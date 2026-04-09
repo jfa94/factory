@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Detect available reviewer: Codex (preferred) or Claude Code (fallback).
+# Usage: pipeline-detect-reviewer [--base <ref>]
+# Exit: always 0 (detection never fails, just selects fallback)
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+base_ref="staging"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --base) base_ref="$2"; shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+# Check Codex availability
+if command -v codex &>/dev/null; then
+  if codex status --auth &>/dev/null 2>&1; then
+    jq -n \
+      --arg reviewer "codex" \
+      --arg base "$base_ref" \
+      '{reviewer: $reviewer, command: ("codex adversarial-review --base " + $base + " --wait")}'
+    exit 0
+  fi
+fi
+
+# Fallback to Claude Code task-reviewer agent
+jq -n \
+  --arg reviewer "claude-code" \
+  --arg agent "task-reviewer" \
+  '{reviewer: $reviewer, agent: $agent}'

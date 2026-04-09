@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# Parse structured review output into normalized JSON.
+# Usage: pipeline-parse-review [--reviewer codex|claude-code]
+# Input: stdin (raw reviewer output)
+# Exit: 0=parsed, 1=parse failure
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+reviewer="claude-code"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --reviewer) reviewer="$2"; shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+raw=$(cat)
+
+if [[ -z "$raw" ]]; then
+  log_error "empty review input"
+  exit 1
+fi
+
+# --- Codex JSON passthrough ---
+if [[ "$reviewer" == "codex" ]]; then
+  if printf '%s' "$raw" | jq empty 2>/dev/null; then
+    printf '%s' "$raw" | jq --arg reviewer "codex" '. + {reviewer: $reviewer}'
+    exit 0
+  fi
+  log_error "codex output is not valid JSON"
+  exit 1
+fi
+
+# --- Claude Code structured text parsing ---
+
+# Extract verdict
+verdict=$(printf '%s' "$raw" | grep 'VERDICT:' | grep -oE 'APPROVE|REQUEST_CHANGES|NEEDS_DISCUSSION' | head -1)
+if [[ -z "$verdict" ]]; then
+  log_error "could not extract VERDICT from review output"
+  exit 1
+fi
+
+# Extract round
+round=$(printf '%s' "$raw" | grep 'ROUND:' | grep -oE '[0-9]+' | head -1)
+round="${round:-1}"
+
+# Extract confidence
+confidence=$(printf '%s' "$raw" | grep 'CONFIDENCE:' | grep -oE 'HIGH|MEDIUM|LOW' | head -1)
+confidence="${confidence:-MEDIUM}"
+
+# Save raw to temp file for multi-pass parsing
+tmpfile=$(mktemp)
+printf '%s' "$raw" > "$tmpfile"
+trap 'rm -f "$tmpfile"' EXIT
+
+# Parse findings by iterating line-by-line through the file
+findings='[]'
+blocking_count=0
+non_blocking_count=0
+
+current_type=""  # BLOCKING or NON-BLOCKING
+current_title=""
+current_file=""
+current_severity=""
+current_category=""
+current_description=""
+current_suggestion=""
+
+_flush_finding() {
+  [[ -z "$current_title" ]] && return
+  local is_blocking="false"
+  [[ "$current_type" == "BLOCKING" ]] && is_blocking="true"
+  findings=$(printf '%s' "$findings" | jq \
+    --arg title "$current_title" \
+    --arg file "$current_file" \
+    --arg severity "$current_severity" \
+    --arg category "$current_category" \
+    --arg description "$current_description" \
+    --arg suggestion "$current_suggestion" \
+    --argjson blocking "$is_blocking" \
+    '. + [{title: $title, file: $file, severity: $severity, category: $category, description: $description, suggestion: $suggestion, blocking: $blocking}]')
+  if [[ "$current_type" == "BLOCKING" ]]; then
+    blocking_count=$((blocking_count + 1))
+  else
+    non_blocking_count=$((non_blocking_count + 1))
+  fi
+  current_title=""
+  current_file=""
+  current_severity=""
+  current_category=""
+  current_description=""
+  current_suggestion=""
+  current_type=""
+}
+
+in_findings=false
+while IFS= read -r line; do
+  # Track section
+  if [[ "$line" == "## Findings" ]]; then
+    in_findings=true
+    continue
+  fi
+  if [[ "$line" == "## "* ]] && [[ "$line" != "## Findings" ]]; then
+    _flush_finding
+    in_findings=false
+    continue
+  fi
+
+  [[ "$in_findings" != "true" ]] && continue
+
+  # New finding header
+  if [[ "$line" == "### [BLOCKING] "* ]]; then
+    _flush_finding
+    current_type="BLOCKING"
+    current_title="${line#"### [BLOCKING] "}"
+  elif [[ "$line" == "### [NON-BLOCKING] "* ]]; then
+    _flush_finding
+    current_type="NON-BLOCKING"
+    current_title="${line#"### [NON-BLOCKING] "}"
+  elif [[ -n "$current_title" ]]; then
+    # Parse metadata lines
+    case "$line" in
+      "- **File:** "*) current_file="${line#"- **File:** "}" ;;
+      "- **Severity:** "*) current_severity="${line#"- **Severity:** "}" ;;
+      "- **Category:** "*) current_category="${line#"- **Category:** "}" ;;
+      "- **Description:** "*) current_description="${line#"- **Description:** "}" ;;
+      "- **Suggestion:** "*) current_suggestion="${line#"- **Suggestion:** "}" ;;
+    esac
+  fi
+done < "$tmpfile"
+_flush_finding
+
+# Parse acceptance criteria check
+criteria_passed=0
+criteria_failed=0
+in_criteria=false
+while IFS= read -r line; do
+  if [[ "$line" == "## Acceptance Criteria Check"* ]]; then
+    in_criteria=true
+    continue
+  fi
+  if [[ "$in_criteria" == "true" ]] && [[ "$line" == "## "* ]]; then
+    break
+  fi
+  if [[ "$in_criteria" == "true" ]]; then
+    case "$line" in
+      *"| PASS |"*) criteria_passed=$((criteria_passed + 1)) ;;
+      *"| FAIL |"*) criteria_failed=$((criteria_failed + 1)) ;;
+    esac
+  fi
+done < "$tmpfile"
+
+# Parse holdout criteria check
+holdout_passed=0
+holdout_failed=0
+in_holdout=false
+while IFS= read -r line; do
+  if [[ "$line" == "## Holdout Criteria Check"* ]]; then
+    in_holdout=true
+    continue
+  fi
+  if [[ "$in_holdout" == "true" ]] && [[ "$line" == "## "* ]]; then
+    break
+  fi
+  if [[ "$in_holdout" == "true" ]]; then
+    case "$line" in
+      *"| PASS |"*) holdout_passed=$((holdout_passed + 1)) ;;
+      *"| FAIL |"*) holdout_failed=$((holdout_failed + 1)) ;;
+    esac
+  fi
+done < "$tmpfile"
+
+# Extract summary (portable: awk instead of GNU sed)
+summary=$(awk '/^## Summary$/{found=1; next} found{print}' "$tmpfile" | head -5 | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
+
+# Build output JSON
+jq -n \
+  --arg verdict "$verdict" \
+  --argjson round "$round" \
+  --arg confidence "$confidence" \
+  --argjson findings "$findings" \
+  --argjson blocking_count "$blocking_count" \
+  --argjson non_blocking_count "$non_blocking_count" \
+  --argjson criteria_passed "$criteria_passed" \
+  --argjson criteria_failed "$criteria_failed" \
+  --argjson holdout_passed "$holdout_passed" \
+  --argjson holdout_failed "$holdout_failed" \
+  --arg summary "$summary" \
+  --arg reviewer "$reviewer" \
+  '{
+    verdict: $verdict,
+    round: $round,
+    confidence: $confidence,
+    findings: $findings,
+    blocking_count: $blocking_count,
+    non_blocking_count: $non_blocking_count,
+    criteria_passed: $criteria_passed,
+    criteria_failed: $criteria_failed,
+    holdout_passed: $holdout_passed,
+    holdout_failed: $holdout_failed,
+    summary: $summary,
+    reviewer: $reviewer
+  }'

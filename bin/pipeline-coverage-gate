@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Compare before/after coverage reports. Block if coverage decreased.
+# Usage: pipeline-coverage-gate <before-json> <after-json>
+# Input: vitest coverage-v8 JSON summary files
+# Exit: 0=passed (no decrease), 1=failed (coverage decreased)
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+before_file="${1:?missing before coverage JSON path}"
+after_file="${2:?missing after coverage JSON path}"
+
+# Validate inputs exist
+if [[ ! -f "$before_file" ]]; then
+  log_error "before coverage file not found: $before_file"
+  jq -n '{passed: false, error: "before coverage file not found", before: {}, after: {}, delta: {}}'
+  exit 1
+fi
+
+if [[ ! -f "$after_file" ]]; then
+  log_error "after coverage file not found: $after_file"
+  jq -n '{passed: false, error: "after coverage file not found", before: {}, after: {}, delta: {}}'
+  exit 1
+fi
+
+# Validate JSON
+if ! jq empty "$before_file" 2>/dev/null; then
+  log_error "before coverage file is not valid JSON"
+  jq -n '{passed: false, error: "before coverage file is not valid JSON", before: {}, after: {}, delta: {}}'
+  exit 1
+fi
+
+if ! jq empty "$after_file" 2>/dev/null; then
+  log_error "after coverage file is not valid JSON"
+  jq -n '{passed: false, error: "after coverage file is not valid JSON", before: {}, after: {}, delta: {}}'
+  exit 1
+fi
+
+# Extract total coverage metrics (vitest coverage-v8 summary format)
+# Supports both {total: {lines: {pct: N}}} and {total: {lines: N}} shapes
+extract_metrics() {
+  local file="$1"
+  jq '{
+    lines: (if .total.lines | type == "object" then .total.lines.pct else .total.lines end // 0),
+    branches: (if .total.branches | type == "object" then .total.branches.pct else .total.branches end // 0),
+    functions: (if .total.functions | type == "object" then .total.functions.pct else .total.functions end // 0),
+    statements: (if .total.statements | type == "object" then .total.statements.pct else .total.statements end // 0)
+  }' "$file"
+}
+
+before=$(extract_metrics "$before_file")
+after=$(extract_metrics "$after_file")
+
+# Compute deltas
+delta=$(jq -n \
+  --argjson b "$before" \
+  --argjson a "$after" \
+  '{
+    lines: (($a.lines - $b.lines) * 100 | round | . / 100),
+    branches: (($a.branches - $b.branches) * 100 | round | . / 100),
+    functions: (($a.functions - $b.functions) * 100 | round | . / 100),
+    statements: (($a.statements - $b.statements) * 100 | round | . / 100)
+  }')
+
+# Check for decrease — any metric going down is a failure
+decreased=$(jq -n --argjson d "$delta" '
+  ($d.lines < 0) or ($d.branches < 0) or ($d.functions < 0) or ($d.statements < 0)
+')
+
+if [[ "$decreased" == "true" ]]; then
+  decreased_metrics=$(jq -n --argjson d "$delta" '
+    [
+      (if $d.lines < 0 then "lines (\($d.lines)%)" else empty end),
+      (if $d.branches < 0 then "branches (\($d.branches)%)" else empty end),
+      (if $d.functions < 0 then "functions (\($d.functions)%)" else empty end),
+      (if $d.statements < 0 then "statements (\($d.statements)%)" else empty end)
+    ] | join(", ")
+  ')
+  log_error "coverage decreased: $decreased_metrics"
+
+  jq -n \
+    --argjson passed false \
+    --argjson before "$before" \
+    --argjson after "$after" \
+    --argjson delta "$delta" \
+    '{passed: $passed, before: $before, after: $after, delta: $delta}'
+  exit 1
+fi
+
+log_info "coverage gate passed"
+jq -n \
+  --argjson passed true \
+  --argjson before "$before" \
+  --argjson after "$after" \
+  --argjson delta "$delta" \
+  '{passed: $passed, before: $before, after: $after, delta: $delta}'
