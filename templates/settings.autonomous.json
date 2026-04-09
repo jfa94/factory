@@ -1,0 +1,37 @@
+{
+  "$schema": "https://code.claude.com/schemas/settings.json",
+  "_comment": "Minimal pipeline-specific settings merged with user's existing settings at runtime. User settings take precedence.",
+  "env": {
+    "DARK_FACTORY_AUTONOMOUS_MODE": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(pipeline-*)",
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(pnpm *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Read",
+      "Write",
+      "Edit",
+      "Grep",
+      "Glob",
+      "Agent"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "hooks/branch-protection.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

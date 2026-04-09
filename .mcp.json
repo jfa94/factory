@@ -1,0 +1,14 @@
+{
+  "$schema": "https://code.claude.com/schemas/mcp.json",
+  "mcpServers": {
+    "pipeline-metrics": {
+      "command": "node",
+      "args": ["servers/pipeline-metrics/index.js"],
+      "env": {
+        "METRICS_DB": "${CLAUDE_PLUGIN_DATA}/metrics.db"
+      },
+      "disabled": true,
+      "_comment": "Enable after running: cd servers/pipeline-metrics && npm install"
+    }
+  }
+}
