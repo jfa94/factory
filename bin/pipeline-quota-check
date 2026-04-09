@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# Check Claude API quota utilization.
+# Detection methods (in priority order):
+#   1. OAuth API — macOS Keychain token + api.anthropic.com/api/oauth/usage
+#   2. CLI probe — `claude -p "ok"` and parse stderr for rate limit
+#   3. Headers (stubbed) — for future header-based detection
+#
+# Usage: pipeline-quota-check [--method oauth|cli|auto]
+# Exit: 0=data retrieved, 1=all methods failed
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+method="auto"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --method) method="$2"; shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+# --- OAuth API detection (macOS only) ---
+_check_oauth() {
+  # Read OAuth token from macOS Keychain
+  local token
+  token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null) || return 1
+
+  if [[ -z "$token" ]]; then
+    log_warn "no OAuth token found in Keychain"
+    return 1
+  fi
+
+  # Parse the token — it's a JSON blob with access_token
+  local access_token
+  access_token=$(printf '%s' "$token" | jq -r '.access_token // empty' 2>/dev/null)
+
+  if [[ -z "$access_token" ]]; then
+    log_warn "could not extract access_token from Keychain credential"
+    return 1
+  fi
+
+  # Call usage API
+  local response
+  response=$(curl -sf --connect-timeout 5 --max-time 10 \
+    -H "Authorization: Bearer $access_token" \
+    "https://api.anthropic.com/api/oauth/usage" 2>/dev/null) || return 1
+
+  if [[ -z "$response" ]]; then
+    return 1
+  fi
+
+  # Parse utilization values
+  local five_hour seven_day billing_mode
+  five_hour=$(printf '%s' "$response" | jq -r '.["unified-5h-utilization"] // empty' 2>/dev/null)
+  seven_day=$(printf '%s' "$response" | jq -r '.["unified-7d-utilization"] // empty' 2>/dev/null)
+  billing_mode=$(printf '%s' "$response" | jq -r '.billing_mode // "subscription"' 2>/dev/null)
+
+  if [[ -z "$five_hour" ]] || [[ -z "$seven_day" ]]; then
+    log_warn "could not parse utilization from OAuth response"
+    return 1
+  fi
+
+  # Compute window position and thresholds
+  local now_epoch hour_in_day window_hour hourly_threshold
+  now_epoch=$(date +%s)
+
+  # 5-hour window: which hour (1-5) are we in?
+  # The window resets every 5 hours from midnight UTC
+  hour_in_day=$(date -u +%H)
+  window_hour=$(( (hour_in_day % 5) + 1 ))
+  # Hourly threshold = min(hour * 20, 90)
+  hourly_threshold=$((window_hour * 20))
+  if [[ $hourly_threshold -gt 90 ]]; then
+    hourly_threshold=90
+  fi
+
+  # 7-day window: which day (1-7)?
+  local day_of_week
+  day_of_week=$(date -u +%u)  # 1=Monday ... 7=Sunday
+  local daily_threshold
+  daily_threshold=$((day_of_week * 100 / 7))
+
+  local five_hour_over="false"
+  if [[ $(printf '%s > %s\n' "$five_hour" "$hourly_threshold" | bc 2>/dev/null) == "1" ]]; then
+    five_hour_over="true"
+  fi
+
+  local seven_day_over="false"
+  if [[ $(printf '%s > %s\n' "$seven_day" "$daily_threshold" | bc 2>/dev/null) == "1" ]]; then
+    seven_day_over="true"
+  fi
+
+  jq -n \
+    --argjson five_hour "$five_hour" \
+    --argjson hourly_threshold "$hourly_threshold" \
+    --argjson five_hour_over "$five_hour_over" \
+    --argjson window_hour "$window_hour" \
+    --argjson seven_day "$seven_day" \
+    --argjson daily_threshold "$daily_threshold" \
+    --argjson seven_day_over "$seven_day_over" \
+    --argjson window_day "$day_of_week" \
+    --arg billing_mode "$billing_mode" \
+    --arg detection_method "oauth" \
+    '{
+      five_hour: {
+        utilization: $five_hour,
+        hourly_threshold: $hourly_threshold,
+        over_threshold: $five_hour_over,
+        window_hour: $window_hour
+      },
+      seven_day: {
+        utilization: $seven_day,
+        daily_threshold: $daily_threshold,
+        over_threshold: $seven_day_over,
+        window_day: $window_day
+      },
+      billing_mode: $billing_mode,
+      detection_method: $detection_method
+    }'
+  return 0
+}
+
+# --- CLI probe detection ---
+_check_cli() {
+  if ! command -v claude &>/dev/null; then
+    log_warn "claude CLI not found"
+    return 1
+  fi
+
+  local stderr_output
+  stderr_output=$(claude -p "ok" --max-turns 1 --model haiku 2>&1 >/dev/null) || true
+
+  local rate_limited="false"
+  if printf '%s' "$stderr_output" | grep -qi "rate.limit\|quota\|throttl\|too.many.requests"; then
+    rate_limited="true"
+  fi
+
+  jq -n \
+    --argjson rate_limited "$rate_limited" \
+    --arg detection_method "cli" \
+    '{
+      five_hour: {
+        utilization: (if $rate_limited then 100 else 0 end),
+        hourly_threshold: 90,
+        over_threshold: $rate_limited,
+        window_hour: null
+      },
+      seven_day: {
+        utilization: (if $rate_limited then 100 else 0 end),
+        daily_threshold: 100,
+        over_threshold: $rate_limited,
+        window_day: null
+      },
+      billing_mode: "unknown",
+      detection_method: $detection_method
+    }'
+  return 0
+}
+
+# --- Headers detection (stubbed for future use) ---
+_check_headers() {
+  # Stubbed: when Claude Code exposes response headers (GitHub #27915),
+  # read unified-5h-utilization and unified-7d-utilization from last-headers.json
+  log_info "header-based detection not yet available"
+  return 1
+}
+
+# --- Main ---
+case "$method" in
+  oauth)
+    _check_oauth
+    ;;
+  cli)
+    _check_cli
+    ;;
+  headers)
+    _check_headers
+    ;;
+  auto)
+    if _check_oauth 2>/dev/null; then
+      exit 0
+    fi
+    log_info "OAuth detection failed, falling back to CLI probe"
+    if _check_cli 2>/dev/null; then
+      exit 0
+    fi
+    log_error "all quota detection methods failed"
+    # Return safe defaults (assume not rate limited)
+    jq -n '{
+      five_hour: {utilization: 0, hourly_threshold: 90, over_threshold: false, window_hour: null},
+      seven_day: {utilization: 0, daily_threshold: 100, over_threshold: false, window_day: null},
+      billing_mode: "unknown",
+      detection_method: "none"
+    }'
+    ;;
+  *)
+    log_error "invalid method: $method (expected oauth|cli|headers|auto)"
+    exit 1
+    ;;
+esac
