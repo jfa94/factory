@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pipeline-*)",
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(npm test*)",
+      "Bash(npx vitest*)",
+      "Read",
+      "Write",
+      "Edit",
+      "Grep",
+      "Glob",
+      "Agent"
+    ]
+  }
+}

@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Circuit breaker — checks safety thresholds before each task.
+# Exit 0 = safe to proceed, Exit 1 = tripped (reason on stderr)
+# Usage: pipeline-circuit-breaker <run-id>
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+run_id="${1:?missing run-id}"
+state_file="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/state.json"
+
+if [[ ! -f "$state_file" ]]; then
+  log_error "state file not found: $state_file"
+  exit 1
+fi
+
+state=$(cat "$state_file")
+
+# Read thresholds from config (with defaults)
+max_tasks=$(read_config '.circuitBreaker.maxTasks' '20')
+max_runtime=$(read_config '.circuitBreaker.maxRuntimeMinutes' '360')
+max_failures=$(read_config '.circuitBreaker.maxConsecutiveFailures' '3')
+
+# Read current values from state
+tasks_completed=$(printf '%s' "$state" | jq -r '.circuit_breaker.tasks_completed // 0')
+consecutive_failures=$(printf '%s' "$state" | jq -r '.circuit_breaker.consecutive_failures // 0')
+
+# Calculate runtime
+started_at=$(printf '%s' "$state" | jq -r '.started_at // empty')
+if [[ -n "$started_at" ]]; then
+  if command -v gdate &>/dev/null; then
+    start_epoch=$(gdate -d "$started_at" +%s 2>/dev/null || echo 0)
+  else
+    start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$started_at" +%s 2>/dev/null || echo 0)
+  fi
+  now_epoch=$(date +%s)
+  runtime_minutes=$(( (now_epoch - start_epoch) / 60 ))
+else
+  runtime_minutes=0
+fi
+
+# Check thresholds
+tripped="false"
+reason=""
+
+if [[ "$tasks_completed" -ge "$max_tasks" ]]; then
+  tripped="true"
+  reason="max tasks reached ($tasks_completed >= $max_tasks)"
+elif [[ "$runtime_minutes" -ge "$max_runtime" ]]; then
+  tripped="true"
+  reason="max runtime reached (${runtime_minutes}min >= ${max_runtime}min)"
+elif [[ "$consecutive_failures" -ge "$max_failures" ]]; then
+  tripped="true"
+  reason="max consecutive failures ($consecutive_failures >= $max_failures)"
+fi
+
+# Output
+jq -n \
+  --argjson tripped "$tripped" \
+  --argjson tasks_completed "$tasks_completed" \
+  --argjson runtime_minutes "$runtime_minutes" \
+  --argjson consecutive_failures "$consecutive_failures" \
+  --argjson max_tasks "$max_tasks" \
+  --argjson max_runtime "$max_runtime" \
+  --argjson max_failures "$max_failures" \
+  --arg reason "$reason" \
+  '{
+    tripped: $tripped,
+    tasks_completed: $tasks_completed,
+    runtime_minutes: $runtime_minutes,
+    consecutive_failures: $consecutive_failures,
+    thresholds: {
+      max_tasks: $max_tasks,
+      max_runtime_minutes: $max_runtime,
+      max_consecutive_failures: $max_failures
+    },
+    reason: (if $tripped then $reason else null end)
+  }'
+
+if [[ "$tripped" == "true" ]]; then
+  log_error "circuit breaker tripped: $reason"
+  exit 1
+fi

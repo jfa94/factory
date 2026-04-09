@@ -1,0 +1,60 @@
+{
+  "name": "dark-factory",
+  "version": "0.1.0",
+  "description": "Autonomous coding pipeline: converts GitHub PRD issues into merged pull requests with quality-first review gates",
+  "userConfig": {
+    "humanReviewLevel": {
+      "type": "number",
+      "default": 1,
+      "description": "Autonomy level: 0=full auto, 1=PR approval (default), 2=review checkpoint, 3=spec approval, 4=full supervision"
+    },
+    "circuitBreaker": {
+      "type": "object",
+      "default": {
+        "maxTasks": 20,
+        "maxRuntimeMinutes": 360,
+        "maxConsecutiveFailures": 3
+      }
+    },
+    "review": {
+      "type": "object",
+      "default": {
+        "preferCodex": true,
+        "routineRounds": 2,
+        "featureRounds": 4,
+        "securityRounds": 6,
+        "ollamaRoutineRounds": 15,
+        "ollamaFeatureRounds": 20,
+        "ollamaSecurityRounds": 25
+      }
+    },
+    "holdout": {
+      "type": "object",
+      "default": {
+        "enabled": true,
+        "percent": 20
+      }
+    },
+    "mutationTesting": {
+      "type": "object",
+      "default": {
+        "enabled": true,
+        "scoreThreshold": 80
+      }
+    },
+    "localLlm": {
+      "type": "object",
+      "default": {
+        "enabled": false,
+        "ollamaUrl": "http://localhost:11434",
+        "model": "qwen2.5-coder:14b"
+      }
+    },
+    "parallel": {
+      "type": "object",
+      "default": {
+        "maxConcurrent": 3
+      }
+    }
+  }
+}

@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# Phase 1 verification tests
+set -euo pipefail
+
+export CLAUDE_PLUGIN_DATA=$(mktemp -d)
+export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
+
+pass=0
+fail=0
+
+assert_eq() {
+  local label="$1" expected="$2" actual="$3"
+  if [[ "$expected" == "$actual" ]]; then
+    echo "  PASS: $label"
+    pass=$((pass + 1))
+  else
+    echo "  FAIL: $label (expected '$expected', got '$actual')"
+    fail=$((fail + 1))
+  fi
+}
+
+assert_exit() {
+  local label="$1" expected="$2"
+  shift 2
+  local actual
+  set +e
+  "$@" >/dev/null 2>&1
+  actual=$?
+  set -e
+  assert_eq "$label" "$expected" "$actual"
+}
+
+assert_file_exists() {
+  local label="$1" path="$2"
+  if [[ -e "$path" ]]; then
+    echo "  PASS: $label"
+    pass=$((pass + 1))
+  else
+    echo "  FAIL: $label (file not found: $path)"
+    fail=$((fail + 1))
+  fi
+}
+
+echo "=== pipeline-init ==="
+
+pipeline-init "run-test-001" --issue 42 --mode prd >/dev/null 2>&1
+assert_file_exists "state.json created" "$CLAUDE_PLUGIN_DATA/runs/run-test-001/state.json"
+assert_file_exists "audit.jsonl created" "$CLAUDE_PLUGIN_DATA/runs/run-test-001/audit.jsonl"
+assert_file_exists "metrics.jsonl created" "$CLAUDE_PLUGIN_DATA/runs/run-test-001/metrics.jsonl"
+assert_file_exists "holdouts/ created" "$CLAUDE_PLUGIN_DATA/runs/run-test-001/holdouts"
+assert_file_exists "reviews/ created" "$CLAUDE_PLUGIN_DATA/runs/run-test-001/reviews"
+assert_file_exists "current symlink" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+run_id=$(jq -r '.run_id' "$CLAUDE_PLUGIN_DATA/runs/run-test-001/state.json")
+assert_eq "run_id in state" "run-test-001" "$run_id"
+
+status=$(jq -r '.status' "$CLAUDE_PLUGIN_DATA/runs/run-test-001/state.json")
+assert_eq "status is running" "running" "$status"
+
+mode=$(jq -r '.mode' "$CLAUDE_PLUGIN_DATA/runs/run-test-001/state.json")
+assert_eq "mode is prd" "prd" "$mode"
+
+issue=$(jq -r '.input.issue_numbers[0]' "$CLAUDE_PLUGIN_DATA/runs/run-test-001/state.json")
+assert_eq "issue number captured" "42" "$issue"
+
+# Should fail on duplicate run
+assert_exit "rejects duplicate run-id" 1 pipeline-init "run-test-001"
+
+echo ""
+echo "=== pipeline-state read/write round-trip ==="
+
+val=$(pipeline-state read "run-test-001" '.status')
+assert_eq "read status" "running" "$val"
+
+pipeline-state write "run-test-001" '.spec.status' '"generating"' >/dev/null 2>&1
+val=$(pipeline-state read "run-test-001" '.spec.status')
+assert_eq "write+read spec.status" "generating" "$val"
+
+echo ""
+echo "=== pipeline-state task-status ==="
+
+# Add a task to state first
+pipeline-state write "run-test-001" '.tasks.task_1' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
+pipeline-state task-status "run-test-001" "task_1" "executing" 2>/dev/null
+val=$(pipeline-state read "run-test-001" '.tasks.task_1.status')
+assert_eq "task_1 status updated" "executing" "$val"
+
+started=$(pipeline-state read "run-test-001" '.tasks.task_1.started_at')
+assert_eq "started_at set" "true" "$( [[ "$started" != "null" ]] && echo true || echo false )"
+
+pipeline-state task-status "run-test-001" "task_1" "done" 2>/dev/null
+val=$(pipeline-state read "run-test-001" '.tasks.task_1.status')
+assert_eq "task_1 done" "done" "$val"
+
+completed=$(pipeline-state read "run-test-001" '.circuit_breaker.tasks_completed')
+assert_eq "tasks_completed incremented" "1" "$completed"
+
+consec=$(pipeline-state read "run-test-001" '.circuit_breaker.consecutive_failures')
+assert_eq "consecutive_failures reset on done" "0" "$consec"
+
+echo ""
+echo "=== pipeline-state deps-satisfied ==="
+
+pipeline-state write "run-test-001" '.tasks.task_2' '{"status":"pending","depends_on":["task_1"]}' >/dev/null 2>&1
+assert_exit "deps satisfied (task_1 done)" 0 pipeline-state deps-satisfied "run-test-001" "task_2"
+
+pipeline-state write "run-test-001" '.tasks.task_3' '{"status":"pending","depends_on":["task_99"]}' >/dev/null 2>&1
+# task_99 doesn't exist, so its status will be "unknown" → not done
+assert_exit "deps not satisfied (missing dep)" 1 pipeline-state deps-satisfied "run-test-001" "task_3"
+
+echo ""
+echo "=== pipeline-state resume-point ==="
+
+resume=$(pipeline-state resume-point "run-test-001")
+assert_eq "resume-point finds pending task" "task_2" "$resume"
+
+echo ""
+echo "=== pipeline-circuit-breaker ==="
+
+# Write config
+mkdir -p "$CLAUDE_PLUGIN_DATA"
+echo '{"circuitBreaker":{"maxTasks":20,"maxRuntimeMinutes":360,"maxConsecutiveFailures":3}}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+# Should be safe (1 task completed, 0 failures)
+assert_exit "circuit breaker safe" 0 pipeline-circuit-breaker "run-test-001"
+
+# Simulate 3 consecutive failures
+pipeline-state write "run-test-001" '.circuit_breaker.consecutive_failures' '3' >/dev/null 2>&1
+assert_exit "circuit breaker tripped (failures)" 1 pipeline-circuit-breaker "run-test-001"
+
+# Reset and test max tasks
+pipeline-state write "run-test-001" '.circuit_breaker.consecutive_failures' '0' >/dev/null 2>&1
+pipeline-state write "run-test-001" '.circuit_breaker.tasks_completed' '20' >/dev/null 2>&1
+assert_exit "circuit breaker tripped (max tasks)" 1 pipeline-circuit-breaker "run-test-001"
+
+echo ""
+echo "=== pipeline-lock ==="
+
+# Acquire
+output=$(pipeline-lock acquire 2>/dev/null)
+action=$(echo "$output" | jq -r '.action')
+assert_eq "lock acquired" "acquired" "$action"
+
+# Second acquire from different process — recovers dead PID of first call
+output=$(pipeline-lock acquire 2>/dev/null)
+action=$(echo "$output" | jq -r '.action')
+assert_eq "lock re-acquired after dead PID" "acquired" "$action"
+
+# Status
+output=$(pipeline-lock status 2>/dev/null)
+locked=$(echo "$output" | jq -r '.locked')
+assert_eq "lock status shows locked" "true" "$locked"
+
+# Release
+output=$(pipeline-lock release 2>/dev/null)
+action=$(echo "$output" | jq -r '.action')
+assert_eq "lock released" "released" "$action"
+
+# Status after release
+output=$(pipeline-lock status 2>/dev/null)
+locked=$(echo "$output" | jq -r '.locked')
+assert_eq "lock status shows unlocked" "false" "$locked"
+
+# Recover from dead PID
+echo '{"pid":99999,"timestamp":"2026-01-01T00:00:00Z"}' > "$CLAUDE_PLUGIN_DATA/pipeline.lock"
+output=$(pipeline-lock recover 2>/dev/null)
+action=$(echo "$output" | jq -r '.action')
+assert_eq "lock recovered from dead PID" "recovered" "$action"
+
+pipeline-lock release 2>/dev/null
+
+echo ""
+echo "=== pipeline-state list ==="
+
+pipeline-init "run-test-002" --mode discover >/dev/null 2>&1
+list_output=$(pipeline-state list)
+count=$(echo "$list_output" | jq 'length')
+assert_eq "list shows 2 runs" "2" "$count"
+
+echo ""
+echo "=== pipeline-lib.sh utilities ==="
+
+source "$(dirname "$0")/pipeline-lib.sh"
+
+slug=$(slugify "Hello World -- Test 123!")
+assert_eq "slugify" "hello-world-test-123" "$slug"
+
+pkg=$(detect_pkg_manager "/nonexistent")
+assert_eq "detect_pkg_manager default" "pnpm" "$pkg"
+
+echo ""
+echo "================================"
+echo "Results: $pass passed, $fail failed"
+echo "================================"
+
+# Cleanup
+rm -rf "$CLAUDE_PLUGIN_DATA"
+
+[[ $fail -eq 0 ]]

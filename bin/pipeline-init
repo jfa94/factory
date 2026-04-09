@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Initialize a new pipeline run.
+# Creates directory structure, state.json, audit/metrics logs, symlink.
+# Usage: pipeline-init <run-id> [--issue <N>] [--mode <mode>]
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+run_id="${1:?missing run-id}"
+shift
+
+# Reject run-ids with path separators or dots to prevent directory traversal
+if [[ "$run_id" == */* ]] || [[ "$run_id" == *..* ]]; then
+  log_error "invalid run-id (must not contain / or ..): $run_id"
+  exit 1
+fi
+
+issue=""
+mode="prd"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --issue) issue="$2"; shift 2 ;;
+    --mode) mode="$2"; shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+# Validate mode
+case "$mode" in
+  discover|prd|task|resume) ;;
+  *) log_error "invalid mode: $mode (expected discover|prd|task|resume)"; exit 1 ;;
+esac
+
+runs_dir="${CLAUDE_PLUGIN_DATA}/runs"
+run_dir="${runs_dir}/${run_id}"
+
+# Check for existing run
+if [[ -d "$run_dir" ]]; then
+  log_error "run already exists: $run_id"
+  exit 1
+fi
+
+# Create directory structure
+mkdir -p "$run_dir"/{holdouts,reviews}
+
+# Build issue_numbers array
+issue_numbers="[]"
+if [[ -n "$issue" ]]; then
+  issue_numbers=$(printf '[%s]' "$issue")
+fi
+
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Initialize state.json
+state=$(jq -n \
+  --arg run_id "$run_id" \
+  --arg mode "$mode" \
+  --arg now "$now" \
+  --argjson issues "$issue_numbers" \
+  '{
+    run_id: $run_id,
+    status: "running",
+    mode: $mode,
+    started_at: $now,
+    updated_at: $now,
+    ended_at: null,
+    input: {
+      issue_numbers: $issues,
+      resumed_from: null
+    },
+    spec: {
+      status: "pending",
+      path: null,
+      review_iterations: 0,
+      review_score: null
+    },
+    tasks: {},
+    circuit_breaker: {
+      tasks_completed: 0,
+      consecutive_failures: 0,
+      runtime_minutes: 0
+    },
+    cost: {
+      total_tokens: 0,
+      estimated_usd: 0,
+      by_model: {}
+    }
+  }')
+
+atomic_write "$run_dir/state.json" "$state"
+
+# Create empty log files
+touch "$run_dir/audit.jsonl"
+touch "$run_dir/metrics.jsonl"
+
+# Set 'current' symlink (remove old one if exists)
+current_link="${runs_dir}/current"
+rm -f "$current_link"
+ln -s "$run_dir" "$current_link"
+
+log_info "initialized run $run_id (mode=$mode, issue=$issue)"
+
+jq -n \
+  --arg run_id "$run_id" \
+  --arg state_path "$run_dir/state.json" \
+  --argjson created true \
+  '{run_id: $run_id, state_path: $state_path, created: $created}'

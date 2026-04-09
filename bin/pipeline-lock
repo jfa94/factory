@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Lock manager — prevents two orchestrator instances from running simultaneously.
+# Secondary safety mechanism (primary is worktree isolation).
+# Usage: pipeline-lock <acquire|release|recover|status> [--timeout <seconds>]
+
+source "$(dirname "$0")/pipeline-lib.sh"
+
+action="${1:?missing action: acquire|release|recover|status}"
+shift
+
+LOCK_FILE="${CLAUDE_PLUGIN_DATA}/pipeline.lock"
+TIMEOUT=30
+
+# Parse flags
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --timeout) TIMEOUT="$2"; shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+_lock_info() {
+  if [[ ! -f "$LOCK_FILE" ]]; then
+    return 1
+  fi
+  cat "$LOCK_FILE"
+}
+
+_is_pid_alive() {
+  kill -0 "$1" 2>/dev/null
+}
+
+case "$action" in
+  acquire)
+    mkdir -p "$(dirname "$LOCK_FILE")"
+    elapsed=0
+
+    while [[ $elapsed -lt $TIMEOUT ]]; do
+      # Try to create lock atomically
+      if ( set -o noclobber; printf '{"pid":%d,"timestamp":"%s"}' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK_FILE" ) 2>/dev/null; then
+        log_info "lock acquired (PID $$)"
+        json_output locked "true" pid "$$" action "acquired"
+        exit 0
+      fi
+
+      # Lock exists — check if it's ours (reentrant)
+      info=$(_lock_info) || { sleep 1; elapsed=$((elapsed + 1)); continue; }
+      holder_pid=$(printf '%s' "$info" | jq -r '.pid')
+
+      if [[ "$holder_pid" == "$$" ]]; then
+        log_info "lock already held by us (PID $$)"
+        json_output locked "true" pid "$$" action "reentrant"
+        exit 0
+      fi
+
+      # Check if holder is dead — auto-recover
+      if ! _is_pid_alive "$holder_pid"; then
+        log_warn "lock held by dead process $holder_pid, recovering"
+        rm -f "$LOCK_FILE"
+        continue
+      fi
+
+      sleep 1
+      elapsed=$((elapsed + 1))
+    done
+
+    info=$(_lock_info) || true
+    holder_pid=$(printf '%s' "${info:-{}}" | jq -r '.pid // "unknown"')
+    log_error "lock acquisition timed out after ${TIMEOUT}s (held by PID $holder_pid)"
+    json_output locked "false" holder_pid "$holder_pid" action "timeout"
+    exit 1
+    ;;
+
+  release)
+    if [[ ! -f "$LOCK_FILE" ]]; then
+      log_warn "no lock to release"
+      json_output locked "false" action "noop"
+      exit 0
+    fi
+
+    rm -f "$LOCK_FILE"
+    log_info "lock released"
+    json_output locked "false" action "released"
+    ;;
+
+  recover)
+    if [[ ! -f "$LOCK_FILE" ]]; then
+      log_info "no lock exists"
+      json_output locked "false" action "no_lock"
+      exit 0
+    fi
+
+    info=$(_lock_info)
+    holder_pid=$(printf '%s' "$info" | jq -r '.pid')
+    timestamp=$(printf '%s' "$info" | jq -r '.timestamp')
+
+    if _is_pid_alive "$holder_pid"; then
+      log_info "lock holder PID $holder_pid is alive"
+      json_output locked "true" holder_pid "$holder_pid" alive "true" timestamp "$timestamp" action "no_recovery"
+      exit 1
+    fi
+
+    # Dead PID — take ownership
+    rm -f "$LOCK_FILE"
+    printf '{"pid":%d,"timestamp":"%s","recovered_from":%s}' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$holder_pid" > "$LOCK_FILE"
+    log_info "recovered lock from dead PID $holder_pid"
+    json_output locked "true" pid "$$" recovered_from "$holder_pid" action "recovered"
+    ;;
+
+  status)
+    if [[ ! -f "$LOCK_FILE" ]]; then
+      json_output locked "false"
+      exit 0
+    fi
+
+    info=$(_lock_info)
+    holder_pid=$(printf '%s' "$info" | jq -r '.pid')
+    timestamp=$(printf '%s' "$info" | jq -r '.timestamp')
+    alive="false"
+    if _is_pid_alive "$holder_pid"; then
+      alive="true"
+    fi
+
+    # Calculate age in seconds
+    if command -v gdate &>/dev/null; then
+      lock_epoch=$(gdate -d "$timestamp" +%s 2>/dev/null || echo 0)
+    else
+      lock_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s 2>/dev/null || echo 0)
+    fi
+    now_epoch=$(date +%s)
+    age_seconds=$((now_epoch - lock_epoch))
+
+    json_output locked "true" holder_pid "$holder_pid" alive "$alive" timestamp "$timestamp" age_seconds "$age_seconds"
+    ;;
+
+  *)
+    log_error "unknown action: $action"
+    echo "Usage: pipeline-lock <acquire|release|recover|status> [--timeout <seconds>]" >&2
+    exit 1
+    ;;
+esac

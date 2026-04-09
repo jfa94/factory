@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# State manager for pipeline runs.
+# Usage: pipeline-state <action> <run-id> [key] [value]
+#
+# Actions:
+#   read <run-id> [key]                     Read full state or jq key
+#   write <run-id> <key> <value>            Atomic write to state key
+#   task-status <run-id> <task-id> <status>  Update task status
+#   deps-satisfied <run-id> <task-id>        Check if deps done (exit 0/1)
+#   interrupted <run-id>                     Check if run interrupted (exit 0/1)
+#   resume-point <run-id>                    Find first incomplete task
+#   list                                     List all runs
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+action="${1:?missing action}"
+shift
+
+_state_file() {
+  local run_id="$1"
+  printf '%s/runs/%s/state.json' "$CLAUDE_PLUGIN_DATA" "$run_id"
+}
+
+_read_state_file() {
+  local f
+  f=$(_state_file "$1")
+  if [[ ! -f "$f" ]]; then
+    log_error "state file not found: $f"
+    exit 1
+  fi
+  cat "$f"
+}
+
+case "$action" in
+  read)
+    run_id="${1:?missing run-id}"
+    key="${2:-}"
+    state=$(_read_state_file "$run_id")
+    if [[ -z "$key" ]]; then
+      printf '%s' "$state"
+    else
+      printf '%s' "$state" | jq -r "$key"
+    fi
+    ;;
+
+  write)
+    run_id="${1:?missing run-id}"
+    key="${2:?missing key}"
+    value="${3:?missing value}"
+    f=$(_state_file "$run_id")
+    state=$(_read_state_file "$run_id")
+
+    # Determine if value is valid JSON; if so, use argjson
+    if printf '%s' "$value" | jq empty 2>/dev/null; then
+      updated=$(printf '%s' "$state" | jq --argjson v "$value" "$key = \$v")
+    else
+      updated=$(printf '%s' "$state" | jq --arg v "$value" "$key = \$v")
+    fi
+
+    # Update the updated_at timestamp
+    updated=$(printf '%s' "$updated" | jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.updated_at = $t')
+
+    atomic_write "$f" "$updated"
+    log_info "state updated: $key"
+    ;;
+
+  task-status)
+    run_id="${1:?missing run-id}"
+    task_id="${2:?missing task-id}"
+    status="${3:?missing status}"
+    f=$(_state_file "$run_id")
+    state=$(_read_state_file "$run_id")
+
+    # Validate status
+    case "$status" in
+      pending|executing|reviewing|done|failed|interrupted|needs_human_review) ;;
+      *) log_error "invalid task status: $status"; exit 1 ;;
+    esac
+
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    updated=$(printf '%s' "$state" | jq \
+      --arg tid "$task_id" \
+      --arg s "$status" \
+      --arg now "$now" '
+      .tasks[$tid].status = $s |
+      .updated_at = $now |
+      if $s == "executing" then .tasks[$tid].started_at = $now
+      elif ($s == "done" or $s == "failed") then .tasks[$tid].ended_at = $now
+      else . end |
+      # Update circuit breaker counters
+      if $s == "done" then
+        .circuit_breaker.tasks_completed = (.circuit_breaker.tasks_completed + 1) |
+        .circuit_breaker.consecutive_failures = 0
+      elif $s == "failed" then
+        .circuit_breaker.consecutive_failures = (.circuit_breaker.consecutive_failures + 1)
+      else . end
+    ')
+
+    atomic_write "$f" "$updated"
+    log_info "task $task_id → $status"
+    ;;
+
+  deps-satisfied)
+    run_id="${1:?missing run-id}"
+    task_id="${2:?missing task-id}"
+    state=$(_read_state_file "$run_id")
+
+    # Check each dependency's status
+    deps=$(printf '%s' "$state" | jq -r --arg tid "$task_id" '
+      if .tasks[$tid].depends_on then .tasks[$tid].depends_on[] else empty end
+    ' 2>/dev/null || true)
+
+    if [[ -z "$deps" ]]; then
+      exit 0
+    fi
+
+    while IFS= read -r dep_id; do
+      dep_status=$(printf '%s' "$state" | jq -r --arg d "$dep_id" '.tasks[$d].status // "unknown"')
+      if [[ "$dep_status" != "done" ]]; then
+        log_info "dep $dep_id not satisfied (status: $dep_status)"
+        exit 1
+      fi
+    done <<< "$deps"
+    exit 0
+    ;;
+
+  interrupted)
+    run_id="${1:?missing run-id}"
+    state=$(_read_state_file "$run_id")
+    status=$(printf '%s' "$state" | jq -r '.status')
+    [[ "$status" == "interrupted" ]]
+    ;;
+
+  resume-point)
+    run_id="${1:?missing run-id}"
+    state=$(_read_state_file "$run_id")
+
+    # Find first task not in done/failed state
+    task_id=$(printf '%s' "$state" | jq -r '
+      [.tasks | to_entries[] | select(.value.status != "done" and .value.status != "failed")] |
+      first | .key // empty
+    ')
+
+    if [[ -z "$task_id" ]]; then
+      log_info "no incomplete tasks found"
+      exit 1
+    fi
+    printf '%s' "$task_id"
+    ;;
+
+  list)
+    runs_dir="${CLAUDE_PLUGIN_DATA}/runs"
+    if [[ ! -d "$runs_dir" ]]; then
+      printf '[]\n'
+      exit 0
+    fi
+    # List all run directories (excluding 'current' symlink)
+    find "$runs_dir" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; \
+      | sort \
+      | jq -R -s 'split("\n") | map(select(length > 0))'
+    ;;
+
+  *)
+    log_error "unknown action: $action"
+    echo "Usage: pipeline-state <read|write|task-status|deps-satisfied|interrupted|resume-point|list> <run-id> [args...]" >&2
+    exit 1
+    ;;
+esac
