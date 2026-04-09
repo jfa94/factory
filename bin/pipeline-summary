@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Generate a run summary from state.json.
+# Usage: pipeline-summary <run-id> [--post-to-issue]
+# Output: JSON summary to stdout
+# Exit: 0=success, 1=failure
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+run_id="${1:?missing run-id}"
+shift
+
+post_to_issue=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --post-to-issue) post_to_issue=true; shift ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+# Read state
+state_file="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/state.json"
+if [[ ! -f "$state_file" ]]; then
+  log_error "state file not found: $state_file"
+  exit 1
+fi
+
+state=$(cat "$state_file")
+
+# Extract task counts
+task_summary=$(printf '%s' "$state" | jq '{
+  total: (.tasks | length),
+  done: [.tasks | to_entries[] | select(.value.status == "done")] | length,
+  failed: [.tasks | to_entries[] | select(.value.status == "failed")] | length,
+  skipped: [.tasks | to_entries[] | select(.value.status == "pending")] | length,
+  interrupted: [.tasks | to_entries[] | select(.value.status == "interrupted")] | length,
+  needs_human: [.tasks | to_entries[] | select(.value.status == "needs_human_review")] | length
+}')
+
+# Extract timing
+started_at=$(printf '%s' "$state" | jq -r '.started_at // empty')
+ended_at=$(printf '%s' "$state" | jq -r '.ended_at // empty')
+duration_minutes=""
+
+if [[ -n "$started_at" ]] && [[ -n "$ended_at" ]] && [[ "$ended_at" != "null" ]]; then
+  # Compute duration — try macOS date -jf first, fall back to GNU date -d
+  start_epoch=""
+  end_epoch=""
+  if start_epoch=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$started_at" "+%s" 2>/dev/null); then
+    end_epoch=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$ended_at" "+%s" 2>/dev/null) || true
+  elif start_epoch=$(date -d "$started_at" "+%s" 2>/dev/null); then
+    end_epoch=$(date -d "$ended_at" "+%s" 2>/dev/null) || true
+  fi
+  if [[ -n "$start_epoch" ]] && [[ -n "$end_epoch" ]]; then
+    duration_minutes=$(( (end_epoch - start_epoch) / 60 ))
+  fi
+fi
+
+# Count review rounds from reviews directory
+reviews_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/reviews"
+review_count=0
+if [[ -d "$reviews_dir" ]]; then
+  review_count=$(find "$reviews_dir" -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' ')
+fi
+
+# Read quality metrics from state (coverage, holdout, mutation scores if stored)
+quality=$(printf '%s' "$state" | jq '{
+  coverage_delta: (.quality.coverage_delta // null),
+  holdout_pass_rate: (.quality.holdout_pass_rate // null),
+  mutation_score: (.quality.mutation_score // null)
+}')
+
+# Read cost info
+cost=$(printf '%s' "$state" | jq '.cost // {total_tokens: 0, estimated_usd: 0, by_model: {}}')
+
+# Collect PR info from task metadata
+prs=$(printf '%s' "$state" | jq '[
+  .tasks | to_entries[] |
+  select(.value.pr_number != null) |
+  {task_id: .key, pr_number: .value.pr_number, pr_status: (.value.pr_status // "unknown")}
+]')
+
+# Build summary
+run_status=$(printf '%s' "$state" | jq -r '.status')
+mode=$(printf '%s' "$state" | jq -r '.mode')
+issues=$(printf '%s' "$state" | jq '.input.issue_numbers // []')
+
+summary=$(jq -n \
+  --arg run_id "$run_id" \
+  --arg status "$run_status" \
+  --arg mode "$mode" \
+  --arg started_at "$started_at" \
+  --arg ended_at "${ended_at:-null}" \
+  --arg duration_minutes "${duration_minutes:-null}" \
+  --argjson issues "$issues" \
+  --argjson tasks "$task_summary" \
+  --argjson review_rounds "$review_count" \
+  --argjson quality "$quality" \
+  --argjson cost "$cost" \
+  --argjson prs "$prs" \
+  '{
+    run_id: $run_id,
+    status: $status,
+    mode: $mode,
+    started_at: $started_at,
+    ended_at: (if $ended_at == "null" then null else $ended_at end),
+    duration_minutes: (if $duration_minutes == "null" then null else ($duration_minutes | tonumber) end),
+    issues: $issues,
+    tasks: $tasks,
+    review_rounds: $review_rounds,
+    quality: $quality,
+    cost: $cost,
+    prs: $prs
+  }')
+
+printf '%s\n' "$summary"
+
+# Post to GitHub issue if requested
+if [[ "$post_to_issue" == "true" ]]; then
+  issue_number=$(printf '%s' "$state" | jq -r '.input.issue_numbers[0] // empty')
+  if [[ -n "$issue_number" ]]; then
+    tasks_done=$(printf '%s' "$task_summary" | jq -r '.done')
+    tasks_total=$(printf '%s' "$task_summary" | jq -r '.total')
+
+    # Build human-readable summary text
+    summary_text="**Run ID:** \`${run_id}\`
+**Mode:** ${mode}
+**Duration:** ${duration_minutes:-unknown} minutes
+**Review rounds:** ${review_count}
+
+### Tasks
+| Status | Count |
+|--------|-------|
+| Done | ${tasks_done} |
+| Failed | $(printf '%s' "$task_summary" | jq -r '.failed') |
+| Needs Human Review | $(printf '%s' "$task_summary" | jq -r '.needs_human') |"
+
+    pipeline-gh-comment "$issue_number" "run-summary" --update \
+      --data "$(jq -n \
+        --arg summary "$summary_text" \
+        --arg status "$run_status" \
+        --argjson tasks_done "$tasks_done" \
+        --argjson tasks_total "$tasks_total" \
+        '{summary: $summary, status: $status, tasks_done: $tasks_done, tasks_total: $tasks_total}'
+      )" 2>/dev/null || log_warn "could not post summary to issue $issue_number"
+  fi
+fi

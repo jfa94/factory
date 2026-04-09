@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# Wait for a PR to be merged, handling CI failures and conflicts.
+# Usage: pipeline-wait-pr <pr-number> [--timeout <minutes>] [--interval <seconds>]
+# Exit codes:
+#   0 = merged
+#   1 = timeout
+#   2 = closed without merge
+#   3 = CI failed (failure details on stdout)
+#   4 = unresolvable merge conflict
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command gh
+require_command jq
+
+pr="${1:?missing PR number}"
+shift
+
+timeout_minutes=45
+interval_seconds=60
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --timeout) timeout_minutes="$2"; shift 2 ;;
+    --interval) interval_seconds="$2"; shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+# Validate numeric inputs
+if ! [[ "$pr" =~ ^[0-9]+$ ]]; then
+  log_error "invalid PR number: $pr"
+  exit 1
+fi
+
+timeout_seconds=$((timeout_minutes * 60))
+start_time=$(date +%s)
+
+# Auto-safe rebase: files we know how to resolve
+# - pnpm-lock.yaml, claude-progress.json, feature-status.json → ours
+# - .gitignore → union merge
+# - package.json → attempt 3-way merge
+SAFE_OURS_FILES="pnpm-lock.yaml claude-progress.json feature-status.json"
+
+_elapsed() {
+  local now
+  now=$(date +%s)
+  echo $(( now - start_time ))
+}
+
+_check_pr_status() {
+  gh pr view "$pr" --json state,mergedAt,mergeable,headRefName 2>/dev/null
+}
+
+_check_pr_checks() {
+  gh pr checks "$pr" --json name,state,conclusion 2>/dev/null
+}
+
+_attempt_rebase() {
+  local head_branch
+  head_branch=$(printf '%s' "$1" | jq -r '.headRefName')
+
+  log_info "attempting rebase for $head_branch"
+
+  # Fetch latest
+  git fetch origin 2>/dev/null || return 1
+
+  local current_branch
+  current_branch=$(git branch --show-current 2>/dev/null)
+
+  # Check out the PR branch
+  git checkout "$head_branch" 2>/dev/null || return 1
+
+  local rebase_ok=true
+  if ! git rebase "origin/staging" 2>/dev/null; then
+    # Check if conflicts are in safe files
+    local conflicted_files
+    conflicted_files=$(git diff --name-only --diff-filter=U 2>/dev/null)
+
+    if [[ -z "$conflicted_files" ]]; then
+      git rebase --abort 2>/dev/null
+      git checkout "$current_branch" 2>/dev/null
+      return 1
+    fi
+
+    local has_unsafe=false
+    while IFS= read -r cf; do
+      local is_safe=false
+
+      # Check ours-strategy files
+      for sf in $SAFE_OURS_FILES; do
+        if [[ "$cf" == "$sf" ]]; then
+          git checkout --ours "$cf" 2>/dev/null
+          git add "$cf" 2>/dev/null
+          is_safe=true
+          break
+        fi
+      done
+
+      # Check .gitignore (union merge: combine both sides, deduplicate)
+      if [[ "$cf" == ".gitignore" ]]; then
+        local tmp_union
+        tmp_union=$(mktemp)
+        { git show REBASE_HEAD:.gitignore 2>/dev/null || true; git show HEAD:.gitignore 2>/dev/null || true; } > "$tmp_union"
+        sort -u "$tmp_union" > "$cf"
+        rm -f "$tmp_union"
+        git add "$cf" 2>/dev/null
+        is_safe=true
+      fi
+
+      if [[ "$is_safe" != "true" ]]; then
+        has_unsafe=true
+        break
+      fi
+    done <<< "$conflicted_files"
+
+    if [[ "$has_unsafe" == "true" ]]; then
+      git rebase --abort 2>/dev/null
+      git checkout "$current_branch" 2>/dev/null
+
+      # Output conflict info
+      jq -n \
+        --arg branch "$head_branch" \
+        --arg files "$conflicted_files" \
+        '{branch: $branch, conflicted_files: ($files | split("\n") | map(select(length > 0)))}'
+      return 1
+    fi
+
+    # All conflicts resolved, continue rebase
+    GIT_EDITOR=true git rebase --continue 2>/dev/null || {
+      git rebase --abort 2>/dev/null
+      git checkout "$current_branch" 2>/dev/null
+      return 1
+    }
+  fi
+
+  # Push the rebased branch
+  git push --force-with-lease origin "$head_branch" 2>/dev/null || {
+    git checkout "$current_branch" 2>/dev/null
+    return 1
+  }
+
+  git checkout "$current_branch" 2>/dev/null
+  log_info "rebase successful for $head_branch"
+  return 0
+}
+
+# --- Main poll loop ---
+
+rebase_attempted=false
+
+while true; do
+  elapsed=$(_elapsed)
+  if [[ $elapsed -ge $timeout_seconds ]]; then
+    log_error "timeout after ${timeout_minutes} minutes waiting for PR #${pr}"
+    jq -n --arg pr "$pr" --argjson timeout "$timeout_minutes" \
+      '{status: "timeout", pr: $pr, timeout_minutes: $timeout}'
+    exit 1
+  fi
+
+  # Check PR status
+  pr_data=$(_check_pr_status)
+  if [[ -z "$pr_data" ]]; then
+    log_warn "could not fetch PR #${pr} status, retrying..."
+    sleep "$interval_seconds"
+    continue
+  fi
+
+  state=$(printf '%s' "$pr_data" | jq -r '.state')
+  merged_at=$(printf '%s' "$pr_data" | jq -r '.mergedAt')
+  mergeable=$(printf '%s' "$pr_data" | jq -r '.mergeable')
+
+  # Check if merged
+  if [[ "$state" == "MERGED" ]] || [[ "$merged_at" != "null" && "$merged_at" != "" ]]; then
+    log_info "PR #${pr} merged"
+    jq -n --arg pr "$pr" --arg merged_at "$merged_at" \
+      '{status: "merged", pr: $pr, merged_at: $merged_at}'
+    exit 0
+  fi
+
+  # Check if closed without merge
+  if [[ "$state" == "CLOSED" ]]; then
+    log_error "PR #${pr} closed without merge"
+    jq -n --arg pr "$pr" '{status: "closed", pr: $pr}'
+    exit 2
+  fi
+
+  # Check for merge conflicts
+  if [[ "$mergeable" == "CONFLICTING" ]]; then
+    if [[ "$rebase_attempted" == "true" ]]; then
+      log_error "PR #${pr} has unresolvable merge conflict"
+      jq -n --arg pr "$pr" '{status: "conflict", pr: $pr}'
+      exit 4
+    fi
+
+    rebase_attempted=true
+    if ! _attempt_rebase "$pr_data"; then
+      log_error "PR #${pr} rebase failed — conflict escalated"
+      exit 4
+    fi
+
+    # Check sooner after rebase
+    sleep 10
+    continue
+  fi
+
+  # Check CI status — exit 3 on failure so orchestrator can push a fix and re-invoke
+  checks_data=$(_check_pr_checks)
+  if [[ -n "$checks_data" ]]; then
+    failed_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.conclusion == "FAILURE")] | length')
+
+    if [[ "$failed_checks" -gt 0 ]]; then
+      failed_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.conclusion == "FAILURE") | .name] | join(", ")')
+      log_error "PR #${pr} CI failed: $failed_names"
+      jq -n \
+        --arg pr "$pr" \
+        --arg failed "$failed_names" \
+        '{status: "ci_failed", pr: $pr, failed_checks: $failed}'
+      exit 3
+    fi
+
+    # Log progress if checks still running
+    pending_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.state == "IN_PROGRESS" or .state == "QUEUED" or .state == "PENDING")] | length')
+    if [[ "$pending_checks" -eq 0 ]]; then
+      log_info "all checks passed for PR #${pr}, waiting for merge..."
+    fi
+  fi
+
+  remaining=$(( (timeout_seconds - elapsed) / 60 ))
+  log_info "PR #${pr} state=$state mergeable=$mergeable — ${remaining}min remaining"
+  sleep "$interval_seconds"
+done

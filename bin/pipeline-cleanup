@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# Clean up after a pipeline run: branches, worktrees, issues, spec, state archive.
+# Usage: pipeline-cleanup <run-id> [flags]
+# Flags:
+#   --close-issues      Close GitHub issues (only if ALL tasks for issue merged)
+#   --delete-branches   Delete local+remote branches for merged PRs
+#   --remove-worktrees  Remove git worktrees for merged tasks
+#   --clean-spec        Remove spec dir after all tasks merged
+#   --spec-dir <path>   Spec directory path (required for --clean-spec)
+# Exit: 0=success, 1=failure
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+run_id="${1:?missing run-id}"
+shift
+
+close_issues=false
+delete_branches=false
+remove_worktrees=false
+clean_spec=false
+spec_dir=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --close-issues) close_issues=true; shift ;;
+    --delete-branches) delete_branches=true; shift ;;
+    --remove-worktrees) remove_worktrees=true; shift ;;
+    --clean-spec) clean_spec=true; shift ;;
+    --spec-dir) spec_dir="$2"; shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+# Read state
+state_file="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/state.json"
+if [[ ! -f "$state_file" ]]; then
+  log_error "state file not found: $state_file"
+  exit 1
+fi
+
+state=$(cat "$state_file")
+
+# Collect results for output
+branches_deleted=0
+branches_skipped=0
+worktrees_removed=0
+issues_closed=0
+spec_cleaned=false
+
+# --- Delete branches ---
+if [[ "$delete_branches" == "true" ]]; then
+  log_info "cleaning up branches..."
+
+  # Iterate tasks, delete branches for done tasks with PR info
+  while IFS= read -r task_entry; do
+    task_id=$(printf '%s' "$task_entry" | jq -r '.key')
+    task_status=$(printf '%s' "$task_entry" | jq -r '.value.status')
+    branch=$(printf '%s' "$task_entry" | jq -r '.value.branch // empty')
+
+    if [[ -z "$branch" ]]; then
+      continue
+    fi
+
+    if [[ "$task_status" == "done" ]]; then
+      deleted_any=false
+
+      # Delete remote branch
+      if git push origin --delete "$branch" 2>/dev/null; then
+        log_info "deleted remote branch: $branch"
+        deleted_any=true
+      fi
+
+      # Delete local branch
+      if git branch -d "$branch" 2>/dev/null; then
+        log_info "deleted local branch: $branch"
+        deleted_any=true
+      fi
+
+      if [[ "$deleted_any" == "true" ]]; then
+        branches_deleted=$((branches_deleted + 1))
+      fi
+    else
+      log_warn "skipping unmerged branch: $branch (task $task_id status=$task_status)"
+      branches_skipped=$((branches_skipped + 1))
+    fi
+  done < <(printf '%s' "$state" | jq -c '.tasks | to_entries[]')
+fi
+
+# --- Remove worktrees ---
+if [[ "$remove_worktrees" == "true" ]]; then
+  log_info "cleaning up worktrees..."
+
+  while IFS= read -r task_entry; do
+    task_id=$(printf '%s' "$task_entry" | jq -r '.key')
+    task_status=$(printf '%s' "$task_entry" | jq -r '.value.status')
+    worktree=$(printf '%s' "$task_entry" | jq -r '.value.worktree // empty')
+
+    if [[ -z "$worktree" ]]; then
+      continue
+    fi
+
+    if [[ "$task_status" == "done" ]]; then
+      if [[ -d "$worktree" ]]; then
+        git worktree remove "$worktree" --force 2>/dev/null || {
+          log_warn "could not remove worktree: $worktree"
+          continue
+        }
+        log_info "removed worktree: $worktree"
+        worktrees_removed=$((worktrees_removed + 1))
+      fi
+    else
+      log_warn "skipping worktree for unmerged task: $task_id"
+    fi
+  done < <(printf '%s' "$state" | jq -c '.tasks | to_entries[]')
+fi
+
+# --- Close issues ---
+if [[ "$close_issues" == "true" ]]; then
+  require_command gh
+  log_info "checking issues for closure..."
+
+  issues=$(printf '%s' "$state" | jq -r '.input.issue_numbers[]' 2>/dev/null)
+  for issue_number in $issues; do
+    # Check if ALL tasks are done
+    total_tasks=$(printf '%s' "$state" | jq '.tasks | length')
+    done_tasks=$(printf '%s' "$state" | jq '[.tasks | to_entries[] | select(.value.status == "done")] | length')
+
+    if [[ "$done_tasks" -eq "$total_tasks" ]] && [[ "$total_tasks" -gt 0 ]]; then
+      if gh issue close "$issue_number" 2>/dev/null; then
+        log_info "closed issue #$issue_number"
+        issues_closed=$((issues_closed + 1))
+      else
+        log_warn "could not close issue #$issue_number"
+      fi
+    else
+      log_warn "not closing issue #$issue_number ($done_tasks/$total_tasks tasks done)"
+    fi
+  done
+fi
+
+# --- Clean spec ---
+if [[ "$clean_spec" == "true" ]]; then
+  if [[ -z "$spec_dir" ]]; then
+    log_warn "no --spec-dir specified, skipping spec cleanup"
+  elif [[ ! -d "$spec_dir" ]]; then
+    log_warn "spec dir not found: $spec_dir"
+  else
+    # Only clean if all tasks done
+    total_tasks=$(printf '%s' "$state" | jq '.tasks | length')
+    done_tasks=$(printf '%s' "$state" | jq '[.tasks | to_entries[] | select(.value.status == "done")] | length')
+
+    if [[ "$done_tasks" -eq "$total_tasks" ]] && [[ "$total_tasks" -gt 0 ]]; then
+      git rm -rf "$spec_dir" 2>/dev/null || rm -rf "$spec_dir"
+      log_info "cleaned spec dir: $spec_dir"
+      spec_cleaned=true
+    else
+      log_warn "not cleaning spec ($done_tasks/$total_tasks tasks done)"
+    fi
+  fi
+fi
+
+# --- Archive run state ---
+archive_dir="${CLAUDE_PLUGIN_DATA}/archive/${run_id}"
+run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+
+if [[ -d "$run_dir" ]]; then
+  mkdir -p "$archive_dir"
+
+  # Copy state and logs to archive
+  cp "$run_dir/state.json" "$archive_dir/" 2>/dev/null || true
+  cp "$run_dir/audit.jsonl" "$archive_dir/" 2>/dev/null || true
+  cp "$run_dir/metrics.jsonl" "$archive_dir/" 2>/dev/null || true
+
+  # Copy reviews and holdouts
+  if [[ -d "$run_dir/reviews" ]]; then
+    cp -r "$run_dir/reviews" "$archive_dir/" 2>/dev/null || true
+  fi
+  if [[ -d "$run_dir/holdouts" ]]; then
+    cp -r "$run_dir/holdouts" "$archive_dir/" 2>/dev/null || true
+  fi
+
+  # Remove current symlink if it points to this run
+  current_link="${CLAUDE_PLUGIN_DATA}/runs/current"
+  if [[ -L "$current_link" ]]; then
+    current_target=$(readlink "$current_link")
+    if [[ "$current_target" == "$run_dir" ]] || [[ "$(basename "$current_target")" == "$run_id" ]]; then
+      rm -f "$current_link"
+    fi
+  fi
+
+  # Remove the run directory
+  rm -rf "$run_dir"
+  log_info "archived run $run_id to $archive_dir"
+fi
+
+# Output results
+jq -n \
+  --arg run_id "$run_id" \
+  --argjson branches_deleted "$branches_deleted" \
+  --argjson branches_skipped "$branches_skipped" \
+  --argjson worktrees_removed "$worktrees_removed" \
+  --argjson issues_closed "$issues_closed" \
+  --argjson spec_cleaned "$spec_cleaned" \
+  --arg archive_path "$archive_dir" \
+  '{
+    run_id: $run_id,
+    branches_deleted: $branches_deleted,
+    branches_skipped: $branches_skipped,
+    worktrees_removed: $worktrees_removed,
+    issues_closed: $issues_closed,
+    spec_cleaned: $spec_cleaned,
+    archive_path: $archive_path
+  }'
