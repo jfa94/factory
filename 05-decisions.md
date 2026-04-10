@@ -1,0 +1,496 @@
+# Dark Factory Plugin — Design Decisions & Open Questions
+
+## Design Decisions
+
+### Decision 1: Deterministic-First Architecture
+
+**Choice:** ~3:1 ratio of deterministic components (bin scripts, hooks) to non-deterministic (agents). If a step CAN be a script, it MUST be a script.
+
+**Alternatives considered:**
+
+| Option                                       | Pros                                                            | Cons                                                                                                   |
+| -------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **A: Agent-heavy (7+ agents, 4+ skills)**    | Natural language flexibility, easier to write                   | Agent instructions followed ~70%, non-deterministic state management, hard to test                     |
+| **B: Script-heavy (pure Bash orchestrator)** | 100% deterministic, testable, debuggable                        | Cannot spawn Claude Code agents (Agent tool only available to agents), loses plugin framework benefits |
+| **C: Hybrid — deterministic-first (chosen)** | Scripts for reliability where needed, agents for judgment tasks | More components to maintain, two paradigms to reason about                                             |
+
+**Evidence:**
+
+- Concrete operational rules outperform abstract directives by 123% (research report)
+- Agent instructions followed ~70% of the time; hooks/scripts enforce at 100%
+- METR RCT: perception gap of 39pp between believed and actual AI productivity — unreliable self-assessment extends to agents
+
+**Result:** 21 bin scripts, 4 plugin agents, 4 hooks, 8+ existing agents reused. Scripts handle validation, state, classification, parsing. Agents handle code generation, review, spec creation.
+
+---
+
+### Decision 2: Orchestrator-as-Agent with Script Delegation
+
+**Choice:** The orchestrator is an agent (required to spawn subagents via Agent tool), but it delegates ALL deterministic work to bin/ scripts via Bash calls.
+
+**Why not a pure script orchestrator?**
+The Claude Code plugin system has no process manager primitive. Only agents can use the `Agent` tool to spawn subagents. A shell script cannot spawn `spec-generator`, `task-executor`, or `task-reviewer` agents.
+
+**Why not pure agent orchestration?**
+State management, circuit breakers, DAG traversal, and classification MUST be 100% reliable. Agent instructions for these would fail ~30% of the time — unacceptable for pipeline control flow.
+
+**Risk:** The orchestrator itself is non-deterministic. It might not call bin scripts in the right order, might misinterpret their output, or might skip steps.
+
+**Mitigations:**
+
+1. **State persistence** — every state transition is written by a bin script. If the orchestrator crashes/misbehaves, state reflects reality.
+2. **Circuit breakers** — deterministic limits prevent runaway execution regardless of orchestrator behavior.
+3. **Idempotent scripts** — re-running a script with the same input produces the same output. Safe to retry.
+4. **Resume capability** — interrupted runs recover from persisted state, not agent memory.
+5. **Explicit instructions** — orchestrator instructions are operational and concrete, not abstract directives.
+
+---
+
+### Decision 3: Reuse Existing Agents by Reference
+
+**Choice:** Spawn the user's existing agents (spec-reviewer, code-reviewer, architecture-reviewer, security-reviewer, test-writer, scout, simple-task-runner, scribe) by name via the Agent tool rather than creating plugin-internal copies.
+
+**Alternatives considered:**
+
+- **Copy agents into plugin:** Guarantees stable interface, but diverges from user's evolving setup. Updates to user's agents don't propagate.
+- **Reuse by reference (chosen):** User improvements propagate automatically. Pipeline benefits from the user's customizations.
+
+**Trade-off:** If the user modifies an agent's output format, the pipeline's `pipeline-parse-review` script might break. Mitigated by:
+
+- Parsing is best-effort with fallback patterns
+- Review output format is specified by `review-protocol` skill, which we inject
+- Spec-reviewer has a stable scoring format (score/60, PASS/NEEDS_REVISION)
+
+---
+
+### Decision 4: Separate task-reviewer from code-reviewer
+
+**Choice:** Create a new `task-reviewer` agent in the plugin rather than reusing the existing `code-reviewer` directly.
+
+**Why:**
+
+1. `task-reviewer` adds acceptance-criteria validation (checking each criterion against code with PASS/FAIL evidence)
+2. `task-reviewer` validates holdout criteria (criteria the executor never saw)
+3. `task-reviewer` outputs machine-parseable structured format (parsed by `pipeline-parse-review`)
+4. `task-reviewer` is round-aware (includes round number, focuses on previous findings in subsequent rounds)
+
+**The existing `code-reviewer` is still used** as a fallback when Codex is unavailable AND `review-protocol` skill needs to be injected for adversarial posture.
+
+**Result:** `task-reviewer` is the primary pipeline reviewer. `code-reviewer` is a fallback option. Both can receive `review-protocol` skill injection.
+
+---
+
+### Decision 5: Holdout Specs in Plugin Data, Not Repo
+
+**Choice:** Store withheld acceptance criteria in `${CLAUDE_PLUGIN_DATA}/holdouts/`, outside the git worktree.
+
+**Why:**
+
+- The task-executor runs in an isolated worktree. If holdout criteria were in the repo, the executor could read them.
+- `${CLAUDE_PLUGIN_DATA}` is a plugin-specific directory outside any git repo. Agents operating in worktrees cannot access it unless explicitly given the path.
+- The `pipeline-build-prompt` script writes holdouts to this directory. The orchestrator passes holdout criteria to the task-reviewer separately.
+
+**Trade-off:** Holdout criteria are not version-controlled. If a run is interrupted and resumed, holdouts must still exist in plugin data. Mitigated by: holdouts are stored per-run, and resume reads from the same run directory.
+
+---
+
+### Decision 6: Three-Tier Component Model (Hooks → Scripts → Agents)
+
+**Choice:** Three distinct tiers of components with clear responsibility boundaries:
+
+| Tier                            | Reliability                    | Responsibility                                                       | Example                                               |
+| ------------------------------- | ------------------------------ | -------------------------------------------------------------------- | ----------------------------------------------------- |
+| **Hooks** (un-bypassable)       | 100% enforcement               | Safety constraints that MUST never be violated                       | Branch protection, audit logging                      |
+| **Bin scripts** (deterministic) | 100% correct given valid input | Logic that has a single correct answer                               | Validation, state management, classification, parsing |
+| **Agents** (non-deterministic)  | ~70% instruction following     | Tasks requiring judgment, creativity, natural language understanding | Code generation, code review, spec creation           |
+
+**Why not just hooks + agents?**
+Hooks fire on specific events (PreToolUse, PostToolUse, Stop, SubagentStop). They cannot be called on-demand by the orchestrator. Bin scripts fill the gap: on-demand deterministic logic that agents call via Bash.
+
+**Why not just scripts + agents?**
+Hooks are un-bypassable. Even if the orchestrator agent ignores its instructions, hooks still fire. Branch protection via hook means force-push to main is blocked regardless of what any agent tries to do.
+
+---
+
+### Decision 7: No External State Server
+
+**Choice:** JSON files in `${CLAUDE_PLUGIN_DATA}` for all state management.
+
+**Alternatives considered:**
+
+- **SQLite:** Better querying, atomic transactions. But adds dependency, harder to inspect, and the current pipeline uses JSON files successfully.
+- **Redis/PostgreSQL:** Overkill for single-machine pipeline.
+- **JSON files (chosen):** Same pattern as Bash pipeline. Human-readable, trivially inspectable with `jq`, no dependencies.
+
+**Exception:** The metrics MCP server uses SQLite (`metrics.db`) because metrics queries benefit from SQL (aggregation, filtering, time ranges). State management stays JSON.
+
+**Atomic writes:** All state writes use `write-to-temp + mv` pattern to prevent corruption from partial writes or interrupted sessions.
+
+---
+
+### Decision 8: Worktree Isolation Replaces Directory Locking
+
+**Choice:** Each task-executor runs in its own git worktree. The `pipeline-lock` script is a secondary safety mechanism (prevents two orchestrators, not two executors).
+
+**Why worktrees over locks:**
+
+- **True isolation:** Each executor has its own working directory and branch. No possibility of git conflicts between concurrent tasks.
+- **No deadlocks:** Lock-based concurrency can deadlock if a process dies holding a lock. Worktrees don't have this problem.
+- **Native support:** Claude Code's `isolation: "worktree"` agent frontmatter creates and manages worktrees automatically.
+
+**Lock still exists because:** Two orchestrator instances running simultaneously would cause state corruption. The lock prevents this edge case (e.g., user accidentally runs `/dark-factory:run` twice).
+
+---
+
+### Decision 9: Adversarial Review with Vendor Fallback
+
+**Choice:** Use OpenAI Codex's adversarial review mode as primary reviewer when available; fall back to Claude Code's code-reviewer + review-protocol skill.
+
+**Why Codex as primary:**
+
+- Codex has a purpose-built `/codex:adversarial-review` command designed for threat-modeling code
+- Using a DIFFERENT vendor for review than for implementation creates genuine independence (different model biases, different failure modes)
+- Actor-Critic pattern is strongest when Actor and Critic are distinct systems
+
+**Why Claude Code as fallback:**
+
+- Codex may not be installed or authenticated
+- Fallback must be fully functional, not degraded
+- `review-protocol` skill injects adversarial posture into any reviewer
+- The existing `code-reviewer` agent already has a strong review methodology
+
+**Detection is deterministic:** `pipeline-detect-reviewer` checks Codex availability via `command -v codex && codex status --auth`. No agent judgment involved.
+
+**Trade-off:** External dependency on Codex (npm package, OpenAI auth). Mitigated: detection is fast, fallback is automatic, and the fallback reviewer is fully capable.
+
+---
+
+### Decision 10: Dual Usage Checks — Separate 5h and 7d Behaviors
+
+**Choice:** Run two independent usage checks before each task spawn — a 5-hour burst window check and a 7-day rolling window check — with distinct behaviors when exceeded.
+
+**Why not coalesce into a single "effective" metric?**
+The original bash pipeline took whichever utilization was higher (5h or 7d) and applied one behavior (wait). This is wrong: the 5-hour limit is a burst constraint (temporary, reset every 5 hours — appropriate to wait it out), while the 7-day limit is a budget constraint (indicates sustained over-consumption — not appropriate to wait, pipeline should stop and let the budget recover).
+
+**5-hour check behavior:**
+- Hourly thresholds: 20% / 40% / 60% / 80% / 90% across hours 1–5, derived from `resets_at - 5h`
+- Over threshold + Ollama enabled → route to Ollama (all tiers allowed)
+- Over threshold + no Ollama → wait until next hour boundary, then retry on Claude
+- Ollama exhausts max review rounds → wait for 5h reset, then retry on Claude
+
+**7-day check behavior:**
+- Daily thresholds: 14.2% / 28.6% / 42.9% / 57.1% / 71.4% / 85.7% / 95% across days 1–7, derived from `resets_at - 7d`
+- Final threshold is 95% (not 100%) to preserve a 5% buffer
+- Over threshold + Ollama enabled → route to Ollama (all tiers allowed), continue until next daily threshold
+- Over threshold + no Ollama → end gracefully: stop spawning, drain in-flight tasks, mark run `partial`, persist state for resume
+- Ollama exhausts max review rounds → same graceful exit (no cloud fallback — budget is the constraint)
+
+**Why allow all tiers on Ollama?**
+When a budget limit is hit, blocking higher-tier tasks entirely means the pipeline grinds to a halt. Ollama with elevated review caps (routine=15, feature=20, security=25 rounds) provides a quality-compensated path forward. The stricter review is the critical element — it runs until the code passes, not until rounds are exhausted (the cap is a safety bound, not a target).
+
+**Why source from response headers, not the OAuth usage API?**
+The existing bash pipeline called `https://api.anthropic.com/api/oauth/usage` directly, requiring OAuth token retrieval from Keychain (macOS-only, fragile). The `unified-*` response headers (`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`) carry the same data and are already present in `last-headers.json` saved after each API call. No separate API call, no credential handling, cross-platform.
+
+**Billing mode detection (auto, no config):**
+- `unified-*` headers + `is_using_overage=false` → subscription allowance (cost = $0)
+- `unified-*` headers + `is_using_overage=true` → extra usage/overage (API rates apply)
+- No `unified-*` headers / `ANTHROPIC_API_KEY` set → direct API (API rates apply)
+Cost estimates in the pipeline summary reflect billing mode automatically.
+
+**Advanced option:** LiteLLM proxy at `http://localhost:4000` for unified routing. Adds dependency but simplifies multi-provider management. Optional — not required for basic Ollama fallback.
+
+---
+
+### Decision 11: Ollama Configuration, Remote Support & Auto-Pull
+
+**Choice:** Remote Ollama is supported via `localLlm.ollamaUrl` (existing key). Model validation and auto-pull are integrated into `pipeline-model-router`. Configuration uses a conversational `/dark-factory:configure` agent command covering all settings.
+
+**Default model:** `qwen2.5-coder:14b` — 9GB disk, ~10-12GB VRAM at Q4_K_M quantization. **16GB minimum GPU** to allow headroom for KV cache and OS overhead. The "14B model needs 16GB" concern conflates unquantized weight size (~28GB at FP16) with the actual Q4_K_M size. Ollama uses Q4_K_M by default; the model fits comfortably on 16GB without a context cap.
+
+**Why auto-pull is in `pipeline-model-router`, not a separate script:**
+Model validation is part of the routing decision — if the model isn't available, Ollama effectively isn't available. Bundling the check in the router keeps the logic in one place and avoids an extra bin script.
+
+**Why auto-pull fires on the server (even for remote):**
+`POST /api/pull` triggers download on the Ollama server, not the client. This is correct behavior for remote setups — the client machine doesn't need 9GB of disk space. Documented explicitly to avoid confusion.
+
+**Why `configure` is conversational, not a TUI:**
+Claude Code's Bash tool has no TTY access — interactive scripts (gum, fzf, dialog) cannot receive keyboard input when invoked by an agent. A standalone TUI script would require the user to run it outside Claude Code. The conversational approach works natively within the plugin without extra dependencies, and covers all `userConfig` settings, not just localLlm.
+
+**Security for remote Ollama:**
+Ollama has no built-in auth. The plugin documents LAN-only exposure and recommends a reverse proxy for access control if needed. No attempt is made to abstract this — it's the user's infrastructure concern.
+
+---
+
+### Decision 12: Existing User Hooks Fire Automatically
+
+**Choice:** Do NOT duplicate any of the user's existing hooks in the plugin. They fire automatically for all plugin agents.
+
+**Why:**
+
+- The user's `.claude/settings.json` defines hooks for pre-commit, pre-push, dangerous patterns, SQL safety, etc.
+- These hooks fire for ALL agent sessions, including plugin agents
+- Duplicating them in the plugin's `hooks.json` would cause double-execution
+- The user may customize these hooks — the plugin should inherit, not override
+
+**Plugin-specific hooks** (branch-protection, run-tracker, stop-gate, subagent-stop-gate) cover pipeline-specific concerns that the user's hooks don't address.
+
+---
+
+### Decision 13: Staging Branch as Integration Point
+
+**Choice:** All task worktrees branch from a `staging` branch, and all task PRs target `staging` rather than `main` or `develop`. The pipeline auto-creates `staging` if it doesn't exist.
+
+**Branching hierarchy:**
+
+1. Pipeline runs `pipeline-branch staging-init` at the start of every run
+2. Checks remote for `staging` branch
+3. If absent: creates from `develop` (if it exists) or `main`, pushes to remote
+4. All task branches: `dark-factory/<issue>/<task-id>` created from `staging` HEAD
+5. All PRs target `staging`
+6. The `staging` branch is NOT auto-merged into `main`/`develop` — that's a deliberate human gate
+
+**Why not branch directly from main/develop?**
+
+- `main` and `develop` are protected branches. The autonomous settings hook blocks writes to them.
+- Multiple concurrent tasks modifying the same protected branch would create conflicts.
+- `staging` provides an integration layer where concurrent feature branches can merge safely without touching `main`.
+- Humans retain explicit control over what moves from `staging` → `main`.
+
+**Dependent task ordering:**
+
+Task B (depends on task A) waits for A's PR to merge into `staging` via `pipeline-wait-pr`. Only after A is merged does the orchestrator call `pipeline-branch create` for B. This guarantees B's worktree starts from `staging` + A's changes — sequential execution for dependent tasks, parallel execution for independent ones.
+
+**Security:** The `settings.autonomous.json` branch-protection hook blocks writes to `main`, `master`, and `develop`. `staging` is intentionally NOT in this list — task PRs must be able to merge there.
+
+---
+
+### Decision 14: Bundled Autonomous Settings with CLI Flag Detection
+
+**Choice:** The plugin ships `templates/settings.autonomous.json` as an exact copy of the existing `~/Projects/dark-factory/templates/settings.autonomous.json`. The `/dark-factory:run` command detects whether the session was launched with these settings, and if not, prompts the user to relaunch.
+
+**Detection mechanism:** `settings.autonomous.json` sets an environment variable `DARK_FACTORY_AUTONOMOUS_MODE=1` in its `env` config. The `/dark-factory:run` command checks for this env var as its first step. If absent, it exits with a clear message:
+
+> "Dark Factory requires autonomous settings. Relaunch with: `claude --settings <plugin-root>/templates/settings.autonomous.json`"
+
+**Why an exact copy (not trimmed)?**
+
+The autonomous settings have been carefully considered in the existing dark-factory project — `Bash(*)` with an explicit deny-list, safety hooks (branch protection, SQL safety, dangerous patterns, audit logging, test runner), and full MCP tool permissions. Trimming it would risk omitting safety constraints that were added for specific reasons. Users can customize via `/dark-factory:configure` after install; the bundled file is the safe default.
+
+**Why not hook-based swap/restore?**
+
+The session must start with the correct settings — subagents inherit the parent session's settings, not settings that are swapped mid-session. A hook-based approach could swap `settings.json` before the session starts, but this risks leaving autonomous settings in place if the pipeline crashes before the stop-gate fires. The `--settings` flag approach is stateless: if the session crashes, the next session starts fresh with whatever settings the user specifies.
+
+**Why not prompt per-run?**
+
+Repeatedly asking the user to re-launch adds friction. The environment variable check is a one-time detection on `/dark-factory:run`. Once the user has set up their launcher (alias, script, or shell config), subsequent runs are seamless.
+
+---
+
+### Decision 15: CI Integration and Merge Conflict Handling
+
+**Choice:** `pipeline-wait-pr` polls both PR merge status AND GitHub Actions CI checks. On CI failure, the orchestrator attempts up to 2 automated fixes before escalating. On merge conflicts, it attempts one rebase before escalating.
+
+**Why integrate with dark-factory's GitHub Actions CI?**
+
+The plugin's 5-layer quality gate runs before PR creation. However, the CI workflow in the dark-factory project runs independently on the PR branch — it may catch issues the quality gate missed (environment differences, integration tests, etc.). Ignoring CI failures and merging anyway would defeat the purpose of the CI workflow.
+
+**CI failure retry limit (2):**
+
+Conservative — CI failures from the pipeline's own output should be rare (quality gates run first). If the first fix attempt doesn't resolve the issue, the second is a safety net. Beyond 2 attempts, the failure is likely structural (environment issue, spec ambiguity, external dependency) and requires human judgment.
+
+**Merge conflict rebase-once strategy:**
+
+Merge conflicts happen when two tasks modify the same files concurrently. The pipeline's worktree isolation prevents conflicts during execution, but post-merge conflicts can occur if two PRs (targeting the same `staging` branch) both modify overlapping files. One rebase attempt resolves most simple conflicts (pure divergence). If a rebase still fails, the conflict is likely a genuine semantic collision requiring human review.
+
+**Exit code 4 (unresolvable conflict) vs exit code 2 (closed without merge):**
+
+The distinction matters for the orchestrator's response: a closed-without-merge PR from a human reviewer is different from a closed-due-to-conflict PR from auto-merge failure. Exit code 4 triggers a rebase attempt; exit code 2 does not.
+
+**Auto-safe rebase file list:**
+
+Some files can be resolved mechanically during rebase without human review:
+- `package.json`: 3-way merge (both dependency additions are valid; conflicts here indicate intentional version disagreements which should be rare)
+- `pnpm-lock.yaml`: always take `ours` — the lockfile is deterministically regenerated by `pnpm install` post-merge, so the rebase value is throwaway
+- `claude-progress.json`, `feature-status.json`: pipeline tracking state, not code; the currently-executing task's view is authoritative (`ours`)
+- `.gitignore`: union strategy — both sets of ignore entries should be kept
+
+All other file conflicts require human review. The rebase loop runs up to 30 rounds to handle multi-commit rebases (where each round may surface a new conflict in a different commit).
+
+---
+
+### Decision 16: Project Scaffolding and Config Deployment
+
+**Choice:** `pipeline-scaffold` and `pipeline-init --deploy-config` create project scaffolding files and CI/CD config on first run. Files are only created if absent (idempotent).
+
+**Why scaffold files instead of bundled templates?**
+
+The scaffolding files (`claude-progress.json`, `feature-status.json`, `init.sh`, `quality-gate.yml`) are project-specific artifacts, not plugin metadata. They belong in the user's repository (versioned, visible to teammates), not in the plugin directory.
+
+**Why idempotent creation (not overwrite)?**
+
+Users may customize their `quality-gate.yml` after the first run (add steps, adjust thresholds). Overwriting on every run would destroy those customizations. Idempotency means: if the file exists, trust the user's version.
+
+**Why `.gitignore` management?**
+
+Plugin state directories (`${CLAUDE_PLUGIN_DATA}/*`) contain ephemeral run state, not project code. Committing them would pollute the repository and cause merge conflicts across multiple machines. The pipeline automates this to prevent "accidentally committed pipeline state" issues that would otherwise require manual cleanup.
+
+**Why spec directory cleanup post-merge?**
+
+The spec directory is scaffolding for the pipeline's execution, not a permanent artifact. After all tasks for an issue are merged, the spec has served its purpose. Leaving it in the repository would accumulate spec files for every PRD ever processed, creating noise. Removal is committed so the deletion is in git history (recoverable) rather than silently deleted.
+
+---
+
+## Plugin System Constraints & Workarounds
+
+### Constraint: Agents Cannot Use Hooks
+
+**Impact:** Plugin agents cannot have per-agent hook configurations. All hooks in `hooks.json` fire for all agents.
+
+**Workaround:** Hook scripts check context to decide whether to act:
+
+- `run-tracker` checks if `${CLAUDE_PLUGIN_DATA}/runs/current` exists (only logs during active pipeline runs)
+- `branch-protection` checks the target branch (applies universally — this is desirable)
+
+### Constraint: Agents Cannot Use mcpServers
+
+**Impact:** Individual agents cannot declare MCP server dependencies in their frontmatter.
+
+**Workaround:** MCP servers are declared in `.mcp.json` at the plugin root. They're available to all agents in the plugin. The `pipeline-metrics` MCP server tools are accessible from the orchestrator agent.
+
+### Constraint: Agents Cannot Use permissionMode
+
+**Impact:** Cannot set per-agent permission modes (e.g., read-only for reviewers).
+
+**Workaround:** `settings.json` at plugin root defines default permissions. Reviewer agents are instructed to only use Read/Grep/Glob/Bash (no Write/Edit). This is an instruction (~70% reliable), not enforcement. Mitigated: reviewers don't need to write files; if they accidentally do, it's in a worktree that gets cleaned up.
+
+### Constraint: No Process Manager Primitive
+
+**Impact:** Cannot define a Bash-like pipeline orchestration flow declaratively.
+
+**Workaround:** Orchestrator-as-agent pattern (Decision 2). The agent IS the control loop, delegating deterministic work to scripts.
+
+### Constraint: Background Agent Output Reading
+
+**Impact:** When the orchestrator spawns a background agent, how does it read the result?
+
+**Workaround approaches (to be validated):**
+
+1. **SubagentStop hook** writes completion status to state files → orchestrator reads state
+2. **Agent tool return** — when a background agent completes, the orchestrator receives its output on the next turn
+3. **Polling state files** — orchestrator periodically checks `pipeline-state` for task status changes
+
+### Constraint: Turn Budget (200 turns)
+
+**Impact:** Orchestrator at 200 turns may not be sufficient for 20+ task pipelines.
+
+**Workaround options:**
+
+1. **Phase orchestrators** — split into spec-phase (40 turns) and execution-phase (160 turns) orchestrators
+2. **Efficient turn usage** — batch multiple bin script calls per turn where possible
+3. **Reduce per-task turns** — current estimate is ~16 turns/task; optimize by combining related calls
+
+---
+
+## Open Questions (Require Validation)
+
+### 1. Cross-Boundary Agent Spawning
+
+**Question:** Can a plugin agent spawn an agent defined in the user's `.claude/agents/` directory?
+
+**Expected:** Yes — the Agent tool takes a `subagent_type` parameter that should resolve against all available agents (plugin + user).
+
+**Validation:** Test with `claude --plugin-dir ./dark-factory-plugin` and have the orchestrator spawn `spec-reviewer`.
+
+**Fallback if no:** Copy agent definitions into the plugin (loses auto-propagation of user improvements).
+
+### 2. Background Agent Result Reading
+
+**Question:** When the orchestrator spawns a background agent (`run_in_background: true`), how does it receive the result?
+
+**Expected:** The system notifies the orchestrator when the background agent completes, and the result is available on the next turn.
+
+**Validation:** Test background agent spawning in a plugin context.
+
+**Fallback if notification doesn't work:** Use SubagentStop hook to write results to state files; orchestrator polls state.
+
+### 3. Hook Context Scoping
+
+**Question:** Can hooks detect whether they're firing during a dark-factory pipeline run vs normal user activity?
+
+**Proposed:** Hooks check for existence of `${CLAUDE_PLUGIN_DATA}/runs/current/state.json`.
+
+**Validation:** Verify that `${CLAUDE_PLUGIN_DATA}` is available as an environment variable in hook scripts.
+
+**Fallback if env var unavailable:** Use a well-known path (`~/.dark-factory/runs/current`) instead of plugin data directory.
+
+### 4. Bin Script Environment Variables
+
+**Question:** Do bin/ scripts automatically get `${CLAUDE_PLUGIN_DATA}` and `${CLAUDE_PLUGIN_ROOT}` as environment variables when called via Bash tool?
+
+**Expected:** Yes — the plugin system should inject these into the environment for all plugin components.
+
+**Validation:** Add `echo $CLAUDE_PLUGIN_DATA` to a test bin script, run via agent.
+
+**Fallback if no:** Pass paths as arguments to every script call; store in a config file at a known location.
+
+### 5. Codex Plugin Availability
+
+**Question:** Is the Codex Claude Code plugin stable and publicly available? Do `/codex:setup` and `/codex:adversarial-review` commands exist?
+
+**Risk:** Codex integration details were gathered from web research; the plugin may not be GA or may have a different API.
+
+**Validation:** Check npm registry for `@openai/codex`, test installation and auth flow.
+
+**Fallback:** Claude Code's code-reviewer + review-protocol skill is fully functional as fallback. Codex is an enhancement, not a requirement.
+
+### 6. Ollama Model Routing via Environment Variables
+
+**Question:** Can `ANTHROPIC_BASE_URL` be overridden per-subagent spawn, or is it process-global?
+
+**Expected:** If the orchestrator sets env vars before spawning a subagent, the subagent should inherit them.
+
+**Validation:** Test spawning an agent with env overrides in Agent tool parameters.
+
+**Fallback if process-global:** Use LiteLLM proxy as an intermediary — always point at `http://localhost:4000`, configure LiteLLM to route based on model name.
+
+### 7. Local Model Tool-Use Compatibility
+
+**Question:** Does Claude Code's agent framework work correctly with Ollama models (non-Anthropic tool-use format)?
+
+**Expected:** Ollama's OpenAI-compatible API (`/v1/chat/completions`) supports function calling for Llama 3.1+ and Qwen 2.5+ models. Claude Code may or may not handle OpenAI-format tool-use responses.
+
+**Validation:** Set `ANTHROPIC_BASE_URL` to Ollama, run a simple agent task with tool calls.
+
+**Fallback if incompatible:** Local models used only via direct Bash invocation (not via Agent tool). Limits local fallback to simpler use cases.
+
+### 8. Turn Budget Sufficiency
+
+**Question:** Is 200 turns sufficient for a 20-task pipeline?
+
+**Estimate:** ~16 turns/task × 20 tasks = 320 turns. Exceeds budget.
+
+**Options:**
+
+1. Phase orchestrators (spec phase + execution phase)
+2. Increase maxTurns if the plugin system allows >200
+3. Batch more operations per turn
+4. Accept limit of ~12 tasks per orchestrator session
+
+**Validation:** Run a real pipeline and measure actual turn consumption.
+
+---
+
+## Risk Assessment
+
+| Risk                                                | Likelihood | Impact                                         | Mitigation                                                |
+| --------------------------------------------------- | ---------- | ---------------------------------------------- | --------------------------------------------------------- |
+| Orchestrator ignores script delegation instructions | Medium     | High — unreliable state                        | Circuit breakers + state persistence + resume             |
+| Turn budget exceeded for large pipelines            | High       | Medium — pipeline stops mid-run                | Phase orchestrators + resume capability                   |
+| Codex plugin not available/stable                   | Medium     | Low — fallback is fully functional             | Claude Code reviewer with review-protocol skill           |
+| Ollama model quality insufficient                   | Medium     | Low — quality gates catch bad output           | Tier restrictions + unchanged quality gates               |
+| Cross-boundary agent spawning doesn't work          | Low        | High — must copy all agents into plugin        | Test early; fallback: copy agent definitions              |
+| Rate limit detection via headers unreliable         | Low        | Medium — reactive (429) instead of proactive   | Catch 429 errors as secondary detection                   |
+| User modifies existing agent breaking pipeline      | Low        | Medium — parse-review or spec validation fails | Best-effort parsing with fallback patterns                |
+| Worktree cleanup fails leaving orphans              | Medium     | Low — disk space waste                         | pipeline-cleanup + manual `git worktree prune`            |
+| State file corruption from concurrent writes        | Low        | High — pipeline state lost                     | Atomic writes (tmp + mv) + lock for orchestrator          |
+| EU AI Act compliance gaps in audit log              | Low        | High — legal exposure                          | Tamper-evident sequence numbers + log completeness checks |
