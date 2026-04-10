@@ -133,6 +133,58 @@ assert_eq "seven_day.over_threshold" "false" "$(printf '%s' "$output" | jq -r '.
 
 # ============================================================
 echo ""
+echo "=== pipeline-quota-check (oauth arithmetic — no octal crash) ==="
+
+# Regression: C3 / task_02_01. Bash arithmetic treated zero-padded hours
+# (08, 09) as octal, crashing _check_oauth between 08:00-09:59 UTC.
+# Mock date/security/curl so _check_oauth executes its arithmetic path
+# with the problematic hour values.
+_run_quota_check_with_fake_hour() {
+  local fake_hour="$1"
+  local mocks_dir
+  mocks_dir=$(mktemp -d)
+  trap '[[ -n "$mocks_dir" && "$mocks_dir" == /tmp/* ]] && rm -rf "$mocks_dir"' RETURN
+
+  cat > "$mocks_dir/security" <<'MOCK_EOF'
+#!/usr/bin/env bash
+printf '{"access_token":"fake-token"}'
+MOCK_EOF
+
+  cat > "$mocks_dir/curl" <<'MOCK_EOF'
+#!/usr/bin/env bash
+printf '{"unified-5h-utilization":50,"unified-7d-utilization":50,"billing_mode":"subscription"}'
+MOCK_EOF
+
+  cat > "$mocks_dir/date" <<MOCK_EOF
+#!/usr/bin/env bash
+case "\$*" in
+  "-u +%H") echo "$fake_hour" ;;
+  "-u +%M") echo "00" ;;
+  "-u +%u") echo "3" ;;
+  "+%s") echo "1700000000" ;;
+  *) exec /bin/date "\$@" ;;
+esac
+MOCK_EOF
+
+  chmod +x "$mocks_dir"/security "$mocks_dir"/curl "$mocks_dir"/date
+
+  PATH="$mocks_dir:$PATH" pipeline-quota-check --method oauth
+  local rc=$?
+  return $rc
+}
+
+set +e
+_run_quota_check_with_fake_hour "08" >/dev/null 2>&1
+rc_08=$?
+_run_quota_check_with_fake_hour "09" >/dev/null 2>&1
+rc_09=$?
+set -e
+
+assert_eq "oauth path succeeds with hour=08" "0" "$rc_08"
+assert_eq "oauth path succeeds with hour=09" "0" "$rc_09"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"

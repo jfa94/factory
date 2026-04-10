@@ -65,9 +65,10 @@ _check_oauth() {
   now_epoch=$(date +%s)
 
   # 5-hour window: which hour (1-5) are we in?
-  # The window resets every 5 hours from midnight UTC
+  # The window resets every 5 hours from midnight UTC.
+  # Force base-10 with 10# prefix to avoid bash interpreting leading zeros as octal.
   hour_in_day=$(date -u +%H)
-  window_hour=$(( (hour_in_day % 5) + 1 ))
+  window_hour=$(( (10#$hour_in_day % 5) + 1 ))
   # Hourly threshold = min(hour * 20, 90)
   hourly_threshold=$((window_hour * 20))
   if [[ $hourly_threshold -gt 90 ]]; then
@@ -78,7 +79,7 @@ _check_oauth() {
   local day_of_week
   day_of_week=$(date -u +%u)  # 1=Monday ... 7=Sunday
   local daily_threshold
-  daily_threshold=$((day_of_week * 100 / 7))
+  daily_threshold=$(( 10#$day_of_week * 100 / 7 ))
 
   local five_hour_over
   five_hour_over=$(jq -n --argjson a "$five_hour" --argjson b "$hourly_threshold" 'if $a > $b then "true" else "false" end' -r)
