@@ -48,7 +48,7 @@
     "task_id": "task_01_03",
     "plan_id": "01-critical-safety-hardening",
     "title": "Add path validation to pipeline-cleanup --spec-dir",
-    "description": "Line 154 of bin/pipeline-cleanup runs `rm -rf \"$spec_dir\"` with no path validation. The orchestrator (an agent influenced by LLM output) can be steered into passing --spec-dir / or --spec-dir ~ or a symlink.",
+    "description": "The refuse-list guard in bin/pipeline-cleanup (lines 154-198) is already implemented and rejects /, ~, $HOME, project root, and out-of-project paths before any rm -rf. What remains is writing the automated tests in bin/test-phase5.sh that verify every rejection case. DO NOT re-test the pre-fix behavior by temporarily removing the guard or by passing real system paths to the binary.",
     "priority": "P0",
     "findings": ["C8"],
     "status": "pending",
@@ -61,12 +61,13 @@
       "Clear error message on rejection"
     ],
     "tests_to_write": [
-      "bin/test-phase5.sh: pipeline-cleanup --clean-spec --spec-dir / is rejected",
-      "bin/test-phase5.sh: pipeline-cleanup --clean-spec --spec-dir ~ is rejected",
-      "bin/test-phase5.sh: pipeline-cleanup --clean-spec --spec-dir ../other is rejected",
-      "bin/test-phase5.sh: pipeline-cleanup --clean-spec --spec-dir pointing to symlink outside project is rejected",
-      "bin/test-phase5.sh: pipeline-cleanup --clean-spec --spec-dir valid in-project path succeeds"
+      "bin/test-phase5.sh: pipeline-cleanup --clean-spec is rejected when --spec-dir points OUTSIDE the sandbox project root (use e.g. \"$TEST_SANDBOX/outside\", NEVER real / or ~)",
+      "bin/test-phase5.sh: pipeline-cleanup --clean-spec is rejected when --spec-dir is a symlink whose target is outside the sandbox project root",
+      "bin/test-phase5.sh: pipeline-cleanup --clean-spec is rejected when --spec-dir contains \"..\" segments that resolve outside the sandbox project root",
+      "bin/test-phase5.sh: pipeline-cleanup --clean-spec is rejected when --spec-dir is empty or \".\"",
+      "bin/test-phase5.sh: pipeline-cleanup --clean-spec succeeds for an in-project spec dir created under the sandbox"
     ],
+    "test_safety": "NEVER invoke pipeline-cleanup against real /, real ~, real $HOME, or any path you did not create in a fresh mktemp sandbox. The binary refuse-list is in place, but do NOT remove or bypass it to test pre-fix behavior. Every test MUST use a mktemp -d sandbox, export CLAUDE_PLUGIN_DATA=$sandbox/data, mock git rev-parse --show-toplevel to return the sandbox project root, and pass --spec-dir paths that are children of that sandbox. Always verify the sandbox variable is set and non-empty before the trap executes (e.g. [[ -n \"$sandbox\" ]] && rm -rf \"$sandbox\").",
     "depends_on": []
   },
   {
@@ -85,7 +86,8 @@
     ],
     "tests_to_write": [
       "bin/test-phase1.sh: pipeline-init --issue abc fails with error",
-      "bin/test-phase1.sh: pipeline-init --issue '42; rm -rf /' fails",
+      "bin/test-phase1.sh: pipeline-init --issue '42abc' fails (non-numeric suffix)",
+      "bin/test-phase1.sh: pipeline-init --issue '42,\"poisoned\":1' fails (jq injection attempt)",
       "bin/test-phase1.sh: pipeline-init --issue 42 succeeds and emits valid state.json"
     ],
     "depends_on": []
@@ -249,7 +251,12 @@
     "priority": "P0",
     "findings": ["C1"],
     "status": "pending",
-    "files": ["agents/spec-generator.md", "agents/pipeline-orchestrator.md", "bin/pipeline-spec-publish", "bin/test-phase8.sh"],
+    "files": [
+      "agents/spec-generator.md",
+      "agents/pipeline-orchestrator.md",
+      "bin/pipeline-spec-publish",
+      "bin/test-phase8.sh"
+    ],
     "acceptance_criteria": [
       "Spec files written by spec-generator are reachable by the orchestrator",
       "The handoff mechanism is deterministic (either scripted or enforced by a non-worktree isolation)",
@@ -271,7 +278,11 @@
     "priority": "P0",
     "findings": ["C1", "parity: commit_spec_to_staging"],
     "status": "pending",
-    "files": ["bin/pipeline-branch", "agents/pipeline-orchestrator.md", "bin/test-phase4.sh"],
+    "files": [
+      "bin/pipeline-branch",
+      "agents/pipeline-orchestrator.md",
+      "bin/test-phase4.sh"
+    ],
     "acceptance_criteria": [
       "pipeline-branch commit-spec <spec-dir> commits the spec directory to staging with message 'chore: add spec directory <path>'",
       "Idempotent: skipped if no uncommitted changes in spec dir",
@@ -293,7 +304,12 @@
     "priority": "P0",
     "findings": ["C1"],
     "status": "pending",
-    "files": ["bin/pipeline-init", "bin/pipeline-build-prompt", "agents/pipeline-orchestrator.md", "bin/test-phase3.sh"],
+    "files": [
+      "bin/pipeline-init",
+      "bin/pipeline-build-prompt",
+      "agents/pipeline-orchestrator.md",
+      "bin/test-phase3.sh"
+    ],
     "acceptance_criteria": [
       "Orchestrator writes spec.path to state.json after spec-generation phase",
       "pipeline-build-prompt reads spec.path from state if not passed as argument",
@@ -623,7 +639,11 @@
     "priority": "P1",
     "findings": ["M7"],
     "status": "pending",
-    "files": ["bin/pipeline-circuit-breaker", "bin/pipeline-state", "bin/test-phase1.sh"],
+    "files": [
+      "bin/pipeline-circuit-breaker",
+      "bin/pipeline-state",
+      "bin/test-phase1.sh"
+    ],
     "acceptance_criteria": [
       "state.json includes .circuit_breaker.pause_minutes (default 0)",
       "Orchestrator increments this via pipeline-state when a wait occurs",
@@ -645,7 +665,11 @@
     "priority": "P1",
     "findings": ["M3"],
     "status": "pending",
-    "files": ["bin/pipeline-build-prompt", "agents/pipeline-orchestrator.md", "bin/test-phase3.sh"],
+    "files": [
+      "bin/pipeline-build-prompt",
+      "agents/pipeline-orchestrator.md",
+      "bin/test-phase3.sh"
+    ],
     "acceptance_criteria": [
       "--worktree-path flag allows the orchestrator to specify the task's worktree",
       "git log runs against that path via `git -C <path>` or `--git-dir`",
@@ -690,7 +714,11 @@
     "priority": "P1",
     "findings": ["parity: quality gate layer 1/2", "M18"],
     "status": "pending",
-    "files": ["bin/pipeline-quality-gate", "agents/pipeline-orchestrator.md", "bin/test-phase6.sh"],
+    "files": [
+      "bin/pipeline-quality-gate",
+      "agents/pipeline-orchestrator.md",
+      "bin/test-phase6.sh"
+    ],
     "acceptance_criteria": [
       "New bin/pipeline-quality-gate script runs <pkg-manager> lint, typecheck, test",
       "Emits JSON output: {passed: bool, lint: {...}, typecheck: {...}, test: {...}}",
@@ -797,7 +825,11 @@
     "priority": "P1",
     "findings": ["M(config drift)"],
     "status": "pending",
-    "files": [".claude-plugin/plugin.json", "02-quality-and-config.md", "bin/*"],
+    "files": [
+      ".claude-plugin/plugin.json",
+      "02-quality-and-config.md",
+      "bin/*"
+    ],
     "acceptance_criteria": [
       "plugin.json, PRD, scripts, configure.md, and agent references all use the same keys",
       "grep -r 'holdoutPercent\\|holdout.percent' shows consistent usage",
@@ -836,7 +868,11 @@
     "priority": "P1",
     "findings": ["C5"],
     "status": "pending",
-    "files": ["hooks/run-tracker.sh", "02-quality-and-config.md", "bin/test-phase1.sh"],
+    "files": [
+      "hooks/run-tracker.sh",
+      "02-quality-and-config.md",
+      "bin/test-phase1.sh"
+    ],
     "acceptance_criteria": [
       "Either: audit.jsonl entries include prev_hash, and modifying any historical entry breaks the chain downstream",
       "Or: 02-quality-and-config.md does not claim tamper-evidence, and the PRD notes hash chain is a P2 future enhancement",
@@ -924,7 +960,12 @@
     "priority": "P2",
     "findings": ["parity: config-deployer"],
     "status": "pending",
-    "files": ["bin/pipeline-scaffold", "templates/.stryker.config.json", "templates/.dependency-cruiser.cjs", "bin/test-phase9.sh"],
+    "files": [
+      "bin/pipeline-scaffold",
+      "templates/.stryker.config.json",
+      "templates/.dependency-cruiser.cjs",
+      "bin/test-phase9.sh"
+    ],
     "acceptance_criteria": [
       "templates/.stryker.config.json exists (ported from ~/Projects/dark-factory/templates/)",
       "templates/.dependency-cruiser.cjs exists (ported)",
@@ -947,7 +988,11 @@
     "priority": "P2",
     "findings": ["parity: config-deployer"],
     "status": "pending",
-    "files": ["bin/pipeline-scaffold", "templates/package.scaffold.json", "bin/test-phase9.sh"],
+    "files": [
+      "bin/pipeline-scaffold",
+      "templates/package.scaffold.json",
+      "bin/test-phase9.sh"
+    ],
     "acceptance_criteria": [
       "templates/package.scaffold.json exists",
       "--merge-package-json flag triggers merge",
@@ -1172,9 +1217,7 @@
       "metrics_export paginates internally and returns all rows",
       "Hard cap raised or removed for export"
     ],
-    "tests_to_write": [
-      "bin/test-phase9.sh: index.js syntax check passes"
-    ],
+    "tests_to_write": ["bin/test-phase9.sh: index.js syntax check passes"],
     "depends_on": []
   },
   {
@@ -1276,9 +1319,7 @@
       "Feature inventory tables in the same file are also updated",
       "Deleted claims: 'exact copy' (Decision 14) — reconcile with task_04_01 outcome"
     ],
-    "tests_to_write": [
-      "manual: review the PRD diff for accuracy"
-    ],
+    "tests_to_write": ["manual: review the PRD diff for accuracy"],
     "depends_on": ["task_04_01", "task_08_04"]
   },
   {
@@ -1297,9 +1338,7 @@
       "Decision 14 updated to reflect ported template or explicit divergence from old pipeline",
       "Remaining open questions clearly marked as still-open with mitigation plan"
     ],
-    "tests_to_write": [
-      "manual: review decisions doc for resolved questions"
-    ],
+    "tests_to_write": ["manual: review decisions doc for resolved questions"],
     "depends_on": ["task_12_01", "task_12_02", "task_12_03", "task_12_04"]
   }
 ]
