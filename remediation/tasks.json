@@ -140,8 +140,12 @@
     "description": "Current pipeline-quota-check computes `window_hour = (hour_in_day % 5) + 1`, assuming windows reset at UTC 00/05/10/15/20. Anthropic's 5-hour windows are actually tied to the first request in a session. The correct formula (from 04-data-flow.md:489) is `window_hour = floor((now - (resets_at - 5h)) / 3600) + 1`. Similarly for 7-day window, the daily_threshold must be derived from resets_at - 7d, not from day-of-week.",
     "priority": "P0",
     "findings": ["C9"],
-    "status": "pending",
-    "files": ["bin/pipeline-quota-check", "bin/test-phase7.sh"],
+    "status": "done",
+    "files": [
+      "bin/pipeline-quota-check",
+      "bin/pipeline-lib.sh",
+      "bin/test-phase7.sh"
+    ],
     "acceptance_criteria": [
       "5h window_hour computed from resets_at field in API/headers response",
       "7d window_day computed from resets_at - 7d, not day-of-week",
@@ -155,7 +159,8 @@
       "bin/test-phase7.sh: daily_threshold on day 7 is 0.95 not 1.0",
       "bin/test-phase7.sh: hourly_threshold caps at 0.90 for window_hour=5"
     ],
-    "depends_on": ["task_02_01"]
+    "depends_on": ["task_02_01"],
+    "notes": "Added pure-math helpers (compute_window_hour/day, compute_hourly/daily_threshold, parse_iso8601_to_epoch) to pipeline-lib.sh so task_02_03's _check_headers can reuse them. Rewrote _check_oauth to parse unified-5h-reset / unified-7d-reset from the API response and feed them through the helpers. Integration test uses a fully-deterministic date/curl mock (date -u +%H returns 14, +%u returns 7) so the pre-fix code would produce wrong but predictable answers (window_hour=5, window_day=7, daily_threshold=100) — the RED run against the buggy code confirmed 25 failures; GREEN run after the fix confirmed 50/50 pass. Full phase 1-9 suite still green."
   },
   {
     "task_id": "task_02_03",

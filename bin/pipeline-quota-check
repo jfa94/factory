@@ -49,10 +49,14 @@ _check_oauth() {
     return 1
   fi
 
-  # Parse utilization values
-  local five_hour seven_day billing_mode
+  # Parse utilization and reset timestamps from the OAuth usage response.
+  # The reset fields anchor the window positions — without them we can't
+  # compute accurate thresholds.
+  local five_hour seven_day billing_mode resets_5h resets_7d
   five_hour=$(printf '%s' "$response" | jq -r '.["unified-5h-utilization"] // empty' 2>/dev/null)
   seven_day=$(printf '%s' "$response" | jq -r '.["unified-7d-utilization"] // empty' 2>/dev/null)
+  resets_5h=$(printf '%s' "$response" | jq -r '.["unified-5h-reset"] // empty' 2>/dev/null)
+  resets_7d=$(printf '%s' "$response" | jq -r '.["unified-7d-reset"] // empty' 2>/dev/null)
   billing_mode=$(printf '%s' "$response" | jq -r '.billing_mode // "subscription"' 2>/dev/null)
 
   if [[ -z "$five_hour" ]] || [[ -z "$seven_day" ]]; then
@@ -60,26 +64,28 @@ _check_oauth() {
     return 1
   fi
 
-  # Compute window position and thresholds
-  local now_epoch hour_in_day window_hour hourly_threshold
+  # Compute window position and thresholds from resets_at (C9 fix).
+  # If a reset field is missing, fall back to treating "now" as the window
+  # start — this yields window_hour=1/window_day=1 and a 20/14 threshold,
+  # which is conservative (low threshold → more likely to detect pressure).
+  local now_epoch resets_5h_epoch resets_7d_epoch
   now_epoch=$(date +%s)
-
-  # 5-hour window: which hour (1-5) are we in?
-  # The window resets every 5 hours from midnight UTC.
-  # Force base-10 with 10# prefix to avoid bash interpreting leading zeros as octal.
-  hour_in_day=$(date -u +%H)
-  window_hour=$(( (10#$hour_in_day % 5) + 1 ))
-  # Hourly threshold = min(hour * 20, 90)
-  hourly_threshold=$((window_hour * 20))
-  if [[ $hourly_threshold -gt 90 ]]; then
-    hourly_threshold=90
+  if [[ -n "$resets_5h" ]]; then
+    resets_5h_epoch=$(parse_iso8601_to_epoch "$resets_5h" || printf '%s' "$((now_epoch + 18000))")
+  else
+    resets_5h_epoch=$((now_epoch + 18000))
+  fi
+  if [[ -n "$resets_7d" ]]; then
+    resets_7d_epoch=$(parse_iso8601_to_epoch "$resets_7d" || printf '%s' "$((now_epoch + 604800))")
+  else
+    resets_7d_epoch=$((now_epoch + 604800))
   fi
 
-  # 7-day window: which day (1-7)?
-  local day_of_week
-  day_of_week=$(date -u +%u)  # 1=Monday ... 7=Sunday
-  local daily_threshold
-  daily_threshold=$(( 10#$day_of_week * 100 / 7 ))
+  local window_hour window_day hourly_threshold daily_threshold
+  window_hour=$(compute_window_hour "$resets_5h_epoch" "$now_epoch")
+  window_day=$(compute_window_day "$resets_7d_epoch" "$now_epoch")
+  hourly_threshold=$(compute_hourly_threshold "$window_hour")
+  daily_threshold=$(compute_daily_threshold "$window_day")
 
   local five_hour_over
   five_hour_over=$(jq -n --argjson a "$five_hour" --argjson b "$hourly_threshold" 'if $a > $b then "true" else "false" end' -r)
@@ -95,7 +101,7 @@ _check_oauth() {
     --argjson seven_day "$seven_day" \
     --argjson daily_threshold "$daily_threshold" \
     --argjson seven_day_over "$seven_day_over" \
-    --argjson window_day "$day_of_week" \
+    --argjson window_day "$window_day" \
     --arg billing_mode "$billing_mode" \
     --arg detection_method "oauth" \
     '{

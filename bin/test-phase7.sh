@@ -5,6 +5,11 @@ set -euo pipefail
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
 export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
 
+# Source pipeline-lib.sh up front so the window-math helper tests below can
+# call its internal functions directly. Must come before any function that
+# installs a RETURN trap, since RETURN traps fire on source completion.
+source "$(cd "$(dirname "$0")" && pwd)/pipeline-lib.sh"
+
 pass=0
 fail=0
 
@@ -182,6 +187,133 @@ set -e
 
 assert_eq "oauth path succeeds with hour=08" "0" "$rc_08"
 assert_eq "oauth path succeeds with hour=09" "0" "$rc_09"
+
+# ============================================================
+echo ""
+echo "=== pipeline-lib window math helpers (task_02_02) ==="
+
+# Window math helpers live in pipeline-lib.sh so both _check_oauth and the
+# upcoming _check_headers implementation share a single source of truth.
+# These tests pin pure-function behavior: no mocking, no I/O.
+# (pipeline-lib.sh is sourced at the top of this file.)
+
+# Fixed reference epoch (2026-04-10T12:00:00Z). The specific value doesn't
+# matter — we construct resets_at relative to it.
+_now=1775822400
+
+# 5-hour window (18000s).
+# 10 minutes (600s) elapsed → resets_at = now + (18000 - 600) = now + 17400
+_resets=$((_now + 17400))
+assert_eq "window_hour=1 when 10m into the window" "1" "$(compute_window_hour "$_resets" "$_now")"
+
+# 4.5 hours (16200s) elapsed → resets_at = now + (18000 - 16200) = now + 1800
+_resets=$((_now + 1800))
+assert_eq "window_hour=5 when 4.5h into the window" "5" "$(compute_window_hour "$_resets" "$_now")"
+
+# Exactly at window boundary: 0s elapsed → resets_at = now + 18000
+_resets=$((_now + 18000))
+assert_eq "window_hour=1 at window start" "1" "$(compute_window_hour "$_resets" "$_now")"
+
+# Clamp: resets_at far in the future (caller bug) → clamp to 1
+_resets=$((_now + 99999))
+assert_eq "window_hour clamps to 1 when resets_at beyond 5h" "1" "$(compute_window_hour "$_resets" "$_now")"
+
+# Clamp: resets_at in the past → clamp to 5
+_resets=$((_now - 3600))
+assert_eq "window_hour clamps to 5 when resets_at in past" "5" "$(compute_window_hour "$_resets" "$_now")"
+
+# 7-day window (604800s).
+# 3.5 days (302400s) elapsed → resets_at = now + (604800 - 302400) = now + 302400
+_resets=$((_now + 302400))
+assert_eq "window_day=4 when 3.5d into a 7d window" "4" "$(compute_window_day "$_resets" "$_now")"
+
+# Exactly at window start
+_resets=$((_now + 604800))
+assert_eq "window_day=1 at 7d window start" "1" "$(compute_window_day "$_resets" "$_now")"
+
+# Just before 7d window closes (6.9 days in)
+_resets=$((_now + 8640))
+assert_eq "window_day=7 near 7d window end" "7" "$(compute_window_day "$_resets" "$_now")"
+
+# Hourly thresholds: linear up to cap.
+assert_eq "hourly_threshold window_hour=1" "20" "$(compute_hourly_threshold 1)"
+assert_eq "hourly_threshold window_hour=2" "40" "$(compute_hourly_threshold 2)"
+assert_eq "hourly_threshold window_hour=3" "60" "$(compute_hourly_threshold 3)"
+assert_eq "hourly_threshold window_hour=4" "80" "$(compute_hourly_threshold 4)"
+assert_eq "hourly_threshold caps at 90 for window_hour=5" "90" "$(compute_hourly_threshold 5)"
+
+# Daily thresholds: explicit array [14, 29, 43, 57, 71, 86, 95].
+# Critical: day 7 must be 95, NOT 100 (leaves headroom for burst-in-final-day).
+assert_eq "daily_threshold day 1" "14" "$(compute_daily_threshold 1)"
+assert_eq "daily_threshold day 2" "29" "$(compute_daily_threshold 2)"
+assert_eq "daily_threshold day 3" "43" "$(compute_daily_threshold 3)"
+assert_eq "daily_threshold day 4" "57" "$(compute_daily_threshold 4)"
+assert_eq "daily_threshold day 5" "71" "$(compute_daily_threshold 5)"
+assert_eq "daily_threshold day 6" "86" "$(compute_daily_threshold 6)"
+assert_eq "daily_threshold day 7 is 95 not 100" "95" "$(compute_daily_threshold 7)"
+
+# parse_iso8601_to_epoch round-trips a known UTC ISO timestamp.
+# 2026-04-10T12:00:00Z = 1775822400
+assert_eq "parse_iso8601_to_epoch 2026-04-10T12:00:00Z" "1775822400" "$(parse_iso8601_to_epoch "2026-04-10T12:00:00Z")"
+
+# ============================================================
+echo ""
+echo "=== pipeline-quota-check (oauth uses resets_at window math — task_02_02) ==="
+
+# Regression: C9 / task_02_02. _check_oauth must compute window_hour/window_day
+# from the resets_at fields in the API response, not from wall-clock hour/DOW.
+# Mock curl to return a controlled resets_at, mock date +%s to return a known now,
+# and assert the output JSON carries the expected window positions and thresholds.
+_run_quota_check_with_resets() {
+  local now_epoch="$1" resets_5h="$2" resets_7d="$3"
+  local mocks_dir
+  mocks_dir=$(mktemp -d)
+  trap '[[ -n "$mocks_dir" && "$mocks_dir" == /tmp/* ]] && rm -rf "$mocks_dir"' RETURN
+
+  cat > "$mocks_dir/security" <<'MOCK_EOF'
+#!/usr/bin/env bash
+printf '{"access_token":"fake-token"}'
+MOCK_EOF
+
+  # Mock curl: return a JSON body that includes both utilization and reset fields.
+  cat > "$mocks_dir/curl" <<MOCK_EOF
+#!/usr/bin/env bash
+printf '%s' '{"unified-5h-utilization":50,"unified-7d-utilization":50,"unified-5h-reset":"$resets_5h","unified-7d-reset":"$resets_7d","billing_mode":"subscription"}'
+MOCK_EOF
+
+  # Mock date: intercept +%s plus the wall-clock helpers so the buggy
+  # hour-of-day / day-of-week math (which this test is meant to catch)
+  # produces predictably-WRONG answers. The new math uses resets_at, so
+  # it must not depend on any of these.
+  cat > "$mocks_dir/date" <<MOCK_EOF
+#!/usr/bin/env bash
+case "\$*" in
+  "+%s") echo "$now_epoch" ;;
+  "-u +%H") echo "14" ;;
+  "-u +%M") echo "30" ;;
+  "-u +%u") echo "7" ;;
+  "-u +%d") echo "10" ;;
+  *) exec /bin/date "\$@" ;;
+esac
+MOCK_EOF
+
+  chmod +x "$mocks_dir"/security "$mocks_dir"/curl "$mocks_dir"/date
+
+  PATH="$mocks_dir:$PATH" pipeline-quota-check --method oauth
+}
+
+# now = 2026-04-10T12:00:00Z (epoch 1775822400)
+# 5h window: resets 2026-04-10T16:50:00Z → 10 minutes in → window_hour=1, threshold=20
+# 7d window: resets 2026-04-13T12:00:00Z → 4 days in → window_day=5, threshold=71
+set +e
+output=$(_run_quota_check_with_resets 1775822400 "2026-04-10T16:50:00Z" "2026-04-13T12:00:00Z" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "oauth with resets_at exits 0" "0" "$rc"
+assert_eq "oauth five_hour.window_hour" "1" "$(printf '%s' "$output" | jq -r '.five_hour.window_hour')"
+assert_eq "oauth five_hour.hourly_threshold" "20" "$(printf '%s' "$output" | jq -r '.five_hour.hourly_threshold')"
+assert_eq "oauth seven_day.window_day" "5" "$(printf '%s' "$output" | jq -r '.seven_day.window_day')"
+assert_eq "oauth seven_day.daily_threshold" "71" "$(printf '%s' "$output" | jq -r '.seven_day.daily_threshold')"
 
 # ============================================================
 echo ""
