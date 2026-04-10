@@ -46,6 +46,7 @@ For each task:
 ## Task-specific guidance
 
 ### task_01_01 — jq path injection
+
 The current denylist at `bin/pipeline-state:56-61` is incomplete. Switch to an allowlist approach. The cleanest fix is to require callers to pass dotted path expressions and parse them into an array of segments inside the script:
 
 ```bash
@@ -57,6 +58,7 @@ The current denylist at `bin/pipeline-state:56-61` is incomplete. Switch to an a
 Orchestrator callers pass `.tasks.task_1.status` as before — the script handles parsing internally. Reject any segment that doesn't match the identifier regex. Keep supporting numeric indices (e.g., `.tasks.task_1.review_rounds[0]`) via a second allowed pattern `^[0-9]+$` that's coerced to an integer index.
 
 ### task_01_02 — JSON concatenation in validate-tasks
+
 Replace the string-built entries with jq-built JSON:
 
 ```bash
@@ -64,9 +66,10 @@ entry=$(jq -n --arg tid "$tid" --argjson group "$group" '{task_id:$tid,parallel_
 execution_order+=("$entry")
 ```
 
-Also add a pre-validation pass that rejects task_ids containing any character outside `^[a-zA-Z0-9_-]+$`. Task IDs from an LLM should be simple identifiers; exotic characters are either bugs or attacks.
+Also add a pre-validation pass that rejects task*ids containing any character outside `^[a-zA-Z0-9*-]+$`. Task IDs from an LLM should be simple identifiers; exotic characters are either bugs or attacks.
 
 ### task_01_03 — path validation in cleanup
+
 The safest approach is to require spec_dir to be a path underneath the current working directory (which should be the project root when the orchestrator runs):
 
 ```bash
@@ -86,7 +89,35 @@ esac
 
 Also reject `..` segments in the raw input before realpath resolution (defense in depth).
 
+#### Test safety — MANDATORY
+
+Do not implement the red-phase test by running `pipeline-cleanup` against real `/`, real `~`, real `$HOME`, or any path the test script did not itself create. The refuse-list is already in the binary (lines 154-198 of `bin/pipeline-cleanup`). Do NOT remove or bypass the guard to observe pre-fix behavior.
+
+Use this pattern in `bin/test-phase5.sh`:
+
+```bash
+sandbox=$(mktemp -d)
+trap '[[ -n "$sandbox" && "$sandbox" == /tmp/* ]] && rm -rf "$sandbox"' EXIT
+export CLAUDE_PLUGIN_DATA="$sandbox/data"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/test-run"
+printf '%s' '{"tasks":{"t1":{"status":"done"}}}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/test-run/state.json"
+
+fake_project_root="$sandbox/proj"
+mkdir -p "$fake_project_root"
+outside="$sandbox/outside"; mkdir -p "$outside"
+
+# Stub git so the guard checks against the sandbox, not the real repo.
+# (add a fake `git` to the mocks dir already on PATH in test-phase5.sh)
+
+# Expect rejection — NEVER substitute real / or ~ for "$outside"
+pipeline-cleanup test-run --clean-spec --spec-dir "$outside" && fail=1
+```
+
+For the "valid in-project" case, create `$fake_project_root/spec` and assert it is removed. Only that directory — created by the test inside the sandbox — should ever be a legal `--spec-dir` argument.
+
 ### task_01_04 — numeric validation in pipeline-init
+
 Simple fix — add a validation block before the `--argjson issues` line:
 
 ```bash
@@ -97,6 +128,7 @@ fi
 ```
 
 ### task_01_05 — pipeline-lock --pid
+
 Cleanest fix is to remove the flag entirely and require callers to run as the process they want to represent. If the flag is needed for tests, replace it with an env var `DARK_FACTORY_LOCK_TEST_PID` that's documented as test-only. Alternatively: verify the passed PID is in the caller's process tree via `ps -o ppid= -p $LOCK_PID` walking up to `$$`.
 
 ## Completion checklist

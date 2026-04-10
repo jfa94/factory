@@ -51,6 +51,19 @@ remediation/
 - `status` — updated as work progresses; the entire session state lives in this field
 - `plan_id` — matches a file in `plans/` (without the `.md` extension)
 
+## Test safety — do not run destructive commands against real paths
+
+Several tasks harden code that calls `rm -rf`, `git push --force`, `gh issue close`, etc.
+
+**Non-negotiable rules for every task in this directory:**
+
+1. Never pass a real filesystem path (`/`, `~`, `$HOME`, the repo root, `/tmp` itself) as an argument to a command being hardened. Use a child of a fresh `mktemp -d` sandbox the test itself created. For teardown, always guard the variable: `trap '[[ -n "$sandbox" && "$sandbox" == /tmp/* ]] && rm -rf "$sandbox"' EXIT`. Never use `rm -rf` directly on any path you did not create in the current script.
+2. Stub external calls (`git rev-parse`, `gh`, `git push`, etc.) with a mocks directory on `PATH` so a red-phase run never touches the real repo or real GitHub.
+3. If a finding says "verify `--spec-dir ~` is rejected", treat that as _semantic_ — use a sandbox path that sits outside the fake project root, never the literal `~` or `/`.
+4. When in doubt, stop and ask. The cost of pausing is seconds; the cost of `rm -rf ~` is your home directory.
+
+These rules override `tests_to_write` field content if there is a conflict.
+
 ## How to resume across sessions
 
 ### Start a fresh session
@@ -101,12 +114,12 @@ Integration tests (plan 12) go in a new `bin/test-integration.sh`.
 
 Execute plans roughly in this order. Later plans depend on earlier ones.
 
-| Phase | Plans | Why |
-|-------|-------|-----|
-| **P0 — Block any real run** | 01, 02, 03, 04 | Injection, broken quota, broken spec handoff, missing safety template |
-| **P1 — Feature parity** | 05, 06, 07, 08, 09 | Branch handling, state/resume, orchestrator flow, config, hooks |
-| **P1 — Test coverage** | 12 | Integration tests for all P0/P1 fixes |
-| **P2 — Polish** | 10, 11, 13, 14 | Scaffolding, validator, cleanups, docs |
+| Phase                       | Plans              | Why                                                                   |
+| --------------------------- | ------------------ | --------------------------------------------------------------------- |
+| **P0 — Block any real run** | 01, 02, 03, 04     | Injection, broken quota, broken spec handoff, missing safety template |
+| **P1 — Feature parity**     | 05, 06, 07, 08, 09 | Branch handling, state/resume, orchestrator flow, config, hooks       |
+| **P1 — Test coverage**      | 12                 | Integration tests for all P0/P1 fixes                                 |
+| **P2 — Polish**             | 10, 11, 13, 14     | Scaffolding, validator, cleanups, docs                                |
 
 ## Finding reference
 
