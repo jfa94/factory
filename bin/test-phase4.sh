@@ -335,6 +335,222 @@ assert_eq "invalid JSON passed false" "false" "$(echo "$output" | jq -r '.passed
 
 # ============================================================
 echo ""
+echo "=== pipeline-branch staging-init reconcile ==="
+
+# Sandbox git setup shared across reconcile + commit-spec tests.
+#
+# Creates a bare origin and a worktree clone under a guarded temp dir. The
+# sandbox lives only for the duration of this phase; we restore the original
+# working directory before each new sandbox so failed cleanup never leaks
+# into the real plugin repo.
+setup_git_sandbox() {
+  local sandbox
+  sandbox=$(mktemp -d "${TMPDIR:-/tmp}/dark-factory-phase4-XXXXXX")
+  (
+    cd "$sandbox"
+    git init --bare --quiet origin.git
+    git clone --quiet origin.git repo
+    cd repo
+    git config user.email "test@test.local"
+    git config user.name "phase4-test"
+    git commit --allow-empty -m "root" --quiet
+    git checkout -b develop --quiet
+    git push -u origin develop --quiet 2>/dev/null || true
+  )
+  printf '%s' "$sandbox"
+}
+
+cleanup_sandbox() {
+  local path="$1"
+  # Only rm paths we created under a tmp prefix. Matches mktemp output on
+  # macOS (/var/folders/...) and linux (/tmp/...).
+  if [[ -n "$path" && -d "$path" ]]; then
+    case "$path" in
+      /tmp/dark-factory-phase4-*|/var/folders/*/dark-factory-phase4-*|/private/var/folders/*/dark-factory-phase4-*)
+        rm -rf "$path" ;;
+    esac
+  fi
+}
+
+orig_cwd=$(pwd)
+
+# --- Case 1: develop is ancestor of staging — no-op ---
+sandbox=$(setup_git_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  # staging starts on top of develop with its own commits, so develop is an ancestor
+  git checkout -b staging --quiet
+  echo "s1" > s1.txt; git add s1.txt
+  git commit -m "staging-only-1" --quiet
+  git push -u origin staging --quiet 2>/dev/null || true
+
+  output=$(pipeline-branch staging-init 2>/dev/null)
+  reconcile=$(echo "$output" | jq -r '.reconcile')
+  head_before=$(git rev-parse HEAD)
+  # Case 1: develop is behind staging → reconcile is a no-op
+  echo "__CASE1__ reconcile=$reconcile head=$head_before" > "$sandbox/result"
+)
+case1=$(cat "$sandbox/result" 2>/dev/null || echo "MISSING")
+assert_eq "reconcile no-op when develop is ancestor" "up-to-date" \
+  "$(printf '%s' "$case1" | awk -F'reconcile=' '{print $2}' | awk '{print $1}')"
+cleanup_sandbox "$sandbox"
+
+# --- Case 2: develop is ahead — fast-forwards staging ---
+sandbox=$(setup_git_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  # push staging identical to develop first, then advance develop, then re-init
+  git checkout -b staging --quiet
+  git push -u origin staging --quiet 2>/dev/null || true
+  # Move back to develop, advance it
+  git checkout develop --quiet
+  echo "d1" > d1.txt; git add d1.txt
+  git commit -m "develop-ahead-1" --quiet
+  echo "d2" > d2.txt; git add d2.txt
+  git commit -m "develop-ahead-2" --quiet
+  git push origin develop --quiet 2>/dev/null || true
+  # Switch away from staging so staging-init can re-check it out
+  git checkout develop --quiet
+
+  output=$(pipeline-branch staging-init 2>/dev/null)
+  reconcile=$(echo "$output" | jq -r '.reconcile')
+  develop_sha=$(git rev-parse origin/develop)
+  staging_sha=$(git rev-parse HEAD)
+  printf '%s\n' "$reconcile" > "$sandbox/reconcile"
+  printf '%s\n' "$develop_sha" > "$sandbox/develop_sha"
+  printf '%s\n' "$staging_sha" > "$sandbox/staging_sha"
+)
+assert_eq "reconcile ff when develop ahead" "fast-forwarded" "$(cat "$sandbox/reconcile")"
+assert_eq "staging HEAD equals develop HEAD after ff" \
+  "$(cat "$sandbox/develop_sha")" "$(cat "$sandbox/staging_sha")"
+cleanup_sandbox "$sandbox"
+
+# --- Case 3: staging has commits not in develop — non-ff merge ---
+sandbox=$(setup_git_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  git checkout -b staging --quiet
+  echo "s1" > s1.txt; git add s1.txt
+  git commit -m "staging-feature-1" --quiet
+  git push -u origin staging --quiet 2>/dev/null || true
+  # advance develop with a separate commit (no conflict, different file)
+  git checkout develop --quiet
+  echo "d1" > d1.txt; git add d1.txt
+  git commit -m "develop-ahead-1" --quiet
+  git push origin develop --quiet 2>/dev/null || true
+  git checkout develop --quiet
+
+  output=$(pipeline-branch staging-init 2>/dev/null)
+  reconcile=$(echo "$output" | jq -r '.reconcile')
+  # both files should exist after merge
+  has_s1=$([[ -f s1.txt ]] && echo yes || echo no)
+  has_d1=$([[ -f d1.txt ]] && echo yes || echo no)
+  printf '%s\n' "$reconcile" > "$sandbox/reconcile"
+  printf '%s\n' "$has_s1" > "$sandbox/has_s1"
+  printf '%s\n' "$has_d1" > "$sandbox/has_d1"
+)
+assert_eq "reconcile merges when divergent" "merged" "$(cat "$sandbox/reconcile")"
+assert_eq "staging keeps its own commits after merge" "yes" "$(cat "$sandbox/has_s1")"
+assert_eq "staging picks up develop commits after merge" "yes" "$(cat "$sandbox/has_d1")"
+cleanup_sandbox "$sandbox"
+
+# --- Case 4: true merge conflict — abort cleanly, exit 1, no dirty state ---
+sandbox=$(setup_git_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  git checkout -b staging --quiet
+  echo "staging-version" > conflict.txt; git add conflict.txt
+  git commit -m "staging conflict" --quiet
+  git push -u origin staging --quiet 2>/dev/null || true
+  git checkout develop --quiet
+  echo "develop-version" > conflict.txt; git add conflict.txt
+  git commit -m "develop conflict" --quiet
+  git push origin develop --quiet 2>/dev/null || true
+  git checkout develop --quiet
+
+  set +e
+  output=$(pipeline-branch staging-init 2>/dev/null)
+  exit_code=$?
+  set -e
+  err_key=$(echo "$output" | jq -r '.error // empty')
+  behind=$(echo "$output" | jq -r '.behind // empty')
+
+  # Check dirty state: no MERGE_HEAD, no index conflicts
+  merge_head_present=$([[ -f .git/MERGE_HEAD ]] && echo yes || echo no)
+  dirty=$(git status --porcelain=v1 | { grep -cE '^(UU|AA|DD|AU|UA|DU|UD) ' || true; })
+
+  printf '%s\n' "$exit_code" > "$sandbox/exit"
+  printf '%s\n' "$err_key" > "$sandbox/err"
+  printf '%s\n' "$behind" > "$sandbox/behind"
+  printf '%s\n' "$merge_head_present" > "$sandbox/merge_head"
+  printf '%s\n' "$dirty" > "$sandbox/dirty"
+)
+assert_eq "conflict exits 1" "1" "$(cat "$sandbox/exit")"
+assert_eq "conflict emits structured error" "staging_reconcile_conflict" "$(cat "$sandbox/err")"
+assert_eq "conflict reports behind > 0" "1" "$(cat "$sandbox/behind")"
+assert_eq "conflict leaves no MERGE_HEAD" "no" "$(cat "$sandbox/merge_head")"
+assert_eq "conflict leaves no conflict index entries" "0" "$(cat "$sandbox/dirty")"
+cleanup_sandbox "$sandbox"
+
+cd "$orig_cwd"
+trap - EXIT
+
+# ============================================================
+echo ""
+echo "=== pipeline-branch commit-spec ==="
+
+orig_cwd=$(pwd)
+
+# --- Case A: commits untracked spec files to staging ---
+sandbox=$(setup_git_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  git checkout -b staging --quiet
+  git push -u origin staging --quiet 2>/dev/null || true
+  mkdir -p .state/run-abc
+  printf '# spec\n' > .state/run-abc/spec.md
+  printf '[]\n' > .state/run-abc/tasks.json
+
+  output=$(pipeline-branch commit-spec .state/run-abc 2>/dev/null)
+  result=$(echo "$output" | jq -r '.result')
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+  log_msg=$(git log -1 --pretty=%s)
+  spec_tracked=$(git ls-files .state/run-abc/spec.md | head -1)
+
+  printf '%s\n' "$result" > "$sandbox/result"
+  printf '%s\n' "$current_branch" > "$sandbox/branch"
+  printf '%s\n' "$log_msg" > "$sandbox/log_msg"
+  printf '%s\n' "$spec_tracked" > "$sandbox/tracked"
+)
+assert_eq "commit-spec result committed" "committed" "$(cat "$sandbox/result")"
+assert_eq "commit-spec leaves staging checked out" "staging" "$(cat "$sandbox/branch")"
+assert_eq "commit-spec uses chore: message" "true" \
+  "$(grep -q '^chore: add spec directory' "$sandbox/log_msg" && echo true || echo false)"
+assert_eq "commit-spec tracks spec.md" ".state/run-abc/spec.md" "$(cat "$sandbox/tracked")"
+
+# --- Case B: idempotent when nothing to commit ---
+(
+  cd "$sandbox/repo"
+  output=$(pipeline-branch commit-spec .state/run-abc 2>/dev/null)
+  result=$(echo "$output" | jq -r '.result')
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+  printf '%s\n' "$result" > "$sandbox/result2"
+  printf '%s\n' "$current_branch" > "$sandbox/branch2"
+)
+assert_eq "commit-spec idempotent no-op" "no-op" "$(cat "$sandbox/result2")"
+assert_eq "commit-spec no-op leaves staging checked out" "staging" "$(cat "$sandbox/branch2")"
+cleanup_sandbox "$sandbox"
+
+cd "$orig_cwd"
+trap - EXIT
+
+# ============================================================
+echo ""
 echo "=== Skill & Agent files exist ==="
 
 assert_eq "review-protocol SKILL.md exists" "true" \

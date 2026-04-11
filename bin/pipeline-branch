@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Branch and worktree management for pipeline.
 # Usage: pipeline-branch <action> [options]
-# Actions: staging-init, create, worktree-create, worktree-remove, exists, naming
+# Actions: staging-init, commit-spec, create, worktree-create, worktree-remove, exists, naming
 # Exit: 0=success, 1=failure
 
 source "$(dirname "$0")/pipeline-lib.sh"
@@ -12,23 +12,99 @@ shift
 
 case "$action" in
   staging-init)
+    base_branch="${DARK_FACTORY_BASE_BRANCH:-develop}"
+    reconcile_status="skipped"
+
     if git ls-remote --heads origin staging 2>/dev/null | grep -q staging; then
-      git fetch origin staging &>/dev/null
+      git fetch origin staging &>/dev/null || true
       git checkout staging &>/dev/null
-      git pull origin staging &>/dev/null
-      json_output staging_branch "staging" base "existing" created "false"
+      git pull origin staging &>/dev/null || true
+
+      # Reconcile staging with base branch to prevent drift between runs.
+      # Fast-forward if possible, otherwise non-ff merge, otherwise fail cleanly.
+      base_ref=""
+      if git ls-remote --heads origin "$base_branch" 2>/dev/null | grep -q "$base_branch"; then
+        git fetch origin "$base_branch" &>/dev/null || true
+        base_ref="origin/$base_branch"
+      elif git rev-parse --verify "$base_branch" >/dev/null 2>&1; then
+        base_ref="$base_branch"
+      fi
+
+      if [[ -n "$base_ref" ]]; then
+        behind=$(git rev-list --count "HEAD..$base_ref" 2>/dev/null || echo 0)
+        if [[ "$behind" -eq 0 ]]; then
+          reconcile_status="up-to-date"
+        elif git merge --ff-only "$base_ref" --quiet &>/dev/null; then
+          reconcile_status="fast-forwarded"
+        elif git -c user.email=dark-factory@local \
+                 -c user.name="dark-factory" \
+                 merge --no-ff "$base_ref" \
+                 -m "chore: reconcile staging with $base_branch" --quiet &>/dev/null; then
+          reconcile_status="merged"
+        else
+          git merge --abort &>/dev/null || true
+          json_output error "staging_reconcile_conflict" \
+                      base "$base_branch" \
+                      behind "$behind"
+          exit 1
+        fi
+      fi
+
+      json_output staging_branch "staging" \
+                  base "existing" \
+                  created "false" \
+                  reconcile "$reconcile_status"
     else
-      if git ls-remote --heads origin develop 2>/dev/null | grep -q develop; then
-        base="develop"
-        git fetch origin develop &>/dev/null
-        git checkout -b staging "origin/develop" &>/dev/null
+      if git ls-remote --heads origin "$base_branch" 2>/dev/null | grep -q "$base_branch"; then
+        base="$base_branch"
+        git fetch origin "$base_branch" &>/dev/null
+        git checkout -b staging "origin/$base_branch" &>/dev/null
       else
         base="main"
         git fetch origin main &>/dev/null
         git checkout -b staging "origin/main" &>/dev/null
       fi
-      git push -u origin staging &>/dev/null
-      json_output staging_branch "staging" base "$base" created "true"
+      git push -u origin staging &>/dev/null || true
+      json_output staging_branch "staging" \
+                  base "$base" \
+                  created "true" \
+                  reconcile "fresh"
+    fi
+    ;;
+
+  commit-spec)
+    spec_dir="${1:?missing spec dir}"
+    if [[ ! -d "$spec_dir" ]]; then
+      log_error "spec dir not found: $spec_dir"
+      exit 1
+    fi
+
+    # Must be on staging (let the orchestrator decide when to call this).
+    current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [[ "$current_branch" != "staging" ]]; then
+      git checkout staging &>/dev/null || {
+        log_error "cannot checkout staging branch"
+        exit 1
+      }
+    fi
+
+    git add -- "$spec_dir" 2>/dev/null || true
+
+    if git diff --cached --quiet 2>/dev/null; then
+      json_output action "commit-spec" \
+                  result "no-op" \
+                  spec_dir "$spec_dir" \
+                  branch "staging"
+    else
+      git -c user.email=dark-factory@local \
+          -c user.name="dark-factory" \
+          commit -m "chore: add spec directory $spec_dir" --quiet
+      sha=$(git rev-parse HEAD)
+      json_output action "commit-spec" \
+                  result "committed" \
+                  spec_dir "$spec_dir" \
+                  branch "staging" \
+                  sha "$sha"
     fi
     ;;
 
@@ -83,7 +159,7 @@ case "$action" in
 
   *)
     log_error "unknown action: $action"
-    echo "Usage: pipeline-branch <staging-init|create|worktree-create|worktree-remove|exists|naming> [options]" >&2
+    echo "Usage: pipeline-branch <staging-init|commit-spec|create|worktree-create|worktree-remove|exists|naming> [options]" >&2
     exit 1
     ;;
 esac
