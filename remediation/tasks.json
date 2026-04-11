@@ -195,7 +195,7 @@
     "description": "Line 35 uses `jq -r '.access_token // empty'` but the macOS Keychain credential format nests under `.claudeAiOauth.accessToken` (see reference lib/usage.sh:54). _check_oauth always silently fails and falls through to the CLI probe. Either fix the JSON path OR remove OAuth fallback entirely in favor of header-based detection.",
     "priority": "P0",
     "findings": ["C2b"],
-    "status": "pending",
+    "status": "done",
     "files": ["bin/pipeline-quota-check", "bin/test-phase7.sh"],
     "acceptance_criteria": [
       "Either: _check_oauth correctly parses .claudeAiOauth.accessToken from Keychain",
@@ -206,7 +206,8 @@
       "bin/test-phase7.sh: OAuth fallback (if kept) extracts token from correct JSON path",
       "bin/test-phase7.sh: auto mode prefers headers, then falls back appropriately"
     ],
-    "depends_on": ["task_02_03"]
+    "depends_on": ["task_02_03"],
+    "notes": "Removed _check_oauth entirely per Decision 10 (headers replace OAuth). Auto mode now: headers → cli → safe defaults. --method oauth rejected as invalid. Removed obsolete oauth tests (octal regression + resets_at) — coverage transferred to the headers path and the pipeline-lib helper tests. Added regression tests: (1) --method oauth rejected, (2) security cmd never invoked in auto, (3) _check_oauth symbol absent from script."
   },
   {
     "task_id": "task_02_05",

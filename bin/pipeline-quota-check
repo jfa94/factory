@@ -3,10 +3,18 @@
 # Detection methods (in priority order under --method auto):
 #   1. Headers — read ${CLAUDE_PLUGIN_DATA}/last-headers.json (cross-platform,
 #      no quota cost). Cold-start probe runs `claude -p ok` once if missing.
-#   2. OAuth API — macOS Keychain token + api.anthropic.com/api/oauth/usage
-#   3. CLI probe — `claude -p ok` and parse stderr for rate limit (burns quota)
+#   2. CLI probe — `claude -p ok` and parse stderr for rate limit (burns quota)
 #
-# Usage: pipeline-quota-check [--method headers|oauth|cli|auto]
+# OAuth/Keychain detection was removed in task_02_04 (finding C2b). Rationale:
+#   - The credential format nests under `.claudeAiOauth.accessToken` (not
+#     `.access_token`), so the old code silently failed and fell through to
+#     the CLI probe.
+#   - Decision 10 (docs/05-decisions.md) explicitly chose headers as the
+#     primary detection path and retired OAuth to make the plugin
+#     cross-platform (macOS Keychain is not portable).
+#   - Keeping a broken OAuth path would mask bugs behind silent fallbacks.
+#
+# Usage: pipeline-quota-check [--method headers|cli|auto]
 # Exit: 0=data retrieved, 1=all methods failed
 
 source "$(dirname "$0")/pipeline-lib.sh"
@@ -19,110 +27,6 @@ while [[ $# -gt 0 ]]; do
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
-
-# --- OAuth API detection (macOS only) ---
-_check_oauth() {
-  # Read OAuth token from macOS Keychain
-  local token
-  token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null) || return 1
-
-  if [[ -z "$token" ]]; then
-    log_warn "no OAuth token found in Keychain"
-    return 1
-  fi
-
-  # Parse the token — it's a JSON blob with access_token
-  local access_token
-  access_token=$(printf '%s' "$token" | jq -r '.access_token // empty' 2>/dev/null)
-
-  if [[ -z "$access_token" ]]; then
-    log_warn "could not extract access_token from Keychain credential"
-    return 1
-  fi
-
-  # Call usage API
-  local response
-  response=$(curl -sf --connect-timeout 5 --max-time 10 \
-    -H "Authorization: Bearer $access_token" \
-    "https://api.anthropic.com/api/oauth/usage" 2>/dev/null) || return 1
-
-  if [[ -z "$response" ]]; then
-    return 1
-  fi
-
-  # Parse utilization and reset timestamps from the OAuth usage response.
-  # The reset fields anchor the window positions — without them we can't
-  # compute accurate thresholds.
-  local five_hour seven_day billing_mode resets_5h resets_7d
-  five_hour=$(printf '%s' "$response" | jq -r '.["unified-5h-utilization"] // empty' 2>/dev/null)
-  seven_day=$(printf '%s' "$response" | jq -r '.["unified-7d-utilization"] // empty' 2>/dev/null)
-  resets_5h=$(printf '%s' "$response" | jq -r '.["unified-5h-reset"] // empty' 2>/dev/null)
-  resets_7d=$(printf '%s' "$response" | jq -r '.["unified-7d-reset"] // empty' 2>/dev/null)
-  billing_mode=$(printf '%s' "$response" | jq -r '.billing_mode // "subscription"' 2>/dev/null)
-
-  if [[ -z "$five_hour" ]] || [[ -z "$seven_day" ]]; then
-    log_warn "could not parse utilization from OAuth response"
-    return 1
-  fi
-
-  # Compute window position and thresholds from resets_at (C9 fix).
-  # If a reset field is missing, fall back to treating "now" as the window
-  # start — this yields window_hour=1/window_day=1 and a 20/14 threshold,
-  # which is conservative (low threshold → more likely to detect pressure).
-  local now_epoch resets_5h_epoch resets_7d_epoch
-  now_epoch=$(date +%s)
-  if [[ -n "$resets_5h" ]]; then
-    resets_5h_epoch=$(parse_iso8601_to_epoch "$resets_5h" || printf '%s' "$((now_epoch + 18000))")
-  else
-    resets_5h_epoch=$((now_epoch + 18000))
-  fi
-  if [[ -n "$resets_7d" ]]; then
-    resets_7d_epoch=$(parse_iso8601_to_epoch "$resets_7d" || printf '%s' "$((now_epoch + 604800))")
-  else
-    resets_7d_epoch=$((now_epoch + 604800))
-  fi
-
-  local window_hour window_day hourly_threshold daily_threshold
-  window_hour=$(compute_window_hour "$resets_5h_epoch" "$now_epoch")
-  window_day=$(compute_window_day "$resets_7d_epoch" "$now_epoch")
-  hourly_threshold=$(compute_hourly_threshold "$window_hour")
-  daily_threshold=$(compute_daily_threshold "$window_day")
-
-  local five_hour_over
-  five_hour_over=$(jq -n --argjson a "$five_hour" --argjson b "$hourly_threshold" 'if $a > $b then "true" else "false" end' -r)
-
-  local seven_day_over
-  seven_day_over=$(jq -n --argjson a "$seven_day" --argjson b "$daily_threshold" 'if $a > $b then "true" else "false" end' -r)
-
-  jq -n \
-    --argjson five_hour "$five_hour" \
-    --argjson hourly_threshold "$hourly_threshold" \
-    --argjson five_hour_over "$five_hour_over" \
-    --argjson window_hour "$window_hour" \
-    --argjson seven_day "$seven_day" \
-    --argjson daily_threshold "$daily_threshold" \
-    --argjson seven_day_over "$seven_day_over" \
-    --argjson window_day "$window_day" \
-    --arg billing_mode "$billing_mode" \
-    --arg detection_method "oauth" \
-    '{
-      five_hour: {
-        utilization: $five_hour,
-        hourly_threshold: $hourly_threshold,
-        over_threshold: $five_hour_over,
-        window_hour: $window_hour
-      },
-      seven_day: {
-        utilization: $seven_day,
-        daily_threshold: $daily_threshold,
-        over_threshold: $seven_day_over,
-        window_day: $window_day
-      },
-      billing_mode: $billing_mode,
-      detection_method: $detection_method
-    }'
-  return 0
-}
 
 # --- CLI probe detection ---
 _check_cli() {
@@ -316,9 +220,6 @@ _check_headers() {
 
 # --- Main ---
 case "$method" in
-  oauth)
-    _check_oauth
-    ;;
   cli)
     _check_cli
     ;;
@@ -329,11 +230,7 @@ case "$method" in
     if _check_headers 2>/dev/null; then
       exit 0
     fi
-    log_info "header-based detection failed, falling back to OAuth"
-    if _check_oauth 2>/dev/null; then
-      exit 0
-    fi
-    log_info "OAuth detection failed, falling back to CLI probe"
+    log_info "header-based detection failed, falling back to CLI probe"
     if _check_cli 2>/dev/null; then
       exit 0
     fi
@@ -347,7 +244,7 @@ case "$method" in
     }'
     ;;
   *)
-    log_error "invalid method: $method (expected oauth|cli|headers|auto)"
+    log_error "invalid method: $method (expected cli|headers|auto)"
     exit 1
     ;;
 esac

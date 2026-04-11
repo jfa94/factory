@@ -154,58 +154,6 @@ assert_eq "seven_day.over_threshold" "false" "$(printf '%s' "$output" | jq -r '.
 
 # ============================================================
 echo ""
-echo "=== pipeline-quota-check (oauth arithmetic — no octal crash) ==="
-
-# Regression: C3 / task_02_01. Bash arithmetic treated zero-padded hours
-# (08, 09) as octal, crashing _check_oauth between 08:00-09:59 UTC.
-# Mock date/security/curl so _check_oauth executes its arithmetic path
-# with the problematic hour values.
-_run_quota_check_with_fake_hour() {
-  local fake_hour="$1"
-  local mocks_dir
-  mocks_dir=$(mktemp -d)
-  trap '[[ -n "$mocks_dir" && "$mocks_dir" == /tmp/* ]] && rm -rf "$mocks_dir"' RETURN
-
-  cat > "$mocks_dir/security" <<'MOCK_EOF'
-#!/usr/bin/env bash
-printf '{"access_token":"fake-token"}'
-MOCK_EOF
-
-  cat > "$mocks_dir/curl" <<'MOCK_EOF'
-#!/usr/bin/env bash
-printf '{"unified-5h-utilization":50,"unified-7d-utilization":50,"billing_mode":"subscription"}'
-MOCK_EOF
-
-  cat > "$mocks_dir/date" <<MOCK_EOF
-#!/usr/bin/env bash
-case "\$*" in
-  "-u +%H") echo "$fake_hour" ;;
-  "-u +%M") echo "00" ;;
-  "-u +%u") echo "3" ;;
-  "+%s") echo "1700000000" ;;
-  *) exec /bin/date "\$@" ;;
-esac
-MOCK_EOF
-
-  chmod +x "$mocks_dir"/security "$mocks_dir"/curl "$mocks_dir"/date
-
-  PATH="$mocks_dir:$PATH" pipeline-quota-check --method oauth
-  local rc=$?
-  return $rc
-}
-
-set +e
-_run_quota_check_with_fake_hour "08" >/dev/null 2>&1
-rc_08=$?
-_run_quota_check_with_fake_hour "09" >/dev/null 2>&1
-rc_09=$?
-set -e
-
-assert_eq "oauth path succeeds with hour=08" "0" "$rc_08"
-assert_eq "oauth path succeeds with hour=09" "0" "$rc_09"
-
-# ============================================================
-echo ""
 echo "=== pipeline-lib window math helpers (task_02_02) ==="
 
 # Window math helpers live in pipeline-lib.sh so both _check_oauth and the
@@ -274,62 +222,71 @@ assert_eq "parse_iso8601_to_epoch 2026-04-10T12:00:00Z" "1775822400" "$(parse_is
 
 # ============================================================
 echo ""
-echo "=== pipeline-quota-check (oauth uses resets_at window math — task_02_02) ==="
+echo "=== pipeline-quota-check (oauth removed — task_02_04) ==="
 
-# Regression: C9 / task_02_02. _check_oauth must compute window_hour/window_day
-# from the resets_at fields in the API response, not from wall-clock hour/DOW.
-# Mock curl to return a controlled resets_at, mock date +%s to return a known now,
-# and assert the output JSON carries the expected window positions and thresholds.
-_run_quota_check_with_resets() {
-  local now_epoch="$1" resets_5h="$2" resets_7d="$3"
-  local mocks_dir
+# Regression: C2b / task_02_04. OAuth/Keychain detection was removed entirely
+# (Decision 10). The old code parsed `.access_token` but the Keychain format
+# actually nests the token under `.claudeAiOauth.accessToken`, so the path was
+# silently broken. Rather than fix a cross-platform-hostile code path, the
+# entire method was deleted. These tests pin the removal.
+
+# (1) --method oauth must be rejected as an unknown method
+assert_exit "--method oauth rejected (removed)" 1 pipeline-quota-check --method oauth
+
+# (2) Auto mode must NEVER invoke `security find-generic-password`. We stub
+# `security` with a tripwire that writes a marker file if it runs; the marker
+# must not exist after auto completes. CLI probe fallback is still allowed
+# until task_02_05 removes it too.
+_run_auto_without_oauth_probe() (
+  test_data=$(mktemp -d)
   mocks_dir=$(mktemp -d)
-  trap '[[ -n "$mocks_dir" && "$mocks_dir" == /tmp/* ]] && rm -rf "$mocks_dir"' RETURN
+  trap '[[ "$test_data" == /tmp/* ]] && rm -rf "$test_data"; [[ "$mocks_dir" == /tmp/* ]] && rm -rf "$mocks_dir"' EXIT
 
-  cat > "$mocks_dir/security" <<'MOCK_EOF'
+  # Provide a valid headers fixture so _check_headers succeeds and auto exits
+  # before reaching any fallback. This proves the headers path is still first.
+  cat > "$test_data/last-headers.json" <<'JSON_EOF'
+{
+  "anthropic-ratelimit-unified-5h-utilization": 10,
+  "anthropic-ratelimit-unified-5h-reset": "2026-04-10T16:50:00Z",
+  "anthropic-ratelimit-unified-7d-utilization": 10,
+  "anthropic-ratelimit-unified-7d-reset": "2026-04-13T12:00:00Z",
+  "is_using_overage": "false"
+}
+JSON_EOF
+
+  # Tripwire: if this runs, the marker file appears.
+  cat > "$mocks_dir/security" <<MOCK_EOF
 #!/usr/bin/env bash
-printf '{"access_token":"fake-token"}'
+touch "$test_data/security_was_called"
+exit 0
 MOCK_EOF
+  chmod +x "$mocks_dir/security"
 
-  # Mock curl: return a JSON body that includes both utilization and reset fields.
-  cat > "$mocks_dir/curl" <<MOCK_EOF
+  cat > "$mocks_dir/date" <<'MOCK_EOF'
 #!/usr/bin/env bash
-printf '%s' '{"unified-5h-utilization":50,"unified-7d-utilization":50,"unified-5h-reset":"$resets_5h","unified-7d-reset":"$resets_7d","billing_mode":"subscription"}'
-MOCK_EOF
-
-  # Mock date: intercept +%s plus the wall-clock helpers so the buggy
-  # hour-of-day / day-of-week math (which this test is meant to catch)
-  # produces predictably-WRONG answers. The new math uses resets_at, so
-  # it must not depend on any of these.
-  cat > "$mocks_dir/date" <<MOCK_EOF
-#!/usr/bin/env bash
-case "\$*" in
-  "+%s") echo "$now_epoch" ;;
-  "-u +%H") echo "14" ;;
-  "-u +%M") echo "30" ;;
-  "-u +%u") echo "7" ;;
-  "-u +%d") echo "10" ;;
-  *) exec /bin/date "\$@" ;;
+case "$*" in
+  "+%s") echo "1775822400" ;;
+  *) exec /bin/date "$@" ;;
 esac
 MOCK_EOF
+  chmod +x "$mocks_dir/date"
 
-  chmod +x "$mocks_dir"/security "$mocks_dir"/curl "$mocks_dir"/date
+  env CLAUDE_PLUGIN_DATA="$test_data" PATH="$mocks_dir:$PATH" \
+    pipeline-quota-check --method auto >/dev/null
 
-  PATH="$mocks_dir:$PATH" pipeline-quota-check --method oauth
-}
+  if [[ -e "$test_data/security_was_called" ]]; then
+    return 2
+  fi
+  return 0
+)
 
-# now = 2026-04-10T12:00:00Z (epoch 1775822400)
-# 5h window: resets 2026-04-10T16:50:00Z → 10 minutes in → window_hour=1, threshold=20
-# 7d window: resets 2026-04-13T12:00:00Z → 4 days in → window_day=5, threshold=71
-set +e
-output=$(_run_quota_check_with_resets 1775822400 "2026-04-10T16:50:00Z" "2026-04-13T12:00:00Z" 2>/dev/null)
-rc=$?
-set -e
-assert_eq "oauth with resets_at exits 0" "0" "$rc"
-assert_eq "oauth five_hour.window_hour" "1" "$(printf '%s' "$output" | jq -r '.five_hour.window_hour')"
-assert_eq "oauth five_hour.hourly_threshold" "20" "$(printf '%s' "$output" | jq -r '.five_hour.hourly_threshold')"
-assert_eq "oauth seven_day.window_day" "5" "$(printf '%s' "$output" | jq -r '.seven_day.window_day')"
-assert_eq "oauth seven_day.daily_threshold" "71" "$(printf '%s' "$output" | jq -r '.seven_day.daily_threshold')"
+assert_exit "auto mode does not invoke security command" 0 _run_auto_without_oauth_probe
+
+# (3) Grep guard: _check_oauth function name must not appear in the script
+# anywhere except inside the removal-rationale comment block at the top.
+_script="$(cd "$(dirname "$0")" && pwd)/pipeline-quota-check"
+oauth_refs=$(grep -c '_check_oauth' "$_script" || true)
+assert_eq "_check_oauth symbol fully removed" "0" "$oauth_refs"
 
 # ============================================================
 echo ""
