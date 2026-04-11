@@ -126,6 +126,53 @@ assert_contains "has Step 2" "Step 2" "$CONFIGURE"
 assert_contains "writes to config.json" "config.json" "$CONFIGURE"
 assert_contains "probes ollama" "ollama" "$CONFIGURE"
 
+# task_08_02: write step must use setpath with split(".") so dotted keys
+# create nested objects, not flat keys with literal dots in their name.
+assert_contains "configure.md uses setpath for nested keys" "setpath" "$CONFIGURE"
+assert_contains "configure.md splits dotted key into path array" 'split(".")' "$CONFIGURE"
+if grep -qE "jq[^']*'\.\[\\\$k\] = \\\$v'" "$CONFIGURE"; then
+  echo "  FAIL: configure.md still uses flat-key write '.[\$k] = \$v'"
+  fail=$((fail + 1))
+else
+  echo "  PASS: configure.md no longer uses flat-key write"
+  pass=$((pass + 1))
+fi
+
+# Exercise the documented jq one-liner against a synthetic fixture to confirm
+# that the dotted key produces a nested object (and not a flat top-level key).
+# Cleanup is inline at the end of this block — the materialize section below
+# installs its own EXIT trap and would overwrite anything set here.
+CFG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/phase9-configure-XXXXXX")
+CFG_FILE="$CFG_DIR/config.json"
+echo '{}' > "$CFG_FILE"
+
+CFG_TMP=$(mktemp "$CFG_DIR/config.XXXXXX")
+jq --arg k "circuitBreaker.maxTasks" --argjson v 20 \
+  'setpath(($k | split(".")); $v)' \
+  "$CFG_FILE" > "$CFG_TMP"
+mv -f "$CFG_TMP" "$CFG_FILE"
+
+nested_value=$(jq -r '.circuitBreaker.maxTasks // "missing"' "$CFG_FILE")
+assert_eq "setpath creates nested circuitBreaker.maxTasks" "20" "$nested_value"
+
+flat_value=$(jq -r '."circuitBreaker.maxTasks" // "missing"' "$CFG_FILE")
+assert_eq "no flat key with literal dot in name" "missing" "$flat_value"
+
+# Adding a sibling key under the same namespace must preserve the first.
+CFG_TMP2=$(mktemp "$CFG_DIR/config.XXXXXX")
+jq --arg k "circuitBreaker.maxRuntimeMinutes" --argjson v 360 \
+  'setpath(($k | split(".")); $v)' \
+  "$CFG_FILE" > "$CFG_TMP2"
+mv -f "$CFG_TMP2" "$CFG_FILE"
+
+sibling_first=$(jq -r '.circuitBreaker.maxTasks' "$CFG_FILE")
+sibling_second=$(jq -r '.circuitBreaker.maxRuntimeMinutes' "$CFG_FILE")
+assert_eq "sibling write preserves circuitBreaker.maxTasks" "20" "$sibling_first"
+assert_eq "sibling write adds circuitBreaker.maxRuntimeMinutes" "360" "$sibling_second"
+
+[[ -n "${CFG_DIR:-}" && "$CFG_DIR" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$CFG_DIR"
+unset CFG_DIR CFG_FILE CFG_TMP CFG_TMP2
+
 # ============================================================
 echo ""
 echo "=== templates/settings.autonomous.json ==="

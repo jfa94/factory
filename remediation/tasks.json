@@ -803,7 +803,7 @@
     "description": "commands/configure.md:97-99 uses `jq --arg k \"<key>\" '.[$k] = $v'`. This treats $k as a literal object key, not a nested path, so setting 'circuitBreaker.maxTasks' creates a top-level `\"circuitBreaker.maxTasks\"` key with a dot in its name. Rewrite to split the key into a path array and use `setpath($path; $v)`.",
     "priority": "P1",
     "findings": ["M8"],
-    "status": "pending",
+    "status": "done",
     "files": ["commands/configure.md", "bin/test-phase9.sh"],
     "acceptance_criteria": [
       "Setting circuitBreaker.maxTasks creates nested path, not flat key",
