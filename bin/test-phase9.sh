@@ -649,6 +649,90 @@ assert_contains "mkdirSync for DB dir" "mkdirSync" "$INDEX"
 
 # ============================================================
 echo ""
+echo "=== pipeline-scaffold quality-gate.yml — dynamic package manager (task_10_01) ==="
+
+SCAFFOLD="$PLUGIN_ROOT/bin/pipeline-scaffold"
+assert_file_exists "pipeline-scaffold exists" "$SCAFFOLD"
+
+SCAFFOLD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/phase9-scaffold-XXXXXX")
+trap '[[ -n "${SCAFFOLD_DIR:-}" && "$SCAFFOLD_DIR" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$SCAFFOLD_DIR"' EXIT
+
+_scaffold_with_lockfile() {
+  local fixture="$1" lockfile="$2"
+  mkdir -p "$SCAFFOLD_DIR/$fixture"
+  [[ -n "$lockfile" ]] && : > "$SCAFFOLD_DIR/$fixture/$lockfile"
+  "$SCAFFOLD" "$SCAFFOLD_DIR/$fixture" >/dev/null
+}
+
+# --- pnpm ---
+_scaffold_with_lockfile pnpm-proj pnpm-lock.yaml
+PNPM_YML="$SCAFFOLD_DIR/pnpm-proj/.github/workflows/quality-gate.yml"
+assert_file_exists "pnpm scaffold generated quality-gate.yml" "$PNPM_YML"
+assert_contains "pnpm workflow uses pnpm/action-setup" "pnpm/action-setup" "$PNPM_YML"
+assert_contains "pnpm workflow caches pnpm" "cache: pnpm" "$PNPM_YML"
+assert_contains "pnpm workflow uses pnpm install --frozen-lockfile" "pnpm install --frozen-lockfile" "$PNPM_YML"
+if grep -qE '^\s*- run: (yarn|bun|npm) ' "$PNPM_YML"; then
+  echo "  FAIL: pnpm workflow leaks non-pnpm run commands"
+  fail=$((fail + 1))
+else
+  echo "  PASS: pnpm workflow has no non-pnpm run commands"
+  pass=$((pass + 1))
+fi
+
+# --- yarn ---
+_scaffold_with_lockfile yarn-proj yarn.lock
+YARN_YML="$SCAFFOLD_DIR/yarn-proj/.github/workflows/quality-gate.yml"
+assert_file_exists "yarn scaffold generated quality-gate.yml" "$YARN_YML"
+assert_contains "yarn workflow caches yarn" "cache: yarn" "$YARN_YML"
+assert_contains "yarn workflow uses yarn install --immutable" "yarn install --immutable" "$YARN_YML"
+if grep -q 'pnpm/action-setup' "$YARN_YML"; then
+  echo "  FAIL: yarn workflow still references pnpm/action-setup"
+  fail=$((fail + 1))
+else
+  echo "  PASS: yarn workflow has no pnpm/action-setup"
+  pass=$((pass + 1))
+fi
+
+# --- bun ---
+_scaffold_with_lockfile bun-proj bun.lockb
+BUN_YML="$SCAFFOLD_DIR/bun-proj/.github/workflows/quality-gate.yml"
+assert_file_exists "bun scaffold generated quality-gate.yml" "$BUN_YML"
+assert_contains "bun workflow uses oven-sh/setup-bun" "oven-sh/setup-bun" "$BUN_YML"
+assert_contains "bun workflow uses bun install --frozen-lockfile" "bun install --frozen-lockfile" "$BUN_YML"
+if grep -q 'pnpm/action-setup' "$BUN_YML"; then
+  echo "  FAIL: bun workflow still references pnpm/action-setup"
+  fail=$((fail + 1))
+else
+  echo "  PASS: bun workflow has no pnpm/action-setup"
+  pass=$((pass + 1))
+fi
+
+# Also accept the newer text-format bun.lock
+_scaffold_with_lockfile bun-text-proj bun.lock
+BUN_TEXT_YML="$SCAFFOLD_DIR/bun-text-proj/.github/workflows/quality-gate.yml"
+assert_contains "bun.lock (text) also selects bun workflow" "oven-sh/setup-bun" "$BUN_TEXT_YML"
+
+# --- npm ---
+_scaffold_with_lockfile npm-proj package-lock.json
+NPM_YML="$SCAFFOLD_DIR/npm-proj/.github/workflows/quality-gate.yml"
+assert_file_exists "npm scaffold generated quality-gate.yml" "$NPM_YML"
+assert_contains "npm workflow caches npm" "cache: npm" "$NPM_YML"
+assert_contains "npm workflow uses npm ci" "npm ci" "$NPM_YML"
+if grep -q 'pnpm/action-setup' "$NPM_YML"; then
+  echo "  FAIL: npm workflow still references pnpm/action-setup"
+  fail=$((fail + 1))
+else
+  echo "  PASS: npm workflow has no pnpm/action-setup"
+  pass=$((pass + 1))
+fi
+
+# --- no-lockfile fallback ---
+_scaffold_with_lockfile bare-proj ""
+BARE_YML="$SCAFFOLD_DIR/bare-proj/.github/workflows/quality-gate.yml"
+assert_contains "no-lockfile fallback uses npm ci" "npm ci" "$BARE_YML"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"
