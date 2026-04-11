@@ -321,6 +321,28 @@ output=$(pipeline-build-prompt "$task" "$spec_dir" --fix-instructions "$fix" 2>/
 assert_eq "fix instructions present" "true" "$( echo "$output" | grep -q "Review Feedback" && echo true || echo false )"
 assert_eq "fix finding present" "true" "$( echo "$output" | grep -q "Missing null check" && echo true || echo false )"
 
+# task_03_04: spec path propagation via state
+# When --spec-path is not given, build-prompt reads .spec.path from state.
+state_spec_dir=$(mktemp -d)
+printf '# State Spec\nResolved via .spec.path' > "$state_spec_dir/spec.md"
+pipeline-state write "run-prompt-test" '.spec.path' "\"$state_spec_dir\"" >/dev/null 2>&1
+
+output=$(pipeline-build-prompt "$task" 2>/dev/null)
+assert_eq "build-prompt reads .spec.path from state when --spec-path omitted" "true" \
+  "$( echo "$output" | grep -q "Resolved via .spec.path" && echo true || echo false )"
+
+# Prompt output must contain an absolute spec path so task-executors running
+# in a different worktree know where to look.
+assert_eq "prompt contains absolute spec path" "true" \
+  "$( echo "$output" | grep -qF "$state_spec_dir" && echo true || echo false )"
+
+# --spec-path flag overrides state
+override_dir=$(mktemp -d)
+printf '# Override Spec\nFrom flag' > "$override_dir/spec.md"
+output=$(pipeline-build-prompt "$task" --spec-path "$override_dir" 2>/dev/null)
+assert_eq "--spec-path flag overrides state" "true" \
+  "$( echo "$output" | grep -q "From flag" && echo true || echo false )"
+
 echo ""
 echo "=== task_01_02: pipeline-validate-tasks task_id injection hardening ==="
 

@@ -76,6 +76,12 @@ pipeline-state write "run-test-001" '.spec.status' '"generating"' >/dev/null 2>&
 val=$(pipeline-state read "run-test-001" '.spec.status')
 assert_eq "write+read spec.status" "generating" "$val"
 
+# task_03_04: .spec.path must persist through the write/read round-trip so
+# the orchestrator and pipeline-build-prompt can discover it on resume.
+pipeline-state write "run-test-001" '.spec.path' '"/abs/path/to/.state/run-test-001"' >/dev/null 2>&1
+val=$(pipeline-state read "run-test-001" '.spec.path')
+assert_eq "write+read .spec.path persists absolute path" "/abs/path/to/.state/run-test-001" "$val"
+
 echo ""
 echo "=== pipeline-state task-status ==="
 

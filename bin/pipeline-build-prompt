@@ -1,25 +1,52 @@
 #!/usr/bin/env bash
 # Build structured prompt for task executor.
-# Usage: pipeline-build-prompt <task-json> <spec-path> [--holdout <percent>] [--fix-instructions <json>]
+# Usage:
+#   pipeline-build-prompt <task-json> [<spec-path>] [--spec-path <path>] [--holdout <percent>] [--fix-instructions <json>]
+#
+# spec-path resolution order:
+#   1. --spec-path flag
+#   2. positional 2nd argument (legacy form)
+#   3. .spec.path on the current run's state.json (via current_run_id)
+# If none of these yields a usable path, the spec section is emitted empty with
+# a pointer for the executor to fetch it from `origin/staging`.
 # Exit: 0=success
 
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
 task_json="${1:?missing task JSON}"
-spec_path="${2:?missing spec path}"
-shift 2
+shift
+
+spec_path=""
+# Legacy positional form: pipeline-build-prompt <task-json> <spec-path>
+if [[ $# -gt 0 && "$1" != --* ]]; then
+  spec_path="$1"
+  shift
+fi
 
 holdout_percent=0
 fix_instructions=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --spec-path) spec_path="$2"; shift 2 ;;
     --holdout) holdout_percent="$2"; shift 2 ;;
     --fix-instructions) fix_instructions="$2"; shift 2 ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
+
+# If still unset, resolve via current run's state.json (.spec.path).
+if [[ -z "$spec_path" ]]; then
+  state_run_id=$(current_run_id 2>/dev/null || true)
+  if [[ -n "${state_run_id:-}" ]]; then
+    resolved=$(pipeline-state read "$state_run_id" '.spec.path' 2>/dev/null || true)
+    # jq renders missing keys as literal "null"; treat that as absent
+    if [[ -n "$resolved" && "$resolved" != "null" ]]; then
+      spec_path="$resolved"
+    fi
+  fi
+fi
 
 # Parse task metadata
 task_id=$(printf '%s' "$task_json" | jq -r '.task_id')
@@ -78,7 +105,20 @@ if [[ "$holdout_percent" -gt 0 ]] && [[ "$total_criteria" -gt 1 ]]; then
   log_info "holdout: withheld $holdout_count of $total_criteria criteria for $task_id"
 fi
 
-# Read spec
+# Resolve spec location into an absolute path (task-executor runs in a different
+# worktree, so relative paths are meaningless to it).
+resolved_spec_abs=""
+if [[ -n "$spec_path" ]]; then
+  if [[ -d "$spec_path" ]]; then
+    resolved_spec_abs=$(cd "$spec_path" 2>/dev/null && pwd) || resolved_spec_abs="$spec_path"
+  elif [[ -f "$spec_path" ]]; then
+    resolved_spec_abs=$(cd "$(dirname "$spec_path")" 2>/dev/null && pwd)/$(basename "$spec_path") || resolved_spec_abs="$spec_path"
+  else
+    resolved_spec_abs="$spec_path"
+  fi
+fi
+
+# Read spec content
 spec_content=""
 if [[ -f "$spec_path/spec.md" ]]; then
   spec_content=$(<"$spec_path/spec.md")
@@ -121,6 +161,13 @@ ${criteria_list}
 
 ## Tests to Write
 ${tests_to_write}
+
+## Spec Location
+${resolved_spec_abs}
+
+Read the spec directly via one of:
+  git fetch origin staging && git show origin/staging:${resolved_spec_abs#${PWD}/}/spec.md
+  (or, if running on the orchestrator filesystem) ${resolved_spec_abs}/spec.md
 
 ## Spec Context
 ${spec_content}
