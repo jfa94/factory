@@ -266,6 +266,14 @@ When `pipeline-model-router` returns `action: wait`:
 3. Re-check quota
 4. If still over: check if any in-flight tasks can drain first
 5. Continue when quota allows
+6. After the wait completes, add the elapsed minutes to
+   `.circuit_breaker.pause_minutes` so `pipeline-circuit-breaker` does not
+   count paused wall-clock time against `maxRuntimeMinutes`:
+
+   ```
+   prior=$(pipeline-state read <run-id> '.circuit_breaker.pause_minutes // 0')
+   pipeline-state write <run-id> '.circuit_breaker.pause_minutes' $((prior + wait_minutes))
+   ```
 
 When `action: end_gracefully`:
 

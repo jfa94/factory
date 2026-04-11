@@ -17,11 +17,13 @@ fi
 
 issue=""
 mode="prd"
+force=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --issue) issue="$2"; shift 2 ;;
     --mode) mode="$2"; shift 2 ;;
+    --force) force=1; shift ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -83,7 +85,8 @@ state=$(jq -n \
     circuit_breaker: {
       tasks_completed: 0,
       consecutive_failures: 0,
-      runtime_minutes: 0
+      runtime_minutes: 0,
+      pause_minutes: 0
     },
     cost: {
       total_tokens: 0,
@@ -98,8 +101,29 @@ atomic_write "$run_dir/state.json" "$state"
 touch "$run_dir/audit.jsonl"
 touch "$run_dir/metrics.jsonl"
 
-# Set 'current' symlink (remove old one if exists)
+# Set 'current' symlink, refusing to clobber an actively-running run.
+# Non-terminal run statuses — treat symlink target as owned until --force.
 current_link="${runs_dir}/current"
+if [[ -L "$current_link" ]]; then
+  current_target=$(readlink "$current_link" 2>/dev/null || true)
+  if [[ -n "$current_target" && -f "$current_target/state.json" ]]; then
+    current_status=$(jq -r '.status // "unknown"' "$current_target/state.json" 2>/dev/null || echo "unknown")
+    case "$current_status" in
+      running)
+        if [[ $force -eq 0 ]]; then
+          other_run=$(basename "$current_target")
+          log_error "current symlink points to active run '$other_run' (status=running). Pass --force to override."
+          # Clean up the just-created run-dir so we don't leak state on the
+          # refused init. The caller can retry with --force.
+          rm -rf "$run_dir"
+          exit 1
+        fi
+        log_warn "overriding active run with --force"
+        ;;
+      *) ;;
+    esac
+  fi
+fi
 rm -f "$current_link"
 ln -s "$run_dir" "$current_link"
 

@@ -670,7 +670,7 @@
     "findings": [
       "M10"
     ],
-    "status": "pending",
+    "status": "done",
     "files": [
       "bin/pipeline-state",
       "bin/test-phase1.sh"
@@ -698,7 +698,7 @@
     "findings": [
       "M15"
     ],
-    "status": "pending",
+    "status": "done",
     "files": [
       "hooks/stop-gate.sh",
       "bin/test-phase1.sh"
@@ -726,7 +726,7 @@
     "findings": [
       "M16"
     ],
-    "status": "pending",
+    "status": "done",
     "files": [
       "hooks/subagent-stop-gate.sh",
       "bin/test-phase1.sh"
@@ -752,7 +752,7 @@
     "findings": [
       "M13"
     ],
-    "status": "pending",
+    "status": "done",
     "files": [
       "bin/pipeline-init",
       "bin/test-phase1.sh"
@@ -780,7 +780,7 @@
     "findings": [
       "M9"
     ],
-    "status": "pending",
+    "status": "done",
     "files": [
       "bin/pipeline-lock",
       "bin/test-phase1.sh"
@@ -805,7 +805,7 @@
     "findings": [
       "M7"
     ],
-    "status": "pending",
+    "status": "done",
     "files": [
       "bin/pipeline-circuit-breaker",
       "bin/pipeline-state",

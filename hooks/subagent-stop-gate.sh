@@ -45,23 +45,33 @@ case "$agent_type" in
     ;;
 
   task-executor)
-    # Expect commits on the task branch (check via state for branch name)
+    # Check commits on every executing task's worktree, not just the first.
+    # Parallel task-executors run concurrently — the subagent-stop hook fires
+    # per subagent return, but we still want to surface missing commits across
+    # the whole fan-out so warnings are not lost.
     state_file="$run_dir/state.json"
     if [[ -f "$state_file" ]]; then
-      # Find executing tasks and check for branches
-      executing=$(jq -r '
-        [.tasks | to_entries[] | select(.value.status == "executing") | .key] | first // empty
-      ' "$state_file" 2>/dev/null)
-
-      if [[ -n "$executing" ]]; then
-        branch=$(jq -r --arg tid "$executing" '.tasks[$tid].branch // empty' "$state_file" 2>/dev/null)
-        if [[ -n "$branch" ]]; then
-          # Check if branch has commits ahead of staging
-          if ! git log --oneline "staging..$branch" 2>/dev/null | grep -q .; then
-            warnings+=("no commits found on branch $branch for task $executing")
-          fi
+      while IFS= read -r tid; do
+        [[ -z "$tid" ]] && continue
+        branch=$(jq -r --arg t "$tid" '.tasks[$t].branch // empty' "$state_file" 2>/dev/null)
+        worktree=$(jq -r --arg t "$tid" '.tasks[$t].worktree // empty' "$state_file" 2>/dev/null)
+        if [[ -z "$branch" ]]; then
+          continue
         fi
-      fi
+        # Prefer the task's own worktree for the git log check — cwd is the
+        # orchestrator, which has no knowledge of the task branch.
+        log_output=""
+        if [[ -n "$worktree" && -d "$worktree" ]]; then
+          log_output=$(git -C "$worktree" log --oneline "staging..$branch" 2>/dev/null || true)
+        else
+          log_output=$(git log --oneline "staging..$branch" 2>/dev/null || true)
+        fi
+        if [[ -z "$log_output" ]]; then
+          warnings+=("no commits found on branch $branch for task $tid")
+        fi
+      done < <(jq -r '
+        [.tasks | to_entries[] | select(.value.status == "executing") | .key] | .[]
+      ' "$state_file" 2>/dev/null)
     fi
     ;;
 

@@ -190,11 +190,35 @@ case "$action" in
     run_id="${1:?missing run-id}"
     state=$(_read_state_file "$run_id")
 
-    # Find first task not in done/failed state
+    # Prefer .execution_order (validated topo-sort from pipeline-validate-tasks).
+    # Each entry is {task_id, parallel_group}; array order is already grouped
+    # so earlier parallel_groups appear first.
     task_id=$(printf '%s' "$state" | jq -r '
-      [.tasks | to_entries[] | select(.value.status != "done" and .value.status != "failed")] |
-      first | .key // empty
+      . as $root
+      | ($root.execution_order // []) as $order
+      | if ($order | length) > 0 then
+          $order
+          | map(.task_id)
+          | map(select(
+              ($root.tasks[.].status // "pending") != "done"
+              and ($root.tasks[.].status // "pending") != "failed"
+            ))
+          | .[0] // empty
+        else
+          empty
+        end
     ')
+
+    # Fallback: legacy state without .execution_order (pre-seeding).
+    if [[ -z "$task_id" ]]; then
+      if printf '%s' "$state" | jq -e '(.execution_order // []) | length == 0' >/dev/null; then
+        log_warn "state has no execution_order, falling back to .tasks iteration order"
+        task_id=$(printf '%s' "$state" | jq -r '
+          [.tasks | to_entries[] | select(.value.status != "done" and .value.status != "failed")] |
+          first | .key // empty
+        ')
+      fi
+    fi
 
     if [[ -z "$task_id" ]]; then
       log_info "no incomplete tasks found"

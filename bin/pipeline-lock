@@ -106,9 +106,19 @@ case "$action" in
       exit 1
     fi
 
-    # Dead PID — take ownership
-    rm -f "$LOCK_FILE"
-    printf '{"pid":%d,"timestamp":"%s","recovered_from":%s}' "$LOCK_PID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$holder_pid" > "$LOCK_FILE"
+    # Dead PID — take ownership atomically. Write the new lock to a tmp
+    # file in the same dir, then rename into place. Between the old rm+write
+    # implementation the lock file was briefly absent, letting a concurrent
+    # recover race in and both claim ownership. rename(2) is atomic on the
+    # same filesystem, so no window.
+    tmp_lock=$(mktemp "${LOCK_FILE}.recover.XXXXXX")
+    printf '{"pid":%d,"timestamp":"%s","recovered_from":%s}' \
+      "$LOCK_PID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$holder_pid" > "$tmp_lock"
+    if ! mv -f "$tmp_lock" "$LOCK_FILE"; then
+      rm -f "$tmp_lock"
+      log_error "failed to install recovered lock"
+      exit 1
+    fi
     log_info "recovered lock from dead PID $holder_pid"
     json_output locked "true" pid "$LOCK_PID" recovered_from "$holder_pid" action "recovered"
     ;;

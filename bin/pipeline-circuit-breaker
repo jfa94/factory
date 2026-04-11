@@ -24,17 +24,23 @@ max_failures=$(read_config '.circuitBreaker.maxConsecutiveFailures' '3')
 # Read current values from state
 tasks_completed=$(printf '%s' "$state" | jq -r '.circuit_breaker.tasks_completed // 0')
 consecutive_failures=$(printf '%s' "$state" | jq -r '.circuit_breaker.consecutive_failures // 0')
+pause_minutes=$(printf '%s' "$state" | jq -r '.circuit_breaker.pause_minutes // 0')
 
-# Calculate runtime
+# Calculate runtime, deducting time the run was paused (e.g. rate-limit waits).
+# pause_minutes is maintained by the orchestrator via pipeline-state when
+# model-router returns action=wait.
 started_at=$(printf '%s' "$state" | jq -r '.started_at // empty')
 if [[ -n "$started_at" ]]; then
-  if command -v gdate &>/dev/null; then
-    start_epoch=$(gdate -d "$started_at" +%s 2>/dev/null || echo 0)
-  else
-    start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$started_at" +%s 2>/dev/null || echo 0)
-  fi
+  # parse_iso8601_to_epoch handles BSD/GNU/Homebrew date variants uniformly
+  # AND respects the UTC 'Z' suffix — the old `date -j -f` call omitted -u
+  # and interpreted UTC timestamps as local time, inflating elapsed time.
+  start_epoch=$(parse_iso8601_to_epoch "$started_at" 2>/dev/null || echo 0)
   now_epoch=$(date +%s)
-  runtime_minutes=$(( (now_epoch - start_epoch) / 60 ))
+  wall_minutes=$(( (now_epoch - start_epoch) / 60 ))
+  runtime_minutes=$(( wall_minutes - pause_minutes ))
+  if (( runtime_minutes < 0 )); then
+    runtime_minutes=0
+  fi
 else
   runtime_minutes=0
 fi
@@ -59,6 +65,7 @@ jq -n \
   --argjson tripped "$tripped" \
   --argjson tasks_completed "$tasks_completed" \
   --argjson runtime_minutes "$runtime_minutes" \
+  --argjson pause_minutes "$pause_minutes" \
   --argjson consecutive_failures "$consecutive_failures" \
   --argjson max_tasks "$max_tasks" \
   --argjson max_runtime "$max_runtime" \
@@ -68,6 +75,7 @@ jq -n \
     tripped: $tripped,
     tasks_completed: $tasks_completed,
     runtime_minutes: $runtime_minutes,
+    pause_minutes: $pause_minutes,
     consecutive_failures: $consecutive_failures,
     thresholds: {
       max_tasks: $max_tasks,
