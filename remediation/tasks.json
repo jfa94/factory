@@ -418,7 +418,7 @@
     "findings": [
       "C6"
     ],
-    "status": "pending",
+    "status": "done",
     "files": [
       "templates/settings.autonomous.json",
       "bin/test-phase9.sh"
@@ -438,7 +438,8 @@
       "bin/test-phase9.sh: template has deny-list with rm -rf, git push --force, etc.",
       "bin/test-phase9.sh: jq -e . validates the template"
     ],
-    "depends_on": []
+    "depends_on": [],
+    "notes": "Ported full settings.autonomous.json from ~/Projects/dark-factory. Includes 58-entry deny list, 8 PreToolUse matcher groups (.claude access block, branch protection via git branch --show-current, protected-files/migrations, Supabase SQL safety, dangerous Bash patterns, native-tool-nudge, pre-commit-check, pre-push-check), 3 PostToolUse hooks (prettier, related vitest runs, audit-log JSONL), and vitest Stop hook. User-env hook paths (~/.claude/hooks/*) preserved per acceptance criteria. Stripped enabledPlugins/effortLevel so template safely merges with user settings."
   },
   {
     "task_id": "task_04_02",

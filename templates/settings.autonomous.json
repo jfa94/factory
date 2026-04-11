@@ -1,6 +1,6 @@
 {
   "$schema": "https://code.claude.com/schemas/settings.json",
-  "_comment": "Minimal pipeline-specific settings merged with user's existing settings at runtime. User settings take precedence.",
+  "_comment": "Pipeline-specific autonomous-mode settings merged with user's existing settings at runtime. User settings take precedence. Paths that reference ~/.claude/hooks/* are user-env hooks inherited from the host environment; inline shell is executed under the user's shell and Bash(*) gating.",
   "env": {
     "DARK_FACTORY_AUTONOMOUS_MODE": "1"
   },
@@ -9,9 +9,13 @@
       "Bash(pipeline-*)",
       "Bash(git *)",
       "Bash(gh *)",
-      "Bash(pnpm *)",
-      "Bash(npm *)",
+      "Bash(jq *)",
+      "Bash(node --check *)",
+      "Bash(npm run *)",
+      "Bash(npm test*)",
       "Bash(npx *)",
+      "Bash(pnpm run *)",
+      "Bash(pnpm test*)",
       "Bash(yarn *)",
       "Bash(bun *)",
       "Read",
@@ -20,17 +24,194 @@
       "Grep",
       "Glob",
       "Agent"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/*)",
+      "Bash(rm -rf $HOME*)",
+      "Bash(rm -rf .)",
+      "Bash(rm -rf ./*)",
+      "Bash(rm -rf ..*)",
+      "Bash(rm -r /)",
+      "Bash(rm -r /*)",
+      "Bash(rm -r ~)",
+      "Bash(rm -r ~/*)",
+      "Bash(find .claude*)",
+      "Bash(ls .claude*)",
+      "Bash(cat .claude/*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push *--force*)",
+      "Bash(git push origin main*)",
+      "Bash(git push origin master*)",
+      "Bash(git push origin develop*)",
+      "Bash(git rebase *)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(git branch -D main*)",
+      "Bash(git branch -D master*)",
+      "Bash(git branch -D develop*)",
+      "Bash(*--no-verify*)",
+      "Bash(*--no-gpg-sign*)",
+      "Bash(DROP TABLE*)",
+      "Bash(DROP DATABASE*)",
+      "Bash(DROP SCHEMA*)",
+      "Bash(TRUNCATE*)",
+      "Bash(DELETE FROM*WHERE 1*)",
+      "Bash(chmod -R 777*)",
+      "Bash(chmod 777*)",
+      "Bash(sudo *)",
+      "Bash(npm publish*)",
+      "Bash(pnpm publish*)",
+      "Bash(gh release delete*)",
+      "Bash(gh repo delete*)",
+      "Bash(npx *create-*)",
+      "Bash(aws iam delete-* *)",
+      "Bash(aws iam detach-* *)",
+      "Bash(aws cloudformation delete-stack *)",
+      "Bash(aws s3 rb *)",
+      "Bash(aws rds delete-* *)",
+      "Bash(aws ec2 terminate-* *)",
+      "Bash(aws dynamodb delete-table *)",
+      "Bash(aws lambda delete-function *)",
+      "Bash(aws logs delete-* *)",
+      "Write(.env)",
+      "Write(.env.*)",
+      "Write(**/secrets/**)",
+      "Write(**/migrations/**)",
+      "Edit(.env)",
+      "Edit(.env.*)",
+      "Edit(**/migrations/**)"
     ]
   },
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^Bash$",
+        "matcher": "Glob|Grep|Read|Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "hooks/branch-protection.sh",
-            "timeout": 5
+            "command": "INPUT=$(cat); FP=$(printf '%s' \"$INPUT\" | jq -r '.tool_input.file_path // .tool_input.path // .tool_input.pattern // empty'); [ -z \"$FP\" ] && exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude(/|$)' || exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude/worktrees/' && exit 0; echo '{\"decision\":\"block\",\"reason\":\"Access to .claude/ directory is restricted in autonomous mode.\"}'",
+            "statusMessage": "Checking .claude/ directory access"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "BRANCH=$(git branch --show-current 2>/dev/null); if [ \"$BRANCH\" = \"main\" ] || [ \"$BRANCH\" = \"master\" ]; then echo '{\"decision\":\"block\",\"reason\":\"Cannot edit on main/master. Create a feature branch first.\"}'; exit 0; fi",
+            "statusMessage": "Checking branch protection"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FP=$(cat | jq -r '.tool_input.file_path // \"\"'); if printf '%s' \"$FP\" | grep -qE '(\\.env[^/]*$|/secrets/)'; then echo '{\"decision\":\"block\",\"reason\":\"Protected file: requires human review.\"}'; exit 0; fi; if printf '%s' \"$FP\" | grep -qE '/migrations/'; then ROOT=$(cd \"${CLAUDE_PROJECT_DIR:-.}\" && git rev-parse --show-toplevel 2>/dev/null); if [ -n \"$ROOT\" ]; then REL=\"${FP#$ROOT/}\"; if git -C \"$ROOT\" cat-file -e \"main:$REL\" 2>/dev/null; then echo '{\"decision\":\"block\",\"reason\":\"Applied migration (exists on main): cannot edit in autonomous mode.\"}'; fi; fi; fi",
+            "statusMessage": "Checking protected files & migrations"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_supabase_supabase__execute_sql",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SQL=$(cat | jq -r '.tool_input.sql // .tool_input.query // \"\"' | tr '[:lower:]' '[:upper:]'); if echo \"$SQL\" | grep -q 'DROP DATABASE'; then echo '{\"decision\":\"block\",\"reason\":\"DROP DATABASE blocked.\"}'; exit 0; fi; if echo \"$SQL\" | grep -q 'DROP SCHEMA'; then echo '{\"decision\":\"block\",\"reason\":\"DROP SCHEMA blocked.\"}'; exit 0; fi; for KW in TRUNCATE GRANT REVOKE; do if echo \"$SQL\" | grep -qw \"$KW\"; then echo '{\"decision\":\"block\",\"reason\":\"'\"$KW\"' blocked in autonomous mode.\"}'; exit 0; fi; done",
+            "statusMessage": "Checking SQL safety"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CMD=$(cat | jq -r '.tool_input.command // \"\"'); for PAT in 'rm -rf' 'rm -r /' 'DROP TABLE' 'DROP DATABASE' 'chmod 777' 'curl.*\\|.*sh' 'wget.*\\|.*sh'; do if echo \"$CMD\" | grep -qiE \"$PAT\"; then echo '{\"decision\":\"block\",\"reason\":\"Blocked dangerous command pattern\"}'; exit 0; fi; done",
+            "statusMessage": "Checking for dangerous patterns"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/native-tool-nudge.sh",
+            "statusMessage": "Checking for native tool alternatives"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pre-commit-check.sh",
+            "timeout": 60,
+            "statusMessage": "Running pre-commit checks"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/pre-push-check.sh",
+            "timeout": 900,
+            "statusMessage": "Running quality checks before push"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(cat | jq -r '.tool_input.file_path'); npx prettier --write \"$FILE\" 2>/dev/null; echo '{\"suppressOutput\": true}'",
+            "timeout": 15,
+            "statusMessage": "Auto-formatting with prettier"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(cat | jq -r '.tool_input.file_path // \"\"'); if echo \"$FILE\" | grep -qE '\\.(test|spec)\\.(ts|tsx)$'; then exit 0; fi; if echo \"$FILE\" | grep -qE '\\.(ts|tsx)$'; then npx vitest run --reporter=dot --findRelatedTests \"$FILE\" --passWithNoTests 2>&1 | tail -10; fi",
+            "timeout": 30,
+            "statusMessage": "Running related tests"
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AUDIT=.claude/tool-audit.jsonl; if [ -f \"$AUDIT\" ] && [ $(stat -f%z \"$AUDIT\" 2>/dev/null || stat -c%s \"$AUDIT\" 2>/dev/null || echo 0) -gt 10485760 ]; then mv \"$AUDIT\" \"$AUDIT.old\"; fi; jq -c --arg ts \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" --arg task \"${FACTORY_TASK_ID:-interactive}\" '{ts: $ts, task: $task, tool: .tool_name, target: (.tool_input.file_path // .tool_input.command // null)}' >> \"$AUDIT\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -f \"${CLAUDE_PROJECT_DIR:-.}/package.json\" ] || exit 0; grep -q vitest \"${CLAUDE_PROJECT_DIR:-.}/package.json\" || exit 0; cd \"${CLAUDE_PROJECT_DIR:-.}\" && npx vitest run --reporter=verbose 2>&1 | tail -40; TEST=$?; if [ $TEST -ne 0 ]; then echo 'STOP GATE FAILED: tests failing. Fix all issues.'; exit 1; fi",
+            "timeout": 120,
+            "statusMessage": "Running test suite"
           }
         ]
       }

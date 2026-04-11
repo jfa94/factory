@@ -78,17 +78,146 @@ assert_eq "DARK_FACTORY_AUTONOMOUS_MODE = 1" "1" "$env_val"
 has_pipeline=$(jq -r '.permissions.allow | index("Bash(pipeline-*)") | if . != null then "yes" else "no" end' "$TEMPLATE")
 assert_eq "permissions includes Bash(pipeline-*)" "yes" "$has_pipeline"
 
-# PreToolUse hook present
-has_hook=$(jq -r '.hooks.PreToolUse | length' "$TEMPLATE")
-assert_eq "has PreToolUse hook" "1" "$has_hook"
-
-# Hook command path references branch-protection.sh
-hook_cmd=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$TEMPLATE")
-if printf '%s' "$hook_cmd" | grep -q 'branch-protection.sh'; then
-  echo "  PASS: hook command references branch-protection.sh"
+# --- Deny list: full set ported from old pipeline ---
+deny_count=$(jq -r '.permissions.deny | length' "$TEMPLATE")
+if [[ "$deny_count" -ge 20 ]]; then
+  echo "  PASS: deny list has $deny_count entries (>= 20)"
   pass=$((pass + 1))
 else
-  echo "  FAIL: hook command does not reference branch-protection.sh (got: $hook_cmd)"
+  echo "  FAIL: deny list too small ($deny_count entries, need >= 20)"
+  fail=$((fail + 1))
+fi
+
+for pattern in \
+  "Bash(rm -rf /*)" \
+  "Bash(git push --force*)" \
+  "Bash(*--no-verify*)" \
+  "Bash(git reset --hard*)" \
+  "Bash(find .claude*)" \
+  "Write(.env)" \
+  "Edit(.env)" \
+  "Write(**/secrets/**)" \
+  "Write(**/migrations/**)"; do
+  match=$(jq --arg p "$pattern" -r '.permissions.deny | index($p) | if . != null then "yes" else "no" end' "$TEMPLATE")
+  assert_eq "deny list contains $pattern" "yes" "$match"
+done
+
+# --- PreToolUse hooks: multiple, covering all old-pipeline guards ---
+pretool_groups=$(jq -r '.hooks.PreToolUse | length' "$TEMPLATE")
+if [[ "$pretool_groups" -ge 6 ]]; then
+  echo "  PASS: has $pretool_groups PreToolUse matcher groups (>= 6)"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: PreToolUse has $pretool_groups matcher groups, need >= 6"
+  fail=$((fail + 1))
+fi
+
+# .claude access block — matcher must cover Read/Glob/Grep/Edit/Write
+dotclaude_block=$(jq -r '[.hooks.PreToolUse[] | select(.matcher | test("Glob|Grep|Read|Edit|Write")) | .hooks[] | .command] | map(select(test("\\.claude"))) | length' "$TEMPLATE")
+if [[ "$dotclaude_block" -ge 1 ]]; then
+  echo "  PASS: .claude access block hook present"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: .claude access block hook missing"
+  fail=$((fail + 1))
+fi
+
+# Branch protection via git branch --show-current (inline)
+branch_protect=$(jq -r '[.. | .command? // empty] | map(select(test("git branch --show-current"))) | length' "$TEMPLATE")
+if [[ "$branch_protect" -ge 1 ]]; then
+  echo "  PASS: branch protection hook (git branch --show-current) present"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: branch protection hook missing"
+  fail=$((fail + 1))
+fi
+
+# Protected-files hook (.env, secrets, migrations)
+protected_files=$(jq -r '[.. | .command? // empty] | map(select(test("secrets") and test("migrations"))) | length' "$TEMPLATE")
+if [[ "$protected_files" -ge 1 ]]; then
+  echo "  PASS: protected-files (.env/secrets/migrations) hook present"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: protected-files hook missing"
+  fail=$((fail + 1))
+fi
+
+# SQL safety hook — matches Supabase execute_sql
+sql_safety=$(jq -r '[.hooks.PreToolUse[] | select(.matcher | test("execute_sql"))] | length' "$TEMPLATE")
+if [[ "$sql_safety" -ge 1 ]]; then
+  echo "  PASS: SQL safety hook (execute_sql matcher) present"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: SQL safety hook missing"
+  fail=$((fail + 1))
+fi
+
+# Dangerous Bash pattern hook
+dangerous_bash=$(jq -r '[.. | .command? // empty] | map(select(test("Blocked dangerous command pattern"))) | length' "$TEMPLATE")
+if [[ "$dangerous_bash" -ge 1 ]]; then
+  echo "  PASS: dangerous Bash pattern hook present"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: dangerous Bash pattern hook missing"
+  fail=$((fail + 1))
+fi
+
+# pre-commit-check and pre-push-check from ~/.claude/hooks/
+for script in pre-commit-check.sh pre-push-check.sh; do
+  match=$(jq --arg s "$script" -r '[.. | .command? // empty] | map(select(test("~/.claude/hooks/" + $s))) | length' "$TEMPLATE")
+  if [[ "$match" -ge 1 ]]; then
+    echo "  PASS: $script hook present (user env path preserved)"
+    pass=$((pass + 1))
+  else
+    echo "  FAIL: $script hook missing"
+    fail=$((fail + 1))
+  fi
+done
+
+# --- PostToolUse: prettier + related tests + audit log ---
+prettier_hook=$(jq -r '[.. | .command? // empty] | map(select(test("prettier --write"))) | length' "$TEMPLATE")
+if [[ "$prettier_hook" -ge 1 ]]; then
+  echo "  PASS: PostToolUse prettier auto-format hook present"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: prettier auto-format hook missing"
+  fail=$((fail + 1))
+fi
+
+related_tests=$(jq -r '[.. | .command? // empty] | map(select(test("findRelatedTests"))) | length' "$TEMPLATE")
+if [[ "$related_tests" -ge 1 ]]; then
+  echo "  PASS: PostToolUse related-tests hook present"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: related-tests hook missing"
+  fail=$((fail + 1))
+fi
+
+audit_log=$(jq -r '[.. | .command? // empty] | map(select(test("tool-audit.jsonl"))) | length' "$TEMPLATE")
+if [[ "$audit_log" -ge 1 ]]; then
+  echo "  PASS: PostToolUse audit-log hook present"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: audit-log hook missing"
+  fail=$((fail + 1))
+fi
+
+# --- Stop hook: vitest runner ---
+stop_hook_count=$(jq -r '.hooks.Stop | length' "$TEMPLATE")
+if [[ "$stop_hook_count" -ge 1 ]]; then
+  echo "  PASS: Stop hook group present"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: Stop hook group missing"
+  fail=$((fail + 1))
+fi
+
+vitest_stop=$(jq -r '[.hooks.Stop[].hooks[].command] | map(select(test("vitest run"))) | length' "$TEMPLATE")
+if [[ "$vitest_stop" -ge 1 ]]; then
+  echo "  PASS: Stop hook runs vitest suite"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: Stop hook does not run vitest"
   fail=$((fail + 1))
 fi
 
