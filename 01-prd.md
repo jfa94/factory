@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-The [dark-factory](https://github.com/jfa94/dark-factory) autonomous coding pipeline (~3,700 lines, 17 Bash modules) converts GitHub PRD issues into merged pull requests without human intervention. It works, but suffers from fundamental limitations inherent to a shell-based architecture:
+The [dark-factory](https://github.com/jfa94/dark-factory) autonomous coding pipeline (~3,700 lines, 17 Bash modules) converts GitHub PRD issues into merged pull requests with minimal human intervention. It works, but suffers from fundamental limitations inherent to a shell-based architecture:
 
 **Shell fragility** — Bash lacks structured error handling, type safety, and composability. State management is ad-hoc (JSON files manipulated with `jq`), parallelism is limited to background processes with PID tracking, and recovery from partial failures requires manual intervention.
 
@@ -25,7 +25,32 @@ The [dark-factory](https://github.com/jfa94/dark-factory) autonomous coding pipe
 
 ## Goals
 
-1. **Faithful reproduction** of ALL existing dark-factory pipeline functionality — every feature in every Bash module has a corresponding plugin component
+1. **Minimal-intervention PRD execution** — convert a PRD issue to merged PRs with a single command. Human touchpoints are explicit and by design:
+
+   **One-time setup (per project):**
+   - Install the plugin from the marketplace
+   - Run `/dark-factory:configure` to set project-specific thresholds (quota.pause_threshold, parallel.max_concurrent, review.spec_threshold)
+   - Create a GitHub label `prd` for PRD issues (or use file-based PRDs)
+
+   **Per run:**
+   - Create a GitHub issue labeled `prd` describing the work
+   - Run `/dark-factory:run <issue_number>` (or omit the number to use the most-recently-updated prd-labeled issue)
+
+   **During the run (intervention points):**
+   - Tasks escalated to `needs_human_review` require human approval — these happen when:
+     - Quality gates fail 3 times in a row on the same task
+     - Code review verdicts return REQUEST_CHANGES 3 times in a row
+     - Circuit breaker trips (runtime, cost, or failure caps exceeded)
+     - A reviewer returns NEEDS_DISCUSSION
+   - PRs that pass all automated checks merge without human action unless the project's GitHub branch protection rules require a human approver
+
+   **Not autonomous by design:**
+   - Merging PRs into `main` — the plugin merges into `staging`. A human (or separate release automation) promotes `staging` → `main`
+   - Deleting branches on `main` or `master` — blocked by hooks
+   - Modifying `.env*`, migrations, secrets — blocked by hooks
+
+   Goal #1 is satisfied when a labeled PRD issue can be completed by running a single command and approving escalated tasks along the way.
+
 2. **Deterministic-first architecture** — ~3:1 ratio of deterministic components (bin scripts, hooks) to non-deterministic (agents). Agent instructions are followed ~70%; hooks/scripts enforce at 100%. Concrete operational rules outperform abstract directives by 123%.
 3. **Quality-first additions** from research:
    - 5-layer quality gate stack (static analysis → tests → coverage regression → holdout validation → mutation testing)
@@ -64,6 +89,36 @@ Works on repositories with auth, payment, or PII handling. Needs security-tier r
 
 ---
 
+## Feature Parity Summary
+
+The plugin reimplements the bash pipeline with substantial enhancements. Of 80 features across 11 stages:
+
+| Classification | Count | Description                                                     |
+| -------------- | ----- | --------------------------------------------------------------- |
+| Preserved      | 26    | Same behavior as bash pipeline                                  |
+| Enhanced       | 15    | Same behavior + new capabilities                                |
+| Rewritten      | 2     | Reimplemented with different mechanism                          |
+| New            | 36    | No bash equivalent                                              |
+| Deprecated     | 1     | Directory locking — replaced by worktree isolation (Decision 8) |
+
+| Stage                     | Preserved | Enhanced | Rewritten | New | Deprecated |
+| ------------------------- | --------- | -------- | --------- | --- | ---------- |
+| A: Input & Discovery      | 4         | 1        | —         | —   | —          |
+| B: Spec Generation        | 2         | 3        | —         | 2   | —          |
+| C: Task Decomposition     | 4         | 1        | —         | —   | —          |
+| D: Task Execution         | 3         | 3        | —         | 5   | —          |
+| E: Quality Gates          | 2         | —        | —         | 4   | —          |
+| F: Code Review            | —         | —        | 1         | 7   | —          |
+| G: Dependency Resolution  | 3         | —        | —         | —   | —          |
+| H: Completion             | 3         | 1        | —         | 3   | —          |
+| I: Safety & Observability | 3         | 3        | 1         | 3   | 1          |
+| J: Local LLM Fallback     | —         | —        | —         | 9   | —          |
+| K: Configuration          | 2         | 3        | —         | 3   | —          |
+
+The deterministic-first ratio is 3.5:1 (21 bin scripts + 4 hooks vs 6 agents), exceeding the 3:1 target.
+
+---
+
 ## Complete Feature Inventory
 
 ### Stage A: Input & Discovery
@@ -78,13 +133,13 @@ Works on repositories with auth, payment, or PII handling. Needs security-tier r
 
 ### Stage B: Spec Generation
 
-| Feature                    | Existing Behavior (Bash)                            | Plugin Primitive                                                                    | Enhancements                                                 |
-| -------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| **PRD → spec conversion**  | `spec-gen.sh` invokes Claude with prd-to-spec skill | `spec-generator` agent (opus, 40 turns, worktree) with `prd-to-spec` skill injected | Native skill injection; worktree isolation                   |
-| **Autonomous mode**        | Skips interactive prompts                           | Skill step 5 (quiz user) skipped via agent instructions                             | Same behavior                                                |
-| **Spec output validation** | Basic file existence checks                         | `bin/pipeline-validate-spec` script                                                 | Structured validation (file exists, non-empty, valid format) |
-| **Spec review loop**       | Calls spec-reviewer, retries up to 5x               | Spawns existing `spec-reviewer` agent (score ≥54/60, PASS/NEEDS_REVISION)           | Increased turns (40), threshold (90%), and retries (5)       |
-| **tasks.json generation**  | Part of prd-to-spec output                          | Same — embedded in prd-to-spec skill                                                | Same behavior                                                |
+| Feature                    | Existing Behavior (Bash)                            | Plugin Primitive                                                                    | Enhancements                                                                                          |
+| -------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **PRD → spec conversion**  | `spec-gen.sh` invokes Claude with prd-to-spec skill | `spec-generator` agent (opus, 40 turns, worktree) with `prd-to-spec` skill injected | Native skill injection; worktree isolation                                                            |
+| **Autonomous mode**        | Skips interactive prompts                           | Skill step 5 (quiz user) skipped via agent instructions                             | Same behavior                                                                                         |
+| **Spec output validation** | Basic file existence checks                         | `bin/pipeline-validate-spec` script                                                 | Structured validation (file exists, non-empty, valid format)                                          |
+| **Spec review loop**       | Calls spec-reviewer, retries up to 5x               | Spawns existing `spec-reviewer` agent (score ≥54/60, PASS/NEEDS_REVISION)           | Increased turns (40), threshold (90%), and retries (5)                                                |
+| **tasks.json generation**  | Part of prd-to-spec output                          | Same — embedded in prd-to-spec skill                                                | Same behavior                                                                                         |
 | **Transient error retry**  | Not in Bash pipeline                                | spec-generator agent retries on 500/502/503/529                                     | NEW: up to 3 attempts with exponential backoff (15s × attempt); separate from review iteration budget |
 | **Spec failure reporting** | Not in Bash pipeline                                | `bin/pipeline-gh-comment` posts to GitHub issue                                     | NEW: on spec failure, post comment + add `needs-manual-spec` label to issue                           |
 
@@ -100,19 +155,19 @@ Works on repositories with auth, payment, or PII handling. Needs security-tier r
 
 ### Stage D: Task Execution
 
-| Feature                       | Existing Behavior (Bash)                  | Plugin Primitive                                      | Enhancements                                                                                                             |
-| ----------------------------- | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **Feature branch creation**   | `repository.sh` creates branches          | `bin/pipeline-branch` script                          | Branches from `staging` (auto-created from develop/main if absent); same naming conventions; worktree-aware              |
-| **Complexity classification** | `task-runner.sh` classifies by file count | `bin/pipeline-classify-task` script                   | Same heuristic: file count + dep count → haiku (simple, 40 turns) / sonnet (medium, 60 turns) / opus (complex, 80 turns) |
-| **Risk classification**       | Not in Bash pipeline                      | `bin/pipeline-classify-risk` script                   | NEW: file-path heuristics → routine/feature/security tier. Auth/security/migration paths → security tier                 |
-| **Code generation**           | Claude subprocess in feature branch       | `task-executor` agent (worktree-isolated, background) | Native worktree isolation, background execution, model/turns from classify-task                                          |
-| **Test writing**              | Part of task execution                    | `task-executor` agent instructions                    | Adds property-based testing instructions (PGS framework: 15.7% improvement)                                              |
-| **Auto-fix loop**             | Retry on test failure (max 3)             | `task-executor` retries internally                    | Same behavior                                                                                                            |
-| **Parallel execution**        | Limited (background PIDs)                 | Background agents + worktrees, max 3 concurrent       | True parallel isolation via git worktrees                                                                                |
-| **Prompt construction**       | `task-runner.sh` builds prompt            | `bin/pipeline-build-prompt` script                    | Adds `--holdout N%` flag to withhold acceptance criteria                                                                 |
-| **Failure-specific retry**    | Generic retry on failure                  | `task-executor` reads `TASK_FAILURE_TYPE` env var     | NEW: typed retries — `max_turns` (preserve partial work), `quality_gate` (include QG output), `agent_error` (non-zero exit), `no_changes` (no diff), `code_review` (include prior findings); max 4 total retries |
-| **Prior work injection**      | Not in Bash pipeline                      | `bin/pipeline-build-prompt` detects commits ahead of staging | NEW: on resume, appends "Prior Work" section with existing commits to retry prompt; prevents duplicate effort |
-| **Auto-fix pipeline**         | Not in Bash pipeline                      | Runs `pnpm format` then `pnpm lint:fix` post-execution | NEW: non-fatal — failures logged but don't block or trigger retries; only commits tracked files (`git add -u`) |
+| Feature                       | Existing Behavior (Bash)                  | Plugin Primitive                                             | Enhancements                                                                                                                                                                                                     |
+| ----------------------------- | ----------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Feature branch creation**   | `repository.sh` creates branches          | `bin/pipeline-branch` script                                 | Branches from `staging` (auto-created from develop/main if absent); same naming conventions; worktree-aware                                                                                                      |
+| **Complexity classification** | `task-runner.sh` classifies by file count | `bin/pipeline-classify-task` script                          | Same heuristic: file count + dep count → haiku (simple, 40 turns) / sonnet (medium, 60 turns) / opus (complex, 80 turns)                                                                                         |
+| **Risk classification**       | Not in Bash pipeline                      | `bin/pipeline-classify-risk` script                          | NEW: file-path heuristics → routine/feature/security tier. Auth/security/migration paths → security tier                                                                                                         |
+| **Code generation**           | Claude subprocess in feature branch       | `task-executor` agent (worktree-isolated, background)        | Native worktree isolation, background execution, model/turns from classify-task                                                                                                                                  |
+| **Test writing**              | Part of task execution                    | `task-executor` agent instructions                           | Adds property-based testing instructions (PGS framework: 15.7% improvement)                                                                                                                                      |
+| **Auto-fix loop**             | Retry on test failure (max 3)             | `task-executor` retries internally                           | Same behavior                                                                                                                                                                                                    |
+| **Parallel execution**        | Limited (background PIDs)                 | Background agents + worktrees, max 3 concurrent              | True parallel isolation via git worktrees                                                                                                                                                                        |
+| **Prompt construction**       | `task-runner.sh` builds prompt            | `bin/pipeline-build-prompt` script                           | Adds `--holdout N%` flag to withhold acceptance criteria                                                                                                                                                         |
+| **Failure-specific retry**    | Generic retry on failure                  | `task-executor` reads `TASK_FAILURE_TYPE` env var            | NEW: typed retries — `max_turns` (preserve partial work), `quality_gate` (include QG output), `agent_error` (non-zero exit), `no_changes` (no diff), `code_review` (include prior findings); max 4 total retries |
+| **Prior work injection**      | Not in Bash pipeline                      | `bin/pipeline-build-prompt` detects commits ahead of staging | NEW: on resume, appends "Prior Work" section with existing commits to retry prompt; prevents duplicate effort                                                                                                    |
+| **Auto-fix pipeline**         | Not in Bash pipeline                      | Runs `pnpm format` then `pnpm lint:fix` post-execution       | NEW: non-fatal — failures logged but don't block or trigger retries; only commits tracked files (`git add -u`)                                                                                                   |
 
 ### Stage E: Quality Gates
 
@@ -127,15 +182,15 @@ Works on repositories with auth, payment, or PII handling. Needs security-tier r
 
 ### Stage F: Code Review
 
-| Feature                   | Existing Behavior (Bash)                        | Plugin Primitive                                              | Enhancements                                                                                          |
-| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| **Single review pass**    | `code-review.sh` runs one Claude review session | `task-reviewer` agent OR Codex adversarial review             | Upgraded to multi-round adversarial review                                                            |
-| **Adversarial review**    | Not in Bash pipeline                            | `review-protocol` skill (Actor-Critic methodology)            | NEW: Critic reviews cold (zero implementation context), treats code as hostile artifact               |
-| **Multi-round loop**      | Not in Bash pipeline                            | Orchestrator manages round loop (max configurable, default 3) | NEW: reviewer finds issues → executor fixes → re-review. Exit early on APPROVE.                       |
-| **Codex-first detection** | Not in Bash pipeline                            | `bin/pipeline-detect-reviewer` script                         | NEW: check Codex installed + authenticated → use `/codex:adversarial-review`; fallback to Claude Code |
-| **Structured verdicts**   | Human-readable review output                    | `bin/pipeline-parse-review` normalizes to JSON                | NEW: `{"verdict":"APPROVE\|REQUEST_CHANGES\|NEEDS_DISCUSSION","findings":[...],"round":N}`            |
+| Feature                   | Existing Behavior (Bash)                        | Plugin Primitive                                              | Enhancements                                                                                           |
+| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Single review pass**    | `code-review.sh` runs one Claude review session | `task-reviewer` agent OR Codex adversarial review             | Upgraded to multi-round adversarial review                                                             |
+| **Adversarial review**    | Not in Bash pipeline                            | `review-protocol` skill (Actor-Critic methodology)            | NEW: Critic reviews cold (zero implementation context), treats code as hostile artifact                |
+| **Multi-round loop**      | Not in Bash pipeline                            | Orchestrator manages round loop (max configurable, default 3) | NEW: reviewer finds issues → executor fixes → re-review. Exit early on APPROVE.                        |
+| **Codex-first detection** | Not in Bash pipeline                            | `bin/pipeline-detect-reviewer` script                         | NEW: check Codex installed + authenticated → use `/codex:adversarial-review`; fallback to Claude Code  |
+| **Structured verdicts**   | Human-readable review output                    | `bin/pipeline-parse-review` normalizes to JSON                | NEW: `{"verdict":"APPROVE\|REQUEST_CHANGES\|NEEDS_DISCUSSION","findings":[...],"round":N}`             |
 | **Risk-tiered intensity** | Same review for all tasks                       | Orchestrator selects rounds by risk tier                      | NEW: routine=2 rounds, feature=4 rounds, security=6 rounds + security-reviewer + architecture-reviewer |
-| **Human escalation**      | Not in Bash pipeline                            | After max rounds with REQUEST_CHANGES → pause for human       | NEW: prevents infinite review loops                                                                   |
+| **Human escalation**      | Not in Bash pipeline                            | After max rounds with REQUEST_CHANGES → pause for human       | NEW: prevents infinite review loops                                                                    |
 
 ### Stage G: Dependency Resolution
 
@@ -147,57 +202,57 @@ Works on repositories with auth, payment, or PII handling. Needs security-tier r
 
 ### Stage H: Completion
 
-| Feature               | Existing Behavior (Bash)             | Plugin Primitive                         | Enhancements                                                            |
-| --------------------- | ------------------------------------ | ---------------------------------------- | ----------------------------------------------------------------------- |
-| **Issue closing**     | `completion.sh` closes GitHub issues | `bin/pipeline-cleanup --close-issues`    | Same `gh` interface                                                     |
-| **Branch cleanup**    | Deletes feature branches             | `bin/pipeline-cleanup --delete-branches` | Only deletes branches for merged PRs; unmerged PR branches retained with warning in summary |
-| **Execution summary** | Prints summary to stdout             | `bin/pipeline-summary` script            | Richer output: per-task status, quality gate results, model usage, cost |
-| **Docs update**       | `docs-update.sh` runs scribe         | Spawns existing `scribe` agent           | Same behavior, reuses user's agent                                      |
-| **Spec dir cleanup**  | Not in Bash pipeline                 | `bin/pipeline-cleanup --clean-spec`      | NEW: `git rm` spec directory after all tasks for the issue are merged; keeps repo history clean |
-| **Partial failure summary** | Not in Bash pipeline           | `bin/pipeline-summary` + `bin/pipeline-gh-comment` | NEW: posts per-task breakdown to issue on partial runs; deduplicates comments on resume/retry |
-| **PR URL restoration**| Not in Bash pipeline                 | `pipeline-state` preserves PR URLs      | NEW: on resume, restores existing PR URLs to task state; prevents duplicate PR creation |
+| Feature                     | Existing Behavior (Bash)             | Plugin Primitive                                   | Enhancements                                                                                    |
+| --------------------------- | ------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Issue closing**           | `completion.sh` closes GitHub issues | `bin/pipeline-cleanup --close-issues`              | Same `gh` interface                                                                             |
+| **Branch cleanup**          | Deletes feature branches             | `bin/pipeline-cleanup --delete-branches`           | Only deletes branches for merged PRs; unmerged PR branches retained with warning in summary     |
+| **Execution summary**       | Prints summary to stdout             | `bin/pipeline-summary` script                      | Richer output: per-task status, quality gate results, model usage, cost                         |
+| **Docs update**             | `docs-update.sh` runs scribe         | Spawns existing `scribe` agent                     | Same behavior, reuses user's agent                                                              |
+| **Spec dir cleanup**        | Not in Bash pipeline                 | `bin/pipeline-cleanup --clean-spec`                | NEW: `git rm` spec directory after all tasks for the issue are merged; keeps repo history clean |
+| **Partial failure summary** | Not in Bash pipeline                 | `bin/pipeline-summary` + `bin/pipeline-gh-comment` | NEW: posts per-task breakdown to issue on partial runs; deduplicates comments on resume/retry   |
+| **PR URL restoration**      | Not in Bash pipeline                 | `pipeline-state` preserves PR URLs                 | NEW: on resume, restores existing PR URLs to task state; prevents duplicate PR creation         |
 
 ### Stage I: Safety & Observability
 
-| Feature                   | Existing Behavior (Bash)                   | Plugin Primitive                                                   | Enhancements                                                          |
-| ------------------------- | ------------------------------------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| **Circuit breakers**      | 20 tasks / 360min / 3 consecutive failures | `bin/pipeline-circuit-breaker` script                              | Same thresholds, configurable via userConfig                          |
-| **Directory locking**     | SHA256 lock file (`lock.sh`)               | ELIMINATED — worktree isolation                                    | Better: true isolation vs mutual exclusion                            |
-| **5h usage pacing**       | 90% cap, polling                           | `bin/pipeline-quota-check` script                                  | Reads `unified-5h-utilization` header; hourly thresholds 20/40/60/80/90%; Ollama fallback or wait |
+| Feature                   | Existing Behavior (Bash)                   | Plugin Primitive                                                   | Enhancements                                                                                            |
+| ------------------------- | ------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| **Circuit breakers**      | 20 tasks / 360min / 3 consecutive failures | `bin/pipeline-circuit-breaker` script                              | Same thresholds, configurable via userConfig                                                            |
+| **Directory locking**     | SHA256 lock file (`lock.sh`)               | ELIMINATED — worktree isolation                                    | Better: true isolation vs mutual exclusion                                                              |
+| **5h usage pacing**       | 90% cap, polling                           | `bin/pipeline-quota-check` script                                  | Reads `unified-5h-utilization` header; hourly thresholds 20/40/60/80/90%; Ollama fallback or wait       |
 | **7d budget enforcement** | Not in Bash pipeline                       | `bin/pipeline-quota-check` script                                  | NEW: reads `unified-7d-utilization` header; daily thresholds 14.2–95%; Ollama fallback or graceful exit |
-| **Resume capability**     | Reads state files on restart               | `pipeline-state` + orchestrator `--resume` flag                    | Same pattern, richer state schema                                     |
-| **Git safety**            | Branch protection checks                   | `branch-protection` hook (PreToolUse)                              | Un-bypassable hook vs agent instruction                               |
-| **Audit logging**         | Not in Bash pipeline                       | `run-tracker` hook (PostToolUse)                                   | NEW: every tool use logged to `audit.jsonl`. EU AI Act compliance.    |
-| **Metrics collection**    | Not in Bash pipeline                       | `pipeline-metrics` MCP server                                      | NEW: token counts, durations, model usage, quality gate results, cost |
-| **Run state consistency** | Basic state checks                         | `stop-gate` hook (Stop) + `subagent-stop-gate` hook (SubagentStop) | NEW: validates state on session end, marks interrupted runs           |
+| **Resume capability**     | Reads state files on restart               | `pipeline-state` + orchestrator `--resume` flag                    | Same pattern, richer state schema                                                                       |
+| **Git safety**            | Branch protection checks                   | `branch-protection` hook (PreToolUse)                              | Un-bypassable hook vs agent instruction                                                                 |
+| **Audit logging**         | Not in Bash pipeline                       | `run-tracker` hook (PostToolUse)                                   | NEW: every tool use logged to `audit.jsonl`. EU AI Act compliance.                                      |
+| **Metrics collection**    | Not in Bash pipeline                       | `pipeline-metrics` MCP server                                      | NEW: token counts, durations, model usage, quality gate results, cost                                   |
+| **Run state consistency** | Basic state checks                         | `stop-gate` hook (Stop) + `subagent-stop-gate` hook (SubagentStop) | NEW: validates state on session end, marks interrupted runs                                             |
 
 ### Stage J: Local LLM Fallback
 
-| Feature                       | Existing Behavior (Bash) | Plugin Primitive                                                       | Enhancements                                                                           |
-| ----------------------------- | ------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| **5h rate detection**         | 90% cap polling          | `bin/pipeline-quota-check` reads `unified-5h-utilization` header      | NEW: proactive header-based detection (no OAuth API call); hourly thresholds 20–90%   |
-| **7d budget detection**       | Not in Bash pipeline     | `bin/pipeline-quota-check` reads `unified-7d-utilization` header      | NEW: separate daily threshold check; graceful exit when budget pacing exceeded         |
-| **Ollama availability check** | Not in Bash pipeline     | `bin/pipeline-model-router` checks `curl -sf localhost:11434/api/tags` | NEW: verify Ollama running + model loaded                                              |
+| Feature                       | Existing Behavior (Bash) | Plugin Primitive                                                       | Enhancements                                                                                             |
+| ----------------------------- | ------------------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **5h rate detection**         | 90% cap polling          | `bin/pipeline-quota-check` reads `unified-5h-utilization` header       | NEW: proactive header-based detection (no OAuth API call); hourly thresholds 20–90%                      |
+| **7d budget detection**       | Not in Bash pipeline     | `bin/pipeline-quota-check` reads `unified-7d-utilization` header       | NEW: separate daily threshold check; graceful exit when budget pacing exceeded                           |
+| **Ollama availability check** | Not in Bash pipeline     | `bin/pipeline-model-router` checks `curl -sf localhost:11434/api/tags` | NEW: verify Ollama running + model loaded                                                                |
 | **Model routing**             | Not in Bash pipeline     | `bin/pipeline-model-router` consumes quota-check output                | NEW: routes all tiers to Ollama when either limit triggers (5h=wait fallback, 7d=graceful-exit fallback) |
-| **Elevated review caps**      | Not in Bash pipeline     | Orchestrator uses tier-specific Ollama caps (15/20/25 rounds)          | NEW: stricter review compensates for lower local model quality                         |
-| **Quality gate parity**       | Not in Bash pipeline     | Same quality gates regardless of model provider                        | NEW: local model output must pass identical gates                                      |
-| **Model recommendations**     | Not in Bash pipeline     | userConfig.localLlm.model                                              | NEW: default Qwen 2.5-Coder 14B (16GB min, 9GB Q4_K_M); also: 7B (8GB), 32B (24GB+)  |
-| **Remote Ollama support**     | Not in Bash pipeline     | userConfig.localLlm.ollamaUrl                                          | NEW: point to any Ollama server on LAN (server: `OLLAMA_HOST=0.0.0.0:11434`)           |
-| **Model auto-pull**           | Not in Bash pipeline     | `bin/pipeline-model-router` calls `/api/pull` on server               | NEW: auto-downloads model if not present; works for local and remote servers            |
-| **LiteLLM proxy**             | Not in Bash pipeline     | Optional advanced config                                               | NEW: unified gateway for multi-provider routing + cost tracking                        |
+| **Elevated review caps**      | Not in Bash pipeline     | Orchestrator uses tier-specific Ollama caps (15/20/25 rounds)          | NEW: stricter review compensates for lower local model quality                                           |
+| **Quality gate parity**       | Not in Bash pipeline     | Same quality gates regardless of model provider                        | NEW: local model output must pass identical gates                                                        |
+| **Model recommendations**     | Not in Bash pipeline     | userConfig.localLlm.model                                              | NEW: default Qwen 2.5-Coder 14B (16GB min, 9GB Q4_K_M); also: 7B (8GB), 32B (24GB+)                      |
+| **Remote Ollama support**     | Not in Bash pipeline     | userConfig.localLlm.ollamaUrl                                          | NEW: point to any Ollama server on LAN (server: `OLLAMA_HOST=0.0.0.0:11434`)                             |
+| **Model auto-pull**           | Not in Bash pipeline     | `bin/pipeline-model-router` calls `/api/pull` on server                | NEW: auto-downloads model if not present; works for local and remote servers                             |
+| **LiteLLM proxy**             | Not in Bash pipeline     | Optional advanced config                                               | NEW: unified gateway for multi-provider routing + cost tracking                                          |
 
 ### Stage K: Configuration
 
-| Feature                        | Existing Behavior (Bash)    | Plugin Primitive                                   | Enhancements                                                    |
-| ------------------------------ | --------------------------- | -------------------------------------------------- | --------------------------------------------------------------- |
-| **Pipeline settings**          | `settings.sh` + config file | `plugin.json` userConfig schema                    | Native Claude Code configuration                                |
-| **Permission defaults**        | Manual setup                | `settings.json` in plugin                          | Automatic permission grants for plugin tools                    |
-| **Plugin manifest**            | `config-deployer.sh`        | `.claude-plugin/plugin.json`                       | Native plugin metadata                                          |
-| **Interactive settings editor**| Not in Bash pipeline        | `/dark-factory:configure` command (agent-based)    | NEW: review + update all userConfig settings conversationally   |
-| **Autonomous settings**        | Not in Bash pipeline        | `templates/settings.autonomous.json` (bundled)     | NEW: `Bash(*)` + safety hooks + deny-list; exact copy of dark-factory project file; detected via `DARK_FACTORY_AUTONOMOUS_MODE` env var; `/dark-factory:run` prompts relaunch with `--settings` if absent |
-| **Config deployment**          | `config-deployer.sh`        | `bin/pipeline-init --deploy-config`                | Deploys `.github/workflows/quality-gate.yml`, `.gitignore` entries, `package.json` scripts; idempotent |
-| **Project scaffolding**        | `project-init.sh`           | `bin/pipeline-init --scaffold`                     | Creates `claude-progress.json`, `feature-status.json`, `init.sh`; only on first run when files absent |
-| **GitIgnore management**       | Manual                      | `bin/pipeline-init --gitignore`                    | Ensures plugin state dirs (`${PLUGIN_DATA}/*`) and lock files are in `.gitignore`                       |
+| Feature                         | Existing Behavior (Bash)    | Plugin Primitive                                | Enhancements                                                                                                                                                                                                                                                                        |
+| ------------------------------- | --------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Pipeline settings**           | `settings.sh` + config file | `plugin.json` userConfig schema                 | Native Claude Code configuration                                                                                                                                                                                                                                                    |
+| **Permission defaults**         | Manual setup                | `settings.json` in plugin                       | Automatic permission grants for plugin tools                                                                                                                                                                                                                                        |
+| **Plugin manifest**             | `config-deployer.sh`        | `.claude-plugin/plugin.json`                    | Native plugin metadata                                                                                                                                                                                                                                                              |
+| **Interactive settings editor** | Not in Bash pipeline        | `/dark-factory:configure` command (agent-based) | NEW: review + update all userConfig settings conversationally                                                                                                                                                                                                                       |
+| **Autonomous settings**         | Not in Bash pipeline        | `templates/settings.autonomous.json` (bundled)  | NEW: `Bash(*)` + safety hooks + deny-list; ported from dark-factory project file (stripped `enabledPlugins`/`effortLevel` for safe merge with user settings); detected via `DARK_FACTORY_AUTONOMOUS_MODE` env var; `/dark-factory:run` prompts relaunch with `--settings` if absent |
+| **Config deployment**           | `config-deployer.sh`        | `bin/pipeline-init --deploy-config`             | Deploys `.github/workflows/quality-gate.yml`, `.gitignore` entries, `package.json` scripts; idempotent                                                                                                                                                                              |
+| **Project scaffolding**         | `project-init.sh`           | `bin/pipeline-init --scaffold`                  | Creates `claude-progress.json`, `feature-status.json`, `init.sh`; only on first run when files absent                                                                                                                                                                               |
+| **GitIgnore management**        | Manual                      | `bin/pipeline-init --gitignore`                 | Ensures plugin state dirs (`${PLUGIN_DATA}/*`) and lock files are in `.gitignore`                                                                                                                                                                                                   |
 
 ---
 

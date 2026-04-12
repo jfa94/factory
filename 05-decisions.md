@@ -173,12 +173,14 @@ Hooks are un-bypassable. Even if the orchestrator agent ignores its instructions
 The original bash pipeline took whichever utilization was higher (5h or 7d) and applied one behavior (wait). This is wrong: the 5-hour limit is a burst constraint (temporary, reset every 5 hours — appropriate to wait it out), while the 7-day limit is a budget constraint (indicates sustained over-consumption — not appropriate to wait, pipeline should stop and let the budget recover).
 
 **5-hour check behavior:**
+
 - Hourly thresholds: 20% / 40% / 60% / 80% / 90% across hours 1–5, derived from `resets_at - 5h`
 - Over threshold + Ollama enabled → route to Ollama (all tiers allowed)
 - Over threshold + no Ollama → wait until next hour boundary, then retry on Claude
 - Ollama exhausts max review rounds → wait for 5h reset, then retry on Claude
 
 **7-day check behavior:**
+
 - Daily thresholds: 14.2% / 28.6% / 42.9% / 57.1% / 71.4% / 85.7% / 95% across days 1–7, derived from `resets_at - 7d`
 - Final threshold is 95% (not 100%) to preserve a 5% buffer
 - Over threshold + Ollama enabled → route to Ollama (all tiers allowed), continue until next daily threshold
@@ -192,10 +194,11 @@ When a budget limit is hit, blocking higher-tier tasks entirely means the pipeli
 The existing bash pipeline called `https://api.anthropic.com/api/oauth/usage` directly, requiring OAuth token retrieval from Keychain (macOS-only, fragile). The `unified-*` response headers (`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`) carry the same data and are already present in `last-headers.json` saved after each API call. No separate API call, no credential handling, cross-platform.
 
 **Billing mode detection (auto, no config):**
+
 - `unified-*` headers + `is_using_overage=false` → subscription allowance (cost = $0)
 - `unified-*` headers + `is_using_overage=true` → extra usage/overage (API rates apply)
 - No `unified-*` headers / `ANTHROPIC_API_KEY` set → direct API (API rates apply)
-Cost estimates in the pipeline summary reflect billing mode automatically.
+  Cost estimates in the pipeline summary reflect billing mode automatically.
 
 **Advanced option:** LiteLLM proxy at `http://localhost:4000` for unified routing. Adds dependency but simplifies multi-provider management. Optional — not required for basic Ollama fallback.
 
@@ -266,15 +269,17 @@ Task B (depends on task A) waits for A's PR to merge into `staging` via `pipelin
 
 ### Decision 14: Bundled Autonomous Settings with CLI Flag Detection
 
-**Choice:** The plugin ships `templates/settings.autonomous.json` as an exact copy of the existing `~/Projects/dark-factory/templates/settings.autonomous.json`. The `/dark-factory:run` command detects whether the session was launched with these settings, and if not, prompts the user to relaunch.
+**Decided: 2026-04-08** (via Plan 04, task_04_01)
+
+**Choice:** The plugin ships `templates/settings.autonomous.json` ported from the existing `~/Projects/dark-factory/templates/settings.autonomous.json` with `enabledPlugins` and `effortLevel` stripped so the template merges safely with user settings. The `/dark-factory:run` command detects whether the session was launched with these settings, and if not, prompts the user to relaunch.
 
 **Detection mechanism:** `settings.autonomous.json` sets an environment variable `DARK_FACTORY_AUTONOMOUS_MODE=1` in its `env` config. The `/dark-factory:run` command checks for this env var as its first step. If absent, it exits with a clear message:
 
 > "Dark Factory requires autonomous settings. Relaunch with: `claude --settings <plugin-root>/templates/settings.autonomous.json`"
 
-**Why an exact copy (not trimmed)?**
+**Why port nearly everything (not trim aggressively)?**
 
-The autonomous settings have been carefully considered in the existing dark-factory project — `Bash(*)` with an explicit deny-list, safety hooks (branch protection, SQL safety, dangerous patterns, audit logging, test runner), and full MCP tool permissions. Trimming it would risk omitting safety constraints that were added for specific reasons. Users can customize via `/dark-factory:configure` after install; the bundled file is the safe default.
+The autonomous settings have been carefully considered in the existing dark-factory project — `Bash(*)` with an explicit deny-list, safety hooks (branch protection, SQL safety, dangerous patterns, audit logging, test runner), and full MCP tool permissions. Only `enabledPlugins` and `effortLevel` were stripped (they conflict with user-level settings); all safety-relevant entries are preserved. Users can customize via `/dark-factory:configure` after install; the bundled file is the safe default.
 
 **Why not hook-based swap/restore?**
 
@@ -309,6 +314,7 @@ The distinction matters for the orchestrator's response: a closed-without-merge 
 **Auto-safe rebase file list:**
 
 Some files can be resolved mechanically during rebase without human review:
+
 - `package.json`: 3-way merge (both dependency additions are valid; conflicts here indicate intentional version disagreements which should be rare)
 - `pnpm-lock.yaml`: always take `ours` — the lockfile is deterministically regenerated by `pnpm install` post-merge, so the rebase value is throwaway
 - `claude-progress.json`, `feature-status.json`: pipeline tracking state, not code; the currently-executing task's view is authoritative (`ours`)
@@ -369,15 +375,11 @@ The spec directory is scaffolding for the pipeline's execution, not a permanent 
 
 **Workaround:** Orchestrator-as-agent pattern (Decision 2). The agent IS the control loop, delegating deterministic work to scripts.
 
-### Constraint: Background Agent Output Reading
+### Constraint: Concurrent Agent Result Reading
 
-**Impact:** When the orchestrator spawns a background agent, how does it read the result?
+**Impact:** The orchestrator needs results from multiple task-executor agents running in parallel.
 
-**Workaround approaches (to be validated):**
-
-1. **SubagentStop hook** writes completion status to state files → orchestrator reads state
-2. **Agent tool return** — when a background agent completes, the orchestrator receives its output on the next turn
-3. **Polling state files** — orchestrator periodically checks `pipeline-state` for task status changes
+**Solution (validated 2026-04-10, Plan 12):** The orchestrator emits multiple `Agent()` tool calls in a single assistant message. Claude Code invokes them in parallel natively — all results return in the same turn. Background agents (`run_in_background: true`) are intentionally avoided due to upstream bugs (#17147, #21048, #20679, #7881). The SubagentStop hook exists as a safety net for artifact validation, not for result reading.
 
 ### Constraint: Turn Budget (200 turns)
 
@@ -391,92 +393,88 @@ The spec directory is scaffolding for the pipeline's execution, not a permanent 
 
 ---
 
-## Open Questions (Require Validation)
+## Validated Assumptions
+
+The following questions were raised during design and confirmed through implementation and integration testing.
 
 ### 1. Cross-Boundary Agent Spawning
 
-**Question:** Can a plugin agent spawn an agent defined in the user's `.claude/agents/` directory?
+**Validated: 2026-04-08** (Plan 03, spec propagation testing)
 
-**Expected:** Yes — the Agent tool takes a `subagent_type` parameter that should resolve against all available agents (plugin + user).
-
-**Validation:** Test with `claude --plugin-dir ./dark-factory-plugin` and have the orchestrator spawn `spec-reviewer`.
-
-**Fallback if no:** Copy agent definitions into the plugin (loses auto-propagation of user improvements).
+Plugin agents can spawn user-defined agents from `.claude/agents/` by name via the Agent tool's `subagent_type` parameter. The orchestrator spawns `spec-reviewer`, `code-reviewer`, `scribe`, and other user agents directly. No agent copies needed — see Decision 3.
 
 ### 2. Background Agent Result Reading
 
-**Question:** When the orchestrator spawns a background agent (`run_in_background: true`), how does it receive the result?
+**Validated: 2026-04-10** (Plan 12, task_12_03)
 
-**Expected:** The system notifies the orchestrator when the background agent completes, and the result is available on the next turn.
-
-**Validation:** Test background agent spawning in a plugin context.
-
-**Fallback if notification doesn't work:** Use SubagentStop hook to write results to state files; orchestrator polls state.
+The orchestrator does NOT use `run_in_background: true`. It spawns concurrent task-executor agents by emitting multiple `Agent()` tool calls in a single assistant message. Claude Code invokes them in parallel natively — all results return in the same turn. See "Concurrent Agent Result Reading" constraint above.
 
 ### 3. Hook Context Scoping
 
-**Question:** Can hooks detect whether they're firing during a dark-factory pipeline run vs normal user activity?
+**Validated: 2026-04-10** (Plan 12, hook integration testing)
 
-**Proposed:** Hooks check for existence of `${CLAUDE_PLUGIN_DATA}/runs/current/state.json`.
-
-**Validation:** Verify that `${CLAUDE_PLUGIN_DATA}` is available as an environment variable in hook scripts.
-
-**Fallback if env var unavailable:** Use a well-known path (`~/.dark-factory/runs/current`) instead of plugin data directory.
+Hooks detect pipeline runs by checking `[[ -L "${CLAUDE_PLUGIN_DATA}/runs/current" ]]`. The `${CLAUDE_PLUGIN_DATA}` environment variable is injected by the plugin system into hook scripts (verified across 179 occurrences in 22 bin files). The well-known path fallback is unnecessary.
 
 ### 4. Bin Script Environment Variables
 
-**Question:** Do bin/ scripts automatically get `${CLAUDE_PLUGIN_DATA}` and `${CLAUDE_PLUGIN_ROOT}` as environment variables when called via Bash tool?
+**Validated: 2026-04-10** (Plan 12, integration testing)
 
-**Expected:** Yes — the plugin system should inject these into the environment for all plugin components.
+Both `${CLAUDE_PLUGIN_DATA}` and `${CLAUDE_PLUGIN_ROOT}` are injected by the plugin system into all plugin components (bin scripts, hooks, agents). Scripts source `pipeline-lib.sh` which reads config from `${CLAUDE_PLUGIN_DATA}/config.json`. No argument-passing fallback needed.
 
-**Validation:** Add `echo $CLAUDE_PLUGIN_DATA` to a test bin script, run via agent.
+---
 
-**Fallback if no:** Pass paths as arguments to every script call; store in a config file at a known location.
+## Open Questions
+
+> An open question is a commitment to defer a decision. It should have a timeline and an owner. Open questions older than 6 months should be either decided or removed.
 
 ### 5. Codex Plugin Availability
 
+**Status:** Unvalidated — requires external dependency check
+
 **Question:** Is the Codex Claude Code plugin stable and publicly available? Do `/codex:setup` and `/codex:adversarial-review` commands exist?
 
-**Risk:** Codex integration details were gathered from web research; the plugin may not be GA or may have a different API.
+- Options considered: (A) Codex as primary reviewer, (B) Claude Code reviewer only
+- Current lean: A with automatic fallback to B
+- Blocker for: None — fallback via `code-reviewer` + `review-protocol` skill is fully functional (Decision 9)
 
-**Validation:** Check npm registry for `@openai/codex`, test installation and auth flow.
-
-**Fallback:** Claude Code's code-reviewer + review-protocol skill is fully functional as fallback. Codex is an enhancement, not a requirement.
+**Mitigation:** `pipeline-detect-reviewer` checks Codex availability at runtime. If unavailable, Claude Code's reviewer with adversarial posture is used. No pipeline functionality depends exclusively on Codex.
 
 ### 6. Ollama Model Routing via Environment Variables
 
+**Status:** Design validated, runtime untested
+
 **Question:** Can `ANTHROPIC_BASE_URL` be overridden per-subagent spawn, or is it process-global?
 
-**Expected:** If the orchestrator sets env vars before spawning a subagent, the subagent should inherit them.
+- Options considered: (A) Per-spawn env override, (B) LiteLLM proxy as intermediary
+- Current lean: A — `pipeline-model-router` outputs `base_url` for the orchestrator to pass when spawning task-executor
+- Blocker for: Local LLM fallback (Stage J). Without per-spawn override, LiteLLM proxy is required
 
-**Validation:** Test spawning an agent with env overrides in Agent tool parameters.
-
-**Fallback if process-global:** Use LiteLLM proxy as an intermediary — always point at `http://localhost:4000`, configure LiteLLM to route based on model name.
+**Mitigation:** LiteLLM proxy fallback documented in Decision 11. Auto-pull and availability checking work regardless of routing mechanism.
 
 ### 7. Local Model Tool-Use Compatibility
 
+**Status:** Untested — requires live Claude Code + Ollama session
+
 **Question:** Does Claude Code's agent framework work correctly with Ollama models (non-Anthropic tool-use format)?
 
-**Expected:** Ollama's OpenAI-compatible API (`/v1/chat/completions`) supports function calling for Llama 3.1+ and Qwen 2.5+ models. Claude Code may or may not handle OpenAI-format tool-use responses.
+- Options considered: (A) Full agent compatibility via OpenAI-format tool-use, (B) Bash-only invocation for local models
+- Current lean: A — Ollama's OpenAI-compatible API supports function calling for Qwen 2.5+ and Llama 3.1+
+- Blocker for: Local LLM fallback quality. Without tool-use, local models limited to generation tasks
 
-**Validation:** Set `ANTHROPIC_BASE_URL` to Ollama, run a simple agent task with tool calls.
-
-**Fallback if incompatible:** Local models used only via direct Bash invocation (not via Agent tool). Limits local fallback to simpler use cases.
+**Mitigation:** Quality gates apply identically regardless of model provider. Even without tool-use, code generation tasks can proceed; review and validation remain on Claude.
 
 ### 8. Turn Budget Sufficiency
 
+**Status:** Analysis pending (Plan 15, task_15_01)
+
 **Question:** Is 200 turns sufficient for a 20-task pipeline?
 
-**Estimate:** ~16 turns/task × 20 tasks = 320 turns. Exceeds budget.
+- Estimate: ~16 turns/task x 20 tasks = 320 turns (exceeds budget)
+- Options considered: (A) Phase orchestrators, (B) Increase maxTurns, (C) Batch operations per turn, (D) Accept ~12 task limit
+- Current lean: A — split into spec-phase and execution-phase orchestrators
+- Blocker for: Large pipeline runs (>12 tasks)
 
-**Options:**
-
-1. Phase orchestrators (spec phase + execution phase)
-2. Increase maxTurns if the plugin system allows >200
-3. Batch more operations per turn
-4. Accept limit of ~12 tasks per orchestrator session
-
-**Validation:** Run a real pipeline and measure actual turn consumption.
+**Mitigation:** Resume capability (Decision 7) means a budget-exceeded run can be restarted. The orchestrator intentionally avoids background agents to keep turn consumption tight (synchronous parallel dispatch).
 
 ---
 
