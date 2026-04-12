@@ -122,16 +122,12 @@ _extract_named_arg() {
   done
 }
 
-# --- Check 1: are we currently on a protected branch and modifying refs? ---
-# Only fires for git operations that mutate refs (push/commit/reset/branch/merge),
-# never for read-only `git status` etc.
-if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+(push|reset[[:space:]]+--hard|branch[[:space:]]+.*-[dD]|commit|merge)([[:space:]]|$)'; then
+# --- Check 1: are we currently on a protected branch and pushing implicitly? ---
+if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+push([[:space:]]|$)'; then
   current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
   if [[ -n "$current_branch" ]] && _is_protected "$current_branch"; then
-    # We allow read-only commands on a protected branch but not mutating ones.
-    # `git push` from main is the headline case; others are caught by their own
-    # checks below for explicit-target safety.
-    if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+push([[:space:]]|$)'; then
+    _resolve_push_dest
+    if [[ -z "$dest_branch" || "$dest_branch" == "$current_branch" ]]; then
       _block "on_protected_branch" "currently on '$current_branch' — push will publish to protected"
     fi
   fi
