@@ -98,13 +98,21 @@ detect_pkg_manager() {
   fi
 }
 
-# Atomic write: write to temp file then mv (prevents partial reads)
+# Atomic write: write to temp file, fsync, then mv (prevents partial reads)
 # Usage: atomic_write <target-path> <content>
 atomic_write() {
   local target="$1" content="$2"
   local tmp
   tmp=$(mktemp "${target}.XXXXXX")
   printf '%s' "$content" > "$tmp"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import os, sys
+f = open(sys.argv[1], 'rb')
+os.fsync(f.fileno())
+f.close()
+" "$tmp" 2>/dev/null || true
+  fi
   mv -f "$tmp" "$target"
 }
 

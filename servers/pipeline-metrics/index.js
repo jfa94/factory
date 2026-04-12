@@ -34,7 +34,8 @@ mkdirSync(dirname(DB_PATH), { recursive: true });
 // Initialize database
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
-db.prepare(`
+db.prepare(
+  `
   CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -44,13 +45,18 @@ db.prepare(`
     data TEXT DEFAULT '{}',
     duration_ms INTEGER
   )
-`).run();
-db.prepare(
-  "CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id)"
+`,
 ).run();
+db.prepare("CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id)").run();
 db.prepare(
-  "CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)"
+  "CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)",
 ).run();
+
+const CURRENT_SCHEMA_VERSION = 1;
+const dbVersion = db.pragma("user_version", { simple: true });
+if (dbVersion < 1) {
+  db.pragma("user_version = 1");
+}
 
 const VALID_EVENT_TYPES = [
   "task_start",
@@ -107,6 +113,11 @@ const TOOLS = [
           description: "Max results (default 100)",
           default: 100,
         },
+        offset: {
+          type: "number",
+          description: "Offset for pagination (default 0)",
+          default: 0,
+        },
       },
     },
   },
@@ -140,19 +151,19 @@ function handleRecord({ run_id, event_type, task_id, data, duration_ms }) {
     return { error: `Invalid event type: ${event_type}` };
   }
   const stmt = db.prepare(
-    "INSERT INTO events (run_id, event_type, task_id, data, duration_ms) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO events (run_id, event_type, task_id, data, duration_ms) VALUES (?, ?, ?, ?, ?)",
   );
   const result = stmt.run(
     run_id,
     event_type,
     task_id || null,
     JSON.stringify(data || {}),
-    duration_ms || null
+    duration_ms || null,
   );
   return { id: result.lastInsertRowid, recorded: true };
 }
 
-function handleQuery({ run_id, event_type, task_id, limit = 100 }) {
+function handleQuery({ run_id, event_type, task_id, limit = 100, offset = 0 }) {
   let sql = "SELECT * FROM events WHERE 1=1";
   const params = [];
   if (run_id) {
@@ -167,8 +178,8 @@ function handleQuery({ run_id, event_type, task_id, limit = 100 }) {
     sql += " AND task_id = ?";
     params.push(task_id);
   }
-  sql += " ORDER BY timestamp DESC LIMIT ?";
-  params.push(Math.min(limit, 1000));
+  sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?";
+  params.push(limit, offset);
   return db.prepare(sql).all(...params);
 }
 
@@ -212,7 +223,9 @@ function handleSummary({ run_id }) {
 
     if (event.event_type === "quality_gate") {
       let data = {};
-      try { data = JSON.parse(event.data || "{}"); } catch {}
+      try {
+        data = JSON.parse(event.data || "{}");
+      } catch {}
       if (data.passed) {
         summary.quality_gates.passed++;
       } else {
@@ -230,7 +243,9 @@ function handleExport({ run_id }) {
     .all(run_id)
     .map((row) => {
       let data = {};
-      try { data = JSON.parse(row.data || "{}"); } catch {}
+      try {
+        data = JSON.parse(row.data || "{}");
+      } catch {}
       return { ...row, data };
     });
 }
@@ -238,7 +253,7 @@ function handleExport({ run_id }) {
 // Server setup
 const server = new Server(
   { name: "pipeline-metrics", version: "0.1.0" },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {} } },
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({

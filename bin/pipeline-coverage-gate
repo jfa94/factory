@@ -9,6 +9,19 @@ require_command jq
 
 before_file="${1:?missing before coverage JSON path}"
 after_file="${2:?missing after coverage JSON path}"
+shift 2
+
+tolerance=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --tolerance) tolerance="$2"; shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+if [[ -z "$tolerance" ]]; then
+  tolerance=$(read_config '.quality.coverageTolerance' '0.5')
+fi
 
 # Validate inputs exist
 if [[ ! -f "$before_file" ]]; then
@@ -62,35 +75,37 @@ delta=$(jq -n \
     statements: (($a.statements - $b.statements) * 100 | round | . / 100)
   }')
 
-# Check for decrease — any metric going down is a failure
-decreased=$(jq -n --argjson d "$delta" '
-  ($d.lines < 0) or ($d.branches < 0) or ($d.functions < 0) or ($d.statements < 0)
+# Check for decrease beyond tolerance
+decreased=$(jq -n --argjson d "$delta" --argjson t "$tolerance" '
+  ($d.lines < (-1 * $t)) or ($d.branches < (-1 * $t)) or ($d.functions < (-1 * $t)) or ($d.statements < (-1 * $t))
 ')
 
 if [[ "$decreased" == "true" ]]; then
-  decreased_metrics=$(jq -n --argjson d "$delta" '
+  decreased_metrics=$(jq -n --argjson d "$delta" --argjson t "$tolerance" '
     [
-      (if $d.lines < 0 then "lines (\($d.lines)%)" else empty end),
-      (if $d.branches < 0 then "branches (\($d.branches)%)" else empty end),
-      (if $d.functions < 0 then "functions (\($d.functions)%)" else empty end),
-      (if $d.statements < 0 then "statements (\($d.statements)%)" else empty end)
+      (if $d.lines < (-1 * $t) then "lines (\($d.lines)%)" else empty end),
+      (if $d.branches < (-1 * $t) then "branches (\($d.branches)%)" else empty end),
+      (if $d.functions < (-1 * $t) then "functions (\($d.functions)%)" else empty end),
+      (if $d.statements < (-1 * $t) then "statements (\($d.statements)%)" else empty end)
     ] | join(", ")
   ')
-  log_error "coverage decreased: $decreased_metrics"
+  log_error "coverage decreased beyond tolerance (${tolerance}%): $decreased_metrics"
 
   jq -n \
     --argjson passed false \
     --argjson before "$before" \
     --argjson after "$after" \
     --argjson delta "$delta" \
-    '{passed: $passed, before: $before, after: $after, delta: $delta}'
+    --argjson tolerance "$tolerance" \
+    '{passed: $passed, before: $before, after: $after, delta: $delta, tolerance: $tolerance}'
   exit 1
 fi
 
-log_info "coverage gate passed"
+log_info "coverage gate passed (tolerance: ${tolerance}%)"
 jq -n \
   --argjson passed true \
   --argjson before "$before" \
   --argjson after "$after" \
   --argjson delta "$delta" \
-  '{passed: $passed, before: $before, after: $after, delta: $delta}'
+  --argjson tolerance "$tolerance" \
+  '{passed: $passed, before: $before, after: $after, delta: $delta, tolerance: $tolerance}'

@@ -26,12 +26,14 @@ fi
 
 holdout_percent=0
 fix_instructions=""
+holdout_seed=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --spec-path) spec_path="$2"; shift 2 ;;
     --holdout) holdout_percent="$2"; shift 2 ;;
     --fix-instructions) fix_instructions="$2"; shift 2 ;;
+    --seed) holdout_seed="$2"; shift 2 ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -69,9 +71,9 @@ if [[ "$holdout_percent" -gt 0 ]] && [[ "$total_criteria" -gt 1 ]]; then
   [[ "$holdout_count" -ge "$total_criteria" ]] && holdout_count=$(( total_criteria - 1 ))
 
   # Generate shuffled indices via awk (proper PRNG, avoids jq linear-hash bias)
-  holdout_indices=$(awk -v n="$total_criteria" -v k="$holdout_count" '
+  holdout_indices=$(awk -v n="$total_criteria" -v k="$holdout_count" -v seed="${holdout_seed:-}" '
     BEGIN {
-      srand()
+      if (seed != "") srand(seed + 0); else srand()
       for (i = 0; i < n; i++) a[i] = i
       for (i = n - 1; i > 0; i--) {
         j = int(rand() * (i + 1))

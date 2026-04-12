@@ -11,28 +11,36 @@ task_json="${1:?missing task JSON}"
 files=$(printf '%s' "$task_json" | jq -r '(.files // [])[]')
 
 tier="routine"
+tier_trigger=""
 matched=()
 
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
 
   pattern=""
+  new_tier=""
   case "$file" in
-    */auth/*)           pattern="*/auth/*";           tier="security" ;;
-    */security/*)       pattern="*/security/*";       tier="security" ;;
-    */migration/*)      pattern="*/migration/*";      tier="security" ;;
-    */payment/*)        pattern="*/payment/*";        tier="security" ;;
-    */crypto/*)         pattern="*/crypto/*";         tier="security" ;;
-    .env|.env.*|*/.env|*/.env.*) pattern="*/.env*"; tier="security" ;;
-    */middleware/auth*)  pattern="*/middleware/auth*"; tier="security" ;;
-    */api/*)            pattern="*/api/*";            [[ "$tier" != "security" ]] && tier="feature" ;;
-    */routes/*)         pattern="*/routes/*";         [[ "$tier" != "security" ]] && tier="feature" ;;
-    */models/*)         pattern="*/models/*";         [[ "$tier" != "security" ]] && tier="feature" ;;
-    */services/*)       pattern="*/services/*";       [[ "$tier" != "security" ]] && tier="feature" ;;
-    */hooks/*)          pattern="*/hooks/*";          [[ "$tier" != "security" ]] && tier="feature" ;;
+    auth/*|*/auth/*)                     pattern="auth/*";            new_tier="security" ;;
+    security/*|*/security/*)             pattern="security/*";        new_tier="security" ;;
+    migration/*|*/migration/*)           pattern="migration/*";       new_tier="security" ;;
+    payment/*|*/payment/*)               pattern="payment/*";         new_tier="security" ;;
+    crypto/*|*/crypto/*)                 pattern="crypto/*";          new_tier="security" ;;
+    .env|.env.*|*/.env|*/.env.*)         pattern=".env*";             new_tier="security" ;;
+    middleware/auth*|*/middleware/auth*)  pattern="middleware/auth*";   new_tier="security" ;;
+    api/*|*/api/*)                       pattern="api/*";             new_tier="feature" ;;
+    routes/*|*/routes/*)                 pattern="routes/*";          new_tier="feature" ;;
+    models/*|*/models/*)                 pattern="models/*";          new_tier="feature" ;;
+    services/*|*/services/*)             pattern="services/*";        new_tier="feature" ;;
+    hooks/*|*/hooks/*)                   pattern="hooks/*";           new_tier="feature" ;;
   esac
 
   [[ -n "$pattern" ]] && matched+=("$pattern")
+
+  if [[ "$new_tier" == "security" && "$tier" != "security" ]]; then
+    tier="security"; tier_trigger="$file"
+  elif [[ "$new_tier" == "feature" && "$tier" == "routine" ]]; then
+    tier="feature"; tier_trigger="$file"
+  fi
 done <<< "$files"
 
 case "$tier" in
@@ -47,12 +55,16 @@ else
   matched_json='[]'
 fi
 
-first_file=$(printf '%s' "$task_json" | jq -r '(.files // [])[0] // "no files"')
+if [[ -n "$tier_trigger" ]]; then
+  reasoning_str="${tier_trigger} → ${tier} tier"
+else
+  reasoning_str="no matching patterns → ${tier} tier"
+fi
 
 jq -n \
   --arg tier "$tier" \
   --argjson review_rounds "$review_rounds" \
   --argjson extra_reviewers "$extra_reviewers" \
   --argjson matched_patterns "$matched_json" \
-  --arg reasoning "files include ${first_file} → ${tier} tier" \
+  --arg reasoning "$reasoning_str" \
   '{tier: $tier, review_rounds: $review_rounds, extra_reviewers: $extra_reviewers, matched_patterns: $matched_patterns, reasoning: $reasoning}'

@@ -1196,7 +1196,7 @@
     "description": "bin/pipeline-classify-risk:50 always reports `first_file → tier`, but tier may have been set by a later file. Report the file that triggered the current tier instead.",
     "priority": "P2",
     "findings": ["P(classify-risk reasoning)"],
-    "status": "pending",
+    "status": "done",
     "files": ["bin/pipeline-classify-risk", "bin/test-phase3.sh"],
     "acceptance_criteria": [
       "reasoning field references the file that actually triggered the tier",
@@ -1205,7 +1205,8 @@
     "tests_to_write": [
       "bin/test-phase3.sh: classify-risk with routine file first and auth file second reports auth file in reasoning"
     ],
-    "depends_on": []
+    "depends_on": [],
+    "notes": "Replaced first_file-based reasoning with tier_trigger tracking. Loop now records which file caused each tier upgrade. reasoning field shows 'file → tier' for the actual triggering file, or 'no matching patterns → tier' when none match."
   },
   {
     "task_id": "task_13_02",
@@ -1214,7 +1215,7 @@
     "description": "servers/pipeline-metrics/index.js creates the events table with CREATE TABLE IF NOT EXISTS. No version column, no migration logic. Add PRAGMA user_version and a migration framework for future schema changes.",
     "priority": "P2",
     "findings": ["P(metrics schema)"],
-    "status": "pending",
+    "status": "done",
     "files": ["servers/pipeline-metrics/index.js", "bin/test-phase9.sh"],
     "acceptance_criteria": [
       "DB has PRAGMA user_version set to a numeric schema version",
@@ -1226,7 +1227,8 @@
       "bin/test-phase9.sh: index.js declares user_version",
       "bin/test-phase9.sh: index.js syntax check still passes"
     ],
-    "depends_on": []
+    "depends_on": [],
+    "notes": "Added CURRENT_SCHEMA_VERSION=1, PRAGMA user_version check on boot. Migration framework ready: future versions add elif blocks checking dbVersion < N."
   },
   {
     "task_id": "task_13_03",
@@ -1235,7 +1237,7 @@
     "description": "servers/pipeline-metrics/index.js:171 hard-caps query results at 1000. metrics_export for a 50-task × 20-event run hits the cap. Add pagination via offset/cursor.",
     "priority": "P2",
     "findings": ["P(metrics pagination)"],
-    "status": "pending",
+    "status": "done",
     "files": ["servers/pipeline-metrics/index.js", "bin/test-phase9.sh"],
     "acceptance_criteria": [
       "metrics_query accepts an offset parameter",
@@ -1243,7 +1245,8 @@
       "Hard cap raised or removed for export"
     ],
     "tests_to_write": ["bin/test-phase9.sh: index.js syntax check passes"],
-    "depends_on": []
+    "depends_on": [],
+    "notes": "Added offset parameter to metrics_query input schema and handler. Removed Math.min(limit,1000) hard cap. SQL now uses LIMIT ? OFFSET ?."
   },
   {
     "task_id": "task_13_04",
@@ -1252,7 +1255,7 @@
     "description": "bin/pipeline-lib.sh atomic_write does `printf > tmp; mv -f tmp target`. The write may not be fsync'd before the rename. On crash, target could be a dangling inode or empty file. Add `sync` or use `install` which fsyncs.",
     "priority": "P2",
     "findings": ["P(atomic_write)"],
-    "status": "pending",
+    "status": "done",
     "files": ["bin/pipeline-lib.sh", "bin/test-phase1.sh"],
     "acceptance_criteria": [
       "atomic_write ensures content is durable before rename",
@@ -1262,7 +1265,8 @@
       "bin/test-phase1.sh: atomic_write produces a non-empty target file",
       "bin/test-phase1.sh: atomic_write is idempotent under repeated calls"
     ],
-    "depends_on": []
+    "depends_on": [],
+    "notes": "Added python3 fsync of tmp file before mv. Falls through gracefully if python3 unavailable. Tests verify non-empty output, idempotency, and no leftover tmp files."
   },
   {
     "task_id": "task_13_05",
@@ -1271,7 +1275,7 @@
     "description": "bin/pipeline-coverage-gate treats any decrease (< 0) as failure. A 0.001% decrease from a refactor blocks. Add a --tolerance flag (default 0.5%) below which decreases are allowed.",
     "priority": "P2",
     "findings": ["P(coverage tolerance)"],
-    "status": "pending",
+    "status": "done",
     "files": ["bin/pipeline-coverage-gate", "bin/test-phase6.sh"],
     "acceptance_criteria": [
       "--tolerance <percent> flag allows decreases up to that threshold",
@@ -1284,7 +1288,8 @@
       "bin/test-phase6.sh: 1% decrease fails with default tolerance",
       "bin/test-phase6.sh: --tolerance 2 allows 1.5% decrease"
     ],
-    "depends_on": ["task_08_01"]
+    "depends_on": ["task_08_01"],
+    "notes": "Added --tolerance flag with default from config quality.coverageTolerance (fallback 0.5%). Decrease check now compares against -tolerance instead of 0. Output JSON includes tolerance field."
   },
   {
     "task_id": "task_13_06",
@@ -1293,7 +1298,7 @@
     "description": "bin/pipeline-build-prompt:45 calls `srand()` without explicit seed. For reproducibility, optionally accept a --seed flag and document non-determinism as intentional if not set.",
     "priority": "P2",
     "findings": ["P(holdout seeding)"],
-    "status": "pending",
+    "status": "done",
     "files": ["bin/pipeline-build-prompt", "bin/test-phase3.sh"],
     "acceptance_criteria": [
       "--seed <int> produces deterministic holdout selection",
@@ -1304,7 +1309,8 @@
       "bin/test-phase3.sh: build-prompt --seed 42 produces same holdout on two runs",
       "bin/test-phase3.sh: different seeds produce different holdouts"
     ],
-    "depends_on": []
+    "depends_on": [],
+    "notes": "Added --seed flag to build-prompt. Passed to awk srand() via -v seed=. When empty, falls back to srand() (time-based). Tests confirm same seed → same holdout, different seeds → different holdouts."
   },
   {
     "task_id": "task_13_07",
@@ -1313,7 +1319,7 @@
     "description": "bin/pipeline-classify-risk uses patterns like `*/auth/*` which do not match `auth/foo.ts` (bare leading path). Add alternative patterns or use a different matching approach.",
     "priority": "P2",
     "findings": ["P(classify-risk patterns)"],
-    "status": "pending",
+    "status": "done",
     "files": ["bin/pipeline-classify-risk", "bin/test-phase3.sh"],
     "acceptance_criteria": [
       "auth/handler.ts matches security tier",
@@ -1327,7 +1333,8 @@
       "bin/test-phase3.sh: classify-risk with api/routes.ts returns feature",
       "bin/test-phase3.sh: classify-risk with components/widget.tsx returns routine"
     ],
-    "depends_on": []
+    "depends_on": [],
+    "notes": "Added bare-path alternatives (auth/*|*/auth/*) to all case patterns in classify-risk. Combined with task_13_01 refactor: new_tier variable + tier upgrade tracking replaces unconditional tier assignment."
   },
   {
     "task_id": "task_14_01",

@@ -500,6 +500,52 @@ assert_eq "no package.json ok=false" "false" "$(echo "$output" | jq -r '.ok')"
 
 # ============================================================
 echo ""
+echo "=== task_13_05: pipeline-coverage-gate tolerance ==="
+
+cov_dir=$(mktemp -d)
+
+# Helper to create coverage JSON
+_cov_json() {
+  local lines="$1" branches="$2" funcs="$3" stmts="$4"
+  printf '{"total":{"lines":%s,"branches":%s,"functions":%s,"statements":%s}}' \
+    "$lines" "$branches" "$funcs" "$stmts"
+}
+
+# Before: 80% across the board
+echo "$(_cov_json 80 80 80 80)" > "$cov_dir/before.json"
+
+# After: 0.3% decrease in lines → passes with default 0.5% tolerance
+echo "$(_cov_json 79.7 80 80 80)" > "$cov_dir/after-small.json"
+set +e
+output=$("$BIN_DIR/pipeline-coverage-gate" "$cov_dir/before.json" "$cov_dir/after-small.json" 2>/dev/null)
+exit_code=$?
+set -e
+assert_eq "0.3% decrease passes with default tolerance" "0" "$exit_code"
+assert_eq "0.3% decrease passed=true" "true" "$(echo "$output" | jq -r '.passed')"
+assert_eq "tolerance in output" "0.5" "$(echo "$output" | jq -r '.tolerance')"
+
+# After: 1% decrease in lines → fails with default 0.5% tolerance
+echo "$(_cov_json 79 80 80 80)" > "$cov_dir/after-big.json"
+set +e
+output=$("$BIN_DIR/pipeline-coverage-gate" "$cov_dir/before.json" "$cov_dir/after-big.json" 2>/dev/null)
+exit_code=$?
+set -e
+assert_eq "1% decrease fails with default tolerance" "1" "$exit_code"
+assert_eq "1% decrease passed=false" "false" "$(echo "$output" | jq -r '.passed')"
+
+# --tolerance 2 allows 1.5% decrease
+echo "$(_cov_json 78.5 80 80 80)" > "$cov_dir/after-med.json"
+set +e
+output=$("$BIN_DIR/pipeline-coverage-gate" "$cov_dir/before.json" "$cov_dir/after-med.json" --tolerance 2 2>/dev/null)
+exit_code=$?
+set -e
+assert_eq "--tolerance 2 allows 1.5% decrease" "0" "$exit_code"
+assert_eq "--tolerance 2 tolerance in output" "2" "$(echo "$output" | jq -r '.tolerance')"
+
+rm -rf "$cov_dir"
+
+# ============================================================
+echo ""
 echo "=== All hook scripts are executable ==="
 
 assert_eq "branch-protection executable" "true" "$([[ -x "$HOOKS_DIR/branch-protection.sh" ]] && echo true || echo false)"

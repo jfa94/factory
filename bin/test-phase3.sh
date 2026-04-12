@@ -130,6 +130,35 @@ output=$(pipeline-classify-risk '{"files":["config/.env.production"]}' 2>/dev/nu
 assert_eq "nested .env is security" "security" "$(echo "$output" | jq -r '.tier')"
 
 echo ""
+echo "=== task_13_01: pipeline-classify-risk reasoning accuracy ==="
+
+# Routine file first, auth file second — reasoning must reference the auth file
+output=$(pipeline-classify-risk '{"files":["src/components/Button.tsx","src/auth/handler.ts"]}' 2>/dev/null)
+assert_eq "reasoning references auth file (not first file)" "true" \
+  "$( echo "$output" | jq -r '.reasoning' | grep -q 'src/auth/handler.ts' && echo true || echo false )"
+assert_eq "tier is security despite routine file first" "security" "$(echo "$output" | jq -r '.tier')"
+
+# No matching patterns → reasoning says so
+output=$(pipeline-classify-risk '{"files":["README.md"]}' 2>/dev/null)
+assert_eq "no-match reasoning" "true" \
+  "$( echo "$output" | jq -r '.reasoning' | grep -q 'no matching patterns' && echo true || echo false )"
+
+echo ""
+echo "=== task_13_07: classify-risk bare leading paths ==="
+
+# auth/foo.ts (no prefix) must match security
+output=$(pipeline-classify-risk '{"files":["auth/foo.ts"]}' 2>/dev/null)
+assert_eq "bare auth/ → security" "security" "$(echo "$output" | jq -r '.tier')"
+
+# api/routes.ts (no prefix) must match feature
+output=$(pipeline-classify-risk '{"files":["api/routes.ts"]}' 2>/dev/null)
+assert_eq "bare api/ → feature" "feature" "$(echo "$output" | jq -r '.tier')"
+
+# Deep nested still works
+output=$(pipeline-classify-risk '{"files":["a/b/c/auth/x.ts"]}' 2>/dev/null)
+assert_eq "deep nested auth → security" "security" "$(echo "$output" | jq -r '.tier')"
+
+echo ""
 echo "=== pipeline-validate-tasks (valid DAG) ==="
 
 tasks_dir=$(mktemp -d)
@@ -320,6 +349,28 @@ fix='{"findings":[{"severity":"critical","title":"Missing null check","descripti
 output=$(pipeline-build-prompt "$task" "$spec_dir" --fix-instructions "$fix" 2>/dev/null)
 assert_eq "fix instructions present" "true" "$( echo "$output" | grep -q "Review Feedback" && echo true || echo false )"
 assert_eq "fix finding present" "true" "$( echo "$output" | grep -q "Missing null check" && echo true || echo false )"
+
+# task_13_06: --seed flag for deterministic holdout
+echo ""
+echo "=== task_13_06: build-prompt --seed determinism ==="
+
+seed_task='{"task_id":"seed1","title":"Seed test","description":"D","files":["a.ts"],"acceptance_criteria":["c1","c2","c3","c4","c5","c6"],"tests_to_write":["t"],"depends_on":[]}'
+
+pipeline-build-prompt "$seed_task" --holdout 50 --seed 42 2>/dev/null >/dev/null
+h1=$(jq -Sc '.withheld_criteria' "${CLAUDE_PLUGIN_DATA}/runs/run-prompt-test/holdouts/seed1.json")
+pipeline-build-prompt "$seed_task" --holdout 50 --seed 42 2>/dev/null >/dev/null
+h2=$(jq -Sc '.withheld_criteria' "${CLAUDE_PLUGIN_DATA}/runs/run-prompt-test/holdouts/seed1.json")
+assert_eq "same seed produces same holdout" "$h1" "$h2"
+
+pipeline-build-prompt "$seed_task" --holdout 50 --seed 99 2>/dev/null >/dev/null
+h3=$(jq -Sc '.withheld_criteria' "${CLAUDE_PLUGIN_DATA}/runs/run-prompt-test/holdouts/seed1.json")
+if [[ "$h1" != "$h3" ]]; then
+  echo "  PASS: different seeds produce different holdouts"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: different seeds produced same holdout (unlikely)"
+  fail=$((fail + 1))
+fi
 
 # task_03_04: spec path propagation via state
 # When --spec-path is not given, build-prompt reads .spec.path from state.

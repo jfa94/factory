@@ -706,9 +706,39 @@ trap - EXIT
 sandbox=""
 
 echo ""
-echo "=== pipeline-lib.sh utilities ==="
+echo "=== task_13_04: atomic_write fsync ==="
 
 source "$(dirname "$0")/pipeline-lib.sh"
+
+aw_dir=$(mktemp -d)
+atomic_write "$aw_dir/test.json" '{"key":"value"}'
+assert_eq "atomic_write produces non-empty file" "true" \
+  "$( [[ -s "$aw_dir/test.json" ]] && echo true || echo false )"
+aw_content=$(cat "$aw_dir/test.json")
+assert_eq "atomic_write content correct" '{"key":"value"}' "$aw_content"
+
+# Idempotent: overwrite same target
+atomic_write "$aw_dir/test.json" '{"key":"updated"}'
+aw_content=$(cat "$aw_dir/test.json")
+assert_eq "atomic_write idempotent overwrite" '{"key":"updated"}' "$aw_content"
+
+# No tmp leftovers
+leftover=$(find "$aw_dir" -name 'test.json.*' -print 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "atomic_write no tmp leftovers" "0" "$leftover"
+
+# Repeated calls all produce correct output
+for i in $(seq 1 20); do
+  atomic_write "$aw_dir/repeat.json" "{\"i\":$i}"
+done
+aw_final=$(jq -r '.i' "$aw_dir/repeat.json")
+assert_eq "atomic_write 20 repeated calls final value" "20" "$aw_final"
+leftover=$(find "$aw_dir" -name 'repeat.json.*' -print 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "atomic_write repeated calls no tmp leftovers" "0" "$leftover"
+
+rm -rf "$aw_dir"
+
+echo ""
+echo "=== pipeline-lib.sh utilities ==="
 
 slug=$(slugify "Hello World -- Test 123!")
 assert_eq "slugify" "hello-world-test-123" "$slug"

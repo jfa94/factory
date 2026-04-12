@@ -647,6 +647,13 @@ done
 # mkdirSync for DB parent directory
 assert_contains "mkdirSync for DB dir" "mkdirSync" "$INDEX"
 
+# task_13_02: schema versioning
+assert_contains "index.js declares user_version" "user_version" "$INDEX"
+assert_contains "index.js has CURRENT_SCHEMA_VERSION" "CURRENT_SCHEMA_VERSION" "$INDEX"
+
+# task_13_03: pagination offset support
+assert_contains "index.js supports offset parameter" "offset" "$INDEX"
+
 # ============================================================
 echo ""
 echo "=== pipeline-scaffold quality-gate.yml — dynamic package manager (task_10_01) ==="
