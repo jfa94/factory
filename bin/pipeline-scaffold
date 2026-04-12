@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # Create project scaffolding files if absent (idempotent).
-# Usage: pipeline-scaffold <project-root> [--force]
+# Usage: pipeline-scaffold <project-root> [--force] [--merge-package-json]
 # Exit: 0=success
 
 source "$(dirname "$0")/pipeline-lib.sh"
+
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TEMPLATES_DIR="$PLUGIN_ROOT/templates"
 
 root="${1:?missing project root}"
 shift
 
 force=false
+merge_pkg_json=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force) force=true; shift ;;
+    --merge-package-json) merge_pkg_json=true; shift ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -25,6 +30,20 @@ _create_if_absent() {
     printf '%s\n' "$content" > "$path"
     created+=("$path")
     log_info "created $path"
+  fi
+}
+
+_copy_template_if_absent() {
+  local src="$1" dest="$2"
+  if [[ ! -f "$src" ]]; then
+    log_warn "template missing: $src"
+    return 0
+  fi
+  if [[ "$force" == "true" ]] || [[ ! -f "$dest" ]]; then
+    mkdir -p "$(dirname "$dest")"
+    cp "$src" "$dest"
+    created+=("$dest")
+    log_info "created $dest"
   fi
 }
 
@@ -127,6 +146,51 @@ YML
 }
 
 _create_if_absent "$root/.github/workflows/quality-gate.yml" "$(_quality_gate_yml "$(_detect_pkg_manager)")"
+
+# Node-specific templates — only when target has package.json.
+# Ported from the old pipeline's config-deployer.sh (task_10_02).
+merged=false
+if [[ -f "$root/package.json" ]]; then
+  _copy_template_if_absent \
+    "$TEMPLATES_DIR/.stryker.config.json" \
+    "$root/.stryker.config.json"
+
+  _copy_template_if_absent \
+    "$TEMPLATES_DIR/.dependency-cruiser.cjs" \
+    "$root/.dependency-cruiser.cjs"
+
+  # package.json merge (task_10_03) — gated behind --merge-package-json so the
+  # default scaffold run never mutates an existing manifest. Merges scripts and
+  # devDependencies from templates/package.scaffold.json, preserving any user
+  # entries already present (existing keys win). No-op when nothing changes.
+  scaffold_pkg="$TEMPLATES_DIR/package.scaffold.json"
+  if [[ "$merge_pkg_json" == "true" && -f "$scaffold_pkg" ]]; then
+    if ! merge_result=$(jq -s '
+      .[0] as $pkg
+      | .[1] as $scaffold
+      | $pkg
+      | .scripts = (($scaffold.scripts // {}) + ($pkg.scripts // {}))
+      | .devDependencies = (($scaffold.devDependencies // {}) + ($pkg.devDependencies // {}))
+    ' "$root/package.json" "$scaffold_pkg" 2>&1); then
+      log_error "package.json merge failed: $merge_result"
+      exit 1
+    fi
+
+    # Compare stable-serialized forms to detect no-op.
+    current=$(jq -S . "$root/package.json")
+    next=$(printf '%s' "$merge_result" | jq -S .)
+    if [[ "$current" != "$next" ]]; then
+      tmp=$(mktemp "${root}/package.json.XXXXXX")
+      printf '%s\n' "$merge_result" | jq '.' > "$tmp"
+      mv -f "$tmp" "$root/package.json"
+      created+=("$root/package.json (merged)")
+      merged=true
+      log_info "merged scaffold scripts/devDependencies into package.json"
+    else
+      log_info "package.json already up to date; no merge performed"
+    fi
+  fi
+fi
 
 # .gitignore management
 gitignore="$root/.gitignore"

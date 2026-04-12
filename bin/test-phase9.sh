@@ -733,6 +733,158 @@ assert_contains "no-lockfile fallback uses npm ci" "npm ci" "$BARE_YML"
 
 # ============================================================
 echo ""
+echo "=== templates: stryker + dep-cruiser + package.scaffold (task_10_02/03) ==="
+
+STRYKER_TMPL="$PLUGIN_ROOT/templates/.stryker.config.json"
+DEPCRUISE_TMPL="$PLUGIN_ROOT/templates/.dependency-cruiser.cjs"
+PKG_SCAFFOLD_TMPL="$PLUGIN_ROOT/templates/package.scaffold.json"
+
+assert_file_exists "templates/.stryker.config.json exists" "$STRYKER_TMPL"
+assert_valid_json "templates/.stryker.config.json is valid JSON" "$STRYKER_TMPL"
+assert_file_exists "templates/.dependency-cruiser.cjs exists" "$DEPCRUISE_TMPL"
+assert_file_exists "templates/package.scaffold.json exists" "$PKG_SCAFFOLD_TMPL"
+assert_valid_json "templates/package.scaffold.json is valid JSON" "$PKG_SCAFFOLD_TMPL"
+
+# Sanity-check template contents
+stryker_runner=$(jq -r '.testRunner' "$STRYKER_TMPL")
+assert_eq "stryker template uses vitest runner" "vitest" "$stryker_runner"
+assert_contains "dep-cruiser template exports config" "module.exports" "$DEPCRUISE_TMPL"
+
+scaffold_has_testmut=$(jq -r '.scripts["test:mutation"] // empty' "$PKG_SCAFFOLD_TMPL")
+assert_eq "package.scaffold.json defines test:mutation script" "stryker run" "$scaffold_has_testmut"
+scaffold_has_stryker_dep=$(jq -r '.devDependencies["@stryker-mutator/core"] // empty' "$PKG_SCAFFOLD_TMPL")
+if [[ -n "$scaffold_has_stryker_dep" ]]; then
+  echo "  PASS: package.scaffold.json declares @stryker-mutator/core devDependency"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: package.scaffold.json missing @stryker-mutator/core"
+  fail=$((fail + 1))
+fi
+
+# --- task_10_02: scaffold deploys stryker + depcruise when package.json exists ---
+NODE_PROJ="$SCAFFOLD_DIR/node-proj"
+mkdir -p "$NODE_PROJ"
+printf '{"name":"user-proj","version":"1.0.0"}\n' > "$NODE_PROJ/package.json"
+"$SCAFFOLD" "$NODE_PROJ" >/dev/null
+
+assert_file_exists "scaffold deploys .stryker.config.json when package.json present" \
+  "$NODE_PROJ/.stryker.config.json"
+assert_file_exists "scaffold deploys .dependency-cruiser.cjs when package.json present" \
+  "$NODE_PROJ/.dependency-cruiser.cjs"
+
+# Byte-identical to template (copy, not mutate)
+if diff -q "$STRYKER_TMPL" "$NODE_PROJ/.stryker.config.json" >/dev/null 2>&1; then
+  echo "  PASS: deployed .stryker.config.json matches template byte-for-byte"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: deployed .stryker.config.json differs from template"
+  fail=$((fail + 1))
+fi
+
+# --- Idempotency: second run must not overwrite user customizations ---
+printf '{"mutate": ["custom/**"]}\n' > "$NODE_PROJ/.stryker.config.json"
+"$SCAFFOLD" "$NODE_PROJ" >/dev/null
+custom_mutate=$(jq -rc '.mutate' "$NODE_PROJ/.stryker.config.json")
+assert_eq "scaffold does not overwrite existing stryker config" '["custom/**"]' "$custom_mutate"
+
+# --- task_10_02: no package.json → no node-specific templates deployed ---
+NO_PKG_PROJ="$SCAFFOLD_DIR/no-pkg-proj"
+mkdir -p "$NO_PKG_PROJ"
+"$SCAFFOLD" "$NO_PKG_PROJ" >/dev/null
+if [[ -f "$NO_PKG_PROJ/.stryker.config.json" ]]; then
+  echo "  FAIL: scaffold deployed stryker config without package.json"
+  fail=$((fail + 1))
+else
+  echo "  PASS: scaffold skips stryker config when package.json absent"
+  pass=$((pass + 1))
+fi
+if [[ -f "$NO_PKG_PROJ/.dependency-cruiser.cjs" ]]; then
+  echo "  FAIL: scaffold deployed dep-cruiser config without package.json"
+  fail=$((fail + 1))
+else
+  echo "  PASS: scaffold skips dep-cruiser config when package.json absent"
+  pass=$((pass + 1))
+fi
+
+# --- task_10_03: --merge-package-json flag merges scripts and devDependencies ---
+MERGE_PROJ="$SCAFFOLD_DIR/merge-proj"
+mkdir -p "$MERGE_PROJ"
+cat > "$MERGE_PROJ/package.json" <<'PKG'
+{
+  "name": "merge-proj",
+  "version": "2.3.4",
+  "scripts": {
+    "start": "node ./server.js",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}
+PKG
+"$SCAFFOLD" "$MERGE_PROJ" --merge-package-json >/dev/null
+
+# Scaffold scripts added
+added_test_mutation=$(jq -r '.scripts["test:mutation"] // empty' "$MERGE_PROJ/package.json")
+assert_eq "merge adds scaffold test:mutation script" "stryker run" "$added_test_mutation"
+added_lint=$(jq -r '.scripts.lint // empty' "$MERGE_PROJ/package.json")
+assert_eq "merge adds scaffold lint script" "eslint . --max-warnings 0" "$added_lint"
+
+# User scripts preserved
+preserved_start=$(jq -r '.scripts.start // empty' "$MERGE_PROJ/package.json")
+assert_eq "merge preserves user start script" "node ./server.js" "$preserved_start"
+preserved_test=$(jq -r '.scripts.test // empty' "$MERGE_PROJ/package.json")
+assert_eq "merge preserves user test script (user wins over scaffold)" "jest" "$preserved_test"
+
+# User's other top-level fields preserved
+preserved_name=$(jq -r '.name' "$MERGE_PROJ/package.json")
+assert_eq "merge preserves user top-level name" "merge-proj" "$preserved_name"
+preserved_version=$(jq -r '.version' "$MERGE_PROJ/package.json")
+assert_eq "merge preserves user top-level version" "2.3.4" "$preserved_version"
+
+# User devDependency version wins, new ones are added
+preserved_vitest=$(jq -r '.devDependencies.vitest' "$MERGE_PROJ/package.json")
+assert_eq "merge preserves user vitest version" "^3.0.0" "$preserved_vitest"
+added_depcruise=$(jq -r '.devDependencies["dependency-cruiser"] // empty' "$MERGE_PROJ/package.json")
+if [[ -n "$added_depcruise" ]]; then
+  echo "  PASS: merge adds scaffold dependency-cruiser devDependency"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: merge did not add dependency-cruiser devDependency"
+  fail=$((fail + 1))
+fi
+
+# --- task_10_03: second run is a no-op (scaffold scripts already present) ---
+before_second=$(jq -S . "$MERGE_PROJ/package.json")
+"$SCAFFOLD" "$MERGE_PROJ" --merge-package-json >/dev/null
+after_second=$(jq -S . "$MERGE_PROJ/package.json")
+if [[ "$before_second" == "$after_second" ]]; then
+  echo "  PASS: second --merge-package-json run is a no-op"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: second --merge-package-json run mutated package.json"
+  fail=$((fail + 1))
+fi
+
+# --- task_10_03: default scaffold (no flag) does NOT mutate package.json ---
+NOFLAG_PROJ="$SCAFFOLD_DIR/noflag-proj"
+mkdir -p "$NOFLAG_PROJ"
+cat > "$NOFLAG_PROJ/package.json" <<'PKG'
+{"name":"noflag","scripts":{"only":"echo ok"}}
+PKG
+original=$(jq -S . "$NOFLAG_PROJ/package.json")
+"$SCAFFOLD" "$NOFLAG_PROJ" >/dev/null
+after=$(jq -S . "$NOFLAG_PROJ/package.json")
+if [[ "$original" == "$after" ]]; then
+  echo "  PASS: default scaffold does not merge package.json without flag"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: default scaffold mutated package.json without flag"
+  fail=$((fail + 1))
+fi
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"
