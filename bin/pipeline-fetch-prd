@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 # Fetch a PRD from a GitHub issue.
-# Usage: pipeline-fetch-prd <issue-number>
-# Exit: 0=success, 1=not found, 2=gh not authed
+# Usage: pipeline-fetch-prd [--strict] <issue-number>
+# Exit: 0=success, 1=not found/strict fail, 2=gh not authed
 
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command gh
 require_command jq
+
+strict=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --strict) strict=true; shift ;;
+    -*) log_error "unknown flag: $1"; exit 1 ;;
+    *) break ;;
+  esac
+done
 
 issue="${1:?missing issue number}"
 
@@ -46,6 +55,10 @@ if printf '%s' "$labels" | jq -e 'map(ascii_downcase) | index("prd")' &>/dev/nul
 fi
 
 if [[ "$has_prd" == "false" ]]; then
+  if [[ "$strict" == "true" ]]; then
+    log_error "issue $issue has no [PRD] marker in title or labels (strict mode)"
+    exit 1
+  fi
   log_warn "issue $issue has no [PRD] marker in title or labels — proceeding anyway"
 fi
 

@@ -53,6 +53,9 @@ EOF
     echo "Could not resolve to an Issue" >&2
     exit 1
     ;;
+  "repo view --json nameWithOwner -q .nameWithOwner")
+    echo "test/test"
+    ;;
   "issue comment"*)
     exit 0
     ;;
@@ -321,12 +324,121 @@ type=$(echo "$output" | jq -r '.type')
 assert_eq "ci-escalation type correct" "ci-escalation" "$type"
 
 echo ""
+echo "=== pipeline-validate: cross-location skill discovery ==="
+
+# Test project-level skill only (already tested above, but explicit for plan 11)
+validate_proj=$(mktemp -d)
+cd "$validate_proj"
+git init -q
+git remote add origin "https://github.com/test/test.git"
+mkdir -p .claude/skills/prd-to-spec
+echo "# prd-to-spec" > .claude/skills/prd-to-spec/SKILL.md
+git add -A && git commit -q -m "init"
+output=$(pipeline-validate 2>/dev/null)
+detail=$(echo "$output" | jq -r '.checks[] | select(.name=="skill_prd_to_spec") | .detail')
+assert_eq "passes with project-level skill only" "found .claude/skills/prd-to-spec/" "$detail"
+
+# Test home-level skill only
+validate_home=$(mktemp -d)
+cd "$validate_home"
+git init -q
+git config user.email "test@test.com"
+git config user.name "Test"
+git remote add origin "https://github.com/test/test.git"
+echo "init" > README
+# No project-level skill — set HOME to temp dir with skill installed there
+REAL_HOME="$HOME"
+export HOME=$(mktemp -d)
+mkdir -p "$HOME/.claude/skills/prd-to-spec"
+echo "# prd-to-spec" > "$HOME/.claude/skills/prd-to-spec/SKILL.md"
+git add -A && git commit -q -m "init"
+output=$(pipeline-validate 2>/dev/null)
+status=$(echo "$output" | jq -r '.checks[] | select(.name=="skill_prd_to_spec") | .status')
+assert_eq "passes with home-level skill only" "pass" "$status"
+detail=$(echo "$output" | jq -r '.checks[] | select(.name=="skill_prd_to_spec") | .detail')
+echo "$detail" | grep -q "/.claude/skills/prd-to-spec/" && \
+  assert_eq "reports home location found" "0" "0" || \
+  assert_eq "reports home location found" "contains home path" "$detail"
+
+# Test both absent
+rm -rf "$HOME/.claude/skills/prd-to-spec"
+output=$(pipeline-validate 2>/dev/null) || true
+status=$(echo "$output" | jq -r '.checks[] | select(.name=="skill_prd_to_spec") | .status')
+assert_eq "fails when both project and home skill absent" "fail" "$status"
+export HOME="$REAL_HOME"
+
+echo ""
+echo "=== pipeline-fetch-prd: --strict flag ==="
+
+cd "$validate_proj"
+
+# --strict on non-PRD issue → exit non-zero
+set +e
+pipeline-fetch-prd --strict 99 >/dev/null 2>&1
+exit_code=$?
+set -e
+assert_eq "pipeline-fetch-prd --strict exits non-zero on non-PRD issue" "1" "$exit_code"
+
+# Default (no --strict) on non-PRD issue → succeeds
+set +e
+pipeline-fetch-prd 99 >/dev/null 2>&1
+exit_code=$?
+set -e
+assert_eq "pipeline-fetch-prd (default) warns on non-PRD issue but succeeds" "0" "$exit_code"
+
+echo ""
+echo "=== pipeline-gh-comment: explicit repo resolution ==="
+
+# Resolves repo explicitly (mock returns "test/test")
+output=$(pipeline-gh-comment 42 spec-failure --data '{"reason":"test","run_id":"run-t01"}' 2>/dev/null)
+action=$(echo "$output" | jq -r '.action')
+assert_eq "gh-comment resolves repo explicitly" "created" "$action"
+
+# --repo override bypasses autodetection
+output=$(pipeline-gh-comment 42 run-summary --repo "custom/repo" --data '{"summary":"ok","status":"done","tasks_done":1,"tasks_total":1}' 2>/dev/null)
+action=$(echo "$output" | jq -r '.action')
+assert_eq "gh-comment --repo override bypasses autodetection" "created" "$action"
+
+# Fails when no repo can be resolved (mock gh repo view fails from non-git dir)
+no_repo_dir=$(mktemp -d)
+cd "$no_repo_dir"
+# Override mock to fail on repo view
+MOCK_DIR2=$(mktemp -d)
+cat > "$MOCK_DIR2/gh" << 'MOCK_GH2'
+#!/usr/bin/env bash
+case "$*" in
+  "repo view --json nameWithOwner -q .nameWithOwner")
+    echo "no git remote" >&2
+    exit 1
+    ;;
+  "auth status")
+    exit 0
+    ;;
+  *)
+    echo "mock gh: unhandled: $*" >&2
+    exit 1
+    ;;
+esac
+MOCK_GH2
+chmod +x "$MOCK_DIR2/gh"
+OLD_PATH="$PATH"
+export PATH="$MOCK_DIR2:$(dirname "$0"):$OLD_PATH"
+set +e
+pipeline-gh-comment 42 spec-failure --data '{"reason":"test","run_id":"run-t02"}' >/dev/null 2>&1
+exit_code=$?
+set -e
+assert_eq "gh-comment fails when no repo can be resolved" "1" "$exit_code"
+export PATH="$OLD_PATH"
+cd "$validate_proj"
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"
 
 # Cleanup
-rm -rf "$CLAUDE_PLUGIN_DATA" "$MOCK_DIR" "$spec_dir" "$empty_dir" "$bad_json_dir" \
-  "$empty_tasks_dir" "$missing_field_dir" "$too_many_files_dir" "$dup_dir" "$dangling_dir" "$test_project"
+rm -rf "$CLAUDE_PLUGIN_DATA" "$MOCK_DIR" "$MOCK_DIR2" "$spec_dir" "$empty_dir" "$bad_json_dir" \
+  "$empty_tasks_dir" "$missing_field_dir" "$too_many_files_dir" "$dup_dir" "$dangling_dir" \
+  "$test_project" "$validate_proj" "$validate_home" "$no_repo_dir"
 
 [[ $fail -eq 0 ]]

@@ -1035,7 +1035,7 @@
     "description": "bin/pipeline-validate:64-68 only checks `.claude/skills/prd-to-spec`. The old validator.sh also checks `$HOME/.claude/skills/prd-to-spec`. Users with home-level skills fail validation. Check both locations.",
     "priority": "P2",
     "findings": ["M17"],
-    "status": "pending",
+    "status": "done",
     "files": ["bin/pipeline-validate", "bin/test-phase2.sh"],
     "acceptance_criteria": [
       "pipeline-validate passes if prd-to-spec skill exists in project OR home .claude dir",
@@ -1056,7 +1056,7 @@
     "description": "bin/pipeline-fetch-prd:48-50 warns but proceeds when an issue has no [PRD] marker. Add a --strict flag that makes this an error. Default remains warn-but-proceed for backward compat.",
     "priority": "P2",
     "findings": ["M12"],
-    "status": "pending",
+    "status": "done",
     "files": ["bin/pipeline-fetch-prd", "bin/test-phase2.sh"],
     "acceptance_criteria": [
       "--strict flag causes non-PRD issues to exit with error",
@@ -1076,7 +1076,7 @@
     "description": "bin/pipeline-gh-comment:161 uses `gh api \"repos/{owner}/{repo}/...\"` which relies on gh's cwd-based autodetection. Orchestrator may call this from a worktree or outside a git repo. Resolve the repo explicitly via `gh repo view --json nameWithOwner` at script start and use the concrete path.",
     "priority": "P2",
     "findings": ["M20"],
-    "status": "pending",
+    "status": "done",
     "files": ["bin/pipeline-gh-comment", "bin/test-phase2.sh"],
     "acceptance_criteria": [
       "Repo owner/name is resolved explicitly at script start",

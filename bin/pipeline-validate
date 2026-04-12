@@ -60,11 +60,18 @@ fi
 # 4. Required agents — bundled by plugin (spec-reviewer, code-reviewer, task-reviewer, etc.)
 # No user-side check needed: plugin install guarantees presence.
 
-# 5. Required skills
+# 5. Required skills — check project-local then home-global
+_found_skill=""
 if [[ -d ".claude/skills/prd-to-spec" ]]; then
-  _add_check "skill_prd_to_spec" "pass" "found .claude/skills/prd-to-spec/"
+  _found_skill=".claude/skills/prd-to-spec/"
+elif [[ -d "$HOME/.claude/skills/prd-to-spec" ]]; then
+  _found_skill="$HOME/.claude/skills/prd-to-spec/"
+fi
+
+if [[ -n "$_found_skill" ]]; then
+  _add_check "skill_prd_to_spec" "pass" "found $_found_skill"
 else
-  _add_check "skill_prd_to_spec" "fail" "missing .claude/skills/prd-to-spec/"
+  _add_check "skill_prd_to_spec" "fail" "missing .claude/skills/prd-to-spec/ (checked project and home)"
 fi
 
 # 6. CLAUDE_PLUGIN_DATA writable
@@ -76,14 +83,21 @@ else
   _add_check "plugin_data" "fail" "CLAUDE_PLUGIN_DATA not writable: $CLAUDE_PLUGIN_DATA"
 fi
 
-# 7. Strict mode: optional agents
+# 7. Strict mode: optional agents — search project, home, and plugin locations
 if [[ "$strict" == "true" ]]; then
   optional_agents=("architecture-reviewer" "security-reviewer" "test-writer" "scout" "scribe")
   for agent in "${optional_agents[@]}"; do
-    if [[ -f ".claude/agents/${agent}.md" ]]; then
-      _add_check "agent_${agent}" "pass" "found .claude/agents/${agent}.md"
+    _agent_found=""
+    for loc in ".claude/agents/${agent}.md" "$HOME/.claude/agents/${agent}.md"; do
+      if [[ -f "$loc" ]]; then
+        _agent_found="$loc"
+        break
+      fi
+    done
+    if [[ -n "$_agent_found" ]]; then
+      _add_check "agent_${agent}" "pass" "found $_agent_found"
     else
-      _add_check "agent_${agent}" "warn" "missing optional .claude/agents/${agent}.md"
+      _add_check "agent_${agent}" "warn" "missing optional ${agent}.md (checked project and home)"
     fi
   done
 fi

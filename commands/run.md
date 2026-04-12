@@ -14,6 +14,9 @@ arguments:
   - name: "--spec-dir"
     description: "Path to spec directory (required for task mode)"
     required: false
+  - name: "--strict"
+    description: "Require [PRD] marker on issues; fail instead of warn when missing"
+    required: false
   - name: "--dry-run"
     description: "Validate inputs and show plan without executing"
     required: false

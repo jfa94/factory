@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Post structured comments and labels to GitHub issues.
-# Usage: pipeline-gh-comment <issue-number> <comment-type> [--update] [--data <json>]
+# Usage: pipeline-gh-comment <issue-number> <comment-type> [--repo owner/name] [--update] [--data <json>]
 # Comment types: spec-failure, run-summary, ci-escalation, conflict-escalated
 # Exit: 0=success, 1=failure
 
@@ -20,14 +20,26 @@ fi
 
 update=false
 data="{}"
+repo_override=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --update) update=true; shift ;;
     --data) data="$2"; shift 2 ;;
+    --repo) repo_override="$2"; shift 2 ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
+
+# Resolve owner/repo explicitly
+if [[ -n "$repo_override" ]]; then
+  REPO_SLUG="$repo_override"
+elif REPO_SLUG=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) && [[ -n "$REPO_SLUG" ]]; then
+  :
+else
+  log_error "could not resolve repository — pass --repo owner/name or run from a git checkout"
+  exit 1
+fi
 
 # Validate comment type
 case "$comment_type" in
@@ -151,18 +163,18 @@ body=$(_build_body)
 # Add labels for specific types
 case "$comment_type" in
   spec-failure)
-    gh issue edit "$issue" --add-label "needs-manual-spec" 2>/dev/null || \
+    gh issue edit "$issue" --repo "$REPO_SLUG" --add-label "needs-manual-spec" 2>/dev/null || \
       log_warn "could not add label 'needs-manual-spec' (may not exist)"
     ;;
 esac
 
 # Check for existing comment to update
 if [[ "$update" == "true" ]]; then
-  existing_id=$(gh api "repos/{owner}/{repo}/issues/${issue}/comments" \
+  existing_id=$(gh api "repos/${REPO_SLUG}/issues/${issue}/comments" \
     --jq "[.[] | select(.body | contains(\"${MARKER}\")) | .id] | first // empty" 2>/dev/null)
 
   if [[ -n "$existing_id" ]]; then
-    gh api "repos/{owner}/{repo}/issues/comments/${existing_id}" \
+    gh api "repos/${REPO_SLUG}/issues/comments/${existing_id}" \
       -X PATCH \
       -f body="$body" &>/dev/null
     log_info "updated existing $comment_type comment on issue $issue"
@@ -172,7 +184,7 @@ if [[ "$update" == "true" ]]; then
 fi
 
 # Post new comment
-gh issue comment "$issue" --body "$body" &>/dev/null || {
+gh issue comment "$issue" --repo "$REPO_SLUG" --body "$body" &>/dev/null || {
   log_error "failed to post comment on issue $issue"
   exit 1
 }
