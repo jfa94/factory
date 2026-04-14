@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Phase 1 verification tests
+# state.sh — pipeline-state, pipeline-init, pipeline-circuit-breaker,
+# pipeline-lock, stop-gate, and atomic_write primitives.
 set -euo pipefail
 
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
-export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
+export PATH="$(cd "$(dirname "$0")/.." && pwd):$PATH"
 
 pass=0
 fail=0
@@ -734,7 +735,7 @@ oi_sandbox=""
 echo ""
 echo "=== task_06_02: stop-gate handles all task statuses ==="
 
-stop_gate_hook="$(cd "$(dirname "$0")/.." && pwd)/hooks/stop-gate.sh"
+stop_gate_hook="$(cd "$(dirname "$0")/../.." && pwd)/hooks/stop-gate.sh"
 
 # Helper: prepare a run with a fresh state, point current at it, invoke the
 # stop-gate, read back final status. Uses a private CLAUDE_PLUGIN_DATA per call.
@@ -803,7 +804,7 @@ assert_eq "stop-gate all done → completed" "completed" "$run_status"
 echo ""
 echo "=== task_06_03: subagent-stop-gate iterates all executing tasks ==="
 
-subagent_hook="$(cd "$(dirname "$0")/.." && pwd)/hooks/subagent-stop-gate.sh"
+subagent_hook="$(cd "$(dirname "$0")/../.." && pwd)/hooks/subagent-stop-gate.sh"
 
 _mk_task_worktree() {
   local dir="$1" branch="$2" with_commits_ahead="$3"
@@ -904,7 +905,7 @@ sandbox=""
 echo ""
 echo "=== task_13_04: atomic_write fsync ==="
 
-source "$(dirname "$0")/pipeline-lib.sh"
+source "$(dirname "$0")/../pipeline-lib.sh"
 
 aw_dir=$(mktemp -d)
 atomic_write "$aw_dir/test.json" '{"key":"value"}'

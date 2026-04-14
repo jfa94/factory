@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Master test runner — invokes every bin/tests/*.sh suite in order and
+# aggregates pass/fail totals. Individual suites are self-contained:
+# each one sets its own CLAUDE_PLUGIN_DATA tmpdir and PATH.
+#
+# Usage:
+#   bin/test                  # run all suites
+#   bin/test state hooks      # run a subset by basename (without .sh)
+#   bin/test --list           # print suite names and exit
+set -euo pipefail
+
+TESTS_DIR="$(cd "$(dirname "$0")/tests" && pwd)"
+
+# Default order: primitives → components → integration. Failures in earlier
+# suites usually explain later ones, so keep this sequence stable.
+SUITES=(
+  state
+  spec-intake
+  task-prep
+  branching
+  cleanup
+  hooks
+  audit-hooks
+  routing
+  orchestrator
+  config
+  integration
+)
+
+if [[ "${1:-}" == "--list" ]]; then
+  printf '%s\n' "${SUITES[@]}"
+  exit 0
+fi
+
+if [[ $# -gt 0 ]]; then
+  requested=("$@")
+else
+  requested=("${SUITES[@]}")
+fi
+
+total_pass=0
+total_fail=0
+failed_suites=()
+
+for name in "${requested[@]}"; do
+  suite="$TESTS_DIR/$name.sh"
+  if [[ ! -f "$suite" ]]; then
+    echo "ERROR: no such suite: $name (looked for $suite)" >&2
+    exit 2
+  fi
+  echo ""
+  echo "################################"
+  echo "# $name"
+  echo "################################"
+  # Run in a subshell so one suite's `set -e` or env exports don't leak.
+  if output=$(bash "$suite" 2>&1); then
+    ec=0
+  else
+    ec=$?
+  fi
+  printf '%s\n' "$output"
+  # Parse the trailing "Results: N passed, M failed" / "Passed: N" line.
+  p=$(printf '%s' "$output" | grep -oE '(Passed|passed):?[[:space:]]+[0-9]+' | tail -1 | grep -oE '[0-9]+' || echo 0)
+  f=$(printf '%s' "$output" | grep -oE '(Failed|failed):?[[:space:]]+[0-9]+' | tail -1 | grep -oE '[0-9]+' || echo 0)
+  total_pass=$((total_pass + p))
+  total_fail=$((total_fail + f))
+  if (( ec != 0 || f > 0 )); then
+    failed_suites+=("$name")
+  fi
+done
+
+echo ""
+echo "================================"
+echo "Aggregate: $total_pass passed, $total_fail failed across ${#requested[@]} suites"
+if (( ${#failed_suites[@]} > 0 )); then
+  echo "Failed suites: ${failed_suites[*]}"
+  exit 1
+fi
+echo "================================"

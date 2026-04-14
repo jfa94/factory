@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Phase 3 verification tests
+# task-prep.sh — pipeline-classify-task, pipeline-classify-risk,
+# pipeline-validate-tasks (DAG + cycles), pipeline-branch naming,
+# pipeline-scaffold, pipeline-build-prompt.
 set -euo pipefail
 
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
-export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
+export PATH="$(cd "$(dirname "$0")/.." && pwd):$PATH"
 
 pass=0
 fail=0

@@ -93,7 +93,7 @@ Alternatively, tackle a whole plan in a single session:
 Read remediation/plans/02-quota-rate-limiting.md and the tasks in
 remediation/tasks.json with plan_id=02-quota-rate-limiting. Execute all
 tasks in dependency order. After each task: write the regression tests,
-run the full phase-test suite (bin/test-phase*.sh), update tasks.json,
+run the full test suite (`bin/test` or `bin/tests/*.sh`), update tasks.json,
 and commit.
 ```
 
@@ -111,9 +111,7 @@ left off. Check git log and the working tree for prior work.
 
 **Every task MUST include regression tests.** The `tests_to_write` field on each task is mandatory, not optional. Reviewers found that the existing 411 tests are purely structural and do not exercise failure modes. Each bug fix in this remediation plan must ship with a test that would fail against the buggy code and pass against the fix.
 
-Tests live in the existing `bin/test-phase*.sh` suites. When a fix touches a file, add the regression test to the corresponding phase suite (phase 1 = state/lock/circuit-breaker, phase 2 = gh-comment/fetch/validate, phase 3 = build-prompt/classify, phase 4 = branch/wait-pr, phase 5 = cleanup/summary, phase 6 = parse-review/coverage, phase 7 = quota/router, phase 8 = orchestrator.md, phase 9 = configure/templates/mcp).
-
-Integration tests (plan 12) go in a new `bin/test-integration.sh`.
+Tests live in `bin/tests/*.sh`, organized by domain: `state.sh`, `spec-intake.sh`, `task-prep.sh`, `branching.sh`, `cleanup.sh`, `hooks.sh`, `routing.sh`, `orchestrator.sh`, `config.sh`, `audit-hooks.sh`. Integration tests live in `bin/tests/integration.sh`. The `bin/test` runner invokes the full suite.
 
 ## Priority ordering
 

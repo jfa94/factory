@@ -5,10 +5,10 @@
 # task_09_01: parallel bumps don't collide
 # task_09_02: hash chain links every entry and verify_chain detects tampering
 # task_09_03: branch-protection inspects repo state, not command substrings
-# task_09_04: covered by templates/settings.autonomous.json (see test-phase9.sh)
+# task_09_04: covered by templates/settings.autonomous.json (see tests/config.sh)
 set -euo pipefail
 
-PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUN_TRACKER="$PLUGIN_ROOT/hooks/run-tracker.sh"
 BRANCH_PROTECTION="$PLUGIN_ROOT/hooks/branch-protection.sh"
 

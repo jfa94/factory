@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Phase 2 verification tests
+# spec-intake.sh — pipeline-fetch-prd, pipeline-validate-spec,
+# pipeline-validate, pipeline-gh-comment, cross-location skill discovery.
 set -euo pipefail
 
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
-export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
+export PATH="$(cd "$(dirname "$0")/.." && pwd):$PATH"
 
 pass=0
 fail=0
@@ -441,7 +442,7 @@ esac
 MOCK_GH2
 chmod +x "$MOCK_DIR2/gh"
 OLD_PATH="$PATH"
-export PATH="$MOCK_DIR2:$(dirname "$0"):$OLD_PATH"
+export PATH="$MOCK_DIR2:$(cd "$(dirname "$0")/.." && pwd):$OLD_PATH"
 set +e
 pipeline-gh-comment 42 spec-failure --data '{"reason":"test","run_id":"run-t02"}' >/dev/null 2>&1
 exit_code=$?

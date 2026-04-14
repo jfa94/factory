@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Phase 8 verification tests — pipeline-orchestrator agent structural validation
+# orchestrator.sh — structural validation of agents/pipeline-orchestrator.md:
+# frontmatter, required sections, script/agent references, spec-handoff
+# contract, execution-loop shape.
 set -euo pipefail
 
-PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ORCH="$PLUGIN_ROOT/agents/pipeline-orchestrator.md"
 SPECGEN="$PLUGIN_ROOT/agents/spec-generator.md"
 

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Phase 6 verification tests
+# hooks.sh — hooks.json wiring, branch-protection hook, run-tracker hook,
+# stop-gate / subagent-stop-gate hooks, pipeline-quality-gate,
+# pipeline-coverage-gate tolerance, log_metric retention.
 set -euo pipefail
 
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
-HOOKS_DIR="$(cd "$(dirname "$0")/../hooks" && pwd)"
-BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOOKS_DIR="$(cd "$(dirname "$0")/../../hooks" && pwd)"
+BIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="$BIN_DIR:$PATH"
 
 pass=0
@@ -590,7 +592,7 @@ ln -s "$obs_run_dir" "$CLAUDE_PLUGIN_DATA/runs/current"
 
 # --- Case A: log_metric with auditLog=true writes a JSONL line ---
 rm -f "$CLAUDE_PLUGIN_DATA/config.json"
-( source "$(dirname "$0")/pipeline-lib.sh"; log_metric "task.start" "task_id=\"t_01\"" "rank=2" )
+( source "$(dirname "$0")/../pipeline-lib.sh"; log_metric "task.start" "task_id=\"t_01\"" "rank=2" )
 line_count=$(wc -l < "$obs_run_dir/metrics.jsonl" | tr -d ' ')
 assert_eq "log_metric writes 1 line when auditLog default (true)" "1" "$line_count"
 event=$(head -1 "$obs_run_dir/metrics.jsonl" | jq -r '.event')
@@ -603,7 +605,7 @@ assert_eq "log_metric numeric k=v parsed as JSON number" "2" "$rank"
 # --- Case B: auditLog=false → no new lines ---
 printf '{"observability":{"auditLog":false}}' > "$CLAUDE_PLUGIN_DATA/config.json"
 before=$(wc -l < "$obs_run_dir/metrics.jsonl" | tr -d ' ')
-( source "$(dirname "$0")/pipeline-lib.sh"; log_metric "task.end" "status=\"done\"" )
+( source "$(dirname "$0")/../pipeline-lib.sh"; log_metric "task.end" "status=\"done\"" )
 after=$(wc -l < "$obs_run_dir/metrics.jsonl" | tr -d ' ')
 assert_eq "auditLog=false disables log_metric" "$before" "$after"
 

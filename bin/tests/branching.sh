@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Phase 4 verification tests
+# branching.sh — pipeline-detect-reviewer, pipeline-parse-review,
+# pipeline-coverage-gate, pipeline-branch staging/commit-spec/task-commit,
+# pipeline-wait-pr rebase + 3-way merge behavior.
 set -euo pipefail
 
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
-export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
+export PATH="$(cd "$(dirname "$0")/.." && pwd):$PATH"
 
 pass=0
 fail=0
@@ -741,7 +743,7 @@ orig_cwd=$(pwd)
 # REBASE_HELPERS_START/END markers) so we can unit-test them without
 # running the full main loop or requiring a gh mock. The extracted file
 # exports two functions: _resolve_safe_conflict and _rebase_with_retries.
-_PIPELINE_WAIT_PR_SRC="$(cd "$(dirname "$0")" && pwd)/pipeline-wait-pr"
+_PIPELINE_WAIT_PR_SRC="$(cd "$(dirname "$0")/.." && pwd)/pipeline-wait-pr"
 _WAIT_PR_HELPERS=$(mktemp)
 {
   # Stubs for the few log helpers the functions reference.
@@ -1137,9 +1139,9 @@ echo ""
 echo "=== Skill & Agent files exist ==="
 
 assert_eq "review-protocol SKILL.md exists" "true" \
-  "$([[ -f "$(dirname "$0")/../skills/review-protocol/SKILL.md" ]] && echo true || echo false)"
+  "$([[ -f "$(dirname "$0")/../../skills/review-protocol/SKILL.md" ]] && echo true || echo false)"
 assert_eq "task-reviewer.md exists" "true" \
-  "$([[ -f "$(dirname "$0")/../agents/task-reviewer.md" ]] && echo true || echo false)"
+  "$([[ -f "$(dirname "$0")/../../agents/task-reviewer.md" ]] && echo true || echo false)"
 
 # ============================================================
 echo ""

@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Phase 7 verification tests
+# routing.sh — pipeline-quota-check (headers, CLI/oauth removed branches),
+# pipeline-model-router (limits, ollama fallback, input validation),
+# pipeline-lib window math helpers.
 set -euo pipefail
 
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
-export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
+export PATH="$(cd "$(dirname "$0")/.." && pwd):$PATH"
 
 # Source pipeline-lib.sh up front so the window-math helper tests below can
 # call its internal functions directly. Must come before any function that
 # installs a RETURN trap, since RETURN traps fire on source completion.
-source "$(cd "$(dirname "$0")" && pwd)/pipeline-lib.sh"
+source "$(cd "$(dirname "$0")/.." && pwd)/pipeline-lib.sh"
 
 pass=0
 fail=0
@@ -329,7 +331,7 @@ assert_exit "auto mode does not invoke security command" 0 _run_auto_without_oau
 
 # (3) Grep guard: _check_oauth function name must not appear in the script
 # anywhere except inside the removal-rationale comment block at the top.
-_script="$(cd "$(dirname "$0")" && pwd)/pipeline-quota-check"
+_script="$(cd "$(dirname "$0")/.." && pwd)/pipeline-quota-check"
 oauth_refs=$(grep -c '_check_oauth' "$_script" || true)
 assert_eq "_check_oauth symbol fully removed" "0" "$oauth_refs"
 
@@ -615,7 +617,7 @@ assert_eq "auto failure produces no stdout JSON" "" "$stdout"
 assert_exit "--method cli rejected (removed)" 1 pipeline-quota-check --method cli
 
 # (5) Grep guard: the _check_cli symbol must not reappear in the script.
-_script="$(cd "$(dirname "$0")" && pwd)/pipeline-quota-check"
+_script="$(cd "$(dirname "$0")/.." && pwd)/pipeline-quota-check"
 cli_refs=$(grep -c '_check_cli' "$_script" || true)
 assert_eq "_check_cli symbol fully removed" "0" "$cli_refs"
 

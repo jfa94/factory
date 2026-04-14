@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Phase 5 verification tests
+# cleanup.sh — pipeline-wait-pr arg validation, pipeline-summary,
+# pipeline-cleanup (archive, branch delete gating, spec-dir sandbox guards,
+# symlink-escape refusal).
 set -euo pipefail
 
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
-export PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
+export PATH="$(cd "$(dirname "$0")/.." && pwd):$PATH"
 
 # Mock gh for --close-issues tests and PR-state gating tests.
 #
@@ -731,7 +733,7 @@ echo "=== assert_in_plugin_data helper (task_16_03) ==="
 _assert_helper() {
   local path="$1"
   (
-    source "$(dirname "$0")/pipeline-lib.sh" 2>/dev/null
+    source "$(dirname "$0")/../pipeline-lib.sh" 2>/dev/null
     # pipeline-lib.sh enables `set -euo pipefail`; disable again so a returning-1
     # helper does not terminate the subshell before we can capture $?.
     set +e

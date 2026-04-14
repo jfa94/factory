@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Integration tests — exercise multiple pipeline-* scripts together with only
 # external systems (gh, claude, ollama, network) mocked. Plan 12 / tasks
-# 12_01..12_04. Run: bash bin/test-integration.sh
+# 12_01..12_04. Run: bash bin/tests/integration.sh
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN_DIR="$REPO_ROOT/bin"
 ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dark-factory-integration.XXXXXX")"
 trap '_cleanup' EXIT INT TERM

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Phase 9 verification tests — configure command, templates, MCP server
+# config.sh — plugin.json userConfig schema, commands/configure.md,
+# templates (settings.autonomous, stryker, dep-cruiser, package.scaffold),
+# commands/run.md materialization, .mcp.json, pipeline-metrics server.
 set -euo pipefail
 
-PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 pass=0
 fail=0
@@ -287,7 +289,7 @@ for legacy in 'circuitBreaker.maxTasks' 'parallel.maxConcurrent' 'holdout.percen
   hits=$(grep -RIl --exclude-dir=remediation --exclude-dir=.git \
     --exclude='03-components.md' --exclude='01-prd.md' \
     --exclude-dir=node_modules \
-    -F "$legacy" "$PLUGIN_ROOT" 2>/dev/null | grep -v test-phase9.sh || true)
+    -F "$legacy" "$PLUGIN_ROOT" 2>/dev/null | grep -v 'tests/config.sh' || true)
   if [[ -z "$hits" ]]; then
     echo "  PASS: no live reference to legacy key $legacy"
     pass=$((pass + 1))
