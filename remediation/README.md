@@ -26,7 +26,8 @@ remediation/
     ├── 13-minor-cleanups.md
     ├── 14-documentation-honesty.md
     ├── 15-turn-budget-review.md
-    └── 15-turn-budget-impl.md
+    ├── 15-turn-budget-impl.md
+    └── 16-runnable-posture.md
 ```
 
 ## Task schema
@@ -118,12 +119,13 @@ Integration tests (plan 12) go in a new `bin/test-integration.sh`.
 
 Execute plans roughly in this order. Later plans depend on earlier ones.
 
-| Phase                       | Plans              | Why                                                                   |
-| --------------------------- | ------------------ | --------------------------------------------------------------------- |
-| **P0 — Block any real run** | 01, 02, 03, 04     | Injection, broken quota, broken spec handoff, missing safety template |
-| **P1 — Feature parity**     | 05, 06, 07, 08, 09 | Branch handling, state/resume, orchestrator flow, config, hooks       |
-| **P1 — Test coverage**      | 12                 | Integration tests for all P0/P1 fixes                                 |
-| **P2 — Polish**             | 10, 11, 13, 14, 15 | Scaffolding, validator, cleanups, docs, turn-budget analysis          |
+| Phase                        | Plans              | Why                                                                           |
+| ---------------------------- | ------------------ | ----------------------------------------------------------------------------- |
+| **P0 — Block any real run**  | 01, 02, 03, 04     | Injection, broken quota, broken spec handoff, missing safety template         |
+| **P1 — Feature parity**      | 05, 06, 07, 08, 09 | Branch handling, state/resume, orchestrator flow, config, hooks               |
+| **P1 — Test coverage**       | 12                 | Integration tests for all P0/P1 fixes                                         |
+| **P2 — Polish**              | 10, 11, 13, 14, 15 | Scaffolding, validator, cleanups, docs, turn-budget analysis                  |
+| **P0/P1 — Runnable posture** | 16                 | Safety hooks, config alignment, observability, scaffold command (post-review) |
 
 ## Finding reference
 

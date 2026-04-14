@@ -133,6 +133,98 @@ current_run_id() {
   basename "$dir"
 }
 
+# --- Observability ---
+
+# Append a structured JSONL metric line to the current run's metrics.jsonl.
+# No-op when observability.auditLog is false or the current run dir is missing.
+# Usage: log_metric <event> [key1=val1 key2=val2 ...]
+# Values that parse as JSON (numbers, booleans, arrays) pass through verbatim;
+# anything else is embedded as a JSON string.
+log_metric() {
+  local event="$1"; shift || true
+  [[ -z "$event" ]] && return 0
+
+  # Read the boolean directly. jq's `//` coalescing would swallow a configured
+  # `false` (false // true → true), so handle null separately via `if`.
+  local audit_enabled="true"
+  local config_file="${CLAUDE_PLUGIN_DATA}/config.json"
+  if [[ -f "$config_file" ]]; then
+    audit_enabled=$(jq -r '.observability.auditLog | if . == null then "true" else tostring end' "$config_file" 2>/dev/null || printf 'true')
+  fi
+  [[ "$audit_enabled" != "true" ]] && return 0
+
+  local run_dir
+  run_dir=$(current_run_dir 2>/dev/null) || return 0
+  local metrics_file="$run_dir/metrics.jsonl"
+  [[ -f "$metrics_file" ]] || return 0
+
+  local run_id
+  run_id=$(basename "$run_dir")
+
+  local jq_args=(-n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                    --arg run_id "$run_id" \
+                    --arg event "$event")
+  local filter='{ts:$ts, run_id:$run_id, event:$event}'
+  local pair key val parsed
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    val="${pair#*=}"
+    [[ -z "$key" || "$key" == "$pair" ]] && continue
+    if parsed=$(printf '%s' "$val" | jq -e . 2>/dev/null); then
+      jq_args+=(--argjson "$key" "$parsed")
+    else
+      jq_args+=(--arg "$key" "$val")
+    fi
+    filter+=" + {$key: \$$key}"
+  done
+
+  jq -c "${jq_args[@]}" "$filter" >> "$metrics_file" 2>/dev/null || true
+}
+
+# --- Safety guards ---
+
+# Refuse a path if it is empty, a known system root, outside CLAUDE_PLUGIN_DATA,
+# or resolves via realpath to a location outside CLAUDE_PLUGIN_DATA (symlink
+# escape). Used before every destructive `rm -rf` in pipeline scripts.
+# Usage: assert_in_plugin_data "$path" || exit 1
+assert_in_plugin_data() {
+  local path="$1"
+  if [[ -z "$path" ]]; then
+    log_error "refuse: empty path"
+    return 1
+  fi
+  case "$path" in
+    /|/bin|/etc|/home|/root|/tmp|/usr|/var|"$HOME") log_error "refuse: system path: $path"; return 1 ;;
+  esac
+  local base
+  base=$(_realpath_m "${CLAUDE_PLUGIN_DATA:-}") || {
+    log_error "refuse: cannot resolve CLAUDE_PLUGIN_DATA"
+    return 1
+  }
+  local resolved
+  resolved=$(_realpath_m "$path") || {
+    log_error "refuse: cannot resolve path: $path"
+    return 1
+  }
+  if [[ "$resolved" != "$base" && "$resolved" != "$base"/* ]]; then
+    log_error "refuse: $resolved is outside $base"
+    return 1
+  fi
+  return 0
+}
+
+# Portable `realpath -m` shim. GNU coreutils supports `-m` (resolve even when
+# components don't exist); macOS realpath does not. Fall back to Python.
+_realpath_m() {
+  local p="$1"
+  [[ -z "$p" ]] && return 1
+  if realpath -m "$p" 2>/dev/null; then return 0; fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$p" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
 # --- Rate-limit window math ---
 
 # Parse an ISO 8601 UTC timestamp to epoch seconds. Portable across GNU

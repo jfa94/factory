@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Deterministic gate between pipeline stages. Compares the configured
+# humanReviewLevel against a stage threshold and either proceeds (exit 0)
+# or pauses the run awaiting human action (exit 42).
+#
+# Usage: pipeline-human-gate <run-id> <stage>
+#   stage = spec | pre-execute | post-execute | pre-merge
+#
+# Stage thresholds (gate trips when humanReviewLevel >= threshold):
+#   pre-merge     -> 1   (default level 1 gate — PR approval)
+#   post-execute  -> 2   (review checkpoint)
+#   spec          -> 3   (spec approval)
+#   pre-execute   -> 4   (full per-task supervision)
+#
+# Exit 0  = gate passed, proceed
+# Exit 42 = gate tripped, run marked awaiting_human, GH comment posted
+# Exit 1  = argument error
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+run_id="${1:?missing run-id}"
+stage="${2:?missing stage: spec|pre-execute|post-execute|pre-merge}"
+
+case "$stage" in
+  spec)          threshold=3 ;;
+  pre-execute)   threshold=4 ;;
+  post-execute)  threshold=2 ;;
+  pre-merge)     threshold=1 ;;
+  *)
+    log_error "invalid stage: $stage (expected spec|pre-execute|post-execute|pre-merge)"
+    exit 1
+    ;;
+esac
+
+level=$(read_config '.humanReviewLevel' '1')
+# Normalise to integer; missing/invalid falls back to default 1.
+if ! [[ "$level" =~ ^[0-9]+$ ]]; then
+  level=1
+fi
+
+if (( level < threshold )); then
+  json_output gate "passed" stage "$stage" level "$level" threshold "$threshold"
+  exit 0
+fi
+
+# Gate tripped — pause the run. Mark run-level status as awaiting_human.
+pipeline-state write "$run_id" '.status' '"awaiting_human"' >/dev/null 2>&1 || \
+  log_warn "could not update run status to awaiting_human"
+
+# Post a human-gate comment on the run's primary issue (if recorded).
+state_file="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/state.json"
+if [[ -f "$state_file" ]]; then
+  issue_number=$(jq -r '.input.issue_numbers[0] // empty' "$state_file" 2>/dev/null)
+  if [[ -n "$issue_number" ]]; then
+    data=$(jq -n \
+      --arg run_id "$run_id" \
+      --arg stage "$stage" \
+      --argjson level "$level" \
+      --argjson threshold "$threshold" \
+      '{run_id:$run_id, stage:$stage, humanReviewLevel:$level, threshold:$threshold}')
+    pipeline-gh-comment "$issue_number" human-gate --data "$data" >/dev/null 2>&1 || \
+      log_warn "could not post human-gate comment on issue $issue_number"
+  fi
+fi
+
+json_output gate "tripped" stage "$stage" level "$level" threshold "$threshold" action "awaiting_human"
+exit 42

@@ -55,13 +55,14 @@ If no specific setting was requested, show all settings grouped by category:
 
 ### Quality Gates
 
-| Setting                           | Current | Default                  | Description                                                   |
-| --------------------------------- | ------- | ------------------------ | ------------------------------------------------------------- |
-| `quality.holdoutPercent`          | -       | 20                       | Percentage of criteria to withhold (set 0 to disable holdout) |
-| `quality.holdoutPassRate`         | -       | 80                       | Minimum % of withheld criteria that must be satisfied         |
-| `quality.mutationScoreTarget`     | -       | 80                       | Minimum mutation score percentage                             |
-| `quality.mutationTestingTiers`    | -       | `["feature","security"]` | Risk tiers requiring mutation testing (empty array disables)  |
-| `quality.coverageMustNotDecrease` | -       | true                     | Block tasks that decrease test coverage                       |
+| Setting                                  | Current | Default                  | Description                                                        |
+| ---------------------------------------- | ------- | ------------------------ | ------------------------------------------------------------------ |
+| `quality.holdoutPercent`                 | -       | 20                       | Percentage of criteria to withhold (set 0 to disable holdout)      |
+| `quality.holdoutPassRate`                | -       | 80                       | Minimum % of withheld criteria that must be satisfied              |
+| `quality.mutationScoreTarget`            | -       | 80                       | Minimum mutation score percentage                                  |
+| `quality.mutationTestingTiers`           | -       | `["feature","security"]` | Risk tiers requiring mutation testing (empty array disables)       |
+| `quality.coverageMustNotDecrease`        | -       | true                     | Block tasks that decrease test coverage                            |
+| `quality.coverageRegressionTolerancePct` | -       | 0.5                      | Max coverage drop (percentage points) before regression gate fails |
 
 ### Local LLM (Ollama)
 
@@ -95,8 +96,8 @@ If the user specifies a setting to change:
    - `quality.holdoutPassRate`: integer 50-100
    - `quality.mutationScoreTarget`: integer 50-100
    - `quality.coverageMustNotDecrease`: boolean
-   - `localLlm.enabled`, `localLlm.useLiteLlm`: boolean
-   - `localLlm.ollamaUrl`, `localLlm.liteLlmUrl`: valid URL (starts with http)
+   - `localLlm.enabled`: boolean
+   - `localLlm.ollamaUrl`: valid URL (starts with http)
    - `localLlm.model`: non-empty string
    - `execution.defaultModel`: one of `haiku`, `sonnet`, `opus`
 

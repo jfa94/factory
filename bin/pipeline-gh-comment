@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Post structured comments and labels to GitHub issues.
 # Usage: pipeline-gh-comment <issue-number> <comment-type> [--repo owner/name] [--update] [--data <json>]
-# Comment types: spec-failure, run-summary, ci-escalation, conflict-escalated
+# Comment types: spec-failure, run-summary, ci-escalation, conflict-escalated, review-escalation, human-gate
 # Exit: 0=success, 1=failure
 
 source "$(dirname "$0")/pipeline-lib.sh"
@@ -43,7 +43,7 @@ fi
 
 # Validate comment type
 case "$comment_type" in
-  spec-failure|run-summary|ci-escalation|conflict-escalated) ;;
+  spec-failure|run-summary|ci-escalation|conflict-escalated|review-escalation|human-gate) ;;
   *) log_error "invalid comment type: $comment_type"; exit 1 ;;
 esac
 
@@ -70,6 +70,30 @@ The autonomous pipeline was unable to generate a valid spec from this PRD after 
 1. Review the PRD for clarity and completeness
 2. Run the pipeline again with \`/dark-factory:run prd --issue ${issue}\`
 3. Or create the spec manually and run \`/dark-factory:run task --spec-dir <path>\`
+
+---
+*Posted by dark-factory pipeline*"
+      ;;
+
+    human-gate)
+      local gate_run_id gate_stage gate_level gate_threshold
+      gate_run_id=$(printf '%s' "$data" | jq -r '.run_id // "unknown"')
+      gate_stage=$(printf '%s' "$data" | jq -r '.stage // "unknown"')
+      gate_level=$(printf '%s' "$data" | jq -r '.humanReviewLevel // 1')
+      gate_threshold=$(printf '%s' "$data" | jq -r '.threshold // 1')
+      body="${MARKER}
+## Pipeline Paused — Human Approval Required
+
+**Run:** \`${gate_run_id}\`
+**Stage:** \`${gate_stage}\`
+**humanReviewLevel:** ${gate_level} (threshold for this stage: ${gate_threshold})
+
+The pipeline reached a checkpoint that requires your approval because \`humanReviewLevel >= ${gate_threshold}\` for stage \`${gate_stage}\`.
+
+### Next Steps
+1. Inspect the run state under \`runs/${gate_run_id}/\` and the latest changes
+2. Approve by resuming: \`/dark-factory:run resume\`
+3. Or lower \`humanReviewLevel\` via \`/dark-factory:configure\` to let the pipeline proceed automatically in the future
 
 ---
 *Posted by dark-factory pipeline*"
@@ -123,6 +147,34 @@ ${log_excerpt}
 ### Next Steps
 1. Check the CI logs for the full error
 2. Fix the issue locally and push
+3. Resume the pipeline with \`/dark-factory:run resume\`
+
+---
+*Posted by dark-factory pipeline*"
+      ;;
+
+    review-escalation)
+      local run_id task_id review_attempts verdict reason
+      run_id=$(printf '%s' "$data" | jq -r '.run_id // "unknown"')
+      task_id=$(printf '%s' "$data" | jq -r '.task_id // "unknown"')
+      review_attempts=$(printf '%s' "$data" | jq -r '.review_attempts // 0')
+      verdict=$(printf '%s' "$data" | jq -r '.verdict // "unknown"')
+      reason=$(printf '%s' "$data" | jq -r '.reason // "adversarial reviewer blocked merge"')
+      body="${MARKER}
+## Review Escalation — Human Attention Required
+
+**Run:** \`${run_id}\`
+**Task:** \`${task_id}\`
+**Review attempts:** ${review_attempts}
+**Final verdict:** ${verdict}
+
+${reason}
+
+The adversarial reviewer could not be satisfied after the configured number of fix attempts, or returned a \`NEEDS_DISCUSSION\` verdict. This task has been marked \`needs_human_review\`.
+
+### Next Steps
+1. Inspect the full review transcripts under \`runs/${run_id}/reviews/${task_id}/\`
+2. Either hand-edit the task branch \`task/${task_id}\` and push a resolution, or re-scope the task in the PRD
 3. Resume the pipeline with \`/dark-factory:run resume\`
 
 ---

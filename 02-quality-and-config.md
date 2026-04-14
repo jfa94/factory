@@ -377,12 +377,37 @@ userConfig:
     default: true
     description: "Block tasks that decrease test coverage"
 
+  quality.coverageRegressionTolerancePct:
+    type: number
+    default: 0.5
+    min: 0
+    max: 10
+    description: "Max coverage drop (percentage points) before the regression gate fails. Default 0.5 absorbs measurement noise from branch/line count shifts. Not a minimum-coverage floor."
+
   # === Task Execution ===
   execution.defaultModel:
     type: string
     default: "sonnet"
     enum: ["haiku", "sonnet", "opus"]
     description: "Default model for task execution (overridden by complexity classification)"
+
+  execution.modelByTier.simple:
+    type: string
+    default: "haiku"
+    enum: ["haiku", "sonnet", "opus"]
+    description: "Model used for tasks classified as simple tier"
+
+  execution.modelByTier.medium:
+    type: string
+    default: "sonnet"
+    enum: ["haiku", "sonnet", "opus"]
+    description: "Model used for tasks classified as medium tier"
+
+  execution.modelByTier.complex:
+    type: string
+    default: "opus"
+    enum: ["haiku", "sonnet", "opus"]
+    description: "Model used for tasks classified as complex tier"
 
   execution.maxTurnsSimple:
     type: number
@@ -464,6 +489,22 @@ userConfig:
     min: 7
     max: 365
     description: "Days to retain metrics data"
+
+  # === Safety ===
+  safety.writeBlockedPaths:
+    type: array
+    default: []
+    description: "Glob patterns (bash globstar + extglob) that the PreToolUse write-protection hook must refuse. Empty by default — opt in per project by adding entries like `**/migrations/**` or `.env*`."
+
+  safety.useTruffleHog:
+    type: boolean
+    default: false
+    description: "When true, the secret-commit-guard hook runs `trufflehog filesystem --only-verified` before every `git commit` in addition to the built-in path + regex scans. Findings are filtered through safety.allowedSecretPatterns. If trufflehog is not installed the hook warns and continues with regex-only scanning."
+
+  safety.allowedSecretPatterns:
+    type: array
+    default: []
+    description: "Regex patterns for known-safe secret-like strings (e.g. Supabase anon keys). Path matches, content-regex hits, and TruffleHog findings whose raw value matches any pattern are filtered out before deciding whether to block a commit."
 ```
 
 ---
@@ -475,6 +516,7 @@ userConfig:
 Usage data comes from `unified-*` response headers saved to `${CLAUDE_PLUGIN_DATA}/last-headers.json` after each Claude API call. No separate OAuth API call is needed.
 
 **Header sources:**
+
 - Subscription users (Pro/Max): `anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`, `anthropic-ratelimit-unified-status`, `is_using_overage`
 - API key users: standard `anthropic-ratelimit-*` headers — 5h pacing only, no 7d tracking
 
@@ -551,11 +593,11 @@ Before each task-executor spawn:
 
 ### Model Recommendations
 
-| VRAM   | Model                          | Disk  | Quality                    | Use Case                                          |
-| ------ | ------------------------------ | ----- | -------------------------- | ------------------------------------------------- |
-| 8GB    | Qwen 2.5-Coder 7B              | 4.7GB | Good for simple tasks      | Routine-tier: rename, config changes, simple CRUD |
-| 16GB+  | Qwen 2.5-Coder 14B **(default)** | 9GB | Good for code gen + review | Routine + feature tasks                           |
-| 24GB+  | Qwen 2.5-Coder 32B             | 20GB  | Near cloud-quality         | Most routine and some feature tasks               |
+| VRAM  | Model                            | Disk  | Quality                    | Use Case                                          |
+| ----- | -------------------------------- | ----- | -------------------------- | ------------------------------------------------- |
+| 8GB   | Qwen 2.5-Coder 7B                | 4.7GB | Good for simple tasks      | Routine-tier: rename, config changes, simple CRUD |
+| 16GB+ | Qwen 2.5-Coder 14B **(default)** | 9GB   | Good for code gen + review | Routine + feature tasks                           |
+| 24GB+ | Qwen 2.5-Coder 32B               | 20GB  | Near cloud-quality         | Most routine and some feature tasks               |
 
 All sizes shown are Q4_K_M quantization (Ollama default). The 14B model uses ~10-12GB VRAM at inference — **16GB minimum** to allow headroom for KV cache and OS overhead. Configured via `localLlm.model`.
 
@@ -564,13 +606,15 @@ All sizes shown are Q4_K_M quantization (Ollama default). The 14B model uses ~10
 To run Ollama on a separate machine on the same network:
 
 **Server-side** (on the remote machine):
+
 ```bash
 OLLAMA_HOST=0.0.0.0:11434 ollama serve
 ```
 
 **Client-side** (in plugin userConfig):
+
 ```yaml
-localLlm.ollamaUrl: "http://192.168.1.50:11434"   # replace with server IP
+localLlm.ollamaUrl: "http://192.168.1.50:11434" # replace with server IP
 ```
 
 Verify connectivity: `curl http://<server-ip>:11434/api/tags`

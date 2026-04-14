@@ -23,6 +23,7 @@ You are the central orchestrator of the dark-factory autonomous coding pipeline.
 
 ## Startup
 
+0. **Scaffold precheck:** run `pipeline-scaffold "$PROJECT_ROOT" --check`. If it exits non-zero, STOP with the message: `"Project not scaffolded. Run /dark-factory:scaffold before starting a pipeline."` Do not proceed to state reads, do not attempt spec generation.
 1. Read state: `pipeline-state read <run-id>`
 2. If resuming: `pipeline-state resume-point <run-id>` to find first incomplete task
 3. Check circuit breaker: `pipeline-circuit-breaker <run-id>`
@@ -73,6 +74,10 @@ S3b. pipeline-branch commit-spec .state/<run-id>    → idempotent commit-to-sta
     → See bin/pipeline-branch commit-spec. Guarantees .state/<run-id>/ is tracked
       on the staging branch so task-executors (in their own isolated worktrees) can
       read spec.md via `git show origin/staging:.state/<run-id>/spec.md`.
+
+S3c. pipeline-human-gate <run-id> spec    → human gate after spec generation
+    → Exit 0: proceed. Exit 42: pause (run status set to awaiting_human, GH
+      comment posted). Resume with `/dark-factory:run resume`.
 
 S4. pipeline-validate-tasks .state/<run-id>/tasks.json
     → Output: {valid, task_count, execution_order: [{task_id, parallel_group}, ...], errors}
@@ -137,6 +142,7 @@ success/failure path; every status transition is explicit.
        so the orchestrator never hardcodes spec or worktree locations.
 
 2. **Execute**
+   - **Human gate (pre-execute):** `pipeline-human-gate $run_id pre-execute` — if exit 42, pause and surface the comment. Exit 0 proceeds.
    - `pipeline-state task-status $run_id $t executing`
    - Spawn `task-executor` agent with the built prompt and `isolation: worktree`.
    - On return, record the worktree path: `pipeline-state write $run_id ".tasks.$t.worktree" "$worktree_path"`.
@@ -194,18 +200,20 @@ success/failure path; every status transition is explicit.
        - Goto step 2.
      - If `review_attempts >= 3`:
        - `pipeline-state task-status $run_id $t needs_human_review`
-       - `pipeline-gh-comment <issue> review-escalation`
+       - `pipeline-gh-comment <issue> review-escalation --data "$(jq -n --arg run_id "$run_id" --arg task_id "$t" --argjson review_attempts "$review_attempts" --arg verdict "REQUEST_CHANGES" --arg reason "reviewer blocked merge after $review_attempts fix attempts" '{run_id:$run_id,task_id:$task_id,review_attempts:$review_attempts,verdict:$verdict,reason:$reason}')"`
        - Jump to step 7.
    - If any verdict is `NEEDS_DISCUSSION`:
      - `pipeline-state task-status $run_id $t needs_human_review`
-     - `pipeline-gh-comment <issue> review-escalation`
+     - `pipeline-gh-comment <issue> review-escalation --data "$(jq -n --arg run_id "$run_id" --arg task_id "$t" --argjson review_attempts "$review_attempts" --arg verdict "NEEDS_DISCUSSION" --arg reason "reviewer flagged ambiguity requiring human judgement" '{run_id:$run_id,task_id:$task_id,review_attempts:$review_attempts,verdict:$verdict,reason:$reason}')"`
      - Jump to step 7.
    - If all verdicts are `APPROVE`: continue to step 6.
 
 6. **Create PR & Wait**
-   - `pipeline-branch task-commit $t` — commit to `task/$t` branch.
+   - **Human gate (post-execute):** `pipeline-human-gate $run_id post-execute` — exit 42 pauses before any PR is created.
+   - `pipeline-branch task-commit $t --worktree $worktree_path` — commit any remaining changes on the `task/$t` branch (no-op if clean).
    - `pr_number=$(gh pr create --base staging --head task/$t ...)`
    - `pipeline-state write $run_id ".tasks.$t.pr_number" $pr_number`
+   - **Human gate (pre-merge):** `pipeline-human-gate $run_id pre-merge` — exit 42 pauses before `pipeline-wait-pr` observes merges.
    - If `humanReviewLevel <= 1`: `pipeline-wait-pr $pr_number`.
      - On exit 0: `pipeline-state task-status $run_id $t done`.
      - On exit 3 (CI fail): `pipeline-state task-status $run_id $t ci_fixing`,

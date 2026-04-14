@@ -116,11 +116,36 @@
       "default": true,
       "description": "Block tasks that decrease test coverage"
     },
+    "quality.coverageRegressionTolerancePct": {
+      "type": "number",
+      "default": 0.5,
+      "min": 0,
+      "max": 10,
+      "description": "Maximum allowed drop in coverage (percentage points) before the regression gate fails. Default 0.5 absorbs measurement noise from branch/line count shifts. This is a regression tolerance, NOT a minimum-coverage floor — projects that want to enforce a floor should add a dedicated CI step."
+    },
     "execution.defaultModel": {
       "type": "string",
       "default": "sonnet",
       "enum": ["haiku", "sonnet", "opus"],
       "description": "Default model for task execution (overridden by complexity classification)"
+    },
+    "execution.modelByTier.simple": {
+      "type": "string",
+      "default": "haiku",
+      "enum": ["haiku", "sonnet", "opus"],
+      "description": "Model used for tasks classified as simple tier (low file count, no dependencies)"
+    },
+    "execution.modelByTier.medium": {
+      "type": "string",
+      "default": "sonnet",
+      "enum": ["haiku", "sonnet", "opus"],
+      "description": "Model used for tasks classified as medium tier"
+    },
+    "execution.modelByTier.complex": {
+      "type": "string",
+      "default": "opus",
+      "enum": ["haiku", "sonnet", "opus"],
+      "description": "Model used for tasks classified as complex tier (many files or deep dependency chains)"
     },
     "execution.maxTurnsSimple": {
       "type": "number",
@@ -158,16 +183,6 @@
       "default": "qwen2.5-coder:14b",
       "description": "Ollama model tag (auto-pulled on first use if not present on server)"
     },
-    "localLlm.useLiteLlm": {
-      "type": "boolean",
-      "default": false,
-      "description": "Use LiteLLM proxy for unified routing instead of direct Ollama"
-    },
-    "localLlm.liteLlmUrl": {
-      "type": "string",
-      "default": "http://localhost:4000",
-      "description": "LiteLLM proxy URL (only used if useLiteLlm is true)"
-    },
     "dependencies.prMergeTimeout": {
       "type": "number",
       "default": 45,
@@ -199,6 +214,21 @@
       "min": 7,
       "max": 365,
       "description": "Days to retain metrics data"
+    },
+    "safety.writeBlockedPaths": {
+      "type": "array",
+      "default": [],
+      "description": "Glob patterns (bash globstar + extglob) of file paths that the write-protection hook must block. Evaluated on PreToolUse Edit/Write/MultiEdit. Empty by default; add entries like \"**/migrations/**\" or \".env*\" to opt into blocking."
+    },
+    "safety.useTruffleHog": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, the secret-commit-guard hook runs `trufflehog filesystem --directory <cwd> --only-verified` before every git commit in addition to the built-in path and regex scans. Findings are filtered against safety.allowedSecretPatterns. If trufflehog is not installed the hook logs a warning and continues with regex-only scanning."
+    },
+    "safety.allowedSecretPatterns": {
+      "type": "array",
+      "default": [],
+      "description": "Regex patterns for known-safe secret-like strings (e.g. Supabase anon keys, Stripe publishable keys). Any path-scan hit or TruffleHog finding whose raw value matches one of these patterns is filtered out before deciding whether to block a commit."
     }
   }
 }

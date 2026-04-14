@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Branch and worktree management for pipeline.
 # Usage: pipeline-branch <action> [options]
-# Actions: staging-init, commit-spec, create, worktree-create, worktree-remove, exists, naming
+# Actions: staging-init, commit-spec, create, worktree-create, worktree-remove, exists, naming, task-commit
 # Exit: 0=success, 1=failure
 
 source "$(dirname "$0")/pipeline-lib.sh"
@@ -200,9 +200,61 @@ case "$action" in
     printf 'dark-factory/%s/%s' "$issue" "$slug"
     ;;
 
+  task-commit)
+    task_id="${1:?missing task-id}"
+    shift
+    worktree=""
+    message=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --worktree) worktree="$2"; shift 2 ;;
+        --message)  message="$2";  shift 2 ;;
+        *) log_error "unknown flag: $1"; exit 1 ;;
+      esac
+    done
+    if [[ -z "$worktree" ]]; then
+      log_error "task-commit requires --worktree <path>"
+      exit 1
+    fi
+    if [[ ! -d "$worktree" ]]; then
+      log_error "worktree path does not exist: $worktree"
+      exit 1
+    fi
+
+    expected_branch="task/${task_id}"
+    current_branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [[ "$current_branch" != "$expected_branch" ]]; then
+      log_error "worktree is on branch '$current_branch', expected '$expected_branch'"
+      exit 1
+    fi
+
+    git -C "$worktree" add -A 2>/dev/null || true
+
+    if git -C "$worktree" diff --cached --quiet 2>/dev/null; then
+      json_output action "task-commit" \
+                  result "no-op" \
+                  task_id "$task_id" \
+                  branch "$expected_branch"
+    else
+      if [[ -z "$message" ]]; then
+        message="chore(dark-factory): finalize task ${task_id}"
+      fi
+      git -C "$worktree" \
+          -c user.email=dark-factory@local \
+          -c user.name="dark-factory" \
+          commit -m "$message" --quiet
+      sha=$(git -C "$worktree" rev-parse HEAD)
+      json_output action "task-commit" \
+                  result "committed" \
+                  task_id "$task_id" \
+                  branch "$expected_branch" \
+                  sha "$sha"
+    fi
+    ;;
+
   *)
     log_error "unknown action: $action"
-    echo "Usage: pipeline-branch <staging-init|commit-spec|create|worktree-create|worktree-remove|exists|naming> [options]" >&2
+    echo "Usage: pipeline-branch <staging-init|commit-spec|create|worktree-create|worktree-remove|exists|naming|task-commit> [options]" >&2
     exit 1
     ;;
 esac

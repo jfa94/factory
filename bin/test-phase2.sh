@@ -323,6 +323,25 @@ assert_eq "ci-escalation comment posted" "created" "$action"
 type=$(echo "$output" | jq -r '.type')
 assert_eq "ci-escalation type correct" "ci-escalation" "$type"
 
+# Case 4: review-escalation comment type (regression for BUG-1)
+output=$(pipeline-gh-comment 42 review-escalation --data '{"run_id":"run-esc-01","task_id":"t_01","review_attempts":3,"verdict":"REQUEST_CHANGES"}' 2>/dev/null)
+action=$(echo "$output" | jq -r '.action')
+assert_eq "review-escalation comment posted" "created" "$action"
+type=$(echo "$output" | jq -r '.type')
+assert_eq "review-escalation type correct" "review-escalation" "$type"
+
+# Also NEEDS_DISCUSSION variant
+output=$(pipeline-gh-comment 42 review-escalation --data '{"run_id":"run-esc-02","task_id":"t_02","review_attempts":1,"verdict":"NEEDS_DISCUSSION"}' 2>/dev/null)
+action=$(echo "$output" | jq -r '.action')
+assert_eq "review-escalation NEEDS_DISCUSSION posted" "created" "$action"
+
+# Case 5: human-gate comment type (task_16_10)
+output=$(pipeline-gh-comment 42 human-gate --data '{"run_id":"run-hg-01","stage":"spec","humanReviewLevel":3,"threshold":3}' 2>/dev/null)
+action=$(echo "$output" | jq -r '.action')
+assert_eq "human-gate comment posted" "created" "$action"
+type=$(echo "$output" | jq -r '.type')
+assert_eq "human-gate type correct" "human-gate" "$type"
+
 echo ""
 echo "=== pipeline-validate: cross-location skill discovery ==="
 

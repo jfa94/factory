@@ -77,6 +77,17 @@ if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]] || [[ ! -L "$current_link" ]]; then
   exit 0
 fi
 
+# Respect observability.auditLog: when false, audit logging is disabled
+# project-wide. The hook must still exit 0 (never block), just no-op.
+# task_16_11 (GAP-2): this was previously unconditional.
+config_file="${CLAUDE_PLUGIN_DATA}/config.json"
+if [[ -f "$config_file" ]] && command -v jq >/dev/null 2>&1; then
+  audit_flag=$(jq -r '.observability.auditLog // true' "$config_file" 2>/dev/null)
+  if [[ "$audit_flag" == "false" ]]; then
+    exit 0
+  fi
+fi
+
 run_dir=$(readlink "$current_link" 2>/dev/null) || exit 0
 audit_file="$run_dir/audit.jsonl"
 

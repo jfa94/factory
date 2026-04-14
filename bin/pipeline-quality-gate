@@ -94,6 +94,9 @@ fi
 
 printf '%s\n' "$summary"
 
+log_metric "task.gate.quality" "task_id=\"$task_id\"" \
+  "status=\"$([[ "$overall_ok" == "true" ]] && echo pass || echo fail)\""
+
 if [[ "$overall_ok" == "true" ]]; then
   exit 0
 else

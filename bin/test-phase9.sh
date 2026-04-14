@@ -77,20 +77,25 @@ for key in \
   quality.mutationScoreTarget \
   quality.mutationTestingTiers \
   quality.coverageMustNotDecrease \
+  quality.coverageRegressionTolerancePct \
   execution.defaultModel \
+  execution.modelByTier.simple \
+  execution.modelByTier.medium \
+  execution.modelByTier.complex \
   execution.maxTurnsSimple \
   execution.maxTurnsMedium \
   execution.maxTurnsComplex \
   localLlm.enabled \
   localLlm.ollamaUrl \
   localLlm.model \
-  localLlm.useLiteLlm \
-  localLlm.liteLlmUrl \
   dependencies.prMergeTimeout \
   dependencies.pollInterval \
   observability.auditLog \
   observability.metricsExport \
-  observability.metricsRetentionDays; do
+  observability.metricsRetentionDays \
+  safety.writeBlockedPaths \
+  safety.useTruffleHog \
+  safety.allowedSecretPatterns; do
   has=$(jq --arg k "$key" -r '.userConfig | has($k) | tostring' "$PLUGIN_JSON")
   assert_eq "userConfig has $key" "true" "$has"
 done
@@ -114,6 +119,50 @@ assert_eq "observability.auditLog default = true" "true" "$default_audit_log"
 
 default_mutation_tiers=$(jq -rc '.userConfig["quality.mutationTestingTiers"].default' "$PLUGIN_JSON")
 assert_eq "quality.mutationTestingTiers default = [feature,security]" '["feature","security"]' "$default_mutation_tiers"
+
+# task_16_08: LiteLLM keys must be absent (feature was never implemented)
+for stripped in localLlm.useLiteLlm localLlm.liteLlmUrl; do
+  has=$(jq --arg k "$stripped" -r '.userConfig | has($k) | tostring' "$PLUGIN_JSON")
+  assert_eq "userConfig does NOT contain $stripped" "false" "$has"
+done
+
+# task_16_01: write-protection hook registered for Edit/Write/MultiEdit
+HOOKS_JSON="$PLUGIN_ROOT/hooks/hooks.json"
+wp_registered=$(jq -r '[.hooks.PreToolUse[] | select(.matcher | test("Edit|Write|MultiEdit")) | .hooks[] | .command] | map(select(test("write-protection"))) | length' "$HOOKS_JSON")
+assert_eq "hooks.json registers write-protection.sh on Edit/Write/MultiEdit" "1" "$wp_registered"
+
+# task_16_01: default blocklist is an empty array
+default_blocked=$(jq -rc '.userConfig["safety.writeBlockedPaths"].default' "$PLUGIN_JSON")
+assert_eq "safety.writeBlockedPaths default is []" "[]" "$default_blocked"
+
+# task_16_02: default secret-guard config (useTruffleHog=false, allowedSecretPatterns=[])
+default_truffle=$(jq -r '.userConfig["safety.useTruffleHog"].default' "$PLUGIN_JSON")
+assert_eq "safety.useTruffleHog default = false" "false" "$default_truffle"
+default_allowed=$(jq -rc '.userConfig["safety.allowedSecretPatterns"].default' "$PLUGIN_JSON")
+assert_eq "safety.allowedSecretPatterns default = []" "[]" "$default_allowed"
+
+# task_16_12: scaffold slash command + --check mode
+assert_eq "commands/scaffold.md exists" "true" \
+  "$([[ -f "$PLUGIN_ROOT/commands/scaffold.md" ]] && echo true || echo false)"
+assert_contains "scaffold.md has frontmatter description" "description:" "$PLUGIN_ROOT/commands/scaffold.md"
+assert_contains "scaffold.md mentions trufflehog" "trufflehog" "$PLUGIN_ROOT/commands/scaffold.md"
+
+# pipeline-scaffold --check: empty tempdir → exit 1
+scaffold_empty=$(mktemp -d)
+set +e
+"$PLUGIN_ROOT/bin/pipeline-scaffold" "$scaffold_empty" --check >/dev/null 2>&1
+check_empty_ec=$?
+set -e
+assert_eq "pipeline-scaffold --check in unscaffolded dir → exit 1" "1" "$check_empty_ec"
+
+# Run full scaffold then re-check
+"$PLUGIN_ROOT/bin/pipeline-scaffold" "$scaffold_empty" >/dev/null 2>&1 || true
+set +e
+"$PLUGIN_ROOT/bin/pipeline-scaffold" "$scaffold_empty" --check >/dev/null 2>&1
+check_full_ec=$?
+set -e
+assert_eq "pipeline-scaffold --check after scaffolding → exit 0" "0" "$check_full_ec"
+rm -rf "$scaffold_empty"
 
 # ============================================================
 echo "=== commands/configure.md ==="

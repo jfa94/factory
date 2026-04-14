@@ -134,6 +134,71 @@ assert_eq "ollama unreachable → wait" "wait" "$(printf '%s' "$output" | jq -r 
 
 # ============================================================
 echo ""
+echo "=== task_16_05: model-router /api/pull body built via jq (SEC-1) ==="
+
+# Inject a mock `curl` that captures the body to disk. Route both the /api/tags
+# HEAD/GET and the /api/pull POST through the mock so the router thinks Ollama
+# is reachable and triggers the pull path.
+capture_dir=$(mktemp -d)
+MOCK_CURL_DIR=$(mktemp -d)
+cat > "$MOCK_CURL_DIR/curl" <<MOCK
+#!/usr/bin/env bash
+# Args include the URL and, for POST, -d "<body>". Capture the -d value if
+# present and always exit 0 so the router continues the happy path.
+body=""
+url=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -d) body="\$2"; shift 2 ;;
+    http*) url="\$1"; shift ;;
+    *) shift ;;
+  esac
+done
+if [[ "\$url" == *"/api/tags"* ]]; then
+  # Return a tags response that does NOT include the injected model name
+  # so the router takes the "pull" branch.
+  printf '{"models":[]}'
+  exit 0
+fi
+if [[ "\$url" == *"/api/pull"* ]]; then
+  printf '%s' "\$body" > "$capture_dir/pull_body.json"
+  exit 0
+fi
+exit 0
+MOCK
+chmod +x "$MOCK_CURL_DIR/curl"
+
+# Fresh config with an adversarial model name that would break naive JSON
+# string interpolation (contains double quotes + backslash).
+printf '{"localLlm":{"enabled":true,"ollamaUrl":"http://localhost:19999","model":"llama3\\",\\"x\\":\\"y"}}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+# Clear the pull cache so the router actually calls /api/pull
+rm -f "$CLAUDE_PLUGIN_DATA/.ollama_pull_cache"
+
+quota_5h_over='{"five_hour":{"utilization":95,"hourly_threshold":60,"over_threshold":true,"window_hour":3},"seven_day":{"utilization":40,"daily_threshold":57,"over_threshold":false,"window_day":4},"billing_mode":"subscription","detection_method":"oauth"}'
+
+OLD_PATH="$PATH"
+export PATH="$MOCK_CURL_DIR:$PATH"
+pipeline-model-router --quota "$quota_5h_over" --tier routine >/dev/null 2>&1 || true
+export PATH="$OLD_PATH"
+
+# Body file must exist and be valid JSON with the full adversarial model name
+# round-tripped correctly via jq --arg.
+assert_eq "pull body file captured" "true" \
+  "$([[ -f "$capture_dir/pull_body.json" ]] && echo true || echo false)"
+
+assert_eq "pull body is valid JSON" "true" \
+  "$(jq empty "$capture_dir/pull_body.json" 2>/dev/null && echo true || echo false)"
+
+captured_name=$(jq -r '.name' "$capture_dir/pull_body.json" 2>/dev/null || echo "")
+assert_eq "pull body .name preserves adversarial model string" 'llama3","x":"y' "$captured_name"
+
+rm -rf "$capture_dir" "$MOCK_CURL_DIR"
+# Restore a safe config for later tests
+printf '{"localLlm":{"enabled":true,"ollamaUrl":"http://localhost:19999","model":"test-model"}}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+# ============================================================
+echo ""
 echo "=== pipeline-lib window math helpers (task_02_02) ==="
 
 # Window math helpers live in pipeline-lib.sh so both _check_oauth and the

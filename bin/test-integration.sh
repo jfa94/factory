@@ -195,7 +195,9 @@ test_resume_after_crash() {
   assert_eq "resume-point exits non-zero when no incomplete tasks remain" "1" "$rc"
 
   local final_done
-  final_done=$(pipeline-state read "$run_id" '.tasks | to_entries | map(select(.value.status == "done")) | length')
+  # pipeline-state read enforces an allowlist on the key (task_16_05 / OBS-1),
+  # so we fetch full state and pipe through jq for the aggregate query.
+  final_done=$(pipeline-state read "$run_id" | jq '[.tasks | to_entries[] | select(.value.status == "done")] | length')
   assert_eq "final state has 3 done tasks" "3" "$final_done"
 }
 

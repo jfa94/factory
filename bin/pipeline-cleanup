@@ -258,9 +258,51 @@ if [[ -d "$run_dir" ]]; then
     fi
   fi
 
-  # Remove the run directory
+  # Remove the run directory — guard against empty CLAUDE_PLUGIN_DATA,
+  # symlink escapes, and system paths via assert_in_plugin_data.
+  if ! assert_in_plugin_data "$run_dir"; then
+    log_error "refusing to rm run_dir (failed assert_in_plugin_data): $run_dir"
+    exit 1
+  fi
   rm -rf "$run_dir"
   log_info "archived run $run_id to $archive_dir"
+fi
+
+# --- task_16_11: retention trim on audit/metrics JSONL under archive ---
+# Drops lines older than observability.metricsRetentionDays (default 90).
+# Only runs when observability.auditLog is true (matches run-tracker gate).
+# Read the boolean directly so a configured `false` isn't swallowed by
+# jq's `// empty` default in read_config.
+audit_enabled="true"
+config_file="${CLAUDE_PLUGIN_DATA}/config.json"
+if [[ -f "$config_file" ]]; then
+  audit_enabled=$(jq -r '.observability.auditLog | if . == null then "true" else tostring end' "$config_file" 2>/dev/null || printf 'true')
+fi
+if [[ "$audit_enabled" == "true" ]]; then
+  retention_days=$(read_config '.observability.metricsRetentionDays' '90')
+  if [[ "$retention_days" =~ ^[0-9]+$ ]] && [[ "$retention_days" -gt 0 ]]; then
+    cutoff_epoch=$(( $(date +%s) - retention_days * 86400 ))
+    # Trim every audit.jsonl / metrics.jsonl under $CLAUDE_PLUGIN_DATA. Lines
+    # missing a .ts field are kept (can't judge their age safely).
+    while IFS= read -r -d '' jsonl; do
+      # Guard destructive edits via the same helper.
+      assert_in_plugin_data "$jsonl" || continue
+      tmp_trim=$(mktemp "${jsonl}.trim.XXXXXX")
+      jq -c --argjson cutoff "$cutoff_epoch" '
+        . as $row
+        | (.ts // "") as $t
+        | if $t == "" then $row
+          else
+            ($t | fromdateiso8601?) as $epoch
+            | if $epoch == null then $row
+              elif $epoch >= $cutoff then $row
+              else empty
+              end
+          end
+      ' "$jsonl" > "$tmp_trim" 2>/dev/null && mv -f "$tmp_trim" "$jsonl" \
+        || rm -f "$tmp_trim"
+    done < <(find "${CLAUDE_PLUGIN_DATA}" \( -name 'audit.jsonl' -o -name 'metrics.jsonl' \) -type f -print0 2>/dev/null || true)
+  fi
 fi
 
 # Output results

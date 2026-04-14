@@ -305,6 +305,59 @@ assert_eq "lock acquire without --pid succeeds" "acquired" "$action"
 pipeline-lock release >/dev/null 2>&1
 
 echo ""
+echo "=== task_16_04: pipeline-lock release PID ownership check ==="
+
+# Semantics: release refuses only when the lockfile PID is ALIVE and != caller.
+# A dead PID is an orphaned lock that any caller may clean up.
+
+# --- Case 1: lockfile held by an alive peer PID, release from caller refused ---
+# Use a backgrounded sleep as the "alive peer"; its PID is guaranteed alive
+# for the duration of this test case.
+sleep 30 &
+peer_pid=$!
+
+# Manually write lockfile as if the peer had acquired it
+printf '{"pid":%d,"timestamp":"2026-01-01T00:00:00Z"}' "$peer_pid" > "$CLAUDE_PLUGIN_DATA/pipeline.lock"
+
+set +e
+output=$(DARK_FACTORY_LOCK_TEST_PID=99991 pipeline-lock release 2>/dev/null)
+ec=$?
+set -e
+assert_eq "release from non-owner-alive-peer exits non-zero" "1" "$ec"
+action=$(printf '%s' "$output" | jq -r '.action')
+assert_eq "release from non-owner-alive-peer is refused" "refused" "$action"
+reason=$(printf '%s' "$output" | jq -r '.reason')
+assert_eq "refusal reason is not_owner" "not_owner" "$reason"
+assert_eq "lockfile intact after refused release" "true" \
+  "$([[ -f "$CLAUDE_PLUGIN_DATA/pipeline.lock" ]] && echo true || echo false)"
+
+# --- Case 2: release from the owner PID succeeds ---
+output=$(DARK_FACTORY_LOCK_TEST_PID=$peer_pid pipeline-lock release 2>/dev/null)
+action=$(printf '%s' "$output" | jq -r '.action')
+assert_eq "release from owner PID succeeds" "released" "$action"
+assert_eq "lockfile removed after owner release" "false" \
+  "$([[ -f "$CLAUDE_PLUGIN_DATA/pipeline.lock" ]] && echo true || echo false)"
+
+# Tear down the backgrounded peer
+kill "$peer_pid" 2>/dev/null || true
+wait "$peer_pid" 2>/dev/null || true
+
+# --- Case 3: release with no lockfile is idempotent (exit 0, action=noop) ---
+set +e
+output=$(pipeline-lock release 2>/dev/null)
+ec=$?
+set -e
+assert_eq "release with no lockfile is idempotent (exit 0)" "0" "$ec"
+action=$(printf '%s' "$output" | jq -r '.action')
+assert_eq "release with no lockfile reports noop" "noop" "$action"
+
+# --- Case 4: lockfile PID is dead → any caller may release (orphan cleanup) ---
+echo '{"pid":77777,"timestamp":"2026-01-01T00:00:00Z"}' > "$CLAUDE_PLUGIN_DATA/pipeline.lock"
+output=$(DARK_FACTORY_LOCK_TEST_PID=88888 pipeline-lock release 2>/dev/null)
+action=$(printf '%s' "$output" | jq -r '.action')
+assert_eq "dead-holder lock is released by any caller" "released" "$action"
+
+echo ""
 echo "=== task_01_01: pipeline-state write injection hardening ==="
 
 # Injection attempts must be rejected (exit non-zero)
@@ -335,6 +388,117 @@ assert_exit "write accepts array-index path" 0 \
 
 val=$(pipeline-state read "run-test-001" '.spec.rounds[0]')
 assert_eq "setpath correctly updates array index" "r0" "$val"
+
+echo ""
+echo "=== task_16_05: pipeline-state read key allowlist (OBS-1) ==="
+
+# Injection attempts on READ must be rejected (previously accepted any jq)
+assert_exit "read rejects key with pipe operator" 1 \
+  pipeline-state read "run-test-001" '.status | @sh "echo pwn"'
+
+assert_exit "read rejects key with @sh filter" 1 \
+  pipeline-state read "run-test-001" '.tasks | @sh'
+
+assert_exit "read rejects key with error() call" 1 \
+  pipeline-state read "run-test-001" '.x,error("pwn")'
+
+assert_exit "read rejects key with double-quote segment" 1 \
+  pipeline-state read "run-test-001" '.tasks."injected"'
+
+# Legitimate paths and `// default` fallbacks still work
+val=$(pipeline-state read "run-test-001" '.status')
+assert_eq "read plain dotted path" "running" "$val"
+
+# Fallback with numeric default
+val=$(pipeline-state read "run-test-001" '.nonexistent_key // 0')
+assert_eq "read allows // numeric default" "0" "$val"
+
+# Fallback with string default
+val=$(pipeline-state read "run-test-001" '.nonexistent_key // "fallback"')
+assert_eq "read allows // string default" "fallback" "$val"
+
+# Unsafe default (not a literal) must be rejected
+assert_exit "read rejects unsafe default (jq expression)" 1 \
+  pipeline-state read "run-test-001" '.x // env'
+
+echo ""
+echo "=== task_16_10: pipeline-human-gate ==="
+
+# Set up a run whose state has an issue number so the gate can attempt
+# to post a comment (we'll mock gh to no-op the post).
+HG_MOCK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/hg-mock-XXXXXX")
+cat > "$HG_MOCK_DIR/gh" <<'MOCKGH'
+#!/usr/bin/env bash
+# Accept anything; just exit 0.
+exit 0
+MOCKGH
+chmod +x "$HG_MOCK_DIR/gh"
+HG_OLD_PATH="$PATH"
+export PATH="$HG_MOCK_DIR:$PATH"
+
+pipeline-init "run-hg" --mode prd --issue 99 --force >/dev/null 2>&1
+
+# --- Level 0 → every stage passes ---
+printf '{"humanReviewLevel":0}' > "$CLAUDE_PLUGIN_DATA/config.json"
+for stage in spec pre-execute post-execute pre-merge; do
+  set +e
+  pipeline-human-gate "run-hg" "$stage" >/dev/null 2>&1
+  ec=$?
+  set -e
+  assert_eq "level 0 stage $stage → passes (exit 0)" "0" "$ec"
+done
+
+# --- Level 1 → only pre-merge trips ---
+printf '{"humanReviewLevel":1}' > "$CLAUDE_PLUGIN_DATA/config.json"
+set +e
+pipeline-human-gate "run-hg" pre-merge >/dev/null 2>&1
+ec=$?
+set -e
+assert_eq "level 1 stage pre-merge → trips (exit 42)" "42" "$ec"
+
+# Lower-threshold stages still pass at level 1
+for stage in post-execute spec pre-execute; do
+  # Reset run status so the trip-side-effects from the previous call don't affect
+  # subsequent passes (only status=awaiting_human matters here — we're not
+  # asserting it for pass cases).
+  pipeline-state write "run-hg" '.status' '"running"' >/dev/null 2>&1
+  set +e
+  pipeline-human-gate "run-hg" "$stage" >/dev/null 2>&1
+  ec=$?
+  set -e
+  assert_eq "level 1 stage $stage → passes (exit 0)" "0" "$ec"
+done
+
+# --- Level 3 → spec stage trips and sets awaiting_human ---
+printf '{"humanReviewLevel":3}' > "$CLAUDE_PLUGIN_DATA/config.json"
+pipeline-state write "run-hg" '.status' '"running"' >/dev/null 2>&1
+set +e
+output=$(pipeline-human-gate "run-hg" spec 2>/dev/null)
+ec=$?
+set -e
+assert_eq "level 3 stage spec → trips (exit 42)" "42" "$ec"
+assert_eq "gate output reports tripped" "tripped" "$(echo "$output" | jq -r '.gate')"
+
+# Verify run status is now awaiting_human
+run_status=$(pipeline-state read "run-hg" '.status')
+assert_eq "run status set to awaiting_human on trip" "awaiting_human" "$run_status"
+
+# --- Level 4 → pre-execute trips ---
+printf '{"humanReviewLevel":4}' > "$CLAUDE_PLUGIN_DATA/config.json"
+pipeline-state write "run-hg" '.status' '"running"' >/dev/null 2>&1
+set +e
+pipeline-human-gate "run-hg" pre-execute >/dev/null 2>&1
+ec=$?
+set -e
+assert_eq "level 4 stage pre-execute → trips (exit 42)" "42" "$ec"
+
+# --- Invalid stage → exit 1 ---
+assert_exit "invalid stage exits 1" 1 pipeline-human-gate "run-hg" bogus-stage
+
+# Cleanup
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+export PATH="$HG_OLD_PATH"
+rm -rf "$HG_MOCK_DIR"
 
 echo ""
 echo "=== task_06_06: circuit-breaker deducts pause time ==="

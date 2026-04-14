@@ -38,7 +38,7 @@ echo "=== hooks.json structure ==="
 hooks_json="$HOOKS_DIR/hooks.json"
 assert_eq "hooks.json exists" "true" "$([[ -f "$hooks_json" ]] && echo true || echo false)"
 assert_eq "hooks.json valid JSON" "0" "$(jq empty "$hooks_json" 2>/dev/null; echo $?)"
-assert_eq "has PreToolUse" "1" "$(jq '.hooks.PreToolUse | length' "$hooks_json")"
+assert_eq "has PreToolUse (Bash + Edit/Write/MultiEdit groups)" "2" "$(jq '.hooks.PreToolUse | length' "$hooks_json")"
 assert_eq "has PostToolUse" "1" "$(jq '.hooks.PostToolUse | length' "$hooks_json")"
 assert_eq "has Stop" "1" "$(jq '.hooks.Stop | length' "$hooks_json")"
 assert_eq "has SubagentStop" "1" "$(jq '.hooks.SubagentStop | length' "$hooks_json")"
@@ -543,6 +543,113 @@ assert_eq "--tolerance 2 allows 1.5% decrease" "0" "$exit_code"
 assert_eq "--tolerance 2 tolerance in output" "2" "$(echo "$output" | jq -r '.tolerance')"
 
 rm -rf "$cov_dir"
+
+# ============================================================
+echo ""
+echo "=== task_16_06: coverage-gate reads renamed config key ==="
+
+cov_cfg_dir=$(mktemp -d)
+echo "$(_cov_json 80 80 80 80)" > "$cov_cfg_dir/before.json"
+# 0.2pp drop — passes at default tolerance 0.5, must fail at 0.1
+echo "$(_cov_json 79.8 80 80 80)" > "$cov_cfg_dir/after.json"
+
+# Write config in the canonical nested shape (configure.md uses setpath +
+# split(".") so dotted keys become nested objects).
+printf '{"quality":{"coverageRegressionTolerancePct":0.1}}' > "$CLAUDE_PLUGIN_DATA/config.json"
+set +e
+output=$("$BIN_DIR/pipeline-coverage-gate" "$cov_cfg_dir/before.json" "$cov_cfg_dir/after.json" 2>/dev/null)
+exit_code=$?
+set -e
+assert_eq "coverage-gate reads coverageRegressionTolerancePct=0.1 and fails 0.2pp drop" "1" "$exit_code"
+assert_eq "tolerance reported as 0.1" "0.1" "$(echo "$output" | jq -r '.tolerance')"
+
+# Old key must NOT be recognized anymore — with only old key set, gate uses
+# the 0.5 default and passes.
+printf '{"quality":{"coverageTolerance":0.1}}' > "$CLAUDE_PLUGIN_DATA/config.json"
+set +e
+output=$("$BIN_DIR/pipeline-coverage-gate" "$cov_cfg_dir/before.json" "$cov_cfg_dir/after.json" 2>/dev/null)
+exit_code=$?
+set -e
+assert_eq "old coverageTolerance key is ignored (gate uses default)" "0" "$exit_code"
+assert_eq "default tolerance 0.5 used when new key absent" "0.5" "$(echo "$output" | jq -r '.tolerance')"
+
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+rm -rf "$cov_cfg_dir"
+
+# ============================================================
+echo ""
+echo "=== task_16_11: log_metric + retention trim ==="
+
+# Build a minimal "current" run dir so log_metric can target it.
+OBS_RUN_ID="obs-test-run"
+obs_run_dir="$CLAUDE_PLUGIN_DATA/runs/$OBS_RUN_ID"
+mkdir -p "$obs_run_dir"
+touch "$obs_run_dir/metrics.jsonl"
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -s "$obs_run_dir" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# --- Case A: log_metric with auditLog=true writes a JSONL line ---
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+( source "$(dirname "$0")/pipeline-lib.sh"; log_metric "task.start" "task_id=\"t_01\"" "rank=2" )
+line_count=$(wc -l < "$obs_run_dir/metrics.jsonl" | tr -d ' ')
+assert_eq "log_metric writes 1 line when auditLog default (true)" "1" "$line_count"
+event=$(head -1 "$obs_run_dir/metrics.jsonl" | jq -r '.event')
+assert_eq "log_metric event captured" "task.start" "$event"
+tid=$(head -1 "$obs_run_dir/metrics.jsonl" | jq -r '.task_id')
+assert_eq "log_metric string k=v captured" "t_01" "$tid"
+rank=$(head -1 "$obs_run_dir/metrics.jsonl" | jq -r '.rank')
+assert_eq "log_metric numeric k=v parsed as JSON number" "2" "$rank"
+
+# --- Case B: auditLog=false → no new lines ---
+printf '{"observability":{"auditLog":false}}' > "$CLAUDE_PLUGIN_DATA/config.json"
+before=$(wc -l < "$obs_run_dir/metrics.jsonl" | tr -d ' ')
+( source "$(dirname "$0")/pipeline-lib.sh"; log_metric "task.end" "status=\"done\"" )
+after=$(wc -l < "$obs_run_dir/metrics.jsonl" | tr -d ' ')
+assert_eq "auditLog=false disables log_metric" "$before" "$after"
+
+# --- Case C: retention trim drops old lines ---
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+# Write a metric dated 200 days ago and another dated now.
+old_ts=$(date -u -v-200d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "200 days ago" +%Y-%m-%dT%H:%M:%SZ)
+: > "$obs_run_dir/metrics.jsonl"
+printf '{"ts":"%s","run_id":"obs-test-run","event":"old.event"}\n' "$old_ts" >> "$obs_run_dir/metrics.jsonl"
+printf '{"ts":"%s","run_id":"obs-test-run","event":"new.event"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$obs_run_dir/metrics.jsonl"
+
+# Configure retention to 90 days. Populate tasks so cleanup archives the run.
+cat > "$obs_run_dir/state.json" <<EOF
+{
+  "run_id": "$OBS_RUN_ID",
+  "status": "completed",
+  "mode": "prd",
+  "started_at": "2026-01-01T00:00:00Z",
+  "ended_at": "2026-01-01T00:30:00Z",
+  "tasks": {"t1": {"status": "done"}},
+  "input": {"issue_numbers": [1]},
+  "spec": {"path": null}
+}
+EOF
+
+printf '{"observability":{"metricsRetentionDays":90}}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+pipeline-cleanup "$OBS_RUN_ID" >/dev/null 2>&1 || true
+
+# After cleanup, the run dir is archived. Retention trim runs on all
+# audit/metrics files under CLAUDE_PLUGIN_DATA — the archive copy should
+# have the old line removed.
+archive_metrics="$CLAUDE_PLUGIN_DATA/archive/$OBS_RUN_ID/metrics.jsonl"
+if [[ -f "$archive_metrics" ]]; then
+  # Use awk to avoid grep -c's non-zero exit when count is zero.
+  old_survived=$(awk '/old\.event/{c++} END{print c+0}' "$archive_metrics")
+  new_survived=$(awk '/new\.event/{c++} END{print c+0}' "$archive_metrics")
+  assert_eq "retention trim removes line older than 90 days" "0" "$old_survived"
+  assert_eq "retention trim keeps recent line" "1" "$new_survived"
+else
+  echo "  FAIL: archive metrics file not found at $archive_metrics"
+  fail=$((fail + 1))
+fi
+
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
 # ============================================================
 echo ""

@@ -230,6 +230,150 @@ assert_eq "git branch -D some-feature → allow" "0" "$status"
 status=$( ( printf '{}' | bash "$BRANCH_PROTECTION" >/dev/null 2>&1 ); echo $? )
 assert_eq "empty hook input → allow" "0" "$status"
 
+# ===========================================================================
+echo ""
+echo "=== task_16_01: write-protection hook ==="
+
+WP="$PLUGIN_ROOT/hooks/write-protection.sh"
+export CLAUDE_PLUGIN_DATA="$TMPROOT/wp-data"
+mkdir -p "$CLAUDE_PLUGIN_DATA"
+
+_write_config() { printf '%s' "$1" > "$CLAUDE_PLUGIN_DATA/config.json"; }
+
+# 1. No config.json → exit 0 (fast path, opt-in only)
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+status=$( ( printf '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x.env"}}' | bash "$WP" >/dev/null 2>&1 ); echo $? )
+assert_eq "write-protection: no config.json → allow" "0" "$status"
+
+# 2. Empty blocklist → allow
+_write_config '{"safety.writeBlockedPaths":[]}'
+status=$( ( printf '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x.env"}}' | bash "$WP" >/dev/null 2>&1 ); echo $? )
+assert_eq "write-protection: empty blocklist → allow" "0" "$status"
+
+# 3. .env* blocks an Edit on .env.local
+WP_SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/wp-sandbox-XXXXXX")
+_write_config '{"safety.writeBlockedPaths":[".env*"]}'
+set +e
+wp_block_output=$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s/.env.local"}}' "$WP_SANDBOX" | bash "$WP" 2>&1 >/dev/null)
+wp_ec=$?
+set -e
+assert_eq "write-protection: .env* blocks Edit on .env.local" "2" "$wp_ec"
+assert_eq "write-protection: block JSON reason is write_blocked" "write_blocked" \
+  "$(printf '%s' "$wp_block_output" | jq -r '.reason' 2>/dev/null)"
+
+# 4. Same config, unrelated path → allowed
+status=$( ( printf '{"tool_name":"Edit","tool_input":{"file_path":"%s/src/config.ts"}}' "$WP_SANDBOX" | bash "$WP" >/dev/null 2>&1 ); echo $? )
+assert_eq "write-protection: .env* allows src/config.ts" "0" "$status"
+
+# 5. **/migrations/** blocks a nested SQL migration
+_write_config '{"safety.writeBlockedPaths":["**/migrations/**"]}'
+mkdir -p "$WP_SANDBOX/supabase/migrations"
+status=$( ( printf '{"tool_name":"Write","tool_input":{"file_path":"%s/supabase/migrations/001_init.sql"}}' "$WP_SANDBOX" | bash "$WP" >/dev/null 2>&1 ); echo $? )
+assert_eq "write-protection: **/migrations/** blocks nested SQL" "2" "$status"
+
+# 6. MultiEdit with nested edits[].file_path under the blocked glob
+status=$( ( printf '{"tool_name":"MultiEdit","tool_input":{"edits":[{"file_path":"%s/supabase/migrations/002.sql"}]}}' "$WP_SANDBOX" | bash "$WP" >/dev/null 2>&1 ); echo $? )
+assert_eq "write-protection: MultiEdit edits[] blocked" "2" "$status"
+
+# 7. Non-write tool (Bash) passes through
+status=$( ( printf '{"tool_name":"Bash","tool_input":{"command":"ls .env"}}' | bash "$WP" >/dev/null 2>&1 ); echo $? )
+assert_eq "write-protection: Bash tool passes through" "0" "$status"
+
+# 8. Basename glob matches regardless of directory depth
+_write_config '{"safety.writeBlockedPaths":["credentials.json"]}'
+mkdir -p "$WP_SANDBOX/app"
+status=$( ( printf '{"tool_name":"Write","tool_input":{"file_path":"%s/app/credentials.json"}}' "$WP_SANDBOX" | bash "$WP" >/dev/null 2>&1 ); echo $? )
+assert_eq "write-protection: basename glob matches nested file" "2" "$status"
+
+rm -rf "$WP_SANDBOX"
+unset CLAUDE_PLUGIN_DATA
+
+# ===========================================================================
+echo ""
+echo "=== task_16_02: secret-commit-guard hook ==="
+
+SCG="$PLUGIN_ROOT/hooks/secret-commit-guard.sh"
+export CLAUDE_PLUGIN_DATA="$TMPROOT/scg-data"
+mkdir -p "$CLAUDE_PLUGIN_DATA"
+_scg_write_config() { printf '%s' "$1" > "$CLAUDE_PLUGIN_DATA/config.json"; }
+
+_scg_sandbox() {
+  local d
+  d=$(mktemp -d "${TMPDIR:-/tmp}/scg-XXXXXX")
+  git -C "$d" init -q
+  git -C "$d" config user.email "t@t"
+  git -C "$d" config user.name "t"
+  printf '%s' "$d"
+}
+
+_scg_exit() {
+  # $1 = cwd, $2 = command; emit the hook's exit code only.
+  local cwd="$1" cmd="$2"
+  ( cd "$cwd" && printf '{"tool_input":{"command":%s}}' "$(jq -Rn --arg s "$cmd" '$s')" \
+    | bash "$SCG" >/dev/null 2>&1 ); echo $?
+}
+
+# 1. Non-commit command → allow (fast path)
+S1=$(_scg_sandbox)
+assert_eq "scg: non-commit command → allow" "0" "$(_scg_exit "$S1" "ls -la")"
+
+# 2. git push is explicitly NOT covered → allow
+assert_eq "scg: git push not covered → allow" "0" "$(_scg_exit "$S1" "git push origin main")"
+
+# 3. git commit with nothing staged → allow
+assert_eq "scg: empty staged diff → allow" "0" "$(_scg_exit "$S1" "git commit -m nothing")"
+
+# 4. Staged .env file → blocked by path rule
+S2=$(_scg_sandbox)
+printf 'SECRET=foo\n' > "$S2/.env"
+git -C "$S2" add .env
+assert_eq "scg: staging .env → block" "2" "$(_scg_exit "$S2" "git commit -m pwn")"
+
+# 5. Source file with AWS key → blocked by content regex
+S3=$(_scg_sandbox)
+printf 'const aws_key = "AKIAIOSFODNN7EXAMPLE";\n' > "$S3/config.ts"
+git -C "$S3" add config.ts
+assert_eq "scg: AWS key in diff → block" "2" "$(_scg_exit "$S3" "git commit -m feat")"
+
+# 6. Same AWS key in allowlist → pass through
+_scg_write_config '{"safety.allowedSecretPatterns":["AKIAIOSFODNN7EXAMPLE"]}'
+assert_eq "scg: allowlist filters content hit → allow" "0" "$(_scg_exit "$S3" "git commit -m feat")"
+
+# 7. Clean source file → allow
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+S4=$(_scg_sandbox)
+printf 'const greeting = "hello";\n' > "$S4/hello.ts"
+git -C "$S4" add hello.ts
+assert_eq "scg: clean diff → allow" "0" "$(_scg_exit "$S4" "git commit -m feat")"
+
+# 8. TruffleHog enabled but not installed → warn + regex-only (no false block)
+_scg_write_config '{"safety.useTruffleHog":true}'
+SCG_NOTRUF=$(mktemp -d "${TMPDIR:-/tmp}/scg-notruf-XXXXXX")
+SCG_OLD_PATH="$PATH"
+export PATH="$SCG_NOTRUF:/usr/bin:/bin"
+assert_eq "scg: trufflehog enabled + not installed + clean → allow" "0" "$(_scg_exit "$S4" "git commit -m feat")"
+export PATH="$SCG_OLD_PATH"
+rm -rf "$SCG_NOTRUF"
+
+# 9. TruffleHog enabled + mock returns a finding → block
+SCG_TRUF=$(mktemp -d "${TMPDIR:-/tmp}/scg-truf-XXXXXX")
+cat > "$SCG_TRUF/trufflehog" <<'MOCKEOF'
+#!/usr/bin/env bash
+printf '{"Raw":"AKIA1234567890FAKE","SourceMetadata":{"Data":{"Filesystem":{"file":"/x"}}}}\n'
+MOCKEOF
+chmod +x "$SCG_TRUF/trufflehog"
+export PATH="$SCG_TRUF:$PATH"
+_scg_write_config '{"safety.useTruffleHog":true}'
+assert_eq "scg: trufflehog mock finding → block" "2" "$(_scg_exit "$S4" "git commit -m feat")"
+
+# 10. TruffleHog finding matched by allowlist → filtered, allow
+_scg_write_config '{"safety.useTruffleHog":true,"safety.allowedSecretPatterns":["AKIA1234567890FAKE"]}'
+assert_eq "scg: trufflehog finding in allowlist → allow" "0" "$(_scg_exit "$S4" "git commit -m feat")"
+
+export PATH="$SCG_OLD_PATH"
+rm -rf "$SCG_TRUF" "$S1" "$S2" "$S3" "$S4"
+unset CLAUDE_PLUGIN_DATA
+
 echo ""
 echo "================================"
 echo "Hook tests: $pass passed, $fail failed"

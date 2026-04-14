@@ -105,8 +105,13 @@ _check_ollama() {
 
     if [[ "$should_pull" == "true" ]]; then
       log_info "pulling Ollama model: $ollama_model"
+      # Build JSON body via jq --arg to avoid injection through model names
+      # containing special characters (quotes, backslashes, control chars).
+      local pull_body
+      pull_body=$(jq -cn --arg name "$ollama_model" '{name:$name}')
       if curl -sf -X POST "${ollama_url}/api/pull" \
-        -d "{\"name\":\"${ollama_model}\"}" >/dev/null 2>&1; then
+        -H "Content-Type: application/json" \
+        -d "$pull_body" >/dev/null 2>&1; then
         printf '%s' "$now_epoch" > "$pull_cache"
       else
         log_warn "could not pull model $ollama_model"

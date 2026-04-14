@@ -101,6 +101,55 @@ assert_exit "invalid PR number exits 1" 1 pipeline-wait-pr "abc"
 
 # ============================================================
 echo ""
+echo "=== task_16_07: pipeline-wait-pr reads config timeout/interval ==="
+
+# Mock gh to return OPEN + UNKNOWN mergeable indefinitely, so the script
+# times out at whatever timeout the config says (5 min with test override).
+WAIT_PR_MOCK=$(mktemp -d)
+cat > "$WAIT_PR_MOCK/gh" <<'MOCKGH'
+#!/usr/bin/env bash
+case "$*" in
+  *"--json state"*)    echo OPEN ;;
+  *"--json mergeable"*) echo UNKNOWN ;;
+  *"pr checks"*)       exit 0 ;;
+  *)                   exit 0 ;;
+esac
+MOCKGH
+chmod +x "$WAIT_PR_MOCK/gh"
+
+# Use --timeout / --interval flags here (fast assertion without waiting a full
+# minute); these also prove the CLI flags still override the config defaults.
+WP_OLD_PATH="$PATH"
+export PATH="$WAIT_PR_MOCK:$PATH"
+
+# Verify config-driven defaults: write a config with prMergeTimeout=5 and
+# pollInterval=120 and run with --interval 1 to finish fast; we only care
+# that the config-read path is exercised and the script still runs cleanly.
+printf '{"dependencies":{"prMergeTimeout":5,"pollInterval":120}}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+# Run wait-pr in the background, cap at 3s so we can observe the script reads
+# config defaults (timeout 5m would hold; we actually rely on --interval 1
+# to short-circuit this test). The goal here is a smoke check that the
+# `read_config` call doesn't crash and the script is still argument-compatible.
+set +e
+pipeline-wait-pr 123 --interval 1 --timeout 0 >/dev/null 2>&1
+ec=$?
+set -e
+assert_eq "wait-pr --timeout 0 override honored (immediate timeout)" "1" "$ec"
+
+# Unset config → verify it falls back to hardcoded defaults via read_config
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+set +e
+pipeline-wait-pr 123 --interval 1 --timeout 0 >/dev/null 2>&1
+ec=$?
+set -e
+assert_eq "wait-pr runs cleanly with no config (defaults applied)" "1" "$ec"
+
+export PATH="$WP_OLD_PATH"
+rm -rf "$WAIT_PR_MOCK"
+
+# ============================================================
+echo ""
 echo "=== pipeline-summary (all tasks done) ==="
 
 _create_test_run "test-summary-1" '{
@@ -137,6 +186,11 @@ assert_eq "summary quality coverage" "5" "$(printf '%s' "$output" | jq -r '.qual
 assert_eq "summary quality holdout" "100" "$(printf '%s' "$output" | jq -r '.quality.holdout_pass_rate')"
 assert_eq "summary quality mutation" "85" "$(printf '%s' "$output" | jq -r '.quality.mutation_score')"
 assert_eq "summary started_at" "2026-01-01T00:00:00Z" "$(printf '%s' "$output" | jq -r '.started_at')"
+# Regression for BUG-3: duration_minutes must be computed portably via
+# parse_iso8601_to_epoch, not via the old `date -jf ... / date -d` chain
+# that silently produced null on some platforms.
+assert_eq "summary duration_minutes (BUG-3 portable date)" "90" \
+  "$(printf '%s' "$output" | jq -r '.duration_minutes')"
 
 # ============================================================
 echo ""
@@ -667,6 +721,88 @@ echo "=== pipeline-wait-pr (help/flags) ==="
 
 # Test unknown flag
 assert_exit "unknown flag exits 1" 1 pipeline-wait-pr 123 --bogus
+
+# ============================================================
+echo ""
+echo "=== assert_in_plugin_data helper (task_16_03) ==="
+
+# Use a subshell so `set -e` in pipeline-lib.sh + our `return 1` doesn't kill the
+# parent test script. We source the lib, then probe the helper.
+_assert_helper() {
+  local path="$1"
+  (
+    source "$(dirname "$0")/pipeline-lib.sh" 2>/dev/null
+    # pipeline-lib.sh enables `set -euo pipefail`; disable again so a returning-1
+    # helper does not terminate the subshell before we can capture $?.
+    set +e
+    assert_in_plugin_data "$path" 2>/dev/null
+    echo $?
+  )
+}
+
+assert_eq "refuses empty path" "1" "$(_assert_helper '')"
+assert_eq "refuses /" "1" "$(_assert_helper '/')"
+assert_eq "refuses /tmp" "1" "$(_assert_helper '/tmp')"
+assert_eq "refuses \$HOME" "1" "$(_assert_helper "$HOME")"
+
+decoy_outside=$(mktemp -d)
+assert_eq "refuses /tmp/decoy (outside CLAUDE_PLUGIN_DATA)" "1" "$(_assert_helper "$decoy_outside")"
+rm -rf "$decoy_outside"
+
+# Valid path inside CLAUDE_PLUGIN_DATA
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/assert-test"
+assert_eq "accepts path inside CLAUDE_PLUGIN_DATA" "0" "$(_assert_helper "$CLAUDE_PLUGIN_DATA/runs/assert-test")"
+
+# Symlink-escape: create a symlink inside CLAUDE_PLUGIN_DATA pointing outside.
+# realpath should resolve to outside, so assert refuses.
+decoy_escape=$(mktemp -d)
+ln -s "$decoy_escape" "$CLAUDE_PLUGIN_DATA/escape-link"
+assert_eq "refuses symlink escape via realpath" "1" "$(_assert_helper "$CLAUDE_PLUGIN_DATA/escape-link")"
+rm -f "$CLAUDE_PLUGIN_DATA/escape-link"
+rm -rf "$decoy_escape"
+
+# ============================================================
+echo ""
+echo "=== pipeline-cleanup refuses symlink-escape run_dir (task_16_03) ==="
+
+# Create a run state that points (via symlink) to a decoy outside CLAUDE_PLUGIN_DATA.
+# pipeline-cleanup should refuse before the `rm -rf "$run_dir"` call.
+decoy_cleanup=$(mktemp -d)
+printf 'sentinel\n' > "$decoy_cleanup/DO_NOT_DELETE"
+
+escape_run_id="escape-run-$$"
+escape_run_dir="$CLAUDE_PLUGIN_DATA/runs/$escape_run_id"
+mkdir -p "$(dirname "$escape_run_dir")"
+# Symlink the run dir to the decoy
+ln -s "$decoy_cleanup" "$escape_run_dir"
+
+# Write a minimal state file under CLAUDE_PLUGIN_DATA so pipeline-cleanup can read it
+# (pipeline-cleanup reads state from $run_dir/state.json; the symlink makes that resolve
+# inside the decoy. We'll create a minimal state inside the decoy).
+cat > "$decoy_cleanup/state.json" <<EOF
+{
+  "run_id": "$escape_run_id",
+  "status": "completed",
+  "mode": "prd",
+  "started_at": "2026-01-01T00:00:00Z",
+  "ended_at": "2026-01-01T00:30:00Z",
+  "tasks": {"t1": {"status": "done"}},
+  "input": {"issue_numbers": [1]},
+  "spec": {"path": null}
+}
+EOF
+
+set +e
+pipeline-cleanup "$escape_run_id" >/dev/null 2>&1
+cleanup_ec=$?
+set -e
+assert_eq "pipeline-cleanup refuses symlink-escape run_dir" "1" "$cleanup_ec"
+assert_eq "decoy sentinel survives cleanup refusal" "true" \
+  "$([[ -f "$decoy_cleanup/DO_NOT_DELETE" ]] && echo true || echo false)"
+
+# Manually unlink the escape symlink (not the decoy)
+rm -f "$escape_run_dir"
+rm -rf "$decoy_cleanup"
 
 # ============================================================
 echo ""

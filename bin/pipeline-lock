@@ -84,9 +84,26 @@ case "$action" in
       exit 0
     fi
 
+    # Ownership check: only refuse if the lockfile PID is CURRENTLY ALIVE and
+    # not equal to the caller. A dead PID is an orphaned lock (normal after an
+    # acquire subprocess exits) and any caller may clean it up. This prevents
+    # stealing an active peer's lock while allowing idempotent cleanup.
+    info=$(_lock_info) || {
+      log_warn "lock file present but unreadable; treating as noop"
+      json_output locked "false" action "noop"
+      exit 0
+    }
+    holder_pid=$(printf '%s' "$info" | jq -r '.pid // empty')
+    if [[ -n "$holder_pid" ]] && _is_pid_alive "$holder_pid" && [[ "$holder_pid" != "$LOCK_PID" ]]; then
+      log_error "lock is actively held by alive PID $holder_pid; refusing release from PID $LOCK_PID"
+      json_output locked "true" action "refused" reason "not_owner" \
+                  owner_pid "$holder_pid" caller_pid "$LOCK_PID"
+      exit 1
+    fi
+
     rm -f "$LOCK_FILE"
-    log_info "lock released"
-    json_output locked "false" action "released"
+    log_info "lock released (PID $LOCK_PID)"
+    json_output locked "false" action "released" pid "$LOCK_PID"
     ;;
 
   recover)

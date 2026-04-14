@@ -1061,6 +1061,79 @@ rm -rf "$MERGEABLE_MOCK"
 
 # ============================================================
 echo ""
+echo "=== pipeline-branch task-commit (regression for BUG-2) ==="
+
+orig_cwd=$(pwd)
+
+# --- Case A: happy path — dirty worktree on task/<id> → committed ---
+sandbox=$(setup_git_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  git checkout -b staging --quiet
+  wt_path="$sandbox/wt-happy"
+  git worktree add -b "task/t_01" "$wt_path" staging --quiet
+  printf 'change\n' > "$wt_path/file.txt"
+
+  output=$(pipeline-branch task-commit t_01 --worktree "$wt_path" 2>/dev/null)
+  result=$(echo "$output" | jq -r '.result')
+  branch=$(echo "$output" | jq -r '.branch')
+  sha=$(echo "$output" | jq -r '.sha')
+  printf '%s\n' "$result" > "$sandbox/tc_result"
+  printf '%s\n' "$branch" > "$sandbox/tc_branch"
+  printf '%s\n' "$sha" > "$sandbox/tc_sha"
+  # Confirm sha exists and matches HEAD of worktree
+  head_sha=$(git -C "$wt_path" rev-parse HEAD)
+  printf '%s\n' "$head_sha" > "$sandbox/tc_head"
+)
+assert_eq "task-commit result committed" "committed" "$(cat "$sandbox/tc_result")"
+assert_eq "task-commit reports correct branch" "task/t_01" "$(cat "$sandbox/tc_branch")"
+assert_eq "task-commit sha matches HEAD" "$(cat "$sandbox/tc_head")" "$(cat "$sandbox/tc_sha")"
+
+# --- Case B: no-op when worktree is clean ---
+(
+  cd "$sandbox/repo"
+  wt_path="$sandbox/wt-happy"
+  output=$(pipeline-branch task-commit t_01 --worktree "$wt_path" 2>/dev/null)
+  result=$(echo "$output" | jq -r '.result')
+  printf '%s\n' "$result" > "$sandbox/tc_noop"
+)
+assert_eq "task-commit no-op on clean worktree" "no-op" "$(cat "$sandbox/tc_noop")"
+
+# --- Case C: rejects wrong branch ---
+(
+  cd "$sandbox/repo"
+  wt_wrong="$sandbox/wt-wrong"
+  # Detached worktree is NOT on task/t_02 — must be rejected.
+  git worktree add --detach "$wt_wrong" staging --quiet
+  set +e
+  pipeline-branch task-commit t_02 --worktree "$wt_wrong" >/dev/null 2>&1
+  ec=$?
+  set -e
+  printf '%s\n' "$ec" > "$sandbox/tc_wrong_ec"
+)
+assert_eq "task-commit rejects wrong branch" "1" "$(cat "$sandbox/tc_wrong_ec")"
+
+# --- Case D: missing --worktree flag ---
+set +e
+pipeline-branch task-commit t_03 >/dev/null 2>&1
+ec=$?
+set -e
+assert_eq "task-commit requires --worktree" "1" "$ec"
+
+# --- Case E: usage string lists task-commit ---
+set +e
+usage=$(pipeline-branch bogus-action 2>&1 >/dev/null)
+set -e
+assert_eq "usage string includes task-commit" "true" \
+  "$(echo "$usage" | grep -q 'task-commit' && echo true || echo false)"
+
+cleanup_sandbox "$sandbox"
+cd "$orig_cwd"
+trap - EXIT
+
+# ============================================================
+echo ""
 echo "=== Skill & Agent files exist ==="
 
 assert_eq "review-protocol SKILL.md exists" "true" \

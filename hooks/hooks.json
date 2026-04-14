@@ -9,6 +9,23 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/branch-protection.sh",
             "timeout": 5,
             "statusMessage": "Checking branch protection"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/secret-commit-guard.sh",
+            "timeout": 15,
+            "statusMessage": "Scanning staged changes for secrets"
+          }
+        ]
+      },
+      {
+        "matcher": "^(Edit|Write|MultiEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/write-protection.sh",
+            "timeout": 5,
+            "statusMessage": "Checking write-blocklist"
           }
         ]
       }

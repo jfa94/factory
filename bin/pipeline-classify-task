@@ -37,10 +37,31 @@ else
 fi
 
 case "$rank" in
-  0) tier="simple";  model="haiku";  max_turns=40 ;;
-  1) tier="medium";  model="sonnet"; max_turns=60 ;;
-  *) tier="complex"; model="opus";   max_turns=80 ;;
+  0) tier="simple"  ;;
+  1) tier="medium"  ;;
+  *) tier="complex" ;;
 esac
+
+# Model + maxTurns come from user config (with compiled-in defaults). This
+# lets operators override the tier→model mapping and turn budgets without
+# editing this script (task_16_09 / GAP-5).
+case "$tier" in
+  simple)
+    model=$(read_config ".execution.modelByTier.simple" "haiku")
+    max_turns=$(read_config ".execution.maxTurnsSimple" "40")
+    ;;
+  medium)
+    model=$(read_config ".execution.modelByTier.medium" "sonnet")
+    max_turns=$(read_config ".execution.maxTurnsMedium" "60")
+    ;;
+  complex)
+    model=$(read_config ".execution.modelByTier.complex" "opus")
+    max_turns=$(read_config ".execution.maxTurnsComplex" "80")
+    ;;
+esac
+
+log_metric "task.classify" "tier=$tier" "model=\"$model\"" "max_turns=$max_turns" \
+  "file_count=$file_count" "dep_count=$dep_count"
 
 jq -n \
   --arg tier "$tier" \

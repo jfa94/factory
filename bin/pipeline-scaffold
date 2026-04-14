@@ -13,13 +13,47 @@ shift
 
 force=false
 merge_pkg_json=false
+check_only=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force) force=true; shift ;;
     --merge-package-json) merge_pkg_json=true; shift ;;
+    --check) check_only=true; shift ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
+
+# --check mode: read-only report. Exit 0 when all required scaffold files
+# are present, exit 1 with a missing-files list otherwise. Node-specific
+# templates (.stryker.config.json, .dependency-cruiser.cjs) are required ONLY
+# when a package.json exists, matching the scaffold's own conditional copy.
+if [[ "$check_only" == "true" ]]; then
+  required=(
+    "$root/claude-progress.json"
+    "$root/feature-status.json"
+    "$root/init.sh"
+    "$root/.github/workflows/quality-gate.yml"
+  )
+  if [[ -f "$root/package.json" ]]; then
+    required+=(
+      "$root/.stryker.config.json"
+      "$root/.dependency-cruiser.cjs"
+    )
+  fi
+  missing=()
+  for f in "${required[@]}"; do
+    [[ -f "$f" ]] || missing+=("$f")
+  done
+  if (( ${#missing[@]} == 0 )); then
+    json_output action "check" status "scaffolded" root "$root"
+    exit 0
+  else
+    missing_json=$(printf '%s\n' "${missing[@]}" | jq -R . | jq -s .)
+    jq -cn --arg root "$root" --argjson missing "$missing_json" \
+      '{action:"check", status:"missing", root:$root, missing:$missing}'
+    exit 1
+  fi
+fi
 
 created=()
 

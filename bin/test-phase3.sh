@@ -70,6 +70,21 @@ assert_eq "empty = simple" "simple" "$(echo "$output" | jq -r '.tier')"
 output=$(pipeline-classify-task '{}' 2>/dev/null)
 assert_eq "null fields = simple" "simple" "$(echo "$output" | jq -r '.tier')"
 
+# task_16_09: config overrides the tier→model mapping and maxTurns
+printf '%s' '{"execution":{"modelByTier":{"simple":"sonnet"},"maxTurnsSimple":20}}' \
+  > "$CLAUDE_PLUGIN_DATA/config.json"
+output=$(pipeline-classify-task '{"files":["a.ts"],"depends_on":[]}' 2>/dev/null)
+assert_eq "modelByTier.simple override wins over default haiku" "sonnet" \
+  "$(echo "$output" | jq -r '.model')"
+assert_eq "maxTurnsSimple override honored" "20" \
+  "$(echo "$output" | jq -r '.maxTurns')"
+
+# Unset config → compiled-in defaults haiku/40
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+output=$(pipeline-classify-task '{"files":["a.ts"],"depends_on":[]}' 2>/dev/null)
+assert_eq "default simple model is haiku" "haiku" "$(echo "$output" | jq -r '.model')"
+assert_eq "default simple maxTurns is 40" "40" "$(echo "$output" | jq -r '.maxTurns')"
+
 echo ""
 echo "=== pipeline-classify-risk ==="
 

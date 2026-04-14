@@ -15,8 +15,10 @@ require_command jq
 pr="${1:?missing PR number}"
 shift
 
-timeout_minutes=45
-interval_seconds=60
+# Defaults come from config (dependencies.prMergeTimeout / dependencies.pollInterval).
+# CLI flags override. Empty config returns "" → fallback to the second read_config arg.
+timeout_minutes=$(read_config '.dependencies.prMergeTimeout' '45')
+interval_seconds=$(read_config '.dependencies.pollInterval' '60')
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

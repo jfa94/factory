@@ -44,14 +44,8 @@ ended_at=$(printf '%s' "$state" | jq -r '.ended_at // empty')
 duration_minutes="null"
 
 if [[ -n "$started_at" ]] && [[ -n "$ended_at" ]] && [[ "$ended_at" != "null" ]]; then
-  # Compute duration — try macOS date -jf first, fall back to GNU date -d
-  start_epoch=""
-  end_epoch=""
-  if start_epoch=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$started_at" "+%s" 2>/dev/null); then
-    end_epoch=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$ended_at" "+%s" 2>/dev/null) || true
-  elif start_epoch=$(date -d "$started_at" "+%s" 2>/dev/null); then
-    end_epoch=$(date -d "$ended_at" "+%s" 2>/dev/null) || true
-  fi
+  start_epoch=$(parse_iso8601_to_epoch "$started_at" 2>/dev/null || true)
+  end_epoch=$(parse_iso8601_to_epoch "$ended_at" 2>/dev/null || true)
   if [[ -n "$start_epoch" ]] && [[ -n "$end_epoch" ]]; then
     duration_minutes=$(( (end_epoch - start_epoch) / 60 ))
   fi
@@ -115,6 +109,13 @@ summary=$(jq -n \
   }')
 
 printf '%s\n' "$summary"
+
+# task_16_11: emit a run.summary metric event. No-op when auditLog=false.
+tasks_done_metric=$(printf '%s' "$task_summary" | jq -r '.done')
+tasks_total_metric=$(printf '%s' "$task_summary" | jq -r '.total')
+log_metric "run.summary" "status=\"$run_status\"" \
+  "tasks_done=$tasks_done_metric" "tasks_total=$tasks_total_metric" \
+  "review_rounds=$review_count"
 
 # Post to GitHub issue if requested
 if [[ "$post_to_issue" == "true" ]]; then
