@@ -177,7 +177,7 @@ For remote servers, verify the server is running and firewalls allow port 11434.
 
 ## Advanced: LiteLLM Proxy
 
-For teams or heavy usage, LiteLLM provides unified multi-provider routing:
+For teams or heavy usage, LiteLLM provides unified multi-provider routing. Note that the plugin does not have built-in LiteLLM config fields — you set it up manually:
 
 1. Install: `pip install litellm`
 
@@ -200,12 +200,11 @@ router_settings:
 
 3. Start proxy: `litellm --config litellm_config.yaml`
 
-4. Configure plugin:
+4. Point Ollama URL to LiteLLM:
 
 ```
 /dark-factory:configure
-> Set localLlm.useLiteLlm to true
-> Set localLlm.liteLlmUrl to http://localhost:4000
+> Set localLlm.ollamaUrl to http://localhost:4000
 ```
 
 Benefits:

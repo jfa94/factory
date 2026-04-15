@@ -274,24 +274,6 @@ Ollama server URL. Supports local or remote servers.
 
 Ollama model tag. Auto-pulled on first use if not present on server.
 
-### localLlm.useLiteLlm
-
-| Property | Value   |
-| -------- | ------- |
-| Type     | boolean |
-| Default  | false   |
-
-Use LiteLLM proxy for unified routing instead of direct Ollama.
-
-### localLlm.liteLlmUrl
-
-| Property | Value                 |
-| -------- | --------------------- |
-| Type     | string                |
-| Default  | http://localhost:4000 |
-
-LiteLLM proxy URL. Only used if `useLiteLlm` is true.
-
 ---
 
 ## Dependencies

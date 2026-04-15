@@ -249,10 +249,6 @@ Ollama model tag. Auto-pulled on first use if not present.
 | 16GB+ | `qwen2.5-coder:14b` | Routine + feature tasks |
 | 24GB+ | `qwen2.5-coder:32b` | Near cloud quality      |
 
-### localLlm.useLiteLlm / liteLlmUrl
-
-Optional LiteLLM proxy for unified multi-provider routing. Only recommended for teams or heavy usage.
-
 ---
 
 ## Dependencies
