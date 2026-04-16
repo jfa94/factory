@@ -187,15 +187,15 @@ cat "${CLAUDE_PLUGIN_DATA}/runs/current/state.json" | jq '.tasks.task_03'
 
 ### Recovering from Rate Limits
 
-If the pipeline stops due to rate limits and Ollama is not enabled:
+If the pipeline stops due to rate limits:
 
 1. Check current utilization:
 
 ```bash
-cat "${CLAUDE_PLUGIN_DATA}/last-headers.json" | jq '.["anthropic-ratelimit-unified-5h-utilization"]'
+cat "${CLAUDE_PLUGIN_DATA}/usage-cache.json" | jq '.five_hour.used_percentage'
 ```
 
-2. Wait for the reset window or enable Ollama:
+2. Wait for the reset window:
 
 ```
 /dark-factory:configure

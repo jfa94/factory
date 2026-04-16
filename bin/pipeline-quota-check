@@ -1,208 +1,115 @@
 #!/usr/bin/env bash
 # Check Claude API quota utilization.
 #
-# Detection path (single method, no fallbacks):
-#   Headers — read ${CLAUDE_PLUGIN_DATA}/last-headers.json (cross-platform,
-#   no quota cost). On cold start (file missing) a single one-shot probe
-#   `claude -p ok --max-turns 1 --model haiku` runs inside _check_headers
-#   so whatever layer captures Anthropic response headers can populate the
-#   file. The probe fires at most once per cold start.
+# Data source: ${CLAUDE_PLUGIN_DATA}/usage-cache.json, written by
+# bin/statusline-wrapper.sh on every Claude Code statusline update. This file
+# contains real-time rate_limits data from the Claude Code process — no API
+# calls, no token cost.
 #
-# Historical fallbacks (both removed):
-#   - OAuth/Keychain detection — removed in task_02_04 (finding C2b). The
-#     credential format nests under `.claudeAiOauth.accessToken` (not
-#     `.access_token`), so the code silently failed. Decision 10 retired
-#     OAuth entirely to keep the plugin cross-platform.
-#   - CLI probe fallback — removed in task_02_05 (finding C2b). The old
-#     auto mode fell through to `claude -p ok` on every check, burning a
-#     turn from the user's quota just to measure quota. The cold-start
-#     probe inside _check_headers already covers the "file missing" case
-#     and only runs once. On header failure the script now exits 1 with
-#     explicit operator instructions instead of masking the failure
-#     behind silent safe-default zeros.
+# Setup: set statusLine.command in ~/.claude/settings.json (or project-level)
+# to bin/statusline-wrapper.sh. One-time user step; see docs/guides/setup.md.
 #
-# Usage: pipeline-quota-check [--method headers|auto]
-# Exit: 0=data retrieved, 1=header detection failed
+# Freshness: if captured_at is >120s old, a warning is logged but the data is
+# still used — statusline can stall during long Agent() tool calls, but the
+# cached values are still the most recent available.
+#
+# Usage: pipeline-quota-check
+# Exit: 0=data retrieved (JSON on stdout), 1=detection failed
 
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
-method="auto"
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --method) method="$2"; shift 2 ;;
-    *) log_error "unknown flag: $1"; exit 1 ;;
-  esac
-done
+PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/plugin-data/dark-factory}"
+cache_file="${PLUGIN_DATA}/usage-cache.json"
 
-# --- Headers detection ---
-# Reads ${CLAUDE_PLUGIN_DATA}/last-headers.json (populated after each Claude
-# API call) and parses the unified-* rate-limit headers. On cold start (file
-# missing), runs a single minimal `claude` probe to populate the file.
-#
-# Decision 10 (05-decisions.md): headers replace OAuth as the primary path —
-# no Keychain dependency, no separate API call, cross-platform.
-_check_headers() {
-  local headers_file="${CLAUDE_PLUGIN_DATA:-}/last-headers.json"
+# --- Validate cache file ---
 
-  if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
-    log_warn "CLAUDE_PLUGIN_DATA not set"
-    return 1
-  fi
+if [[ ! -f "$cache_file" ]]; then
+  log_error "usage-cache.json not found: $cache_file"
+  log_error "setup required: set statusLine.command in ~/.claude/settings.json to:"
+  log_error "  $(cd "$(dirname "$0")/.." && pwd)/bin/statusline-wrapper.sh"
+  log_error "If you already have a statusline, set DARK_FACTORY_ORIGINAL_STATUSLINE"
+  log_error "in settings.json 'env' field to chain to it."
+  exit 1
+fi
 
-  # Cold-start probe: if no headers file exists, run a minimal one-shot probe
-  # so whatever layer captures Anthropic response headers can populate the file.
-  # Only fires once per cold start; subsequent calls read the cached file.
-  if [[ ! -f "$headers_file" ]]; then
-    if command -v claude &>/dev/null; then
-      log_info "last-headers.json missing, running cold-start probe"
-      claude -p "ok" --max-turns 1 --model haiku >/dev/null 2>&1 || true
-    fi
-    if [[ ! -f "$headers_file" ]]; then
-      log_warn "last-headers.json still missing after cold-start probe"
-      return 1
-    fi
-  fi
+if ! jq -e . "$cache_file" >/dev/null 2>&1; then
+  log_error "usage-cache.json is not valid JSON: $cache_file"
+  exit 1
+fi
 
-  if ! jq -e . "$headers_file" >/dev/null 2>&1; then
-    log_warn "last-headers.json is not valid JSON"
-    return 1
-  fi
+# --- Freshness check ---
 
-  # Detect billing mode from header presence.
-  local has_unified
-  has_unified=$(jq -r '
-    if has("anthropic-ratelimit-unified-5h-utilization")
-       or has("anthropic-ratelimit-unified-7d-utilization")
-    then "true" else "false" end
-  ' "$headers_file")
+now_epoch=$(date +%s)
+captured_at=$(jq -r '.captured_at // 0' "$cache_file")
+age=$(( now_epoch - captured_at ))
+if (( age > 120 )); then
+  log_warn "usage-cache.json is ${age}s old (>120s) — data may be stale"
+fi
 
-  local billing_mode
-  if [[ "$has_unified" == "true" ]]; then
-    local overage
-    overage=$(jq -r '.is_using_overage // "false"' "$headers_file")
-    if [[ "$overage" == "true" ]]; then
-      billing_mode="overage"
-    else
-      billing_mode="subscription"
-    fi
-  elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
-    billing_mode="api"
-  else
-    log_warn "no unified-* headers and no ANTHROPIC_API_KEY — cannot determine billing mode"
-    return 1
-  fi
+# --- Parse utilization and resets_at ---
 
-  # API mode: no unified headers available → emit safe-default zeros so the
-  # router treats this as "no quota pressure detected". 5h pacing via legacy
-  # ratelimit-* headers is out of scope for this task.
-  if [[ "$billing_mode" == "api" ]]; then
-    jq -n \
-      --arg billing_mode "$billing_mode" \
-      --arg detection_method "headers" \
-      '{
-        five_hour:  { utilization: 0, hourly_threshold: 90, over_threshold: false, window_hour: null },
-        seven_day:  { utilization: 0, daily_threshold: 95, over_threshold: false, window_day: null },
-        billing_mode: $billing_mode,
-        detection_method: $detection_method
-      }'
-    return 0
-  fi
+# used_percentage may be a float (e.g. 45.2) — truncate to integer
+five_hour_pct=$(jq -r '.five_hour.used_percentage // empty' "$cache_file" 2>/dev/null)
+seven_day_pct=$(jq -r '.seven_day.used_percentage // empty' "$cache_file" 2>/dev/null)
 
-  # Parse utilization values. Headers may be strings ("0.45") or numbers (45).
-  # Normalize to integer percent (0-100): values <= 1 are ratios, multiply by 100.
-  local five_hour seven_day
-  five_hour=$(jq -r '
-    (.["anthropic-ratelimit-unified-5h-utilization"] // empty)
-    | tonumber? // empty
-    | if . <= 1 then . * 100 else . end
-    | round
-  ' "$headers_file")
+if [[ -z "$five_hour_pct" || -z "$seven_day_pct" ]]; then
+  log_error "usage-cache.json missing five_hour or seven_day data"
+  log_error "ensure statusline-wrapper.sh is configured and has run at least once"
+  exit 1
+fi
 
-  seven_day=$(jq -r '
-    (.["anthropic-ratelimit-unified-7d-utilization"] // empty)
-    | tonumber? // empty
-    | if . <= 1 then . * 100 else . end
-    | round
-  ' "$headers_file")
+# Normalize to integer percent
+five_hour=$(jq -n --argjson v "$five_hour_pct" '$v | round | tonumber' 2>/dev/null) || five_hour="${five_hour_pct%%.*}"
+seven_day=$(jq -n --argjson v "$seven_day_pct" '$v | round | tonumber' 2>/dev/null) || seven_day="${seven_day_pct%%.*}"
 
-  if [[ -z "$five_hour" || -z "$seven_day" ]]; then
-    log_warn "could not parse utilization from last-headers.json"
-    return 1
-  fi
+# resets_at from statusline JSON is already epoch seconds
+resets_5h_epoch=$(jq -r '.five_hour.resets_at // empty' "$cache_file" 2>/dev/null)
+resets_7d_epoch=$(jq -r '.seven_day.resets_at // empty' "$cache_file" 2>/dev/null)
 
-  local resets_5h resets_7d
-  resets_5h=$(jq -r '.["anthropic-ratelimit-unified-5h-reset"] // empty' "$headers_file")
-  resets_7d=$(jq -r '.["anthropic-ratelimit-unified-7d-reset"] // empty' "$headers_file")
+# Fall back to sensible defaults if missing
+[[ -z "$resets_5h_epoch" ]] && resets_5h_epoch=$(( now_epoch + 18000 ))
+[[ -z "$resets_7d_epoch" ]] && resets_7d_epoch=$(( now_epoch + 604800 ))
 
-  local now_epoch resets_5h_epoch resets_7d_epoch
-  now_epoch=$(date +%s)
-  if [[ -n "$resets_5h" ]]; then
-    resets_5h_epoch=$(parse_iso8601_to_epoch "$resets_5h" 2>/dev/null || printf '%s' "$((now_epoch + 18000))")
-  else
-    resets_5h_epoch=$((now_epoch + 18000))
-  fi
-  if [[ -n "$resets_7d" ]]; then
-    resets_7d_epoch=$(parse_iso8601_to_epoch "$resets_7d" 2>/dev/null || printf '%s' "$((now_epoch + 604800))")
-  else
-    resets_7d_epoch=$((now_epoch + 604800))
-  fi
+# --- Compute window position and thresholds ---
 
-  local window_hour window_day hourly_threshold daily_threshold
-  window_hour=$(compute_window_hour "$resets_5h_epoch" "$now_epoch")
-  window_day=$(compute_window_day "$resets_7d_epoch" "$now_epoch")
-  hourly_threshold=$(compute_hourly_threshold "$window_hour")
-  daily_threshold=$(compute_daily_threshold "$window_day")
+window_hour=$(compute_window_hour "$resets_5h_epoch" "$now_epoch")
+window_day=$(compute_window_day "$resets_7d_epoch" "$now_epoch")
+hourly_threshold=$(compute_hourly_threshold "$window_hour")
+daily_threshold=$(compute_daily_threshold "$window_day")
 
-  local five_hour_over seven_day_over
-  five_hour_over=$(jq -n --argjson a "$five_hour" --argjson b "$hourly_threshold" 'if $a > $b then "true" else "false" end' -r)
-  seven_day_over=$(jq -n --argjson a "$seven_day" --argjson b "$daily_threshold" 'if $a > $b then "true" else "false" end' -r)
+five_hour_over=$(jq -n --argjson a "$five_hour" --argjson b "$hourly_threshold" \
+  'if $a > $b then true else false end')
+seven_day_over=$(jq -n --argjson a "$seven_day" --argjson b "$daily_threshold" \
+  'if $a > $b then true else false end')
 
-  jq -n \
-    --argjson five_hour "$five_hour" \
-    --argjson hourly_threshold "$hourly_threshold" \
-    --argjson five_hour_over "$five_hour_over" \
-    --argjson window_hour "$window_hour" \
-    --argjson seven_day "$seven_day" \
-    --argjson daily_threshold "$daily_threshold" \
-    --argjson seven_day_over "$seven_day_over" \
-    --argjson window_day "$window_day" \
-    --arg billing_mode "$billing_mode" \
-    --arg detection_method "headers" \
-    '{
-      five_hour: {
-        utilization: $five_hour,
-        hourly_threshold: $hourly_threshold,
-        over_threshold: $five_hour_over,
-        window_hour: $window_hour
-      },
-      seven_day: {
-        utilization: $seven_day,
-        daily_threshold: $daily_threshold,
-        over_threshold: $seven_day_over,
-        window_day: $window_day
-      },
-      billing_mode: $billing_mode,
-      detection_method: $detection_method
-    }'
-  return 0
-}
+# --- Emit output ---
 
-# --- Main ---
-# auto and headers are identical paths: task_02_05 removed the CLI probe
-# fallback. `auto` is kept as an alias so call sites don't need to change.
-case "$method" in
-  headers|auto)
-    if _check_headers; then
-      exit 0
-    fi
-    log_error "quota detection failed: could not read ${CLAUDE_PLUGIN_DATA:-\$CLAUDE_PLUGIN_DATA}/last-headers.json"
-    log_error "to populate it, run a single Claude request so the header-capture"
-    log_error "layer can write the file, then retry. See docs/04-data-flow.md."
-    exit 1
-    ;;
-  *)
-    log_error "invalid method: $method (expected headers|auto)"
-    exit 1
-    ;;
-esac
+jq -n \
+  --argjson five_hour      "$five_hour" \
+  --argjson hourly_threshold "$hourly_threshold" \
+  --argjson five_hour_over "$five_hour_over" \
+  --argjson window_hour    "$window_hour" \
+  --argjson resets_5h_epoch "$resets_5h_epoch" \
+  --argjson seven_day      "$seven_day" \
+  --argjson daily_threshold "$daily_threshold" \
+  --argjson seven_day_over "$seven_day_over" \
+  --argjson window_day     "$window_day" \
+  --argjson resets_7d_epoch "$resets_7d_epoch" \
+  '{
+    five_hour: {
+      utilization: $five_hour,
+      hourly_threshold: $hourly_threshold,
+      over_threshold: $five_hour_over,
+      window_hour: $window_hour,
+      resets_at_epoch: $resets_5h_epoch
+    },
+    seven_day: {
+      utilization: $seven_day,
+      daily_threshold: $daily_threshold,
+      over_threshold: $seven_day_over,
+      window_day: $window_day,
+      resets_at_epoch: $resets_7d_epoch
+    },
+    detection_method: "statusline"
+  }'

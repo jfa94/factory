@@ -782,44 +782,39 @@ Tier = max(file_tier, dep_tier). Ties broken upward.
 
 **Behavior:**
 
-1. Read `${CLAUDE_PLUGIN_DATA}/last-headers.json` (populated after each Claude API response)
-2. Detect billing mode from header presence:
-   - `unified-*` headers present + `is_using_overage=false` → `"subscription"` (cost = $0)
-   - `unified-*` headers present + `is_using_overage=true` → `"overage"` (API rates apply)
-   - No `unified-*` headers / `ANTHROPIC_API_KEY` set → `"api"` (API rates apply)
-3. Calculate 5h position using `anthropic-ratelimit-unified-5h-utilization` + `*-reset`:
+1. Read `${CLAUDE_PLUGIN_DATA}/usage-cache.json` (written by `bin/statusline-wrapper.sh`)
+2. Freshness check: if `captured_at` is >120s old, log warning but continue
+3. Calculate 5h position using `five_hour.used_percentage` + `five_hour.resets_at`:
    - `window_hour = floor((now - (resets_at - 5h)) / 3600) + 1` [1–5]
-   - `hourly_threshold = min(window_hour * 0.20, 0.90)`
-4. Calculate 7d position using `anthropic-ratelimit-unified-7d-utilization` + `*-reset`:
+   - `hourly_threshold = min(window_hour * 20, 90)`
+4. Calculate 7d position using `seven_day.used_percentage` + `seven_day.resets_at`:
    - `window_day = floor((now - (resets_at - 7d)) / 86400) + 1` [1–7]
-   - `daily_threshold = [0.142, 0.286, 0.429, 0.571, 0.714, 0.857, 0.95][window_day - 1]`
+   - `daily_threshold = [14, 29, 43, 57, 71, 86, 95][window_day - 1]`
 5. Exit 0 with JSON output (caller decides action based on over_threshold flags)
 
-**Cold start:** If `last-headers.json` does not exist, runs a minimal probe to populate it:
-
-```bash
-claude -p "ok" --max-turns 1 --model haiku
-```
+**Setup:** One-time user step — set `statusLine.command` in `~/.claude/settings.json`
+to `bin/statusline-wrapper.sh`. The wrapper captures `rate_limits` from Claude Code's
+statusline JSON and writes it to `usage-cache.json`. No cold-start probe needed.
 
 **Output:**
 
 ```json
 {
   "five_hour": {
-    "utilization": 0.45,
-    "hourly_threshold": 0.6,
+    "utilization": 45,
+    "hourly_threshold": 60,
     "over_threshold": false,
-    "resets_at": "2026-04-08T14:30:00Z",
-    "window_hour": 3
+    "window_hour": 3,
+    "resets_at_epoch": 1776329771
   },
   "seven_day": {
-    "utilization": 0.52,
-    "daily_threshold": 0.571,
+    "utilization": 52,
+    "daily_threshold": 57,
     "over_threshold": false,
-    "resets_at": "2026-04-12T00:00:00Z",
-    "window_day": 4
+    "window_day": 4,
+    "resets_at_epoch": 1776900000
   },
-  "billing_mode": "subscription|overage|api"
+  "detection_method": "statusline"
 }
 ```
 

@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Output schema for codex exec adversarial code review",
+  "type": "object",
+  "required": [
+    "findings",
+    "overall_correctness",
+    "overall_explanation",
+    "overall_confidence_score"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "type": "array",
+      "description": "Individual issues found in the code",
+      "items": {
+        "type": "object",
+        "required": ["title", "body", "priority"],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Short one-line summary of the issue"
+          },
+          "body": {
+            "type": "string",
+            "description": "Detailed explanation of the issue and how to fix it"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "critical/high = blocking; medium/low = non-blocking"
+          },
+          "confidence_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Confidence that this is a real issue (0-1)"
+          },
+          "code_location": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "absolute_file_path": {
+                "type": "string",
+                "description": "Absolute path to the file containing the issue"
+              },
+              "line_range": {
+                "type": "string",
+                "description": "Line range, e.g. '42-55'"
+              }
+            }
+          }
+        }
+      }
+    },
+    "overall_correctness": {
+      "type": "string",
+      "enum": ["patch is correct", "patch is incorrect"],
+      "description": "patch is correct = APPROVE; patch is incorrect = REQUEST_CHANGES"
+    },
+    "overall_explanation": {
+      "type": "string",
+      "description": "One-paragraph overall assessment of the patch"
+    },
+    "overall_confidence_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Overall confidence in the correctness assessment (0-1)"
+    }
+  }
+}

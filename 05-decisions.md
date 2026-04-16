@@ -175,32 +175,17 @@ The original bash pipeline took whichever utilization was higher (5h or 7d) and 
 **5-hour check behavior:**
 
 - Hourly thresholds: 20% / 40% / 60% / 80% / 90% across hours 1–5, derived from `resets_at - 5h`
-- Over threshold + Ollama enabled → route to Ollama (all tiers allowed)
-- Over threshold + no Ollama → wait until next hour boundary, then retry on Claude
-- Ollama exhausts max review rounds → wait for 5h reset, then retry on Claude
+- Over threshold → wait until 5h window resets (wait_minutes from `resets_at_epoch`, session-anchored)
+- After wait, re-check quota and retry
 
 **7-day check behavior:**
 
-- Daily thresholds: 14.2% / 28.6% / 42.9% / 57.1% / 71.4% / 85.7% / 95% across days 1–7, derived from `resets_at - 7d`
+- Daily thresholds: 14% / 29% / 43% / 57% / 71% / 86% / 95% across days 1–7, derived from `resets_at - 7d`
 - Final threshold is 95% (not 100%) to preserve a 5% buffer
-- Over threshold + Ollama enabled → route to Ollama (all tiers allowed), continue until next daily threshold
-- Over threshold + no Ollama → end gracefully: stop spawning, drain in-flight tasks, mark run `partial`, persist state for resume
-- Ollama exhausts max review rounds → same graceful exit (no cloud fallback — budget is the constraint)
+- Over threshold → end gracefully: stop spawning, drain in-flight tasks, mark run `partial`, persist state for resume
 
-**Why allow all tiers on Ollama?**
-When a budget limit is hit, blocking higher-tier tasks entirely means the pipeline grinds to a halt. Ollama with elevated review caps (routine=15, feature=20, security=25 rounds) provides a quality-compensated path forward. The stricter review is the critical element — it runs until the code passes, not until rounds are exhausted (the cap is a safety bound, not a target).
-
-**Why source from response headers, not the OAuth usage API?**
-The existing bash pipeline called `https://api.anthropic.com/api/oauth/usage` directly, requiring OAuth token retrieval from Keychain (macOS-only, fragile). The `unified-*` response headers (`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`) carry the same data and are already present in `last-headers.json` saved after each API call. No separate API call, no credential handling, cross-platform.
-
-**Billing mode detection (auto, no config):**
-
-- `unified-*` headers + `is_using_overage=false` → subscription allowance (cost = $0)
-- `unified-*` headers + `is_using_overage=true` → extra usage/overage (API rates apply)
-- No `unified-*` headers / `ANTHROPIC_API_KEY` set → direct API (API rates apply)
-  Cost estimates in the pipeline summary reflect billing mode automatically.
-
-**Advanced option:** LiteLLM proxy at `http://localhost:4000` for unified routing. Adds dependency but simplifies multi-provider management. Optional — not required for basic Ollama fallback.
+**Why source from Claude Code's statusline, not response headers?**
+Response headers require a layer to capture and write `last-headers.json` after each API call — but no such layer existed in the plugin (Agent() subagents don't expose response headers to the orchestrator). The Claude Code process already provides real-time `rate_limits` data in its statusline JSON (updated near-continuously). A wrapper script captures this to `usage-cache.json` with zero token cost and no API calls needed.
 
 ---
 

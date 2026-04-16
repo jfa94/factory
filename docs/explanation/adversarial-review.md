@@ -68,13 +68,11 @@ Each round, the Actor receives specific findings to address. The Critic verifies
 
 **Round limits by risk tier:**
 
-| Risk Tier | Cloud Max | Ollama Max |
-| --------- | --------- | ---------- |
-| Routine   | 2         | 15         |
-| Feature   | 4         | 20         |
-| Security  | 6         | 25         |
-
-Ollama limits are higher to compensate for lower model quality. The local model may need more iterations to converge on acceptable code.
+| Risk Tier | Max Rounds |
+| --------- | ---------- |
+| Routine   | 2          |
+| Feature   | 4          |
+| Security  | 6          |
 
 ---
 
@@ -125,7 +123,20 @@ pipeline-detect-reviewer
   → Otherwise: use Claude Code task-reviewer
 ```
 
-Codex has a purpose-built adversarial review mode designed for pressure-testing assumptions. It performs threat modeling and edge case analysis specifically.
+When Codex is available, `pipeline-codex-review` builds a review prompt from the
+`review-protocol` skill + spec + `git diff`, then invokes:
+
+```bash
+codex exec \
+  --output-schema schemas/codex-review.schema.json \
+  --output-last-message <out-file> \
+  --sandbox read-only \
+  - < prompt-file
+```
+
+The wrapper maps Codex's structured JSON output to the same normalized verdict
+shape `pipeline-parse-review` produces. On Codex failure, the orchestrator
+retries once, then falls through to the Claude Code `task-reviewer` agent.
 
 The Claude Code fallback uses the `task-reviewer` agent with the `review-protocol` skill injected. This provides consistent review behavior regardless of which reviewer is used.
 

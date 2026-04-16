@@ -7,7 +7,7 @@ Reference for run state structure and task lifecycle.
 ```
 ${CLAUDE_PLUGIN_DATA}/
 ├── config.json                    # User configuration
-├── last-headers.json              # API rate limit headers
+├── usage-cache.json               # Rate limit data from statusline wrapper
 ├── pipeline.lock                  # Lock file (PID + timestamp)
 ├── metrics.db                     # SQLite database (MCP server)
 │

@@ -16,11 +16,13 @@ done
 
 # Check Codex availability
 if command -v codex &>/dev/null; then
-  if codex status --auth &>/dev/null 2>&1; then
+  if codex login status &>/dev/null 2>&1; then
+    PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
     jq -n \
       --arg reviewer "codex" \
       --arg base "$base_ref" \
-      '{reviewer: $reviewer, command: ("codex adversarial-review --base " + $base + " --wait")}'
+      --arg plugin_root "$PLUGIN_ROOT" \
+      '{reviewer: $reviewer, command: ($plugin_root + "/bin/pipeline-codex-review --base " + $base)}'
     exit 0
   fi
 fi

@@ -245,7 +245,7 @@ Pipeline state lives outside the git repository:
 ```
 ${CLAUDE_PLUGIN_DATA}/
 ├── config.json           # User configuration
-├── last-headers.json     # Rate limit headers from last API call
+├── usage-cache.json      # Rate limit data from statusline wrapper
 ├── metrics.db            # SQLite metrics (MCP server)
 └── runs/
     ├── current -> run-.../ # Symlink to active run

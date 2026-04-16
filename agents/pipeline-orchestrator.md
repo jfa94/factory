@@ -179,14 +179,18 @@ success/failure path; every status transition is explicit.
        - Jump to step 7.
 
 4. **Spawn Reviewers**
-   - `pipeline-detect-reviewer` — discover the reviewer toolchain
-     (`{reviewer, command}`); used to know whether to invoke the bundled
-     `task-reviewer` agent or shell out to Codex.
-   - Always spawn `task-reviewer` with `$worktree_path` and task context.
-   - If `risk_tier == "security"`: also spawn `code-reviewer` (bundled), and any
-     user-provided `security-reviewer` / `architecture-reviewer` that exist
-     under `.claude/agents/`.
-   - All reviewers run in parallel — emit one assistant message with N Agent calls.
+   - `detect=$(pipeline-detect-reviewer --base staging)` — discover the reviewer
+     toolchain (`{reviewer, command}`).
+   - If `$(printf '%s' "$detect" | jq -r '.reviewer') == "codex"`:
+     - Run `$(printf '%s' "$detect" | jq -r '.command') --task-id $t --spec-dir $spec_dir 2>codex.err >codex.out`
+     - If non-zero exit: retry once. If still non-zero, log warning and fall
+       through to Claude `task-reviewer` (spawn via Agent below).
+     - On success: `pipeline-parse-review --reviewer codex <codex.out` → verdict JSON.
+     - Do NOT spawn `task-reviewer` (Codex replaces it).
+   - Else: spawn `task-reviewer` via `Agent({subagent_type: "task-reviewer", ...})`.
+   - If `risk_tier == "security"`: also spawn `code-reviewer` (bundled) and any
+     user-provided `security-reviewer` / `architecture-reviewer` under `.claude/agents/`.
+   - Non-Codex reviewers run in parallel — emit one assistant message with N Agent calls.
 
 5. **Parse Verdicts**
    - For each returned reviewer: `pipeline-parse-review < <output-file>` →
@@ -245,8 +249,7 @@ Wait for all N calls to return.
 ```
 
 Each task-executor runs in its own worktree; model/maxTurns come from the
-Pre-flight step; env var overrides (ANTHROPIC_BASE_URL for Ollama) come from the
-model router result.
+Pre-flight step.
 
 ### After all groups complete
 
@@ -320,10 +323,9 @@ When `pipeline-model-router` returns `action: wait`:
 
 1. Log the wait time and reason
 2. Sleep for `wait_minutes`
-3. Re-check quota
-4. If still over: check if any in-flight tasks can drain first
-5. Continue when quota allows
-6. After the wait completes, add the elapsed minutes to
+3. Re-check quota via `pipeline-quota-check` (statusline keeps writing
+   `usage-cache.json` even during sleep, so re-reads get fresh data)
+4. After the wait completes, add the elapsed minutes to
    `.circuit_breaker.pause_minutes` so `pipeline-circuit-breaker` does not
    count paused wall-clock time against `maxRuntimeMinutes`:
 
@@ -332,10 +334,13 @@ When `pipeline-model-router` returns `action: wait`:
    pipeline-state write <run-id> '.circuit_breaker.pause_minutes' $((prior + wait_minutes))
    ```
 
+5. If 3 consecutive wait cycles still return `over_threshold: true`, treat as
+   `end_gracefully` to prevent infinite sleep loops.
+
 When `action: end_gracefully`:
 
 1. Do NOT start new tasks
-2. Wait for in-flight tasks to complete (with Ollama if available)
+2. Wait for in-flight tasks to complete
 3. Mark run as `partial`
 4. Run summary (includes partial results)
 

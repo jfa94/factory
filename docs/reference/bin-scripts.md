@@ -128,15 +128,15 @@ pipeline-state <action> <run-id> [args...]
 
 **Actions:**
 
-| Action           | Arguments                     | Description              |
-| ---------------- | ----------------------------- | ------------------------ |
-| `read`           | `<run-id> [key]`              | Read full state or jq key |
-| `write`          | `<run-id> <key> <value>`      | Atomic write to state key |
-| `task-status`    | `<run-id> <task-id> <status>` | Update task status        |
-| `deps-satisfied` | `<run-id> <task-id>`          | Check if deps done        |
-| `interrupted`    | `<run-id>`                    | Check if run interrupted  |
+| Action           | Arguments                     | Description                |
+| ---------------- | ----------------------------- | -------------------------- |
+| `read`           | `<run-id> [key]`              | Read full state or jq key  |
+| `write`          | `<run-id> <key> <value>`      | Atomic write to state key  |
+| `task-status`    | `<run-id> <task-id> <status>` | Update task status         |
+| `deps-satisfied` | `<run-id> <task-id>`          | Check if deps done         |
+| `interrupted`    | `<run-id>`                    | Check if run interrupted   |
 | `resume-point`   | `<run-id>`                    | Find first incomplete task |
-| `list`           | -                             | List all runs             |
+| `list`           | -                             | List all runs              |
 
 **Task statuses:** pending, executing, reviewing, done, failed, interrupted, needs_human_review, ci_fixing
 
@@ -357,10 +357,10 @@ pipeline-circuit-breaker <run-id>
 
 **Thresholds checked:**
 
-| Threshold    | Config Key               | Default    |
-| ------------ | ------------------------ | ---------- |
-| Max runtime  | `maxRuntimeMinutes`      | 0 (off)    |
-| Max failures | `maxConsecutiveFailures` | 5          |
+| Threshold    | Config Key               | Default |
+| ------------ | ------------------------ | ------- |
+| Max runtime  | `maxRuntimeMinutes`      | 0 (off) |
+| Max failures | `maxConsecutiveFailures` | 5       |
 
 The runtime check is skipped when `maxRuntimeMinutes` is `0`. The script trips on two conditions only: `maxConsecutiveFailures` being reached, or a positive `maxRuntimeMinutes` being exceeded.
 
@@ -506,27 +506,27 @@ Parse rate limit headers, compute window position.
 pipeline-quota-check
 ```
 
-**Reads:** `${CLAUDE_PLUGIN_DATA}/last-headers.json`
+**Reads:** `${CLAUDE_PLUGIN_DATA}/usage-cache.json` (written by `bin/statusline-wrapper.sh`)
 
 **Output:**
 
 ```json
 {
   "five_hour": {
-    "utilization": 0.45,
-    "hourly_threshold": 0.4,
+    "utilization": 45,
+    "hourly_threshold": 40,
     "over_threshold": true,
-    "resets_at": "2026-04-13T18:00:00Z",
-    "window_hour": 3
+    "window_hour": 3,
+    "resets_at_epoch": 1776329771
   },
   "seven_day": {
-    "utilization": 0.25,
-    "daily_threshold": 0.286,
+    "utilization": 25,
+    "daily_threshold": 29,
     "over_threshold": false,
-    "resets_at": "2026-04-15T00:00:00Z",
-    "window_day": 2
+    "window_day": 2,
+    "resets_at_epoch": 1776900000
   },
-  "billing_mode": "subscription"
+  "detection_method": "statusline"
 }
 ```
 
@@ -534,32 +534,45 @@ pipeline-quota-check
 
 ### pipeline-model-router
 
-Route to Anthropic or Ollama based on quota.
+Route task execution based on quota utilization.
 
 **Usage:**
 
 ```bash
-pipeline-model-router --quota '<quota-json>' --task-tier <tier>
+pipeline-model-router --quota '<quota-json>' --tier <routine|feature|security>
 ```
 
-**Output:**
+**Output (proceed):**
 
 ```json
 {
   "provider": "anthropic",
-  "model": "sonnet",
-  "action": "proceed"
+  "action": "proceed",
+  "review_cap": 2,
+  "tier": "routine"
 }
 ```
 
-Or:
+**Output (wait — 5h over threshold):**
 
 ```json
 {
-  "provider": "ollama",
-  "model": "qwen2.5-coder:14b",
-  "action": "proceed",
-  "review_cap": 20
+  "provider": "anthropic",
+  "action": "wait",
+  "trigger": "5h_over",
+  "wait_minutes": 47,
+  "tier": "routine"
+}
+```
+
+**Output (end gracefully — 7d over threshold):**
+
+```json
+{
+  "provider": "anthropic",
+  "action": "end_gracefully",
+  "trigger": "7d_over",
+  "tier": "routine"
 }
 ```
 

@@ -305,9 +305,9 @@ Both 5h and 7d checks run independently. Results compose — neither short-circu
                                  ▼
               ┌──────────────────────────────────────┐
               │  pipeline-quota-check                 │
-              │    read last-headers.json             │
-              │    parse unified-5h-utilization       │
-              │    parse unified-7d-utilization       │
+              │    read usage-cache.json              │
+              │    parse five_hour.used_percentage    │
+              │    parse seven_day.used_percentage    │
               └──────┬───────────────────────┬────────┘
                      │                       │
              5h check│               7d check│
@@ -477,7 +477,7 @@ At 200 turns: ~12 tasks safely, ~15 tasks if reviews pass first round. For 20+ t
 ```
 ${CLAUDE_PLUGIN_DATA}/
 ├── config.json                    # Populated from userConfig at init
-├── last-headers.json              # Last Anthropic API response headers (for rate limiting)
+├── usage-cache.json               # Rate limit data from statusline wrapper
 ├── pipeline.lock                  # Lock file (PID + timestamp)
 ├── metrics.db                     # SQLite database (MCP server)
 │

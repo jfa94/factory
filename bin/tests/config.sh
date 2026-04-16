@@ -69,9 +69,6 @@ for key in \
   review.routineRounds \
   review.featureRounds \
   review.securityRounds \
-  review.ollamaRoutineRounds \
-  review.ollamaFeatureRounds \
-  review.ollamaSecurityRounds \
   review.preferCodex \
   quality.holdoutPercent \
   quality.holdoutPassRate \
@@ -86,9 +83,6 @@ for key in \
   execution.maxTurnsSimple \
   execution.maxTurnsMedium \
   execution.maxTurnsComplex \
-  localLlm.enabled \
-  localLlm.ollamaUrl \
-  localLlm.model \
   dependencies.prMergeTimeout \
   dependencies.pollInterval \
   observability.auditLog \
@@ -142,8 +136,12 @@ assert_eq "observability.auditLog default = true" "true" "$default_audit_log"
 default_mutation_tiers=$(jq -rc '.userConfig["quality.mutationTestingTiers"].default' "$PLUGIN_JSON")
 assert_eq "quality.mutationTestingTiers default = [feature,security]" '["feature","security"]' "$default_mutation_tiers"
 
-# task_16_08: LiteLLM keys must be absent (feature was never implemented)
-for stripped in localLlm.useLiteLlm localLlm.liteLlmUrl; do
+# Local LLM removed: localLlm.*, review.ollama*, LiteLLM keys must all be absent
+# (Ollama routing is architecturally impossible with Agent() subagents — claude-code#38698)
+for stripped in \
+  localLlm.enabled localLlm.ollamaUrl localLlm.model \
+  localLlm.useLiteLlm localLlm.liteLlmUrl \
+  review.ollamaRoutineRounds review.ollamaFeatureRounds review.ollamaSecurityRounds; do
   has=$(jq --arg k "$stripped" -r '.userConfig | has($k) | tostring' "$PLUGIN_JSON")
   assert_eq "userConfig does NOT contain $stripped" "false" "$has"
 done
@@ -195,7 +193,6 @@ assert_contains "has description" "description:" "$CONFIGURE"
 assert_contains "has Step 1" "Step 1" "$CONFIGURE"
 assert_contains "has Step 2" "Step 2" "$CONFIGURE"
 assert_contains "writes to config.json" "config.json" "$CONFIGURE"
-assert_contains "probes ollama" "ollama" "$CONFIGURE"
 
 # task_08_02: write step must use setpath with split(".") so dotted keys
 # create nested objects, not flat keys with literal dots in their name.
@@ -246,25 +243,25 @@ assert_eq "sibling write adds review.featureRounds" "5" "$sibling_second"
 # documented technique works at runtime AND that configure.md documents both
 # variants.
 CFG_TMP3=$(mktemp "$CFG_DIR/config.XXXXXX")
-jq --arg k "localLlm.ollamaUrl" --arg v "http://192.168.1.50:11434" \
+jq --arg k "execution.defaultModel" --arg v "opus" \
   'setpath(($k | split(".")); $v)' \
   "$CFG_FILE" > "$CFG_TMP3"
 mv -f "$CFG_TMP3" "$CFG_FILE"
 
-string_value=$(jq -r '.localLlm.ollamaUrl // "missing"' "$CFG_FILE")
-assert_eq "setpath with --arg writes string localLlm.ollamaUrl" \
-  "http://192.168.1.50:11434" "$string_value"
+string_value=$(jq -r '.execution.defaultModel // "missing"' "$CFG_FILE")
+assert_eq "setpath with --arg writes string execution.defaultModel" \
+  "opus" "$string_value"
 
-# Sanity-check: --argjson on the same raw string SHOULD fail, proving why we
+# Sanity-check: --argjson on a non-JSON string SHOULD fail, proving why we
 # need the string/number distinction in the first place.
 CFG_TMP4=$(mktemp "$CFG_DIR/config.XXXXXX")
-if jq --arg k "localLlm.ollamaUrl" --argjson v "http://192.168.1.50:11434" \
+if jq --arg k "execution.defaultModel" --argjson v "not-valid-json" \
   'setpath(($k | split(".")); $v)' \
   "$CFG_FILE" > "$CFG_TMP4" 2>/dev/null; then
-  echo "  FAIL: --argjson unexpectedly accepted a raw URL string"
+  echo "  FAIL: --argjson unexpectedly accepted a non-JSON string"
   fail=$((fail + 1))
 else
-  echo "  PASS: --argjson rejects raw URL string (proves --arg is required for strings)"
+  echo "  PASS: --argjson rejects non-JSON string (proves --arg is required for strings)"
   pass=$((pass + 1))
 fi
 rm -f "$CFG_TMP4"
@@ -278,9 +275,9 @@ unset CFG_DIR CFG_FILE CFG_TMP CFG_TMP2 CFG_TMP3 CFG_TMP4
 assert_contains "configure.md documents argjson for numbers/booleans" \
   'argjson v 3' "$CONFIGURE"
 assert_contains "configure.md documents arg for strings" \
-  'arg v "http://192.168.1.50:11434"' "$CONFIGURE"
-assert_contains "configure.md gives a string-valued example (localLlm.ollamaUrl)" \
-  'localLlm.ollamaUrl' "$CONFIGURE"
+  'arg v "opus"' "$CONFIGURE"
+assert_contains "configure.md gives a string-valued example (execution.defaultModel)" \
+  'execution.defaultModel' "$CONFIGURE"
 assert_contains "configure.md gives a numeric example (review.routineRounds)" \
   'review.routineRounds' "$CONFIGURE"
 

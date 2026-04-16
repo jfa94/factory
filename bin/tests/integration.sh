@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Integration tests — exercise multiple pipeline-* scripts together with only
-# external systems (gh, claude, ollama, network) mocked. Plan 12 / tasks
+# external systems (gh, claude, network) mocked. Plan 12 / tasks
 # 12_01..12_04. Run: bash bin/tests/integration.sh
 set -euo pipefail
 
@@ -9,13 +9,7 @@ BIN_DIR="$REPO_ROOT/bin"
 ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dark-factory-integration.XXXXXX")"
 trap '_cleanup' EXIT INT TERM
 
-OLLAMA_PID=""
-
 _cleanup() {
-  if [[ -n "$OLLAMA_PID" ]] && kill -0 "$OLLAMA_PID" 2>/dev/null; then
-    kill "$OLLAMA_PID" 2>/dev/null || true
-    wait "$OLLAMA_PID" 2>/dev/null || true
-  fi
   rm -rf "$ROOT_TMP"
 }
 
@@ -314,165 +308,62 @@ test_parallel_spawn() {
 }
 
 # ---------------------------------------------------------------------------
-# task_12_04 — Ollama fallback flow
-# Seed last-headers.json with a 5h-over-threshold value, run pipeline-quota-check,
-# then pipeline-model-router. Cover three branches:
-#  1. Ollama disabled → router emits action=wait.
-#  2. Ollama enabled but unreachable → router emits action=wait.
-#  3. Ollama enabled and reachable (mock python http server) → router emits
-#     provider=ollama with base_url and review_cap.
+# task_12_04 — Statusline wait flow
+# Seed usage-cache.json with a 5h-over-threshold value, run pipeline-quota-check,
+# then pipeline-model-router. Exercises the full quota-check → router integration
+# using the statusline data source.
 # ---------------------------------------------------------------------------
-test_ollama_fallback() {
-  new_scenario "ollama-fallback"
+test_statusline_wait_flow() {
+  new_scenario "statusline-wait-flow"
 
-  # Seed last-headers.json with utilization 0.95 and a 10-minute reset.
-  local now reset_5h reset_7d
+  # Seed usage-cache.json with utilization 95% and a reset 10 minutes out.
+  local now resets_5h_epoch resets_7d_epoch
   now=$(date +%s)
-  reset_5h=$(date -u -r $((now + 600)) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
-    || date -u -d "@$((now + 600))" +%Y-%m-%dT%H:%M:%SZ)
-  reset_7d=$(date -u -r $((now + 86400)) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
-    || date -u -d "@$((now + 86400))" +%Y-%m-%dT%H:%M:%SZ)
+  resets_5h_epoch=$(( now + 600 ))
+  resets_7d_epoch=$(( now + 86400 ))
 
   jq -n \
-    --arg reset_5h "$reset_5h" \
-    --arg reset_7d "$reset_7d" \
+    --argjson resets_5h "$resets_5h_epoch" \
+    --argjson resets_7d "$resets_7d_epoch" \
+    --argjson now "$now" \
     '{
-      "anthropic-ratelimit-unified-5h-utilization": 0.95,
-      "anthropic-ratelimit-unified-5h-reset": $reset_5h,
-      "anthropic-ratelimit-unified-7d-utilization": 0.10,
-      "anthropic-ratelimit-unified-7d-reset": $reset_7d,
-      "is_using_overage": "false"
-    }' > "$CLAUDE_PLUGIN_DATA/last-headers.json"
+      "five_hour": {"used_percentage": 95, "resets_at": $resets_5h},
+      "seven_day": {"used_percentage": 10, "resets_at": $resets_7d},
+      "captured_at": $now
+    }' > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
 
   local quota
   quota=$(pipeline-quota-check)
-  assert_eq "quota detection_method=headers" "headers" \
+  assert_eq "quota detection_method=statusline" "statusline" \
     "$(printf '%s' "$quota" | jq -r '.detection_method')"
-  assert_eq "five_hour utilization parsed to 95" "95" \
+  assert_eq "five_hour utilization=95" "95" \
     "$(printf '%s' "$quota" | jq -r '.five_hour.utilization')"
   assert_eq "five_hour over_threshold true" "true" \
     "$(printf '%s' "$quota" | jq -r '.five_hour.over_threshold')"
   assert_eq "seven_day under_threshold" "false" \
     "$(printf '%s' "$quota" | jq -r '.seven_day.over_threshold')"
+  assert_eq "resets_at_epoch present" "true" \
+    "$(printf '%s' "$quota" | jq -e '.five_hour.resets_at_epoch > 0' >/dev/null 2>&1 && echo true || echo false)"
 
-  # --- Branch 1: Ollama disabled → router waits.
-  cat > "$CLAUDE_PLUGIN_DATA/config.json" <<'CFG'
-{
-  "localLlm": { "enabled": false },
-  "review": {
-    "routineRounds": 2,
-    "featureRounds": 4,
-    "securityRounds": 6
-  }
-}
-CFG
+  # 5h over → router emits action=wait with session-anchored wait_minutes.
+  local route_5h_over
+  route_5h_over=$(pipeline-model-router --quota "$quota" --tier routine 2>/dev/null)
+  assert_eq "5h over → action=wait" "wait" \
+    "$(printf '%s' "$route_5h_over" | jq -r '.action')"
+  assert_eq "5h over → trigger=5h_over" "5h_over" \
+    "$(printf '%s' "$route_5h_over" | jq -r '.trigger')"
+  assert_eq "wait_minutes positive" "true" \
+    "$(printf '%s' "$route_5h_over" | jq -e '.wait_minutes > 0' >/dev/null 2>&1 && echo true || echo false)"
 
-  local route_disabled
-  route_disabled=$(pipeline-model-router --quota "$quota" --tier routine 2>/dev/null)
-  assert_eq "ollama disabled → action=wait" "wait" \
-    "$(printf '%s' "$route_disabled" | jq -r '.action')"
-  assert_eq "ollama disabled → trigger=5h_over_no_ollama" "5h_over_no_ollama" \
-    "$(printf '%s' "$route_disabled" | jq -r '.trigger')"
-
-  # --- Branch 2: Ollama enabled but pointed at an unreachable port.
-  cat > "$CLAUDE_PLUGIN_DATA/config.json" <<'CFG'
-{
-  "localLlm": {
-    "enabled": true,
-    "ollamaUrl": "http://127.0.0.1:1",
-    "model": "qwen2.5-coder:14b"
-  },
-  "review": {
-    "routineRounds": 2,
-    "ollamaRoutineRounds": 15
-  }
-}
-CFG
-
-  local route_unreachable
-  route_unreachable=$(pipeline-model-router --quota "$quota" --tier routine 2>/dev/null)
-  assert_eq "ollama unreachable → action=wait" "wait" \
-    "$(printf '%s' "$route_unreachable" | jq -r '.action')"
-
-  # --- Branch 3: Ollama enabled and reachable via mock HTTP server.
-  if ! command -v python3 >/dev/null 2>&1; then
-    printf '  SKIP  [%s] python3 not available — skipping reachable-ollama branch\n' \
-      "$current_scenario"
-    return 0
-  fi
-
-  local ollama_port=18434
-  local server_script="$ROOT_TMP/mock-ollama.py"
-  cat > "$server_script" <<'PY'
-import http.server, json, sys
-port = int(sys.argv[1])
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/api/tags':
-            body = json.dumps({"models":[{"name":"qwen2.5-coder:14b"}]}).encode()
-            self.send_response(200)
-            self.send_header('Content-Type','application/json')
-            self.send_header('Content-Length',str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self.send_response(404); self.end_headers()
-    def log_message(self, *a, **kw): pass
-http.server.HTTPServer(('127.0.0.1', port), H).serve_forever()
-PY
-  python3 "$server_script" "$ollama_port" >/dev/null 2>&1 &
-  OLLAMA_PID=$!
-
-  # Wait for the mock server to come up (max ~3s).
-  local up=0 i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    if curl -sf --connect-timeout 1 "http://127.0.0.1:$ollama_port/api/tags" >/dev/null 2>&1; then
-      up=1; break
-    fi
-    sleep 0.3
-  done
-  if [[ "$up" -ne 1 ]]; then
-    failed=$((failed + 1))
-    printf '  FAIL  [%s] mock ollama server did not come up\n' "$current_scenario"
-    return 0
-  fi
-
-  cat > "$CLAUDE_PLUGIN_DATA/config.json" <<CFG
-{
-  "localLlm": {
-    "enabled": true,
-    "ollamaUrl": "http://127.0.0.1:$ollama_port",
-    "model": "qwen2.5-coder:14b"
-  },
-  "review": {
-    "routineRounds": 2,
-    "ollamaRoutineRounds": 15
-  }
-}
-CFG
-
-  local route_ollama
-  route_ollama=$(pipeline-model-router --quota "$quota" --tier routine 2>/dev/null)
-  assert_eq "ollama reachable → provider=ollama" "ollama" \
-    "$(printf '%s' "$route_ollama" | jq -r '.provider')"
-  assert_eq "ollama reachable → model echoed" "qwen2.5-coder:14b" \
-    "$(printf '%s' "$route_ollama" | jq -r '.model')"
-  assert_eq "ollama reachable → base_url echoed" "http://127.0.0.1:$ollama_port" \
-    "$(printf '%s' "$route_ollama" | jq -r '.base_url')"
-  assert_eq "ollama reachable → review_cap elevated" "15" \
-    "$(printf '%s' "$route_ollama" | jq -r '.review_cap')"
-  assert_eq "ollama reachable → trigger=rate_limit_fallback" "rate_limit_fallback" \
-    "$(printf '%s' "$route_ollama" | jq -r '.trigger')"
-
-  # Verify mock /api/tags advertises the configured model (sanity check).
-  local tags_body
-  tags_body=$(curl -sf "http://127.0.0.1:$ollama_port/api/tags")
-  assert_eq "mock /api/tags advertises configured model" "qwen2.5-coder:14b" \
-    "$(printf '%s' "$tags_body" | jq -r '.models[0].name')"
-
-  kill "$OLLAMA_PID" 2>/dev/null || true
-  wait "$OLLAMA_PID" 2>/dev/null || true
-  OLLAMA_PID=""
+  # 7d over → router emits action=end_gracefully.
+  local quota_7d_over
+  quota_7d_over=$(printf '%s' "$quota" | jq '.seven_day.over_threshold = true | .seven_day.utilization = 100')
+  local route_7d_over
+  route_7d_over=$(pipeline-model-router --quota "$quota_7d_over" --tier feature 2>/dev/null)
+  assert_eq "7d over → action=end_gracefully" "end_gracefully" \
+    "$(printf '%s' "$route_7d_over" | jq -r '.action')"
+  assert_eq "7d over → trigger=7d_over" "7d_over" \
+    "$(printf '%s' "$route_7d_over" | jq -r '.trigger')"
 }
 
 # ---------------------------------------------------------------------------
@@ -481,7 +372,7 @@ CFG
 test_spec_handoff
 test_resume_after_crash
 test_parallel_spawn
-test_ollama_fallback
+test_statusline_wait_flow
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

@@ -319,27 +319,6 @@ userConfig:
     max: 10
     description: "Maximum adversarial review rounds for security-tier tasks (cloud)"
 
-  review.ollamaRoutineRounds:
-    type: number
-    default: 15
-    min: 5
-    max: 50
-    description: "Review rounds for routine-tier tasks when running on Ollama"
-
-  review.ollamaFeatureRounds:
-    type: number
-    default: 20
-    min: 5
-    max: 50
-    description: "Review rounds for feature-tier tasks when running on Ollama"
-
-  review.ollamaSecurityRounds:
-    type: number
-    default: 25
-    min: 5
-    max: 50
-    description: "Review rounds for security-tier tasks when running on Ollama"
-
   review.preferCodex:
     type: boolean
     default: true
@@ -437,32 +416,6 @@ userConfig:
     max: 9999
     description: "Circuit-breaker threshold on orchestrator assistant turns. Enables graceful wind-down before the runtime maxTurns cap; default 500 = ~50% headroom over the 334-turn moderate-friction estimate for a 20-task pipeline."
 
-  # === Local LLM Fallback ===
-  localLlm.enabled:
-    type: boolean
-    default: false
-    description: "Enable Ollama fallback when Anthropic rate limits approach"
-
-  localLlm.ollamaUrl:
-    type: string
-    default: "http://localhost:11434"
-    description: "Ollama server URL — local or remote (e.g., http://192.168.1.50:11434)"
-
-  localLlm.model:
-    type: string
-    default: "qwen2.5-coder:14b"
-    description: "Ollama model tag (auto-pulled on first use if not present on server)"
-
-  localLlm.useLiteLlm:
-    type: boolean
-    default: false
-    description: "Use LiteLLM proxy for unified routing instead of direct Ollama"
-
-  localLlm.liteLlmUrl:
-    type: string
-    default: "http://localhost:4000"
-    description: "LiteLLM proxy URL (only used if useLiteLlm is true)"
-
   # === Dependencies ===
   dependencies.prMergeTimeout:
     type: number
@@ -516,141 +469,48 @@ userConfig:
 
 ---
 
-## Local LLM Fallback Configuration
+## Rate Limit Detection
 
 ### Detection Flow
 
-Usage data comes from `unified-*` response headers saved to `${CLAUDE_PLUGIN_DATA}/last-headers.json` after each Claude API call. No separate OAuth API call is needed.
-
-**Header sources:**
-
-- Subscription users (Pro/Max): `anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`, `anthropic-ratelimit-unified-status`, `is_using_overage`
-- API key users: standard `anthropic-ratelimit-*` headers — 5h pacing only, no 7d tracking
-
-**Cold start** (no `last-headers.json`): run a minimal probe (`claude -p "ok" --max-turns 1 --model haiku`) to populate initial headers before the first task.
+Usage data comes from `${CLAUDE_PLUGIN_DATA}/usage-cache.json`, written by
+`bin/statusline-wrapper.sh` on every Claude Code statusline update. The statusline
+JSON provides real-time `rate_limits` data — no API calls, no token cost.
 
 ```
 Before each task-executor spawn:
   1. pipeline-quota-check
-     → Read: ${CLAUDE_PLUGIN_DATA}/last-headers.json
-     → Parse unified-* headers (subscription) OR ratelimit-* headers (API)
-     → Calculate 5h position: window_hour = floor((now - (resets_at_5h - 5h)) / 3600) + 1  [1-5]
-                               hourly_threshold = min(window_hour * 0.20, 0.90)
-     → Calculate 7d position: window_day = floor((now - (resets_at_7d - 7d)) / 86400) + 1  [1-7]
-                               thresholds = [0.142, 0.286, 0.429, 0.571, 0.714, 0.857, 0.95]
+     → Read: ${CLAUDE_PLUGIN_DATA}/usage-cache.json
+     → Parse five_hour.used_percentage, five_hour.resets_at
+     → Parse seven_day.used_percentage, seven_day.resets_at
+     → Calculate 5h position: window_hour = floor((now - (resets_at - 5h)) / 3600) + 1  [1-5]
+                               hourly_threshold = min(window_hour * 20, 90)
+     → Calculate 7d position: window_day = floor((now - (resets_at - 7d)) / 86400) + 1  [1-7]
+                               thresholds = [14, 29, 43, 57, 71, 86, 95]
                                daily_threshold = thresholds[window_day - 1]
-     → Detect billing mode: unified-* present + is_using_overage=false → "subscription"
-                             unified-* present + is_using_overage=true  → "overage"
-                             ANTHROPIC_API_KEY set (no unified-* headers) → "api"
      → Output: {
          "five_hour":  { "utilization": N, "hourly_threshold": T, "over_threshold": bool,
-                         "resets_at": "...", "window_hour": N },
+                         "window_hour": N, "resets_at_epoch": N },
          "seven_day":  { "utilization": N, "daily_threshold": T, "over_threshold": bool,
-                         "resets_at": "...", "window_day": N },
-         "billing_mode": "subscription|overage|api"
+                         "window_day": N, "resets_at_epoch": N },
+         "detection_method": "statusline"
        }
 
-  2. pipeline-model-router --quota <quota-check-output> --task-tier <tier>
-     → Reads pipeline-quota-check output
-     → Composes 5h and 7d results (both checked independently):
+  2. pipeline-model-router --quota <quota-check-output> --tier <tier>
+     → Composes 5h and 7d results:
 
        CASE: both within limits
-         → provider: anthropic (normal path)
+         → provider: anthropic, action: proceed
 
        CASE: 5h over threshold, 7d within limits
-         → If localLlm.enabled AND Ollama available:
-              provider: ollama (elevated review caps apply: routine=15, feature=20, security=25)
-              (Ollama continues until 5h window resets)
-              If Ollama exhausts max rounds without passing review:
-                → wait for 5h reset, then retry on Claude
-         → If localLlm.disabled OR Ollama unavailable:
-              → wait (sleep until next hour boundary, max-wait configurable)
-              → retry with Claude
+         → action: wait
+         → wait_minutes derived from resets_at_epoch (session-anchored, not UTC boundary)
+         → retry with Claude after sleep
 
-       CASE: 7d over threshold (regardless of 5h)
-         → If localLlm.enabled AND Ollama available:
-              provider: ollama (elevated review caps apply: routine=15, feature=20, security=25)
-              (Ollama continues until next daily threshold)
-              If Ollama exhausts max rounds without passing review:
-                → end gracefully (see graceful exit below)
-         → If localLlm.disabled OR Ollama unavailable:
-              → end gracefully (see graceful exit below)
-
-       CASE: both over threshold
-         → 7d behavior takes precedence
-         → If localLlm.enabled AND Ollama available: → ollama (elevated caps)
-         → Else: → end gracefully
-
-  3. If provider = ollama:
-     → Check: curl -sf ${ollamaUrl}/api/tags → model available?
-     → Check: curl -sf ${ollamaUrl}/api/ps → model loaded?
-     → Spawn task-executor with env overrides:
-          ANTHROPIC_BASE_URL=http://localhost:11434/v1
-          ANTHROPIC_AUTH_TOKEN=dummy
-     → Use tier-specific review cap (not cloud cap)
-
-  4. Graceful exit (7d limit with no Ollama fallback, or Ollama failed):
-     → Stop spawning new tasks
-     → Let in-flight tasks complete
-     → Mark run status as "partial"
-     → Update state.json with resume-point so /dark-factory:run resume can continue
-        when the next daily threshold allows cloud model usage
-     → Print summary to user: utilization, next threshold, expected reset time
+       CASE: 7d over threshold
+         → action: end_gracefully
+         → Stop spawning new tasks, let in-flight complete, mark run as "partial"
 ```
-
-### Model Recommendations
-
-| VRAM  | Model                            | Disk  | Quality                    | Use Case                                          |
-| ----- | -------------------------------- | ----- | -------------------------- | ------------------------------------------------- |
-| 8GB   | Qwen 2.5-Coder 7B                | 4.7GB | Good for simple tasks      | Routine-tier: rename, config changes, simple CRUD |
-| 16GB+ | Qwen 2.5-Coder 14B **(default)** | 9GB   | Good for code gen + review | Routine + feature tasks                           |
-| 24GB+ | Qwen 2.5-Coder 32B               | 20GB  | Near cloud-quality         | Most routine and some feature tasks               |
-
-All sizes shown are Q4_K_M quantization (Ollama default). The 14B model uses ~10-12GB VRAM at inference — **16GB minimum** to allow headroom for KV cache and OS overhead. Configured via `localLlm.model`.
-
-### Remote Ollama Support
-
-To run Ollama on a separate machine on the same network:
-
-**Server-side** (on the remote machine):
-
-```bash
-OLLAMA_HOST=0.0.0.0:11434 ollama serve
-```
-
-**Client-side** (in plugin userConfig):
-
-```yaml
-localLlm.ollamaUrl: "http://192.168.1.50:11434" # replace with server IP
-```
-
-Verify connectivity: `curl http://<server-ip>:11434/api/tags`
-
-> **Security:** Ollama has no built-in auth. Only expose on a trusted LAN. Firewall the port to LAN-only or add a reverse proxy (nginx/caddy) with auth if needed.
-
-Auto-pull works identically on remote — `POST /api/pull` triggers the download on the server. The plugin does not download to the local machine.
-
-### Quality Constraints
-
-- Ollama fallback is **limit-triggered only** — it activates when the 5h or 7d threshold is exceeded, not by user configuration
-- All risk tiers (routine, feature, security) may run on Ollama when limits are triggered
-- Local model quality is lower — compensated by elevated review caps per tier (routine=15, feature=20, security=25 rounds)
-- Quality gate thresholds remain IDENTICAL regardless of model provider
-- Local model output passes through the same 5-layer quality stack
-- If Ollama exhausts its elevated review cap without passing: 5h trigger → wait for cloud; 7d trigger → end gracefully
-- There are no user-configurable tier restrictions for Ollama; `localLlm.enabled` is the sole toggle
-- On first use, `pipeline-model-router` validates Ollama connectivity and auto-pulls the configured model if not present
-
-### Advanced: LiteLLM Proxy
-
-Optional unified gateway for multi-provider routing:
-
-- Install: `pip install litellm`
-- Run: `litellm --config litellm_config.yaml`
-- Config: fallback chain `["anthropic/claude-sonnet-4-20250514", "ollama/qwen2.5-coder:32b"]`
-- Benefits: automatic fallback, cost tracking, latency logging, model-level observability
-- Point Claude Code at `http://localhost:4000` instead of direct Ollama
-- Trade-off: adds a dependency. Only recommended for teams or heavy usage.
 
 ---
 
@@ -708,7 +568,7 @@ Every tool use by every agent in the pipeline is logged to `${CLAUDE_PLUGIN_DATA
   "timestamp": "2026-04-06T03:14:15.926Z",
   "event_type": "task_completed" | "review_round" | "quality_gate" | "model_switch" | "circuit_breaker",
   "model": "sonnet",
-  "provider": "anthropic" | "ollama",
+  "provider": "anthropic",
   "tokens_in": 15000,
   "tokens_out": 8000,
   "duration_ms": 45000,

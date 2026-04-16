@@ -2,7 +2,7 @@
 description: "Configure dark-factory pipeline settings"
 arguments:
   - name: setting
-    description: "Setting to configure (e.g., humanReviewLevel, localLlm.enabled)"
+    description: "Setting to configure (e.g., humanReviewLevel, review.routineRounds)"
     required: false
 ---
 
@@ -63,14 +63,6 @@ If no specific setting was requested, show all settings grouped by category:
 | `quality.coverageMustNotDecrease`        | -       | true                     | Block tasks that decrease test coverage                            |
 | `quality.coverageRegressionTolerancePct` | -       | 0.5                      | Max coverage drop (percentage points) before regression gate fails |
 
-### Local LLM (Ollama)
-
-| Setting              | Current | Default                | Description            |
-| -------------------- | ------- | ---------------------- | ---------------------- |
-| `localLlm.enabled`   | -       | false                  | Enable Ollama fallback |
-| `localLlm.ollamaUrl` | -       | http://localhost:11434 | Ollama server URL      |
-| `localLlm.model`     | -       | qwen2.5-coder:14b      | Ollama model name      |
-
 ### Parallel Execution
 
 | Setting            | Current | Default | Description                   |
@@ -96,21 +88,10 @@ If the user specifies a setting to change:
    - `quality.holdoutPassRate`: integer 50-100
    - `quality.mutationScoreTarget`: integer 50-100
    - `quality.coverageMustNotDecrease`: boolean
-   - `localLlm.enabled`: boolean
-   - `localLlm.ollamaUrl`: valid URL (starts with http)
-   - `localLlm.model`: non-empty string
    - `execution.defaultModel`: one of `haiku`, `sonnet`, `opus`
 
-2. **For `localLlm` changes**: probe Ollama availability:
-
-   ```bash
-   curl -sf --connect-timeout 3 "${ollamaUrl}/api/tags"
-   ```
-
-   If unreachable, warn the user but still save the setting.
-
-3. **Write the updated config** (always to config.json, never to run state).
-   The key is a dotted path like `review.routineRounds` or `localLlm.ollamaUrl`.
+2. **Write the updated config** (always to config.json, never to run state).
+   The key is a dotted path like `review.routineRounds` or `execution.defaultModel`.
    Split it into a path array and use `setpath` so the assignment creates a
    nested object instead of a flat key with a literal dot in its name. `setpath`
    also auto-creates any missing intermediate objects.
@@ -120,7 +101,7 @@ If the user specifies a setting to change:
      (e.g. `20`, `0.9`, `true`). Passing a string here will fail because raw
      strings aren't valid JSON.
    - `--arg` passes the value as a string. Use it for **string-typed settings**
-     (e.g. `localLlm.ollamaUrl`, `localLlm.model`, `execution.defaultModel`).
+     (e.g. `execution.defaultModel`).
 
    Number / boolean (use `--argjson`):
 
@@ -136,7 +117,7 @@ If the user specifies a setting to change:
 
    ```bash
    tmpfile=$(mktemp "${CLAUDE_PLUGIN_DATA}/config.XXXXXX")
-   jq --arg k "localLlm.ollamaUrl" --arg v "http://192.168.1.50:11434" \
+   jq --arg k "execution.defaultModel" --arg v "opus" \
      'setpath(($k | split(".")); $v)' \
      "${CLAUDE_PLUGIN_DATA}/config.json" > "$tmpfile"
    mv -f "$tmpfile" "${CLAUDE_PLUGIN_DATA}/config.json"
@@ -148,7 +129,7 @@ If the user specifies a setting to change:
    For arrays (e.g. `quality.mutationTestingTiers`), pass the JSON literal via
    `--argjson v '["feature","security"]'`.
 
-4. **Confirm the change** — show the updated value.
+3. **Confirm the change** — show the updated value.
 
 ## Step 4: Interactive Mode
 
