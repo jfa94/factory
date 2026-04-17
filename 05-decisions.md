@@ -48,18 +48,14 @@ State management, circuit breakers, DAG traversal, and classification MUST be 10
 
 ### Decision 3: Reuse Existing Agents by Reference
 
-**Choice:** Spawn the user's existing agents (spec-reviewer, code-reviewer, architecture-reviewer, security-reviewer, test-writer, scout, simple-task-runner, scribe) by name via the Agent tool rather than creating plugin-internal copies.
+**Choice:** Bundle architecture-reviewer, security-reviewer, test-writer, and scribe directly inside the plugin's `agents/` directory. Spawn the user's existing agents (spec-reviewer, code-reviewer, scout) by name via the Agent tool for agents that benefit from user customization.
 
 **Alternatives considered:**
 
-- **Copy agents into plugin:** Guarantees stable interface, but diverges from user's evolving setup. Updates to user's agents don't propagate.
-- **Reuse by reference (chosen):** User improvements propagate automatically. Pipeline benefits from the user's customizations.
+- **Bundle all agents:** Used for architecture-reviewer, security-reviewer, test-writer, scribe — these have fixed interfaces and no user customization benefit.
+- **Reuse all by reference:** Used for spec-reviewer, code-reviewer, scout — user improvements propagate automatically and these benefit from per-project customization.
 
-**Trade-off:** If the user modifies an agent's output format, the pipeline's `pipeline-parse-review` script might break. Mitigated by:
-
-- Parsing is best-effort with fallback patterns
-- Review output format is specified by `review-protocol` skill, which we inject
-- Spec-reviewer has a stable scoring format (score/60, PASS/NEEDS_REVISION)
+**Trade-off:** Bundled agents pin behavior to the plugin version. Mitigated by: the bundled agents have stable, spec-driven output formats enforced by the `review-protocol` skill and structured output schemas.
 
 ---
 
@@ -382,7 +378,7 @@ The following questions were raised during design and confirmed through implemen
 
 **Validated: 2026-04-08** (Plan 03, spec propagation testing)
 
-Plugin agents can spawn user-defined agents from `.claude/agents/` by name via the Agent tool's `subagent_type` parameter. The orchestrator spawns `spec-reviewer`, `code-reviewer`, `scribe`, and other user agents directly. No agent copies needed — see Decision 3.
+Plugin agents can spawn agents by name via the Agent tool's `subagent_type` parameter. Claude Code resolves names against plugin-local `agents/` first, then the user's `.claude/agents/`. The orchestrator spawns `spec-reviewer`, `code-reviewer`, and `scout` from user agents; `architecture-reviewer`, `security-reviewer`, `test-writer`, and `scribe` from bundled plugin agents. See Decision 3.
 
 ### 2. Background Agent Result Reading
 

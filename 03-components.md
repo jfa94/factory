@@ -392,18 +392,22 @@ One paragraph summary of overall assessment.
 
 ## Existing Agents Reused Directly
 
-These agents are NOT part of the plugin — they live in the user's `.claude/agents/` directory. The plugin's orchestrator spawns them by name via the Agent tool.
+These agents live in the user's `.claude/agents/` directory. The plugin's orchestrator spawns them by name via the Agent tool.
 
-| Agent                   | Spawned By              | Purpose in Pipeline                                                                                                                      | Config           |
-| ----------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `spec-reviewer`         | spec-generator          | Validates spec quality (score ≥54/60, PASS/NEEDS_REVISION). 6 dimensions: granularity, deps, criteria, tests, vertical slices, alignment | sonnet, 40 turns |
-| `code-reviewer`         | orchestrator (fallback) | General code review when Codex unavailable. review-protocol skill injected for adversarial posture                                       | sonnet, 20 turns |
-| `architecture-reviewer` | orchestrator            | Extra review pass for complex/security-tier tasks. Validates module boundaries, dependency direction, coupling                           | sonnet, 20 turns |
-| `security-reviewer`     | orchestrator            | Security-tier tasks only. OWASP Top 10, framework-specific concerns, secrets exposure                                                    | sonnet, 20 turns |
-| `test-writer`           | orchestrator            | Kills mutation testing survivors. Spawned when mutation score < 80% threshold                                                            | sonnet, 20 turns |
-| `scout`                 | spec-generator          | Codebase exploration during spec generation. Maps architecture, patterns, dependencies                                                   | haiku, varies    |
-| `simple-task-runner`    | orchestrator            | Handles simple-tier tasks (< 3 files, no deps). Lighter than full task-executor                                                          | sonnet, varies   |
-| `scribe`                | orchestrator            | Post-pipeline docs update. Runs after all tasks complete                                                                                 | sonnet, varies   |
+| Agent           | Spawned By              | Purpose in Pipeline                                                                                                                      | Config           |
+| --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `spec-reviewer` | spec-generator          | Validates spec quality (score ≥54/60, PASS/NEEDS_REVISION). 6 dimensions: granularity, deps, criteria, tests, vertical slices, alignment | sonnet, 40 turns |
+| `code-reviewer` | orchestrator (fallback) | General code review when Codex unavailable. review-protocol skill injected for adversarial posture                                       | sonnet, 20 turns |
+| `scout`         | spec-generator          | Codebase exploration during spec generation. Maps architecture, patterns, dependencies                                                   | haiku, varies    |
+
+The following agents are **bundled inside the plugin** (`agents/` directory) and require no user setup:
+
+| Agent                   | Spawned By   | Purpose in Pipeline                                                                              |
+| ----------------------- | ------------ | ------------------------------------------------------------------------------------------------ |
+| `architecture-reviewer` | orchestrator | Extra review pass for feature/security-tier tasks. Module boundaries, coupling, AI anti-patterns |
+| `security-reviewer`     | orchestrator | Security-tier tasks only. OWASP Top 10, secrets exposure, AI-specific insecure defaults          |
+| `test-writer`           | orchestrator | Kills mutation testing survivors. Spawned when mutation score < 80% threshold                    |
+| `scribe`                | orchestrator | Post-pipeline docs update. Enforced final step before pipeline-cleanup                           |
 
 ---
 
@@ -450,7 +454,7 @@ Shared Bash library sourced by all other scripts. Not executable directly.
 4. Required agents exist in `.claude/agents/` (spec-reviewer, code-reviewer)
 5. Required skills exist in `.claude/skills/` (prd-to-spec)
 6. `${CLAUDE_PLUGIN_DATA}` directory writable
-7. `--strict`: also checks optional agents (architecture-reviewer, security-reviewer, test-writer, scout, scribe)
+7. `--strict`: also checks optional user-provided agents (scout)
 
 **Output:** JSON `{"valid": true, "checks": [{"name": "...", "status": "pass|fail", "detail": "..."}]}`
 
@@ -622,11 +626,11 @@ Tier = max(file_tier, dep_tier). Ties broken upward.
 
 **Heuristic (file-path based):**
 
-| Risk Tier  | Path Patterns                                                                                                          | Review Rounds | Extra Reviewers                           |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------- |
-| `security` | `**/auth/**`, `**/security/**`, `**/migration/**`, `**/payment/**`, `**/crypto/**`, `**/*.env*`, `**/middleware/auth*` | 6             | security-reviewer + architecture-reviewer |
-| `feature`  | `**/api/**`, `**/routes/**`, `**/models/**`, `**/services/**`, `**/hooks/**`                                           | 4             | architecture-reviewer (optional)          |
-| `routine`  | Everything else (`**/components/**`, `**/utils/**`, `**/docs/**`, `**/tests/**`, `**/styles/**`)                       | 2             | None                                      |
+| Risk Tier  | Path Patterns                                                                                                          | Review Rounds | Extra Reviewers                                          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- | ------------- | -------------------------------------------------------- |
+| `security` | `**/auth/**`, `**/security/**`, `**/migration/**`, `**/payment/**`, `**/crypto/**`, `**/*.env*`, `**/middleware/auth*` | 6             | security-reviewer + architecture-reviewer (both bundled) |
+| `feature`  | `**/api/**`, `**/routes/**`, `**/models/**`, `**/services/**`, `**/hooks/**`                                           | 4             | architecture-reviewer (bundled)                          |
+| `routine`  | Everything else (`**/components/**`, `**/utils/**`, `**/docs/**`, `**/tests/**`, `**/styles/**`)                       | 2             | None                                                     |
 
 **Output:**
 
@@ -1310,7 +1314,7 @@ Complete mapping of every dark-factory Bash module to its plugin equivalent(s):
 | `validator.sh`              | `bin/pipeline-validate`                                                           | Bin script                 | Adds plugin-specific checks                         |
 | `scaffolding.sh`            | `bin/pipeline-init`                                                               | Bin script                 | Creates richer state structure                      |
 | `config-deployer.sh`        | `.claude-plugin/plugin.json` + `settings.json`                                    | Plugin manifest            | Native plugin config replaces custom deployer       |
-| `docs-update.sh`            | Reused `scribe` agent                                                             | Existing agent             | Spawned by orchestrator post-pipeline               |
+| `docs-update.sh`            | Bundled `scribe` agent                                                            | Bundled agent              | Enforced final step before pipeline-cleanup         |
 | `settings.sh`               | `plugin.json` userConfig                                                          | Plugin manifest            | Native userConfig replaces custom settings          |
 
 ---

@@ -58,7 +58,7 @@ The [dark-factory](https://github.com/jfa94/dark-factory) autonomous coding pipe
    - Risk-based task classification (routine/feature/security → tiered review intensity)
    - Holdout validation (StrongDM Attractor pattern)
 4. **Local LLM fallback** via Ollama when Anthropic rate limits are approached — keep routine tasks progressing instead of stalling
-5. **Reuse existing `.claude/` setup** — spawn the user's spec-reviewer, code-reviewer, architecture-reviewer, security-reviewer, test-writer, scout, scribe, and simple-task-runner agents directly. Leverage existing hooks (pre-commit, pre-push, dangerous-patterns, etc.) that fire automatically.
+5. **Reuse existing `.claude/` setup** — spawn the user's spec-reviewer, code-reviewer, and scout agents directly. Bundle architecture-reviewer, security-reviewer, test-writer, and scribe inside the plugin. Leverage existing hooks (pre-commit, pre-push, dangerous-patterns, etc.) that fire automatically.
 6. **Observability and compliance** — tamper-evident audit logs, delegation chains, metrics (EU AI Act Aug 2026 readiness)
 7. **Resume capability** — pipeline recovers from interruptions by reading persisted state
 
@@ -177,20 +177,20 @@ The deterministic-first ratio is 3.5:1 (21 bin scripts + 4 hooks vs 6 agents), e
 | **Layer 2: Test suite**          | Runs test suite                             | Existing Stop hook runs vitest                                           | No change needed                                                                                                                                  |
 | **Layer 3: Coverage regression** | Not in Bash pipeline                        | `bin/pipeline-coverage-gate` script                                      | NEW: compare before/after coverage, must not decrease. Evidence: agents delete failing tests to improve metrics; coverage regression catches this |
 | **Layer 4: Holdout validation**  | Not in Bash pipeline                        | `bin/pipeline-build-prompt --holdout 20%` + holdout-validator evaluation | NEW: withhold 20% of acceptance criteria, verify task still satisfies them. StrongDM Attractor: 6-7K NLSpec → 32K+ production code                |
-| **Layer 5: Mutation testing**    | Not in Bash pipeline                        | `test-writer` agent kills surviving mutants                              | NEW: target >80% mutation score. AI code has 15-25% higher mutation survival rates                                                                |
+| **Layer 5: Mutation testing**    | Not in Bash pipeline                        | `test-writer` agent (bundled) kills surviving mutants                    | NEW: target >80% mutation score. AI code has 15-25% higher mutation survival rates                                                                |
 | **Anti-pattern detection**       | Not in Bash pipeline                        | `task-reviewer` instructions + existing hooks                            | NEW: hallucinated APIs, over-abstraction, copy-paste drift, dead code, excessive I/O, sycophantic generation                                      |
 
 ### Stage F: Code Review
 
-| Feature                   | Existing Behavior (Bash)                        | Plugin Primitive                                              | Enhancements                                                                                           |
-| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Single review pass**    | `code-review.sh` runs one Claude review session | `task-reviewer` agent OR Codex adversarial review             | Upgraded to multi-round adversarial review                                                             |
-| **Adversarial review**    | Not in Bash pipeline                            | `review-protocol` skill (Actor-Critic methodology)            | NEW: Critic reviews cold (zero implementation context), treats code as hostile artifact                |
-| **Multi-round loop**      | Not in Bash pipeline                            | Orchestrator manages round loop (max configurable, default 3) | NEW: reviewer finds issues → executor fixes → re-review. Exit early on APPROVE.                        |
-| **Codex-first detection** | Not in Bash pipeline                            | `bin/pipeline-detect-reviewer` script                         | NEW: check Codex installed + authenticated → use `/codex:adversarial-review`; fallback to Claude Code  |
-| **Structured verdicts**   | Human-readable review output                    | `bin/pipeline-parse-review` normalizes to JSON                | NEW: `{"verdict":"APPROVE\|REQUEST_CHANGES\|NEEDS_DISCUSSION","findings":[...],"round":N}`             |
-| **Risk-tiered intensity** | Same review for all tasks                       | Orchestrator selects rounds by risk tier                      | NEW: routine=2 rounds, feature=4 rounds, security=6 rounds + security-reviewer + architecture-reviewer |
-| **Human escalation**      | Not in Bash pipeline                            | After max rounds with REQUEST_CHANGES → pause for human       | NEW: prevents infinite review loops                                                                    |
+| Feature                   | Existing Behavior (Bash)                        | Plugin Primitive                                              | Enhancements                                                                                                               |
+| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Single review pass**    | `code-review.sh` runs one Claude review session | `task-reviewer` agent OR Codex adversarial review             | Upgraded to multi-round adversarial review                                                                                 |
+| **Adversarial review**    | Not in Bash pipeline                            | `review-protocol` skill (Actor-Critic methodology)            | NEW: Critic reviews cold (zero implementation context), treats code as hostile artifact                                    |
+| **Multi-round loop**      | Not in Bash pipeline                            | Orchestrator manages round loop (max configurable, default 3) | NEW: reviewer finds issues → executor fixes → re-review. Exit early on APPROVE.                                            |
+| **Codex-first detection** | Not in Bash pipeline                            | `bin/pipeline-detect-reviewer` script                         | NEW: check Codex installed + authenticated → use `/codex:adversarial-review`; fallback to Claude Code                      |
+| **Structured verdicts**   | Human-readable review output                    | `bin/pipeline-parse-review` normalizes to JSON                | NEW: `{"verdict":"APPROVE\|REQUEST_CHANGES\|NEEDS_DISCUSSION","findings":[...],"round":N}`                                 |
+| **Risk-tiered intensity** | Same review for all tasks                       | Orchestrator selects rounds by risk tier                      | NEW: routine=2 rounds, feature=4 rounds, security=6 rounds + security-reviewer (bundled) + architecture-reviewer (bundled) |
+| **Human escalation**      | Not in Bash pipeline                            | After max rounds with REQUEST_CHANGES → pause for human       | NEW: prevents infinite review loops                                                                                        |
 
 ### Stage G: Dependency Resolution
 
@@ -202,15 +202,15 @@ The deterministic-first ratio is 3.5:1 (21 bin scripts + 4 hooks vs 6 agents), e
 
 ### Stage H: Completion
 
-| Feature                     | Existing Behavior (Bash)             | Plugin Primitive                                   | Enhancements                                                                                    |
-| --------------------------- | ------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| **Issue closing**           | `completion.sh` closes GitHub issues | `bin/pipeline-cleanup --close-issues`              | Same `gh` interface                                                                             |
-| **Branch cleanup**          | Deletes feature branches             | `bin/pipeline-cleanup --delete-branches`           | Only deletes branches for merged PRs; unmerged PR branches retained with warning in summary     |
-| **Execution summary**       | Prints summary to stdout             | `bin/pipeline-summary` script                      | Richer output: per-task status, quality gate results, model usage, cost                         |
-| **Docs update**             | `docs-update.sh` runs scribe         | Spawns existing `scribe` agent                     | Same behavior, reuses user's agent                                                              |
-| **Spec dir cleanup**        | Not in Bash pipeline                 | `bin/pipeline-cleanup --clean-spec`                | NEW: `git rm` spec directory after all tasks for the issue are merged; keeps repo history clean |
-| **Partial failure summary** | Not in Bash pipeline                 | `bin/pipeline-summary` + `bin/pipeline-gh-comment` | NEW: posts per-task breakdown to issue on partial runs; deduplicates comments on resume/retry   |
-| **PR URL restoration**      | Not in Bash pipeline                 | `pipeline-state` preserves PR URLs                 | NEW: on resume, restores existing PR URLs to task state; prevents duplicate PR creation         |
+| Feature                     | Existing Behavior (Bash)             | Plugin Primitive                                     | Enhancements                                                                                    |
+| --------------------------- | ------------------------------------ | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Issue closing**           | `completion.sh` closes GitHub issues | `bin/pipeline-cleanup --close-issues`                | Same `gh` interface                                                                             |
+| **Branch cleanup**          | Deletes feature branches             | `bin/pipeline-cleanup --delete-branches`             | Only deletes branches for merged PRs; unmerged PR branches retained with warning in summary     |
+| **Execution summary**       | Prints summary to stdout             | `bin/pipeline-summary` script                        | Richer output: per-task status, quality gate results, model usage, cost                         |
+| **Docs update**             | `docs-update.sh` runs scribe         | Spawns bundled `scribe` agent as enforced final step | Bundled — no user setup required; runs before pipeline-cleanup                                  |
+| **Spec dir cleanup**        | Not in Bash pipeline                 | `bin/pipeline-cleanup --clean-spec`                  | NEW: `git rm` spec directory after all tasks for the issue are merged; keeps repo history clean |
+| **Partial failure summary** | Not in Bash pipeline                 | `bin/pipeline-summary` + `bin/pipeline-gh-comment`   | NEW: posts per-task breakdown to issue on partial runs; deduplicates comments on resume/retry   |
+| **PR URL restoration**      | Not in Bash pipeline                 | `pipeline-state` preserves PR URLs                   | NEW: on resume, restores existing PR URLs to task state; prevents duplicate PR creation         |
 
 ### Stage I: Safety & Observability
 

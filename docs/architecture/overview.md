@@ -91,7 +91,7 @@ For each task in execution order:
 ### Stage H: Completion
 
 - Generate summary via `pipeline-summary`
-- Spawn `scribe` agent for docs update
+- Spawn `scribe` (bundled) as enforced final step to update `/docs`
 - Clean up branches, worktrees, spec directory via `pipeline-cleanup`
 - Close GitHub issue (if all tasks merged)
 
@@ -123,13 +123,17 @@ For each task in execution order:
 │ pipeline-*      │      │ spec-generator  │      │ branch-protection│
 │ (21 scripts)    │      │ task-executor   │      │ run-tracker     │
 │                 │      │ task-reviewer   │      │ stop-gate       │
-│ Validation      │      │                 │      │ subagent-stop   │
-│ State mgmt      │      │ Existing:       │      │                 │
-│ Classification  │      │ spec-reviewer   │      │                 │
-│ Parsing         │      │ code-reviewer   │      │                 │
-│ Prompt building │      │ security-reviewer│     │                 │
+│ Validation      │      │ code-reviewer   │      │ subagent-stop   │
+│ State mgmt      │      │ security-       │      │                 │
+│ Classification  │      │   reviewer      │      │                 │
+│ Parsing         │      │ architecture-   │      │                 │
+│ Prompt building │      │   reviewer      │      │                 │
 └─────────────────┘      │ test-writer     │      └─────────────────┘
                          │ scribe          │
+                         ├─────────────────┤
+                         │ User-provided:  │
+                         │ spec-reviewer   │
+                         │ scout           │
                          └─────────────────┘
 ```
 

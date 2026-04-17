@@ -158,21 +158,89 @@ Fresh-context adversarial code review with structured verdicts.
 - Validates holdout criteria (criteria executor did not see)
 - Outputs structured verdict: APPROVE, REQUEST_CHANGES, or NEEDS_DISCUSSION
 
+### architecture-reviewer
+
+Validates architectural compliance: module boundaries, dependency direction, coupling metrics, AI-specific anti-patterns.
+
+| Property       | Value                  |
+| -------------- | ---------------------- |
+| Model          | sonnet                 |
+| Max Turns      | 25                     |
+| Tools          | Read, Bash, Grep, Glob |
+| permissionMode | plan (read-only)       |
+
+**Key behaviors:**
+
+- Checks dependency-cruiser / eslint-plugin-boundaries rules if configured; falls back to manual import-graph scan
+- Detects god objects (>300 lines or >15 exports), circular imports, leaky abstractions
+- Flags AI anti-patterns: over-engineering, barrel file abuse, swallowed errors, hallucinated packages
+- Spawned for feature-tier and security-tier tasks
+
+### security-reviewer
+
+Audits code for security vulnerabilities following OWASP Top 10 and AI-specific insecure defaults.
+
+| Property       | Value                  |
+| -------------- | ---------------------- |
+| Model          | opus                   |
+| Max Turns      | 25                     |
+| Tools          | Read, Grep, Glob, Bash |
+| permissionMode | plan (read-only)       |
+
+**Key behaviors:**
+
+- Traces all user-input sources to sinks (SQL, HTML, shell, file paths, redirects)
+- Checks auth/authz: IDOR prevention, ownership verification, RLS (if Supabase), JWT validation
+- Scans for hardcoded secrets using pattern + Shannon-entropy analysis
+- Verifies new dependencies exist (no typosquatting, no hallucinated subpath imports)
+- Checks AI-specific insecure defaults: wildcard CORS, Math.random() for crypto, disabled TLS, missing rate limits
+- Spawned for security-tier tasks only
+
+### test-writer
+
+Writes behavioral tests from specifications and type signatures, never from implementation. Kills mutation testing survivors.
+
+| Property  | Value                               |
+| --------- | ----------------------------------- |
+| Model     | opus                                |
+| Max Turns | 30                                  |
+| Tools     | Read, Write, Edit, Bash, Grep, Glob |
+
+**Key behaviors:**
+
+- Derives expected values from specs, type signatures, and JSDoc — never from reading implementation
+- Writes AAA-structured tests with specific value assertions (no tautological or presence-only assertions)
+- Writes property-based tests (fast-check) for pure functions and data transformations
+- In Phase 5: receives Stryker surviving-mutants report, writes targeted tests to kill each survivor
+- Spawned by orchestrator when mutation score < `quality.mutationScoreTarget`
+
+### scribe
+
+Incrementally updates `/docs` after each pipeline run using the Diátaxis framework.
+
+| Property | Value                               |
+| -------- | ----------------------------------- |
+| Model    | claude-opus-4-5                     |
+| Tools    | Read, Grep, Glob, Bash, Write, Edit |
+
+**Key behaviors:**
+
+- Reads `<!-- last-documented: <hash> -->` from the first line of `docs/README.md` to determine which commits are new
+- Runs `git diff <hash>..HEAD --name-only` and scopes updates to changed files and their dependents
+- Produces only sections it can fill accurately — never speculates or creates placeholders
+- Rewrites the last-documented marker to current HEAD on completion
+- Spawned as the final enforced step of every pipeline run, before `pipeline-cleanup`
+
 ---
 
 ## Existing Agents (Reused by Reference)
 
 These agents are defined in the user's `.claude/agents/` directory. The plugin spawns them by name via the Agent tool.
 
-| Agent                   | Spawned By              | Purpose                                     |
-| ----------------------- | ----------------------- | ------------------------------------------- |
-| `spec-reviewer`         | spec-generator          | Validates spec quality (score >= 54/60)     |
-| `code-reviewer`         | orchestrator (fallback) | General code review when Codex unavailable  |
-| `architecture-reviewer` | orchestrator            | Extra review for security-tier tasks        |
-| `security-reviewer`     | orchestrator            | OWASP Top 10, secrets exposure              |
-| `test-writer`           | orchestrator            | Kills mutation testing survivors            |
-| `scout`                 | spec-generator          | Codebase exploration during spec generation |
-| `scribe`                | orchestrator            | Post-pipeline docs update                   |
+| Agent           | Spawned By     | Purpose                                     |
+| --------------- | -------------- | ------------------------------------------- |
+| `spec-reviewer` | spec-generator | Validates spec quality (score >= 54/60)     |
+| `scout`         | spec-generator | Codebase exploration during spec generation |
 
 ---
 

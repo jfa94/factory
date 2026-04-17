@@ -165,7 +165,7 @@ success/failure path; every status transition is explicit.
    - `pipeline-coverage-gate <before> <after>` — block if test coverage
      decreased relative to the pre-task baseline. Its exit code feeds the
      same retry loop as the quality gate above.
-   - If both exit codes are 0: continue to step 4.
+   - If both exit codes are 0: continue to step 3b.
    - If exit code is non-zero:
      - `prior=$(pipeline-state read $run_id ".tasks.$t.quality_attempts // 0")`
      - `pipeline-state write $run_id ".tasks.$t.quality_attempts" $((prior + 1))`
@@ -178,6 +178,19 @@ success/failure path; every status transition is explicit.
        - `pipeline-gh-comment <issue> ci-escalation --data '{"reason":"quality_gate exhausted"}'`
        - Jump to step 7.
 
+3b. **Mutation Testing** (Layer 5 — feature and security tiers only)
+
+- Check whether `risk_tier` is in `quality.mutationTestingTiers` config (default: `["feature","security"]`). If not, skip to step 4.
+- Run `stryker run` (or the project's configured mutation command) in the worktree. Read the summary score.
+- If score ≥ `quality.mutationScoreTarget` (default 80): continue to step 4.
+- If score < target:
+  - `mutation_round=$(pipeline-state read $run_id ".tasks.$t.mutation_rounds // 0")`
+  - If `mutation_round < 2`:
+    - `pipeline-state write $run_id ".tasks.$t.mutation_rounds" $((mutation_round + 1))`
+    - Spawn `test-writer` (bundled) via `Agent({subagent_type: "test-writer", ...})` with the surviving-mutants report as context.
+    - After `test-writer` completes, re-run mutation testing. Goto score check.
+  - If `mutation_round >= 2`: log a warning ("mutation score below target after 2 rounds — proceeding") and continue to step 4.
+
 4. **Spawn Reviewers**
    - `detect=$(pipeline-detect-reviewer --base staging)` — discover the reviewer
      toolchain (`{reviewer, command}`).
@@ -188,8 +201,8 @@ success/failure path; every status transition is explicit.
      - On success: `pipeline-parse-review --reviewer codex <codex.out` → verdict JSON.
      - Do NOT spawn `task-reviewer` (Codex replaces it).
    - Else: spawn `task-reviewer` via `Agent({subagent_type: "task-reviewer", ...})`.
-   - If `risk_tier == "security"`: also spawn `code-reviewer` (bundled) and any
-     user-provided `security-reviewer` / `architecture-reviewer` under `.claude/agents/`.
+   - If `risk_tier == "security"`: also spawn `code-reviewer`, `security-reviewer`, and `architecture-reviewer` (all bundled — see "Security Tier Extra Review").
+   - If `risk_tier == "feature"`: also spawn `architecture-reviewer` (bundled).
    - Non-Codex reviewers run in parallel — emit one assistant message with N Agent calls.
 
 5. **Parse Verdicts**
@@ -255,6 +268,21 @@ Pre-flight step.
 
 ```
 pipeline-summary $run_id --post-to-issue
+```
+
+Then spawn `scribe` (bundled) to update `/docs` before worktrees are removed:
+
+```
+Agent({
+  subagent_type: "scribe",
+  description: "Post-pipeline docs update",
+  prompt: "Incremental mode. Update /docs to reflect all changes shipped in this pipeline run."
+})
+```
+
+Scribe reads `<!-- last-documented: <hash> -->` from the first line of `docs/README.md`, diffs against HEAD, and updates only affected doc sections. If scribe commits changes, those commits land on the working branch before cleanup. If scribe fails or finds nothing to update, the pipeline still completes — docs update is best-effort, never a blocker.
+
+```
 pipeline-cleanup $run_id --close-issues --delete-branches \
     --remove-worktrees --clean-spec --spec-dir <path>
 ```
@@ -346,15 +374,17 @@ When `action: end_gracefully`:
 
 ## Security Tier Extra Review
 
-For tasks classified as `security` risk tier:
+For tasks classified as `security` risk tier, spawn all four bundled reviewers:
 
-1. Spawn `task-reviewer` (always — bundled in plugin)
-2. Spawn `code-reviewer` (always for security tier — bundled in plugin). The code-reviewer is specialized for injection vectors, auth/authz, secrets, crypto, and input validation at trust boundaries.
-3. (Optional) Check if `security-reviewer` exists in user's `.claude/agents/`; if present, spawn it for additional user-defined security checks.
-4. (Optional) Check if `architecture-reviewer` exists in user's `.claude/agents/`; if present, spawn it for architectural validation.
-5. **All spawned reviewers must approve** before proceeding. If any returns REQUEST_CHANGES, the task re-enters the fix loop.
+1. Spawn `task-reviewer` (bundled). Adversarial review with zero implementation context; validates acceptance and holdout criteria.
+2. Spawn `code-reviewer` (bundled). Specialized for injection vectors, auth/authz, secrets, crypto, and input validation at trust boundaries.
+3. Spawn `security-reviewer` (bundled). OWASP Top 10, secrets exposure, supply-chain risks, AI-specific insecure defaults, framework-specific concerns (Next.js, Supabase).
+4. Spawn `architecture-reviewer` (bundled). Module boundaries, dependency direction, coupling metrics, AI-specific anti-patterns (god objects, leaky abstractions).
+5. **All four reviewers must APPROVE** before proceeding. Any REQUEST_CHANGES re-enters the fix loop (up to `review_rounds` from `pipeline-classify-risk`).
 
-The plugin ships `task-reviewer` and `code-reviewer`, so the first two are always available. The user-provided agents (3, 4) are additive and optional.
+Emit steps 1–4 as a single assistant message with four concurrent `Agent()` calls. Claude Code runs them in parallel natively.
+
+For tasks classified as `feature` risk tier, spawn steps 1 and 4 only (`task-reviewer` + `architecture-reviewer`).
 
 ## State Management
 

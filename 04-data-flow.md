@@ -169,8 +169,8 @@
 │    → task-executor never saw these criteria                             │
 │                                                                         │
 │  Layer 5: Mutation Testing (if enabled)                                 │
-│    → orchestrator spawns test-writer agent if mutation score < 80%      │
-│    → test-writer kills surviving mutants by writing targeted tests      │
+│    → orchestrator spawns test-writer (bundled) if mutation score < 80%  │
+│    → test-writer kills surviving mutants by writing targeted tests       │
 │    → re-run mutation testing; if still < 80% → log warning, continue    │
 └──────────────────────────────────┬──────────────────────────────────────┘
                                    │
@@ -200,8 +200,8 @@
 │    │    → {verdict, round, findings[], criteria_check[]}        │       │
 │    │                                                            │       │
 │    │  IF risk == security:                                      │       │
-│    │    also spawn security-reviewer agent                      │       │
-│    │    also spawn architecture-reviewer agent                  │       │
+│    │    also spawn security-reviewer (bundled)                  │       │
+│    │    also spawn architecture-reviewer (bundled)              │       │
 │    │                                                            │       │
 │    │  IF verdict == APPROVE:                                    │       │
 │    │    → break loop, proceed to Stage G                        │       │
@@ -267,8 +267,8 @@
 │     → aggregate: tasks completed/failed, review rounds, quality scores, │
 │       cost, tokens, model usage, PRs created                            │
 │                                                                         │
-│  2. spawn scribe agent (existing)                                       │
-│     → update /docs for any architectural changes                        │
+│  2. spawn scribe agent (bundled — enforced final step)                  │
+│     → update /docs for any architectural changes; best-effort           │
 │                                                                         │
 │  3. IF run status == partial:                                           │
 │     pipeline-gh-comment <issue> run-summary --update                   │
@@ -429,11 +429,11 @@ Orchestrator Agent (judgment + control flow)
         ├── spec-generator (code generation)
         ├── task-executor (code generation)
         ├── task-reviewer (code review)
-        ├── spec-reviewer (spec quality — existing)
-        ├── security-reviewer (security review — existing)
-        ├── architecture-reviewer (architecture review — existing)
-        ├── test-writer (mutation killing — existing)
-        └── scribe (docs update — existing)
+        ├── spec-reviewer (spec quality — user-provided)
+        ├── security-reviewer (security review — bundled)
+        ├── architecture-reviewer (architecture review — bundled)
+        ├── test-writer (mutation killing — bundled)
+        └── scribe (docs update — bundled)
 ```
 
 ### Parallel Execution

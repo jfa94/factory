@@ -147,7 +147,7 @@ Industry target is >80% mutation score. AI code has 15-25% higher mutation survi
 **How it works:**
 
 1. Run mutation testing framework (Stryker)
-2. If score < 80%, spawn `test-writer` agent
+2. If score < 80%, spawn `test-writer` (bundled in plugin)
 3. `test-writer` generates targeted tests for surviving mutants
 4. Re-run mutation testing
 5. Max 2 rounds of mutation test improvement

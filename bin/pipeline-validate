@@ -85,7 +85,7 @@ fi
 
 # 7. Strict mode: optional agents — search project, home, and plugin locations
 if [[ "$strict" == "true" ]]; then
-  optional_agents=("architecture-reviewer" "security-reviewer" "test-writer" "scout" "scribe")
+  optional_agents=("scout")
   for agent in "${optional_agents[@]}"; do
     _agent_found=""
     for loc in ".claude/agents/${agent}.md" "$HOME/.claude/agents/${agent}.md"; do

@@ -42,10 +42,10 @@ pipeline-validate [--strict] [--no-clean-check]
 
 **Flags:**
 
-| Flag               | Description                                                            |
-| ------------------ | ---------------------------------------------------------------------- |
-| `--strict`         | Check optional agents (architecture-reviewer, security-reviewer, etc.) |
-| `--no-clean-check` | Skip working tree clean check                                          |
+| Flag               | Description                                 |
+| ------------------ | ------------------------------------------- |
+| `--strict`         | Check optional user-provided agents (scout) |
+| `--no-clean-check` | Skip working tree clean check               |
 
 **Checks:**
 

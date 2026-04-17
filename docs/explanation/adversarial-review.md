@@ -103,13 +103,14 @@ The reviewer must provide specific findings with file, line, severity, and descr
 
 ## Security Tier Review
 
-Security-tier tasks (those touching auth, payment, crypto, etc.) receive additional review:
+Security-tier tasks (those touching auth, payment, crypto, etc.) receive four bundled reviewers running in parallel:
 
-1. `task-reviewer` with standard review-protocol
-2. `security-reviewer` agent (OWASP Top 10, secrets exposure)
-3. `architecture-reviewer` agent (design implications)
+1. `task-reviewer` — adversarial review with zero implementation context; validates acceptance and holdout criteria
+2. `code-reviewer` — specialized for injection vectors, auth/authz, secrets, crypto, input validation at trust boundaries
+3. `security-reviewer` — OWASP Top 10, secrets exposure, supply-chain risks, AI-specific insecure defaults
+4. `architecture-reviewer` — module boundaries, dependency direction, coupling metrics, AI anti-patterns
 
-All three must approve. Any REQUEST_CHANGES triggers a fix cycle.
+All four must APPROVE. Any REQUEST_CHANGES triggers a fix cycle. All are bundled in the plugin — no user setup required.
 
 ---
 
