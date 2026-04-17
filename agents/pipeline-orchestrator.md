@@ -287,10 +287,11 @@ Scribe reads `<!-- last-documented: <hash> -->` from the first line of `docs/REA
 Once every task PR has merged into `staging` and scribe has pushed any doc updates, open the rollup PR from `staging` to `develop`:
 
 ```
-final_pr=$(gh pr create --base develop --head staging \
+gh pr create --base develop --head staging \
     --title "Pipeline run $run_id: rollup to develop" \
-    --body "$(pipeline-summary $run_id --format markdown)")
-pipeline-state write $run_id ".final_pr" "$final_pr"
+    --body "$(pipeline-summary $run_id --format markdown)" >/dev/null
+final_pr_number=$(gh pr view staging --json number -q .number)
+pipeline-state write $run_id ".final_pr_number" "$final_pr_number"
 ```
 
 CI runs the full-codebase quality gate on this PR (the workflow detects `base_ref == develop` and runs full mutation testing instead of incremental). Auto-merge is already enabled by the `auto-merge` job in `.github/workflows/quality-gate.yml` — no extra `gh pr merge --auto` call is needed.

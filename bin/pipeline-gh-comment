@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Post structured comments and labels to GitHub issues.
 # Usage: pipeline-gh-comment <issue-number> <comment-type> [--repo owner/name] [--update] [--data <json>]
-# Comment types: spec-failure, run-summary, ci-escalation, conflict-escalated, review-escalation, human-gate
+# Comment types: spec-failure, run-summary, ci-escalation, conflict-escalated, review-escalation, human-gate, final-rollup-pending
 # Exit: 0=success, 1=failure
 
 source "$(dirname "$0")/pipeline-lib.sh"
@@ -43,7 +43,7 @@ fi
 
 # Validate comment type
 case "$comment_type" in
-  spec-failure|run-summary|ci-escalation|conflict-escalated|review-escalation|human-gate) ;;
+  spec-failure|run-summary|ci-escalation|conflict-escalated|review-escalation|human-gate|final-rollup-pending) ;;
   *) log_error "invalid comment type: $comment_type"; exit 1 ;;
 esac
 
@@ -179,6 +179,28 @@ The adversarial reviewer could not be satisfied after the configured number of f
 
 ---
 *Posted by dark-factory pipeline*"
+      ;;
+
+    final-rollup-pending)
+      local rp_run_id rp_summary_url
+      rp_run_id=$(printf '%s' "$data" | jq -r '.run_id // "unknown"')
+      rp_summary_url=$(printf '%s' "$data" | jq -r '.summary_url // ""')
+      body="${MARKER}
+## Final Rollup PR — Human Approval Required
+
+**Run:** \`${rp_run_id}\`
+
+All task PRs merged into \`staging\` and scribe finished any doc updates. The rollup PR from \`staging\` to \`develop\` was not opened automatically because \`humanReviewLevel >= 2\`.
+
+### Next Steps
+1. Inspect the staged changes on the \`staging\` branch
+2. Open the rollup PR manually: \`gh pr create --base develop --head staging\`
+3. Or lower \`humanReviewLevel\` via \`/factory:configure\` to let the pipeline open the rollup PR automatically
+${rp_summary_url:+
+Run summary: ${rp_summary_url}}
+
+---
+*Posted by factory pipeline*"
       ;;
 
     conflict-escalated)

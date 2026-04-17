@@ -25,6 +25,22 @@
 #                         / 1 (broken) — used by tests and operators
 set -euo pipefail
 
+# Portable sha256 digest: Linux provides `sha256sum` (coreutils), macOS provides
+# `shasum -a 256`. Prefer sha256sum where available so CI Linux runners don't
+# depend on Perl (shasum is a Perl script). Emits the 64-hex-char digest only.
+# Exits non-zero if neither tool is found — audit chain integrity depends on
+# this, so silent fallback to "unavailable" would mask a broken environment.
+_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    echo "[run-tracker] ERROR: neither sha256sum nor shasum is available; audit chain cannot be hashed" >&2
+    return 1
+  fi
+}
+
 verify_chain() {
   local audit_file="$1"
   if [[ ! -f "$audit_file" ]]; then
@@ -103,7 +119,7 @@ tool=$(printf '%s' "$input" | jq -r '.tool_name // "unknown"' 2>/dev/null)
 tool_input=$(printf '%s' "$input" | jq -r '.tool_input // {} | tostring' 2>/dev/null)
 
 # Hash the params for tamper-evidence (not storing raw params which could be large)
-params_hash=$(printf '%s' "$tool_input" | shasum -a 256 2>/dev/null | cut -d' ' -f1)
+params_hash=$(printf '%s' "$tool_input" | _sha256 2>/dev/null)
 if [[ -z "$params_hash" ]]; then
   params_hash="unavailable"
 fi
@@ -140,7 +156,7 @@ fi
 
 # Chain link: hash(prev_hash || params_hash). Using `||` as a separator avoids
 # accidental ambiguity between (prev="ab", params="cd") and (prev="a", params="bcd").
-chain_hash=$(printf '%s||%s' "$prev_hash" "$params_hash" | shasum -a 256 2>/dev/null | cut -d' ' -f1)
+chain_hash=$(printf '%s||%s' "$prev_hash" "$params_hash" | _sha256 2>/dev/null)
 if [[ -z "$chain_hash" ]]; then
   chain_hash="unavailable"
 fi
