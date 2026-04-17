@@ -5,7 +5,7 @@
     {
       "name": "factory",
       "source": {
-        "source": "git",
+        "source": "url",
         "url": "https://github.com/jfa94/factory.git"
       },
       "description": "Autonomous coding pipeline: converts GitHub PRD issues into merged pull requests with quality-first review gates",
