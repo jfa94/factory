@@ -9,7 +9,8 @@ dark-factory-plugin/
 │
 ├── commands/
 │   ├── run.md                         # /factory:run entry point
-│   └── configure.md                   # /factory:configure — review/edit all plugin settings
+│   ├── configure.md                   # /factory:configure — review/edit all plugin settings
+│   └── scaffold.md                    # /factory:scaffold — create project state files (idempotent)
 │
 ├── agents/
 │   ├── pipeline-orchestrator.md       # DAG iteration, subagent spawning, retry logic
@@ -136,6 +137,22 @@ arguments:
 5. Write updated config and confirm
 
 > **Note:** Claude Code's Bash tool has no TTY access, so interactive TUI scripts are not possible from plugin commands. This command uses the agent's conversational interface instead.
+
+---
+
+### `/factory:scaffold`
+
+**File:** `commands/scaffold.md`
+
+**Purpose:** Create the per-project state files the pipeline expects (idempotent — safe to re-run).
+
+**Behavior:**
+
+1. Delegates to `bin/pipeline-scaffold <project-root>` (see Bin Scripts).
+2. Creates `claude-progress.json`, `feature-status.json`, `init.sh`, and `.github/workflows/quality-gate.yml` if missing.
+3. When the target has a `package.json`, also copies `.stryker.config.json` and `.dependency-cruiser.cjs` from `templates/`.
+4. With `--merge-package-json`, merges the scaffold's scripts and devDependencies into an existing `package.json` (existing keys win).
+5. With `--check`, runs read-only and exits non-zero with a missing-files JSON list when scaffolding is incomplete. The orchestrator's startup sequence calls `pipeline-scaffold "$PROJECT_ROOT" --check` and refuses to start when this exits non-zero.
 
 ---
 
@@ -1126,10 +1143,44 @@ All hooks are defined in a single JSON file. Each hook fires automatically for a
 1. Parse subagent type from stdin JSON
 2. Based on agent type, verify expected artifacts:
    - `spec-generator`: spec.md and tasks.json exist in output directory
-   - `task-executor`: at least one commit on feature branch, tests pass
-   - `task-reviewer`: review output file exists with valid verdict format
-3. If artifacts missing → log warning to audit.jsonl, write `incomplete` status
-4. If artifacts valid → write success status
+   - `task-executor`: at least one commit on every executing task's worktree (parallel fan-out aware)
+   - `task-reviewer`: review output file exists in `<run>/reviews/`
+3. If artifacts missing → log warning to stderr AND append a structured event to `<run>/missed-artifacts.jsonl` so `pipeline-summary` can surface it
+4. Always exits 0 (never blocks subagent return)
+
+### Hook 5: `write-protection`
+
+**Event:** `PreToolUse` (fires before `Edit`, `Write`, `MultiEdit`)
+**Type:** `command`
+
+**Purpose:** Block writes to project-defined sensitive paths (e.g. migrations, env files) before the tool executes.
+
+**Script behavior (`hooks/write-protection.sh`):**
+
+1. Read `safety.writeBlockedPaths` from `${CLAUDE_PLUGIN_DATA}/config.json` — bash globstar + extglob patterns.
+2. Resolve the target path from the tool input (`file_path`, or `edits[].file_path` for `MultiEdit`).
+3. If any pattern matches → exit with `permissionDecision: deny` and a reason listing the matched pattern.
+4. If no patterns configured → no-op pass-through.
+
+The default `safety.writeBlockedPaths=[]` means the hook is a no-op until a project opts in.
+
+### Hook 6: `secret-commit-guard`
+
+**Event:** `PreToolUse` (fires before `Bash`, scoped to `git commit` invocations)
+**Type:** `command`
+
+**Purpose:** Block commits that contain recognisable secrets, before the commit reaches the local history. Push-time scanning is intentionally NOT a separate hook — block-at-commit is the chosen chokepoint.
+
+**Script behavior (`hooks/secret-commit-guard.sh`):**
+
+1. Detect `git commit` (also `git -C <dir> commit`, `cd && git commit`, etc.).
+2. Path scan: deny when staged file basenames match a baked-in blocklist (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials.{json,yaml,yml}`, `*.keystore`, `*.p12`, `*.pfx`, `*.jks`, `service-account*.json`, `.netrc`, `*.crt`).
+3. Content scan: deny when the staged diff matches built-in regexes for AWS keys (`AKIA[0-9A-Z]{16}`), GitHub PATs (`ghp_/ghs_/gho_/ghr_/...`), OpenAI keys (`sk-[A-Za-z0-9]{20,}`), or PEM private-key headers.
+4. Optional TruffleHog scan: when `safety.useTruffleHog=true`, run `trufflehog filesystem --only-verified --json` and add verified findings to the block list. Trufflehog non-zero exits log a redacted stderr warning and fall back to regex-only (does not block on internal trufflehog errors).
+5. Allow-list filter: hits matching any regex in `safety.allowedSecretPatterns` are removed from the block list before deciding. Used for known-public keys (e.g. Supabase anon JWTs, Stripe publishable keys).
+6. Emit a structured `decision: block` reason on stderr with raw secrets redacted (first 4 chars + `****`) when any block survives the filter.
+
+CI also runs Semgrep (`p/typescript`, `p/security-audit`, `p/secrets`) and TruffleHog as a separate workflow job (`templates/.github/workflows/quality-gate.yml::security`). The `secret-commit-guard` hook covers the local-commit path; the CI job covers the push-time path. Both must agree before a PR can merge under the default `humanReviewLevel=0`.
 
 ---
 

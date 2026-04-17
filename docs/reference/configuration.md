@@ -157,6 +157,17 @@ Risk tiers that require mutation testing. Empty array disables mutation testing.
 
 Block tasks that decrease test coverage.
 
+### quality.coverageRegressionTolerancePct
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | number |
+| Default  | 0.5    |
+| Min      | 0      |
+| Max      | 10     |
+
+Maximum allowed drop in coverage (percentage points) before the regression gate fails. Default `0.5` absorbs measurement noise from branch/line count shifts. This is a regression tolerance, NOT a minimum-coverage floor — projects that want to enforce a floor should add a dedicated CI step.
+
 ---
 
 ## Task Execution
@@ -169,13 +180,43 @@ Block tasks that decrease test coverage.
 | Default  | sonnet              |
 | Enum     | haiku, sonnet, opus |
 
-Default model for task execution. Overridden by complexity classification:
+Default model for task execution. Overridden by per-tier overrides below:
 
-| Complexity | Model  |
-| ---------- | ------ |
-| Simple     | haiku  |
-| Medium     | sonnet |
-| Complex    | opus   |
+| Tier (from `pipeline-classify-task`) | Default model | Override key                    |
+| ------------------------------------ | ------------- | ------------------------------- |
+| Simple                               | haiku         | `execution.modelByTier.simple`  |
+| Medium                               | sonnet        | `execution.modelByTier.medium`  |
+| Complex                              | opus          | `execution.modelByTier.complex` |
+
+### execution.modelByTier.simple
+
+| Property | Value               |
+| -------- | ------------------- |
+| Type     | string              |
+| Default  | haiku               |
+| Enum     | haiku, sonnet, opus |
+
+Model used for tasks classified as simple tier (low file count, no dependencies).
+
+### execution.modelByTier.medium
+
+| Property | Value               |
+| -------- | ------------------- |
+| Type     | string              |
+| Default  | sonnet              |
+| Enum     | haiku, sonnet, opus |
+
+Model used for tasks classified as medium tier.
+
+### execution.modelByTier.complex
+
+| Property | Value               |
+| -------- | ------------------- |
+| Type     | string              |
+| Default  | opus                |
+| Enum     | haiku, sonnet, opus |
+
+Model used for tasks classified as complex tier (many files or deep dependency chains).
 
 ### execution.maxTurnsSimple
 
@@ -269,3 +310,36 @@ Metrics storage format.
 | Max      | 365    |
 
 Days to retain metrics data.
+
+---
+
+## Safety
+
+Used by the `write-protection` and `secret-commit-guard` PreToolUse hooks. All three keys default to permissive values so the hooks no-op until a project opts in.
+
+### safety.writeBlockedPaths
+
+| Property | Value |
+| -------- | ----- |
+| Type     | array |
+| Default  | `[]`  |
+
+Glob patterns (bash globstar + extglob) of file paths that the write-protection hook must block. Evaluated on PreToolUse for `Edit`, `Write`, and `MultiEdit` tool calls. Empty by default; add entries like `"**/migrations/**"` or `".env*"` to opt into blocking.
+
+### safety.useTruffleHog
+
+| Property | Value   |
+| -------- | ------- |
+| Type     | boolean |
+| Default  | false   |
+
+When `true`, the secret-commit-guard hook runs `trufflehog filesystem --directory <cwd> --only-verified` before every `git commit` in addition to the built-in path and regex scans. Findings are filtered against `safety.allowedSecretPatterns`. If `trufflehog` is not installed the hook logs a warning and continues with regex-only scanning (does not block).
+
+### safety.allowedSecretPatterns
+
+| Property | Value |
+| -------- | ----- |
+| Type     | array |
+| Default  | `[]`  |
+
+Regex patterns (extended regex, evaluated by `grep -E`) for known-safe secret-like strings (e.g. Supabase anon keys, Stripe publishable keys). Any path-scan hit or TruffleHog finding whose raw value matches one of these patterns is filtered out before the hook decides whether to block a commit.

@@ -504,34 +504,42 @@ Before each task-executor spawn:
 
 ### Audit Logging
 
-**Hook:** `run-tracker` (PostToolUse on Bash|Write|Edit)
+**Hook:** `run-tracker` (PostToolUse, fires on every tool call while a run is active)
 
-Every tool use by every agent in the pipeline is logged to `${CLAUDE_PLUGIN_DATA}/runs/{run_id}/audit.jsonl`. One JSON object per line:
+Every tool use by every agent in the pipeline is logged to `${CLAUDE_PLUGIN_DATA}/runs/{run_id}/audit.jsonl`. The hook keeps the on-disk record narrow on purpose — it stores the inputs needed to verify chain integrity and the metadata needed to correlate entries with run state, but does NOT store raw tool inputs (which can be large or contain secrets).
 
 ```json
 {
-  "timestamp": "2026-04-06T03:14:15.926Z",
+  "timestamp": "2026-04-06T03:14:15Z",
   "run_id": "run_abc123",
-  "agent": "task-executor",
-  "task_id": "task_3",
   "tool": "Write",
-  "file": "src/auth.ts",
-  "action": "create",
-  "model": "sonnet",
-  "provider": "anthropic",
-  "tokens_in": 1500,
-  "tokens_out": 800
+  "params_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "prev_hash": "GENESIS",
+  "hash": "f5eb1c3c2f3e3e8bb5a1f73e2d9d6e44a8b4e3a1f4c7c0d6e9b3a2f1e0d9c8b7",
+  "seq": 1
 }
 ```
 
-**Tamper-evidence:** Each entry includes a SHA256 hash of the previous entry (hash chain). The first entry's hash is derived from the run_id + start timestamp. Any modification to historical entries breaks the chain.
+| Field         | Meaning                                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------------------------- |
+| `timestamp`   | UTC, second-resolution (`%Y-%m-%dT%H:%M:%SZ`).                                                          |
+| `run_id`      | Active run, derived from the `runs/current` symlink.                                                    |
+| `tool`        | Tool name from the hook input (`tool_name`).                                                            |
+| `params_hash` | SHA256 of the tool input JSON. Inputs themselves are not stored.                                        |
+| `prev_hash`   | Chain hash of the previous entry, or `"GENESIS"` for the first entry of the run.                        |
+| `hash`        | `SHA256(prev_hash \|\| params_hash)` — re-ordering or deletion breaks the chain.                        |
+| `seq`         | Monotonic 1-based sequence within the run; derived under a per-run mutex so parallel hooks cannot race. |
+
+The hook mutex is a portable `mkdir`-based lock under `<run_dir>/.run-tracker.lock`; if the lock cannot be acquired in ~10s the hook logs an error and exits 0 (it never blocks tool execution). On Linux the SHA256 helper prefers `sha256sum` (coreutils); macOS falls back to `shasum -a 256` — see `hooks/run-tracker.sh::_sha256`.
+
+**Verification:** `hooks/run-tracker.sh --verify <run_dir>` walks `audit.jsonl`, recomputes the chain, and exits 0 (valid) / 1 (broken) with a JSON status. Used by tests and on-demand integrity checks.
 
 **EU AI Act compliance (Aug 2026):**
 
-- Tamper-evident logs ✓ (hash chain)
-- Delegation chains ✓ (agent → subagent → tool traced)
-- Model provenance ✓ (model + provider logged per action)
-- Human oversight records ✓ (human review level + approval timestamps)
+- Tamper-evident logs ✓ (hash chain over `params_hash`).
+- Tool provenance ✓ (each entry names the tool that ran).
+- Human oversight records ✓ (`humanReviewLevel` gate transitions live in `state.json`, not `audit.jsonl`; the two together reconstruct the full trail).
+- Delegation / model provenance — the audit log proves _what_ tools ran in what order; per-task model and agent attribution lives in `state.json` and the `pipeline-metrics` MCP server, not in `audit.jsonl`. Combine the three sources for a full delegation trace.
 
 ### Metrics MCP Server
 

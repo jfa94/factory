@@ -173,18 +173,28 @@ Block tasks that decrease test coverage.
 
 **Default:** sonnet | **Options:** haiku, sonnet, opus
 
-Default model for task execution. Overridden by complexity classification:
-
-| Complexity | Model  |
-| ---------- | ------ |
-| Simple     | haiku  |
-| Medium     | sonnet |
-| Complex    | opus   |
+Default model for task execution. The orchestrator overrides this on a per-task basis using the per-tier keys below — `defaultModel` is the fallback when a tier-specific key is not set.
 
 **When to change:**
 
-- Set to `opus` for codebases requiring complex reasoning
-- Set to `haiku` to reduce costs on simple tasks
+- Set to `opus` for codebases where every task benefits from heavier reasoning (rare; usually the per-tier override is the right knob).
+- Set to `haiku` only if you also want to override the per-tier defaults below.
+
+### execution.modelByTier.simple / medium / complex
+
+Per-tier model override applied after `pipeline-classify-task` assigns a tier:
+
+| Tier    | Default | Override key                    |
+| ------- | ------- | ------------------------------- |
+| Simple  | haiku   | `execution.modelByTier.simple`  |
+| Medium  | sonnet  | `execution.modelByTier.medium`  |
+| Complex | opus    | `execution.modelByTier.complex` |
+
+**When to change:**
+
+- Bump `simple` to `sonnet` if haiku-tier tasks regularly need a fix-loop iteration; the slower model often clears the bar on the first attempt.
+- Drop `complex` to `sonnet` for cost-sensitive runs on a codebase where opus offers little marginal benefit.
+- Keep all three at defaults unless you have measured a tier-specific quality issue.
 
 ### execution.maxTurnsSimple / maxTurnsMedium / maxTurnsComplex
 
@@ -253,3 +263,44 @@ Metrics storage format.
 **Default:** 90 | **Range:** 7-365
 
 Days to retain metrics data.
+
+---
+
+## Safety
+
+Drives the `write-protection` and `secret-commit-guard` PreToolUse hooks. All three keys default to permissive values so the hooks no-op until a project opts in.
+
+### safety.writeBlockedPaths
+
+**Default:** `[]`
+
+Glob patterns (bash globstar + extglob) of file paths that the write-protection hook must block on `Edit`/`Write`/`MultiEdit`.
+
+**When to change:**
+
+- Add `"**/migrations/**"` for repos where migrations must be authored by humans.
+- Add `".env*"` to refuse env-file rewrites even when committing them is also blocked.
+- Leave empty for repos where the in-repo CODEOWNERS / branch protection already covers the same surface.
+
+### safety.useTruffleHog
+
+**Default:** false
+
+When true, the secret-commit-guard hook runs `trufflehog filesystem --directory <cwd> --only-verified` before every `git commit`, in addition to the built-in path and content-regex scans.
+
+**When to change:**
+
+- Enable for repos that handle production credentials; verified-only mode keeps false-positives low.
+- Leave false in projects where the built-in regex sweep is sufficient (the regex set covers AWS, GitHub, OpenAI, and PEM keys).
+- Enabling without `trufflehog` on PATH will log a warning and continue with regex-only scanning (does not block).
+
+### safety.allowedSecretPatterns
+
+**Default:** `[]`
+
+Regex patterns (extended regex) for known-safe strings that look secret-ish but aren't, e.g. Supabase anon keys (`eyJ...` JWTs that are public by design) or Stripe publishable keys (`pk_live_...`).
+
+**When to change:**
+
+- Add a project's well-known public keys here once, instead of disabling the hook per-commit.
+- Each entry is matched against the raw value of any path-scan hit or TruffleHog finding; a match filters that finding out before the hook decides whether to block.
