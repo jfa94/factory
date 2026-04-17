@@ -1,13 +1,14 @@
-# Dark Factory Plugin — Remediation
+# Factory Plugin — Remediation (Historical)
 
-This directory contains the follow-up work to address the comprehensive review findings for the dark-factory Claude Code plugin. It mirrors the dark-factory pipeline's own spec format (markdown plan + tasks.json) so the work is resumable across sessions.
+This directory holds the markdown plans that drove the post-review remediation work for the dark-factory / factory plugin migration. **All work tracked here is complete.** The directory is retained for archaeology — the plans explain _why_ particular fixes were made and what the alternatives were, which can be useful when revisiting the same areas later.
+
+The original task tracker (`tasks.json`, 75 entries) was removed in 0.3.0; every entry was status=`done` and the surviving narrative lives in the per-plan markdown files plus git history.
 
 ## Structure
 
 ```
 remediation/
-├── README.md                  # This file
-├── tasks.json                 # Flat task list with status — the single source of truth
+├── README.md
 └── plans/
     ├── 01-critical-safety-hardening.md
     ├── 03-spec-propagation.md
@@ -21,100 +22,22 @@ remediation/
     └── 13-minor-cleanups.md
 ```
 
-Plans 02, 08, 12, 14, 15, 16 were removed in 0.3.0 along with the Ollama/LiteLLM local-LLM routing, `maxTasks`, and `execution.maxOrchestratorTurns` features they were written against. History lives in git.
-
-## Task schema
-
-`tasks.json` is a flat JSON array. Each entry extends the standard dark-factory task schema with remediation-specific fields:
-
-```json
-{
-  "task_id": "task_01_01",
-  "plan_id": "01-critical-safety-hardening",
-  "title": "Short descriptive title",
-  "description": "What to implement and why",
-  "priority": "P0|P1|P2",
-  "findings": ["C4", "M22"],
-  "status": "pending|in_progress|done|failed|blocked",
-  "files": ["bin/pipeline-state", "bin/test-phase1.sh"],
-  "acceptance_criteria": ["Criterion 1", "Criterion 2"],
-  "tests_to_write": ["test file: description of what it asserts"],
-  "depends_on": [],
-  "notes": "optional free-text after completion"
-}
-```
-
-- `priority` — `P0` (blocker), `P1` (major), `P2` (polish)
-- `findings` — references to review-document finding IDs (C* = critical, M* = major, S* = security, P* = minor)
-- `status` — updated as work progresses; the entire session state lives in this field
-- `plan_id` — matches a file in `plans/` (without the `.md` extension)
+Plans 02 (quota-rate-limiting), 08 (config-schema-alignment), 12 (integration-tests), 14 (documentation-honesty), 15 (turn-budget), and 16 (runnable-posture) were removed in 0.3.0 along with the Ollama/LiteLLM local-LLM routing, `maxTasks`, and `execution.maxOrchestratorTurns` features they were written against.
 
 ## Test safety — do not run destructive commands against real paths
 
-Several tasks harden code that calls `rm -rf`, `git push --force`, `gh issue close`, etc.
-
-**Non-negotiable rules for every task in this directory:**
+Several tasks in these plans harden code that calls `rm -rf`, `git push --force`, `gh issue close`, etc. The same rules still apply when extending those areas:
 
 1. Never pass a real filesystem path (`/`, `~`, `$HOME`, the repo root, `/tmp` itself) as an argument to a command being hardened. Use a child of a fresh `mktemp -d` sandbox the test itself created. For teardown, always guard the variable: `trap '[[ -n "$sandbox" && "$sandbox" == /tmp/* ]] && rm -rf "$sandbox"' EXIT`. Never use `rm -rf` directly on any path you did not create in the current script.
 2. Stub external calls (`git rev-parse`, `gh`, `git push`, etc.) with a mocks directory on `PATH` so a red-phase run never touches the real repo or real GitHub.
 3. If a finding says "verify `--spec-dir ~` is rejected", treat that as _semantic_ — use a sandbox path that sits outside the fake project root, never the literal `~` or `/`.
 4. When in doubt, stop and ask. The cost of pausing is seconds; the cost of `rm -rf ~` is your home directory.
 
-These rules override `tests_to_write` field content if there is a conflict.
-
-## How to resume across sessions
-
-### Start a fresh session
-
-1. Open a new Claude Code session at the plugin root
-2. Point Claude at this remediation plan:
-
-```
-Read remediation/README.md and remediation/tasks.json.
-Find the next unblocked task (status=pending, all depends_on=done) with the
-highest priority (P0 > P1 > P2). Read the plan file at
-remediation/plans/<plan_id>.md for context. Execute the task, write the
-regression tests listed in tests_to_write, then update tasks.json setting
-status=done. Commit the work.
-```
-
-### Work one plan at a time
-
-Alternatively, tackle a whole plan in a single session:
-
-```
-Read remediation/plans/<plan_id>.md and the tasks in
-remediation/tasks.json with plan_id=<plan_id>. Execute all
-tasks in dependency order. After each task: write the regression tests,
-run the full test suite (`bin/test` or `bin/tests/*.sh`), update tasks.json,
-and commit.
-```
-
-### Resume a partial task
-
-If you left mid-task:
-
-```
-Read remediation/tasks.json. Find the task with status=in_progress. Read
-remediation/plans/<plan_id>.md for context. Resume where the prior session
-left off. Check git log and the working tree for prior work.
-```
-
 ## Testing requirement
 
-**Every task MUST include regression tests.** The `tests_to_write` field on each task is mandatory, not optional. Reviewers found that the existing 411 tests are purely structural and do not exercise failure modes. Each bug fix in this remediation plan must ship with a test that would fail against the buggy code and pass against the fix.
+Every fix shipped here had to include regression tests in `bin/tests/*.sh`. The same expectation applies to any future patch in these areas — pure structural tests are not enough; the test must fail against the buggy code and pass against the fix.
 
 Tests live in `bin/tests/*.sh`, organized by domain: `state.sh`, `spec-intake.sh`, `task-prep.sh`, `branching.sh`, `cleanup.sh`, `hooks.sh`, `routing.sh`, `orchestrator.sh`, `config.sh`, `audit-hooks.sh`. Integration tests live in `bin/tests/integration.sh`. The `bin/test` runner invokes the full suite.
-
-## Priority ordering
-
-Execute plans roughly in this order. Later plans depend on earlier ones.
-
-| Phase                       | Plans          | Why                                                     |
-| --------------------------- | -------------- | ------------------------------------------------------- |
-| **P0 — Block any real run** | 01, 03, 04     | Injection, broken spec handoff, missing safety template |
-| **P1 — Feature parity**     | 05, 06, 07, 09 | Branch handling, state/resume, orchestrator flow, hooks |
-| **P2 — Polish**             | 10, 11, 13     | Scaffolding, validator discovery, cleanups              |
 
 ## Finding reference
 
@@ -123,22 +46,3 @@ Execute plans roughly in this order. Later plans depend on earlier ones.
 - `M1`–`M23`: Major (P1)
 - `S1`–`S7`: Security-specific
 - `P*` / `P2`: Minor polish
-
-## Progress tracking
-
-To see progress at a glance:
-
-```bash
-jq '[.[] | {status, priority}] | group_by(.status) | map({status: .[0].status, count: length})' remediation/tasks.json
-```
-
-To list the next actionable task:
-
-```bash
-jq '[.[] | select(.status == "pending")]
-    | map(select(all(.depends_on[];
-        . as $dep
-        | (input_filename | fromjson | .[] | select(.task_id == $dep) | .status == "done")
-      ) or (.depends_on | length == 0)))
-    | sort_by(.priority)[0]' remediation/tasks.json
-```
