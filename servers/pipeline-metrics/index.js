@@ -63,11 +63,30 @@ const VALID_EVENT_TYPES = [
   "task_end",
   "review_round",
   "quality_gate",
-  "model_switch",
   "circuit_breaker",
   "run_start",
   "run_end",
 ];
+
+// Domain-specific exception so the dispatcher can distinguish caller-input
+// failures (returned as isError MCP responses) from genuine server crashes
+// (re-thrown so the transport surfaces them).
+class HandlerInputError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "HandlerInputError";
+  }
+}
+
+function _requireString(args, key) {
+  const v = args?.[key];
+  if (typeof v !== "string" || v.length === 0) {
+    throw new HandlerInputError(
+      `missing or invalid required field: ${key} (expected non-empty string)`,
+    );
+  }
+  return v;
+}
 
 // Tool definitions
 const TOOLS = [
@@ -145,11 +164,56 @@ const TOOLS = [
   },
 ];
 
-// Handlers
-function handleRecord({ run_id, event_type, task_id, data, duration_ms }) {
-  if (!VALID_EVENT_TYPES.includes(event_type)) {
-    return { error: `Invalid event type: ${event_type}` };
+// Parse a stored event.data blob. Returns { data, parse_error }.
+// Stored data should always be valid JSON because handleRecord stringifies
+// it on the way in, but rows written by an older schema (or hand-edited
+// rows) could be corrupt — surface that via parse_error instead of swallowing
+// the failure with `{}`.
+function _parseStoredData(raw) {
+  if (raw === null || raw === undefined || raw === "") {
+    return { data: {}, parse_error: null };
   }
+  try {
+    return { data: JSON.parse(raw), parse_error: null };
+  } catch (err) {
+    return { data: {}, parse_error: err.message };
+  }
+}
+
+// Handlers
+function handleRecord(args) {
+  const run_id = _requireString(args, "run_id");
+  const event_type = _requireString(args, "event_type");
+  if (!VALID_EVENT_TYPES.includes(event_type)) {
+    throw new HandlerInputError(
+      `invalid event_type: ${event_type} (expected one of ${VALID_EVENT_TYPES.join(", ")})`,
+    );
+  }
+  const { task_id, data, duration_ms } = args;
+  if (
+    task_id !== undefined &&
+    task_id !== null &&
+    typeof task_id !== "string"
+  ) {
+    throw new HandlerInputError("task_id must be a string when present");
+  }
+  if (
+    data !== undefined &&
+    data !== null &&
+    (typeof data !== "object" || Array.isArray(data))
+  ) {
+    throw new HandlerInputError("data must be an object when present");
+  }
+  if (
+    duration_ms !== undefined &&
+    duration_ms !== null &&
+    (typeof duration_ms !== "number" || !Number.isFinite(duration_ms))
+  ) {
+    throw new HandlerInputError(
+      "duration_ms must be a finite number when present",
+    );
+  }
+
   const stmt = db.prepare(
     "INSERT INTO events (run_id, event_type, task_id, data, duration_ms) VALUES (?, ?, ?, ?, ?)",
   );
@@ -158,12 +222,29 @@ function handleRecord({ run_id, event_type, task_id, data, duration_ms }) {
     event_type,
     task_id || null,
     JSON.stringify(data || {}),
-    duration_ms || null,
+    duration_ms == null ? null : duration_ms,
   );
   return { id: result.lastInsertRowid, recorded: true };
 }
 
-function handleQuery({ run_id, event_type, task_id, limit = 100, offset = 0 }) {
+function handleQuery(args) {
+  const { run_id, event_type, task_id, limit = 100, offset = 0 } = args || {};
+  if (run_id !== undefined && typeof run_id !== "string") {
+    throw new HandlerInputError("run_id must be a string when present");
+  }
+  if (event_type !== undefined && typeof event_type !== "string") {
+    throw new HandlerInputError("event_type must be a string when present");
+  }
+  if (task_id !== undefined && typeof task_id !== "string") {
+    throw new HandlerInputError("task_id must be a string when present");
+  }
+  if (typeof limit !== "number" || !Number.isFinite(limit) || limit < 0) {
+    throw new HandlerInputError("limit must be a non-negative number");
+  }
+  if (typeof offset !== "number" || !Number.isFinite(offset) || offset < 0) {
+    throw new HandlerInputError("offset must be a non-negative number");
+  }
+
   let sql = "SELECT * FROM events WHERE 1=1";
   const params = [];
   if (run_id) {
@@ -183,7 +264,8 @@ function handleQuery({ run_id, event_type, task_id, limit = 100, offset = 0 }) {
   return db.prepare(sql).all(...params);
 }
 
-function handleSummary({ run_id }) {
+function handleSummary(args) {
+  const run_id = _requireString(args, "run_id");
   const events = db
     .prepare("SELECT * FROM events WHERE run_id = ? ORDER BY timestamp")
     .all(run_id);
@@ -200,6 +282,7 @@ function handleSummary({ run_id }) {
     total_duration_ms: 0,
     review_rounds: 0,
     quality_gates: { passed: 0, failed: 0 },
+    parse_errors: [],
   };
 
   for (const event of events) {
@@ -222,10 +305,11 @@ function handleSummary({ run_id }) {
     }
 
     if (event.event_type === "quality_gate") {
-      let data = {};
-      try {
-        data = JSON.parse(event.data || "{}");
-      } catch {}
+      const { data, parse_error } = _parseStoredData(event.data);
+      if (parse_error) {
+        summary.parse_errors.push({ event_id: event.id, parse_error });
+        continue;
+      }
       if (data.passed) {
         summary.quality_gates.passed++;
       } else {
@@ -234,19 +318,25 @@ function handleSummary({ run_id }) {
     }
   }
 
+  if (summary.parse_errors.length === 0) {
+    delete summary.parse_errors;
+  }
+
   return summary;
 }
 
-function handleExport({ run_id }) {
+function handleExport(args) {
+  const run_id = _requireString(args, "run_id");
   return db
     .prepare("SELECT * FROM events WHERE run_id = ? ORDER BY timestamp")
     .all(run_id)
     .map((row) => {
-      let data = {};
-      try {
-        data = JSON.parse(row.data || "{}");
-      } catch {}
-      return { ...row, data };
+      const { data, parse_error } = _parseStoredData(row.data);
+      const out = { ...row, data };
+      if (parse_error) {
+        out.data_parse_error = parse_error;
+      }
+      return out;
     });
 }
 
@@ -263,24 +353,60 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
   let result;
-  switch (name) {
-    case "metrics_record":
-      result = handleRecord(args);
-      break;
-    case "metrics_query":
-      result = handleQuery(args);
-      break;
-    case "metrics_summary":
-      result = handleSummary(args);
-      break;
-    case "metrics_export":
-      result = handleExport(args);
-      break;
-    default:
+  try {
+    switch (name) {
+      case "metrics_record":
+        result = handleRecord(args);
+        break;
+      case "metrics_query":
+        result = handleQuery(args);
+        break;
+      case "metrics_summary":
+        result = handleSummary(args);
+        break;
+      case "metrics_export":
+        result = handleExport(args);
+        break;
+      default:
+        return {
+          content: [{ type: "text", text: `Unknown tool: ${name}` }],
+          isError: true,
+        };
+    }
+  } catch (err) {
+    if (err instanceof HandlerInputError) {
       return {
-        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { error: err.message, tool: name, kind: "input_validation" },
+              null,
+              2,
+            ),
+          },
+        ],
         isError: true,
       };
+    }
+    // Genuine server-side failure (DB error, etc.). Surface as isError but
+    // also re-log so the host process notices.
+    process.stderr.write(
+      `pipeline-metrics ${name} failed: ${err.stack || err.message}\n`,
+    );
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            { error: err.message, tool: name, kind: "internal_error" },
+            null,
+            2,
+          ),
+        },
+      ],
+      isError: true,
+    };
   }
   return {
     content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

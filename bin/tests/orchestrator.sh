@@ -218,6 +218,56 @@ assert_contains "review_attempts counter" "review_attempts" "$ORCH"
 # Prior-work handoff into resume context
 assert_contains "prior_work_dir handoff" "prior_work_dir" "$ORCH"
 
+# Layer 4 holdout validation orchestration must be wired
+assert_contains "Layer 4 holdout step labelled 3b"     "Holdout Validation"        "$ORCH"
+assert_contains "calls pipeline-holdout-validate prompt" "pipeline-holdout-validate prompt" "$ORCH"
+assert_contains "calls pipeline-holdout-validate check"  "pipeline-holdout-validate check"  "$ORCH"
+assert_contains "tracks holdout_attempts retry counter"  "holdout_attempts"          "$ORCH"
+
+# review_attempts must be read at the top of step 5 so first-pass
+# NEEDS_DISCUSSION can reference it without a shell-level unset error.
+assert_contains "review_attempts read before verdict branch" \
+  'review_attempts=$(pipeline-state read $run_id ".tasks.$t.review_attempts // 0")' "$ORCH"
+
+# Final-rollup PR step must capture an integer PR number, not the create URL.
+assert_contains "final_pr_number captured via gh pr view" \
+  'final_pr_number=$(gh pr view staging --json number -q .number)' "$ORCH"
+
+# ============================================================
+echo ""
+echo "=== pipeline-metrics MCP server ==="
+
+METRICS="$PLUGIN_ROOT/servers/pipeline-metrics/index.js"
+assert_file_exists "metrics index.js exists" "$METRICS"
+
+# Removed: model_switch is no longer a valid event type (Ollama routing
+# was deleted in 0.3.0; the dispatcher should reject the legacy value).
+if grep -q '"model_switch"' "$METRICS"; then
+  echo "  FAIL: metrics still references removed event type 'model_switch'"
+  fail=$((fail + 1))
+else
+  echo "  PASS: metrics no longer accepts removed event type 'model_switch'"
+  pass=$((pass + 1))
+fi
+
+assert_contains "HandlerInputError class declared" "class HandlerInputError" "$METRICS"
+assert_contains "_requireString validator declared" "function _requireString" "$METRICS"
+assert_contains "_parseStoredData helper declared"  "function _parseStoredData" "$METRICS"
+assert_contains "dispatcher try/catch wraps handlers" "if (err instanceof HandlerInputError)" "$METRICS"
+assert_contains "input_validation kind surfaced"    "kind: \"input_validation\"" "$METRICS"
+assert_contains "internal_error kind surfaced"      "kind: \"internal_error\""   "$METRICS"
+assert_contains "isError propagated to MCP response" "isError: true,"            "$METRICS"
+
+# Node syntax check — catches a syntax regression without needing
+# better-sqlite3 installed (it isn't, in CI sandboxes).
+if node --check "$METRICS" >/dev/null 2>&1; then
+  echo "  PASS: metrics index.js parses (node --check)"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: metrics index.js failed node --check"
+  fail=$((fail + 1))
+fi
+
 # ============================================================
 echo ""
 echo "=== Results ==="

@@ -242,9 +242,14 @@ success/failure path; every status transition is explicit.
 5. **Parse Verdicts**
    - For each returned reviewer: `pipeline-parse-review < <output-file>` →
      `{verdict, declared_blockers, findings, ...}`.
+   - **Always read `review_attempts` first** so both verdict branches below
+     can reference it. Reading is independent of incrementing — first-pass
+     NEEDS_DISCUSSION needs `review_attempts` for the escalation comment,
+     but must NOT bump the counter (no fix loop has run):
+     - `review_attempts=$(pipeline-state read $run_id ".tasks.$t.review_attempts // 0")`
    - If any verdict is `REQUEST_CHANGES` with `declared_blockers > 0`:
-     - `prior=$(pipeline-state read $run_id ".tasks.$t.review_attempts // 0")`
-     - `pipeline-state write $run_id ".tasks.$t.review_attempts" $((prior + 1))`
+     - `review_attempts=$((review_attempts + 1))`
+     - `pipeline-state write $run_id ".tasks.$t.review_attempts" $review_attempts`
      - If `review_attempts < 3`:
        - `pipeline-state task-status $run_id $t ci_fixing`
        - `pipeline-build-prompt '<task-json>' --fix-instructions '<findings>'`
