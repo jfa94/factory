@@ -46,17 +46,23 @@ assert_contains() {
 # ============================================================
 echo "=== pipeline-detect-reviewer ==="
 
-# Without Codex installed, should fall back to claude-code
-output=$(pipeline-detect-reviewer 2>/dev/null)
+# Run detect-reviewer with a PATH that excludes codex so these assertions are
+# deterministic regardless of whether the host has codex installed. The plugin
+# bin dir + /usr/bin + /bin are enough to run the script and jq.
+PLUGIN_BIN="$(cd "$(dirname "$0")/.." && pwd)"
+_nocodex_path="$PLUGIN_BIN:/usr/bin:/bin"
+
+# Without Codex on PATH, should fall back to claude-code
+output=$(env PATH="$_nocodex_path" pipeline-detect-reviewer 2>/dev/null)
 assert_eq "fallback reviewer" "claude-code" "$(echo "$output" | jq -r '.reviewer')"
 assert_eq "fallback agent" "task-reviewer" "$(echo "$output" | jq -r '.agent')"
 
 # With --base flag
-output=$(pipeline-detect-reviewer --base main 2>/dev/null)
+output=$(env PATH="$_nocodex_path" pipeline-detect-reviewer --base main 2>/dev/null)
 assert_eq "base flag accepted" "claude-code" "$(echo "$output" | jq -r '.reviewer')"
 
 # Always exits 0
-assert_exit "always exits 0" 0 pipeline-detect-reviewer
+assert_exit "always exits 0" 0 env PATH="$_nocodex_path" pipeline-detect-reviewer
 
 # ============================================================
 echo ""

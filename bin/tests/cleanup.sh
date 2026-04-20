@@ -614,8 +614,14 @@ _create_test_run "test-close-3" '{
   "circuit_breaker": {"tasks_completed": 1, "consecutive_failures": 0},
   "cost": {"total_tokens": 0, "estimated_usd": 0}
 }'
+# pipeline-cleanup exits 1 when cleanup_status is "partial" (e.g. an
+# issue-close failure). Capture under set +e so the non-zero exit doesn't
+# abort the test script.
+set +e
 output=$(pipeline-cleanup "test-close-3" --close-issues 2>/dev/null)
+set -e
 assert_eq "gh fail → no close" "0" "$(printf '%s' "$output" | jq -r '.issues_closed')"
+assert_eq "gh fail → issue_errors contains 404" "404" "$(printf '%s' "$output" | jq -r '.issue_errors[0]')"
 
 # ============================================================
 echo ""
