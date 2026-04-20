@@ -63,15 +63,23 @@ echo "Generated: $merged_settings"
 
 Then stop and show the user:
 
-> This pipeline requires autonomous mode settings for safe operation.
+> This pipeline requires autonomous-mode settings for safe operation.
 >
-> Relaunch Claude Code with the generated settings file:
+> **Recommended — relaunch with the generated settings file:**
 >
 > ```
 > claude --settings $CLAUDE_PLUGIN_DATA/merged-settings.json
 > ```
 >
-> Or set `FACTORY_AUTONOMOUS_MODE=1` in your environment to acknowledge autonomous operation.
+> This loads the safety hooks (branch protection, protected-file guards, SQL-safety, vitest stop-gate) and the permission allow/deny lists that scope the pipeline to safe operations.
+>
+> **Advanced / CI — bypass the acknowledgment check only:**
+>
+> ```
+> export FACTORY_AUTONOMOUS_MODE=1
+> ```
+>
+> This flag lets `/factory:run` proceed but does **not** load the hooks or permission lists. Use it only in CI or when equivalent guardrails are already enforced at the host level. For interactive runs on your own machine, prefer `--settings`.
 
 Do not proceed without this confirmation.
 

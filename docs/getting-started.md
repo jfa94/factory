@@ -144,20 +144,24 @@ Because autonomous mode is not yet active, the command will:
 
 ### Session B — relaunch with autonomous settings
 
+#### Recommended — use the settings file
+
 Use the path the command printed:
 
 ```bash
 claude --settings $CLAUDE_PLUGIN_DATA/merged-settings.json
 ```
 
-Autonomous mode enables:
+This loads:
 
 - **PreToolUse hooks**: branch protection, protected-file guards, SQL safety checks, dangerous-bash pattern detection
 - **PostToolUse hooks**: prettier auto-format, related-test runner, audit log to `.claude/tool-audit.jsonl`
 - **Stop hook**: vitest gate before Claude exits
 - **Permission allowlist/denylist**: scoped to safe pipeline operations
 
-> **For CI or advanced use only:** Setting `FACTORY_AUTONOMOUS_MODE=1` in your environment bypasses the acknowledgment check but does **not** load the hooks or permission lists. Always use the settings file for real runs.
+#### Advanced / CI — bypass the acknowledgment check only
+
+Setting `FACTORY_AUTONOMOUS_MODE=1` in your environment lets `/factory:run` proceed but does **not** load the hooks or permission lists. Use this only in CI environments where equivalent guardrails are already enforced at the host level (sandboxed runner, GitHub branch protection, no production credentials on disk). For interactive runs on your own machine, always use the settings file.
 
 ## Step 5: Create a PRD Issue
 
