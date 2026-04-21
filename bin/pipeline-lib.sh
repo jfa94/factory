@@ -216,6 +216,19 @@ log_metric() {
   jq -c "${jq_args[@]}" "$filter" >> "$metrics_file" 2>/dev/null || true
 }
 
+# Emit a structured CI-outcome metric.
+# Usage: emit_ci_metric <kind: task|run> <pr_number> <status: green|red|timeout> [<checks_json>]
+emit_ci_metric() {
+  local kind="$1" pr="$2" status="$3" checks="${4:-[]}"
+  local event
+  case "$kind" in
+    task) event="task.ci" ;;
+    run)  event="run.ci" ;;
+    *) log_error "emit_ci_metric: invalid kind: $kind"; return 1 ;;
+  esac
+  log_metric "$event" "pr_number=$pr" "status=\"$status\"" "checks=$checks"
+}
+
 # --- Safety guards ---
 
 # Refuse a path if it is empty, a known system root, outside CLAUDE_PLUGIN_DATA,
