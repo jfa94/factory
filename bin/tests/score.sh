@@ -54,6 +54,20 @@ assert_eq "pipeline-score emits run_id" "run-fix-001" "$run_id"
 version=$(printf '%s' "$out" | jq -r '.plugin_version')
 assert_eq "pipeline-score emits plugin_version" "0.3.2" "$version"
 
+echo "=== run-level steps R1-R4 ==="
+
+out=$(pipeline-score --run run-fix-001 --format json --no-gh)
+R1=$(printf '%s' "$out" | jq -r '.run_steps.R1_autonomy_ok.state')
+R2=$(printf '%s' "$out" | jq -r '.run_steps.R2_spec_generated.state')
+R3=$(printf '%s' "$out" | jq -r '.run_steps.R3_spec_reviewer_approved.state')
+R4=$(printf '%s' "$out" | jq -r '.run_steps.R4_tasks_decomposed.state')
+
+assert_eq "R1 autonomy_ok"           "pass"           "$R1"
+assert_eq "R2 spec_generated"         "pass"           "$R2"
+# Fixture lacks spec.review_score → not_performed is the correct reading.
+assert_eq "R3 spec_reviewer_approved" "not_performed"  "$R3"
+assert_eq "R4 tasks_decomposed"       "pass"           "$R4"
+
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="
 [[ $fail -eq 0 ]]

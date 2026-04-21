@@ -47,8 +47,20 @@ case "$status" in
     ;;
 esac
 
-# Placeholder scoring — replaced in Tasks 6-11.
-run_steps='{}'
+_score_run_step() {
+  local id="$1" label="$2" fn="$3"
+  local state_out; state_out=$($fn)
+  jq -n --arg id "$id" --arg label "$label" --arg state "$state_out" \
+    '{id: $id, label: $label, state: $state}'
+}
+
+run_steps=$(jq -n \
+  --argjson R1 "$(_score_run_step R1_autonomy_ok          autonomy_ok          eval_R1_autonomy_ok)" \
+  --argjson R2 "$(_score_run_step R2_spec_generated       spec_generated       eval_R2_spec_generated)" \
+  --argjson R3 "$(_score_run_step R3_spec_reviewer_approved spec_reviewer_approved eval_R3_spec_reviewer_approved)" \
+  --argjson R4 "$(_score_run_step R4_tasks_decomposed     tasks_decomposed     eval_R4_tasks_decomposed)" \
+  '{R1_autonomy_ok: $R1, R2_spec_generated: $R2, R3_spec_reviewer_approved: $R3, R4_tasks_decomposed: $R4}')
+
 task_steps_aggregate='{}'
 anomalies=0
 
