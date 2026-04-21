@@ -253,6 +253,22 @@ _quality_check_step() {
   esac
 }
 
+eval_T1_quota_checked() {
+  local t="$1"
+  if ! _task_reached_executing "$t"; then echo "skipped_task_inactive"; return; fi
+  [[ -f "$metrics_file" ]] || { echo "fail"; return; }
+  local start_ts check_ts
+  start_ts=$(grep '"event":"task.start"' "$metrics_file" 2>/dev/null \
+    | jq -cr --arg t "$t" 'select(.task_id == $t) | .ts' | head -1)
+  check_ts=$(grep '"event":"quota.check"' "$metrics_file" 2>/dev/null \
+    | jq -cr --arg t "$t" 'select(.task_id == $t) | .ts' | head -1)
+  if [[ -n "$check_ts" && ( -z "$start_ts" || "$check_ts" < "$start_ts" || "$check_ts" == "$start_ts" ) ]]; then
+    echo "pass"
+  else
+    echo "fail"
+  fi
+}
+
 eval_T2_executor_spawned() {
   local t="$1"
   local wt; wt=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].worktree // empty')

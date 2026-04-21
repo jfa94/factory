@@ -99,6 +99,7 @@ _aggregate_step() {
 }
 
 task_steps_aggregate=$(jq -n \
+  --argjson T1 "$(_aggregate_step T1_quota_checked                 eval_T1_quota_checked)" \
   --argjson T2 "$(_aggregate_step T2_executor_spawned              eval_T2_executor_spawned)" \
   --argjson T3 "$(_aggregate_step T3_lint_pass                     eval_T3_lint_pass)" \
   --argjson T4 "$(_aggregate_step T4_typecheck_pass                eval_T4_typecheck_pass)" \
@@ -112,7 +113,8 @@ task_steps_aggregate=$(jq -n \
   --argjson T12 "$(_aggregate_step T12_pr_ci_green                 eval_T12_pr_ci_green)" \
   --argjson T13 "$(_aggregate_step T13_pr_merged                   eval_T13_pr_merged)" \
   --argjson T14 "$(_aggregate_step T14_within_retry_budget         eval_T14_within_retry_budget)" \
-  '{T2_executor_spawned:$T2, T3_lint_pass:$T3, T4_typecheck_pass:$T4,
+  '{T1_quota_checked:$T1,
+    T2_executor_spawned:$T2, T3_lint_pass:$T3, T4_typecheck_pass:$T4,
     T5_tests_pass:$T5, T6_coverage_non_regress:$T6, T7_holdout_pass:$T7,
     T8_mutation_pass:$T8, T9_reviewer_approved_first_round:$T9,
     T10_reviewer_approved_overall:$T10, T11_pr_created:$T11,

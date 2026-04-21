@@ -288,13 +288,26 @@ _realpath_m() {
 # end_gracefully to avoid infinite loops when the statusline stops ticking.
 # The counter resets on `proceed`.
 #
-# Usage: pipeline_quota_gate <run_id> <tier> <boundary_label>
+# Usage: pipeline_quota_gate <run_id> <tier> <boundary_label> [task_id]
+# When invoked in per-task context, pass <task_id> (4th arg) so emitted
+# quota.check / quota.wait events include it — enabling the scorer to
+# evaluate T1_quota_checked per task. If omitted and <boundary_label>
+# matches "task-<id>", the id is auto-derived.
 # Returns: 0=proceed, 2=end_gracefully (halt), 3=wait_retry (orchestrator re-invoke)
 pipeline_quota_gate() {
-  local run_id="$1" tier="$2" boundary_label="$3"
+  local run_id="$1" tier="$2" boundary_label="$3" task_id="${4:-}"
   local quota route action wait_min prior trigger
   local sleep_cap_sec="${FACTORY_QUOTA_GATE_SLEEP_CAP_SEC:-540}"
   local max_cycles="${FACTORY_QUOTA_GATE_MAX_CYCLES:-60}"
+
+  # Auto-derive task_id from boundary_label like "task-<id>" when not given.
+  if [[ -z "$task_id" && "$boundary_label" == task-* ]]; then
+    task_id="${boundary_label#task-}"
+  fi
+
+  # Build the optional task_id kv for log_metric calls (empty when run-level).
+  local task_id_kv=()
+  [[ -n "$task_id" ]] && task_id_kv=("task_id=\"$task_id\"")
 
   if [[ -z "$run_id" ]]; then
     log_error "quota gate [$boundary_label]: run_id required"
@@ -321,7 +334,8 @@ pipeline_quota_gate() {
     "action=\"$action\"" \
     "tier=\"$tier\"" \
     "over_5h=$util5" \
-    "over_7d=$util7"
+    "over_7d=$util7" \
+    ${task_id_kv[@]+"${task_id_kv[@]}"}
 
   case "$action" in
     proceed)
@@ -358,7 +372,8 @@ pipeline_quota_gate() {
         "tier=\"$tier\"" \
         "minutes_slept=$slept_min" \
         "cumulative_pause_minutes=$(( prior + slept_min ))" \
-        "cycle=$((cycles + 1))"
+        "cycle=$((cycles + 1))" \
+        ${task_id_kv[@]+"${task_id_kv[@]}"}
 
       # Re-check after the chunk. If clear, proceed; else yield to orchestrator.
       quota=$(pipeline-quota-check)
@@ -371,7 +386,8 @@ pipeline_quota_gate() {
         "tier=\"$tier\"" \
         "over_5h=$(printf '%s' "$quota" | jq -r '.five_hour.utilization // null')" \
         "over_7d=$(printf '%s' "$quota" | jq -r '.seven_day.utilization // null')" \
-        "phase=\"post-wait\""
+        "phase=\"post-wait\"" \
+        ${task_id_kv[@]+"${task_id_kv[@]}"}
       if [[ "$action" == "proceed" ]]; then
         pipeline-state write "$run_id" '.circuit_breaker.quota_wait_cycles' '0' 2>/dev/null \
           || log_warn "quota gate [$boundary_label]: failed to reset quota_wait_cycles"

@@ -318,7 +318,7 @@ For each task `$t` in the current parallel group, walk these seven steps in orde
    - Quota gate (Gate C):
      ```
      while true; do
-       pipeline_quota_gate "$run_id" "<risk_level>" "task-$t"; rc=$?
+       pipeline_quota_gate "$run_id" "<risk_level>" "task-$t" "$t"; rc=$?
        case $rc in
          0) break ;;                          # proceed
          2) drain in-flight tasks; mark run partial; go to cleanup ;;

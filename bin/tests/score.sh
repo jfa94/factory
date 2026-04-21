@@ -271,6 +271,45 @@ assert_eq "mixed success+failure → red" "red" \
 assert_eq "empty rollup → unknown" "unknown" \
   "$(_run_color '{"statusCheckRollup":[]}')"
 
+echo "=== T1_quota_checked pass when quota.check precedes task.start ==="
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-t1-pass"
+cat > "$CLAUDE_PLUGIN_DATA/runs/run-t1-pass/state.json" <<'JSON'
+{
+  "version":"9.9.9","mode":"task","status":"done",
+  "started_at":"2026-04-21T00:00:00Z","ended_at":"2026-04-21T00:10:00Z",
+  "tasks":{"t-1":{"status":"done","worktree":"/tmp/wt"}}
+}
+JSON
+cat > "$CLAUDE_PLUGIN_DATA/runs/run-t1-pass/metrics.jsonl" <<'M'
+{"ts":"2026-04-21T00:00:10Z","run_id":"run-t1-pass","event":"quota.check","task_id":"t-1","over_5h":0.42}
+{"ts":"2026-04-21T00:00:20Z","run_id":"run-t1-pass","event":"task.start","task_id":"t-1"}
+M
+: > "$CLAUDE_PLUGIN_DATA/runs/run-t1-pass/audit.jsonl"
+out=$(pipeline-score --run run-t1-pass --format json --no-gh --no-log)
+v=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T1_quota_checked.pass')
+assert_eq "T1_quota_checked pass case" "1" "$v"
+
+echo "=== T1_quota_checked fail when no quota.check event ==="
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-t1-fail"
+cat > "$CLAUDE_PLUGIN_DATA/runs/run-t1-fail/state.json" <<'JSON'
+{
+  "version":"9.9.9","mode":"task","status":"done",
+  "started_at":"2026-04-21T00:00:00Z","ended_at":"2026-04-21T00:10:00Z",
+  "tasks":{"t-1":{"status":"done","worktree":"/tmp/wt"}}
+}
+JSON
+cat > "$CLAUDE_PLUGIN_DATA/runs/run-t1-fail/metrics.jsonl" <<'M'
+{"ts":"2026-04-21T00:00:20Z","run_id":"run-t1-fail","event":"task.start","task_id":"t-1"}
+M
+: > "$CLAUDE_PLUGIN_DATA/runs/run-t1-fail/audit.jsonl"
+out=$(pipeline-score --run run-t1-fail --format json --no-gh --no-log)
+v=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T1_quota_checked.fail')
+assert_eq "T1_quota_checked fail case" "1" "$v"
+
+echo "=== T1_quota_checked is first field of task_steps_aggregate ==="
+first=$(printf '%s' "$out" | jq -r '.task_steps_aggregate | keys_unsorted | .[0]')
+assert_eq "T1 is first field" "T1_quota_checked" "$first"
+
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="
 [[ $fail -eq 0 ]]
