@@ -192,6 +192,16 @@ S2. Spawn spec-generator agent with PRD body
     → spec-generator runs with isolation: worktree in an ephemeral worktree.
     → spec-generator calls pipeline-validate-spec internally
     → spec-generator calls spec-reviewer (bundled) and retries up to 5x on validation failure
+    → After spec-reviewer completes, persist the review score to state so the
+      scorer's R3 step (spec_reviewer_approved) can evaluate it:
+      ```bash
+      if [[ -f "$spec_reviewer_output" ]]; then
+        review_score=$(jq -r '.score // empty' "$spec_reviewer_output")
+        if [[ -n "$review_score" ]]; then
+          pipeline-state write "$run_id" '.spec.review_score' "$review_score"
+        fi
+      fi
+      ```
     → As its final step spec-generator completes the "Handoff Protocol" described in
       agents/spec-generator.md: it commits spec.md + tasks.json on a
       `spec-handoff/<run_id>` branch and writes the branch name, ref sha, and spec
@@ -328,7 +338,11 @@ For each task `$t` in the current parallel group, walk these seven steps in orde
    - **Human gate (pre-execute):** `pipeline-human-gate $run_id pre-execute` — if exit 42, pause and surface the comment. Exit 0 proceeds.
    - `pipeline-state task-status $run_id $t executing`
    - Spawn `task-executor` agent with the built prompt and `isolation: worktree`.
-   - On return, record the worktree path: `pipeline-state write $run_id ".tasks.$t.worktree" "$worktree_path"`.
+   - On return, record the worktree path. **Mandatory:** every task that enters
+     the executing state must have `.tasks.$t.worktree` written. The scorer uses
+     this field to distinguish tasks that spawned successfully from those that
+     never ran.
+     `pipeline-state write $run_id ".tasks.$t.worktree" "$worktree_path"`
    - If the agent failed hard (Agent tool returned non-success):
      - `pipeline-state task-status $run_id $t failed`
      - Jump to step 7 (Finalize) for this task.
@@ -411,10 +425,25 @@ For each task `$t` in the current parallel group, walk these seven steps in orde
 4. **Spawn Reviewers**
    - `detect=$(pipeline-detect-reviewer --base staging)` — discover the reviewer
      toolchain (`{reviewer, command}`).
+   - Emit a review-provider metric so the scorer can report which reviewer ran:
+     ```bash
+     reviewer_name=$(printf '%s' "$detect" | jq -r '.reviewer')
+     log_metric "task.review.provider" \
+       "task_id=\"$t\"" \
+       "reviewer=\"$reviewer_name\"" \
+       "reason=\"detected\""
+     ```
    - If `$(printf '%s' "$detect" | jq -r '.reviewer') == "codex"`:
      - Run `$(printf '%s' "$detect" | jq -r '.command') --task-id $t --spec-dir $spec_dir 2>codex.err >codex.out`
-     - If non-zero exit: retry once. If still non-zero, log warning and fall
-       through to Claude `task-reviewer` (spawn via Agent below).
+     - If non-zero exit: retry once. If still non-zero, log warning, emit a
+       fallback metric, and fall through to Claude `task-reviewer` (spawn via
+       Agent below):
+       ```bash
+       log_metric "task.review.provider" \
+         "task_id=\"$t\"" \
+         "reviewer=\"claude\"" \
+         "reason=\"fallback\""
+       ```
      - On success: `pipeline-parse-review --reviewer codex <codex.out` → verdict JSON.
      - Do NOT spawn `task-reviewer` (Codex replaces it).
    - Else: spawn `task-reviewer` via `Agent({subagent_type: "task-reviewer", ...})`.
