@@ -96,7 +96,11 @@ task_steps_aggregate=$(jq -n \
   --argjson T3 "$(_aggregate_step T3_typecheck_pass       eval_T3_typecheck_pass)" \
   --argjson T4 "$(_aggregate_step T4_tests_pass           eval_T4_tests_pass)" \
   --argjson T5 "$(_aggregate_step T5_coverage_non_regress eval_T5_coverage_non_regress)" \
-  '{T1_executor_spawned: $T1, T2_lint_pass: $T2, T3_typecheck_pass: $T3, T4_tests_pass: $T4, T5_coverage_non_regress: $T5}')
+  --argjson T6 "$(_aggregate_step T6_holdout_pass                   eval_T6_holdout_pass)" \
+  --argjson T7 "$(_aggregate_step T7_mutation_pass                  eval_T7_mutation_pass)" \
+  --argjson T8 "$(_aggregate_step T8_reviewer_approved_first_round  eval_T8_reviewer_approved_first_round)" \
+  --argjson T9 "$(_aggregate_step T9_reviewer_approved_overall      eval_T9_reviewer_approved_overall)" \
+  '{T1_executor_spawned: $T1, T2_lint_pass: $T2, T3_typecheck_pass: $T3, T4_tests_pass: $T4, T5_coverage_non_regress: $T5, T6_holdout_pass: $T6, T7_mutation_pass: $T7, T8_reviewer_approved_first_round: $T8, T9_reviewer_approved_overall: $T9}')
 
 anomalies=0
 

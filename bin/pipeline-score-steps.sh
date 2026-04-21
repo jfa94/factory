@@ -184,3 +184,51 @@ eval_T5_coverage_non_regress() {
     echo "not_performed"
   fi
 }
+
+eval_T6_holdout_pass() {
+  local t="$1"
+  if ! _task_reached_executing "$t"; then echo "skipped_ok"; return; fi
+  if [[ ! -f "$run_dir/holdouts/$t.json" ]]; then echo "skipped_ok"; return; fi
+  local s; s=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].quality_gates.holdout // empty')
+  case "$s" in
+    pass)  echo "pass" ;;
+    fail)  echo "fail" ;;
+    *)     echo "not_performed" ;;
+  esac
+}
+
+eval_T7_mutation_pass() {
+  local t="$1"
+  if ! _task_reached_executing "$t"; then echo "skipped_ok"; return; fi
+  local risk; risk=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].risk_tier // empty')
+  case "$risk" in
+    feature|security) ;;
+    *) echo "skipped_ok"; return ;;
+  esac
+  local score target
+  score=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].mutation_score // empty')
+  target=$(read_config '.quality.mutationScoreTarget' '80')
+  if [[ -z "$score" || "$score" == "null" ]]; then echo "not_performed"; return; fi
+  if (( $(printf '%.0f' "$score") >= target )); then echo "pass"; else echo "fail"; fi
+}
+
+eval_T8_reviewer_approved_first_round() {
+  local t="$1"
+  if ! _task_reached_executing "$t"; then echo "skipped_ok"; return; fi
+  local attempts status
+  attempts=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].review_attempts // 0')
+  status=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].status // empty')
+  if [[ "$status" != "done" ]]; then echo "not_performed"; return; fi
+  [[ "$attempts" -eq 0 ]] && echo "pass" || echo "fail"
+}
+
+eval_T9_reviewer_approved_overall() {
+  local t="$1"
+  if ! _task_reached_executing "$t"; then echo "skipped_ok"; return; fi
+  local status; status=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].status // empty')
+  case "$status" in
+    done) echo "pass" ;;
+    needs_human_review|failed) echo "fail" ;;
+    *) echo "not_performed" ;;
+  esac
+}

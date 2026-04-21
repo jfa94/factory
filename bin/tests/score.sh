@@ -108,6 +108,14 @@ T4_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T4_tests_pass.pass')
 [[ "$T3_pass" -ge 1 ]] && { echo "  PASS: T3 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T3 pass count = $T3_pass"; fail=$((fail+1)); }
 [[ "$T4_pass" -ge 1 ]] && { echo "  PASS: T4 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T4 pass count = $T4_pass"; fail=$((fail+1)); }
 
+echo "=== per-task steps T6-T9 ==="
+
+out=$(pipeline-score --run run-fix-001 --format json --no-gh)
+for k in T6_holdout_pass T7_mutation_pass T8_reviewer_approved_first_round T9_reviewer_approved_overall; do
+  val=$(printf '%s' "$out" | jq -r ".task_steps_aggregate.$k.id // empty")
+  assert_eq "$k present in aggregate" "$k" "$val"
+done
+
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="
 [[ $fail -eq 0 ]]
