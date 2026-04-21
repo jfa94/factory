@@ -37,6 +37,8 @@ audit_file="$run_dir/audit.jsonl"
 plugin_version=$(printf '%s' "$state" | jq -r '.version // "unknown"')
 mode=$(printf '%s' "$state" | jq -r '.mode')
 status=$(printf '%s' "$state" | jq -r '.status')
+started_at=$(printf '%s' "$state" | jq -r '.started_at // empty')
+ended_at=$(printf '%s' "$state" | jq -r '.ended_at // empty')
 
 # Bucketing.
 final_pr=$(printf '%s' "$state" | jq -r '.final_pr_number // empty')
@@ -137,6 +139,8 @@ result=$(jq -n \
   --arg mode "$mode" \
   --arg status "$status" \
   --arg bucket "$bucket" \
+  --arg started_at "$started_at" \
+  --arg ended_at "$ended_at" \
   --argjson run_steps "$run_steps" \
   --argjson task_steps_aggregate "$task_steps_aggregate" \
   --argjson anomalies "$anomalies" \
@@ -148,6 +152,8 @@ result=$(jq -n \
     mode: $mode,
     status: $status,
     bucket: $bucket,
+    started_at: (if $started_at == "" then null else $started_at end),
+    ended_at:   (if $ended_at == "" then null else $ended_at end),
     run_steps: $run_steps,
     task_steps_aggregate: $task_steps_aggregate,
     anomalies: $anomalies,

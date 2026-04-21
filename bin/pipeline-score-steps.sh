@@ -14,8 +14,28 @@ _render_table() {
   anomalies=$(printf '%s' "$json" | jq -r '.anomalies')
   full=$(printf '%s' "$json" | jq -r '.full_success')
 
+  local started_at ended_at
+  started_at=$(printf '%s' "$json" | jq -r '.started_at // empty')
+  ended_at=$(printf '%s'   "$json" | jq -r '.ended_at // empty')
+
+  local duration="—"
+  if [[ -n "$started_at" && -n "$ended_at" ]]; then
+    local s e delta h m sec
+    s=$(parse_iso8601_to_epoch "$started_at" 2>/dev/null || echo "")
+    e=$(parse_iso8601_to_epoch "$ended_at"   2>/dev/null || echo "")
+    if [[ "$s" =~ ^[0-9]+$ && "$e" =~ ^[0-9]+$ && "$e" -ge "$s" ]]; then
+      delta=$((e - s))
+      h=$((delta / 3600))
+      m=$(( (delta % 3600) / 60 ))
+      sec=$((delta % 60))
+      duration=$(printf '%d:%02d:%02d' "$h" "$m" "$sec")
+    fi
+  fi
+
   printf "Run: %s   plugin-version: %s   mode: %s   status: %s   bucket: %s\n" \
     "$run_id" "$version" "$mode" "$status" "$bucket"
+  printf "Started: %s   Ended: %s   Duration: %s\n" \
+    "${started_at:-—}" "${ended_at:-—}" "$duration"
   printf "\nRUN-LEVEL STEPS\n"
   printf '%s' "$json" | jq -r '.run_steps | to_entries[] | "  \(.value.state | (. + "            ")[0:12])  \(.key)"'
   printf "\nPER-TASK STEPS (aggregate)\n"

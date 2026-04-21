@@ -236,6 +236,18 @@ assert_eq "quota.checks count"         "2" "$(printf '%s' "$out" | jq -r '.obser
 assert_eq "quota.waits count"          "1" "$(printf '%s' "$out" | jq -r '.observability.quota.waits')"
 assert_eq "quota.pause_minutes sum"    "9" "$(printf '%s' "$out" | jq -r '.observability.quota.pause_minutes')"
 
+echo "=== header includes start/end/duration ==="
+
+out=$(pipeline-score --run run-fix-001 --format table --no-gh --no-log)
+if echo "$out" | grep -qE '^Started: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z   Ended: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z   Duration: [0-9]+:[0-9]{2}:[0-9]{2}$'; then
+  echo "  PASS: header has Started/Ended/Duration"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: header missing timestamps"
+  echo "$out"
+  fail=$((fail + 1))
+fi
+
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="
 [[ $fail -eq 0 ]]
