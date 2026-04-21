@@ -129,6 +129,8 @@ full_success=$(jq -n \
     ($rs | all_run_pass) and ($ts | all_task_clean)
   ')
 
+observability=$(_observability_json)
+
 result=$(jq -n \
   --arg run_id "$run_id" \
   --arg plugin_version "$plugin_version" \
@@ -139,6 +141,7 @@ result=$(jq -n \
   --argjson task_steps_aggregate "$task_steps_aggregate" \
   --argjson anomalies "$anomalies" \
   --argjson full_success "$full_success" \
+  --argjson observability "$observability" \
   '{
     run_id: $run_id,
     plugin_version: $plugin_version,
@@ -148,7 +151,8 @@ result=$(jq -n \
     run_steps: $run_steps,
     task_steps_aggregate: $task_steps_aggregate,
     anomalies: $anomalies,
-    full_success: $full_success
+    full_success: $full_success,
+    observability: $observability
   }')
 
 if [[ "$log_history" == "true" ]]; then

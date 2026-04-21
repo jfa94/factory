@@ -210,6 +210,32 @@ assert_eq "gate label captured" "test-gate-A" "$gate"
 action=$(grep '"event":"quota.check"' "$metrics" | tail -1 | jq -r '.action')
 assert_eq "action captured" "proceed" "$action"
 
+echo "=== observability section in score output ==="
+
+# Synthesize a fixture run with two quota.check events and two review.provider events.
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-obs-001"
+jq -n '{run_id:"run-obs-001", version:"0.3.4", status:"done", mode:"prd", tasks:{}}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/run-obs-001/state.json"
+cat > "$CLAUDE_PLUGIN_DATA/runs/run-obs-001/metrics.jsonl" <<EOF
+{"ts":"2026-04-21T00:00:01Z","run_id":"run-obs-001","event":"quota.check","gate":"A","action":"proceed","tier":"feature","over_5h":0.05,"over_7d":0.10}
+{"ts":"2026-04-21T00:15:01Z","run_id":"run-obs-001","event":"quota.check","gate":"C","action":"wait","tier":"feature","over_5h":0.22,"over_7d":0.11}
+{"ts":"2026-04-21T00:15:05Z","run_id":"run-obs-001","event":"quota.wait","gate":"C","tier":"feature","minutes_slept":9,"cumulative_pause_minutes":9,"cycle":1}
+{"ts":"2026-04-21T00:00:20Z","run_id":"run-obs-001","event":"task.review.provider","task_id":"t1","reviewer":"codex","reason":"detected"}
+{"ts":"2026-04-21T00:05:10Z","run_id":"run-obs-001","event":"task.review.provider","task_id":"t2","reviewer":"claude","reason":"fallback"}
+EOF
+touch "$CLAUDE_PLUGIN_DATA/runs/run-obs-001/audit.jsonl"
+
+out=$(pipeline-score --run run-obs-001 --format json --no-gh --no-log)
+obs=$(printf '%s' "$out" | jq -r '.observability')
+[[ "$obs" != "null" ]] && { echo "  PASS: observability section present"; pass=$((pass+1)); } || { echo "  FAIL: no observability section"; fail=$((fail+1)); }
+
+assert_eq "reviewers.codex count"      "1" "$(printf '%s' "$out" | jq -r '.observability.reviewers.codex')"
+assert_eq "reviewers.claude count"     "1" "$(printf '%s' "$out" | jq -r '.observability.reviewers.claude')"
+assert_eq "reviewers.fallback count"   "1" "$(printf '%s' "$out" | jq -r '.observability.reviewers.fallback_from_codex')"
+assert_eq "quota.checks count"         "2" "$(printf '%s' "$out" | jq -r '.observability.quota.checks')"
+assert_eq "quota.waits count"          "1" "$(printf '%s' "$out" | jq -r '.observability.quota.waits')"
+assert_eq "quota.pause_minutes sum"    "9" "$(printf '%s' "$out" | jq -r '.observability.quota.pause_minutes')"
+
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="
 [[ $fail -eq 0 ]]

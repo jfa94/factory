@@ -28,6 +28,12 @@ _render_table() {
       "  \(($k + (" " * 35))[0:35])  \(($p | tostring) + (" " * (5 - ($p | tostring | length))))  \(($f | tostring) + (" " * (5 - ($f | tostring | length))))  \(($v.skipped_ok | tostring) + (" " * (7 - ($v.skipped_ok | tostring | length))))  \(($v.not_performed | tostring) + (" " * (8 - ($v.not_performed | tostring | length))))  \($pct)")'
   printf "\nANOMALIES: %s step-instances marked not_performed\n" "$anomalies"
   printf "FULL SUCCESS: %s\n" "$full"
+  printf "\nOBSERVABILITY\n"
+  printf '%s' "$json" | jq -r '
+    .observability as $o |
+    "  reviewers   codex=\($o.reviewers.codex)  claude=\($o.reviewers.claude)  fallback_from_codex=\($o.reviewers.fallback_from_codex)",
+    "  quota       checks=\($o.quota.checks)  waits=\($o.quota.waits)  pause_minutes=\($o.quota.pause_minutes)  first_hour_waits=\($o.quota.first_hour_waits)"
+  '
 }
 
 eval_R1_autonomy_ok() {
@@ -327,4 +333,59 @@ eval_T14_terminal_status_done() {
     failed|needs_human_review) echo "fail" ;;
     *) echo "not_performed" ;;
   esac
+}
+
+_observability_json() {
+  # Emits the observability block for the current $metrics_file.
+  # Note: `grep -c` exits 1 with output `0` when no matches; the `|| echo 0`
+  # fallback would then append an extra line, breaking --argjson. Always
+  # collapse to a single integer via `| head -1`.
+  local codex_n claude_n fallback_n
+  codex_n=0; claude_n=0; fallback_n=0
+  if [[ -f "$metrics_file" ]]; then
+    codex_n=$({ grep -c '"event":"task.review.provider".*"reviewer":"codex"' "$metrics_file" 2>/dev/null || echo 0; } | head -1)
+    claude_n=$({ grep -c '"event":"task.review.provider".*"reviewer":"claude"' "$metrics_file" 2>/dev/null || echo 0; } | head -1)
+    fallback_n=$({ grep -c '"event":"task.review.provider".*"reason":"fallback"' "$metrics_file" 2>/dev/null || echo 0; } | head -1)
+  fi
+
+  local quota_checks quota_waits pause_minutes
+  quota_checks=0; quota_waits=0; pause_minutes=0
+  if [[ -f "$metrics_file" ]]; then
+    quota_checks=$({ grep -c '"event":"quota.check"' "$metrics_file" 2>/dev/null || echo 0; } | head -1)
+    quota_waits=$({ grep -c '"event":"quota.wait"' "$metrics_file" 2>/dev/null || echo 0; } | head -1)
+    pause_minutes=$({ grep '"event":"quota.wait"' "$metrics_file" 2>/dev/null \
+      | jq -s 'map(.minutes_slept // 0) | add // 0' 2>/dev/null || echo 0; } | head -1)
+  fi
+
+  # First-hour quota activity: events within 60m of run start.
+  local started_at first_hour_waits
+  started_at=$(printf '%s' "$state" | jq -r '.started_at // empty')
+  first_hour_waits=0
+  if [[ -n "$started_at" && -f "$metrics_file" ]]; then
+    first_hour_waits=$({ jq -s --arg start "$started_at" '
+      def parse_ts($s):
+        ($s | sub("\\..*Z$"; "Z")) as $norm |
+        try ($norm | fromdateiso8601) catch null;
+      (parse_ts($start)) as $start_ep |
+      if $start_ep == null then 0
+      else
+        [ .[] | select(.event == "quota.wait")
+              | (parse_ts(.ts // "")) as $ep
+              | select($ep != null and $ep <= $start_ep + 3600) ]
+        | length
+      end' "$metrics_file" 2>/dev/null || echo 0; } | head -1)
+  fi
+
+  jq -n \
+    --argjson codex "$codex_n" \
+    --argjson claude "$claude_n" \
+    --argjson fb "$fallback_n" \
+    --argjson checks "$quota_checks" \
+    --argjson waits "$quota_waits" \
+    --argjson pause "$pause_minutes" \
+    --argjson fhw "$first_hour_waits" \
+    '{
+      reviewers: {codex: $codex, claude: $claude, fallback_from_codex: $fb},
+      quota: {checks: $checks, waits: $waits, pause_minutes: $pause, first_hour_waits: $fhw}
+    }'
 }
