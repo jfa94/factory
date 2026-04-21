@@ -82,3 +82,60 @@ eval_R8_rollup_pr_opened() {
   local pr; pr=$(printf '%s' "$state" | jq -r '.final_pr_number // empty')
   if [[ -n "$pr" ]]; then echo "pass"; else echo "not_performed"; fi
 }
+
+eval_R9_rollup_pr_merged() {
+  local pr; pr=$(printf '%s' "$state" | jq -r '.final_pr_number // empty')
+  if [[ -z "$pr" ]]; then echo "skipped_ok"; return; fi
+  if [[ "${use_gh:-true}" == "true" ]]; then
+    local merged
+    merged=$(gh pr view "$pr" --json merged -q '.merged' 2>/dev/null || echo "unknown")
+    case "$merged" in
+      true)  echo "pass" ;;
+      false) echo "fail" ;;
+      *)     echo "not_performed" ;;
+    esac
+  else
+    if [[ -f "$metrics_file" ]] && grep -q "\"event\":\"run.ci\".*\"pr_number\":$pr" "$metrics_file" 2>/dev/null; then
+      echo "pass"
+    else
+      echo "not_performed"
+    fi
+  fi
+}
+
+eval_R10_rollup_ci_green() {
+  local pr; pr=$(printf '%s' "$state" | jq -r '.final_pr_number // empty')
+  if [[ -z "$pr" ]]; then echo "skipped_ok"; return; fi
+  local ci_status=""
+  if [[ -f "$metrics_file" ]]; then
+    ci_status=$(grep "\"event\":\"run.ci\"" "$metrics_file" 2>/dev/null | tail -1 | jq -r '.status // empty')
+  fi
+  if [[ -n "$ci_status" ]]; then
+    [[ "$ci_status" == "green" ]] && echo "pass" || echo "fail"
+    return
+  fi
+  if [[ "${use_gh:-true}" == "true" ]]; then
+    local conclusion
+    conclusion=$(gh pr view "$pr" --json statusCheckRollup -q '.statusCheckRollup | map(.conclusion) | if length == 0 then "unknown" elif all(. == "SUCCESS") then "green" else "red" end' 2>/dev/null || echo "unknown")
+    case "$conclusion" in
+      green) echo "pass" ;;
+      red)   echo "fail" ;;
+      *)     echo "not_performed" ;;
+    esac
+  else
+    echo "not_performed"
+  fi
+}
+
+eval_R11_no_escalation_comments() {
+  local matches=0
+  if [[ -f "$metrics_file" ]]; then
+    matches=$(grep -cE '"event":"pipeline.comment".*"type":"(ci-escalation|review-escalation|conflict-escalated)"' "$metrics_file" 2>/dev/null) || matches=0
+  fi
+  [[ "$matches" -eq 0 ]] && echo "pass" || echo "fail"
+}
+
+eval_R12_terminal_status_done() {
+  local s; s=$(printf '%s' "$state" | jq -r '.status')
+  [[ "$s" == "done" ]] && echo "pass" || echo "fail"
+}

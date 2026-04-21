@@ -82,6 +82,19 @@ assert_eq "R6 no_human_gate_pause"  "pass"        "$R6"
 assert_eq "R7 scribe_ran"           "skipped_ok"  "$R7"
 assert_eq "R8 rollup_pr_opened"     "skipped_ok"  "$R8"
 
+echo "=== run-level steps R9-R12 ==="
+
+out=$(pipeline-score --run run-fix-001 --format json --no-gh)
+R9=$(printf '%s' "$out" | jq -r '.run_steps.R9_rollup_pr_merged.state')
+R10=$(printf '%s' "$out" | jq -r '.run_steps.R10_rollup_ci_green.state')
+R11=$(printf '%s' "$out" | jq -r '.run_steps.R11_no_escalation_comments.state')
+R12=$(printf '%s' "$out" | jq -r '.run_steps.R12_terminal_status_done.state')
+
+assert_eq "R9 rollup_pr_merged"           "skipped_ok"  "$R9"
+assert_eq "R10 rollup_ci_green"            "skipped_ok"  "$R10"
+assert_eq "R11 no_escalation_comments"     "pass"        "$R11"
+assert_eq "R12 terminal_status_done"       "fail"        "$R12"
+
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="
 [[ $fail -eq 0 ]]
