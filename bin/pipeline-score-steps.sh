@@ -253,17 +253,17 @@ _quality_check_step() {
   esac
 }
 
-eval_T1_executor_spawned() {
+eval_T2_executor_spawned() {
   local t="$1"
   local wt; wt=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].worktree // empty')
   [[ -n "$wt" && "$wt" != "null" ]] && echo "pass" || echo "not_performed"
 }
 
-eval_T2_lint_pass()      { _quality_check_step "$1" lint; }
-eval_T3_typecheck_pass() { _quality_check_step "$1" typecheck; }
-eval_T4_tests_pass()     { _quality_check_step "$1" test; }
+eval_T3_lint_pass()      { _quality_check_step "$1" lint; }
+eval_T4_typecheck_pass() { _quality_check_step "$1" typecheck; }
+eval_T5_tests_pass()     { _quality_check_step "$1" test; }
 
-eval_T5_coverage_non_regress() {
+eval_T6_coverage_non_regress() {
   local t="$1"
   if ! _task_reached_executing "$t"; then echo "skipped_task_inactive"; return; fi
   if [[ -f "$metrics_file" ]] && grep -q "\"event\":\"task.gate.coverage\".*\"task_id\":\"$t\".*\"status\":\"pass\"" "$metrics_file" 2>/dev/null; then
@@ -275,7 +275,7 @@ eval_T5_coverage_non_regress() {
   fi
 }
 
-eval_T6_holdout_pass() {
+eval_T7_holdout_pass() {
   local t="$1"
   if ! _task_reached_executing "$t"; then echo "skipped_task_inactive"; return; fi
   if [[ ! -f "$run_dir/holdouts/$t.json" ]]; then echo "skipped_na"; return; fi
@@ -287,7 +287,7 @@ eval_T6_holdout_pass() {
   esac
 }
 
-eval_T7_mutation_pass() {
+eval_T8_mutation_pass() {
   local t="$1"
   if ! _task_reached_executing "$t"; then echo "skipped_task_inactive"; return; fi
   local risk; risk=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].risk_tier // empty')
@@ -302,7 +302,7 @@ eval_T7_mutation_pass() {
   if (( $(printf '%.0f' "$score") >= target )); then echo "pass"; else echo "fail"; fi
 }
 
-eval_T8_reviewer_approved_first_round() {
+eval_T9_reviewer_approved_first_round() {
   local t="$1"
   if ! _task_reached_executing "$t"; then echo "skipped_task_inactive"; return; fi
   local attempts status
@@ -312,7 +312,7 @@ eval_T8_reviewer_approved_first_round() {
   [[ "$attempts" -eq 0 ]] && echo "pass" || echo "fail"
 }
 
-eval_T9_reviewer_approved_overall() {
+eval_T10_reviewer_approved_overall() {
   local t="$1"
   if ! _task_reached_executing "$t"; then echo "skipped_task_inactive"; return; fi
   local status; status=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].status // empty')
@@ -323,7 +323,7 @@ eval_T9_reviewer_approved_overall() {
   esac
 }
 
-eval_T10_pr_created() {
+eval_T11_pr_created() {
   local t="$1"
   local status; status=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].status // empty')
   case "$status" in
@@ -334,7 +334,7 @@ eval_T10_pr_created() {
   if [[ -n "$pr" && "$pr" != "null" ]]; then echo "pass"; else echo "not_performed"; fi
 }
 
-eval_T11_pr_ci_green() {
+eval_T12_pr_ci_green() {
   local t="$1"
   local pr; pr=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].pr_number // empty')
   if [[ -z "$pr" || "$pr" == "null" ]]; then echo "skipped_na"; return; fi
@@ -364,7 +364,7 @@ eval_T11_pr_ci_green() {
   fi
 }
 
-eval_T12_pr_merged() {
+eval_T13_pr_merged() {
   local t="$1"
   local pr; pr=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].pr_number // empty')
   if [[ -z "$pr" || "$pr" == "null" ]]; then echo "skipped_na"; return; fi
@@ -379,23 +379,13 @@ eval_T12_pr_merged() {
   fi
 }
 
-eval_T13_no_fix_loop_exhaustion() {
+eval_T14_within_retry_budget() {
   local t="$1"
   if ! _task_reached_executing "$t"; then echo "skipped_task_inactive"; return; fi
   local qa ra
   qa=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].quality_attempts // 0')
   ra=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].review_attempts // 0')
   if (( qa >= 3 )) || (( ra >= 3 )); then echo "fail"; else echo "pass"; fi
-}
-
-eval_T14_terminal_status_done() {
-  local t="$1"
-  local status; status=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].status // empty')
-  case "$status" in
-    done) echo "pass" ;;
-    failed|needs_human_review) echo "fail" ;;
-    *) echo "not_performed" ;;
-  esac
 }
 
 _observability_json() {

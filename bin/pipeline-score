@@ -99,21 +99,24 @@ _aggregate_step() {
 }
 
 task_steps_aggregate=$(jq -n \
-  --argjson T1 "$(_aggregate_step T1_executor_spawned     eval_T1_executor_spawned)" \
-  --argjson T2 "$(_aggregate_step T2_lint_pass            eval_T2_lint_pass)" \
-  --argjson T3 "$(_aggregate_step T3_typecheck_pass       eval_T3_typecheck_pass)" \
-  --argjson T4 "$(_aggregate_step T4_tests_pass           eval_T4_tests_pass)" \
-  --argjson T5 "$(_aggregate_step T5_coverage_non_regress eval_T5_coverage_non_regress)" \
-  --argjson T6 "$(_aggregate_step T6_holdout_pass                   eval_T6_holdout_pass)" \
-  --argjson T7 "$(_aggregate_step T7_mutation_pass                  eval_T7_mutation_pass)" \
-  --argjson T8 "$(_aggregate_step T8_reviewer_approved_first_round  eval_T8_reviewer_approved_first_round)" \
-  --argjson T9 "$(_aggregate_step T9_reviewer_approved_overall      eval_T9_reviewer_approved_overall)" \
-  --argjson T10 "$(_aggregate_step T10_pr_created               eval_T10_pr_created)" \
-  --argjson T11 "$(_aggregate_step T11_pr_ci_green              eval_T11_pr_ci_green)" \
-  --argjson T12 "$(_aggregate_step T12_pr_merged                eval_T12_pr_merged)" \
-  --argjson T13 "$(_aggregate_step T13_no_fix_loop_exhaustion   eval_T13_no_fix_loop_exhaustion)" \
-  --argjson T14 "$(_aggregate_step T14_terminal_status_done     eval_T14_terminal_status_done)" \
-  '{T1_executor_spawned: $T1, T2_lint_pass: $T2, T3_typecheck_pass: $T3, T4_tests_pass: $T4, T5_coverage_non_regress: $T5, T6_holdout_pass: $T6, T7_mutation_pass: $T7, T8_reviewer_approved_first_round: $T8, T9_reviewer_approved_overall: $T9, T10_pr_created: $T10, T11_pr_ci_green: $T11, T12_pr_merged: $T12, T13_no_fix_loop_exhaustion: $T13, T14_terminal_status_done: $T14}')
+  --argjson T2 "$(_aggregate_step T2_executor_spawned              eval_T2_executor_spawned)" \
+  --argjson T3 "$(_aggregate_step T3_lint_pass                     eval_T3_lint_pass)" \
+  --argjson T4 "$(_aggregate_step T4_typecheck_pass                eval_T4_typecheck_pass)" \
+  --argjson T5 "$(_aggregate_step T5_tests_pass                    eval_T5_tests_pass)" \
+  --argjson T6 "$(_aggregate_step T6_coverage_non_regress          eval_T6_coverage_non_regress)" \
+  --argjson T7 "$(_aggregate_step T7_holdout_pass                  eval_T7_holdout_pass)" \
+  --argjson T8 "$(_aggregate_step T8_mutation_pass                 eval_T8_mutation_pass)" \
+  --argjson T9 "$(_aggregate_step T9_reviewer_approved_first_round eval_T9_reviewer_approved_first_round)" \
+  --argjson T10 "$(_aggregate_step T10_reviewer_approved_overall   eval_T10_reviewer_approved_overall)" \
+  --argjson T11 "$(_aggregate_step T11_pr_created                  eval_T11_pr_created)" \
+  --argjson T12 "$(_aggregate_step T12_pr_ci_green                 eval_T12_pr_ci_green)" \
+  --argjson T13 "$(_aggregate_step T13_pr_merged                   eval_T13_pr_merged)" \
+  --argjson T14 "$(_aggregate_step T14_within_retry_budget         eval_T14_within_retry_budget)" \
+  '{T2_executor_spawned:$T2, T3_lint_pass:$T3, T4_typecheck_pass:$T4,
+    T5_tests_pass:$T5, T6_coverage_non_regress:$T6, T7_holdout_pass:$T7,
+    T8_mutation_pass:$T8, T9_reviewer_approved_first_round:$T9,
+    T10_reviewer_approved_overall:$T10, T11_pr_created:$T11,
+    T12_pr_ci_green:$T12, T13_pr_merged:$T13, T14_within_retry_budget:$T14}')
 
 anomalies=$(jq -n \
   --argjson rs "$run_steps" \

@@ -95,31 +95,31 @@ assert_eq "R10 rollup_ci_green"            "skipped_na"  "$R10"
 assert_eq "R11 no_escalation_comments"     "pass"        "$R11"
 assert_eq "R12 terminal_status_done"       "fail"        "$R12"
 
-echo "=== per-task steps T1-T5 ==="
+echo "=== per-task steps T2-T5 ==="
 
 out=$(pipeline-score --run run-fix-001 --format json --no-gh)
-T1_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T1_executor_spawned.pass')
-T2_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T2_lint_pass.pass')
-T3_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T3_typecheck_pass.pass')
-T4_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T4_tests_pass.pass')
+T2_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T2_executor_spawned.pass')
+T3_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T3_lint_pass.pass')
+T4_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T4_typecheck_pass.pass')
+T5_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T5_tests_pass.pass')
 
-[[ "$T1_pass" -ge 1 ]] && { echo "  PASS: T1 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T1 pass count = $T1_pass"; fail=$((fail+1)); }
 [[ "$T2_pass" -ge 1 ]] && { echo "  PASS: T2 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T2 pass count = $T2_pass"; fail=$((fail+1)); }
 [[ "$T3_pass" -ge 1 ]] && { echo "  PASS: T3 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T3 pass count = $T3_pass"; fail=$((fail+1)); }
 [[ "$T4_pass" -ge 1 ]] && { echo "  PASS: T4 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T4 pass count = $T4_pass"; fail=$((fail+1)); }
+[[ "$T5_pass" -ge 1 ]] && { echo "  PASS: T5 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T5 pass count = $T5_pass"; fail=$((fail+1)); }
 
-echo "=== per-task steps T6-T9 ==="
+echo "=== per-task steps T7-T10 ==="
 
 out=$(pipeline-score --run run-fix-001 --format json --no-gh)
-for k in T6_holdout_pass T7_mutation_pass T8_reviewer_approved_first_round T9_reviewer_approved_overall; do
+for k in T7_holdout_pass T8_mutation_pass T9_reviewer_approved_first_round T10_reviewer_approved_overall; do
   val=$(printf '%s' "$out" | jq -r ".task_steps_aggregate.$k.id // empty")
   assert_eq "$k present in aggregate" "$k" "$val"
 done
 
-echo "=== per-task steps T10-T14 ==="
+echo "=== per-task steps T11-T14 ==="
 
 out=$(pipeline-score --run run-fix-001 --format json --no-gh)
-for k in T10_pr_created T11_pr_ci_green T12_pr_merged T13_no_fix_loop_exhaustion T14_terminal_status_done; do
+for k in T11_pr_created T12_pr_ci_green T13_pr_merged T14_within_retry_budget; do
   val=$(printf '%s' "$out" | jq -r ".task_steps_aggregate.$k.id // empty")
   assert_eq "$k present in aggregate" "$k" "$val"
 done
