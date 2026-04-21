@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Score a pipeline run against the expected-steps checklist.
+# Usage: pipeline-score --run <run-id> [--format json|table] [--no-gh] [--no-log]
+#
+# Output: JSON (default) or a terminal table (--format table).
+# Appends one-line record to ${CLAUDE_PLUGIN_DATA}/scores.jsonl unless --no-log.
+set -euo pipefail
+
+source "$(dirname "$0")/pipeline-lib.sh"
+source "$(dirname "$0")/pipeline-score-steps.sh"
+require_command jq
+
+run_id=""
+format="json"
+use_gh=true
+log_history=true
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --run) run_id="$2"; shift 2 ;;
+    --format) format="$2"; shift 2 ;;
+    --no-gh) use_gh=false; shift ;;
+    --no-log) log_history=false; shift ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+[[ -z "$run_id" ]] && { log_error "missing --run"; exit 1; }
+
+run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+[[ -f "$run_dir/state.json" ]] || { log_error "state.json not found: $run_dir"; exit 1; }
+
+state=$(cat "$run_dir/state.json")
+metrics_file="$run_dir/metrics.jsonl"
+audit_file="$run_dir/audit.jsonl"
+
+plugin_version=$(printf '%s' "$state" | jq -r '.version // "unknown"')
+mode=$(printf '%s' "$state" | jq -r '.mode')
+status=$(printf '%s' "$state" | jq -r '.status')
+
+# Bucketing.
+final_pr=$(printf '%s' "$state" | jq -r '.final_pr_number // empty')
+bucket="terminated"
+case "$status" in
+  interrupted|partial)
+    [[ -z "$final_pr" ]] && bucket="incomplete"
+    ;;
+esac
+
+# Placeholder scoring — replaced in Tasks 6-11.
+run_steps='{}'
+task_steps_aggregate='{}'
+anomalies=0
+
+result=$(jq -n \
+  --arg run_id "$run_id" \
+  --arg plugin_version "$plugin_version" \
+  --arg mode "$mode" \
+  --arg status "$status" \
+  --arg bucket "$bucket" \
+  --argjson run_steps "$run_steps" \
+  --argjson task_steps_aggregate "$task_steps_aggregate" \
+  --argjson anomalies "$anomalies" \
+  '{
+    run_id: $run_id,
+    plugin_version: $plugin_version,
+    mode: $mode,
+    status: $status,
+    bucket: $bucket,
+    run_steps: $run_steps,
+    task_steps_aggregate: $task_steps_aggregate,
+    anomalies: $anomalies
+  }')
+
+case "$format" in
+  json)  printf '%s\n' "$result" ;;
+  table) printf '%s\n' "$result" | _render_table ;;
+  *) log_error "invalid format: $format"; exit 1 ;;
+esac

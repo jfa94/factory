@@ -41,6 +41,19 @@ assert_eq "status field captured" "green" "$status"
 pr_num=$(jq -r '.pr_number' "$metrics_file")
 assert_eq "pr_number captured" "42" "$pr_num"
 
+echo "=== pipeline-score skeleton ==="
+
+fixture="$(cd "$(dirname "$0")/fixtures/score/outsidey-20260420" && pwd)"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-fix-001"
+cp -r "$fixture"/. "$CLAUDE_PLUGIN_DATA/runs/run-fix-001/"
+
+out=$(pipeline-score --run run-fix-001 --format json --no-gh 2>/dev/null)
+run_id=$(printf '%s' "$out" | jq -r '.run_id')
+assert_eq "pipeline-score emits run_id" "run-fix-001" "$run_id"
+
+version=$(printf '%s' "$out" | jq -r '.plugin_version')
+assert_eq "pipeline-score emits plugin_version" "0.3.2" "$version"
+
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="
 [[ $fail -eq 0 ]]
