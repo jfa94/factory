@@ -79,8 +79,8 @@ R8=$(printf '%s' "$out" | jq -r '.run_steps.R8_rollup_pr_opened.state')
 assert_eq "R5 no_circuit_trip"      "pass"        "$R5"
 assert_eq "R6 no_human_gate_pause"  "pass"        "$R6"
 # Fixture: not all tasks done (interrupted) → scribe did not need to run.
-assert_eq "R7 scribe_ran"           "skipped_ok"  "$R7"
-assert_eq "R8 rollup_pr_opened"     "skipped_ok"  "$R8"
+assert_eq "R7 scribe_ran"           "skipped_na"  "$R7"
+assert_eq "R8 rollup_pr_opened"     "skipped_na"  "$R8"
 
 echo "=== run-level steps R9-R12 ==="
 
@@ -90,36 +90,36 @@ R10=$(printf '%s' "$out" | jq -r '.run_steps.R10_rollup_ci_green.state')
 R11=$(printf '%s' "$out" | jq -r '.run_steps.R11_no_escalation_comments.state')
 R12=$(printf '%s' "$out" | jq -r '.run_steps.R12_terminal_status_done.state')
 
-assert_eq "R9 rollup_pr_merged"           "skipped_ok"  "$R9"
-assert_eq "R10 rollup_ci_green"            "skipped_ok"  "$R10"
+assert_eq "R9 rollup_pr_merged"           "skipped_na"  "$R9"
+assert_eq "R10 rollup_ci_green"            "skipped_na"  "$R10"
 assert_eq "R11 no_escalation_comments"     "pass"        "$R11"
 assert_eq "R12 terminal_status_done"       "fail"        "$R12"
 
-echo "=== per-task steps T1-T5 ==="
+echo "=== per-task steps T2-T5 ==="
 
 out=$(pipeline-score --run run-fix-001 --format json --no-gh)
-T1_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T1_executor_spawned.pass')
-T2_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T2_lint_pass.pass')
-T3_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T3_typecheck_pass.pass')
-T4_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T4_tests_pass.pass')
+T2_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T2_executor_spawned.pass')
+T3_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T3_lint_pass.pass')
+T4_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T4_typecheck_pass.pass')
+T5_pass=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T5_tests_pass.pass')
 
-[[ "$T1_pass" -ge 1 ]] && { echo "  PASS: T1 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T1 pass count = $T1_pass"; fail=$((fail+1)); }
 [[ "$T2_pass" -ge 1 ]] && { echo "  PASS: T2 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T2 pass count = $T2_pass"; fail=$((fail+1)); }
 [[ "$T3_pass" -ge 1 ]] && { echo "  PASS: T3 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T3 pass count = $T3_pass"; fail=$((fail+1)); }
 [[ "$T4_pass" -ge 1 ]] && { echo "  PASS: T4 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T4 pass count = $T4_pass"; fail=$((fail+1)); }
+[[ "$T5_pass" -ge 1 ]] && { echo "  PASS: T5 has >=1 pass"; pass=$((pass+1)); } || { echo "  FAIL: T5 pass count = $T5_pass"; fail=$((fail+1)); }
 
-echo "=== per-task steps T6-T9 ==="
+echo "=== per-task steps T7-T10 ==="
 
 out=$(pipeline-score --run run-fix-001 --format json --no-gh)
-for k in T6_holdout_pass T7_mutation_pass T8_reviewer_approved_first_round T9_reviewer_approved_overall; do
+for k in T7_holdout_pass T8_mutation_pass T9_reviewer_approved_first_round T10_reviewer_approved_overall; do
   val=$(printf '%s' "$out" | jq -r ".task_steps_aggregate.$k.id // empty")
   assert_eq "$k present in aggregate" "$k" "$val"
 done
 
-echo "=== per-task steps T10-T14 ==="
+echo "=== per-task steps T11-T14 ==="
 
 out=$(pipeline-score --run run-fix-001 --format json --no-gh)
-for k in T10_pr_created T11_pr_ci_green T12_pr_merged T13_no_fix_loop_exhaustion T14_terminal_status_done; do
+for k in T11_pr_created T12_pr_ci_green T13_pr_merged T14_within_retry_budget; do
   val=$(printf '%s' "$out" | jq -r ".task_steps_aggregate.$k.id // empty")
   assert_eq "$k present in aggregate" "$k" "$val"
 done
@@ -235,6 +235,80 @@ assert_eq "reviewers.fallback count"   "1" "$(printf '%s' "$out" | jq -r '.obser
 assert_eq "quota.checks count"         "2" "$(printf '%s' "$out" | jq -r '.observability.quota.checks')"
 assert_eq "quota.waits count"          "1" "$(printf '%s' "$out" | jq -r '.observability.quota.waits')"
 assert_eq "quota.pause_minutes sum"    "9" "$(printf '%s' "$out" | jq -r '.observability.quota.pause_minutes')"
+
+echo "=== header includes start/end/duration ==="
+
+out=$(pipeline-score --run run-fix-001 --format table --no-gh --no-log)
+if echo "$out" | grep -qE '^Started: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z   Ended: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z   Duration: [0-9]+:[0-9]{2}:[0-9]{2}$'; then
+  echo "  PASS: header has Started/Ended/Duration"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: header missing timestamps"
+  echo "$out"
+  fail=$((fail + 1))
+fi
+
+echo "=== _gh_pr_ci_color all outcomes ==="
+
+steps_path="$(cd "$(dirname "$0")/.." && pwd)/pipeline-score-steps.sh"
+
+_run_color() {
+  _FAKE_PR_VIEW="$1" bash -c "source '$steps_path'; _gh_pr_ci_color 42"
+}
+
+assert_eq "SUCCESS StatusContext → green" "green" \
+  "$(_run_color '{"statusCheckRollup":[{"__typename":"StatusContext","state":"SUCCESS","conclusion":null}]}')"
+assert_eq "FAILURE CheckRun → red" "red" \
+  "$(_run_color '{"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}]}')"
+assert_eq "IN_PROGRESS CheckRun → pending" "pending" \
+  "$(_run_color '{"statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":null}]}')"
+assert_eq "StatusContext PENDING → pending" "pending" \
+  "$(_run_color '{"statusCheckRollup":[{"__typename":"StatusContext","state":"PENDING","conclusion":null}]}')"
+assert_eq "mixed success+in-flight → pending" "pending" \
+  "$(_run_color '{"statusCheckRollup":[{"__typename":"StatusContext","state":"SUCCESS","conclusion":null},{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":null}]}')"
+assert_eq "mixed success+failure → red" "red" \
+  "$(_run_color '{"statusCheckRollup":[{"conclusion":"SUCCESS"},{"conclusion":"FAILURE"}]}')"
+assert_eq "empty rollup → unknown" "unknown" \
+  "$(_run_color '{"statusCheckRollup":[]}')"
+
+echo "=== T1_quota_checked pass when quota.check precedes task.start ==="
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-t1-pass"
+cat > "$CLAUDE_PLUGIN_DATA/runs/run-t1-pass/state.json" <<'JSON'
+{
+  "version":"9.9.9","mode":"task","status":"done",
+  "started_at":"2026-04-21T00:00:00Z","ended_at":"2026-04-21T00:10:00Z",
+  "tasks":{"t-1":{"status":"done","worktree":"/tmp/wt"}}
+}
+JSON
+cat > "$CLAUDE_PLUGIN_DATA/runs/run-t1-pass/metrics.jsonl" <<'M'
+{"ts":"2026-04-21T00:00:10Z","run_id":"run-t1-pass","event":"quota.check","task_id":"t-1","over_5h":0.42}
+{"ts":"2026-04-21T00:00:20Z","run_id":"run-t1-pass","event":"task.start","task_id":"t-1"}
+M
+: > "$CLAUDE_PLUGIN_DATA/runs/run-t1-pass/audit.jsonl"
+out=$(pipeline-score --run run-t1-pass --format json --no-gh --no-log)
+v=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T1_quota_checked.pass')
+assert_eq "T1_quota_checked pass case" "1" "$v"
+
+echo "=== T1_quota_checked fail when no quota.check event ==="
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-t1-fail"
+cat > "$CLAUDE_PLUGIN_DATA/runs/run-t1-fail/state.json" <<'JSON'
+{
+  "version":"9.9.9","mode":"task","status":"done",
+  "started_at":"2026-04-21T00:00:00Z","ended_at":"2026-04-21T00:10:00Z",
+  "tasks":{"t-1":{"status":"done","worktree":"/tmp/wt"}}
+}
+JSON
+cat > "$CLAUDE_PLUGIN_DATA/runs/run-t1-fail/metrics.jsonl" <<'M'
+{"ts":"2026-04-21T00:00:20Z","run_id":"run-t1-fail","event":"task.start","task_id":"t-1"}
+M
+: > "$CLAUDE_PLUGIN_DATA/runs/run-t1-fail/audit.jsonl"
+out=$(pipeline-score --run run-t1-fail --format json --no-gh --no-log)
+v=$(printf '%s' "$out" | jq -r '.task_steps_aggregate.T1_quota_checked.fail')
+assert_eq "T1_quota_checked fail case" "1" "$v"
+
+echo "=== T1_quota_checked is first field of task_steps_aggregate ==="
+first=$(printf '%s' "$out" | jq -r '.task_steps_aggregate | keys_unsorted | .[0]')
+assert_eq "T1 is first field" "T1_quota_checked" "$first"
 
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="

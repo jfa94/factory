@@ -37,6 +37,8 @@ audit_file="$run_dir/audit.jsonl"
 plugin_version=$(printf '%s' "$state" | jq -r '.version // "unknown"')
 mode=$(printf '%s' "$state" | jq -r '.mode')
 status=$(printf '%s' "$state" | jq -r '.status')
+started_at=$(printf '%s' "$state" | jq -r '.started_at // empty')
+ended_at=$(printf '%s' "$state" | jq -r '.ended_at // empty')
 
 # Bucketing.
 final_pr=$(printf '%s' "$state" | jq -r '.final_pr_number // empty')
@@ -75,37 +77,48 @@ _task_ids() {
 
 _aggregate_step() {
   local id="$1" fn="$2"
-  local p=0 f=0 s=0 np=0
+  local p=0 f=0 sna=0 sti=0 np=0
   while IFS= read -r t; do
     [[ -z "$t" ]] && continue
     local r; r=$($fn "$t")
     case "$r" in
-      pass)          p=$((p+1)) ;;
-      fail)          f=$((f+1)) ;;
-      skipped_ok)    s=$((s+1)) ;;
-      not_performed) np=$((np+1)) ;;
+      pass)                  p=$((p+1)) ;;
+      fail)                  f=$((f+1)) ;;
+      skipped_na)            sna=$((sna+1)) ;;
+      skipped_task_inactive) sti=$((sti+1)) ;;
+      not_performed)         np=$((np+1)) ;;
     esac
   done < <(_task_ids)
-  jq -n --arg id "$id" --argjson p "$p" --argjson f "$f" --argjson s "$s" --argjson np "$np" \
-    '{id: $id, pass: $p, fail: $f, skipped_ok: $s, not_performed: $np}'
+  jq -n --arg id "$id" \
+        --argjson p "$p" --argjson f "$f" \
+        --argjson sna "$sna" --argjson sti "$sti" \
+        --argjson np "$np" \
+    '{id: $id, pass: $p, fail: $f,
+      skipped_na: $sna, skipped_task_inactive: $sti,
+      not_performed: $np}'
 }
 
 task_steps_aggregate=$(jq -n \
-  --argjson T1 "$(_aggregate_step T1_executor_spawned     eval_T1_executor_spawned)" \
-  --argjson T2 "$(_aggregate_step T2_lint_pass            eval_T2_lint_pass)" \
-  --argjson T3 "$(_aggregate_step T3_typecheck_pass       eval_T3_typecheck_pass)" \
-  --argjson T4 "$(_aggregate_step T4_tests_pass           eval_T4_tests_pass)" \
-  --argjson T5 "$(_aggregate_step T5_coverage_non_regress eval_T5_coverage_non_regress)" \
-  --argjson T6 "$(_aggregate_step T6_holdout_pass                   eval_T6_holdout_pass)" \
-  --argjson T7 "$(_aggregate_step T7_mutation_pass                  eval_T7_mutation_pass)" \
-  --argjson T8 "$(_aggregate_step T8_reviewer_approved_first_round  eval_T8_reviewer_approved_first_round)" \
-  --argjson T9 "$(_aggregate_step T9_reviewer_approved_overall      eval_T9_reviewer_approved_overall)" \
-  --argjson T10 "$(_aggregate_step T10_pr_created               eval_T10_pr_created)" \
-  --argjson T11 "$(_aggregate_step T11_pr_ci_green              eval_T11_pr_ci_green)" \
-  --argjson T12 "$(_aggregate_step T12_pr_merged                eval_T12_pr_merged)" \
-  --argjson T13 "$(_aggregate_step T13_no_fix_loop_exhaustion   eval_T13_no_fix_loop_exhaustion)" \
-  --argjson T14 "$(_aggregate_step T14_terminal_status_done     eval_T14_terminal_status_done)" \
-  '{T1_executor_spawned: $T1, T2_lint_pass: $T2, T3_typecheck_pass: $T3, T4_tests_pass: $T4, T5_coverage_non_regress: $T5, T6_holdout_pass: $T6, T7_mutation_pass: $T7, T8_reviewer_approved_first_round: $T8, T9_reviewer_approved_overall: $T9, T10_pr_created: $T10, T11_pr_ci_green: $T11, T12_pr_merged: $T12, T13_no_fix_loop_exhaustion: $T13, T14_terminal_status_done: $T14}')
+  --argjson T1 "$(_aggregate_step T1_quota_checked                 eval_T1_quota_checked)" \
+  --argjson T2 "$(_aggregate_step T2_executor_spawned              eval_T2_executor_spawned)" \
+  --argjson T3 "$(_aggregate_step T3_lint_pass                     eval_T3_lint_pass)" \
+  --argjson T4 "$(_aggregate_step T4_typecheck_pass                eval_T4_typecheck_pass)" \
+  --argjson T5 "$(_aggregate_step T5_tests_pass                    eval_T5_tests_pass)" \
+  --argjson T6 "$(_aggregate_step T6_coverage_non_regress          eval_T6_coverage_non_regress)" \
+  --argjson T7 "$(_aggregate_step T7_holdout_pass                  eval_T7_holdout_pass)" \
+  --argjson T8 "$(_aggregate_step T8_mutation_pass                 eval_T8_mutation_pass)" \
+  --argjson T9 "$(_aggregate_step T9_reviewer_approved_first_round eval_T9_reviewer_approved_first_round)" \
+  --argjson T10 "$(_aggregate_step T10_reviewer_approved_overall   eval_T10_reviewer_approved_overall)" \
+  --argjson T11 "$(_aggregate_step T11_pr_created                  eval_T11_pr_created)" \
+  --argjson T12 "$(_aggregate_step T12_pr_ci_green                 eval_T12_pr_ci_green)" \
+  --argjson T13 "$(_aggregate_step T13_pr_merged                   eval_T13_pr_merged)" \
+  --argjson T14 "$(_aggregate_step T14_within_retry_budget         eval_T14_within_retry_budget)" \
+  '{T1_quota_checked:$T1,
+    T2_executor_spawned:$T2, T3_lint_pass:$T3, T4_typecheck_pass:$T4,
+    T5_tests_pass:$T5, T6_coverage_non_regress:$T6, T7_holdout_pass:$T7,
+    T8_mutation_pass:$T8, T9_reviewer_approved_first_round:$T9,
+    T10_reviewer_approved_overall:$T10, T11_pr_created:$T11,
+    T12_pr_ci_green:$T12, T13_pr_merged:$T13, T14_within_retry_budget:$T14}')
 
 anomalies=$(jq -n \
   --argjson rs "$run_steps" \
@@ -114,7 +127,7 @@ anomalies=$(jq -n \
     def count_run:
       [ .[] | select(.state == "not_performed") ] | length;
     def count_tasks:
-      [ .[] | .not_performed ] | add // 0;
+      [ .[] | (.not_performed + .skipped_task_inactive) ] | add // 0;
     ($rs | count_run) + ($ts | count_tasks)
   ')
 
@@ -123,31 +136,37 @@ full_success=$(jq -n \
   --argjson ts "$task_steps_aggregate" \
   '
     def all_run_pass:
-      [ .[] | select(.state != "pass" and .state != "skipped_ok") ] | length == 0;
+      [ .[] | select(.state != "pass" and .state != "skipped_na") ] | length == 0;
     def all_task_clean:
-      [ .[] | select(.fail > 0 or .not_performed > 0) ] | length == 0;
+      [ .[] | select(.fail > 0 or .not_performed > 0 or .skipped_task_inactive > 0) ] | length == 0;
     ($rs | all_run_pass) and ($ts | all_task_clean)
   ')
 
 observability=$(_observability_json)
 
 result=$(jq -n \
+  --argjson score_schema 2 \
   --arg run_id "$run_id" \
   --arg plugin_version "$plugin_version" \
   --arg mode "$mode" \
   --arg status "$status" \
   --arg bucket "$bucket" \
+  --arg started_at "$started_at" \
+  --arg ended_at "$ended_at" \
   --argjson run_steps "$run_steps" \
   --argjson task_steps_aggregate "$task_steps_aggregate" \
   --argjson anomalies "$anomalies" \
   --argjson full_success "$full_success" \
   --argjson observability "$observability" \
   '{
+    score_schema: $score_schema,
     run_id: $run_id,
     plugin_version: $plugin_version,
     mode: $mode,
     status: $status,
     bucket: $bucket,
+    started_at: (if $started_at == "" then null else $started_at end),
+    ended_at:   (if $ended_at == "" then null else $ended_at end),
     run_steps: $run_steps,
     task_steps_aggregate: $task_steps_aggregate,
     anomalies: $anomalies,

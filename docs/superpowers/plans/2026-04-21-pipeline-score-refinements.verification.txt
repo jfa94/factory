@@ -1,0 +1,40 @@
+Run: run-verify   plugin-version: 0.3.2   mode: prd   status: interrupted   bucket: incomplete
+Started: 2026-04-20T14:16:21Z   Ended: 2026-04-21T05:49:15Z   Duration: 15:32:54
+
+RUN-LEVEL STEPS
+  pass                    R1_autonomy_ok
+  pass                    R2_spec_generated
+  not_performed           R3_spec_reviewer_approved
+  pass                    R4_tasks_decomposed
+  pass                    R5_no_circuit_trip
+  pass                    R6_no_human_gate_pause
+  skipped_na              R7_scribe_ran
+  skipped_na              R8_rollup_pr_opened
+  skipped_na              R9_rollup_pr_merged
+  skipped_na              R10_rollup_ci_green
+  pass                    R11_no_escalation_comments
+  fail                    R12_terminal_status_done
+
+PER-TASK STEPS (aggregate)
+  step                                  pass   fail  skip_na  skip_inact  not_perf  compliance
+  T1_quota_checked                     0      18     0        3           0         0%
+  T2_executor_spawned                  0      0      0        0           21        0%
+  T3_lint_pass                         0      0      0        3           18        0%
+  T4_typecheck_pass                    0      0      0        3           18        0%
+  T5_tests_pass                        0      0      0        3           18        0%
+  T6_coverage_non_regress              0      0      0        3           18        0%
+  T7_holdout_pass                      0      0      11       3           7         0%
+  T8_mutation_pass                     0      0      18       3           0         0%
+  T9_reviewer_approved_first_round     15     0      0        3           3         71%
+  T10_reviewer_approved_overall        15     0      0        3           3         71%
+  T11_pr_created                       12     0      6        0           3         80%
+  T12_pr_ci_green                      9      8      4        0           0         52%
+  T13_pr_merged                        0      17     4        0           0         0%
+  T14_within_retry_budget              18     0      0        3           0         85%
+
+ANOMALIES: 140 step-instances marked not_performed
+FULL SUCCESS: false
+
+OBSERVABILITY
+  reviewers   codex=0  claude=0  fallback_from_codex=0
+  quota       checks=0  waits=0  pause_minutes=0  first_hour_waits=0
