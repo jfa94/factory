@@ -171,6 +171,17 @@ out=$("$wrapper" --run run-fix-001 --format json --no-gh --no-log)
 run_id=$(printf '%s' "$out" | jq -r '.run_id')
 assert_eq "wrapper passes --run" "run-fix-001" "$run_id"
 
+echo "=== backfill version stamping ==="
+
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-no-version"
+jq -n '{run_id: "run-no-version", status: "done", mode: "prd", started_at: "2026-03-15T10:00:00Z", tasks: {}}' > "$CLAUDE_PLUGIN_DATA/runs/run-no-version/state.json"
+touch "$CLAUDE_PLUGIN_DATA/runs/run-no-version/metrics.jsonl"
+touch "$CLAUDE_PLUGIN_DATA/runs/run-no-version/audit.jsonl"
+
+"$(cd "$(dirname "$0")/../../tools" && pwd)/score-run.sh" backfill --run run-no-version --assume-version 0.3.2 --no-gh
+version=$(jq -r '.version' "$CLAUDE_PLUGIN_DATA/runs/run-no-version/state.json")
+assert_eq "backfill stamps version" "0.3.2" "$version"
+
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="
 [[ $fail -eq 0 ]]
