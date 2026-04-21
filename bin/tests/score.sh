@@ -116,6 +116,14 @@ for k in T6_holdout_pass T7_mutation_pass T8_reviewer_approved_first_round T9_re
   assert_eq "$k present in aggregate" "$k" "$val"
 done
 
+echo "=== per-task steps T10-T14 ==="
+
+out=$(pipeline-score --run run-fix-001 --format json --no-gh)
+for k in T10_pr_created T11_pr_ci_green T12_pr_merged T13_no_fix_loop_exhaustion T14_terminal_status_done; do
+  val=$(printf '%s' "$out" | jq -r ".task_steps_aggregate.$k.id // empty")
+  assert_eq "$k present in aggregate" "$k" "$val"
+done
+
 echo ""
 echo "=== RESULTS: ${pass} passed, ${fail} failed ==="
 [[ $fail -eq 0 ]]

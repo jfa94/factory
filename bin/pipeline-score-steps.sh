@@ -232,3 +232,77 @@ eval_T9_reviewer_approved_overall() {
     *) echo "not_performed" ;;
   esac
 }
+
+eval_T10_pr_created() {
+  local t="$1"
+  local status; status=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].status // empty')
+  case "$status" in
+    reviewing|done|ci_fixing) ;;
+    *) echo "skipped_ok"; return ;;
+  esac
+  local pr; pr=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].pr_number // empty')
+  if [[ -n "$pr" && "$pr" != "null" ]]; then echo "pass"; else echo "not_performed"; fi
+}
+
+eval_T11_pr_ci_green() {
+  local t="$1"
+  local pr; pr=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].pr_number // empty')
+  if [[ -z "$pr" || "$pr" == "null" ]]; then echo "skipped_ok"; return; fi
+  local ci=""
+  if [[ -f "$metrics_file" ]]; then
+    ci=$(grep "\"event\":\"task.ci\"" "$metrics_file" 2>/dev/null | jq -cr "select(.pr_number == $pr) | .status" 2>/dev/null | tail -1)
+  fi
+  if [[ -n "$ci" ]]; then
+    case "$ci" in
+      green) echo "pass" ;;
+      red|timeout) echo "fail" ;;
+      *) echo "not_performed" ;;
+    esac
+    return
+  fi
+  if [[ "${use_gh:-true}" == "true" ]]; then
+    local conclusion
+    conclusion=$(gh pr checks "$pr" --json state,conclusion 2>/dev/null | jq -r 'map(.conclusion) | if length == 0 then "unknown" elif all(. == "SUCCESS") then "green" else "red" end' 2>/dev/null || echo "unknown")
+    case "$conclusion" in
+      green) echo "pass" ;;
+      red) echo "fail" ;;
+      *) echo "not_performed" ;;
+    esac
+  else
+    echo "not_performed"
+  fi
+}
+
+eval_T12_pr_merged() {
+  local t="$1"
+  local pr; pr=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].pr_number // empty')
+  if [[ -z "$pr" || "$pr" == "null" ]]; then echo "skipped_ok"; return; fi
+  local status; status=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].status // empty')
+  if [[ "$status" != "done" ]]; then echo "fail"; return; fi
+  if [[ "${use_gh:-true}" == "true" ]]; then
+    local merged
+    merged=$(gh pr view "$pr" --json merged -q '.merged' 2>/dev/null || echo "unknown")
+    [[ "$merged" == "true" ]] && echo "pass" || echo "fail"
+  else
+    echo "pass"
+  fi
+}
+
+eval_T13_no_fix_loop_exhaustion() {
+  local t="$1"
+  if ! _task_reached_executing "$t"; then echo "skipped_ok"; return; fi
+  local qa ra
+  qa=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].quality_attempts // 0')
+  ra=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].review_attempts // 0')
+  if (( qa >= 3 )) || (( ra >= 3 )); then echo "fail"; else echo "pass"; fi
+}
+
+eval_T14_terminal_status_done() {
+  local t="$1"
+  local status; status=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].status // empty')
+  case "$status" in
+    done) echo "pass" ;;
+    failed|needs_human_review) echo "fail" ;;
+    *) echo "not_performed" ;;
+  esac
+}
