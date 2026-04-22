@@ -111,7 +111,7 @@ If fewer than 80% of withheld criteria are satisfied, the implementation is surf
 
 **Graceful skip behavior:**
 
-When a holdout file exists but the `SubagentStop` hook has not wired the `holdout_review_file` field to state, the pipeline records `.tasks.<id>.quality_gates.holdout = "skipped"` and continues rather than blocking. This avoids infinite re-entry loops when the holdout reviewer output is not yet available. The scorer treats `skipped` as `skipped_na` (not applicable) rather than a failure.
+When a holdout file exists but the `SubagentStop` hook has not wired the `holdout_review_file` field to state, the pipeline records `.tasks.<id>.quality_gates.holdout = "skipped"` and continues rather than blocking. This was refined in version 0.3.5 to avoid infinite re-entry loops when the holdout reviewer output is not yet available. The scorer treats `skipped` as `skipped_na` (not applicable) rather than a failure.
 
 **Configuration:**
 

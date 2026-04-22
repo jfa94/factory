@@ -635,14 +635,15 @@ Compare before/after coverage reports. Block if coverage decreased.
 **Usage:**
 
 ```bash
-pipeline-coverage-gate <before.json> <after.json> [--tolerance <percent>]
+pipeline-coverage-gate <before.json> <after.json> [--tolerance <percent>] [--task-id <id>]
 ```
 
 **Flags:**
 
-| Flag          | Description                               |
-| ------------- | ----------------------------------------- |
-| `--tolerance` | Allowed coverage decrease (default: 0.5%) |
+| Flag          | Description                                          |
+| ------------- | ---------------------------------------------------- |
+| `--tolerance` | Allowed coverage decrease (default: 0.5%)            |
+| `--task-id`   | Task identifier for metrics logging (added in 0.3.5) |
 
 **Output:**
 

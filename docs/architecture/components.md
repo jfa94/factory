@@ -26,8 +26,7 @@ dark-factory-plugin/
 │   └── subagent-stop-gate.sh    # Subagent artifact validation
 ├── bin/
 │   └── (21 scripts)             # Deterministic pipeline utilities
-├── servers/
-│   └── pipeline-metrics/        # Metrics MCP server
+├── servers/                     # (empty — orphaned MCP server removed in 0.3.5)
 ├── templates/
 │   └── settings.autonomous.json # Safety settings for autonomous mode
 ├── settings.json                # Default permission grants
@@ -404,6 +403,8 @@ All scripts live in `bin/`. They source `pipeline-lib.sh` for shared functions.
 ## Metrics
 
 Pipeline execution metrics are written to `$run_dir/metrics.jsonl` (one JSONL line per event) by the `log_metric` helper in `bin/pipeline-lib.sh`. Every event carries `ts`, `run_id`, and `event` fields plus optional key-value pairs. Events of note: `run.start`, `run.summary`, `task.start`, `task.end`, `task.executor_spawned`, `task.gate.quality`, `task.gate.coverage`, `task.coverage.snapshot`, `task.review.provider`, `task.pr_created`, `pipeline.step.begin/end`, `quota.check`, `quota.wait`, `circuit_breaker`. The scorer (`bin/pipeline-score`) reads this file to derive run quality scores.
+
+The MCP metrics server (`servers/pipeline-metrics/`) was removed in version 0.3.5 as it was orphaned and unused. Metrics are now written directly to JSONL files.
 
 ---
 
