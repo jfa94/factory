@@ -182,6 +182,86 @@ if [[ "$remove_worktrees" == "true" ]]; then
   done < <(git branch --list 'worktree-agent-*' --format='%(refname:short)' 2>/dev/null)
 fi
 
+# --- Delete spec-handoff/<run_id> branch (current run) ---
+# Consumed (merged into staging) before cleanup runs; safe to delete unconditionally.
+spec_handoff_branch="spec-handoff/${run_id}"
+spec_handoff_deleted=0
+
+if git show-ref --verify --quiet "refs/heads/${spec_handoff_branch}" 2>/dev/null; then
+  if git branch -D "$spec_handoff_branch" 2>/dev/null; then
+    log_info "deleted local spec-handoff branch: $spec_handoff_branch"
+    spec_handoff_deleted=1
+  fi
+fi
+if git ls-remote --exit-code --heads origin "$spec_handoff_branch" &>/dev/null; then
+  if git push origin --delete "$spec_handoff_branch" 2>/dev/null; then
+    log_info "deleted remote spec-handoff branch: $spec_handoff_branch"
+    spec_handoff_deleted=1
+  fi
+fi
+
+# --- Sweep orphan spec-handoff/* branches (other runs) ---
+# Cross-reference active runs so we don't delete a branch mid spec-generation.
+mapfile -t active_runs < <(pipeline-state list 2>/dev/null | jq -r '.[]' 2>/dev/null)
+orphan_spec_deleted=0
+
+while IFS= read -r sh_branch; do
+  [[ -z "$sh_branch" ]] && continue
+  sh_run_id="${sh_branch#spec-handoff/}"
+  skip=false
+  for ar in "${active_runs[@]}"; do
+    [[ "$ar" == "$sh_run_id" ]] && { skip=true; break; }
+  done
+  [[ "$skip" == "true" ]] && { log_info "keeping spec-handoff branch (active run): $sh_branch"; continue; }
+  if git branch -D "$sh_branch" 2>/dev/null; then
+    log_info "deleted orphan spec-handoff branch: $sh_branch"
+    orphan_spec_deleted=$((orphan_spec_deleted + 1))
+  fi
+  git push origin --delete "$sh_branch" 2>/dev/null || true
+done < <(git branch --list 'spec-handoff/*' --format='%(refname:short)' 2>/dev/null)
+
+# --- Sweep orphan orchestrator-run-* worktrees and branches ---
+# Happy-path removal runs at SKILL.md after finalize-run; this catches crash/abort leftovers.
+orchestrator_branches_deleted=0
+orchestrator_wts_removed=0
+orchestrator_errors=()
+
+if [[ ${#live_wt_branches[@]} -eq 0 ]]; then
+  mapfile -t live_wt_branches < <(
+    git worktree list --porcelain 2>/dev/null \
+      | awk '/^branch /{sub("refs/heads/", "", $2); print $2}'
+  )
+fi
+project_root=$(git rev-parse --show-toplevel 2>/dev/null)
+
+while IFS= read -r orch_branch; do
+  [[ -z "$orch_branch" ]] && continue
+  skip=false
+  for live in "${live_wt_branches[@]}"; do
+    [[ "$live" == "$orch_branch" ]] && { skip=true; break; }
+  done
+  [[ "$skip" == "true" ]] && { log_info "keeping orchestrator branch (live worktree): $orch_branch"; continue; }
+
+  orch_wt="${project_root}/.claude/worktrees/${orch_branch}"
+  if [[ -d "$orch_wt" ]]; then
+    if err=$(git worktree remove "$orch_wt" --force 2>&1); then
+      log_info "removed orphan orchestrator worktree: $orch_wt"
+      orchestrator_wts_removed=$((orchestrator_wts_removed + 1))
+    else
+      log_warn "could not remove orchestrator worktree $orch_wt: $err"
+      orchestrator_errors+=("worktree:${orch_branch}:${err}")
+    fi
+  fi
+
+  if err=$(git branch -D "$orch_branch" 2>&1); then
+    log_info "deleted orphan orchestrator branch: $orch_branch"
+    orchestrator_branches_deleted=$((orchestrator_branches_deleted + 1))
+  else
+    log_warn "could not delete orphan orchestrator branch $orch_branch: $err"
+    orchestrator_errors+=("branch:${orch_branch}:${err}")
+  fi
+done < <(git branch --list 'orchestrator-run-*' --format='%(refname:short)' 2>/dev/null)
+
 # --- Close issues ---
 if [[ "$close_issues" == "true" ]]; then
   require_command gh
@@ -368,9 +448,13 @@ agent_branch_errors_json='[]'
 if (( ${#agent_branch_errors[@]} > 0 )); then
   agent_branch_errors_json=$(printf '%s\n' "${agent_branch_errors[@]}" | jq -R . | jq -s .)
 fi
+orchestrator_errors_json='[]'
+if (( ${#orchestrator_errors[@]} > 0 )); then
+  orchestrator_errors_json=$(printf '%s\n' "${orchestrator_errors[@]}" | jq -R . | jq -s .)
+fi
 
 cleanup_status="ok"
-if (( ${#worktree_errors[@]} > 0 || ${#issue_errors[@]} > 0 || ${#agent_branch_errors[@]} > 0 )); then
+if (( ${#worktree_errors[@]} > 0 || ${#issue_errors[@]} > 0 || ${#agent_branch_errors[@]} > 0 || ${#orchestrator_errors[@]} > 0 )); then
   cleanup_status="partial"
 fi
 
@@ -381,6 +465,10 @@ jq -n \
   --argjson branches_skipped "$branches_skipped" \
   --argjson worktrees_removed "$worktrees_removed" \
   --argjson agent_branches_deleted "$agent_branches_deleted" \
+  --argjson spec_handoff_deleted "$spec_handoff_deleted" \
+  --argjson orphan_spec_deleted "$orphan_spec_deleted" \
+  --argjson orchestrator_branches_deleted "$orchestrator_branches_deleted" \
+  --argjson orchestrator_wts_removed "$orchestrator_wts_removed" \
   --argjson issues_closed "$issues_closed" \
   --argjson spec_cleaned "$spec_cleaned" \
   --arg archive_path "$archive_dir" \
@@ -388,6 +476,7 @@ jq -n \
   --argjson worktree_errors "$worktree_errors_json" \
   --argjson issue_errors "$issue_errors_json" \
   --argjson agent_branch_errors "$agent_branch_errors_json" \
+  --argjson orchestrator_errors "$orchestrator_errors_json" \
   '{
     run_id: $run_id,
     cleanup_status: $cleanup_status,
@@ -395,13 +484,18 @@ jq -n \
     branches_skipped: $branches_skipped,
     worktrees_removed: $worktrees_removed,
     agent_branches_deleted: $agent_branches_deleted,
+    spec_handoff_deleted: $spec_handoff_deleted,
+    orphan_spec_deleted: $orphan_spec_deleted,
+    orchestrator_branches_deleted: $orchestrator_branches_deleted,
+    orchestrator_wts_removed: $orchestrator_wts_removed,
     issues_closed: $issues_closed,
     spec_cleaned: $spec_cleaned,
     archive_path: $archive_path,
     warnings: $warnings,
     worktree_errors: $worktree_errors,
     issue_errors: $issue_errors,
-    agent_branch_errors: $agent_branch_errors
+    agent_branch_errors: $agent_branch_errors,
+    orchestrator_errors: $orchestrator_errors
   }'
 
 if [[ "$cleanup_status" == "partial" ]]; then

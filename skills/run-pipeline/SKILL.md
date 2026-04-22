@@ -168,6 +168,8 @@ Runs once, before task execution.
    git show "$handoff_ref:$spec_path/tasks.json" > ".state/$run_id/tasks.json"
    git checkout staging
    git merge --ff-only "$handoff_ref" || git merge --no-ff "$handoff_ref" -m "chore: merge spec handoff for $run_id"
+   git push origin --delete "$handoff_branch" 2>/dev/null || true
+   git branch -D "$handoff_branch" 2>/dev/null || true
    pipeline-state write "$run_id" .spec.path "\"$(pwd)/.state/$run_id\""
    pipeline-state write "$run_id" .spec.committed true
    pipeline-branch commit-spec ".state/$run_id"
