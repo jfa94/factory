@@ -800,13 +800,69 @@ pipeline-summary <run-id>
 
 ### pipeline-cleanup
 
-Delete branches, close issues, clean worktrees.
+Clean up after a pipeline run: branches, worktrees, issues, spec directory, and state archival.
 
 **Usage:**
 
 ```bash
-pipeline-cleanup <run-id> [--dry-run]
+pipeline-cleanup <run-id> [flags]
 ```
+
+**Flags:**
+
+| Flag                 | Description                                       |
+| -------------------- | ------------------------------------------------- |
+| `--close-issues`     | Close GitHub issues (only if ALL tasks merged)    |
+| `--delete-branches`  | Delete local+remote branches for merged PRs       |
+| `--remove-worktrees` | Remove git worktrees for merged tasks             |
+| `--clean-spec`       | Remove spec dir after all tasks merged            |
+| `--spec-dir <path>`  | Spec directory path (required for `--clean-spec`) |
+
+**Behavior:**
+
+1. **Branch deletion** (`--delete-branches`): Only deletes branches for tasks with status=done AND whose PR is actually MERGED. Skips branches for unfinished tasks or non-merged PRs.
+
+2. **Worktree removal** (`--remove-worktrees`): Removes worktree directories for done tasks.
+
+3. **Orphan cleanup** (runs when `--remove-worktrees` is set):
+   - `worktree-agent-*` branches: Claude Code's `isolation:worktree` harness creates these but only removes the worktree directory, leaving orphan branches. The script deletes any not backing a live worktree.
+   - `spec-handoff/<run_id>` branch: Deleted for the current run (already merged into staging). Cross-references active runs via `pipeline-state list` to avoid deleting mid-run branches for other runs.
+   - `orchestrator-run-*` branches and worktrees: Sweeps orphan orchestrator artifacts left by crashed/aborted runs.
+
+4. **Issue closure** (`--close-issues`): Closes issues only when ALL tasks for the run are done.
+
+5. **Spec cleanup** (`--clean-spec`): Removes the spec directory only when all tasks are done. Includes refuse-list to prevent deletion of system paths, `$HOME`, or project root.
+
+6. **State archival**: Copies `state.json`, `audit.jsonl`, `metrics.jsonl`, `reviews/`, and `holdouts/` to `${CLAUDE_PLUGIN_DATA}/archive/<run-id>/`, then removes the run directory.
+
+7. **Retention trim**: Drops audit/metrics JSONL lines older than `observability.metricsRetentionDays` (default 90).
+
+**Output:**
+
+```json
+{
+  "run_id": "run-20260413-140000",
+  "cleanup_status": "ok",
+  "branches_deleted": 3,
+  "branches_skipped": 1,
+  "worktrees_removed": 3,
+  "agent_branches_deleted": 2,
+  "spec_handoff_deleted": 1,
+  "orphan_spec_deleted": 0,
+  "orchestrator_branches_deleted": 1,
+  "orchestrator_wts_removed": 1,
+  "issues_closed": 1,
+  "spec_cleaned": true,
+  "archive_path": "/path/to/archive/run-20260413-140000",
+  "warnings": [],
+  "worktree_errors": [],
+  "issue_errors": [],
+  "agent_branch_errors": [],
+  "orchestrator_errors": []
+}
+```
+
+**Exit codes:** 0=success, 1=partial failure (some cleanup operations failed)
 
 ---
 
