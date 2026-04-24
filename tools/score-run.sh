@@ -31,22 +31,43 @@ for arg in "$@"; do
 done
 
 runs_dir="${CLAUDE_PLUGIN_DATA}/runs"
-mapfile -t candidates < <(ls -1t "$runs_dir" 2>/dev/null | grep -v '^current$' | head -5)
+archive_dir="${CLAUDE_PLUGIN_DATA}/archive"
+
+_state_mtime() {
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+}
+
+_find_state_file() {
+  local r="$1"
+  local f="$runs_dir/$r/state.json"
+  [[ -f "$f" ]] || f="$archive_dir/$r/state.json"
+  [[ -f "$f" ]] && echo "$f"
+}
+
+mapfile -t candidates < <(
+  {
+    for d in "$runs_dir"/*/state.json "$archive_dir"/*/state.json; do
+      [[ -f "$d" ]] || continue
+      printf '%s\t%s\n' "$(_state_mtime "$d")" "$(basename "$(dirname "$d")")"
+    done
+  } | sort -rn | awk '!seen[$2]++ { print $2 }' | head -5
+)
 
 if [[ ${#candidates[@]} -eq 0 ]]; then
-  echo "No runs found under $runs_dir" >&2
+  echo "No runs found under $runs_dir or $archive_dir" >&2
   exit 1
 fi
 
 echo "Recent runs:"
 for i in "${!candidates[@]}"; do
   r="${candidates[$i]}"
-  state_file="$runs_dir/$r/state.json"
-  if [[ -f "$state_file" ]]; then
+  state_file=$(_find_state_file "$r")
+  if [[ -n "$state_file" ]]; then
     status=$(jq -r '.status' "$state_file")
     mode=$(jq -r '.mode' "$state_file")
     version=$(jq -r '.version // "?"' "$state_file")
-    echo "  [$((i+1))] $r  (v$version, mode=$mode, status=$status)"
+    [[ "$state_file" == "$archive_dir"* ]] && tag=" [archived]" || tag=""
+    echo "  [$((i+1))] $r  (v$version, mode=$mode, status=$status$tag)"
   else
     echo "  [$((i+1))] $r  (no state.json)"
   fi
