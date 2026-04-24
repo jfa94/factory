@@ -7,10 +7,9 @@
 # Exit: 0 if ok or exempt; 1 on violation.
 set -euo pipefail
 
-_lib="$(dirname "$0")/pipeline-lib.sh"
 # shellcheck source=/dev/null
-[[ -f "$_lib" ]] && source "$_lib"
-command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
 
 base_ref="staging"
 task_id=""
@@ -25,7 +24,12 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
 done
-[[ -z "$task_id" ]] && { echo "--task-id required" >&2; exit 1; }
+[[ -z "$task_id" ]] && { printf '{"ok":false,"exempt":false,"violations":[],"error":"task_id_required"}\n'; exit 1; }
+
+if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
+  printf '{"ok":false,"exempt":false,"violations":[],"error":"base_ref_not_found","base_ref":"%s"}\n' "$base_ref"
+  exit 1
+fi
 
 _is_test_path() {
   case "$1" in
@@ -71,6 +75,7 @@ _emit() {
   if [[ -n "$run_id" ]] && command -v pipeline-state >/dev/null 2>&1; then
     pipeline-state task-write "$run_id" "$task_id" quality_gates.tdd "$out" >/dev/null 2>&1 || true
   fi
+  command -v log_metric >/dev/null && log_metric "task.gate.tdd" "task_id=\"$task_id\"" "ok=$ok" "exempt=$exempt" || true
 }
 
 commits=$(git log --format='%H' "${base_ref}..HEAD" 2>/dev/null \
@@ -88,6 +93,10 @@ commits_oldest=$(printf '%s\n' "$commits" | awk '{a[NR]=$0} END{for(i=NR;i>0;i--
 classes=()
 while read -r sha; do
   [[ -z "$sha" ]] && continue
+  # Skip merge commits — two parents means two SHAs on the %P line.
+  if git show -s --format='%P' "$sha" | grep -q ' '; then
+    continue
+  fi
   files=$(git show --name-only --format= "$sha")
   kind="test-only"
   while IFS= read -r f; do

@@ -88,5 +88,38 @@ JSON
   pass "case4: tdd_exempt flag respected"
 }
 
-case1; case2; case3; case4
+case5() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  # Create a side branch, modify a file, then merge it into feat/task-001.
+  ( cd "$repo"
+    git checkout -q staging
+    git checkout -q -b side
+    printf 'y' > other.txt
+    git add other.txt && git -c user.email=t@t -c user.name=t commit -q -m "side"
+    git checkout -q feat/task-001
+    git -c user.email=t@t -c user.name=t merge --no-ff -m "merge side [task-001]" side
+  )
+  _commit "$repo" "feat(x): impl [task-001]" "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-001 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 1 ]]; then fail "case5 expected exit 1 (merge must not count as test-only), got $rc"; fi
+  printf '%s' "$out" | jq -e '.ok == false' >/dev/null || fail "case5 expected ok=false"
+  pass "case5: merge commit does not count as test-only"
+}
+
+case6() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-001 --base nonexistent-ref )
+  rc=$?
+  set -e
+  if [[ $rc -ne 1 ]]; then fail "case6 expected exit 1 for missing base ref, got $rc"; fi
+  printf '%s' "$out" | jq -e '.error == "base_ref_not_found"' >/dev/null \
+    || fail "case6 expected error=base_ref_not_found"
+  pass "case6: missing base ref errors with JSON"
+}
+
+case1; case2; case3; case4; case5; case6
 printf 'all tdd-gate tests passed\n'
