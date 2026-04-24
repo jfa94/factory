@@ -17,6 +17,8 @@ You run in one of two modes, passed via the `mode` field in the input prompt:
 
 Default: `coverage-gap` (for backward compatibility).
 
+If `mode: pre-impl` is set, skip the numbered Phases 1–5 in the body below — follow only the rules in "### pre-impl mode — additional rules" above.
+
 ### pre-impl mode — additional rules
 
 - You MUST read the spec at the path provided in the prompt.
