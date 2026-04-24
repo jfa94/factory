@@ -55,7 +55,7 @@ _nocodex_path="$PLUGIN_BIN:/usr/bin:/bin"
 # Without Codex on PATH, should fall back to claude-code
 output=$(env PATH="$_nocodex_path" pipeline-detect-reviewer 2>/dev/null)
 assert_eq "fallback reviewer" "claude-code" "$(echo "$output" | jq -r '.reviewer')"
-assert_eq "fallback agent" "implementation-reviewer" "$(echo "$output" | jq -r '.agent')"
+assert_eq "fallback agent" "quality-reviewer" "$(echo "$output" | jq -r '.agent')"
 
 # With --base flag
 output=$(env PATH="$_nocodex_path" pipeline-detect-reviewer --base main 2>/dev/null)
