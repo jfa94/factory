@@ -28,11 +28,39 @@ done
 [[ -z "$run_id" ]] && { log_error "missing --run"; exit 1; }
 
 run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
-[[ -f "$run_dir/state.json" ]] || { log_error "state.json not found: $run_dir"; exit 1; }
+if [[ ! -f "$run_dir/state.json" ]]; then
+  _archive_dir="${CLAUDE_PLUGIN_DATA}/archive/${run_id}"
+  if [[ -f "$_archive_dir/state.json" ]]; then
+    run_dir="$_archive_dir"
+  else
+    log_error "state.json not found in runs/ or archive/: ${run_id}"
+    exit 1
+  fi
+fi
 
 state=$(cat "$run_dir/state.json")
 metrics_file="$run_dir/metrics.jsonl"
 audit_file="$run_dir/audit.jsonl"
+
+# Derive GitHub repo slug so gh pr view calls target the right repo.
+# Steps: spec.path → strip /.state/<run> to get project root → git remote.
+gh_repo=""
+if [[ "$use_gh" == "true" ]]; then
+  _spec_path=$(printf '%s' "$state" | jq -r '.spec.path // empty')
+  _proj_dir=""
+  if [[ -n "$_spec_path" ]]; then
+    _candidate="$(dirname "$(dirname "$_spec_path")")"
+    [[ -d "$_candidate/.git" || -d "$_candidate/../.git" ]] && _proj_dir="$_candidate"
+  fi
+  if [[ -z "$_proj_dir" ]]; then
+    _wt=$(printf '%s' "$state" | jq -r '[.tasks // {} | to_entries[] | .value.worktree // ""] | map(select(. != "")) | first // empty')
+    [[ -n "$_wt" ]] && _proj_dir="$(dirname "$(dirname "$(dirname "$_wt")")")"
+  fi
+  if [[ -n "$_proj_dir" && -d "$_proj_dir" ]]; then
+    gh_repo=$(git -C "$_proj_dir" remote get-url origin 2>/dev/null \
+      | sed -E 's|.*github\.com[:/]||;s|\.git$||') || gh_repo=""
+  fi
+fi
 
 plugin_version=$(printf '%s' "$state" | jq -r '.version // "unknown"')
 mode=$(printf '%s' "$state" | jq -r '.mode')

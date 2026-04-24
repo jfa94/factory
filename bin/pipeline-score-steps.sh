@@ -159,6 +159,8 @@ _all_tasks_done() {
 
 eval_R7_scribe_ran() {
   if ! _all_tasks_done; then echo "skipped_na"; return; fi
+  local scribe_state; scribe_state=$(printf '%s' "$state" | jq -r '.scribe.status // empty')
+  if [[ "$scribe_state" == "done" ]]; then echo "pass"; return; fi
   if [[ -f "$metrics_file" ]] && grep -q '"event":"agent.scribe.end"' "$metrics_file" 2>/dev/null; then
     echo "pass"
   else
@@ -176,12 +178,13 @@ eval_R9_rollup_pr_merged() {
   local pr; pr=$(printf '%s' "$state" | jq -r '(.rollup.pr_number // .final_pr_number) // empty')
   if [[ -z "$pr" ]]; then echo "skipped_na"; return; fi
   if [[ "${use_gh:-true}" == "true" ]]; then
-    local merged
-    merged=$(gh pr view "$pr" --json merged -q '.merged' 2>/dev/null || echo "unknown")
-    case "$merged" in
-      true)  echo "pass" ;;
-      false) echo "fail" ;;
-      *)     echo "not_performed" ;;
+    local pr_state _repo_arg=()
+    [[ -n "${gh_repo:-}" ]] && _repo_arg=(--repo "$gh_repo")
+    pr_state=$(gh pr view "$pr" "${_repo_arg[@]}" --json state -q '.state' 2>/dev/null || echo "unknown")
+    case "$pr_state" in
+      MERGED) echo "pass" ;;
+      OPEN)   echo "fail" ;;
+      *)      echo "not_performed" ;;
     esac
   else
     if [[ -f "$metrics_file" ]] && grep -q "\"event\":\"run.ci\".*\"pr_number\":$pr" "$metrics_file" 2>/dev/null; then
@@ -205,7 +208,7 @@ eval_R10_rollup_ci_green() {
   fi
   if [[ "${use_gh:-true}" == "true" ]]; then
     local color
-    color=$(_gh_pr_ci_color "$pr")
+    color=$(_gh_pr_ci_color "$pr" "${gh_repo:-}")
     case "$color" in
       green)   echo "pass" ;;
       red)     echo "fail" ;;
@@ -227,7 +230,18 @@ eval_R11_no_escalation_comments() {
 
 eval_R12_terminal_status_done() {
   local s; s=$(printf '%s' "$state" | jq -r '.status')
-  [[ "$s" == "done" ]] && echo "pass" || echo "fail"
+  [[ "$s" == "done" ]] && echo "pass" && return
+  # Heuristic: orchestrator may exit before flushing status=done.
+  # Infer done when all tasks terminal, scribe done, and rollup PR exists.
+  if [[ "$s" == "running" ]] && _all_tasks_done; then
+    local scribe_s rollup_pr
+    scribe_s=$(printf '%s' "$state" | jq -r '.scribe.status // empty')
+    rollup_pr=$(printf '%s' "$state" | jq -r '(.rollup.pr_number // .final_pr_number) // empty')
+    if [[ "$scribe_s" == "done" && -n "$rollup_pr" ]]; then
+      echo "pass"; return
+    fi
+  fi
+  echo "fail"
 }
 
 _task_reached_executing() {
@@ -239,7 +253,7 @@ _task_reached_executing() {
 _quality_check_status() {
   local t="$1" cmd="$2"
   printf '%s' "$state" | jq -r --arg t "$t" --arg c "$cmd" \
-    '.tasks[$t].quality_gate.checks // [] | map(select(.command == $c)) | .[0].status // empty'
+    '.tasks[$t].quality_gate.checks // [] | map(select(.command == $c or (.command | startswith($c + ":")))) | .[0].status // empty'
 }
 
 _quality_check_step() {
@@ -369,7 +383,7 @@ eval_T12_pr_ci_green() {
   fi
   if [[ "${use_gh:-true}" == "true" ]]; then
     local color
-    color=$(_gh_pr_ci_color "$pr")
+    color=$(_gh_pr_ci_color "$pr" "${gh_repo:-}")
     case "$color" in
       green)   echo "pass" ;;
       red)     echo "fail" ;;
@@ -388,9 +402,15 @@ eval_T13_pr_merged() {
   local status; status=$(printf '%s' "$state" | jq -r --arg t "$t" '.tasks[$t].status // empty')
   if [[ "$status" != "done" ]]; then echo "fail"; return; fi
   if [[ "${use_gh:-true}" == "true" ]]; then
-    local merged
-    merged=$(gh pr view "$pr" --json merged -q '.merged' 2>/dev/null || echo "unknown")
-    [[ "$merged" == "true" ]] && echo "pass" || echo "fail"
+    local pr_state _repo_arg=()
+    [[ -n "${gh_repo:-}" ]] && _repo_arg=(--repo "$gh_repo")
+    pr_state=$(gh pr view "$pr" "${_repo_arg[@]}" --json state -q '.state' 2>/dev/null || echo "unknown")
+    case "$pr_state" in
+      MERGED)  echo "pass" ;;
+      OPEN)    echo "fail" ;;
+      CLOSED)  echo "fail" ;;
+      *)       echo "fail" ;;
+    esac
   else
     echo "pass"
   fi
