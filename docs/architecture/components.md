@@ -244,7 +244,7 @@ Validates spec output before task execution begins.
 - Returns structured PASS/NEEDS_REVISION verdict (score >= 54/60 required)
 - Spawned by spec-generator; failure triggers regeneration (max 5 iterations)
 
-### code-reviewer
+### quality-reviewer
 
 Fresh-context code review with semi-formal reasoning and structured findings.
 

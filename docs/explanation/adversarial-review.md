@@ -106,7 +106,7 @@ The reviewer must provide specific findings with file, line, severity, and descr
 Security-tier tasks (those touching auth, payment, crypto, etc.) receive four bundled reviewers running in parallel:
 
 1. `implementation-reviewer` — adversarial review with zero implementation context; validates acceptance and holdout criteria
-2. `code-reviewer` — specialized for injection vectors, auth/authz, secrets, crypto, input validation at trust boundaries
+2. `quality-reviewer` — specialized for injection vectors, auth/authz, secrets, crypto, input validation at trust boundaries
 3. `security-reviewer` — OWASP Top 10, secrets exposure, supply-chain risks, AI-specific insecure defaults
 4. `architecture-reviewer` — module boundaries, dependency direction, coupling metrics, AI anti-patterns
 

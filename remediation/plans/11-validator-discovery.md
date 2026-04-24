@@ -100,7 +100,7 @@ check_agent "spec-generator" required
 check_agent "task-executor" required
 check_agent "implementation-reviewer" required
 check_agent "spec-reviewer" required    # bundled (plan 01 follow-up)
-check_agent "code-reviewer" required    # bundled
+check_agent "quality-reviewer" required    # bundled
 check_agent "security-reviewer" optional
 check_agent "architecture-reviewer" optional
 

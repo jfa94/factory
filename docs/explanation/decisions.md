@@ -59,9 +59,9 @@ The orchestrator creates a dedicated worktree at `.claude/worktrees/orchestrator
 
 ---
 
-## Decision 4: Separate implementation-reviewer from code-reviewer
+## Decision 4: Separate implementation-reviewer from quality-reviewer
 
-**Choice:** Create a new `implementation-reviewer` agent in the plugin rather than reusing the existing `code-reviewer` directly.
+**Choice:** Create a new `implementation-reviewer` agent in the plugin rather than reusing the existing `quality-reviewer` directly.
 
 **Why:**
 
@@ -70,7 +70,7 @@ The orchestrator creates a dedicated worktree at `.claude/worktrees/orchestrator
 - `implementation-reviewer` outputs machine-parseable structured format
 - `implementation-reviewer` is round-aware (tracks review iteration)
 
-The existing `code-reviewer` is still used as a fallback when Codex is unavailable.
+The existing `quality-reviewer` is still used as a fallback when Codex is unavailable.
 
 ---
 

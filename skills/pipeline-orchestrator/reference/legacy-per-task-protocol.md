@@ -66,7 +66,7 @@ For each task `$t` in the current parallel group, walk these seven steps in orde
 - `pipeline-detect-reviewer --base staging` → `{reviewer, command}`.
 - Emit `task.review.provider` metric.
 - Codex path: run command inline, `pipeline-parse-review --reviewer codex`.
-- Claude path: spawn `implementation-reviewer` + risk-tier fan-out (feature → +architecture-reviewer; security → +code-reviewer/security-reviewer/architecture-reviewer).
+- Claude path: spawn `implementation-reviewer` + risk-tier fan-out (feature → +architecture-reviewer; security → +quality-reviewer/security-reviewer/architecture-reviewer).
 
 ### 5. Parse Verdicts
 

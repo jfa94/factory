@@ -122,7 +122,7 @@ For each task in execution order:
 │ pipeline-*      │      │ spec-generator  │      │ branch-protection│
 │ (21 scripts)    │      │ task-executor   │      │ run-tracker     │
 │                 │      │ implementation-reviewer   │      │ stop-gate       │
-│ Validation      │      │ code-reviewer   │      │ subagent-stop   │
+│ Validation      │      │ quality-reviewer   │      │ subagent-stop   │
 │ State mgmt      │      │ security-       │      │                 │
 │ Classification  │      │   reviewer      │      │                 │
 │ Parsing         │      │ architecture-   │      │                 │

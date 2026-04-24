@@ -302,7 +302,7 @@ _stage_postexec() {
   local reviewers=("implementation-reviewer")
   case "$tier" in
     feature)  reviewers+=("architecture-reviewer") ;;
-    security) reviewers+=("code-reviewer" "security-reviewer" "architecture-reviewer") ;;
+    security) reviewers+=("quality-reviewer" "security-reviewer" "architecture-reviewer") ;;
   esac
 
   _ensure_prompt_dir
