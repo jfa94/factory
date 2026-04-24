@@ -1162,6 +1162,52 @@ trap - EXIT
 
 # ============================================================
 echo ""
+echo "=== task_06_07: pipeline-branch task-commit writes standardized message ==="
+(
+  tmp=$(mktemp -d)
+  cd "$tmp"
+  git init --quiet
+  git config user.email test@local
+  git config user.name test
+  git commit --allow-empty -m "root" --quiet
+  git checkout -b task/T1 --quiet
+
+  export CLAUDE_PLUGIN_DATA="$tmp/.data"
+  mkdir -p "$CLAUDE_PLUGIN_DATA/runs/R1"
+  cat > "$CLAUDE_PLUGIN_DATA/runs/R1/state.json" <<'JSON'
+{
+  "run_id": "R1",
+  "input": {"issue_numbers": [112]},
+  "tasks": {"T1": {"task_id": "T1", "description": "add login endpoint"}}
+}
+JSON
+  ln -s "$CLAUDE_PLUGIN_DATA/runs/R1" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+  echo change > file.txt
+  pipeline-branch task-commit T1 --worktree "$tmp" --run-id R1 >/dev/null 2>&1
+  msg=$(git log -1 --format=%s)
+  assert_eq "task-commit default message format" "[112] task(T1): add login endpoint" "$msg"
+)
+
+# ============================================================
+echo ""
+echo "=== task_06_08: pipeline-branch task-pr-title builds standardized PR title ==="
+(
+  export CLAUDE_PLUGIN_DATA=$(mktemp -d)
+  mkdir -p "$CLAUDE_PLUGIN_DATA/runs/R1"
+  cat > "$CLAUDE_PLUGIN_DATA/runs/R1/state.json" <<'JSON'
+{
+  "run_id": "R1",
+  "input": {"issue_numbers": [112]},
+  "tasks": {"T1": {"task_id": "T1", "description": "add login endpoint"}}
+}
+JSON
+  title=$(pipeline-branch task-pr-title T1 --run-id R1)
+  assert_eq "pr title format" "[112] task(T1): add login endpoint" "$title"
+)
+
+# ============================================================
+echo ""
 echo "=== Skill & Agent files exist ==="
 
 assert_eq "review-protocol SKILL.md exists" "true" \
