@@ -54,7 +54,7 @@ task_id="${FACTORY_TASK_ID:-}"
 
 if [[ -z "$task_id" && -f "$transcript" ]]; then
   # Look for `<run-id>/<task-id>.<role>-prompt.md` reference in transcript.
-  task_id=$({ grep -oE "\.state/${run_id}/[a-zA-Z0-9_-]+\.(executor|executor-fix|executor-ci-fix|reviewer|holdout)-prompt\.md" "$transcript" 2>/dev/null || true; } \
+  task_id=$({ grep -oE "\.state/${run_id}/[a-zA-Z0-9_-]+\.(test-writer|executor|executor-fix|executor-ci-fix|reviewer|holdout)-prompt\.md" "$transcript" 2>/dev/null || true; } \
     | head -1 \
     | sed -E "s|.*\.state/${run_id}/([a-zA-Z0-9_-]+)\..*|\1|")
 fi
@@ -67,7 +67,7 @@ fi
 # For task-executor: scan transcript for `cwd` entries under the plugin's
 # ephemeral worktree root (.claude/worktrees/). First match wins.
 worktree=""
-if [[ "$agent_type" == "task-executor" && -f "$transcript" ]]; then
+if [[ ( "$agent_type" == "task-executor" || "$agent_type" == "test-writer" ) && -f "$transcript" ]]; then
   worktree=$({ grep -oE '"cwd":[[:space:]]*"[^"]*\.claude/worktrees/[^"]+"' "$transcript" 2>/dev/null || true; } \
     | head -1 \
     | sed -E 's/.*"cwd":[[:space:]]*"([^"]+)".*/\1/')
@@ -88,6 +88,12 @@ esac
 # --- 5. State writes ---
 if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
   case "$agent_type" in
+    test-writer)
+      pipeline-state task-write "$run_id" "$task_id" test_writer_status "\"$status\"" >/dev/null 2>&1 || true
+      if [[ -n "$worktree" ]]; then
+        pipeline-state task-write "$run_id" "$task_id" worktree "\"$worktree\"" >/dev/null 2>&1 || true
+      fi
+      ;;
     task-executor)
       pipeline-state task-write "$run_id" "$task_id" executor_status "\"$status\"" >/dev/null 2>&1 || true
       if [[ -n "$worktree" ]]; then
