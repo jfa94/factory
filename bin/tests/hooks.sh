@@ -858,6 +858,21 @@ assert_eq "session-start active run exit 0" "0" "$rc"
 ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
 [[ "$ctx" == *"run-laws-active"* ]] && { echo "  PASS: session-start ctx contains run id"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing run id"; fail=$((fail+1)); }
 [[ "$ctx" == *"pipeline-run-task"* ]] && { echo "  PASS: session-start ctx has resume command"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing resume command"; fail=$((fail+1)); }
+[[ "$ctx" == *"--stage preexec_tests"* ]] && { echo "  PASS: session-start recommends --stage preexec_tests"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing --stage preexec_tests"; fail=$((fail+1)); }
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+echo ""
+echo "=== session-start (Iron Laws): interrupted run shows stage summary (resumable) ==="
+
+_seed_run "run-laws-interrupted" '{"status":"interrupted","tasks":{"task-1":{"status":"interrupted","stage":"preexec_tests_done"}}}'
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start interrupted run exit 0" "0" "$rc"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" == *"run-laws-interrupted"* ]] && { echo "  PASS: session-start interrupted run shows run id (resumable)"; pass=$((pass+1)); } || { echo "  FAIL: session-start interrupted run should show run id"; fail=$((fail+1)); }
+[[ "$ctx" == *"--stage postexec"* ]] && { echo "  PASS: session-start interrupted maps preexec_tests_done → postexec"; pass=$((pass+1)); } || { echo "  FAIL: session-start interrupted stage transition wrong"; fail=$((fail+1)); }
 rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
 echo ""

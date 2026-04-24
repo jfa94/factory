@@ -52,6 +52,7 @@ if [[ -n "${CLAUDE_PLUGIN_DATA:-}" && -L "$current_link" ]]; then
     run_status=$(jq -r '.status // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
 
     # Only show for non-terminal runs.
+    # interrupted = resumable, intentionally not in this list
     case "$run_status" in
       done|completed|failed|partial) ;;
       *)
@@ -70,6 +71,7 @@ if [[ -n "${CLAUDE_PLUGIN_DATA:-}" && -L "$current_link" ]]; then
         next_stage=$(jq -r --arg t "$next_task" '
           (.tasks[$t].stage // "preflight")
           | if . == "preflight_done"  then "preexec_tests"
+            elif . == "preexec_tests_done" then "postexec"
             elif . == "postexec_done" then "postreview"
             elif . == "postreview_done" then "ship"
             elif . == "ship_done"     then "finalize-run"
