@@ -1,0 +1,329 @@
+#!/usr/bin/env bash
+# Apply rescue remediations. Idempotent per action.
+# Usage:
+#   pipeline-rescue-apply --tier=safe --plan=<report.json>
+#   pipeline-rescue-apply --tier=risky --plan=<approved.json>
+#   pipeline-rescue-apply --plans=<approved-plans.json>        (investigation)
+#   pipeline-rescue-apply --dry-run ...
+# Exit: 0 on success (even with per-action errors logged), 1 on fatal.
+
+set -euo pipefail
+
+source "$(dirname "$0")/pipeline-lib.sh"
+source "$(dirname "$0")/pipeline-rescue-lib.sh"
+require_command jq
+
+tier=""
+plan=""
+plans=""
+dry_run=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --tier) tier="$2"; shift 2 ;;
+    --tier=*) tier="${1#--tier=}"; shift ;;
+    --plan) plan="$2"; shift 2 ;;
+    --plan=*) plan="${1#--plan=}"; shift ;;
+    --plans) plans="$2"; shift 2 ;;
+    --plans=*) plans="${1#--plans=}"; shift ;;
+    --dry-run) dry_run=1; shift ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+if [[ -z "$plan" && -z "$plans" ]]; then
+  log_error "must pass --plan or --plans"
+  exit 1
+fi
+
+_apply_I_03() {
+  local run_id="$1" task_id="$2"
+  local cur
+  cur=$(pipeline-state read "$run_id" ".tasks.${task_id}.status" 2>/dev/null || echo '')
+  if [[ "$cur" == 'done' ]]; then
+    rescue_audit "$run_id" safe I-03 "$task_id" mark_pr_merged skipped ""
+    return 0
+  fi
+  if (( dry_run )); then
+    rescue_audit "$run_id" safe I-03 "$task_id" mark_pr_merged dry_run ""
+    return 0
+  fi
+  local err=0
+  pipeline-state task-status "$run_id" "$task_id" done >/dev/null || err=1
+  if (( err == 0 )); then
+    pipeline-state task-write "$run_id" "$task_id" stage '"ship_done"' >/dev/null || err=1
+  fi
+  if (( err )); then
+    rescue_audit "$run_id" safe I-03 "$task_id" mark_pr_merged partial_failure "write failed"
+  else
+    rescue_audit "$run_id" safe I-03 "$task_id" mark_pr_merged ok ""
+  fi
+}
+
+_apply_I_01() {
+  local run_id="$1"
+  local lock="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.lock"
+  if [[ ! -d "$lock" ]]; then
+    rescue_audit "$run_id" safe I-01 "" clear_stale_lock skipped ""
+    return 0
+  fi
+  if (( dry_run )); then
+    rescue_audit "$run_id" safe I-01 "" clear_stale_lock dry_run ""
+    return 0
+  fi
+  [[ -f "$lock/pid" ]] && rm -f "$lock/pid"
+  rmdir "$lock" 2>/dev/null || true
+  rescue_audit "$run_id" safe I-01 "" clear_stale_lock ok ""
+}
+
+_apply_I_02() {
+  local run_id="$1" wt_path="$2"
+  if [[ ! -d "$wt_path" ]]; then
+    rescue_audit "$run_id" safe I-02 "" remove_orphan_worktree skipped ""
+    return 0
+  fi
+  if (( dry_run )); then
+    rescue_audit "$run_id" safe I-02 "" remove_orphan_worktree dry_run ""
+    return 0
+  fi
+  git worktree remove --force "$wt_path" 2>/dev/null || true
+  rescue_audit "$run_id" safe I-02 "" remove_orphan_worktree ok "$wt_path"
+}
+
+_apply_I_04() {
+  local run_id="$1" task_id="$2" pr_url="$3"
+  local cur
+  cur=$(pipeline-state read "$run_id" ".tasks.${task_id}.pr_url" 2>/dev/null || echo '')
+  if [[ -n "$cur" && "$cur" != "null" ]]; then
+    rescue_audit "$run_id" safe I-04 "$task_id" backfill_pr_url skipped ""
+    return 0
+  fi
+  if (( dry_run )); then
+    rescue_audit "$run_id" safe I-04 "$task_id" backfill_pr_url dry_run ""
+    return 0
+  fi
+  local pr_num
+  if [[ "$pr_url" =~ /pull/([0-9]+) ]]; then
+    pr_num="${BASH_REMATCH[1]}"
+  else
+    pr_num=''
+  fi
+  pipeline-state task-write "$run_id" "$task_id" pr_url "\"$pr_url\"" >/dev/null
+  [[ -n "$pr_num" ]] && pipeline-state task-write "$run_id" "$task_id" pr_number "$pr_num" >/dev/null
+  rescue_audit "$run_id" safe I-04 "$task_id" backfill_pr_url ok ""
+}
+
+_apply_I_05() {
+  local run_id="$1" task_id="$2" latest="$3"
+  if (( dry_run )); then
+    rescue_audit "$run_id" safe I-05 "$task_id" refresh_ci_status dry_run ""
+    return 0
+  fi
+  pipeline-state task-write "$run_id" "$task_id" ci_status "\"$latest\"" >/dev/null
+  rescue_audit "$run_id" safe I-05 "$task_id" refresh_ci_status ok ""
+}
+
+_apply_I_06() {
+  local run_id="$1" task_id="$2"
+  if (( dry_run )); then rescue_audit "$run_id" mechanical I-06 "$task_id" reset_to_ci_fixing dry_run ""; return 0; fi
+  pipeline-state task-write "$run_id" "$task_id" stage '"postreview_done"' >/dev/null
+  pipeline-state task-status "$run_id" "$task_id" ci_fixing >/dev/null
+  rescue_audit "$run_id" mechanical I-06 "$task_id" reset_to_ci_fixing ok ""
+}
+
+_apply_I_07() {
+  local run_id="$1" task_id="$2"
+  # Attempt rebase in task worktree; on failure, leave for investigation.
+  local wt
+  wt=$(pipeline-state read "$run_id" ".tasks.${task_id}.worktree" 2>/dev/null | tr -d '"')
+  if [[ -z "$wt" || "$wt" == "null" || ! -d "$wt" ]]; then
+    rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr skipped "worktree missing"
+    return 0
+  fi
+  if (( dry_run )); then rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr dry_run ""; return 0; fi
+  local base="${FACTORY_BASE_BRANCH:-develop}"
+  if (cd "$wt" && git fetch origin "$base" && git rebase "origin/$base") >/dev/null 2>&1; then
+    (cd "$wt" && git push --force-with-lease) >/dev/null 2>&1 || true
+    rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr ok ""
+  else
+    (cd "$wt" && git rebase --abort) >/dev/null 2>&1 || true
+    pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
+    pipeline-state task-write "$run_id" "$task_id" failure_reason '"unresolvable merge conflict (I-13)"' >/dev/null
+    rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr error "rebase failed; escalated to investigation (I-13)"
+  fi
+}
+
+_apply_I_08() {
+  local run_id="$1" task_id="$2"
+  if (( dry_run )); then rescue_audit "$run_id" mechanical I-08 "$task_id" mark_failed dry_run ""; return 0; fi
+  pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" failure_reason '"PR closed without merge"' >/dev/null
+  rescue_audit "$run_id" mechanical I-08 "$task_id" mark_failed ok ""
+}
+
+_apply_I_09() {
+  local run_id="$1" task_id="$2"
+  if (( dry_run )); then rescue_audit "$run_id" mechanical I-09 "$task_id" reset_review dry_run ""; return 0; fi
+  pipeline-state task-write "$run_id" "$task_id" stage '"postexec_done"' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null
+  rescue_audit "$run_id" mechanical I-09 "$task_id" reset_review ok ""
+}
+
+_apply_I_10() {
+  local run_id="$1" task_id="$2"
+  if (( dry_run )); then rescue_audit "$run_id" mechanical I-10 "$task_id" reset_pending dry_run ""; return 0; fi
+  pipeline-state task-status "$run_id" "$task_id" pending >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" stage 'null' >/dev/null
+  rescue_audit "$run_id" mechanical I-10 "$task_id" reset_pending ok ""
+}
+
+_apply_I_11() {
+  local run_id="$1"
+  if (( dry_run )); then rescue_audit "$run_id" mechanical I-11 "" reset_spec_phase dry_run ""; return 0; fi
+  pipeline-state write "$run_id" '.spec.status' '"pending"' >/dev/null
+  rescue_audit "$run_id" mechanical I-11 "" reset_spec_phase ok ""
+}
+
+_apply_I_12() {
+  local run_id="$1"
+  local backup="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.json.backup"
+  if (( dry_run )); then rescue_audit "$run_id" mechanical I-12 "" restore_backup dry_run ""; return 0; fi
+  if [[ -f "$backup" ]]; then
+    cp "$backup" "$CLAUDE_PLUGIN_DATA/runs/$run_id/state.json"
+    rescue_audit "$run_id" mechanical I-12 "" restore_backup ok ""
+  else
+    rescue_audit "$run_id" mechanical I-12 "" restore_backup error "no backup available"
+  fi
+}
+
+_apply_I_15() {
+  local run_id="$1" task_id="$2" plan_file="$3"
+  local evidence keep close_list
+  evidence=$(jq -c '.mechanical_issues[] | select(.id == "I-15")' "$plan_file" | head -n1)
+  [[ -z "$evidence" ]] && return 0
+  keep=$(jq -r '.evidence.prs | max_by(.number) | .number' <<<"$evidence")
+  close_list=$(jq -r --argjson k "$keep" '.evidence.prs[] | select(.number != $k) | .number' <<<"$evidence")
+  if (( dry_run )); then rescue_audit "$run_id" mechanical I-15 "" close_duplicate dry_run ""; return 0; fi
+  for pr_num in $close_list; do
+    gh pr close "$pr_num" --comment "Superseded by #$keep (autonomous rescue)" 2>/dev/null || true
+    rescue_audit "$run_id" mechanical I-15 "" close_duplicate ok "closed PR #$pr_num"
+  done
+}
+
+_apply_plan_reset_pending() {
+  local run_id="$1" task_id="$2"
+  pipeline-state task-status "$run_id" "$task_id" pending >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" stage 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" worktree 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" pr_url 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" pr_number 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" ci_status 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null
+}
+
+_apply_plan_mark_failed() {
+  local run_id="$1" task_id="$2" reason="$3"
+  pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" failure_reason "$(jq -n --arg r "$reason" '$r')" >/dev/null
+}
+
+_apply_plan_delete_branch() {
+  local run_id="$1" task_id="$2" branch="$3"
+  [[ -z "$branch" ]] && return 0
+  git branch -D "$branch" 2>/dev/null || true
+  git push origin --delete "$branch" 2>/dev/null || true
+}
+
+_apply_plan_reset_postreview() {
+  local run_id="$1" task_id="$2"
+  pipeline-state task-write "$run_id" "$task_id" stage '"postexec_done"' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null
+}
+
+_apply_plan_state_updates() {
+  local run_id="$1" updates_json="$2"
+  [[ "$updates_json" == "null" || "$updates_json" == "{}" || -z "$updates_json" ]] && return 0
+  while IFS=$'\t' read -r key value; do
+    [[ -z "$key" ]] && continue
+    pipeline-state write "$run_id" "$key" "$value" >/dev/null
+  done < <(jq -r 'to_entries[] | [.key, (.value | @json)] | @tsv' <<<"$updates_json")
+}
+
+_dispatch_plans() {
+  local plans_file="$1"
+  local run_id
+  run_id=$(jq -r '.run_id' "$plans_file")
+  while IFS=$'\t' read -r task_id decision reason updates branch; do
+    [[ -z "$task_id" ]] && continue
+    case "$decision" in
+      reset_pending)
+        _apply_plan_reset_pending "$run_id" "$task_id"
+        rescue_audit "$run_id" investigation "" "$task_id" reset_pending ok "$reason"
+        ;;
+      mark_failed)
+        _apply_plan_mark_failed "$run_id" "$task_id" "$reason"
+        rescue_audit "$run_id" investigation "" "$task_id" mark_failed ok "$reason"
+        ;;
+      delete_branch)
+        _apply_plan_delete_branch "$run_id" "$task_id" "$branch"
+        rescue_audit "$run_id" investigation "" "$task_id" delete_branch ok "$branch"
+        ;;
+      reset_postreview)
+        _apply_plan_reset_postreview "$run_id" "$task_id"
+        rescue_audit "$run_id" investigation "" "$task_id" reset_postreview ok "$reason"
+        ;;
+      no_action)
+        rescue_audit "$run_id" investigation "" "$task_id" no_action ok "$reason"
+        ;;
+      *)
+        rescue_audit "$run_id" investigation "" "$task_id" invalid_decision error "decision=$decision"
+        ;;
+    esac
+    _apply_plan_state_updates "$run_id" "$updates"
+    pipeline-state task-write "$run_id" "$task_id" rescue_last_decision "$(jq -n --arg d "$decision" '$d')" >/dev/null
+    pipeline-state task-write "$run_id" "$task_id" rescue_last_reason "$(jq -n --arg r "$reason" '$r')" >/dev/null
+  done < <(jq -r '.plans[] | [.task_id, .decision, .reason, (.state_updates // {} | @json), (.branch // "")] | @tsv' "$plans_file")
+}
+
+_dispatch_risky() {
+  local run_id="$1" plan_file="$2"
+  while IFS=$'\t' read -r id task_id; do
+    case "$id" in
+      I-06) _apply_I_06 "$run_id" "$task_id" ;;
+      I-07) _apply_I_07 "$run_id" "$task_id" ;;
+      I-08) _apply_I_08 "$run_id" "$task_id" ;;
+      I-09) _apply_I_09 "$run_id" "$task_id" ;;
+      I-10) _apply_I_10 "$run_id" "$task_id" ;;
+      I-11) _apply_I_11 "$run_id" ;;
+      I-12) _apply_I_12 "$run_id" ;;
+      I-15) _apply_I_15 "$run_id" "$task_id" "$plan_file" ;;
+    esac
+  done < <(jq -r '.mechanical_issues[] | select(.tier == 2 or .tier == 3) | [.id, (.task_id // "")] | @tsv' "$plan_file")
+}
+
+_dispatch_safe() {
+  local run_id="$1" plan_file="$2"
+  while IFS=$'\t' read -r id task_id detail pr_url; do
+    case "$id" in
+      I-01) _apply_I_01 "$run_id" ;;
+      I-02) _apply_I_02 "$run_id" "$task_id" ;;
+      I-03) _apply_I_03 "$run_id" "$task_id" ;;
+      I-04) _apply_I_04 "$run_id" "$task_id" "$pr_url" ;;
+      I-05) _apply_I_05 "$run_id" "$task_id" "$detail" ;;
+    esac
+  done < <(jq -r '.mechanical_issues[] | select(.tier == 1) | [.id, (.task_id // ""), (.description // ""), (.pr_url // "")] | @tsv' "$plan_file")
+}
+
+if [[ -n "$plans" ]]; then
+  _dispatch_plans "$plans"
+  exit 0
+fi
+
+run_id=$(jq -r '.run_id' "$plan")
+if [[ "$tier" == "safe" ]]; then
+  _dispatch_safe "$run_id" "$plan"
+elif [[ "$tier" == "risky" ]]; then
+  _dispatch_risky "$run_id" "$plan"
+fi
+
+printf '{"run_id":"%s","tier":"%s"}\n' "$run_id" "${tier:-plans}"

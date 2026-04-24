@@ -593,15 +593,16 @@ _stage_ship() {
     return 30
   fi
 
-  if ! pipeline-branch task-commit "$task_id" --worktree "$wt" >/dev/null; then
+  if ! pipeline-branch task-commit "$task_id" --worktree "$wt" --run-id "$run_id" >/dev/null; then
     log_error "task-commit failed"
     t1=$(_now_ms)
     log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\""
     return 30
   fi
 
-  local pr_url pr_number
-  pr_url=$(cd "$wt" && gh pr create --fill --base staging 2>/dev/null || true)
+  local pr_url pr_number pr_title
+  pr_title=$(pipeline-branch task-pr-title "$task_id" --run-id "$run_id")
+  pr_url=$(cd "$wt" && gh pr create --base staging --title "$pr_title" --body "Automated task PR for $task_id in run $run_id." 2>/dev/null || true)
   pr_number=$(printf '%s' "$pr_url" | grep -oE '[0-9]+$' || printf '')
   if [[ -z "$pr_number" ]]; then
     log_error "gh pr create returned no PR number"

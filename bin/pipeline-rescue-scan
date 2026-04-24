@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# Scan a pipeline run for rescue-actionable issues.
+# Usage: pipeline-rescue-scan <run-id>
+# Output: JSON on stdout with {run_id, state_summary, mechanical_issues[], investigation_flags[]}
+# Exit: 0 on success (including "no issues"), 1 on fatal (state missing, GitHub unreachable).
+
+set -euo pipefail
+
+source "$(dirname "$0")/pipeline-lib.sh"
+source "$(dirname "$0")/pipeline-rescue-lib.sh"
+require_command jq
+
+run_id="${1:?missing run-id}"
+state="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.json"
+[[ -f "$state" ]] || { log_error "no state for run $run_id"; exit 1; }
+
+# I-12: detect malformed state.json before any other jq reads
+if ! jq . "$state" >/dev/null 2>&1; then
+  jq -n --arg run_id "$run_id" \
+    '{run_id: $run_id, state_summary: null, mechanical_issues: [{"id":"I-12","tier":2,"task_id":null,"description":"state.json malformed"}], investigation_flags: []}'
+  exit 0
+fi
+
+mechanical=()
+investigation=()
+state_summary=$(jq '{status: .status, tasks: (.tasks // {} | to_entries | map({task_id: .key, status: .value.status, stage: .value.stage, pr_number: .value.pr_number}))}' "$state")
+
+# I-01: stale state lock
+lock_dir="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.lock"
+if [[ -d "$lock_dir" ]]; then
+  pid_file="$lock_dir/pid"
+  if [[ -f "$pid_file" ]]; then
+    holder=$(<"$pid_file")
+    if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
+      mechanical+=("$(jq -n --arg id I-01 --argjson tier 1 --arg desc "stale state lock (dead PID $holder)" '{id: $id, tier: $tier, task_id: null, description: $desc}')")
+    fi
+  fi
+fi
+
+# I-02: orphan worktree (branch gone)
+if git -C "$(pwd)" rev-parse --git-dir >/dev/null 2>&1; then
+  while IFS= read -r wt_path; do
+    [[ -z "$wt_path" ]] && continue
+    branch=$(git -C "$wt_path" symbolic-ref --short HEAD 2>/dev/null || echo "")
+    if [[ -z "$branch" ]]; then continue; fi
+    if ! git rev-parse --verify "refs/heads/$branch" >/dev/null 2>&1; then
+      mechanical+=("$(jq -n --arg id I-02 --argjson tier 1 --arg desc "orphan worktree at $wt_path (branch $branch missing)" '{id: $id, tier: $tier, task_id: null, description: $desc}')")
+    fi
+  done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree / {print $2}' | tail -n +2)
+fi
+
+# Get task entries for PR-related checks
+issue=$(rescue_issue_for_run "$run_id")
+
+# GitHub search results (used for I-04 and I-15)
+search_json='[]'
+if [[ -n "$issue" ]]; then
+  if ! search_json=$(gh pr list --search "[$issue] task( in:title" --state all --json number,title,state,mergedAt,mergeable,headRefName,url 2>/dev/null); then
+    log_error "GitHub unavailable: gh pr list failed"
+    exit 1
+  fi
+fi
+
+# For each task with a PR, fetch PR state via gh
+while IFS=$'\t' read -r task_id pr_number status stage ci_status; do
+  [[ -z "$task_id" ]] && continue
+  [[ -z "$pr_number" || "$pr_number" == "null" ]] && continue
+  if ! pr_json=$(gh pr view "$pr_number" --json state,mergedAt,mergeable,statusCheckRollup 2>/dev/null); then
+    log_error "GitHub unavailable: gh pr view $pr_number failed"
+    exit 1
+  fi
+  pr_state=$(jq -r '.state // ""' <<<"$pr_json")
+
+  # I-03: PR merged, state not updated
+  if [[ "$pr_state" == "MERGED" && "$status" != "done" ]]; then
+    mechanical+=("$(jq -n --arg id I-03 --argjson tier 1 --arg task "$task_id" --arg desc "PR #$pr_number merged but task status=$status" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+
+  # I-05: stale CI status
+  latest_ci=$(jq -r '[.statusCheckRollup[]?.conclusion] | map(select(. != null)) | if length == 0 then "" elif all(. == "SUCCESS") then "green" else "red" end' <<<"$pr_json")
+  if [[ "$stage" == "ship" && -n "$latest_ci" && -n "$ci_status" && "$ci_status" != "null" && "$ci_status" != "$latest_ci" ]]; then
+    mechanical+=("$(jq -n --arg id I-05 --argjson tier 1 --arg task "$task_id" --arg desc "ci_status=$ci_status but PR shows $latest_ci" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+
+  mergeable=$(jq -r '.mergeable // ""' <<<"$pr_json")
+  merged_at=$(jq -r '.mergedAt // ""' <<<"$pr_json")
+
+  # I-07: PR merge conflict with base
+  if [[ "$mergeable" == "CONFLICTING" ]]; then
+    mechanical+=("$(jq -n --arg id I-07 --argjson tier 2 --arg task "$task_id" --arg desc "PR #$pr_number has merge conflict with base" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+
+  # I-08: PR closed unmerged
+  if [[ "$pr_state" == "CLOSED" && ( -z "$merged_at" || "$merged_at" == "null" ) ]]; then
+    mechanical+=("$(jq -n --arg id I-08 --argjson tier 2 --arg task "$task_id" --arg desc "PR #$pr_number closed without merge" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+
+  # I-06: CI red, stage=ship, no ci_fixing attempted
+  if [[ "$stage" == "ship" && "$latest_ci" == "red" && "$status" != "ci_fixing" ]]; then
+    mechanical+=("$(jq -n --arg id I-06 --argjson tier 2 --arg task "$task_id" --arg desc "CI red on PR #$pr_number, no recovery attempted" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+done < <(jq -r '.tasks // {} | to_entries[] | [.key, (.value.pr_number // ""), (.value.status // ""), (.value.stage // ""), (.value.ci_status // "")] | @tsv' "$state")
+
+# I-10: stuck executing, no worktree, no PR
+while IFS=$'\t' read -r task_id status worktree pr_number; do
+  [[ -z "$task_id" ]] && continue
+  if [[ "$status" == "executing" && ( -z "$worktree" || "$worktree" == "null" ) && ( -z "$pr_number" || "$pr_number" == "null" ) ]]; then
+    mechanical+=("$(jq -n --arg id I-10 --argjson tier 2 --arg task "$task_id" --arg desc "stuck in executing with no worktree or PR" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+done < <(jq -r '.tasks // {} | to_entries[] | [.key, (.value.status // ""), (.value.worktree // ""), (.value.pr_number // "")] | @tsv' "$state")
+
+# I-09: review verdict deadlock (review_files present + attempts >= 3)
+while IFS=$'\t' read -r task_id attempts rf_count; do
+  [[ -z "$task_id" ]] && continue
+  if (( ${attempts:-0} >= 3 )) && (( ${rf_count:-0} >= 2 )); then
+    mechanical+=("$(jq -n --arg id I-09 --argjson tier 2 --arg task "$task_id" --arg desc "review deadlock after $attempts attempts" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+done < <(jq -r '.tasks // {} | to_entries[] | [.key, (.value.review_attempts // 0), ((.value.review_files // []) | length)] | @tsv' "$state")
+
+# I-11: spec done, no spec-handoff branch, tasks empty
+spec_status=$(jq -r '.spec.status // ""' "$state")
+tasks_count=$(jq '.tasks // {} | length' "$state")
+if [[ "$spec_status" != "pending" && "$spec_status" != "" && "$tasks_count" -eq 0 ]]; then
+  if ! git rev-parse --verify "refs/heads/spec-handoff/$run_id" >/dev/null 2>&1; then
+    mechanical+=("$(jq -n --arg id I-11 --argjson tier 2 --arg desc "spec handoff branch missing, tasks empty" '{id: $id, tier: $tier, task_id: null, description: $desc}')")
+  fi
+fi
+
+# I-15: duplicate PRs for same branch
+if [[ -n "$issue" && -n "${search_json:-}" ]]; then
+  dup_json=$(jq -r '[group_by(.headRefName)[] | select(length > 1) | {branch: .[0].headRefName, prs: map({number: .number, url: .url})}]' <<<"$search_json")
+  if [[ "$dup_json" != "[]" && -n "$dup_json" ]]; then
+    while IFS= read -r dup; do
+      [[ -z "$dup" || "$dup" == "null" ]] && continue
+      branch=$(jq -r '.branch' <<<"$dup")
+      mechanical+=("$(jq -n --arg id I-15 --argjson tier 3 --arg desc "duplicate PRs for branch $branch" --argjson dup "$dup" '{id: $id, tier: $tier, task_id: null, description: $desc, evidence: $dup}')")
+    done < <(jq -c '.[]' <<<"$dup_json")
+  fi
+fi
+
+# I-04: PR exists on GitHub but state.pr_url empty
+if [[ -n "$issue" ]]; then
+  while IFS=$'\t' read -r pr_num title pr_url_gh; do
+    [[ -z "$pr_num" ]] && continue
+    tid=$(rescue_task_id_from_title "$title")
+    [[ -z "$tid" ]] && continue
+    state_pr=$(jq -r --arg t "$tid" '.tasks[$t].pr_url // ""' "$state")
+    if [[ -z "$state_pr" ]]; then
+      exists=$(jq -r --arg t "$tid" '.tasks | has($t) | tostring' "$state")
+      if [[ "$exists" == "true" ]]; then
+        mechanical+=("$(jq -n --arg id I-04 --argjson tier 1 --arg task "$tid" --arg desc "PR #$pr_num exists on GitHub but state.pr_url empty" --arg url "$pr_url_gh" '{id: $id, tier: $tier, task_id: $task, description: $desc, pr_url: $url}')")
+      fi
+    fi
+  done < <(jq -r '.[] | [.number, .title, .url] | @tsv' <<<"$search_json")
+fi
+
+# I-16: every task with status=failed is flagged for investigation
+while IFS= read -r task_id; do
+  [[ -z "$task_id" ]] && continue
+  investigation+=("$(jq -n --arg id I-16 --arg task "$task_id" '{id: $id, task_id: $task, reason: "task status=failed"}')")
+done < <(jq -r '.tasks // {} | to_entries[] | select(.value.status == "failed") | .key' "$state")
+
+# I-14: orphan task branches in the local repo with no matching state entry
+if [[ -n "$issue" ]] && git rev-parse --git-dir >/dev/null 2>&1; then
+  while IFS= read -r branch; do
+    [[ -z "$branch" ]] && continue
+    slug="${branch##*/}"
+    found=$(jq -r --arg s "$slug" '.tasks // {} | to_entries[] | select((.value.task_id // "") | ascii_downcase | test($s; "i")) | .key' "$state" | head -n1)
+    if [[ -z "$found" ]]; then
+      investigation+=("$(jq -n --arg id I-14 --arg branch "$branch" '{id: $id, task_id: null, branch: $branch, reason: "orphan branch, no state entry"}')")
+    fi
+  done < <(git branch --list "dark-factory/$issue/*" --format='%(refname:short)' 2>/dev/null)
+fi
+
+# I-13 is emitted by pipeline-rescue-apply when a rebase attempt fails; not scan's responsibility.
+
+# Emit
+mech_json='[]'
+[[ ${#mechanical[@]} -gt 0 ]] && mech_json=$(printf '%s\n' "${mechanical[@]}" | jq -s '.')
+
+inv_json='[]'
+[[ ${#investigation[@]} -gt 0 ]] && inv_json=$(printf '%s\n' "${investigation[@]}" | jq -s '.')
+
+jq -n \
+  --arg run_id "$run_id" \
+  --argjson state_summary "$state_summary" \
+  --argjson mech "$mech_json" \
+  --argjson inv "$inv_json" \
+  '{run_id: $run_id, state_summary: $state_summary, mechanical_issues: $mech, investigation_flags: $inv}'
