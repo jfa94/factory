@@ -96,8 +96,9 @@ repo=$(mktemp -d)
   git config user.email test@local
   git config user.name test
   git commit --allow-empty -m root --quiet
-  git worktree add -b temp "$repo/wt" >/dev/null 2>&1
-  git branch -D temp 2>/dev/null || true
+  git worktree add --detach "$repo/wt" >/dev/null 2>&1
+  # Point the worktree HEAD to a branch that does not exist
+  echo "ref: refs/heads/orphan-branch" > "$repo/.git/worktrees/wt/HEAD"
 )
 seed_run "$run_id"
 (
@@ -105,10 +106,28 @@ seed_run "$run_id"
   PATH="$mock_dir:$PATH" pipeline-rescue-scan "$run_id" > "$CLAUDE_PLUGIN_DATA/scan.json"
 )
 i02=$(jq '[.mechanical_issues[] | select(.id == "I-02")] | length' "$CLAUDE_PLUGIN_DATA/scan.json")
-if [[ "$i02" -ge 0 ]]; then
-  echo "  PASS: I-02 scan completes without error (count=$i02)"
-  pass=$((pass + 1))
-fi
+assert_eq "I-02 detected" "1" "$i02"
+
+echo "=== I-04: PR on GitHub but state.pr_url empty ==="
+run_id_i04="R2"
+rundir_i04="$CLAUDE_PLUGIN_DATA/runs/$run_id_i04"
+mkdir -p "$rundir_i04"
+cat > "$rundir_i04/state.json" <<'JSON'
+{
+  "run_id": "R2",
+  "status": "running",
+  "input": {"issue_numbers": [112]},
+  "tasks": {
+    "T1": {"task_id": "T1", "title": "Add login", "description": "add login endpoint",
+           "status": "executing", "stage": "review"}
+  }
+}
+JSON
+PATH="$mock_dir:$PATH" pipeline-rescue-scan "$run_id_i04" > "$CLAUDE_PLUGIN_DATA/scan_i04.json"
+i04=$(jq '[.mechanical_issues[] | select(.id == "I-04")] | length' "$CLAUDE_PLUGIN_DATA/scan_i04.json")
+assert_eq "I-04 detected" "1" "$i04"
+i04_task=$(jq -r '.mechanical_issues[] | select(.id == "I-04") | .task_id' "$CLAUDE_PLUGIN_DATA/scan_i04.json")
+assert_eq "I-04 task_id" "T1" "$i04_task"
 
 echo
 echo "Passed: $pass | Failed: $fail"

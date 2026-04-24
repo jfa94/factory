@@ -34,8 +34,8 @@ fi
 if git -C "$(pwd)" rev-parse --git-dir >/dev/null 2>&1; then
   while IFS= read -r wt_path; do
     [[ -z "$wt_path" ]] && continue
-    branch=$(git -C "$wt_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [[ "$branch" == "HEAD" || -z "$branch" ]]; then continue; fi
+    branch=$(git -C "$wt_path" symbolic-ref --short HEAD 2>/dev/null || echo "")
+    if [[ -z "$branch" ]]; then continue; fi
     if ! git rev-parse --verify "refs/heads/$branch" >/dev/null 2>&1; then
       mechanical+=("$(jq -n --arg id I-02 --argjson tier 1 --arg desc "orphan worktree at $wt_path (branch $branch missing)" '{id: $id, tier: $tier, task_id: null, description: $desc}')")
     fi
