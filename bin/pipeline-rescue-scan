@@ -68,7 +68,67 @@ while IFS=$'\t' read -r task_id pr_number status stage ci_status; do
   if [[ "$stage" == "ship" && -n "$latest_ci" && -n "$ci_status" && "$ci_status" != "null" && "$ci_status" != "$latest_ci" ]]; then
     mechanical+=("$(jq -n --arg id I-05 --argjson tier 1 --arg task "$task_id" --arg desc "ci_status=$ci_status but PR shows $latest_ci" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
   fi
+
+  mergeable=$(jq -r '.mergeable // ""' <<<"$pr_json")
+  merged_at=$(jq -r '.mergedAt // ""' <<<"$pr_json")
+
+  # I-07: PR merge conflict with base
+  if [[ "$mergeable" == "CONFLICTING" ]]; then
+    mechanical+=("$(jq -n --arg id I-07 --argjson tier 2 --arg task "$task_id" --arg desc "PR #$pr_number has merge conflict with base" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+
+  # I-08: PR closed unmerged
+  if [[ "$pr_state" == "CLOSED" && ( -z "$merged_at" || "$merged_at" == "null" ) ]]; then
+    mechanical+=("$(jq -n --arg id I-08 --argjson tier 2 --arg task "$task_id" --arg desc "PR #$pr_number closed without merge" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+
+  # I-06: CI red, stage=ship, no ci_fixing attempted
+  if [[ "$stage" == "ship" && "$latest_ci" == "red" && "$status" != "ci_fixing" ]]; then
+    mechanical+=("$(jq -n --arg id I-06 --argjson tier 2 --arg task "$task_id" --arg desc "CI red on PR #$pr_number, no recovery attempted" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
 done < <(jq -r '.tasks // {} | to_entries[] | [.key, (.value.pr_number // ""), (.value.status // ""), (.value.stage // ""), (.value.ci_status // "")] | @tsv' "$state")
+
+# I-10: stuck executing, no worktree, no PR
+while IFS=$'\t' read -r task_id status worktree pr_number; do
+  [[ -z "$task_id" ]] && continue
+  if [[ "$status" == "executing" && ( -z "$worktree" || "$worktree" == "null" ) && ( -z "$pr_number" || "$pr_number" == "null" ) ]]; then
+    mechanical+=("$(jq -n --arg id I-10 --argjson tier 2 --arg task "$task_id" --arg desc "stuck in executing with no worktree or PR" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+done < <(jq -r '.tasks // {} | to_entries[] | [.key, (.value.status // ""), (.value.worktree // ""), (.value.pr_number // "")] | @tsv' "$state")
+
+# I-09: review verdict deadlock (review_files present + attempts >= 3)
+while IFS=$'\t' read -r task_id attempts rf_count; do
+  [[ -z "$task_id" ]] && continue
+  if (( ${attempts:-0} >= 3 )) && (( ${rf_count:-0} >= 2 )); then
+    mechanical+=("$(jq -n --arg id I-09 --argjson tier 2 --arg task "$task_id" --arg desc "review deadlock after $attempts attempts" '{id: $id, tier: $tier, task_id: $task, description: $desc}')")
+  fi
+done < <(jq -r '.tasks // {} | to_entries[] | [.key, (.value.review_attempts // 0), ((.value.review_files // []) | length)] | @tsv' "$state")
+
+# I-11: spec done, no spec-handoff branch, tasks empty
+spec_status=$(jq -r '.spec.status // ""' "$state")
+tasks_count=$(jq '.tasks // {} | length' "$state")
+if [[ "$spec_status" != "pending" && "$spec_status" != "" && "$tasks_count" -eq 0 ]]; then
+  if ! git rev-parse --verify "refs/heads/spec-handoff/$run_id" >/dev/null 2>&1; then
+    mechanical+=("$(jq -n --arg id I-11 --argjson tier 2 --arg desc "spec handoff branch missing, tasks empty" '{id: $id, tier: $tier, task_id: null, description: $desc}')")
+  fi
+fi
+
+# I-12: malformed state.json
+if ! jq . "$state" >/dev/null 2>&1; then
+  mechanical+=("$(jq -n --arg id I-12 --argjson tier 2 --arg desc "state.json malformed" '{id: $id, tier: $tier, task_id: null, description: $desc}')")
+fi
+
+# I-15: duplicate PRs for same branch
+if [[ -n "$issue" && -n "${search_json:-}" ]]; then
+  dup_json=$(jq -r '[group_by(.headRefName)[] | select(length > 1) | {branch: .[0].headRefName, prs: map({number: .number, url: .url})}]' <<<"$search_json")
+  if [[ "$dup_json" != "[]" && -n "$dup_json" ]]; then
+    while IFS= read -r dup; do
+      [[ -z "$dup" || "$dup" == "null" ]] && continue
+      branch=$(jq -r '.branch' <<<"$dup")
+      mechanical+=("$(jq -n --arg id I-15 --argjson tier 3 --arg desc "duplicate PRs for branch $branch" --argjson dup "$dup" '{id: $id, tier: $tier, task_id: null, description: $desc, evidence: $dup}')")
+    done < <(jq -c '.[]' <<<"$dup_json")
+  fi
+fi
 
 # I-04: PR exists on GitHub but state.pr_url empty
 if [[ -n "$issue" ]]; then

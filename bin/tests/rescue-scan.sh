@@ -132,6 +132,44 @@ assert_eq "I-04 detected" "1" "$i04"
 i04_task=$(jq -r '.mechanical_issues[] | select(.id == "I-04") | .task_id' "$CLAUDE_PLUGIN_DATA/scan_i04.json")
 assert_eq "I-04 task_id" "T1" "$i04_task"
 
+echo "=== I-07: PR merge conflict ==="
+mkdir -p "$CLAUDE_PLUGIN_DATA/mock2"
+cat > "$CLAUDE_PLUGIN_DATA/mock2/gh" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  "pr view 42 --json state,mergedAt,mergeable,statusCheckRollup")
+    echo '{"state":"OPEN","mergedAt":null,"mergeable":"CONFLICTING","statusCheckRollup":[]}' ;;
+  "pr list --search [112] task( in:title --state all --json number,title,state,mergedAt,mergeable,headRefName,url")
+    echo '[{"number":42,"title":"[112] task(T1): add login","state":"OPEN","mergedAt":null,"mergeable":"CONFLICTING","headRefName":"dark-factory/112/t1","url":"https://x/42"}]' ;;
+  *) echo '{}' ;;
+esac
+SHIM
+chmod +x "$CLAUDE_PLUGIN_DATA/mock2/gh"
+seed_run R1
+PATH="$CLAUDE_PLUGIN_DATA/mock2:$PATH" pipeline-rescue-scan R1 > "$CLAUDE_PLUGIN_DATA/scan.json"
+i07=$(jq '[.mechanical_issues[] | select(.id == "I-07")] | length' "$CLAUDE_PLUGIN_DATA/scan.json")
+assert_eq "I-07 detected" "1" "$i07"
+i07_tier=$(jq -r '[.mechanical_issues[] | select(.id == "I-07")][0].tier' "$CLAUDE_PLUGIN_DATA/scan.json")
+assert_eq "I-07 tier" "2" "$i07_tier"
+
+echo "=== I-15: duplicate PRs for same branch ==="
+mkdir -p "$CLAUDE_PLUGIN_DATA/mock3"
+cat > "$CLAUDE_PLUGIN_DATA/mock3/gh" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  "pr view 42 --json state,mergedAt,mergeable,statusCheckRollup")
+    echo '{"state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","statusCheckRollup":[]}' ;;
+  "pr list --search [112] task( in:title --state all --json number,title,state,mergedAt,mergeable,headRefName,url")
+    printf '[{"number":41,"title":"[112] task(T1): first","state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","headRefName":"dark-factory/112/t1","url":"https://x/41"},{"number":42,"title":"[112] task(T1): add login","state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","headRefName":"dark-factory/112/t1","url":"https://x/42"}]\n' ;;
+  *) echo '{}' ;;
+esac
+SHIM
+chmod +x "$CLAUDE_PLUGIN_DATA/mock3/gh"
+seed_run R1
+PATH="$CLAUDE_PLUGIN_DATA/mock3:$PATH" pipeline-rescue-scan R1 > "$CLAUDE_PLUGIN_DATA/scan.json"
+i15=$(jq '[.mechanical_issues[] | select(.id == "I-15")] | length' "$CLAUDE_PLUGIN_DATA/scan.json")
+assert_eq "I-15 detected" "1" "$i15"
+
 echo
 echo "Passed: $pass | Failed: $fail"
 [[ $fail -eq 0 ]]
