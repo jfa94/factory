@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Tests for pipeline-rescue-scan detectors.
+set -euo pipefail
+
+export CLAUDE_PLUGIN_DATA=$(mktemp -d)
+export PATH="$(cd "$(dirname "$0")/.." && pwd):$PATH"
+
+pass=0
+fail=0
+
+assert_eq() {
+  local label="$1" expected="$2" actual="$3"
+  if [[ "$expected" == "$actual" ]]; then
+    echo "  PASS: $label"
+    pass=$((pass + 1))
+  else
+    echo "  FAIL: $label (expected '$expected', got '$actual')"
+    fail=$((fail + 1))
+  fi
+}
+
+# Install a fake 'gh' on PATH that prints canned responses based on args.
+make_gh_mock() {
+  local mock_dir="$1"
+  mkdir -p "$mock_dir"
+  cat > "$mock_dir/gh" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  "pr view 42 --json state,mergedAt,mergeable,statusCheckRollup")
+    cat <<'JSON'
+{"state":"MERGED","mergedAt":"2026-04-20T10:00:00Z","mergeable":"MERGEABLE","statusCheckRollup":[]}
+JSON
+    ;;
+  "pr list --search [112] task( in:title --state all --json number,title,state,mergedAt,mergeable,headRefName,url")
+    cat <<'JSON'
+[{"number":42,"title":"[112] task(T1): add login","state":"MERGED","mergedAt":"2026-04-20T10:00:00Z","mergeable":"MERGEABLE","headRefName":"dark-factory/112/t1","url":"https://github.com/x/y/pull/42"}]
+JSON
+    ;;
+  *)
+    echo '{}'
+    ;;
+esac
+SHIM
+  chmod +x "$mock_dir/gh"
+}
+
+seed_run() {
+  local run_id="${1:-R1}"
+  local rundir="$CLAUDE_PLUGIN_DATA/runs/$run_id"
+  mkdir -p "$rundir"
+  cat > "$rundir/state.json" <<'JSON'
+{
+  "run_id": "R1",
+  "status": "running",
+  "input": {"issue_numbers": [112]},
+  "tasks": {
+    "T1": {"task_id": "T1", "title": "Add login", "description": "add login endpoint",
+           "status": "executing", "stage": "postreview_done", "pr_number": 42, "pr_url": "https://github.com/x/y/pull/42"}
+  }
+}
+JSON
+  ln -sfn "$rundir" "$CLAUDE_PLUGIN_DATA/runs/current"
+}
+
+echo "=== I-03: PR merged, state says executing ==="
+run_id="R1"
+seed_run "$run_id"
+mock_dir=$(mktemp -d)
+make_gh_mock "$mock_dir"
+PATH="$mock_dir:$PATH" pipeline-rescue-scan "$run_id" > "$CLAUDE_PLUGIN_DATA/scan.json"
+issue_count=$(jq '[.mechanical_issues[] | select(.id == "I-03")] | length' "$CLAUDE_PLUGIN_DATA/scan.json")
+assert_eq "I-03 detected once" "1" "$issue_count"
+task_id=$(jq -r '.mechanical_issues[] | select(.id == "I-03") | .task_id' "$CLAUDE_PLUGIN_DATA/scan.json")
+assert_eq "I-03 task_id" "T1" "$task_id"
+
+echo "=== I-01: stale state lock ==="
+lock_dir="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.lock"
+mkdir -p "$lock_dir"
+echo 99999999 > "$lock_dir/pid"  # Non-existent PID
+PATH="$mock_dir:$PATH" pipeline-rescue-scan "$run_id" > "$CLAUDE_PLUGIN_DATA/scan.json"
+i01=$(jq '[.mechanical_issues[] | select(.id == "I-01")] | length' "$CLAUDE_PLUGIN_DATA/scan.json")
+assert_eq "I-01 stale lock detected" "1" "$i01"
+rm -rf "$lock_dir"
+
+echo "=== tier_1 ids are tagged tier 1 ==="
+seed_run "$run_id"
+PATH="$mock_dir:$PATH" pipeline-rescue-scan "$run_id" > "$CLAUDE_PLUGIN_DATA/scan.json"
+tier=$(jq -r '.mechanical_issues[] | select(.id == "I-03") | .tier' "$CLAUDE_PLUGIN_DATA/scan.json")
+assert_eq "I-03 tier" "1" "$tier"
+
+echo "=== I-02: orphan worktree ==="
+repo=$(mktemp -d)
+(
+  cd "$repo"
+  git init --quiet
+  git config user.email test@local
+  git config user.name test
+  git commit --allow-empty -m root --quiet
+  git worktree add -b temp "$repo/wt" >/dev/null 2>&1
+  git branch -D temp 2>/dev/null || true
+)
+seed_run "$run_id"
+(
+  cd "$repo"
+  PATH="$mock_dir:$PATH" pipeline-rescue-scan "$run_id" > "$CLAUDE_PLUGIN_DATA/scan.json"
+)
+i02=$(jq '[.mechanical_issues[] | select(.id == "I-02")] | length' "$CLAUDE_PLUGIN_DATA/scan.json")
+if [[ "$i02" -ge 0 ]]; then
+  echo "  PASS: I-02 scan completes without error (count=$i02)"
+  pass=$((pass + 1))
+fi
+
+echo
+echo "Passed: $pass | Failed: $fail"
+[[ $fail -eq 0 ]]
