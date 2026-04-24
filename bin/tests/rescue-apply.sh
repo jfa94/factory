@@ -62,6 +62,29 @@ else
   fail=$((fail + 1))
 fi
 
+echo "=== I-08: mark task failed when PR closed unmerged ==="
+seed_run
+report2="$CLAUDE_PLUGIN_DATA/report2.json"
+cat > "$report2" <<'JSON'
+{"run_id":"R1","mechanical_issues":[{"id":"I-08","tier":2,"task_id":"T1","description":"pr closed unmerged"}]}
+JSON
+pipeline-rescue-apply --tier=risky --plan="$report2" >/dev/null
+status=$(pipeline-state read R1 '.tasks.T1.status' | tr -d '"')
+assert_eq "I-08 marks failed" "failed" "$status"
+
+echo "=== I-06: reset ship stage to ci_fixing ==="
+seed_run
+pipeline-state task-write R1 T1 stage '"ship"' >/dev/null
+report3="$CLAUDE_PLUGIN_DATA/report3.json"
+cat > "$report3" <<'JSON'
+{"run_id":"R1","mechanical_issues":[{"id":"I-06","tier":2,"task_id":"T1","description":"ci red"}]}
+JSON
+pipeline-rescue-apply --tier=risky --plan="$report3" >/dev/null
+stage=$(pipeline-state read R1 '.tasks.T1.stage' | tr -d '"')
+assert_eq "I-06 resets stage" "postreview_done" "$stage"
+status=$(pipeline-state read R1 '.tasks.T1.status' | tr -d '"')
+assert_eq "I-06 sets ci_fixing" "ci_fixing" "$status"
+
 echo
 echo "Passed: $pass | Failed: $fail"
 [[ $fail -eq 0 ]]
