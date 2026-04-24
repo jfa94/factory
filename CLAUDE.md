@@ -9,7 +9,7 @@ This plugin enforces test-driven development (TDD) at the harness layer:
 - Tasks run through two phases: `test-writer` commits failing tests first, then `task-executor` commits the minimal implementation.
 - `pipeline-tdd-gate` enforces test-before-impl commit ordering. Violations block the task.
 - See `skills/test-driven-development/SKILL.md` for the full discipline.
-- Opt-out per task via `tdd_exempt: true` in the spec's `tasks.json`; globally via `package.json.dark-factory.tddExempt`.
+- Opt-out per task via `tdd_exempt: true` in the spec's `tasks.json`; globally via `package.json.dark-factory.tddExempt`. For repos with exotic test runners (Go, Ruby, Deno, etc.), set `.quality.redTestCommand` in config to provide a custom red-test verification command instead of bypassing enforcement.
 
 Reviewer roles:
 

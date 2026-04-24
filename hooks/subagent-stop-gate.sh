@@ -147,11 +147,20 @@ if [[ "$autonomous" == "1" ]]; then
     retries=$(( retries + 1 ))
     printf '%s' "$retries" > "$retry_file"
 
-    # Budget: 1 retry (2 attempts total). On 2nd block, write BLOCKED to state.
+    # Budget: 1 retry (2 attempts total). On 2nd block, write BLOCKED to the
+    # correct per-agent status field so downstream stages detect exhaustion.
     if (( retries >= 2 )); then
       if [[ -n "$task_id" ]] && [[ -f "$run_dir/state.json" ]] && command -v pipeline-state >/dev/null 2>&1; then
         run_id=$(basename "$run_dir")
-        pipeline-state task-write "$run_id" "$task_id" executor_status '"BLOCKED"' >/dev/null 2>&1 || true
+        status_field=""
+        case "$agent_type" in
+          test-writer)   status_field="test_writer_status" ;;
+          task-executor) status_field="executor_status" ;;
+          *)             status_field="" ;;
+        esac
+        if [[ -n "$status_field" ]]; then
+          pipeline-state task-write "$run_id" "$task_id" "$status_field" '"BLOCKED"' >/dev/null 2>&1 || true
+        fi
       fi
     fi
 

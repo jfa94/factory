@@ -267,12 +267,40 @@ _verify_red_tests() {
     return 1
   fi
 
+  # Check for an explicit verification command first — escape hatch for exotic toolchains.
+  # Command receives new test file paths as positional args.
+  local custom_cmd
+  custom_cmd=$(read_config '.quality.redTestCommand' '')
+  if [[ -n "$custom_cmd" ]]; then
+    log_info "red-test verification: using .quality.redTestCommand escape hatch task_id=\"$task_id\""
+    local out_log rc=0
+    out_log=$(mktemp)
+    # shellcheck disable=SC2086
+    (cd "$tw_wt" && $custom_cmd "${new_tests[@]}" >"$out_log" 2>&1) || rc=$?
+    local out
+    out=$(cat "$out_log" 2>/dev/null || printf '')
+    rm -f "$out_log"
+    # Apply same rc taxonomy as the built-in runners below.
+    if [[ $rc -eq 0 ]]; then
+      log_error "red-test verification: tests passed (not red) via .quality.redTestCommand task_id=\"$task_id\""
+      _task_write quality_gates.red_test '{"ok":false,"reason":"tests_not_red"}'
+      return 1
+    elif [[ $rc -ge 126 ]]; then
+      log_error "red-test verification: infra error (rc=$rc) via .quality.redTestCommand; failing closed task_id=\"$task_id\""
+      _task_write quality_gates.red_test "{\"ok\":false,\"reason\":\"infra_error\",\"rc\":$rc}"
+      return 1
+    fi
+    _task_write quality_gates.red_test '{"ok":true}'
+    return 0
+  fi
+
   # Detect runner
   local runner
   runner=$(_detect_red_test_runner "$tw_wt")
   if [[ -z "$runner" ]]; then
-    log_warn "red-test verification: cannot detect test runner; skipping task_id=\"$task_id\""
-    return 0
+    log_error "red-test verification: cannot detect test runner; set .quality.redTestCommand or mark tdd_exempt task_id=\"$task_id\""
+    _task_write quality_gates.red_test '{"ok":false,"reason":"runner_undetectable"}'
+    return 1
   fi
 
   local pkg_mgr
@@ -303,7 +331,11 @@ _verify_red_tests() {
       # shellcheck disable=SC2086
       cmd=(cargo test $cargo_target)
       ;;
-    *)      log_warn "red-test verification: unknown runner '$runner'; skipping"; return 0 ;;
+    *)
+      log_error "red-test verification: unsupported runner '$runner'; set .quality.redTestCommand or mark tdd_exempt task_id=\"$task_id\""
+      _task_write quality_gates.red_test "{\"ok\":false,\"reason\":\"unsupported_runner\",\"runner\":\"$runner\"}"
+      return 1
+      ;;
   esac
 
   # Capture output to apply rc taxonomy — infra failures must not masquerade as red tests.

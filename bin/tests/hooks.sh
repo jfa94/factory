@@ -1339,7 +1339,50 @@ assert_eq "retry file = 2 after second block" "2" "$retry_count"
 # Verify BLOCKED written to state.json after 2nd block
 executor_status_after=$(jq -r '.tasks.t3.executor_status // empty' "$retry_dir/state.json" 2>/dev/null || true)
 assert_eq "executor_status=BLOCKED written to state after 2nd block" "BLOCKED" "$executor_status_after"
+# Verify test_writer_status was NOT poisoned by the executor retry
+tw_status_after=$(jq -r '.tasks.t3.test_writer_status // empty' "$retry_dir/state.json" 2>/dev/null || true)
+assert_eq "task-executor retry does NOT write test_writer_status" "" "$tw_status_after"
 rm -rf "$retry_stubs"
+
+echo "=== subagent-stop-gate: test-writer retry exhaustion writes test_writer_status (not executor_status) ==="
+
+_seed_run "run-ssg-tw-retry" '{"status":"running","tasks":{"tw1":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'
+tw_retry_dir="$CLAUDE_PLUGIN_DATA/runs/run-ssg-tw-retry"
+
+tw_retry_stubs=$(mktemp -d)
+cat > "$tw_retry_stubs/pipeline-state" <<'SH'
+#!/usr/bin/env bash
+run_id="$2"; task_id="$3"; field="$4"; value="$5"
+state="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.json"
+[[ -f "$state" ]] || exit 0
+tmp=$(mktemp)
+jq --arg t "$task_id" --arg f "$field" --argjson v "$value" \
+  '.tasks[$t][$f] = $v' "$state" > "$tmp" && mv "$tmp" "$state"
+SH
+chmod +x "$tw_retry_stubs/pipeline-state"
+
+# First block attempt
+set +e
+jq -cn '{agent_type:"test-writer", last_assistant_message:"No status."}' \
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=tw1 PATH="$tw_retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+set -e
+tw_retry_count=$(cat "$tw_retry_dir/.subagent_retries.tw1" 2>/dev/null || echo 0)
+assert_eq "tw retry file = 1 after first block" "1" "$tw_retry_count"
+
+# Second block attempt — should write test_writer_status=BLOCKED
+set +e
+jq -cn '{agent_type:"test-writer", last_assistant_message:"No status."}' \
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=tw1 PATH="$tw_retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+set -e
+tw_retry_count=$(cat "$tw_retry_dir/.subagent_retries.tw1" 2>/dev/null || echo 0)
+assert_eq "tw retry file = 2 after second block" "2" "$tw_retry_count"
+
+tw_status_blocked=$(jq -r '.tasks.tw1.test_writer_status // empty' "$tw_retry_dir/state.json" 2>/dev/null || true)
+assert_eq "test_writer_status=BLOCKED written after 2nd test-writer block" "BLOCKED" "$tw_status_blocked"
+# Verify executor_status was NOT written
+exec_status_clean=$(jq -r '.tasks.tw1.executor_status // empty' "$tw_retry_dir/state.json" 2>/dev/null || true)
+assert_eq "test-writer retry does NOT write executor_status" "" "$exec_status_clean"
+rm -rf "$tw_retry_stubs"
 
 # ============================================================
 # Scribe path-scope guard tests

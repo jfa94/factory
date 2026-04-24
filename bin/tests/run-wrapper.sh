@@ -457,7 +457,59 @@ red_test_ok=$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.red_tes
 assert_eq "preexec-red-origin-staging: red_test.ok=true" "true" "$red_test_ok"
 rm -f "$STUB_DIR/git" "$STUB_DIR/vitest"
 
-# --- 19.b: preexec_tests — resume path: origin/staging fallback detects test commit ---
+# --- 19.b: preexec_tests — red-test verify: undetectable runner fails closed ---
+new_run preexec-red-unknown-runner
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+# No package.json / Cargo.toml / pyproject.toml → runner undetectable
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+write_stub git '
+if [[ "$*" == *"rev-parse --verify staging"* ]] && [[ "$*" != *"origin/"* ]]; then exit 0; fi
+if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then
+  printf "main_test.go\n"; exit 0
+fi
+exec /usr/bin/git "$@"'
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage preexec_tests 2>/dev/null; RC=$?; set -e
+assert_eq "preexec-red-unknown-runner: exit 30 (fail closed)" "30" "$RC"
+red_test_ok=$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.red_test 2>/dev/null | jq -r '.ok | tostring')
+assert_eq "preexec-red-unknown-runner: red_test.ok=false" "false" "$red_test_ok"
+red_test_reason=$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.red_test 2>/dev/null | jq -r '.reason')
+assert_eq "preexec-red-unknown-runner: reason=runner_undetectable" "runner_undetectable" "$red_test_reason"
+rm -f "$STUB_DIR/git"
+
+# --- 19.c: preexec_tests — red-test verify: .quality.redTestCommand escape hatch ---
+new_run preexec-red-custom-cmd
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+# No recognized runner, but .quality.redTestCommand set to a stub that exits 1 (red)
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+write_stub git '
+if [[ "$*" == *"rev-parse --verify staging"* ]] && [[ "$*" != *"origin/"* ]]; then exit 0; fi
+if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then
+  printf "main_test.go\n"; exit 0
+fi
+exec /usr/bin/git "$@"'
+# Point .quality.redTestCommand at a stub that exits 1 (tests are red)
+custom_cmd_stub="$ROOT_TMP/fake-test-runner"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$custom_cmd_stub"
+chmod +x "$custom_cmd_stub"
+# Write to config.json (what read_config reads)
+config_file="$CLAUDE_PLUGIN_DATA/config.json"
+orig_config=$(cat "$config_file" 2>/dev/null || printf '{}')
+printf '%s' "$orig_config" \
+  | jq --arg cmd "$custom_cmd_stub" '.quality.redTestCommand = $cmd' \
+  > "$config_file"
+run_wrapper alpha-001 --stage preexec_tests
+assert_eq "preexec-red-custom-cmd: exit 10 (spawns executor)" "10" "$RC"
+assert_eq "preexec-red-custom-cmd: spawns executor" "task-executor" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+red_test_ok=$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.red_test 2>/dev/null | jq -r '.ok | tostring')
+assert_eq "preexec-red-custom-cmd: red_test.ok=true" "true" "$red_test_ok"
+# Restore config
+printf '%s' "$orig_config" > "$config_file"
+rm -f "$STUB_DIR/git" "$custom_cmd_stub"
+
+# --- 19.d: preexec_tests — resume path: origin/staging fallback detects test commit ---
 new_run preexec-resume-origin-staging
 # No test_writer_status → triggers resume path check
 wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
