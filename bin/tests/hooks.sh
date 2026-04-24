@@ -831,6 +831,61 @@ assert_eq "subagent-stop sets .scribe.status=done" "done" "$scribe_status"
 
 # ============================================================
 echo ""
+echo "=== session-start (Iron Laws): emits valid JSON with Iron Laws digest ==="
+
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start Iron Laws exit 0" "0" "$rc"
+event=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName // empty')
+assert_eq "session-start Iron Laws event name" "SessionStart" "$event"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" == *"FACTORY_HARNESS_REMINDER"* ]] && { echo "  PASS: session-start ctx has harness reminder tag"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing FACTORY_HARNESS_REMINDER tag"; fail=$((fail+1)); }
+[[ "$ctx" == *"Iron Laws"* ]] && { echo "  PASS: session-start ctx contains Iron Laws"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing Iron Laws"; fail=$((fail+1)); }
+[[ "$ctx" == *"Red Flags"* ]] && { echo "  PASS: session-start ctx contains Red Flags"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing Red Flags"; fail=$((fail+1)); }
+[[ "$ctx" == *"pipeline-run-task"* ]] && { echo "  PASS: session-start ctx mentions wrapper"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing wrapper reference"; fail=$((fail+1)); }
+
+echo ""
+echo "=== session-start (Iron Laws): appends stage-state when active run exists ==="
+
+_seed_run "run-laws-active" '{"status":"running","tasks":{"task-1":{"status":"executing","stage":"preflight_done"}}}'
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start active run exit 0" "0" "$rc"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" == *"run-laws-active"* ]] && { echo "  PASS: session-start ctx contains run id"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing run id"; fail=$((fail+1)); }
+[[ "$ctx" == *"pipeline-run-task"* ]] && { echo "  PASS: session-start ctx has resume command"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing resume command"; fail=$((fail+1)); }
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+echo ""
+echo "=== session-start (Iron Laws): no active run still emits digest ==="
+
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start no run exit 0" "0" "$rc"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" == *"Iron Laws"* ]] && { echo "  PASS: session-start no-run ctx still has Iron Laws"; pass=$((pass+1)); } || { echo "  FAIL: session-start no-run ctx missing Iron Laws"; fail=$((fail+1)); }
+
+echo ""
+echo "=== session-start (Iron Laws): terminal run omits stage summary ==="
+
+_seed_run "run-laws-done" '{"status":"done","tasks":{"t1":{"status":"done"}}}'
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start terminal run exit 0" "0" "$rc"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" != *"run-laws-done"* ]] && { echo "  PASS: session-start terminal run omits run id from stage summary"; pass=$((pass+1)); } || { echo "  FAIL: session-start terminal run should not show run id"; fail=$((fail+1)); }
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# ============================================================
+echo ""
 echo "=== session-start-resume: injects additionalContext ==="
 
 _seed_run "run-resume" '{"status":"running","tasks":{"alpha-001":{"status":"executing","stage":"preflight_done"},"alpha-002":{"status":"pending"}}}'
@@ -895,7 +950,7 @@ echo "=== settings.autonomous.json registers Layer-2 hooks ==="
 
 autonom="$(cd "$(dirname "$0")/../../templates" && pwd)/settings.autonomous.json"
 assert_eq "template has SubagentStop"        "1" "$(jq '.hooks.SubagentStop | length' "$autonom")"
-assert_eq "template has SessionStart"        "1" "$(jq '.hooks.SessionStart | length' "$autonom")"
+assert_eq "template has SessionStart"        "2" "$(jq '.hooks.SessionStart | length' "$autonom")"
 assert_eq "template PostToolUse has asyncRewake" "1" "$(jq '[.hooks.PostToolUse[].hooks[]? | select(.asyncRewake == true)] | length' "$autonom")"
 assert_eq "template PreToolUse has pipeline-guards" "1" "$(jq '[.hooks.PreToolUse[].hooks[]? | select(.command | test("pretooluse-pipeline-guards"))] | length' "$autonom")"
 assert_eq "template allows Bash(codex *)"     "true" "$(jq '[.permissions.allow[] | select(. == "Bash(codex *)")] | length > 0' "$autonom")"
@@ -1009,6 +1064,7 @@ assert_eq "subagent-stop-gate executable" "true" "$([[ -x "$HOOKS_DIR/subagent-s
 assert_eq "pretooluse-pipeline-guards executable" "true" "$([[ -x "$HOOKS_DIR/pretooluse-pipeline-guards.sh" ]] && echo true || echo false)"
 assert_eq "subagent-stop-transcript executable" "true" "$([[ -x "$HOOKS_DIR/subagent-stop-transcript.sh" ]] && echo true || echo false)"
 assert_eq "session-start-resume executable" "true" "$([[ -x "$HOOKS_DIR/session-start-resume.sh" ]] && echo true || echo false)"
+assert_eq "session-start executable" "true" "$([[ -x "$HOOKS_DIR/session-start" ]] && echo true || echo false)"
 assert_eq "asyncrewake-ci executable" "true" "$([[ -x "$HOOKS_DIR/asyncrewake-ci.sh" ]] && echo true || echo false)"
 
 # ============================================================
