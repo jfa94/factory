@@ -329,11 +329,13 @@ _stage_postexec() {
   fi
 
   if ! ( cd "$wt" && pipeline-tdd-gate --task-id "$task_id" --run-id "$run_id" --base staging ) >/dev/null; then
+    _task_write quality_gates.tdd '{"ok":false}'
     log_warn "tdd gate failed for $task_id"
     t1=$(_now_ms)
     log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"tdd\""
     return 30
   fi
+  _task_write quality_gates.tdd '{"ok":true}'
 
   local cov_before="$run_dir/.state/$run_id/$task_id.coverage-before.json"
   local cov_after="$wt/coverage/coverage-summary.json"
@@ -595,7 +597,7 @@ _write_ship_checklist() {
       review_blockers_resolved: $review_blockers_resolved,
       ci_status:                $ci_status,
       generated_at:             $generated_at
-    }' > "$checklist_file"
+    }' > "${checklist_file}.tmp" && mv "${checklist_file}.tmp" "$checklist_file"
 
   log_metric "task.ship_checklist_written" "task_id=\"$task_id\"" "tdd=\"$tdd_gate\"" \
     "coverage=\"$coverage_gate\"" "quality=\"$quality_gate\"" "ci=\"$ci_status\""
