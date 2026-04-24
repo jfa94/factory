@@ -453,7 +453,7 @@ BLOCKERS: 0
 ROUND: 2
 
 ```json
-{"verdict":"APPROVE","prior_blocker_map":[{"id":1,"status":"still-present","notes":"Still crashes on null"}]}
+{"verdict":"APPROVED","findings":[],"prior_blocker_map":[{"id":1,"status":"still-present","notes":"Still crashes on null"}]}
 ```
 MDEOF
 run_wrapper alpha-001 --stage postreview --review-file "$rf"
@@ -484,7 +484,7 @@ BLOCKERS: 0
 ROUND: 2
 
 ```json
-{"verdict":"APPROVE","prior_blocker_map":[{"id":1,"status":"resolved","notes":"Fixed"}]}
+{"verdict":"APPROVED","findings":[],"prior_blocker_map":[{"id":1,"status":"resolved","notes":"Fixed"}]}
 ```
 MDEOF
 run_wrapper alpha-001 --stage postreview --review-file "$rf"
