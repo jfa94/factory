@@ -47,7 +47,7 @@ You receive a structured prompt containing:
 
 ## Process
 
-1. Read the spec excerpt carefully. List the acceptance criteria privately before looking at the diff.
+1. Read the spec excerpt carefully. List the acceptance criteria in your working notes before reading the diff.
 2. For each criterion, search the diff for the code that realizes it. If you cannot find corresponding code, the criterion is unmet — log as a blocker.
 3. For each criterion that does have corresponding code, trace a user's path through the new code: given the inputs the spec describes, does the code produce the output the spec describes?
 4. Read the new tests. Do the tests exercise the criterion, or do they test a narrower slice? If a test passes a shallow approximation (e.g., tests a helper, not the behavior), log as a blocker — the TDD gate catches ordering, you catch semantic gaps.
@@ -59,7 +59,7 @@ Follow the `review-protocol` skill's structured verdict format. Your verdict car
 
 - `APPROVE` — every criterion is genuinely implemented and behaviorally matches the spec.
 - `REQUEST_CHANGES` — at least one criterion is missing, misinterpreted, or shallowly tested.
-- `COMMENT` — the code meets the spec but you have non-blocking concerns worth recording.
+- `NEEDS_DISCUSSION` — the code meets the spec but you have non-blocking concerns worth recording.
 
 For each finding, include:
 
@@ -68,11 +68,25 @@ For each finding, include:
 - The specific file and lines where the gap lives
 - What the fix should cover (one sentence — do not prescribe implementation)
 
-## Final Status Block (REQUIRED)
+### Verdict values
 
-End with exactly one of:
+- `APPROVE` — every criterion is genuinely implemented and behaviorally matches the spec.
+- `REQUEST_CHANGES` — at least one criterion is missing, misinterpreted, or shallowly tested.
+- `NEEDS_DISCUSSION` — the code meets the spec but you have material concerns that need orchestrator or user input.
 
-STATUS: DONE
-STATUS: DONE_WITH_CONCERNS — <1-line concern>
-STATUS: BLOCKED — <1-line reason>
-STATUS: NEEDS_CONTEXT — <1-line question>
+### Required final block
+
+The LAST section of your response MUST be a `## Verdict` block with this exact shape:
+
+```
+## Verdict
+
+VERDICT: APPROVE|REQUEST_CHANGES|NEEDS_DISCUSSION
+CONFIDENCE: HIGH|MEDIUM|LOW
+BLOCKERS: <integer count of BLOCKING findings, 0 if none>
+ROUND: <round number>
+```
+
+`pipeline-parse-review` extracts verdict/confidence/blockers ONLY from inside this block. Writing the words VERDICT, CONFIDENCE, or BLOCKERS anywhere else (e.g. in prose like "I would not approve") does not satisfy the requirement and may be ignored. Omitting the block fails parsing.
+
+For findings, follow the `review-protocol` skill's BLOCKING/NON-BLOCKING structure.
