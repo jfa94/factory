@@ -396,5 +396,61 @@ assert_eq "preexec-red-tdd-exempt: exit 10" "10" "$RC"
 assert_eq "preexec-red-tdd-exempt: spawns executor" "task-executor" \
   "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
 
+# Restore the cat stub for scenarios 20-23 (they use JSON review files)
+write_stub pipeline-parse-review 'cat'
+
+# --- 20: postreview — REQUEST_CHANGES saves prior_blockers + sets reviewer_only ---
+new_run postreview-prior-blockers
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
+rf="$ROOT_TMP/$current-review.json"
+echo '{"verdict":"REQUEST_CHANGES","findings":[{"file":"src/a.ts","line":10,"severity":"major","description":"Missing null check","evidence":"foo()"}],"blockers":["Missing null check"],"concerns":[]}' > "$rf"
+run_wrapper alpha-001 --stage postreview --review-file "$rf"
+assert_eq "postreview-prior-blockers: exit 10" "10" "$RC"
+assert_eq "postreview-prior-blockers: stage_after=postexec" "postexec" \
+  "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+assert_eq "postreview-prior-blockers: reviewer_only=true" "true" \
+  "$(field_of postexec_reviewer_only | tr -d '\"')"
+pb_len=$(pipeline-state task-read "$RUN_ID" alpha-001 postreview_prior_blockers 2>/dev/null | jq 'length')
+assert_eq "postreview-prior-blockers: prior_blockers saved" "1" "$pb_len"
+
+# --- 21: postexec — reviewer_only re-entry skips gates, spawns reviewers ------
+new_run postexec-reviewer-only
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 postexec_reviewer_only '"true"' >/dev/null
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec-reviewer-only: exit 10" "10" "$RC"
+assert_eq "postexec-reviewer-only: stage_after=postreview" "postreview" \
+  "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+assert_eq "postexec-reviewer-only: flag cleared" "null" \
+  "$(field_of postexec_reviewer_only | tr -d '\"')"
+
+# --- 22: postreview — still-present blocker in prior_blocker_map → re-fix ----
+new_run postreview-still-present
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 postreview_prior_blockers \
+  '[{"id":1,"file":"src/a.ts","line":10,"severity":"major","description":"Missing null check"}]' >/dev/null
+rf="$ROOT_TMP/$current-review.json"
+echo '{"verdict":"APPROVE","findings":[],"prior_blocker_map":[{"id":1,"status":"still-present","notes":"Still crashes on null"}],"blockers":[],"concerns":[]}' > "$rf"
+run_wrapper alpha-001 --stage postreview --review-file "$rf"
+assert_eq "postreview-still-present: exit 10" "10" "$RC"
+assert_eq "postreview-still-present: stage_after=postexec" "postexec" \
+  "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+
+# --- 23: postreview — all prior blockers resolved → success, blockers cleared -
+new_run postreview-resolved
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 postreview_prior_blockers \
+  '[{"id":1,"file":"src/a.ts","line":10,"severity":"major","description":"Missing null check"}]' >/dev/null
+rf="$ROOT_TMP/$current-review.json"
+echo '{"verdict":"APPROVE","findings":[],"prior_blocker_map":[{"id":1,"status":"resolved","notes":"Fixed in latest commit"}],"blockers":[],"concerns":[]}' > "$rf"
+run_wrapper alpha-001 --stage postreview --review-file "$rf"
+assert_eq "postreview-resolved: exit 0" "0" "$RC"
+assert_eq "postreview-resolved: stage=postreview_done" "postreview_done" "$(stage_of)"
+pb_after=$(pipeline-state task-read "$RUN_ID" alpha-001 postreview_prior_blockers 2>/dev/null | jq -r '.')
+assert_eq "postreview-resolved: prior_blockers cleared" "null" "$pb_after"
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
