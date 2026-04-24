@@ -19,7 +19,12 @@ Review the diff in the worktree for task `<task-id>`. Return a strict verdict th
 3. Check every acceptance criterion is addressed in the diff.
 4. Check tests exist for every criterion and cover edge cases.
 5. Apply your role's specific rubric.
-6. Form one verdict with declared blockers and concerns.
+6. **Before forming a verdict, validate each candidate finding:**
+   - Re-read the relevant code to confirm the issue actually exists in the diff (not just in surrounding context or your mental model).
+   - Ask: would fixing this finding break any existing test or regress any currently-passing behaviour? If yes, report `NEEDS_DISCUSSION`, not `REQUEST_CHANGES`.
+   - Ask: is this finding already handled by the project's formatter, linter, or framework? If yes, drop it.
+   - If you cannot point to a specific line in the diff that demonstrates the problem, drop the finding.
+7. Form one verdict with only confirmed, regression-safe blockers and concerns.
 
 ## Verdict block (REQUIRED)
 
