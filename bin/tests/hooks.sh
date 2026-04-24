@@ -1278,6 +1278,27 @@ assert_eq "autonomous zero-commits reason mentions commits" "true" \
   "$(printf '%s' "$out" | jq -r '.reason' | grep -qi 'commit' && echo true || echo false)"
 
 echo ""
+echo "=== subagent-stop-gate: no block when branch has commits but staging ref missing ==="
+
+# Create a real temp git repo with a branch that has a commit but no staging ref
+_ssg_tmp=$(mktemp -d)
+git -C "$_ssg_tmp" init -q
+git -C "$_ssg_tmp" commit --allow-empty -m "init" -q
+git -C "$_ssg_tmp" checkout -b "dark-factory/test-has-commit" -q
+git -C "$_ssg_tmp" commit --allow-empty -m "task commit" -q
+# No staging or origin/staging ref created — this is the bug scenario
+
+_seed_run "run-ssg-nostaging" \
+  "{\"status\":\"running\",\"tasks\":{\"t-ns\":{\"status\":\"executing\",\"branch\":\"dark-factory/test-has-commit\",\"worktree\":\"$_ssg_tmp\"}}}"
+set +e
+out=$(jq -cn '{agent_type:"task-executor", last_assistant_message:"Done!\nSTATUS: DONE"}' \
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t-ns bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "no-staging ref: exit 0 (not blocked)" "0" "$rc"
+rm -rf "$_ssg_tmp"
+
+echo ""
 echo "=== subagent-stop-gate: retry counter increments and writes BLOCKED on 2nd block ==="
 
 _seed_run "run-ssg-retry" '{"status":"running","tasks":{"t3":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'

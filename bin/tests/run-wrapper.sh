@@ -334,7 +334,7 @@ echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
 pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
 # git stub: diff returns empty (no new test files)
 write_stub git '
-if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=A"* ]]; then printf ""; exit 0; fi
+if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then printf ""; exit 0; fi
 exec /usr/bin/git "$@"'
 set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage preexec_tests 2>/dev/null; RC=$?; set -e
 assert_eq "preexec-red-no-files: exit 30" "30" "$RC"
@@ -350,7 +350,7 @@ echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
 pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
 # git stub: diff returns a test file
 write_stub git '
-if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=A"* ]]; then
+if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then
   printf "src/foo.test.ts\n"; exit 0
 fi
 exec /usr/bin/git "$@"'
@@ -369,7 +369,7 @@ wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
 echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
 pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
 write_stub git '
-if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=A"* ]]; then
+if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then
   printf "src/foo.test.ts\n"; exit 0
 fi
 exec /usr/bin/git "$@"'

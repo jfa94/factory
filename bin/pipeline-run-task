@@ -241,11 +241,11 @@ _verify_red_tests() {
   local new_tests=()
   while IFS= read -r f; do
     [[ -n "$f" ]] && new_tests+=("$f")
-  done < <(cd "$tw_wt" && git diff staging..HEAD --name-only --diff-filter=A 2>/dev/null \
+  done < <(cd "$tw_wt" && git diff staging..HEAD --name-only --diff-filter=AM 2>/dev/null \
     | grep -E '\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$|_test\.(go|py|rb)$|Test\.(php|java)$|_spec\.rb$' || true)
 
   if [[ ${#new_tests[@]} -eq 0 ]]; then
-    log_error "red-test verification: no new test files found task_id=\"$task_id\""
+    log_error "red-test verification: no new or modified test files found task_id=\"$task_id\""
     _task_write quality_gates.red_test '{"ok":false,"reason":"no_new_tests"}'
     return 1
   fi

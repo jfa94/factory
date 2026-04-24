@@ -96,16 +96,12 @@ if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; t
     # Extract summary
     json_summary=$(printf '%s' "$json_block" | jq -r '.summary // ""')
 
-    # Cross-field consistency: APPROVED with critical/blocking findings is a
-    # trust-boundary violation — downgrade rather than discard the findings.
-    if [[ "$normalized_verdict" == "APPROVE" ]]; then
-      critical_count=$(printf '%s' "$valid_findings" | \
-        jq '[.[] | select(.severity == "critical" or .severity == "blocking")] | length' 2>/dev/null || printf '0')
-      if (( critical_count > 0 )); then
-        log_warn "parser-downgrade: APPROVED verdict with $critical_count critical/blocking finding(s) — downgrading to REQUEST_CHANGES"
-        normalized_verdict="REQUEST_CHANGES"
-        json_summary="[parser-downgrade: APPROVED with critical findings] ${json_summary}"
-      fi
+    # Cross-field consistency: APPROVED with any findings violates the reviewer contract
+    # (quality-reviewer.md: "findings must be empty array [] when APPROVED").
+    if [[ "$normalized_verdict" == "APPROVE" ]] && (( valid_count > 0 )); then
+      log_warn "parser-downgrade: APPROVED verdict with $valid_count finding(s) — downgrading to REQUEST_CHANGES"
+      normalized_verdict="REQUEST_CHANGES"
+      json_summary="[parser-downgrade: APPROVED with findings] ${json_summary}"
     fi
 
     # REQUEST_CHANGES with no valid findings is an inverse hallucination — reject.

@@ -259,6 +259,34 @@ assert_eq "json reviewer tag" "claude-code" "$(echo "$output" | jq -r '.reviewer
 
 # ============================================================
 echo ""
+echo "=== pipeline-parse-review (JSON schema — APPROVED with findings → downgrade) ==="
+
+json_approve_with_findings='Review prose.
+
+```json
+{
+  "verdict": "APPROVED",
+  "summary": "Mostly fine but one nit",
+  "findings": [
+    {
+      "file": "src/auth.ts",
+      "line": 10,
+      "evidence": "const token = req.body.token",
+      "severity": "important",
+      "description": "Token logged without redaction"
+    }
+  ]
+}
+```
+
+STATUS: DONE'
+
+output=$(printf '%s' "$json_approve_with_findings" | pipeline-parse-review 2>/dev/null)
+assert_eq "APPROVED+findings → downgraded to REQUEST_CHANGES" "REQUEST_CHANGES" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "APPROVED+findings: finding preserved" "1" "$(echo "$output" | jq '.findings | length')"
+
+# ============================================================
+echo ""
 echo "=== pipeline-parse-review (JSON schema — REQUEST_CHANGES) ==="
 
 json_changes_input='Review prose.
