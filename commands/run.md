@@ -24,7 +24,7 @@ arguments:
 
 # /factory:run
 
-Invoke the `run-pipeline` skill with these arguments. The skill contains the full orchestrator protocol (startup, mode dispatch, spec generation, per-task stage-machine loop, finalize-run). Every per-task step is driven by `bin/pipeline-run-task`; the skill's Iron Laws and red-flag table prevent drift across long runs.
+Invoke the `pipeline-orchestrator` skill with these arguments. The skill contains the full orchestrator protocol (startup, mode dispatch, spec generation, per-task stage-machine loop, finalize-run). Every per-task step is driven by `bin/pipeline-run-task`; the skill's Iron Laws and red-flag table prevent drift across long runs.
 
 Parse `mode` from the user's input. Validate required args for the chosen mode:
 
@@ -38,7 +38,7 @@ Parse `mode` from the user's input. Validate required args for the chosen mode:
 Then load the skill:
 
 ```
-Skill(run-pipeline, "mode=<mode> issue=<N> task-id=<T> spec-dir=<D> strict=<bool> dry-run=<bool>")
+Skill(pipeline-orchestrator, "mode=<mode> issue=<N> task-id=<T> spec-dir=<D> strict=<bool> dry-run=<bool>")
 ```
 
-All orchestration logic lives in `skills/run-pipeline/SKILL.md` and its `reference/` + `prompts/` directories. Do not duplicate it here.
+All orchestration logic lives in `skills/pipeline-orchestrator/SKILL.md` and its `reference/` + `prompts/` directories. Do not duplicate it here.

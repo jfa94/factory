@@ -460,15 +460,15 @@ RUN_MD="$PLUGIN_ROOT/commands/run.md"
 assert_file_exists "run.md exists" "$RUN_MD"
 
 # Materialization moved to pipeline-ensure-autonomy; run.md delegates to the
-# run-pipeline skill which invokes the autonomy check. Accept either inline
-# reference in run.md or in the skill body.
-SKILL_MD="$PLUGIN_ROOT/skills/run-pipeline/SKILL.md"
+# pipeline-orchestrator skill which invokes the autonomy check. Accept either
+# inline reference in run.md or in the skill body.
+SKILL_MD="$PLUGIN_ROOT/skills/pipeline-orchestrator/SKILL.md"
 if grep -q 'pipeline-ensure-autonomy' "$RUN_MD" \
    || { [[ -f "$SKILL_MD" ]] && grep -q 'pipeline-ensure-autonomy' "$SKILL_MD"; }; then
-  echo "  PASS: orchestrator (run.md or run-pipeline skill) calls pipeline-ensure-autonomy"
+  echo "  PASS: orchestrator (run.md or pipeline-orchestrator skill) calls pipeline-ensure-autonomy"
   pass=$((pass + 1))
 else
-  echo "  FAIL: neither run.md nor run-pipeline skill calls pipeline-ensure-autonomy"
+  echo "  FAIL: neither run.md nor pipeline-orchestrator skill calls pipeline-ensure-autonomy"
   fail=$((fail + 1))
 fi
 

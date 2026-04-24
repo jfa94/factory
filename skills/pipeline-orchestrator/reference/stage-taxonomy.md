@@ -48,7 +48,7 @@ Emitted on stdout with exit 10.
 }
 ```
 
-Pass every field through to `Agent()` verbatim. The `prompt_file` is already written by the wrapper from the externalized template under `skills/run-pipeline/prompts/`; load and inline its content, do not modify.
+Pass every field through to `Agent()` verbatim. The `prompt_file` is already written by the wrapper from the externalized template under `skills/pipeline-orchestrator/prompts/`; load and inline its content, do not modify.
 
 Multiple entries in `agents` run in parallel — emit them in a single assistant message.
 

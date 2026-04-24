@@ -3,19 +3,20 @@
 # frontmatter, required sections, script/agent references, spec-handoff
 # contract, execution-loop shape, orchestrator-worktree bootstrap.
 #
-# commands/run.md is the main-session orchestrator: it runs inline in the
-# session that invoked /factory:run and spawns all sub-agents via Agent() +
-# isolation: worktree. There is no pipeline-orchestrator sub-agent anymore.
+# commands/run.md is the main-session orchestrator entrypoint: it runs inline
+# in the session that invoked /factory:run, loads the pipeline-orchestrator
+# skill, and spawns all sub-agents via Agent() + isolation: worktree. The
+# orchestrator itself is a skill, not a sub-agent.
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-# commands/run.md is now a thin dispatcher into skills/run-pipeline. Any
-# orchestrator-body assertion should accept content from either the command
-# file or the skill body (including its reference/ subdir). RUN_CMD points
-# at a concatenation written to a tmp file so existing grep assertions still
-# work without rewriting every assert_contains call site.
+# commands/run.md is now a thin dispatcher into skills/pipeline-orchestrator.
+# Any orchestrator-body assertion should accept content from either the
+# command file or the skill body (including its reference/ subdir). RUN_CMD
+# points at a concatenation written to a tmp file so existing grep assertions
+# still work without rewriting every assert_contains call site.
 _RUN_CMD_SRC="$PLUGIN_ROOT/commands/run.md"
-_RUN_SKILL_DIR="$PLUGIN_ROOT/skills/run-pipeline"
+_RUN_SKILL_DIR="$PLUGIN_ROOT/skills/pipeline-orchestrator"
 RUN_CMD=$(mktemp "${TMPDIR:-/tmp}/run-cmd-concat.XXXXXX.md")
 {
   cat "$_RUN_CMD_SRC"
@@ -127,7 +128,7 @@ done
 echo ""
 echo "=== orchestrator-worktree bootstrap ==="
 
-# Orchestrator worktree creation lives in the run-pipeline skill now.
+# Orchestrator worktree creation lives in the pipeline-orchestrator skill now.
 assert_contains "uses pipeline-branch worktree-create" "pipeline-branch worktree-create" "$RUN_CMD"
 assert_contains "worktree path under .claude/worktrees" ".claude/worktrees/orchestrator-" "$RUN_CMD"
 assert_contains "records worktree path in state" ".orchestrator.worktree" "$RUN_CMD"
@@ -141,7 +142,7 @@ assert_not_contains "no orchestrator sub-agent spawn" 'subagent_type: "pipeline-
 echo ""
 echo "=== required sections (skill-era) ==="
 
-# Sections now live across commands/run.md + skills/run-pipeline/SKILL.md.
+# Sections now live across commands/run.md + skills/pipeline-orchestrator/SKILL.md.
 # Assert the protocol milestones by keyword, not literal markdown heading.
 sections=(
   "Autonomy check"

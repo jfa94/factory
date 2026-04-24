@@ -1,5 +1,5 @@
 ---
-name: run-pipeline
+name: pipeline-orchestrator
 description: Drive the dark-factory autonomous coding pipeline end-to-end. Orchestrator walks every task through preflight → postexec → postreview → ship via the `pipeline-run-task` wrapper; forgetting a gate is structurally impossible because the wrapper owns quota, quality, coverage, holdout, review fan-out, PR creation, CI wait, and finalize.
 auto-invoke: false
 ---
@@ -144,7 +144,7 @@ Runs once, before task execution.
 
 2. **Fetch PRD.** `pipeline-fetch-prd <issue>`.
 
-3. **Spawn spec-generator.** `Agent({subagent_type: "spec-generator", isolation: "worktree", prompt_file: skills/run-pipeline/prompts/spec-generator.md})`. The agent commits spec.md + tasks.json on `spec-handoff/$run_id` and writes `.spec.handoff_branch`, `.spec.handoff_ref`, `.spec.path` to state.
+3. **Spawn spec-generator.** `Agent({subagent_type: "spec-generator", isolation: "worktree", prompt_file: skills/pipeline-orchestrator/prompts/spec-generator.md})`. The agent commits spec.md + tasks.json on `spec-handoff/$run_id` and writes `.spec.handoff_branch`, `.spec.handoff_ref`, `.spec.path` to state.
 
 4. **Persist review score.**
 
