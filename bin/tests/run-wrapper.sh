@@ -324,5 +324,77 @@ case "$1 $2" in
 esac'
 rm -f "$STUB_DIR/git"
 
+# --- 16: preexec_tests — red-test verify: no new test files → fails ----------
+new_run preexec-red-no-files
+# Seed RED_READY status so we skip the spawn-test-writer path
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+# Worktree with vitest but no new test files in diff
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+# git stub: diff returns empty (no new test files)
+write_stub git '
+if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=A"* ]]; then printf ""; exit 0; fi
+exec /usr/bin/git "$@"'
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage preexec_tests 2>/dev/null; RC=$?; set -e
+assert_eq "preexec-red-no-files: exit 30" "30" "$RC"
+red_test_ok=$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.red_test 2>/dev/null | jq -r '.ok | tostring')
+assert_eq "preexec-red-no-files: red_test.ok=false" "false" "$red_test_ok"
+rm -f "$STUB_DIR/git"
+
+# --- 17: preexec_tests — red-test verify: new tests pass (no-op) → fails ----
+new_run preexec-red-tests-pass
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+# git stub: diff returns a test file
+write_stub git '
+if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=A"* ]]; then
+  printf "src/foo.test.ts\n"; exit 0
+fi
+exec /usr/bin/git "$@"'
+# vitest stub exits 0 (tests "pass" — no-op)
+write_stub vitest 'exit 0'
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage preexec_tests 2>/dev/null; RC=$?; set -e
+assert_eq "preexec-red-tests-pass: exit 30" "30" "$RC"
+red_test_ok=$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.red_test 2>/dev/null | jq -r '.ok | tostring')
+assert_eq "preexec-red-tests-pass: red_test.ok=false" "false" "$red_test_ok"
+rm -f "$STUB_DIR/git" "$STUB_DIR/vitest"
+
+# --- 18: preexec_tests — red-test verify: new tests fail → spawns executor --
+new_run preexec-red-tests-fail
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+write_stub git '
+if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=A"* ]]; then
+  printf "src/foo.test.ts\n"; exit 0
+fi
+exec /usr/bin/git "$@"'
+# vitest stub exits 1 (tests fail — correct red state)
+write_stub vitest 'exit 1'
+run_wrapper alpha-001 --stage preexec_tests
+assert_eq "preexec-red-tests-fail: exit 10" "10" "$RC"
+assert_eq "preexec-red-tests-fail: spawns executor" "task-executor" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+red_test_ok=$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.red_test 2>/dev/null | jq -r '.ok | tostring')
+assert_eq "preexec-red-tests-fail: red_test.ok=true" "true" "$red_test_ok"
+rm -f "$STUB_DIR/git" "$STUB_DIR/vitest"
+
+# --- 19: preexec_tests — red-test verify: tdd_exempt skips check -----------
+new_run preexec-red-tdd-exempt
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+# Mark task as tdd_exempt in state (the field the gate reads)
+pipeline-state task-write "$RUN_ID" alpha-001 tdd_exempt 'true' >/dev/null
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+# No package.json, no test files — would fail if verification ran
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+run_wrapper alpha-001 --stage preexec_tests
+assert_eq "preexec-red-tdd-exempt: exit 10" "10" "$RC"
+assert_eq "preexec-red-tdd-exempt: spawns executor" "task-executor" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

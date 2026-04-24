@@ -196,6 +196,93 @@ _stage_preflight() {
   return 10
 }
 
+# Detect test runner from config or project files in $1 (worktree path).
+# Prints: vitest | jest | pytest | cargo | "" (empty = unknown)
+_detect_red_test_runner() {
+  local wt="$1"
+  local runner
+  runner=$(read_config '.redTestRunner' '')
+  if [[ -n "$runner" ]]; then printf '%s' "$runner"; return; fi
+  if [[ -f "$wt/package.json" ]]; then
+    if jq -e '.devDependencies.vitest // .dependencies.vitest' "$wt/package.json" &>/dev/null; then
+      printf 'vitest'; return
+    fi
+    if jq -e '.devDependencies.jest // .dependencies.jest // ."devDependencies"."@jest/core"' \
+        "$wt/package.json" &>/dev/null; then
+      printf 'jest'; return
+    fi
+  fi
+  if [[ -f "$wt/Cargo.toml" ]]; then printf 'cargo'; return; fi
+  if [[ -f "$wt/pyproject.toml" ]] || [[ -f "$wt/pytest.ini" ]] || [[ -f "$wt/setup.py" ]]; then
+    printf 'pytest'; return
+  fi
+  printf ''
+}
+
+# Verify that new test files written by the test-writer actually fail.
+# Args: <tw_wt> (test-writer worktree path)
+# Returns 0 (ok / skip), 1 (verification failed → block preexec_tests).
+_verify_red_tests() {
+  local tw_wt="$1"
+
+  # Skip for tdd_exempt tasks
+  local tdd_exempt
+  tdd_exempt=$(jq -r --arg t "$task_id" \
+    '.tasks[$t].tdd_exempt // false' "$state_file" 2>/dev/null || printf 'false')
+  if [[ "$tdd_exempt" == "true" ]]; then
+    log_info "red-test verification skipped (tdd_exempt) task_id=\"$task_id\""
+    return 0
+  fi
+
+  # Find new test files added by test-writer
+  local new_tests=()
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && new_tests+=("$f")
+  done < <(cd "$tw_wt" && git diff staging..HEAD --name-only --diff-filter=A 2>/dev/null \
+    | grep -E '\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$' || true)
+
+  if [[ ${#new_tests[@]} -eq 0 ]]; then
+    log_error "red-test verification: no new test files found task_id=\"$task_id\""
+    _task_write quality_gates.red_test '{"ok":false,"reason":"no_new_tests"}'
+    return 1
+  fi
+
+  # Detect runner
+  local runner
+  runner=$(_detect_red_test_runner "$tw_wt")
+  if [[ -z "$runner" ]]; then
+    log_warn "red-test verification: cannot detect test runner; skipping task_id=\"$task_id\""
+    return 0
+  fi
+
+  local pkg_mgr
+  pkg_mgr=$(detect_pkg_manager "$tw_wt")
+
+  # Build scoped command
+  local cmd=()
+  case "$runner" in
+    vitest) cmd=("$pkg_mgr" exec vitest run "${new_tests[@]}") ;;
+    jest)   cmd=("$pkg_mgr" exec jest -- "${new_tests[@]}") ;;
+    pytest) cmd=(pytest "${new_tests[@]}") ;;
+    cargo)  cmd=(cargo test) ;;
+    *)      log_warn "red-test verification: unknown runner '$runner'; skipping"; return 0 ;;
+  esac
+
+  # Run tests; expect failure (non-zero = good)
+  local rc=0
+  (cd "$tw_wt" && "${cmd[@]}" >/dev/null 2>&1) || rc=$?
+
+  if [[ $rc -eq 0 ]]; then
+    log_error "red-test verification failed: new tests passed (no-op assertions?) task_id=\"$task_id\""
+    _task_write quality_gates.red_test '{"ok":false,"reason":"tests_passed"}'
+    return 1
+  fi
+
+  log_info "red-test verification passed: ${#new_tests[@]} new test(s) are red task_id=\"$task_id\""
+  _task_write quality_gates.red_test '{"ok":true}'
+  return 0
+}
+
 # --- preexec_tests ----------------------------------------------------------
 _stage_preexec_tests() {
   local t0 t1
@@ -255,7 +342,21 @@ _stage_preexec_tests() {
     return 30
   fi
 
-  # RED_READY (or other non-blocked): spawn task-executor for GREEN phase.
+  # RED_READY (or other non-blocked): verify tests are actually red before spawning executor.
+  local tw_wt
+  tw_wt=$(_task_field worktree)
+  tw_wt=$(printf '%s' "$tw_wt" | tr -d '"')
+  [[ -z "$tw_wt" ]] && tw_wt="$worktree"
+
+  if ! _verify_red_tests "$tw_wt"; then
+    _task_write test_writer_status '"BLOCKED"'
+    pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+    t1=$(_now_ms)
+    log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"red_tests_not_verified\""
+    return 30
+  fi
+
+  # Spawn task-executor for GREEN phase.
   _ensure_prompt_dir
   local spec_path prompt_file holdout_pct task_json
   spec_path=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
