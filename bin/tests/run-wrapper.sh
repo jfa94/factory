@@ -127,6 +127,44 @@ assert_eq "postexec codex: stage_after=postreview" "postreview" \
 assert_eq "postexec codex: stage=postexec_done" "postexec_done" "$(stage_of)"
 echo claude > "$STUB_DIR/reviewer"
 
+# --- 3.a: postexec — codex + feature tier: impl + architecture reviewers ----
+new_run postexec-codex-feature
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 risk_tier '"feature"' >/dev/null
+echo codex > "$STUB_DIR/reviewer"
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec codex-feature: exit 10" "10" "$RC"
+assert_eq "postexec codex-feature: 2 agents" "2" \
+  "$(printf '%s' "$OUT" | jq -r '.agents | length')"
+assert_eq "postexec codex-feature: agents[0]=implementation-reviewer" "implementation-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+assert_eq "postexec codex-feature: agents[1]=architecture-reviewer" "architecture-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[1].subagent_type')"
+assert_eq "postexec codex-feature: stage=postexec_done" "postexec_done" "$(stage_of)"
+echo claude > "$STUB_DIR/reviewer"
+
+# --- 3.b: postexec — codex + security tier: impl + security + architecture ---
+new_run postexec-codex-security
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 risk_tier '"security"' >/dev/null
+echo codex > "$STUB_DIR/reviewer"
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec codex-security: exit 10" "10" "$RC"
+assert_eq "postexec codex-security: 3 agents" "3" \
+  "$(printf '%s' "$OUT" | jq -r '.agents | length')"
+assert_eq "postexec codex-security: agents[0]=implementation-reviewer" "implementation-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+assert_eq "postexec codex-security: agents[1]=security-reviewer" "security-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[1].subagent_type')"
+assert_eq "postexec codex-security: agents[2]=architecture-reviewer" "architecture-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[2].subagent_type')"
+assert_eq "postexec codex-security: stage=postexec_done" "postexec_done" "$(stage_of)"
+echo claude > "$STUB_DIR/reviewer"
+
 # --- 4: postexec — claude fan-out (security tier) -------------------------
 new_run postexec-claude
 run_wrapper alpha-001 --stage preflight
@@ -332,8 +370,9 @@ pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >
 wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
 echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
 pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
-# git stub: diff returns empty (no new test files)
+# git stub: staging exists; diff returns empty (no new test files)
 write_stub git '
+if [[ "$*" == *"rev-parse --verify staging"* ]] && [[ "$*" != *"origin/"* ]]; then exit 0; fi
 if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then printf ""; exit 0; fi
 exec /usr/bin/git "$@"'
 set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage preexec_tests 2>/dev/null; RC=$?; set -e
@@ -348,8 +387,9 @@ pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >
 wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
 echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
 pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
-# git stub: diff returns a test file
+# git stub: staging exists; diff returns a test file
 write_stub git '
+if [[ "$*" == *"rev-parse --verify staging"* ]] && [[ "$*" != *"origin/"* ]]; then exit 0; fi
 if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then
   printf "src/foo.test.ts\n"; exit 0
 fi
@@ -369,6 +409,7 @@ wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
 echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
 pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
 write_stub git '
+if [[ "$*" == *"rev-parse --verify staging"* ]] && [[ "$*" != *"origin/"* ]]; then exit 0; fi
 if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then
   printf "src/foo.test.ts\n"; exit 0
 fi
@@ -395,6 +436,45 @@ run_wrapper alpha-001 --stage preexec_tests
 assert_eq "preexec-red-tdd-exempt: exit 10" "10" "$RC"
 assert_eq "preexec-red-tdd-exempt: spawns executor" "task-executor" \
   "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+
+# --- 19.a: preexec_tests — red-test verify: origin/staging fallback (no local staging) ---
+new_run preexec-red-origin-staging
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+write_stub git '
+if [[ "$*" == *"rev-parse --verify staging"* ]] && [[ "$*" != *"origin/"* ]]; then exit 1; fi
+if [[ "$*" == *"rev-parse --verify origin/staging"* ]]; then exit 0; fi
+if [[ "$*" == *"diff origin/staging..HEAD --name-only --diff-filter=AM"* ]]; then printf "src/foo.test.ts\n"; exit 0; fi
+exec /usr/bin/git "$@"'
+write_stub vitest 'exit 1'
+run_wrapper alpha-001 --stage preexec_tests
+assert_eq "preexec-red-origin-staging: exit 10" "10" "$RC"
+assert_eq "preexec-red-origin-staging: spawns executor" "task-executor" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+red_test_ok=$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.red_test 2>/dev/null | jq -r '.ok | tostring')
+assert_eq "preexec-red-origin-staging: red_test.ok=true" "true" "$red_test_ok"
+rm -f "$STUB_DIR/git" "$STUB_DIR/vitest"
+
+# --- 19.b: preexec_tests — resume path: origin/staging fallback detects test commit ---
+new_run preexec-resume-origin-staging
+# No test_writer_status → triggers resume path check
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+write_stub git '
+if [[ "$*" == *"rev-parse --verify staging"* ]] && [[ "$*" != *"origin/"* ]]; then exit 1; fi
+if [[ "$*" == *"rev-parse --verify origin/staging"* ]]; then exit 0; fi
+if [[ "$*" == *"log --format=%s origin/staging..HEAD"* ]]; then printf "test(x): failing [alpha-001]\n"; exit 0; fi
+if [[ "$*" == *"diff origin/staging..HEAD --name-only --diff-filter=AM"* ]]; then printf "src/foo.test.ts\n"; exit 0; fi
+exec /usr/bin/git "$@"'
+write_stub vitest 'exit 1'
+run_wrapper alpha-001 --stage preexec_tests
+assert_eq "preexec-resume-origin-staging: exit 10" "10" "$RC"
+assert_eq "preexec-resume-origin-staging: spawns executor" "task-executor" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+rm -f "$STUB_DIR/git" "$STUB_DIR/vitest"
 
 # Restore the cat stub for scenarios 20-23 (they use JSON review files)
 write_stub pipeline-parse-review 'cat'

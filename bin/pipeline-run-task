@@ -222,6 +222,17 @@ _detect_red_test_runner() {
   printf ''
 }
 
+# Resolve a usable base ref in <git_dir>: prefers local staging, falls back to origin/staging.
+# Prints the ref name or nothing if neither exists.
+_resolve_base_ref() {
+  local git_dir="$1"
+  if git -C "$git_dir" rev-parse --verify staging >/dev/null 2>&1; then
+    printf 'staging'
+  elif git -C "$git_dir" rev-parse --verify origin/staging >/dev/null 2>&1; then
+    printf 'origin/staging'
+  fi
+}
+
 # Verify that new test files written by the test-writer actually fail.
 # Args: <tw_wt> (test-writer worktree path)
 # Returns 0 (ok / skip), 1 (verification failed → block preexec_tests).
@@ -238,10 +249,16 @@ _verify_red_tests() {
   fi
 
   # Find new test files added by test-writer (expanded pattern covers major ecosystems)
-  local new_tests=()
+  local base_ref new_tests=()
+  base_ref=$(_resolve_base_ref "$tw_wt")
+  if [[ -z "$base_ref" ]]; then
+    log_error "red-test verification: base ref not found (staging and origin/staging both missing) task_id=\"$task_id\""
+    _task_write quality_gates.red_test '{"ok":false,"reason":"missing_base_ref"}'
+    return 1
+  fi
   while IFS= read -r f; do
     [[ -n "$f" ]] && new_tests+=("$f")
-  done < <(cd "$tw_wt" && git diff staging..HEAD --name-only --diff-filter=AM 2>/dev/null \
+  done < <(cd "$tw_wt" && git diff "$base_ref..HEAD" --name-only --diff-filter=AM \
     | grep -E '\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$|_test\.(go|py|rb)$|Test\.(php|java)$|_spec\.rb$' || true)
 
   if [[ ${#new_tests[@]} -eq 0 ]]; then
@@ -346,10 +363,14 @@ _stage_preexec_tests() {
     tw_wt=$(_task_field worktree)
     tw_wt=$(printf '%s' "$tw_wt" | tr -d '"')
     [[ -z "$tw_wt" ]] && tw_wt="$worktree"
-    if [[ -n "$tw_wt" && -d "$tw_wt" ]] \
-       && ( cd "$tw_wt" && git log --format=%s staging..HEAD 2>/dev/null \
-              | grep -qE "^test\(.*\):.*\[${task_id}\]" 2>/dev/null ); then
-      tw_status="RED_READY"
+    if [[ -n "$tw_wt" && -d "$tw_wt" ]]; then
+      local resume_base
+      resume_base=$(_resolve_base_ref "$tw_wt")
+      if [[ -n "$resume_base" ]] \
+         && ( cd "$tw_wt" && git log --format=%s "$resume_base..HEAD" 2>/dev/null \
+                | grep -qE "^test\(.*\):.*\[${task_id}\]" 2>/dev/null ); then
+        tw_status="RED_READY"
+      fi
     fi
   fi
 
@@ -630,6 +651,15 @@ _emit_postexec_manifest() {
     local codex_agents_json
     codex_agents_json=$(jq -cn --arg pf "$pf" \
       '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:1, prompt_file:$pf}]')
+    case "$tier" in
+      feature)
+        codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
+          '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+      security)
+        codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
+          '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf},
+                {subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+    esac
     _emit_manifest postreview "$codex_agents_json"
     return 10
   fi

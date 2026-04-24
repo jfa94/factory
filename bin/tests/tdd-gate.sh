@@ -121,5 +121,42 @@ case6() {
   pass "case6: missing base ref errors with JSON"
 }
 
-case1; case2; case3; case4; case5; case6
+# Test 7: no --base flag; only origin/staging exists → gate uses it and passes.
+case7() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  ( cd "$repo"
+    git update-ref refs/remotes/origin/staging "$(git rev-parse staging)"
+    git branch -d staging
+  )
+  _commit "$repo" "test(x): failing [task-007]" "tests/x.test.ts"
+  _commit "$repo" "feat(x): impl [task-007]"    "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-007 )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case7 expected exit 0 (origin/staging fallback), got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case7 expected ok=true; got $out"
+  pass "case7: origin/staging fallback — no local staging"
+}
+
+# Test 8: explicit --base staging with no local staging → base_ref_not_found (backwards compat).
+case8() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  ( cd "$repo"
+    git update-ref refs/remotes/origin/staging "$(git rev-parse staging)"
+    git branch -d staging
+  )
+  _commit "$repo" "feat(x): impl [task-008]" "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-008 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 1 ]]; then fail "case8 expected exit 1 for explicit --base staging, got $rc"; fi
+  printf '%s' "$out" | jq -e '.error == "base_ref_not_found"' >/dev/null \
+    || fail "case8 expected error=base_ref_not_found; got $out"
+  pass "case8: explicit --base staging still errors when local staging missing"
+}
+
+case1; case2; case3; case4; case5; case6; case7; case8
 printf 'all tdd-gate tests passed\n'

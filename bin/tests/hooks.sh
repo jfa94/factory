@@ -46,6 +46,7 @@ assert_eq "has Stop" "1" "$(jq '.hooks.Stop | length' "$hooks_json")"
 assert_eq "has SubagentStop" "1" "$(jq '.hooks.SubagentStop | length' "$hooks_json")"
 assert_eq "PreToolUse matches Bash" "^Bash\$" "$(jq -r '.hooks.PreToolUse[0].matcher' "$hooks_json")"
 assert_eq "PostToolUse matches multi" "^(Bash|Write|Edit)$" "$(jq -r '.hooks.PostToolUse[0].matcher' "$hooks_json")"
+assert_eq "hooks.json Bash fires pipeline-guards" "1" "$(jq '[.hooks.PreToolUse[] | select(.matcher == "^Bash$") | .hooks[] | select(.command | test("pretooluse-pipeline-guards"))] | length' "$hooks_json")"
 
 # ============================================================
 echo ""
