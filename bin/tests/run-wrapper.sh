@@ -428,29 +428,71 @@ assert_eq "postexec-reviewer-only: flag cleared" "null" \
   "$(field_of postexec_reviewer_only | tr -d '\"')"
 
 # --- 22: postreview — still-present blocker in prior_blocker_map → re-fix ----
+# Drop parse-review stub: the still-present check reads raw file directly (not
+# via pipeline-parse-review), but the verdict loop uses the real parser too.
+rm -f "$STUB_DIR/pipeline-parse-review"
 new_run postreview-still-present
 pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
 pipeline-state task-write "$RUN_ID" alpha-001 postreview_prior_blockers \
   '[{"id":1,"file":"src/a.ts","line":10,"severity":"major","description":"Missing null check"}]' >/dev/null
-rf="$ROOT_TMP/$current-review.json"
-echo '{"verdict":"APPROVE","findings":[],"prior_blocker_map":[{"id":1,"status":"still-present","notes":"Still crashes on null"}],"blockers":[],"concerns":[]}' > "$rf"
+rf="$ROOT_TMP/$current-review.md"
+cat > "$rf" <<'MDEOF'
+## Findings
+
+No new findings.
+
+## Summary
+
+Fix applied.
+
+## Verdict
+
+VERDICT: APPROVE
+CONFIDENCE: HIGH
+BLOCKERS: 0
+ROUND: 2
+
+```json
+{"verdict":"APPROVE","prior_blocker_map":[{"id":1,"status":"still-present","notes":"Still crashes on null"}]}
+```
+MDEOF
 run_wrapper alpha-001 --stage postreview --review-file "$rf"
 assert_eq "postreview-still-present: exit 10" "10" "$RC"
 assert_eq "postreview-still-present: stage_after=postexec" "postexec" \
   "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+write_stub pipeline-parse-review 'cat'
 
 # --- 23: postreview — all prior blockers resolved → success, blockers cleared -
+rm -f "$STUB_DIR/pipeline-parse-review"
 new_run postreview-resolved
 pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
 pipeline-state task-write "$RUN_ID" alpha-001 postreview_prior_blockers \
   '[{"id":1,"file":"src/a.ts","line":10,"severity":"major","description":"Missing null check"}]' >/dev/null
-rf="$ROOT_TMP/$current-review.json"
-echo '{"verdict":"APPROVE","findings":[],"prior_blocker_map":[{"id":1,"status":"resolved","notes":"Fixed in latest commit"}],"blockers":[],"concerns":[]}' > "$rf"
+rf="$ROOT_TMP/$current-review.md"
+cat > "$rf" <<'MDEOF'
+## Findings
+
+## Summary
+
+All issues resolved.
+
+## Verdict
+
+VERDICT: APPROVE
+CONFIDENCE: HIGH
+BLOCKERS: 0
+ROUND: 2
+
+```json
+{"verdict":"APPROVE","prior_blocker_map":[{"id":1,"status":"resolved","notes":"Fixed"}]}
+```
+MDEOF
 run_wrapper alpha-001 --stage postreview --review-file "$rf"
 assert_eq "postreview-resolved: exit 0" "0" "$RC"
 assert_eq "postreview-resolved: stage=postreview_done" "postreview_done" "$(stage_of)"
 pb_after=$(pipeline-state task-read "$RUN_ID" alpha-001 postreview_prior_blockers 2>/dev/null | jq -r '.')
 assert_eq "postreview-resolved: prior_blockers cleared" "null" "$pb_after"
+write_stub pipeline-parse-review 'cat'
 
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

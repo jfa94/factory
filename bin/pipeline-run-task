@@ -616,10 +616,15 @@ _stage_postreview() {
   if (( pb_active_len > 0 )); then
     for f in "${files[@]}"; do
       [[ ! -f "$f" ]] && continue
-      local fverdict2
-      fverdict2=$(pipeline-parse-review < "$f" 2>/dev/null) || continue
-      local still_count
-      still_count=$(printf '%s' "$fverdict2" | jq '[.prior_blocker_map // [] | .[] | select(.status == "still-present")] | length' 2>/dev/null || printf '0')
+      local raw_json still_count
+      if [[ "$f" == *.json ]]; then
+        raw_json=$(cat "$f" 2>/dev/null || printf '{}')
+      else
+        # Extract first ```json...``` block from markdown
+        raw_json=$(awk '/^```json/{p=1;next}/^```/{if(p){exit}}p{print}' "$f" 2>/dev/null || printf '{}')
+      fi
+      still_count=$(printf '%s' "$raw_json" | \
+        jq '[.prior_blocker_map // [] | .[] | select(.status == "still-present")] | length' 2>/dev/null || printf '0')
       if (( still_count > 0 )); then
         log_warn "postreview: $still_count prior blocker(s) still-present in $f"
         any_changes=true
