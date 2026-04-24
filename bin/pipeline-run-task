@@ -220,7 +220,7 @@ _stage_preexec_tests() {
     [[ -z "$tw_wt" ]] && tw_wt="$worktree"
     if [[ -n "$tw_wt" && -d "$tw_wt" ]] \
        && ( cd "$tw_wt" && git log --format=%s staging..HEAD 2>/dev/null \
-              | grep -qE "^test\(.*\)\[${task_id}\]" 2>/dev/null ); then
+              | grep -qE "^test\(.*\):.*\[${task_id}\]" 2>/dev/null ); then
       tw_status="RED_READY"
     fi
   fi
