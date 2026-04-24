@@ -85,6 +85,57 @@ assert_eq "I-06 resets stage" "postreview_done" "$stage"
 status=$(pipeline-state read R1 '.tasks.T1.status' | tr -d '"')
 assert_eq "I-06 sets ci_fixing" "ci_fixing" "$status"
 
+echo "=== investigation plan: reset_pending ==="
+seed_run
+pipeline-state task-status R1 T1 failed >/dev/null 2>&1 || pipeline-state task-write R1 T1 status '"failed"' >/dev/null
+plans="$CLAUDE_PLUGIN_DATA/plans.json"
+cat > "$plans" <<'JSON'
+{
+  "run_id": "R1",
+  "plans": [
+    {"task_id": "T1", "decision": "reset_pending", "reason": "transient ci flake",
+     "evidence": [], "state_updates": {}, "confidence": "high"}
+  ]
+}
+JSON
+pipeline-rescue-apply --plans="$plans" >/dev/null
+status=$(pipeline-state read R1 '.tasks.T1.status' | tr -d '"')
+assert_eq "reset_pending sets status" "pending" "$status"
+
+echo "=== investigation plan: mark_failed with reason ==="
+seed_run
+plans2="$CLAUDE_PLUGIN_DATA/plans2.json"
+cat > "$plans2" <<'JSON'
+{
+  "run_id": "R1",
+  "plans": [
+    {"task_id": "T1", "decision": "mark_failed", "reason": "schema conflict unresolvable",
+     "evidence": ["spec:L42"], "state_updates": {".tasks.T1.failure_reason": "schema conflict"},
+     "confidence": "high"}
+  ]
+}
+JSON
+pipeline-rescue-apply --plans="$plans2" >/dev/null
+status=$(pipeline-state read R1 '.tasks.T1.status' | tr -d '"')
+assert_eq "mark_failed sets status" "failed" "$status"
+reason=$(pipeline-state read R1 '.tasks.T1.failure_reason' | tr -d '"')
+assert_eq "mark_failed writes reason" "schema conflict" "$reason"
+
+echo "=== investigation plan: malformed decision → no_action ==="
+seed_run
+plans3="$CLAUDE_PLUGIN_DATA/plans3.json"
+cat > "$plans3" <<'JSON'
+{
+  "run_id": "R1",
+  "plans": [
+    {"task_id": "T1", "decision": "explode", "reason": "x", "evidence": [], "state_updates": {}, "confidence": "low"}
+  ]
+}
+JSON
+pipeline-rescue-apply --plans="$plans3" >/dev/null
+status=$(pipeline-state read R1 '.tasks.T1.status' | tr -d '"')
+assert_eq "malformed decision leaves status" "executing" "$status"
+
 echo
 echo "Passed: $pass | Failed: $fail"
 [[ $fail -eq 0 ]]

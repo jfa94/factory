@@ -208,6 +208,81 @@ _apply_I_15() {
   done
 }
 
+_apply_plan_reset_pending() {
+  local run_id="$1" task_id="$2"
+  pipeline-state task-status "$run_id" "$task_id" pending >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" stage 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" worktree 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" pr_url 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" pr_number 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" ci_status 'null' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null
+}
+
+_apply_plan_mark_failed() {
+  local run_id="$1" task_id="$2" reason="$3"
+  pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" failure_reason "$(jq -n --arg r "$reason" '$r')" >/dev/null
+}
+
+_apply_plan_delete_branch() {
+  local run_id="$1" task_id="$2" branch="$3"
+  [[ -z "$branch" ]] && return 0
+  git branch -D "$branch" 2>/dev/null || true
+  git push origin --delete "$branch" 2>/dev/null || true
+}
+
+_apply_plan_reset_postreview() {
+  local run_id="$1" task_id="$2"
+  pipeline-state task-write "$run_id" "$task_id" stage '"postexec_done"' >/dev/null
+  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null
+}
+
+_apply_plan_state_updates() {
+  local run_id="$1" updates_json="$2"
+  [[ "$updates_json" == "null" || "$updates_json" == "{}" || -z "$updates_json" ]] && return 0
+  while IFS=$'\t' read -r key value; do
+    [[ -z "$key" ]] && continue
+    pipeline-state write "$run_id" "$key" "$value" >/dev/null
+  done < <(jq -r 'to_entries[] | [.key, (.value | @json)] | @tsv' <<<"$updates_json")
+}
+
+_dispatch_plans() {
+  local plans_file="$1"
+  local run_id
+  run_id=$(jq -r '.run_id' "$plans_file")
+  while IFS=$'\t' read -r task_id decision reason updates branch; do
+    [[ -z "$task_id" ]] && continue
+    case "$decision" in
+      reset_pending)
+        _apply_plan_reset_pending "$run_id" "$task_id"
+        rescue_audit "$run_id" investigation "" "$task_id" reset_pending ok "$reason"
+        ;;
+      mark_failed)
+        _apply_plan_mark_failed "$run_id" "$task_id" "$reason"
+        rescue_audit "$run_id" investigation "" "$task_id" mark_failed ok "$reason"
+        ;;
+      delete_branch)
+        _apply_plan_delete_branch "$run_id" "$task_id" "$branch"
+        rescue_audit "$run_id" investigation "" "$task_id" delete_branch ok "$branch"
+        ;;
+      reset_postreview)
+        _apply_plan_reset_postreview "$run_id" "$task_id"
+        rescue_audit "$run_id" investigation "" "$task_id" reset_postreview ok "$reason"
+        ;;
+      no_action)
+        rescue_audit "$run_id" investigation "" "$task_id" no_action ok "$reason"
+        ;;
+      *)
+        rescue_audit "$run_id" investigation "" "$task_id" invalid_decision error "decision=$decision"
+        ;;
+    esac
+    _apply_plan_state_updates "$run_id" "$updates"
+    pipeline-state task-write "$run_id" "$task_id" rescue_last_decision "$(jq -n --arg d "$decision" '$d')" >/dev/null
+    pipeline-state task-write "$run_id" "$task_id" rescue_last_reason "$(jq -n --arg r "$reason" '$r')" >/dev/null
+  done < <(jq -r '.plans[] | [.task_id, .decision, .reason, (.state_updates // {} | @json), (.branch // "")] | @tsv' "$plans_file")
+}
+
 _dispatch_risky() {
   local run_id="$1" plan_file="$2"
   while IFS=$'\t' read -r id task_id; do
@@ -237,8 +312,8 @@ _dispatch_safe() {
   done < <(jq -r '.mechanical_issues[] | select(.tier == 1) | [.id, (.task_id // ""), (.description // "")] | @tsv' "$plan_file")
 }
 
-if [[ -n "$plans" && -z "$plan" ]]; then
-  log_warn "--plans mode not yet implemented"
+if [[ -n "$plans" ]]; then
+  _dispatch_plans "$plans"
   exit 0
 fi
 
