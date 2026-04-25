@@ -1,4 +1,4 @@
-<!-- last-documented: 8a2499219bf3497ce06531c4ed0fcc265236e262 -->
+<!-- last-documented: 40e846704b82505d33f35053e56147fa85d1ab2c -->
 
 # Dark Factory Plugin
 
@@ -32,6 +32,7 @@ The plugin automates the end-to-end software development workflow: reading a req
 ### How-To Guides
 
 - [Running the Pipeline](./guides/running-pipeline.md) - Operating modes and invocation patterns
+- [Debugging Code](./guides/debug-command.md) - Using `/factory:debug` for reviewer-driven fix loops
 - [Configuring Settings](./guides/configuration.md) - Adjusting quality gates, review rounds, and autonomy levels
 
 ### Reference

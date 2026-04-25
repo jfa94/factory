@@ -60,6 +60,28 @@ Entry point for all pipeline invocations.
 4. Initialize run state via `pipeline-init`
 5. Create a dedicated orchestrator worktree at `.claude/worktrees/orchestrator-<run_id>/` and run the full orchestration inline in the invoking session — spec generation, task execution, adversarial review, PR creation, and cleanup. The command itself is the control loop; sub-agents (`spec-generator`, `task-executor`, reviewers, `scribe`) are spawned via `Agent()` with `isolation: worktree` from the main session.
 
+### `/factory:debug`
+
+Reviewer-implementer loop for iterative code quality fixes.
+
+**Arguments:**
+
+| Argument        | Required | Default  | Description                                              |
+| --------------- | -------- | -------- | -------------------------------------------------------- |
+| `--base`        | No       | `HEAD~1` | Git ref to diff against                                  |
+| `--full`        | No       | -        | Review entire codebase (empty-tree SHA as base)          |
+| `--limit`       | No       | 0        | Soft time limit in seconds (0 = unlimited)               |
+| `--fixSeverity` | No       | `medium` | Minimum severity to address: critical, high, medium, all |
+
+**Behavior:**
+
+1. Detect available reviewer (Codex or Claude Code fallback)
+2. Review diff between base and HEAD
+3. Filter findings by severity threshold
+4. If blocking findings exist, spawn `task-executor` to fix them
+5. Repeat until clean, escalated, or time limit reached
+6. Write audit trail on escalation
+
 ### `/factory:configure`
 
 Conversational settings editor.
@@ -266,6 +288,17 @@ Fresh-context code review with semi-formal reasoning and structured findings.
 ---
 
 ## Skills
+
+### debug
+
+Drives the `/factory:debug` reviewer-implementer loop. Handles reviewer detection, round iteration, severity filtering, and escalation.
+
+**Key behaviors:**
+
+- Detects reviewer once (Codex or Claude Code) and uses it for all rounds
+- Persists review artifacts and executor logs per round
+- Enforces Iron Law: every round commits a review artifact before spawning executor
+- Writes escalation audit trail when executor cannot resolve findings
 
 ### review-protocol
 

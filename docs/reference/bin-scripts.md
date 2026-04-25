@@ -511,7 +511,7 @@ pipeline-detect-reviewer [--base <ref>]
 ```json
 {
   "reviewer": "claude-code",
-  "agent": "implementation-reviewer"
+  "agent": "quality-reviewer"
 }
 ```
 
@@ -603,7 +603,7 @@ Extract structured verdict from reviewer output.
 **Usage:**
 
 ```bash
-echo "<reviewer output>" | pipeline-parse-review
+echo "<reviewer output>" | pipeline-parse-review [--reviewer <codex|claude-code>] [--base <ref>]
 ```
 
 **Output:**
@@ -625,6 +625,134 @@ echo "<reviewer output>" | pipeline-parse-review
   "summary": "..."
 }
 ```
+
+---
+
+## Debug Loop Scripts
+
+### pipeline-debug-review
+
+Codex branch for `/factory:debug`. Invokes `pipeline-codex-review` and pipes output through `pipeline-debug-normalize`.
+
+**Usage:**
+
+```bash
+pipeline-debug-review --base <ref> --severity <critical|high|medium|all> \
+                      --out-dir <dir> [--round <N>]
+```
+
+**Flags:**
+
+| Flag         | Required | Default  | Description                 |
+| ------------ | -------- | -------- | --------------------------- |
+| `--base`     | Yes      | -        | Git ref for diff base       |
+| `--severity` | No       | `medium` | Severity threshold          |
+| `--out-dir`  | Yes      | -        | Directory for review output |
+| `--round`    | No       | 1        | Round number                |
+
+**Output (stdout, single line JSON):**
+
+```json
+{
+  "blocking_count": 2,
+  "below_threshold_count": 1,
+  "verdict": "REQUEST_CHANGES",
+  "review_file": "/path/to/round-1.review.json"
+}
+```
+
+**Exit codes:** 0=success, 1=reviewer or IO failure
+
+**Note:** This script is the Codex branch only. If the detected reviewer is `claude-code`, the skill routes through `quality-reviewer` agent + `pipeline-parse-review` + `pipeline-debug-normalize` instead.
+
+---
+
+### pipeline-debug-normalize
+
+Shared severity normalization and threshold counting for `/factory:debug`. Used by both Codex and Claude-fallback branches.
+
+**Usage:**
+
+```bash
+cat review.json | pipeline-debug-normalize --severity <level> --out-dir <dir> [--round <N>]
+```
+
+**Flags:**
+
+| Flag         | Required | Default  | Description                 |
+| ------------ | -------- | -------- | --------------------------- |
+| `--severity` | No       | `medium` | Severity threshold          |
+| `--out-dir`  | Yes      | -        | Directory for review output |
+| `--round`    | No       | 1        | Round number                |
+
+**Severity normalization:**
+
+| Input       | Normalized |
+| ----------- | ---------- |
+| `important` | `high`     |
+| `minor`     | `low`      |
+| (missing)   | `medium`   |
+
+**Threshold sets:**
+
+| Level      | Includes                    |
+| ---------- | --------------------------- |
+| `critical` | critical                    |
+| `high`     | critical, high              |
+| `medium`   | critical, high, medium      |
+| `all`      | critical, high, medium, low |
+
+**Output (stdout, single line JSON):**
+
+```json
+{
+  "blocking_count": 2,
+  "below_threshold_count": 1,
+  "verdict": "REQUEST_CHANGES",
+  "review_file": "/path/to/round-1.review.json"
+}
+```
+
+**Exit codes:** 0=success, 1=IO or parse failure
+
+---
+
+### pipeline-debug-escalate
+
+Writes the escalation audit trail for `/factory:debug` when the executor returns `STATUS: BLOCKED -- escalate: <reason>`.
+
+**Usage:**
+
+```bash
+pipeline-debug-escalate --run-id <id> --reason <text> --base <ref> \
+                        --severity <s> --findings <path> --executor-msg <path>
+```
+
+**Flags:**
+
+| Flag             | Required | Description                      |
+| ---------------- | -------- | -------------------------------- |
+| `--run-id`       | Yes      | Debug run identifier             |
+| `--reason`       | Yes      | Escalation reason from executor  |
+| `--base`         | Yes      | Git ref used as diff base        |
+| `--severity`     | Yes      | Severity threshold used          |
+| `--findings`     | Yes      | Path to review findings JSON     |
+| `--executor-msg` | Yes      | Path to executor's final message |
+
+**Output (stdout, exact):**
+
+```
+ESCALATED path=/absolute/path/to/escalation.md
+```
+
+**Behavior:**
+
+1. Validates all required flags are present
+2. Validates `--findings` and `--executor-msg` files are readable (fail-closed)
+3. Writes `escalation.md` with run metadata, findings JSON, and executor message
+4. Prints the `ESCALATED path=<path>` marker
+
+**Exit codes:** 0=success, 1=IO failure or missing required inputs
 
 ---
 
