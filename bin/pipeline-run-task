@@ -892,6 +892,7 @@ _stage_postreview() {
         printf '\nPrior blockers to address (numbered for tracking):\n'
         printf '%s\n' "$prior_blockers_json" | jq -r '.[] | "  [\(.id)] \(.severity // "?"): \(.description // "(no description)") [\(.file // "?"):\(.line // "?")]"' 2>/dev/null || true
       fi
+      printf '\nIron Law reminder: verify each finding (technically + against task intent) before planning a fix; address root causes, not symptoms; if a root cause is a fundamental design/architecture flaw outside scope, end with STATUS: BLOCKED — escalate: <reason>.\n'
       printf 'End with STATUS: DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT.\n'
     } > "$pf"
     local agents_json
