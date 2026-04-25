@@ -23,7 +23,7 @@ Review the diff in the worktree for task `<task-id>`. Return a strict verdict th
    - Re-read the relevant code to confirm the issue actually exists in the diff (not just in surrounding context or your mental model).
    - Ask: would fixing this finding break any existing test or regress any currently-passing behaviour? If yes, report `NEEDS_DISCUSSION`, not `REQUEST_CHANGES`.
    - Ask: is this finding already handled by the project's formatter, linter, or framework? If yes, drop it.
-   - If you cannot point to a specific line in the diff that demonstrates the problem, drop the finding.
+   - **Quote a real diff line.** Every finding must include a `Verbatim:` line — an exact 10+-character substring copied verbatim from `git diff` output. The harness drops findings whose verbatim text isn't in the diff, so fabricating one is counterproductive. If you cannot quote a real line, drop the finding.
 7. Form one verdict with only confirmed, regression-safe blockers and concerns.
 
 ## Output Format
@@ -81,6 +81,7 @@ STATUS: DONE
 - Do NOT request changes for style nits that the project's formatter handles.
 - Do NOT collapse genuine security concerns into "concerns" — those are blockers.
 - `blockers` must be actionable in one sentence. No multi-paragraph blockers.
+- Every finding must carry a `Verbatim:` field with a real diff line. Findings without verifiable diff text are dropped by the harness — there is no benefit to fabricating one.
 
 ## Holdout reviews
 

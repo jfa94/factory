@@ -510,3 +510,44 @@ compute_daily_threshold() {
   if (( idx > 6 )); then idx=6; fi
   printf '%s' "${thresholds[$idx]}"
 }
+
+# Drop reviewer findings whose verbatim_line is not a substring of the diff.
+# Stdin: normalized review JSON (with .findings[].verbatim_line set).
+# Args:  $1 = path to a file containing the diff text to grep against.
+# Stdout: filtered review JSON. Recomputes blocking_count / non_blocking_count /
+# declared_blockers; if all blockers were dropped, downgrades verdict to APPROVE
+# and appends a marker to .summary so the orchestrator can audit.
+#
+# Findings missing a verbatim_line, or with one shorter than 10 chars, are
+# treated as unverifiable and dropped.
+validate_findings() {
+  local diff_file="$1" json n i q kept dropped
+  json=$(cat)
+  if [[ ! -s "$diff_file" ]]; then
+    printf '%s' "$json"
+    return 0
+  fi
+  n=$(printf '%s' "$json" | jq '.findings | length')
+  kept='[]'
+  dropped=0
+  for ((i=0; i<n; i++)); do
+    q=$(printf '%s' "$json" | jq -r ".findings[$i].verbatim_line // \"\"")
+    if [[ ${#q} -ge 10 ]] && grep -qF -- "$q" "$diff_file"; then
+      kept=$(printf '%s' "$json" | jq --argjson k "$kept" --argjson i "$i" '$k + [.findings[$i]]')
+    else
+      dropped=$((dropped + 1))
+    fi
+  done
+  printf '%s' "$json" | jq --argjson k "$kept" --argjson d "$dropped" '
+    .findings = $k
+    | .blocking_count = ([.findings[] | select(.blocking == true)] | length)
+    | .non_blocking_count = ((.findings | length) - .blocking_count)
+    | .declared_blockers = .blocking_count
+    | if $d > 0 then
+        .summary = ((.summary // "") + " [validator: dropped " + ($d|tostring) + " unverifiable finding(s)]")
+      else . end
+    | if $d > 0 and .blocking_count == 0 and .verdict == "REQUEST_CHANGES" then
+        .verdict = "APPROVE"
+      else . end
+  '
+}

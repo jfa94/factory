@@ -8,9 +8,11 @@ source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
 reviewer="claude-code"
+base_ref=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --reviewer) reviewer="$2"; shift 2 ;;
+    --base)     base_ref="$2"; shift 2 ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -203,6 +205,7 @@ current_severity=""
 current_category=""
 current_description=""
 current_suggestion=""
+current_verbatim=""
 
 _flush_finding() {
   [[ -z "$current_title" ]] && return
@@ -215,8 +218,9 @@ _flush_finding() {
     --arg category "$current_category" \
     --arg description "$current_description" \
     --arg suggestion "$current_suggestion" \
+    --arg verbatim_line "$current_verbatim" \
     --argjson blocking "$is_blocking" \
-    '. + [{title: $title, file: $file, severity: $severity, category: $category, description: $description, suggestion: $suggestion, blocking: $blocking}]')
+    '. + [{title: $title, file: $file, severity: $severity, category: $category, description: $description, suggestion: $suggestion, verbatim_line: $verbatim_line, blocking: $blocking}]')
   if [[ "$current_type" == "BLOCKING" ]]; then
     blocking_count=$((blocking_count + 1))
   else
@@ -228,6 +232,7 @@ _flush_finding() {
   current_category=""
   current_description=""
   current_suggestion=""
+  current_verbatim=""
   current_type=""
 }
 
@@ -263,6 +268,7 @@ while IFS= read -r line; do
       "- **Category:** "*) current_category="${line#"- **Category:** "}" ;;
       "- **Description:** "*) current_description="${line#"- **Description:** "}" ;;
       "- **Suggestion:** "*) current_suggestion="${line#"- **Suggestion:** "}" ;;
+      "- **Verbatim:** "*) current_verbatim="${line#"- **Verbatim:** "}" ;;
     esac
   fi
 done < "$tmpfile"
@@ -312,7 +318,7 @@ done < "$tmpfile"
 summary=$(awk '/^## Summary$/{found=1; next} found{print}' "$tmpfile" | head -5 | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
 
 # Build output JSON
-jq -n \
+out_json=$(jq -n \
   --arg verdict "$verdict" \
   --argjson round "$round" \
   --arg confidence "$confidence" \
@@ -340,4 +346,20 @@ jq -n \
     holdout_failed: $holdout_failed,
     summary: $summary,
     reviewer: $reviewer
-  }'
+  }')
+
+# Validate findings against the diff if a base ref was provided. Findings whose
+# verbatim_line does not appear in `git diff <base> HEAD` are dropped; if all
+# blockers were dropped, the verdict is downgraded to APPROVE (see
+# validate_findings in pipeline-lib.sh).
+if [[ -n "$base_ref" ]]; then
+  diff_file=$(mktemp)
+  trap 'rm -f "$tmpfile" "$diff_file"' EXIT
+  if git diff --unified=5 "$base_ref" HEAD > "$diff_file" 2>/dev/null && [[ -s "$diff_file" ]]; then
+    printf '%s' "$out_json" | validate_findings "$diff_file"
+  else
+    printf '%s' "$out_json"
+  fi
+else
+  printf '%s' "$out_json"
+fi
