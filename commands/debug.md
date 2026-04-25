@@ -1,5 +1,6 @@
 ---
 description: "Run a reviewer ⇄ implementer loop against the latest commit (or a chosen scope) until the reviewer is satisfied"
+argument-hint: "[--base <hash>|--full] [--limit <secs>] [--fixSeverity critical|high|medium|all]"
 arguments:
   - name: "--base"
     description: "Diff base (commit hash). Mutually exclusive with --full. Default: HEAD~1."

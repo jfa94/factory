@@ -1,5 +1,6 @@
 ---
 description: "Configure dark-factory pipeline settings"
+argument-hint: "[setting]"
 arguments:
   - name: setting
     description: "Setting to configure (e.g., humanReviewLevel, review.routineRounds)"

@@ -1,5 +1,6 @@
 ---
 description: "Run the dark-factory autonomous coding pipeline"
+argument-hint: "[discover|prd|task|resume] [--issue <N>] [--task-id <T>] [--spec-dir <D>] [--strict] [--dry-run]"
 arguments:
   - name: mode
     description: "Operating mode: discover, prd, task, or resume"

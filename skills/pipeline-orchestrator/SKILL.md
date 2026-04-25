@@ -1,6 +1,6 @@
 ---
 name: pipeline-orchestrator
-description: Drive the dark-factory autonomous coding pipeline end-to-end. Orchestrator walks every task through preflight → postexec → postreview → ship via the `pipeline-run-task` wrapper; forgetting a gate is structurally impossible because the wrapper owns quota, quality, coverage, holdout, review fan-out, PR creation, CI wait, and finalize.
+description: (internal) Drive the dark-factory autonomous coding pipeline end-to-end. Orchestrator walks every task through preflight → postexec → postreview → ship via the `pipeline-run-task` wrapper; forgetting a gate is structurally impossible because the wrapper owns quota, quality, coverage, holdout, review fan-out, PR creation, CI wait, and finalize.
 auto-invoke: false
 ---
 

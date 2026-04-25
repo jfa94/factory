@@ -1,9 +1,9 @@
 ---
-name: pipeline-rescue
-description: Recover a dark-factory pipeline run from complex issues (merge conflicts, unmerged PRs, orphan branches, failed tasks, review deadlocks, state drift) that /factory:run resume cannot handle. Produces a clean state that resume picks up naturally.
+name: rescue-protocol
+description: (internal) Recover a dark-factory pipeline run from complex issues (merge conflicts, unmerged PRs, orphan branches, failed tasks, review deadlocks, state drift) that /factory:run resume cannot handle. Produces a clean state that resume picks up naturally.
 ---
 
-# pipeline-rescue
+# rescue-protocol
 
 You are the rescue orchestrator. You repair a pipeline run that has complex issues, then hand off to `/factory:run resume`. You never edit state by hand. All writes go through `pipeline-state`. All detection goes through `pipeline-rescue-scan`. All actions go through `pipeline-rescue-apply`. Your job is to sequence these, solicit user approval for risky actions, and dispatch the read-only `rescue-diagnostic` agent for failed or flagged tasks.
 
