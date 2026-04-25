@@ -65,6 +65,55 @@ out_dir="$ROOT_TMP/out-medium"
 [[ -f "$out_dir/round-1.review.json" ]] && pass "round file written" \
   || fail "round file written (missing $out_dir/round-1.review.json)"
 
+# --- pipeline-debug-escalate ---------------------------------------------
+
+current="escalate"
+
+esc_run="esc-001"
+esc_dir="$ROOT_TMP/data/debug/$esc_run"
+mkdir -p "$esc_dir"
+export CLAUDE_PLUGIN_DATA="$ROOT_TMP/data"
+
+cat > "$esc_dir/findings.json" <<'EOF'
+[{"file":"x.ts","line":10,"severity":"critical","description":"d","verbatim_line":"let x"}]
+EOF
+
+cat > "$esc_dir/executor-msg.txt" <<'EOF'
+The ConnectionPool singleton can't accept a configurable timeout without redesigning the pool ownership model.
+STATUS: BLOCKED — escalate: ConnectionPool singleton needs ownership rework
+EOF
+
+stdout=$(pipeline-debug-escalate \
+  --run-id "$esc_run" \
+  --reason "ConnectionPool singleton needs ownership rework" \
+  --base "HEAD~1" \
+  --severity "medium" \
+  --findings "$esc_dir/findings.json" \
+  --executor-msg "$esc_dir/executor-msg.txt")
+
+# Stdout exact format
+case "$stdout" in
+  "ESCALATED path=$esc_dir/escalation.md") pass "stdout format" ;;
+  *) fail "stdout format (got: $stdout)" ;;
+esac
+
+# Escalation file exists and includes key fields
+[[ -f "$esc_dir/escalation.md" ]] && pass "escalation file written" \
+  || fail "escalation file written (missing)"
+
+grep -q "ConnectionPool singleton needs ownership rework" "$esc_dir/escalation.md" \
+  && pass "escalation file contains reason" \
+  || fail "escalation file contains reason"
+
+grep -q '"severity": "critical"' "$esc_dir/escalation.md" \
+  || grep -q '"severity":"critical"' "$esc_dir/escalation.md" \
+  && pass "escalation file embeds findings JSON" \
+  || fail "escalation file embeds findings JSON"
+
+grep -q "STATUS: BLOCKED — escalate" "$esc_dir/escalation.md" \
+  && pass "escalation file embeds executor message" \
+  || fail "escalation file embeds executor message"
+
 # --- summary --------------------------------------------------------------
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [[ $failed -eq 0 ]]
