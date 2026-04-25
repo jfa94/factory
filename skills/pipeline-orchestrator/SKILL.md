@@ -115,7 +115,11 @@ status=$(printf '%s' "$result" | jq -r '.status')
 settings_path=$(printf '%s' "$result" | jq -r '.settings_path')
 ```
 
-If `status != ok && status != bypass`, stop and ask the user to relaunch with `claude --settings $settings_path` (or `export FACTORY_AUTONOMOUS_MODE=1` for CI). Do not proceed without it.
+If `status != ok && status != bypass`, stop and ask the user to relaunch with **exactly** `claude --settings $settings_path` (or `export FACTORY_AUTONOMOUS_MODE=1` for CI). Do not proceed without it.
+
+> ⚠️ Do **not** append `--dangerously-skip-permissions` to the relaunch command. The whole purpose of `merged-settings.json` is to grant scoped autonomy via `permissions.allow` plus deny-list and PreToolUse guard hooks; bypassing permissions would actively defeat the deny list and guards. Surface the relaunch command verbatim — no extra flags.
+
+If the autonomy check halts with `reason: usage-cache-too-stale` (status=`stale-cache`), the merged settings are wired but the statusline hasn't ticked recently. Tell the user to re-run `/factory:run`; the next invocation is itself an agent turn that will cause the statusline to fire and refresh `usage-cache.json` before quota gates run. If it still halts on a second attempt, the session was not launched with `--settings` — instruct a fresh relaunch.
 
 ### 2. Preconditions
 

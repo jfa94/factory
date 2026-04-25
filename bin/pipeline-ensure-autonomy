@@ -6,14 +6,17 @@
 # generated from the current plugin version. Regenerates the file if it is
 # missing or stale, then emits a JSON result on stdout and exits:
 #
-#   ok      – file is current and FACTORY_AUTONOMOUS_MODE=1; proceed.
-#   bypass  – FACTORY_AUTONOMOUS_MODE=1 but no merged file (CI/env path).
-#   stale   – file existed but was regenerated; session must relaunch.
-#   missing – no file (first run); file was generated; session must relaunch.
+#   ok          – file is current and FACTORY_AUTONOMOUS_MODE=1; proceed.
+#   bypass      – FACTORY_AUTONOMOUS_MODE=1 but no merged file (CI/env path).
+#   stale       – file existed but was regenerated; session must relaunch.
+#   missing     – no file (first run); file was generated; session must relaunch.
+#   stale-cache – settings ok but usage-cache.json missing or >3600s old;
+#                 caller should re-invoke (next agent turn fires statusline)
+#                 or relaunch with --settings if cache stays stale.
 #
 # Exit codes:
 #   0 – ok or bypass (pipeline may continue)
-#   2 – stale or missing (pipeline must halt; caller should show relaunch msg)
+#   2 – stale, missing, or stale-cache (pipeline must halt; caller shows msg)
 
 set -euo pipefail
 
@@ -22,6 +25,19 @@ source "$(dirname "$0")/pipeline-lib.sh"
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
 TEMPLATE="$PLUGIN_ROOT/templates/settings.autonomous.json"
+
+# Self-heal exec bits on entry-point scripts. Source is tracked as 100755 in
+# git, but some packaging paths (zip without -X, npm pack, mirror caches) can
+# strip the bit. statusline-wrapper.sh going non-exec is silent and corrosive:
+# Claude Code skips the statusline, usage-cache.json never updates, quota
+# gates fail-closed at every task. Cheap and idempotent — fix here before any
+# downstream code depends on it.
+for _script in "$PLUGIN_ROOT/bin/statusline-wrapper.sh" \
+               "$PLUGIN_ROOT/bin"/pipeline-*; do
+  [[ -f "$_script" ]] || continue
+  case "$_script" in *-lib.sh|*-steps.sh) continue ;; esac
+  [[ -x "$_script" ]] || chmod +x "$_script" 2>/dev/null || true
+done
 
 # Current plugin version
 current_version=$(jq -r '.version // empty' "$PLUGIN_JSON" 2>/dev/null)
@@ -132,28 +148,50 @@ if [[ "${FACTORY_AUTONOMOUS_MODE:-}" != "1" ]]; then
   exit 2
 fi
 
-# Cache freshness check: warn if usage-cache.json is missing or stale.
-# This catches edge cases where the wrapper is wired but not firing
-# (e.g., session not relaunched with --settings, wrapper script broken).
-# Does not block execution — the fail-closed sentinel in pipeline-quota-check
-# enforces protection at every gate.
+# Cache freshness check.
+#
+# The statusline-wrapper writes usage-cache.json on every Claude Code statusline
+# tick (one per agent turn). pipeline-quota-check enforces a hard ceiling at
+# 3600s — beyond that, every per-task quota gate fails closed and halts mid-run.
+#
+# Failing closed at startup is far better UX than failing closed mid-pipeline:
+# the user gets one clear message and one corrective action instead of a halt
+# after N tasks have already burned tokens. Thresholds:
+#   - >300s        → soft warning (statusline may have skipped a tick)
+#   - >3600s       → hard halt with status=stale-cache (matches quota-check)
+#   - missing file → hard halt with status=stale-cache
 now_epoch=$(date +%s)
 cache_file="${merged_settings%/*}/usage-cache.json"
-cache_warning=""
+cache_age=-1
+cache_state="ok"
 if [[ ! -f "$cache_file" ]]; then
-  cache_warning="usage-cache.json absent; quota gates will block until statusline ticks"
+  cache_state="missing"
 else
-  # Coerce to int; non-numeric or missing → 0 (triggers stale branch).
   captured_at=$(jq -r '(.captured_at // 0) | tonumber? // 0' "$cache_file" 2>/dev/null || printf '0')
-  if (( now_epoch - captured_at > 300 )); then
-    cache_warning="usage-cache.json is stale (>300s); statusline may not be ticking"
+  cache_age=$(( now_epoch - captured_at ))
+  if (( cache_age > 3600 )); then
+    cache_state="too-stale"
+  elif (( cache_age > 300 )); then
+    cache_state="warn"
   fi
 fi
 
-if [[ -n "$cache_warning" ]]; then
-  log_warn "$cache_warning"
-  printf '{"status":"ok","message":"autonomous mode active (version %s)","settings_path":"%s","cache_warning":"%s"}\n' \
-    "$current_version" "$merged_settings" "$cache_warning"
+if [[ "$cache_state" == "missing" || "$cache_state" == "too-stale" ]]; then
+  if [[ "$cache_state" == "missing" ]]; then
+    msg="usage-cache.json absent; statusline has not ticked yet. Re-run /factory:run after a moment so the statusline can fire, or relaunch with claude --settings $merged_settings if the session was not started with --settings."
+  else
+    msg="usage-cache.json is ${cache_age}s old (>3600s); statusline is not ticking. Re-run /factory:run; the next agent turn will refresh the cache. If this repeats, the session was not launched with --settings — relaunch with claude --settings $merged_settings."
+  fi
+  log_warn "$msg"
+  printf '{"status":"stale-cache","reason":"%s","message":"%s","settings_path":"%s","cache_age":%d}\n' \
+    "$cache_state" "$msg" "$merged_settings" "$cache_age"
+  exit 2
+fi
+
+if [[ "$cache_state" == "warn" ]]; then
+  log_warn "usage-cache.json is ${cache_age}s old (>300s); statusline may have skipped a tick"
+  printf '{"status":"ok","message":"autonomous mode active (version %s)","settings_path":"%s","cache_warning":"usage-cache.json is %ds old","cache_age":%d}\n' \
+    "$current_version" "$merged_settings" "$cache_age" "$cache_age"
 else
   _emit "ok" "autonomous mode active (version $current_version)"
 fi

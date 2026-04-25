@@ -15,7 +15,7 @@ You are the rescue orchestrator. You repair a pipeline run that has complex issu
 4. Tier-1 fixes auto-apply without prompting.
 5. Tier-2 and tier-3 fixes require `AskUserQuestion` batch approval.
 6. The `rescue-diagnostic` agent is read-only; its decisions drive deterministic apply actions.
-7. Final step is always `/factory:run resume`, unless the user cancels.
+7. Final step is always a direct `Skill(pipeline-orchestrator, "mode=resume")` invocation, unless the user cancels.
 
 ## Protocol
 
@@ -52,7 +52,13 @@ You are the rescue orchestrator. You repair a pipeline run that has complex issu
 
 11. **Apply plans.** Run `pipeline-rescue-apply --plans=<approved-plans>.json`.
 
-12. **Invoke resume.** Skill complete — hand control back by instructing the user (or downstream orchestrator) to run `/factory:run resume`. If operating in autonomous mode where you can directly invoke, call the `pipeline-orchestrator` skill with `mode=resume`.
+12. **Invoke resume.** Hand off by invoking the `pipeline-orchestrator` skill **directly**:
+
+    ```
+    Skill(pipeline-orchestrator, "mode=resume")
+    ```
+
+    Do **not** instruct the user to run `/factory:run resume` themselves. The slash command is just a thin loader for the same skill (see `commands/run.md`); calling the skill directly is the autonomous path and avoids a needless human round-trip. The user-facing slash command should only be used as fallback if the rescue is being narrated to the user as a manual procedure.
 
 ## References
 

@@ -840,6 +840,32 @@ fi
 
 # ============================================================
 echo ""
+echo "=== bin/* executable bit (git-tracked mode 100755) ==="
+# Every shipped script under bin/ must be tracked as executable in git.
+# Claude Code's plugin loader preserves the git mode bits when materializing
+# the cache copy; a non-executable script silently no-ops. Past incident:
+# bin/statusline-wrapper.sh was tracked as 100644, statusline never ran,
+# usage-cache.json went 5 days stale and the pipeline halted at every quota
+# gate with no visible cause.
+# Entry-point scripts: extensionless pipeline-* commands + statusline-wrapper.sh.
+# Libraries (*-lib.sh, *-steps.sh) and tests/fixtures are intentionally not
+# executable — they are sourced or read, never exec'd.
+nonexec=$(cd "$PLUGIN_ROOT" && git ls-files -s bin/ \
+  | awk '$1 != "100755" {
+      if ($4 ~ /\/pipeline-[^\/.]+$/) print $4;
+      else if ($4 ~ /\/statusline-wrapper\.sh$/) print $4;
+    }' \
+  || true)
+if [[ -z "$nonexec" ]]; then
+  echo "  PASS: all bin/* shipped scripts are tracked as 100755"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: bin/* scripts tracked as non-executable in git:"
+  printf '    - %s\n' $nonexec
+  echo "    Fix: git update-index --chmod=+x <path>"
+  fail=$((fail + 1))
+fi
+
 echo "=== bin/pipeline-ensure-autonomy ==="
 
 ENSURE_SCRIPT="$PLUGIN_ROOT/bin/pipeline-ensure-autonomy"
@@ -874,11 +900,23 @@ stamped_ver=$(jq -r '._factoryVersion // empty' "$EA_DIR/merged-settings.json" 2
 assert_eq "ensure-autonomy stamps _factoryVersion in merged-settings.json" \
   "$plugin_version" "$stamped_ver"
 
-# ok path — file current + mode set
+# ok path — file current + mode set + fresh usage-cache
+printf '{"captured_at": %d}' "$(date +%s)" > "$EA_DIR/usage-cache.json"
 ea_out_ok=$(CLAUDE_PLUGIN_DATA="$EA_DIR" FACTORY_AUTONOMOUS_MODE=1 \
   PATH="$PLUGIN_ROOT/bin:$PATH" "$ENSURE_SCRIPT" 2>/dev/null)
 ea_status_ok=$(printf '%s' "$ea_out_ok" | jq -r '.status')
 assert_eq "ensure-autonomy: ok status when file current and mode set" "ok" "$ea_status_ok"
+
+# stale-cache path — usage-cache.json older than 3600s
+printf '{"captured_at": %d}' "$(( $(date +%s) - 7200 ))" > "$EA_DIR/usage-cache.json"
+ea_out_stcache=$(CLAUDE_PLUGIN_DATA="$EA_DIR" FACTORY_AUTONOMOUS_MODE=1 \
+  PATH="$PLUGIN_ROOT/bin:$PATH" "$ENSURE_SCRIPT" 2>/dev/null) || true
+ea_status_stcache=$(printf '%s' "$ea_out_stcache" | jq -r '.status')
+assert_eq "ensure-autonomy: stale-cache status when usage-cache >3600s old" \
+  "stale-cache" "$ea_status_stcache"
+
+# Restore fresh cache for subsequent tests
+printf '{"captured_at": %d}' "$(date +%s)" > "$EA_DIR/usage-cache.json"
 
 # stale path — overwrite _factoryVersion with 0.0.0
 jq '._factoryVersion = "0.0.0"' "$EA_DIR/merged-settings.json" > "$EA_DIR/merged-settings.json.tmp"
