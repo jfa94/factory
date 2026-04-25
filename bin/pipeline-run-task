@@ -82,7 +82,7 @@ _already_past() {
   local cur
   cur=$(_task_field stage 2>/dev/null || printf '')
   case "$cur" in null|"") return 1 ;; esac
-  local order=(preflight_done preexec_tests_done postexec_spawn_pending postexec_done postreview_done ship_done)
+  local order=("${PIPELINE_STAGE_ORDER[@]}")
   local cur_rank=-1 want_rank=-1 i
   for i in "${!order[@]}"; do
     [[ "${order[$i]}" == "$cur"  ]] && cur_rank=$i
@@ -239,11 +239,10 @@ _resolve_base_ref() {
 _verify_red_tests() {
   local tw_wt="$1"
 
-  # Skip for tdd_exempt tasks
-  local tdd_exempt
-  tdd_exempt=$(jq -r --arg t "$task_id" \
-    '.tasks[$t].tdd_exempt // false' "$state_file" 2>/dev/null || printf 'false')
-  if [[ "$tdd_exempt" == "true" ]]; then
+  # Skip for tdd_exempt tasks — read from tasks.json (single source of truth)
+  local spec_path_for_exempt
+  spec_path_for_exempt=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
+  if task_tdd_exempt "$task_id" "$spec_path_for_exempt"; then
     log_info "red-test verification skipped (tdd_exempt) task_id=\"$task_id\""
     return 0
   fi
@@ -257,9 +256,8 @@ _verify_red_tests() {
     return 1
   fi
   while IFS= read -r f; do
-    [[ -n "$f" ]] && new_tests+=("$f")
-  done < <(cd "$tw_wt" && git diff "$base_ref..HEAD" --name-only --diff-filter=AM \
-    | grep -E '\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$|_test\.(go|py|rb)$|Test\.(php|java)$|_spec\.rb$' || true)
+    if [[ -n "$f" ]] && is_test_path "$f"; then new_tests+=("$f"); fi
+  done < <(cd "$tw_wt" && git diff "$base_ref..HEAD" --name-only --diff-filter=AM || true)
 
   if [[ ${#new_tests[@]} -eq 0 ]]; then
     log_error "red-test verification: no new or modified test files found task_id=\"$task_id\""
@@ -387,13 +385,13 @@ _stage_preexec_tests() {
 
   local tw_status
   tw_status=$(_task_field test_writer_status)
-  tw_status=$(printf '%s' "$tw_status" | tr -d '"')
+  tw_status=$(_unquote_json_string "$tw_status")
 
   # Resume path: status not recorded; check for an existing test commit.
   if [[ -z "$tw_status" ]]; then
     local tw_wt
     tw_wt=$(_task_field worktree)
-    tw_wt=$(printf '%s' "$tw_wt" | tr -d '"')
+    tw_wt=$(_unquote_json_string "$tw_wt")
     [[ -z "$tw_wt" ]] && tw_wt="$worktree"
     if [[ -n "$tw_wt" && -d "$tw_wt" ]]; then
       local resume_base
@@ -440,7 +438,7 @@ _stage_preexec_tests() {
   # RED_READY (or other non-blocked): verify tests are actually red before spawning executor.
   local tw_wt
   tw_wt=$(_task_field worktree)
-  tw_wt=$(printf '%s' "$tw_wt" | tr -d '"')
+  tw_wt=$(_unquote_json_string "$tw_wt")
   [[ -z "$tw_wt" ]] && tw_wt="$worktree"
 
   if ! _verify_red_tests "$tw_wt"; then
@@ -510,7 +508,7 @@ _stage_postexec() {
   if _already_past postexec_done; then
     local reviewer_only
     reviewer_only=$(_task_field postexec_reviewer_only)
-    reviewer_only=$(printf '%s' "$reviewer_only" | tr -d '"')
+    reviewer_only=$(_unquote_json_string "$reviewer_only")
     if [[ "$reviewer_only" != "true" ]]; then
       t1=$(_now_ms)
       log_step_end "postexec" "skipped" "$((t1-t0))" "task_id=\"$task_id\""
@@ -540,7 +538,7 @@ _stage_postexec() {
     fi
     local wt_resume
     wt_resume=$(_task_field worktree)
-    wt_resume=$(printf '%s' "$wt_resume" | sed -e 's/^"//' -e 's/"$//')
+    wt_resume=$(_unquote_json_string "$wt_resume")
     _emit_postexec_manifest "$wt_resume"
     t1=$(_now_ms)
     log_step_end "postexec" "re_emit_manifest" "$((t1-t0))" "task_id=\"$task_id\""
@@ -549,7 +547,7 @@ _stage_postexec() {
 
   local wt
   wt=$(_task_field worktree)
-  wt=$(printf '%s' "$wt" | sed -e 's/^"//' -e 's/"$//')
+  wt=$(_unquote_json_string "$wt")
   [[ -z "$wt" ]] && wt="$worktree"
   if [[ -z "$wt" ]]; then
     log_error "worktree not set for task $task_id (SubagentStop hook missing?); pass --worktree"
@@ -594,7 +592,7 @@ _stage_postexec() {
   if [[ -f "$holdout_file" ]]; then
     local reviewer_output
     reviewer_output=$(_task_field holdout_review_file)
-    reviewer_output=$(printf '%s' "$reviewer_output" | sed -e 's/^"//' -e 's/"$//')
+    reviewer_output=$(_unquote_json_string "$reviewer_output")
     if [[ -n "$reviewer_output" && -f "$reviewer_output" ]]; then
       if pipeline-holdout-validate check "$run_id" "$task_id" "$reviewer_output" >/dev/null; then
         _task_write quality_gates.holdout '"pass"'
@@ -640,7 +638,7 @@ _emit_postexec_manifest() {
 
   local tier
   tier=$(_task_field risk_tier)
-  tier=$(printf '%s' "$tier" | sed -e 's/^"//' -e 's/"$//')
+  tier=$(_unquote_json_string "$tier")
   [[ -z "$tier" ]] && tier="routine"
 
   _ensure_prompt_dir
@@ -768,7 +766,7 @@ _stage_postreview() {
   # verbatim_line isn't in the diff).
   local pr_wt
   pr_wt=$(_task_field worktree)
-  pr_wt=$(printf '%s' "$pr_wt" | sed -e 's/^"//' -e 's/"$//')
+  pr_wt=$(_unquote_json_string "$pr_wt")
   [[ -z "$pr_wt" ]] && pr_wt="$worktree"
 
   local any_changes=false any_discuss=false f verdict decision raw_json still_count
@@ -937,7 +935,7 @@ _write_ship_checklist() {
   # coverage_gate: read from quality_gates.coverage (ok|fail|skipped).
   local cov_raw coverage_gate
   cov_raw=$(_task_field 'quality_gates.coverage' 2>/dev/null || printf '')
-  cov_raw=$(printf '%s' "$cov_raw" | tr -d '"')
+  cov_raw=$(_unquote_json_string "$cov_raw")
   case "$cov_raw" in
     ok|fail|skipped) coverage_gate="$cov_raw" ;;
     *) coverage_gate="skipped" ;;
@@ -951,13 +949,13 @@ _write_ship_checklist() {
   # review_blockers_resolved: true if postreview_done (no pending blockers).
   local stage_cur review_blockers_resolved
   stage_cur=$(_task_field stage 2>/dev/null || printf '')
-  stage_cur=$(printf '%s' "$stage_cur" | tr -d '"')
+  stage_cur=$(_unquote_json_string "$stage_cur")
   review_blockers_resolved=$([[ "$stage_cur" == "postreview_done" ]] && printf 'true' || printf 'false')
 
   # ci_status: from task state (green|pending|red). Map to checklist values.
   local ci_raw ci_status
   ci_raw=$(_task_field ci_status 2>/dev/null || printf '')
-  ci_raw=$(printf '%s' "$ci_raw" | tr -d '"')
+  ci_raw=$(_unquote_json_string "$ci_raw")
   case "$ci_raw" in
     green) ci_status="green" ;;
     red)   ci_status="red"   ;;
@@ -1062,7 +1060,7 @@ _stage_ship() {
 
   local wt
   wt=$(_task_field worktree)
-  wt=$(printf '%s' "$wt" | sed -e 's/^"//' -e 's/"$//')
+  wt=$(_unquote_json_string "$wt")
   if [[ -z "$wt" ]]; then
     log_error "worktree missing at ship stage"
     t1=$(_now_ms)

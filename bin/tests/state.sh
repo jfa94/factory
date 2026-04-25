@@ -1141,6 +1141,79 @@ fos_lock_blocked=$(_fos_lock_test)
 assert_eq "finalize-on-stop blocks while lock is held" "true" "$fos_lock_blocked"
 
 echo ""
+echo "=== C3+C4: subagent_retries persisted in state.json ==="
+
+# Simulate two blocked subagent stops for the same task. Verify:
+# 1. retries increments in state.json (not in a sidecar file)
+# 2. cleanup (rm -rf run_dir sidecars) does NOT reset the counter
+# 3. on success, retries is reset to 0 in state.json
+_c3_retry_test() {
+  local run_id="c3-retry-test" sandbox
+  sandbox=$(mktemp -d)
+  mkdir -p "$sandbox/runs/$run_id"
+  jq -n --arg rid "$run_id" '{
+    run_id: $rid, status: "running",
+    started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    ended_at: null,
+    tasks: {
+      "task-1": {status: "executing", branch: "df/1/task-1", subagent_retries: 0}
+    }
+  }' > "$sandbox/runs/$run_id/state.json"
+  ln -s "$sandbox/runs/$run_id" "$sandbox/runs/current"
+
+  # First block: write retry counter
+  CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state task-write "$run_id" "task-1" \
+    "subagent_retries" "1" >/dev/null 2>&1
+  retries1=$(CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state task-read "$run_id" "task-1" \
+    "subagent_retries // 0" 2>/dev/null)
+  printf 'retries1=%s\n' "$retries1"
+
+  # Simulate cleanup that removes sidecar files but NOT state.json
+  rm -f "$sandbox/runs/$run_id/.subagent_retries."* 2>/dev/null || true
+
+  # Counter must survive in state.json
+  retries2=$(CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state task-read "$run_id" "task-1" \
+    "subagent_retries // 0" 2>/dev/null)
+  printf 'retries2=%s\n' "$retries2"
+
+  # Success — reset to 0
+  CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state task-write "$run_id" "task-1" \
+    "subagent_retries" "0" >/dev/null 2>&1
+  retries3=$(CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state task-read "$run_id" "task-1" \
+    "subagent_retries // 0" 2>/dev/null)
+  printf 'retries3=%s\n' "$retries3"
+
+  rm -rf "$sandbox"
+}
+c3_out=$(_c3_retry_test)
+r1=$(printf '%s' "$c3_out" | grep '^retries1=' | cut -d= -f2)
+r2=$(printf '%s' "$c3_out" | grep '^retries2=' | cut -d= -f2)
+r3=$(printf '%s' "$c3_out" | grep '^retries3=' | cut -d= -f2)
+assert_eq "C3: retries stored in state.json after first block" "1" "$r1"
+assert_eq "C3: retries survive sidecar cleanup (not in sidecar)" "1" "$r2"
+assert_eq "C3: retries reset to 0 on success" "0" "$r3"
+
+# Verify no sidecar file is created when using pipeline-state
+_c3_nosidecar_test() {
+  local run_id="c3-nosidecar" sandbox
+  sandbox=$(mktemp -d)
+  mkdir -p "$sandbox/runs/$run_id"
+  jq -n --arg rid "$run_id" '{
+    run_id: $rid, status: "running",
+    started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    ended_at: null,
+    tasks: {"task-x": {status: "executing"}}
+  }' > "$sandbox/runs/$run_id/state.json"
+  CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state task-write "$run_id" "task-x" \
+    "subagent_retries" "2" >/dev/null 2>&1
+  sidecar_count=$(find "$sandbox/runs/$run_id" -name '.subagent_retries.*' 2>/dev/null | wc -l | tr -d ' ')
+  printf '%s' "$sidecar_count"
+  rm -rf "$sandbox"
+}
+no_sidecar=$(_c3_nosidecar_test)
+assert_eq "C3: no sidecar files created (retries in state.json only)" "0" "$no_sidecar"
+
+echo ""
 echo "=== C2: pipeline-lock dead-PID race (atomic acquire) ==="
 
 # Spawn two background acquirers against a lock file with a stale (dead) PID.

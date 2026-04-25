@@ -36,12 +36,6 @@ if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
   fi
 fi
 
-_is_test_path() {
-  case "$1" in
-    *.test.*|*.spec.*|tests/*|*/__tests__/*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 _is_docs_path() {
   case "$1" in
     docs/*|*.md) return 0 ;;
@@ -56,19 +50,7 @@ _is_config_path() {
 }
 
 _task_exempt() {
-  local tfile
-  for tfile in "$spec_dir/tasks.json" specs/current/tasks.json; do
-    [[ -f "$tfile" ]] || continue
-    local flag
-    flag=$(jq -r --arg id "$task_id" '.tasks[]? | select(.id==$id) | .tdd_exempt // false' "$tfile" 2>/dev/null)
-    [[ "$flag" == "true" ]] && return 0
-  done
-  if [[ -f package.json ]]; then
-    local g
-    g=$(jq -r '.["dark-factory"].tddExempt // false' package.json 2>/dev/null)
-    [[ "$g" == "true" ]] && return 0
-  fi
-  return 1
+  task_tdd_exempt "$task_id" "$spec_dir"
 }
 
 _emit() {
@@ -98,15 +80,24 @@ commits_oldest=$(printf '%s\n' "$commits" | awk '{a[NR]=$0} END{for(i=NR;i>0;i--
 classes=()
 while read -r sha; do
   [[ -z "$sha" ]] && continue
-  # Skip merge commits — two parents means two SHAs on the %P line.
-  if git show -s --format='%P' "$sha" | grep -q ' '; then
-    continue
+  # For merge commits, use --first-parent diff-tree to classify only the files
+  # that the merge *introduces* into the first-parent line (i.e. the new content
+  # not reachable from the first parent before the merge). This prevents a merge
+  # commit that brings impl files from being silently skipped.
+  num_parents=$(git show -s --format='%P' "$sha" | wc -w | tr -d ' ')
+  if (( num_parents > 1 )); then
+    # Merge commit: classify files the merge introduces relative to its first parent.
+    # Use explicit "<first-parent> <sha>" form so we get the full diff, not the
+    # combined (intersection) diff that `git diff-tree <sha>` emits for merges.
+    first_parent=$(git show -s --format='%P' "$sha" | cut -d' ' -f1)
+    files=$(git diff-tree --no-commit-id --name-only -r "$first_parent" "$sha" 2>/dev/null || true)
+  else
+    files=$(git diff-tree --no-commit-id --name-only -r "$sha" 2>/dev/null || true)
   fi
-  files=$(git show --name-only --format= "$sha")
   kind="test-only"
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
-    if ! _is_test_path "$f"; then
+    if ! is_test_path "$f"; then
       if ! _is_docs_path "$f" && ! _is_config_path "$f"; then
         kind="impl"
       fi

@@ -54,13 +54,23 @@ fi
 run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
 mkdir -p "$run_dir"
 
+# Determine attempt number for log file naming (preserves per-attempt forensics).
+# Falls back to timestamp when state is unavailable (e.g. test fixtures without state.json).
+_attempt_raw=$(pipeline-state task-read "$run_id" "$task_id" review_attempts 2>/dev/null || printf 'err')
+if [[ "$_attempt_raw" == "err" || -z "$_attempt_raw" || "$_attempt_raw" == "null" ]]; then
+  _log_suffix=$(date +%s)
+else
+  _log_suffix="$_attempt_raw"
+fi
+
 results_json='[]'
 overall_ok=true
 
 while IFS= read -r cmd; do
   [[ -z "$cmd" ]] && continue
 
-  log_file="$run_dir/${task_id}.${cmd}.log"
+  # Include attempt (or timestamp fallback) in filename so re-runs don't overwrite prior logs.
+  log_file="$run_dir/${task_id}.${cmd}.${_log_suffix}.log"
   start=$(date +%s)
   set +e
   "$pkg_mgr" run "$cmd" > "$log_file" 2>&1
@@ -98,7 +108,7 @@ summary=$(jq -n --argjson ok "$ok_json" --argjson checks "$results_json" \
 # state.json (e.g. integration tests for this script in isolation) are the
 # only legitimate skip path.
 if [[ -f "$run_dir/state.json" ]]; then
-  if ! pipeline-state write "$run_id" ".tasks.$task_id.quality_gate" "$summary" >/dev/null; then
+  if ! pipeline-state task-write "$run_id" "$task_id" quality_gate "$summary" >/dev/null; then
     log_error "failed to record quality_gate result for $task_id"
     exit 1
   fi

@@ -511,6 +511,119 @@ compute_daily_threshold() {
   printf '%s' "${thresholds[$idx]}"
 }
 
+# ============================================================
+# BD-scope helpers — added by Subagent BD [code-review]
+# ============================================================
+
+# Classify a file path as a test file (return 0) or not (return 1).
+# Covers: *.test.*, *.spec.*, *_test.*, *Test.*, *Tests.*, *_spec.rb,
+# and directory-based patterns: tests/**, test/**, spec/**, **/__tests__/**
+# Usage: is_test_path <path>
+is_test_path() {
+  local f="$1"
+  case "$f" in
+    # Suffix-based: .test.<ext> and .spec.<ext>
+    *.test.ts|*.test.tsx|*.test.js|*.test.jsx|*.test.mjs|*.test.cjs) return 0 ;;
+    *.test.py|*.test.rb|*.test.go|*.test.rs)                          return 0 ;;
+    *.spec.ts|*.spec.tsx|*.spec.js|*.spec.jsx|*.spec.mjs|*.spec.cjs) return 0 ;;
+    *.spec.py|*.spec.rb|*.spec.go|*.spec.rs)                          return 0 ;;
+    # Suffix-based: _test.<ext> (Go, Python, Ruby, Elixir)
+    *_test.go|*_test.py|*_test.rb|*_test.exs)                        return 0 ;;
+    # Suffix-based: *Test.<ext> (Java, Kotlin, PHP)
+    *Test.java|*Test.kt|*Test.php)                                    return 0 ;;
+    # Suffix-based: *Tests.<ext> (Swift, C#)
+    *Tests.swift|*Tests.cs)                                           return 0 ;;
+    # Suffix-based: *_spec.rb (RSpec)
+    *_spec.rb)                                                        return 0 ;;
+    # Directory-based
+    tests/*|test/*|spec/*)                                            return 0 ;;
+    */__tests__/*)                                                    return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Return 0 if the given task is tdd_exempt per tasks.json or package.json.
+# Args: <task_id> [<spec_dir>]
+# Reads tasks.json from <spec_dir>/tasks.json and specs/current/tasks.json.
+task_tdd_exempt() {
+  local task_id="$1" spec_dir="${2:-}"
+  local tfile flag
+  for tfile in "${spec_dir:+$spec_dir/tasks.json}" specs/current/tasks.json; do
+    [[ -z "$tfile" || ! -f "$tfile" ]] && continue
+    flag=$(jq -r --arg id "$task_id" '.tasks[]? | select(.id==$id) | .tdd_exempt // false' "$tfile" 2>/dev/null || true)
+    [[ "$flag" == "true" ]] && return 0
+  done
+  if [[ -f package.json ]]; then
+    local g
+    g=$(jq -r '.["dark-factory"].tddExempt // false' package.json 2>/dev/null || true)
+    [[ "$g" == "true" ]] && return 0
+  fi
+  return 1
+}
+
+# Stage ordering constant — single source of truth used by _already_past and
+# any future callers that need to compare pipeline stage ranks.
+# shellcheck disable=SC2034  # used by sourcing scripts (pipeline-run-task)
+PIPELINE_STAGE_ORDER=(preflight_done preexec_tests_done postexec_spawn_pending postexec_done postreview_done ship_done)
+
+# Strip exactly one leading and one trailing double-quote from a JSON-encoded
+# string value. Semantically equivalent to `jq -r` for simple string values.
+# Usage: _unquote_json_string <value>
+_unquote_json_string() {
+  local s="$1"
+  s="${s#\"}"
+  s="${s%\"}"
+  printf '%s' "$s"
+}
+
+# Load and render a prompt template from
+# skills/pipeline-orchestrator/prompts/<stage>.tmpl.
+# Variables in the template are expanded using ${VAR} syntax (envsubst-style).
+# If envsubst is not available, a pure-bash fallback substituter is used.
+# Usage: load_prompt <stage>
+# Exports must be set by caller before invoking this function.
+load_prompt() {
+  local stage="$1" tmpl_dir tmpl_file
+  local lib_dir
+  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+  tmpl_dir="$lib_dir/../skills/pipeline-orchestrator/prompts"
+  tmpl_file="$tmpl_dir/$stage.tmpl"
+  if [[ ! -f "$tmpl_file" ]]; then
+    log_error "missing prompt template: $stage (looked in $tmpl_dir)"
+    return 1
+  fi
+  # Prefer envsubst when available; fall back to pure-bash substituter.
+  if command -v envsubst >/dev/null 2>&1; then
+    envsubst < "$tmpl_file"
+  else
+    _envsubst_bash < "$tmpl_file"
+  fi
+}
+
+# Pure-bash envsubst substitute. Reads stdin; expands ${VAR} and $VAR
+# using the caller's environment via ${!var} indirection. Only replaces
+# tokens that correspond to valid variable names (ASCII alnum + underscore,
+# not starting with a digit).
+_envsubst_bash() {
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Replace ${VAR} patterns
+    while [[ "$line" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)\} ]]; do
+      local var="${BASH_REMATCH[1]}"
+      local val="${!var:-}"
+      line="${line/\$\{$var\}/$val}"
+    done
+    # Replace $VAR patterns (not followed by { to avoid double-replacement)
+    while [[ "$line" =~ \$([A-Za-z_][A-Za-z0-9_]*)([^A-Za-z0-9_]|$) ]]; do
+      local var="${BASH_REMATCH[1]}"
+      local val="${!var:-}"
+      local rest="${BASH_REMATCH[2]}"
+      line="${line/\$$var/$val}"
+    done
+    printf '%s\n' "$line"
+  done
+}
+
 # Drop reviewer findings whose verbatim_line is not a substring of the diff.
 # Stdin: normalized review JSON (with .findings[].verbatim_line set).
 # Args:  $1 = path to a file containing the diff text to grep against.
