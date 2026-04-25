@@ -900,6 +900,29 @@ stamped_ver=$(jq -r '._factoryVersion // empty' "$EA_DIR/merged-settings.json" 2
 assert_eq "ensure-autonomy stamps _factoryVersion in merged-settings.json" \
   "$plugin_version" "$stamped_ver"
 
+# CLAUDE_PLUGIN_DATA pin — wrapper (user-shell env) writes to fallback path
+# unless this env var is baked into the merged-settings env block. Without it,
+# usage-cache.json drifts and the gates fail closed.
+stamped_data=$(jq -r '.env.CLAUDE_PLUGIN_DATA // empty' "$EA_DIR/merged-settings.json" 2>/dev/null)
+assert_eq "ensure-autonomy injects env.CLAUDE_PLUGIN_DATA into merged-settings" \
+  "$EA_DIR" "$stamped_data"
+
+# Self-heal: existing merged-settings missing env.CLAUDE_PLUGIN_DATA → regenerate
+EA_DIR_HEAL=$(mktemp -d "${TMPDIR:-/tmp}/ensure-autonomy-heal-XXXXXX")
+trap '[[ -n "${EA_DIR_HEAL:-}" && "$EA_DIR_HEAL" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$EA_DIR_HEAL"' EXIT
+# Seed a current-version merged-settings WITHOUT env.CLAUDE_PLUGIN_DATA
+jq --arg ver "$plugin_version" 'del(.env.CLAUDE_PLUGIN_DATA) | ._factoryVersion = $ver' \
+  "$EA_DIR/merged-settings.json" > "$EA_DIR_HEAL/merged-settings.json"
+printf '{"captured_at": %d}' "$(date +%s)" > "$EA_DIR_HEAL/usage-cache.json"
+ea_out_heal=$(CLAUDE_PLUGIN_DATA="$EA_DIR_HEAL" FACTORY_AUTONOMOUS_MODE=1 \
+  PATH="$PLUGIN_ROOT/bin:$PATH" "$ENSURE_SCRIPT" 2>/dev/null) || true
+ea_status_heal=$(printf '%s' "$ea_out_heal" | jq -r '.status')
+assert_eq "ensure-autonomy: stale status when merged-settings lacks env.CLAUDE_PLUGIN_DATA" \
+  "stale" "$ea_status_heal"
+heal_data=$(jq -r '.env.CLAUDE_PLUGIN_DATA // empty' "$EA_DIR_HEAL/merged-settings.json")
+assert_eq "ensure-autonomy: self-heal injects env.CLAUDE_PLUGIN_DATA on regen" \
+  "$EA_DIR_HEAL" "$heal_data"
+
 # ok path — file current + mode set + fresh usage-cache
 printf '{"captured_at": %d}' "$(date +%s)" > "$EA_DIR/usage-cache.json"
 ea_out_ok=$(CLAUDE_PLUGIN_DATA="$EA_DIR" FACTORY_AUTONOMOUS_MODE=1 \

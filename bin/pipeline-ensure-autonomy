@@ -59,6 +59,15 @@ _regenerate() {
   local tmp user_cmd expanded_cmd
   tmp=$(mktemp)
 
+  # CLAUDE_PLUGIN_DATA pin: bake the current plugin data dir into the merged-settings
+  # env block so that the statusline wrapper (which runs in the user shell, NOT in
+  # the plugin command runtime) writes usage-cache.json to the same location that
+  # pipeline-ensure-autonomy / pipeline-quota-check read from. Without this, the
+  # wrapper falls back to ~/.claude/plugin-data/factory while the gates read
+  # ~/.claude/plugins/data/<plugin-id>/, the cache appears permanently stale at
+  # the gate, and every quota check fails closed.
+  local plugin_data="${CLAUDE_PLUGIN_DATA:-}"
+
   # Detect user's existing statusLine.command so the wrapper can chain to it.
   # Read from ~/.claude/settings.json only (project-level statuslines are rare
   # and pipeline runs in the project root with the merged file taking precedence).
@@ -77,25 +86,42 @@ _regenerate() {
   if [[ -n "$user_cmd" ]] && [[ "$user_cmd_real" != "$our_wrapper_real" ]]; then
     expanded_cmd="${user_cmd/#\~/$HOME}"
     jq --arg root "$PLUGIN_ROOT" --arg ver "$current_version" \
-       --arg original_statusline "$expanded_cmd" '
+       --arg original_statusline "$expanded_cmd" \
+       --arg plugin_data "$plugin_data" '
       walk(
         if type == "string" and test("\\$\\{CLAUDE_PLUGIN_ROOT\\}")
         then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root)
         else . end
       ) | . + {_factoryVersion: $ver}
         | .env.FACTORY_ORIGINAL_STATUSLINE = $original_statusline
+        | (if $plugin_data != "" then .env.CLAUDE_PLUGIN_DATA = $plugin_data else . end)
     ' "$TEMPLATE" > "$tmp"
     log_info "detected user statusline; will chain via FACTORY_ORIGINAL_STATUSLINE=$expanded_cmd"
   else
-    jq --arg root "$PLUGIN_ROOT" --arg ver "$current_version" '
+    jq --arg root "$PLUGIN_ROOT" --arg ver "$current_version" \
+       --arg plugin_data "$plugin_data" '
       walk(
         if type == "string" and test("\\$\\{CLAUDE_PLUGIN_ROOT\\}")
         then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root)
         else . end
       ) | . + {_factoryVersion: $ver}
+        | (if $plugin_data != "" then .env.CLAUDE_PLUGIN_DATA = $plugin_data else . end)
     ' "$TEMPLATE" > "$tmp"
   fi
   mv "$tmp" "$merged_settings"
+
+  # Migrate any fresh cache from the wrapper's legacy fallback path so the gate
+  # has data to read on the very next invocation (otherwise it would wait for
+  # the next statusline tick post-relaunch).
+  local legacy_cache="${HOME}/.claude/plugin-data/factory/usage-cache.json"
+  local target_cache="${plugin_data}/usage-cache.json"
+  if [[ -n "$plugin_data" && -f "$legacy_cache" ]]; then
+    if [[ ! -f "$target_cache" ]] || [[ "$legacy_cache" -nt "$target_cache" ]]; then
+      cp -p "$legacy_cache" "$target_cache" 2>/dev/null \
+        && log_info "migrated fresh usage-cache from $legacy_cache to $target_cache" \
+        || true
+    fi
+  fi
 
   # asyncRewake compat probe. Feature requires Claude Code >= 2.1.116.
   # On older installs, strip the hook entry so the PostToolUse ship watcher
@@ -137,6 +163,18 @@ file_version=$(jq -r '._factoryVersion // empty' "$merged_settings" 2>/dev/null 
 if [[ "$file_version" != "$current_version" ]]; then
   _regenerate
   _emit "stale" "merged-settings.json was version ${file_version:-unknown}; regenerated to $current_version; relaunch required"
+  exit 2
+fi
+
+# Self-heal: 0.6.2 and earlier did not bake CLAUDE_PLUGIN_DATA into the env block,
+# causing the statusline wrapper (user-shell env, no CLAUDE_PLUGIN_DATA set) to
+# write usage-cache.json to ~/.claude/plugin-data/factory while the gates read
+# ${CLAUDE_PLUGIN_DATA}/usage-cache.json. Detect the old-shape file, regenerate,
+# and force a relaunch so the new env propagates to statusline.
+file_plugin_data=$(jq -r '.env.CLAUDE_PLUGIN_DATA // empty' "$merged_settings" 2>/dev/null || true)
+if [[ -z "$file_plugin_data" ]] && [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
+  _regenerate
+  _emit "stale" "merged-settings.json was missing env.CLAUDE_PLUGIN_DATA (cache path mismatch); regenerated; relaunch required"
   exit 2
 fi
 

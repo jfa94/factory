@@ -77,7 +77,7 @@ Run the configuration command to review and adjust settings:
 /factory:configure
 ```
 
-This opens an interactive settings editor. It reads your current config from `${CLAUDE_PLUGIN_DATA}/config.json` (created on first write) and falls back to plugin defaults for any unset value. On macOS, `CLAUDE_PLUGIN_DATA` is typically `~/.claude/plugin-data/factory`.
+This opens an interactive settings editor. It reads your current config from `${CLAUDE_PLUGIN_DATA}/config.json` (created on first write) and falls back to plugin defaults for any unset value. `CLAUDE_PLUGIN_DATA` is set by Claude Code's plugin runtime to `~/.claude/plugins/data/<plugin-id>/` (e.g. `~/.claude/plugins/data/factory-<owner>/`).
 
 Key settings to review on first setup:
 
@@ -213,7 +213,7 @@ The pipeline logs progress to stderr. Key checkpoints:
 To check the state of a run (macOS example path):
 
 ```bash
-# $CLAUDE_PLUGIN_DATA is typically ~/.claude/plugin-data/factory
+# $CLAUDE_PLUGIN_DATA is set by Claude Code, e.g. ~/.claude/plugins/data/factory-<owner>/
 cat "${CLAUDE_PLUGIN_DATA}/runs/current/state.json" | jq '.tasks | to_entries | map({task: .key, status: .value.status})'
 ```
 
