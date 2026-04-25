@@ -1,6 +1,6 @@
 ---
 name: debug
-description: "Drives a reviewer ⇄ implementer loop against a chosen scope until the reviewer is satisfied. Reuses pipeline-codex-review and the task-executor agent. Used by /factory:debug."
+description: "Drives a reviewer ⇄ implementer loop against a chosen scope until the reviewer is satisfied. Codex preferred; falls back to the quality-reviewer agent when Codex is unavailable. Used by /factory:debug."
 ---
 
 # /factory:debug — Reviewer ⇄ Implementer Loop
@@ -10,7 +10,7 @@ description: "Drives a reviewer ⇄ implementer loop against a chosen scope unti
 
 EVERY ROUND COMMITS A REVIEW ARTIFACT TO STATE BEFORE SPAWNING THE EXECUTOR.
 
-`pipeline-debug-review` writes `round-N.review.json` to the run's state dir and prints `{blocking_count, below_threshold_count, verdict, review_file}` on stdout. You do NOT spawn the executor without first persisting that artifact, and you do NOT advance to round N+1 without the executor's STATUS line recorded.
+The active reviewer path (Codex via `pipeline-debug-review`, or Claude via `quality-reviewer` agent + `pipeline-debug-normalize`) writes `round-N.review.json` to the run's state dir and prints `{blocking_count, below_threshold_count, verdict, review_file}` on stdout. You do NOT spawn the executor without first persisting that artifact, and you do NOT advance to round N+1 without the executor's STATUS line recorded.
 
 Violating the letter of this rule violates the spirit. No exceptions.
 </EXTREMELY-IMPORTANT>
@@ -36,18 +36,19 @@ The command parses flags into a single line of arguments and invokes this skill 
 1. **Validate flags + resolve base.** If `--full` and `--base` both set, abort: `usage: /factory:debug [--base <hash>|--full] [--limit <s>] [--fixSeverity ...]`.
 2. **Compute deadline.** `deadline = LIMIT > 0 ? $(date +%s) + LIMIT : 0`.
 3. **Initialise state.** `state_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/dark-factory}/debug/$RUN_ID"`. Write `state.json` with `{base, severity, deadline, started_at, rounds:[]}`.
-4. **Loop (round = 1..N):**
-   a. If `deadline > 0 && $(date +%s) >= deadline`: print summary with `STATUS: TIME_LIMIT`, break.
-   b. Run: `pipeline-debug-review --base "$BASE" --severity "$SEVERITY" --out-dir "$state_dir" --round "$round"`. Parse stdout JSON.
-   c. If `blocking_count == 0`: print summary with `STATUS: CLEAN`, break.
-   d. Build the executor-fix prompt. Use the `Agent` tool with `subagent_type: "task-executor"`, `isolation: "worktree"`. Prompt content (template below).
-   e. Capture the executor's final assistant message → `state_dir/round-${round}.executor.log`. Extract STATUS line.
-   f. If STATUS matches `BLOCKED — escalate: <reason>`:
-   - Run: `pipeline-debug-escalate --run-id "$RUN_ID" --reason "<reason>" --base "$BASE" --severity "$SEVERITY" --findings "$review_file" --executor-msg "$state_dir/round-${round}.executor.log"`.
-   - Capture the `ESCALATED path=<X>` line. Print summary with `STATUS: ESCALATED` and `Escalated to human review. Audit trail: <X>`. Break.
-     g. If STATUS is `BLOCKED` (other) or `NEEDS_CONTEXT`: print summary with `STATUS: <as-returned>`, break.
-     h. Else (`DONE | DONE_WITH_CONCERNS`): increment `round`, continue.
-5. **Final summary** (always printed). Include: rounds run, final STATUS, last review's `below_threshold_count`, and the escalation line if applicable.
+4. **Detect reviewer once.** Run `pipeline-detect-reviewer` and capture `.reviewer` (`codex` or `claude-code`). Persist it in `state.json` as `reviewer`. The choice is fixed for the run; do not re-detect inside the loop.
+5. **Loop (round = 1..N):**
+   1. If `deadline > 0 && $(date +%s) >= deadline`: print summary with `STATUS: TIME_LIMIT`, break.
+   2. Produce the round review artifact based on `reviewer` from step 4:
+      - **Codex branch** (`reviewer == codex`): run `pipeline-debug-review --base "$BASE" --severity "$SEVERITY" --out-dir "$state_dir" --round "$round"`. Parse stdout JSON.
+      - **Claude branch** (`reviewer == claude-code`): use the `Agent` tool with `subagent_type: "quality-reviewer"` to review the diff between `$BASE` and `HEAD`. Capture the agent's full final assistant message to `$state_dir/round-${round}.raw-review.txt`, then run `cat "$state_dir/round-${round}.raw-review.txt" | pipeline-parse-review --reviewer claude-code --base "$BASE" | pipeline-debug-normalize --severity "$SEVERITY" --out-dir "$state_dir" --round "$round"`. Parse the final stdout JSON. If either pipe stage exits non-zero, print summary with `STATUS: BLOCKED — review parse failed` and break.
+   3. If `blocking_count == 0`: print summary with `STATUS: CLEAN`, break.
+   4. Build the executor-fix prompt. Use the `Agent` tool with `subagent_type: "task-executor"`, `isolation: "worktree"`. Prompt content (template below).
+   5. Capture the executor's final assistant message → `state_dir/round-${round}.executor.log`. Extract STATUS line.
+   6. If STATUS matches `BLOCKED — escalate: <reason>`: run `pipeline-debug-escalate --run-id "$RUN_ID" --reason "<reason>" --base "$BASE" --severity "$SEVERITY" --findings "$review_file" --executor-msg "$state_dir/round-${round}.executor.log"`. Capture the `ESCALATED path=<X>` line. Print summary with `STATUS: ESCALATED` and `Escalated to human review. Audit trail: <X>`. Break.
+   7. If STATUS is `BLOCKED` (other) or `NEEDS_CONTEXT`: print summary with `STATUS: <as-returned>`, break.
+   8. Else (`DONE | DONE_WITH_CONCERNS`): increment `round`, continue.
+6. **Final summary** (always printed). Include: rounds run, final STATUS, last review's `below_threshold_count`, and the escalation line if applicable.
 
 ## Executor-fix prompt template
 
@@ -83,7 +84,8 @@ End with STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
 
 - [ ] Validated flags (mutually exclusive, severity in allowed set)
 - [ ] Resolved base ref BEFORE the first review
-- [ ] Persisted each round's review artifact + executor log under `state_dir`
+- [ ] Detected reviewer once via `pipeline-detect-reviewer` and used the same branch for every round
+- [ ] Persisted each round's review artifact + executor log (and `raw-review.txt` on the Claude branch) under `state_dir`
 - [ ] When the executor escalated, ran `pipeline-debug-escalate` and surfaced its path verbatim in the summary
 - [ ] Time limit was checked only at the top of each iteration
 

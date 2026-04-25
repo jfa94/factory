@@ -29,10 +29,16 @@ for v in run_id reason base_ref severity findings exec_msg; do
   [[ -z "${!v}" ]] && { log_error "--${v//_/-} required"; exit 1; }
 done
 
+# Fail closed: missing or unreadable evidence must NOT produce a bogus
+# audit trail. Validate before touching the output path.
+[[ -r "$findings" ]] || { log_error "--findings not readable: $findings"; exit 1; }
+[[ -r "$exec_msg" ]] || { log_error "--executor-msg not readable: $exec_msg"; exit 1; }
+
 data_root="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/dark-factory}"
 out_dir="$data_root/debug/$run_id"
 mkdir -p "$out_dir"
 out_file="$out_dir/escalation.md"
+tmp_file="$out_file.tmp.$$"
 
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')
 
@@ -45,14 +51,13 @@ ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')
   printf '%s\n\n' "- **Reason:** $reason"
 
   printf '## Findings\n\n```json\n'
-  if [[ -f "$findings" ]]; then
-    jq '.' "$findings" 2>/dev/null || cat "$findings"
-  fi
+  jq '.' "$findings" 2>/dev/null || cat "$findings"
   printf '\n```\n\n'
 
   printf '## Executor final message\n\n```\n'
-  if [[ -f "$exec_msg" ]]; then cat "$exec_msg"; fi
+  cat "$exec_msg"
   printf '\n```\n'
-} > "$out_file"
+} > "$tmp_file" || { log_error "failed to write escalation artifact"; rm -f "$tmp_file"; exit 1; }
 
+mv "$tmp_file" "$out_file"
 printf 'ESCALATED path=%s\n' "$out_file"

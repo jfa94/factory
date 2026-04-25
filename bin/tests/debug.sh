@@ -114,6 +114,96 @@ grep -q "STATUS: BLOCKED — escalate" "$esc_dir/escalation.md" \
   && pass "escalation file embeds executor message" \
   || fail "escalation file embeds executor message"
 
+# --- pipeline-debug-escalate: fail-closed on missing evidence ------------
+
+current="escalate-fail-closed"
+
+fc_run="esc-fc-001"
+fc_dir="$ROOT_TMP/data/debug/$fc_run"
+mkdir -p "$fc_dir"
+
+# Valid executor msg, missing findings file
+cat > "$fc_dir/exec.txt" <<'EOF'
+STATUS: BLOCKED — escalate: x
+EOF
+
+set +e
+out=$(pipeline-debug-escalate \
+  --run-id "$fc_run" \
+  --reason "x" \
+  --base "HEAD~1" \
+  --severity "medium" \
+  --findings "$fc_dir/does-not-exist.json" \
+  --executor-msg "$fc_dir/exec.txt" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "missing findings → exit 1" "1" "$rc"
+case "$out" in
+  *ESCALATED*) fail "missing findings emitted ESCALATED stdout (got: $out)" ;;
+  *) pass "missing findings emitted no ESCALATED stdout" ;;
+esac
+[[ ! -f "$fc_dir/escalation.md" ]] && pass "missing findings → no escalation.md" \
+  || fail "missing findings → escalation.md should not exist"
+
+# Valid findings, missing executor msg
+echo '[]' > "$fc_dir/findings.json"
+rm -f "$fc_dir/escalation.md"
+
+set +e
+out=$(pipeline-debug-escalate \
+  --run-id "$fc_run" \
+  --reason "x" \
+  --base "HEAD~1" \
+  --severity "medium" \
+  --findings "$fc_dir/findings.json" \
+  --executor-msg "$fc_dir/missing-exec.txt" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "missing executor-msg → exit 1" "1" "$rc"
+[[ ! -f "$fc_dir/escalation.md" ]] && pass "missing executor-msg → no escalation.md" \
+  || fail "missing executor-msg → escalation.md should not exist"
+
+# Unreadable findings (chmod 000)
+chmod 000 "$fc_dir/findings.json"
+set +e
+out=$(pipeline-debug-escalate \
+  --run-id "$fc_run" \
+  --reason "x" \
+  --base "HEAD~1" \
+  --severity "medium" \
+  --findings "$fc_dir/findings.json" \
+  --executor-msg "$fc_dir/exec.txt" 2>/dev/null)
+rc=$?
+set -e
+chmod 644 "$fc_dir/findings.json"
+assert_eq "unreadable findings → exit 1" "1" "$rc"
+
+# --- pipeline-debug-normalize --------------------------------------------
+
+current="normalize"
+
+norm_dir="$ROOT_TMP/normalize-out"
+result=$(pipeline-debug-normalize \
+  --severity high --out-dir "$norm_dir" --round 1 \
+  < "$FIXTURES/review-mixed.json")
+got=$(printf '%s' "$result" | jq -r '.blocking_count')
+assert_eq "normalize: high → 3 blocking" "3" "$got"
+
+got=$(printf '%s' "$result" | jq -r '.below_threshold_count')
+assert_eq "normalize: high → 3 below-threshold" "3" "$got"
+
+got=$(printf '%s' "$result" | jq -r '.verdict')
+assert_eq "normalize: verdict surfaced" "REQUEST_CHANGES" "$got"
+
+[[ -f "$norm_dir/round-1.review.json" ]] && pass "normalize: round file written" \
+  || fail "normalize: round file written"
+
+# Severity mapping persisted in round file (important→high, minor→low)
+mapped_high=$(jq '[.findings[] | select(.severity=="high")] | length' "$norm_dir/round-1.review.json")
+assert_eq "normalize: important mapped to high" "2" "$mapped_high"
+mapped_low=$(jq '[.findings[] | select(.severity=="low")] | length' "$norm_dir/round-1.review.json")
+assert_eq "normalize: minor mapped to low" "2" "$mapped_low"
+
 # --- skill loop smoke test (bin scripts only) ----------------------------
 
 current="loop-smoke"

@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# pipeline-debug-normalize — shared severity normalization + threshold
+# counting for /factory:debug. Used by both the Codex path
+# (pipeline-debug-review) and the Claude-fallback path (skill spawns
+# quality-reviewer agent, then pipes that review's normalized JSON here).
+#
+# Usage:
+#   pipeline-debug-normalize --severity <critical|high|medium|all>
+#                            --out-dir <dir> [--round <N>]
+# Input  (stdin): review JSON with .verdict and .findings[].severity
+# Output (stdout, single line JSON):
+#   {"blocking_count":N,"below_threshold_count":M,"verdict":"...","review_file":"<path>"}
+# Exit: 0 on success, 1 on IO/parse failure.
+
+set -euo pipefail
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+severity="medium"
+out_dir=""
+round=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --severity) severity="$2"; shift 2 ;;
+    --out-dir)  out_dir="$2";  shift 2 ;;
+    --round)    round="$2";    shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+[[ -z "$out_dir" ]] && { log_error "--out-dir required"; exit 1; }
+case "$severity" in critical|high|medium|all) : ;; *) log_error "invalid --severity: $severity"; exit 1 ;; esac
+
+mkdir -p "$out_dir"
+review_file="$out_dir/round-${round}.review.json"
+
+raw=$(cat)
+[[ -z "$raw" ]] && { log_error "empty review input"; exit 1; }
+printf '%s' "$raw" | jq empty 2>/dev/null || { log_error "review input is not valid JSON"; exit 1; }
+
+# Severity normalization: important → high, minor → low; default missing → medium.
+normalized=$(printf '%s' "$raw" | jq -c '
+  .findings = (.findings // [] | map(
+    .severity = (
+      if .severity == "important" then "high"
+      elif .severity == "minor"   then "low"
+      else (.severity // "medium")
+      end
+    )
+  ))
+')
+printf '%s' "$normalized" > "$review_file"
+
+threshold_set() {
+  case "$1" in
+    critical) printf 'critical' ;;
+    high)     printf 'critical high' ;;
+    medium)   printf 'critical high medium' ;;
+    all)      printf 'critical high medium low' ;;
+  esac
+}
+allowed=$(threshold_set "$severity")
+
+blocking=$(jq --arg allowed "$allowed" '
+  [.findings[] | select((.severity // "medium") as $s
+                        | ($allowed | split(" ")) | index($s))] | length
+' "$review_file")
+below=$(jq --arg allowed "$allowed" '
+  [.findings[] | select(((.severity // "medium") as $s
+                        | ($allowed | split(" ")) | index($s)) | not)] | length
+' "$review_file")
+verdict=$(jq -r '.verdict // "UNKNOWN"' "$review_file")
+
+jq -nc \
+  --argjson blocking "$blocking" \
+  --argjson below "$below" \
+  --arg verdict "$verdict" \
+  --arg path "$review_file" \
+  '{blocking_count:$blocking, below_threshold_count:$below, verdict:$verdict, review_file:$path}'
