@@ -60,28 +60,33 @@ _emit_default() {
 
 # Chain to original statusline or emit default output.
 if [[ -n "${FACTORY_ORIGINAL_STATUSLINE:-}" ]]; then
-  # Expand ~ and extract the script path (first whitespace-delimited token)
-  _chain="${FACTORY_ORIGINAL_STATUSLINE/#\~/$HOME}"
-  _chain_path="${_chain%% *}"
-  # Path-with-spaces vs path-with-args disambiguation:
-  # If the whole string is a readable file, treat it as the path (no args).
-  # Otherwise assume the first token is the path and the rest are args.
-  if [[ -f "$_chain" ]]; then
-    _chain_path="$_chain"
-    _chain_cmd="$_chain"
-  else
-    _chain_cmd="$_chain"
-  fi
-  if [[ -f "$_chain_path" ]]; then
-    # Disable -e and -u around the eval so a broken chain falls back
-    # instead of crashing (unbound vars in user's statusline, non-zero exit).
-    set +eu
-    printf '%s' "$input" | eval "$_chain_cmd"
-    _chain_rc=$?
-    set -eu
-    if (( _chain_rc != 0 )); then _emit_default; fi
-  else
+  # Expand ~ and split into argv. Refuse values containing shell metacharacters
+  # (;, |, &, backticks, $() ) to prevent arbitrary code execution.
+  _chain_raw="${FACTORY_ORIGINAL_STATUSLINE/#\~/$HOME}"
+  if printf '%s' "$_chain_raw" | grep -qE '[;|&`]|\$\('; then
+    printf '%s\n' "statusline-wrapper: FACTORY_ORIGINAL_STATUSLINE contains shell metacharacters — ignored" >&2
     _emit_default
+  else
+    # Split on whitespace into an argv array.
+    read -ra _chain_argv <<< "$_chain_raw"
+    _chain_path="${_chain_argv[0]}"
+    # Path-with-spaces vs path-with-args disambiguation:
+    # If the whole raw string is a readable file, treat it as the sole arg (no args).
+    if [[ -f "$_chain_raw" ]]; then
+      _chain_argv=("$_chain_raw")
+      _chain_path="$_chain_raw"
+    fi
+    if [[ -f "$_chain_path" ]]; then
+      # Pipe input to the chained command via direct exec (no eval).
+      # Non-zero exit falls back to the default statusline output.
+      set +e
+      printf '%s' "$input" | "${_chain_argv[@]}"
+      _chain_rc=$?
+      set -e
+      if (( _chain_rc != 0 )); then _emit_default; fi
+    else
+      _emit_default
+    fi
   fi
 else
   _emit_default

@@ -4,18 +4,19 @@
 # Stdin: hook input JSON with .tool_input.command
 # Exit 0 = allow, Exit 2 = block (reason on stderr as JSON)
 #
-# task_09_03: previous version pattern-matched substrings of the command line.
-# Bypasses included `git push origin $BRANCH` (where $BRANCH expands to "main")
-# and decoy strings like `mainly-fixes`. We now:
-#   1. Inspect actual repo state via `git symbolic-ref --short HEAD` for the
-#      "currently on a protected branch and pushing" check.
-#   2. Parse the push refspec to extract the destination branch (handles
-#      `<branch>`, `HEAD:<branch>`, `<sha>:<branch>`, and `+<refspec>` force).
-#   3. Match the resolved branch against an exact regex over the protected set
-#      so `mainly-fixes` no longer matches `main`.
-# The legacy substring checks for `git reset --hard <protected>`,
-# `git branch -D <protected>`, and `git push <remote> --delete <protected>`
-# are preserved using the same exact-match resolver.
+# The parser recognises all of:
+#   git push origin main
+#   git -C <dir> push origin main
+#   /usr/bin/git push origin main
+#   GIT_DIR=... git push origin main
+#   git push origin "main"
+#   git push origin HEAD~0:refs/heads/main
+#   git push origin develop:main
+#   git push origin +HEAD:main (force-refspec)
+#
+# Implementation:
+#   _parse_git_invocation() is called once and populates shared variables.
+#   All checks (1-7) read from those variables — no re-tokenisation.
 set -euo pipefail
 
 PROTECTED_BRANCHES=("main" "master" "develop")
@@ -45,151 +46,241 @@ _is_protected() {
   [[ "$name" =~ $PROTECTED_RE ]]
 }
 
-# Helper: tokenize command preserving simple word boundaries.
-# We split on whitespace; complex shell quoting (`'main'` etc) won't survive but
-# the protected-branch regex still catches the unquoted form which is what
-# matters in practice.
-_tokens() {
-  printf '%s\n' "$command" | tr -s '[:space:]' '\n'
-}
+# ---------------------------------------------------------------------------
+# Token-aware git invocation parser.
+#
+# Populates global variables (memoised — call once, read many):
+#   _git_subcommand   push | reset | branch | (empty if no git found)
+#   _git_subflags     space-joined flags found after the subcommand
+#   _git_dest_branch  resolved destination branch for push (may be empty)
+#   _git_named_arg    branch/ref after --delete / --hard / -D / -d
+#   _git_is_force     "1" if --force / -f / --force-with-lease present
+#   _git_is_plus_ref  "1" if a +<refspec> token was seen
+# ---------------------------------------------------------------------------
+_parse_git_invocation() {
+  # Already parsed — nothing to do.
+  [[ -n "${_GIT_PARSED:-}" ]] && return 0
+  _GIT_PARSED=1
 
-# Helper: extract the resolved destination branch from a `git push` invocation.
-# Sets dest_branch to the resolved name (may be empty if unparseable).
-_resolve_push_dest() {
-  dest_branch=""
-  local saw_push=0 saw_remote=0
-  local tok stripped
-  while IFS= read -r tok; do
-    [[ -z "$tok" ]] && continue
-    if (( saw_push == 0 )); then
-      [[ "$tok" == "git" ]] && continue
-      if [[ "$tok" == "push" ]]; then
-        saw_push=1
-      fi
-      continue
-    fi
-    # After "push": skip flags entirely (--force, --delete, -u, etc).
-    if [[ "$tok" == -* || "$tok" == --* ]]; then
-      continue
-    fi
-    if (( saw_remote == 0 )); then
-      saw_remote=1
-      continue
-    fi
-    # First non-flag token after the remote is the refspec.
-    stripped="${tok#+}"            # strip force-push prefix
-    stripped="${stripped##*:}"     # strip src side of <src>:<dst>
-    dest_branch="$stripped"
-    return 0
-  done < <(_tokens)
+  _git_subcommand=""
+  _git_subflags=""
+  _git_dest_branch=""
+  _git_named_arg=""
+  _git_is_force="0"
+  _git_is_plus_ref="0"
 
-  # If `git push` had no remote/refspec, fall back to the current branch.
-  if (( saw_push == 1 && saw_remote == 0 )); then
-    dest_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
-  fi
-}
-
-# Helper: extract the bare-name argument that follows a flag list, used for
-# `git reset --hard <ref>`, `git branch -D <name>`, `git push <remote> --delete <name>`.
-# Sets target to the resolved name (may be empty).
-_extract_named_arg() {
-  local needle="$1"   # token sequence to match before consuming a name
-  target=""
+  # Tokenise: split on whitespace, strip env-var prefixes (VAR=value tokens),
+  # and strip a leading directory path from the git binary so that
+  # `/usr/bin/git`, `./git`, etc. all match as "git".
   local tokens=()
   while IFS= read -r tok; do
     [[ -z "$tok" ]] && continue
+    # Skip env-var prefix tokens (VAR=value or VAR= ).
+    [[ "$tok" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && continue
     tokens+=("$tok")
-  done < <(_tokens)
+  done < <(printf '%s\n' "$command" | tr -s '[:space:]' '\n')
 
-  local n=${#tokens[@]} i=0
+  local n=${#tokens[@]}
+  local i=0
+  local found_git=0
+
+  # Walk until we find a token whose basename is "git".
   while (( i < n )); do
-    if [[ "${tokens[i]}" == "$needle" ]]; then
-      # Walk forward, skipping flags, take first non-flag.
-      local j=$((i + 1))
-      while (( j < n )); do
-        if [[ "${tokens[j]}" == -* || "${tokens[j]}" == --* ]]; then
-          j=$((j + 1))
-          continue
-        fi
-        target="${tokens[j]}"
-        # Strip force-push / refspec syntax for safety.
-        target="${target#+}"
-        target="${target##*:}"
-        return 0
-      done
+    local tok="${tokens[i]}"
+    local base_tok
+    base_tok=$(basename -- "$tok")
+    if [[ "$base_tok" == "git" ]]; then
+      found_git=1
+      i=$((i + 1))
+      break
     fi
     i=$((i + 1))
   done
+
+  [[ $found_git -eq 0 ]] && return 0
+
+  # Skip -C <dir> and other git-global flags that appear before the subcommand.
+  while (( i < n )); do
+    local tok="${tokens[i]}"
+    if [[ "$tok" == "-C" || "$tok" == "--work-tree" || "$tok" == "--git-dir" ]]; then
+      # These consume the next token as their argument.
+      i=$((i + 2))
+      continue
+    fi
+    if [[ "$tok" == -* ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    # First non-flag token is the subcommand.
+    _git_subcommand="$tok"
+    i=$((i + 1))
+    break
+  done
+
+  [[ -z "$_git_subcommand" ]] && return 0
+
+  # Parse the rest of the arguments depending on the subcommand.
+  local saw_remote=0
+  while (( i < n )); do
+    local tok="${tokens[i]}"
+
+    # Strip surrounding double-quotes (handles `git push origin "main"`).
+    tok="${tok#\"}"
+    tok="${tok%\"}"
+
+    case "$_git_subcommand" in
+      push)
+        # Detect force flags.
+        if [[ "$tok" == "--force" || "$tok" == "-f" || "$tok" == "--force-with-lease" ]]; then
+          _git_is_force="1"
+          i=$((i + 1)); continue
+        fi
+        # Skip other flags.
+        if [[ "$tok" == -* ]]; then
+          i=$((i + 1)); continue
+        fi
+        # Remote (first non-flag token).
+        if (( saw_remote == 0 )); then
+          saw_remote=1
+          i=$((i + 1)); continue
+        fi
+        # Refspec token(s).
+        local stripped="$tok"
+        # Detect leading + (force-push refspec syntax).
+        if [[ "$stripped" == +* ]]; then
+          _git_is_plus_ref="1"
+          stripped="${stripped#+}"
+        fi
+        # Resolve destination: strip everything up to and including the last `:`.
+        # `HEAD:refs/heads/main` → `refs/heads/main`; `develop:main` → `main`.
+        if [[ "$stripped" == *:* ]]; then
+          stripped="${stripped##*:}"
+        fi
+        # Normalise refs/heads/<name> → <name>.
+        stripped="${stripped#refs/heads/}"
+        _git_dest_branch="$stripped"
+        ;;
+
+      reset)
+        if [[ "$tok" == "--hard" ]]; then
+          # Next non-flag token is the ref.
+          local j=$((i + 1))
+          while (( j < n )); do
+            local nt="${tokens[j]}"
+            [[ "$nt" == -* ]] && { j=$((j + 1)); continue; }
+            # Strip remote prefix (origin/main → main).
+            _git_named_arg="${nt##*/}"
+            break
+          done
+        fi
+        ;;
+
+      branch)
+        if [[ "$tok" == "-D" || "$tok" == "-d" ]]; then
+          local j=$((i + 1))
+          while (( j < n )); do
+            local nt="${tokens[j]}"
+            [[ "$nt" == -* ]] && { j=$((j + 1)); continue; }
+            _git_named_arg="$nt"
+            break
+          done
+        fi
+        # --delete also works for branch deletion.
+        if [[ "$tok" == "--delete" ]]; then
+          local j=$((i + 1))
+          while (( j < n )); do
+            local nt="${tokens[j]}"
+            [[ "$nt" == -* ]] && { j=$((j + 1)); continue; }
+            _git_named_arg="$nt"
+            break
+          done
+        fi
+        ;;
+    esac
+
+    i=$((i + 1))
+  done
+
+  # For push with --delete, capture the branch name that follows.
+  if [[ "$_git_subcommand" == "push" ]]; then
+    # Re-scan for --delete <branch> in push context.
+    local j=0
+    local in_push_delete=0
+    while (( j < n )); do
+      local tok="${tokens[j]}"
+      tok="${tok#\"}"
+      tok="${tok%\"}"
+      if [[ "$tok" == "--delete" ]]; then
+        in_push_delete=1
+        j=$((j + 1)); continue
+      fi
+      if (( in_push_delete == 1 )) && [[ "$tok" != -* ]]; then
+        _git_named_arg="$tok"
+        break
+      fi
+      j=$((j + 1))
+    done
+  fi
+
+  # If push had no refspec, fall back to current branch (implicit push).
+  if [[ "$_git_subcommand" == "push" && -z "$_git_dest_branch" && $saw_remote -eq 1 ]]; then
+    _git_dest_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+  fi
 }
 
+# Ensure parsed on first access.
+_parse_git_invocation
+
 # --- Check 1: are we currently on a protected branch and pushing implicitly? ---
-if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+push([[:space:]]|$)'; then
+if [[ "$_git_subcommand" == "push" ]]; then
   current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
   if [[ -n "$current_branch" ]] && _is_protected "$current_branch"; then
-    _resolve_push_dest
-    if [[ -z "$dest_branch" || "$dest_branch" == "$current_branch" ]]; then
+    if [[ -z "$_git_dest_branch" || "$_git_dest_branch" == "$current_branch" ]]; then
       _block "on_protected_branch" "currently on '$current_branch' — push will publish to protected"
     fi
   fi
 fi
 
 # --- Check 2: git push --force / -f / --force-with-lease to a protected target ---
-if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+push([[:space:]]|$)'; then
-  _resolve_push_dest
-  if [[ -n "$dest_branch" ]] && _is_protected "$dest_branch"; then
-    if printf '%s' "$command" | grep -qE '(--force|--force-with-lease|[[:space:]]-f([[:space:]]|$))'; then
-      _block "force_push_protected" "force-push targets protected branch '$dest_branch'"
-    fi
+if [[ "$_git_subcommand" == "push" && "$_git_is_force" == "1" ]]; then
+  if [[ -n "$_git_dest_branch" ]] && _is_protected "$_git_dest_branch"; then
+    _block "force_push_protected" "force-push targets protected branch '$_git_dest_branch'"
   fi
 fi
 
 # --- Check 3: git push +refspec force-syntax to a protected branch ---
-if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+push([[:space:]]|$)'; then
-  _resolve_push_dest
-  # Detect leading-+ token in the original command (force-push refspec syntax).
-  if printf '%s\n' "$command" | grep -qE '(^|[[:space:]])\+[A-Za-z0-9._/:+-]*'; then
-    if [[ -n "$dest_branch" ]] && _is_protected "$dest_branch"; then
-      _block "force_push_refspec_protected" "+refspec force-push targets protected branch '$dest_branch'"
-    fi
+if [[ "$_git_subcommand" == "push" && "$_git_is_plus_ref" == "1" ]]; then
+  if [[ -n "$_git_dest_branch" ]] && _is_protected "$_git_dest_branch"; then
+    _block "force_push_refspec_protected" "+refspec force-push targets protected branch '$_git_dest_branch'"
   fi
 fi
 
 # --- Check 4: plain `git push <remote> <protected>` (or HEAD:<protected>) ---
-if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+push([[:space:]]|$)'; then
-  _resolve_push_dest
-  if [[ -n "$dest_branch" ]] && _is_protected "$dest_branch"; then
-    _block "push_to_protected" "push targets protected branch '$dest_branch'"
+if [[ "$_git_subcommand" == "push" ]]; then
+  if [[ -n "$_git_dest_branch" ]] && _is_protected "$_git_dest_branch"; then
+    _block "push_to_protected" "push targets protected branch '$_git_dest_branch'"
   fi
 fi
 
 # --- Check 5: git push <remote> --delete <protected> ---
-if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+push[[:space:]]+\S+[[:space:]]+--delete([[:space:]]|$)'; then
-  _extract_named_arg "--delete"
-  if [[ -n "$target" ]] && _is_protected "$target"; then
-    _block "remote_delete_protected" "remote deletion of protected branch '$target'"
+if [[ "$_git_subcommand" == "push" && -n "$_git_named_arg" ]]; then
+  if _is_protected "$_git_named_arg"; then
+    _block "remote_delete_protected" "remote deletion of protected branch '$_git_named_arg'"
   fi
 fi
 
 # --- Check 6: git reset --hard <protected> ---
-if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+reset[[:space:]]+--hard([[:space:]]|$)'; then
-  _extract_named_arg "--hard"
-  if [[ -n "$target" ]]; then
-    # Strip remote prefix (origin/main → main) before matching.
-    bare="${target##*/}"
-    if _is_protected "$bare"; then
-      _block "hard_reset_protected" "hard reset targets protected branch '$bare'"
-    fi
+if [[ "$_git_subcommand" == "reset" && -n "$_git_named_arg" ]]; then
+  if _is_protected "$_git_named_arg"; then
+    _block "hard_reset_protected" "hard reset targets protected branch '$_git_named_arg'"
   fi
 fi
 
 # --- Check 7: git branch -D / -d <protected> ---
-if printf '%s' "$command" | grep -qE '(^|[[:space:]])git[[:space:]]+branch[[:space:]]+.*-[dD]([[:space:]]|$)'; then
-  for flag in "-D" "-d"; do
-    _extract_named_arg "$flag"
-    if [[ -n "$target" ]] && _is_protected "$target"; then
-      _block "delete_protected_branch" "deletion of protected branch '$target'"
-    fi
-  done
+if [[ "$_git_subcommand" == "branch" && -n "$_git_named_arg" ]]; then
+  if _is_protected "$_git_named_arg"; then
+    _block "delete_protected_branch" "deletion of protected branch '$_git_named_arg'"
+  fi
 fi
 
 # All checks passed — allow

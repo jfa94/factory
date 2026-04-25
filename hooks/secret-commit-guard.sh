@@ -33,16 +33,30 @@ PATH_BLOCKLIST=(
   '*.keystore'       '*.p12'         '*.pfx'       '*.jks'
   'service-account*.json'
   '.netrc'           '*.crt'
+  '*.tfvars'         '*.tfstate'     'kubeconfig'
+  'firebase-adminsdk-*.json'
+  '*.kdbx'           'wrangler.toml'
+  '*.gpg'            '*.asc'         '*.ppk'
 )
 
 # --- Built-in content-regex patterns ---
+# Note: sk-ant- is checked before the generic sk- so Anthropic keys are
+# labelled correctly; the older sk- pattern still catches OpenAI keys.
 CONTENT_PATTERNS=(
   'AKIA[0-9A-Z]{16}'
   'ghp_[A-Za-z0-9]{36}'
   'ghs_[A-Za-z0-9]{36}'
   'gho_[A-Za-z0-9]{36}'
   'ghr_[A-Za-z0-9]{36}'
+  'sk-ant-(api03-)?[A-Za-z0-9_-]{20,}'
   'sk-[A-Za-z0-9]{20,}'
+  'xox[bpars]-[A-Za-z0-9-]{10,}'
+  'AIza[A-Za-z0-9_-]{35}'
+  'sk_live_[A-Za-z0-9]{20,}'
+  'rk_live_[A-Za-z0-9]{20,}'
+  'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+'
+  'aws_secret_access_key[[:space:]]*=[[:space:]]*[A-Za-z0-9/+=]{40}'
+  '"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN'
   '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----'
 )
 
