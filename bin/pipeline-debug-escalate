@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# pipeline-debug-escalate — writes the escalation audit trail for /factory:debug
+# when the executor returns STATUS: BLOCKED — escalate: <reason>.
+#
+# Usage:
+#   pipeline-debug-escalate --run-id <id> --reason <text> --base <ref>
+#                           --severity <s> --findings <path> --executor-msg <path>
+# Output (stdout, exact): ESCALATED path=<absolute escalation.md path>
+# Exit: 0 on success, 1 on IO failure.
+
+set -euo pipefail
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+run_id=""; reason=""; base_ref=""; severity=""; findings=""; exec_msg=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --run-id)       run_id="$2";   shift 2 ;;
+    --reason)       reason="$2";   shift 2 ;;
+    --base)         base_ref="$2"; shift 2 ;;
+    --severity)     severity="$2"; shift 2 ;;
+    --findings)     findings="$2"; shift 2 ;;
+    --executor-msg) exec_msg="$2"; shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+for v in run_id reason base_ref severity findings exec_msg; do
+  [[ -z "${!v}" ]] && { log_error "--${v//_/-} required"; exit 1; }
+done
+
+data_root="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/dark-factory}"
+out_dir="$data_root/debug/$run_id"
+mkdir -p "$out_dir"
+out_file="$out_dir/escalation.md"
+
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')
+
+{
+  printf '# /factory:debug Escalation\n\n'
+  printf '%s\n' "- **Run ID:** $run_id"
+  printf '%s\n' "- **Timestamp:** $ts"
+  printf '%s\n' "- **Base ref:** $base_ref"
+  printf '%s\n' "- **Severity threshold:** $severity"
+  printf '%s\n\n' "- **Reason:** $reason"
+
+  printf '## Findings\n\n```json\n'
+  if [[ -f "$findings" ]]; then
+    jq '.' "$findings" 2>/dev/null || cat "$findings"
+  fi
+  printf '\n```\n\n'
+
+  printf '## Executor final message\n\n```\n'
+  if [[ -f "$exec_msg" ]]; then cat "$exec_msg"; fi
+  printf '\n```\n'
+} > "$out_file"
+
+printf 'ESCALATED path=%s\n' "$out_file"
