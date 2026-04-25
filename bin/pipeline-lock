@@ -33,13 +33,39 @@ _is_pid_alive() {
   kill -0 "$1" 2>/dev/null
 }
 
+# C2: Atomic lock install — write payload to a tmp file in the same directory
+# then rename into place. rename(2) is atomic on the same filesystem so there
+# is no window where the lock file is absent. Two concurrent callers racing
+# on a dead-PID lock both mv successfully (last writer wins), so we always
+# read back after the mv and verify the installed PID is ours; if not, we
+# fall through to the normal retry loop on the next iteration.
+# Returns 0 if we own the lock after the install; 1 if we lost the race.
+_install_lock_atomically() {
+  local payload="$1"
+  local tmp_lock
+  tmp_lock=$(mktemp "${LOCK_FILE}.install.XXXXXX")
+  printf '%s' "$payload" > "$tmp_lock"
+  if ! mv -f "$tmp_lock" "$LOCK_FILE"; then
+    rm -f "$tmp_lock"
+    return 1
+  fi
+  # Read back and verify we hold the lock (not a concurrent acquirer).
+  local readback_pid
+  readback_pid=$(jq -r '.pid' "$LOCK_FILE" 2>/dev/null || true)
+  if [[ "$readback_pid" != "$LOCK_PID" ]]; then
+    # Another process won the race; let the outer loop handle it.
+    return 1
+  fi
+  return 0
+}
+
 case "$action" in
   acquire)
     mkdir -p "$(dirname "$LOCK_FILE")"
     elapsed=0
 
     while [[ $elapsed -lt $TIMEOUT ]]; do
-      # Try to create lock atomically
+      # Try to create lock atomically (noclobber: succeeds only when absent)
       if ( set -o noclobber; printf '{"pid":%d,"timestamp":"%s"}' "$LOCK_PID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK_FILE" ) 2>/dev/null; then
         log_info "lock acquired (PID $LOCK_PID)"
         json_output locked "true" pid "$LOCK_PID" action "acquired"
@@ -56,10 +82,23 @@ case "$action" in
         exit 0
       fi
 
-      # Check if holder is dead — auto-recover
+      # Check if holder is dead — auto-recover atomically.
+      # Old path: rm -f + continue (two acquirers seeing the same dead PID both
+      # remove the file, both then race the noclobber-write — benign but wasteful).
+      # New path: atomic mv install + read-back verify. If we lose the race,
+      # the loop continues and we either see our competitor's PID (alive → wait,
+      # or dead → race again) or their lock becomes ours on the next noclobber.
       if ! _is_pid_alive "$holder_pid"; then
-        log_warn "lock held by dead process $holder_pid, recovering"
-        rm -f "$LOCK_FILE"
+        log_warn "lock held by dead process $holder_pid, recovering atomically"
+        payload=$(printf '{"pid":%d,"timestamp":"%s","recovered_from":%d}' \
+          "$LOCK_PID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$holder_pid")
+        if _install_lock_atomically "$payload"; then
+          log_info "lock acquired via dead-PID recovery (PID $LOCK_PID)"
+          json_output locked "true" pid "$LOCK_PID" action "acquired"
+          exit 0
+        fi
+        # Lost the race — retry the loop without sleeping (competitor just
+        # installed a lock we can check on the next iteration).
         continue
       fi
 
@@ -123,17 +162,13 @@ case "$action" in
       exit 1
     fi
 
-    # Dead PID — take ownership atomically. Write the new lock to a tmp
-    # file in the same dir, then rename into place. Between the old rm+write
-    # implementation the lock file was briefly absent, letting a concurrent
-    # recover race in and both claim ownership. rename(2) is atomic on the
-    # same filesystem, so no window.
-    tmp_lock=$(mktemp "${LOCK_FILE}.recover.XXXXXX")
-    printf '{"pid":%d,"timestamp":"%s","recovered_from":%s}' \
-      "$LOCK_PID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$holder_pid" > "$tmp_lock"
-    if ! mv -f "$tmp_lock" "$LOCK_FILE"; then
-      rm -f "$tmp_lock"
-      log_error "failed to install recovered lock"
+    # Dead PID — take ownership atomically via shared _install_lock_atomically
+    # helper (mv + read-back verify). If concurrent recoverers race, the last
+    # mv wins; both see a valid lock file at all times (no window of absence).
+    payload=$(printf '{"pid":%d,"timestamp":"%s","recovered_from":%d}' \
+      "$LOCK_PID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$holder_pid")
+    if ! _install_lock_atomically "$payload"; then
+      log_error "failed to install recovered lock (lost race to concurrent recoverer)"
       exit 1
     fi
     log_info "recovered lock from dead PID $holder_pid"
