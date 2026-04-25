@@ -1,20 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "_comment": "Pipeline-specific autonomous-mode settings merged with user's existing settings at runtime. User settings take precedence. Paths that reference ~/.claude/hooks/* are user-env hooks inherited from the host environment; inline shell is executed under the user's shell and Bash(*) gating.",
+  "_comment": "Pipeline-specific autonomous-mode settings merged with user's existing settings at runtime. User settings take precedence.",
   "env": {
     "FACTORY_AUTONOMOUS_MODE": "1"
   },
   "permissions": {
-    "allow": [
-      "Bash(*)",
-      "Bash(codex *)",
-      "Read",
-      "Write",
-      "Edit",
-      "Grep",
-      "Glob",
-      "Agent"
-    ],
+    "allow": ["Bash(*)", "Read", "Write", "Edit", "Grep", "Glob", "Agent"],
     "deny": [
       "Bash(rm -rf /)",
       "Bash(rm -rf /*)",
@@ -67,13 +58,46 @@
       "Bash(aws dynamodb delete-table *)",
       "Bash(aws lambda delete-function *)",
       "Bash(aws logs delete-* *)",
+      "Bash(python -c *)",
+      "Bash(python3 -c *)",
+      "Bash(node -e *)",
+      "Bash(perl -e *)",
+      "Bash(ruby -e *)",
+      "Bash(deno eval *)",
+      "Bash(bun -e *)",
+      "Bash(*base64 -d*)",
+      "Bash(*| base64 -D*)",
+      "Bash(eval *)",
+      "Bash(find * -delete*)",
+      "Bash(gh api -X DELETE*)",
+      "Bash(gh repo edit*)",
+      "Bash(*$(curl*)",
+      "Bash(*$(wget*)",
       "Write(.env)",
       "Write(.env.*)",
       "Write(**/secrets/**)",
       "Write(**/migrations/**)",
       "Edit(.env)",
       "Edit(.env.*)",
-      "Edit(**/migrations/**)"
+      "Edit(**/migrations/**)",
+      "Write(~/.ssh/**)",
+      "Edit(~/.ssh/**)",
+      "Write(~/.aws/**)",
+      "Edit(~/.aws/**)",
+      "Write(~/.gnupg/**)",
+      "Edit(~/.gnupg/**)",
+      "Write(~/.netrc)",
+      "Edit(~/.netrc)",
+      "Write(~/.bashrc)",
+      "Edit(~/.bashrc)",
+      "Write(~/.zshrc)",
+      "Edit(~/.zshrc)",
+      "Write(~/.profile)",
+      "Edit(~/.profile)",
+      "Write(~/.config/gh/**)",
+      "Edit(~/.config/gh/**)",
+      "Write(~/.claude/**)",
+      "Edit(~/.claude/**)"
     ]
   },
   "statusLine": {
@@ -137,30 +161,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/native-tool-nudge.sh",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/native-tool-nudge.sh",
             "statusMessage": "Checking for native tool alternatives"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/pre-commit-check.sh",
-            "timeout": 60,
-            "statusMessage": "Running pre-commit checks"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/pre-push-check.sh",
-            "timeout": 900,
-            "statusMessage": "Running quality checks before push"
           }
         ]
       },

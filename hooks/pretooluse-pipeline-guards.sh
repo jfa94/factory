@@ -101,6 +101,28 @@ if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
           if [[ -f "$config_file" ]]; then
             while IFS= read -r fixture_dir; do
               [[ -z "$fixture_dir" ]] && continue
+              # Validate fixture_dir: must be >=2 chars, only safe chars, no
+              # leading /, no .., no leading ./. Reject invalid entries silently.
+              if [[ ${#fixture_dir} -lt 2 ]]; then
+                printf '%s\n' "pretooluse-guards: invalid fixture_dir (too short): $fixture_dir" >&2
+                continue
+              fi
+              if [[ "$fixture_dir" == /* ]]; then
+                printf '%s\n' "pretooluse-guards: invalid fixture_dir (leading /): $fixture_dir" >&2
+                continue
+              fi
+              if [[ "$fixture_dir" == *..* ]]; then
+                printf '%s\n' "pretooluse-guards: invalid fixture_dir (contains ..): $fixture_dir" >&2
+                continue
+              fi
+              if [[ "$fixture_dir" == ./* ]]; then
+                printf '%s\n' "pretooluse-guards: invalid fixture_dir (leading ./): $fixture_dir" >&2
+                continue
+              fi
+              if ! [[ "$fixture_dir" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+                printf '%s\n' "pretooluse-guards: invalid fixture_dir (unsafe chars): $fixture_dir" >&2
+                continue
+              fi
               # Use prefix match instead of regex to avoid metachar injection
               if [[ "$p" == "${fixture_dir}/"* || "$p" == *"/${fixture_dir}/"* ]]; then return 0; fi
             done < <(jq -r '.safety.testWriterFixtureDirs // [] | .[]' "$config_file" 2>/dev/null || true)
@@ -124,28 +146,28 @@ fi
 #   - Version-bump files: package.json, plugin.json, pyproject.toml, Cargo.toml,
 #     VERSION, .version
 #   - Root README.md (scribe keeps it as a short intro + link to /docs)
+# Bash is also restricted: write-equivalent shell ops (>, >>, tee, cp, mv,
+# cat >, mkdir, touch, dd of=) are parsed; if any target path is out-of-scope,
+# the command is denied. Unresolvable targets → fail-closed deny.
 if [[ "${FACTORY_SUBAGENT_ROLE:-}" == "scribe" ]]; then
+  _is_scribe_allowed_path() {
+    local p="$1"
+    [[ -z "$p" ]] && return 0
+    local rel="$p"
+    # Allow /docs/** or docs/**
+    if [[ "$rel" =~ ^/docs/ || "$rel" =~ ^docs/ || "$rel" == "/docs" || "$rel" == "docs" ]]; then return 0; fi
+    # Allow version-bump root files (basename only).
+    local base
+    base=$(basename -- "$rel")
+    case "$base" in
+      package.json|plugin.json|pyproject.toml|Cargo.toml|VERSION|.version|README.md) return 0 ;;
+    esac
+    # Blocked
+    deny "Scribe is restricted to /docs/** and run manifest. Attempted write to $p."
+  }
+
   case "$tool_name" in
     Edit|Write|MultiEdit)
-      _is_scribe_allowed_path() {
-        local p="$1"
-        [[ -z "$p" ]] && return 0
-        # Strip any leading absolute prefix to get a repo-relative path for matching.
-        local rel="$p"
-        # Allow /docs/** or docs/**
-        if [[ "$rel" =~ ^/docs/ || "$rel" =~ ^docs/ || "$rel" == "/docs" || "$rel" == "docs" ]]; then return 0; fi
-        # Allow version-bump root files (basename only, anywhere in path — but
-        # scribe only touches these at repo root, so basename match is sufficient
-        # and avoids false negatives from absolute paths).
-        local base
-        base=$(basename "$rel")
-        case "$base" in
-          package.json|plugin.json|pyproject.toml|Cargo.toml|VERSION|.version|README.md) return 0 ;;
-        esac
-        # Blocked
-        deny "Scribe is restricted to /docs/** and run manifest. Attempted write to $p."
-      }
-
       scribe_fp=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null || true)
       _is_scribe_allowed_path "$scribe_fp"
       # MultiEdit may have edits[].file_path
@@ -153,6 +175,72 @@ if [[ "${FACTORY_SUBAGENT_ROLE:-}" == "scribe" ]]; then
         [[ -z "$ep" ]] && continue
         _is_scribe_allowed_path "$ep"
       done < <(printf '%s' "$input" | jq -r '.tool_input.edits[]?.file_path // empty' 2>/dev/null || true)
+      ;;
+    Bash)
+      # Parse the Bash command for write-equivalent operations and check each
+      # extracted target path against the scribe allowlist.
+      # Write-equivalent patterns checked (in order):
+      #   >file / >>file (redirection targets)
+      #   tee <file>
+      #   cp <src> <dst>   — dst is the last token
+      #   mv <src> <dst>   — dst is the last token
+      #   cat > <file>     — file after >
+      #   mkdir <dir>
+      #   touch <file>
+      #   dd of=<file>
+      # If we can't determine any target, deny fail-closed.
+      if [[ -n "$cmd" ]]; then
+        _scribe_bash_targets=()
+
+        # Redirections: capture token after > or >>
+        while IFS= read -r redir_target; do
+          [[ -n "$redir_target" ]] && _scribe_bash_targets+=("$redir_target")
+        done < <(printf '%s\n' "$cmd" | grep -oE '(>>?)[[:space:]]*[^[:space:];|&]+' | sed 's/^>>//; s/^>//; s/^[[:space:]]*//' || true)
+
+        # tee: extract argument(s) after the word "tee"
+        if printf '%s' "$cmd" | grep -qE '(^|[|;[:space:]])tee[[:space:]]'; then
+          while IFS= read -r tee_target; do
+            [[ -n "$tee_target" ]] && _scribe_bash_targets+=("$tee_target")
+          done < <(printf '%s\n' "$cmd" | grep -oE 'tee[[:space:]]+[^[:space:]|;&]+' | sed 's/^tee[[:space:]]*//' || true)
+        fi
+
+        # cp / mv: last whitespace-delimited token on the segment
+        for _op in cp mv; do
+          if printf '%s' "$cmd" | grep -qE "(^|[|;[:space:]])${_op}[[:space:]]"; then
+            _last=$(printf '%s\n' "$cmd" | grep -oE "${_op}([[:space:]]+[^[:space:]|;&]+)+" | sed 's/.*[[:space:]]//' || true)
+            [[ -n "$_last" ]] && _scribe_bash_targets+=("$_last")
+          fi
+        done
+
+        # mkdir / touch: all non-flag args
+        for _op in mkdir touch; do
+          if printf '%s' "$cmd" | grep -qE "(^|[|;[:space:]])${_op}[[:space:]]"; then
+            while IFS= read -r _arg; do
+              [[ -n "$_arg" ]] && _scribe_bash_targets+=("$_arg")
+            done < <(printf '%s\n' "$cmd" | grep -oE "${_op}([[:space:]]+-[^[:space:]]+)*([[:space:]]+[^[:space:]|;&-][^[:space:]|;&]*)*" | sed "s/^${_op}//" | tr '[:space:]' '\n' | grep -v '^-' || true)
+          fi
+        done
+
+        # dd of=<file>
+        if printf '%s' "$cmd" | grep -qE '(^|[|;[:space:]])dd[[:space:]]'; then
+          while IFS= read -r dd_target; do
+            [[ -n "$dd_target" ]] && _scribe_bash_targets+=("$dd_target")
+          done < <(printf '%s\n' "$cmd" | grep -oE 'of=[^[:space:]|;&]+' | sed 's/^of=//' || true)
+        fi
+
+        if (( ${#_scribe_bash_targets[@]} == 0 )); then
+          # Check whether the command actually contains any write-equivalent op.
+          # If it does but we couldn't parse a target, deny fail-closed.
+          # If it contains none, allow (read-only command).
+          if printf '%s' "$cmd" | grep -qE '(>>?[^>]|[^|;[:space:]](tee|cp|mv|mkdir|touch)[[:space:]]| dd .*of=)'; then
+            deny "Scribe Bash guard: detected write-equivalent operation but could not determine target path — denied fail-closed."
+          fi
+        else
+          for _t in "${_scribe_bash_targets[@]}"; do
+            _is_scribe_allowed_path "$_t"
+          done
+        fi
+      fi
       ;;
   esac
 fi
@@ -187,10 +275,16 @@ if [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]]; then
       deny "pipeline invariant: gh pr create for task $task_id blocked by ship checklist: $reason_str"
     fi
   else
-    # Backwards compat: checklist absent — fall back to quality_gate.ok only.
-    qok=$(jq -r --arg t "$task_id" '.tasks[$t].quality_gate.ok // false' "$state_file")
-    if [[ "$qok" != "true" ]]; then
-      deny "pipeline invariant: gh pr create for task $task_id requires .tasks.$task_id.quality_gate.ok == true (current: $qok). Run pipeline-run-task \"$run_id\" $task_id --stage postexec first."
+    # Checklist absent: in autonomous mode fail closed — the checklist must
+    # have been written by _stage_ship before pr create is attempted.
+    # In non-autonomous / interactive mode, fall back to quality_gate.ok only.
+    if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
+      deny "pipeline invariant: gh pr create for task $task_id requires a ship checklist at $checklist_file. Run pipeline-run-task first to populate the checklist."
+    else
+      qok=$(jq -r --arg t "$task_id" '.tasks[$t].quality_gate.ok // false' "$state_file")
+      if [[ "$qok" != "true" ]]; then
+        deny "pipeline invariant: gh pr create for task $task_id requires .tasks.$task_id.quality_gate.ok == true (current: $qok). Run pipeline-run-task \"$run_id\" $task_id --stage postexec first."
+      fi
     fi
   fi
 fi

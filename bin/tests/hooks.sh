@@ -1094,7 +1094,7 @@ assert_eq "template has SubagentStop"        "1" "$(jq '.hooks.SubagentStop | le
 assert_eq "template has SessionStart"        "2" "$(jq '.hooks.SessionStart | length' "$autonom")"
 assert_eq "template PostToolUse has asyncRewake" "1" "$(jq '[.hooks.PostToolUse[].hooks[]? | select(.asyncRewake == true)] | length' "$autonom")"
 assert_eq "template PreToolUse has pipeline-guards" "1" "$(jq '[.hooks.PreToolUse[].hooks[]? | select(.command | test("pretooluse-pipeline-guards"))] | length' "$autonom")"
-assert_eq "template allows Bash(codex *)"     "true" "$(jq '[.permissions.allow[] | select(. == "Bash(codex *)")] | length > 0' "$autonom")"
+assert_eq "template does NOT redundantly allow Bash(codex *) under Bash(*)" "false" "$(jq '[.permissions.allow[] | select(. == "Bash(codex *)")] | length > 0' "$autonom")"
 
 rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
@@ -1309,35 +1309,23 @@ echo "=== subagent-stop-gate: retry counter increments and writes BLOCKED on 2nd
 _seed_run "run-ssg-retry" '{"status":"running","tasks":{"t3":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'
 retry_dir="$CLAUDE_PLUGIN_DATA/runs/run-ssg-retry"
 
-# Stub pipeline-state so the BLOCKED write inside the hook succeeds in the test harness
-retry_stubs=$(mktemp -d)
-cat > "$retry_stubs/pipeline-state" <<'SH'
-#!/usr/bin/env bash
-# Stub: pipeline-state task-write <run_id> <task_id> <field> <value>
-# Writes the field directly to state.json via jq.
-run_id="$2"; task_id="$3"; field="$4"; value="$5"
-state="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.json"
-[[ -f "$state" ]] || exit 0
-tmp=$(mktemp)
-jq --arg t "$task_id" --arg f "$field" --argjson v "$value" \
-  '.tasks[$t][$f] = $v' "$state" > "$tmp" && mv "$tmp" "$state"
-SH
-chmod +x "$retry_stubs/pipeline-state"
+# C3: retry counter now lives in state.json (.tasks.t3.subagent_retries),
+# not in a sidecar file. The hook uses the real pipeline-state binary.
 
 # First block attempt
 set +e
 jq -cn '{agent_type:"task-executor", last_assistant_message:"No status."}' \
-  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t3 PATH="$retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t3 bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
 set -e
-retry_count=$(cat "$retry_dir/.subagent_retries.t3" 2>/dev/null || echo 0)
+retry_count=$(jq -r '.tasks.t3.subagent_retries // 0' "$retry_dir/state.json" 2>/dev/null || echo 0)
 assert_eq "retry file = 1 after first block" "1" "$retry_count"
 
 # Second block attempt — should write BLOCKED to state
 set +e
 jq -cn '{agent_type:"task-executor", last_assistant_message:"No status."}' \
-  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t3 PATH="$retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t3 bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
 set -e
-retry_count=$(cat "$retry_dir/.subagent_retries.t3" 2>/dev/null || echo 0)
+retry_count=$(jq -r '.tasks.t3.subagent_retries // 0' "$retry_dir/state.json" 2>/dev/null || echo 0)
 assert_eq "retry file = 2 after second block" "2" "$retry_count"
 
 # Verify BLOCKED written to state.json after 2nd block
@@ -1346,39 +1334,26 @@ assert_eq "executor_status=BLOCKED written to state after 2nd block" "BLOCKED" "
 # Verify test_writer_status was NOT poisoned by the executor retry
 tw_status_after=$(jq -r '.tasks.t3.test_writer_status // empty' "$retry_dir/state.json" 2>/dev/null || true)
 assert_eq "task-executor retry does NOT write test_writer_status" "" "$tw_status_after"
-rm -rf "$retry_stubs"
 
 echo "=== subagent-stop-gate: test-writer retry exhaustion writes test_writer_status (not executor_status) ==="
 
 _seed_run "run-ssg-tw-retry" '{"status":"running","tasks":{"tw1":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'
 tw_retry_dir="$CLAUDE_PLUGIN_DATA/runs/run-ssg-tw-retry"
 
-tw_retry_stubs=$(mktemp -d)
-cat > "$tw_retry_stubs/pipeline-state" <<'SH'
-#!/usr/bin/env bash
-run_id="$2"; task_id="$3"; field="$4"; value="$5"
-state="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.json"
-[[ -f "$state" ]] || exit 0
-tmp=$(mktemp)
-jq --arg t "$task_id" --arg f "$field" --argjson v "$value" \
-  '.tasks[$t][$f] = $v' "$state" > "$tmp" && mv "$tmp" "$state"
-SH
-chmod +x "$tw_retry_stubs/pipeline-state"
-
 # First block attempt
 set +e
 jq -cn '{agent_type:"test-writer", last_assistant_message:"No status."}' \
-  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=tw1 PATH="$tw_retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=tw1 bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
 set -e
-tw_retry_count=$(cat "$tw_retry_dir/.subagent_retries.tw1" 2>/dev/null || echo 0)
+tw_retry_count=$(jq -r '.tasks.tw1.subagent_retries // 0' "$tw_retry_dir/state.json" 2>/dev/null || echo 0)
 assert_eq "tw retry file = 1 after first block" "1" "$tw_retry_count"
 
 # Second block attempt — should write test_writer_status=BLOCKED
 set +e
 jq -cn '{agent_type:"test-writer", last_assistant_message:"No status."}' \
-  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=tw1 PATH="$tw_retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=tw1 bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
 set -e
-tw_retry_count=$(cat "$tw_retry_dir/.subagent_retries.tw1" 2>/dev/null || echo 0)
+tw_retry_count=$(jq -r '.tasks.tw1.subagent_retries // 0' "$tw_retry_dir/state.json" 2>/dev/null || echo 0)
 assert_eq "tw retry file = 2 after second block" "2" "$tw_retry_count"
 
 tw_status_blocked=$(jq -r '.tasks.tw1.test_writer_status // empty' "$tw_retry_dir/state.json" 2>/dev/null || true)
@@ -1386,7 +1361,6 @@ assert_eq "test_writer_status=BLOCKED written after 2nd test-writer block" "BLOC
 # Verify executor_status was NOT written
 exec_status_clean=$(jq -r '.tasks.tw1.executor_status // empty' "$tw_retry_dir/state.json" 2>/dev/null || true)
 assert_eq "test-writer retry does NOT write executor_status" "" "$exec_status_clean"
-rm -rf "$tw_retry_stubs"
 
 # ============================================================
 # Scribe path-scope guard tests

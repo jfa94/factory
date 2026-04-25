@@ -21,6 +21,31 @@ action=""
 run_id_arg=""
 dry_run=0
 
+# Protected branch set (mirrors branch-protection.sh; kept in sync manually).
+_RESCUE_PROTECTED_BRANCHES=("main" "master" "develop")
+
+# Validate a branch name received from a rescue-plan JSON field.
+# Returns 0 (valid) or 1 (invalid — caller must skip the git operation).
+_validate_branch_name() {
+  local b="$1"
+  [[ -z "$b" ]] && return 1
+  [[ "$b" == -* ]] && return 1       # leading dash → could be a git flag
+  [[ "$b" == *:* ]] && return 1      # colon → refspec injection
+  [[ "$b" == *..* ]] && return 1     # double-dot → range expression
+  [[ ${#b} -gt 250 ]] && return 1    # excessive length
+  [[ "$b" =~ ^[a-zA-Z0-9._/-]+$ ]] || return 1
+  return 0
+}
+
+# Check whether a branch name is in the protected set.
+_is_rescue_protected() {
+  local b="$1" p
+  for p in "${_RESCUE_PROTECTED_BRANCHES[@]}"; do
+    [[ "$b" == "$p" ]] && return 0
+  done
+  return 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tier) tier="$2"; shift 2 ;;
@@ -151,12 +176,22 @@ _apply_I_07() {
     rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr skipped "base branch unknown (missing from scan action)"
     return 0
   fi
+  # Validate base branch before passing it to git.
+  if ! _validate_branch_name "$base"; then
+    log_error "_apply_I_07: invalid base branch name '$base' — skipping rebase"
+    rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr error "invalid base branch name rejected"
+    return 0
+  fi
+  if _is_rescue_protected "$base"; then
+    # Rebasing onto a protected branch is allowed (e.g. onto main); just log it.
+    log_error "_apply_I_07: rebasing onto protected branch '$base' — proceeding"
+  fi
   if (( dry_run )); then rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr dry_run ""; return 0; fi
-  if (cd "$wt" && git fetch origin "$base" && git rebase "origin/$base") >/dev/null 2>&1; then
-    (cd "$wt" && git push --force-with-lease) >/dev/null 2>&1 || true
+  if (git -C "$wt" fetch origin "$base" && git -C "$wt" rebase "origin/$base") >/dev/null 2>&1; then
+    git -C "$wt" push --force-with-lease >/dev/null 2>&1 || true
     rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr ok ""
   else
-    (cd "$wt" && git rebase --abort) >/dev/null 2>&1 || true
+    git -C "$wt" rebase --abort >/dev/null 2>&1 || true
     pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
     pipeline-state task-write "$run_id" "$task_id" failure_reason '"unresolvable merge conflict (I-13)"' >/dev/null
     rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr error "rebase failed; escalated to investigation (I-13)"
@@ -270,6 +305,14 @@ _apply_plan_mark_failed() {
 _apply_plan_delete_branch() {
   local run_id="$1" task_id="$2" branch="$3"
   [[ -z "$branch" ]] && return 0
+  if ! _validate_branch_name "$branch"; then
+    log_error "_apply_plan_delete_branch: invalid branch name '$branch' — skipping"
+    return 0
+  fi
+  if _is_rescue_protected "$branch"; then
+    log_error "_apply_plan_delete_branch: refusing to delete protected branch '$branch'"
+    return 0
+  fi
   git branch -D "$branch" 2>/dev/null || true
   git push origin --delete "$branch" 2>/dev/null || true
 }

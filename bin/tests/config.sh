@@ -383,14 +383,15 @@ else
   fail=$((fail + 1))
 fi
 
-# pre-commit-check and pre-push-check from ~/.claude/hooks/
+# Self-containment: pre-commit-check and pre-push-check must NOT be referenced.
+# Their functionality is duplicated by hooks/secret-commit-guard.sh and bin/pipeline-quality-gate.
 for script in pre-commit-check.sh pre-push-check.sh; do
-  match=$(jq --arg s "$script" -r '[.. | .command? // empty] | map(select(test("~/.claude/hooks/" + $s))) | length' "$TEMPLATE")
-  if [[ "$match" -ge 1 ]]; then
-    echo "  PASS: $script hook present (user env path preserved)"
+  match=$(jq --arg s "$script" -r '[.. | .command? // empty] | map(select(test($s))) | length' "$TEMPLATE")
+  if [[ "$match" -eq 0 ]]; then
+    echo "  PASS: $script not referenced (self-contained)"
     pass=$((pass + 1))
   else
-    echo "  FAIL: $script hook missing"
+    echo "  FAIL: $script still referenced — plugin should be self-contained"
     fail=$((fail + 1))
   fi
 done
@@ -442,13 +443,23 @@ else
   fail=$((fail + 1))
 fi
 
-# native-tool-nudge from ~/.claude/hooks/
-nudge=$(jq -r '[.. | .command? // empty] | map(select(test("~/.claude/hooks/native-tool-nudge.sh"))) | length' "$TEMPLATE")
+# Self-containment: native-tool-nudge.sh must reference plugin's own hooks/ via CLAUDE_PLUGIN_ROOT
+nudge=$(jq -r '[.. | .command? // empty] | map(select(test("\\$\\{CLAUDE_PLUGIN_ROOT\\}/hooks/native-tool-nudge.sh"))) | length' "$TEMPLATE")
 if [[ "$nudge" -ge 1 ]]; then
-  echo "  PASS: native-tool-nudge.sh hook present (user env path preserved)"
+  echo "  PASS: native-tool-nudge.sh hook present (plugin-relative path)"
   pass=$((pass + 1))
 else
-  echo "  FAIL: native-tool-nudge.sh hook missing"
+  echo "  FAIL: native-tool-nudge.sh hook missing or not self-contained"
+  fail=$((fail + 1))
+fi
+
+# Self-containment: the actual file must exist in hooks/
+PLUGIN_NUDGE="$PLUGIN_ROOT/hooks/native-tool-nudge.sh"
+if [[ -x "$PLUGIN_NUDGE" ]]; then
+  echo "  PASS: hooks/native-tool-nudge.sh exists and is executable"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: hooks/native-tool-nudge.sh missing or not executable"
   fail=$((fail + 1))
 fi
 
@@ -601,13 +612,13 @@ jq --arg root "$FAKE_ROOT" '
 ' "$TEMPLATE" > "$REAL_MATERIALIZED"
 assert_valid_json "materialized real template is valid JSON" "$REAL_MATERIALIZED"
 
-# Preserve ~/.claude/hooks paths in the real template
+# Self-containment: real template must have NO ~/.claude/hooks/* references after materialization
 real_user_hooks=$(jq -r '[.. | .command? // empty] | map(select(test("~/.claude/hooks/"))) | length' "$REAL_MATERIALIZED")
-if [[ "$real_user_hooks" -ge 1 ]]; then
-  echo "  PASS: real template materialization preserves ~/.claude/hooks/* paths"
+if [[ "$real_user_hooks" -eq 0 ]]; then
+  echo "  PASS: real template has no ~/.claude/hooks/* references (self-contained)"
   pass=$((pass + 1))
 else
-  echo "  FAIL: real template materialization dropped ~/.claude/hooks/* paths"
+  echo "  FAIL: real template still references ~/.claude/hooks/* — should be self-contained"
   fail=$((fail + 1))
 fi
 
