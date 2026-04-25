@@ -624,6 +624,27 @@ _envsubst_bash() {
   done
 }
 
+# ============================================================
+# E-scope helpers — added by Subagent E [code-review]
+# ============================================================
+
+# Validate that a string is a safe identifier for run-id / task-id use.
+# Charset: [a-zA-Z0-9_-], length 1-64.
+# Returns 0 (valid) or 1 (invalid). On invalid, logs to stderr.
+# Usage: _validate_id <id> [<label>]
+_validate_id() {
+  local id="$1" label="${2:-id}"
+  if [[ -z "$id" ]]; then
+    log_error "$label: empty"
+    return 1
+  fi
+  if ! [[ "$id" =~ ^[a-zA-Z0-9_-]{1,64}$ ]]; then
+    log_error "$label: invalid (must match ^[a-zA-Z0-9_-]{1,64}$): $id"
+    return 1
+  fi
+  return 0
+}
+
 # Drop reviewer findings whose verbatim_line is not a substring of the diff.
 # Stdin: normalized review JSON (with .findings[].verbatim_line set).
 # Args:  $1 = path to a file containing the diff text to grep against.

@@ -9,11 +9,8 @@ require_command jq
 run_id="${1:?missing run-id}"
 shift
 
-# Reject run-ids with path separators or dots to prevent directory traversal
-if [[ "$run_id" == */* ]] || [[ "$run_id" == *..* ]]; then
-  log_error "invalid run-id (must not contain / or ..): $run_id"
-  exit 1
-fi
+# Validate run-id: must match ^[a-zA-Z0-9_-]{1,64}$ (positive charset, E1)
+_validate_id "$run_id" "run-id" || exit 1
 
 issue=""
 mode="prd"

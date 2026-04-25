@@ -268,8 +268,15 @@ if [[ "$close_issues" == "true" ]]; then
   require_command gh
   log_info "checking issues for closure..."
 
-  issues=$(printf '%s' "$state" | jq -r '.input.issue_numbers[]' 2>/dev/null)
-  for issue_number in $issues; do
+  # E2: use while+read to avoid word-splitting, and validate each issue number
+  # is purely numeric before passing to gh — defence-in-depth against malformed
+  # state (e.g. injection via a non-validating writer in the future).
+  while IFS= read -r issue_number; do
+    [[ -z "$issue_number" ]] && continue
+    if ! [[ "$issue_number" =~ ^[0-9]+$ ]]; then
+      log_warn "skipping non-numeric issue_number from state: $issue_number"
+      continue
+    fi
     # Check if ALL tasks are done
     total_tasks=$(printf '%s' "$state" | jq '.tasks | length')
     done_tasks=$(printf '%s' "$state" | jq '[.tasks | to_entries[] | select(.value.status == "done")] | length')
@@ -285,7 +292,7 @@ if [[ "$close_issues" == "true" ]]; then
     else
       log_warn "not closing issue #$issue_number ($done_tasks/$total_tasks tasks done)"
     fi
-  done
+  done < <(printf '%s' "$state" | jq -r '.input.issue_numbers[]' 2>/dev/null)
 fi
 
 # --- Clean spec ---

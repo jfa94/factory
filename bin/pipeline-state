@@ -19,6 +19,24 @@ require_command jq
 action="${1:?missing action}"
 shift
 
+# Known top-level task fields. New code should add to this list when it
+# introduces a new state.tasks[].field. Unknown fields trigger a warning to
+# surface typos like 'qualtiy_gate' early; they are NOT blocked (yet) for
+# backwards compat. After one release cycle this should become a hard reject.
+# (E3)
+_KNOWN_TASK_FIELDS=(
+  status started_at ended_at depends_on stage
+  classify risk risk_tier
+  test_writer_status executor_status
+  worktree branch
+  quality_gate quality_gates review_files review_attempts
+  postexec_reviewer_only postreview_prior_blockers
+  pr_number pr_url ci_status merge_status
+  ci_fix_attempts subagent_retries failure_reason
+  holdout_review_file
+  tdd_exempt
+)
+
 # Per-run advisory lock using mkdir (atomic on all POSIX systems, no flock needed).
 # Serialises concurrent read-modify-write cycles in write and task-status actions.
 _state_lock_dir() { echo "$CLAUDE_PLUGIN_DATA/runs/$1/state.lock"; }
@@ -121,6 +139,7 @@ _read_state_file() {
 case "$action" in
   read)
     run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
     key="${2:-}"
     state=$(_read_state_file "$run_id")
     if [[ -z "$key" ]]; then
@@ -137,12 +156,14 @@ case "$action" in
         default_expr="$(printf '%s' "$default_expr" | awk '{$1=$1; print}')"
       fi
 
-      # Validate default, if present. Allowed: json literals (numbers, bools,
-      # null, quoted strings). Anything else is rejected to block injection
-      # through the fallback operand.
+      # Validate default, if present. Use jq -e empty as the parser: any input
+      # that is valid JSON (numbers with exponents, escape-sequenced strings,
+      # populated arrays/objects) is accepted; anything jq rejects is blocked.
+      # jq parse is the actual security boundary — values that survive it are
+      # safe to embed in a getpath(…) // <expr> expression (E4).
       if [[ -n "$default_expr" ]]; then
-        if ! [[ "$default_expr" =~ ^(null|true|false|-?[0-9]+(\.[0-9]+)?|\"[^\"\\]*\"|\[\]|\{\})$ ]]; then
-          log_error "unsafe default expression in read key: $default_expr"
+        if ! printf '%s' "$default_expr" | jq . >/dev/null 2>&1; then
+          log_error "invalid JSON default expression: $default_expr"
           exit 1
         fi
       fi
@@ -161,6 +182,7 @@ case "$action" in
 
   write)
     run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
     key="${2:?missing key}"
     value="${3:?missing value}"
     f=$(_state_file "$run_id")
@@ -190,7 +212,9 @@ case "$action" in
 
   task-write)
     run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
     task_id="${2:?missing task-id}"
+    _validate_id "$task_id" "task-id" || exit 1
     field="${3:?missing field}"
     value="${4:?missing value}"
     f=$(_state_file "$run_id")
@@ -207,6 +231,19 @@ case "$action" in
       log_error "invalid task-write field: $field"
       exit 1
     fi
+
+    # Warn (not block) on unknown top-level field to surface typos early.
+    # Strip nested suffix (.foo.bar → foo) to match against the allowlist root.
+    # (E3: warn-only; becomes a hard reject after one release cycle.)
+    field_root="${field%%.*}"
+    _known=0
+    for _k in "${_KNOWN_TASK_FIELDS[@]}"; do
+      [[ "$_k" == "$field_root" ]] && { _known=1; break; }
+    done
+    if (( _known == 0 )); then
+      log_warn "task-write unknown field: $field (known roots: ${_KNOWN_TASK_FIELDS[*]})"
+    fi
+    unset _known _k
 
     # Build path array ["tasks", $tid, <field segments>] via jq.
     jq_path=$(jq -n --arg tid "$task_id" --arg f "$field" \
@@ -234,7 +271,9 @@ case "$action" in
 
   task-read)
     run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
     task_id="${2:?missing task-id}"
+    _validate_id "$task_id" "task-id" || exit 1
     field="${3:-}"
     state=$(_read_state_file "$run_id")
 
@@ -260,8 +299,8 @@ case "$action" in
         exit 1
       fi
       if [[ -n "$default_expr" ]]; then
-        if ! [[ "$default_expr" =~ ^(null|true|false|-?[0-9]+(\.[0-9]+)?|\"[^\"\\]*\"|\[\]|\{\})$ ]]; then
-          log_error "unsafe default expression in task-read field: $default_expr"
+        if ! printf '%s' "$default_expr" | jq . >/dev/null 2>&1; then
+          log_error "invalid JSON default expression: $default_expr"
           exit 1
         fi
       fi
@@ -280,7 +319,9 @@ case "$action" in
 
   task-status)
     run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
     task_id="${2:?missing task-id}"
+    _validate_id "$task_id" "task-id" || exit 1
     status="${3:?missing status}"
     f=$(_state_file "$run_id")
 
@@ -329,7 +370,9 @@ case "$action" in
 
   deps-satisfied)
     run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
     task_id="${2:?missing task-id}"
+    _validate_id "$task_id" "task-id" || exit 1
     state=$(_read_state_file "$run_id")
 
     # Check each dependency's status
@@ -353,6 +396,7 @@ case "$action" in
 
   interrupted)
     run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
     state=$(_read_state_file "$run_id")
     status=$(printf '%s' "$state" | jq -r '.status')
     [[ "$status" == "interrupted" ]]
@@ -360,6 +404,7 @@ case "$action" in
 
   resume-point)
     run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
     state=$(_read_state_file "$run_id")
 
     # Prefer .execution_order (validated topo-sort from pipeline-validate-tasks).
@@ -418,6 +463,7 @@ case "$action" in
   # Side-effect: removes the 'current' symlink after writing state.
   finalize-on-stop)
     run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
     f=$(_state_file "$run_id")
 
     _state_lock "$run_id"
