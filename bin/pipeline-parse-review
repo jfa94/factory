@@ -104,8 +104,8 @@ if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; t
     fi
 
     # Build normalized output matching the prose parser's schema
-    blocking_count=$(printf '%s' "$valid_findings" | jq '[.[] | select(.severity == "critical")] | length')
-    non_blocking_count=$(printf '%s' "$valid_findings" | jq "[.[] | select(.severity != \"critical\")] | length")
+    blocking_count=$(printf '%s' "$valid_findings" | jq '[.[] | select(.severity == "critical" or .severity == "high")] | length')
+    non_blocking_count=$(printf '%s' "$valid_findings" | jq '[.[] | select(.severity != "critical" and .severity != "high")] | length')
 
     out_json=$(jq -n \
       --arg verdict "$normalized_verdict" \

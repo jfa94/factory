@@ -539,7 +539,11 @@ validate_findings() {
     fi
   done
   printf '%s' "$json" | jq --argjson k "$kept" --argjson d "$dropped" '
-    .findings = $k
+    .findings = ($k | map(
+      .blocking = (
+        if (.blocking == true or .blocking == false) then .blocking
+        else (.severity == "critical" or .severity == "high")
+        end)))
     | .blocking_count = ([.findings[] | select(.blocking == true)] | length)
     | .non_blocking_count = ((.findings | length) - .blocking_count)
     | .declared_blockers = .blocking_count

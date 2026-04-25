@@ -564,6 +564,39 @@ rm -rf "$_origin_repo"
 
 # ============================================================
 echo ""
+echo "=== validate_findings: severity-only finding (no .blocking field) counted as blocker ==="
+
+# Source pipeline-lib.sh to get validate_findings in this shell
+_lib_dir="$(cd "$(dirname "$0")/.." && pwd)"
+source "$_lib_dir/pipeline-lib.sh"
+
+_vf_diff=$(mktemp)
+printf '+real line that exists in the diff\n' > "$_vf_diff"
+
+_vf_input='{"verdict":"REQUEST_CHANGES","findings":[{"title":"t","file":"a.ts","severity":"high","evidence":"real line that exists in the diff","verbatim_line":"real line that exists in the diff","description":"d"}],"summary":"s","blocking_count":0,"non_blocking_count":0,"declared_blockers":0}'
+_vf_out=$(printf '%s' "$_vf_input" | validate_findings "$_vf_diff")
+assert_eq "severity=high with no .blocking field → counted as blocker" "1" "$(printf '%s' "$_vf_out" | jq '.blocking_count')"
+assert_eq "severity=high: verdict stays REQUEST_CHANGES" "REQUEST_CHANGES" "$(printf '%s' "$_vf_out" | jq -r '.verdict')"
+
+rm -f "$_vf_diff"
+
+# ============================================================
+echo ""
+echo "=== validate_findings: REQUEST_CHANGES preserved when one critical finding survives drop ==="
+
+_vf2_diff=$(mktemp)
+printf '+the real line is here verbatim\n' > "$_vf2_diff"
+
+_vf2_input='{"verdict":"REQUEST_CHANGES","findings":[{"title":"real","file":"a.ts","severity":"critical","evidence":"real line","verbatim_line":"the real line is here verbatim","description":"real blocker"},{"title":"fake","file":"b.ts","severity":"critical","evidence":"some evidence","verbatim_line":"THIS_DOES_NOT_EXIST_IN_DIFF_XYZ","description":"fabricated"}],"summary":"s","blocking_count":2,"non_blocking_count":0,"declared_blockers":2}'
+_vf2_out=$(printf '%s' "$_vf2_input" | validate_findings "$_vf2_diff")
+assert_eq "one surviving critical finding: verdict stays REQUEST_CHANGES" "REQUEST_CHANGES" "$(printf '%s' "$_vf2_out" | jq -r '.verdict')"
+assert_eq "one surviving critical finding: blocking_count = 1" "1" "$(printf '%s' "$_vf2_out" | jq '.blocking_count')"
+assert_eq "one surviving critical finding: findings length = 1" "1" "$(printf '%s' "$_vf2_out" | jq '.findings | length')"
+
+rm -f "$_vf2_diff"
+
+# ============================================================
+echo ""
 echo "=== pipeline-coverage-gate (coverage increase) ==="
 
 before_file="$CLAUDE_PLUGIN_DATA/before.json"

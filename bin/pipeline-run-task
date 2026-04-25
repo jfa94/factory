@@ -774,7 +774,14 @@ _stage_postreview() {
   local any_changes=false any_discuss=false f verdict decision raw_json still_count
   for f in "${files[@]}"; do
     [[ ! -f "$f" ]] && { log_warn "review file missing: $f"; continue; }
-    if [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
+    if [[ "$f" == *.json ]]; then
+      # Already-normalized verdict JSON (e.g. pipeline-codex-review output, which
+      # runs validate_findings internally before writing the file).
+      verdict=$(cat "$f") || { log_warn "read failed on $f"; any_changes=true; continue; }
+      if ! printf '%s' "$verdict" | jq -e 'has("verdict")' >/dev/null 2>&1; then
+        log_warn "normalized review missing .verdict field: $f"; any_changes=true; continue
+      fi
+    elif [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
       local base_ref
       base_ref=$(_resolve_base_ref "$pr_wt")
       if [[ -z "$base_ref" ]]; then
@@ -849,7 +856,12 @@ _stage_postreview() {
     for f in "${files[@]}"; do
       [[ ! -f "$f" ]] && continue
       local fverdict
-      fverdict=$(pipeline-parse-review < "$f" 2>/dev/null) || continue
+      if [[ "$f" == *.json ]]; then
+        fverdict=$(cat "$f" 2>/dev/null) || continue
+        printf '%s' "$fverdict" | jq -e 'has("verdict")' >/dev/null 2>&1 || continue
+      else
+        fverdict=$(pipeline-parse-review < "$f" 2>/dev/null) || continue
+      fi
       local ffindings
       ffindings=$(printf '%s' "$fverdict" | jq -c '.findings // [] | map(select(type=="object"))' 2>/dev/null || printf '[]')
       local count
