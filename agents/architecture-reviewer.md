@@ -2,7 +2,7 @@
 name: architecture-reviewer
 description: Reviews code changes for architectural compliance — module boundaries, dependency direction, coupling metrics, and AI-specific anti-patterns (god objects, leaky abstractions, barrel-file abuse). Triggered after implementation, before PR merge.
 tools: Read, Bash, Grep, Glob
-model: sonnet
+model: opus
 permissionMode: plan
 maxTurns: 25
 ---
