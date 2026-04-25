@@ -36,10 +36,6 @@ _derive_task_id_from_transcript() {
   local state_file="$2"
   local tid=""
   if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
-    tid=$(grep -oE '\[task:[^]]+\]' "$transcript_path" 2>/dev/null | head -1 | grep -oE '[^[task:][^]]+' || true)
-  fi
-  # grep pattern above extracts the id from [task:<id>]; use sed for clarity
-  if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
     tid=$(grep -oE '\[task:[^]]+\]' "$transcript_path" 2>/dev/null | head -1 | sed 's/\[task:\([^]]*\)\]/\1/' || true)
   fi
   if [[ -z "$tid" ]]; then
@@ -136,19 +132,31 @@ if [[ "$autonomous" == "1" ]]; then
     transcript_path="${transcript_path:-$(printf '%s' "$input" | jq -r '.agent_transcript_path // empty' 2>/dev/null)}"
     task_id=$(_derive_task_id_from_transcript "$transcript_path" "$state_file")
 
-    retry_file="$run_dir/.subagent_retries.${task_id:-unknown}"
+    # C3: retry counter persisted in state.json (tasks[$t].subagent_retries) rather
+    # than sidecar files — survives cleanup/rescue ops that clear run-dir sidecars.
+    # Validate task_id before using it as a state key (Subagent E adds full
+    # _validate_id later; inline check here as a guard until then).
     retries=0
-    if [[ -f "$retry_file" ]]; then
-      retries=$(cat "$retry_file" 2>/dev/null || echo 0)
+    run_id_for_retry=$(basename "$run_dir")
+    if [[ -n "$task_id" && "$task_id" =~ ^[a-zA-Z0-9_-]+$ ]] && \
+       [[ -f "$run_dir/state.json" ]] && command -v pipeline-state >/dev/null 2>&1; then
+      retries=$(pipeline-state task-read "$run_id_for_retry" "$task_id" \
+        'subagent_retries // 0' 2>/dev/null || echo 0)
+      # Ensure we have a numeric value
+      [[ "$retries" =~ ^[0-9]+$ ]] || retries=0
     fi
     retries=$(( retries + 1 ))
-    printf '%s' "$retries" > "$retry_file"
+    if [[ -n "$task_id" && "$task_id" =~ ^[a-zA-Z0-9_-]+$ ]] && \
+       [[ -f "$run_dir/state.json" ]] && command -v pipeline-state >/dev/null 2>&1; then
+      pipeline-state task-write "$run_id_for_retry" "$task_id" \
+        "subagent_retries" "$retries" >/dev/null 2>&1 || true
+    fi
 
     # Budget: 1 retry (2 attempts total). On 2nd block, write BLOCKED to the
     # correct per-agent status field so downstream stages detect exhaustion.
     if (( retries >= 2 )); then
-      if [[ -n "$task_id" ]] && [[ -f "$run_dir/state.json" ]] && command -v pipeline-state >/dev/null 2>&1; then
-        run_id=$(basename "$run_dir")
+      if [[ -n "$task_id" && "$task_id" =~ ^[a-zA-Z0-9_-]+$ ]] && \
+         [[ -f "$run_dir/state.json" ]] && command -v pipeline-state >/dev/null 2>&1; then
         status_field=""
         case "$agent_type" in
           test-writer)   status_field="test_writer_status" ;;
@@ -156,7 +164,8 @@ if [[ "$autonomous" == "1" ]]; then
           *)             status_field="" ;;
         esac
         if [[ -n "$status_field" ]]; then
-          pipeline-state task-write "$run_id" "$task_id" "$status_field" '"BLOCKED"' >/dev/null 2>&1 || true
+          pipeline-state task-write "$run_id_for_retry" "$task_id" \
+            "$status_field" '"BLOCKED"' >/dev/null 2>&1 || true
         fi
       fi
     fi
@@ -166,13 +175,15 @@ if [[ "$autonomous" == "1" ]]; then
     exit 1
   fi
 
-  # No block — clean up the retry sidecar for this agent's task
+  # No block — reset retry counter in state.json (was: rm sidecar file)
   state_file="${state_file:-$run_dir/state.json}"
   transcript_path="${transcript_path:-$(printf '%s' "$input" | jq -r '.agent_transcript_path // empty' 2>/dev/null)}"
   task_id_for_cleanup=$(_derive_task_id_from_transcript "$transcript_path" "$state_file")
-  if [[ -n "$task_id_for_cleanup" ]]; then
-    retry_file_cleanup="$run_dir/.subagent_retries.${task_id_for_cleanup}"
-    [[ -f "$retry_file_cleanup" ]] && rm -f "$retry_file_cleanup"
+  if [[ -n "$task_id_for_cleanup" && "$task_id_for_cleanup" =~ ^[a-zA-Z0-9_-]+$ ]] && \
+     command -v pipeline-state >/dev/null 2>&1; then
+    run_id_cleanup=$(basename "$run_dir")
+    pipeline-state task-write "$run_id_cleanup" "$task_id_for_cleanup" \
+      "subagent_retries" "0" >/dev/null 2>&1 || true
   fi
 fi
 
