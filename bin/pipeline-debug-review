@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# pipeline-debug-review — wraps the existing reviewer (codex preferred,
+# Claude fallback) for the /factory:debug loop. Resolves the diff base,
+# normalizes finding severities, filters by --severity threshold, writes
+# the round JSON to --out-dir, and prints a small JSON summary on stdout.
+#
+# Usage:
+#   pipeline-debug-review --base <ref> --severity <critical|high|medium|all>
+#                         --out-dir <dir> [--round <N>]
+# Output (stdout, single line JSON):
+#   {"blocking_count":N,"below_threshold_count":M,"verdict":"...","review_file":"<path>"}
+# Exit: 0 on success, 1 on reviewer/IO failure.
+
+set -euo pipefail
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+base_ref=""
+severity="medium"
+out_dir=""
+round=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --base)     base_ref="$2"; shift 2 ;;
+    --severity) severity="$2"; shift 2 ;;
+    --out-dir)  out_dir="$2";  shift 2 ;;
+    --round)    round="$2";    shift 2 ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+[[ -z "$base_ref" ]] && { log_error "--base required"; exit 1; }
+[[ -z "$out_dir"  ]] && { log_error "--out-dir required"; exit 1; }
+case "$severity" in critical|high|medium|all) : ;; *) log_error "invalid --severity: $severity"; exit 1 ;; esac
+
+mkdir -p "$out_dir"
+review_file="$out_dir/round-${round}.review.json"
+
+# Run the underlying reviewer (codex preferred). pipeline-detect-reviewer
+# never fails; if codex unavailable its caller would fall back to the
+# quality-reviewer agent. /debug only supports the codex path for now;
+# fallback is reported as REVIEW_FAILED.
+detect_json=$(pipeline-detect-reviewer 2>/dev/null || printf '{}')
+reviewer=$(printf '%s' "$detect_json" | jq -r '.reviewer // "unknown"')
+
+if [[ "$reviewer" != "codex" ]]; then
+  log_error "non-codex reviewer (\"$reviewer\") not yet supported by /factory:debug"
+  exit 1
+fi
+
+# Codex review writes normalized JSON to stdout
+if ! pipeline-codex-review --base "$base_ref" --task-id "debug-r${round}" > "$review_file"; then
+  log_error "pipeline-codex-review failed"
+  exit 1
+fi
+
+# Severity normalization: important → high, minor → low
+normalized=$(jq -c '
+  .findings = (.findings // [] | map(
+    .severity = (
+      if .severity == "important" then "high"
+      elif .severity == "minor"   then "low"
+      else (.severity // "medium")
+      end
+    )
+  ))
+' "$review_file")
+printf '%s' "$normalized" > "$review_file"
+
+# Threshold mapping
+threshold_set() {
+  case "$1" in
+    critical) printf 'critical' ;;
+    high)     printf 'critical high' ;;
+    medium)   printf 'critical high medium' ;;
+    all)      printf 'critical high medium low' ;;
+  esac
+}
+allowed=$(threshold_set "$severity")
+
+blocking=$(jq --arg allowed "$allowed" '
+  [.findings[] | select((.severity // "medium") as $s
+                        | ($allowed | split(" ")) | index($s))] | length
+' "$review_file")
+below=$(jq --arg allowed "$allowed" '
+  [.findings[] | select(((.severity // "medium") as $s
+                        | ($allowed | split(" ")) | index($s)) | not)] | length
+' "$review_file")
+verdict=$(jq -r '.verdict // "UNKNOWN"' "$review_file")
+
+jq -nc \
+  --argjson blocking "$blocking" \
+  --argjson below "$below" \
+  --arg verdict "$verdict" \
+  --arg path "$review_file" \
+  '{blocking_count:$blocking, below_threshold_count:$below, verdict:$verdict, review_file:$path}'
