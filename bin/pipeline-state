@@ -411,9 +411,83 @@ case "$action" in
       | jq -R -s 'split("\n") | map(select(length > 0))'
     ;;
 
+  # C1: finalize-on-stop — atomically transition in-flight tasks and compute
+  # run-level final status. Called exclusively by stop-gate.sh to ensure all
+  # state writes go through the lock rather than direct tmp+mv.
+  # Usage: pipeline-state finalize-on-stop <run-id>
+  # Side-effect: removes the 'current' symlink after writing state.
+  finalize-on-stop)
+    run_id="${1:?missing run-id}"
+    f=$(_state_file "$run_id")
+
+    _state_lock "$run_id"
+    trap '_state_unlock "$run_id"' EXIT
+    state=$(_read_state_file "$run_id")
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # Transition in-flight tasks to interrupted.
+    # needs_human_review is preserved (human must act; not a pipeline failure).
+    state=$(printf '%s' "$state" | jq --arg now "$now" '
+      .tasks |= with_entries(
+        if .value.status == "executing"
+           or .value.status == "reviewing"
+           or .value.status == "ci_fixing" then
+          .value.status = "interrupted" | .value.ended_at = $now
+        else . end
+      )
+    ')
+
+    # Determine run-level final status from (post-transition) task statuses.
+    final_status=$(printf '%s' "$state" | jq -r '
+      .tasks | to_entries | map(.value.status) as $statuses |
+      if ($statuses | length) == 0 then
+        "interrupted"
+      elif ($statuses | all(. == "done")) then
+        "completed"
+      elif ([$statuses[] | select(. == "interrupted" or . == "pending" or . == "needs_human_review")] | length) > 0 then
+        if ([$statuses[] | select(. == "failed")] | length) > 0 then
+          "partial"
+        else
+          "interrupted"
+        end
+      elif ([$statuses[] | select(. == "failed")] | length) > 0 then
+        "partial"
+      else
+        "interrupted"
+      end
+    ')
+
+    # Resume point: first task whose status is not done and not failed.
+    resume_task=$(printf '%s' "$state" | jq -r '
+      [.tasks | to_entries[] |
+       select(.value.status != "done" and .value.status != "failed") |
+       .key] | first // ""
+    ')
+
+    updated=$(printf '%s' "$state" | jq \
+      --arg status "$final_status" \
+      --arg now "$now" \
+      --arg resume "$resume_task" '
+      .status = $status |
+      .ended_at = $now |
+      .updated_at = $now |
+      .resume_point = (if $resume != "" then $resume else null end)
+    ')
+
+    atomic_write "$f" "$updated"
+    _state_unlock "$run_id"
+    trap - EXIT
+
+    # Remove the 'current' symlink — this run is no longer the active session.
+    current_link="${CLAUDE_PLUGIN_DATA}/runs/current"
+    rm -f "$current_link"
+
+    log_info "run $run_id finalized: $final_status (resume: ${resume_task:-none})"
+    ;;
+
   *)
     log_error "unknown action: $action"
-    echo "Usage: pipeline-state <read|write|task-status|deps-satisfied|interrupted|resume-point|list> <run-id> [args...]" >&2
+    echo "Usage: pipeline-state <read|write|task-status|deps-satisfied|interrupted|resume-point|list|finalize-on-stop> <run-id> [args...]" >&2
     exit 1
     ;;
 esac

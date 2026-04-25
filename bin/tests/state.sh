@@ -1037,6 +1037,139 @@ pkg=$(detect_pkg_manager "/nonexistent")
 assert_eq "detect_pkg_manager default" "pnpm" "$pkg"
 
 echo ""
+echo "=== C1: finalize-on-stop action ==="
+
+# Helper: create a run with given tasks and call finalize-on-stop directly.
+_run_finalize() {
+  local run_id="$1" tasks_json="$2" sandbox
+  sandbox=$(mktemp -d)
+  mkdir -p "$sandbox/runs/$run_id"
+  jq -n --arg rid "$run_id" --argjson tasks "$tasks_json" '{
+    run_id: $rid,
+    status: "running",
+    started_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ended_at: null,
+    tasks: $tasks
+  }' > "$sandbox/runs/$run_id/state.json"
+  ln -s "$sandbox/runs/$run_id" "$sandbox/runs/current"
+  CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state finalize-on-stop "$run_id" >/dev/null 2>&1
+  # Emit run-level status + task json for caller inspection
+  jq -r '.status' "$sandbox/runs/$run_id/state.json"
+  printf '__TASKS_JSON__%s\n' "$(jq -c '.tasks' "$sandbox/runs/$run_id/state.json")"
+  printf '__SYMLINK_EXISTS__%s\n' "$( [[ -L "$sandbox/runs/current" ]] && echo true || echo false )"
+  printf '__RESUME_POINT__%s\n' "$(jq -r '.resume_point // ""' "$sandbox/runs/$run_id/state.json")"
+  rm -rf "$sandbox"
+}
+
+# executing tasks → interrupted, run status = interrupted
+fos_out=$(_run_finalize "fos-exec" '{"t1":{"status":"executing"},"t2":{"status":"reviewing"},"t3":{"status":"ci_fixing"}}')
+fos_status=$(printf '%s' "$fos_out" | head -n1)
+fos_tasks=$(printf '%s' "$fos_out" | grep '^__TASKS_JSON__' | sed 's/^__TASKS_JSON__//')
+fos_symlink=$(printf '%s' "$fos_out" | grep '^__SYMLINK_EXISTS__' | sed 's/^__SYMLINK_EXISTS__//')
+assert_eq "finalize-on-stop: executing → interrupted" "interrupted" \
+  "$(printf '%s' "$fos_tasks" | jq -r '.t1.status')"
+assert_eq "finalize-on-stop: reviewing → interrupted" "interrupted" \
+  "$(printf '%s' "$fos_tasks" | jq -r '.t2.status')"
+assert_eq "finalize-on-stop: ci_fixing → interrupted" "interrupted" \
+  "$(printf '%s' "$fos_tasks" | jq -r '.t3.status')"
+assert_eq "finalize-on-stop: run status interrupted" "interrupted" "$fos_status"
+assert_eq "finalize-on-stop: current symlink removed" "false" "$fos_symlink"
+
+# ended_at set on transitioned tasks
+assert_eq "finalize-on-stop: ended_at set on t1" "true" \
+  "$(printf '%s' "$fos_tasks" | jq -r '.t1.ended_at != null')"
+
+# all done → completed
+fos_out=$(_run_finalize "fos-done" '{"t1":{"status":"done"},"t2":{"status":"done"}}')
+fos_status=$(printf '%s' "$fos_out" | head -n1)
+assert_eq "finalize-on-stop: all done → completed" "completed" "$fos_status"
+
+# done + failed → partial
+fos_out=$(_run_finalize "fos-part" '{"t1":{"status":"done"},"t2":{"status":"failed"}}')
+fos_status=$(printf '%s' "$fos_out" | head -n1)
+assert_eq "finalize-on-stop: done+failed → partial" "partial" "$fos_status"
+
+# needs_human_review preserved, run → interrupted
+fos_out=$(_run_finalize "fos-nhr" '{"t1":{"status":"needs_human_review"}}')
+fos_status=$(printf '%s' "$fos_out" | head -n1)
+fos_tasks=$(printf '%s' "$fos_out" | grep '^__TASKS_JSON__' | sed 's/^__TASKS_JSON__//')
+assert_eq "finalize-on-stop: needs_human_review preserved" "needs_human_review" \
+  "$(printf '%s' "$fos_tasks" | jq -r '.t1.status')"
+assert_eq "finalize-on-stop: needs_human_review run status" "interrupted" "$fos_status"
+
+# resume_point is the first non-done/non-failed task
+fos_out=$(_run_finalize "fos-rp" '{"t1":{"status":"done"},"t2":{"status":"pending"},"t3":{"status":"pending"}}')
+fos_resume=$(printf '%s' "$fos_out" | grep '^__RESUME_POINT__' | sed 's/^__RESUME_POINT__//')
+assert_eq "finalize-on-stop: resume_point is first non-terminal" "t2" "$fos_resume"
+
+# Lock held during transform: hold the lock externally, call finalize-on-stop
+# in background, verify it does NOT complete within 1s (lock blocks it), then
+# release the lock and verify it completes.
+_fos_lock_test() {
+  local sandbox run_id="fos-lock-test"
+  sandbox=$(mktemp -d)
+  mkdir -p "$sandbox/runs/$run_id"
+  jq -n --arg rid "$run_id" '{
+    run_id: $rid, status: "running",
+    started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    ended_at: null, tasks: {}
+  }' > "$sandbox/runs/$run_id/state.json"
+  ln -s "$sandbox/runs/$run_id" "$sandbox/runs/current"
+  # Acquire the state lock externally (mkdir-based)
+  local lock_dir="$sandbox/runs/$run_id/state.lock"
+  mkdir -p "$lock_dir"
+  printf '%s' "$$" > "$lock_dir/pid"
+  # Run finalize-on-stop in background with locked state
+  local done_marker="$sandbox/done"
+  ( CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state finalize-on-stop "$run_id" >/dev/null 2>&1
+    touch "$done_marker" ) &
+  local bg_pid=$!
+  # Give it 0.5s — it must NOT complete while lock is held
+  sleep 0.5
+  local blocked=false
+  if [[ ! -f "$done_marker" ]]; then
+    blocked=true
+  fi
+  # Release the lock; background job should complete shortly
+  rm -rf "$lock_dir"
+  wait "$bg_pid" 2>/dev/null || true
+  rm -rf "$sandbox"
+  printf '%s' "$blocked"
+}
+fos_lock_blocked=$(_fos_lock_test)
+assert_eq "finalize-on-stop blocks while lock is held" "true" "$fos_lock_blocked"
+
+echo ""
+echo "=== C2: pipeline-lock dead-PID race (atomic acquire) ==="
+
+# Spawn two background acquirers against a lock file with a stale (dead) PID.
+# Exactly one should succeed; the other should either also succeed (last-mv-wins
+# with read-back verify) or time out. The key invariant: no process errors out
+# non-gracefully and the lock file is left in a consistent (valid JSON) state.
+_lock_race_test() {
+  local sandbox
+  sandbox=$(mktemp -d)
+  local lf="$sandbox/pipeline.lock"
+  echo '{"pid":77770,"timestamp":"2026-01-01T00:00:00Z"}' > "$lf"
+  local results=()
+  for i in 1 2; do
+    CLAUDE_PLUGIN_DATA="$sandbox" FACTORY_LOCK_TEST_PID=$((90000 + i)) \
+      pipeline-lock acquire --timeout 5 >/dev/null 2>&1 &
+  done
+  wait
+  # The lock file must exist and contain valid JSON after the race
+  if jq -e '.pid' "$lf" >/dev/null 2>&1; then
+    printf 'valid'
+  else
+    printf 'invalid'
+  fi
+  rm -rf "$sandbox"
+}
+race_result=$(_lock_race_test)
+assert_eq "lock race: file is valid JSON after concurrent dead-PID acquire" "valid" "$race_result"
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"
