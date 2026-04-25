@@ -64,6 +64,26 @@ assert_eq "base flag accepted" "claude-code" "$(echo "$output" | jq -r '.reviewe
 # Always exits 0
 assert_exit "always exits 0" 0 env PATH="$_nocodex_path" pipeline-detect-reviewer
 
+# F2 fix: with Codex on PATH, when only origin/staging exists (no local staging),
+# detect-reviewer must fall back to origin/staging and embed it in the emitted command.
+_codex_stubs=$(mktemp -d)
+cat > "$_codex_stubs/codex" <<'SH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "login status") exit 0 ;;
+  *) exit 0 ;;
+esac
+SH
+chmod +x "$_codex_stubs/codex"
+_dr_repo=$(mktemp -d)
+git -C "$_dr_repo" init -q
+git -C "$_dr_repo" commit --allow-empty -m "init" -q
+git -C "$_dr_repo" update-ref refs/remotes/origin/staging "$(git -C "$_dr_repo" rev-parse HEAD)"
+output=$(cd "$_dr_repo" && env PATH="$_codex_stubs:$PLUGIN_BIN:/usr/bin:/bin" pipeline-detect-reviewer 2>/dev/null)
+assert_eq "detect-reviewer codex: uses origin/staging fallback" "true" \
+  "$( [[ "$(echo "$output" | jq -r '.command')" == *"origin/staging"* ]] && echo true || echo false )"
+rm -rf "$_codex_stubs" "$_dr_repo"
+
 # ============================================================
 echo ""
 echo "=== pipeline-parse-review (APPROVE) ==="
@@ -217,22 +237,363 @@ assert_eq "no verdict exits 1" "1" "$exit_code"
 
 # ============================================================
 echo ""
-echo "=== pipeline-parse-review (codex JSON passthrough) ==="
+echo "=== pipeline-parse-review (codex passthrough removed — prose fallthrough) ==="
 
-codex_json='{"verdict":"APPROVE","round":1,"findings":[],"summary":"ok"}'
-output=$(printf '%s' "$codex_json" | pipeline-parse-review --reviewer codex 2>/dev/null)
-assert_eq "codex verdict" "APPROVE" "$(echo "$output" | jq -r '.verdict')"
-assert_eq "codex reviewer tag" "codex" "$(echo "$output" | jq -r '.reviewer')"
+# Codex flow goes through pipeline-codex-review, which maps overall_correctness →
+# verdict before writing the review file. pipeline-parse-review no longer has a
+# special --reviewer codex passthrough; pre-normalized JSON without a ## Verdict
+# block or JSON code block with verdict+findings must fail.
+set +e
+printf '{"verdict":"APPROVE","round":1,"findings":[],"summary":"ok"}' \
+  | pipeline-parse-review --reviewer codex >/dev/null 2>&1
+exit_code=$?
+set -e
+assert_eq "codex pre-normalized JSON falls through prose — exits 1" "1" "$exit_code"
+
+# Real codex schema (overall_correctness) also fails: JSON-block path requires
+# verdict + findings keys; pipeline-codex-review must handle this schema, not parse-review.
+set +e
+printf '{"overall_correctness":"patch is correct","findings":[],"overall_explanation":"ok"}' \
+  | pipeline-parse-review --reviewer codex >/dev/null 2>&1
+exit_code=$?
+set -e
+assert_eq "real codex schema (overall_correctness) rejected by parse-review — exits 1" "1" "$exit_code"
 
 # ============================================================
 echo ""
-echo "=== pipeline-parse-review (codex invalid JSON) ==="
+echo "=== pipeline-parse-review (JSON schema — APPROVED) ==="
+
+json_approve_input='Some prose before the block.
+
+```json
+{
+  "verdict": "APPROVED",
+  "summary": "All criteria satisfied",
+  "findings": [],
+  "notes": "LGTM"
+}
+```
+
+STATUS: DONE'
+
+output=$(printf '%s' "$json_approve_input" | pipeline-parse-review 2>/dev/null)
+assert_eq "json APPROVED → normalized APPROVE" "APPROVE" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "json summary extracted" "All criteria satisfied" "$(echo "$output" | jq -r '.summary')"
+assert_eq "json findings empty array" "0" "$(echo "$output" | jq '.findings | length')"
+assert_eq "json reviewer tag" "claude-code" "$(echo "$output" | jq -r '.reviewer')"
+
+# ============================================================
+echo ""
+echo "=== pipeline-parse-review (JSON schema — APPROVED with findings → downgrade) ==="
+
+json_approve_with_findings='Review prose.
+
+```json
+{
+  "verdict": "APPROVED",
+  "summary": "Mostly fine but one nit",
+  "findings": [
+    {
+      "file": "src/auth.ts",
+      "line": 10,
+      "evidence": "const token = req.body.token",
+      "severity": "important",
+      "description": "Token logged without redaction"
+    }
+  ]
+}
+```
+
+STATUS: DONE'
+
+output=$(printf '%s' "$json_approve_with_findings" | pipeline-parse-review 2>/dev/null)
+assert_eq "APPROVED+findings → downgraded to REQUEST_CHANGES" "REQUEST_CHANGES" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "APPROVED+findings: finding preserved" "1" "$(echo "$output" | jq '.findings | length')"
+
+# ============================================================
+echo ""
+echo "=== pipeline-parse-review (JSON schema — REQUEST_CHANGES) ==="
+
+json_changes_input='Review prose.
+
+```json
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "SQL injection found",
+  "findings": [
+    {
+      "file": "src/db.ts",
+      "line": 23,
+      "evidence": "query = \"SELECT * FROM users WHERE id=\" + userId",
+      "severity": "critical",
+      "description": "Unparameterized query allows SQL injection"
+    },
+    {
+      "file": "src/handler.ts",
+      "line": 15,
+      "evidence": "req.body.email",
+      "severity": "important",
+      "description": "email used without validation"
+    }
+  ]
+}
+```
+
+STATUS: DONE'
+
+output=$(printf '%s' "$json_changes_input" | pipeline-parse-review 2>/dev/null)
+assert_eq "json REQUEST_CHANGES verdict" "REQUEST_CHANGES" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "json findings count 2" "2" "$(echo "$output" | jq '.findings | length')"
+assert_eq "json first finding file" "src/db.ts" "$(echo "$output" | jq -r '.findings[0].file')"
+assert_eq "json first finding evidence present" "true" \
+  "$(echo "$output" | jq -r '(.findings[0].evidence | length) > 0' )"
+
+# ============================================================
+echo ""
+echo "=== pipeline-parse-review (JSON schema — evidence stripped when too short) ==="
+
+json_strip_input='Review.
+
+```json
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "issues found",
+  "findings": [
+    {
+      "file": "src/a.ts",
+      "line": 1,
+      "evidence": "val",
+      "severity": "critical",
+      "description": "evidence too short, must be stripped"
+    },
+    {
+      "file": "src/b.ts",
+      "line": 2,
+      "evidence": "const x = null; // unguarded",
+      "severity": "critical",
+      "description": "valid evidence, kept"
+    }
+  ]
+}
+```'
+
+output=$(printf '%s' "$json_strip_input" | pipeline-parse-review 2>/dev/null)
+assert_eq "json stripped short-evidence finding" "1" "$(echo "$output" | jq '.findings | length')"
+assert_eq "json kept valid-evidence finding" "src/b.ts" "$(echo "$output" | jq -r '.findings[0].file')"
+
+# ============================================================
+echo ""
+echo "=== pipeline-parse-review (JSON schema — NEEDS_DISCUSSION) ==="
+
+json_discuss_input='```json
+{
+  "verdict": "NEEDS_DISCUSSION",
+  "summary": "ambiguous auth boundary",
+  "findings": []
+}
+```'
+
+output=$(printf '%s' "$json_discuss_input" | pipeline-parse-review 2>/dev/null)
+assert_eq "json NEEDS_DISCUSSION verdict" "NEEDS_DISCUSSION" "$(echo "$output" | jq -r '.verdict')"
+
+# ============================================================
+echo ""
+echo "=== pipeline-parse-review (JSON schema — invalid verdict rejected) ==="
+
+json_invalid_verdict='```json
+{"verdict": "MAYBE", "summary": "x", "findings": []}
+```'
 
 set +e
-printf 'not json' | pipeline-parse-review --reviewer codex >/dev/null 2>&1
+printf '%s' "$json_invalid_verdict" | pipeline-parse-review >/dev/null 2>&1
 exit_code=$?
 set -e
-assert_eq "codex invalid JSON exits 1" "1" "$exit_code"
+assert_eq "json invalid verdict exits 1" "1" "$exit_code"
+
+# ============================================================
+echo ""
+echo "=== pipeline-parse-review (JSON schema — falls back to prose when no JSON block) ==="
+
+# Prose-only input with no ```json block should still parse via legacy path
+prose_fallback_input='## Findings
+
+## Summary
+All good.
+
+## Verdict
+
+VERDICT: APPROVE
+CONFIDENCE: HIGH
+BLOCKERS: 0
+ROUND: 1'
+
+output=$(printf '%s' "$prose_fallback_input" | pipeline-parse-review 2>/dev/null)
+assert_eq "prose fallback verdict APPROVE" "APPROVE" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "prose fallback confidence HIGH" "HIGH" "$(echo "$output" | jq -r '.confidence')"
+
+# ============================================================
+echo ""
+echo "=== pipeline-parse-review (JSON schema — last block wins when multiple present) ==="
+
+json_multi_block='```json
+{"verdict": "REQUEST_CHANGES", "summary": "first block", "findings": [{"file":"a.ts","line":1,"evidence":"bad code here","severity":"critical","description":"old"}]}
+```
+
+More analysis...
+
+```json
+{"verdict": "APPROVED", "summary": "second block wins", "findings": []}
+```'
+
+output=$(printf '%s' "$json_multi_block" | pipeline-parse-review 2>/dev/null)
+assert_eq "last json block wins" "APPROVE" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "last json block summary" "second block wins" "$(echo "$output" | jq -r '.summary')"
+
+# ============================================================
+echo ""
+echo "=== pipeline-parse-review (JSON-block: fabricated verbatim_line dropped) ==="
+
+_vl_repo=$(mktemp -d)
+git -C "$_vl_repo" init -q
+git -C "$_vl_repo" config user.email "test@test.local"
+git -C "$_vl_repo" config user.name "test"
+printf 'real content here\n' > "$_vl_repo/file.txt"
+git -C "$_vl_repo" add file.txt
+git -C "$_vl_repo" commit -m "staging commit" -q
+git -C "$_vl_repo" branch staging
+printf 'new content added\n' >> "$_vl_repo/file.txt"
+git -C "$_vl_repo" add file.txt
+git -C "$_vl_repo" commit -m "head commit" -q
+
+_fake_vl_review='Some review text.
+
+```json
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "Found critical issue",
+  "findings": [{
+    "title": "Fake finding",
+    "severity": "critical",
+    "evidence": "sufficient evidence here",
+    "verbatim_line": "THIS_LINE_DOES_NOT_EXIST_IN_DIFF_ZXQVB"
+  }]
+}
+```'
+
+output=$(cd "$_vl_repo" && printf '%s' "$_fake_vl_review" | pipeline-parse-review --base staging 2>/dev/null)
+assert_eq "json-block fabricated verbatim_line: finding dropped" "0" "$(echo "$output" | jq '.findings | length')"
+assert_eq "json-block fabricated verbatim_line: verdict downgraded to APPROVE" "APPROVE" "$(echo "$output" | jq -r '.verdict')"
+
+_real_vl_review='Some review text.
+
+```json
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "Found critical issue",
+  "findings": [{
+    "title": "Real finding",
+    "severity": "critical",
+    "evidence": "sufficient evidence here",
+    "verbatim_line": "new content added"
+  }]
+}
+```'
+
+output=$(cd "$_vl_repo" && printf '%s' "$_real_vl_review" | pipeline-parse-review --base staging 2>/dev/null)
+assert_eq "json-block real verbatim_line: finding retained" "1" "$(echo "$output" | jq '.findings | length')"
+assert_eq "json-block real verbatim_line: verdict stays REQUEST_CHANGES" "REQUEST_CHANGES" "$(echo "$output" | jq -r '.verdict')"
+
+rm -rf "$_vl_repo"
+
+# ============================================================
+echo ""
+echo "=== pipeline-parse-review (JSON-block: validates against origin/staging, no local staging) ==="
+
+_origin_repo=$(mktemp -d)
+git -C "$_origin_repo" init -q
+git -C "$_origin_repo" config user.email "test@test.local"
+git -C "$_origin_repo" config user.name "test"
+printf 'base content\n' > "$_origin_repo/file.txt"
+git -C "$_origin_repo" add file.txt
+git -C "$_origin_repo" commit -m "staging commit" -q
+# Set up origin/staging without a local staging branch
+git -C "$_origin_repo" update-ref refs/remotes/origin/staging "$(git -C "$_origin_repo" rev-parse HEAD)"
+printf 'added line\n' >> "$_origin_repo/file.txt"
+git -C "$_origin_repo" add file.txt
+git -C "$_origin_repo" commit -m "head commit" -q
+
+_origin_fake_review='Review text.
+
+```json
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "Fabricated",
+  "findings": [{
+    "title": "Fake",
+    "severity": "critical",
+    "evidence": "sufficient evidence here",
+    "verbatim_line": "THIS_LINE_DOES_NOT_EXIST_IN_DIFF_ZXQVB"
+  }]
+}
+```'
+
+output=$(cd "$_origin_repo" && printf '%s' "$_origin_fake_review" | pipeline-parse-review --base origin/staging 2>/dev/null)
+assert_eq "origin/staging: fabricated verbatim_line dropped" "0" "$(echo "$output" | jq '.findings | length')"
+assert_eq "origin/staging: verdict downgraded to APPROVE" "APPROVE" "$(echo "$output" | jq -r '.verdict')"
+
+_origin_real_review='Review text.
+
+```json
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "Real issue",
+  "findings": [{
+    "title": "Real",
+    "severity": "critical",
+    "evidence": "sufficient evidence here",
+    "verbatim_line": "added line"
+  }]
+}
+```'
+
+output=$(cd "$_origin_repo" && printf '%s' "$_origin_real_review" | pipeline-parse-review --base origin/staging 2>/dev/null)
+assert_eq "origin/staging: real verbatim_line retained" "1" "$(echo "$output" | jq '.findings | length')"
+assert_eq "origin/staging: verdict stays REQUEST_CHANGES" "REQUEST_CHANGES" "$(echo "$output" | jq -r '.verdict')"
+
+rm -rf "$_origin_repo"
+
+# ============================================================
+echo ""
+echo "=== validate_findings: severity-only finding (no .blocking field) counted as blocker ==="
+
+# Source pipeline-lib.sh to get validate_findings in this shell
+_lib_dir="$(cd "$(dirname "$0")/.." && pwd)"
+source "$_lib_dir/pipeline-lib.sh"
+
+_vf_diff=$(mktemp)
+printf '+real line that exists in the diff\n' > "$_vf_diff"
+
+_vf_input='{"verdict":"REQUEST_CHANGES","findings":[{"title":"t","file":"a.ts","severity":"high","evidence":"real line that exists in the diff","verbatim_line":"real line that exists in the diff","description":"d"}],"summary":"s","blocking_count":0,"non_blocking_count":0,"declared_blockers":0}'
+_vf_out=$(printf '%s' "$_vf_input" | validate_findings "$_vf_diff")
+assert_eq "severity=high with no .blocking field → counted as blocker" "1" "$(printf '%s' "$_vf_out" | jq '.blocking_count')"
+assert_eq "severity=high: verdict stays REQUEST_CHANGES" "REQUEST_CHANGES" "$(printf '%s' "$_vf_out" | jq -r '.verdict')"
+
+rm -f "$_vf_diff"
+
+# ============================================================
+echo ""
+echo "=== validate_findings: REQUEST_CHANGES preserved when one critical finding survives drop ==="
+
+_vf2_diff=$(mktemp)
+printf '+the real line is here verbatim\n' > "$_vf2_diff"
+
+_vf2_input='{"verdict":"REQUEST_CHANGES","findings":[{"title":"real","file":"a.ts","severity":"critical","evidence":"real line","verbatim_line":"the real line is here verbatim","description":"real blocker"},{"title":"fake","file":"b.ts","severity":"critical","evidence":"some evidence","verbatim_line":"THIS_DOES_NOT_EXIST_IN_DIFF_XYZ","description":"fabricated"}],"summary":"s","blocking_count":2,"non_blocking_count":0,"declared_blockers":2}'
+_vf2_out=$(printf '%s' "$_vf2_input" | validate_findings "$_vf2_diff")
+assert_eq "one surviving critical finding: verdict stays REQUEST_CHANGES" "REQUEST_CHANGES" "$(printf '%s' "$_vf2_out" | jq -r '.verdict')"
+assert_eq "one surviving critical finding: blocking_count = 1" "1" "$(printf '%s' "$_vf2_out" | jq '.blocking_count')"
+assert_eq "one surviving critical finding: findings length = 1" "1" "$(printf '%s' "$_vf2_out" | jq '.findings | length')"
+
+rm -f "$_vf2_diff"
 
 # ============================================================
 echo ""

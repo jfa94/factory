@@ -237,6 +237,17 @@
     ],
     "SessionStart": [
       {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start",
+            "timeout": 10,
+            "statusMessage": "Injecting Iron Laws reminder"
+          }
+        ]
+      },
+      {
         "matcher": "resume",
         "hooks": [
           {

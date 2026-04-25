@@ -12,7 +12,10 @@
 #     "permissionDecision":"deny","permissionDecisionReason":"..."}}
 #
 # Invariants enforced:
-#   1. `gh pr create` for task $t requires .tasks.$t.quality_gate.ok == true.
+#   1. `gh pr create` for task $t — if .tasks/<t>.ship_checklist.json exists,
+#      checks tdd_gate (ok|skipped), coverage_gate (ok|skipped), quality_gate (ok),
+#      and review_blockers_resolved (true). Falls back to quality_gate.ok only if
+#      no checklist file exists (backwards compat).
 #   2. `gh pr merge` for task $t requires .tasks.$t.pr_number and
 #      .tasks.$t.ci_status == "green".
 #   3. `pipeline-state task-status <run> <task> done` requires .worktree,
@@ -20,8 +23,8 @@
 set -euo pipefail
 
 input=$(cat 2>/dev/null || printf '{}')
+tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""')
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
-[[ -z "$cmd" ]] && exit 0
 
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
 if [[ -z "${CLAUDE_PLUGIN_DATA:-}" || ! -L "$current_link" ]]; then
@@ -58,12 +61,137 @@ if [[ -z "$task_id" ]]; then
   fi
 fi
 
+# --- 0. path-scope guard: preexec_tests phase (test-writer) ---
+# Only fires in autonomous mode for Edit/Write/MultiEdit when the active task
+# stage is exactly "preexec_tests". Blocks writes to non-test paths.
+if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
+  case "$tool_name" in
+    Edit|Write|MultiEdit)
+      # Determine the active task's stage.
+      active_stage=""
+      if [[ -n "$task_id" ]]; then
+        active_stage=$(jq -r --arg t "$task_id" '.tasks[$t].stage // ""' "$state_file" 2>/dev/null || true)
+      else
+        # No explicit task id — inspect first executing task.
+        active_stage=$(jq -r '[.tasks[] | select(.stage == "preexec_tests")] | first | .stage // ""' "$state_file" 2>/dev/null || true)
+      fi
+
+      if [[ "$active_stage" == "preexec_tests" ]]; then
+        # Collect candidate paths.
+        file_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null || true)
+        # MultiEdit may have edits[].file_path too; collect all.
+        mapfile -t extra_paths < <(printf '%s' "$input" \
+          | jq -r '.tool_input.edits[]?.file_path // empty' 2>/dev/null || true)
+
+        _check_test_path() {
+          local p="$1"
+          [[ -z "$p" ]] && return 0  # nothing to check
+          local base
+          base=$(basename "$p")
+          # Allowed: *.test.* or *.spec.*
+          if [[ "$base" =~ \.(test|spec)\. ]]; then return 0; fi
+          # Allowed: *.test-helpers.* or *.test-utils.*
+          if [[ "$base" =~ \.(test-helpers|test-utils)\. ]]; then return 0; fi
+          # Allowed: paths under tests/ or __tests__/
+          if [[ "$p" =~ (^|/)tests/ || "$p" =~ (^|/)__tests__/ ]]; then return 0; fi
+          # Allowed: paths under fixtures/
+          if [[ "$p" =~ (^|/)fixtures/ ]]; then return 0; fi
+          # Allowed: config-defined fixture dirs from safety.testWriterFixtureDirs
+          config_file="${CLAUDE_PLUGIN_DATA:-}/config.json"
+          if [[ -f "$config_file" ]]; then
+            while IFS= read -r fixture_dir; do
+              [[ -z "$fixture_dir" ]] && continue
+              # Use prefix match instead of regex to avoid metachar injection
+              if [[ "$p" == "${fixture_dir}/"* || "$p" == *"/${fixture_dir}/"* ]]; then return 0; fi
+            done < <(jq -r '.safety.testWriterFixtureDirs // [] | .[]' "$config_file" 2>/dev/null || true)
+          fi
+          # Blocked
+          deny "Test-writer phase: only test files allowed. Detected write to $p. Move implementation code to the GREEN phase."
+        }
+
+        _check_test_path "$file_path"
+        for ep in "${extra_paths[@]}"; do
+          _check_test_path "$ep"
+        done
+      fi
+      ;;
+  esac
+fi
+
+# --- 0b. path-scope guard: scribe agent ---
+# When FACTORY_SUBAGENT_ROLE=scribe, Edit/Write/MultiEdit are restricted to:
+#   - docs/** or /docs/**
+#   - Version-bump files: package.json, plugin.json, pyproject.toml, Cargo.toml,
+#     VERSION, .version
+#   - Root README.md (scribe keeps it as a short intro + link to /docs)
+if [[ "${FACTORY_SUBAGENT_ROLE:-}" == "scribe" ]]; then
+  case "$tool_name" in
+    Edit|Write|MultiEdit)
+      _is_scribe_allowed_path() {
+        local p="$1"
+        [[ -z "$p" ]] && return 0
+        # Strip any leading absolute prefix to get a repo-relative path for matching.
+        local rel="$p"
+        # Allow /docs/** or docs/**
+        if [[ "$rel" =~ ^/docs/ || "$rel" =~ ^docs/ || "$rel" == "/docs" || "$rel" == "docs" ]]; then return 0; fi
+        # Allow version-bump root files (basename only, anywhere in path — but
+        # scribe only touches these at repo root, so basename match is sufficient
+        # and avoids false negatives from absolute paths).
+        local base
+        base=$(basename "$rel")
+        case "$base" in
+          package.json|plugin.json|pyproject.toml|Cargo.toml|VERSION|.version|README.md) return 0 ;;
+        esac
+        # Blocked
+        deny "Scribe is restricted to /docs/** and run manifest. Attempted write to $p."
+      }
+
+      scribe_fp=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null || true)
+      _is_scribe_allowed_path "$scribe_fp"
+      # MultiEdit may have edits[].file_path
+      while IFS= read -r ep; do
+        [[ -z "$ep" ]] && continue
+        _is_scribe_allowed_path "$ep"
+      done < <(printf '%s' "$input" | jq -r '.tool_input.edits[]?.file_path // empty' 2>/dev/null || true)
+      ;;
+  esac
+fi
+
+# Remaining guards only apply to Bash commands.
+[[ -z "$cmd" ]] && exit 0
+
 # --- 1. gh pr create ---
 if [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]]; then
   [[ -z "$task_id" ]] && exit 0  # can't attribute — let it through
-  qok=$(jq -r --arg t "$task_id" '.tasks[$t].quality_gate.ok // false' "$state_file")
-  if [[ "$qok" != "true" ]]; then
-    deny "pipeline invariant: gh pr create for task $task_id requires .tasks.$task_id.quality_gate.ok == true (current: $qok). Run pipeline-run-task \"$run_id\" $task_id --stage postexec first."
+
+  checklist_file="$run_dir/.tasks/${task_id}.ship_checklist.json"
+  if [[ -f "$checklist_file" ]]; then
+    # Full checklist check.
+    cl_tdd=$(jq -r '.tdd_gate // "fail"' "$checklist_file" 2>/dev/null)
+    cl_cov=$(jq -r '.coverage_gate // "fail"' "$checklist_file" 2>/dev/null)
+    cl_qok=$(jq -r '.quality_gate // "fail"' "$checklist_file" 2>/dev/null)
+    cl_rbr=$(jq -r '.review_blockers_resolved // false' "$checklist_file" 2>/dev/null)
+
+    deny_reasons=()
+    [[ "$cl_tdd" != "ok" && "$cl_tdd" != "skipped" ]] && \
+      deny_reasons+=("tdd_gate=$cl_tdd (must be ok or skipped)")
+    [[ "$cl_cov" != "ok" && "$cl_cov" != "skipped" ]] && \
+      deny_reasons+=("coverage_gate=$cl_cov (must be ok or skipped)")
+    [[ "$cl_qok" != "ok" ]] && \
+      deny_reasons+=("quality_gate=$cl_qok (must be ok)")
+    [[ "$cl_rbr" != "true" ]] && \
+      deny_reasons+=("review_blockers_resolved=false")
+
+    if (( ${#deny_reasons[@]} > 0 )); then
+      reason_str=$(printf ', %s' "${deny_reasons[@]}"); reason_str="${reason_str:2}"
+      deny "pipeline invariant: gh pr create for task $task_id blocked by ship checklist: $reason_str"
+    fi
+  else
+    # Backwards compat: checklist absent — fall back to quality_gate.ok only.
+    qok=$(jq -r --arg t "$task_id" '.tasks[$t].quality_gate.ok // false' "$state_file")
+    if [[ "$qok" != "true" ]]; then
+      deny "pipeline invariant: gh pr create for task $task_id requires .tasks.$task_id.quality_gate.ok == true (current: $qok). Run pipeline-run-task \"$run_id\" $task_id --stage postexec first."
+    fi
   fi
 fi
 

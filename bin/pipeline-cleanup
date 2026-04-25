@@ -148,6 +148,7 @@ fi
 # Sweep any such branch that is not currently backing a live worktree.
 agent_branches_deleted=0
 agent_branch_errors=()
+live_wt_branches=()
 
 if [[ "$remove_worktrees" == "true" ]]; then
   # Collect branches held by active worktrees (refs/heads/ prefix stripped).

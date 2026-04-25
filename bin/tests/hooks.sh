@@ -46,6 +46,7 @@ assert_eq "has Stop" "1" "$(jq '.hooks.Stop | length' "$hooks_json")"
 assert_eq "has SubagentStop" "1" "$(jq '.hooks.SubagentStop | length' "$hooks_json")"
 assert_eq "PreToolUse matches Bash" "^Bash\$" "$(jq -r '.hooks.PreToolUse[0].matcher' "$hooks_json")"
 assert_eq "PostToolUse matches multi" "^(Bash|Write|Edit)$" "$(jq -r '.hooks.PostToolUse[0].matcher' "$hooks_json")"
+assert_eq "hooks.json Bash fires pipeline-guards" "1" "$(jq '[.hooks.PreToolUse[] | select(.matcher == "^Bash$") | .hooks[] | select(.command | test("pretooluse-pipeline-guards"))] | length' "$hooks_json")"
 
 # ============================================================
 echo ""
@@ -768,6 +769,131 @@ assert_eq "guards no-run no output" "" "$out"
 
 # ============================================================
 echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — blocks impl file during preexec_tests ==="
+
+_seed_run "run-pathscope-block" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"preexec_tests"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope block src/foo.ts exit 0" "0" "$rc"
+decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')
+assert_eq "pathscope block src/foo.ts denies" "deny" "$decision"
+reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')
+assert_eq "pathscope block reason mentions path" "true" \
+  "$(printf '%s' "$reason" | grep -q 'src/foo.ts' && echo true || echo false)"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — allows *.test.* during preexec_tests ==="
+
+_seed_run "run-pathscope-test" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"preexec_tests"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.test.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope allow src/foo.test.ts exit 0" "0" "$rc"
+assert_eq "pathscope allow src/foo.test.ts no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — allows tests/ dir during preexec_tests ==="
+
+_seed_run "run-pathscope-testsdir" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"preexec_tests"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"tests/foo.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope allow tests/foo.ts exit 0" "0" "$rc"
+assert_eq "pathscope allow tests/foo.ts no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — allows fixtures/ during preexec_tests ==="
+
+_seed_run "run-pathscope-fixtures" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"preexec_tests"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"fixtures/data.json"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope allow fixtures/data.json exit 0" "0" "$rc"
+assert_eq "pathscope allow fixtures/data.json no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — allows *.spec.* during preexec_tests ==="
+
+_seed_run "run-pathscope-spec" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"preexec_tests"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.spec.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope allow src/foo.spec.ts exit 0" "0" "$rc"
+assert_eq "pathscope allow src/foo.spec.ts no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — allows __tests__/ dir during preexec_tests ==="
+
+_seed_run "run-pathscope-dunder-tests" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"preexec_tests"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"__tests__/foo.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope allow __tests__/foo.ts exit 0" "0" "$rc"
+assert_eq "pathscope allow __tests__/foo.ts no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — allows *.test-helpers.* during preexec_tests ==="
+
+_seed_run "run-pathscope-test-helpers" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"preexec_tests"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.test-helpers.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope allow src/foo.test-helpers.ts exit 0" "0" "$rc"
+assert_eq "pathscope allow src/foo.test-helpers.ts no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — allows *.test-utils.* during preexec_tests ==="
+
+_seed_run "run-pathscope-test-utils" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"preexec_tests"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.test-utils.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope allow src/foo.test-utils.ts exit 0" "0" "$rc"
+assert_eq "pathscope allow src/foo.test-utils.ts no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — not triggered in postexec stage ==="
+
+_seed_run "run-pathscope-postexec" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"postexec"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope postexec src/foo.ts exit 0" "0" "$rc"
+assert_eq "pathscope postexec src/foo.ts no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: path-scope — not triggered when no active run ==="
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "pathscope no-run exit 0" "0" "$rc"
+assert_eq "pathscope no-run no deny" "" "$out"
+
+# ============================================================
+echo ""
 echo "=== subagent-stop-transcript: parses STATUS line + worktree ==="
 
 _seed_run "run-sag" '{"status":"running","tasks":{"alpha-001":{"status":"executing"}}}'
@@ -828,6 +954,76 @@ printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 
 set -e
 scribe_status=$(jq -r '.scribe.status // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-scribe/state.json")
 assert_eq "subagent-stop sets .scribe.status=done" "done" "$scribe_status"
+
+# ============================================================
+echo ""
+echo "=== session-start (Iron Laws): emits valid JSON with Iron Laws digest ==="
+
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start Iron Laws exit 0" "0" "$rc"
+event=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName // empty')
+assert_eq "session-start Iron Laws event name" "SessionStart" "$event"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" == *"FACTORY_HARNESS_REMINDER"* ]] && { echo "  PASS: session-start ctx has harness reminder tag"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing FACTORY_HARNESS_REMINDER tag"; fail=$((fail+1)); }
+[[ "$ctx" == *"Iron Laws"* ]] && { echo "  PASS: session-start ctx contains Iron Laws"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing Iron Laws"; fail=$((fail+1)); }
+[[ "$ctx" == *"Red Flags"* ]] && { echo "  PASS: session-start ctx contains Red Flags"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing Red Flags"; fail=$((fail+1)); }
+[[ "$ctx" == *"pipeline-run-task"* ]] && { echo "  PASS: session-start ctx mentions wrapper"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing wrapper reference"; fail=$((fail+1)); }
+
+echo ""
+echo "=== session-start (Iron Laws): appends stage-state when active run exists ==="
+
+_seed_run "run-laws-active" '{"status":"running","tasks":{"task-1":{"status":"executing","stage":"preflight_done"}}}'
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start active run exit 0" "0" "$rc"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" == *"run-laws-active"* ]] && { echo "  PASS: session-start ctx contains run id"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing run id"; fail=$((fail+1)); }
+[[ "$ctx" == *"pipeline-run-task"* ]] && { echo "  PASS: session-start ctx has resume command"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing resume command"; fail=$((fail+1)); }
+[[ "$ctx" == *"--stage preexec_tests"* ]] && { echo "  PASS: session-start recommends --stage preexec_tests"; pass=$((pass+1)); } || { echo "  FAIL: session-start ctx missing --stage preexec_tests"; fail=$((fail+1)); }
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+echo ""
+echo "=== session-start (Iron Laws): interrupted run shows stage summary (resumable) ==="
+
+_seed_run "run-laws-interrupted" '{"status":"interrupted","tasks":{"task-1":{"status":"interrupted","stage":"preexec_tests_done"}}}'
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start interrupted run exit 0" "0" "$rc"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" == *"run-laws-interrupted"* ]] && { echo "  PASS: session-start interrupted run shows run id (resumable)"; pass=$((pass+1)); } || { echo "  FAIL: session-start interrupted run should show run id"; fail=$((fail+1)); }
+[[ "$ctx" == *"--stage postexec"* ]] && { echo "  PASS: session-start interrupted maps preexec_tests_done → postexec"; pass=$((pass+1)); } || { echo "  FAIL: session-start interrupted stage transition wrong"; fail=$((fail+1)); }
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+echo ""
+echo "=== session-start (Iron Laws): no active run still emits digest ==="
+
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start no run exit 0" "0" "$rc"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" == *"Iron Laws"* ]] && { echo "  PASS: session-start no-run ctx still has Iron Laws"; pass=$((pass+1)); } || { echo "  FAIL: session-start no-run ctx missing Iron Laws"; fail=$((fail+1)); }
+
+echo ""
+echo "=== session-start (Iron Laws): terminal run omits stage summary ==="
+
+_seed_run "run-laws-done" '{"status":"done","tasks":{"t1":{"status":"done"}}}'
+set +e
+out=$(bash "$HOOKS_DIR/session-start" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "session-start terminal run exit 0" "0" "$rc"
+ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+[[ "$ctx" != *"run-laws-done"* ]] && { echo "  PASS: session-start terminal run omits run id from stage summary"; pass=$((pass+1)); } || { echo "  FAIL: session-start terminal run should not show run id"; fail=$((fail+1)); }
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
 # ============================================================
 echo ""
@@ -895,7 +1091,7 @@ echo "=== settings.autonomous.json registers Layer-2 hooks ==="
 
 autonom="$(cd "$(dirname "$0")/../../templates" && pwd)/settings.autonomous.json"
 assert_eq "template has SubagentStop"        "1" "$(jq '.hooks.SubagentStop | length' "$autonom")"
-assert_eq "template has SessionStart"        "1" "$(jq '.hooks.SessionStart | length' "$autonom")"
+assert_eq "template has SessionStart"        "2" "$(jq '.hooks.SessionStart | length' "$autonom")"
 assert_eq "template PostToolUse has asyncRewake" "1" "$(jq '[.hooks.PostToolUse[].hooks[]? | select(.asyncRewake == true)] | length' "$autonom")"
 assert_eq "template PreToolUse has pipeline-guards" "1" "$(jq '[.hooks.PreToolUse[].hooks[]? | select(.command | test("pretooluse-pipeline-guards"))] | length' "$autonom")"
 assert_eq "template allows Bash(codex *)"     "true" "$(jq '[.permissions.allow[] | select(. == "Bash(codex *)")] | length > 0' "$autonom")"
@@ -999,6 +1195,411 @@ ARW_STALL_COUNT=$(printf '%s' "$ARW_ERR" | grep -c "stalled" || true)
 rm -rf "$ARW_DATA" "$ARW_STUBS"
 
 # ============================================================
+# subagent-stop-gate: autonomous blocking tests
+# ============================================================
+
+echo ""
+echo "=== subagent-stop-gate: non-autonomous mode passes even with missing STATUS ==="
+
+_seed_run "run-ssg-noauto" '{"status":"running","tasks":{"t1":{"status":"executing","branch":"feat/t1"}}}'
+set +e
+out=$(printf '{"agent_type":"task-executor","last_assistant_message":"I did some work."}' \
+  | bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "non-autonomous missing STATUS exit 0" "0" "$rc"
+assert_eq "non-autonomous no block output" "" "$out"
+
+echo ""
+echo "=== subagent-stop-gate: autonomous mode blocks on missing STATUS ==="
+
+_seed_run "run-ssg-block-status" '{"status":"running","tasks":{"t1":{"status":"executing","branch":"feat/t1"}}}'
+set +e
+out=$(printf '{"agent_type":"task-executor","last_assistant_message":"I finished the work but forgot the status line."}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "autonomous missing STATUS exit 1" "1" "$rc"
+assert_eq "autonomous missing STATUS decision=block" "block" "$(printf '%s' "$out" | jq -r '.decision // empty')"
+assert_eq "autonomous missing STATUS reason mentions STATUS" "true" \
+  "$(printf '%s' "$out" | jq -r '.reason' | grep -q 'STATUS' && echo true || echo false)"
+
+echo ""
+echo "=== subagent-stop-gate: autonomous mode passes on STATUS: DONE ==="
+
+# Use implementation-reviewer which doesn't check commits, to isolate STATUS parsing
+_seed_run "run-ssg-reviewer-done" '{"status":"running","tasks":{}}'
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-ssg-reviewer-done/reviews"
+set +e
+out=$(jq -cn '{agent_type:"implementation-reviewer", last_assistant_message:"Looks good.\nSTATUS: DONE"}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "autonomous STATUS: DONE reviewer exit 0" "0" "$rc"
+assert_eq "autonomous STATUS: DONE no block output" "" "$out"
+
+echo ""
+echo "=== subagent-stop-gate: autonomous mode passes on STATUS: NO_WORK ==="
+
+_seed_run "run-ssg-nowork" '{"status":"running","tasks":{}}'
+set +e
+out=$(jq -cn '{agent_type:"task-executor", last_assistant_message:"Nothing to do.\nSTATUS: NO_WORK"}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "autonomous STATUS: NO_WORK exit 0" "0" "$rc"
+assert_eq "autonomous STATUS: NO_WORK no block" "" "$out"
+
+echo ""
+echo "=== subagent-stop-gate: autonomous mode passes on STATUS: SKIP ==="
+
+_seed_run "run-ssg-skip" '{"status":"running","tasks":{}}'
+set +e
+out=$(jq -cn '{agent_type:"task-executor", last_assistant_message:"Skipping.\nSTATUS: SKIP"}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "autonomous STATUS: SKIP exit 0" "0" "$rc"
+assert_eq "autonomous STATUS: SKIP no block" "" "$out"
+
+echo ""
+echo "=== subagent-stop-gate: autonomous mode blocks on zero commits for executor ==="
+
+# Seed a run with a task that has a branch, but no commits on it vs staging
+# Use a branch name that won't exist so git log returns empty
+_seed_run "run-ssg-nocommit" '{"status":"running","tasks":{"t2":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'
+set +e
+out=$(jq -cn '{agent_type:"task-executor", last_assistant_message:"Done!\nSTATUS: DONE"}' \
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t2 bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "autonomous zero-commits exit 1" "1" "$rc"
+assert_eq "autonomous zero-commits decision=block" "block" "$(printf '%s' "$out" | jq -r '.decision // empty')"
+assert_eq "autonomous zero-commits reason mentions commits" "true" \
+  "$(printf '%s' "$out" | jq -r '.reason' | grep -qi 'commit' && echo true || echo false)"
+
+echo ""
+echo "=== subagent-stop-gate: blocks when no staging or origin/staging ref exists ==="
+
+# Create a real temp git repo with a branch that has a commit but no staging ref at all.
+# Previously this was a fail-open (skip); after F3 fix it must block.
+_ssg_tmp=$(mktemp -d)
+git -C "$_ssg_tmp" init -q
+git -C "$_ssg_tmp" commit --allow-empty -m "init" -q
+git -C "$_ssg_tmp" checkout -b "dark-factory/test-has-commit" -q
+git -C "$_ssg_tmp" commit --allow-empty -m "task commit" -q
+# Neither local staging nor origin/staging exists.
+
+_seed_run "run-ssg-nostaging" \
+  "{\"status\":\"running\",\"tasks\":{\"t-ns\":{\"status\":\"executing\",\"branch\":\"dark-factory/test-has-commit\",\"worktree\":\"$_ssg_tmp\"}}}"
+set +e
+out=$(jq -cn '{agent_type:"task-executor", last_assistant_message:"Done!\nSTATUS: DONE"}' \
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t-ns bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+assert_eq "no-staging ref: exit 1 (blocked fail-closed)" "1" "$rc"
+block_reason=$(printf '%s' "$out" | jq -r '.reason // empty' 2>/dev/null)
+assert_eq "no-staging ref: reason mentions staging" "true" \
+  "$( [[ "$block_reason" == *"staging"* ]] && echo true || echo false )"
+rm -rf "$_ssg_tmp"
+
+echo ""
+echo "=== subagent-stop-gate: retry counter increments and writes BLOCKED on 2nd block ==="
+
+_seed_run "run-ssg-retry" '{"status":"running","tasks":{"t3":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'
+retry_dir="$CLAUDE_PLUGIN_DATA/runs/run-ssg-retry"
+
+# Stub pipeline-state so the BLOCKED write inside the hook succeeds in the test harness
+retry_stubs=$(mktemp -d)
+cat > "$retry_stubs/pipeline-state" <<'SH'
+#!/usr/bin/env bash
+# Stub: pipeline-state task-write <run_id> <task_id> <field> <value>
+# Writes the field directly to state.json via jq.
+run_id="$2"; task_id="$3"; field="$4"; value="$5"
+state="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.json"
+[[ -f "$state" ]] || exit 0
+tmp=$(mktemp)
+jq --arg t "$task_id" --arg f "$field" --argjson v "$value" \
+  '.tasks[$t][$f] = $v' "$state" > "$tmp" && mv "$tmp" "$state"
+SH
+chmod +x "$retry_stubs/pipeline-state"
+
+# First block attempt
+set +e
+jq -cn '{agent_type:"task-executor", last_assistant_message:"No status."}' \
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t3 PATH="$retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+set -e
+retry_count=$(cat "$retry_dir/.subagent_retries.t3" 2>/dev/null || echo 0)
+assert_eq "retry file = 1 after first block" "1" "$retry_count"
+
+# Second block attempt — should write BLOCKED to state
+set +e
+jq -cn '{agent_type:"task-executor", last_assistant_message:"No status."}' \
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t3 PATH="$retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+set -e
+retry_count=$(cat "$retry_dir/.subagent_retries.t3" 2>/dev/null || echo 0)
+assert_eq "retry file = 2 after second block" "2" "$retry_count"
+
+# Verify BLOCKED written to state.json after 2nd block
+executor_status_after=$(jq -r '.tasks.t3.executor_status // empty' "$retry_dir/state.json" 2>/dev/null || true)
+assert_eq "executor_status=BLOCKED written to state after 2nd block" "BLOCKED" "$executor_status_after"
+# Verify test_writer_status was NOT poisoned by the executor retry
+tw_status_after=$(jq -r '.tasks.t3.test_writer_status // empty' "$retry_dir/state.json" 2>/dev/null || true)
+assert_eq "task-executor retry does NOT write test_writer_status" "" "$tw_status_after"
+rm -rf "$retry_stubs"
+
+echo "=== subagent-stop-gate: test-writer retry exhaustion writes test_writer_status (not executor_status) ==="
+
+_seed_run "run-ssg-tw-retry" '{"status":"running","tasks":{"tw1":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'
+tw_retry_dir="$CLAUDE_PLUGIN_DATA/runs/run-ssg-tw-retry"
+
+tw_retry_stubs=$(mktemp -d)
+cat > "$tw_retry_stubs/pipeline-state" <<'SH'
+#!/usr/bin/env bash
+run_id="$2"; task_id="$3"; field="$4"; value="$5"
+state="$CLAUDE_PLUGIN_DATA/runs/$run_id/state.json"
+[[ -f "$state" ]] || exit 0
+tmp=$(mktemp)
+jq --arg t "$task_id" --arg f "$field" --argjson v "$value" \
+  '.tasks[$t][$f] = $v' "$state" > "$tmp" && mv "$tmp" "$state"
+SH
+chmod +x "$tw_retry_stubs/pipeline-state"
+
+# First block attempt
+set +e
+jq -cn '{agent_type:"test-writer", last_assistant_message:"No status."}' \
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=tw1 PATH="$tw_retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+set -e
+tw_retry_count=$(cat "$tw_retry_dir/.subagent_retries.tw1" 2>/dev/null || echo 0)
+assert_eq "tw retry file = 1 after first block" "1" "$tw_retry_count"
+
+# Second block attempt — should write test_writer_status=BLOCKED
+set +e
+jq -cn '{agent_type:"test-writer", last_assistant_message:"No status."}' \
+  | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=tw1 PATH="$tw_retry_stubs:$PATH" bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/dev/null
+set -e
+tw_retry_count=$(cat "$tw_retry_dir/.subagent_retries.tw1" 2>/dev/null || echo 0)
+assert_eq "tw retry file = 2 after second block" "2" "$tw_retry_count"
+
+tw_status_blocked=$(jq -r '.tasks.tw1.test_writer_status // empty' "$tw_retry_dir/state.json" 2>/dev/null || true)
+assert_eq "test_writer_status=BLOCKED written after 2nd test-writer block" "BLOCKED" "$tw_status_blocked"
+# Verify executor_status was NOT written
+exec_status_clean=$(jq -r '.tasks.tw1.executor_status // empty' "$tw_retry_dir/state.json" 2>/dev/null || true)
+assert_eq "test-writer retry does NOT write executor_status" "" "$exec_status_clean"
+rm -rf "$tw_retry_stubs"
+
+# ============================================================
+# Scribe path-scope guard tests
+# ============================================================
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe — blocks write to src/foo.ts ==="
+
+_seed_run "run-scribe-block" '{"status":"running","tasks":{}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_SUBAGENT_ROLE=scribe bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "scribe block src/foo.ts exit 0" "0" "$rc"
+decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')
+assert_eq "scribe block src/foo.ts denies" "deny" "$decision"
+reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')
+assert_eq "scribe block src/foo.ts reason mentions path" "true" \
+  "$(printf '%s' "$reason" | grep -q 'src/foo.ts' && echo true || echo false)"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe — allows write to docs/api.md ==="
+
+_seed_run "run-scribe-allow-docs" '{"status":"running","tasks":{}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"docs/api.md"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_SUBAGENT_ROLE=scribe bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "scribe allow docs/api.md exit 0" "0" "$rc"
+assert_eq "scribe allow docs/api.md no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe — allows write to docs/foo/bar.md ==="
+
+_seed_run "run-scribe-allow-nested" '{"status":"running","tasks":{}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"docs/foo/bar.md"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_SUBAGENT_ROLE=scribe bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "scribe allow docs/foo/bar.md exit 0" "0" "$rc"
+assert_eq "scribe allow docs/foo/bar.md no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe guard skipped for non-scribe role ==="
+
+_seed_run "run-scribe-nonscribe" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"postexec"}}}'
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.ts"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_SUBAGENT_ROLE=task-executor bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "non-scribe src/foo.ts exit 0" "0" "$rc"
+assert_eq "non-scribe src/foo.ts no deny" "" "$out"
+
+# ============================================================
+# Ship checklist guard tests
+# ============================================================
+
+echo ""
+echo "=== pretooluse-pipeline-guards: ship checklist — PR allowed when full checklist ok ==="
+
+_seed_run "run-checklist-ok" '{"status":"running","tasks":{"task-sc":{"status":"reviewing","stage":"postreview_done","quality_gate":{"ok":true},"quality_gates":{"tdd":{"ok":true,"exempt":false},"coverage":"ok"}}}}'
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-checklist-ok/.tasks"
+jq -n '{
+  task_id:"task-sc", tdd_gate:"ok", coverage_gate:"ok",
+  quality_gate:"ok", review_blockers_resolved:true,
+  ci_status:"pending", generated_at:"2026-04-24T00:00:00Z"
+}' > "$CLAUDE_PLUGIN_DATA/runs/run-checklist-ok/.tasks/task-sc.ship_checklist.json"
+input='{"tool_input":{"command":"gh pr create --base staging --title foo"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_TASK_ID=task-sc bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "checklist-ok exit 0" "0" "$rc"
+assert_eq "checklist-ok no deny" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: ship checklist — PR blocked when tdd_gate=fail ==="
+
+_seed_run "run-checklist-tdd-fail" '{"status":"running","tasks":{"task-sc":{"status":"reviewing","quality_gate":{"ok":true}}}}'
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-checklist-tdd-fail/.tasks"
+jq -n '{
+  task_id:"task-sc", tdd_gate:"fail", coverage_gate:"ok",
+  quality_gate:"ok", review_blockers_resolved:true,
+  ci_status:"pending", generated_at:"2026-04-24T00:00:00Z"
+}' > "$CLAUDE_PLUGIN_DATA/runs/run-checklist-tdd-fail/.tasks/task-sc.ship_checklist.json"
+input='{"tool_input":{"command":"gh pr create --base staging --title foo"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_TASK_ID=task-sc bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "checklist-tdd-fail exit 0" "0" "$rc"
+decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')
+assert_eq "checklist-tdd-fail denies" "deny" "$decision"
+reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')
+assert_eq "checklist-tdd-fail reason mentions tdd_gate" "true" \
+  "$(printf '%s' "$reason" | grep -q 'tdd_gate' && echo true || echo false)"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: ship checklist — PR blocked when checklist missing + quality_gate not ok ==="
+
+_seed_run "run-checklist-missing-bad" '{"status":"running","tasks":{"task-sc":{"status":"reviewing","quality_gate":{"ok":false}}}}'
+# No checklist file — backwards compat path
+input='{"tool_input":{"command":"gh pr create --base staging --title foo"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_TASK_ID=task-sc bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "checklist-missing-bad exit 0" "0" "$rc"
+decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')
+assert_eq "checklist-missing-bad denies" "deny" "$decision"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: ship checklist — PR allowed when checklist missing but quality_gate ok ==="
+
+_seed_run "run-checklist-missing-ok" '{"status":"running","tasks":{"task-sc":{"status":"reviewing","quality_gate":{"ok":true}}}}'
+# No checklist file — backwards compat: falls through to quality_gate check
+input='{"tool_input":{"command":"gh pr create --base staging --title foo"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_TASK_ID=task-sc bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "checklist-missing-ok exit 0" "0" "$rc"
+assert_eq "checklist-missing-ok no deny" "" "$out"
+
+# ============================================================
+# Fix #3: subagent-stop-gate transcript-based task scoping
+# ============================================================
+
+echo ""
+echo "=== subagent-stop-gate: transcript [task:id] marker scopes block to correct task ==="
+
+# Two executing tasks; hook fires for task-A via transcript marker.
+# task-A has no commits; task-B has no commits either but must NOT be poisoned.
+_seed_run "run-ssg-scoped" '{"status":"running","tasks":{"task-A":{"status":"executing","branch":"dark-factory/test-nonexistent-taskA"},"task-B":{"status":"executing","branch":"dark-factory/test-nonexistent-taskB"}}}'
+transcript_scoped=$(mktemp)
+printf '[task:task-A]\nDoing work for task A.\nSTATUS: DONE\n' > "$transcript_scoped"
+set +e
+out=$(jq -cn --arg t "$transcript_scoped" \
+  '{agent_type:"task-executor", last_assistant_message:"All done.\nSTATUS: DONE", agent_transcript_path:$t}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+rm -f "$transcript_scoped"
+# Should block task-A (no commits) and NOT write BLOCKED to task-B
+assert_eq "transcript-scoped: exit 1 (block)" "1" "$rc"
+assert_eq "transcript-scoped: decision=block" "block" "$(printf '%s' "$out" | jq -r '.decision // empty')"
+task_b_executor_status=$(jq -r '.tasks["task-B"].executor_status // empty' "$CLAUDE_PLUGIN_DATA/runs/run-ssg-scoped/state.json" 2>/dev/null || true)
+assert_eq "transcript-scoped: task-B executor_status NOT poisoned" "" "$task_b_executor_status"
+
+echo ""
+echo "=== subagent-stop-gate: no transcript marker + 2 executing tasks → skip block with warning ==="
+
+_seed_run "run-ssg-nomarker-multi" '{"status":"running","tasks":{"tX":{"status":"executing","branch":"dark-factory/test-nonexistent-X"},"tY":{"status":"executing","branch":"dark-factory/test-nonexistent-Y"}}}'
+transcript_nomarker=$(mktemp)
+printf 'No task marker here.\nSTATUS: DONE\n' > "$transcript_nomarker"
+set +e
+out=$(jq -cn --arg t "$transcript_nomarker" \
+  '{agent_type:"task-executor", last_assistant_message:"All done.\nSTATUS: DONE", agent_transcript_path:$t}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
+rc=$?
+set -e
+rm -f "$transcript_nomarker"
+# Must pass (exit 0) — do not block when task_id unknown and >1 executing
+assert_eq "nomarker-multi: exit 0 (no block)" "0" "$rc"
+assert_eq "nomarker-multi: no block decision" "" "$(printf '%s' "$out" | jq -r '.decision // empty' 2>/dev/null || true)"
+
+# ============================================================
+# Fix #7: asyncrewake-ci merge_status separation
+# ============================================================
+
+echo ""
+echo "=== asyncrewake-ci: ci_status and merge_status written independently ==="
+
+# Validate the script sets merge_status to "stalled" when CI is green but PR not merged.
+# We test by sourcing only the logic; actual polling is skipped (we check the variable
+# assignments at the bottom of the script via a stub environment).
+
+# The asyncrewake-ci.sh script polls gh — we only test the field-separation via
+# the pipeline-state stub (same pattern as retry tests above).
+
+rewake_stubs=$(mktemp -d)
+cat > "$rewake_stubs/pipeline-state" <<'SH'
+#!/usr/bin/env bash
+# Stub: records calls to verify fields written
+echo "$@" >> "${REWAKE_STUB_LOG:-/dev/null}"
+SH
+chmod +x "$rewake_stubs/pipeline-state"
+
+REWAKE_STUB_LOG=$(mktemp)
+export REWAKE_STUB_LOG
+
+# Verify the asyncrewake-ci.sh script writes merge_status separately from ci_status.
+# We grep the source for the dual-write pattern as a structural check.
+assert_eq "asyncrewake-ci: writes ci_status field" "true" \
+  "$(grep -q 'task-write.*ci_status' "$HOOKS_DIR/asyncrewake-ci.sh" && echo true || echo false)"
+assert_eq "asyncrewake-ci: writes merge_status field" "true" \
+  "$(grep -q 'task-write.*merge_status' "$HOOKS_DIR/asyncrewake-ci.sh" && echo true || echo false)"
+assert_eq "asyncrewake-ci: ci_status not overwritten on merge stall" "false" \
+  "$(grep -q 'ci_conclusion.*=.*"red".*stall\|state.*=.*red.*merge' "$HOOKS_DIR/asyncrewake-ci.sh" && echo true || echo false)"
+assert_eq "asyncrewake-ci: merge_status=stalled defined" "true" \
+  "$(grep -q 'merge_status.*stalled' "$HOOKS_DIR/asyncrewake-ci.sh" && echo true || echo false)"
+assert_eq "asyncrewake-ci: wake message includes --merge-status flag" "true" \
+  "$(grep -q '\-\-merge-status' "$HOOKS_DIR/asyncrewake-ci.sh" && echo true || echo false)"
+
+rm -f "$REWAKE_STUB_LOG"
+rm -rf "$rewake_stubs"
+unset REWAKE_STUB_LOG
+
+# ============================================================
 echo ""
 echo "=== All hook scripts are executable ==="
 
@@ -1009,6 +1610,7 @@ assert_eq "subagent-stop-gate executable" "true" "$([[ -x "$HOOKS_DIR/subagent-s
 assert_eq "pretooluse-pipeline-guards executable" "true" "$([[ -x "$HOOKS_DIR/pretooluse-pipeline-guards.sh" ]] && echo true || echo false)"
 assert_eq "subagent-stop-transcript executable" "true" "$([[ -x "$HOOKS_DIR/subagent-stop-transcript.sh" ]] && echo true || echo false)"
 assert_eq "session-start-resume executable" "true" "$([[ -x "$HOOKS_DIR/session-start-resume.sh" ]] && echo true || echo false)"
+assert_eq "session-start executable" "true" "$([[ -x "$HOOKS_DIR/session-start" ]] && echo true || echo false)"
 assert_eq "asyncrewake-ci executable" "true" "$([[ -x "$HOOKS_DIR/asyncrewake-ci.sh" ]] && echo true || echo false)"
 
 # ============================================================

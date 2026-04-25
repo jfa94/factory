@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # Parse structured review output into normalized JSON.
-# Usage: pipeline-parse-review [--reviewer codex|claude-code]
-# Input: stdin (raw reviewer output)
+# Usage: pipeline-parse-review [--reviewer claude-code] [--base <ref>]
+# Input: stdin (raw reviewer output — JSON-block or prose format)
+# Codex reviews must go through pipeline-codex-review, not this script.
 # Exit: 0=parsed, 1=parse failure
 
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
 reviewer="claude-code"
+base_ref=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --reviewer) reviewer="$2"; shift 2 ;;
+    --base)     base_ref="$2"; shift 2 ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -22,22 +25,141 @@ if [[ -z "$raw" ]]; then
   exit 1
 fi
 
-# --- Codex JSON passthrough ---
-if [[ "$reviewer" == "codex" ]]; then
-  if printf '%s' "$raw" | jq empty 2>/dev/null; then
-    printf '%s' "$raw" | jq --arg reviewer "codex" '. + {reviewer: $reviewer}'
-    exit 0
-  fi
-  log_error "codex output is not valid JSON"
-  exit 1
-fi
-
-# --- Claude Code structured text parsing ---
-
 # Save raw to temp file for multi-pass parsing
 tmpfile=$(mktemp)
 printf '%s' "$raw" > "$tmpfile"
 trap 'rm -f "$tmpfile"' EXIT
+
+# =============================================================================
+# --- JSON schema path: extract last ```json ... ``` block ---
+# =============================================================================
+
+# Extract the last JSON code block from the review text
+json_block=$(awk '
+  /^```json/ { in_block=1; buf=""; next }
+  /^```/ && in_block { last=buf; in_block=0; next }
+  in_block { buf = buf $0 "\n" }
+  END { printf "%s", last }
+' "$tmpfile")
+
+if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; then
+  # Validate required keys
+  has_verdict=$(printf '%s' "$json_block" | jq 'has("verdict")' 2>/dev/null)
+  has_findings=$(printf '%s' "$json_block" | jq 'has("findings")' 2>/dev/null)
+
+  if [[ "$has_verdict" == "true" && "$has_findings" == "true" ]]; then
+    # Validate verdict value
+    json_verdict=$(printf '%s' "$json_block" | jq -r '.verdict // ""')
+    case "$json_verdict" in
+      APPROVED|REQUEST_CHANGES|NEEDS_DISCUSSION) ;;
+      *)
+        log_error "invalid verdict in JSON block (got: '${json_verdict:-<empty>}')"
+        exit 1
+        ;;
+    esac
+
+    # Validate findings is array
+    findings_type=$(printf '%s' "$json_block" | jq -r '.findings | type' 2>/dev/null)
+    if [[ "$findings_type" != "array" ]]; then
+      log_error "findings must be an array in JSON block"
+      exit 1
+    fi
+
+    # Strip findings missing evidence (length < 5), log warnings.
+    # Normalize legacy `.evidence` field into `.verbatim_line` so downstream
+    # validate_findings (which reads .verbatim_line) can grep it against the diff.
+    valid_findings=$(printf '%s' "$json_block" | jq '[
+      .findings[] |
+      . as $f |
+      ((.verbatim_line // .evidence // "")) as $vl |
+      if ($vl | length) >= 5 then ($f + {verbatim_line: $vl}) else empty end
+    ]')
+
+    # Count stripped findings and warn
+    total_findings=$(printf '%s' "$json_block" | jq '.findings | length')
+    valid_count=$(printf '%s' "$valid_findings" | jq 'length')
+    if (( valid_count < total_findings )); then
+      stripped=$(( total_findings - valid_count ))
+      log_warn "stripped $stripped finding(s) missing required evidence (>= 5 chars)"
+    fi
+
+    # Normalize verdict: map APPROVED -> APPROVE for pipeline-run-task compat
+    # pipeline-run-task reads .verdict and expects APPROVE|REQUEST_CHANGES|NEEDS_DISCUSSION
+    normalized_verdict="$json_verdict"
+    if [[ "$json_verdict" == "APPROVED" ]]; then
+      normalized_verdict="APPROVE"
+    fi
+
+    # Extract summary
+    json_summary=$(printf '%s' "$json_block" | jq -r '.summary // ""')
+
+    # Cross-field consistency: APPROVED with any findings violates the reviewer contract
+    # (quality-reviewer.md: "findings must be empty array [] when APPROVED").
+    if [[ "$normalized_verdict" == "APPROVE" ]] && (( valid_count > 0 )); then
+      log_warn "parser-downgrade: APPROVED verdict with $valid_count finding(s) — downgrading to REQUEST_CHANGES"
+      normalized_verdict="REQUEST_CHANGES"
+      json_summary="[parser-downgrade: APPROVED with findings] ${json_summary}"
+    fi
+
+    # REQUEST_CHANGES with no valid findings is an inverse hallucination — reject.
+    if [[ "$normalized_verdict" == "REQUEST_CHANGES" && "$valid_count" -eq 0 ]]; then
+      log_error "REQUEST_CHANGES verdict with no valid findings (all stripped or empty)"
+      exit 1
+    fi
+
+    # Build normalized output matching the prose parser's schema
+    blocking_count=$(printf '%s' "$valid_findings" | jq '[.[] | select(.severity == "critical" or .severity == "high")] | length')
+    non_blocking_count=$(printf '%s' "$valid_findings" | jq '[.[] | select(.severity != "critical" and .severity != "high")] | length')
+
+    out_json=$(jq -n \
+      --arg verdict "$normalized_verdict" \
+      --argjson round 1 \
+      --arg confidence "HIGH" \
+      --argjson findings "$valid_findings" \
+      --argjson blocking_count "$blocking_count" \
+      --argjson non_blocking_count "$non_blocking_count" \
+      --argjson declared_blockers "$blocking_count" \
+      --argjson criteria_passed 0 \
+      --argjson criteria_failed 0 \
+      --argjson holdout_passed 0 \
+      --argjson holdout_failed 0 \
+      --arg summary "$json_summary" \
+      --arg reviewer "$reviewer" \
+      '{
+        verdict: $verdict,
+        round: $round,
+        confidence: $confidence,
+        findings: $findings,
+        blocking_count: $blocking_count,
+        non_blocking_count: $non_blocking_count,
+        declared_blockers: $declared_blockers,
+        criteria_passed: $criteria_passed,
+        criteria_failed: $criteria_failed,
+        holdout_passed: $holdout_passed,
+        holdout_failed: $holdout_failed,
+        summary: $summary,
+        reviewer: $reviewer
+      }')
+
+    if [[ -n "$base_ref" ]]; then
+      diff_file=$(mktemp)
+      trap 'rm -f "$tmpfile" "$diff_file"' EXIT
+      if git diff --unified=5 "$base_ref" HEAD > "$diff_file" 2>/dev/null && [[ -s "$diff_file" ]]; then
+        printf '%s' "$out_json" | validate_findings "$diff_file"
+      else
+        log_error "git diff failed or produced empty diff (base: $base_ref)"
+        exit 1
+      fi
+    else
+      printf '%s' "$out_json"
+    fi
+    exit 0
+  fi
+fi
+
+# =============================================================================
+# --- Prose fallback: legacy ## Verdict block parser ---
+# =============================================================================
 
 # Extract the anchored Verdict block (everything between `## Verdict` and the
 # next top-level `## ` heading). The block is the *only* place where verdict,
@@ -91,6 +213,7 @@ current_severity=""
 current_category=""
 current_description=""
 current_suggestion=""
+current_verbatim=""
 
 _flush_finding() {
   [[ -z "$current_title" ]] && return
@@ -103,8 +226,9 @@ _flush_finding() {
     --arg category "$current_category" \
     --arg description "$current_description" \
     --arg suggestion "$current_suggestion" \
+    --arg verbatim_line "$current_verbatim" \
     --argjson blocking "$is_blocking" \
-    '. + [{title: $title, file: $file, severity: $severity, category: $category, description: $description, suggestion: $suggestion, blocking: $blocking}]')
+    '. + [{title: $title, file: $file, severity: $severity, category: $category, description: $description, suggestion: $suggestion, verbatim_line: $verbatim_line, blocking: $blocking}]')
   if [[ "$current_type" == "BLOCKING" ]]; then
     blocking_count=$((blocking_count + 1))
   else
@@ -116,6 +240,7 @@ _flush_finding() {
   current_category=""
   current_description=""
   current_suggestion=""
+  current_verbatim=""
   current_type=""
 }
 
@@ -151,6 +276,7 @@ while IFS= read -r line; do
       "- **Category:** "*) current_category="${line#"- **Category:** "}" ;;
       "- **Description:** "*) current_description="${line#"- **Description:** "}" ;;
       "- **Suggestion:** "*) current_suggestion="${line#"- **Suggestion:** "}" ;;
+      "- **Verbatim:** "*) current_verbatim="${line#"- **Verbatim:** "}" ;;
     esac
   fi
 done < "$tmpfile"
@@ -199,8 +325,15 @@ done < "$tmpfile"
 # Extract summary (portable: awk instead of GNU sed)
 summary=$(awk '/^## Summary$/{found=1; next} found{print}' "$tmpfile" | head -5 | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
 
+# Enforce declared_blockers == blocking_count. Reviewer MUST agree with parser tally.
+if [[ "${declared_blockers:-0}" != "$blocking_count" ]]; then
+  log_warn "declared_blockers ($declared_blockers) ≠ blocking_count ($blocking_count) — downgrading to REQUEST_CHANGES"
+  verdict="REQUEST_CHANGES"
+  summary="[parser-downgrade: declared/observed blocker mismatch] ${summary}"
+fi
+
 # Build output JSON
-jq -n \
+out_json=$(jq -n \
   --arg verdict "$verdict" \
   --argjson round "$round" \
   --arg confidence "$confidence" \
@@ -228,4 +361,21 @@ jq -n \
     holdout_failed: $holdout_failed,
     summary: $summary,
     reviewer: $reviewer
-  }'
+  }')
+
+# Validate findings against the diff if a base ref was provided. Findings whose
+# verbatim_line does not appear in `git diff <base> HEAD` are dropped; if all
+# blockers were dropped, the verdict is downgraded to APPROVE (see
+# validate_findings in pipeline-lib.sh).
+if [[ -n "$base_ref" ]]; then
+  diff_file=$(mktemp)
+  trap 'rm -f "$tmpfile" "$diff_file"' EXIT
+  if git diff --unified=5 "$base_ref" HEAD > "$diff_file" 2>/dev/null && [[ -s "$diff_file" ]]; then
+    printf '%s' "$out_json" | validate_findings "$diff_file"
+  else
+    log_error "git diff failed or produced empty diff (base: $base_ref)"
+    exit 1
+  fi
+else
+  printf '%s' "$out_json"
+fi

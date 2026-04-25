@@ -15,7 +15,7 @@
       "description": "Individual issues found in the code",
       "items": {
         "type": "object",
-        "required": ["title", "body", "priority"],
+        "required": ["title", "body", "priority", "verbatim_line"],
         "additionalProperties": false,
         "properties": {
           "title": {
@@ -30,6 +30,11 @@
             "type": "string",
             "enum": ["critical", "high", "medium", "low"],
             "description": "critical/high = blocking; medium/low = non-blocking"
+          },
+          "verbatim_line": {
+            "type": "string",
+            "minLength": 10,
+            "description": "Exact substring (10+ chars) copied verbatim from the diff hunk that contains the issue. Used by the harness to verify the finding cites real code; findings whose verbatim_line does not appear in the diff are dropped."
           },
           "confidence_score": {
             "type": "number",

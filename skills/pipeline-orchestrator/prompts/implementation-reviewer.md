@@ -23,23 +23,40 @@ Review the diff in the worktree for task `<task-id>`. Return a strict verdict th
    - Re-read the relevant code to confirm the issue actually exists in the diff (not just in surrounding context or your mental model).
    - Ask: would fixing this finding break any existing test or regress any currently-passing behaviour? If yes, report `NEEDS_DISCUSSION`, not `REQUEST_CHANGES`.
    - Ask: is this finding already handled by the project's formatter, linter, or framework? If yes, drop it.
-   - If you cannot point to a specific line in the diff that demonstrates the problem, drop the finding.
+   - **Quote a real diff line.** Every finding must include a `Verbatim:` line — an exact 10+-character substring copied verbatim from `git diff` output. The harness drops findings whose verbatim text isn't in the diff, so fabricating one is counterproductive. If you cannot quote a real line, drop the finding.
 7. Form one verdict with only confirmed, regression-safe blockers and concerns.
 
-## Verdict block (REQUIRED)
+## Output Format
 
-End your final assistant message with a JSON object, on its own line:
+Emit a single JSON code block as your final output:
 
 ```json
 {
-  "decision": "APPROVE" | "REQUEST_CHANGES" | "NEEDS_DISCUSSION",
-  "blockers": ["short imperative: fix X"],
-  "concerns": ["short note: consider Y"]
+  "verdict": "APPROVED" | "REQUEST_CHANGES" | "NEEDS_DISCUSSION",
+  "summary": "one sentence",
+  "findings": [
+    {
+      "file": "path/to/file.ts",
+      "line": 42,
+      "evidence": "<exact quote from diff>",
+      "severity": "critical" | "important" | "minor",
+      "description": "what is wrong and why"
+    }
+  ],
+  "notes": "optional free-form observations"
 }
 ```
 
-- **APPROVE** — diff meets the spec, tests adequate, no blockers. `concerns` optional (non-blocking notes).
-- **REQUEST_CHANGES** — at least one blocker. The orchestrator will re-spawn the executor with your blockers; max 3 review rounds.
+Rules:
+
+- `verdict` must be one of the three exact strings above
+- `findings` required when verdict is REQUEST_CHANGES; must be empty array [] when APPROVED
+- Each finding MUST include `evidence` — an exact quote (>= 5 chars) from the diff being reviewed
+- Findings without evidence are invalid and will be rejected by the parser
+- `line` is the line number in the file where the issue occurs (0 if unknown)
+
+- **APPROVED** — diff meets the spec, tests adequate, no blockers. `notes` optional (non-blocking observations).
+- **REQUEST_CHANGES** — at least one finding with evidence. The orchestrator will re-spawn the executor with your findings; max 3 review rounds.
 - **NEEDS_DISCUSSION** — ambiguity that requires human judgement (spec is unclear, two equally valid approaches, regulatory uncertainty). The orchestrator escalates to a human.
 
 Then end with:
@@ -50,6 +67,13 @@ STATUS: DONE
 
 (reviewers return DONE regardless of verdict — the verdict lives in the JSON block, not the status line).
 
+### Before forming a verdict, validate each candidate finding:
+
+- Re-read the relevant code to confirm the issue actually exists in the diff (not just in surrounding context or your mental model).
+- Ask: would fixing this finding break any existing test or regress any currently-passing behaviour? If yes, report `NEEDS_DISCUSSION`, not `REQUEST_CHANGES`.
+- Ask: is this finding already handled by the project's formatter, linter, or framework? If yes, drop it.
+- If you cannot point to a specific quoted line from the diff that demonstrates the problem, drop the finding.
+
 ## Hard rules
 
 - Do NOT approve code you did not read.
@@ -57,6 +81,7 @@ STATUS: DONE
 - Do NOT request changes for style nits that the project's formatter handles.
 - Do NOT collapse genuine security concerns into "concerns" — those are blockers.
 - `blockers` must be actionable in one sentence. No multi-paragraph blockers.
+- Every finding must carry a `Verbatim:` field with a real diff line. Findings without verifiable diff text are dropped by the harness — there is no benefit to fabricating one.
 
 ## Holdout reviews
 

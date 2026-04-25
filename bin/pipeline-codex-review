@@ -15,12 +15,13 @@ PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # --- Arg parsing ---
 
 base_ref="staging"
+base_explicit=false
 task_id=""
 spec_dir=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --base)     base_ref="$2"; shift 2 ;;
+    --base)     base_ref="$2"; base_explicit=true; shift 2 ;;
     --task-id)  task_id="$2";  shift 2 ;;
     --spec-dir) spec_dir="$2"; shift 2 ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
@@ -30,6 +31,15 @@ done
 if [[ -z "$task_id" ]]; then
   log_error "--task-id is required"
   exit 1
+fi
+
+if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
+  if [[ "$base_explicit" == "false" ]] && git rev-parse --verify origin/staging >/dev/null 2>&1; then
+    base_ref="origin/staging"
+  else
+    printf '{"ok":false,"error":"base_ref_not_found","base_ref":"%s"}\n' "$base_ref"
+    exit 1
+  fi
 fi
 
 # --- Build review prompt ---
@@ -74,7 +84,9 @@ fi
 # Build prompt file
 prompt_file=$(mktemp /tmp/codex-review-prompt-XXXXXX.md)
 out_file=$(mktemp /tmp/codex-review-output-XXXXXX.json)
-trap 'rm -f "$prompt_file" "$out_file"' EXIT
+diff_file=$(mktemp /tmp/codex-review-diff-XXXXXX.diff)
+printf '%s\n' "$diff_output" > "$diff_file"
+trap 'rm -f "$prompt_file" "$out_file" "$diff_file"' EXIT
 
 {
   if [[ -f "$skill_file" ]]; then
@@ -105,7 +117,12 @@ trap 'rm -f "$prompt_file" "$out_file"' EXIT
   printf 'the provided schema. Do not include any prose, markdown, or explanation '
   printf 'outside the JSON.\n\n'
   printf 'Map severity: critical/high findings are BLOCKING; medium/low are NON-BLOCKING.\n'
-  printf 'Set overall_correctness to "patch is correct" only if there are zero BLOCKING findings.\n'
+  printf 'Set overall_correctness to "patch is correct" only if there are zero BLOCKING findings.\n\n'
+  printf 'Each finding MUST include verbatim_line — an exact 10+-character substring '
+  printf 'copied verbatim from the diff above (a single line within a hunk, including '
+  printf 'leading +/- if present). The harness drops findings whose verbatim_line does '
+  printf 'not appear in the diff, so fabricating one is counterproductive — if you '
+  printf 'cannot quote a real diff line for a finding, drop the finding.\n'
 } > "$prompt_file"
 
 # --- Sandbox cascade: read-only → workspace-read → no flag ---
@@ -171,6 +188,7 @@ jq -r '
       category: "codex",
       description: .body,
       suggestion: "",
+      verbatim_line: (.verbatim_line // ""),
       blocking: (. | is_blocking(.))
     }];
 
@@ -189,4 +207,4 @@ jq -r '
     summary: (.overall_explanation // ""),
     reviewer: "codex"
   }
-' "$out_file"
+' "$out_file" | validate_findings "$diff_file"

@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# SessionStart hook — re-injects orchestrator Iron Laws + Red Flags digest on
+# every startup, clear, or compact so the orchestrator never drifts after a
+# compaction or reinitialization. Also appends a stage-state summary when an
+# active run exists.
+#
+# Stdin: JSON with source, session_id.
+# Output: JSON {hookSpecificOutput:{hookEventName:"SessionStart",
+#              additionalContext:"..."}} on stdout, exit 0.
+set -euo pipefail
+
+# Inline Iron Laws + Red Flags digest (extracted from
+# skills/pipeline-orchestrator/SKILL.md). Kept here so the hook is
+# self-contained and fast — no file read required.
+read -r -d '' IRON_LAWS <<'LAWS' || true
+Iron Laws:
+1. Every step is a script call. Validation, quota gates, quality gates, review dispatch, PR creation, CI wait — all live in bin/pipeline-*. Never perform them by prose.
+2. The wrapper owns the stage machine. pipeline-run-task <run-id> <task-id> --stage <stage> returns exit codes; you react to codes, not invent stages.
+3. Reviewers judge code quality, not you. Spawn them, parse verdicts via pipeline-parse-review, feed --review-file paths. Never form an opinion on correctness.
+4. Quota gate C fires before every task via preflight. Skipping pipeline-run-task --stage preflight = skipping the quota gate.
+5. Status transitions belong to the wrapper: pending → executing → reviewing → done/failed/needs_human_review. Never write task-status done by hand.
+LAWS
+
+read -r -d '' RED_FLAGS <<'FLAGS' || true
+Red Flags (STOP — you are rationalizing):
+- "I'll skip the quota gate once to save time" → quota gate is the only thing between this run and a frozen Stop hook
+- "The executor returned green; I can mark done" → the wrapper marks done; call pipeline-run-task --stage ship
+- "parse-review is overkill" → skipping it lets NEEDS_DISCUSSION become APPROVE
+- "I can combine two stages to save a turn" → each stage is a separate script call
+- "This task is small; full protocol is overkill" → there is no fast path
+- "The spawn manifest is noisy; let me simplify" → pass it verbatim to Agent()
+- "I remember the exit codes" → re-read reference/stage-taxonomy.md if in doubt
+- "finalize-run seems optional" → without it R7-R10 fail; it is mandatory
+- "CI is still pending; I'll just wait here" → asyncRewake hook wakes you; do not poll manually
+FLAGS
+
+# Build the harness reminder.
+ctx="<FACTORY_HARNESS_REMINDER>
+${IRON_LAWS}
+${RED_FLAGS}
+Stage sequence: preflight → preexec_tests → postexec → postreview → ship → finalize-run
+Exit codes: 0=advance, 10=spawn agents, 2=quota stop, 20=human gate paused, 30=task terminal, 3=wait_retry
+</FACTORY_HARNESS_REMINDER>"
+
+# Append stage-state summary if an active run exists.
+current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
+if [[ -n "${CLAUDE_PLUGIN_DATA:-}" && -L "$current_link" ]]; then
+  run_dir=$(readlink "$current_link" 2>/dev/null) || true
+  state_file="${run_dir}/state.json"
+  if [[ -n "$run_dir" && -f "$state_file" ]]; then
+    run_id=$(basename "$run_dir")
+    run_status=$(jq -r '.status // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
+
+    # Only show for non-terminal runs.
+    # interrupted = resumable, intentionally not in this list
+    case "$run_status" in
+      done|completed|failed|partial) ;;
+      *)
+        next_task=$(jq -r '
+          [.tasks | to_entries[]
+           | select(.value.status != "done" and .value.status != "failed" and .value.status != "needs_human_review")
+           | .key] | first // "RUN"
+        ' "$state_file" 2>/dev/null || echo "RUN")
+
+        summary=$(jq -r '
+          (.tasks // {}) | to_entries
+          | map("  " + .key + ": " + (.value.status // "?") + " stage=" + (.value.stage // "none"))
+          | .[]
+        ' "$state_file" 2>/dev/null | head -10 || true)
+
+        next_stage=$(jq -r --arg t "$next_task" '
+          (.tasks[$t].stage // "preflight")
+          | if . == "preflight_done"  then "preexec_tests"
+            elif . == "preexec_tests_done" then "postexec"
+            elif . == "postexec_done" then "postreview"
+            elif . == "postreview_done" then "ship"
+            elif . == "ship_done"     then "finalize-run"
+            else "preflight" end
+        ' "$state_file" 2>/dev/null || echo "preflight")
+
+        state_summary="
+Active run: $run_id (status=$run_status)
+Task snapshot:
+${summary}
+Resume with: pipeline-run-task \"$run_id\" $next_task --stage $next_stage"
+
+        ctx="${ctx}
+${state_summary}"
+        ;;
+    esac
+  fi
+fi
+
+jq -cn --arg ctx "$ctx" '{
+  hookSpecificOutput: {
+    hookEventName: "SessionStart",
+    additionalContext: $ctx
+  }
+}'
+
+exit 0
