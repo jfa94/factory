@@ -308,10 +308,19 @@ _realpath_m() {
 # orchestrator, which re-invokes the gate — preserving full autonomy across
 # arbitrarily long waits (e.g. a 5h window reset) without exceeding the tool cap.
 #
-# Stuck-cache protection: state key `.circuit_breaker.quota_wait_cycles` tracks
-# consecutive yields. After MAX_CYCLES (default 60, ≈9h) the gate returns
-# end_gracefully to avoid infinite loops when the statusline stops ticking.
-# The counter resets on `proceed`.
+# Stuck-cache protection: two separate counters in run state:
+#   .circuit_breaker.quota_wait_cycles  — consecutive "still over" yields
+#   .circuit_breaker.quota_stale_cycles — consecutive yields where the cache
+#                                         did not advance (statusline silent)
+# Both reset on `proceed`. wait_cycles caps at MAX_CYCLES (~9h); stale_cycles
+# caps separately at MAX_STALE_CYCLES (~1h). Splitting them lets a quiet
+# statusline yield gracefully (orchestrator turn refreshes cache) instead of
+# end_gracefully on the first stale read.
+#
+# Config / env overrides (env wins):
+#   FACTORY_QUOTA_GATE_SLEEP_CAP_SEC    / .quota.sleepCapSec       (default 540)
+#   FACTORY_QUOTA_GATE_MAX_CYCLES       / .quota.maxWaitCycles     (default 60)
+#   FACTORY_QUOTA_GATE_MAX_STALE_CYCLES / .quota.maxStaleCycles    (default 6)
 #
 # Usage: pipeline_quota_gate <run_id> <tier> <boundary_label> [task_id]
 # When invoked in per-task context, pass <task_id> (4th arg) so emitted
@@ -320,10 +329,20 @@ _realpath_m() {
 # matches "task-<id>", the id is auto-derived.
 # Returns: 0=proceed, 2=end_gracefully (halt), 3=wait_retry (orchestrator re-invoke)
 pipeline_quota_gate() {
+  # Self-heal env alignment: the statusline wrapper writes usage-cache.json to
+  # whichever CLAUDE_PLUGIN_DATA the wrapper sees, and pipeline_quota_gate reads
+  # from the lib's. If merged-settings.json has a different (or missing) value
+  # in env.CLAUDE_PLUGIN_DATA, the wrapper is silently writing to a different
+  # path and our reads will look stale forever. Warn loudly so an operator can
+  # relaunch with --settings; we cannot regenerate mid-session because the
+  # active Claude Code session owns its env block.
+  _quota_gate_check_env_alignment
   local run_id="$1" tier="$2" boundary_label="$3" task_id="${4:-}"
   local quota route action wait_min prior trigger
-  local sleep_cap_sec="${FACTORY_QUOTA_GATE_SLEEP_CAP_SEC:-540}"
-  local max_cycles="${FACTORY_QUOTA_GATE_MAX_CYCLES:-60}"
+  local sleep_cap_sec max_cycles max_stale_cycles
+  sleep_cap_sec="${FACTORY_QUOTA_GATE_SLEEP_CAP_SEC:-$(read_config '.quota.sleepCapSec' '540')}"
+  max_cycles="${FACTORY_QUOTA_GATE_MAX_CYCLES:-$(read_config '.quota.maxWaitCycles' '60')}"
+  max_stale_cycles="${FACTORY_QUOTA_GATE_MAX_STALE_CYCLES:-$(read_config '.quota.maxStaleCycles' '6')}"
 
   # Auto-derive task_id from boundary_label like "task-<id>" when not given.
   if [[ -z "$task_id" && "$boundary_label" == task-* ]]; then
@@ -340,14 +359,42 @@ pipeline_quota_gate() {
   fi
 
   # Stuck-cache guard: count consecutive wait yields across orchestrator re-invocations.
-  local cycles
+  local cycles stale_cycles
   cycles=$(pipeline-state read "$run_id" '.circuit_breaker.quota_wait_cycles // 0' 2>/dev/null || printf '0')
+  stale_cycles=$(pipeline-state read "$run_id" '.circuit_breaker.quota_stale_cycles // 0' 2>/dev/null || printf '0')
   if (( cycles >= max_cycles )); then
     log_warn "quota gate [$boundary_label]: ${cycles} consecutive wait cycles (cap=${max_cycles}) — ending gracefully"
     return 2
   fi
+  if (( stale_cycles >= max_stale_cycles )); then
+    log_warn "quota gate [$boundary_label]: ${stale_cycles} consecutive stale-cache cycles (cap=${max_stale_cycles}) — ending gracefully"
+    return 2
+  fi
 
   quota=$(pipeline-quota-check)
+  local detection_method reason
+  detection_method=$(printf '%s' "$quota" | jq -r '.detection_method // "statusline"')
+  reason=$(printf '%s' "$quota" | jq -r '.reason // ""')
+
+  # Stale-cache yield: telemetry is broken (statusline silent / cache missing /
+  # cache too old). Yield exit 3 so the next orchestrator turn fires a fresh
+  # statusline tick before we end_gracefully. The stale_cycles cap (above)
+  # still bounds total time spent waiting on a permanently-broken statusline.
+  if [[ "$detection_method" == "unavailable" ]]; then
+    log_metric "quota.check" \
+      "gate=\"$boundary_label\"" \
+      "action=\"stale_yield\"" \
+      "tier=\"$tier\"" \
+      "reason=\"$reason\"" \
+      "stale_cycle=$((stale_cycles + 1))" \
+      ${task_id_kv[@]+"${task_id_kv[@]}"}
+    if ! pipeline-state write "$run_id" '.circuit_breaker.quota_stale_cycles' "$(( stale_cycles + 1 ))" 2>/dev/null; then
+      log_warn "quota gate [$boundary_label]: failed to increment quota_stale_cycles"
+    fi
+    log_info "quota gate [$boundary_label]: cache unavailable ($reason) — yielding to refresh statusline (cycle $((stale_cycles + 1))/${max_stale_cycles})"
+    return 3
+  fi
+
   route=$(pipeline-model-router --quota "$quota" --tier "$tier")
   action=$(printf '%s' "$route" | jq -r '.action')
 
@@ -364,9 +411,11 @@ pipeline_quota_gate() {
 
   case "$action" in
     proceed)
-      # Reset the stuck-cache counter on any successful proceed.
+      # Reset both counters on any successful proceed.
       pipeline-state write "$run_id" '.circuit_breaker.quota_wait_cycles' '0' 2>/dev/null \
         || log_warn "quota gate [$boundary_label]: failed to reset quota_wait_cycles"
+      pipeline-state write "$run_id" '.circuit_breaker.quota_stale_cycles' '0' 2>/dev/null \
+        || log_warn "quota gate [$boundary_label]: failed to reset quota_stale_cycles"
       return 0
       ;;
     end_gracefully)
@@ -400,8 +449,28 @@ pipeline_quota_gate() {
         "cycle=$((cycles + 1))" \
         ${task_id_kv[@]+"${task_id_kv[@]}"}
 
-      # Re-check after the chunk. If clear, proceed; else yield to orchestrator.
+      # Re-check after the chunk. If clear, proceed; if stale, yield separately;
+      # else yield via wait_cycles counter.
       quota=$(pipeline-quota-check)
+      detection_method=$(printf '%s' "$quota" | jq -r '.detection_method // "statusline"')
+      reason=$(printf '%s' "$quota" | jq -r '.reason // ""')
+
+      if [[ "$detection_method" == "unavailable" ]]; then
+        log_metric "quota.check" \
+          "gate=\"$boundary_label\"" \
+          "action=\"stale_yield\"" \
+          "tier=\"$tier\"" \
+          "reason=\"$reason\"" \
+          "phase=\"post-wait\"" \
+          "stale_cycle=$((stale_cycles + 1))" \
+          ${task_id_kv[@]+"${task_id_kv[@]}"}
+        if ! pipeline-state write "$run_id" '.circuit_breaker.quota_stale_cycles' "$(( stale_cycles + 1 ))" 2>/dev/null; then
+          log_warn "quota gate [$boundary_label]: failed to increment quota_stale_cycles"
+        fi
+        log_info "quota gate [$boundary_label]: post-wait cache unavailable ($reason) — yielding to refresh statusline (cycle $((stale_cycles + 1))/${max_stale_cycles})"
+        return 3
+      fi
+
       route=$(pipeline-model-router --quota "$quota" --tier "$tier")
       action=$(printf '%s' "$route" | jq -r '.action')
 
@@ -413,6 +482,11 @@ pipeline_quota_gate() {
         "over_7d=$(printf '%s' "$quota" | jq -r '.seven_day.utilization // null')" \
         "phase=\"post-wait\"" \
         ${task_id_kv[@]+"${task_id_kv[@]}"}
+
+      # Telemetry working again — reset stale counter regardless of action.
+      pipeline-state write "$run_id" '.circuit_breaker.quota_stale_cycles' '0' 2>/dev/null \
+        || log_warn "quota gate [$boundary_label]: failed to reset quota_stale_cycles"
+
       if [[ "$action" == "proceed" ]]; then
         pipeline-state write "$run_id" '.circuit_breaker.quota_wait_cycles' '0' 2>/dev/null \
           || log_warn "quota gate [$boundary_label]: failed to reset quota_wait_cycles"
@@ -487,28 +561,67 @@ compute_window_day() {
   printf '%s' "$day"
 }
 
-# Hourly utilization threshold for a given window_hour. Linear 20/40/60/80
-# with a hard cap at 90% in the final hour (the extra headroom protects
-# against burst pricing).
+# Verify merged-settings.json env.CLAUDE_PLUGIN_DATA matches the runtime
+# CLAUDE_PLUGIN_DATA. Logs a warning + emits a one-shot metric on mismatch.
+# Idempotent and cheap (one jq + one comparison). No-op when the file is
+# absent (FACTORY_AUTONOMOUS_MODE bypass / dev shell).
+_quota_gate_check_env_alignment() {
+  local merged="${CLAUDE_PLUGIN_DATA:-}/merged-settings.json"
+  [[ -f "$merged" ]] || return 0
+  local pinned
+  pinned=$(jq -r '.env.CLAUDE_PLUGIN_DATA // empty' "$merged" 2>/dev/null) || return 0
+  if [[ -z "$pinned" ]]; then
+    log_warn "merged-settings.json missing env.CLAUDE_PLUGIN_DATA — statusline cache may write to a different path. Relaunch with: claude --settings $merged"
+    log_metric "quota.env_misalignment" "kind=\"pinned-missing\""
+    return 0
+  fi
+  if [[ "$pinned" != "${CLAUDE_PLUGIN_DATA:-}" ]]; then
+    log_warn "merged-settings.json env.CLAUDE_PLUGIN_DATA=$pinned does not match runtime CLAUDE_PLUGIN_DATA=${CLAUDE_PLUGIN_DATA:-}; statusline cache likely stale. Relaunch with: claude --settings $merged"
+    log_metric "quota.env_misalignment" "kind=\"pinned-mismatch\"" "pinned=\"$pinned\"" "runtime=\"${CLAUDE_PLUGIN_DATA:-}\""
+  fi
+}
+
+# Read a single index from a JSON-array config key, falling back to a default.
+# Usage: _quota_curve_value <jq-path-to-array> <idx> <default>
+# Returns the array element at idx, or default if config is missing/short.
+_quota_curve_value() {
+  local jq_key="$1" idx="$2" default="$3"
+  local config_file="${CLAUDE_PLUGIN_DATA:-}/config.json"
+  if [[ -f "$config_file" ]]; then
+    local val
+    val=$(jq -r --argjson i "$idx" "${jq_key}[\$i] // empty" "$config_file" 2>/dev/null) || val=""
+    if [[ -n "$val" && "$val" != "null" ]]; then
+      printf '%s' "$val"
+      return
+    fi
+  fi
+  printf '%s' "$default"
+}
+
+# Hourly utilization threshold for a given window_hour. Default curve
+# [20, 40, 60, 80, 90] — linear with a 90% cap in the final hour to protect
+# the burst-pricing reserve. Override via .quota.hourlyThresholds in config.
 # Usage: compute_hourly_threshold <window_hour>
 compute_hourly_threshold() {
   local hour="$1"
-  local t=$((hour * 20))
-  if (( t > 90 )); then t=90; fi
-  printf '%s' "$t"
+  local idx=$((hour - 1))
+  if (( idx < 0 )); then idx=0; fi
+  if (( idx > 4 )); then idx=4; fi
+  local defaults=(20 40 60 80 90)
+  _quota_curve_value '.quota.hourlyThresholds' "$idx" "${defaults[$idx]}"
 }
 
-# Daily utilization threshold for a given window_day. Non-linear curve
-# [14, 29, 43, 57, 71, 86, 95] — day 7 is 95% (not 100%) so we never burn
-# the very last reserve.
+# Daily utilization threshold for a given window_day. Default curve
+# [14, 29, 43, 57, 71, 86, 95] — front-loaded conservatism; day 7 caps at
+# 95% so we never burn the final reserve. Override via .quota.dailyThresholds.
 # Usage: compute_daily_threshold <window_day>
 compute_daily_threshold() {
   local day="$1"
-  local thresholds=(14 29 43 57 71 86 95)
   local idx=$((day - 1))
   if (( idx < 0 )); then idx=0; fi
   if (( idx > 6 )); then idx=6; fi
-  printf '%s' "${thresholds[$idx]}"
+  local defaults=(14 29 43 57 71 86 95)
+  _quota_curve_value '.quota.dailyThresholds' "$idx" "${defaults[$idx]}"
 }
 
 # ============================================================

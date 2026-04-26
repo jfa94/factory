@@ -97,13 +97,52 @@ assert_eq "proceed resets quota_wait_cycles to 0" "0" "$cycles"
 
 # ============================================================
 echo ""
-echo "=== pipeline_quota_gate: end_gracefully direct ==="
+echo "=== pipeline_quota_gate: unavailable cache yields stale (exit 3) on first hit ==="
 
 _reset_scratch run-2
 _stub_quota_check_sequence '{"detection_method":"unavailable","reason":"usage-cache-missing"}'
-_stub_router_sequence '{"action":"end_gracefully","trigger":"quota_detection_failed"}'
+# Router should NOT be called when detection_method=unavailable; gate yields earlier.
+_stub_router_sequence '{"action":"never_called"}'
 set +e; pipeline_quota_gate run-2 feature gate-A >/dev/null 2>&1; rc=$?; set -e
-assert_eq "end_gracefully → exit 2" "2" "$rc"
+assert_eq "stale yield → exit 3" "3" "$rc"
+stale=$(pipeline-state read run-2 '.circuit_breaker.quota_stale_cycles' 2>/dev/null)
+assert_eq "quota_stale_cycles incremented" "1" "$stale"
+
+# ============================================================
+echo ""
+echo "=== pipeline_quota_gate: end_gracefully direct (router-emitted) ==="
+
+_reset_scratch run-2b
+_stub_quota_check_sequence '{"detection_method":"statusline","five_hour":{"utilization":99,"over_threshold":true},"seven_day":{"utilization":99,"over_threshold":true}}'
+_stub_router_sequence '{"action":"end_gracefully","trigger":"7d_over"}'
+set +e; pipeline_quota_gate run-2b feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "router end_gracefully → exit 2" "2" "$rc"
+
+# ============================================================
+echo ""
+echo "=== pipeline_quota_gate: stale-cycle cap ==="
+
+_reset_scratch run-2c
+export FACTORY_QUOTA_GATE_MAX_STALE_CYCLES=2
+pipeline-state write run-2c '.circuit_breaker.quota_stale_cycles' '2' >/dev/null
+_stub_quota_check_sequence '{"never":"called"}'
+_stub_router_sequence '{"action":"never"}'
+set +e; pipeline_quota_gate run-2c feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "stale_cycles==cap → exit 2" "2" "$rc"
+unset FACTORY_QUOTA_GATE_MAX_STALE_CYCLES
+
+# ============================================================
+echo ""
+echo "=== pipeline_quota_gate: proceed resets stale_cycles ==="
+
+_reset_scratch run-2d
+pipeline-state write run-2d '.circuit_breaker.quota_stale_cycles' '3' >/dev/null
+_stub_quota_check_sequence '{"detection_method":"statusline"}'
+_stub_router_sequence '{"action":"proceed","provider":"anthropic"}'
+set +e; pipeline_quota_gate run-2d feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "proceed-after-stale → exit 0" "0" "$rc"
+stale=$(pipeline-state read run-2d '.circuit_breaker.quota_stale_cycles' 2>/dev/null)
+assert_eq "proceed resets quota_stale_cycles" "0" "$stale"
 
 # ============================================================
 echo ""
@@ -167,6 +206,26 @@ echo "=== pipeline_quota_gate: empty run_id ==="
 _reset_scratch run-7
 set +e; pipeline_quota_gate "" feature gate-A >/dev/null 2>&1; rc=$?; set -e
 assert_eq "empty run_id → exit 2" "2" "$rc"
+
+# ============================================================
+echo ""
+echo "=== compute_hourly_threshold / compute_daily_threshold: config override ==="
+
+mkdir -p "$CLAUDE_PLUGIN_DATA"
+cat > "$CLAUDE_PLUGIN_DATA/config.json" <<'JSON'
+{ "quota": {
+    "hourlyThresholds": [10, 20, 30, 40, 50],
+    "dailyThresholds":  [5, 10, 20, 30, 40, 60, 80]
+} }
+JSON
+assert_eq "hourly override h1=10" "10" "$(compute_hourly_threshold 1)"
+assert_eq "hourly override h5=50" "50" "$(compute_hourly_threshold 5)"
+assert_eq "daily override d1=5"   "5"  "$(compute_daily_threshold 1)"
+assert_eq "daily override d7=80"  "80" "$(compute_daily_threshold 7)"
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+# Defaults restored when config absent
+assert_eq "hourly default h1=20"  "20" "$(compute_hourly_threshold 1)"
+assert_eq "daily default d4=57"   "57" "$(compute_daily_threshold 4)"
 
 # ============================================================
 echo ""

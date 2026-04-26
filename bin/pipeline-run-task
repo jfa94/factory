@@ -96,6 +96,35 @@ _emit_manifest() {
     '{action:"spawn_agents", stage_after:$after, agents:$agents}'
 }
 
+# Resolve the per-task risk tier from state (written in preflight). Falls back
+# to "routine" when missing — keeps mid-task gates working even on resumes
+# from runs that predate per-task tier persistence.
+_task_tier() {
+  local t
+  t=$(_task_field risk_tier 2>/dev/null)
+  t=$(_unquote_json_string "$t")
+  [[ -z "$t" || "$t" == "null" ]] && t="routine"
+  printf '%s' "$t"
+}
+
+# Run pipeline_quota_gate at a mid-task stage boundary and translate the rc
+# into a stage-level return code matching the preflight convention. Emits
+# log_step_end on non-proceed paths so the caller can `return` immediately.
+# Usage: _run_stage_quota_gate <stage> <t0_ms>
+# Caller consumes the function's return code: 0=proceed, 2/3/30 to propagate.
+_run_stage_quota_gate() {
+  local stage="$1" t0="$2"
+  local tier_local; tier_local=$(_task_tier)
+  pipeline_quota_gate "$run_id" "$tier_local" "task-${task_id}-${stage}" "$task_id"
+  local qrc=$? t1
+  case $qrc in
+    0) return 0 ;;
+    2) t1=$(_now_ms); log_step_end "$stage" "end_gracefully" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"quota\""; return 2 ;;
+    3) t1=$(_now_ms); log_step_end "$stage" "wait_retry"     "$((t1-t0))" "task_id=\"$task_id\""; return 3 ;;
+    *) t1=$(_now_ms); log_step_end "$stage" "failed"         "$((t1-t0))" "task_id=\"$task_id\""; return 30 ;;
+  esac
+}
+
 _prompt_path() {
   printf '%s/.state/%s/%s.%s-prompt.md' "$run_dir" "$run_id" "$task_id" "$1"
 }
@@ -545,6 +574,10 @@ _stage_postexec() {
     return 10
   fi
 
+  _run_stage_quota_gate postexec "$t0"
+  local _qrc=$?
+  (( _qrc != 0 )) && return $_qrc
+
   local wt
   wt=$(_task_field worktree)
   wt=$(_unquote_json_string "$wt")
@@ -730,6 +763,10 @@ _stage_postreview() {
     log_step_end "postreview" "skipped" "$((t1-t0))" "task_id=\"$task_id\""
     return 0
   fi
+
+  _run_stage_quota_gate postreview "$t0"
+  local _qrc=$?
+  (( _qrc != 0 )) && return $_qrc
 
   local -a files=()
   if (( ${#review_files[@]} )); then
@@ -1048,6 +1085,10 @@ _stage_ship() {
     esac
   fi
 
+  _run_stage_quota_gate ship "$t0"
+  local _qrc=$?
+  (( _qrc != 0 )) && return $_qrc
+
   local gate_lvl
   gate_lvl=$(read_config '.humanReviewLevel' '2')
   if (( gate_lvl >= 1 )); then
@@ -1119,6 +1160,15 @@ _stage_finalize_run() {
   local t0 t1
   t0=$(_now_ms)
   log_step_begin "finalize-run"
+
+  pipeline_quota_gate "$run_id" feature run-finalize ""
+  local _qrc=$?
+  case $_qrc in
+    0) : ;;
+    2) t1=$(_now_ms); log_step_end "finalize-run" "end_gracefully" "$((t1-t0))" "reason=\"quota\""; return 2 ;;
+    3) t1=$(_now_ms); log_step_end "finalize-run" "wait_retry"     "$((t1-t0))"; return 3 ;;
+    *) t1=$(_now_ms); log_step_end "finalize-run" "failed"         "$((t1-t0))"; return 30 ;;
+  esac
 
   # Partial-rollup escape hatch. Default: every task must be status=done.
   # FACTORY_ALLOW_PARTIAL_ROLLUP=1 permits failed/needs_human_review tasks

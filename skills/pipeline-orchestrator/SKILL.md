@@ -177,6 +177,21 @@ pipeline-scaffold "$PROJECT_ROOT" --check || { echo "run /factory:scaffold first
 pipeline-circuit-breaker "$run_id" >/dev/null || { /* mark partial, cleanup, exit */ }
 ```
 
+### 8. Run-start budget gate (Gate 0)
+
+Script-enforced before any agent spawns. Same loop shape as Gate A/B/C — react to exit codes 0/2/3.
+
+```bash
+while :; do
+  pipeline-quota-gate-cli --run-id "$run_id" --tier feature --boundary run-start; rc=$?
+  case $rc in
+    0) break ;;          # proceed
+    2) mark_partial; exit 0 ;;
+    3) continue ;;       # wait_retry — re-invoke (next agent turn refreshes statusline)
+  esac
+done
+```
+
 ## Spec Generation (prd / discover modes only)
 
 Runs once, before task execution.
@@ -184,9 +199,8 @@ Runs once, before task execution.
 1. **Quota gate A.**
 
    ```bash
-   source pipeline-lib.sh
    while :; do
-     pipeline_quota_gate "$run_id" feature spec; rc=$?
+     pipeline-quota-gate-cli --run-id "$run_id" --tier feature --boundary spec; rc=$?
      case $rc in 0) break;; 2) mark_partial; exit 0;; 3) continue;; esac
    done
    ```
@@ -251,7 +265,7 @@ for G in groups:
   for batch in chunks(tasks_G, maxConcurrent):
     # Quota gate B
     while :; do
-      pipeline_quota_gate "$run_id" "<max tier in batch>" "batch-G$G"; rc=$?
+      pipeline-quota-gate-cli --run-id "$run_id" --tier "<max tier in batch>" --boundary "batch-G$G"; rc=$?
       case $rc in 0) break;; 2) drain; mark_partial; exit 0;; 3) continue;; esac
     done
 

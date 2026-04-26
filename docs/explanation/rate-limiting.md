@@ -23,21 +23,32 @@ Both windows are tracked independently. Exceeding either triggers recovery behav
 
 ## Quota Gates
 
-The pipeline enforces three quota gates, each using `pipeline_quota_gate` from `bin/pipeline-lib.sh`:
+Every gate goes through `pipeline_quota_gate` (`bin/pipeline-lib.sh`) — orchestrator-level callers invoke it via `bin/pipeline-quota-gate-cli` so the wrapper script enforces the same exit-code contract for prose-driven skills.
 
-| Gate          | When                         | Tier               |
-| ------------- | ---------------------------- | ------------------ |
-| **A — spec**  | Before spec generation (S0b) | `feature`          |
-| **B — batch** | Before each parallel batch   | max tier in batch  |
-| **C — task**  | Per-task pre-flight          | task's `risk_tier` |
+| Gate                   | When                                       | Tier               |
+| ---------------------- | ------------------------------------------ | ------------------ |
+| **0 — run-start**      | Once, before any agent spawns              | `feature`          |
+| **A — spec**           | Before spec generation                     | `feature`          |
+| **B — batch**          | Before each parallel batch                 | max tier in batch  |
+| **C — task preflight** | Per-task pre-flight                        | task's `risk_tier` |
+| **D — postexec**       | Before reviewer fan-out                    | task's `risk_tier` |
+| **E — postreview**     | Before parsing reviewer artifacts          | task's `risk_tier` |
+| **F — ship**           | Before `gh pr create` / `pipeline-wait-pr` | task's `risk_tier` |
+| **G — finalize-run**   | Before scribe + final-PR                   | `feature`          |
 
 Each gate calls `pipeline-quota-check` → `pipeline-model-router` and handles the result:
 
 - `proceed` → continue
-- `wait` → sleep `wait_minutes`, re-check (max 3 cycles), record pause time in state
+- `wait` → sleep up to `.quota.sleepCapSec` (default 540 s), re-check, record pause time in `.circuit_breaker.pause_minutes`
+- `stale_yield` → `usage-cache.json` is missing or too old; yield `wait_retry` so the next agent turn refreshes the statusline
 - `end_gracefully` → drain in-flight tasks, mark run `partial`, run summary, cleanup
 
-If 3 consecutive wait cycles still return `over_threshold: true`, the gate treats it as `end_gracefully` to prevent infinite sleep loops.
+Two independent counters bound the wait loop:
+
+- `.circuit_breaker.quota_wait_cycles` — consecutive "still over threshold" yields. Cap `.quota.maxWaitCycles` (default 60, ≈ 9 h).
+- `.circuit_breaker.quota_stale_cycles` — consecutive stale-cache yields (statusline silent). Cap `.quota.maxStaleCycles` (default 6, ≈ 1 h).
+
+Hitting either cap returns `end_gracefully`. Any successful `proceed` resets both counters.
 
 ## How the Pipeline Checks Limits
 
@@ -59,26 +70,15 @@ Fields read from `usage-cache.json`:
 - `seven_day.resets_at` (epoch seconds)
 - `captured_at` (epoch seconds of last statusline update)
 
-The script computes dynamic thresholds based on window position:
+The script computes dynamic thresholds based on window position. Curves are defaults and overridable via the plugin config (`.quota.hourlyThresholds`, `.quota.dailyThresholds`):
 
-**5-Hour Window:**
+**5-Hour Window** (default `[20, 40, 60, 80, 90]`):
 
-```
-window_hour = 1-5 (which hour of the 5h window)
-hourly_threshold = min(window_hour * 20, 90)
-```
+In hour 1, the threshold is 20% utilization. By hour 5, it's 90%. This allows heavier usage late in the window when you're closer to reset.
 
-In hour 1, the threshold is 20%. By hour 5, it's 90%. This allows heavier usage late in the window when you're closer to reset.
+**7-Day Window** (default `[14, 29, 43, 57, 71, 86, 95]`):
 
-**7-Day Window:**
-
-```
-window_day = 1-7 (which day of the 7d window)
-thresholds = [14, 29, 43, 57, 71, 86, 95]
-daily_threshold = thresholds[window_day - 1]
-```
-
-Similar logic: more aggressive usage is allowed later in the window.
+Similar logic — more aggressive usage allowed later in the week. Day 7 caps at 95% so the final reserve is preserved.
 
 ---
 
@@ -113,22 +113,11 @@ Stop spawning new tasks. Let in-flight tasks complete. Mark run as `partial`.
 
 **Case: quota data unavailable** (`detection_method == "unavailable"`)
 
-`pipeline-quota-check` emits this sentinel when `usage-cache.json` is missing, malformed,
-or has missing rate-limit fields. `pipeline-model-router` converts it to `end_gracefully`
-immediately — waiting cannot fix a broken wrapper:
+`pipeline-quota-check` emits this sentinel when `usage-cache.json` is missing, malformed, has missing rate-limit fields, or is older than 1 h.
 
-```json
-{
-  "action": "end_gracefully",
-  "trigger": "quota_detection_failed",
-  "reason": "usage-cache-missing"
-}
-```
+`pipeline_quota_gate` intercepts the sentinel **before** the router and yields `wait_retry` (rc=3) — the next orchestrator turn fires a fresh statusline tick which refreshes the cache. The yield increments `circuit_breaker.quota_stale_cycles`; only when the counter hits `.quota.maxStaleCycles` (default 6, ≈ 1 h of fully silent telemetry) does the gate fall through to `end_gracefully`.
 
-This is the fail-closed path: when the pipeline cannot verify quota it halts rather
-than proceeding blindly. The sentinel path is exercised on the first run before the
-statusline has ticked; subsequent runs (with the wrapper auto-installed via
-`merged-settings.json`) have a warm cache.
+This change unifies the previous fail-closed-on-first-stale behavior with the resilient wait-and-retry behavior the orchestrator already used for over-threshold cases. A genuinely broken wrapper still halts the run, just after a bounded recovery window rather than instantly.
 
 ---
 
@@ -204,13 +193,14 @@ The orchestrator reads persisted state and continues from the first incomplete t
 
 ## Consecutive Wait Limit
 
-To prevent infinite sleep loops, the orchestrator tracks consecutive wait cycles. If 3 consecutive quota checks still return `over_threshold: true` after waiting, the pipeline treats it as `end_gracefully` and stops spawning new tasks.
+Two independent counters bound the wait loop:
 
-This handles edge cases where:
+- `circuit_breaker.quota_wait_cycles` (cap `.quota.maxWaitCycles`, default 60) — consecutive yields where the cache is fresh but utilization is still over threshold.
+- `circuit_breaker.quota_stale_cycles` (cap `.quota.maxStaleCycles`, default 6) — consecutive yields where the cache is stale or missing (statusline silent).
 
-- The statusline data is stale and not updating
-- Rate limits are not resetting as expected
-- External factors prevent quota recovery
+Hitting either cap returns `end_gracefully`. The split lets a quiet statusline (transient, e.g. during a long bash sleep) yield gracefully for a bounded window — instead of treating the very first stale read as a hard fail — while still capping total time spent waiting on permanently-broken telemetry.
+
+Both counters reset to 0 on the first successful `proceed`.
 
 ---
 

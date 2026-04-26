@@ -24,7 +24,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
 4. **Surface every escalation.** When `pipeline-debug-escalate` prints `ESCALATED path=<X>`, your final user-facing message MUST include the line `Escalated to human review. Audit trail: <X>`.
 5. **Phase 0 fan-out is parallel — single message, multiple `Agent` tool calls.** Architecture, security, quality, and implementation reviewers MUST be dispatched in one assistant message so they run concurrently. The Codex sweep (when available) is launched in the same message via `Bash` with `run_in_background: true`. The orchestrator's own line-by-line review runs immediately after the parallel batch returns (it cannot truly parallelize with itself).
 6. **Findings are validated before they are addressed.** Every Phase 0 finding is classified `confirmed | dismissed | uncertain` against (a) the actual code in the diff and (b) the apparent intent of the diff (since `/factory:debug` has no spec). Only `confirmed` findings enter the plan. Dismissed and uncertain ones are catalogued with the reason.
-7. **Budget is gated twice — but pauses, never stops the factory.** The 5h API budget is consulted via `pipeline-quota-check` (a) before launch and (b) between Phase 0 and Phase 1. The full ladder is in the **Quota-aware ladder** section below. Crossing a low-budget threshold pauses the run via a bounded wait-and-retry loop (default cap 60 cycles ≈ 9h) until the next band is reached — it does **not** abort. The only abort paths are: `detection_method == "unavailable"` (telemetry broken — fail-closed) and the cycle limit (stuck-cache guard). `--quick` skips Phase 0 and skips the between-phases re-check.
+7. **Budget is gated twice — but pauses, never stops the factory.** The 5h API budget is consulted via `pipeline-quota-check` (a) before launch and (b) between Phase 0 and Phase 1. The full ladder is in the **Quota-aware ladder** section below. Crossing a low-budget threshold delegates the wait loop to `pipeline-quota-gate-cli`, which paces a bounded wait-and-retry (`quota_wait_cycles` cap 60 ≈ 9h, `quota_stale_cycles` cap 6 ≈ 1h) until the next band is reached — it does **not** abort. The only abort paths are: the wait-cycle cap (stuck high-utilization) and the stale-cycle cap (telemetry fully broken). `--quick` skips Phase 0 and skips the between-phases re-check.
 
 ## Inputs
 
@@ -49,17 +49,23 @@ The skill consults `pipeline-quota-check` (5h window) before launch and again be
 | 10–20%    | Force `--quick` (skip Phase 0); print explanation                            | **Wait-and-retry loop** until `remaining ≥ 20%` (next band) or window resets |
 | < 10%     | **Wait-and-retry loop** until `remaining ≥ 10%` (next band) or window resets | **Wait-and-retry loop** until `remaining ≥ 20%`                              |
 
-**Pause, do not abort.** Crossing a low-budget threshold pauses the run until the next band is reached — it does not stop the factory. The wait loop:
+**Pause, do not abort.** Crossing a low-budget threshold pauses the run until the next band is reached — it does not stop the factory. The wait loop is delegated to `pipeline-quota-gate-cli` so the sleep / cycle-cap / stale-cache logic stays in one place (shared with `/factory:run`):
 
-1. Compute `sleep_sec = clamp(resets_5h_epoch - now, 60, 540)` (≤ 9min so the Bash tool's 10-min cap is respected).
-2. `Bash` `sleep $sleep_sec`. Persist the slept minutes under `phase{0|1}.budget_wait_minutes_total` (cumulative).
-3. Re-run `pipeline-quota-check`. If `detection_method == "unavailable"`: abort fail-closed (telemetry broken cannot be fixed by waiting) — print `STATUS: BUDGET_ABORTED — quota detection failed during wait` and break.
-4. If the new `remaining` crosses the target band: re-apply the ladder from the current phase's gate (step 5 or step 13).
-5. Else: increment `phase{0|1}.budget_wait_cycles`. If cycles `>= MAX_CYCLES` (default 60, ≈ 9h, env: `FACTORY_DEBUG_BUDGET_MAX_CYCLES`): abort with `STATUS: BUDGET_ABORTED — wait cycle limit reached (<N> cycles)`. Otherwise loop back to step 1.
+```bash
+phase=phase0   # or phase1 below
+while :; do
+  pipeline-quota-gate-cli --run-id "$RUN_ID" --tier feature --boundary "${phase}-budget"; rc=$?
+  case $rc in
+    0) break ;;                                              # remaining crossed the next band — proceed
+    2) STATUS="BUDGET_ABORTED — wait cycle limit reached"; break ;;
+    3) continue ;;                                           # wait_retry — next loop turn refreshes statusline
+  esac
+done
+```
 
-The cycle counter resets to 0 on the first `proceed`. Pause time is excluded from `LIMIT` (the soft deadline only counts active runtime, mirroring `pipeline_quota_gate`'s behavior).
+The CLI maintains `circuit_breaker.quota_wait_cycles` (cap 60, ≈9h) and `circuit_breaker.quota_stale_cycles` (cap 6, ≈1h) in run state — the skill no longer rolls its own counters. Pause time is excluded from `LIMIT` because the CLI writes `circuit_breaker.pause_minutes` (mirrored by `pipeline-circuit-breaker`).
 
-If `pipeline-quota-check` returns the unavailable sentinel **before the first wait** (i.e. at the initial check), the skill aborts immediately — the wait loop is only entered when telemetry is working but the bands are low.
+A stale `usage-cache.json` (statusline silent during a sleep) now yields `rc=3` instead of aborting; only the stale-cycle cap escalates to abort. Telemetry that was broken **before** the first wait still aborts at the very first check via the cap on stale cycles, but transient single misses are absorbed.
 
 The `AskUserQuestion` tool is used for the 20–40% pre-launch prompt; default to `--quick` if no answer.
 
@@ -79,7 +85,7 @@ The `AskUserQuestion` tool is used for the 20–40% pre-launch prompt; default t
       - `20 <= remaining < 40`: use `AskUserQuestion` with question `"5h API budget at <util>% used (<rem>% left). Phase 0 fans out 4+ subagents and may consume 10–25% of remaining budget. Use --quick (skip Phase 0)?"`, options `Yes (skip Phase 0) | No (run full sweep)`. Default to `Yes` if the user does not respond. If `Yes`, set `QUICK = true` and persist `state.quick_forced_by = "user-prompt"`.
       - `10 <= remaining < 20`: enter the **wait-and-retry loop** (see "Quota-aware ladder" above) with `target_band = 20`. On exit (cycle limit reached or telemetry broken): abort with the printed status and break. Otherwise re-evaluate from step 5.iii with the fresh `remaining`.
       - `remaining < 10`: enter the **wait-and-retry loop** with `target_band = 10`. Same exit behavior; on resume re-evaluate from step 5.iii.
-   4. Persist `phase0.pre_launch_remaining = $remaining`, `phase0.pre_launch_action = proceed|prompt|forced-quick|waited|aborted`, and (when waited) `phase0.budget_wait_minutes_total` and `phase0.budget_wait_cycles` in `state.json`.
+   4. Persist `phase0.pre_launch_remaining = $remaining`, `phase0.pre_launch_action = proceed|prompt|forced-quick|waited|aborted`, and (when waited) `circuit_breaker.pause_minutes` and `circuit_breaker.quota_wait_cycles` in `state.json`.
 
 ### Phase 0 — All-Hands Sweep (one shot, parallel fan-out)
 
@@ -137,7 +143,7 @@ If `QUICK == true` (set by flag, by user prompt at step 5.iii, or by forced budg
        - `remaining >= 40`: proceed (print one-line notice if `< 60`).
        - `20 <= remaining < 40`: print `Between-phases notice: <rem>% 5h remaining. Proceeding into Phase 1; another full sweep would be unsafe.` Proceed.
        - `remaining < 20`: enter the **wait-and-retry loop** with `target_band = 20`. On exit (cycle limit reached or telemetry broken): abort with the printed status and break. Otherwise re-evaluate from step 13.iii with the fresh `remaining`. Phase 0 results remain on disk throughout the wait.
-    4. Persist `phase1.pre_loop_remaining = $remaining`, `phase1.pre_loop_action = proceed|notice|waited|aborted`, and (when waited) `phase1.budget_wait_minutes_total` and `phase1.budget_wait_cycles` in `state.json`.
+    4. Persist `phase1.pre_loop_remaining = $remaining`, `phase1.pre_loop_action = proceed|notice|waited|aborted`, and (when waited) `circuit_breaker.pause_minutes` and `circuit_breaker.quota_wait_cycles` in `state.json`.
 
 14. **Loop (round = 1..N):**
     1. If `deadline > 0 && $(date +%s) >= deadline`: print summary with `STATUS: TIME_LIMIT`, break.
@@ -215,12 +221,12 @@ End with STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
 - [ ] Validated flags (mutually exclusive, severity in allowed set, `--quick` captured)
 - [ ] Resolved base ref BEFORE the first review
 - [ ] Detected reviewer once via `pipeline-detect-reviewer` and used the same branch for both Phase 0 (Codex slot) and every Phase 1 round
-- [ ] **Pre-launch quota gate:** Ran `pipeline-quota-check` (unless `QUICK` was already set by flag); applied the ladder (proceed / prompt / forced-quick / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `phase0.budget_wait_minutes_total` + `phase0.budget_wait_cycles`; persisted `phase0.pre_launch_*` in `state.json`
+- [ ] **Pre-launch quota gate:** Ran `pipeline-quota-check` (unless `QUICK` was already set by flag); applied the ladder (proceed / prompt / forced-quick / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase0.pre_launch_*` in `state.json`
 - [ ] **Phase 0:** Dispatched architecture, security, quality, implementation reviewers in a SINGLE assistant message (parallel). Codex sweep launched in same message via background `Bash` when `reviewer == codex`. (Skipped when `QUICK == true`.)
 - [ ] **Phase 0:** Captured raw output from every reviewer (and the orchestrator's self-review) under `state_dir/phase0/*.raw.txt`
 - [ ] **Phase 0:** Wrote `phase0/findings.json` (validated + deduped + classified) and `phase0/plan.md` BEFORE spawning the Phase 0 executor
 - [ ] **Phase 0:** Captured `phase0/executor.log` and acted on its STATUS line (escalate / break / fall-through-on-NEEDS_CONTEXT / proceed)
-- [ ] **Between-phases quota gate:** Re-ran `pipeline-quota-check` (skipped only when `QUICK == true`); applied the between-phases ladder (proceed / notice / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `phase1.budget_wait_minutes_total` + `phase1.budget_wait_cycles`; persisted `phase1.pre_loop_*` in `state.json`
+- [ ] **Between-phases quota gate:** Re-ran `pipeline-quota-check` (skipped only when `QUICK == true`); applied the between-phases ladder (proceed / notice / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase1.pre_loop_*` in `state.json`
 - [ ] **Phase 1:** Persisted each round's review artifact + executor log (and `raw-review.txt` on the Claude branch) under `state_dir`
 - [ ] When any executor escalated, ran `pipeline-debug-escalate` and surfaced its path verbatim in the summary
 - [ ] Time limit was checked only at the top of Phase 0 and at the top of each Phase 1 iteration
