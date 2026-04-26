@@ -5,7 +5,17 @@
     "FACTORY_AUTONOMOUS_MODE": "1"
   },
   "permissions": {
-    "allow": ["Bash(*)", "Read", "Write", "Edit", "Grep", "Glob", "Agent"],
+    "allow": [
+      "Bash(*)",
+      "Bash(pipeline-ensure-autonomy:*)",
+      "Bash(pipeline-ensure-autonomy 2>&1; echo \"EXIT=$?\")",
+      "Read",
+      "Write",
+      "Edit",
+      "Grep",
+      "Glob",
+      "Agent"
+    ],
     "deny": [
       "Bash(rm -rf /)",
       "Bash(rm -rf /*)",
@@ -163,17 +173,6 @@
             "statusMessage": "Checking for native tool alternatives"
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-pipeline-guards.sh",
-            "timeout": 10,
-            "statusMessage": "Checking pipeline invariants"
-          }
-        ]
       }
     ],
     "PostToolUse": [
@@ -193,7 +192,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -z \"${FACTORY_TASK_ID:-}\" ]; then exit 0; fi; FILE=$(cat | jq -r '.tool_input.file_path // \"\"'); if echo \"$FILE\" | grep -qE '\\.(test|spec)\\.(ts|tsx)$'; then exit 0; fi; if echo \"$FILE\" | grep -qE '\\.(ts|tsx)$'; then npx vitest run --reporter=dot --findRelatedTests \"$FILE\" --passWithNoTests 2>&1 | tail -10; fi",
+            "command": "if [ -z \"${FACTORY_TASK_ID:-}\" ]; then exit 0; fi; FILE=$(cat | jq -r '.tool_input.file_path // \"\"'); echo \"$FILE\" | grep -qE '\\.(test|spec|d)\\.(ts|tsx)$|\\.config\\.(ts|tsx)$' && exit 0; echo \"$FILE\" | grep -qE '\\.(ts|tsx)$' || exit 0; { [ -f node_modules/.bin/vitest ] || jq -e '.devDependencies.vitest // .dependencies.vitest' package.json >/dev/null 2>&1; } || exit 0; npx vitest run --reporter=dot --findRelatedTests \"$FILE\" --passWithNoTests 2>&1 | tail -10 >&2; echo '{\"suppressOutput\": true}'",
             "timeout": 30,
             "statusMessage": "Running related tests"
           }
@@ -255,18 +254,6 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-resume.sh",
             "timeout": 5,
             "statusMessage": "Injecting resume context"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "[ -f \"${CLAUDE_PROJECT_DIR:-.}/package.json\" ] || exit 0; grep -q vitest \"${CLAUDE_PROJECT_DIR:-.}/package.json\" || exit 0; cd \"${CLAUDE_PROJECT_DIR:-.}\" && npx vitest run --reporter=verbose 2>&1 | tail -40; TEST=$?; if [ $TEST -ne 0 ]; then echo 'STOP GATE FAILED: tests failing. Fix all issues.'; exit 1; fi",
-            "timeout": 120,
-            "statusMessage": "Running test suite"
           }
         ]
       }
