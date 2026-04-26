@@ -125,8 +125,15 @@ Each stage starts by calling `_already_past`: if `.tasks.<id>.stage` is already 
 
 ### finalize-run
 
-- Scans all tasks; if any are non-terminal, exit 3 (wait_retry).
-- Verifies every task PR is merged into `origin/staging`: for each task `.pr_number`, checks GitHub PR `state=MERGED` and that the merge commit SHA is an ancestor of `origin/staging`. Any gap → exit 3 (wait_retry).
+Strict-by-default gates run in order; each gap → exit 3 (wait_retry):
+
+1. **Status gate.** Every task must be `status=done`. `failed` and `needs_human_review` tasks block the rollup. Set `FACTORY_ALLOW_PARTIAL_ROLLUP=1` to permit `failed` / `needs_human_review` (their PRs are still verified individually if `pr_number` is set).
+2. **Stage consistency.** Every `status=done` task must have `stage=ship_done`. Catches state drift from rescue-apply or legacy runs.
+3. **`git fetch origin staging` fail-closed.** Fetch must succeed; a stale local ref could let the SHA-ancestor check pass against an outdated tip.
+4. **PR verification.** For every `status=done` task: require `pr_number`, GitHub PR `state=MERGED`, and the merge SHA is an ancestor of `origin/staging`. A done task without `pr_number` is rejected (not silently skipped).
+
+After gates pass:
+
 - Reads `.scribe.status`. If not `done`:
   - Writes `RUN.scribe-prompt.md`, sets `.scribe.status="spawned"`, emits scribe manifest, exit 10.
 - Reads `.final_pr.pr_url`. If empty:

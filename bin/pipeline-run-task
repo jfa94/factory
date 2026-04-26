@@ -1120,37 +1120,76 @@ _stage_finalize_run() {
   t0=$(_now_ms)
   log_step_begin "finalize-run"
 
-  local pending
-  pending=$(jq -r '[.tasks[] | select(.status != "done" and .status != "failed" and .status != "needs_human_review")] | length' "$state_file")
-  if (( pending > 0 )); then
-    log_warn "finalize-run: $pending task(s) still non-terminal"
+  # Partial-rollup escape hatch. Default: every task must be status=done.
+  # FACTORY_ALLOW_PARTIAL_ROLLUP=1 permits failed/needs_human_review tasks
+  # (their PRs are still verified individually below if pr_number is set).
+  local allow_partial="${FACTORY_ALLOW_PARTIAL_ROLLUP:-0}"
+  local non_done_filter
+  if [[ "$allow_partial" == "1" ]]; then
+    non_done_filter='.value.status != "done" and .value.status != "failed" and .value.status != "needs_human_review"'
+  else
+    non_done_filter='.value.status != "done"'
+  fi
+
+  local non_done_detail non_done
+  non_done_detail=$(jq -r --argjson empty 0 \
+    "[.tasks | to_entries[] | select($non_done_filter) | \"\(.key)=\(.value.status // \"null\")\"] | join(\",\")" \
+    "$state_file" 2>/dev/null || printf '')
+  non_done=$(jq -r "[.tasks | to_entries[] | select($non_done_filter)] | length" "$state_file" 2>/dev/null || printf '0')
+  if (( non_done > 0 )); then
+    log_warn "finalize-run: $non_done task(s) not done: $non_done_detail (allow_partial=$allow_partial)"
     t1=$(_now_ms)
-    log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "pending=$pending"
+    log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "non_done=$non_done" "allow_partial=$allow_partial"
     return 3
   fi
 
-  # Verify every task PR is actually merged into origin/staging before proceeding.
-  # Tasks reach status=done on CI-green (async path) but auto-merge may still be
-  # in-flight. This guard prevents the final PR opening against a stale staging.
-  git fetch origin staging --quiet 2>/dev/null || true
+  # Stage consistency: every status=done task must also have stage=ship_done.
+  # Catches state drift from rescue-apply or legacy runs where status was
+  # mutated without the stage transition.
+  local bad_stage_detail bad_stage
+  bad_stage_detail=$(jq -r '[.tasks | to_entries[] | select(.value.status == "done" and .value.stage != "ship_done") | "\(.key)=\(.value.stage // "null")"] | join(",")' "$state_file" 2>/dev/null || printf '')
+  bad_stage=$(jq -r '[.tasks | to_entries[] | select(.value.status == "done" and .value.stage != "ship_done")] | length' "$state_file" 2>/dev/null || printf '0')
+  if (( bad_stage > 0 )); then
+    log_error "finalize-run: $bad_stage done task(s) with stage!=ship_done: $bad_stage_detail"
+    t1=$(_now_ms)
+    log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"stage_inconsistent\""
+    return 3
+  fi
+
+  # Fetch origin/staging fail-closed: a stale ref could let the SHA-ancestor
+  # check pass against an outdated tip.
+  if ! git fetch origin staging --quiet 2>/dev/null; then
+    log_error "finalize-run: git fetch origin staging failed; cannot verify staging contents"
+    t1=$(_now_ms)
+    log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"git_fetch_failed\""
+    return 3
+  fi
+
+  # Verify every status=done task PR is merged into origin/staging.
+  # Iterate task entries (id+pr_number) so a done task without a pr_number is
+  # caught instead of silently skipped.
   local staging_sha_missing=false
-  while IFS= read -r pr_num; do
-    [[ -z "$pr_num" || "$pr_num" == "null" ]] && continue
-    local pr_data merge_sha
+  while IFS=$'\t' read -r tid pr_num; do
+    [[ -z "$tid" ]] && continue
+    if [[ -z "$pr_num" || "$pr_num" == "null" ]]; then
+      log_error "finalize-run: task $tid status=done but pr_number missing"
+      staging_sha_missing=true
+      continue
+    fi
+    local pr_data merge_sha pr_state
     pr_data=$(gh pr view "$pr_num" --json state,mergeCommit,headRefOid 2>/dev/null || printf '{}')
-    local pr_state
     pr_state=$(printf '%s' "$pr_data" | jq -r '.state // "OPEN"')
     if [[ "$pr_state" != "MERGED" ]]; then
-      log_warn "finalize-run: task PR #$pr_num not yet merged (state=$pr_state)"
+      log_warn "finalize-run: task $tid PR #$pr_num not yet merged (state=$pr_state)"
       staging_sha_missing=true
       continue
     fi
     merge_sha=$(printf '%s' "$pr_data" | jq -r '.mergeCommit.oid // .headRefOid // ""')
     if [[ -n "$merge_sha" ]] && ! git merge-base --is-ancestor "$merge_sha" origin/staging 2>/dev/null; then
-      log_warn "finalize-run: task PR #$pr_num merge SHA $merge_sha not yet visible on origin/staging"
+      log_warn "finalize-run: task $tid PR #$pr_num merge SHA $merge_sha not yet visible on origin/staging"
       staging_sha_missing=true
     fi
-  done < <(jq -r '.tasks[].pr_number // empty' "$state_file" 2>/dev/null)
+  done < <(jq -r '.tasks | to_entries[] | select(.value.status == "done") | [.key, (.value.pr_number // "")] | @tsv' "$state_file" 2>/dev/null)
 
   if [[ "$staging_sha_missing" == "true" ]]; then
     t1=$(_now_ms)

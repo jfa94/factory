@@ -273,11 +273,13 @@ stage=finalize-run
 loop-until-terminal RUN   # same per-task loop shape, task_id="RUN"
 ```
 
-The wrapper:
+The wrapper (exit 3 wait_retry on any gap, in order):
 
-- Blocks (exit 3) while any task is still non-terminal.
+- Blocks while any task is not `status=done`. `failed` / `needs_human_review` block by default; opt in with `FACTORY_ALLOW_PARTIAL_ROLLUP=1`.
+- Blocks if any `status=done` task has `stage != ship_done` (state drift from rescue/legacy).
+- Fails-closed if `git fetch origin staging` errors.
+- Verifies every `status=done` task has a `pr_number`, the PR is `MERGED` on GitHub, and its merge SHA is an ancestor of `origin/staging`.
 - Emits a `scribe` spawn manifest once, waits for `.scribe.status == "done"`.
-- Verifies all task PRs are merged into `origin/staging` (exit 3 wait_retry if any are pending).
 - Opens the final PR `staging → develop`, records `.final_pr.pr_url` / `.final_pr.pr_number`, emits `run.final_pr_created`.
 - Runs `pipeline-cleanup`, sets `.status = "done"`, `.ended_at`.
 

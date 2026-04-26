@@ -242,6 +242,21 @@ assert_eq "finalize-run pending: exit 3" "3" "$RC"
 # --- 12: finalize-run — scribe spawn then complete -----------------------
 new_run finalize-complete
 pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '202' >/dev/null
+write_stub gh '
+case "$*" in
+  "pr view 202 --json state,mergeCommit,headRefOid")
+    printf '"'"'{"state":"MERGED","mergeCommit":{"oid":"feedface"},"headRefOid":"feedface"}'"'"' ;;
+  "pr create"*) echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+write_stub git '
+case "$1 $2 $3" in
+  "fetch origin staging") exit 0 ;;
+esac
+if [[ "$1 $2" == "merge-base --is-ancestor" ]]; then exit 0; fi
+exec /usr/bin/git "$@"'
 run_wrapper RUN --stage finalize-run
 assert_eq "finalize-run 1st: exit 10" "10" "$RC"
 assert_eq "finalize-run 1st: agent=scribe" "scribe" \
@@ -251,6 +266,12 @@ run_wrapper RUN --stage finalize-run
 assert_eq "finalize-run 2nd: exit 0" "0" "$RC"
 assert_eq "finalize-run: run status=done" "done" \
   "$(pipeline-state read "$RUN_ID" .status 2>/dev/null)"
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+rm -f "$STUB_DIR/git"
 
 # --- 13: postreview — real parse-review contract (markdown → .verdict) ----
 # Regression for the .decision/.verdict key mismatch: stub parse-review is
@@ -312,11 +333,24 @@ assert_eq "postreview real REQUEST_CHANGES: attempts=1" "1" "$(field_of review_a
 # Restore the stub so later tests (if added) still get the cat passthrough.
 write_stub pipeline-parse-review 'cat'
 
+# --- finalize-run gate stubs -----------------------------------------------
+# Default gates: git fetch origin staging must succeed (fail-closed) and
+# merge-base --is-ancestor accepts the merge SHA. Tests that need to assert a
+# specific failure path override the stub locally.
+_stub_git_finalize_ok() {
+  write_stub git '
+case "$1 $2 $3" in
+  "fetch origin staging") exit 0 ;;
+esac
+if [[ "$1 $2" == "merge-base --is-ancestor" ]]; then exit 0; fi
+exec /usr/bin/git "$@"'
+}
+
 # --- 14: finalize-run SHA guard — task PR not merged → exit 3 ---------------
 new_run finalize-sha-guard-open
 pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
 pipeline-state task-write "$RUN_ID" alpha-001 pr_number '101' >/dev/null
-# gh stub returns PR state=OPEN → guard should detect not merged
 write_stub gh '
 case "$*" in
   "pr view 101 --json state,mergeCommit,headRefOid")
@@ -324,21 +358,74 @@ case "$*" in
   "pr create"*) echo "https://github.com/acme/repo/pull/4242" ;;
   *) exit 0 ;;
 esac'
+_stub_git_finalize_ok
 set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
 assert_eq "finalize-run sha-guard (pr open): exit 3" "3" "$RC"
-# Restore default gh stub
 write_stub gh '
 case "$1 $2" in
   "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
   *) exit 0 ;;
 esac'
+rm -f "$STUB_DIR/git"
+
+# --- 14a: finalize-run — done task with no pr_number → exit 3 ---------------
+new_run finalize-done-no-pr
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+# Intentionally no pr_number set
+_stub_git_finalize_ok
+set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
+assert_eq "finalize-run done-no-pr: exit 3" "3" "$RC"
+rm -f "$STUB_DIR/git"
+
+# --- 14b: finalize-run — failed task blocks (default strict) → exit 3 -------
+new_run finalize-failed-strict
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"failed"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship"' >/dev/null
+_stub_git_finalize_ok
+set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
+assert_eq "finalize-run failed strict: exit 3" "3" "$RC"
+rm -f "$STUB_DIR/git"
+
+# --- 14c: finalize-run — needs_human_review blocks (default strict) → exit 3
+new_run finalize-nhr-strict
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"needs_human_review"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship"' >/dev/null
+_stub_git_finalize_ok
+set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
+assert_eq "finalize-run nhr strict: exit 3" "3" "$RC"
+rm -f "$STUB_DIR/git"
+
+# --- 14d: finalize-run — status=done but stage!=ship_done → exit 3 ----------
+new_run finalize-stage-inconsistent
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"preflight_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '999' >/dev/null
+_stub_git_finalize_ok
+set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
+assert_eq "finalize-run stage inconsistent: exit 3" "3" "$RC"
+rm -f "$STUB_DIR/git"
+
+# --- 14e: finalize-run — git fetch failure is fail-closed → exit 3 ----------
+new_run finalize-fetch-fail
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '888' >/dev/null
+write_stub git '
+case "$1 $2 $3" in
+  "fetch origin staging") exit 1 ;;
+esac
+exec /usr/bin/git "$@"'
+set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
+assert_eq "finalize-run fetch failure: exit 3" "3" "$RC"
+rm -f "$STUB_DIR/git"
 
 # --- 15: finalize-run SHA guard — all PRs merged, SHA on staging → proceeds -
 new_run finalize-sha-guard-merged
 pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
 pipeline-state task-write "$RUN_ID" alpha-001 pr_number '102' >/dev/null
 pipeline-state write "$RUN_ID" .scribe.status '"done"' >/dev/null
-# gh stub returns PR state=MERGED with a sha that git will accept
 write_stub gh '
 case "$*" in
   "pr view 102 --json state,mergeCommit,headRefOid")
@@ -346,15 +433,38 @@ case "$*" in
   "pr create"*) echo "https://github.com/acme/repo/pull/5050" ;;
   *) exit 0 ;;
 esac'
-# Stub git to accept merge-base --is-ancestor check
-write_stub git '
-if [[ "$1 $2" == "merge-base --is-ancestor" ]]; then exit 0; fi
-exec /usr/bin/git "$@"'
+_stub_git_finalize_ok
 run_wrapper RUN --stage finalize-run
 assert_eq "finalize-run sha-guard (merged): exit 0" "0" "$RC"
 final_pr_url=$(pipeline-state read "$RUN_ID" '.final_pr.pr_url // ""' 2>/dev/null || printf '')
 assert_eq "finalize-run sha-guard: final_pr.pr_url written" "https://github.com/acme/repo/pull/5050" "$final_pr_url"
-# Restore default stubs
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+rm -f "$STUB_DIR/git"
+
+# --- 15a: finalize-run — partial rollup with FACTORY_ALLOW_PARTIAL_ROLLUP=1 -
+# Failed task with no pr_number is allowed; done task PR still verified.
+new_run finalize-partial-allowed
+pipeline-state write "$RUN_ID" .tasks '{
+  "alpha-001":{"task_id":"alpha-001","status":"done","stage":"ship_done","pr_number":"203"},
+  "alpha-002":{"task_id":"alpha-002","status":"failed","stage":"ship"}
+}' >/dev/null
+pipeline-state write "$RUN_ID" .scribe.status '"done"' >/dev/null
+write_stub gh '
+case "$*" in
+  "pr view 203 --json state,mergeCommit,headRefOid")
+    printf '"'"'{"state":"MERGED","mergeCommit":{"oid":"cafef00d"},"headRefOid":"cafef00d"}'"'"' ;;
+  "pr create"*) echo "https://github.com/acme/repo/pull/6060" ;;
+  *) exit 0 ;;
+esac'
+_stub_git_finalize_ok
+set +e; FACTORY_ALLOW_PARTIAL_ROLLUP=1 pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
+assert_eq "finalize-run partial allowed: exit 0" "0" "$RC"
+final_pr_url=$(pipeline-state read "$RUN_ID" '.final_pr.pr_url // ""' 2>/dev/null || printf '')
+assert_eq "finalize-run partial: final_pr.pr_url written" "https://github.com/acme/repo/pull/6060" "$final_pr_url"
 write_stub gh '
 case "$1 $2" in
   "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
