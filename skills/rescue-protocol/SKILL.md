@@ -19,7 +19,9 @@ You are the rescue orchestrator. You repair a pipeline run that has complex issu
 
 ## Protocol
 
-1. **Autonomy check.** Run `pipeline-ensure-autonomy`. If it exits 2 (stale or missing), follow the existing relaunch prompt pattern from `/factory:run`.
+1. **Autonomy check.** Run `pipeline-ensure-autonomy`. If it exits 2 (stale or missing), parse `settings_path` from the JSON output and tell the user to relaunch with **exactly** `claude --settings $settings_path`. Surface that command verbatim — no extra flags.
+
+   > ⚠️ Do **not** append `--dangerously-skip-permissions`. The whole purpose of `merged-settings.json` is to grant scoped autonomy via `permissions.allow` plus deny-list and PreToolUse guard hooks; bypassing permissions would actively defeat the deny list and guards.
 
 2. **Select target run.** Resolution order:
    1. Read `$CLAUDE_PLUGIN_DATA/runs/current` symlink → run id.
