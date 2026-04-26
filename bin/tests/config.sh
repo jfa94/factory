@@ -424,22 +424,16 @@ else
   fail=$((fail + 1))
 fi
 
-# --- Stop hook: vitest runner ---
-stop_hook_count=$(jq -r '.hooks.Stop | length' "$TEMPLATE")
-if [[ "$stop_hook_count" -ge 1 ]]; then
-  echo "  PASS: Stop hook group present"
+# Stop hook: intentionally absent in autonomous template (commit d8ddaee).
+# Per-turn full-suite vitest ran in wrong cwd against stale main; coverage
+# is provided by hooks/stop-gate.sh + pipeline-quality-gate at postexec +
+# pretooluse ship gate.
+stop_hook_count=$(jq -r '.hooks | (.Stop // []) | length' "$TEMPLATE")
+if [[ "$stop_hook_count" -eq 0 ]]; then
+  echo "  PASS: autonomous template has no Stop hook (intentional, see d8ddaee)"
   pass=$((pass + 1))
 else
-  echo "  FAIL: Stop hook group missing"
-  fail=$((fail + 1))
-fi
-
-vitest_stop=$(jq -r '[.hooks.Stop[].hooks[].command] | map(select(test("vitest run"))) | length' "$TEMPLATE")
-if [[ "$vitest_stop" -ge 1 ]]; then
-  echo "  PASS: Stop hook runs vitest suite"
-  pass=$((pass + 1))
-else
-  echo "  FAIL: Stop hook does not run vitest"
+  echo "  FAIL: autonomous template should not register a Stop hook"
   fail=$((fail + 1))
 fi
 

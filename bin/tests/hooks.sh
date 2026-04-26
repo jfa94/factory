@@ -1090,10 +1090,14 @@ echo ""
 echo "=== settings.autonomous.json registers Layer-2 hooks ==="
 
 autonom="$(cd "$(dirname "$0")/../../templates" && pwd)/settings.autonomous.json"
+base_hooks="$(cd "$(dirname "$0")/../../hooks" && pwd)/hooks.json"
 assert_eq "template has SubagentStop"        "1" "$(jq '.hooks.SubagentStop | length' "$autonom")"
 assert_eq "template has SessionStart"        "2" "$(jq '.hooks.SessionStart | length' "$autonom")"
 assert_eq "template PostToolUse has asyncRewake" "1" "$(jq '[.hooks.PostToolUse[].hooks[]? | select(.asyncRewake == true)] | length' "$autonom")"
-assert_eq "template PreToolUse has pipeline-guards" "1" "$(jq '[.hooks.PreToolUse[].hooks[]? | select(.command | test("pretooluse-pipeline-guards"))] | length' "$autonom")"
+# pipeline-guards lives in base hooks/hooks.json (autonomous overlay would
+# double-register it). See d8ddaee.
+assert_eq "autonomous overlay does NOT redundantly register pipeline-guards" "0" "$(jq '[.hooks.PreToolUse[].hooks[]? | select(.command | test("pretooluse-pipeline-guards"))] | length' "$autonom")"
+assert_eq "base hooks.json registers pipeline-guards" "2" "$(jq '[.hooks.PreToolUse[].hooks[]? | select(.command | test("pretooluse-pipeline-guards"))] | length' "$base_hooks")"
 assert_eq "template does NOT redundantly allow Bash(codex *) under Bash(*)" "false" "$(jq '[.permissions.allow[] | select(. == "Bash(codex *)")] | length > 0' "$autonom")"
 
 rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
