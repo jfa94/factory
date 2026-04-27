@@ -98,7 +98,7 @@ jobs:
         if: github.base_ref == 'staging' && steps.changed.outputs.scope != ''
         env:
           MUTATE_SCOPE: ${{ steps.changed.outputs.scope }}
-        run: pnpm test:mutation -- --mutate "$MUTATE_SCOPE"
+        run: pnpm exec stryker run --mutate "$MUTATE_SCOPE"
       - name: Mutation (skip — no mutable src changes in staging-target PR)
         if: github.base_ref == 'staging' && steps.changed.outputs.scope == ''
         run: echo "No mutable src changes; skipping mutation."
