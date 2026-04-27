@@ -15,7 +15,14 @@
       "description": "Individual issues found in the code",
       "items": {
         "type": "object",
-        "required": ["title", "body", "priority", "verbatim_line"],
+        "required": [
+          "title",
+          "body",
+          "priority",
+          "verbatim_line",
+          "confidence_score",
+          "code_location"
+        ],
         "additionalProperties": false,
         "properties": {
           "title": {
@@ -37,22 +44,23 @@
             "description": "Exact substring (10+ chars) copied verbatim from the diff hunk that contains the issue. Used by the harness to verify the finding cites real code; findings whose verbatim_line does not appear in the diff are dropped."
           },
           "confidence_score": {
-            "type": "number",
+            "type": ["number", "null"],
             "minimum": 0,
             "maximum": 1,
-            "description": "Confidence that this is a real issue (0-1)"
+            "description": "Confidence that this is a real issue (0-1). May be null if not provided."
           },
           "code_location": {
-            "type": "object",
+            "type": ["object", "null"],
             "additionalProperties": false,
+            "required": ["absolute_file_path", "line_range"],
             "properties": {
               "absolute_file_path": {
-                "type": "string",
-                "description": "Absolute path to the file containing the issue"
+                "type": ["string", "null"],
+                "description": "Absolute path to the file containing the issue. May be null when the location is uncertain."
               },
               "line_range": {
-                "type": "string",
-                "description": "Line range, e.g. '42-55'"
+                "type": ["string", "null"],
+                "description": "Line range, e.g. '42-55'. May be null when the line is uncertain."
               }
             }
           }

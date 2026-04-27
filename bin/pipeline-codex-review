@@ -85,8 +85,9 @@ fi
 prompt_file=$(mktemp /tmp/codex-review-prompt-XXXXXX.md)
 out_file=$(mktemp /tmp/codex-review-output-XXXXXX.json)
 diff_file=$(mktemp /tmp/codex-review-diff-XXXXXX.diff)
+err_file=$(mktemp /tmp/codex-review-err-XXXXXX.log)
 printf '%s\n' "$diff_output" > "$diff_file"
-trap 'rm -f "$prompt_file" "$out_file" "$diff_file"' EXIT
+trap 'rm -f "$prompt_file" "$out_file" "$diff_file" "$err_file"' EXIT
 
 {
   if [[ -f "$skill_file" ]]; then
@@ -129,17 +130,18 @@ trap 'rm -f "$prompt_file" "$out_file" "$diff_file"' EXIT
 
 _run_codex() {
   local sandbox_flag="$1"
+  local err_path="$2"
   local args=(exec
     --output-schema "$schema_file"
     --output-last-message "$out_file")
   [[ -n "$sandbox_flag" ]] && args+=(--sandbox "$sandbox_flag")
   args+=(-)
-  codex "${args[@]}" < "$prompt_file" >/dev/null 2>&1
+  codex "${args[@]}" < "$prompt_file" >/dev/null 2>"$err_path"
 }
 
 codex_ok=false
 for sandbox in "read-only" "workspace-read" ""; do
-  if _run_codex "$sandbox"; then
+  if _run_codex "$sandbox" "$err_file"; then
     codex_ok=true
     break
   fi
@@ -147,6 +149,9 @@ done
 
 if [[ "$codex_ok" != "true" ]]; then
   log_error "codex exec failed with all sandbox levels"
+  if [[ -s "$err_file" ]]; then
+    log_error "last codex stderr (tail 2KB): $(tail -c 2000 "$err_file")"
+  fi
   exit 1
 fi
 
