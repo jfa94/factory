@@ -79,17 +79,17 @@ The `AskUserQuestion` tool is used for the 20–40% pre-launch prompt; default t
 4. **Detect reviewer once.** Run `pipeline-detect-reviewer` and capture `.reviewer` (`codex` or `claude-code`). Persist it in `state.json` as `reviewer`. The choice is fixed for the run; it controls both the Phase 0 Codex slot and the Phase 1 loop branch.
 5. **Pre-launch quota gate.** Skip if `QUICK == true` (the user has already opted out of the heavy phase). Otherwise:
    1. Run `pipeline-quota-check` and capture `.five_hour.utilization`, `.five_hour.resets_at_epoch`, and `.detection_method`.
-   2. If `detection_method == "unavailable"`: print `STATUS: BUDGET_ABORTED — quota detection failed (<reason>)` and break (the wait loop is only safe to enter when telemetry is working). Persist `state.budget_aborted = true`.
+   2. If `detection_method == "unavailable"`: do NOT auto-degrade and do NOT enter the wait loop. Use `AskUserQuestion` with question `"Quota telemetry unavailable (<reason>). Cannot enforce the budget ladder or wait for budget recovery. Continue with --quick (skip Phase 0 + between-phases gate; reviewer ⇄ implementer loop still runs, bounded by --limit and reviewer rounds) or abort?"`, options `Continue with --quick | Abort`. There is no default — wait for the user's choice. If `Continue with --quick`: set `QUICK = true`, persist `state.quick_forced_by = "user-prompt-no-telemetry"` and `phase0.pre_launch_action = "user-continue-no-telemetry"`, jump to step 6. If `Abort`: print `STATUS: BUDGET_ABORTED — quota detection failed (<reason>); user declined to continue without telemetry`, persist `state.budget_aborted = true` and `phase0.pre_launch_action = "user-aborted-no-telemetry"`, break.
    3. Compute `remaining = 100 - utilization`. Apply the **Quota-aware ladder** (Pre-launch column):
       - `remaining >= 40`: proceed (print one-line notice if `< 60`).
       - `20 <= remaining < 40`: use `AskUserQuestion` with question `"5h API budget at <util>% used (<rem>% left). Phase 0 fans out 4+ subagents and may consume 10–25% of remaining budget. Use --quick (skip Phase 0)?"`, options `Yes (skip Phase 0) | No (run full sweep)`. Default to `Yes` if the user does not respond. If `Yes`, set `QUICK = true` and persist `state.quick_forced_by = "user-prompt"`.
       - `10 <= remaining < 20`: enter the **wait-and-retry loop** (see "Quota-aware ladder" above) with `target_band = 20`. On exit (cycle limit reached or telemetry broken): abort with the printed status and break. Otherwise re-evaluate from step 5.iii with the fresh `remaining`.
       - `remaining < 10`: enter the **wait-and-retry loop** with `target_band = 10`. Same exit behavior; on resume re-evaluate from step 5.iii.
-   4. Persist `phase0.pre_launch_remaining = $remaining`, `phase0.pre_launch_action = proceed|prompt|forced-quick|waited|aborted`, and (when waited) `circuit_breaker.pause_minutes` and `circuit_breaker.quota_wait_cycles` in `state.json`.
+   4. Persist `phase0.pre_launch_remaining = $remaining` (omit when 5.ii fired — no telemetry to record), `phase0.pre_launch_action = proceed|prompt|forced-quick|user-continue-no-telemetry|user-aborted-no-telemetry|waited|aborted`, and (when waited) `circuit_breaker.pause_minutes` and `circuit_breaker.quota_wait_cycles` in `state.json`.
 
 ### Phase 0 — All-Hands Sweep (one shot, parallel fan-out)
 
-If `QUICK == true` (set by flag, by user prompt at step 5.iii, or by forced budget-low), skip the entire Phase 0 block (steps 6–12) and jump to step 13 (between-phases gate). Persist `phase0.skipped = true` and `phase0.skipped_reason = "quick-flag" | "user-prompt" | "budget-low"` in `state.json`.
+If `QUICK == true` (set by flag, by user prompt at step 5.iii, by forced budget-low, or by user prompt at step 5.ii when telemetry is unavailable), skip the entire Phase 0 block (steps 6–12) and jump to step 13 (between-phases gate). Persist `phase0.skipped = true` and `phase0.skipped_reason = "quick-flag" | "user-prompt" | "budget-low" | "user-continue-no-telemetry"` in `state.json`.
 
 6. **Deadline check.** If `deadline > 0 && $(date +%s) >= deadline`: print summary with `STATUS: TIME_LIMIT` and break (do not enter Phase 1).
 7. **Parallel fan-out (single assistant message, multiple tool calls).** Dispatch all of the following concurrently:
@@ -138,12 +138,12 @@ If `QUICK == true` (set by flag, by user prompt at step 5.iii, or by forced budg
 
 13. **Between-phases quota gate.** Re-read the 5h budget before starting Phase 1:
     1. If Phase 0 was skipped via `QUICK`, skip this re-check (we only ran the cheap path) and proceed directly to step 14.
-    2. Run `pipeline-quota-check`. If `detection_method == "unavailable"`: abort with `STATUS: BUDGET_ABORTED — quota detection failed (<reason>); will not start Phase 1` and break (telemetry broken cannot be fixed by waiting).
+    2. Run `pipeline-quota-check`. If `detection_method == "unavailable"`: do NOT auto-degrade and do NOT enter the wait loop. Use `AskUserQuestion` with question `"Quota telemetry unavailable between phases (<reason>). Cannot enforce the between-phases ladder or wait for budget recovery. Continue into Phase 1 without the gate (loop still bounded by --limit and reviewer rounds) or abort?"`, options `Continue into Phase 1 | Abort`. There is no default — wait for the user's choice. Phase 0 results remain on disk regardless. If `Continue into Phase 1`: persist `phase1.pre_loop_action = "user-continue-no-telemetry"`, proceed to step 14. If `Abort`: print `STATUS: BUDGET_ABORTED — quota detection failed (<reason>); user declined to continue without telemetry; will not start Phase 1`, persist `phase1.pre_loop_action = "user-aborted-no-telemetry"`, break.
     3. Compute `remaining = 100 - utilization`. Apply the **Quota-aware ladder** (Between Phase 0 → Phase 1 column):
        - `remaining >= 40`: proceed (print one-line notice if `< 60`).
        - `20 <= remaining < 40`: print `Between-phases notice: <rem>% 5h remaining. Proceeding into Phase 1; another full sweep would be unsafe.` Proceed.
        - `remaining < 20`: enter the **wait-and-retry loop** with `target_band = 20`. On exit (cycle limit reached or telemetry broken): abort with the printed status and break. Otherwise re-evaluate from step 13.iii with the fresh `remaining`. Phase 0 results remain on disk throughout the wait.
-    4. Persist `phase1.pre_loop_remaining = $remaining`, `phase1.pre_loop_action = proceed|notice|waited|aborted`, and (when waited) `circuit_breaker.pause_minutes` and `circuit_breaker.quota_wait_cycles` in `state.json`.
+    4. Persist `phase1.pre_loop_remaining = $remaining` (omit when 13.2 fired — no telemetry to record), `phase1.pre_loop_action = proceed|notice|waited|aborted|user-continue-no-telemetry|user-aborted-no-telemetry`, and (when waited) `circuit_breaker.pause_minutes` and `circuit_breaker.quota_wait_cycles` in `state.json`.
 
 14. **Loop (round = 1..N):**
     1. If `deadline > 0 && $(date +%s) >= deadline`: print summary with `STATUS: TIME_LIMIT`, break.
@@ -201,14 +201,14 @@ End with STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
 - Run ID: ${RUN_ID}
 - Base: ${BASE}
 - Severity: ${SEVERITY}
-- Quick mode: ${QUICK} (forced by: ${QUICK_FORCED_BY|cli-flag|user-prompt|budget-low|n/a})
-- Pre-launch budget: ${PRE_LAUNCH_REMAINING}% 5h remaining → ${PRE_LAUNCH_ACTION}
+- Quick mode: ${QUICK} (forced by: ${QUICK_FORCED_BY|cli-flag|user-prompt|budget-low|user-prompt-no-telemetry|n/a})
+- Pre-launch budget: ${PRE_LAUNCH_REMAINING|n/a}% 5h remaining → ${PRE_LAUNCH_ACTION|proceed|prompt|forced-quick|user-continue-no-telemetry|user-aborted-no-telemetry|waited|aborted}
   [Waited ${PHASE0_WAIT_MINUTES}m across ${PHASE0_WAIT_CYCLES} cycles — only when PRE_LAUNCH_ACTION=waited]
 - Phase 0 sweep: ${PHASE0_STATUS}  [or "skipped (${PHASE0_SKIP_REASON})"]
   - Reviewers run: architecture, security, quality, implementation, orchestrator${CODEX_SUFFIX}
   - Findings: ${CONFIRMED_COUNT} confirmed / ${DISMISSED_COUNT} dismissed / ${UNCERTAIN_COUNT} uncertain
   - Plan: ${state_dir}/phase0/plan.md
-- Between-phases budget: ${PRE_LOOP_REMAINING}% 5h remaining → ${PRE_LOOP_ACTION}
+- Between-phases budget: ${PRE_LOOP_REMAINING|n/a}% 5h remaining → ${PRE_LOOP_ACTION|proceed|notice|waited|aborted|user-continue-no-telemetry|user-aborted-no-telemetry}
   [Waited ${PHASE1_WAIT_MINUTES}m across ${PHASE1_WAIT_CYCLES} cycles — only when PRE_LOOP_ACTION=waited]
 - Phase 1 rounds: ${round}
 - Final: ${STATUS}
@@ -221,12 +221,12 @@ End with STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
 - [ ] Validated flags (mutually exclusive, severity in allowed set, `--quick` captured)
 - [ ] Resolved base ref BEFORE the first review
 - [ ] Detected reviewer once via `pipeline-detect-reviewer` and used the same branch for both Phase 0 (Codex slot) and every Phase 1 round
-- [ ] **Pre-launch quota gate:** Ran `pipeline-quota-check` (unless `QUICK` was already set by flag); applied the ladder (proceed / prompt / forced-quick / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase0.pre_launch_*` in `state.json`
+- [ ] **Pre-launch quota gate:** Ran `pipeline-quota-check` (unless `QUICK` was already set by flag); applied the ladder (proceed / prompt / forced-quick / user-continue-no-telemetry / user-aborted-no-telemetry / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase0.pre_launch_*` in `state.json`. When `detection_method == "unavailable"`, asked the user via `AskUserQuestion` whether to continue with `--quick` or abort (no auto-degrade, no wait).
 - [ ] **Phase 0:** Dispatched architecture, security, quality, implementation reviewers in a SINGLE assistant message (parallel). Codex sweep launched in same message via background `Bash` when `reviewer == codex`. (Skipped when `QUICK == true`.)
 - [ ] **Phase 0:** Captured raw output from every reviewer (and the orchestrator's self-review) under `state_dir/phase0/*.raw.txt`
 - [ ] **Phase 0:** Wrote `phase0/findings.json` (validated + deduped + classified) and `phase0/plan.md` BEFORE spawning the Phase 0 executor
 - [ ] **Phase 0:** Captured `phase0/executor.log` and acted on its STATUS line (escalate / break / fall-through-on-NEEDS_CONTEXT / proceed)
-- [ ] **Between-phases quota gate:** Re-ran `pipeline-quota-check` (skipped only when `QUICK == true`); applied the between-phases ladder (proceed / notice / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase1.pre_loop_*` in `state.json`
+- [ ] **Between-phases quota gate:** Re-ran `pipeline-quota-check` (skipped only when `QUICK == true`); applied the between-phases ladder (proceed / notice / waited / aborted / user-continue-no-telemetry / user-aborted-no-telemetry); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase1.pre_loop_*` in `state.json`. When `detection_method == "unavailable"`, asked the user via `AskUserQuestion` whether to continue without the gate or abort (no auto-degrade, no wait).
 - [ ] **Phase 1:** Persisted each round's review artifact + executor log (and `raw-review.txt` on the Claude branch) under `state_dir`
 - [ ] When any executor escalated, ran `pipeline-debug-escalate` and surfaced its path verbatim in the summary
 - [ ] Time limit was checked only at the top of Phase 0 and at the top of each Phase 1 iteration

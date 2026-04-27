@@ -60,12 +60,10 @@ _regenerate() {
   tmp=$(mktemp)
 
   # CLAUDE_PLUGIN_DATA pin: bake the current plugin data dir into the merged-settings
-  # env block so that the statusline wrapper (which runs in the user shell, NOT in
-  # the plugin command runtime) writes usage-cache.json to the same location that
-  # pipeline-ensure-autonomy / pipeline-quota-check read from. Without this, the
-  # wrapper falls back to ~/.claude/plugin-data/factory while the gates read
-  # ~/.claude/plugins/data/<plugin-id>/, the cache appears permanently stale at
-  # the gate, and every quota check fails closed.
+  # env block. Both statusline-wrapper.sh and pipeline-quota-check now default to
+  # ~/.claude/plugins/data/factory-jfa94 when the env var is unset, so this pin is
+  # belt-and-braces — it lets a non-default install (e.g. a forked marketplace id)
+  # still keep wrapper writes and gate reads on the same path.
   local plugin_data="${CLAUDE_PLUGIN_DATA:-}"
 
   # Detect user's existing statusLine.command so the wrapper can chain to it.
@@ -110,19 +108,6 @@ _regenerate() {
   fi
   mv "$tmp" "$merged_settings"
 
-  # Migrate any fresh cache from the wrapper's legacy fallback path so the gate
-  # has data to read on the very next invocation (otherwise it would wait for
-  # the next statusline tick post-relaunch).
-  local legacy_cache="${HOME}/.claude/plugin-data/factory/usage-cache.json"
-  local target_cache="${plugin_data}/usage-cache.json"
-  if [[ -n "$plugin_data" && -f "$legacy_cache" ]]; then
-    if [[ ! -f "$target_cache" ]] || [[ "$legacy_cache" -nt "$target_cache" ]]; then
-      cp -p "$legacy_cache" "$target_cache" 2>/dev/null \
-        && log_info "migrated fresh usage-cache from $legacy_cache to $target_cache" \
-        || true
-    fi
-  fi
-
   # asyncRewake compat probe. Feature requires Claude Code >= 2.1.116.
   # On older installs, strip the hook entry so the PostToolUse ship watcher
   # falls back to the wrapper's synchronous FACTORY_ASYNC_CI=off path.
@@ -166,11 +151,11 @@ if [[ "$file_version" != "$current_version" ]]; then
   exit 2
 fi
 
-# Self-heal: 0.6.2 and earlier did not bake CLAUDE_PLUGIN_DATA into the env block,
-# causing the statusline wrapper (user-shell env, no CLAUDE_PLUGIN_DATA set) to
-# write usage-cache.json to ~/.claude/plugin-data/factory while the gates read
-# ${CLAUDE_PLUGIN_DATA}/usage-cache.json. Detect the old-shape file, regenerate,
-# and force a relaunch so the new env propagates to statusline.
+# Self-heal: 0.6.2 and earlier did not bake CLAUDE_PLUGIN_DATA into the env block.
+# Both the wrapper and the quota gate now default to ~/.claude/plugins/data/factory-jfa94
+# when the env var is unset, so a missing env entry is no longer load-bearing — but
+# regenerating still ensures forks with custom plugin ids stay aligned, and the
+# relaunch keeps merged-settings consistent with on-disk state.
 file_plugin_data=$(jq -r '.env.CLAUDE_PLUGIN_DATA // empty' "$merged_settings" 2>/dev/null || true)
 if [[ -z "$file_plugin_data" ]] && [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
   _regenerate

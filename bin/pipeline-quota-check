@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/plugin-data/factory}"
+PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/plugins/data/factory-jfa94}"
 cache_file="${PLUGIN_DATA}/usage-cache.json"
 
 _sentinel() {

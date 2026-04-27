@@ -1065,7 +1065,7 @@ Configure as `statusLine.command` in `~/.claude/settings.json`:
 **Notes:**
 
 - Fails silently on cache write errors to never break statusline output
-- The statusline runs in the user's shell environment, NOT in the plugin command runtime, so `CLAUDE_PLUGIN_DATA` is not set automatically. `pipeline-ensure-autonomy` bakes `CLAUDE_PLUGIN_DATA` into the merged-settings `env` block so the wrapper writes to the same path that `pipeline-quota-check` reads. Without this pin, the wrapper falls back to `~/.claude/plugin-data/factory` while the gates read `~/.claude/plugins/data/<plugin-id>/`, and the cache appears permanently stale at the gate.
+- The statusline runs in the user's shell environment, NOT in the plugin command runtime, so `CLAUDE_PLUGIN_DATA` is not set automatically. The wrapper and `pipeline-quota-check` both default to `~/.claude/plugins/data/factory-jfa94/usage-cache.json` when the env var is unset, so writes and reads agree by default. `pipeline-ensure-autonomy` still bakes `CLAUDE_PLUGIN_DATA` into the merged-settings `env` block as belt-and-braces — useful for forks that ship under a different plugin id.
 - Required for `pipeline-quota-check` to function
 
 ---

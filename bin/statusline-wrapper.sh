@@ -17,9 +17,9 @@ input=$(cat)
 
 # Determine plugin data directory. CLAUDE_PLUGIN_DATA is set by the plugin
 # system when the pipeline runs; for the statusline (which runs in user env)
-# we fall back to a standard location. Set CLAUDE_PLUGIN_DATA in settings.json
-# "env" to override.
-PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/plugin-data/factory}"
+# we fall back to the canonical plugin-runtime path so wrapper writes and
+# pipeline-quota-check reads agree without env pinning.
+PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/plugins/data/factory-jfa94}"
 
 # Write rate limit data to usage-cache.json if rate_limits are present.
 # Fail silently so a broken jq or missing dir never breaks the statusline output.
