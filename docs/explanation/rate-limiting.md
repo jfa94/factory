@@ -117,7 +117,9 @@ Stop spawning new tasks. Let in-flight tasks complete. Mark run as `partial`.
 
 `pipeline_quota_gate` intercepts the sentinel **before** the router and yields `wait_retry` (rc=3) — the next orchestrator turn fires a fresh statusline tick which refreshes the cache. The yield increments `circuit_breaker.quota_stale_cycles`; only when the counter hits `.quota.maxStaleCycles` (default 6, ≈ 1 h of fully silent telemetry) does the gate fall through to `end_gracefully`.
 
-This change unifies the previous fail-closed-on-first-stale behavior with the resilient wait-and-retry behavior the orchestrator already used for over-threshold cases. A genuinely broken wrapper still halts the run, just after a bounded recovery window rather than instantly.
+**User prompt on first unavailable.** When quota detection fails on the very first check of a run, the orchestrator prompts the user via `AskUserQuestion` instead of immediately yielding: "Telemetry unavailable — statusline may not be configured. Continue without budget gates?" A `Yes` bypasses gates for the session; `No` halts immediately. This prevents silent failures when the statusline wrapper was never installed.
+
+This design unifies the previous fail-closed-on-first-stale behavior with the resilient wait-and-retry behavior the orchestrator already used for over-threshold cases. A genuinely broken wrapper still halts the run, just after a bounded recovery window rather than instantly.
 
 ---
 

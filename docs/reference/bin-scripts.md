@@ -12,6 +12,10 @@ All scripts source `pipeline-lib.sh` for shared functions. Scripts output JSON w
 
 Shared library sourced by all scripts.
 
+**Plugin Data Directory Canonicalization:**
+
+When a factory script is invoked from a bash block inside another plugin's command or hook chain, the inherited `CLAUDE_PLUGIN_DATA` can point at the wrong plugin's data directory. The library detects the marketplace-cache install layout (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`) and rewrites `CLAUDE_PLUGIN_DATA` to `<plugin>-<marketplace>` when it does not match. Dev checkouts (plugin not under the cache root) are left untouched.
+
 **Functions:**
 
 | Function                 | Description                             |
