@@ -477,6 +477,18 @@ else
   fail=$((fail + 1))
 fi
 
+# /factory:debug must also gate the quota check behind the autonomy check —
+# usage-cache.json is only fresh inside an autonomous session, so calling
+# pipeline-quota-check from a regular session always returns `unavailable`.
+DEBUG_SKILL_MD="$PLUGIN_ROOT/skills/debug/SKILL.md"
+if [[ -f "$DEBUG_SKILL_MD" ]] && grep -q 'pipeline-ensure-autonomy' "$DEBUG_SKILL_MD"; then
+  echo "  PASS: skills/debug/SKILL.md calls pipeline-ensure-autonomy"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: skills/debug/SKILL.md does not call pipeline-ensure-autonomy"
+  fail=$((fail + 1))
+fi
+
 if grep -q 'FACTORY_AUTONOMOUS_MODE:-' "$RUN_MD"; then
   echo "  FAIL: run.md still contains expansion-triggering echo of FACTORY_AUTONOMOUS_MODE"
   fail=$((fail + 1))

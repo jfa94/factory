@@ -37,6 +37,8 @@ Two-phase debugging workflow:
 7. If any remain, spawn `task-executor` to verify and fix them.
 8. Repeat until clean, escalated, or `--limit` reached.
 
+**Autonomous mode required.** Like `/factory:run`, `/factory:debug` runs `pipeline-ensure-autonomy` at the top of Setup. If the session was not launched with `claude --settings <merged-settings.json>` (or `FACTORY_AUTONOMOUS_MODE=1` for CI), the skill halts with the relaunch command. The pre-launch quota gate runs only after this check clears — `usage-cache.json` is only kept fresh inside an autonomous session.
+
 **Budget gating.** Before launch and again between Phase 0 and Phase 1, the skill checks the 5h API window via `pipeline-quota-check`. The 5h **remaining** percentage drives a 5-step ladder (`≥ 40 / 20–40 / 10–20 / < 10` pre-launch; `≥ 40 / 20–40 / < 20` between-phases). At `20–40%` remaining the user is prompted to opt into `--quick`. Below the next bands the run **pauses** in a bounded wait-and-retry loop until budget recovers — it does not abort (only telemetry failure or the wait-cycle cap aborts). `--quick` skips Phase 0 entirely and skips the between-phases re-check. See the **Quota-aware ladder** in `skills/debug/SKILL.md`.
 
 Parse flags from the user's input. Reject the call if both `--base` and `--full` are provided. Resolve the base ref:

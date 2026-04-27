@@ -24,7 +24,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
 4. **Surface every escalation.** When `pipeline-debug-escalate` prints `ESCALATED path=<X>`, your final user-facing message MUST include the line `Escalated to human review. Audit trail: <X>`.
 5. **Phase 0 fan-out is parallel — single message, multiple `Agent` tool calls.** Architecture, security, quality, and implementation reviewers MUST be dispatched in one assistant message so they run concurrently. The Codex sweep (when available) is launched in the same message via `Bash` with `run_in_background: true`. The orchestrator's own line-by-line review runs immediately after the parallel batch returns (it cannot truly parallelize with itself).
 6. **Findings are validated before they are addressed.** Every Phase 0 finding is classified `confirmed | dismissed | uncertain` against (a) the actual code in the diff and (b) the apparent intent of the diff (since `/factory:debug` has no spec). Only `confirmed` findings enter the plan. Dismissed and uncertain ones are catalogued with the reason.
-7. **Budget is gated twice — but pauses, never stops the factory.** The 5h API budget is consulted via `pipeline-quota-check` (a) before launch and (b) between Phase 0 and Phase 1. The full ladder is in the **Quota-aware ladder** section below. Crossing a low-budget threshold delegates the wait loop to `pipeline-quota-gate-cli`, which paces a bounded wait-and-retry (`quota_wait_cycles` cap 60 ≈ 9h, `quota_stale_cycles` cap 6 ≈ 1h) until the next band is reached — it does **not** abort. The only abort paths are: the wait-cycle cap (stuck high-utilization) and the stale-cycle cap (telemetry fully broken). `--quick` skips Phase 0 and skips the between-phases re-check.
+7. **Budget is gated twice — but pauses, never stops the factory.** The 5h API budget is consulted via `pipeline-quota-check` (a) before launch and (b) between Phase 0 and Phase 1. The full ladder is in the **Quota-aware ladder** section below. Crossing a low-budget threshold delegates the wait loop to `pipeline-quota-gate-cli`, which paces a bounded wait-and-retry (`quota_wait_cycles` cap 60 ≈ 9h, `quota_stale_cycles` cap 6 ≈ 1h) until the next band is reached — it does **not** abort. The only abort paths are: the wait-cycle cap (stuck high-utilization) and the stale-cycle cap (telemetry fully broken). `--quick` skips Phase 0 and skips the between-phases re-check. Both budget gates run only **after** the Autonomy precondition (above) clears — quota telemetry is only fresh inside an autonomous session.
 
 ## Inputs
 
@@ -71,11 +71,32 @@ The `AskUserQuestion` tool is used for the 20–40% pre-launch prompt; default t
 
 ## Procedure
 
+### Autonomy check (precondition for all numbered steps)
+
+The pre-launch quota gate (step 5) reads `usage-cache.json`, which is only written by the factory `statusline-wrapper.sh` while running under `merged-settings.json`. In a non-autonomous session the cache is stale by design and every quota call returns `unavailable`. Verify autonomous mode FIRST — same pattern as `skills/pipeline-orchestrator/SKILL.md:108-122`.
+
+```bash
+result=$(pipeline-ensure-autonomy)
+status=$(printf '%s' "$result" | jq -r '.status')
+settings_path=$(printf '%s' "$result" | jq -r '.settings_path')
+reason=$(printf '%s' "$result" | jq -r '.reason // empty')
+```
+
+Persist `state.autonomy = {status, message: <result.message>, checked_at: $(date +%s)}` as part of the initial state object written in step 3 below.
+
+If `status` is `ok` or `bypass`, proceed into the numbered Setup steps.
+
+Otherwise, **stop**. Print: `Autonomous mode required for /factory:debug. Relaunch with exactly: claude --settings $settings_path (or export FACTORY_AUTONOMOUS_MODE=1 for CI), then re-run /factory:debug.` Do not append `--dangerously-skip-permissions` — `merged-settings.json` grants scoped autonomy via `permissions.allow` plus the deny list and `PreToolUse` guards; bypassing permissions defeats them. Surface the command verbatim, no extra flags.
+
+Special case `status == "stale-cache"`: the merged settings are wired but the statusline has not ticked recently. Print: `Autonomy ok but usage-cache.json is <reason>. Re-run /factory:debug — the next agent turn will fire the statusline and refresh the cache. If it halts again on the second attempt, the session was not launched with --settings; relaunch with claude --settings $settings_path.` Then break.
+
+Not surfaced in the user-facing summary (parity with `/factory:run`); audit only via `state.autonomy.*`.
+
 ### Setup
 
 1. **Validate flags + resolve base.** If `--full` and `--base` both set, abort: `usage: /factory:debug [--base <hash>|--full] [--limit <s>] [--fixSeverity ...]`.
 2. **Compute deadline.** `deadline = LIMIT > 0 ? $(date +%s) + LIMIT : 0`.
-3. **Initialise state.** `state_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/factory}/debug/$RUN_ID"`. `mkdir -p "$state_dir/phase0"`. Write `state.json` with `{base, severity, deadline, started_at, quick:$QUICK, phase0:{}, rounds:[]}`.
+3. **Initialise state.** `state_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/factory}/debug/$RUN_ID"`. `mkdir -p "$state_dir/phase0"`. Write `state.json` with `{base, severity, deadline, started_at, quick:$QUICK, autonomy:{...from precondition...}, phase0:{}, rounds:[]}`.
 4. **Detect reviewer once.** Run `pipeline-detect-reviewer` and capture `.reviewer` (`codex` or `claude-code`). Persist it in `state.json` as `reviewer`. The choice is fixed for the run; it controls both the Phase 0 Codex slot and the Phase 1 loop branch.
 5. **Pre-launch quota gate.** Skip if `QUICK == true` (the user has already opted out of the heavy phase). Otherwise:
    1. Run `pipeline-quota-check` and capture `.five_hour.utilization`, `.five_hour.resets_at_epoch`, and `.detection_method`.
@@ -221,6 +242,7 @@ End with STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
 - [ ] Validated flags (mutually exclusive, severity in allowed set, `--quick` captured)
 - [ ] Resolved base ref BEFORE the first review
 - [ ] Detected reviewer once via `pipeline-detect-reviewer` and used the same branch for both Phase 0 (Codex slot) and every Phase 1 round
+- [ ] **Autonomy check (precondition):** Ran `pipeline-ensure-autonomy` BEFORE the numbered Setup steps; halted with relaunch instructions if status not in `{ok, bypass}`; persisted `state.autonomy.{status, message, checked_at}`. Stale-cache (`status=stale-cache`) printed the re-run-/factory:debug guidance instead of the bin's hardcoded `/factory:run` text.
 - [ ] **Pre-launch quota gate:** Ran `pipeline-quota-check` (unless `QUICK` was already set by flag); applied the ladder (proceed / prompt / forced-quick / user-continue-no-telemetry / user-aborted-no-telemetry / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase0.pre_launch_*` in `state.json`. When `detection_method == "unavailable"`, asked the user via `AskUserQuestion` whether to continue with `--quick` or abort (no auto-degrade, no wait).
 - [ ] **Phase 0:** Dispatched architecture, security, quality, implementation reviewers in a SINGLE assistant message (parallel). Codex sweep launched in same message via background `Bash` when `reviewer == codex`. (Skipped when `QUICK == true`.)
 - [ ] **Phase 0:** Captured raw output from every reviewer (and the orchestrator's self-review) under `state_dir/phase0/*.raw.txt`
