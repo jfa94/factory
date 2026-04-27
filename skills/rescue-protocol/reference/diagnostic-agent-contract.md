@@ -72,12 +72,12 @@ Input:
       "stage": "postexec_done",
       "failure_reason": "executor timed out"
     },
-    "worktree_path": "/repo/.worktrees/dark-factory/run-2026-04-20/T3",
+    "worktree_path": "/repo/.worktrees/factory/run-2026-04-20/T3",
     "pr_url": null,
     "pr_state": null,
     "review_files": [],
     "ci_logs_path": null,
-    "branch": "dark-factory/112/t3",
+    "branch": "factory/112/t3",
     "failure_reason": "executor timed out"
   }
 }

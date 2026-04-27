@@ -26,7 +26,7 @@ In:
 
 - Fix all six bugs in `bin/pipeline-branch` and `bin/pipeline-wait-pr` and `bin/pipeline-cleanup`
 - Add regression tests for each in `bin/test-phase4.sh` / `bin/test-phase5.sh`
-- Replicate the multi-round rebase loop and package.json 3-way merge from `~/Projects/dark-factory/lib/git-helpers.sh`
+- Replicate the multi-round rebase loop and package.json 3-way merge from `~/Projects/factory/lib/git-helpers.sh`
 
 Out:
 
@@ -100,7 +100,7 @@ Test in `bin/test-phase4.sh`:
 
 File: `bin/pipeline-wait-pr`
 
-Read `~/Projects/dark-factory/lib/git-helpers.sh` and find the `rebase_with_retries` function (the original uses 30 rounds). Port it into `pipeline-wait-pr`:
+Read `~/Projects/factory/lib/git-helpers.sh` and find the `rebase_with_retries` function (the original uses 30 rounds). Port it into `pipeline-wait-pr`:
 
 ```bash
 rebase_with_retries() {

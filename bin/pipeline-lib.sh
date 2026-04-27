@@ -668,7 +668,7 @@ task_tdd_exempt() {
   done
   if [[ -f package.json ]]; then
     local g
-    g=$(jq -r '.["dark-factory"].tddExempt // false' package.json 2>/dev/null || true)
+    g=$(jq -r '.["factory"].tddExempt // false' package.json 2>/dev/null || true)
     [[ "$g" == "true" ]] && return 0
   fi
   return 1

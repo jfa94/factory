@@ -1,10 +1,10 @@
 ---
-description: "Scaffold a project for the dark-factory pipeline (run once per project)"
+description: "Scaffold a project for the factory pipeline (run once per project)"
 ---
 
 # /factory:scaffold
 
-You are preparing a project to be run by the dark-factory pipeline for the first time. The pipeline refuses to start against an unscaffolded project, so this command must run before any `/factory:run` in a new repo.
+You are preparing a project to be run by the factory pipeline for the first time. The pipeline refuses to start against an unscaffolded project, so this command must run before any `/factory:run` in a new repo.
 
 ## Step 1: Detect project root
 

@@ -5,7 +5,7 @@ This document provides a detailed inventory of all plugin components: agents, ho
 ## Plugin File Structure
 
 ```
-dark-factory-plugin/
+factory-plugin/
 ├── .claude-plugin/
 │   └── plugin.json              # Plugin manifest (name, version, description)
 ├── commands/

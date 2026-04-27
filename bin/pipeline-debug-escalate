@@ -34,7 +34,7 @@ done
 [[ -r "$findings" ]] || { log_error "--findings not readable: $findings"; exit 1; }
 [[ -r "$exec_msg" ]] || { log_error "--executor-msg not readable: $exec_msg"; exit 1; }
 
-data_root="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/dark-factory}"
+data_root="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/factory}"
 out_dir="$data_root/debug/$run_id"
 mkdir -p "$out_dir"
 out_file="$out_dir/escalation.md"

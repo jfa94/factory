@@ -5,7 +5,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN_DIR="$REPO_ROOT/bin"
 FIXTURES="$REPO_ROOT/bin/tests/fixtures/debug"
-ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dark-factory-debug.XXXXXX")"
+ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/factory-debug.XXXXXX")"
 STUB_DIR="$ROOT_TMP/stubs"
 mkdir -p "$STUB_DIR"
 trap 'rm -rf "$ROOT_TMP"' EXIT INT TERM

@@ -1,6 +1,6 @@
 ---
 name: rescue-protocol
-description: (internal) Recover a dark-factory pipeline run from complex issues (merge conflicts, unmerged PRs, orphan branches, failed tasks, review deadlocks, state drift) that /factory:run resume cannot handle. Produces a clean state that resume picks up naturally.
+description: (internal) Recover a factory pipeline run from complex issues (merge conflicts, unmerged PRs, orphan branches, failed tasks, review deadlocks, state drift) that /factory:run resume cannot handle. Produces a clean state that resume picks up naturally.
 ---
 
 # rescue-protocol

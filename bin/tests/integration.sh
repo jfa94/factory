@@ -6,7 +6,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN_DIR="$REPO_ROOT/bin"
-ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dark-factory-integration.XXXXXX")"
+ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/factory-integration.XXXXXX")"
 trap '_cleanup' EXIT INT TERM
 
 _cleanup() {

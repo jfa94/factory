@@ -6,7 +6,7 @@
 
 ## Problem
 
-`templates/settings.autonomous.json` in the plugin contains a single `PreToolUse` hook entry (`branch-protection.sh`) and no `permissions.deny` list. The original `~/Projects/dark-factory/templates/settings.autonomous.json` ships with a full safety net:
+`templates/settings.autonomous.json` in the plugin contains a single `PreToolUse` hook entry (`branch-protection.sh`) and no `permissions.deny` list. The original `~/Projects/factory/templates/settings.autonomous.json` ships with a full safety net:
 
 - **8 PreToolUse hooks** — branch protection, force-push guard, env/migrations guard, rm-guard, git-push audit, npm-run approval, gh-release guard, secret-scan
 - **3 PostToolUse hooks** — run-tracker, stop-gate, cost-tracker
@@ -22,7 +22,7 @@ Secondary issue: `hooks/hooks.json` uses bare relative paths (e.g. `hooks/branch
 
 In:
 
-- Port the full hook set and deny/allow lists from `~/Projects/dark-factory/templates/settings.autonomous.json` into the plugin template (C6)
+- Port the full hook set and deny/allow lists from `~/Projects/factory/templates/settings.autonomous.json` into the plugin template (C6)
 - Rewrite all paths to use `${CLAUDE_PLUGIN_ROOT}` (S5)
 - Fix `hooks/hooks.json` the same way
 - Add runtime materialization in `commands/run.md` so the orchestrator hands Claude Code a settings file with absolute paths (works regardless of whether the plugin is activated)
@@ -49,7 +49,7 @@ See `remediation/tasks.json` for full `acceptance_criteria` and `tests_to_write`
 
 File: `templates/settings.autonomous.json`
 
-Read `~/Projects/dark-factory/templates/settings.autonomous.json` as the canonical source.
+Read `~/Projects/factory/templates/settings.autonomous.json` as the canonical source.
 
 Structure to replicate:
 
@@ -276,7 +276,7 @@ Run this once per session:
 
 ```bash
 plugin_root="$(dirname "$(dirname "$(command -v pipeline-state)")")"
-data_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.local/share/dark-factory}"
+data_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.local/share/factory}"
 mkdir -p "$data_dir"
 
 jq --arg root "$plugin_root" '
@@ -302,7 +302,7 @@ Notes:
 
 - The `walk()` + `gsub()` approach handles arbitrary nesting, not just `PreToolUse[0].hooks[0]`. Future hooks added to the template don't need a matching jq path update.
 - `$plugin_root` is derived from `$(command -v pipeline-state)` because the plugin's `bin/` is on PATH when the command is running.
-- `$CLAUDE_PLUGIN_DATA` is the canonical location for plugin-writable state; falling back to `~/.local/share/dark-factory` keeps the command functional for users who invoke it outside the plugin loader.
+- `$CLAUDE_PLUGIN_DATA` is the canonical location for plugin-writable state; falling back to `~/.local/share/factory` keeps the command functional for users who invoke it outside the plugin loader.
 - `--continue` preserves the current session's conversation state — the orchestrator lives across the relaunch.
 
 Test in `bin/test-phase9.sh`:
@@ -319,7 +319,7 @@ Test in `bin/test-phase9.sh`:
    plugin_root="$PWD"
    jq --arg root "$plugin_root" 'walk(if type=="object" and has("command") then .command |= gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root) else . end)' templates/settings.autonomous.json | jq '.hooks.PreToolUse[0].hooks[0].command'
    ```
-   Expected: a fully qualified `/Users/Javier/Projects/dark-factory-plugin/hooks/branch-protection.sh` path (no `${...}` literals).
+   Expected: a fully qualified `/Users/Javier/Projects/factory-plugin/hooks/branch-protection.sh` path (no `${...}` literals).
 3. `grep -c '${CLAUDE_PLUGIN_ROOT}' hooks/hooks.json` — matches the number of hook scripts referenced.
 4. `jq '.permissions.deny | length' templates/settings.autonomous.json` — at least 20.
-5. Diff against `~/Projects/dark-factory/templates/settings.autonomous.json` — deny list is a superset or equivalent; no safety regression from the old pipeline.
+5. Diff against `~/Projects/factory/templates/settings.autonomous.json` — deny list is a superset or equivalent; no safety regression from the old pipeline.

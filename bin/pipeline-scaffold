@@ -162,7 +162,7 @@ fi
 # .gitignore management
 gitignore="$root/.gitignore"
 entries=(
-  "# dark-factory plugin state"
+  "# factory plugin state"
   ".claude-plugin-data/"
   "*.worktree"
 )

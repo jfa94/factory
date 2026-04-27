@@ -6,7 +6,7 @@
 
 ## Problem
 
-Three scaffolding gaps relative to `~/Projects/dark-factory`:
+Three scaffolding gaps relative to `~/Projects/factory`:
 
 1. **Hardcoded package manager.** Several plugin scripts assume `pnpm` (`pnpm quality`, `pnpm install`). The old pipeline had a `detect_pkg_manager` helper that picked pnpm/yarn/npm based on lockfile presence. Plan 05 introduced `bin/pipeline-detect-pkg-manager` as a fix for the package.json rebase conflict — this plan makes sure every other caller switches to it.
 

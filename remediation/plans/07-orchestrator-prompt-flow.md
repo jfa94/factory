@@ -149,10 +149,10 @@ worktree="${3:-$PWD}"
 pkg_mgr=$(pipeline-detect-pkg-manager 2>/dev/null || echo npm)
 cd "$worktree"
 
-# Discover quality commands — prefer dark-factory.quality array from package.json
+# Discover quality commands — prefer factory.quality array from package.json
 # but fall back to standard pnpm/npm commands.
 commands=$(jq -r '
-  .["dark-factory"].quality // ["lint","typecheck","test"]
+  .["factory"].quality // ["lint","typecheck","test"]
   | .[]
 ' package.json 2>/dev/null || printf 'lint\ntypecheck\ntest\n')
 
@@ -194,14 +194,14 @@ Notes:
 
 - Never hardcode `pnpm`. The detector (from plan 05) picks the right package manager.
 - Log files per-check go in the state directory so reviewers can inspect failures without re-running.
-- The `dark-factory.quality` override in `package.json` lets projects customize the quality set. Default is `[lint, typecheck, test]`.
+- The `factory.quality` override in `package.json` lets projects customize the quality set. Default is `[lint, typecheck, test]`.
 - Exit code mirrors overall status so callers can branch on it.
 
 Test in `bin/test-phase6.sh` (or a new test file):
 
 1. Fixture package.json with `scripts.lint`, `scripts.typecheck`, `scripts.test` all passing → exit 0, state has `quality_gate.ok=true`.
 2. Fixture with `scripts.lint` failing → exit 1, state has `ok=false`, `checks[0].status=failed`.
-3. Fixture with `dark-factory.quality=["lint"]` → only runs lint, skips others.
+3. Fixture with `factory.quality=["lint"]` → only runs lint, skips others.
 4. Fixture with no package.json → graceful error, exit 1, structured output.
 
 ### task_07_04 — Rewrite orchestrator execution loop

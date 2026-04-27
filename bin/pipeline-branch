@@ -9,7 +9,7 @@ require_command git
 
 _default_task_commit_message() {
   local tid="$1" rid="$2" state issue desc fallback
-  fallback="chore(dark-factory): finalize task ${tid}"
+  fallback="chore(factory): finalize task ${tid}"
   if [[ -z "$rid" ]]; then
     if [[ -L "$CLAUDE_PLUGIN_DATA/runs/current" ]]; then
       rid=$(basename "$(readlink "$CLAUDE_PLUGIN_DATA/runs/current")")
@@ -64,8 +64,8 @@ case "$action" in
           reconcile_status="up-to-date"
         elif git merge --ff-only "$base_ref" --quiet &>/dev/null; then
           reconcile_status="fast-forwarded"
-        elif git -c user.email=dark-factory@local \
-                 -c user.name="dark-factory" \
+        elif git -c user.email=factory@local \
+                 -c user.name="factory" \
                  merge --no-ff "$base_ref" \
                  -m "chore: reconcile staging with $base_branch" --quiet &>/dev/null; then
           reconcile_status="merged"
@@ -135,8 +135,8 @@ case "$action" in
                   spec_dir "$spec_dir" \
                   branch "staging"
     else
-      git -c user.email=dark-factory@local \
-          -c user.name="dark-factory" \
+      git -c user.email=factory@local \
+          -c user.name="factory" \
           commit -m "chore: add spec directory $spec_dir" --quiet
       sha=$(git rev-parse HEAD)
       json_output action "commit-spec" \
@@ -239,7 +239,7 @@ case "$action" in
     task_id="${1:?missing task-id}"
     issue="${2:?missing issue number}"
     slug=$(slugify "$task_id")
-    printf 'dark-factory/%s/%s' "$issue" "$slug"
+    printf 'factory/%s/%s' "$issue" "$slug"
     ;;
 
   task-commit)
@@ -287,8 +287,8 @@ case "$action" in
         message=$(_default_task_commit_message "$task_id" "$run_id")
       fi
       git -C "$worktree" \
-          -c user.email=dark-factory@local \
-          -c user.name="dark-factory" \
+          -c user.email=factory@local \
+          -c user.name="factory" \
           commit -m "$message" --quiet
       sha=$(git -C "$worktree" rev-parse HEAD)
       json_output action "task-commit" \

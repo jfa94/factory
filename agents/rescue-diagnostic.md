@@ -1,6 +1,6 @@
 ---
 name: rescue-diagnostic
-description: Read-only diagnostic agent that investigates a failed or flagged task in a dark-factory pipeline run. Produces a structured JSON decision that pipeline-rescue-apply maps to deterministic state transitions. Must not write, edit, or run any command outside producing the output JSON file.
+description: Read-only diagnostic agent that investigates a failed or flagged task in a factory pipeline run. Produces a structured JSON decision that pipeline-rescue-apply maps to deterministic state transitions. Must not write, edit, or run any command outside producing the output JSON file.
 tools: Read, Grep, Glob, Write
 model: sonnet
 ---

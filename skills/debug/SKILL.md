@@ -75,7 +75,7 @@ The `AskUserQuestion` tool is used for the 20–40% pre-launch prompt; default t
 
 1. **Validate flags + resolve base.** If `--full` and `--base` both set, abort: `usage: /factory:debug [--base <hash>|--full] [--limit <s>] [--fixSeverity ...]`.
 2. **Compute deadline.** `deadline = LIMIT > 0 ? $(date +%s) + LIMIT : 0`.
-3. **Initialise state.** `state_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/dark-factory}/debug/$RUN_ID"`. `mkdir -p "$state_dir/phase0"`. Write `state.json` with `{base, severity, deadline, started_at, quick:$QUICK, phase0:{}, rounds:[]}`.
+3. **Initialise state.** `state_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/factory}/debug/$RUN_ID"`. `mkdir -p "$state_dir/phase0"`. Write `state.json` with `{base, severity, deadline, started_at, quick:$QUICK, phase0:{}, rounds:[]}`.
 4. **Detect reviewer once.** Run `pipeline-detect-reviewer` and capture `.reviewer` (`codex` or `claude-code`). Persist it in `state.json` as `reviewer`. The choice is fixed for the run; it controls both the Phase 0 Codex slot and the Phase 1 loop branch.
 5. **Pre-launch quota gate.** Skip if `QUICK == true` (the user has already opted out of the heavy phase). Otherwise:
    1. Run `pipeline-quota-check` and capture `.five_hour.utilization`, `.five_hour.resets_at_epoch`, and `.detection_method`.

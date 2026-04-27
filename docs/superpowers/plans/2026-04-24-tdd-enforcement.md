@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Enforce TDD in the dark-factory autonomous pipeline by porting the superpowers test-driven-development skill, adding a two-phase execution (test-writer RED → task-executor GREEN), a TDD commit-order quality gate, and restructuring/renaming reviewer agents to separate spec alignment from code quality.
+**Goal:** Enforce TDD in the factory autonomous pipeline by porting the superpowers test-driven-development skill, adding a two-phase execution (test-writer RED → task-executor GREEN), a TDD commit-order quality gate, and restructuring/renaming reviewer agents to separate spec alignment from code quality.
 
 **Architecture:** Two-phase per-task execution: test-writer authors failing tests from spec in the worktree (committing RED), then task-executor implements minimal code to turn tests green (committing GREEN). A new `bin/pipeline-tdd-gate` script validates commit order in postexec between `pipeline-quality-gate` and `pipeline-coverage-gate`. Reviewer slot splits into two parallel agents: `implementation-reviewer` (spec alignment) and `quality-reviewer` (adversarial code quality; Codex preferred, quality-reviewer agent as fallback). Both verdicts merged by the existing `pipeline-parse-review`.
 
@@ -277,7 +277,7 @@ _task_exempt() {
   # Global exemption via package.json
   if [[ -f package.json ]]; then
     local g
-    g=$(jq -r '.["dark-factory"].tddExempt // false' package.json 2>/dev/null)
+    g=$(jq -r '.["factory"].tddExempt // false' package.json 2>/dev/null)
     [[ "$g" == "true" ]] && return 0
   fi
   return 1
@@ -636,7 +636,7 @@ Keep existing frontmatter unchanged. Replace the body (everything after the `---
 ````markdown
 # Task Executor — GREEN Phase
 
-You are the GREEN phase of a TDD cycle in the dark-factory pipeline. A prior `test-writer` subagent has already committed failing tests for this task in the worktree. Your job is to write the minimal implementation that turns them green.
+You are the GREEN phase of a TDD cycle in the factory pipeline. A prior `test-writer` subagent has already committed failing tests for this task in the worktree. Your job is to write the minimal implementation that turns them green.
 
 <EXTREMELY-IMPORTANT>
 ## Iron Law
@@ -1002,7 +1002,7 @@ This plugin enforces test-driven development (TDD) at the harness layer:
 - Tasks run through two phases: `test-writer` commits failing tests first, then `task-executor` commits the minimal implementation.
 - `pipeline-tdd-gate` enforces test-before-impl commit ordering. Violations block the task.
 - See `skills/test-driven-development/SKILL.md` for the full discipline.
-- Opt-out per task via `tdd_exempt: true` in the spec's `tasks.json`; globally via `package.json.dark-factory.tddExempt`.
+- Opt-out per task via `tdd_exempt: true` in the spec's `tasks.json`; globally via `package.json.factory.tddExempt`.
 
 Reviewer roles:
 

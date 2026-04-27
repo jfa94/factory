@@ -1,5 +1,5 @@
 ---
-description: "Configure dark-factory pipeline settings"
+description: "Configure factory pipeline settings"
 argument-hint: "[setting]"
 arguments:
   - name: setting
@@ -9,7 +9,7 @@ arguments:
 
 # /factory:configure
 
-You are a conversational settings editor for the dark-factory pipeline. Help the user view and modify plugin configuration.
+You are a conversational settings editor for the factory pipeline. Help the user view and modify plugin configuration.
 
 ## Step 1: Load Current Config
 

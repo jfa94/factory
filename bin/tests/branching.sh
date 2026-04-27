@@ -737,7 +737,7 @@ echo "=== pipeline-branch staging-init reconcile ==="
 # into the real plugin repo.
 setup_git_sandbox() {
   local sandbox
-  sandbox=$(mktemp -d "${TMPDIR:-/tmp}/dark-factory-phase4-XXXXXX")
+  sandbox=$(mktemp -d "${TMPDIR:-/tmp}/factory-phase4-XXXXXX")
   (
     cd "$sandbox"
     git init --bare --quiet origin.git
@@ -758,7 +758,7 @@ cleanup_sandbox() {
   # macOS (/var/folders/...) and linux (/tmp/...).
   if [[ -n "$path" && -d "$path" ]]; then
     case "$path" in
-      /tmp/dark-factory-phase4-*|/var/folders/*/dark-factory-phase4-*|/private/var/folders/*/dark-factory-phase4-*)
+      /tmp/factory-phase4-*|/var/folders/*/factory-phase4-*|/private/var/folders/*/factory-phase4-*)
         rm -rf "$path" ;;
     esac
   fi

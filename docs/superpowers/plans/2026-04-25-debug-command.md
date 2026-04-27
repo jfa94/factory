@@ -217,7 +217,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN_DIR="$REPO_ROOT/bin"
 FIXTURES="$REPO_ROOT/bin/tests/fixtures/debug"
-ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dark-factory-debug.XXXXXX")"
+ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/factory-debug.XXXXXX")"
 STUB_DIR="$ROOT_TMP/stubs"
 mkdir -p "$STUB_DIR"
 trap 'rm -rf "$ROOT_TMP"' EXIT INT TERM
@@ -552,7 +552,7 @@ for v in run_id reason base_ref severity findings exec_msg; do
   [[ -z "${!v}" ]] && { log_error "--${v//_/-} required"; exit 1; }
 done
 
-data_root="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/dark-factory}"
+data_root="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/factory}"
 out_dir="$data_root/debug/$run_id"
 mkdir -p "$out_dir"
 out_file="$out_dir/escalation.md"
@@ -648,7 +648,7 @@ The command parses flags into a single line of arguments and invokes this skill 
 
 1. **Validate flags + resolve base.** If `--full` and `--base` both set, abort: `usage: /factory:debug [--base <hash>|--full] [--limit <s>] [--fixSeverity ...]`.
 2. **Compute deadline.** `deadline = LIMIT > 0 ? $(date +%s) + LIMIT : 0`.
-3. **Initialise state.** `state_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/dark-factory}/debug/$RUN_ID"`. Write `state.json` with `{base, severity, deadline, started_at, rounds:[]}`.
+3. **Initialise state.** `state_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/factory}/debug/$RUN_ID"`. Write `state.json` with `{base, severity, deadline, started_at, rounds:[]}`.
 4. **Loop (round = 1..N):**
    a. If `deadline > 0 && $(date +%s) >= deadline`: print summary with `STATUS: TIME_LIMIT`, break.
    b. Run: `pipeline-debug-review --base "$BASE" --severity "$SEVERITY" --out-dir "$state_dir" --round "$round"`. Parse stdout JSON.

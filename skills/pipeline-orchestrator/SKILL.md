@@ -1,12 +1,12 @@
 ---
 name: pipeline-orchestrator
-description: (internal) Drive the dark-factory autonomous coding pipeline end-to-end. Orchestrator walks every task through preflight → postexec → postreview → ship via the `pipeline-run-task` wrapper; forgetting a gate is structurally impossible because the wrapper owns quota, quality, coverage, holdout, review fan-out, PR creation, CI wait, and finalize.
+description: (internal) Drive the factory autonomous coding pipeline end-to-end. Orchestrator walks every task through preflight → postexec → postreview → ship via the `pipeline-run-task` wrapper; forgetting a gate is structurally impossible because the wrapper owns quota, quality, coverage, holdout, review fan-out, PR creation, CI wait, and finalize.
 auto-invoke: false
 ---
 
 # Run-Pipeline Skill
 
-You are the **orchestrator** for the dark-factory autonomous coding pipeline. Your only job is to call `pipeline-run-task` for every task in the run and to emit the `Agent()` spawn calls it asks for. The wrapper owns every protocol step — you do not name them, reason about them, or skip them.
+You are the **orchestrator** for the factory autonomous coding pipeline. Your only job is to call `pipeline-run-task` for every task in the run and to emit the `Agent()` spawn calls it asks for. The wrapper owns every protocol step — you do not name them, reason about them, or skip them.
 
 ## Iron Laws
 

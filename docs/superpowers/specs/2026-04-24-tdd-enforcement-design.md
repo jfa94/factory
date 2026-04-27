@@ -5,7 +5,7 @@
 
 ## Goal
 
-Make the dark-factory pipeline test-driven by construction. Ports the superpowers `test-driven-development` skill into the plugin and restructures the pipeline so TDD is enforced structurally (not just as prompt guidance). Also clarifies reviewer roles by renaming and splitting concerns.
+Make the factory pipeline test-driven by construction. Ports the superpowers `test-driven-development` skill into the plugin and restructures the pipeline so TDD is enforced structurally (not just as prompt guidance). Also clarifies reviewer roles by renaming and splitting concerns.
 
 ## Motivation
 
@@ -71,8 +71,8 @@ Logic:
   - `impl` otherwise (touches non-test source).
 - Require that the first `impl` commit is preceded by at least one `test-only` commit tagged with the same task_id.
 - Require that at least one `test-only` commit exists somewhere before any `impl` commit on the task branch.
-- Skip gate (exempt=true) if the task's full diff is tests-only, docs-only, or config-only. "Docs-only" = paths under `docs/`, `*.md`. "Config-only" = paths matching patterns configurable in `package.json.dark-factory.tddConfigPaths` (default: `*.json`, `*.yml`, `*.yaml`, `*.toml`, `.gitignore`).
-- Exempt via `package.json.dark-factory.tddExempt` (global) or `tdd_exempt: true` on a task in the spec's `tasks.json` (per task).
+- Skip gate (exempt=true) if the task's full diff is tests-only, docs-only, or config-only. "Docs-only" = paths under `docs/`, `*.md`. "Config-only" = paths matching patterns configurable in `package.json.factory.tddConfigPaths` (default: `*.json`, `*.yml`, `*.yaml`, `*.toml`, `.gitignore`).
+- Exempt via `package.json.factory.tddExempt` (global) or `tdd_exempt: true` on a task in the spec's `tasks.json` (per task).
 
 Path-correspondence (e.g. `src/foo.ts` paired with `src/foo.test.ts`) is NOT enforced — too brittle across project layouts. Commit ordering alone is the signal.
 

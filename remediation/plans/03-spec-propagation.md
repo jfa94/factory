@@ -10,7 +10,7 @@
 
 Downstream, `pipeline-orchestrator.md` reads `.state/<run_id>/spec.md` and `.state/<run_id>/tasks.json` from the **main** worktree where the orchestrator runs. Those files never appear there, so the orchestrator either fails fast (if `pipeline-validate-spec` is run) or hallucinates tasks (if it proceeds without validation).
 
-Secondary issue: `pipeline-branch` has no `reconcile_staging_with_develop` step before creating the `staging/<run_id>` branch. The original `~/Projects/dark-factory` bash pipeline ran reconciliation on every staging operation to prevent drift. Without it, a long-running plugin run can end up with a staging branch that is N commits behind `develop`, so later PRs will have noisy rebase conflicts.
+Secondary issue: `pipeline-branch` has no `reconcile_staging_with_develop` step before creating the `staging/<run_id>` branch. The original `~/Projects/factory` bash pipeline ran reconciliation on every staging operation to prevent drift. Without it, a long-running plugin run can end up with a staging branch that is N commits behind `develop`, so later PRs will have noisy rebase conflicts.
 
 ## Scope
 
@@ -106,9 +106,9 @@ last step, after spec.md and tasks.json are fully written and validated:
 
 3. Stage and commit the spec files:
      git add spec.md tasks.json
-     git -c user.email=dark-factory@local \
-         -c user.name="dark-factory spec-generator" \
-         commit -m "chore(dark-factory): spec handoff for run $run_id"
+     git -c user.email=factory@local \
+         -c user.name="factory spec-generator" \
+         commit -m "chore(factory): spec handoff for run $run_id"
 
 4. Push the branch to origin so the orchestrator can fetch it from its own
    worktree. If no remote is configured, skip push and rely on the orchestrator

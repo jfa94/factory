@@ -25,7 +25,7 @@ Each issue has a fixed tier and a fixed remediation. The scan emits the issue ty
 | I-11 | Spec handoff branch missing          | past spec, no `spec-handoff/<run-id>`, empty `.tasks`             | 2    | Re-run spec generation phase                                                                      |
 | I-12 | Malformed state.json                 | `jq .` fails, required fields missing, or non-numeric `pr_number` | 2    | Restore from `.backup/` if available; otherwise surface to user; no auto-fix                      |
 | I-13 | Unresolvable merge conflict          | I-07 rebase failed                                                | 3    | Flag task for investigation phase                                                                 |
-| I-14 | Orphan task branch (no PR, no state) | branch matches `dark-factory/<run-issue>/*`, no state entry       | 3    | Flag for investigation phase                                                                      |
+| I-14 | Orphan task branch (no PR, no state) | branch matches `factory/<run-issue>/*`, no state entry       | 3    | Flag for investigation phase                                                                      |
 | I-15 | Duplicate PRs for same task          | multiple open PRs for same branch                                 | 3    | Close all but most recent (autonomous, no per-item choice)                                        |
 | I-16 | Failed task root cause               | `.tasks.<id>.status=failed`                                       | 2    | Investigation phase dispatches diagnostic agent to produce plan                                   |
 

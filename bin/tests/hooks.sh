@@ -79,7 +79,7 @@ assert_exit "push staging allowed" 0 bash -c 'printf "{\"tool_input\":{\"command
 echo ""
 echo "=== branch-protection: allows force-push to feature branch ==="
 
-assert_exit "force-push feature allowed" 0 bash -c 'printf "{\"tool_input\":{\"command\":\"git push --force-with-lease origin dark-factory/42/task-1\"}}" | '"$HOOKS_DIR/branch-protection.sh"
+assert_exit "force-push feature allowed" 0 bash -c 'printf "{\"tool_input\":{\"command\":\"git push --force-with-lease origin factory/42/task-1\"}}" | '"$HOOKS_DIR/branch-protection.sh"
 
 # ============================================================
 echo ""
@@ -468,7 +468,7 @@ assert_eq "lint-fail ok=false" "false" "$(echo "$output" | jq -r '.ok')"
 lint_status=$(echo "$output" | jq -r '.checks[] | select(.command=="lint") | .status')
 assert_eq "lint check failed" "failed" "$lint_status"
 
-# Fixture 3: dark-factory.quality override — only run lint
+# Fixture 3: factory.quality override — only run lint
 qg_proj3=$(mktemp -d)
 cat > "$qg_proj3/package.json" << 'PJSON'
 {
@@ -478,7 +478,7 @@ cat > "$qg_proj3/package.json" << 'PJSON'
     "typecheck": "false",
     "test": "false"
   },
-  "dark-factory": {
+  "factory": {
     "quality": ["lint"]
   }
 }
@@ -1271,7 +1271,7 @@ echo "=== subagent-stop-gate: autonomous mode blocks on zero commits for executo
 
 # Seed a run with a task that has a branch, but no commits on it vs staging
 # Use a branch name that won't exist so git log returns empty
-_seed_run "run-ssg-nocommit" '{"status":"running","tasks":{"t2":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'
+_seed_run "run-ssg-nocommit" '{"status":"running","tasks":{"t2":{"status":"executing","branch":"factory/test-nonexistent-branch-xyz"}}}'
 set +e
 out=$(jq -cn '{agent_type:"task-executor", last_assistant_message:"Done!\nSTATUS: DONE"}' \
   | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t2 bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
@@ -1290,12 +1290,12 @@ echo "=== subagent-stop-gate: blocks when no staging or origin/staging ref exist
 _ssg_tmp=$(mktemp -d)
 git -C "$_ssg_tmp" init -q
 git -C "$_ssg_tmp" commit --allow-empty -m "init" -q
-git -C "$_ssg_tmp" checkout -b "dark-factory/test-has-commit" -q
+git -C "$_ssg_tmp" checkout -b "factory/test-has-commit" -q
 git -C "$_ssg_tmp" commit --allow-empty -m "task commit" -q
 # Neither local staging nor origin/staging exists.
 
 _seed_run "run-ssg-nostaging" \
-  "{\"status\":\"running\",\"tasks\":{\"t-ns\":{\"status\":\"executing\",\"branch\":\"dark-factory/test-has-commit\",\"worktree\":\"$_ssg_tmp\"}}}"
+  "{\"status\":\"running\",\"tasks\":{\"t-ns\":{\"status\":\"executing\",\"branch\":\"factory/test-has-commit\",\"worktree\":\"$_ssg_tmp\"}}}"
 set +e
 out=$(jq -cn '{agent_type:"task-executor", last_assistant_message:"Done!\nSTATUS: DONE"}' \
   | FACTORY_AUTONOMOUS_MODE=1 FACTORY_TASK_ID=t-ns bash "$HOOKS_DIR/subagent-stop-gate.sh" 2>/dev/null)
@@ -1310,7 +1310,7 @@ rm -rf "$_ssg_tmp"
 echo ""
 echo "=== subagent-stop-gate: retry counter increments and writes BLOCKED on 2nd block ==="
 
-_seed_run "run-ssg-retry" '{"status":"running","tasks":{"t3":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'
+_seed_run "run-ssg-retry" '{"status":"running","tasks":{"t3":{"status":"executing","branch":"factory/test-nonexistent-branch-xyz"}}}'
 retry_dir="$CLAUDE_PLUGIN_DATA/runs/run-ssg-retry"
 
 # C3: retry counter now lives in state.json (.tasks.t3.subagent_retries),
@@ -1341,7 +1341,7 @@ assert_eq "task-executor retry does NOT write test_writer_status" "" "$tw_status
 
 echo "=== subagent-stop-gate: test-writer retry exhaustion writes test_writer_status (not executor_status) ==="
 
-_seed_run "run-ssg-tw-retry" '{"status":"running","tasks":{"tw1":{"status":"executing","branch":"dark-factory/test-nonexistent-branch-xyz"}}}'
+_seed_run "run-ssg-tw-retry" '{"status":"running","tasks":{"tw1":{"status":"executing","branch":"factory/test-nonexistent-branch-xyz"}}}'
 tw_retry_dir="$CLAUDE_PLUGIN_DATA/runs/run-ssg-tw-retry"
 
 # First block attempt
@@ -1502,7 +1502,7 @@ echo "=== subagent-stop-gate: transcript [task:id] marker scopes block to correc
 
 # Two executing tasks; hook fires for task-A via transcript marker.
 # task-A has no commits; task-B has no commits either but must NOT be poisoned.
-_seed_run "run-ssg-scoped" '{"status":"running","tasks":{"task-A":{"status":"executing","branch":"dark-factory/test-nonexistent-taskA"},"task-B":{"status":"executing","branch":"dark-factory/test-nonexistent-taskB"}}}'
+_seed_run "run-ssg-scoped" '{"status":"running","tasks":{"task-A":{"status":"executing","branch":"factory/test-nonexistent-taskA"},"task-B":{"status":"executing","branch":"factory/test-nonexistent-taskB"}}}'
 transcript_scoped=$(mktemp)
 printf '[task:task-A]\nDoing work for task A.\nSTATUS: DONE\n' > "$transcript_scoped"
 set +e
@@ -1521,7 +1521,7 @@ assert_eq "transcript-scoped: task-B executor_status NOT poisoned" "" "$task_b_e
 echo ""
 echo "=== subagent-stop-gate: no transcript marker + 2 executing tasks → skip block with warning ==="
 
-_seed_run "run-ssg-nomarker-multi" '{"status":"running","tasks":{"tX":{"status":"executing","branch":"dark-factory/test-nonexistent-X"},"tY":{"status":"executing","branch":"dark-factory/test-nonexistent-Y"}}}'
+_seed_run "run-ssg-nomarker-multi" '{"status":"running","tasks":{"tX":{"status":"executing","branch":"factory/test-nonexistent-X"},"tY":{"status":"executing","branch":"factory/test-nonexistent-Y"}}}'
 transcript_nomarker=$(mktemp)
 printf 'No task marker here.\nSTATUS: DONE\n' > "$transcript_nomarker"
 set +e

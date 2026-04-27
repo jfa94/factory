@@ -48,7 +48,7 @@ case "$comment_type" in
 esac
 
 # Marker for deduplication
-MARKER="<!-- dark-factory:${comment_type} -->"
+MARKER="<!-- factory:${comment_type} -->"
 
 _build_body() {
   local body=""
@@ -72,7 +72,7 @@ The autonomous pipeline was unable to generate a valid spec from this PRD after 
 3. Or create the spec manually and run \`/factory:run task --spec-dir <path>\`
 
 ---
-*Posted by dark-factory pipeline*"
+*Posted by factory pipeline*"
       ;;
 
     human-gate)
@@ -96,7 +96,7 @@ The pipeline reached a checkpoint that requires your approval because \`humanRev
 3. Or lower \`humanReviewLevel\` via \`/factory:configure\` to let the pipeline proceed automatically in the future
 
 ---
-*Posted by dark-factory pipeline*"
+*Posted by factory pipeline*"
       ;;
 
     run-summary)
@@ -117,7 +117,7 @@ The pipeline reached a checkpoint that requires your approval because \`humanRev
 ${summary}
 
 ---
-*Posted by dark-factory pipeline*"
+*Posted by factory pipeline*"
       ;;
 
     ci-escalation)
@@ -150,7 +150,7 @@ ${log_excerpt}
 3. Resume the pipeline with \`/factory:run resume\`
 
 ---
-*Posted by dark-factory pipeline*"
+*Posted by factory pipeline*"
       ;;
 
     review-escalation)
@@ -178,7 +178,7 @@ The adversarial reviewer could not be satisfied after the configured number of f
 3. Resume the pipeline with \`/factory:run resume\`
 
 ---
-*Posted by dark-factory pipeline*"
+*Posted by factory pipeline*"
       ;;
 
     final-rollup-pending)
@@ -225,7 +225,7 @@ The pipeline attempted to rebase but encountered conflicts that could not be aut
 4. Resume the pipeline with \`/factory:run resume\`
 
 ---
-*Posted by dark-factory pipeline*"
+*Posted by factory pipeline*"
       ;;
   esac
 

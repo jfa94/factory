@@ -1020,7 +1020,7 @@ Configure as `statusLine.command` in `~/.claude/settings.json`:
 {
   "statusLine": {
     "type": "command",
-    "command": "/path/to/dark-factory/bin/statusline-wrapper.sh"
+    "command": "/path/to/factory/bin/statusline-wrapper.sh"
   }
 }
 ```
@@ -1041,7 +1041,7 @@ Configure as `statusLine.command` in `~/.claude/settings.json`:
   },
   "statusLine": {
     "type": "command",
-    "command": "/path/to/dark-factory/bin/statusline-wrapper.sh"
+    "command": "/path/to/factory/bin/statusline-wrapper.sh"
   }
 }
 ```

@@ -26,7 +26,7 @@ case "$*" in
   "pr view 44 --json state,"*)
     echo '{"state":"OPEN","mergedAt":null,"mergeable":"CONFLICTING","statusCheckRollup":[],"baseRefName":"staging"}' ;;
   "pr list --search [112] task( in:title --state all --json number,title,state,mergedAt,mergeable,headRefName,url")
-    echo '[{"number":42,"title":"[112] task(T1): add login","state":"MERGED","mergedAt":"2026-04-20T10:00:00Z","mergeable":"MERGEABLE","headRefName":"dark-factory/112/t1","url":"https://x/42"}]' ;;
+    echo '[{"number":42,"title":"[112] task(T1): add login","state":"MERGED","mergedAt":"2026-04-20T10:00:00Z","mergeable":"MERGEABLE","headRefName":"factory/112/t1","url":"https://x/42"}]' ;;
   *) echo '{}' ;;
 esac
 SHIM
@@ -87,7 +87,7 @@ _make_i07_fixture() {
   printf 'line one\n' > "$seed/base.txt"
   git -C "$seed" add base.txt && git -C "$seed" commit -m "base" -q
   git -C "$seed" push origin staging -q
-  git -C "$seed" checkout -b dark-factory/112/t3 -q
+  git -C "$seed" checkout -b factory/112/t3 -q
   if (( conflict )); then
     printf 'task version\n' > "$seed/base.txt"
     git -C "$seed" add base.txt && git -C "$seed" commit -m "task change" -q
@@ -95,7 +95,7 @@ _make_i07_fixture() {
     printf 'task work\n' > "$seed/task.txt"
     git -C "$seed" add task.txt && git -C "$seed" commit -m "task work" -q
   fi
-  git -C "$seed" push origin dark-factory/112/t3 -q
+  git -C "$seed" push origin factory/112/t3 -q
   git -C "$seed" checkout staging -q
   if (( conflict )); then
     printf 'staging version\n' > "$seed/base.txt"
@@ -108,7 +108,7 @@ _make_i07_fixture() {
   git clone -b staging "$bare" "$wt" -q 2>/dev/null
   git -C "$wt" config user.email "test@test.local"
   git -C "$wt" config user.name "Test"
-  git -C "$wt" checkout -b dark-factory/112/t3 origin/dark-factory/112/t3 -q
+  git -C "$wt" checkout -b factory/112/t3 origin/factory/112/t3 -q
   printf '%s' "$wt"
 }
 

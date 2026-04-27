@@ -174,7 +174,7 @@ if [[ -n "$issue" ]] && git rev-parse --git-dir >/dev/null 2>&1; then
     if [[ -z "$found" ]]; then
       investigation+=("$(jq -n --arg id I-14 --arg branch "$branch" '{id: $id, task_id: null, branch: $branch, reason: "orphan branch, no state entry"}')")
     fi
-  done < <(git branch --list "dark-factory/$issue/*" --format='%(refname:short)' 2>/dev/null)
+  done < <(git branch --list "factory/$issue/*" --format='%(refname:short)' 2>/dev/null)
 fi
 
 # I-13 is emitted by pipeline-rescue-apply when a rebase attempt fails; not scan's responsibility.

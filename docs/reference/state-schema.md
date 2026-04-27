@@ -155,7 +155,7 @@ The orchestrator worktree is created at Step 6a of `commands/run.md` to isolate 
       "model_used": "sonnet",
       "provider": "anthropic",
       "depends_on": ["task_00"],
-      "branch": "dark-factory/42/task-01-auth-flow",
+      "branch": "factory/42/task-01-auth-flow",
       "worktree_path": "/tmp/worktrees/task_01",
       "pr_number": 123,
       "pr_url": "https://github.com/...",

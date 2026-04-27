@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse guard for dark-factory pipeline invariants. Matcher: ^Bash$.
+# PreToolUse guard for factory pipeline invariants. Matcher: ^Bash$.
 # Reads the tool_input command and the current run state; denies commands
 # that violate pipeline invariants.
 #

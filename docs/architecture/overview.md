@@ -1,6 +1,6 @@
 # System Overview
 
-The dark-factory plugin implements a 9-stage autonomous coding pipeline that converts GitHub PRD issues into merged pull requests. This document describes the pipeline stages, component relationships, and data flow.
+The factory plugin implements a 9-stage autonomous coding pipeline that converts GitHub PRD issues into merged pull requests. This document describes the pipeline stages, component relationships, and data flow.
 
 ## Pipeline Stages
 

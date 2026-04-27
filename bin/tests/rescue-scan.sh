@@ -34,7 +34,7 @@ JSON
     ;;
   "pr list --search [112] task( in:title --state all --json number,title,state,mergedAt,mergeable,headRefName,url")
     cat <<'JSON'
-[{"number":42,"title":"[112] task(T1): add login","state":"MERGED","mergedAt":"2026-04-20T10:00:00Z","mergeable":"MERGEABLE","headRefName":"dark-factory/112/t1","url":"https://github.com/x/y/pull/42"}]
+[{"number":42,"title":"[112] task(T1): add login","state":"MERGED","mergedAt":"2026-04-20T10:00:00Z","mergeable":"MERGEABLE","headRefName":"factory/112/t1","url":"https://github.com/x/y/pull/42"}]
 JSON
     ;;
   *)
@@ -140,7 +140,7 @@ case "$*" in
   "pr view 42 --json state,"*)
     echo '{"state":"OPEN","mergedAt":null,"mergeable":"CONFLICTING","statusCheckRollup":[],"baseRefName":"staging"}' ;;
   "pr list --search [112] task( in:title --state all --json number,title,state,mergedAt,mergeable,headRefName,url")
-    echo '[{"number":42,"title":"[112] task(T1): add login","state":"OPEN","mergedAt":null,"mergeable":"CONFLICTING","headRefName":"dark-factory/112/t1","url":"https://x/42"}]' ;;
+    echo '[{"number":42,"title":"[112] task(T1): add login","state":"OPEN","mergedAt":null,"mergeable":"CONFLICTING","headRefName":"factory/112/t1","url":"https://x/42"}]' ;;
   *) echo '{}' ;;
 esac
 SHIM
@@ -160,7 +160,7 @@ case "$*" in
   "pr view 42 --json state,"*)
     echo '{"state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","statusCheckRollup":[],"baseRefName":"staging"}' ;;
   "pr list --search [112] task( in:title --state all --json number,title,state,mergedAt,mergeable,headRefName,url")
-    printf '[{"number":41,"title":"[112] task(T1): first","state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","headRefName":"dark-factory/112/t1","url":"https://x/41"},{"number":42,"title":"[112] task(T1): add login","state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","headRefName":"dark-factory/112/t1","url":"https://x/42"}]\n' ;;
+    printf '[{"number":41,"title":"[112] task(T1): first","state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","headRefName":"factory/112/t1","url":"https://x/41"},{"number":42,"title":"[112] task(T1): add login","state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","headRefName":"factory/112/t1","url":"https://x/42"}]\n' ;;
   *) echo '{}' ;;
 esac
 SHIM

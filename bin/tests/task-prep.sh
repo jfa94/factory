@@ -271,10 +271,10 @@ echo ""
 echo "=== pipeline-branch naming ==="
 
 name=$(pipeline-branch naming "setup-auth-system" "42" 2>/dev/null)
-assert_eq "branch naming" "dark-factory/42/setup-auth-system" "$name"
+assert_eq "branch naming" "factory/42/setup-auth-system" "$name"
 
 name=$(pipeline-branch naming "Hello World -- Test" "99" 2>/dev/null)
-assert_eq "branch naming slugified" "dark-factory/99/hello-world-test" "$name"
+assert_eq "branch naming slugified" "factory/99/hello-world-test" "$name"
 
 echo ""
 echo "=== pipeline-branch (git operations) ==="

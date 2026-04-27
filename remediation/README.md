@@ -1,6 +1,6 @@
 # Factory Plugin — Remediation (Historical)
 
-This directory holds the markdown plans that drove the post-review remediation work for the dark-factory / factory plugin migration. **All work tracked here is complete.** The directory is retained for archaeology — the plans explain _why_ particular fixes were made and what the alternatives were, which can be useful when revisiting the same areas later.
+This directory holds the markdown plans that drove the post-review remediation work for the factory / factory plugin migration. **All work tracked here is complete.** The directory is retained for archaeology — the plans explain _why_ particular fixes were made and what the alternatives were, which can be useful when revisiting the same areas later.
 
 The original task tracker (`tasks.json`, 75 entries) was removed in 0.3.0; every entry was status=`done` and the surviving narrative lives in the per-plan markdown files plus git history.
 

@@ -97,7 +97,7 @@ Resume is reduced to trivial-only recovery: on startup it runs a preflight scan;
 | Path                                                                     | Change                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bin/pipeline-run-task`                                                  | Replace `gh pr create --fill` for task PRs with explicit `--title "[<issue>] task(<task-id>): <description>"`. Issue number and description read from state. Final PR title (`Final: <run-id>`) unchanged. |
-| `bin/pipeline-branch`                                                    | In `task-commit`, default commit message becomes `[<issue>] task(<task-id>): <description>` (replacing `chore(dark-factory): finalize task <id>`). Reads issue and description from state.                 |
+| `bin/pipeline-branch`                                                    | In `task-commit`, default commit message becomes `[<issue>] task(<task-id>): <description>` (replacing `chore(factory): finalize task <id>`). Reads issue and description from state.                 |
 | `skills/pipeline-orchestrator/SKILL.md` + `reference/resume-protocol.md` | Document new resume preflight scan. On tier-2/3 issue detection, resume halts with `"Complex issues detected. Run /factory:rescue."` exit 2.                                                               |
 | `bin/pipeline-state`                                                     | Document new state keys (`.rescue.*`, `.tasks.<id>.rescue_last_*`). No code changes — existing `write` covers these paths.                                                                                 |
 
@@ -129,7 +129,7 @@ Batch approval presents all tier-2 and tier-3 mechanical issues in a single `Ask
 | I-11 | Spec handoff branch missing          | past spec, no `spec-handoff/<run-id>`, empty `.tasks`       | 2    | Re-run spec generation phase                                                                      |
 | I-12 | Malformed state.json                 | `jq .` fails, or required fields missing                    | 2    | Restore from `.backup/` if available; otherwise surface to user; no auto-fix                      |
 | I-13 | Unresolvable merge conflict          | I-07 rebase failed                                          | 3    | Flag task for investigation phase                                                                 |
-| I-14 | Orphan task branch (no PR, no state) | branch matches `dark-factory/<run-issue>/*`, no state entry | 3    | Flag for investigation phase                                                                      |
+| I-14 | Orphan task branch (no PR, no state) | branch matches `factory/<run-issue>/*`, no state entry | 3    | Flag for investigation phase                                                                      |
 | I-15 | Duplicate PRs for same task          | multiple open PRs for same branch                           | 3    | Close all but most recent (autonomous, no per-item choice)                                        |
 | I-16 | Failed task root cause               | `.tasks.<id>.status=failed`                                 | 2    | Investigation phase dispatches diagnostic agent to produce plan                                   |
 
@@ -362,11 +362,11 @@ Default in `pipeline-branch task-commit` becomes:
 
 `[<issue>] task(<task-id>): <description>`
 
-Replaces the existing `chore(dark-factory): finalize task <id>` default. An explicit `--message` still overrides.
+Replaces the existing `chore(factory): finalize task <id>` default. An explicit `--message` still overrides.
 
 ### 10.3 Branch name
 
-Unchanged. `pipeline-branch naming` continues to produce `dark-factory/<issue>/<slug>`.
+Unchanged. `pipeline-branch naming` continues to produce `factory/<issue>/<slug>`.
 
 ### 10.4 Final PR
 

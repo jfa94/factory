@@ -164,9 +164,9 @@ _create_test_run "test-summary-1" '{
   "input": {"issue_numbers": [42], "resumed_from": null},
   "spec": {"status": "done", "path": "specs/42", "review_iterations": 2, "review_score": 56},
   "tasks": {
-    "T1": {"status": "done", "started_at": "2026-01-01T00:10:00Z", "ended_at": "2026-01-01T00:30:00Z", "pr_number": 100, "pr_status": "merged", "branch": "dark-factory/42/t1"},
-    "T2": {"status": "done", "started_at": "2026-01-01T00:30:00Z", "ended_at": "2026-01-01T01:00:00Z", "pr_number": 101, "pr_status": "merged", "branch": "dark-factory/42/t2"},
-    "T3": {"status": "done", "started_at": "2026-01-01T01:00:00Z", "ended_at": "2026-01-01T01:30:00Z", "pr_number": 102, "pr_status": "merged", "branch": "dark-factory/42/t3"}
+    "T1": {"status": "done", "started_at": "2026-01-01T00:10:00Z", "ended_at": "2026-01-01T00:30:00Z", "pr_number": 100, "pr_status": "merged", "branch": "factory/42/t1"},
+    "T2": {"status": "done", "started_at": "2026-01-01T00:30:00Z", "ended_at": "2026-01-01T01:00:00Z", "pr_number": 101, "pr_status": "merged", "branch": "factory/42/t2"},
+    "T3": {"status": "done", "started_at": "2026-01-01T01:00:00Z", "ended_at": "2026-01-01T01:30:00Z", "pr_number": 102, "pr_status": "merged", "branch": "factory/42/t3"}
   },
   "circuit_breaker": {"tasks_completed": 3, "consecutive_failures": 0, "runtime_minutes": 90},
   "cost": {"total_tokens": 50000, "estimated_usd": 1.5, "by_model": {"sonnet": 40000, "haiku": 10000}},
@@ -283,8 +283,8 @@ _create_test_run "test-cleanup-1" '{
   "updated_at": "2026-01-01T01:00:00Z",
   "input": {"issue_numbers": [50], "resumed_from": null},
   "tasks": {
-    "T1": {"status": "done", "branch": "dark-factory/50/t1"},
-    "T2": {"status": "done", "branch": "dark-factory/50/t2"}
+    "T1": {"status": "done", "branch": "factory/50/t1"},
+    "T2": {"status": "done", "branch": "factory/50/t2"}
   },
   "circuit_breaker": {"tasks_completed": 2, "consecutive_failures": 0},
   "cost": {"total_tokens": 1000, "estimated_usd": 0.1}
@@ -328,9 +328,9 @@ _create_test_run "test-cleanup-2" '{
   "updated_at": "2026-01-01T01:00:00Z",
   "input": {"issue_numbers": [], "resumed_from": null},
   "tasks": {
-    "T1": {"status": "done", "pr_number": 1001, "branch": "dark-factory/test/t1"},
-    "T2": {"status": "failed", "branch": "dark-factory/test/t2"},
-    "T3": {"status": "needs_human_review", "branch": "dark-factory/test/t3"}
+    "T1": {"status": "done", "pr_number": 1001, "branch": "factory/test/t1"},
+    "T2": {"status": "failed", "branch": "factory/test/t2"},
+    "T3": {"status": "needs_human_review", "branch": "factory/test/t3"}
   },
   "circuit_breaker": {"tasks_completed": 1, "consecutive_failures": 1},
   "cost": {"total_tokens": 0, "estimated_usd": 0}
@@ -644,7 +644,7 @@ _create_test_run "test-delete-open" '{
   "updated_at": "2026-01-01T01:00:00Z",
   "input": {"issue_numbers": [], "resumed_from": null},
   "tasks": {
-    "T1": {"status": "done", "pr_number": 7001, "branch": "dark-factory/test/open-pr"}
+    "T1": {"status": "done", "pr_number": 7001, "branch": "factory/test/open-pr"}
   },
   "circuit_breaker": {"tasks_completed": 1, "consecutive_failures": 0},
   "cost": {"total_tokens": 0, "estimated_usd": 0}
@@ -670,7 +670,7 @@ _create_test_run "test-delete-merged" '{
   "updated_at": "2026-01-01T01:00:00Z",
   "input": {"issue_numbers": [], "resumed_from": null},
   "tasks": {
-    "T1": {"status": "done", "pr_number": 7002, "branch": "dark-factory/test/merged-pr"}
+    "T1": {"status": "done", "pr_number": 7002, "branch": "factory/test/merged-pr"}
   },
   "circuit_breaker": {"tasks_completed": 1, "consecutive_failures": 0},
   "cost": {"total_tokens": 0, "estimated_usd": 0}
@@ -692,7 +692,7 @@ _create_test_run "test-delete-closed" '{
   "updated_at": "2026-01-01T01:00:00Z",
   "input": {"issue_numbers": [], "resumed_from": null},
   "tasks": {
-    "T1": {"status": "done", "pr_number": 7003, "branch": "dark-factory/test/closed-pr"}
+    "T1": {"status": "done", "pr_number": 7003, "branch": "factory/test/closed-pr"}
   },
   "circuit_breaker": {"tasks_completed": 1, "consecutive_failures": 0},
   "cost": {"total_tokens": 0, "estimated_usd": 0}
@@ -713,7 +713,7 @@ _create_test_run "test-delete-nopr" '{
   "updated_at": "2026-01-01T01:00:00Z",
   "input": {"issue_numbers": [], "resumed_from": null},
   "tasks": {
-    "T1": {"status": "done", "branch": "dark-factory/test/orphan"}
+    "T1": {"status": "done", "branch": "factory/test/orphan"}
   },
   "circuit_breaker": {"tasks_completed": 1, "consecutive_failures": 0},
   "cost": {"total_tokens": 0, "estimated_usd": 0}

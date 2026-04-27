@@ -2,7 +2,7 @@
 # Run a project's quality commands and write a structured result to state.
 # Usage: pipeline-quality-gate <run-id> <task-id> [<worktree>]
 #
-# Discovers the command list from package.json `dark-factory.quality` (an array
+# Discovers the command list from package.json `factory.quality` (an array
 # of npm script names), or falls back to ["lint","typecheck","test"]. Each
 # command is executed with the detected package manager; per-command stdout
 # and stderr are captured to a log file in the run directory so reviewers can
@@ -43,10 +43,10 @@ fi
 
 pkg_mgr=$(detect_pkg_manager "$worktree")
 
-# Discover the command list. Prefer the dark-factory.quality override; fall
+# Discover the command list. Prefer the factory.quality override; fall
 # back to a sensible default trio. We use jq with `// empty` so a missing
 # field yields an empty list, which we then replace with the default.
-commands=$(jq -r '.["dark-factory"].quality // empty | .[]?' package.json 2>/dev/null || true)
+commands=$(jq -r '.["factory"].quality // empty | .[]?' package.json 2>/dev/null || true)
 if [[ -z "$commands" ]]; then
   commands=$'lint\ntypecheck\ntest:coverage'
 fi

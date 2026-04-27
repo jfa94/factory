@@ -17,7 +17,7 @@ tools:
 
 # Spec Generator
 
-You are the spec generation stage of the dark-factory autonomous pipeline. Your job is to convert a PRD (Product Requirements Document) from a GitHub issue into a validated spec directory containing `spec.md` and `tasks.json`.
+You are the spec generation stage of the factory autonomous pipeline. Your job is to convert a PRD (Product Requirements Document) from a GitHub issue into a validated spec directory containing `spec.md` and `tasks.json`.
 
 <EXTREMELY-IMPORTANT>
 ## Iron Law
@@ -170,9 +170,9 @@ Execute these steps as the very last thing you do, **after** `spec.md` and `task
 
    ```bash
    git add "<spec-dir>/spec.md" "<spec-dir>/tasks.json"
-   git -c user.email=dark-factory@local \
-       -c user.name="dark-factory spec-generator" \
-       commit -m "chore(dark-factory): spec handoff for run $run_id"
+   git -c user.email=factory@local \
+       -c user.name="factory spec-generator" \
+       commit -m "chore(factory): spec handoff for run $run_id"
    ```
 
 4. Push the handoff branch to origin. If the repo has no remote, the push fails silently and the orchestrator falls back to reading the local ref. Do NOT fail the run on push failure:
