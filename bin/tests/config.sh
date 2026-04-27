@@ -688,7 +688,7 @@ assert_contains "quality-gate template has security job" "name: Security Scan" "
 assert_contains "quality-gate template has mutation job" "name: Mutation Testing" "$QG_TEMPLATE"
 assert_contains "quality-gate template has auto-merge job" "name: Auto Merge" "$QG_TEMPLATE"
 assert_contains "quality-gate template auto-merges via gh pr merge --auto" "gh pr merge" "$QG_TEMPLATE"
-assert_contains "quality-gate template differentiates incremental vs full mutation" "Full-codebase mutation run" "$QG_TEMPLATE"
+assert_contains "quality-gate template differentiates incremental vs full mutation" "Mutation (full scope" "$QG_TEMPLATE"
 assert_contains "quality-gate template uses git since-ref for incremental mutation" 'origin/$BASE_REF' "$QG_TEMPLATE"
 
 # ============================================================
