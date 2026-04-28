@@ -118,6 +118,11 @@ if [[ "$agent_type" == "scribe" ]]; then
       "$scribe_status" "$run_id" >&2
     exit 1
   fi
+  # On terminal success, reset re-spawn attempts so a future re-entry is not
+  # falsely capped on stale state.
+  if [[ "$scribe_status" == "done" ]]; then
+    pipeline-state write "$run_id" '.scribe.attempts' '0' >/dev/null 2>&1 || true
+  fi
 fi
 
 # --- 6. Emit metric ---

@@ -900,5 +900,23 @@ case "$1 $2" in
   *) exit 0 ;;
 esac'
 
+# --- 39: subagent-stop-transcript — scribe DONE resets .scribe.attempts ------
+new_run scribe-attempts-reset
+# Seed stale state: attempts=2, status=spawned (as if a prior scribe timed out)
+pipeline-state write "$RUN_ID" '.scribe.attempts' '2' >/dev/null
+pipeline-state write "$RUN_ID" '.scribe.status' '"spawned"' >/dev/null
+# Invoke hook directly with a scribe DONE payload
+HOOK="$REPO_ROOT/hooks/subagent-stop-transcript.sh"
+HOOK_INPUT='{"agent_type":"scribe","last_assistant_message":"STATUS: DONE"}'
+set +e
+printf '%s' "$HOOK_INPUT" | CLAUDE_PLUGIN_DATA="$CLAUDE_PLUGIN_DATA" bash "$HOOK"
+HOOK_RC=$?
+set -e
+assert_eq "scribe-attempts-reset: hook exit 0" "0" "$HOOK_RC"
+scribe_status=$(pipeline-state read "$RUN_ID" '.scribe.status' 2>/dev/null | tr -d '"')
+assert_eq "scribe-attempts-reset: scribe.status=done" "done" "$scribe_status"
+attempts=$(pipeline-state read "$RUN_ID" '.scribe.attempts' 2>/dev/null | tr -d '"')
+assert_eq "scribe-attempts-reset: scribe.attempts=0" "0" "$attempts"
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
