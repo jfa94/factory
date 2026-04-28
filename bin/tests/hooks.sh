@@ -1630,6 +1630,14 @@ out=$(printf '%s' '{"tool_input":{"command":"git push origin '"'"'staging'"'"'"}
   | (cd /tmp && bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
 assert_eq "single-quoted staging ref denied" "2" "$_rc"
 
+# single-quoted --delete <branch> must DENY (regression: re-scan must also strip single quotes)
+_rc=0
+out=$(printf '%s' '{"tool_input":{"command":"git push origin --delete '"'"'staging'"'"'"}}' \
+  | (cd /tmp && bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "single-quoted --delete staging denied" "2" "$_rc"
+assert_eq "single-quoted --delete reason" "true" \
+  "$(printf '%s' "$out" | grep -q 'remote_delete_protected' && echo true || echo false)"
+
 rm -rf "$_staging_tmp"
 
 # ============================================================

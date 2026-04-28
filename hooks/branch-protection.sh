@@ -134,6 +134,7 @@ _parse_git_invocation() {
 
   # Parse the rest of the arguments depending on the subcommand.
   local saw_remote=0
+  local push_is_delete=0
   while (( i < n )); do
     local tok="${tokens[i]}"
 
@@ -151,6 +152,11 @@ _parse_git_invocation() {
           _git_is_force="1"
           i=$((i + 1)); continue
         fi
+        # Detect --delete flag (remote branch deletion, not a refspec push).
+        if [[ "$tok" == "--delete" || "$tok" == "-d" ]]; then
+          push_is_delete=1
+          i=$((i + 1)); continue
+        fi
         # Skip other flags.
         if [[ "$tok" == -* ]]; then
           i=$((i + 1)); continue
@@ -158,6 +164,10 @@ _parse_git_invocation() {
         # Remote (first non-flag token).
         if (( saw_remote == 0 )); then
           saw_remote=1
+          i=$((i + 1)); continue
+        fi
+        # If this is a --delete invocation, the token is the branch to delete — not a refspec.
+        if (( push_is_delete == 1 )); then
           i=$((i + 1)); continue
         fi
         # Refspec token(s).
@@ -226,6 +236,8 @@ _parse_git_invocation() {
       local tok="${tokens[j]}"
       tok="${tok#\"}"
       tok="${tok%\"}"
+      tok="${tok#\'}"
+      tok="${tok%\'}"
       if [[ "$tok" == "--delete" ]]; then
         in_push_delete=1
         j=$((j + 1)); continue
