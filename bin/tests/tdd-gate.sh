@@ -349,8 +349,42 @@ case_b3_merge_with_impl() {
   pass "case_b3_merge_with_impl: merge bringing impl files counted as impl (gate fails)"
 }
 
+# Test 9: untagged impl commit between staging..HEAD must be a violation
+case9() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test: red tests for untagged-task [task-untagged]" "tests/x.test.ts"
+  _commit "$repo" "feat: add impl" "src/impl.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-untagged --base staging )
+  rc=$?
+  set -e
+  local ok exempt
+  ok=$(printf '%s' "$out" | jq -r '.ok')
+  exempt=$(printf '%s' "$out" | jq -r '.exempt')
+  [[ "$ok" == "false" && "$exempt" == "false" ]] \
+    || fail "case9: untagged impl must be a violation (ok=$ok exempt=$exempt)"
+  pass "case9: untagged impl commit flagged as violation"
+}
+
+# Test 10: tagged test-only present, untagged impl present, must be a violation
+case10() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test: tests [task-mixed]" "tests/x.test.ts"
+  _commit "$repo" "feat: untagged impl" "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-mixed --base staging )
+  rc=$?
+  set -e
+  local ok
+  ok=$(printf '%s' "$out" | jq -r '.ok')
+  [[ "$ok" == "false" ]] \
+    || fail "case10: untagged impl alongside tagged test must violate (ok=$ok)"
+  pass "case10: untagged impl alongside tagged test flagged"
+}
+
 case1; case2; case3; case4; case4b; case5; case6; case7; case8
 case_go_test; case_ruby_spec; case_java_test; case_kotlin_test
 case_python_test; case_swift_tests; case_csharp_tests; case_go_impl_rejected
 case_b3_merge_with_tests; case_b3_merge_with_impl
+case9; case10
 printf 'all tdd-gate tests passed\n'

@@ -65,18 +65,14 @@ _emit() {
   command -v log_metric >/dev/null && log_metric "task.gate.tdd" "task_id=\"$task_id\"" "ok=$ok" "exempt=$exempt" || true
 }
 
-commits=$(git log --format='%H' "${base_ref}..HEAD" 2>/dev/null \
-  | while read -r sha; do
-      msg=$(git log -1 --format='%s%n%b' "$sha")
-      if printf '%s' "$msg" | grep -qF "[$task_id]"; then printf '%s\n' "$sha"; fi
-    done)
-
-if [[ -z "$commits" ]]; then
+# Classify ALL commits in base..HEAD, not just task-tagged ones.
+all_commits=$(git log --format='%H' "${base_ref}..HEAD" 2>/dev/null)
+if [[ -z "$all_commits" ]]; then
   _emit true true '[]'
   exit 0
 fi
 
-commits_oldest=$(printf '%s\n' "$commits" | awk '{a[NR]=$0} END{for(i=NR;i>0;i--) print a[i]}')
+all_commits_oldest=$(printf '%s\n' "$all_commits" | awk '{a[NR]=$0} END{for(i=NR;i>0;i--) print a[i]}')
 classes=()
 while read -r sha; do
   [[ -z "$sha" ]] && continue
@@ -103,12 +99,17 @@ while read -r sha; do
       fi
     fi
   done <<<"$files"
-  classes+=("$sha|$kind")
-done <<<"$commits_oldest"
+  # Determine whether commit is tagged with this task_id.
+  tagged=0
+  if git log -1 --format='%s%n%b' "$sha" | grep -qF "[$task_id]"; then
+    tagged=1
+  fi
+  classes+=("$sha|$kind|$tagged")
+done <<<"$all_commits_oldest"
 
 has_impl=0
 for c in "${classes[@]}"; do
-  IFS='|' read -r _ kind <<<"$c"
+  IFS='|' read -r _ kind _ <<<"$c"
   [[ "$kind" == "impl" ]] && has_impl=1
 done
 if (( has_impl == 0 )); then _emit true true '[]'; exit 0; fi
@@ -117,11 +118,13 @@ if _task_exempt;           then _emit true true '[]'; exit 0; fi
 seen_test_only=0
 violations='[]'
 for c in "${classes[@]}"; do
-  IFS='|' read -r sha kind <<<"$c"
-  if [[ "$kind" == "test-only" ]]; then
+  IFS='|' read -r sha kind tagged <<<"$c"
+  if [[ "$kind" == "test-only" && "$tagged" == "1" ]]; then
     seen_test_only=1
   elif [[ "$kind" == "impl" ]]; then
-    if (( seen_test_only == 0 )); then
+    if [[ "$tagged" != "1" ]]; then
+      violations=$(printf '%s' "$violations" | jq --arg s "$sha" '. + [{commit:$s, reason:"impl-commit-untagged"}]')
+    elif (( seen_test_only == 0 )); then
       violations=$(printf '%s' "$violations" | jq --arg s "$sha" '. + [{commit:$s, reason:"impl-without-preceding-test"}]')
     fi
   fi
