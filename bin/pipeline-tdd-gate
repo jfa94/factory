@@ -99,6 +99,8 @@ while read -r sha; do
       fi
     fi
   done <<<"$files"
+  # An --allow-empty commit has no files; treat as neither test nor impl.
+  if [[ -z "${files// }" ]]; then kind="empty"; fi
   # Determine whether commit is tagged with this task_id.
   tagged=0
   if git log -1 --format='%s%n%b' "$sha" | grep -qF "[$task_id]"; then

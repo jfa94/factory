@@ -363,6 +363,9 @@ case9() {
   exempt=$(printf '%s' "$out" | jq -r '.exempt')
   [[ "$ok" == "false" && "$exempt" == "false" ]] \
     || fail "case9: untagged impl must be a violation (ok=$ok exempt=$exempt)"
+  [[ $rc -eq 1 ]] || fail "case9: expected exit 1, got $rc"
+  reason=$(printf '%s' "$out" | jq -r '.violations[0].reason')
+  [[ "$reason" == "impl-commit-untagged" ]] || fail "case9: expected reason impl-commit-untagged, got $reason"
   pass "case9: untagged impl commit flagged as violation"
 }
 
@@ -379,12 +382,32 @@ case10() {
   ok=$(printf '%s' "$out" | jq -r '.ok')
   [[ "$ok" == "false" ]] \
     || fail "case10: untagged impl alongside tagged test must violate (ok=$ok)"
+  [[ $rc -eq 1 ]] || fail "case10: expected exit 1, got $rc"
+  reason=$(printf '%s' "$out" | jq -r '.violations[0].reason')
+  [[ "$reason" == "impl-commit-untagged" ]] || fail "case10: expected reason impl-commit-untagged, got $reason"
   pass "case10: untagged impl alongside tagged test flagged"
+}
+
+# Test 11: tagged --allow-empty commit must not advance seen_test_only
+case11() {
+  local repo out rc ok reason; repo=$(mktemp -d); _mk_repo "$repo"
+  ( cd "$repo" && git -c user.email=t@t -c user.name=t commit --allow-empty -q \
+      -m "chore: empty placeholder [task-empty]" )
+  _commit "$repo" "feat: impl [task-empty]" "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-empty --base staging )
+  rc=$?
+  set -e
+  ok=$(printf '%s' "$out" | jq -r '.ok')
+  reason=$(printf '%s' "$out" | jq -r '.violations[0].reason // ""')
+  [[ "$ok" == "false" && "$reason" == "impl-without-preceding-test" ]] \
+    || fail "case11: empty commit must not satisfy test-only requirement (ok=$ok reason=$reason)"
+  pass "case11: tagged empty commit does not advance seen_test_only"
 }
 
 case1; case2; case3; case4; case4b; case5; case6; case7; case8
 case_go_test; case_ruby_spec; case_java_test; case_kotlin_test
 case_python_test; case_swift_tests; case_csharp_tests; case_go_impl_rejected
 case_b3_merge_with_tests; case_b3_merge_with_impl
-case9; case10
+case9; case10; case11
 printf 'all tdd-gate tests passed\n'
