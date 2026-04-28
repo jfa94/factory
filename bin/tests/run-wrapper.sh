@@ -801,5 +801,36 @@ run_wrapper alpha-001 --stage postreview --review-file "$ROOT_TMP/does-not-exist
 assert_eq "postreview missing file: exit 30" "30" "$RC"
 assert_eq "postreview missing file: stage stays postexec_done" "postexec_done" "$(stage_of)"
 
+# --- 36: finalize-run — gh pr create empty + no existing PR → wait_retry, status NOT done ---
+new_run finalize-no-pr
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '777' >/dev/null
+pipeline-state write "$RUN_ID" .scribe.status '"done"' >/dev/null
+write_stub gh '
+case "$*" in
+  "pr list --base develop --head staging --state open --json url,number") echo "[]"; exit 0 ;;
+  "pr create --base develop "*) exit 1 ;;
+  "pr view 777 --json state,mergeCommit,headRefOid")
+    printf '"'"'{"state":"MERGED","mergeCommit":{"oid":"aabbccdd"},"headRefOid":"aabbccdd"}'"'"' ;;
+  *) exit 0 ;;
+esac'
+write_stub git '
+case "$*" in
+  "fetch origin staging --quiet") exit 0 ;;
+  "merge-base --is-ancestor "*) exit 0 ;;
+  *) exec /usr/bin/git "$@" ;;
+esac'
+set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run 2>/dev/null; RC=$?; set -e
+assert_eq "finalize-no-pr: exit 3 wait_retry" "3" "$RC"
+status=$(pipeline-state read "$RUN_ID" '.status' 2>/dev/null | tr -d '"')
+assert_eq "finalize-no-pr: status not done" "running" "$status"
+rm -f "$STUB_DIR/gh" "$STUB_DIR/git"
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

@@ -1263,28 +1263,57 @@ _stage_finalize_run() {
     return 10
   fi
 
-  local final_pr_url
+  local final_pr_url final_pr_num
   final_pr_url=$(pipeline-state read "$run_id" '.final_pr.pr_url // ""' 2>/dev/null || printf '')
+
   if [[ -z "$final_pr_url" ]]; then
-    final_pr_url=$(gh pr create --base develop --head staging \
-      --title "Final: $run_id" \
-      --body "Final PR merging staging into develop for run $run_id." \
-      2>/dev/null || true)
-    if [[ -n "$final_pr_url" ]]; then
-      pipeline-state write "$run_id" '.final_pr.pr_url' "\"$final_pr_url\"" >/dev/null || true
-      local final_pr_num
-      final_pr_num=$(printf '%s' "$final_pr_url" | grep -oE '[0-9]+$' || printf '')
-      [[ -n "$final_pr_num" ]] && pipeline-state write "$run_id" '.final_pr.pr_number' "$final_pr_num" >/dev/null || true
-      log_metric "run.final_pr_created" "url=\"$final_pr_url\""
-    else
-      log_warn "final PR create failed"
+    local _existing _err
+    _err=$(mktemp)
+    _existing=$(gh pr list --base develop --head staging --state open --json url,number 2>"$_err") || {
+      log_error "finalize-run: gh pr list failed: $(cat "$_err")"
+      rm -f "$_err"
+      t1=$(_now_ms); log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"gh_pr_list_failed\""
+      return 3
+    }
+    rm -f "$_err"
+    final_pr_url=$(printf '%s' "$_existing" | jq -r '.[0].url // ""')
+
+    if [[ -z "$final_pr_url" ]]; then
+      _err=$(mktemp)
+      final_pr_url=$(gh pr create --base develop --head staging \
+        --title "Final: $run_id" \
+        --body "Final PR merging staging into develop for run $run_id." 2>"$_err") || final_pr_url=""
+      if [[ -z "$final_pr_url" ]]; then
+        log_error "finalize-run: gh pr create failed: $(cat "$_err")"
+        rm -f "$_err"
+        t1=$(_now_ms); log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"final_pr_create_failed\""
+        return 3
+      fi
+      rm -f "$_err"
     fi
+
+    pipeline-state write "$run_id" '.final_pr.pr_url' "\"$final_pr_url\"" >/dev/null \
+      || { log_error "finalize-run: state write final_pr.pr_url failed"; return 3; }
+    final_pr_num=$(printf '%s' "$final_pr_url" | grep -oE '[0-9]+$' || printf '')
+    [[ -n "$final_pr_num" ]] && pipeline-state write "$run_id" '.final_pr.pr_number' "$final_pr_num" >/dev/null
+    log_metric "run.final_pr_created" "url=\"$final_pr_url\""
   fi
 
-  pipeline-cleanup "$run_id" --delete-branches --remove-worktrees --close-issues \
-    >/dev/null 2>&1 || log_warn "cleanup failed"
-  pipeline-state write "$run_id" '.status' '"done"' >/dev/null || true
-  pipeline-state write "$run_id" '.ended_at' "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >/dev/null || true
+  local _cl_err; _cl_err=$(mktemp)
+  if ! pipeline-cleanup "$run_id" --delete-branches --remove-worktrees --close-issues >"$_cl_err" 2>&1; then
+    log_error "finalize-run: cleanup failed: $(cat "$_cl_err")"
+    rm -f "$_cl_err"
+    t1=$(_now_ms); log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"cleanup_failed\""
+    return 3
+  fi
+  rm -f "$_cl_err"
+
+  if ! pipeline-state write "$run_id" '.status' '"done"' >/dev/null; then
+    log_error "finalize-run: failed to write final status=done"
+    return 3
+  fi
+  pipeline-state write "$run_id" '.ended_at' "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >/dev/null \
+    || log_warn "finalize-run: failed to write ended_at (non-fatal)"
 
   t1=$(_now_ms)
   log_step_end "finalize-run" "ok" "$((t1-t0))"
