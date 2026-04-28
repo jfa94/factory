@@ -18,7 +18,7 @@
 #   .scribe.status              (scribe)
 # Emits metric: pipeline.subagent.end agent_type=... status=...
 #
-# Exit: always 0; non-fatal on parse errors.
+# Exit: 0 normally; 1 if scribe state write fails (fatal).
 set -euo pipefail
 
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"

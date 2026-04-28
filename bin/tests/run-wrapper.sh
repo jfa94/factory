@@ -856,6 +856,8 @@ set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run 2>/dev/null; RC=$?;
 assert_eq "finalize-scribe-loop: exit 30" "30" "$RC"
 status=$(pipeline-state read "$RUN_ID" '.scribe.status' 2>/dev/null | tr -d '"')
 assert_eq "finalize-scribe-loop: scribe.status=failed" "failed" "$status"
+reason=$(pipeline-state read "$RUN_ID" '.scribe.failure_reason' 2>/dev/null | tr -d '"')
+assert_eq "finalize-scribe-loop: failure_reason" "hook_did_not_terminate" "$reason"
 rm -f "$STUB_DIR/gh" "$STUB_DIR/git"
 write_stub gh '
 case "$1 $2" in
