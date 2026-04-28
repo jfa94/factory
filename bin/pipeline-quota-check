@@ -87,7 +87,10 @@ fi
 # --- Freshness check ---
 
 now_epoch=$(date +%s)
-captured_at=$(jq -r '.captured_at // 0' "$cache_file")
+# Coerce non-numeric scalars to 0 so the freshness arithmetic below cannot
+# trip `unbound variable` under set -u (would violate the documented
+# fail-closed-with-sentinel contract). Mirrors pipeline-ensure-autonomy:193.
+captured_at=$(jq -r '(.captured_at // 0) | tonumber? // 0' "$cache_file" 2>/dev/null || printf '0')
 age=$(( now_epoch - captured_at ))
 if (( age > 120 )); then
   log_warn "usage-cache.json is ${age}s old (>120s) — data may be stale"
@@ -107,9 +110,11 @@ fi
 
 # --- Parse utilization and resets_at ---
 
-# used_percentage may be a float (e.g. 45.2) — truncate to integer
-five_hour_pct=$(jq -r '.five_hour.used_percentage // empty' "$cache_file" 2>/dev/null)
-seven_day_pct=$(jq -r '.seven_day.used_percentage // empty' "$cache_file" 2>/dev/null)
+# used_percentage may be a float (e.g. 45.2) — truncate to integer.
+# Coerce non-numeric values to empty so the missing-fields branch below
+# routes them through the sentinel path instead of crashing --argjson later.
+five_hour_pct=$(jq -r '(.five_hour.used_percentage // empty) | tonumber? // empty' "$cache_file" 2>/dev/null)
+seven_day_pct=$(jq -r '(.seven_day.used_percentage // empty) | tonumber? // empty' "$cache_file" 2>/dev/null)
 
 if [[ -z "$five_hour_pct" || -z "$seven_day_pct" ]]; then
   if $strict; then
@@ -125,13 +130,43 @@ fi
 five_hour=$(jq -n --argjson v "$five_hour_pct" '$v | round | tonumber' 2>/dev/null) || five_hour="${five_hour_pct%%.*}"
 seven_day=$(jq -n --argjson v "$seven_day_pct" '$v | round | tonumber' 2>/dev/null) || seven_day="${seven_day_pct%%.*}"
 
-# resets_at from statusline JSON is already epoch seconds
-resets_5h_epoch=$(jq -r '.five_hour.resets_at // empty' "$cache_file" 2>/dev/null)
-resets_7d_epoch=$(jq -r '.seven_day.resets_at // empty' "$cache_file" 2>/dev/null)
+# resets_at from statusline JSON is already epoch seconds.
+# Coerce non-numeric scalars to empty so the fallback branch below assigns a
+# sane default — non-numeric values otherwise crash the bash arithmetic in
+# the post-reset guard (set -u: unbound variable).
+resets_5h_epoch=$(jq -r '(.five_hour.resets_at // empty) | tonumber? // empty' "$cache_file" 2>/dev/null)
+resets_7d_epoch=$(jq -r '(.seven_day.resets_at // empty) | tonumber? // empty' "$cache_file" 2>/dev/null)
 
 # Fall back to sensible defaults if missing
 [[ -z "$resets_5h_epoch" ]] && resets_5h_epoch=$(( now_epoch + 18000 ))
 [[ -z "$resets_7d_epoch" ]] && resets_7d_epoch=$(( now_epoch + 604800 ))
+
+# Post-reset stale guard: a resets_at in the past means the cache reflects a
+# previous window. Claude Code only refreshes rate_limits on its own API
+# responses, so between window-reset and the next response, both
+# used_percentage and resets_at carry pre-reset values even when captured_at
+# was just written by the wrapper. Treating that as "fresh" silently produces
+# false-secure proceed decisions (clamped window_hour=5, util<curve threshold).
+# Fail closed: emit the same unavailable sentinel as the >3600s ceiling so the
+# gate yields wait_retry until a fresh API response refreshes the headers.
+if (( resets_5h_epoch <= now_epoch )); then
+  if $strict; then
+    log_error "usage-cache.json: 5h resets_at=${resets_5h_epoch} <= now=${now_epoch} — cache reflects previous window"
+    exit 1
+  fi
+  log_warn "usage-cache.json: 5h window already reset (resets_at <= now) — emitting unavailable sentinel; pipeline will halt until next API response refreshes rate_limits"
+  _sentinel "five-hour-window-reset"
+  exit 0
+fi
+if (( resets_7d_epoch <= now_epoch )); then
+  if $strict; then
+    log_error "usage-cache.json: 7d resets_at=${resets_7d_epoch} <= now=${now_epoch} — cache reflects previous window"
+    exit 1
+  fi
+  log_warn "usage-cache.json: 7d window already reset (resets_at <= now) — emitting unavailable sentinel"
+  _sentinel "seven-day-window-reset"
+  exit 0
+fi
 
 # --- Compute window position and thresholds ---
 

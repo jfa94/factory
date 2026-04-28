@@ -46,6 +46,13 @@ _emit_default() {
     local NOW REMAINING HOURS MINS USAGE REMAINING_PCT
     NOW=$(date +%s)
     REMAINING=$((RESETS - NOW))
+    # Post-reset stale guard: when Claude Code's last API response carried a
+    # resets_at that's now in the past (window reset, no new response yet),
+    # skip the "Xh Ym" component instead of rendering negative time.
+    if (( REMAINING <= 0 )); then
+      printf '%s in %s | window reset pending\n' "$MODEL" "$DIR"
+      return 0
+    fi
     HOURS=$((REMAINING / 3600))
     MINS=$(((REMAINING % 3600) / 60))
     USAGE=$(printf '%s' "$input" \

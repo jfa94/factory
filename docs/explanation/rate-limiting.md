@@ -113,9 +113,11 @@ Stop spawning new tasks. Let in-flight tasks complete. Mark run as `partial`.
 
 **Case: quota data unavailable** (`detection_method == "unavailable"`)
 
-`pipeline-quota-check` emits this sentinel when `usage-cache.json` is missing, malformed, has missing rate-limit fields, or is older than 1 h.
+`pipeline-quota-check` emits this sentinel when `usage-cache.json` is missing, malformed, has missing rate-limit fields, older than 1 h, has non-numeric scalars where numbers are expected (coerced via `tonumber? // 0` so the existing sentinel branches catch them — fail-closed under `set -u`), or carries a `resets_at` already in the past (`reason: five-hour-window-reset` / `seven-day-window-reset`). The post-reset case occurs because Claude Code only refreshes `rate_limits` on its own API responses — between window-reset and the next response, the wrapper writes a fresh `captured_at` over pre-reset numbers. Treating that as valid would silently produce false-secure proceed decisions (clamped `window_hour=5`, util < curve threshold).
 
 `pipeline_quota_gate` intercepts the sentinel **before** the router and yields `wait_retry` (rc=3) — the next orchestrator turn fires a fresh statusline tick which refreshes the cache. The yield increments `circuit_breaker.quota_stale_cycles`; only when the counter hits `.quota.maxStaleCycles` (default 6, ≈ 1 h of fully silent telemetry) does the gate fall through to `end_gracefully`.
+
+**Crash-safe.** The gate also catches outright failures of `pipeline-quota-check` or `pipeline-model-router` (e.g. transient `jq` errors, missing dependencies). Any non-zero exit from either subprocess returns rc=2 (`end_gracefully`) with a `quota.check action="error"` metric — never propagates `set -e` up the call stack mid-gate.
 
 **User prompt on first unavailable.** When quota detection fails on the very first check of a run, the orchestrator prompts the user via `AskUserQuestion` instead of immediately yielding: "Telemetry unavailable — statusline may not be configured. Continue without budget gates?" A `Yes` bypasses gates for the session; `No` halts immediately. This prevents silent failures when the statusline wrapper was never installed.
 
@@ -241,3 +243,21 @@ Check run metrics for model distribution:
 ```bash
 cat "${CLAUDE_PLUGIN_DATA}/runs/current/state.json" | jq '.cost.by_model'
 ```
+
+## Audit Trail (debug runs)
+
+`/factory:debug` persists the full `pipeline-quota-check` output as the audit
+record for each budget decision. Inspect post-run via:
+
+```bash
+cat "${CLAUDE_PLUGIN_DATA}/debug/<run-id>/state.json" \
+  | jq '{phase0: .phase0.pre_launch_check, phase1: .phase1.pre_loop_check}'
+```
+
+Each `pre_launch_check` / `pre_loop_check` carries the raw quota JSON
+(utilization, threshold, window position, resets-at, detection_method) plus
+`checked_at` (when the gate fired) and `cache_age_at_check` (seconds between
+the cache write and the gate firing). When the gate fired with telemetry
+unavailable, the sentinel is persisted verbatim — its `reason` field
+(`usage-cache-missing`, `usage-cache-malformed`, `usage-cache-too-stale`,
+`five-hour-window-reset`, `seven-day-window-reset`) is the audit trail.

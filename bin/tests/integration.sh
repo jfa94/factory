@@ -366,12 +366,184 @@ test_statusline_wait_flow() {
 }
 
 # ---------------------------------------------------------------------------
+# Post-reset stale guard: when Claude Code's last API response carried a
+# resets_at that's now in the past (window reset, no new response yet), the
+# wrapper writes a "fresh" captured_at over pre-reset rate_limits.
+# pipeline-quota-check must treat this as unavailable instead of consuming
+# the stale numbers as a valid budget reading.
+# ---------------------------------------------------------------------------
+test_post_reset_stale_yields_unavailable() {
+  new_scenario "post-reset-stale"
+
+  local now past_5h fut_7d
+  now=$(date +%s)
+  past_5h=$(( now - 120 ))            # 5h reset 2 min in the past
+  fut_7d=$(( now + 86400 ))           # 7d still in the future
+
+  # 5h post-reset, 7d in-window.
+  jq -n --argjson p "$past_5h" --argjson f "$fut_7d" --argjson n "$now" \
+    '{five_hour:{used_percentage:86,resets_at:$p},seven_day:{used_percentage:9,resets_at:$f},captured_at:($n - 30)}' \
+    > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+
+  local quota
+  quota=$(pipeline-quota-check 2>/dev/null)
+  assert_eq "5h post-reset → detection_method=unavailable" "unavailable" \
+    "$(printf '%s' "$quota" | jq -r '.detection_method')"
+  assert_eq "5h post-reset → reason=five-hour-window-reset" "five-hour-window-reset" \
+    "$(printf '%s' "$quota" | jq -r '.reason')"
+
+  # 7d post-reset, 5h in-window.
+  local fut_5h past_7d
+  fut_5h=$(( now + 1800 ))
+  past_7d=$(( now - 60 ))
+  jq -n --argjson f "$fut_5h" --argjson p "$past_7d" --argjson n "$now" \
+    '{five_hour:{used_percentage:50,resets_at:$f},seven_day:{used_percentage:50,resets_at:$p},captured_at:($n - 30)}' \
+    > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+
+  quota=$(pipeline-quota-check 2>/dev/null)
+  assert_eq "7d post-reset → detection_method=unavailable" "unavailable" \
+    "$(printf '%s' "$quota" | jq -r '.detection_method')"
+  assert_eq "7d post-reset → reason=seven-day-window-reset" "seven-day-window-reset" \
+    "$(printf '%s' "$quota" | jq -r '.reason')"
+
+  # Control: both windows in-window — should NOT trigger the new guard.
+  jq -n --argjson f "$fut_5h" --argjson g "$fut_7d" --argjson n "$now" \
+    '{five_hour:{used_percentage:50,resets_at:$f},seven_day:{used_percentage:50,resets_at:$g},captured_at:($n - 30)}' \
+    > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+
+  quota=$(pipeline-quota-check 2>/dev/null)
+  assert_eq "in-window control → detection_method=statusline" "statusline" \
+    "$(printf '%s' "$quota" | jq -r '.detection_method')"
+}
+
+# ---------------------------------------------------------------------------
+# Statusline wrapper post-reset display: when the input's resets_at is in
+# the past, the default emitter must NOT render negative time. Output the
+# "window reset pending" sentinel instead.
+# ---------------------------------------------------------------------------
+test_statusline_wrapper_post_reset_display() {
+  new_scenario "statusline-wrapper-post-reset"
+
+  local now past fut out
+  now=$(date +%s)
+  past=$(( now - 120 ))
+  fut=$(( now + 1800 ))
+
+  # Disable user-statusline chain so we exercise _emit_default.
+  out=$(FACTORY_ORIGINAL_STATUSLINE="" \
+    printf '{"model":{"display_name":"Claude Opus 4.7"},"workspace":{"current_dir":"/tmp/foo"},"rate_limits":{"five_hour":{"used_percentage":86,"resets_at":%d}}}' "$past" \
+    | "$BIN_DIR/statusline-wrapper.sh")
+  assert_eq "post-reset → reset-pending sentinel" "Claude Opus in foo | window reset pending" "$out"
+
+  out=$(FACTORY_ORIGINAL_STATUSLINE="" \
+    printf '{"model":{"display_name":"Claude Opus 4.7"},"workspace":{"current_dir":"/tmp/foo"},"rate_limits":{"five_hour":{"used_percentage":50,"resets_at":%d}}}' "$fut" \
+    | "$BIN_DIR/statusline-wrapper.sh")
+  assert_eq "in-window → normal % + time output" "Claude Opus in foo | 50% left for 0h 30m" "$out"
+}
+
+# ---------------------------------------------------------------------------
+# Non-numeric cache fields (AUDIT-1): a malformed usage-cache.json with string
+# values where numbers are expected must not crash pipeline-quota-check under
+# set -u. The documented contract is fail-closed-with-sentinel (rc=0,
+# detection_method=unavailable). Pre-fix, captured_at="abc" tripped
+# `unbound variable` and exited 1.
+# ---------------------------------------------------------------------------
+test_non_numeric_cache_fields_yield_unavailable() {
+  new_scenario "non-numeric-cache-fields"
+
+  # captured_at as string: must coerce to 0 → too-stale sentinel, rc=0.
+  local quota rc
+  jq -n '{five_hour:{used_percentage:50,resets_at:9999999999},seven_day:{used_percentage:9,resets_at:9999999999},captured_at:"abc"}' \
+    > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+  set +e
+  quota=$(pipeline-quota-check 2>/dev/null); rc=$?
+  set -e
+  assert_eq "captured_at=string → rc=0" "0" "$rc"
+  assert_eq "captured_at=string → detection_method=unavailable" "unavailable" \
+    "$(printf '%s' "$quota" | jq -r '.detection_method')"
+
+  # used_percentage as string: must route to malformed sentinel, rc=0.
+  local now fut
+  now=$(date +%s); fut=$(( now + 1800 ))
+  jq -n --argjson n "$now" --argjson f "$fut" \
+    '{five_hour:{used_percentage:"oops",resets_at:$f},seven_day:{used_percentage:9,resets_at:$f},captured_at:$n}' \
+    > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+  set +e
+  quota=$(pipeline-quota-check 2>/dev/null); rc=$?
+  set -e
+  assert_eq "used_percentage=string → rc=0" "0" "$rc"
+  assert_eq "used_percentage=string → detection_method=unavailable" "unavailable" \
+    "$(printf '%s' "$quota" | jq -r '.detection_method')"
+  assert_eq "used_percentage=string → reason=usage-cache-malformed" "usage-cache-malformed" \
+    "$(printf '%s' "$quota" | jq -r '.reason')"
+
+  # resets_at as string: must coerce to default → still emits valid output.
+  jq -n --argjson n "$now" \
+    '{five_hour:{used_percentage:50,resets_at:"never"},seven_day:{used_percentage:9,resets_at:"never"},captured_at:$n}' \
+    > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+  set +e
+  quota=$(pipeline-quota-check 2>/dev/null); rc=$?
+  set -e
+  assert_eq "resets_at=string → rc=0" "0" "$rc"
+  # detection_method should be statusline (not crashed), since coerced fallback
+  # gives a sensible future epoch.
+  assert_eq "resets_at=string → detection_method=statusline" "statusline" \
+    "$(printf '%s' "$quota" | jq -r '.detection_method')"
+}
+
+# ---------------------------------------------------------------------------
+# AUDIT-2: pipeline_quota_gate must not die under set -e when
+# pipeline-quota-check or pipeline-model-router crash. The gate must catch
+# the failure, log a quota.check action="error" metric, and return rc=2
+# (end_gracefully) so callers see a deterministic outcome.
+# ---------------------------------------------------------------------------
+test_quota_gate_catches_quota_check_crash() {
+  new_scenario "quota-gate-crash-safe"
+
+  local stub_dir run_state run_id rc
+  stub_dir="$ROOT_TMP/quota-gate-crash-safe-stubs"
+  mkdir -p "$stub_dir"
+
+  # Stub pipeline-quota-check to crash unconditionally.
+  cat > "$stub_dir/pipeline-quota-check" <<'EOF'
+#!/bin/sh
+echo "boom: simulated quota-check crash" >&2
+exit 1
+EOF
+  chmod +x "$stub_dir/pipeline-quota-check"
+
+  run_id="quota-crash-$$"
+  run_state="$CLAUDE_PLUGIN_DATA/runs/$run_id"
+  mkdir -p "$run_state"
+  printf '{"circuit_breaker":{"quota_wait_cycles":0,"quota_stale_cycles":0}}' \
+    > "$run_state/state.json"
+
+  # Run the gate with the stub PATH-prefixed so it shadows the real script.
+  set +e
+  PATH="$stub_dir:$PATH" bash -c '
+    source "'"$BIN_DIR"'/pipeline-lib.sh"
+    pipeline_quota_gate "'"$run_id"'" "feature" "test-boundary" ""
+    exit $?
+  ' >"$ROOT_TMP/quota-gate-crash.log" 2>&1
+  rc=$?
+  set -e
+
+  assert_eq "crash-safe gate returns end_gracefully" "2" "$rc"
+  assert "log mentions quota-check crash" \
+    grep -qE 'pipeline-quota-check crashed' "$ROOT_TMP/quota-gate-crash.log"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 test_spec_handoff
 test_resume_after_crash
 test_parallel_spawn
 test_statusline_wait_flow
+test_post_reset_stale_yields_unavailable
+test_statusline_wrapper_post_reset_display
+test_non_numeric_cache_fields_yield_unavailable
+test_quota_gate_catches_quota_check_crash
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
