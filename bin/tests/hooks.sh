@@ -71,9 +71,10 @@ assert_eq "force-push develop blocked" "EXIT:2" "$(printf '%s' "$output" | grep 
 
 # ============================================================
 echo ""
-echo "=== branch-protection: allows push to staging ==="
+echo "=== branch-protection: blocks push to staging (now protected) ==="
 
-assert_exit "push staging allowed" 0 bash -c 'printf "{\"tool_input\":{\"command\":\"git push origin staging\"}}" | '"$HOOKS_DIR/branch-protection.sh"
+output=$(printf '{"tool_input":{"command":"git push origin staging"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+assert_eq "push staging blocked (interactive)" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
 
 # ============================================================
 echo ""
@@ -1576,6 +1577,60 @@ assert_eq "asyncrewake-ci: wake message includes --merge-status flag" "true" \
 rm -f "$REWAKE_STUB_LOG"
 rm -rf "$rewake_stubs"
 unset REWAKE_STUB_LOG
+
+# ============================================================
+echo ""
+echo "=== branch-protection: staging allowlist (autonomous + orchestrator worktree) ==="
+
+# Create fixture: a fake repo with an orchestrator worktree dir.
+_staging_tmp=$(mktemp -d)
+mkdir -p "$_staging_tmp/repo/.git"
+mkdir -p "$_staging_tmp/repo/.claude/worktrees/orchestrator-test"
+
+# staging push from autonomous mode inside orchestrator worktree → ALLOW
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push origin staging"}}' \
+  | (cd "$_staging_tmp/repo/.claude/worktrees/orchestrator-test" && \
+     FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "staging push from orch worktree allowed" "0" "$_rc"
+
+# staging push from interactive shell → DENY
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push origin staging"}}' \
+  | (cd /tmp && bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "staging push from interactive denied" "2" "$_rc"
+assert_eq "staging deny includes push_to_protected" "true" \
+  "$(printf '%s' "$out" | grep -q 'push_to_protected' && echo true || echo false)"
+
+# staging push autonomous BUT outside orchestrator worktree → DENY
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push origin staging"}}' \
+  | (cd /tmp && FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "staging push autonomous outside orch worktree denied" "2" "$_rc"
+
+# staging force push from autonomous orch worktree → DENY (force never allowed)
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push --force origin staging"}}' \
+  | (cd "$_staging_tmp/repo/.claude/worktrees/orchestrator-test" && \
+     FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "force push to staging denied even from orch" "2" "$_rc"
+assert_eq "force deny includes force_push_protected" "true" \
+  "$(printf '%s' "$out" | grep -q 'force_push_protected' && echo true || echo false)"
+
+# develop push from autonomous orch worktree → DENY (only staging is PIPELINE_MANAGED)
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push origin develop"}}' \
+  | (cd "$_staging_tmp/repo/.claude/worktrees/orchestrator-test" && \
+     FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "develop push from orch worktree denied" "2" "$_rc"
+
+# single-quoted ref token strips correctly → DENY
+_rc=0
+out=$(printf '%s' '{"tool_input":{"command":"git push origin '"'"'staging'"'"'"}}' \
+  | (cd /tmp && bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "single-quoted staging ref denied" "2" "$_rc"
+
+rm -rf "$_staging_tmp"
 
 # ============================================================
 echo ""

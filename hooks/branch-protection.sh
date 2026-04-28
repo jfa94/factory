@@ -19,7 +19,8 @@
 #   All checks (1-7) read from those variables — no re-tokenisation.
 set -euo pipefail
 
-PROTECTED_BRANCHES=("main" "master" "develop")
+PROTECTED_BRANCHES=("main" "master" "develop" "staging")
+PIPELINE_MANAGED=("staging")  # writable from autonomous mode in orchestrator worktree
 
 # Build an alternation regex with explicit anchors so `mainly-fixes` !~ main.
 PROTECTED_RE="^($(IFS='|'; echo "${PROTECTED_BRANCHES[*]}"))$"
@@ -44,6 +45,18 @@ _block() {
 _is_protected() {
   local name="$1"
   [[ "$name" =~ $PROTECTED_RE ]]
+}
+
+# Returns 0 if the current invocation is allowed to push/write the given protected branch.
+# Conditions: FACTORY_AUTONOMOUS_MODE=1, branch in PIPELINE_MANAGED, and PWD inside an
+# orchestrator worktree (".claude/worktrees/orchestrator-*").
+_pipeline_can_write() {
+  local target="$1"
+  [[ "${FACTORY_AUTONOMOUS_MODE:-}" != "1" ]] && return 1
+  local allow=0 b
+  for b in "${PIPELINE_MANAGED[@]}"; do [[ "$target" == "$b" ]] && allow=1; done
+  (( allow == 0 )) && return 1
+  case "$PWD" in *"/.claude/worktrees/orchestrator-"*) return 0 ;; *) return 1 ;; esac
 }
 
 # ---------------------------------------------------------------------------
@@ -127,6 +140,9 @@ _parse_git_invocation() {
     # Strip surrounding double-quotes (handles `git push origin "main"`).
     tok="${tok#\"}"
     tok="${tok%\"}"
+    # Strip surrounding single-quotes (handles `git push origin 'main'`).
+    tok="${tok#\'}"
+    tok="${tok%\'}"
 
     case "$_git_subcommand" in
       push)
@@ -236,7 +252,8 @@ if [[ "$_git_subcommand" == "push" ]]; then
   current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
   if [[ -n "$current_branch" ]] && _is_protected "$current_branch"; then
     if [[ -z "$_git_dest_branch" || "$_git_dest_branch" == "$current_branch" ]]; then
-      _block "on_protected_branch" "currently on '$current_branch' — push will publish to protected"
+      _pipeline_can_write "$current_branch" || \
+        _block "on_protected_branch" "currently on '$current_branch' — push will publish to protected"
     fi
   fi
 fi
@@ -258,7 +275,8 @@ fi
 # --- Check 4: plain `git push <remote> <protected>` (or HEAD:<protected>) ---
 if [[ "$_git_subcommand" == "push" ]]; then
   if [[ -n "$_git_dest_branch" ]] && _is_protected "$_git_dest_branch"; then
-    _block "push_to_protected" "push targets protected branch '$_git_dest_branch'"
+    _pipeline_can_write "$_git_dest_branch" || \
+      _block "push_to_protected" "push targets protected branch '$_git_dest_branch'"
   fi
 fi
 
