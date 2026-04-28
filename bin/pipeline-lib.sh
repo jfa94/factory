@@ -371,10 +371,12 @@ pipeline_quota_gate() {
     return 2
   fi
 
-  local _qrc=0
-  quota=$(pipeline-quota-check 2>&1) || _qrc=$?
+  local _qrc=0 _qerr
+  _qerr=$(mktemp)
+  quota=$(pipeline-quota-check 2>"$_qerr") || _qrc=$?
   if (( _qrc != 0 )); then
-    log_warn "quota gate [$boundary_label]: pipeline-quota-check crashed (rc=$_qrc) — ending gracefully. output: $quota"
+    log_warn "quota gate [$boundary_label]: pipeline-quota-check crashed (rc=$_qrc) — ending gracefully. stderr: $(cat "$_qerr")"
+    rm -f "$_qerr"
     log_metric "quota.check" \
       "gate=\"$boundary_label\"" \
       "action=\"error\"" \
@@ -383,6 +385,7 @@ pipeline_quota_gate() {
       ${task_id_kv[@]+"${task_id_kv[@]}"}
     return 2
   fi
+  rm -f "$_qerr"
   local detection_method reason
   detection_method=$(printf '%s' "$quota" | jq -r '.detection_method // "statusline"')
   reason=$(printf '%s' "$quota" | jq -r '.reason // ""')
@@ -406,10 +409,12 @@ pipeline_quota_gate() {
     return 3
   fi
 
-  local _rrc=0
-  route=$(pipeline-model-router --quota "$quota" --tier "$tier" 2>&1) || _rrc=$?
+  local _rrc=0 _rerr
+  _rerr=$(mktemp)
+  route=$(pipeline-model-router --quota "$quota" --tier "$tier" 2>"$_rerr") || _rrc=$?
   if (( _rrc != 0 )); then
-    log_warn "quota gate [$boundary_label]: pipeline-model-router crashed (rc=$_rrc) — ending gracefully. output: $route"
+    log_warn "quota gate [$boundary_label]: pipeline-model-router crashed (rc=$_rrc) — ending gracefully. stderr: $(cat "$_rerr")"
+    rm -f "$_rerr"
     log_metric "quota.check" \
       "gate=\"$boundary_label\"" \
       "action=\"error\"" \
@@ -418,6 +423,7 @@ pipeline_quota_gate() {
       ${task_id_kv[@]+"${task_id_kv[@]}"}
     return 2
   fi
+  rm -f "$_rerr"
   action=$(printf '%s' "$route" | jq -r '.action')
 
   local util5 util7
@@ -474,9 +480,11 @@ pipeline_quota_gate() {
       # Re-check after the chunk. If clear, proceed; if stale, yield separately;
       # else yield via wait_cycles counter.
       _qrc=0
-      quota=$(pipeline-quota-check 2>&1) || _qrc=$?
+      _qerr=$(mktemp)
+      quota=$(pipeline-quota-check 2>"$_qerr") || _qrc=$?
       if (( _qrc != 0 )); then
-        log_warn "quota gate [$boundary_label]: post-wait pipeline-quota-check crashed (rc=$_qrc) — ending gracefully. output: $quota"
+        log_warn "quota gate [$boundary_label]: post-wait pipeline-quota-check crashed (rc=$_qrc) — ending gracefully. stderr: $(cat "$_qerr")"
+        rm -f "$_qerr"
         log_metric "quota.check" \
           "gate=\"$boundary_label\"" \
           "action=\"error\"" \
@@ -486,6 +494,7 @@ pipeline_quota_gate() {
           ${task_id_kv[@]+"${task_id_kv[@]}"}
         return 2
       fi
+      rm -f "$_qerr"
       detection_method=$(printf '%s' "$quota" | jq -r '.detection_method // "statusline"')
       reason=$(printf '%s' "$quota" | jq -r '.reason // ""')
 
@@ -506,9 +515,11 @@ pipeline_quota_gate() {
       fi
 
       _rrc=0
-      route=$(pipeline-model-router --quota "$quota" --tier "$tier" 2>&1) || _rrc=$?
+      _rerr=$(mktemp)
+      route=$(pipeline-model-router --quota "$quota" --tier "$tier" 2>"$_rerr") || _rrc=$?
       if (( _rrc != 0 )); then
-        log_warn "quota gate [$boundary_label]: post-wait pipeline-model-router crashed (rc=$_rrc) — ending gracefully. output: $route"
+        log_warn "quota gate [$boundary_label]: post-wait pipeline-model-router crashed (rc=$_rrc) — ending gracefully. stderr: $(cat "$_rerr")"
+        rm -f "$_rerr"
         log_metric "quota.check" \
           "gate=\"$boundary_label\"" \
           "action=\"error\"" \
@@ -518,6 +529,7 @@ pipeline_quota_gate() {
           ${task_id_kv[@]+"${task_id_kv[@]}"}
         return 2
       fi
+      rm -f "$_rerr"
       action=$(printf '%s' "$route" | jq -r '.action')
 
       log_metric "quota.check" \

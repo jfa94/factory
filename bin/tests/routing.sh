@@ -160,6 +160,7 @@ assert_eq "seven_day.daily_threshold" "57" "$(printf '%s' "$output" | jq -r '.se
 assert_eq "seven_day.over_threshold" "false" "$(printf '%s' "$output" | jq -r '.seven_day.over_threshold')"
 assert_eq "seven_day.resets_at_epoch" "1776124800" "$(printf '%s' "$output" | jq -r '.seven_day.resets_at_epoch')"
 assert_eq "detection_method=statusline" "statusline" "$(printf '%s' "$output" | jq -r '.detection_method')"
+assert_eq "success-path emits captured_at" "1775822390" "$(printf '%s' "$output" | jq -r '.captured_at')"
 
 # Over-threshold: five_hour.used_percentage=95 → 95 > 20 (window_hour=1) → over_threshold=true
 _over_fixture='{

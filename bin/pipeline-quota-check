@@ -193,6 +193,7 @@ jq -n \
   --argjson seven_day_over "$seven_day_over" \
   --argjson window_day     "$window_day" \
   --argjson resets_7d_epoch "$resets_7d_epoch" \
+  --argjson captured_at    "$captured_at" \
   '{
     five_hour: {
       utilization: $five_hour,
@@ -208,5 +209,6 @@ jq -n \
       window_day: $window_day,
       resets_at_epoch: $resets_7d_epoch
     },
-    detection_method: "statusline"
+    detection_method: "statusline",
+    captured_at: $captured_at
   }'

@@ -132,6 +132,74 @@ assert_eq "stale_cycles==cap → exit 2" "2" "$rc"
 unset FACTORY_QUOTA_GATE_MAX_STALE_CYCLES
 
 # ============================================================
+# Real-script regressions (F1): exercise the gate against the actual
+# pipeline-quota-check / pipeline-model-router on PATH so stderr-side
+# log_warn is exercised alongside the stdout JSON contract. Stub-only
+# tests above can't catch a 2>&1 contamination of the cmdsubst capture.
+# ============================================================
+echo ""
+echo "=== pipeline_quota_gate: real script + missing cache → wait_retry ==="
+
+_reset_scratch run-real-unavailable
+# Do NOT install a pipeline-quota-check stub; PATH falls through to the
+# real bin/pipeline-quota-check which emits a sentinel + log_warn.
+rm -f "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+# Capture-style router stub: touches a sentinel file iff invoked, returns
+# proceed (so a buggy gate that falls through to the router would log a
+# false-secure success rather than crash).
+cat > "$MOCKS/pipeline-model-router" <<'STUB'
+#!/usr/bin/env bash
+mocks_dir="$(dirname "$0")"
+touch "$mocks_dir/_router_called"
+printf '{"action":"proceed","provider":"anthropic"}'
+STUB
+chmod +x "$MOCKS/pipeline-model-router"
+
+set +e; pipeline_quota_gate run-real-unavailable feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "real-script unavailable → exit 3 (wait_retry)" "3" "$rc"
+router_called="false"; [[ -f "$MOCKS/_router_called" ]] && router_called="true"
+assert_eq "real-script unavailable → router NOT called" "false" "$router_called"
+stale=$(pipeline-state read run-real-unavailable '.circuit_breaker.quota_stale_cycles' 2>/dev/null)
+assert_eq "real-script unavailable → quota_stale_cycles=1" "1" "$stale"
+
+# ============================================================
+echo ""
+echo "=== pipeline_quota_gate: real script + 121s-stale-but-valid → router gets clean JSON ==="
+
+_reset_scratch run-real-stale-warn
+# 121s-stale fixture: triggers the >120s log_warn in pipeline-quota-check
+# while still emitting a valid statusline JSON on stdout. With the F1 bug,
+# 2>&1 capture taints the cmdsubst result and the router receives garbage.
+now=$(date +%s)
+jq -n --argjson n "$now" \
+  '{five_hour:{used_percentage:30,resets_at:($n + 1800)},
+    seven_day:{used_percentage:5,resets_at:($n + 86400)},
+    captured_at:($n - 121)}' \
+  > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+
+# Capture-style router stub: persists --quota argument for inspection.
+cat > "$MOCKS/pipeline-model-router" <<'STUB'
+#!/usr/bin/env bash
+mocks_dir="$(dirname "$0")"
+quota=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --quota) quota="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s' "$quota" > "$mocks_dir/_router_quota_arg"
+printf '{"action":"proceed","provider":"anthropic"}'
+STUB
+chmod +x "$MOCKS/pipeline-model-router"
+
+set +e; pipeline_quota_gate run-real-stale-warn feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "real-script 121s-stale → exit 0" "0" "$rc"
+router_quota=$(cat "$MOCKS/_router_quota_arg" 2>/dev/null || printf '')
+det=$(printf '%s' "$router_quota" | jq -r '.detection_method' 2>/dev/null || printf '')
+assert_eq "router received clean JSON (detection_method=statusline)" "statusline" "$det"
+
+# ============================================================
 echo ""
 echo "=== pipeline_quota_gate: proceed resets stale_cycles ==="
 
