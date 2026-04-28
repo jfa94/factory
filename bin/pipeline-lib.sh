@@ -721,7 +721,7 @@ task_tdd_exempt() {
   local tfile flag
   for tfile in "${spec_dir:+$spec_dir/tasks.json}" specs/current/tasks.json; do
     [[ -z "$tfile" || ! -f "$tfile" ]] && continue
-    flag=$(jq -r --arg id "$task_id" '.tasks[]? | select(.id==$id) | .tdd_exempt // false' "$tfile" 2>/dev/null || true)
+    flag=$(jq -r --arg id "$task_id" '.tasks[]? | select(.task_id==$id) | .tdd_exempt // false' "$tfile" 2>/dev/null || true)
     [[ "$flag" == "true" ]] && return 0
   done
   if [[ -f package.json ]]; then

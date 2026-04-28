@@ -541,7 +541,7 @@ pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >
 spec_dir="$ROOT_TMP/$current-spec"
 mkdir -p "$spec_dir"
 cat > "$spec_dir/tasks.json" <<'EOF'
-{"tasks":[{"id":"alpha-001","tdd_exempt":true}]}
+{"tasks":[{"task_id":"alpha-001","tdd_exempt":true}]}
 EOF
 pipeline-state write "$RUN_ID" .spec.path "\"$spec_dir\"" >/dev/null
 wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"

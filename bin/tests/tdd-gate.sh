@@ -74,7 +74,7 @@ case4() {
   local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
   mkdir -p "$repo/specs/current"
   cat > "$repo/specs/current/tasks.json" <<JSON
-{"tasks":[{"id":"task-001","tdd_exempt":true}]}
+{"tasks":[{"task_id":"task-001","tdd_exempt":true}]}
 JSON
   ( cd "$repo" && git add specs && git -c user.email=t@t -c user.name=t commit -q -m "spec" )
   _commit "$repo" "feat(x): impl [task-001]" "src/x.ts"
@@ -86,6 +86,24 @@ JSON
   printf '%s' "$out" | jq -e '.exempt == true' >/dev/null \
     || fail "case4 expected exempt=true in JSON"
   pass "case4: tdd_exempt flag respected"
+}
+
+case4b() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  mkdir -p "$repo/specs/current"
+  cat > "$repo/specs/current/tasks.json" <<JSON
+{"tasks":[{"task_id":"task-001","tdd_exempt":true}]}
+JSON
+  ( cd "$repo" && git add specs && git -c user.email=t@t -c user.name=t commit -q -m "spec" )
+  _commit "$repo" "feat(x): impl [task-001]" "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-001 --base staging --spec-dir specs/current )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case4b expected exit 0, got $rc"; fi
+  printf '%s' "$out" | jq -e '.exempt == true' >/dev/null \
+    || fail "case4b: tdd_exempt with .task_id schema not honored"
+  pass "case4b: tdd_exempt respected with canonical .task_id schema"
 }
 
 case5() {
@@ -331,7 +349,7 @@ case_b3_merge_with_impl() {
   pass "case_b3_merge_with_impl: merge bringing impl files counted as impl (gate fails)"
 }
 
-case1; case2; case3; case4; case5; case6; case7; case8
+case1; case2; case3; case4; case4b; case5; case6; case7; case8
 case_go_test; case_ruby_spec; case_java_test; case_kotlin_test
 case_python_test; case_swift_tests; case_csharp_tests; case_go_impl_rejected
 case_b3_merge_with_tests; case_b3_merge_with_impl
