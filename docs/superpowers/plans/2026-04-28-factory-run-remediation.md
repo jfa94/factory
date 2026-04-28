@@ -1682,10 +1682,10 @@ Single commit per cleanup; total ~5 commits.
 
 ---
 
-## Open questions for you
+## Open questions — RESOLVED 2026-04-28
 
-1. **Force-push policy**: `pipeline-wait-pr` rebase relies on `--force-with-lease`. CLAUDE.md prohibits it. Two options: (a) drop the auto-rebase entirely (Task 4.6 default), or (b) carve a CLAUDE.md exception for pipeline-managed feature branches. Which?
-2. **Empty-diff verdict**: Task 3.7 makes empty diff `REQUEST_CHANGES`. Alternative: `NEEDS_DISCUSSION` (auto-escalate to human). Preference?
-3. **`tdd_exempt` test fixtures**: Task 1.1 rewrites `bin/tests/tdd-gate.sh:77` to canonical `task_id`. Should the buggy `id` schema be supported as a backward-compat alias, or hard-rejected?
-4. **Phase order**: Phase 1 (correctness) before Phase 2 (security) — but the prompt-injection vector (#4) is the path that turns the unprotected-staging gap (#5) into RCE. Reorder Phase 2.1 + 2.2 ahead of Phase 1 if security is the higher priority.
-5. **Architecture review**: factory:architecture-reviewer stalled at 600s. Re-dispatch before merging Phase 1, or defer until after Phase 2 hardening?
+1. **Force-push policy** — RESOLVED: drop force-push entirely. Replace auto-rebase with **merge staging → task branch** when drift detected. Ladder: (a) `git merge --ff-only origin/staging` first, (b) `git merge origin/staging --no-edit` on diverged history, (c) on conflict: `git merge --abort`, mark task `task_terminal_failed` reason=`merge_conflict_with_staging`, return 30 — orchestrator drops task, run continues. No human escalation, no CLAUDE.md violation. Tradeoff: merge commits in PR history (acceptable). **Replaces Task 4.6.**
+2. **Empty-diff verdict** — RESOLVED: agent classifies + decides. Reviewer-gate decision tree: (a) re-resolve base (origin/staging at task-start vs current HEAD); if base moved, re-diff against original. (b) If commits exist but tree identical: mark `task_terminal_failed` reason=`no_changes_introduced`, return 30. (c) If no commits at all: `task_terminal_failed` reason=`no_commits`, return 30. Orchestrator skips task, run continues. No human escalation. **Updates Task 3.7.**
+3. **`tdd_exempt` test fixtures** — RESOLVED: hard-reject `.id`. No backcompat alias. Shipped in `bb06890`.
+4. **Phase order** — RESOLVED: Phase 1 shipped first (already done). Phase 2 (security) next.
+5. **Architecture review** — RESOLVED: re-dispatched against Phase 1 head; APPROVED with one non-blocking concern. Fixed in Phase 1.6 (commit `077f18a`): hook resets `.scribe.attempts=0` on `status="done"`.
