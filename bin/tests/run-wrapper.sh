@@ -865,5 +865,40 @@ case "$1 $2" in
   *) exit 0 ;;
 esac'
 
+# --- 38: ship — gh pr create failure surfaces stderr in failure_reason -------
+new_run ship-pr-fail
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+write_stub pipeline-branch '
+case "$1" in
+  task-commit) exit 0 ;;
+  task-pr-title) echo "Test PR title" ;;
+  *) exit 0 ;;
+esac'
+write_stub gh '
+case "$1 $2" in
+  "pr create") printf "GraphQL: pull request already exists\n" >&2; exit 1 ;;
+  *) exit 0 ;;
+esac'
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage ship 2>/dev/null; RC=$?; set -e
+assert_eq "ship-pr-fail: exit 30" "30" "$RC"
+fr=$(pipeline-state task-read "$RUN_ID" alpha-001 failure_reason 2>/dev/null)
+case "$fr" in
+  *"gh pr create failed"*) pass "ship-pr-fail: failure_reason contains 'gh pr create failed'" ;;
+  *) fail "ship-pr-fail: failure_reason contains 'gh pr create failed' (got=$fr)" ;;
+esac
+case "$fr" in
+  *"pull request already exists"*) pass "ship-pr-fail: failure_reason contains stderr text" ;;
+  *) fail "ship-pr-fail: failure_reason contains stderr text (got=$fr)" ;;
+esac
+# restore stubs
+write_stub pipeline-branch 'exit 0'
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

@@ -1118,14 +1118,24 @@ _stage_ship() {
 
   _write_ship_checklist
 
-  local pr_url pr_number pr_title
+  local pr_url pr_number pr_title _gh_err
   pr_title=$(pipeline-branch task-pr-title "$task_id" --run-id "$run_id")
-  pr_url=$(cd "$wt" && gh pr create --base staging --title "$pr_title" --body "Automated task PR for $task_id in run $run_id." 2>/dev/null || true)
+  _gh_err=$(mktemp)
+  pr_url=$(cd "$wt" && gh pr create --base staging --title "$pr_title" \
+    --body "Automated task PR for $task_id in run $run_id." 2>"$_gh_err") || pr_url=""
+  if [[ -z "$pr_url" ]]; then
+    local err_text; err_text=$(<"$_gh_err"); rm -f "$_gh_err"
+    log_error "gh pr create failed for $task_id: ${err_text:-no stderr captured}"
+    _task_write failure_reason "$(jq -Rs . <<<"gh pr create failed: ${err_text:0:500}")"
+    t1=$(_now_ms); log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"gh_pr_create\""
+    return 30
+  fi
+  rm -f "$_gh_err"
   pr_number=$(printf '%s' "$pr_url" | grep -oE '[0-9]+$' || printf '')
   if [[ -z "$pr_number" ]]; then
-    log_error "gh pr create returned no PR number"
-    t1=$(_now_ms)
-    log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\""
+    log_error "gh pr create returned non-numeric URL: $pr_url"
+    _task_write failure_reason "$(jq -Rs . <<<"gh pr create returned non-numeric URL: $pr_url")"
+    t1=$(_now_ms); log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"gh_pr_url_malformed\""
     return 30
   fi
   _task_write pr_number "$pr_number"
