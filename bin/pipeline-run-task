@@ -1247,9 +1247,26 @@ _stage_finalize_run() {
     return 3
   fi
 
-  local scribe_done
-  scribe_done=$(pipeline-state read "$run_id" '.scribe.status // ""' 2>/dev/null || printf '')
-  if [[ "$scribe_done" != "done" ]]; then
+  local scribe_state
+  scribe_state=$(pipeline-state read "$run_id" '.scribe.status // "pending"' 2>/dev/null | tr -d '"')
+
+  if [[ "$scribe_state" == "spawned" ]]; then
+    # Spawned previously; SubagentStop hook should advance to done|failed.
+    # If we still see "spawned" on re-entry, the hook failed — cap re-spawns.
+    local scribe_attempts
+    scribe_attempts=$(pipeline-state read "$run_id" '.scribe.attempts // 0' 2>/dev/null)
+    if (( scribe_attempts >= 2 )); then
+      log_error "finalize-run: scribe re-spawn cap hit (attempts=$scribe_attempts)"
+      pipeline-state write "$run_id" '.scribe.status' '"failed"' >/dev/null
+      pipeline-state write "$run_id" '.scribe.failure_reason' '"hook_did_not_terminate"' >/dev/null
+      t1=$(_now_ms); log_step_end "finalize-run" "failed" "$((t1-t0))" "reason=\"scribe_loop\""
+      return 30
+    fi
+    pipeline-state write "$run_id" '.scribe.attempts' "$((scribe_attempts + 1))" >/dev/null
+    scribe_state="pending"
+  fi
+
+  if [[ "$scribe_state" != "done" ]]; then
     _ensure_prompt_dir
     local pf="$run_dir/.state/$run_id/RUN.scribe-prompt.md"
     printf 'Update /docs based on git diff for run %s.\nEnd with STATUS:.\n' "$run_id" > "$pf"

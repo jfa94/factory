@@ -112,7 +112,12 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
 fi
 
 if [[ "$agent_type" == "scribe" ]]; then
-  pipeline-state write "$run_id" '.scribe.status' "\"$( [[ "$status" == "DONE" || "$status" == "DONE_WITH_CONCERNS" ]] && echo done || echo failed )\"" >/dev/null 2>&1 || true
+  scribe_status=$( [[ "$status" == "DONE" || "$status" == "DONE_WITH_CONCERNS" ]] && echo done || echo failed )
+  if ! pipeline-state write "$run_id" '.scribe.status' "\"$scribe_status\"" 2>/dev/null; then
+    printf '[subagent-stop-transcript] ERROR: failed to write scribe.status=%s for run %s\n' \
+      "$scribe_status" "$run_id" >&2
+    exit 1
+  fi
 fi
 
 # --- 6. Emit metric ---

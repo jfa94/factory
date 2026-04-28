@@ -832,5 +832,36 @@ case "$1 $2" in
   *) exit 0 ;;
 esac'
 
+# --- 37: finalize-run — scribe loop cap (state stuck on "spawned") ---
+new_run finalize-scribe-loop
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '888' >/dev/null
+pipeline-state write "$RUN_ID" '.final_pr.pr_url' '"https://example/1"' >/dev/null
+pipeline-state write "$RUN_ID" '.scribe.status' '"spawned"' >/dev/null
+pipeline-state write "$RUN_ID" '.scribe.attempts' '2' >/dev/null
+write_stub gh '
+case "$*" in
+  "pr view 888 --json state,mergeCommit,headRefOid")
+    printf '"'"'{"state":"MERGED","mergeCommit":{"oid":"deadbeef"},"headRefOid":"deadbeef"}'"'"' ;;
+  *) exit 0 ;;
+esac'
+write_stub git '
+case "$*" in
+  "fetch origin staging --quiet") exit 0 ;;
+  "merge-base --is-ancestor "*) exit 0 ;;
+  *) exec /usr/bin/git "$@" ;;
+esac'
+set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run 2>/dev/null; RC=$?; set -e
+assert_eq "finalize-scribe-loop: exit 30" "30" "$RC"
+status=$(pipeline-state read "$RUN_ID" '.scribe.status' 2>/dev/null | tr -d '"')
+assert_eq "finalize-scribe-loop: scribe.status=failed" "failed" "$status"
+rm -f "$STUB_DIR/gh" "$STUB_DIR/git"
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
