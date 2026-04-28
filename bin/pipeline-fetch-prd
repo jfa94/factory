@@ -62,14 +62,20 @@ if [[ "$has_prd" == "false" ]]; then
   log_warn "issue $issue has no [PRD] marker in title or labels — proceeding anyway"
 fi
 
-# Output structured JSON
+# Output structured JSON (body capped at 64 KB to prevent DoS / prompt injection)
+MAX_BODY_BYTES=$((64 * 1024))
 printf '%s' "$raw" | jq \
   --argjson issue_number "$issue" \
   --argjson has_prd "$has_prd" \
+  --argjson max_bytes "$MAX_BODY_BYTES" \
   '{
     issue_number: $issue_number,
     title: .title,
-    body: .body,
+    body: (if (.body | length) > $max_bytes
+           then (.body[0:$max_bytes]) + "\n\n[...truncated by pipeline-fetch-prd at \($max_bytes) bytes...]"
+           else .body
+           end),
+    body_truncated: ((.body | length) > $max_bytes),
     labels: [.labels[].name],
     assignees: [.assignees[].login],
     has_prd_marker: $has_prd

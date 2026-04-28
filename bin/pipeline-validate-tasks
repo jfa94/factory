@@ -90,6 +90,13 @@ if [[ "$dangling_count" -gt 0 ]]; then
   errors+=("dangling depends_on references: $dangling_list")
 fi
 
+# Reject task descriptions containing control chars, shell-metas, or leading --.
+# These are common prompt-injection / shell-injection vectors after slug truncation.
+bad_desc=$(jq -r '[.[] | select(.description | test("^\\s*--|`|\\$\\(|[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]"))] | length' "$tasks_file" 2>/dev/null || printf '0')
+if (( bad_desc > 0 )); then
+  errors+=("$bad_desc task(s) have unsafe description (control chars / shell metas / leading --)")
+fi
+
 # Bail on field errors before graph algorithms
 if [[ ${#errors[@]} -gt 0 ]]; then
   errors_json=$(printf '%s\n' "${errors[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')
