@@ -824,9 +824,30 @@ _stage_postreview() {
     if [[ "$f" == *.json ]]; then
       # Already-normalized verdict JSON (e.g. pipeline-codex-review output, which
       # runs validate_findings internally before writing the file).
+      # SECURITY: require generator stamp to confirm provenance. Unstamped .json
+      # review files (forged by prompt-injection or compromised reviewer) are
+      # routed through pipeline-parse-review, which validates findings against
+      # the diff and rejects fabricated verbatim_lines.
       verdict=$(cat "$f") || { log_warn "read failed on $f"; any_changes=true; continue; }
-      if ! printf '%s' "$verdict" | jq -e 'has("verdict") or has("decision")' >/dev/null 2>&1; then
-        log_warn "normalized review missing .verdict/.decision field: $f"; any_changes=true; continue
+      local _gen
+      _gen=$(printf '%s' "$verdict" | jq -r '.generator // ""' 2>/dev/null)
+      if [[ "$_gen" != "pipeline-codex-review-v1" ]]; then
+        log_warn "review file $f has no recognized generator stamp; routing through parse-review task_id=\"$task_id\""
+        if [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
+          local base_ref
+          base_ref=$(_resolve_base_ref "$pr_wt")
+          if [[ -z "$base_ref" ]]; then
+            log_warn "postreview: base ref not found — treating $f as REQUEST_CHANGES task_id=\"$task_id\""
+            any_changes=true; continue
+          fi
+          verdict=$(cd "$pr_wt" && pipeline-parse-review --base "$base_ref" < "$f") \
+            || { log_warn "parse-review failed on $f"; any_changes=true; continue; }
+        else
+          verdict=$(pipeline-parse-review < "$f") \
+            || { log_warn "parse-review failed on $f"; any_changes=true; continue; }
+        fi
+      elif ! printf '%s' "$verdict" | jq -e 'has("verdict")' >/dev/null 2>&1; then
+        log_warn "stamped review missing .verdict: $f"; any_changes=true; continue
       fi
     elif [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
       local base_ref

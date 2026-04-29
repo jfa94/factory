@@ -63,6 +63,7 @@ if [[ -z "$diff_output" ]]; then
   # Emit an auto-approve for empty diffs
   jq -n \
     --arg task_id "$task_id" \
+    --arg generator "pipeline-codex-review-v1" \
     '{
       verdict: "APPROVE",
       round: 1,
@@ -76,7 +77,8 @@ if [[ -z "$diff_output" ]]; then
       holdout_passed: 0,
       holdout_failed: 0,
       summary: "No diff to review.",
-      reviewer: "codex"
+      reviewer: "codex",
+      generator: $generator
     }'
   exit 0
 fi
@@ -210,6 +212,7 @@ jq -r '
     holdout_passed: 0,
     holdout_failed: 0,
     summary: (.overall_explanation // ""),
-    reviewer: "codex"
+    reviewer: "codex",
+    generator: "pipeline-codex-review-v1"
   }
 ' "$out_file" | validate_findings "$diff_file"
