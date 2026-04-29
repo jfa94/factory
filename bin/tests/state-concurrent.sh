@@ -18,26 +18,29 @@ cat > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json" <<EOF
 }
 EOF
 
-# Fire N concurrent appends
-for i in 1 2 3 4 5; do
+# Fire N concurrent appends. Use 30 — high enough to expose lost-write races
+# under a broken lock, low enough that mkdir-based serialisation finishes
+# within the 10s lock timeout.
+N=30
+for i in $(seq 1 $N); do
   ( pipeline-state task-array-append "$RUN_ID" t1 review_files "\"file$i.json\"" >/dev/null ) &
 done
 wait
 
-# All five should be present
-result=$(jq -r '.tasks.t1.review_files | sort | join(",")' "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json")
-expected="file1.json,file2.json,file3.json,file4.json,file5.json"
+# All N should be present
+result=$(jq -r '.tasks.t1.review_files | sort_by(. | capture("file(?<n>[0-9]+)\\.json").n | tonumber) | join(",")' "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json")
+expected=$(seq 1 $N | awk '{printf "file%s.json", $0}{if(NR<'$N'){printf ","}}')
 if [[ "$result" != "$expected" ]]; then
   printf 'FAIL: expected %s, got %s\n' "$expected" "$result" >&2
   exit 1
 fi
-printf 'PASS: 5 concurrent task-array-append calls retained all entries\n'
+printf 'PASS: %d concurrent task-array-append calls retained all entries\n' "$N"
 
 # Idempotency: repeated append of the same value should not duplicate
 pipeline-state task-array-append "$RUN_ID" t1 review_files '"file1.json"' >/dev/null
 count=$(jq -r '.tasks.t1.review_files | length' "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json")
-if [[ "$count" != "5" ]]; then
-  printf 'FAIL: expected 5 unique, got %s\n' "$count" >&2
+if [[ "$count" != "$N" ]]; then
+  printf 'FAIL: expected %d unique, got %s\n' "$N" "$count" >&2
   exit 1
 fi
 printf 'PASS: idempotent append (unique semantics)\n'
