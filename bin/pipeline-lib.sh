@@ -763,12 +763,10 @@ load_prompt() {
     log_error "missing prompt template: $stage (looked in $tmpl_dir)"
     return 1
   fi
-  # Prefer envsubst when available; fall back to pure-bash substituter.
-  if command -v envsubst >/dev/null 2>&1; then
-    envsubst < "$tmpl_file"
-  else
-    _envsubst_bash < "$tmpl_file"
-  fi
+  # Always use the bash substituter — it enforces an allowlist of variables
+  # that templates may reference. The system `envsubst` would expand any
+  # exported variable (PATH, HOME, secrets, etc.) and bypass the allowlist.
+  _envsubst_bash < "$tmpl_file"
 }
 
 # Allowed variables that prompt templates may reference. Anything else is
