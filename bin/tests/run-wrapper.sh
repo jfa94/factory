@@ -1167,5 +1167,47 @@ else
 fi
 write_stub pipeline-parse-review 'cat'
 
+# --- 51: Task 5.1 Step 1 — finalize-run reuses existing PR from gh pr list ---
+# When `gh pr list` returns an existing open PR, finalize must not re-create it
+# and must succeed (no collision, status=done, .final_pr.pr_url set from list).
+new_run finalize-existing-pr
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '999' >/dev/null
+pipeline-state write "$RUN_ID" .scribe.status '"done"' >/dev/null
+write_stub gh '
+case "$*" in
+  "pr list --base develop --head staging --state open --json url,number")
+    printf "[{\"url\":\"https://github.com/acme/repo/pull/5151\",\"number\":5151}]" ;;
+  "pr create "*) echo "DUPLICATE_PR_CREATE_CALLED" >&2; exit 1 ;;
+  "pr view 999 --json state,mergeCommit,headRefOid")
+    printf "{\"state\":\"MERGED\",\"mergeCommit\":{\"oid\":\"cafef00d\"},\"headRefOid\":\"cafef00d\"}" ;;
+  *) exit 0 ;;
+esac'
+write_stub git '
+case "$*" in
+  "fetch origin staging --quiet") exit 0 ;;
+  "merge-base --is-ancestor "*) exit 0 ;;
+  *) exec /usr/bin/git "$@" ;;
+esac'
+set +e; ERR=$(pipeline-run-task "$RUN_ID" RUN --stage finalize-run 2>&1 >/dev/null); RC=$?; set -e
+assert_eq "finalize-existing-pr: exit 0" "0" "$RC"
+status=$(pipeline-state read "$RUN_ID" '.status' 2>/dev/null | tr -d '"')
+assert_eq "finalize-existing-pr: status=done" "done" "$status"
+final_url=$(pipeline-state read "$RUN_ID" '.final_pr.pr_url' 2>/dev/null | tr -d '"')
+assert_eq "finalize-existing-pr: final_pr.pr_url adopted from list" \
+  "https://github.com/acme/repo/pull/5151" "$final_url"
+if printf '%s' "$ERR" | grep -q "DUPLICATE_PR_CREATE_CALLED"; then
+  fail "finalize-existing-pr: gh pr create must NOT be invoked when list returns existing"
+else
+  pass "finalize-existing-pr: gh pr create skipped when existing PR found"
+fi
+rm -f "$STUB_DIR/gh" "$STUB_DIR/git"
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

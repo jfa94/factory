@@ -1071,6 +1071,73 @@ assert_eq "atomic_write repeated calls no tmp leftovers" "0" "$leftover"
 rm -rf "$aw_dir"
 
 echo ""
+echo "=== task_5_1_step_6: atomic_write crash-consistency (kill -9) ==="
+
+# Verifies atomic_write never leaves the target in a partial/corrupt state when
+# the writing process is SIGKILLed mid-call. After each kill, target content
+# must be EITHER the prior committed value OR the full new value — never both
+# truncated. Large payload widens the kill window.
+
+cc_dir=$(mktemp -d)
+cc_target="$cc_dir/state.json"
+prior='{"version":"prior","payload":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}'
+# ~64KB new payload — large enough that mv-rename window is observable.
+new_blob=$(printf 'B%.0s' $(seq 1 65536))
+new_content="{\"version\":\"new\",\"payload\":\"$new_blob\"}"
+
+# Seed prior committed value via atomic_write (durable baseline).
+atomic_write "$cc_target" "$prior"
+[[ -s "$cc_target" ]] || { echo "FAIL: crash-consistency seed missing"; exit 1; }
+
+cc_iters=20
+cc_partial=0
+cc_kept_prior=0
+cc_kept_new=0
+
+for i in $(seq 1 "$cc_iters"); do
+  # Spawn atomic_write in subshell; SIGKILL after a short randomized delay.
+  (
+    # shellcheck disable=SC1090
+    source "$(dirname "$0")/../pipeline-lib.sh"
+    atomic_write "$cc_target" "$new_content"
+  ) &
+  cc_pid=$!
+  # Sleep a sub-ms-to-ms window then SIGKILL (no-op if already exited).
+  python3 -c "import time,random; time.sleep(random.uniform(0, 0.005))" 2>/dev/null \
+    || sleep 0
+  kill -9 "$cc_pid" 2>/dev/null || true
+  wait "$cc_pid" 2>/dev/null || true
+
+  # Target must still exist (mv is atomic on POSIX).
+  if [[ ! -e "$cc_target" ]]; then
+    echo "FAIL: crash-consistency iter=$i target vanished"; exit 1
+  fi
+  cur=$(cat "$cc_target")
+  if [[ "$cur" == "$prior" ]]; then
+    cc_kept_prior=$((cc_kept_prior + 1))
+  elif [[ "$cur" == "$new_content" ]]; then
+    cc_kept_new=$((cc_kept_new + 1))
+    # Once new is committed, treat it as the new "prior" baseline.
+    prior="$new_content"
+  else
+    cc_partial=$((cc_partial + 1))
+    echo "FAIL: crash-consistency iter=$i partial/corrupt content (len=${#cur})"
+  fi
+done
+
+assert_eq "atomic_write crash-consistency: zero partial/corrupt observations" "0" "$cc_partial"
+# At least one iteration must reach an outcome (sanity: loop ran).
+total=$((cc_kept_prior + cc_kept_new))
+assert_eq "atomic_write crash-consistency: every iter resolved to a valid state" "$cc_iters" "$total"
+
+# Tmp siblings may remain when SIGKILL preempted before mv — those are not
+# durable state. Crash-consistency property is target-content integrity, which
+# is asserted above. We do not require zero tmp leftovers here because the
+# mktemp-then-write phase is non-resumable under SIGKILL by definition.
+
+rm -rf "$cc_dir"
+
+echo ""
 echo "=== pipeline-lib.sh utilities ==="
 
 slug=$(slugify "Hello World -- Test 123!")
