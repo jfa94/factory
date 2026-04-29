@@ -1374,7 +1374,7 @@ _stage_finalize_run() {
     printf 'Update /docs based on git diff for run %s.\nEnd with STATUS:.\n' "$run_id" > "$pf"
     local agents_json
     agents_json=$(jq -cn --arg pf "$pf" \
-      '[{subagent_type:"scribe", model:"sonnet", maxTurns:40, prompt_file:$pf}]')
+      '[{subagent_type:"scribe", isolation:"worktree", model:"sonnet", maxTurns:40, prompt_file:$pf}]')
     pipeline-state write "$run_id" '.scribe.status' '"spawned"' >/dev/null \
       || log_warn "scribe.status spawned write failed (non-fatal; cap counter may not tick)"
     _emit_manifest finalize-run "$agents_json"
