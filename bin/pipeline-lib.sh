@@ -697,6 +697,22 @@ compute_daily_threshold() {
 # BD-scope helpers — added by Subagent BD [code-review]
 # ============================================================
 
+# Resolve a usable base ref in <git_dir>: prefers local `staging`, falls back
+# to `origin/staging`. Prints the ref name on success and returns 0; prints
+# nothing and returns 1 when neither ref exists. Callers MUST check rc — an
+# empty stdout alone cannot be distinguished from a captured-stderr glitch.
+resolve_base_ref() {
+  local git_dir="$1"
+  if git -C "$git_dir" rev-parse --verify staging >/dev/null 2>&1; then
+    printf 'staging'
+    return 0
+  elif git -C "$git_dir" rev-parse --verify origin/staging >/dev/null 2>&1; then
+    printf 'origin/staging'
+    return 0
+  fi
+  return 1
+}
+
 # Classify a file path as a test file (return 0) or not (return 1).
 # Covers: *.test.*, *.spec.*, *_test.*, *Test.*, *Tests.*, *_spec.rb,
 # and directory-based patterns: tests/**, test/**, spec/**, **/__tests__/**

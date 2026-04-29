@@ -8,6 +8,26 @@
 #   1 — blocked (autonomous mode only, missing STATUS or zero commits)
 set -euo pipefail
 
+# Source pipeline-lib.sh for shared helpers (resolve_base_ref, etc.). Best-
+# effort: hooks must keep functioning when CLAUDE_PLUGIN_ROOT is unset (e.g.
+# tests). A minimal local fallback is defined below if the lib is missing.
+_lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$_lib" ]]; then
+  # shellcheck disable=SC1090
+  source "$_lib" 2>/dev/null || true
+fi
+if ! declare -F resolve_base_ref >/dev/null 2>&1; then
+  resolve_base_ref() {
+    local git_dir="$1"
+    if git -C "$git_dir" rev-parse --verify staging >/dev/null 2>&1; then
+      printf 'staging'; return 0
+    elif git -C "$git_dir" rev-parse --verify origin/staging >/dev/null 2>&1; then
+      printf 'origin/staging'; return 0
+    fi
+    return 1
+  }
+fi
+
 # Check for active run
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
 if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
@@ -106,25 +126,13 @@ if [[ "$autonomous" == "1" ]]; then
         log_output=""
         git_dir="${worktree:-}"
         if [[ -n "$git_dir" && -d "$git_dir" ]]; then
-          base_ref=""
-          if git -C "$git_dir" rev-parse --verify staging >/dev/null 2>&1; then
-            base_ref="staging"
-          elif git -C "$git_dir" rev-parse --verify origin/staging >/dev/null 2>&1; then
-            base_ref="origin/staging"
-          fi
-          if [[ -n "$base_ref" ]]; then
+          if base_ref=$(resolve_base_ref "$git_dir"); then
             log_output=$(git -C "$git_dir" log --oneline "$base_ref..$branch" 2>/dev/null || true)
           else
             block_reason="Cannot verify commits: neither local staging nor origin/staging exists. Fetch staging or create it before running the pipeline."
           fi
         else
-          base_ref=""
-          if git rev-parse --verify staging >/dev/null 2>&1; then
-            base_ref="staging"
-          elif git rev-parse --verify origin/staging >/dev/null 2>&1; then
-            base_ref="origin/staging"
-          fi
-          if [[ -n "$base_ref" ]]; then
+          if base_ref=$(resolve_base_ref "."); then
             log_output=$(git log --oneline "$base_ref..$branch" 2>/dev/null || true)
           else
             block_reason="Cannot verify commits: neither local staging nor origin/staging exists. Fetch staging or create it before running the pipeline."
@@ -240,13 +248,7 @@ case "$agent_type" in
         log_output=""
         git_dir_warn="${worktree:-}"
         if [[ -n "$git_dir_warn" && -d "$git_dir_warn" ]]; then
-          base_ref_warn=""
-          if git -C "$git_dir_warn" rev-parse --verify staging >/dev/null 2>&1; then
-            base_ref_warn="staging"
-          elif git -C "$git_dir_warn" rev-parse --verify origin/staging >/dev/null 2>&1; then
-            base_ref_warn="origin/staging"
-          fi
-          if [[ -n "$base_ref_warn" ]]; then
+          if base_ref_warn=$(resolve_base_ref "$git_dir_warn"); then
             log_output=$(git -C "$git_dir_warn" log --oneline "$base_ref_warn..$branch" 2>/dev/null || true)
           elif git -C "$git_dir_warn" rev-parse --verify "$branch" >/dev/null 2>&1; then
             echo "[subagent-stop-gate] Warning: neither staging nor origin/staging found in $git_dir_warn; skipping commit check" >&2
@@ -255,13 +257,7 @@ case "$agent_type" in
             log_output=""
           fi
         else
-          base_ref_warn=""
-          if git rev-parse --verify staging >/dev/null 2>&1; then
-            base_ref_warn="staging"
-          elif git rev-parse --verify origin/staging >/dev/null 2>&1; then
-            base_ref_warn="origin/staging"
-          fi
-          if [[ -n "$base_ref_warn" ]]; then
+          if base_ref_warn=$(resolve_base_ref "."); then
             log_output=$(git log --oneline "$base_ref_warn..$branch" 2>/dev/null || true)
           elif git rev-parse --verify "$branch" >/dev/null 2>&1; then
             echo "[subagent-stop-gate] Warning: neither staging nor origin/staging found; skipping commit check" >&2

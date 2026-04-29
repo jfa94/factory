@@ -1080,6 +1080,56 @@ pkg=$(detect_pkg_manager "/nonexistent")
 assert_eq "detect_pkg_manager default" "pnpm" "$pkg"
 
 echo ""
+echo "=== resolve_base_ref (lib) ==="
+
+# resolve_base_ref must be exported from pipeline-lib.sh (Task 4.13).
+if declare -F resolve_base_ref >/dev/null 2>&1; then
+  assert_eq "resolve_base_ref defined in lib" "yes" "yes"
+else
+  assert_eq "resolve_base_ref defined in lib" "yes" "no"
+fi
+
+_rbr_repo() {
+  local d
+  d=$(mktemp -d)
+  git -C "$d" init -q -b main
+  git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  printf '%s' "$d"
+}
+
+# Case A: local staging exists → prints "staging", rc=0
+rbr_dir=$(_rbr_repo)
+git -C "$rbr_dir" branch staging >/dev/null 2>&1
+set +e
+rbr_out=$(resolve_base_ref "$rbr_dir"); rbr_rc=$?
+set -e
+assert_eq "resolve_base_ref: local staging → ref" "staging" "$rbr_out"
+assert_eq "resolve_base_ref: local staging → rc=0" "0" "$rbr_rc"
+rm -rf "$rbr_dir"
+
+# Case B: only origin/staging → prints "origin/staging", rc=0
+rbr_dir=$(_rbr_repo)
+upstream=$(_rbr_repo)
+git -C "$upstream" branch staging >/dev/null 2>&1
+git -C "$rbr_dir" remote add origin "$upstream" >/dev/null 2>&1
+git -C "$rbr_dir" fetch origin >/dev/null 2>&1
+set +e
+rbr_out=$(resolve_base_ref "$rbr_dir"); rbr_rc=$?
+set -e
+assert_eq "resolve_base_ref: origin/staging fallback → ref" "origin/staging" "$rbr_out"
+assert_eq "resolve_base_ref: origin/staging → rc=0" "0" "$rbr_rc"
+rm -rf "$rbr_dir" "$upstream"
+
+# Case C: neither exists → empty stdout, rc=1
+rbr_dir=$(_rbr_repo)
+set +e
+rbr_out=$(resolve_base_ref "$rbr_dir"); rbr_rc=$?
+set -e
+assert_eq "resolve_base_ref: miss → empty stdout" "" "$rbr_out"
+assert_eq "resolve_base_ref: miss → rc=1" "1" "$rbr_rc"
+rm -rf "$rbr_dir"
+
+echo ""
 echo "=== C1: finalize-on-stop action ==="
 
 # Helper: create a run with given tasks and call finalize-on-stop directly.

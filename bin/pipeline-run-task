@@ -259,17 +259,6 @@ _detect_red_test_runner() {
   printf ''
 }
 
-# Resolve a usable base ref in <git_dir>: prefers local staging, falls back to origin/staging.
-# Prints the ref name or nothing if neither exists.
-_resolve_base_ref() {
-  local git_dir="$1"
-  if git -C "$git_dir" rev-parse --verify staging >/dev/null 2>&1; then
-    printf 'staging'
-  elif git -C "$git_dir" rev-parse --verify origin/staging >/dev/null 2>&1; then
-    printf 'origin/staging'
-  fi
-}
-
 # Verify that new test files written by the test-writer actually fail.
 # Args: <tw_wt> (test-writer worktree path)
 # Returns 0 (ok / skip), 1 (verification failed → block preexec_tests).
@@ -286,8 +275,7 @@ _verify_red_tests() {
 
   # Find new test files added by test-writer (expanded pattern covers major ecosystems)
   local base_ref new_tests=()
-  base_ref=$(_resolve_base_ref "$tw_wt")
-  if [[ -z "$base_ref" ]]; then
+  if ! base_ref=$(resolve_base_ref "$tw_wt"); then
     log_error "red-test verification: base ref not found (staging and origin/staging both missing) task_id=\"$task_id\""
     _task_write quality_gates.red_test '{"ok":false,"reason":"missing_base_ref"}'
     return 1
@@ -432,8 +420,7 @@ _stage_preexec_tests() {
     [[ -z "$tw_wt" ]] && tw_wt="$worktree"
     if [[ -n "$tw_wt" && -d "$tw_wt" ]]; then
       local resume_base
-      resume_base=$(_resolve_base_ref "$tw_wt")
-      if [[ -n "$resume_base" ]] \
+      if resume_base=$(resolve_base_ref "$tw_wt") \
          && ( cd "$tw_wt" && git log --format=%s "$resume_base..HEAD" 2>/dev/null \
                 | grep -qE "^test\(.*\):.*\[${task_id}\]" 2>/dev/null ); then
         tw_status="RED_READY"
@@ -864,8 +851,7 @@ _stage_postreview() {
         local _perr2; _perr2=$(mktemp)
         if [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
           local base_ref
-          base_ref=$(_resolve_base_ref "$pr_wt")
-          if [[ -z "$base_ref" ]]; then
+          if ! base_ref=$(resolve_base_ref "$pr_wt"); then
             log_error "postreview: base ref not found for unstamped $f — escalating to human task_id=\"$task_id\""
             rm -f "$_perr2"; any_discuss=true; continue
           fi
@@ -883,8 +869,7 @@ _stage_postreview() {
       local _perr; _perr=$(mktemp)
       if [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
         local base_ref
-        base_ref=$(_resolve_base_ref "$pr_wt")
-        if [[ -z "$base_ref" ]]; then
+        if ! base_ref=$(resolve_base_ref "$pr_wt"); then
           log_warn "postreview: base ref not found (staging and origin/staging both missing) — escalating $f to human task_id=\"$task_id\""
           rm -f "$_perr"
           any_discuss=true; continue
