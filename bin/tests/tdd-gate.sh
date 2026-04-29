@@ -388,6 +388,91 @@ case10() {
   pass "case10: untagged impl alongside tagged test flagged"
 }
 
+# ---- Monorepo / per-package test directory coverage (Task 4.10) ----
+
+# Monorepo: packages/foo/tests/bar.test.ts is a test path.
+case_monorepo_packages_tests() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(mono): failing [task-mono1]" "packages/foo/tests/bar.ts"
+  _commit "$repo" "feat(mono): impl [task-mono1]"    "packages/foo/src/bar.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-mono1 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_monorepo_packages_tests expected exit 0, got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_monorepo_packages_tests expected ok=true"
+  pass "case_monorepo_packages_tests: packages/foo/tests/* recognised as test path"
+}
+
+# Monorepo: packages/foo/test/bar.go is a test path (singular `test` dir).
+case_monorepo_packages_test_singular() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(mono): failing [task-mono2]" "packages/foo/test/bar.ts"
+  _commit "$repo" "feat(mono): impl [task-mono2]"    "packages/foo/src/bar.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-mono2 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_monorepo_packages_test_singular expected exit 0, got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_monorepo_packages_test_singular expected ok=true"
+  pass "case_monorepo_packages_test_singular: packages/foo/test/* recognised as test path"
+}
+
+# Monorepo: apps/bar/spec/x.rb is a test path.
+case_monorepo_apps_spec() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(mono): failing [task-mono3]" "apps/bar/spec/x.rb"
+  _commit "$repo" "feat(mono): impl [task-mono3]"    "apps/bar/lib/x.rb"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-mono3 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_monorepo_apps_spec expected exit 0, got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_monorepo_apps_spec expected ok=true"
+  pass "case_monorepo_apps_spec: apps/bar/spec/* recognised as test path"
+}
+
+# Root: __tests__/x.ts (no leading dir) is a test path.
+case_root_double_underscore_tests() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(root): failing [task-root1]" "__tests__/x.ts"
+  _commit "$repo" "feat(root): impl [task-root1]"    "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-root1 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_root_double_underscore_tests expected exit 0, got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_root_double_underscore_tests expected ok=true"
+  pass "case_root_double_underscore_tests: root __tests__/* recognised as test path"
+}
+
+# Direct unit assertions for is_test_path (sourced).
+case_is_test_path_unit() {
+  # shellcheck disable=SC1091
+  source "$PLUGIN_ROOT/bin/pipeline-lib.sh"
+  local p
+  for p in \
+    packages/foo/tests/bar.ts \
+    packages/foo/test/bar.ts \
+    packages/foo/spec/x.rb \
+    apps/bar/__tests__/x.ts \
+    tests/x.ts \
+    test/x.ts \
+    spec/x.rb \
+    __tests__/x.ts \
+    a/b/c/tests/d.ts ; do
+    is_test_path "$p" || fail "is_test_path: expected TEST for $p"
+  done
+  for p in src/foo.ts packages/foo/src/bar.ts apps/bar/lib/x.rb pkg/foo.go ; do
+    if is_test_path "$p"; then fail "is_test_path: expected NOT for $p"; fi
+  done
+  pass "case_is_test_path_unit: monorepo + root test dir patterns classified correctly"
+}
+
 # Test 11: tagged --allow-empty commit must not advance seen_test_only
 case11() {
   local repo out rc ok reason; repo=$(mktemp -d); _mk_repo "$repo"
@@ -409,5 +494,8 @@ case1; case2; case3; case4; case4b; case5; case6; case7; case8
 case_go_test; case_ruby_spec; case_java_test; case_kotlin_test
 case_python_test; case_swift_tests; case_csharp_tests; case_go_impl_rejected
 case_b3_merge_with_tests; case_b3_merge_with_impl
+case_monorepo_packages_tests; case_monorepo_packages_test_singular
+case_monorepo_apps_spec; case_root_double_underscore_tests
+case_is_test_path_unit
 case9; case10; case11
 printf 'all tdd-gate tests passed\n'

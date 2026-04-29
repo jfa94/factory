@@ -717,9 +717,9 @@ is_test_path() {
     *Tests.swift|*Tests.cs)                                           return 0 ;;
     # Suffix-based: *_spec.rb (RSpec)
     *_spec.rb)                                                        return 0 ;;
-    # Directory-based
-    tests/*|test/*|spec/*)                                            return 0 ;;
-    */__tests__/*)                                                    return 0 ;;
+    # Directory-based — root and per-package (monorepo) layouts
+    tests/*|test/*|spec/*|__tests__/*)                                return 0 ;;
+    */tests/*|*/test/*|*/spec/*|*/__tests__/*)                        return 0 ;;
     *) return 1 ;;
   esac
 }
