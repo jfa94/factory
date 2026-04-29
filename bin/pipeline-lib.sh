@@ -845,8 +845,10 @@ _validate_id() {
 # Stdin: normalized review JSON (with .findings[].verbatim_line set).
 # Args:  $1 = path to a file containing the diff text to grep against.
 # Stdout: filtered review JSON. Recomputes blocking_count / non_blocking_count /
-# declared_blockers; if all blockers were dropped, downgrades verdict to APPROVE
-# and appends a marker to .summary so the orchestrator can audit.
+# declared_blockers; appends a marker to .summary if any findings were dropped
+# so the orchestrator can audit. NEVER mutates verdict — if all blockers were
+# unverifiable, verdict stays REQUEST_CHANGES and the orchestrator's retry
+# budget handles eventual termination.
 #
 # Findings missing a verbatim_line, or with one shorter than 10 chars, are
 # treated as unverifiable and dropped.
@@ -854,7 +856,8 @@ validate_findings() {
   local diff_file="$1" json n i q kept dropped
   json=$(cat)
   if [[ ! -s "$diff_file" ]]; then
-    printf '%s' "$json"
+    log_warn "validate_findings: empty diff — keeping all findings, refusing auto-approve"
+    printf '%s' "$json" | jq '.summary = ((.summary // "") + " [validator: diff empty; findings unverifiable]")'
     return 0
   fi
   n=$(printf '%s' "$json" | jq '.findings | length')
@@ -879,9 +882,6 @@ validate_findings() {
     | .declared_blockers = .blocking_count
     | if $d > 0 then
         .summary = ((.summary // "") + " [validator: dropped " + ($d|tostring) + " unverifiable finding(s)]")
-      else . end
-    | if $d > 0 and .blocking_count == 0 and .verdict == "REQUEST_CHANGES" then
-        .verdict = "APPROVE"
       else . end
   '
 }
