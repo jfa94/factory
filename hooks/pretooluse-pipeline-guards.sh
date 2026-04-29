@@ -341,7 +341,16 @@ fi
 if [[ "$cmd" =~ pipeline-state[[:space:]]+task-status[[:space:]]+([a-zA-Z0-9_-]+)[[:space:]]+([a-zA-Z0-9_-]+)[[:space:]]+done([[:space:]]|$) ]]; then
   cmd_run="${BASH_REMATCH[1]}"
   cmd_task="${BASH_REMATCH[2]}"
-  if [[ "$cmd_run" == "$run_id" ]]; then
+  # In autonomous mode, deny cross-run task-status=done writes outright:
+  # the active run owns its task transitions, and rewriting another run's
+  # state from inside a session is structurally suspect. Outside autonomous
+  # mode we keep the legacy scope-check (only validate when ids match) so
+  # operators retain the ability to repair foreign run state by hand.
+  if [[ "$cmd_run" != "$run_id" ]]; then
+    if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
+      deny "pipeline invariant: cross-run task-status=done write rejected in autonomous mode (active run=$run_id, target run=$cmd_run). Switch to that run before mutating its state."
+    fi
+  else
     wt=$(task_field "$cmd_task" worktree)
     qok=$(jq -r --arg t "$cmd_task" '.tasks[$t].quality_gate.ok // false' "$state_file")
     pr=$(task_field "$cmd_task" pr_number)

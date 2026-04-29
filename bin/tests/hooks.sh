@@ -815,6 +815,33 @@ assert_eq "guards task-status-done exit 0" "0" "$rc"
 assert_eq "guards task-status-done denies" "deny" "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')"
 
 echo ""
+echo "=== pretooluse-pipeline-guards: cross-run task-status done in autonomous mode ==="
+
+# Active run is run-guards-done (seeded above). A command targeting a
+# DIFFERENT run-id must be denied when FACTORY_AUTONOMOUS_MODE=1.
+input='{"tool_input":{"command":"pipeline-state task-status run-other alpha-001 done"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "guards cross-run autonomous exit 0" "0" "$rc"
+decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')
+assert_eq "guards cross-run autonomous denies" "deny" "$decision"
+reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')
+case "$reason" in
+  *"cross-run"*) echo "  PASS: deny reason mentions cross-run"; pass=$((pass + 1)) ;;
+  *) echo "  FAIL: deny reason does not mention cross-run (got: $reason)"; fail=$((fail + 1)) ;;
+esac
+
+# Same input WITHOUT autonomous mode → not denied (legacy scope-check passes).
+set +e
+out_loose=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "guards cross-run non-autonomous exit 0" "0" "$rc"
+assert_eq "guards cross-run non-autonomous no output" "" "$out_loose"
+
+echo ""
 echo "=== pretooluse-pipeline-guards: no-op when no pipeline run ==="
 
 rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
