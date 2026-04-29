@@ -932,5 +932,41 @@ assert_eq "scribe-attempts-reset: scribe.status=done" "done" "$scribe_status"
 attempts=$(pipeline-state read "$RUN_ID" '.scribe.attempts' 2>/dev/null | tr -d '"')
 assert_eq "scribe-attempts-reset: scribe.attempts=0" "0" "$attempts"
 
+# --- 40: Task 3.2 — reviewer-only re-entry: clears happen AFTER gates pass ---
+# Positive-path regression: confirms the deferred-clear pattern still clears
+# postexec_reviewer_only/review_files and rewinds stage on a successful re-entry.
+# A crash injected before manifest emission would otherwise leave reviewer_only
+# set (verified indirectly by Test 24 above, where gate failure preserves it).
+new_run postexec-reviewer-only-deferred-clear
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 postexec_reviewer_only '"true"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 review_files '["stale.json"]' >/dev/null
+run_wrapper alpha-001 --stage postexec
+assert_eq "deferred-clear: exit 10" "10" "$RC"
+assert_eq "deferred-clear: reviewer_only cleared" "null" \
+  "$(field_of postexec_reviewer_only | tr -d '\"')"
+# review_files repopulated by manifest emission (claude path leaves []; codex sets file).
+# Just assert it no longer contains the stale entry.
+rf_after=$(field_of review_files | jq -r 'if type=="array" then (index("stale.json")|tostring) else "absent" end' 2>/dev/null)
+case "$rf_after" in
+  null|absent) pass "deferred-clear: stale review_files cleared" ;;
+  *) fail "deferred-clear: stale review_files cleared (got=$rf_after)" ;;
+esac
+
+# --- 41: Task 3.3 — postreview no early postexec_done write on missing files --
+# Old code wrote stage='postexec_done' BEFORE iterating verdicts. New code defers
+# the durable transition to the verdict-decision branch, so a crash (or early
+# return) before then leaves the prior stage intact.
+new_run postreview-no-early-write
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_spawn_pending"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 review_files '[]' >/dev/null
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage postreview 2>/dev/null; RC=$?; set -e
+assert_eq "no-early-write: exit 30 (no review files)" "30" "$RC"
+assert_eq "no-early-write: stage unchanged from spawn_pending" "postexec_spawn_pending" \
+  "$(stage_of | tr -d '\"')"
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

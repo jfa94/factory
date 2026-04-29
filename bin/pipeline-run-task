@@ -534,6 +534,7 @@ _stage_postexec() {
   # executor-fix. Executor has now committed fixes; gates MUST re-run regardless
   # of current stage rank. Check this BEFORE the spawn-pending crash-recovery
   # guard so stale review_files from the prior round don't trigger a spurious skip.
+  local _reviewer_only_pending=false
   if _already_past postexec_done; then
     local reviewer_only
     reviewer_only=$(_task_field postexec_reviewer_only)
@@ -543,19 +544,17 @@ _stage_postexec() {
       log_step_end "postexec" "skipped" "$((t1-t0))" "task_id=\"$task_id\""
       return 0
     fi
-    # Clear flag and stale review_files so the new review round starts fresh.
-    _task_write postexec_reviewer_only 'null'
-    _task_write review_files '[]'
-    # Reset stage to preexec_tests_done so _emit_postexec_manifest can advance it.
-    _task_write stage '"preexec_tests_done"'
+    # Re-entry: defer clears until after manifest emission so a crash in this
+    # window doesn't lose the reviewer_only signal.
+    _reviewer_only_pending=true
   fi
 
   # postexec_spawn_pending: gates passed + manifest emitted last run but
   # postreview hasn't written postexec_done yet (crash window).
-  # Only reached when reviewer_only was false/absent (handled above).
+  # Skipped for reviewer_only re-entry (handled above) — we want gates + a fresh manifest.
   # Re-check review_files: populated means Codex ran sync — resume into postreview.
   # Empty means agent path — re-emit manifest (idempotent).
-  if _already_past postexec_spawn_pending; then
+  if ! $_reviewer_only_pending && _already_past postexec_spawn_pending; then
     local existing_rf
     existing_rf=$(_task_field review_files 2>/dev/null || printf 'null')
     local rf_count
@@ -643,6 +642,15 @@ _stage_postexec() {
       _task_write quality_gates.holdout '"skipped"'
       log_warn "holdout file present but reviewer output not wired for $task_id; skipping Layer 4"
     fi
+  fi
+
+  if $_reviewer_only_pending; then
+    # Gates passed for the reviewer_only re-entry; safe to clear the signal and
+    # rewind stage so _emit_postexec_manifest advances cleanly. A crash before
+    # this point preserves postexec_reviewer_only=true so resume re-enters here.
+    _task_write postexec_reviewer_only 'null'
+    _task_write review_files '[]'
+    _task_write stage '"preexec_tests_done"'
   fi
 
   local _manifest_rc
@@ -795,9 +803,6 @@ _stage_postreview() {
     fi
   done
 
-  # Durable commit point: all review artifacts confirmed present.
-  _task_write stage '"postexec_done"'
-
   # Resolve task worktree so pipeline-parse-review can run `git diff` from
   # the right place when --base is supplied (validator drops findings whose
   # verbatim_line isn't in the diff).
@@ -912,6 +917,7 @@ _stage_postreview() {
     done
     _task_write postreview_prior_blockers "$prior_blockers_json"
     _task_write postexec_reviewer_only '"true"'
+    _task_write stage '"postexec_done"'  # parking lot for upcoming reviewer-only re-entry
 
     _ensure_prompt_dir
     local pf
