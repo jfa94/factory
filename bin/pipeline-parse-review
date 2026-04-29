@@ -322,8 +322,13 @@ while IFS= read -r line; do
   fi
 done < "$tmpfile"
 
-# Extract summary (portable: awk instead of GNU sed)
+# Extract summary (portable: awk instead of GNU sed). Capped at 5 lines —
+# emit a debug line when truncation triggers so reviewers can spot it in logs.
+_summary_full_lines=$(awk '/^## Summary$/{found=1; next} found{print}' "$tmpfile" | wc -l | tr -d ' ')
 summary=$(awk '/^## Summary$/{found=1; next} found{print}' "$tmpfile" | head -5 | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
+if [[ "${_summary_full_lines:-0}" -gt 5 ]]; then
+  log_info "summary truncated: ${_summary_full_lines} lines after '## Summary' header → kept first 5 (FACTORY_DEBUG_PARSE_REVIEW=1 to inspect)"
+fi
 
 # Enforce declared_blockers == blocking_count. Reviewer MUST agree with parser tally.
 if [[ "${declared_blockers:-0}" != "$blocking_count" ]]; then
