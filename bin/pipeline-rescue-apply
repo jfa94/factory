@@ -280,6 +280,11 @@ _apply_I_15() {
   close_list=$(jq -r --argjson k "$keep" '.evidence.prs[] | select(.number != $k) | .number' <<<"$evidence")
   if (( dry_run )); then rescue_audit "$run_id" mechanical I-15 "" close_duplicate dry_run ""; return 0; fi
   for pr_num in $close_list; do
+    if ! [[ "$pr_num" =~ ^[0-9]+$ ]]; then
+      log_warn "rescue-apply: refusing non-numeric pr_num: $pr_num"
+      rescue_audit "$run_id" mechanical I-15 "" close_duplicate skipped "non-numeric pr_num=$pr_num"
+      continue
+    fi
     gh pr close "$pr_num" --comment "Superseded by #$keep (autonomous rescue)" 2>/dev/null || true
     rescue_audit "$run_id" mechanical I-15 "" close_duplicate ok "closed PR #$pr_num"
   done
