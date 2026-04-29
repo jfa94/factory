@@ -10,9 +10,20 @@ set -euo pipefail
 
 # Check for active run
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
-if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]] || [[ ! -L "$current_link" ]]; then
+if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
   exit 0
 fi
+# Fail-closed on a broken symlink: the run dir is missing, which means run
+# state is corrupted. Allowing the subagent to "succeed" would mask the
+# corruption. No symlink at all is a legitimate non-pipeline session.
+if [[ -L "$current_link" && ! -e "$current_link" ]]; then
+  target=$(readlink "$current_link" 2>/dev/null || printf '<unreadable>')
+  printf '%s\n' "[subagent-stop-gate] runs/current symlink is broken (target: $target); failing closed" >&2
+  jq -cn --arg reason "broken pipeline state: runs/current dangling (target: $target). Repair runs/current or clear it before continuing." \
+    '{decision:"block", reason:$reason}' 2>/dev/null || true
+  exit 1
+fi
+[[ -L "$current_link" ]] || exit 0
 
 run_dir=$(readlink "$current_link" 2>/dev/null) || exit 0
 

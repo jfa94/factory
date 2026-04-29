@@ -30,9 +30,28 @@ tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""')
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
 
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
-if [[ -z "${CLAUDE_PLUGIN_DATA:-}" || ! -L "$current_link" ]]; then
+if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
   exit 0
 fi
+# Distinguish "no symlink" (no active run — pass through) from "broken symlink"
+# (run state corrupted — fail closed). A dangling symlink means runs/current
+# points at a missing run dir; allowing the tool would mask real corruption.
+if [[ -L "$current_link" && ! -e "$current_link" ]]; then
+  target=$(readlink "$current_link" 2>/dev/null || printf '<unreadable>')
+  printf '%s\n' "[pretooluse-pipeline-guards] runs/current symlink is broken (target: $target); failing closed" >&2
+  tool_name_for_msg=$(printf '%s' "$input" | jq -r '.tool_name // ""' 2>/dev/null || true)
+  if [[ "$tool_name_for_msg" == "Bash" ]]; then
+    jq -cn --arg reason "broken pipeline state: runs/current dangling (target: $target). Repair runs/current or clear it before continuing." '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: $reason
+      }
+    }'
+  fi
+  exit 1
+fi
+[[ -L "$current_link" ]] || exit 0
 run_dir=$(readlink "$current_link" 2>/dev/null) || exit 0
 state_file="$run_dir/state.json"
 [[ -f "$state_file" ]] || exit 0

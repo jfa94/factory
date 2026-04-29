@@ -279,6 +279,23 @@ assert_exit "subagent no run exits 0" 0 bash -c 'printf "{\"agent_type\":\"imple
 
 # ============================================================
 echo ""
+echo "=== subagent-stop-gate: fail-closed on broken current symlink ==="
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -sfn "$CLAUDE_PLUGIN_DATA/runs/does-not-exist" "$CLAUDE_PLUGIN_DATA/runs/current"
+set +e
+printf '{"agent_type":"implementation-reviewer"}' \
+  | bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/tmp/subagent-broken.err
+rc=$?
+set -e
+assert_eq "subagent broken-symlink exit nonzero" "1" "$rc"
+assert_eq "subagent broken-symlink logs diagnostic" "true" \
+  "$(grep -q 'runs/current symlink is broken' /tmp/subagent-broken.err && echo true || echo false)"
+rm -f /tmp/subagent-broken.err
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# ============================================================
+echo ""
 echo "=== subagent-stop-gate: no-op for unknown agent type ==="
 
 run_dir="$CLAUDE_PLUGIN_DATA/runs/test-subagent"
@@ -767,6 +784,38 @@ rc=$?
 set -e
 assert_eq "guards no-run exit 0"    "0" "$rc"
 assert_eq "guards no-run no output" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: fail-closed on broken current symlink (Bash) ==="
+
+# Symlink exists but points at a missing run dir — must fail closed, not no-op.
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -sfn "$CLAUDE_PLUGIN_DATA/runs/does-not-exist" "$CLAUDE_PLUGIN_DATA/runs/current"
+input='{"tool_name":"Bash","tool_input":{"command":"gh pr create --head feat --base main"}}'
+set +e
+out=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>/tmp/guards-broken.err)
+rc=$?
+set -e
+assert_eq "guards broken-symlink Bash exit nonzero" "1" "$rc"
+assert_eq "guards broken-symlink Bash logs diagnostic" "true" \
+  "$(grep -q 'runs/current symlink is broken' /tmp/guards-broken.err && echo true || echo false)"
+rm -f /tmp/guards-broken.err
+
+echo ""
+echo "=== pretooluse-pipeline-guards: fail-closed on broken current symlink (non-Bash) ==="
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -sfn "$CLAUDE_PLUGIN_DATA/runs/does-not-exist" "$CLAUDE_PLUGIN_DATA/runs/current"
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.ts"}}'
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" >/dev/null 2>/tmp/guards-broken2.err
+rc=$?
+set -e
+assert_eq "guards broken-symlink non-Bash exit nonzero" "1" "$rc"
+assert_eq "guards broken-symlink non-Bash logs diagnostic" "true" \
+  "$(grep -q 'runs/current symlink is broken' /tmp/guards-broken2.err && echo true || echo false)"
+rm -f /tmp/guards-broken2.err
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
 # ============================================================
 echo ""
