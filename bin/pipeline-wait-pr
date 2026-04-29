@@ -254,16 +254,13 @@ _attempt_rebase() {
     return 1
   fi
 
-  # Push the rebased branch
-  if ! err=$(git push --force-with-lease origin "$head_branch" 2>&1); then
-    log_error "git push --force-with-lease failed for $head_branch: $err"
-    git checkout "$current_branch" 2>/dev/null
-    return 1
-  fi
-
+  # Rebase succeeded locally, but publishing it requires rewriting the remote
+  # branch. CLAUDE.md forbids all force-push variants from automated tooling,
+  # so we refuse to push and surface the situation for an authorized human to
+  # finish the rebase manually (or merge staging in instead).
+  log_error "rebase succeeded locally for $head_branch; refusing to publish (CLAUDE.md forbids force-push). An authorized human must finish this rebase manually."
   git checkout "$current_branch" 2>/dev/null
-  log_info "rebase successful for $head_branch"
-  return 0
+  return 1
 }
 
 # --- Main poll loop ---
@@ -353,10 +350,13 @@ while true; do
     continue
   fi
   if [[ -n "$checks_data" ]]; then
-    failed_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.conclusion == "FAILURE")] | length')
+    # Treat any non-success terminal conclusion as red. GitHub uses several
+    # conclusions for failure-equivalent states; restricting to FAILURE alone
+    # silently ignored cancelled/timed-out/required runs.
+    failed_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "STARTUP_FAILURE" or .conclusion == "ACTION_REQUIRED")] | length')
 
     if [[ "$failed_checks" -gt 0 ]]; then
-      failed_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.conclusion == "FAILURE") | .name] | join(", ")')
+      failed_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "STARTUP_FAILURE" or .conclusion == "ACTION_REQUIRED") | "\(.name)=\(.conclusion)"] | join(", ")')
       log_error "PR #${pr} CI failed: $failed_names"
       jq -n \
         --arg pr "$pr" \
@@ -366,10 +366,13 @@ while true; do
       exit 3
     fi
 
-    # Log progress if checks still running
+    # Distinguish "no checks defined" (defer to merge state) from "all passed".
+    total_checks=$(printf '%s' "$checks_data" | jq 'length')
     pending_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.state == "IN_PROGRESS" or .state == "QUEUED" or .state == "PENDING")] | length')
-    if [[ "$pending_checks" -eq 0 ]]; then
-      log_info "all checks passed for PR #${pr}, waiting for merge..."
+    if (( total_checks == 0 )); then
+      log_info "PR #${pr} has no checks defined; deferring to merge state"
+    elif [[ "$pending_checks" -eq 0 ]]; then
+      log_info "all $total_checks check(s) passed for PR #${pr}, waiting for merge..."
     fi
   fi
 
