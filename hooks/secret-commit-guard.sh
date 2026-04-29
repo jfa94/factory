@@ -1,30 +1,47 @@
 #!/usr/bin/env bash
-# PreToolUse Bash hook: block `git commit` when staged changes contain
-# recognisable secrets. Scans the staged diff and file paths with a baked-in
-# blocklist; optionally shells out to `trufflehog` when safety.useTruffleHog
-# is enabled. Findings matching safety.allowedSecretPatterns are filtered out
-# before the block decision. `git push` commands are intentionally not
-# covered — block-at-commit is the chosen chokepoint.
+# PreToolUse Bash hook: block `git commit` or `git push` when staged/unpushed
+# changes contain recognisable secrets. Scans with a baked-in blocklist;
+# optionally shells out to `trufflehog` when safety.useTruffleHog is enabled.
+# Findings matching safety.allowedSecretPatterns are filtered out before the
+# block decision.
 #
 # Stdin: hook input JSON with .tool_input.command
 # Exit 0 = allow, Exit 2 = block (JSON reason on stderr)
 set -euo pipefail
 
+# shellcheck source=/dev/null
+source "$(dirname "$0")/_security-common.sh"
+
 input=$(cat)
 command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)
 [[ -z "$command" ]] && exit 0
 
-# Does this command run a `git commit`? Be permissive in recognising it:
-# leading `git commit`, plus `git -C <dir> commit`, plus chained forms like
-# `cd foo && git commit ...` that include the literal tokens. False positives
-# are tolerable — false negatives (missed scans) are not.
-if ! printf '%s' "$command" | grep -qE '(^|[[:space:]]|&|;)git([[:space:]]+-[^[:space:]]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)'; then
+if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]] && _is_nested_shell_or_hook_bypass "$command"; then
+  jq -cn --arg r "nested_shell_denied" --arg d "nested-shell or hook-bypass not allowed in autonomous mode: $command" \
+    '{decision:"block", reason:$r, detail:$d}' >&2
+  exit 2
+fi
+
+# Detect git commit and git push.
+_is_git_commit() {
+  printf '%s' "$1" | grep -qE '(^|[[:space:]]|&|;)git([[:space:]]+-[^[:space:]]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)'
+}
+
+_is_git_push() {
+  printf '%s' "$1" | grep -qE '(^|[[:space:]]|&|;)git([[:space:]]+-[^[:space:]]+[[:space:]]+[^[:space:]]+)*[[:space:]]+push([[:space:]]|$)'
+}
+
+is_commit="false"
+is_push="false"
+_is_git_commit "$command" && is_commit="true"
+_is_git_push "$command" && is_push="true"
+
+# If neither commit nor push, nothing to scan.
+if [[ "$is_commit" == "false" && "$is_push" == "false" ]]; then
   exit 0
 fi
 
 # --- Built-in path blocklist (file names that should never be committed) ---
-# Globs matched against basename + relative path; any match triggers a block
-# unless the raw filename also matches safety.allowedSecretPatterns.
 PATH_BLOCKLIST=(
   '.env'             '.env.*'        '.env*'
   '*.pem'            '*.key'
@@ -40,8 +57,6 @@ PATH_BLOCKLIST=(
 )
 
 # --- Built-in content-regex patterns ---
-# Note: sk-ant- is checked before the generic sk- so Anthropic keys are
-# labelled correctly; the older sk- pattern still catches OpenAI keys.
 CONTENT_PATTERNS=(
   'AKIA[0-9A-Z]{16}'
   'ghp_[A-Za-z0-9]{36}'
@@ -90,8 +105,7 @@ _redact() {
 
 blocks=()
 
-# Resolve where the commit is happening. For `git -C <dir> commit ...` use that
-# directory; otherwise use the caller's cwd. Fall back to pwd if parsing fails.
+# Resolve where the git op is happening. For `git -C <dir> ...` use that dir.
 commit_dir="$PWD"
 # shellcheck disable=SC2016
 commit_c=$(printf '%s' "$command" | grep -oE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $NF}' || true)
@@ -99,37 +113,89 @@ if [[ -n "$commit_c" ]] && [[ -d "$commit_c" ]]; then
   commit_dir="$commit_c"
 fi
 
-# If the commit dir isn't actually a git repo, we can't scan — fail open
-# (allow). The commit itself will fail downstream.
+# If the dir isn't actually a git repo, we can't scan — fail open.
 if ! git -C "$commit_dir" rev-parse --git-dir >/dev/null 2>&1; then
   exit 0
 fi
 
+# Determine scan_paths and scan_diff based on commit vs push.
+scan_paths=""
+scan_diff=""
+
+if [[ "$is_commit" == "true" ]]; then
+  scan_paths=$(git -C "$commit_dir" diff --cached --name-only 2>/dev/null || true)
+  scan_diff=$(git -C "$commit_dir" diff --cached -U0 2>/dev/null || true)
+else
+  # Push scan: determine the range of unpushed commits.
+  push_remote=""
+  push_branch=""
+  # Tokenise command, find `push`, then pull next two non-flag tokens.
+  read -r -a _pt <<< "$command"
+  for ((i=0; i<${#_pt[@]}; i++)); do
+    if [[ "${_pt[i]}" == "push" ]]; then
+      for ((j=i+1; j<${#_pt[@]}; j++)); do
+        [[ "${_pt[j]}" == -* ]] && continue
+        if [[ -z "$push_remote" ]]; then push_remote="${_pt[j]}"
+        elif [[ -z "$push_branch" ]]; then push_branch="${_pt[j]%%:*}"; break
+        fi
+      done
+      break
+    fi
+  done
+
+  if [[ -z "$push_remote" || -z "$push_branch" ]]; then
+    upstream=$(git -C "$commit_dir" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)
+    if [[ -n "$upstream" ]]; then
+      remote_ref="$upstream"
+    else
+      printf '%s\n' "secret-commit-guard: git push without upstream — push scan skipped" >&2
+      exit 0
+    fi
+  else
+    remote_ref="${push_remote}/${push_branch}"
+  fi
+
+  # Ensure remote ref exists locally; fetch if needed.
+  if ! git -C "$commit_dir" rev-parse --verify "$remote_ref" >/dev/null 2>&1; then
+    if [[ -n "$push_remote" && -n "$push_branch" ]]; then
+      git -C "$commit_dir" fetch --quiet "$push_remote" "$push_branch" 2>/dev/null || true
+    fi
+  fi
+  if ! git -C "$commit_dir" rev-parse --verify "$remote_ref" >/dev/null 2>&1; then
+    # Brand-new branch — scan all commits reachable from HEAD.
+    range_arg="HEAD"
+  else
+    range_arg="${remote_ref}..HEAD"
+  fi
+
+  scan_paths=$(git -C "$commit_dir" log "$range_arg" --name-only --format= 2>/dev/null | sort -u || true)
+  scan_diff=$(git -C "$commit_dir" log -p "$range_arg" -U0 2>/dev/null || true)
+fi
+
 # --- Path scan ---
-while IFS= read -r staged_path; do
-  [[ -z "$staged_path" ]] && continue
-  base=$(basename "$staged_path")
+while IFS= read -r fpath; do
+  [[ -z "$fpath" ]] && continue
+  base=$(basename "$fpath")
   for glob in "${PATH_BLOCKLIST[@]}"; do
     # shellcheck disable=SC2053
-    if [[ "$base" == $glob || "$staged_path" == $glob ]]; then
-      if ! _is_allowed "$staged_path"; then
-        blocks+=("path:$staged_path (matched $glob)")
+    if [[ "$base" == $glob || "$fpath" == $glob ]]; then
+      if ! _is_allowed "$fpath"; then
+        blocks+=("path:$fpath (matched $glob)")
       fi
       break
     fi
   done
-done < <(git -C "$commit_dir" diff --cached --name-only 2>/dev/null || true)
+done < <(printf '%s\n' "$scan_paths")
 
-# --- Content-regex scan (on the staged diff, unified=0) ---
-staged_diff=$(git -C "$commit_dir" diff --cached -U0 2>/dev/null || true)
-if [[ -n "$staged_diff" ]]; then
+# --- Content-regex scan ---
+if [[ -n "$scan_diff" ]]; then
   for pat in "${CONTENT_PATTERNS[@]}"; do
     while IFS= read -r hit; do
       [[ -z "$hit" ]] && continue
       if ! _is_allowed "$hit"; then
         blocks+=("content:$(_redact "$hit") (matched /$pat/)")
       fi
-    done < <(printf '%s' "$staged_diff" | grep -Eo "$pat" 2>/dev/null || true)
+    done < <(printf '%s' "$scan_diff" | grep -Eo "$pat" 2>/dev/null || true)
   done
 fi
 
@@ -140,8 +206,6 @@ if [[ -f "$config_file" ]]; then
 fi
 if [[ "$use_trufflehog" == "true" ]]; then
   if command -v trufflehog >/dev/null 2>&1; then
-    # Scan the commit dir; --only-verified reduces false positives. JSON mode
-    # emits one object per finding.
     th_err=$(mktemp)
     set +e
     trufflehog_output=$(trufflehog filesystem --directory "$commit_dir" --only-verified --no-update --json 2>"$th_err")
@@ -163,13 +227,11 @@ if [[ "$use_trufflehog" == "true" ]]; then
       done <<< "$trufflehog_output"
     fi
   else
-    # Warn once but do not block.
     printf '%s\n' "secret-commit-guard: trufflehog enabled in safety.useTruffleHog but not installed; falling back to regex-only" >&2
   fi
 fi
 
 if (( ${#blocks[@]} > 0 )); then
-  # Emit structured block reason on stderr with raw secrets redacted.
   jq -cn --argjson blocks "$(printf '%s\n' "${blocks[@]}" | jq -Rn '[inputs]')" \
     '{decision:"block", reason:"secret_detected", detail:$blocks}' >&2
   exit 2

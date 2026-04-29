@@ -1642,6 +1642,117 @@ rm -rf "$_staging_tmp"
 
 # ============================================================
 echo ""
+echo "=== nested-shell denylist ==="
+
+# bash -lc 'gh pr create' must DENY in autonomous mode (pretooluse-pipeline-guards)
+_seed_run "run-nested-shell" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"bash -lc \"gh pr create --base staging\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "bash -lc gh pr create denied (exit 0 with deny payload)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains() { local label="$1" needle="$2" haystack="$3"
+  if printf '%s' "$haystack" | grep -q "$needle"; then echo "  PASS: $label"; pass=$((pass+1))
+  else echo "  FAIL: $label (expected '$needle' in output)"; fail=$((fail+1)); fi; }
+assert_contains "bash -lc deny has permissionDecision" "permissionDecision" "$out"
+assert_contains "bash -lc deny decision=deny" "deny" "$out"
+
+# git -c hooksPath=/dev/null commit must DENY via secret-commit-guard (exit 2)
+out=$(printf '%s' '{"tool_input":{"command":"git -c hooksPath=/dev/null commit -m x"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "git -c hooksPath commit denied (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "git -c hooksPath commit reason=nested_shell_denied" "nested_shell_denied" "$out"
+
+# git -c core.hooksPath=/dev/null push must DENY by branch-protection (exit 2)
+out=$(printf '%s' '{"tool_input":{"command":"git -c core.hooksPath=/dev/null push origin staging"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+assert_eq "git -c core.hooksPath push denied (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "git -c core.hooksPath push reason=nested_shell_denied" "nested_shell_denied" "$out"
+
+# eval "rm -rf" must DENY in pretooluse-pipeline-guards
+_seed_run "run-eval-deny" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"eval \"rm -rf /\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "eval denied (exit 0 with deny payload)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "eval deny has deny decision" "deny" "$out"
+
+# Interactive (no FACTORY_AUTONOMOUS_MODE) — bash -lc should pass through
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+out=$(printf '%s' '{"tool_input":{"command":"bash -lc \"ls\""}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "bash -lc interactive allowed (no autonomous mode)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+# ============================================================
+echo ""
+echo "=== gh pr create requires task_id in autonomous mode ==="
+
+# In autonomous mode without a derivable task_id: DENY
+_seed_run "run-pr-notaskid" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"gh pr create --base staging --title random"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "gh pr create no task_id autonomous denied (exit 0)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "gh pr create no task_id deny payload" "permissionDecision" "$out"
+assert_contains "gh pr create no task_id deny reason mentions task_id" "task_id" "$out"
+
+# In autonomous mode without task_id: gh pr merge DENY
+_seed_run "run-merge-notaskid" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"gh pr merge 123 --merge"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "gh pr merge no task_id autonomous denied (exit 0)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "gh pr merge no task_id deny payload" "permissionDecision" "$out"
+
+# Interactive with no task_id: let through (no deny)
+_seed_run "run-pr-interactive" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"gh pr create --base main --title test"}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "gh pr create no task_id interactive allowed" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+# ============================================================
+echo ""
+echo "=== git push scan in secret-commit-guard ==="
+
+# Construct fake AWS key at runtime to avoid triggering the secret guard when
+# this test file itself is committed (the pattern must not appear literally here).
+_fake_aws_key="AKIA""IOSFODNN7EXAMPLE"
+
+# Build a tmp git repo with a fake AWS key committed but not pushed.
+_push_tmp=$(mktemp -d)
+git -C "$_push_tmp" init -q
+git -C "$_push_tmp" commit --allow-empty -m "init" -q
+git -C "$_push_tmp" checkout -b "feat/test-push-scan" -q
+# Write a file with a fake AWS key pattern
+printf '%s\n' "export AWS_KEY=$_fake_aws_key" > "$_push_tmp/secrets.txt"
+git -C "$_push_tmp" add "$_push_tmp/secrets.txt"
+git -C "$_push_tmp" commit -m "add secrets" -q
+
+# Bare `git push` with no args and no upstream configured → fail-open with warning, exit 0.
+# Build a separate repo without upstream to test this path.
+_push_tmp2=$(mktemp -d)
+git -C "$_push_tmp2" init -q
+git -C "$_push_tmp2" commit --allow-empty -m "init" -q
+git -C "$_push_tmp2" checkout -b "feat/no-upstream" -q
+printf '%s\n' "export AWS_KEY=$_fake_aws_key" > "$_push_tmp2/secrets.txt"
+git -C "$_push_tmp2" add "$_push_tmp2/secrets.txt"
+git -C "$_push_tmp2" commit -m "add secrets" -q
+out=$(printf '%s' "{\"tool_input\":{\"command\":\"git -C $_push_tmp2 push\"}}" \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "push scan no upstream fail-open exit 0" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "push scan no upstream warning" "push scan skipped" "$out"
+rm -rf "$_push_tmp2"
+
+# Add a fake remote so range resolves; commit with AKIA key; expect EXIT:2
+git -C "$_push_tmp" remote add origin "file:///dev/null" 2>/dev/null || true
+# Simulate origin/feat/test-push-scan existing at init commit (before the secret)
+_init_sha=$(git -C "$_push_tmp" rev-list --max-parents=0 HEAD 2>/dev/null)
+git -C "$_push_tmp" update-ref refs/remotes/origin/feat/test-push-scan "$_init_sha"
+
+out=$(printf '%s' "{\"tool_input\":{\"command\":\"git -C $_push_tmp push origin feat/test-push-scan\"}}" \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "push scan detects AKIA key in unpushed commit (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "push scan block reason=secret_detected" "secret_detected" "$out"
+
+rm -rf "$_push_tmp"
+
+# ============================================================
+echo ""
 echo "=== All hook scripts are executable ==="
 
 assert_eq "branch-protection executable" "true" "$([[ -x "$HOOKS_DIR/branch-protection.sh" ]] && echo true || echo false)"

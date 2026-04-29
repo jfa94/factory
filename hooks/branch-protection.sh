@@ -19,6 +19,9 @@
 #   All checks (1-7) read from those variables — no re-tokenisation.
 set -euo pipefail
 
+# shellcheck source=/dev/null
+source "$(dirname "$0")/_security-common.sh"
+
 PROTECTED_BRANCHES=("main" "master" "develop" "staging")
 PIPELINE_MANAGED=("staging")  # writable from autonomous mode in orchestrator worktree
 
@@ -31,6 +34,12 @@ command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/nul
 
 if [[ -z "$command" ]]; then
   exit 0
+fi
+
+if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]] && _is_nested_shell_or_hook_bypass "$command"; then
+  jq -cn --arg r "nested_shell_denied" --arg d "nested-shell or hook-bypass not allowed in autonomous mode: $command" \
+    '{decision:"block", reason:$r, detail:$d}' >&2
+  exit 2
 fi
 
 # Helper: print a JSON block reason and exit 2.

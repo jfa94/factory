@@ -22,6 +22,9 @@
 #      .quality_gate.ok, and .pr_number all set.
 set -euo pipefail
 
+# shellcheck source=/dev/null
+source "$(dirname "$0")/_security-common.sh"
+
 input=$(cat 2>/dev/null || printf '{}')
 tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""')
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
@@ -59,6 +62,11 @@ if [[ -z "$task_id" ]]; then
   if [[ "$cmd" =~ --head[[:space:]]+task/([a-zA-Z0-9_-]+) ]]; then
     task_id="${BASH_REMATCH[1]}"
   fi
+fi
+
+# Nested-shell / hook-bypass check (autonomous mode only).
+if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]] && _is_nested_shell_or_hook_bypass "$cmd"; then
+  deny "nested-shell or hook-bypass not allowed in autonomous mode: $cmd"
 fi
 
 # --- 0. path-scope guard: preexec_tests phase (test-writer) ---
@@ -250,7 +258,12 @@ fi
 
 # --- 1. gh pr create ---
 if [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]]; then
-  [[ -z "$task_id" ]] && exit 0  # can't attribute — let it through
+  if [[ -z "$task_id" ]]; then
+    if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
+      deny "pipeline invariant: gh pr create cannot run in autonomous mode without an attributable task_id"
+    fi
+    exit 0  # interactive — let through
+  fi
 
   checklist_file="$run_dir/.tasks/${task_id}.ship_checklist.json"
   if [[ -f "$checklist_file" ]]; then
@@ -291,7 +304,12 @@ fi
 
 # --- 2. gh pr merge ---
 if [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge ]]; then
-  [[ -z "$task_id" ]] && exit 0
+  if [[ -z "$task_id" ]]; then
+    if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
+      deny "pipeline invariant: gh pr merge cannot run in autonomous mode without an attributable task_id"
+    fi
+    exit 0  # interactive — let through
+  fi
   pr=$(task_field "$task_id" pr_number)
   ci=$(task_field "$task_id" ci_status)
   if [[ -z "$pr" || "$ci" != "green" ]]; then
