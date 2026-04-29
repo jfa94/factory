@@ -1282,12 +1282,15 @@ _stage_finalize_run() {
 
   # Fetch origin/staging fail-closed: a stale ref could let the SHA-ancestor
   # check pass against an outdated tip.
-  if ! git fetch origin staging --quiet 2>/dev/null; then
-    log_error "finalize-run: git fetch origin staging failed; cannot verify staging contents"
+  local _ferr; _ferr=$(mktemp)
+  if ! git fetch origin staging --quiet 2>"$_ferr"; then
+    log_error "finalize-run: git fetch origin staging failed: $(cat "$_ferr")"
+    rm -f "$_ferr"
     t1=$(_now_ms)
     log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"git_fetch_failed\""
     return 3
   fi
+  rm -f "$_ferr"
 
   # Verify every status=done task PR is merged into origin/staging.
   # Iterate task entries (id+pr_number) so a done task without a pr_number is
@@ -1301,7 +1304,18 @@ _stage_finalize_run() {
       continue
     fi
     local pr_data merge_sha pr_state
-    pr_data=$(gh pr view "$pr_num" --json state,mergeCommit,headRefOid 2>/dev/null || printf '{}')
+    local _vrc=0 _verr; _verr=$(mktemp)
+    pr_data=$(gh pr view "$pr_num" --json state,mergeCommit,headRefOid 2>"$_verr") || _vrc=$?
+    if (( _vrc != 0 )); then
+      log_error "finalize-run: gh pr view #$pr_num failed (rc=$_vrc): $(cat "$_verr")"
+      rm -f "$_verr"
+      staging_sha_missing=true; continue
+    fi
+    rm -f "$_verr"
+    if ! printf '%s' "$pr_data" | jq -e '.state' >/dev/null 2>&1; then
+      log_error "finalize-run: gh pr view #$pr_num returned malformed JSON"
+      staging_sha_missing=true; continue
+    fi
     pr_state=$(printf '%s' "$pr_data" | jq -r '.state // "OPEN"')
     if [[ "$pr_state" != "MERGED" ]]; then
       log_warn "finalize-run: task $tid PR #$pr_num not yet merged (state=$pr_state)"

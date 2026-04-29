@@ -434,6 +434,57 @@ set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC
 assert_eq "finalize-run fetch failure: exit 3" "3" "$RC"
 rm -f "$STUB_DIR/git"
 
+# --- 14e2: finalize-run — git fetch stderr surfaces in error log -----------
+new_run finalize-fetch-stderr
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '777' >/dev/null
+write_stub git '
+case "$1 $2 $3" in
+  "fetch origin staging") echo "fatal: unique-fetch-marker-XYZ" 1>&2; exit 1 ;;
+esac
+exec /usr/bin/git "$@"'
+set +e; FETCH_OUT=$(pipeline-run-task "$RUN_ID" RUN --stage finalize-run 2>&1); RC=$?; set -e
+assert_eq "finalize-run fetch stderr: exit 3" "3" "$RC"
+if printf '%s' "$FETCH_OUT" | grep -q "unique-fetch-marker-XYZ"; then
+  pass "finalize-run fetch stderr surfaced in log_error"
+else
+  fail "finalize-run fetch stderr NOT in output: $FETCH_OUT"
+fi
+rm -f "$STUB_DIR/git"
+
+# --- 14e3: finalize-run — gh pr view failure surfaces stderr, blocks finalize -
+new_run finalize-prview-stderr
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '321' >/dev/null
+write_stub gh '
+case "$*" in
+  "pr view 321 --json state,mergeCommit,headRefOid")
+    echo "gh-error-marker-ABC" 1>&2; exit 4 ;;
+  "pr create"*) echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+_stub_git_finalize_ok
+set +e; PRV_OUT=$(pipeline-run-task "$RUN_ID" RUN --stage finalize-run 2>&1); RC=$?; set -e
+assert_eq "finalize-run prview stderr: exit 3" "3" "$RC"
+if printf '%s' "$PRV_OUT" | grep -q "gh-error-marker-ABC"; then
+  pass "finalize-run prview stderr surfaced in log_error"
+else
+  fail "finalize-run prview stderr NOT in output: $PRV_OUT"
+fi
+if printf '%s' "$PRV_OUT" | grep -q "rc=4"; then
+  pass "finalize-run prview rc captured"
+else
+  fail "finalize-run prview rc not captured: $PRV_OUT"
+fi
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+rm -f "$STUB_DIR/git"
+
 # --- 15: finalize-run SHA guard — all PRs merged, SHA on staging → proceeds -
 new_run finalize-sha-guard-merged
 pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
