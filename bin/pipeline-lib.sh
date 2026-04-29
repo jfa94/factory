@@ -138,17 +138,28 @@ detect_pkg_manager() {
 atomic_write() {
   local target="$1" content="$2"
   local tmp
-  tmp=$(mktemp "${target}.XXXXXX")
-  printf '%s' "$content" > "$tmp"
+  tmp=$(mktemp "${target}.XXXXXX") || return 1
+  printf '%s' "$content" > "$tmp" || { rm -f "$tmp"; return 1; }
   if command -v python3 >/dev/null 2>&1; then
     python3 -c "
 import os, sys
-f = open(sys.argv[1], 'rb')
-os.fsync(f.fileno())
-f.close()
+fd = os.open(sys.argv[1], os.O_RDONLY)
+os.fsync(fd); os.close(fd)
 " "$tmp" 2>/dev/null || true
   fi
-  mv -f "$tmp" "$target"
+  if ! mv -f "$tmp" "$target"; then
+    rm -f "$tmp"
+    log_error "atomic_write: mv failed for $target"
+    return 1
+  fi
+  # fsync parent dir so the rename is durable.
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import os, sys
+d = os.open(os.path.dirname(sys.argv[1]) or '.', os.O_RDONLY)
+os.fsync(d); os.close(d)
+" "$target" 2>/dev/null || true
+  fi
 }
 
 # Get the current run directory (via 'current' symlink)

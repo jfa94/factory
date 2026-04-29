@@ -206,7 +206,8 @@ _stage_preflight() {
   } > "$prompt_file"
 
   _task_write stage '"preflight_done"'
-  pipeline-state task-status "$run_id" "$task_id" executing >/dev/null || true
+  pipeline-state task-status "$run_id" "$task_id" executing >/dev/null \
+    || log_warn "task-status executing write failed for $task_id (non-fatal)"
 
   local cov_base snapshotted="false"
   cov_base=$(pipeline-state read "$run_id" '.orchestrator.worktree // empty' 2>/dev/null || true)
@@ -465,7 +466,10 @@ _stage_preexec_tests() {
 
   if [[ "$tw_status" == "BLOCKED" ]]; then
     log_warn "test-writer blocked for $task_id"
-    pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+    if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+      log_error "task-status failed write failed for $task_id"
+      return 30
+    fi
     t1=$(_now_ms)
     log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"test_writer_blocked\""
     return 30
@@ -479,7 +483,10 @@ _stage_preexec_tests() {
 
   if ! _verify_red_tests "$tw_wt"; then
     _task_write test_writer_status '"BLOCKED"'
-    pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+    if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+      log_error "task-status failed write failed for $task_id"
+      return 30
+    fi
     t1=$(_now_ms)
     log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"red_tests_not_verified\""
     return 30
@@ -898,7 +905,10 @@ _stage_postreview() {
 
   if $any_discuss; then
     _task_write stage '"postreview_pending_human"'
-    pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null || true
+    if ! pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null; then
+      log_error "task-status needs_human_review write failed for $task_id"
+      return 30
+    fi
     t1=$(_now_ms)
     log_step_end "postreview" "needs_human_review" "$((t1-t0))" "task_id=\"$task_id\""
     return 30
@@ -912,7 +922,10 @@ _stage_postreview() {
     _task_write review_attempts "$attempts"
     if (( attempts > 3 )); then
       _task_write stage '"postreview_exhausted"'
-      pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+      if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+        log_error "task-status failed write failed for $task_id"
+        return 30
+      fi
       t1=$(_now_ms)
       log_step_end "postreview" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"review_exhausted\""
       return 30
@@ -1076,13 +1089,19 @@ _stage_ship() {
     case "$ci_status" in
       green)
         if [[ "$merge_status" == "stalled" ]]; then
-          pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+          if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+            log_error "task-status failed write failed for $task_id"
+            return 30
+          fi
           _task_write failure_reason '"auto-merge stalled despite green CI; manual investigation required"'
           t1=$(_now_ms)
           log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"merge_stalled\""
           return 30
         fi
-        pipeline-state task-status "$run_id" "$task_id" done >/dev/null || true
+        if ! pipeline-state task-status "$run_id" "$task_id" done >/dev/null; then
+          log_error "task-status done write failed for $task_id"
+          return 30
+        fi
         _task_write stage '"ship_done"'
         t1=$(_now_ms)
         log_step_end "ship" "ok" "$((t1-t0))" "task_id=\"$task_id\"" "ci=\"green\""
@@ -1094,12 +1113,16 @@ _stage_ship() {
         attempts=$((attempts + 1))
         _task_write ci_fix_attempts "$attempts"
         if (( attempts > 2 )); then
-          pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+          if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+            log_error "task-status failed write failed for $task_id"
+            return 30
+          fi
           t1=$(_now_ms)
           log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_exhausted\""
           return 30
         fi
-        pipeline-state task-status "$run_id" "$task_id" ci_fixing >/dev/null || true
+        pipeline-state task-status "$run_id" "$task_id" ci_fixing >/dev/null \
+          || log_warn "task-status ci_fixing write failed for $task_id (non-fatal)"
         _ensure_prompt_dir
         local pf; pf=$(_prompt_path executor-ci-fix)
         printf '[task:%s]\nFix failing CI on PR for task %s.\nSTATUS: DONE|...\n' "$task_id" "$task_id" > "$pf"
@@ -1112,7 +1135,10 @@ _stage_ship() {
         return 10 ;;
       *)
         log_warn "ci_status=$ci_status treated as timeout"
-        pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null || true
+        if ! pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null; then
+          log_error "task-status needs_human_review write failed for $task_id"
+          return 30
+        fi
         t1=$(_now_ms)
         log_step_end "ship" "needs_human_review" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_timeout\""
         return 30 ;;
@@ -1174,14 +1200,18 @@ _stage_ship() {
   fi
   _task_write pr_number "$pr_number"
   _task_write pr_url    "\"$pr_url\""
-  pipeline-state task-status "$run_id" "$task_id" reviewing >/dev/null || true
+  pipeline-state task-status "$run_id" "$task_id" reviewing >/dev/null \
+    || log_warn "task-status reviewing write failed for $task_id (non-fatal)"
   log_metric "task.pr_created" "task_id=\"$task_id\"" "pr_number=$pr_number"
 
   if [[ "${FACTORY_ASYNC_CI:-auto}" == "off" ]]; then
     _ensure_prompt_dir
     if pipeline-wait-pr "$pr_number" > "$run_dir/.state/$run_id/$task_id.ci.json"; then
       emit_ci_metric task "$pr_number" green
-      pipeline-state task-status "$run_id" "$task_id" done >/dev/null || true
+      if ! pipeline-state task-status "$run_id" "$task_id" done >/dev/null; then
+        log_error "task-status done write failed for $task_id"
+        return 30
+      fi
       _task_write stage '"ship_done"'
       _task_write ci_status '"green"'
       t1=$(_now_ms)
@@ -1317,7 +1347,8 @@ _stage_finalize_run() {
     local agents_json
     agents_json=$(jq -cn --arg pf "$pf" \
       '[{subagent_type:"scribe", model:"sonnet", maxTurns:40, prompt_file:$pf}]')
-    pipeline-state write "$run_id" '.scribe.status' '"spawned"' >/dev/null || true
+    pipeline-state write "$run_id" '.scribe.status' '"spawned"' >/dev/null \
+      || log_warn "scribe.status spawned write failed (non-fatal; cap counter may not tick)"
     _emit_manifest finalize-run "$agents_json"
     t1=$(_now_ms)
     log_step_end "finalize-run" "spawn" "$((t1-t0))" "stage=\"scribe\""

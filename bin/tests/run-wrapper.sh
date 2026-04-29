@@ -1028,5 +1028,22 @@ assert_eq "stamped-json-review: exit 0" "0" "$RC"
 assert_eq "stamped-json-review: stage=postreview_done" "postreview_done" "$(stage_of)"
 write_stub pipeline-parse-review 'cat'
 
+# --- 47: Task 3.8 — terminal state-write failure propagates as exit 30 --------
+# Stub pipeline-state to fail when called with `task-status ... done`,
+# delegating all other invocations to the real implementation in BIN_DIR.
+new_run terminal-write-fail
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 worktree '""' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '"123"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 ci_status '"green"' >/dev/null
+write_stub pipeline-state '
+case "$* " in
+  *"task-status "*" done "*) exit 1 ;;
+  *) exec "'"$BIN_DIR"'/pipeline-state" "$@" ;;
+esac'
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1; RC=$?; set -e
+assert_eq "terminal-write-fail: exit 30" "30" "$RC"
+rm -f "$STUB_DIR/pipeline-state"
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

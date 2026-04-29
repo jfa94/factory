@@ -43,8 +43,20 @@ _KNOWN_TASK_FIELDS=(
 _state_lock_dir() { echo "$CLAUDE_PLUGIN_DATA/runs/$1/state.lock"; }
 
 _state_lock() {
-  local run_id="$1" lock_dir attempts=0
+  local run_id="$1" lock_dir lock_file attempts=0
   lock_dir=$(_state_lock_dir "$run_id")
+  mkdir -p "$(dirname "$lock_dir")"
+  lock_file="${lock_dir}.flock"
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$lock_file"
+    if ! flock -x -w 10 9; then
+      log_error "state lock timeout for run $run_id (flock 10s)"
+      exit 1
+    fi
+    return 0
+  fi
+  # Fallback: existing mkdir-based lock (keep as-is for systems without flock,
+  # e.g. macOS without homebrew util-linux).
   while ! mkdir "$lock_dir" 2>/dev/null; do
     attempts=$((attempts + 1))
     if (( attempts > 200 )); then
@@ -68,7 +80,13 @@ _state_lock() {
 }
 
 _state_unlock() {
-  rm -rf "$(_state_lock_dir "$1")"
+  local run_id="$1"
+  if command -v flock >/dev/null 2>&1; then
+    flock -u 9 2>/dev/null
+    exec 9>&-
+  else
+    rm -rf "$(_state_lock_dir "$run_id")"
+  fi
 }
 
 # Parse a jq-style dotted/bracketed path into a JSON array for use with setpath.
