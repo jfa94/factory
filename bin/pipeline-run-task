@@ -650,11 +650,16 @@ _stage_postexec() {
         return 30
       fi
     else
-      # holdout_review_file not wired by SubagentStop yet — record skip so the
-      # scorer can distinguish "not configured" from "passed". Do not spawn a
-      # dedicated holdout reviewer here; infinite re-entry risk.
-      _task_write quality_gates.holdout '"skipped"'
-      log_warn "holdout file present but reviewer output not wired for $task_id; skipping Layer 4"
+      # holdout_review_file unwired — fail closed. Silently skipping let real
+      # holdout failures merge unchecked; a reviewer-output gap means we cannot
+      # verify Layer 4 and must escalate.
+      log_error "holdout file $holdout_file present but holdout_review_file unwired for $task_id — escalating to human"
+      _task_write quality_gates.holdout '"missing-reviewer-output"'
+      pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null \
+        || log_error "task-status needs_human_review write failed for $task_id"
+      t1=$(_now_ms)
+      log_step_end "postexec" "needs_human_review" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout_unwired\""
+      return 30
     fi
   fi
 
