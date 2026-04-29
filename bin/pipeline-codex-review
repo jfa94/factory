@@ -82,10 +82,10 @@ if [[ -z "$diff_output" ]]; then
 fi
 
 # Build prompt file
-prompt_file=$(mktemp /tmp/codex-review-prompt-XXXXXX.md)
-out_file=$(mktemp /tmp/codex-review-output-XXXXXX.json)
-diff_file=$(mktemp /tmp/codex-review-diff-XXXXXX.diff)
-err_file=$(mktemp /tmp/codex-review-err-XXXXXX.log)
+prompt_file=$(temp_file ".prompt.md")
+out_file=$(temp_file ".out.json")
+diff_file=$(temp_file ".diff")
+err_file=$(temp_file ".err.log")
 printf '%s\n' "$diff_output" > "$diff_file"
 trap 'rm -f "$prompt_file" "$out_file" "$diff_file" "$err_file"' EXIT
 

@@ -771,24 +771,42 @@ load_prompt() {
   fi
 }
 
+# Allowed variables that prompt templates may reference. Anything else is
+# refused (log_warn) and replaced with a [BLOCKED:VAR] sentinel — prevents
+# templates from leaking arbitrary env (PATH, HOME, secrets, etc.).
+_ENVSUBST_ALLOWED=(run_id task_id spec_path stage role base_ref)
+
 # Pure-bash envsubst substitute. Reads stdin; expands ${VAR} and $VAR
-# using the caller's environment via ${!var} indirection. Only replaces
-# tokens that correspond to valid variable names (ASCII alnum + underscore,
-# not starting with a digit).
+# using the caller's environment via ${!var} indirection. Only variables
+# present in _ENVSUBST_ALLOWED are substituted; all others are replaced
+# with a [BLOCKED:VAR] sentinel and a log_warn is emitted.
 _envsubst_bash() {
-  local line
+  local line var val
   while IFS= read -r line || [[ -n "$line" ]]; do
-    # Replace ${VAR} patterns
+    # ${VAR} form
     while [[ "$line" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)\} ]]; do
-      local var="${BASH_REMATCH[1]}"
-      local val="${!var:-}"
+      var="${BASH_REMATCH[1]}"
+      local allowed=0 v
+      for v in "${_ENVSUBST_ALLOWED[@]}"; do [[ "$v" == "$var" ]] && allowed=1; done
+      if (( allowed == 0 )); then
+        log_warn "_envsubst_bash: refusing non-allowlisted var: $var"
+        line="${line/\$\{$var\}/[BLOCKED:$var]}"
+        continue
+      fi
+      val="${!var:-}"
       line="${line/\$\{$var\}/$val}"
     done
-    # Replace $VAR patterns (not followed by { to avoid double-replacement)
+    # $VAR form (not followed by `{` — handled above)
     while [[ "$line" =~ \$([A-Za-z_][A-Za-z0-9_]*)([^A-Za-z0-9_]|$) ]]; do
-      local var="${BASH_REMATCH[1]}"
-      local val="${!var:-}"
-      local rest="${BASH_REMATCH[2]}"
+      var="${BASH_REMATCH[1]}"
+      local allowed=0 v
+      for v in "${_ENVSUBST_ALLOWED[@]}"; do [[ "$v" == "$var" ]] && allowed=1; done
+      if (( allowed == 0 )); then
+        log_warn "_envsubst_bash: refusing non-allowlisted var: $var"
+        line="${line/\$$var/[BLOCKED:$var]}"
+        continue
+      fi
+      val="${!var:-}"
       line="${line/\$$var/$val}"
     done
     printf '%s\n' "$line"
