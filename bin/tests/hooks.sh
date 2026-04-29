@@ -510,14 +510,55 @@ assert_eq "override exit 0" "0" "$exit_code"
 assert_eq "override 1 check" "1" "$(echo "$output" | jq -r '.checks | length')"
 assert_eq "override only lint" "lint" "$(echo "$output" | jq -r '.checks[0].command')"
 
-# Fixture 4: missing package.json — graceful error
+# Fixture 4: missing package.json — non-JS repo, skipped cleanly (Task 4.9)
 qg_proj4=$(mktemp -d)
 set +e
 output=$("$QG" "$qg_run" "qt1" "$qg_proj4" 2>/dev/null)
 exit_code=$?
 set -e
-assert_eq "no package.json exit 1" "1" "$exit_code"
-assert_eq "no package.json ok=false" "false" "$(echo "$output" | jq -r '.ok')"
+assert_eq "no package.json exit 0 (skipped)" "0" "$exit_code"
+assert_eq "no package.json ok=true" "true" "$(echo "$output" | jq -r '.ok')"
+assert_eq "no package.json skipped=true" "true" "$(echo "$output" | jq -r '.skipped')"
+assert_eq "no package.json reason=no-package-json" "no-package-json" "$(echo "$output" | jq -r '.reason')"
+assert_eq "state.quality_gate.skipped=true" "true" \
+  "$(jq -r '.tasks.qt1.quality_gate.skipped' "$qg_run_dir/state.json")"
+
+# Fixture 5: package.json without any quality scripts — skipped cleanly (Task 4.9)
+qg_proj5=$(mktemp -d)
+cat > "$qg_proj5/package.json" << 'PJSON'
+{
+  "name": "qg-no-scripts",
+  "scripts": {
+    "build": "true",
+    "start": "true"
+  }
+}
+PJSON
+set +e
+output=$("$QG" "$qg_run" "qt1" "$qg_proj5" 2>/dev/null)
+exit_code=$?
+set -e
+assert_eq "no quality scripts exit 0" "0" "$exit_code"
+assert_eq "no quality scripts ok=true" "true" "$(echo "$output" | jq -r '.ok')"
+assert_eq "no quality scripts reason=no-quality-scripts" "no-quality-scripts" "$(echo "$output" | jq -r '.reason')"
+
+# Fixture 6: package.json with only lint script — runs only that command (Task 4.9)
+qg_proj6=$(mktemp -d)
+cat > "$qg_proj6/package.json" << 'PJSON'
+{
+  "name": "qg-only-lint",
+  "scripts": {
+    "lint": "true"
+  }
+}
+PJSON
+set +e
+output=$("$QG" "$qg_run" "qt1" "$qg_proj6" 2>/dev/null)
+exit_code=$?
+set -e
+assert_eq "only-lint exit 0" "0" "$exit_code"
+assert_eq "only-lint 1 check" "1" "$(echo "$output" | jq -r '.checks | length')"
+assert_eq "only-lint ran lint" "lint" "$(echo "$output" | jq -r '.checks[0].command')"
 
 # ============================================================
 echo ""

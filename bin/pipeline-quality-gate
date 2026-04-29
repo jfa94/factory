@@ -28,8 +28,8 @@ fi
 cd "$worktree"
 
 if [[ ! -f package.json ]]; then
-  log_error "no package.json in worktree: $worktree"
-  result='{"ok":false,"error":"no_package_json","checks":[]}'
+  log_info "no package.json in $worktree — quality gate not applicable; recording skipped"
+  result='{"ok":true,"skipped":true,"reason":"no-package-json","checks":[]}'
   run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
   if [[ -f "$run_dir/state.json" ]]; then
     if ! pipeline-state task-write "$run_id" "$task_id" quality_gate "$result" >/dev/null; then
@@ -38,17 +38,34 @@ if [[ ! -f package.json ]]; then
     fi
   fi
   printf '%s\n' "$result"
-  exit 1
+  exit 0
 fi
 
 pkg_mgr=$(detect_pkg_manager "$worktree")
 
 # Discover the command list. Prefer the factory.quality override; fall
-# back to a sensible default trio. We use jq with `// empty` so a missing
-# field yields an empty list, which we then replace with the default.
+# back to npm scripts that actually exist (lint / typecheck|tsc /
+# test:coverage|test). Skip cleanly if none are configured — a JS repo
+# without any quality scripts is a real config, not a failure.
 commands=$(jq -r '.["factory"].quality // empty | .[]?' package.json 2>/dev/null || true)
 if [[ -z "$commands" ]]; then
-  commands=$'lint\ntypecheck\ntest:coverage'
+  commands=""
+  jq -e '.scripts.lint' package.json >/dev/null 2>&1 && commands+="lint"$'\n'
+  jq -e '.scripts.typecheck // .scripts.tsc' package.json >/dev/null 2>&1 && commands+="typecheck"$'\n'
+  jq -e '.scripts."test:coverage" // .scripts.test' package.json >/dev/null 2>&1 && commands+="test:coverage"$'\n'
+  if [[ -z "$commands" ]]; then
+    log_info "no factory.quality override and no recognized scripts in $worktree — skipping"
+    result='{"ok":true,"skipped":true,"reason":"no-quality-scripts","checks":[]}'
+    run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+    if [[ -f "$run_dir/state.json" ]]; then
+      if ! pipeline-state task-write "$run_id" "$task_id" quality_gate "$result" >/dev/null; then
+        log_error "failed to record quality_gate result for $task_id (state.json present but write failed)"
+        exit 1
+      fi
+    fi
+    printf '%s\n' "$result"
+    exit 0
+  fi
 fi
 
 run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
