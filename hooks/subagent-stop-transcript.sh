@@ -103,9 +103,8 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
     implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer)
       pipeline-state task-write "$run_id" "$task_id" reviewer_status "\"$status\"" >/dev/null 2>&1 || true
       if [[ -n "$review_path" ]]; then
-        cur=$(jq -c --arg t "$task_id" '.tasks[$t].review_files // []' "$state_file" 2>/dev/null || printf '[]')
-        new=$(printf '%s' "$cur" | jq -c --arg p "$review_path" '. + [$p] | unique')
-        pipeline-state task-write "$run_id" "$task_id" review_files "$new" >/dev/null 2>&1 || true
+        pipeline-state task-array-append "$run_id" "$task_id" review_files "\"$review_path\"" >/dev/null \
+          || printf '[subagent-stop-transcript] WARN: review_files append failed for %s\n' "$task_id" >&2
       fi
       ;;
   esac

@@ -6,6 +6,7 @@
 #   read <run-id> [key]                         Read full state or jq key
 #   write <run-id> <key> <value>                Atomic write to state key
 #   task-write <run-id> <task-id> <field> <value>  Atomic per-task write (hyphen-safe)
+#   task-array-append <run-id> <task-id> <field> <value>  Atomic append-to-array (unique)
 #   task-read <run-id> <task-id> [field]        Read a per-task field or whole record
 #   task-status <run-id> <task-id> <status>     Update task status
 #   deps-satisfied <run-id> <task-id>           Check if deps done (exit 0/1)
@@ -267,6 +268,59 @@ case "$action" in
     _state_unlock "$run_id"
     trap - EXIT
     log_info "state updated: tasks[$task_id].$field"
+    ;;
+
+  task-array-append)
+    run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
+    task_id="${2:?missing task-id}"
+    _validate_id "$task_id" "task-id" || exit 1
+    field="${3:?missing field}"
+    value="${4:?missing value}"
+    f=$(_state_file "$run_id")
+
+    if [[ "$field" =~ ^\. ]]; then
+      log_error "task-array-append field must not start with '.' (got: $field)"
+      exit 1
+    fi
+    if ! [[ "$field" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]; then
+      log_error "invalid task-array-append field: $field"
+      exit 1
+    fi
+
+    field_root="${field%%.*}"
+    _known=0
+    for _k in "${_KNOWN_TASK_FIELDS[@]}"; do
+      [[ "$_k" == "$field_root" ]] && { _known=1; break; }
+    done
+    if (( _known == 0 )); then
+      log_warn "task-array-append unknown field: $field (known roots: ${_KNOWN_TASK_FIELDS[*]})"
+    fi
+    unset _known _k
+
+    jq_path=$(jq -n --arg tid "$task_id" --arg f "$field" \
+      '["tasks", $tid] + ($f | split("."))') || {
+        log_error "failed to build task path"
+        exit 1
+      }
+
+    _state_lock "$run_id"
+    trap '_state_unlock "$run_id"' EXIT
+    state=$(_read_state_file "$run_id")
+
+    if printf '%s' "$value" | jq empty 2>/dev/null; then
+      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --argjson v "$value" \
+        'setpath($path; ((getpath($path) // []) + [$v] | unique))')
+    else
+      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --arg v "$value" \
+        'setpath($path; ((getpath($path) // []) + [$v] | unique))')
+    fi
+    updated=$(printf '%s' "$updated" | jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.updated_at = $t')
+
+    atomic_write "$f" "$updated"
+    _state_unlock "$run_id"
+    trap - EXIT
+    log_info "state appended: tasks[$task_id].$field"
     ;;
 
   task-read)
