@@ -611,13 +611,15 @@ _stage_postexec() {
   fi
 
   if ! ( cd "$wt" && pipeline-tdd-gate --task-id "$task_id" --run-id "$run_id" ) >/dev/null; then
-    _task_write quality_gates.tdd '{"ok":false}'
+    # pipeline-tdd-gate is the sole writer of quality_gates.tdd (it persists
+    # the structured result via pipeline-state task-write). Do not duplicate
+    # the write here — that would clobber violation details with a bare
+    # {"ok":false} object.
     log_warn "tdd gate failed for $task_id"
     t1=$(_now_ms)
     log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"tdd\""
     return 30
   fi
-  _task_write quality_gates.tdd '{"ok":true}'
 
   local cov_before="$run_dir/.state/$run_id/$task_id.coverage-before.json"
   local cov_after="$wt/coverage/coverage-summary.json"

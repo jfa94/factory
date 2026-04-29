@@ -490,6 +490,73 @@ case11() {
   pass "case11: tagged empty commit does not advance seen_test_only"
 }
 
+# ---- Task 4.11: pipeline-state task-write rc propagation ----
+
+# case_state_write_failure_propagates: when pipeline-state task-write fails,
+# the gate exits non-zero and surfaces the failure on stderr (no silent swallow).
+# Forces failure by shadowing pipeline-state on PATH with a stub returning rc=1.
+case_state_write_failure_propagates() {
+  local repo out rc err stub_dir
+  repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(x): failing [task-001]" "tests/x.test.ts"
+  _commit "$repo" "feat(x): impl [task-001]"    "src/x.ts"
+
+  stub_dir=$(mktemp -d)
+  cat > "$stub_dir/pipeline-state" <<'STUB'
+#!/usr/bin/env bash
+# Stub: simulate task-write failure with stderr.
+if [[ "${1:-}" == "task-write" ]]; then
+  printf 'simulated state write error\n' >&2
+  exit 1
+fi
+exit 0
+STUB
+  chmod +x "$stub_dir/pipeline-state"
+
+  err=$(mktemp)
+  set +e
+  out=$( cd "$repo" && PATH="$stub_dir:$PATH" "$GATE" --task-id task-001 --base staging --run-id run-x 2>"$err" )
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    fail "case_state_write_failure_propagates: expected non-zero exit when state write fails; got rc=0; stderr=$(cat "$err")"
+  fi
+  if ! grep -q "state write failed" "$err"; then
+    fail "case_state_write_failure_propagates: expected 'state write failed' on stderr; got: $(cat "$err")"
+  fi
+  if ! grep -q "simulated state write error" "$err"; then
+    fail "case_state_write_failure_propagates: expected stub stderr surfaced; got: $(cat "$err")"
+  fi
+  rm -rf "$stub_dir" "$err"
+  pass "case_state_write_failure_propagates: state-write rc surfaced as gate failure"
+}
+
+# case_state_write_success_still_passes: when pipeline-state task-write succeeds,
+# the gate exits 0 (regression guard for the rc-propagation change).
+case_state_write_success_still_passes() {
+  local repo out rc stub_dir
+  repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(x): failing [task-001]" "tests/x.test.ts"
+  _commit "$repo" "feat(x): impl [task-001]"    "src/x.ts"
+
+  stub_dir=$(mktemp -d)
+  cat > "$stub_dir/pipeline-state" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+  chmod +x "$stub_dir/pipeline-state"
+
+  set +e
+  out=$( cd "$repo" && PATH="$stub_dir:$PATH" "$GATE" --task-id task-001 --base staging --run-id run-x )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_state_write_success_still_passes: expected exit 0, got $rc"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_state_write_success_still_passes: expected ok=true; got $out"
+  rm -rf "$stub_dir"
+  pass "case_state_write_success_still_passes: successful state write keeps gate passing"
+}
+
 case1; case2; case3; case4; case4b; case5; case6; case7; case8
 case_go_test; case_ruby_spec; case_java_test; case_kotlin_test
 case_python_test; case_swift_tests; case_csharp_tests; case_go_impl_rejected
@@ -498,4 +565,5 @@ case_monorepo_packages_tests; case_monorepo_packages_test_singular
 case_monorepo_apps_spec; case_root_double_underscore_tests
 case_is_test_path_unit
 case9; case10; case11
+case_state_write_failure_propagates; case_state_write_success_still_passes
 printf 'all tdd-gate tests passed\n'

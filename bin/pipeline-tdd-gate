@@ -55,12 +55,18 @@ _task_exempt() {
 
 _emit() {
   local ok="$1" exempt="$2" violations="$3"
-  local out
+  local out _err
   out=$(jq -n --argjson ok "$ok" --argjson exempt "$exempt" --argjson v "$violations" \
     '{ok:$ok, exempt:$exempt, violations:$v}')
   printf '%s\n' "$out"
   if [[ -n "$run_id" ]] && command -v pipeline-state >/dev/null 2>&1; then
-    pipeline-state task-write "$run_id" "$task_id" quality_gates.tdd "$out" >/dev/null 2>&1 || true
+    _err=$(mktemp)
+    if ! pipeline-state task-write "$run_id" "$task_id" quality_gates.tdd "$out" >/dev/null 2>"$_err"; then
+      printf 'pipeline-tdd-gate: state write failed: %s\n' "$(cat "$_err")" >&2
+      rm -f "$_err"
+      return 1
+    fi
+    rm -f "$_err"
   fi
   command -v log_metric >/dev/null && log_metric "task.gate.tdd" "task_id=\"$task_id\"" "ok=$ok" "exempt=$exempt" || true
 }
