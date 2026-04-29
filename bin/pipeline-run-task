@@ -854,19 +854,21 @@ _stage_postreview() {
       _gen=$(printf '%s' "$verdict" | jq -r '.generator // ""' 2>/dev/null)
       if [[ "$_gen" != "pipeline-codex-review-v1" ]]; then
         log_warn "review file $f has no recognized generator stamp; routing through parse-review task_id=\"$task_id\""
+        local _perr2; _perr2=$(mktemp)
         if [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
           local base_ref
           base_ref=$(_resolve_base_ref "$pr_wt")
           if [[ -z "$base_ref" ]]; then
-            log_warn "postreview: base ref not found — treating $f as REQUEST_CHANGES task_id=\"$task_id\""
-            any_changes=true; continue
+            log_error "postreview: base ref not found for unstamped $f — escalating to human task_id=\"$task_id\""
+            rm -f "$_perr2"; any_discuss=true; continue
           fi
-          verdict=$(cd "$pr_wt" && pipeline-parse-review --base "$base_ref" < "$f") \
-            || { log_warn "parse-review failed on $f"; any_changes=true; continue; }
+          verdict=$(cd "$pr_wt" && pipeline-parse-review --base "$base_ref" < "$f" 2>"$_perr2") \
+            || { log_error "parse-review failed on $f: $(cat "$_perr2")"; rm -f "$_perr2"; any_discuss=true; continue; }
         else
-          verdict=$(pipeline-parse-review < "$f") \
-            || { log_warn "parse-review failed on $f"; any_changes=true; continue; }
+          verdict=$(pipeline-parse-review < "$f" 2>"$_perr2") \
+            || { log_error "parse-review failed on $f: $(cat "$_perr2")"; rm -f "$_perr2"; any_discuss=true; continue; }
         fi
+        rm -f "$_perr2"
       elif ! printf '%s' "$verdict" | jq -e 'has("verdict")' >/dev/null 2>&1; then
         log_warn "stamped review missing .verdict: $f"; any_changes=true; continue
       fi
