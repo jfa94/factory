@@ -1156,6 +1156,37 @@ out=$(printf '{"source":"resume"}' | bash "$HOOKS_DIR/session-start-resume.sh")
 set -e
 assert_eq "session-start terminal no output" "" "$out"
 
+echo ""
+echo "=== session-start-resume: complete stage map ==="
+
+# Each case: stage in state.json → expected --stage in resume command.
+_resume_stage_check() {
+  local label="$1" stage_in="$2" expect="$3"
+  local rid="run-resume-map-$(printf '%s' "$label" | tr -c '[:alnum:]' '-')"
+  _seed_run "$rid" "$(jq -cn --arg s "$stage_in" '{status:"running",tasks:{"t-1":{status:"executing",stage:$s}}}')"
+  export CLAUDE_ENV_FILE=$(mktemp)
+  local out ctx
+  out=$(printf '{"source":"resume"}' | bash "$HOOKS_DIR/session-start-resume.sh")
+  ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+  if [[ "$ctx" == *"--stage $expect"* ]]; then
+    echo "  PASS: stage map $stage_in → $expect"; pass=$((pass+1))
+  else
+    echo "  FAIL: stage map $stage_in expected '--stage $expect' in: $ctx"; fail=$((fail+1))
+  fi
+  rm -f "$CLAUDE_ENV_FILE"; unset CLAUDE_ENV_FILE
+  rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+}
+
+_resume_stage_check "preflight_done"            "preflight_done"            "preexec_tests"
+_resume_stage_check "preexec_tests_done"        "preexec_tests_done"        "postexec"
+_resume_stage_check "postexec_spawn_pending"    "postexec_spawn_pending"    "postexec"
+_resume_stage_check "postexec_done"             "postexec_done"             "postreview"
+_resume_stage_check "postreview_pending_human"  "postreview_pending_human"  "ship"
+_resume_stage_check "postreview_exhausted"      "postreview_exhausted"      "ship"
+_resume_stage_check "postreview_done"           "postreview_done"           "ship"
+_resume_stage_check "ship_done"                 "ship_done"                 "finalize-run"
+_resume_stage_check "unknown_stage_default"     "weird_state"               "preflight"
+
 # ============================================================
 echo ""
 echo "=== asyncrewake-ci: no-op when Claude version below minimum ==="
