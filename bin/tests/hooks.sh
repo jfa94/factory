@@ -1680,6 +1680,36 @@ out=$(printf '%s' '{"tool_input":{"command":"bash -lc \"ls\""}}' \
   | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
 assert_eq "bash -lc interactive allowed (no autonomous mode)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
 
+# env wrapping bash -c (was the prior bypass)
+_seed_run "run-env-bash" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"env bash -c \"gh pr create\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_contains "env bash -c denied" "deny" "$out"
+
+# env with VAR=val prefix wrapping bash
+_seed_run "run-env-var-bash" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"env PATH=/tmp bash -c \"gh pr merge 1\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_contains "env VAR=val bash -c denied" "deny" "$out"
+
+# env -i sh -c
+_seed_run "run-env-i-sh" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"env -i sh -c \"gh pr create\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_contains "env -i sh -c denied" "deny" "$out"
+
+# Unquoted: bash myscript.sh
+_seed_run "run-unquoted-bash" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"bash /tmp/some.sh"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_contains "unquoted bash script denied" "deny" "$out"
+
+# Interactive (no autonomous) — env bash -c passes through
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+out=$(printf '%s' '{"tool_input":{"command":"env bash -c \"ls\""}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "env bash -c interactive allowed" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
 # ============================================================
 echo ""
 echo "=== gh pr create requires task_id in autonomous mode ==="

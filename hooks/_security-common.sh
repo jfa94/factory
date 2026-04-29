@@ -6,8 +6,20 @@
 # Returns 0 (true) if the command is a nested-shell or hook-bypass wrapper.
 _is_nested_shell_or_hook_bypass() {
   local cmd="$1"
-  # bash/sh/zsh/env -[lic] '<cmd>' patterns (with optional flag combos)
-  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])((bash|sh|zsh|env)[[:space:]]+(-[A-Za-z]+[[:space:]]+)?[\"\'][^\"\']+[\"\']) ]]; then
+  # bash/sh/zsh -[lic] '<cmd>' (with optional flag combos and quoted arg)
+  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])(bash|sh|zsh)[[:space:]]+(-[A-Za-z]+[[:space:]]+)?[\"\'][^\"\']+[\"\'] ]]; then
+    return 0
+  fi
+  # env (with optional VAR=val prefixes) -[lic] '<cmd>'
+  # OR env (with optional VAR=val prefixes) wrapping a shell binary: `env bash -c ...`, `env -i sh -c ...`
+  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])env([[:space:]]+-[A-Za-z]+)*([[:space:]]+[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)*[[:space:]]+(bash|sh|zsh)([[:space:]]|$) ]]; then
+    return 0
+  fi
+  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])env[[:space:]]+(-[A-Za-z]+[[:space:]]+)?[\"\'][^\"\']+[\"\'] ]]; then
+    return 0
+  fi
+  # Unquoted bash/sh/zsh script invocation: `bash some/path.sh ...`
+  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])(bash|sh|zsh)[[:space:]]+[^-[:space:]] ]]; then
     return 0
   fi
   # ev-al ... (intentionally spelled to avoid triggering security scanners in CI)
