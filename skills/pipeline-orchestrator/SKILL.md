@@ -306,7 +306,7 @@ pipeline-branch worktree-remove "$orchestrator_wt"
 
 ## Resume
 
-1. `pipeline-state resume-point "$run_id"` → first non-terminal task.
+1. `pipeline-state resume-point "$run_id"` → first non-terminal task. Resume requires a **canonical run-id** of the shape `run-YYYYMMDD-HHMMSS` (e.g. `run-20260428-130201`); legacy or ad-hoc IDs (`run-test-001`, `run-x`, traversal-shaped tokens) are rejected with exit 1 so resume cannot target arbitrary state directories.
 2. `SessionStart` hook (if available) injects the current per-task stage map via `additionalContext` and exports `FACTORY_CURRENT_RUN`.
 3. Per-task loop is idempotent: the wrapper's `_already_past` check short-circuits any stage whose terminal marker (`.tasks.$t.stage`) is already at or past the requested stage.
 4. Step 6 (orchestrator worktree) reuses `.orchestrator.worktree` from state.

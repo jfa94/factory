@@ -144,7 +144,7 @@ TASKS
 test_resume_after_crash() {
   new_scenario "resume-after-crash"
 
-  local run_id="run-resume-02"
+  local run_id="run-20260102-000002"
   pipeline-init "$run_id" --mode prd >/dev/null
 
   # Seed a 3-task execution order with the validated topo-sort shape.

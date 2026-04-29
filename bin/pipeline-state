@@ -488,6 +488,14 @@ case "$action" in
   resume-point)
     run_id="${1:?missing run-id}"
     _validate_id "$run_id" "run-id" || exit 1
+    # task_5_3: resume-point operates only on canonical run-IDs. _validate_id
+    # accepts any [a-zA-Z0-9_-]{1,64} which is too permissive for resume —
+    # legacy/ad-hoc IDs (e.g. run-test-001, run-x) and traversal-shaped tokens
+    # must be rejected so resume cannot target arbitrary state directories.
+    if ! [[ "$run_id" =~ ^run-[0-9]{8}-[0-9]{6}$ ]]; then
+      log_error "run-id does not match canonical run-YYYYMMDD-HHMMSS: $run_id"
+      exit 1
+    fi
     state=$(_read_state_file "$run_id")
 
     # Prefer .execution_order (validated topo-sort from pipeline-validate-tasks).

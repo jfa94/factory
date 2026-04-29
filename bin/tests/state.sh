@@ -162,53 +162,78 @@ assert_exit "deps not satisfied (missing dep)" 1 pipeline-state deps-satisfied "
 echo ""
 echo "=== pipeline-state resume-point ==="
 
-resume=$(pipeline-state resume-point "run-test-001")
+# resume-point requires canonical run IDs (^run-[0-9]{8}-[0-9]{6}$).
+# Seed a canonical-id run that mirrors run-test-001's two-task shape.
+pipeline-init "run-20260101-000001" --issue 42 --mode prd --force >/dev/null 2>&1
+pipeline-state write "run-20260101-000001" '.tasks.task_1' '{"status":"done","depends_on":[]}' >/dev/null 2>&1
+pipeline-state write "run-20260101-000001" '.tasks.task_2' '{"status":"pending","depends_on":["task_1"]}' >/dev/null 2>&1
+resume=$(pipeline-state resume-point "run-20260101-000001")
 assert_eq "resume-point finds pending task" "task_2" "$resume"
+
+echo ""
+echo "=== task_5_3: resume-point canonical run-id check ==="
+
+# Non-canonical run IDs that pass _validate_id charset must still be rejected
+# because resume operates only on canonical run-YYYYMMDD-HHMMSS IDs.
+# (Path-traversal-style ../foo is already blocked by _validate_id; covered for
+# completeness.)
+assert_exit "resume-point rejects legacy run-test-001" 1 \
+  pipeline-state resume-point "run-test-001"
+assert_exit "resume-point rejects ad-hoc run-x" 1 \
+  pipeline-state resume-point "run-x"
+assert_exit "resume-point rejects bare prefix run-" 1 \
+  pipeline-state resume-point "run-"
+assert_exit "resume-point rejects wrong-length date run-2026-04-29" 1 \
+  pipeline-state resume-point "run-2026-04-29"
+assert_exit "resume-point rejects path-traversal-style ../foo" 1 \
+  pipeline-state resume-point "../foo"
+assert_exit "resume-point rejects empty run-id" 1 \
+  pipeline-state resume-point ""
 
 echo ""
 echo "=== task_06_01: resume-point follows execution_order ==="
 
-# Build a dedicated run for execution_order coverage so we don't collide with
-# the earlier round-trip tasks in run-test-001. --force because task_06_04's
+# Build a dedicated canonical-id run for execution_order coverage so we don't
+# collide with the earlier round-trip tasks. --force because task_06_04's
 # ownership check otherwise blocks replacing a still-'running' symlink target.
-pipeline-init "run-resume-order" --mode prd --force >/dev/null 2>&1
+pipeline-init "run-20260101-000002" --mode prd --force >/dev/null 2>&1
 
 # Seed three tasks in a non-sorted order: A pending, B pending, C pending.
 # execution_order says [C, A, B] — resume-point must return C (first pending
 # by execution_order), NOT whichever jq yields from `.tasks | to_entries`.
-pipeline-state write "run-resume-order" '.tasks.task_A' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
-pipeline-state write "run-resume-order" '.tasks.task_B' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
-pipeline-state write "run-resume-order" '.tasks.task_C' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
-pipeline-state write "run-resume-order" '.execution_order' \
+pipeline-state write "run-20260101-000002" '.tasks.task_A' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
+pipeline-state write "run-20260101-000002" '.tasks.task_B' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
+pipeline-state write "run-20260101-000002" '.tasks.task_C' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
+pipeline-state write "run-20260101-000002" '.execution_order' \
   '[{"task_id":"task_C","parallel_group":0},{"task_id":"task_A","parallel_group":1},{"task_id":"task_B","parallel_group":1}]' \
   >/dev/null 2>&1
 
-resume=$(pipeline-state resume-point "run-resume-order")
+resume=$(pipeline-state resume-point "run-20260101-000002")
 assert_eq "resume-point returns first in execution_order" "task_C" "$resume"
 
 # Mark task_C done → resume should advance to task_A (next by execution_order).
-pipeline-state task-status "run-resume-order" "task_C" "done" 2>/dev/null
-resume=$(pipeline-state resume-point "run-resume-order")
+pipeline-state task-status "run-20260101-000002" "task_C" "done" 2>/dev/null
+resume=$(pipeline-state resume-point "run-20260101-000002")
 assert_eq "resume-point skips done tasks by execution_order" "task_A" "$resume"
 
 # parallel_group ordering: group 0 done, group 1 has two entries. The first
 # one in execution_order is task_A, so resume returns it.
 # (task_A is already next-up from the prior check.)
 # Mark task_A failed → resume should skip failed and return task_B.
-pipeline-state task-status "run-resume-order" "task_A" "failed" 2>/dev/null
-resume=$(pipeline-state resume-point "run-resume-order")
+pipeline-state task-status "run-20260101-000002" "task_A" "failed" 2>/dev/null
+resume=$(pipeline-state resume-point "run-20260101-000002")
 assert_eq "resume-point skips failed tasks" "task_B" "$resume"
 
 # All terminal → resume returns empty and exits 1.
-pipeline-state task-status "run-resume-order" "task_B" "done" 2>/dev/null
+pipeline-state task-status "run-20260101-000002" "task_B" "done" 2>/dev/null
 assert_exit "resume-point exit 1 when all tasks terminal" 1 \
-  pipeline-state resume-point "run-resume-order"
+  pipeline-state resume-point "run-20260101-000002"
 
 # Legacy fallback: state with no .execution_order must still return a pending
 # task using the old jq iteration path.
-pipeline-init "run-resume-legacy" --mode prd --force >/dev/null 2>&1
-pipeline-state write "run-resume-legacy" '.tasks.only_task' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
-resume=$(pipeline-state resume-point "run-resume-legacy" 2>/dev/null)
+pipeline-init "run-20260101-000003" --mode prd --force >/dev/null 2>&1
+pipeline-state write "run-20260101-000003" '.tasks.only_task' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
+resume=$(pipeline-state resume-point "run-20260101-000003" 2>/dev/null)
 assert_eq "resume-point legacy fallback returns pending" "only_task" "$resume"
 
 echo ""
@@ -328,9 +353,10 @@ echo "=== pipeline-state list ==="
 pipeline-init "run-test-002" --mode discover --force >/dev/null 2>&1
 list_output=$(pipeline-state list)
 count=$(echo "$list_output" | jq 'length')
-# runs created up to this point: run-test-001, run-resume-order,
-# run-resume-legacy (from task_06_01 tests), run-test-002.
-assert_eq "list shows 5 runs" "5" "$count"
+# runs created up to this point: run-test-001, run-concurrent,
+# run-20260101-000001 (canonical resume seed), run-20260101-000002 (task_06_01),
+# run-20260101-000003 (legacy fallback), run-test-002.
+assert_eq "list shows 6 runs" "6" "$count"
 
 echo ""
 echo "=== task_01_04: pipeline-init --issue numeric validation ==="
