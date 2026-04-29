@@ -63,6 +63,22 @@ read_config() {
   printf '%s' "${val:-$default}"
 }
 
+# Like read_config, but emits empty string when the key is JSON null or
+# missing, regardless of whether a default was supplied. Use when an explicit
+# null in config.json should mean "unset" rather than "fall back to default".
+# Usage: read_config_strict <jq-key>
+read_config_strict() {
+  local key="$1"
+  local config_file="${CLAUDE_PLUGIN_DATA}/config.json"
+  [[ -f "$config_file" ]] || { printf ''; return; }
+  local val
+  val=$(jq -r "$key // empty" "$config_file" 2>/dev/null) || true
+  # Defensive: jq -r prints "null" for explicit JSON null without // empty;
+  # guard against any path that lets the literal slip through.
+  [[ "$val" == "null" ]] && val=""
+  printf '%s' "$val"
+}
+
 # --- State shortcuts ---
 
 # Read state (delegates to pipeline-state)
