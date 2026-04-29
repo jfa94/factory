@@ -165,6 +165,51 @@ assert_eq "postexec codex-security: agents[2]=architecture-reviewer" "architectu
 assert_eq "postexec codex-security: stage=postexec_done" "postexec_done" "$(stage_of)"
 echo claude > "$STUB_DIR/reviewer"
 
+# --- 3.c: postexec — codex CLI missing → fall back to agent path ------------
+# Regression (Task 4.2): when pipeline-codex-review fails because the codex CLI
+# is not installed, wrapper must log_warn, treat provider as "agent", and
+# fall through to the agent-path manifest emission (quality-reviewer included)
+# instead of returning rc=30.
+new_run postexec-codex-missing
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+echo codex > "$STUB_DIR/reviewer"
+write_stub pipeline-codex-review '
+echo "codex: command not found" >&2
+exit 127'
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec codex-missing: exit 10" "10" "$RC"
+# Agent path includes quality-reviewer; codex path does not.
+assert_eq "postexec codex-missing: includes quality-reviewer" "quality-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[] | select(.subagent_type=="quality-reviewer") | .subagent_type' | head -1)"
+assert_eq "postexec codex-missing: stage=postexec_spawn_pending" "postexec_spawn_pending" "$(stage_of)"
+# Restore default codex-review stub for subsequent cases.
+write_stub pipeline-codex-review '
+echo "{\"decision\":\"APPROVE\",\"blockers\":[],\"concerns\":[]}"'
+echo claude > "$STUB_DIR/reviewer"
+
+# --- 3.d: postexec — codex review fails for non-CLI reason → rc=30 ----------
+# Regression (Task 4.2): if pipeline-codex-review fails with stderr that does
+# not indicate a missing CLI, surface the error and exit 30 instead of falling
+# back to the agent path silently.
+new_run postexec-codex-error
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+echo codex > "$STUB_DIR/reviewer"
+write_stub pipeline-codex-review '
+echo "boom: model auth failure" >&2
+exit 1'
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage postexec >/dev/null 2>&1
+RC=$?
+set -e
+assert_eq "postexec codex-error: exit 30" "30" "$RC"
+write_stub pipeline-codex-review '
+echo "{\"decision\":\"APPROVE\",\"blockers\":[],\"concerns\":[]}"'
+echo claude > "$STUB_DIR/reviewer"
+
 # --- 4: postexec — claude fan-out (security tier) -------------------------
 new_run postexec-claude
 run_wrapper alpha-001 --stage preflight

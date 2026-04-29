@@ -726,27 +726,41 @@ _emit_postexec_manifest() {
     spec_path=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
     local cargs=(--task-id "$task_id")
     [[ -n "$spec_path" ]] && cargs+=(--spec-dir "$spec_path")
-    if ! pipeline-codex-review "${cargs[@]}" > "$review_file"; then
-      log_warn "codex review failed for $task_id"
-      return 30
+    local _codex_err_file _codex_rc=0
+    _codex_err_file=$(mktemp "${TMPDIR:-/tmp}/codex-review-err.XXXXXX")
+    pipeline-codex-review "${cargs[@]}" > "$review_file" 2> "$_codex_err_file" || _codex_rc=$?
+    if (( _codex_rc != 0 )); then
+      local _codex_err
+      _codex_err=$(cat "$_codex_err_file" 2>/dev/null || printf '')
+      rm -f "$_codex_err_file"
+      if printf '%s' "$_codex_err" | grep -qE 'codex: command not found|codex CLI not found'; then
+        log_warn "codex CLI unavailable for $task_id; falling back to agent reviewers"
+        provider="agent"
+        # fall through to agent-path block below
+      else
+        log_error "codex review failed for $task_id: $_codex_err"
+        return 30
+      fi
+    else
+      rm -f "$_codex_err_file"
+      _task_write review_files "$(jq -n --arg f "$review_file" '[$f]')"
+      # Codex review is synchronous — no crash window, advance directly to postexec_done.
+      _task_write stage '"postexec_done"'
+      local codex_agents_json
+      codex_agents_json=$(jq -cn --arg pf "$pf" \
+        '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:1, prompt_file:$pf}]')
+      case "$tier" in
+        feature)
+          codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
+            '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+        security)
+          codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
+            '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf},
+                  {subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+      esac
+      _emit_manifest postreview "$codex_agents_json"
+      return 10
     fi
-    _task_write review_files "$(jq -n --arg f "$review_file" '[$f]')"
-    # Codex review is synchronous — no crash window, advance directly to postexec_done.
-    _task_write stage '"postexec_done"'
-    local codex_agents_json
-    codex_agents_json=$(jq -cn --arg pf "$pf" \
-      '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:1, prompt_file:$pf}]')
-    case "$tier" in
-      feature)
-        codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
-          '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
-      security)
-        codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
-          '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf},
-                {subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
-    esac
-    _emit_manifest postreview "$codex_agents_json"
-    return 10
   fi
 
   # Agent path: write stage before manifest emission — crash between means
