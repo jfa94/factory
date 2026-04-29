@@ -23,6 +23,21 @@ if [[ ${#errors[@]} -gt 0 ]]; then
   exit 1
 fi
 
+# Size budget (security M3, M4): bound the tasks.json byte size before any jq
+# parsing to cap memory/CPU and limit prompt-injection blast radius. Default
+# 256 KB is generous for honest specs (a 50-task PRD with full descriptions
+# fits well under) and tight enough that a single oversized task file cannot
+# blow up downstream prompt builders. Override via FACTORY_TASKS_MAX_BYTES.
+TASKS_MAX_BYTES="${FACTORY_TASKS_MAX_BYTES:-$((256 * 1024))}"
+tasks_size=$(wc -c < "$tasks_file" | tr -d ' ')
+if [[ "$tasks_size" -gt "$TASKS_MAX_BYTES" ]]; then
+  errors+=("tasks.json size $tasks_size bytes exceeds budget $TASKS_MAX_BYTES (set FACTORY_TASKS_MAX_BYTES to override)")
+  errors_json=$(printf '%s\n' "${errors[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')
+  jq -n --argjson valid false --argjson errors "$errors_json" --argjson task_count 0 \
+    '{valid: $valid, task_count: $task_count, execution_order: [], errors: $errors}'
+  exit 1
+fi
+
 if ! jq empty "$tasks_file" 2>/dev/null; then
   errors+=("tasks.json is not valid JSON")
 fi

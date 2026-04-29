@@ -172,6 +172,32 @@ else
   fail "clean description passes (expected valid=true)"
 fi
 
+# size budget — file larger than FACTORY_TASKS_MAX_BYTES is rejected before
+# any jq parsing (security M3/M4 — bound memory/CPU + injection blast radius).
+TASKS_BIG_FILE="$ROOT_TMP/tasks_big.json"
+# Pad description to ~2 KB; with FACTORY_TASKS_MAX_BYTES=512 the file blows the budget.
+big_desc=$(awk 'BEGIN{for(i=0;i<2048;i++) printf "x"; print ""}')
+make_tasks "$big_desc" > "$TASKS_BIG_FILE"
+result_big=$(FACTORY_TASKS_MAX_BYTES=512 "$BIN_DIR/pipeline-validate-tasks" "$TASKS_BIG_FILE" 2>/dev/null || true)
+if printf '%s' "$result_big" | jq -e '.valid == false' >/dev/null 2>&1; then
+  ok "tasks.json over size budget rejected"
+else
+  fail "tasks.json over size budget rejected (expected valid=false)"
+fi
+if printf '%s' "$result_big" | jq -r '.errors[]' 2>/dev/null | grep -q "exceeds budget"; then
+  ok "size-budget error message present"
+else
+  fail "size-budget error message present"
+fi
+
+# Same file is accepted under the default 256 KB budget.
+result_big_default=$("$BIN_DIR/pipeline-validate-tasks" "$TASKS_BIG_FILE" 2>/dev/null)
+if printf '%s' "$result_big_default" | jq -e '.valid == true' >/dev/null 2>&1; then
+  ok "tasks.json under default size budget passes"
+else
+  fail "tasks.json under default size budget passes (expected valid=true)"
+fi
+
 # ---------------------------------------------------------------------------
 # Section 3: pipeline-fetch-prd — body truncation (stubbed gh)
 # ---------------------------------------------------------------------------
