@@ -38,8 +38,11 @@ _KNOWN_TASK_FIELDS=(
   tdd_exempt
 )
 
-# Per-run advisory lock using mkdir (atomic on all POSIX systems, no flock needed).
+# Per-run advisory lock. Prefers flock(1) when available (Linux, util-linux on
+# macOS); falls back to atomic mkdir + PID-reaper for systems without flock.
 # Serialises concurrent read-modify-write cycles in write and task-status actions.
+# _STATE_LOCK_KIND records which primitive was acquired so unlock matches.
+_STATE_LOCK_KIND=""
 _state_lock_dir() { echo "$CLAUDE_PLUGIN_DATA/runs/$1/state.lock"; }
 
 _state_lock() {
@@ -53,10 +56,11 @@ _state_lock() {
       log_error "state lock timeout for run $run_id (flock 10s)"
       exit 1
     fi
+    _STATE_LOCK_KIND=flock
     return 0
   fi
-  # Fallback: existing mkdir-based lock (keep as-is for systems without flock,
-  # e.g. macOS without homebrew util-linux).
+  _STATE_LOCK_KIND=mkdir
+  # Fallback: mkdir-based lock for systems without flock.
   while ! mkdir "$lock_dir" 2>/dev/null; do
     attempts=$((attempts + 1))
     if (( attempts > 200 )); then
@@ -81,12 +85,19 @@ _state_lock() {
 
 _state_unlock() {
   local run_id="$1"
-  if command -v flock >/dev/null 2>&1; then
-    flock -u 9 2>/dev/null
-    exec 9>&-
-  else
-    rm -rf "$(_state_lock_dir "$run_id")"
-  fi
+  case "$_STATE_LOCK_KIND" in
+    flock)
+      flock -u 9 2>/dev/null
+      exec 9>&-
+      ;;
+    mkdir)
+      rm -rf "$(_state_lock_dir "$run_id")"
+      ;;
+    *)
+      # No lock held — defensive no-op.
+      ;;
+  esac
+  _STATE_LOCK_KIND=""
 }
 
 # Parse a jq-style dotted/bracketed path into a JSON array for use with setpath.
