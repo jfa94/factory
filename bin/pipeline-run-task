@@ -83,12 +83,19 @@ _already_past() {
   cur=$(_task_field stage 2>/dev/null || printf '')
   case "$cur" in null|"") return 1 ;; esac
   local order=("${PIPELINE_STAGE_ORDER[@]}")
-  local cur_rank=-1 want_rank=-1 i
+  local cur_rank=-1 want_rank=-1 i status
   for i in "${!order[@]}"; do
     [[ "${order[$i]}" == "$cur"  ]] && cur_rank=$i
     [[ "${order[$i]}" == "$want" ]] && want_rank=$i
   done
-  (( cur_rank >= want_rank && cur_rank >= 0 && want_rank >= 0 ))
+  if (( cur_rank < 0 )); then
+    # Unknown stage (legacy state file). Treat as "past terminal" only when
+    # the task already reached a terminal status — otherwise re-run the stage.
+    status=$(pipeline-state task-read "$run_id" "$task_id" status 2>/dev/null | tr -d '"')
+    case "$status" in failed|needs_human_review) return 0 ;; esac
+    return 1
+  fi
+  (( want_rank >= 0 )) && (( cur_rank >= want_rank ))
 }
 
 _emit_manifest() {

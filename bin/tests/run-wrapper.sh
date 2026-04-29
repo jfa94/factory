@@ -968,5 +968,28 @@ assert_eq "no-early-write: exit 30 (no review files)" "30" "$RC"
 assert_eq "no-early-write: stage unchanged from spawn_pending" "postexec_spawn_pending" \
   "$(stage_of | tr -d '\"')"
 
+# --- 42: Task 3.4 — _already_past: terminal task with unknown stage skips ----
+# Legacy state file with unrecognised stage but terminal status (failed) →
+# preflight short-circuits (exit 0).
+new_run already-past-terminal
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"unrecognized_legacy_stage"' >/dev/null
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"failed"' >/dev/null
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage preflight >/dev/null 2>&1; RC=$?; set -e
+assert_eq "already-past-terminal: preflight skipped on terminal task" "0" "$RC"
+
+# --- 43: Task 3.4 — _already_past: pending_human task re-entering preflight skips
+new_run pending-human-skip
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_pending_human"' >/dev/null
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"needs_human_review"' >/dev/null
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage preflight >/dev/null 2>&1; RC=$?; set -e
+assert_eq "pending_human task: preflight skipped" "0" "$RC"
+
+# --- 44: Task 3.4 — _already_past: exhausted task re-entering postexec skips ---
+new_run exhausted-skip
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_exhausted"' >/dev/null
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"failed"' >/dev/null
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage postexec >/dev/null 2>&1; RC=$?; set -e
+assert_eq "exhausted task: postexec skipped" "0" "$RC"
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

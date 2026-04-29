@@ -735,7 +735,16 @@ task_tdd_exempt() {
 # Stage ordering constant — single source of truth used by _already_past and
 # any future callers that need to compare pipeline stage ranks.
 # shellcheck disable=SC2034  # used by sourcing scripts (pipeline-run-task)
-PIPELINE_STAGE_ORDER=(preflight_done preexec_tests_done postexec_spawn_pending postexec_done postreview_done ship_done)
+PIPELINE_STAGE_ORDER=(
+  preflight_done
+  preexec_tests_done
+  postexec_spawn_pending
+  postexec_done
+  postreview_pending_human
+  postreview_exhausted
+  postreview_done
+  ship_done
+)
 
 # Strip exactly one leading and one trailing double-quote from a JSON-encoded
 # string value. Semantically equivalent to `jq -r` for simple string values.
