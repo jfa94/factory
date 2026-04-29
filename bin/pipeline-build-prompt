@@ -71,7 +71,9 @@ description=$(printf '%s' "$task_json" | jq -r '.description')
 description=$(printf '%s' "$description" | sed -E 's/<<<(END:)?UNTRUSTED:[A-Z_]+(:[A-Za-z0-9]+)?>>>/[redacted-fence]/g')
 
 files=$(printf '%s' "$task_json" | jq -r '(.files // []) | join(", ")')
+files=$(printf '%s' "$files" | sed -E 's/<<<(END:)?UNTRUSTED:[A-Z_]+(:[A-Za-z0-9]+)?>>>/[redacted-fence]/g')
 tests_to_write=$(printf '%s' "$task_json" | jq -r '(.tests_to_write // []) | map("- " + .) | join("\n")')
+tests_to_write=$(printf '%s' "$tests_to_write" | sed -E 's/<<<(END:)?UNTRUSTED:[A-Z_]+(:[A-Za-z0-9]+)?>>>/[redacted-fence]/g')
 
 # Get acceptance criteria
 all_criteria=$(printf '%s' "$task_json" | jq '(.acceptance_criteria // [])')
@@ -147,6 +149,7 @@ spec_content=$(printf '%s' "$spec_content" | sed -E 's/<<<(END:)?UNTRUSTED:[A-Z_
 
 # Format criteria list
 criteria_list=$(printf '%s' "$visible_criteria" | jq -r '.[] | "- " + .')
+criteria_list=$(printf '%s' "$criteria_list" | sed -E 's/<<<(END:)?UNTRUSTED:[A-Z_]+(:[A-Za-z0-9]+)?>>>/[redacted-fence]/g')
 
 # Detect prior work (commits ahead of staging)
 prior_work=""
