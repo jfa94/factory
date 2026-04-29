@@ -833,10 +833,10 @@ _stage_postreview() {
     # backward compatibility with older reviewer outputs / test fixtures.
     decision=$(printf '%s' "$verdict" | jq -r '.verdict // .decision // "UNKNOWN"')
     case "$decision" in
-      APPROVE) : ;;
+      APPROVE|APPROVED) : ;;
       REQUEST_CHANGES) any_changes=true ;;
       NEEDS_DISCUSSION) any_discuss=true ;;
-      *) any_changes=true ;;
+      *) log_warn "unrecognized verdict: $decision"; any_changes=true ;;
     esac
   done
 

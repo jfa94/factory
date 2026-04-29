@@ -187,6 +187,20 @@ run_wrapper alpha-001 --stage postreview --review-file "$rf"
 assert_eq "postreview APPROVE: exit 0" "0" "$RC"
 assert_eq "postreview APPROVE: stage=postreview_done" "postreview_done" "$(stage_of)"
 
+# --- 5.a: postreview — APPROVED (past-tense alias) honored, no any_changes ---
+# Regression: pipeline-codex-review and superpowers code-reviewer emit
+# verdict="APPROVED" (past tense). Wrapper must accept it as the success path,
+# not fall through to the unrecognized-verdict branch and masquerade as
+# REQUEST_CHANGES.
+new_run postreview-approved-alias
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
+rf="$ROOT_TMP/$current-review.json"
+echo '{"verdict":"APPROVED","blockers":[],"concerns":[]}' > "$rf"
+run_wrapper alpha-001 --stage postreview --review-file "$rf"
+assert_eq "postreview APPROVED: exit 0" "0" "$RC"
+assert_eq "postreview APPROVED: stage=postreview_done" "postreview_done" "$(stage_of)"
+assert_eq "postreview APPROVED: no review_attempts increment" "null" "$(field_of review_attempts)"
+
 # --- 6: postreview — REQUEST_CHANGES retry --------------------------------
 new_run postreview-changes
 pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
