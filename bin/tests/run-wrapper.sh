@@ -1141,5 +1141,35 @@ set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1; RC=$
 assert_eq "terminal-write-fail: exit 30" "30" "$RC"
 rm -f "$STUB_DIR/pipeline-state"
 
+# --- 48: Task 4.3 — parse-review failure escalates to human, not REQUEST_CHANGES ---
+# Regression: when pipeline-parse-review fails on a markdown review file, the
+# wrapper used to log_warn and silently set any_changes=true (phantom
+# REQUEST_CHANGES). It must now log_error and route to NEEDS_DISCUSSION
+# (any_discuss=true → status=needs_human_review, exit 30).
+write_stub pipeline-parse-review '
+echo "synthetic parser explosion" >&2
+exit 2'
+new_run postreview-parse-failure
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null
+rf="$ROOT_TMP/$current-review.md"
+cat > "$rf" <<'MDEOF'
+## Findings
+## Verdict
+VERDICT: APPROVE
+MDEOF
+set +e
+ERR=$(pipeline-run-task "$RUN_ID" alpha-001 --stage postreview --review-file "$rf" 2>&1 >/dev/null)
+RC=$?
+set -e
+assert_eq "parse-failure: exit 30" "30" "$RC"
+assert_eq "parse-failure: status=needs_human_review" "needs_human_review" "$(status_of)"
+assert_eq "parse-failure: review_attempts not incremented" "null" "$(field_of review_attempts)"
+if printf '%s' "$ERR" | grep -q "parse-review failed on .*: synthetic parser explosion"; then
+  pass "parse-failure: log_error includes captured stderr"
+else
+  fail "parse-failure: log_error missing captured stderr (got: $ERR)"
+fi
+write_stub pipeline-parse-review 'cat'
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
