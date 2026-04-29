@@ -816,14 +816,57 @@ trap '[[ -n "$oi_sandbox" && ( "$oi_sandbox" == /tmp/* || "$oi_sandbox" == /var/
     echo "  FAIL: pipeline-init refused to replace dangling symlink"
     exit 1
   fi
+
+  # Task 4.12: atomic symlink update — no leftover tmp link after init,
+  # and the symlink is replaced atomically (mv-over) rather than rm+create.
+  shopt -s nullglob
+  leftover_tmps=("$oi_sandbox/runs/current".tmp.*)
+  shopt -u nullglob
+  if [[ ${#leftover_tmps[@]} -eq 0 ]]; then
+    echo "  PASS: atomic symlink: no leftover tmp link after init"
+  else
+    echo "  FAIL: atomic symlink: leftover tmp link(s): ${leftover_tmps[*]}"
+    exit 1
+  fi
+  # The symlink must always point at a valid run dir after init succeeds —
+  # no transient missing window observable post-call.
+  if [[ -L "$oi_sandbox/runs/current" && -d "$oi_sandbox/runs/current" ]]; then
+    echo "  PASS: atomic symlink: current resolves to a directory after init"
+  else
+    echo "  FAIL: atomic symlink: current missing or dangling after init"
+    exit 1
+  fi
 ) && {
-  pass=$((pass + 7))
+  pass=$((pass + 9))
 } || {
   fail=$((fail + 1))
 }
 rm -rf "$oi_sandbox"
 trap - EXIT
 oi_sandbox=""
+
+echo ""
+echo "=== task_04_12: pipeline-init atomic current symlink (source-level) ==="
+
+pi_script="$(cd "$(dirname "$0")/.." && pwd)/pipeline-init"
+# The non-atomic pattern is `rm -f "$current_link"` immediately followed by
+# `ln -s "$run_dir" "$current_link"`. The atomic replacement uses a tmp link
+# and `mv -f` to swap into place. Reject the non-atomic pattern.
+if grep -E '^[[:space:]]*rm -f "\$current_link"[[:space:]]*$' "$pi_script" >/dev/null 2>&1; then
+  echo "  FAIL: pipeline-init still uses non-atomic 'rm -f \$current_link' before ln -s"
+  fail=$((fail + 1))
+else
+  echo "  PASS: pipeline-init does not 'rm -f \$current_link' before ln -s"
+  pass=$((pass + 1))
+fi
+# Atomic implementation must use `mv -f` to rename a tmp link into the target.
+if grep -E 'mv -f[hT] "\$_tmp_link" "\$current_link"' "$pi_script" >/dev/null 2>&1; then
+  echo "  PASS: pipeline-init swaps current symlink via mv -f[hT] tmp"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: pipeline-init missing 'mv -f[hT] tmp \$current_link' atomic swap"
+  fail=$((fail + 1))
+fi
 
 echo ""
 echo "=== task_06_02: stop-gate handles all task statuses ==="

@@ -126,8 +126,28 @@ if [[ -L "$current_link" ]]; then
     esac
   fi
 fi
-rm -f "$current_link"
-ln -s "$run_dir" "$current_link"
+# Atomic symlink swap: create a sibling tmp link, then atomically rename it
+# over `$current_link`. The rename(2) is atomic on POSIX, so observers never
+# see `$current_link` missing. BSD `mv` requires `-h` and GNU `mv` requires
+# `-T` to avoid following a symlink-to-directory target.
+_tmp_link="${current_link}.tmp.$$"
+if ! ln -sfn "$run_dir" "$_tmp_link"; then
+  log_error "ln -s tmp failed: $_tmp_link"
+  rm -rf "$run_dir"
+  exit 1
+fi
+_mv_ok=0
+if mv -fh "$_tmp_link" "$current_link" 2>/dev/null; then
+  _mv_ok=1
+elif mv -fT "$_tmp_link" "$current_link" 2>/dev/null; then
+  _mv_ok=1
+fi
+if [[ $_mv_ok -eq 0 ]]; then
+  rm -f "$_tmp_link"
+  log_error "mv current symlink failed: $current_link"
+  rm -rf "$run_dir"
+  exit 1
+fi
 
 log_metric "run.start" "mode=\"$mode\"" "issue=\"$issue\""
 log_info "initialized run $run_id (mode=$mode, issue=$issue)"
