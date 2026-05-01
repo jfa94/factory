@@ -1,6 +1,5 @@
 ---
 model: sonnet
-maxTurns: 25
 description: "Adversarial quality review for logic errors, security, test quality, and AI anti-patterns. Acts as the fallback when Codex is unavailable; runs in a fresh context to avoid author-bias rubber-stamping."
 skills:
   - review-protocol

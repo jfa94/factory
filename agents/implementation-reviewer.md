@@ -1,6 +1,5 @@
 ---
 model: sonnet
-maxTurns: 25
 description: "Verifies the implementation satisfies the spec's intent, not merely that tests pass. Runs in parallel with quality-reviewer; checks every acceptance criterion is genuinely addressed by tracing the end-to-end user path through the diff."
 skills:
   - review-protocol

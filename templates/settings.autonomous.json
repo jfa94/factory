@@ -17,7 +17,14 @@
       "Agent",
       "Read(~/.claude/plugins/data/factory-jfa94/**)",
       "Edit(~/.claude/plugins/data/factory-jfa94/**)",
-      "Write(~/.claude/plugins/data/factory-jfa94/**)"
+      "Write(~/.claude/plugins/data/factory-jfa94/**)",
+      "Read(~/.claude/projects/**/tool-results/**)",
+      "Read(~/.claude/projects/**/transcripts/**)",
+      "Bash(cp ~/.claude/projects/**)",
+      "Bash(cat ~/.claude/projects/**)",
+      "Bash(wc ~/.claude/projects/**)",
+      "Bash(head ~/.claude/projects/**)",
+      "Bash(tail ~/.claude/projects/**)"
     ],
     "deny": [
       "Bash(rm -rf /)",
@@ -134,7 +141,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); FP=$(printf '%s' \"$INPUT\" | jq -r '.tool_input.file_path // .tool_input.path // .tool_input.pattern // empty'); [ -z \"$FP\" ] && exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude(/|$)' || exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude/worktrees/' && exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude/plugins/data/factory-jfa94/' && exit 0; echo '{\"decision\":\"block\",\"reason\":\"Access to .claude/ directory is restricted in autonomous mode.\"}'",
+            "command": "INPUT=$(cat); FP=$(printf '%s' \"$INPUT\" | jq -r '.tool_input.file_path // .tool_input.path // .tool_input.pattern // empty'); [ -z \"$FP\" ] && exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude(/|$)' || exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude/worktrees/' && exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude/plugins/data/factory-jfa94/' && exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude/projects/[^/]+/[^/]+/tool-results/' && exit 0; echo '{\"decision\":\"block\",\"reason\":\"Access to .claude/ directory is restricted in autonomous mode.\"}'",
             "statusMessage": "Checking .claude/ directory access"
           }
         ]
