@@ -1241,6 +1241,7 @@ echo "=== settings.autonomous.json registers Layer-2 hooks ==="
 autonom="$(cd "$(dirname "$0")/../../templates" && pwd)/settings.autonomous.json"
 base_hooks="$(cd "$(dirname "$0")/../../hooks" && pwd)/hooks.json"
 assert_eq "template has SubagentStop"        "1" "$(jq '.hooks.SubagentStop | length' "$autonom")"
+assert_eq "SubagentStop matcher allows factory: prefix" "^(factory:)?(test-writer|task-executor|implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer|scribe|spec-generator|spec-reviewer)$" "$(jq -r '.hooks.SubagentStop[0].matcher' "$autonom")"
 assert_eq "template has SessionStart"        "2" "$(jq '.hooks.SessionStart | length' "$autonom")"
 assert_eq "template PostToolUse has asyncRewake" "1" "$(jq '[.hooks.PostToolUse[].hooks[]? | select(.asyncRewake == true)] | length' "$autonom")"
 # pipeline-guards lives in base hooks/hooks.json (autonomous overlay would

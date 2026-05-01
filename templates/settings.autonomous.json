@@ -223,7 +223,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "^(test-writer|task-executor|implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer|scribe|spec-generator|spec-reviewer)$",
+        "matcher": "^(factory:)?(test-writer|task-executor|implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer|scribe|spec-generator|spec-reviewer)$",
         "hooks": [
           {
             "type": "command",
