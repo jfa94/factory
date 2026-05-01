@@ -18,19 +18,23 @@ When a factory script is invoked from a bash block inside another plugin's comma
 
 **Functions:**
 
-| Function                 | Description                             |
-| ------------------------ | --------------------------------------- |
-| `log_info`               | Log info message to stderr              |
-| `log_warn`               | Log warning message to stderr           |
-| `log_error`              | Log error message to stderr             |
-| `read_config`            | Read config value with default fallback |
-| `atomic_write`           | Write file atomically via temp + mv     |
-| `current_run_id`         | Get current run ID from symlink         |
-| `require_command`        | Exit if command not found               |
-| `slugify`                | Convert string to slug                  |
-| `temp_file`              | Create temp file with cleanup trap      |
-| `detect_pkg_manager`     | Detect npm/yarn/pnpm/bun                |
-| `parse_iso8601_to_epoch` | Parse ISO timestamp to epoch seconds    |
+| Function                 | Description                                                                |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `log_info`               | Log info message to stderr                                                 |
+| `log_warn`               | Log warning message to stderr                                              |
+| `log_error`              | Log error message to stderr                                                |
+| `read_config`            | Read config value with default fallback                                    |
+| `read_config_strict`     | Read config value; null/missing → empty (no default)                       |
+| `atomic_write`           | Write file atomically via temp + mv                                        |
+| `current_run_id`         | Get current run ID from symlink                                            |
+| `require_command`        | Exit if command not found                                                  |
+| `slugify`                | Convert string to slug                                                     |
+| `temp_file`              | Create temp file with cleanup trap                                         |
+| `detect_pkg_manager`     | Detect npm/yarn/pnpm/bun                                                   |
+| `parse_iso8601_to_epoch` | Parse ISO timestamp to epoch seconds                                       |
+| `resolve_base_ref`       | Resolve `staging` or `origin/staging` in a git dir; rc=1 if neither exists |
+| `is_test_path`           | Classify a file path as test (return 0) or non-test (return 1)             |
+| `task_tdd_exempt`        | Check if task has `tdd_exempt: true` in tasks.json                         |
 
 ---
 
@@ -88,12 +92,16 @@ pipeline-init <run-id> [--issue <N>] [--mode <mode>] [--force]
 
 **Arguments:**
 
-| Argument  | Required | Description                                  |
-| --------- | -------- | -------------------------------------------- |
-| `run-id`  | Yes      | Run identifier (e.g., `run-20260413-140000`) |
-| `--issue` | No       | GitHub issue number                          |
-| `--mode`  | No       | Operating mode: discover, prd, task, resume  |
-| `--force` | No       | Override active run symlink                  |
+| Argument  | Required | Description                                                                       |
+| --------- | -------- | --------------------------------------------------------------------------------- |
+| `run-id`  | Yes      | Run identifier (e.g., `run-20260413-140000`). Must match `^[a-zA-Z0-9_-]{1,64}$`. |
+| `--issue` | No       | GitHub issue number                                                               |
+| `--mode`  | No       | Operating mode: discover, prd, task, resume                                       |
+| `--force` | No       | Override active run symlink                                                       |
+
+**Symlink atomicity:**
+
+The `runs/current` symlink is updated atomically via `ln -sfn` to a temp link followed by `mv -fh` (BSD) or `mv -fT` (GNU). Observers never see the symlink missing during the swap.
 
 **Creates:**
 
@@ -185,13 +193,14 @@ pipeline-run-task <run-id> RUN --stage finalize-run
 
 **Stages:**
 
-| Stage          | Purpose                                                  |
-| -------------- | -------------------------------------------------------- |
-| `preflight`    | Circuit breaker, dep check, classify, quota gate, prompt |
-| `postexec`     | Quality gate, coverage gate, holdout, review dispatch    |
-| `postreview`   | Parse verdicts, retry or advance                         |
-| `ship`         | Human gate, task-commit, PR create, CI wait              |
-| `finalize-run` | Scribe spawn, final PR, cleanup                          |
+| Stage           | Purpose                                                       |
+| --------------- | ------------------------------------------------------------- |
+| `preflight`     | Circuit breaker, dep check, classify, quota gate, test-writer |
+| `preexec_tests` | Red-test verification, then task-executor spawn               |
+| `postexec`      | Quality gate, coverage gate, holdout, review dispatch         |
+| `postreview`    | Parse verdicts, retry or advance                              |
+| `ship`          | Human gate, task-commit, PR create, CI wait                   |
+| `finalize-run`  | Scribe spawn (isolation: worktree), final PR, cleanup         |
 
 **Exit codes:**
 
@@ -275,7 +284,7 @@ pipeline-validate-spec <spec-dir>
 
 ### pipeline-validate-tasks
 
-Field validation, cycle detection, topological sort.
+Field validation, cycle detection, topological sort, size budget enforcement.
 
 **Usage:**
 
@@ -285,10 +294,21 @@ pipeline-validate-tasks <tasks-json-path>
 
 **Validations:**
 
-1. Required fields: task_id, title, description
-2. Dependency cycle detection (DFS)
-3. Topological sort via Kahn's algorithm
-4. Parallel group assignment
+1. **Size budget** (security M3/M4): file size must not exceed `FACTORY_TASKS_MAX_BYTES` (default 256 KB). Checked before JSON parsing to bound memory/CPU and limit prompt-injection blast radius.
+2. Required fields: task_id, title, description, files, acceptance_criteria, tests_to_write, depends_on
+3. `files` array capped at 3 entries per task
+4. `task_id` format: alphanumerics, underscore, hyphen only
+5. `task_id` uniqueness across tasks
+6. Dependency cycle detection (DFS)
+7. Topological sort via Kahn's algorithm
+8. Parallel group assignment
+9. **Prompt-injection guards**: descriptions are rejected if they contain control chars, shell metas, or leading `--`
+
+**Environment variables:**
+
+| Variable                  | Default | Description                      |
+| ------------------------- | ------- | -------------------------------- |
+| `FACTORY_TASKS_MAX_BYTES` | 262144  | Maximum tasks.json size in bytes |
 
 **Output:**
 
@@ -434,6 +454,16 @@ When `--holdout` is specified, the script:
 1. Randomly selects N% of acceptance criteria
 2. Saves withheld criteria to `${CLAUDE_PLUGIN_DATA}/runs/<run-id>/holdouts/<task-id>.json`
 3. Returns prompt with only visible criteria
+
+**Prompt-fencing redaction:**
+
+Untrusted content (`title`, `description`, `files`, `tests_to_write`, `acceptance_criteria`) is sanitized before interpolation:
+
+- Any string matching `<<<(END:)?UNTRUSTED:[A-Z_]+(:[A-Za-z0-9]+)?>>>` is replaced with `[redacted-fence]`
+- `title` is truncated to first line, control chars stripped, capped at 200 chars
+- A per-invocation nonce is appended to fence tokens so untrusted content cannot close the fence by embedding the literal close tag
+
+This prevents prompt-injection attacks where attacker-controlled content (e.g., GitHub issue titles) attempts to break out of fenced regions.
 
 ---
 
@@ -793,6 +823,71 @@ pipeline-coverage-gate <before.json> <after.json> [--tolerance <percent>] [--tas
 
 ---
 
+### pipeline-tdd-gate
+
+Validate that each implementation commit is preceded by a test-only commit with the same `[task-id]` tag.
+
+**Usage:**
+
+```bash
+pipeline-tdd-gate --task-id <id> [--base <ref>] [--run-id <id>] [--spec-dir <path>]
+```
+
+**Flags:**
+
+| Flag         | Default    | Description                            |
+| ------------ | ---------- | -------------------------------------- |
+| `--task-id`  | (required) | Task identifier                        |
+| `--base`     | `staging`  | Git ref for diff base                  |
+| `--run-id`   | -          | Run ID for state writes                |
+| `--spec-dir` | -          | Path to spec directory (for exemption) |
+
+**Validation logic:**
+
+1. Classify ALL commits in `base..HEAD` (not just task-tagged ones)
+2. For each commit, classify files as `test-only`, `impl`, or `empty`
+3. Test-only: all files match `*.test.*`, `*.spec.*`, `tests/`, `__tests__/`, or docs/config patterns
+4. Impl: any file outside those patterns
+5. Report violation if an impl commit is untagged or appears before any tagged test commit
+
+**Exemption:**
+
+Tasks with `tdd_exempt: true` in `tasks.json` skip validation. Checked via `task_tdd_exempt` helper in `pipeline-lib.sh`.
+
+**Monorepo support:**
+
+The `is_test_path` helper (used by TDD gate and red-test verification) recognizes per-package test directories like `packages/*/tests/` and `packages/*/__tests__/`.
+
+**State write:**
+
+When `--run-id` is provided, the result is written to `.tasks.<task-id>.quality_gates.tdd`. If the write fails, the script logs to stderr and returns exit code 1 (propagating the state-write failure rather than silently succeeding).
+
+**Output:**
+
+```json
+{
+  "ok": true,
+  "exempt": false,
+  "violations": []
+}
+```
+
+**Output (violation):**
+
+```json
+{
+  "ok": false,
+  "exempt": false,
+  "violations": [
+    { "commit": "abc123", "reason": "impl-without-preceding-test" }
+  ]
+}
+```
+
+**Exit codes:** 0=ok or exempt, 1=violation
+
+---
+
 ### pipeline-quality-gate
 
 Run the full quality gate stack.
@@ -805,6 +900,10 @@ pipeline-quality-gate <run-id> <task-id>
 
 Runs layers in sequence: static analysis, tests, coverage, holdout, mutation.
 
+**Non-JS skip:**
+
+When the project has no `package.json` or tests are not configured, the gate logs a skip reason and exits 0 rather than failing. This allows non-JS projects to pass through the gate cleanly.
+
 ---
 
 ## Rate Limiting
@@ -816,10 +915,22 @@ Parse rate limit headers, compute window position.
 **Usage:**
 
 ```bash
-pipeline-quota-check
+pipeline-quota-check [--strict]
 ```
 
+**Flags:**
+
+| Flag       | Description                                                 |
+| ---------- | ----------------------------------------------------------- |
+| `--strict` | Exit 1 on detection failure (test-only; prod uses sentinel) |
+
 **Reads:** `${CLAUDE_PLUGIN_DATA}/usage-cache.json` (written by `bin/statusline-wrapper.sh`)
+
+**Fail-closed behavior:**
+
+On missing, malformed, or stale cache (>1 h), the script emits a sentinel JSON with `detection_method: "unavailable"` and `over_threshold: true`. The sentinel routes through `pipeline_quota_gate`'s stale-yield branch (rc=3), giving the statusline a chance to refresh. Consecutive stale yields are capped by `.quota.maxStaleCycles` (default 6).
+
+Non-numeric `resets_at` values (e.g., string-encoded timestamps from corrupt caches) are coerced via `tonumber? // empty` and treated as missing — emitting `reason: "resets-at-missing"`.
 
 **Output:**
 
@@ -900,8 +1011,26 @@ Poll for PR merge with CI/conflict handling.
 **Usage:**
 
 ```bash
-pipeline-wait-pr <pr-number> [--timeout <minutes>]
+pipeline-wait-pr <pr-number> [--timeout <minutes>] [--interval <seconds>]
 ```
+
+**Exit codes:**
+
+| Code | Meaning                       |
+| ---- | ----------------------------- |
+| 0    | PR merged                     |
+| 1    | Timeout                       |
+| 2    | Closed without merge          |
+| 3    | CI failed (details on stdout) |
+| 4    | Unresolvable merge conflict   |
+
+**CI red conditions:**
+
+The script treats a PR as CI-red when any required check reports `failure`, `timed_out`, `action_required`, or `cancelled`. Pending checks do not block; only terminal failure states.
+
+**Rebase error surfacing:**
+
+When auto-rebase fails, stderr from `git rebase --abort` and `git checkout <branch>` is captured and logged via `log_warn` / `log_error` instead of being silently swallowed. This makes debugging stuck worktrees easier.
 
 ---
 

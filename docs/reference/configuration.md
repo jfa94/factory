@@ -343,3 +343,25 @@ When `true`, the secret-commit-guard hook runs `trufflehog filesystem --director
 | Default  | `[]`  |
 
 Regex patterns (extended regex, evaluated by `grep -E`) for known-safe secret-like strings (e.g. Supabase anon keys, Stripe publishable keys). Any path-scan hit or TruffleHog finding whose raw value matches one of these patterns is filtered out before the hook decides whether to block a commit.
+
+### safety.testWriterFixtureDirs
+
+| Property | Value |
+| -------- | ----- |
+| Type     | array |
+| Default  | `[]`  |
+
+Additional directories the test-writer phase is allowed to write to. By default, only `tests/`, `__tests__/`, `fixtures/`, and files matching `*.test.*` / `*.spec.*` patterns are permitted during the `preexec_tests` stage. Add entries like `"test-fixtures"` or `"e2e/fixtures"` to extend the allowlist. Entries must be at least 2 characters, not start with `/` or `./`, and not contain `..`.
+
+---
+
+## Configuration Reading Semantics
+
+### read_config vs read_config_strict
+
+Two config reading functions exist in `pipeline-lib.sh`:
+
+- **`read_config <key> [default]`** — Returns the value at `<key>`, or `default` if the key is missing or `null`.
+- **`read_config_strict <key>`** — Returns the value at `<key>`, or empty string if the key is `null` or missing. Use when an explicit `null` in `config.json` should mean "unset" rather than "fall back to default".
+
+This distinction matters for optional overrides where "not configured" and "explicitly disabled" are different states.

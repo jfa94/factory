@@ -256,6 +256,14 @@ ${CLAUDE_PLUGIN_DATA}/
         └── reviews/
 ```
 
+**Atomic symlink update:**
+
+The `runs/current` symlink is updated atomically via `ln -sfn` to a temp link followed by `mv -fh` (BSD) or `mv -fT` (GNU). Observers never see the symlink missing during the swap. This ensures resume sessions and hooks always see a consistent view of the active run.
+
+**Broken symlink handling:**
+
+If `runs/current` exists as a symlink but its target is missing (dangling symlink), `pretooluse-pipeline-guards.sh` fails closed rather than allowing operations to proceed. This prevents silent corruption when a run directory was deleted but the symlink was not updated.
+
 ### Holdout Criteria Isolation
 
 Acceptance criteria withheld from task-executor are stored in `${CLAUDE_PLUGIN_DATA}/runs/<run-id>/holdouts/<task-id>.json`. Since task-executor runs in a worktree and holdouts live in plugin data, the executor cannot access criteria it was not meant to see.

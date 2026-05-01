@@ -236,10 +236,11 @@ Writes behavioral tests from specifications and type signatures, never from impl
 
 Incrementally updates `/docs` after each pipeline run using the Diátaxis framework.
 
-| Property | Value                               |
-| -------- | ----------------------------------- |
-| Model    | claude-opus-4-5                     |
-| Tools    | Read, Grep, Glob, Bash, Write, Edit |
+| Property  | Value                               |
+| --------- | ----------------------------------- |
+| Model     | claude-opus-4-5                     |
+| Tools     | Read, Grep, Glob, Bash, Write, Edit |
+| Isolation | worktree                            |
 
 **Key behaviors:**
 
@@ -248,6 +249,16 @@ Incrementally updates `/docs` after each pipeline run using the Diátaxis framew
 - Produces only sections it can fill accurately — never speculates or creates placeholders
 - Rewrites the last-documented marker to current HEAD on completion
 - Spawned as the final enforced step of every pipeline run, before `pipeline-cleanup`
+
+**Path scope enforcement:**
+
+When `FACTORY_SUBAGENT_ROLE=scribe`, the `pretooluse-pipeline-guards.sh` hook restricts Edit/Write/MultiEdit to:
+
+- `docs/**` or `/docs/**`
+- Version-bump files: `package.json`, `plugin.json`, `pyproject.toml`, `Cargo.toml`, `VERSION`, `.version`
+- Root `README.md` (kept as a short intro + link to `/docs`)
+
+Bash write-equivalent operations (redirections, `tee`, `cp`, `mv`, `mkdir`, `touch`, `dd of=`) are also scoped. If the target path cannot be determined, the hook fails closed.
 
 ### spec-reviewer
 
@@ -352,6 +363,35 @@ Blocks destructive git operations on protected branches (main, master, develop).
 
 - 0: Allow operation
 - 2: Block operation (JSON reason on stderr)
+
+### pretooluse-pipeline-guards (PreToolUse)
+
+Enforces pipeline invariants during active runs. Only fires when `${CLAUDE_PLUGIN_DATA}/runs/current` is present.
+
+**Invariants enforced:**
+
+1. **`gh pr create`** — requires ship checklist at `.tasks/<task>.ship_checklist.json` with `tdd_gate`, `coverage_gate`, `quality_gate`, and `review_blockers_resolved` all passing. In autonomous mode, missing checklist = denied.
+2. **`gh pr merge`** — requires `.tasks.<task>.pr_number` and `ci_status == "green"`.
+3. **`pipeline-state task-status <run> <task> done`** — requires `.worktree`, `.quality_gate.ok`, and `.pr_number` all set. In autonomous mode, cross-run writes (target run ≠ active run) are denied outright.
+4. **Broken `runs/current` symlink** — if the symlink exists but its target is missing, the hook fails closed with a deny rather than silently passing through. This prevents operations on corrupted pipeline state.
+5. **Nested-shell / hook-bypass** — in autonomous mode, commands that would spawn a subshell or bypass hooks are denied.
+6. **Test-writer path scope** — during `preexec_tests` stage, Edit/Write/MultiEdit are restricted to test files and configured fixture directories.
+7. **Scribe path scope** — when `FACTORY_SUBAGENT_ROLE=scribe`, writes are restricted to `/docs/**` and version-bump files.
+
+### session-start-resume (SessionStart)
+
+Injects current run stage snapshot into resume sessions.
+
+**Triggers:** Sessions with `source=resume`.
+
+**Behavior:**
+
+- Reads `runs/current` symlink and state file
+- Skips if run status is already terminal (`done`, `completed`, `failed`, `partial`)
+- Builds per-task stage summary (task_id, status, current stage)
+- Computes next action: maps `*_done` stages to the following stage (e.g., `preflight_done` → `preexec_tests`, `postexec_done` → `postreview`)
+- Exports `FACTORY_CURRENT_RUN` via `$CLAUDE_ENV_FILE` for subsequent Bash calls
+- Outputs `additionalContext` with the stage snapshot and next `pipeline-run-task` invocation
 
 ### run-tracker (PostToolUse)
 

@@ -194,3 +194,14 @@ Individual layers can be disabled via configuration:
 Static analysis and test suite cannot be disabled; they are enforced by the user's existing hooks.
 
 Disabling layers reduces execution time but increases the risk of quality issues reaching pull requests. Disable only when you understand the tradeoff.
+
+---
+
+## Non-JS / Unconfigured Project Handling
+
+When `pipeline-quality-gate` runs in a directory without a `package.json`, or where no quality scripts (`lint`, `typecheck`, `test:coverage`, `test`) are defined, it records `skipped: true` in the quality gate result and exits 0. This allows:
+
+- Non-JS projects (Go, Rust, Python) to pass through cleanly
+- JS projects with exotic build systems to proceed without blocking
+
+The skip reason (`"no-package-json"` or `"no-quality-scripts"`) is persisted to state for audit purposes. Projects that want to enforce quality gates must configure either the standard npm scripts or a `factory.quality` array in `package.json`.
