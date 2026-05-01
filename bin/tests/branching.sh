@@ -1010,6 +1010,27 @@ trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
 assert_eq "pre-staging decoy does not short-circuit" "true" "$(cat "$sandbox/created")"
 cleanup_sandbox "$sandbox"
 
+# --- No develop, only main → must fail loudly (no silent fallback) ---
+sandbox=$(mktemp -d "${TMPDIR:-/tmp}/factory-phase4-XXXXXX")
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox"
+  git init --bare --quiet origin.git
+  git clone --quiet origin.git repo
+  cd repo
+  git config user.email "test@test.local"
+  git config user.name "phase4-test"
+  git commit --allow-empty -m "root" --quiet
+  # Push only main, not develop
+  git push -u origin HEAD:main --quiet 2>/dev/null || true
+
+  exit_code=0
+  pipeline-branch staging-init 2>/dev/null || exit_code=$?
+  printf '%d' "$exit_code" > "$sandbox/exit_code"
+)
+assert_eq "no-develop no-fallback-to-main: exits non-zero" "1" "$(cat "$sandbox/exit_code")"
+cleanup_sandbox "$sandbox"
+
 cd "$orig_cwd"
 trap - EXIT
 

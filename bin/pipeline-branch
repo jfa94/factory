@@ -85,10 +85,8 @@ case "$action" in
     else
       if git ls-remote --exit-code --heads origin "$base_branch" &>/dev/null; then
         base="$base_branch"
-      elif git ls-remote --exit-code --heads origin main &>/dev/null; then
-        base="main"
       else
-        log_error "neither origin/$base_branch nor origin/main exists; cannot create staging"
+        log_error "origin/$base_branch not found; configure FACTORY_BASE_BRANCH or push $base_branch. Will not fall back to main."
         exit 1
       fi
       if ! git fetch origin "$base" &>/dev/null; then
