@@ -910,16 +910,19 @@ trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
 
   output=$(pipeline-branch commit-spec .state/run-abc 2>/dev/null)
   result=$(echo "$output" | jq -r '.result')
+  push=$(echo "$output" | jq -r '.push')
   current_branch=$(git rev-parse --abbrev-ref HEAD)
   log_msg=$(git log -1 --pretty=%s)
   spec_tracked=$(git ls-files .state/run-abc/spec.md | head -1)
 
   printf '%s\n' "$result" > "$sandbox/result"
+  printf '%s\n' "$push" > "$sandbox/push"
   printf '%s\n' "$current_branch" > "$sandbox/branch"
   printf '%s\n' "$log_msg" > "$sandbox/log_msg"
   printf '%s\n' "$spec_tracked" > "$sandbox/tracked"
 )
 assert_eq "commit-spec result committed" "committed" "$(cat "$sandbox/result")"
+assert_eq "commit-spec pushes staging" "ok" "$(cat "$sandbox/push")"
 assert_eq "commit-spec leaves staging checked out" "staging" "$(cat "$sandbox/branch")"
 assert_eq "commit-spec uses chore: message" "true" \
   "$(grep -q '^chore: add spec directory' "$sandbox/log_msg" && echo true || echo false)"

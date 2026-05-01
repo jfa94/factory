@@ -127,22 +127,31 @@ case "$action" in
       exit 1
     fi
 
+    push_result="ok"
     if git diff --cached --quiet 2>/dev/null; then
-      json_output action "commit-spec" \
-                  result "no-op" \
-                  spec_dir "$spec_dir" \
-                  branch "staging"
+      sha=$(git rev-parse HEAD)
+      result="no-op"
     else
       git -c user.email=factory@local \
           -c user.name="factory" \
           commit -m "chore: add spec directory $spec_dir" --quiet
       sha=$(git rev-parse HEAD)
-      json_output action "commit-spec" \
-                  result "committed" \
-                  spec_dir "$spec_dir" \
-                  branch "staging" \
-                  sha "$sha"
+      result="committed"
     fi
+
+    # Push staging so subagent worktrees (which fork from main via Agent isolation)
+    # can reach the spec via `git fetch origin staging`.
+    if ! git push origin staging --quiet 2>/dev/null; then
+      log_warn "git push origin staging failed; subagents may not see the spec"
+      push_result="failed"
+    fi
+
+    json_output action "commit-spec" \
+                result "$result" \
+                spec_dir "$spec_dir" \
+                branch "staging" \
+                sha "$sha" \
+                push "$push_result"
     ;;
 
   create)

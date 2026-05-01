@@ -225,6 +225,8 @@ Runs once, before task execution.
    handoff_ref=$(pipeline-state read "$run_id" .spec.handoff_ref)
    spec_path=$(pipeline-state read "$run_id" .spec.path)
    [[ -z "$handoff_branch" ]] && { pipeline-gh-comment <issue> ci-escalation --data '{"reason":"spec handoff missing"}'; pipeline-state write "$run_id" .status '"failed"'; exit 1; }
+   # Push handoff branch so the fetch below is reliable across worktree boundaries.
+   git push origin "$handoff_branch" 2>/dev/null || true
    git fetch origin "$handoff_branch" 2>/dev/null || git rev-parse --verify "$handoff_ref" >/dev/null
    mkdir -p ".state/$run_id"
    git show "$handoff_ref:$spec_path/spec.md"    > ".state/$run_id/spec.md"
@@ -235,7 +237,11 @@ Runs once, before task execution.
    git branch -D "$handoff_branch" 2>/dev/null || true
    pipeline-state write "$run_id" .spec.path "\"$(pwd)/.state/$run_id\""
    pipeline-state write "$run_id" .spec.committed true
+   # commit-spec also pushes origin/staging so subagent worktrees see the spec.
    pipeline-branch commit-spec ".state/$run_id"
+   # Verify staging was pushed before fan-out.
+   git ls-remote --exit-code --heads origin staging >/dev/null \
+     || { log_error "origin/staging missing after commit-spec — aborting before task fan-out"; exit 1; }
    ```
 
 6. **Human gate.** `pipeline-human-gate "$run_id" spec`. Exit 42 pauses (status `awaiting_human`, GH comment posted). Resume via `/factory:run resume`.
