@@ -104,8 +104,25 @@
       "Edit(~/.profile)",
       "Write(~/.config/gh/**)",
       "Edit(~/.config/gh/**)",
-      "Write(~/.claude/**)",
-      "Edit(~/.claude/**)"
+      "Write(~/.claude/settings.json)",
+      "Edit(~/.claude/settings.json)",
+      "Write(~/.claude/settings.local.json)",
+      "Edit(~/.claude/settings.local.json)",
+      "Write(~/.claude/credentials*)",
+      "Edit(~/.claude/credentials*)",
+      "Write(~/.claude/auth*)",
+      "Edit(~/.claude/auth*)",
+      "Write(~/.claude/projects/**)",
+      "Edit(~/.claude/projects/**)",
+      "Write(~/.claude/hooks/**)",
+      "Edit(~/.claude/hooks/**)",
+      "Write(~/.claude/CLAUDE.md)",
+      "Edit(~/.claude/CLAUDE.md)"
+    ],
+    "allow": [
+      "Read(~/.claude/plugins/data/factory-jfa94/**)",
+      "Edit(~/.claude/plugins/data/factory-jfa94/**)",
+      "Write(~/.claude/plugins/data/factory-jfa94/**)"
     ]
   },
   "statusLine": {
@@ -119,7 +136,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); FP=$(printf '%s' \"$INPUT\" | jq -r '.tool_input.file_path // .tool_input.path // .tool_input.pattern // empty'); [ -z \"$FP\" ] && exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude(/|$)' || exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude/worktrees/' && exit 0; echo '{\"decision\":\"block\",\"reason\":\"Access to .claude/ directory is restricted in autonomous mode.\"}'",
+            "command": "INPUT=$(cat); FP=$(printf '%s' \"$INPUT\" | jq -r '.tool_input.file_path // .tool_input.path // .tool_input.pattern // empty'); [ -z \"$FP\" ] && exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude(/|$)' || exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude/worktrees/' && exit 0; printf '%s' \"$FP\" | grep -qE '(^|/)\\.claude/plugins/data/factory-jfa94/' && exit 0; echo '{\"decision\":\"block\",\"reason\":\"Access to .claude/ directory is restricted in autonomous mode.\"}'",
             "statusMessage": "Checking .claude/ directory access"
           }
         ]

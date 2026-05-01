@@ -1249,6 +1249,12 @@ assert_eq "template PostToolUse has asyncRewake" "1" "$(jq '[.hooks.PostToolUse[
 assert_eq "autonomous overlay does NOT redundantly register pipeline-guards" "0" "$(jq '[.hooks.PreToolUse[].hooks[]? | select(.command | test("pretooluse-pipeline-guards"))] | length' "$autonom")"
 assert_eq "base hooks.json registers pipeline-guards" "2" "$(jq '[.hooks.PreToolUse[].hooks[]? | select(.command | test("pretooluse-pipeline-guards"))] | length' "$base_hooks")"
 assert_eq "template does NOT redundantly allow Bash(codex *) under Bash(*)" "false" "$(jq '[.permissions.allow[] | select(. == "Bash(codex *)")] | length > 0' "$autonom")"
+assert_eq "template allows Read on plugin data dir" "1" "$(jq '[.permissions.allow[] | select(. == "Read(~/.claude/plugins/data/factory-jfa94/**)")] | length' "$autonom")"
+assert_eq "template allows Write on plugin data dir" "1" "$(jq '[.permissions.allow[] | select(. == "Write(~/.claude/plugins/data/factory-jfa94/**)")] | length' "$autonom")"
+assert_eq "template allows Edit on plugin data dir" "1" "$(jq '[.permissions.allow[] | select(. == "Edit(~/.claude/plugins/data/factory-jfa94/**)")] | length' "$autonom")"
+assert_eq "template does NOT deny ~/.claude/** globally" "0" "$(jq '[.permissions.deny[] | select(. | test("~/.claude/\\*\\*"))] | length' "$autonom")"
+assert_eq "template denies write on settings.json" "1" "$(jq '[.permissions.deny[] | select(. == "Write(~/.claude/settings.json)")] | length' "$autonom")"
+assert_eq ".claude hook allows plugins/data/factory-jfa94/ path" "true" "$(jq -r '[.hooks.PreToolUse[].hooks[]?.command // ""] | join(" ")' "$autonom" | grep -q 'plugins/data/factory-jfa94' && echo true || echo false)"
 
 rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
