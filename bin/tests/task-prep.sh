@@ -284,16 +284,16 @@ bare_repo=$(mktemp -d)/bare.git
 
 cd "$test_repo"
 git init -q
-git checkout -q -b main 2>/dev/null || true
+git checkout -q -b develop 2>/dev/null || true
 git commit -q --allow-empty -m "init"
 git clone -q --bare "$test_repo" "$bare_repo"
 git remote add origin "$bare_repo"
-git push -q -u origin main
+git push -q -u origin develop
 
 # staging-init
 output=$(pipeline-branch staging-init 2>/dev/null)
 assert_eq "staging created" "true" "$(echo "$output" | jq -r '.created')"
-assert_eq "staging base=main" "main" "$(echo "$output" | jq -r '.base')"
+assert_eq "staging base=develop" "develop" "$(echo "$output" | jq -r '.base')"
 
 # exists
 assert_exit "staging exists" 0 pipeline-branch exists staging
@@ -587,6 +587,69 @@ assert_eq "holdout zero-withheld exit"   "0"    "$rc"
 
 # Unknown subcommand → exit 2
 assert_exit "holdout unknown subcommand → 2" 2 pipeline-holdout-validate frob r-holdout t1
+
+echo ""
+echo "=== test-writer prompt: inline spec embedding ==="
+
+tw_spec_dir=$(mktemp -d)
+printf '# TW Spec\nThis is the test-writer spec context.' > "$tw_spec_dir/spec.md"
+cat > "$tw_spec_dir/tasks.json" <<'TWEOF'
+{"tasks":[{"task_id":"TW1","title":"TW task","description":"desc","files":["src/tw.ts"],"acceptance_criteria":["Does the thing"],"tests_to_write":["Test the thing"],"depends_on":[]}],"execution_order":[{"task_id":"TW1"}]}
+TWEOF
+
+# Build the test-writer prompt directly using the same logic as pipeline-run-task preflight.
+# This is a unit test of the prompt-building logic, not an end-to-end preflight invocation.
+task_id="TW1"
+spec_path="$tw_spec_dir"
+_tw_nonce="testnonce"
+_spec_content=$(<"$spec_path/spec.md")
+_spec_content=$(printf '%s' "$_spec_content" | sed -E 's/<<<(END:)?UNTRUSTED:[A-Z_]+(:[A-Za-z0-9]+)?>>>/[redacted-fence]/g')
+_task_row=$(jq -c --arg t "$task_id" '.tasks[] | select(.task_id == $t)' "$spec_path/tasks.json" 2>/dev/null || true)
+_tw_criteria=$(printf '%s' "${_task_row:-{\}}" | jq -r '(.acceptance_criteria // []) | map("- " + .) | join("\n")' 2>/dev/null || true)
+_tw_tests_to_write=$(printf '%s' "${_task_row:-{\}}" | jq -r '(.tests_to_write // []) | map("- " + .) | join("\n")' 2>/dev/null || true)
+_tw_files=$(printf '%s' "${_task_row:-{\}}" | jq -r '(.files // []) | map("- " + .) | join("\n")' 2>/dev/null || true)
+
+tw_prompt=$(cat <<PROMPT
+## Setup (run before reading any file)
+\`\`\`bash
+git fetch origin staging --depth=50
+git reset --hard origin/staging
+\`\`\`
+## Task ID
+${task_id}
+## Files to Modify
+${_tw_files}
+## Acceptance Criteria
+${_tw_criteria}
+## Tests to Write
+${_tw_tests_to_write}
+## Spec
+<<<UNTRUSTED:SPEC:${_tw_nonce}>>>
+${_spec_content}
+<<<END:UNTRUSTED:SPEC:${_tw_nonce}>>>
+STATUS: RED_READY
+STATUS: BLOCKED — <reason>
+PROMPT
+)
+
+assert_eq "tw-prompt has fenced SPEC block" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -q '<<<UNTRUSTED:SPEC:' && echo true || echo false )"
+assert_eq "tw-prompt embeds spec content" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -q 'TW Spec' && echo true || echo false )"
+assert_eq "tw-prompt has staging reset preamble" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -q 'git reset --hard origin/staging' && echo true || echo false )"
+assert_eq "tw-prompt has STATUS: RED_READY" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -q 'STATUS: RED_READY' && echo true || echo false )"
+assert_eq "tw-prompt has acceptance criteria" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -q 'Does the thing' && echo true || echo false )"
+assert_eq "tw-prompt has tests_to_write" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -q 'Test the thing' && echo true || echo false )"
+assert_eq "tw-prompt embeds files" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -q 'src/tw.ts' && echo true || echo false )"
+assert_eq "tw-prompt spec content not empty" "true" \
+  "$( [[ -n "$_spec_content" ]] && echo true || echo false )"
+
+rm -rf "$tw_spec_dir"
 
 echo ""
 echo "================================"
