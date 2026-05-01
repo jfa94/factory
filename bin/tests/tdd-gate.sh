@@ -74,7 +74,7 @@ case4() {
   local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
   mkdir -p "$repo/specs/current"
   cat > "$repo/specs/current/tasks.json" <<JSON
-{"tasks":[{"id":"task-001","tdd_exempt":true}]}
+{"tasks":[{"task_id":"task-001","tdd_exempt":true}]}
 JSON
   ( cd "$repo" && git add specs && git -c user.email=t@t -c user.name=t commit -q -m "spec" )
   _commit "$repo" "feat(x): impl [task-001]" "src/x.ts"
@@ -86,6 +86,24 @@ JSON
   printf '%s' "$out" | jq -e '.exempt == true' >/dev/null \
     || fail "case4 expected exempt=true in JSON"
   pass "case4: tdd_exempt flag respected"
+}
+
+case4b() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  mkdir -p "$repo/specs/current"
+  cat > "$repo/specs/current/tasks.json" <<JSON
+{"tasks":[{"task_id":"task-001","tdd_exempt":true}]}
+JSON
+  ( cd "$repo" && git add specs && git -c user.email=t@t -c user.name=t commit -q -m "spec" )
+  _commit "$repo" "feat(x): impl [task-001]" "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-001 --base staging --spec-dir specs/current )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case4b expected exit 0, got $rc"; fi
+  printf '%s' "$out" | jq -e '.exempt == true' >/dev/null \
+    || fail "case4b: tdd_exempt with .task_id schema not honored"
+  pass "case4b: tdd_exempt respected with canonical .task_id schema"
 }
 
 case5() {
@@ -331,8 +349,221 @@ case_b3_merge_with_impl() {
   pass "case_b3_merge_with_impl: merge bringing impl files counted as impl (gate fails)"
 }
 
-case1; case2; case3; case4; case5; case6; case7; case8
+# Test 9: untagged impl commit between staging..HEAD must be a violation
+case9() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test: red tests for untagged-task [task-untagged]" "tests/x.test.ts"
+  _commit "$repo" "feat: add impl" "src/impl.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-untagged --base staging )
+  rc=$?
+  set -e
+  local ok exempt
+  ok=$(printf '%s' "$out" | jq -r '.ok')
+  exempt=$(printf '%s' "$out" | jq -r '.exempt')
+  [[ "$ok" == "false" && "$exempt" == "false" ]] \
+    || fail "case9: untagged impl must be a violation (ok=$ok exempt=$exempt)"
+  [[ $rc -eq 1 ]] || fail "case9: expected exit 1, got $rc"
+  reason=$(printf '%s' "$out" | jq -r '.violations[0].reason')
+  [[ "$reason" == "impl-commit-untagged" ]] || fail "case9: expected reason impl-commit-untagged, got $reason"
+  pass "case9: untagged impl commit flagged as violation"
+}
+
+# Test 10: tagged test-only present, untagged impl present, must be a violation
+case10() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test: tests [task-mixed]" "tests/x.test.ts"
+  _commit "$repo" "feat: untagged impl" "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-mixed --base staging )
+  rc=$?
+  set -e
+  local ok
+  ok=$(printf '%s' "$out" | jq -r '.ok')
+  [[ "$ok" == "false" ]] \
+    || fail "case10: untagged impl alongside tagged test must violate (ok=$ok)"
+  [[ $rc -eq 1 ]] || fail "case10: expected exit 1, got $rc"
+  reason=$(printf '%s' "$out" | jq -r '.violations[0].reason')
+  [[ "$reason" == "impl-commit-untagged" ]] || fail "case10: expected reason impl-commit-untagged, got $reason"
+  pass "case10: untagged impl alongside tagged test flagged"
+}
+
+# ---- Monorepo / per-package test directory coverage (Task 4.10) ----
+
+# Monorepo: packages/foo/tests/bar.test.ts is a test path.
+case_monorepo_packages_tests() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(mono): failing [task-mono1]" "packages/foo/tests/bar.ts"
+  _commit "$repo" "feat(mono): impl [task-mono1]"    "packages/foo/src/bar.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-mono1 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_monorepo_packages_tests expected exit 0, got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_monorepo_packages_tests expected ok=true"
+  pass "case_monorepo_packages_tests: packages/foo/tests/* recognised as test path"
+}
+
+# Monorepo: packages/foo/test/bar.go is a test path (singular `test` dir).
+case_monorepo_packages_test_singular() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(mono): failing [task-mono2]" "packages/foo/test/bar.ts"
+  _commit "$repo" "feat(mono): impl [task-mono2]"    "packages/foo/src/bar.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-mono2 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_monorepo_packages_test_singular expected exit 0, got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_monorepo_packages_test_singular expected ok=true"
+  pass "case_monorepo_packages_test_singular: packages/foo/test/* recognised as test path"
+}
+
+# Monorepo: apps/bar/spec/x.rb is a test path.
+case_monorepo_apps_spec() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(mono): failing [task-mono3]" "apps/bar/spec/x.rb"
+  _commit "$repo" "feat(mono): impl [task-mono3]"    "apps/bar/lib/x.rb"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-mono3 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_monorepo_apps_spec expected exit 0, got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_monorepo_apps_spec expected ok=true"
+  pass "case_monorepo_apps_spec: apps/bar/spec/* recognised as test path"
+}
+
+# Root: __tests__/x.ts (no leading dir) is a test path.
+case_root_double_underscore_tests() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(root): failing [task-root1]" "__tests__/x.ts"
+  _commit "$repo" "feat(root): impl [task-root1]"    "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-root1 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_root_double_underscore_tests expected exit 0, got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_root_double_underscore_tests expected ok=true"
+  pass "case_root_double_underscore_tests: root __tests__/* recognised as test path"
+}
+
+# Direct unit assertions for is_test_path (sourced).
+case_is_test_path_unit() {
+  # shellcheck disable=SC1091
+  source "$PLUGIN_ROOT/bin/pipeline-lib.sh"
+  local p
+  for p in \
+    packages/foo/tests/bar.ts \
+    packages/foo/test/bar.ts \
+    packages/foo/spec/x.rb \
+    apps/bar/__tests__/x.ts \
+    tests/x.ts \
+    test/x.ts \
+    spec/x.rb \
+    __tests__/x.ts \
+    a/b/c/tests/d.ts ; do
+    is_test_path "$p" || fail "is_test_path: expected TEST for $p"
+  done
+  for p in src/foo.ts packages/foo/src/bar.ts apps/bar/lib/x.rb pkg/foo.go ; do
+    if is_test_path "$p"; then fail "is_test_path: expected NOT for $p"; fi
+  done
+  pass "case_is_test_path_unit: monorepo + root test dir patterns classified correctly"
+}
+
+# Test 11: tagged --allow-empty commit must not advance seen_test_only
+case11() {
+  local repo out rc ok reason; repo=$(mktemp -d); _mk_repo "$repo"
+  ( cd "$repo" && git -c user.email=t@t -c user.name=t commit --allow-empty -q \
+      -m "chore: empty placeholder [task-empty]" )
+  _commit "$repo" "feat: impl [task-empty]" "src/x.ts"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-empty --base staging )
+  rc=$?
+  set -e
+  ok=$(printf '%s' "$out" | jq -r '.ok')
+  reason=$(printf '%s' "$out" | jq -r '.violations[0].reason // ""')
+  [[ "$ok" == "false" && "$reason" == "impl-without-preceding-test" ]] \
+    || fail "case11: empty commit must not satisfy test-only requirement (ok=$ok reason=$reason)"
+  pass "case11: tagged empty commit does not advance seen_test_only"
+}
+
+# ---- Task 4.11: pipeline-state task-write rc propagation ----
+
+# case_state_write_failure_propagates: when pipeline-state task-write fails,
+# the gate exits non-zero and surfaces the failure on stderr (no silent swallow).
+# Forces failure by shadowing pipeline-state on PATH with a stub returning rc=1.
+case_state_write_failure_propagates() {
+  local repo out rc err stub_dir
+  repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(x): failing [task-001]" "tests/x.test.ts"
+  _commit "$repo" "feat(x): impl [task-001]"    "src/x.ts"
+
+  stub_dir=$(mktemp -d)
+  cat > "$stub_dir/pipeline-state" <<'STUB'
+#!/usr/bin/env bash
+# Stub: simulate task-write failure with stderr.
+if [[ "${1:-}" == "task-write" ]]; then
+  printf 'simulated state write error\n' >&2
+  exit 1
+fi
+exit 0
+STUB
+  chmod +x "$stub_dir/pipeline-state"
+
+  err=$(mktemp)
+  set +e
+  out=$( cd "$repo" && PATH="$stub_dir:$PATH" "$GATE" --task-id task-001 --base staging --run-id run-x 2>"$err" )
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    fail "case_state_write_failure_propagates: expected non-zero exit when state write fails; got rc=0; stderr=$(cat "$err")"
+  fi
+  if ! grep -q "state write failed" "$err"; then
+    fail "case_state_write_failure_propagates: expected 'state write failed' on stderr; got: $(cat "$err")"
+  fi
+  if ! grep -q "simulated state write error" "$err"; then
+    fail "case_state_write_failure_propagates: expected stub stderr surfaced; got: $(cat "$err")"
+  fi
+  rm -rf "$stub_dir" "$err"
+  pass "case_state_write_failure_propagates: state-write rc surfaced as gate failure"
+}
+
+# case_state_write_success_still_passes: when pipeline-state task-write succeeds,
+# the gate exits 0 (regression guard for the rc-propagation change).
+case_state_write_success_still_passes() {
+  local repo out rc stub_dir
+  repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(x): failing [task-001]" "tests/x.test.ts"
+  _commit "$repo" "feat(x): impl [task-001]"    "src/x.ts"
+
+  stub_dir=$(mktemp -d)
+  cat > "$stub_dir/pipeline-state" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+  chmod +x "$stub_dir/pipeline-state"
+
+  set +e
+  out=$( cd "$repo" && PATH="$stub_dir:$PATH" "$GATE" --task-id task-001 --base staging --run-id run-x )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_state_write_success_still_passes: expected exit 0, got $rc"; fi
+  printf '%s' "$out" | jq -e '.ok == true' >/dev/null \
+    || fail "case_state_write_success_still_passes: expected ok=true; got $out"
+  rm -rf "$stub_dir"
+  pass "case_state_write_success_still_passes: successful state write keeps gate passing"
+}
+
+case1; case2; case3; case4; case4b; case5; case6; case7; case8
 case_go_test; case_ruby_spec; case_java_test; case_kotlin_test
 case_python_test; case_swift_tests; case_csharp_tests; case_go_impl_rejected
 case_b3_merge_with_tests; case_b3_merge_with_impl
+case_monorepo_packages_tests; case_monorepo_packages_test_singular
+case_monorepo_apps_spec; case_root_double_underscore_tests
+case_is_test_path_unit
+case9; case10; case11
+case_state_write_failure_propagates; case_state_write_success_still_passes
 printf 'all tdd-gate tests passed\n'

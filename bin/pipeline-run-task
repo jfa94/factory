@@ -83,12 +83,19 @@ _already_past() {
   cur=$(_task_field stage 2>/dev/null || printf '')
   case "$cur" in null|"") return 1 ;; esac
   local order=("${PIPELINE_STAGE_ORDER[@]}")
-  local cur_rank=-1 want_rank=-1 i
+  local cur_rank=-1 want_rank=-1 i status
   for i in "${!order[@]}"; do
     [[ "${order[$i]}" == "$cur"  ]] && cur_rank=$i
     [[ "${order[$i]}" == "$want" ]] && want_rank=$i
   done
-  (( cur_rank >= want_rank && cur_rank >= 0 && want_rank >= 0 ))
+  if (( cur_rank < 0 )); then
+    # Unknown stage (legacy state file). Treat as "past terminal" only when
+    # the task already reached a terminal status — otherwise re-run the stage.
+    status=$(pipeline-state task-read "$run_id" "$task_id" status 2>/dev/null | tr -d '"')
+    case "$status" in failed|needs_human_review) return 0 ;; esac
+    return 1
+  fi
+  (( want_rank >= 0 )) && (( cur_rank >= want_rank ))
 }
 
 _emit_manifest() {
@@ -199,7 +206,8 @@ _stage_preflight() {
   } > "$prompt_file"
 
   _task_write stage '"preflight_done"'
-  pipeline-state task-status "$run_id" "$task_id" executing >/dev/null || true
+  pipeline-state task-status "$run_id" "$task_id" executing >/dev/null \
+    || log_warn "task-status executing write failed for $task_id (non-fatal)"
 
   local cov_base snapshotted="false"
   cov_base=$(pipeline-state read "$run_id" '.orchestrator.worktree // empty' 2>/dev/null || true)
@@ -251,17 +259,6 @@ _detect_red_test_runner() {
   printf ''
 }
 
-# Resolve a usable base ref in <git_dir>: prefers local staging, falls back to origin/staging.
-# Prints the ref name or nothing if neither exists.
-_resolve_base_ref() {
-  local git_dir="$1"
-  if git -C "$git_dir" rev-parse --verify staging >/dev/null 2>&1; then
-    printf 'staging'
-  elif git -C "$git_dir" rev-parse --verify origin/staging >/dev/null 2>&1; then
-    printf 'origin/staging'
-  fi
-}
-
 # Verify that new test files written by the test-writer actually fail.
 # Args: <tw_wt> (test-writer worktree path)
 # Returns 0 (ok / skip), 1 (verification failed → block preexec_tests).
@@ -278,8 +275,7 @@ _verify_red_tests() {
 
   # Find new test files added by test-writer (expanded pattern covers major ecosystems)
   local base_ref new_tests=()
-  base_ref=$(_resolve_base_ref "$tw_wt")
-  if [[ -z "$base_ref" ]]; then
+  if ! base_ref=$(resolve_base_ref "$tw_wt"); then
     log_error "red-test verification: base ref not found (staging and origin/staging both missing) task_id=\"$task_id\""
     _task_write quality_gates.red_test '{"ok":false,"reason":"missing_base_ref"}'
     return 1
@@ -424,8 +420,7 @@ _stage_preexec_tests() {
     [[ -z "$tw_wt" ]] && tw_wt="$worktree"
     if [[ -n "$tw_wt" && -d "$tw_wt" ]]; then
       local resume_base
-      resume_base=$(_resolve_base_ref "$tw_wt")
-      if [[ -n "$resume_base" ]] \
+      if resume_base=$(resolve_base_ref "$tw_wt") \
          && ( cd "$tw_wt" && git log --format=%s "$resume_base..HEAD" 2>/dev/null \
                 | grep -qE "^test\(.*\):.*\[${task_id}\]" 2>/dev/null ); then
         tw_status="RED_READY"
@@ -458,7 +453,10 @@ _stage_preexec_tests() {
 
   if [[ "$tw_status" == "BLOCKED" ]]; then
     log_warn "test-writer blocked for $task_id"
-    pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+    if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+      log_error "task-status failed write failed for $task_id"
+      return 30
+    fi
     t1=$(_now_ms)
     log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"test_writer_blocked\""
     return 30
@@ -472,7 +470,10 @@ _stage_preexec_tests() {
 
   if ! _verify_red_tests "$tw_wt"; then
     _task_write test_writer_status '"BLOCKED"'
-    pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+    if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+      log_error "task-status failed write failed for $task_id"
+      return 30
+    fi
     t1=$(_now_ms)
     log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"red_tests_not_verified\""
     return 30
@@ -534,6 +535,7 @@ _stage_postexec() {
   # executor-fix. Executor has now committed fixes; gates MUST re-run regardless
   # of current stage rank. Check this BEFORE the spawn-pending crash-recovery
   # guard so stale review_files from the prior round don't trigger a spurious skip.
+  local _reviewer_only_pending=false
   if _already_past postexec_done; then
     local reviewer_only
     reviewer_only=$(_task_field postexec_reviewer_only)
@@ -543,19 +545,17 @@ _stage_postexec() {
       log_step_end "postexec" "skipped" "$((t1-t0))" "task_id=\"$task_id\""
       return 0
     fi
-    # Clear flag and stale review_files so the new review round starts fresh.
-    _task_write postexec_reviewer_only 'null'
-    _task_write review_files '[]'
-    # Reset stage to preexec_tests_done so _emit_postexec_manifest can advance it.
-    _task_write stage '"preexec_tests_done"'
+    # Re-entry: defer clears until after manifest emission so a crash in this
+    # window doesn't lose the reviewer_only signal.
+    _reviewer_only_pending=true
   fi
 
   # postexec_spawn_pending: gates passed + manifest emitted last run but
   # postreview hasn't written postexec_done yet (crash window).
-  # Only reached when reviewer_only was false/absent (handled above).
+  # Skipped for reviewer_only re-entry (handled above) — we want gates + a fresh manifest.
   # Re-check review_files: populated means Codex ran sync — resume into postreview.
   # Empty means agent path — re-emit manifest (idempotent).
-  if _already_past postexec_spawn_pending; then
+  if ! $_reviewer_only_pending && _already_past postexec_spawn_pending; then
     local existing_rf
     existing_rf=$(_task_field review_files 2>/dev/null || printf 'null')
     local rf_count
@@ -598,13 +598,15 @@ _stage_postexec() {
   fi
 
   if ! ( cd "$wt" && pipeline-tdd-gate --task-id "$task_id" --run-id "$run_id" ) >/dev/null; then
-    _task_write quality_gates.tdd '{"ok":false}'
+    # pipeline-tdd-gate is the sole writer of quality_gates.tdd (it persists
+    # the structured result via pipeline-state task-write). Do not duplicate
+    # the write here — that would clobber violation details with a bare
+    # {"ok":false} object.
     log_warn "tdd gate failed for $task_id"
     t1=$(_now_ms)
     log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"tdd\""
     return 30
   fi
-  _task_write quality_gates.tdd '{"ok":true}'
 
   local cov_before="$run_dir/.state/$run_id/$task_id.coverage-before.json"
   local cov_after="$wt/coverage/coverage-summary.json"
@@ -637,12 +639,26 @@ _stage_postexec() {
         return 30
       fi
     else
-      # holdout_review_file not wired by SubagentStop yet — record skip so the
-      # scorer can distinguish "not configured" from "passed". Do not spawn a
-      # dedicated holdout reviewer here; infinite re-entry risk.
-      _task_write quality_gates.holdout '"skipped"'
-      log_warn "holdout file present but reviewer output not wired for $task_id; skipping Layer 4"
+      # holdout_review_file unwired — fail closed. Silently skipping let real
+      # holdout failures merge unchecked; a reviewer-output gap means we cannot
+      # verify Layer 4 and must escalate.
+      log_error "holdout file $holdout_file present but holdout_review_file unwired for $task_id — escalating to human"
+      _task_write quality_gates.holdout '"missing-reviewer-output"'
+      pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null \
+        || log_error "task-status needs_human_review write failed for $task_id"
+      t1=$(_now_ms)
+      log_step_end "postexec" "needs_human_review" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout_unwired\""
+      return 30
     fi
+  fi
+
+  if $_reviewer_only_pending; then
+    # Gates passed for the reviewer_only re-entry; safe to clear the signal and
+    # rewind stage so _emit_postexec_manifest advances cleanly. A crash before
+    # this point preserves postexec_reviewer_only=true so resume re-enters here.
+    _task_write postexec_reviewer_only 'null'
+    _task_write review_files '[]'
+    _task_write stage '"preexec_tests_done"'
   fi
 
   local _manifest_rc
@@ -704,27 +720,41 @@ _emit_postexec_manifest() {
     spec_path=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
     local cargs=(--task-id "$task_id")
     [[ -n "$spec_path" ]] && cargs+=(--spec-dir "$spec_path")
-    if ! pipeline-codex-review "${cargs[@]}" > "$review_file"; then
-      log_warn "codex review failed for $task_id"
-      return 30
+    local _codex_err_file _codex_rc=0
+    _codex_err_file=$(mktemp "${TMPDIR:-/tmp}/codex-review-err.XXXXXX")
+    pipeline-codex-review "${cargs[@]}" > "$review_file" 2> "$_codex_err_file" || _codex_rc=$?
+    if (( _codex_rc != 0 )); then
+      local _codex_err
+      _codex_err=$(cat "$_codex_err_file" 2>/dev/null || printf '')
+      rm -f "$_codex_err_file"
+      if printf '%s' "$_codex_err" | grep -qE 'codex: command not found|codex CLI not found'; then
+        log_warn "codex CLI unavailable for $task_id; falling back to agent reviewers"
+        provider="agent"
+        # fall through to agent-path block below
+      else
+        log_error "codex review failed for $task_id: $_codex_err"
+        return 30
+      fi
+    else
+      rm -f "$_codex_err_file"
+      _task_write review_files "$(jq -n --arg f "$review_file" '[$f]')"
+      # Codex review is synchronous — no crash window, advance directly to postexec_done.
+      _task_write stage '"postexec_done"'
+      local codex_agents_json
+      codex_agents_json=$(jq -cn --arg pf "$pf" \
+        '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:1, prompt_file:$pf}]')
+      case "$tier" in
+        feature)
+          codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
+            '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+        security)
+          codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
+            '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf},
+                  {subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+      esac
+      _emit_manifest postreview "$codex_agents_json"
+      return 10
     fi
-    _task_write review_files "$(jq -n --arg f "$review_file" '[$f]')"
-    # Codex review is synchronous — no crash window, advance directly to postexec_done.
-    _task_write stage '"postexec_done"'
-    local codex_agents_json
-    codex_agents_json=$(jq -cn --arg pf "$pf" \
-      '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:1, prompt_file:$pf}]')
-    case "$tier" in
-      feature)
-        codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
-          '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
-      security)
-        codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
-          '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf},
-                {subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
-    esac
-    _emit_manifest postreview "$codex_agents_json"
-    return 10
   fi
 
   # Agent path: write stage before manifest emission — crash between means
@@ -795,9 +825,6 @@ _stage_postreview() {
     fi
   done
 
-  # Durable commit point: all review artifacts confirmed present.
-  _task_write stage '"postexec_done"'
-
   # Resolve task worktree so pipeline-parse-review can run `git diff` from
   # the right place when --base is supplied (validator drops findings whose
   # verbatim_line isn't in the diff).
@@ -812,31 +839,58 @@ _stage_postreview() {
     if [[ "$f" == *.json ]]; then
       # Already-normalized verdict JSON (e.g. pipeline-codex-review output, which
       # runs validate_findings internally before writing the file).
+      # SECURITY: require generator stamp to confirm provenance. Unstamped .json
+      # review files (forged by prompt-injection or compromised reviewer) are
+      # routed through pipeline-parse-review, which validates findings against
+      # the diff and rejects fabricated verbatim_lines.
       verdict=$(cat "$f") || { log_warn "read failed on $f"; any_changes=true; continue; }
-      if ! printf '%s' "$verdict" | jq -e 'has("verdict") or has("decision")' >/dev/null 2>&1; then
-        log_warn "normalized review missing .verdict/.decision field: $f"; any_changes=true; continue
+      local _gen
+      _gen=$(printf '%s' "$verdict" | jq -r '.generator // ""' 2>/dev/null)
+      if [[ "$_gen" != "pipeline-codex-review-v1" ]]; then
+        log_warn "review file $f has no recognized generator stamp; routing through parse-review task_id=\"$task_id\""
+        local _perr2; _perr2=$(mktemp)
+        if [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
+          local base_ref
+          if ! base_ref=$(resolve_base_ref "$pr_wt"); then
+            log_error "postreview: base ref not found for unstamped $f — escalating to human task_id=\"$task_id\""
+            rm -f "$_perr2"; any_discuss=true; continue
+          fi
+          verdict=$(cd "$pr_wt" && pipeline-parse-review --base "$base_ref" < "$f" 2>"$_perr2") \
+            || { log_error "parse-review failed on $f: $(cat "$_perr2")"; rm -f "$_perr2"; any_discuss=true; continue; }
+        else
+          verdict=$(pipeline-parse-review < "$f" 2>"$_perr2") \
+            || { log_error "parse-review failed on $f: $(cat "$_perr2")"; rm -f "$_perr2"; any_discuss=true; continue; }
+        fi
+        rm -f "$_perr2"
+      elif ! printf '%s' "$verdict" | jq -e 'has("verdict")' >/dev/null 2>&1; then
+        log_warn "stamped review missing .verdict: $f"; any_changes=true; continue
       fi
-    elif [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
-      local base_ref
-      base_ref=$(_resolve_base_ref "$pr_wt")
-      if [[ -z "$base_ref" ]]; then
-        log_warn "postreview: base ref not found (staging and origin/staging both missing) — treating $f as REQUEST_CHANGES task_id=\"$task_id\""
-        any_changes=true
-        continue
-      fi
-      verdict=$(cd "$pr_wt" && pipeline-parse-review --base "$base_ref" < "$f") || { log_warn "parse-review failed on $f"; any_changes=true; continue; }
     else
-      log_warn "postreview: worktree unresolved — running parse-review without diff validation on $f task_id=\"$task_id\""
-      verdict=$(pipeline-parse-review < "$f") || { log_warn "parse-review failed on $f"; any_changes=true; continue; }
+      local _perr; _perr=$(mktemp)
+      if [[ -n "$pr_wt" && -d "$pr_wt" ]]; then
+        local base_ref
+        if ! base_ref=$(resolve_base_ref "$pr_wt"); then
+          log_warn "postreview: base ref not found (staging and origin/staging both missing) — escalating $f to human task_id=\"$task_id\""
+          rm -f "$_perr"
+          any_discuss=true; continue
+        fi
+        verdict=$(cd "$pr_wt" && pipeline-parse-review --base "$base_ref" < "$f" 2>"$_perr") \
+          || { log_error "parse-review failed on $f: $(cat "$_perr")"; rm -f "$_perr"; any_discuss=true; continue; }
+      else
+        log_warn "postreview: worktree unresolved — running parse-review without diff validation on $f task_id=\"$task_id\""
+        verdict=$(pipeline-parse-review < "$f" 2>"$_perr") \
+          || { log_error "parse-review failed on $f: $(cat "$_perr")"; rm -f "$_perr"; any_discuss=true; continue; }
+      fi
+      rm -f "$_perr"
     fi
     # pipeline-parse-review emits `.verdict`; accept legacy `.decision` for
     # backward compatibility with older reviewer outputs / test fixtures.
     decision=$(printf '%s' "$verdict" | jq -r '.verdict // .decision // "UNKNOWN"')
     case "$decision" in
-      APPROVE) : ;;
+      APPROVE|APPROVED) : ;;
       REQUEST_CHANGES) any_changes=true ;;
       NEEDS_DISCUSSION) any_discuss=true ;;
-      *) any_changes=true ;;
+      *) log_warn "unrecognized verdict: $decision"; any_changes=true ;;
     esac
   done
 
@@ -865,7 +919,10 @@ _stage_postreview() {
 
   if $any_discuss; then
     _task_write stage '"postreview_pending_human"'
-    pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null || true
+    if ! pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null; then
+      log_error "task-status needs_human_review write failed for $task_id"
+      return 30
+    fi
     t1=$(_now_ms)
     log_step_end "postreview" "needs_human_review" "$((t1-t0))" "task_id=\"$task_id\""
     return 30
@@ -879,7 +936,10 @@ _stage_postreview() {
     _task_write review_attempts "$attempts"
     if (( attempts > 3 )); then
       _task_write stage '"postreview_exhausted"'
-      pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+      if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+        log_error "task-status failed write failed for $task_id"
+        return 30
+      fi
       t1=$(_now_ms)
       log_step_end "postreview" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"review_exhausted\""
       return 30
@@ -912,6 +972,7 @@ _stage_postreview() {
     done
     _task_write postreview_prior_blockers "$prior_blockers_json"
     _task_write postexec_reviewer_only '"true"'
+    _task_write stage '"postexec_done"'  # parking lot for upcoming reviewer-only re-entry
 
     _ensure_prompt_dir
     local pf
@@ -1042,13 +1103,19 @@ _stage_ship() {
     case "$ci_status" in
       green)
         if [[ "$merge_status" == "stalled" ]]; then
-          pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+          if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+            log_error "task-status failed write failed for $task_id"
+            return 30
+          fi
           _task_write failure_reason '"auto-merge stalled despite green CI; manual investigation required"'
           t1=$(_now_ms)
           log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"merge_stalled\""
           return 30
         fi
-        pipeline-state task-status "$run_id" "$task_id" done >/dev/null || true
+        if ! pipeline-state task-status "$run_id" "$task_id" done >/dev/null; then
+          log_error "task-status done write failed for $task_id"
+          return 30
+        fi
         _task_write stage '"ship_done"'
         t1=$(_now_ms)
         log_step_end "ship" "ok" "$((t1-t0))" "task_id=\"$task_id\"" "ci=\"green\""
@@ -1060,12 +1127,16 @@ _stage_ship() {
         attempts=$((attempts + 1))
         _task_write ci_fix_attempts "$attempts"
         if (( attempts > 2 )); then
-          pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || true
+          if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+            log_error "task-status failed write failed for $task_id"
+            return 30
+          fi
           t1=$(_now_ms)
           log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_exhausted\""
           return 30
         fi
-        pipeline-state task-status "$run_id" "$task_id" ci_fixing >/dev/null || true
+        pipeline-state task-status "$run_id" "$task_id" ci_fixing >/dev/null \
+          || log_warn "task-status ci_fixing write failed for $task_id (non-fatal)"
         _ensure_prompt_dir
         local pf; pf=$(_prompt_path executor-ci-fix)
         printf '[task:%s]\nFix failing CI on PR for task %s.\nSTATUS: DONE|...\n' "$task_id" "$task_id" > "$pf"
@@ -1078,7 +1149,10 @@ _stage_ship() {
         return 10 ;;
       *)
         log_warn "ci_status=$ci_status treated as timeout"
-        pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null || true
+        if ! pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null; then
+          log_error "task-status needs_human_review write failed for $task_id"
+          return 30
+        fi
         t1=$(_now_ms)
         log_step_end "ship" "needs_human_review" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_timeout\""
         return 30 ;;
@@ -1118,26 +1192,40 @@ _stage_ship() {
 
   _write_ship_checklist
 
-  local pr_url pr_number pr_title
+  local pr_url pr_number pr_title _gh_err
   pr_title=$(pipeline-branch task-pr-title "$task_id" --run-id "$run_id")
-  pr_url=$(cd "$wt" && gh pr create --base staging --title "$pr_title" --body "Automated task PR for $task_id in run $run_id." 2>/dev/null || true)
+  _gh_err=$(mktemp)
+  pr_url=$(cd "$wt" && gh pr create --base staging --title "$pr_title" \
+    --body "Automated task PR for $task_id in run $run_id." 2>"$_gh_err") || pr_url=""
+  if [[ -z "$pr_url" ]]; then
+    local err_text; err_text=$(<"$_gh_err"); rm -f "$_gh_err"
+    log_error "gh pr create failed for $task_id: ${err_text:-no stderr captured}"
+    _task_write failure_reason "$(jq -Rs . <<<"gh pr create failed: ${err_text:0:500}")"
+    t1=$(_now_ms); log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"gh_pr_create\""
+    return 30
+  fi
+  rm -f "$_gh_err"
   pr_number=$(printf '%s' "$pr_url" | grep -oE '[0-9]+$' || printf '')
   if [[ -z "$pr_number" ]]; then
-    log_error "gh pr create returned no PR number"
-    t1=$(_now_ms)
-    log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\""
+    log_error "gh pr create returned non-numeric URL: $pr_url"
+    _task_write failure_reason "$(jq -Rs . <<<"gh pr create returned non-numeric URL: $pr_url")"
+    t1=$(_now_ms); log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"gh_pr_url_malformed\""
     return 30
   fi
   _task_write pr_number "$pr_number"
   _task_write pr_url    "\"$pr_url\""
-  pipeline-state task-status "$run_id" "$task_id" reviewing >/dev/null || true
+  pipeline-state task-status "$run_id" "$task_id" reviewing >/dev/null \
+    || log_warn "task-status reviewing write failed for $task_id (non-fatal)"
   log_metric "task.pr_created" "task_id=\"$task_id\"" "pr_number=$pr_number"
 
   if [[ "${FACTORY_ASYNC_CI:-auto}" == "off" ]]; then
     _ensure_prompt_dir
     if pipeline-wait-pr "$pr_number" > "$run_dir/.state/$run_id/$task_id.ci.json"; then
       emit_ci_metric task "$pr_number" green
-      pipeline-state task-status "$run_id" "$task_id" done >/dev/null || true
+      if ! pipeline-state task-status "$run_id" "$task_id" done >/dev/null; then
+        log_error "task-status done write failed for $task_id"
+        return 30
+      fi
       _task_write stage '"ship_done"'
       _task_write ci_status '"green"'
       t1=$(_now_ms)
@@ -1208,12 +1296,15 @@ _stage_finalize_run() {
 
   # Fetch origin/staging fail-closed: a stale ref could let the SHA-ancestor
   # check pass against an outdated tip.
-  if ! git fetch origin staging --quiet 2>/dev/null; then
-    log_error "finalize-run: git fetch origin staging failed; cannot verify staging contents"
+  local _ferr; _ferr=$(mktemp)
+  if ! git fetch origin staging --quiet 2>"$_ferr"; then
+    log_error "finalize-run: git fetch origin staging failed: $(cat "$_ferr")"
+    rm -f "$_ferr"
     t1=$(_now_ms)
     log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"git_fetch_failed\""
     return 3
   fi
+  rm -f "$_ferr"
 
   # Verify every status=done task PR is merged into origin/staging.
   # Iterate task entries (id+pr_number) so a done task without a pr_number is
@@ -1227,7 +1318,18 @@ _stage_finalize_run() {
       continue
     fi
     local pr_data merge_sha pr_state
-    pr_data=$(gh pr view "$pr_num" --json state,mergeCommit,headRefOid 2>/dev/null || printf '{}')
+    local _vrc=0 _verr; _verr=$(mktemp)
+    pr_data=$(gh pr view "$pr_num" --json state,mergeCommit,headRefOid 2>"$_verr") || _vrc=$?
+    if (( _vrc != 0 )); then
+      log_error "finalize-run: gh pr view #$pr_num failed (rc=$_vrc): $(cat "$_verr")"
+      rm -f "$_verr"
+      staging_sha_missing=true; continue
+    fi
+    rm -f "$_verr"
+    if ! printf '%s' "$pr_data" | jq -e '.state' >/dev/null 2>&1; then
+      log_error "finalize-run: gh pr view #$pr_num returned malformed JSON"
+      staging_sha_missing=true; continue
+    fi
     pr_state=$(printf '%s' "$pr_data" | jq -r '.state // "OPEN"')
     if [[ "$pr_state" != "MERGED" ]]; then
       log_warn "finalize-run: task $tid PR #$pr_num not yet merged (state=$pr_state)"
@@ -1247,44 +1349,91 @@ _stage_finalize_run() {
     return 3
   fi
 
-  local scribe_done
-  scribe_done=$(pipeline-state read "$run_id" '.scribe.status // ""' 2>/dev/null || printf '')
-  if [[ "$scribe_done" != "done" ]]; then
+  local scribe_state
+  scribe_state=$(pipeline-state read "$run_id" '.scribe.status // "pending"' 2>/dev/null | tr -d '"')
+
+  if [[ "$scribe_state" == "spawned" ]]; then
+    # Spawned previously; SubagentStop hook should advance to done|failed.
+    # If we still see "spawned" on re-entry, the hook failed — cap re-spawns.
+    local scribe_attempts
+    scribe_attempts=$(pipeline-state read "$run_id" '.scribe.attempts // 0' 2>/dev/null)
+    if (( scribe_attempts >= 2 )); then
+      log_error "finalize-run: scribe re-spawn cap hit (attempts=$scribe_attempts)"
+      pipeline-state write "$run_id" '.scribe.status' '"failed"' >/dev/null
+      pipeline-state write "$run_id" '.scribe.failure_reason' '"hook_did_not_terminate"' >/dev/null
+      t1=$(_now_ms); log_step_end "finalize-run" "failed" "$((t1-t0))" "reason=\"scribe_loop\""
+      return 30
+    fi
+    pipeline-state write "$run_id" '.scribe.attempts' "$((scribe_attempts + 1))" >/dev/null
+    scribe_state="pending"
+  fi
+
+  if [[ "$scribe_state" != "done" ]]; then
     _ensure_prompt_dir
     local pf="$run_dir/.state/$run_id/RUN.scribe-prompt.md"
     printf 'Update /docs based on git diff for run %s.\nEnd with STATUS:.\n' "$run_id" > "$pf"
     local agents_json
     agents_json=$(jq -cn --arg pf "$pf" \
-      '[{subagent_type:"scribe", model:"sonnet", maxTurns:40, prompt_file:$pf}]')
-    pipeline-state write "$run_id" '.scribe.status' '"spawned"' >/dev/null || true
+      '[{subagent_type:"scribe", isolation:"worktree", model:"sonnet", maxTurns:40, prompt_file:$pf}]')
+    pipeline-state write "$run_id" '.scribe.status' '"spawned"' >/dev/null \
+      || log_warn "scribe.status spawned write failed (non-fatal; cap counter may not tick)"
     _emit_manifest finalize-run "$agents_json"
     t1=$(_now_ms)
     log_step_end "finalize-run" "spawn" "$((t1-t0))" "stage=\"scribe\""
     return 10
   fi
 
-  local final_pr_url
+  local final_pr_url final_pr_num
   final_pr_url=$(pipeline-state read "$run_id" '.final_pr.pr_url // ""' 2>/dev/null || printf '')
+
   if [[ -z "$final_pr_url" ]]; then
-    final_pr_url=$(gh pr create --base develop --head staging \
-      --title "Final: $run_id" \
-      --body "Final PR merging staging into develop for run $run_id." \
-      2>/dev/null || true)
-    if [[ -n "$final_pr_url" ]]; then
-      pipeline-state write "$run_id" '.final_pr.pr_url' "\"$final_pr_url\"" >/dev/null || true
-      local final_pr_num
-      final_pr_num=$(printf '%s' "$final_pr_url" | grep -oE '[0-9]+$' || printf '')
-      [[ -n "$final_pr_num" ]] && pipeline-state write "$run_id" '.final_pr.pr_number' "$final_pr_num" >/dev/null || true
-      log_metric "run.final_pr_created" "url=\"$final_pr_url\""
-    else
-      log_warn "final PR create failed"
+    local _existing _err
+    _err=$(mktemp)
+    _existing=$(gh pr list --base develop --head staging --state open --json url,number 2>"$_err") || {
+      log_error "finalize-run: gh pr list failed: $(cat "$_err")"
+      rm -f "$_err"
+      t1=$(_now_ms); log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"gh_pr_list_failed\""
+      return 3
+    }
+    rm -f "$_err"
+    final_pr_url=$(printf '%s' "$_existing" | jq -r '.[0].url // ""')
+
+    if [[ -z "$final_pr_url" ]]; then
+      _err=$(mktemp)
+      final_pr_url=$(gh pr create --base develop --head staging \
+        --title "Final: $run_id" \
+        --body "Final PR merging staging into develop for run $run_id." 2>"$_err") || final_pr_url=""
+      if [[ -z "$final_pr_url" ]]; then
+        log_error "finalize-run: gh pr create failed: $(cat "$_err")"
+        rm -f "$_err"
+        t1=$(_now_ms); log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"final_pr_create_failed\""
+        return 3
+      fi
+      rm -f "$_err"
     fi
+
+    pipeline-state write "$run_id" '.final_pr.pr_url' "\"$final_pr_url\"" >/dev/null \
+      || { log_error "finalize-run: state write final_pr.pr_url failed"; return 3; }
+    final_pr_num=$(printf '%s' "$final_pr_url" | grep -oE '[0-9]+$' || printf '')
+    [[ -n "$final_pr_num" ]] && pipeline-state write "$run_id" '.final_pr.pr_number' "$final_pr_num" >/dev/null
+    log_metric "run.final_pr_created" "url=\"$final_pr_url\""
   fi
 
-  pipeline-cleanup "$run_id" --delete-branches --remove-worktrees --close-issues \
-    >/dev/null 2>&1 || log_warn "cleanup failed"
-  pipeline-state write "$run_id" '.status' '"done"' >/dev/null || true
-  pipeline-state write "$run_id" '.ended_at' "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >/dev/null || true
+  local _cl_err; _cl_err=$(mktemp)
+  if ! pipeline-cleanup "$run_id" --delete-branches --remove-worktrees --close-issues >"$_cl_err" 2>&1; then
+    log_error "finalize-run: cleanup failed: $(cat "$_cl_err")"
+    rm -f "$_cl_err"
+    t1=$(_now_ms); log_step_end "finalize-run" "wait_retry" "$((t1-t0))" "reason=\"cleanup_failed\""
+    return 3
+  fi
+  rm -f "$_cl_err"
+
+  if ! pipeline-state write "$run_id" '.status' '"done"' >/dev/null; then
+    log_error "finalize-run: failed to write final status=done"
+    return 3
+  fi
+  pipeline-state write "$run_id" '.ended_at' "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >/dev/null \
+    || log_warn "finalize-run: failed to write ended_at (non-fatal)"
 
   t1=$(_now_ms)
   log_step_end "finalize-run" "ok" "$((t1-t0))"

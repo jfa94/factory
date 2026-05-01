@@ -144,7 +144,7 @@ TASKS
 test_resume_after_crash() {
   new_scenario "resume-after-crash"
 
-  local run_id="run-resume-02"
+  local run_id="run-20260102-000002"
   pipeline-init "$run_id" --mode prd >/dev/null
 
   # Seed a 3-task execution order with the validated topo-sort shape.
@@ -477,7 +477,10 @@ test_non_numeric_cache_fields_yield_unavailable() {
   assert_eq "used_percentage=string → reason=usage-cache-malformed" "usage-cache-malformed" \
     "$(printf '%s' "$quota" | jq -r '.reason')"
 
-  # resets_at as string: must coerce to default → still emits valid output.
+  # resets_at as string: Task 4.5 made this fail-closed — non-numeric resets_at
+  # emits the unavailable sentinel so callers wait_retry until the cache is
+  # refreshed, instead of synthesizing a now+5h default that masked corrupt
+  # caches as fresh.
   jq -n --argjson n "$now" \
     '{five_hour:{used_percentage:50,resets_at:"never"},seven_day:{used_percentage:9,resets_at:"never"},captured_at:$n}' \
     > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
@@ -485,10 +488,10 @@ test_non_numeric_cache_fields_yield_unavailable() {
   quota=$(pipeline-quota-check 2>/dev/null); rc=$?
   set -e
   assert_eq "resets_at=string → rc=0" "0" "$rc"
-  # detection_method should be statusline (not crashed), since coerced fallback
-  # gives a sensible future epoch.
-  assert_eq "resets_at=string → detection_method=statusline" "statusline" \
+  assert_eq "resets_at=string → detection_method=unavailable" "unavailable" \
     "$(printf '%s' "$quota" | jq -r '.detection_method')"
+  assert_eq "resets_at=string → reason=resets-at-missing" "resets-at-missing" \
+    "$(printf '%s' "$quota" | jq -r '.reason')"
 }
 
 # ---------------------------------------------------------------------------

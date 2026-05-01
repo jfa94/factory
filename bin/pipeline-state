@@ -6,6 +6,7 @@
 #   read <run-id> [key]                         Read full state or jq key
 #   write <run-id> <key> <value>                Atomic write to state key
 #   task-write <run-id> <task-id> <field> <value>  Atomic per-task write (hyphen-safe)
+#   task-array-append <run-id> <task-id> <field> <value>  Atomic append-to-array (unique)
 #   task-read <run-id> <task-id> [field]        Read a per-task field or whole record
 #   task-status <run-id> <task-id> <status>     Update task status
 #   deps-satisfied <run-id> <task-id>           Check if deps done (exit 0/1)
@@ -37,13 +38,29 @@ _KNOWN_TASK_FIELDS=(
   tdd_exempt
 )
 
-# Per-run advisory lock using mkdir (atomic on all POSIX systems, no flock needed).
+# Per-run advisory lock. Prefers flock(1) when available (Linux, util-linux on
+# macOS); falls back to atomic mkdir + PID-reaper for systems without flock.
 # Serialises concurrent read-modify-write cycles in write and task-status actions.
+# _STATE_LOCK_KIND records which primitive was acquired so unlock matches.
+_STATE_LOCK_KIND=""
 _state_lock_dir() { echo "$CLAUDE_PLUGIN_DATA/runs/$1/state.lock"; }
 
 _state_lock() {
-  local run_id="$1" lock_dir attempts=0
+  local run_id="$1" lock_dir lock_file attempts=0
   lock_dir=$(_state_lock_dir "$run_id")
+  mkdir -p "$(dirname "$lock_dir")"
+  lock_file="${lock_dir}.flock"
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$lock_file"
+    if ! flock -x -w 10 9; then
+      log_error "state lock timeout for run $run_id (flock 10s)"
+      exit 1
+    fi
+    _STATE_LOCK_KIND=flock
+    return 0
+  fi
+  _STATE_LOCK_KIND=mkdir
+  # Fallback: mkdir-based lock for systems without flock.
   while ! mkdir "$lock_dir" 2>/dev/null; do
     attempts=$((attempts + 1))
     if (( attempts > 200 )); then
@@ -67,7 +84,20 @@ _state_lock() {
 }
 
 _state_unlock() {
-  rm -rf "$(_state_lock_dir "$1")"
+  local run_id="$1"
+  case "$_STATE_LOCK_KIND" in
+    flock)
+      flock -u 9 2>/dev/null
+      exec 9>&-
+      ;;
+    mkdir)
+      rm -rf "$(_state_lock_dir "$run_id")"
+      ;;
+    *)
+      # No lock held — defensive no-op.
+      ;;
+  esac
+  _STATE_LOCK_KIND=""
 }
 
 # Parse a jq-style dotted/bracketed path into a JSON array for use with setpath.
@@ -269,6 +299,59 @@ case "$action" in
     log_info "state updated: tasks[$task_id].$field"
     ;;
 
+  task-array-append)
+    run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
+    task_id="${2:?missing task-id}"
+    _validate_id "$task_id" "task-id" || exit 1
+    field="${3:?missing field}"
+    value="${4:?missing value}"
+    f=$(_state_file "$run_id")
+
+    if [[ "$field" =~ ^\. ]]; then
+      log_error "task-array-append field must not start with '.' (got: $field)"
+      exit 1
+    fi
+    if ! [[ "$field" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]; then
+      log_error "invalid task-array-append field: $field"
+      exit 1
+    fi
+
+    field_root="${field%%.*}"
+    _known=0
+    for _k in "${_KNOWN_TASK_FIELDS[@]}"; do
+      [[ "$_k" == "$field_root" ]] && { _known=1; break; }
+    done
+    if (( _known == 0 )); then
+      log_warn "task-array-append unknown field: $field (known roots: ${_KNOWN_TASK_FIELDS[*]})"
+    fi
+    unset _known _k
+
+    jq_path=$(jq -n --arg tid "$task_id" --arg f "$field" \
+      '["tasks", $tid] + ($f | split("."))') || {
+        log_error "failed to build task path"
+        exit 1
+      }
+
+    _state_lock "$run_id"
+    trap '_state_unlock "$run_id"' EXIT
+    state=$(_read_state_file "$run_id")
+
+    if printf '%s' "$value" | jq empty 2>/dev/null; then
+      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --argjson v "$value" \
+        'setpath($path; ((getpath($path) // []) + [$v] | unique))')
+    else
+      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --arg v "$value" \
+        'setpath($path; ((getpath($path) // []) + [$v] | unique))')
+    fi
+    updated=$(printf '%s' "$updated" | jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.updated_at = $t')
+
+    atomic_write "$f" "$updated"
+    _state_unlock "$run_id"
+    trap - EXIT
+    log_info "state appended: tasks[$task_id].$field"
+    ;;
+
   task-read)
     run_id="${1:?missing run-id}"
     _validate_id "$run_id" "run-id" || exit 1
@@ -405,6 +488,14 @@ case "$action" in
   resume-point)
     run_id="${1:?missing run-id}"
     _validate_id "$run_id" "run-id" || exit 1
+    # task_5_3: resume-point operates only on canonical run-IDs. _validate_id
+    # accepts any [a-zA-Z0-9_-]{1,64} which is too permissive for resume —
+    # legacy/ad-hoc IDs (e.g. run-test-001, run-x) and traversal-shaped tokens
+    # must be rejected so resume cannot target arbitrary state directories.
+    if ! [[ "$run_id" =~ ^run-[0-9]{8}-[0-9]{6}$ ]]; then
+      log_error "run-id does not match canonical run-YYYYMMDD-HHMMSS: $run_id"
+      exit 1
+    fi
     state=$(_read_state_file "$run_id")
 
     # Prefer .execution_order (validated topo-sort from pipeline-validate-tasks).

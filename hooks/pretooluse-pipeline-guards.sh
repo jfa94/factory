@@ -22,14 +22,36 @@
 #      .quality_gate.ok, and .pr_number all set.
 set -euo pipefail
 
+# shellcheck source=/dev/null
+source "$(dirname "$0")/_security-common.sh"
+
 input=$(cat 2>/dev/null || printf '{}')
 tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""')
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
 
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
-if [[ -z "${CLAUDE_PLUGIN_DATA:-}" || ! -L "$current_link" ]]; then
+if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
   exit 0
 fi
+# Distinguish "no symlink" (no active run — pass through) from "broken symlink"
+# (run state corrupted — fail closed). A dangling symlink means runs/current
+# points at a missing run dir; allowing the tool would mask real corruption.
+if [[ -L "$current_link" && ! -e "$current_link" ]]; then
+  target=$(readlink "$current_link" 2>/dev/null || printf '<unreadable>')
+  printf '%s\n' "[pretooluse-pipeline-guards] runs/current symlink is broken (target: $target); failing closed" >&2
+  tool_name_for_msg=$(printf '%s' "$input" | jq -r '.tool_name // ""' 2>/dev/null || true)
+  if [[ "$tool_name_for_msg" == "Bash" ]]; then
+    jq -cn --arg reason "broken pipeline state: runs/current dangling (target: $target). Repair runs/current or clear it before continuing." '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: $reason
+      }
+    }'
+  fi
+  exit 1
+fi
+[[ -L "$current_link" ]] || exit 0
 run_dir=$(readlink "$current_link" 2>/dev/null) || exit 0
 state_file="$run_dir/state.json"
 [[ -f "$state_file" ]] || exit 0
@@ -59,6 +81,11 @@ if [[ -z "$task_id" ]]; then
   if [[ "$cmd" =~ --head[[:space:]]+task/([a-zA-Z0-9_-]+) ]]; then
     task_id="${BASH_REMATCH[1]}"
   fi
+fi
+
+# Nested-shell / hook-bypass check (autonomous mode only).
+if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]] && _is_nested_shell_or_hook_bypass "$cmd"; then
+  deny "nested-shell or hook-bypass not allowed in autonomous mode: $cmd"
 fi
 
 # --- 0. path-scope guard: preexec_tests phase (test-writer) ---
@@ -250,7 +277,12 @@ fi
 
 # --- 1. gh pr create ---
 if [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]]; then
-  [[ -z "$task_id" ]] && exit 0  # can't attribute — let it through
+  if [[ -z "$task_id" ]]; then
+    if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
+      deny "pipeline invariant: gh pr create cannot run in autonomous mode without an attributable task_id"
+    fi
+    exit 0  # interactive — let through
+  fi
 
   checklist_file="$run_dir/.tasks/${task_id}.ship_checklist.json"
   if [[ -f "$checklist_file" ]]; then
@@ -291,7 +323,12 @@ fi
 
 # --- 2. gh pr merge ---
 if [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+merge ]]; then
-  [[ -z "$task_id" ]] && exit 0
+  if [[ -z "$task_id" ]]; then
+    if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
+      deny "pipeline invariant: gh pr merge cannot run in autonomous mode without an attributable task_id"
+    fi
+    exit 0  # interactive — let through
+  fi
   pr=$(task_field "$task_id" pr_number)
   ci=$(task_field "$task_id" ci_status)
   if [[ -z "$pr" || "$ci" != "green" ]]; then
@@ -304,7 +341,16 @@ fi
 if [[ "$cmd" =~ pipeline-state[[:space:]]+task-status[[:space:]]+([a-zA-Z0-9_-]+)[[:space:]]+([a-zA-Z0-9_-]+)[[:space:]]+done([[:space:]]|$) ]]; then
   cmd_run="${BASH_REMATCH[1]}"
   cmd_task="${BASH_REMATCH[2]}"
-  if [[ "$cmd_run" == "$run_id" ]]; then
+  # In autonomous mode, deny cross-run task-status=done writes outright:
+  # the active run owns its task transitions, and rewriting another run's
+  # state from inside a session is structurally suspect. Outside autonomous
+  # mode we keep the legacy scope-check (only validate when ids match) so
+  # operators retain the ability to repair foreign run state by hand.
+  if [[ "$cmd_run" != "$run_id" ]]; then
+    if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
+      deny "pipeline invariant: cross-run task-status=done write rejected in autonomous mode (active run=$run_id, target run=$cmd_run). Switch to that run before mutating its state."
+    fi
+  else
     wt=$(task_field "$cmd_task" worktree)
     qok=$(jq -r --arg t "$cmd_task" '.tasks[$t].quality_gate.ok // false' "$state_file")
     pr=$(task_field "$cmd_task" pr_number)

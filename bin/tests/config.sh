@@ -982,6 +982,48 @@ assert_eq "ensure-autonomy: bypass status when no file and mode=1" "bypass" "$ea
 
 # ============================================================
 echo ""
+echo "=== read_config_strict (JSON-null semantics) ==="
+
+RCS_DIR=$(mktemp -d "${TMPDIR:-/tmp}/read-config-strict-XXXXXX")
+trap '[[ -n "${RCS_DIR:-}" && "$RCS_DIR" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$RCS_DIR"' EXIT
+
+# Seed config.json with explicit JSON null, present non-null, and missing path.
+cat > "$RCS_DIR/config.json" <<'JSON'
+{
+  "explicit_null": null,
+  "present": "value",
+  "nested": {"null_inner": null, "real": 42}
+}
+JSON
+
+# Source pipeline-lib.sh in a subshell with CLAUDE_PLUGIN_DATA pinned.
+strict_null=$(CLAUDE_PLUGIN_DATA="$RCS_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config_strict '.explicit_null'")
+assert_eq "read_config_strict: explicit JSON null → empty" "" "$strict_null"
+
+strict_missing=$(CLAUDE_PLUGIN_DATA="$RCS_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config_strict '.does_not_exist'")
+assert_eq "read_config_strict: missing key → empty" "" "$strict_missing"
+
+strict_present=$(CLAUDE_PLUGIN_DATA="$RCS_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config_strict '.present'")
+assert_eq "read_config_strict: present key → value" "value" "$strict_present"
+
+strict_nested_null=$(CLAUDE_PLUGIN_DATA="$RCS_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config_strict '.nested.null_inner'")
+assert_eq "read_config_strict: nested null → empty" "" "$strict_nested_null"
+
+strict_nested_real=$(CLAUDE_PLUGIN_DATA="$RCS_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config_strict '.nested.real'")
+assert_eq "read_config_strict: nested numeric → string repr" "42" "$strict_nested_real"
+
+# Contrast: regular read_config with default substitutes the default on null.
+loose_null=$(CLAUDE_PLUGIN_DATA="$RCS_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config '.explicit_null' 'fallback'")
+assert_eq "read_config: explicit JSON null still substitutes default" "fallback" "$loose_null"
+
+# No config file → still empty (don't crash, don't print 'null').
+RCS_NO_DIR=$(mktemp -d "${TMPDIR:-/tmp}/read-config-strict-no-XXXXXX")
+strict_nofile=$(CLAUDE_PLUGIN_DATA="$RCS_NO_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config_strict '.anything'")
+assert_eq "read_config_strict: missing config.json → empty" "" "$strict_nofile"
+rm -rf "$RCS_NO_DIR"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"

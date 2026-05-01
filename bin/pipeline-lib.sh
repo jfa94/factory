@@ -63,6 +63,22 @@ read_config() {
   printf '%s' "${val:-$default}"
 }
 
+# Like read_config, but emits empty string when the key is JSON null or
+# missing, regardless of whether a default was supplied. Use when an explicit
+# null in config.json should mean "unset" rather than "fall back to default".
+# Usage: read_config_strict <jq-key>
+read_config_strict() {
+  local key="$1"
+  local config_file="${CLAUDE_PLUGIN_DATA}/config.json"
+  [[ -f "$config_file" ]] || { printf ''; return; }
+  local val
+  val=$(jq -r "$key // empty" "$config_file" 2>/dev/null) || true
+  # Defensive: jq -r prints "null" for explicit JSON null without // empty;
+  # guard against any path that lets the literal slip through.
+  [[ "$val" == "null" ]] && val=""
+  printf '%s' "$val"
+}
+
 # --- State shortcuts ---
 
 # Read state (delegates to pipeline-state)
@@ -138,17 +154,28 @@ detect_pkg_manager() {
 atomic_write() {
   local target="$1" content="$2"
   local tmp
-  tmp=$(mktemp "${target}.XXXXXX")
-  printf '%s' "$content" > "$tmp"
+  tmp=$(mktemp "${target}.XXXXXX") || return 1
+  printf '%s' "$content" > "$tmp" || { rm -f "$tmp"; return 1; }
   if command -v python3 >/dev/null 2>&1; then
     python3 -c "
 import os, sys
-f = open(sys.argv[1], 'rb')
-os.fsync(f.fileno())
-f.close()
+fd = os.open(sys.argv[1], os.O_RDONLY)
+os.fsync(fd); os.close(fd)
 " "$tmp" 2>/dev/null || true
   fi
-  mv -f "$tmp" "$target"
+  if ! mv -f "$tmp" "$target"; then
+    rm -f "$tmp"
+    log_error "atomic_write: mv failed for $target"
+    return 1
+  fi
+  # fsync parent dir so the rename is durable.
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import os, sys
+d = os.open(os.path.dirname(sys.argv[1]) or '.', os.O_RDONLY)
+os.fsync(d); os.close(d)
+" "$target" 2>/dev/null || true
+  fi
 }
 
 # Get the current run directory (via 'current' symlink)
@@ -686,6 +713,22 @@ compute_daily_threshold() {
 # BD-scope helpers — added by Subagent BD [code-review]
 # ============================================================
 
+# Resolve a usable base ref in <git_dir>: prefers local `staging`, falls back
+# to `origin/staging`. Prints the ref name on success and returns 0; prints
+# nothing and returns 1 when neither ref exists. Callers MUST check rc — an
+# empty stdout alone cannot be distinguished from a captured-stderr glitch.
+resolve_base_ref() {
+  local git_dir="$1"
+  if git -C "$git_dir" rev-parse --verify staging >/dev/null 2>&1; then
+    printf 'staging'
+    return 0
+  elif git -C "$git_dir" rev-parse --verify origin/staging >/dev/null 2>&1; then
+    printf 'origin/staging'
+    return 0
+  fi
+  return 1
+}
+
 # Classify a file path as a test file (return 0) or not (return 1).
 # Covers: *.test.*, *.spec.*, *_test.*, *Test.*, *Tests.*, *_spec.rb,
 # and directory-based patterns: tests/**, test/**, spec/**, **/__tests__/**
@@ -706,9 +749,9 @@ is_test_path() {
     *Tests.swift|*Tests.cs)                                           return 0 ;;
     # Suffix-based: *_spec.rb (RSpec)
     *_spec.rb)                                                        return 0 ;;
-    # Directory-based
-    tests/*|test/*|spec/*)                                            return 0 ;;
-    */__tests__/*)                                                    return 0 ;;
+    # Directory-based — root and per-package (monorepo) layouts
+    tests/*|test/*|spec/*|__tests__/*)                                return 0 ;;
+    */tests/*|*/test/*|*/spec/*|*/__tests__/*)                        return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -721,7 +764,7 @@ task_tdd_exempt() {
   local tfile flag
   for tfile in "${spec_dir:+$spec_dir/tasks.json}" specs/current/tasks.json; do
     [[ -z "$tfile" || ! -f "$tfile" ]] && continue
-    flag=$(jq -r --arg id "$task_id" '.tasks[]? | select(.id==$id) | .tdd_exempt // false' "$tfile" 2>/dev/null || true)
+    flag=$(jq -r --arg id "$task_id" '.tasks[]? | select(.task_id==$id) | .tdd_exempt // false' "$tfile" 2>/dev/null || true)
     [[ "$flag" == "true" ]] && return 0
   done
   if [[ -f package.json ]]; then
@@ -735,7 +778,16 @@ task_tdd_exempt() {
 # Stage ordering constant — single source of truth used by _already_past and
 # any future callers that need to compare pipeline stage ranks.
 # shellcheck disable=SC2034  # used by sourcing scripts (pipeline-run-task)
-PIPELINE_STAGE_ORDER=(preflight_done preexec_tests_done postexec_spawn_pending postexec_done postreview_done ship_done)
+PIPELINE_STAGE_ORDER=(
+  preflight_done
+  preexec_tests_done
+  postexec_spawn_pending
+  postexec_done
+  postreview_pending_human
+  postreview_exhausted
+  postreview_done
+  ship_done
+)
 
 # Strip exactly one leading and one trailing double-quote from a JSON-encoded
 # string value. Semantically equivalent to `jq -r` for simple string values.
@@ -763,32 +815,48 @@ load_prompt() {
     log_error "missing prompt template: $stage (looked in $tmpl_dir)"
     return 1
   fi
-  # Prefer envsubst when available; fall back to pure-bash substituter.
-  if command -v envsubst >/dev/null 2>&1; then
-    envsubst < "$tmpl_file"
-  else
-    _envsubst_bash < "$tmpl_file"
-  fi
+  # Always use the bash substituter — it enforces an allowlist of variables
+  # that templates may reference. The system `envsubst` would expand any
+  # exported variable (PATH, HOME, secrets, etc.) and bypass the allowlist.
+  _envsubst_bash < "$tmpl_file"
 }
 
+# Allowed variables that prompt templates may reference. Anything else is
+# refused (log_warn) and replaced with a [BLOCKED:VAR] sentinel — prevents
+# templates from leaking arbitrary env (PATH, HOME, secrets, etc.).
+_ENVSUBST_ALLOWED=(run_id task_id spec_path stage role base_ref)
+
 # Pure-bash envsubst substitute. Reads stdin; expands ${VAR} and $VAR
-# using the caller's environment via ${!var} indirection. Only replaces
-# tokens that correspond to valid variable names (ASCII alnum + underscore,
-# not starting with a digit).
+# using the caller's environment via ${!var} indirection. Only variables
+# present in _ENVSUBST_ALLOWED are substituted; all others are replaced
+# with a [BLOCKED:VAR] sentinel and a log_warn is emitted.
 _envsubst_bash() {
-  local line
+  local line var val
   while IFS= read -r line || [[ -n "$line" ]]; do
-    # Replace ${VAR} patterns
+    # ${VAR} form
     while [[ "$line" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)\} ]]; do
-      local var="${BASH_REMATCH[1]}"
-      local val="${!var:-}"
+      var="${BASH_REMATCH[1]}"
+      local allowed=0 v
+      for v in "${_ENVSUBST_ALLOWED[@]}"; do [[ "$v" == "$var" ]] && allowed=1; done
+      if (( allowed == 0 )); then
+        log_warn "_envsubst_bash: refusing non-allowlisted var: $var"
+        line="${line/\$\{$var\}/[BLOCKED:$var]}"
+        continue
+      fi
+      val="${!var:-}"
       line="${line/\$\{$var\}/$val}"
     done
-    # Replace $VAR patterns (not followed by { to avoid double-replacement)
+    # $VAR form (not followed by `{` — handled above)
     while [[ "$line" =~ \$([A-Za-z_][A-Za-z0-9_]*)([^A-Za-z0-9_]|$) ]]; do
-      local var="${BASH_REMATCH[1]}"
-      local val="${!var:-}"
-      local rest="${BASH_REMATCH[2]}"
+      var="${BASH_REMATCH[1]}"
+      local allowed=0 v
+      for v in "${_ENVSUBST_ALLOWED[@]}"; do [[ "$v" == "$var" ]] && allowed=1; done
+      if (( allowed == 0 )); then
+        log_warn "_envsubst_bash: refusing non-allowlisted var: $var"
+        line="${line/\$$var/[BLOCKED:$var]}"
+        continue
+      fi
+      val="${!var:-}"
       line="${line/\$$var/$val}"
     done
     printf '%s\n' "$line"
@@ -820,8 +888,10 @@ _validate_id() {
 # Stdin: normalized review JSON (with .findings[].verbatim_line set).
 # Args:  $1 = path to a file containing the diff text to grep against.
 # Stdout: filtered review JSON. Recomputes blocking_count / non_blocking_count /
-# declared_blockers; if all blockers were dropped, downgrades verdict to APPROVE
-# and appends a marker to .summary so the orchestrator can audit.
+# declared_blockers; appends a marker to .summary if any findings were dropped
+# so the orchestrator can audit. NEVER mutates verdict — if all blockers were
+# unverifiable, verdict stays REQUEST_CHANGES and the orchestrator's retry
+# budget handles eventual termination.
 #
 # Findings missing a verbatim_line, or with one shorter than 10 chars, are
 # treated as unverifiable and dropped.
@@ -829,7 +899,8 @@ validate_findings() {
   local diff_file="$1" json n i q kept dropped
   json=$(cat)
   if [[ ! -s "$diff_file" ]]; then
-    printf '%s' "$json"
+    log_warn "validate_findings: empty diff — keeping all findings, refusing auto-approve"
+    printf '%s' "$json" | jq '.summary = ((.summary // "") + " [validator: diff empty; findings unverifiable]")'
     return 0
   fi
   n=$(printf '%s' "$json" | jq '.findings | length')
@@ -854,9 +925,6 @@ validate_findings() {
     | .declared_blockers = .blocking_count
     | if $d > 0 then
         .summary = ((.summary // "") + " [validator: dropped " + ($d|tostring) + " unverifiable finding(s)]")
-      else . end
-    | if $d > 0 and .blocking_count == 0 and .verdict == "REQUEST_CHANGES" then
-        .verdict = "APPROVE"
       else . end
   '
 }

@@ -162,53 +162,78 @@ assert_exit "deps not satisfied (missing dep)" 1 pipeline-state deps-satisfied "
 echo ""
 echo "=== pipeline-state resume-point ==="
 
-resume=$(pipeline-state resume-point "run-test-001")
+# resume-point requires canonical run IDs (^run-[0-9]{8}-[0-9]{6}$).
+# Seed a canonical-id run that mirrors run-test-001's two-task shape.
+pipeline-init "run-20260101-000001" --issue 42 --mode prd --force >/dev/null 2>&1
+pipeline-state write "run-20260101-000001" '.tasks.task_1' '{"status":"done","depends_on":[]}' >/dev/null 2>&1
+pipeline-state write "run-20260101-000001" '.tasks.task_2' '{"status":"pending","depends_on":["task_1"]}' >/dev/null 2>&1
+resume=$(pipeline-state resume-point "run-20260101-000001")
 assert_eq "resume-point finds pending task" "task_2" "$resume"
+
+echo ""
+echo "=== task_5_3: resume-point canonical run-id check ==="
+
+# Non-canonical run IDs that pass _validate_id charset must still be rejected
+# because resume operates only on canonical run-YYYYMMDD-HHMMSS IDs.
+# (Path-traversal-style ../foo is already blocked by _validate_id; covered for
+# completeness.)
+assert_exit "resume-point rejects legacy run-test-001" 1 \
+  pipeline-state resume-point "run-test-001"
+assert_exit "resume-point rejects ad-hoc run-x" 1 \
+  pipeline-state resume-point "run-x"
+assert_exit "resume-point rejects bare prefix run-" 1 \
+  pipeline-state resume-point "run-"
+assert_exit "resume-point rejects wrong-length date run-2026-04-29" 1 \
+  pipeline-state resume-point "run-2026-04-29"
+assert_exit "resume-point rejects path-traversal-style ../foo" 1 \
+  pipeline-state resume-point "../foo"
+assert_exit "resume-point rejects empty run-id" 1 \
+  pipeline-state resume-point ""
 
 echo ""
 echo "=== task_06_01: resume-point follows execution_order ==="
 
-# Build a dedicated run for execution_order coverage so we don't collide with
-# the earlier round-trip tasks in run-test-001. --force because task_06_04's
+# Build a dedicated canonical-id run for execution_order coverage so we don't
+# collide with the earlier round-trip tasks. --force because task_06_04's
 # ownership check otherwise blocks replacing a still-'running' symlink target.
-pipeline-init "run-resume-order" --mode prd --force >/dev/null 2>&1
+pipeline-init "run-20260101-000002" --mode prd --force >/dev/null 2>&1
 
 # Seed three tasks in a non-sorted order: A pending, B pending, C pending.
 # execution_order says [C, A, B] — resume-point must return C (first pending
 # by execution_order), NOT whichever jq yields from `.tasks | to_entries`.
-pipeline-state write "run-resume-order" '.tasks.task_A' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
-pipeline-state write "run-resume-order" '.tasks.task_B' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
-pipeline-state write "run-resume-order" '.tasks.task_C' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
-pipeline-state write "run-resume-order" '.execution_order' \
+pipeline-state write "run-20260101-000002" '.tasks.task_A' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
+pipeline-state write "run-20260101-000002" '.tasks.task_B' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
+pipeline-state write "run-20260101-000002" '.tasks.task_C' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
+pipeline-state write "run-20260101-000002" '.execution_order' \
   '[{"task_id":"task_C","parallel_group":0},{"task_id":"task_A","parallel_group":1},{"task_id":"task_B","parallel_group":1}]' \
   >/dev/null 2>&1
 
-resume=$(pipeline-state resume-point "run-resume-order")
+resume=$(pipeline-state resume-point "run-20260101-000002")
 assert_eq "resume-point returns first in execution_order" "task_C" "$resume"
 
 # Mark task_C done → resume should advance to task_A (next by execution_order).
-pipeline-state task-status "run-resume-order" "task_C" "done" 2>/dev/null
-resume=$(pipeline-state resume-point "run-resume-order")
+pipeline-state task-status "run-20260101-000002" "task_C" "done" 2>/dev/null
+resume=$(pipeline-state resume-point "run-20260101-000002")
 assert_eq "resume-point skips done tasks by execution_order" "task_A" "$resume"
 
 # parallel_group ordering: group 0 done, group 1 has two entries. The first
 # one in execution_order is task_A, so resume returns it.
 # (task_A is already next-up from the prior check.)
 # Mark task_A failed → resume should skip failed and return task_B.
-pipeline-state task-status "run-resume-order" "task_A" "failed" 2>/dev/null
-resume=$(pipeline-state resume-point "run-resume-order")
+pipeline-state task-status "run-20260101-000002" "task_A" "failed" 2>/dev/null
+resume=$(pipeline-state resume-point "run-20260101-000002")
 assert_eq "resume-point skips failed tasks" "task_B" "$resume"
 
 # All terminal → resume returns empty and exits 1.
-pipeline-state task-status "run-resume-order" "task_B" "done" 2>/dev/null
+pipeline-state task-status "run-20260101-000002" "task_B" "done" 2>/dev/null
 assert_exit "resume-point exit 1 when all tasks terminal" 1 \
-  pipeline-state resume-point "run-resume-order"
+  pipeline-state resume-point "run-20260101-000002"
 
 # Legacy fallback: state with no .execution_order must still return a pending
 # task using the old jq iteration path.
-pipeline-init "run-resume-legacy" --mode prd --force >/dev/null 2>&1
-pipeline-state write "run-resume-legacy" '.tasks.only_task' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
-resume=$(pipeline-state resume-point "run-resume-legacy" 2>/dev/null)
+pipeline-init "run-20260101-000003" --mode prd --force >/dev/null 2>&1
+pipeline-state write "run-20260101-000003" '.tasks.only_task' '{"status":"pending","depends_on":[]}' >/dev/null 2>&1
+resume=$(pipeline-state resume-point "run-20260101-000003" 2>/dev/null)
 assert_eq "resume-point legacy fallback returns pending" "only_task" "$resume"
 
 echo ""
@@ -328,9 +353,10 @@ echo "=== pipeline-state list ==="
 pipeline-init "run-test-002" --mode discover --force >/dev/null 2>&1
 list_output=$(pipeline-state list)
 count=$(echo "$list_output" | jq 'length')
-# runs created up to this point: run-test-001, run-resume-order,
-# run-resume-legacy (from task_06_01 tests), run-test-002.
-assert_eq "list shows 5 runs" "5" "$count"
+# runs created up to this point: run-test-001, run-concurrent,
+# run-20260101-000001 (canonical resume seed), run-20260101-000002 (task_06_01),
+# run-20260101-000003 (legacy fallback), run-test-002.
+assert_eq "list shows 6 runs" "6" "$count"
 
 echo ""
 echo "=== task_01_04: pipeline-init --issue numeric validation ==="
@@ -816,14 +842,57 @@ trap '[[ -n "$oi_sandbox" && ( "$oi_sandbox" == /tmp/* || "$oi_sandbox" == /var/
     echo "  FAIL: pipeline-init refused to replace dangling symlink"
     exit 1
   fi
+
+  # Task 4.12: atomic symlink update — no leftover tmp link after init,
+  # and the symlink is replaced atomically (mv-over) rather than rm+create.
+  shopt -s nullglob
+  leftover_tmps=("$oi_sandbox/runs/current".tmp.*)
+  shopt -u nullglob
+  if [[ ${#leftover_tmps[@]} -eq 0 ]]; then
+    echo "  PASS: atomic symlink: no leftover tmp link after init"
+  else
+    echo "  FAIL: atomic symlink: leftover tmp link(s): ${leftover_tmps[*]}"
+    exit 1
+  fi
+  # The symlink must always point at a valid run dir after init succeeds —
+  # no transient missing window observable post-call.
+  if [[ -L "$oi_sandbox/runs/current" && -d "$oi_sandbox/runs/current" ]]; then
+    echo "  PASS: atomic symlink: current resolves to a directory after init"
+  else
+    echo "  FAIL: atomic symlink: current missing or dangling after init"
+    exit 1
+  fi
 ) && {
-  pass=$((pass + 7))
+  pass=$((pass + 9))
 } || {
   fail=$((fail + 1))
 }
 rm -rf "$oi_sandbox"
 trap - EXIT
 oi_sandbox=""
+
+echo ""
+echo "=== task_04_12: pipeline-init atomic current symlink (source-level) ==="
+
+pi_script="$(cd "$(dirname "$0")/.." && pwd)/pipeline-init"
+# The non-atomic pattern is `rm -f "$current_link"` immediately followed by
+# `ln -s "$run_dir" "$current_link"`. The atomic replacement uses a tmp link
+# and `mv -f` to swap into place. Reject the non-atomic pattern.
+if grep -E '^[[:space:]]*rm -f "\$current_link"[[:space:]]*$' "$pi_script" >/dev/null 2>&1; then
+  echo "  FAIL: pipeline-init still uses non-atomic 'rm -f \$current_link' before ln -s"
+  fail=$((fail + 1))
+else
+  echo "  PASS: pipeline-init does not 'rm -f \$current_link' before ln -s"
+  pass=$((pass + 1))
+fi
+# Atomic implementation must use `mv -f` to rename a tmp link into the target.
+if grep -E 'mv -f[hT] "\$_tmp_link" "\$current_link"' "$pi_script" >/dev/null 2>&1; then
+  echo "  PASS: pipeline-init swaps current symlink via mv -f[hT] tmp"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: pipeline-init missing 'mv -f[hT] tmp \$current_link' atomic swap"
+  fail=$((fail + 1))
+fi
 
 echo ""
 echo "=== task_06_02: stop-gate handles all task statuses ==="
@@ -1028,6 +1097,73 @@ assert_eq "atomic_write repeated calls no tmp leftovers" "0" "$leftover"
 rm -rf "$aw_dir"
 
 echo ""
+echo "=== task_5_1_step_6: atomic_write crash-consistency (kill -9) ==="
+
+# Verifies atomic_write never leaves the target in a partial/corrupt state when
+# the writing process is SIGKILLed mid-call. After each kill, target content
+# must be EITHER the prior committed value OR the full new value — never both
+# truncated. Large payload widens the kill window.
+
+cc_dir=$(mktemp -d)
+cc_target="$cc_dir/state.json"
+prior='{"version":"prior","payload":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}'
+# ~64KB new payload — large enough that mv-rename window is observable.
+new_blob=$(printf 'B%.0s' $(seq 1 65536))
+new_content="{\"version\":\"new\",\"payload\":\"$new_blob\"}"
+
+# Seed prior committed value via atomic_write (durable baseline).
+atomic_write "$cc_target" "$prior"
+[[ -s "$cc_target" ]] || { echo "FAIL: crash-consistency seed missing"; exit 1; }
+
+cc_iters=20
+cc_partial=0
+cc_kept_prior=0
+cc_kept_new=0
+
+for i in $(seq 1 "$cc_iters"); do
+  # Spawn atomic_write in subshell; SIGKILL after a short randomized delay.
+  (
+    # shellcheck disable=SC1090
+    source "$(dirname "$0")/../pipeline-lib.sh"
+    atomic_write "$cc_target" "$new_content"
+  ) &
+  cc_pid=$!
+  # Sleep a sub-ms-to-ms window then SIGKILL (no-op if already exited).
+  python3 -c "import time,random; time.sleep(random.uniform(0, 0.005))" 2>/dev/null \
+    || sleep 0
+  kill -9 "$cc_pid" 2>/dev/null || true
+  wait "$cc_pid" 2>/dev/null || true
+
+  # Target must still exist (mv is atomic on POSIX).
+  if [[ ! -e "$cc_target" ]]; then
+    echo "FAIL: crash-consistency iter=$i target vanished"; exit 1
+  fi
+  cur=$(cat "$cc_target")
+  if [[ "$cur" == "$prior" ]]; then
+    cc_kept_prior=$((cc_kept_prior + 1))
+  elif [[ "$cur" == "$new_content" ]]; then
+    cc_kept_new=$((cc_kept_new + 1))
+    # Once new is committed, treat it as the new "prior" baseline.
+    prior="$new_content"
+  else
+    cc_partial=$((cc_partial + 1))
+    echo "FAIL: crash-consistency iter=$i partial/corrupt content (len=${#cur})"
+  fi
+done
+
+assert_eq "atomic_write crash-consistency: zero partial/corrupt observations" "0" "$cc_partial"
+# At least one iteration must reach an outcome (sanity: loop ran).
+total=$((cc_kept_prior + cc_kept_new))
+assert_eq "atomic_write crash-consistency: every iter resolved to a valid state" "$cc_iters" "$total"
+
+# Tmp siblings may remain when SIGKILL preempted before mv — those are not
+# durable state. Crash-consistency property is target-content integrity, which
+# is asserted above. We do not require zero tmp leftovers here because the
+# mktemp-then-write phase is non-resumable under SIGKILL by definition.
+
+rm -rf "$cc_dir"
+
+echo ""
 echo "=== pipeline-lib.sh utilities ==="
 
 slug=$(slugify "Hello World -- Test 123!")
@@ -1035,6 +1171,56 @@ assert_eq "slugify" "hello-world-test-123" "$slug"
 
 pkg=$(detect_pkg_manager "/nonexistent")
 assert_eq "detect_pkg_manager default" "pnpm" "$pkg"
+
+echo ""
+echo "=== resolve_base_ref (lib) ==="
+
+# resolve_base_ref must be exported from pipeline-lib.sh (Task 4.13).
+if declare -F resolve_base_ref >/dev/null 2>&1; then
+  assert_eq "resolve_base_ref defined in lib" "yes" "yes"
+else
+  assert_eq "resolve_base_ref defined in lib" "yes" "no"
+fi
+
+_rbr_repo() {
+  local d
+  d=$(mktemp -d)
+  git -C "$d" init -q -b main
+  git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  printf '%s' "$d"
+}
+
+# Case A: local staging exists → prints "staging", rc=0
+rbr_dir=$(_rbr_repo)
+git -C "$rbr_dir" branch staging >/dev/null 2>&1
+set +e
+rbr_out=$(resolve_base_ref "$rbr_dir"); rbr_rc=$?
+set -e
+assert_eq "resolve_base_ref: local staging → ref" "staging" "$rbr_out"
+assert_eq "resolve_base_ref: local staging → rc=0" "0" "$rbr_rc"
+rm -rf "$rbr_dir"
+
+# Case B: only origin/staging → prints "origin/staging", rc=0
+rbr_dir=$(_rbr_repo)
+upstream=$(_rbr_repo)
+git -C "$upstream" branch staging >/dev/null 2>&1
+git -C "$rbr_dir" remote add origin "$upstream" >/dev/null 2>&1
+git -C "$rbr_dir" fetch origin >/dev/null 2>&1
+set +e
+rbr_out=$(resolve_base_ref "$rbr_dir"); rbr_rc=$?
+set -e
+assert_eq "resolve_base_ref: origin/staging fallback → ref" "origin/staging" "$rbr_out"
+assert_eq "resolve_base_ref: origin/staging → rc=0" "0" "$rbr_rc"
+rm -rf "$rbr_dir" "$upstream"
+
+# Case C: neither exists → empty stdout, rc=1
+rbr_dir=$(_rbr_repo)
+set +e
+rbr_out=$(resolve_base_ref "$rbr_dir"); rbr_rc=$?
+set -e
+assert_eq "resolve_base_ref: miss → empty stdout" "" "$rbr_out"
+assert_eq "resolve_base_ref: miss → rc=1" "1" "$rbr_rc"
+rm -rf "$rbr_dir"
 
 echo ""
 echo "=== C1: finalize-on-stop action ==="

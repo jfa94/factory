@@ -19,7 +19,11 @@
 #   All checks (1-7) read from those variables — no re-tokenisation.
 set -euo pipefail
 
-PROTECTED_BRANCHES=("main" "master" "develop")
+# shellcheck source=/dev/null
+source "$(dirname "$0")/_security-common.sh"
+
+PROTECTED_BRANCHES=("main" "master" "develop" "staging")
+PIPELINE_MANAGED=("staging")  # writable from autonomous mode in orchestrator worktree
 
 # Build an alternation regex with explicit anchors so `mainly-fixes` !~ main.
 PROTECTED_RE="^($(IFS='|'; echo "${PROTECTED_BRANCHES[*]}"))$"
@@ -30,6 +34,12 @@ command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/nul
 
 if [[ -z "$command" ]]; then
   exit 0
+fi
+
+if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]] && _is_nested_shell_or_hook_bypass "$command"; then
+  jq -cn --arg r "nested_shell_denied" --arg d "nested-shell or hook-bypass not allowed in autonomous mode: $command" \
+    '{decision:"block", reason:$r, detail:$d}' >&2
+  exit 2
 fi
 
 # Helper: print a JSON block reason and exit 2.
@@ -44,6 +54,18 @@ _block() {
 _is_protected() {
   local name="$1"
   [[ "$name" =~ $PROTECTED_RE ]]
+}
+
+# Returns 0 if the current invocation is allowed to push/write the given protected branch.
+# Conditions: FACTORY_AUTONOMOUS_MODE=1, branch in PIPELINE_MANAGED, and PWD inside an
+# orchestrator worktree (".claude/worktrees/orchestrator-*").
+_pipeline_can_write() {
+  local target="$1"
+  [[ "${FACTORY_AUTONOMOUS_MODE:-}" != "1" ]] && return 1
+  local allow=0 b
+  for b in "${PIPELINE_MANAGED[@]}"; do [[ "$target" == "$b" ]] && allow=1; done
+  (( allow == 0 )) && return 1
+  case "$PWD" in *"/.claude/worktrees/orchestrator-"*) return 0 ;; *) return 1 ;; esac
 }
 
 # ---------------------------------------------------------------------------
@@ -121,18 +143,27 @@ _parse_git_invocation() {
 
   # Parse the rest of the arguments depending on the subcommand.
   local saw_remote=0
+  local push_is_delete=0
   while (( i < n )); do
     local tok="${tokens[i]}"
 
     # Strip surrounding double-quotes (handles `git push origin "main"`).
     tok="${tok#\"}"
     tok="${tok%\"}"
+    # Strip surrounding single-quotes (handles `git push origin 'main'`).
+    tok="${tok#\'}"
+    tok="${tok%\'}"
 
     case "$_git_subcommand" in
       push)
         # Detect force flags.
         if [[ "$tok" == "--force" || "$tok" == "-f" || "$tok" == "--force-with-lease" ]]; then
           _git_is_force="1"
+          i=$((i + 1)); continue
+        fi
+        # Detect --delete flag (remote branch deletion, not a refspec push).
+        if [[ "$tok" == "--delete" || "$tok" == "-d" ]]; then
+          push_is_delete=1
           i=$((i + 1)); continue
         fi
         # Skip other flags.
@@ -142,6 +173,10 @@ _parse_git_invocation() {
         # Remote (first non-flag token).
         if (( saw_remote == 0 )); then
           saw_remote=1
+          i=$((i + 1)); continue
+        fi
+        # If this is a --delete invocation, the token is the branch to delete — not a refspec.
+        if (( push_is_delete == 1 )); then
           i=$((i + 1)); continue
         fi
         # Refspec token(s).
@@ -210,6 +245,8 @@ _parse_git_invocation() {
       local tok="${tokens[j]}"
       tok="${tok#\"}"
       tok="${tok%\"}"
+      tok="${tok#\'}"
+      tok="${tok%\'}"
       if [[ "$tok" == "--delete" ]]; then
         in_push_delete=1
         j=$((j + 1)); continue
@@ -236,7 +273,8 @@ if [[ "$_git_subcommand" == "push" ]]; then
   current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
   if [[ -n "$current_branch" ]] && _is_protected "$current_branch"; then
     if [[ -z "$_git_dest_branch" || "$_git_dest_branch" == "$current_branch" ]]; then
-      _block "on_protected_branch" "currently on '$current_branch' — push will publish to protected"
+      _pipeline_can_write "$current_branch" || \
+        _block "on_protected_branch" "currently on '$current_branch' — push will publish to protected"
     fi
   fi
 fi
@@ -258,7 +296,8 @@ fi
 # --- Check 4: plain `git push <remote> <protected>` (or HEAD:<protected>) ---
 if [[ "$_git_subcommand" == "push" ]]; then
   if [[ -n "$_git_dest_branch" ]] && _is_protected "$_git_dest_branch"; then
-    _block "push_to_protected" "push targets protected branch '$_git_dest_branch'"
+    _pipeline_can_write "$_git_dest_branch" || \
+      _block "push_to_protected" "push targets protected branch '$_git_dest_branch'"
   fi
 fi
 

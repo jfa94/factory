@@ -482,7 +482,7 @@ _fake_vl_review='Some review text.
 
 output=$(cd "$_vl_repo" && printf '%s' "$_fake_vl_review" | pipeline-parse-review --base staging 2>/dev/null)
 assert_eq "json-block fabricated verbatim_line: finding dropped" "0" "$(echo "$output" | jq '.findings | length')"
-assert_eq "json-block fabricated verbatim_line: verdict downgraded to APPROVE" "APPROVE" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "json-block fabricated verbatim_line: verdict stays REQUEST_CHANGES (fail-closed)" "REQUEST_CHANGES" "$(echo "$output" | jq -r '.verdict')"
 
 _real_vl_review='Some review text.
 
@@ -539,7 +539,7 @@ _origin_fake_review='Review text.
 
 output=$(cd "$_origin_repo" && printf '%s' "$_origin_fake_review" | pipeline-parse-review --base origin/staging 2>/dev/null)
 assert_eq "origin/staging: fabricated verbatim_line dropped" "0" "$(echo "$output" | jq '.findings | length')"
-assert_eq "origin/staging: verdict downgraded to APPROVE" "APPROVE" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "origin/staging: verdict stays REQUEST_CHANGES (fail-closed)" "REQUEST_CHANGES" "$(echo "$output" | jq -r '.verdict')"
 
 _origin_real_review='Review text.
 

@@ -201,6 +201,35 @@ assert_eq "router received clean JSON (detection_method=statusline)" "statusline
 
 # ============================================================
 echo ""
+echo "=== pipeline-quota-check: missing resets_at → unavailable sentinel (Task 4.5) ==="
+
+_reset_scratch run-resets-missing
+now=$(date +%s)
+# Cache with valid percents but resets_at fields absent.
+jq -n --argjson n "$now" \
+  '{five_hour:{used_percentage:30},
+    seven_day:{used_percentage:5},
+    captured_at:$n}' \
+  > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+out=$(pipeline-quota-check 2>/dev/null)
+det=$(printf '%s' "$out" | jq -r '.detection_method // ""')
+reason=$(printf '%s' "$out" | jq -r '.reason // ""')
+assert_eq "missing resets_at: detection_method=unavailable" "unavailable" "$det"
+assert_eq "missing resets_at: reason=resets-at-missing" "resets-at-missing" "$reason"
+
+# Non-numeric resets_at (e.g., string) hits the same sentinel path.
+_reset_scratch run-resets-nonnumeric
+jq -n --argjson n "$now" \
+  '{five_hour:{used_percentage:30,resets_at:"not-a-number"},
+    seven_day:{used_percentage:5,resets_at:($n + 86400)},
+    captured_at:$n}' \
+  > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+out=$(pipeline-quota-check 2>/dev/null)
+det=$(printf '%s' "$out" | jq -r '.detection_method // ""')
+assert_eq "non-numeric resets_at: detection_method=unavailable" "unavailable" "$det"
+
+# ============================================================
+echo ""
 echo "=== pipeline_quota_gate: proceed resets stale_cycles ==="
 
 _reset_scratch run-2d

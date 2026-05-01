@@ -85,6 +85,35 @@ _check_pr_checks() {
 }
 
 # === REBASE_HELPERS_START ===
+
+# Run `git rebase --abort` and surface stderr if it fails. The previous
+# `2>/dev/null || true` swallowed errors silently, leaving the worktree in a
+# dirty rebase state that callers couldn't detect.
+_safe_rebase_abort() {
+  local _abort_err
+  _abort_err=$(mktemp)
+  if ! git rebase --abort 2>"$_abort_err"; then
+    log_warn "git rebase --abort: $(cat "$_abort_err")"
+  fi
+  rm -f "$_abort_err"
+}
+
+# Check out the original branch and surface stderr/exit on failure. Callers
+# must propagate the non-zero return — leaving the wrong branch checked out is
+# an inconsistent worktree we cannot recover from automatically.
+_safe_checkout_back() {
+  local target="$1" _co_err
+  [[ -z "$target" ]] && return 0
+  _co_err=$(mktemp)
+  if ! git checkout "$target" 2>"$_co_err"; then
+    log_error "git checkout $target failed: $(cat "$_co_err")"
+    rm -f "$_co_err"
+    return 1
+  fi
+  rm -f "$_co_err"
+  return 0
+}
+
 # Resolve one auto-safe conflict file in the current rebase. Returns 0 on
 # success, 1 if the file is not auto-safe (caller must abort the rebase).
 _resolve_safe_conflict() {
@@ -180,7 +209,7 @@ _rebase_with_retries() {
 
     if [[ "$has_unsafe" == "true" ]]; then
       log_error "rebase round $round: unsafe conflict files: $conflict_files"
-      git rebase --abort 2>/dev/null || true
+      _safe_rebase_abort
       return 1
     fi
 
@@ -195,7 +224,7 @@ _rebase_with_retries() {
     done <<< "$conflict_files"
 
     if [[ "$resolve_ok" != "true" ]]; then
-      git rebase --abort 2>/dev/null || true
+      _safe_rebase_abort
       return 1
     fi
 
@@ -215,7 +244,7 @@ _rebase_with_retries() {
   done
 
   log_error "rebase exceeded $REBASE_MAX_ROUNDS rounds"
-  git rebase --abort 2>/dev/null || true
+  _safe_rebase_abort
   return 1
 }
 # === REBASE_HELPERS_END ===
@@ -244,8 +273,13 @@ _attempt_rebase() {
   if ! _rebase_with_retries "origin/staging"; then
     local conflicted_files
     conflicted_files=$(git diff --name-only --diff-filter=U 2>/dev/null)
-    git rebase --abort 2>/dev/null || true
-    git checkout "$current_branch" 2>/dev/null
+    _safe_rebase_abort
+    if ! _safe_checkout_back "$current_branch"; then
+      # Worktree is now on $head_branch with no clear way back. Caller must
+      # abort the wait loop — we cannot keep polling against an inconsistent
+      # worktree.
+      return 1
+    fi
 
     jq -n \
       --arg branch "$head_branch" \
@@ -254,16 +288,13 @@ _attempt_rebase() {
     return 1
   fi
 
-  # Push the rebased branch
-  if ! err=$(git push --force-with-lease origin "$head_branch" 2>&1); then
-    log_error "git push --force-with-lease failed for $head_branch: $err"
-    git checkout "$current_branch" 2>/dev/null
-    return 1
-  fi
-
-  git checkout "$current_branch" 2>/dev/null
-  log_info "rebase successful for $head_branch"
-  return 0
+  # Rebase succeeded locally, but publishing it requires rewriting the remote
+  # branch. CLAUDE.md forbids all force-push variants from automated tooling,
+  # so we refuse to push and surface the situation for an authorized human to
+  # finish the rebase manually (or merge staging in instead).
+  log_error "rebase succeeded locally for $head_branch; refusing to publish (CLAUDE.md forbids force-push). An authorized human must finish this rebase manually."
+  _safe_checkout_back "$current_branch" || true
+  return 1
 }
 
 # --- Main poll loop ---
@@ -353,10 +384,13 @@ while true; do
     continue
   fi
   if [[ -n "$checks_data" ]]; then
-    failed_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.conclusion == "FAILURE")] | length')
+    # Treat any non-success terminal conclusion as red. GitHub uses several
+    # conclusions for failure-equivalent states; restricting to FAILURE alone
+    # silently ignored cancelled/timed-out/required runs.
+    failed_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "STARTUP_FAILURE" or .conclusion == "ACTION_REQUIRED")] | length')
 
     if [[ "$failed_checks" -gt 0 ]]; then
-      failed_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.conclusion == "FAILURE") | .name] | join(", ")')
+      failed_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "STARTUP_FAILURE" or .conclusion == "ACTION_REQUIRED") | "\(.name)=\(.conclusion)"] | join(", ")')
       log_error "PR #${pr} CI failed: $failed_names"
       jq -n \
         --arg pr "$pr" \
@@ -366,10 +400,13 @@ while true; do
       exit 3
     fi
 
-    # Log progress if checks still running
+    # Distinguish "no checks defined" (defer to merge state) from "all passed".
+    total_checks=$(printf '%s' "$checks_data" | jq 'length')
     pending_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.state == "IN_PROGRESS" or .state == "QUEUED" or .state == "PENDING")] | length')
-    if [[ "$pending_checks" -eq 0 ]]; then
-      log_info "all checks passed for PR #${pr}, waiting for merge..."
+    if (( total_checks == 0 )); then
+      log_info "PR #${pr} has no checks defined; deferring to merge state"
+    elif [[ "$pending_checks" -eq 0 ]]; then
+      log_info "all $total_checks check(s) passed for PR #${pr}, waiting for merge..."
     fi
   fi
 

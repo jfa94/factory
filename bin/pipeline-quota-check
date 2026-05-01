@@ -131,15 +131,25 @@ five_hour=$(jq -n --argjson v "$five_hour_pct" '$v | round | tonumber' 2>/dev/nu
 seven_day=$(jq -n --argjson v "$seven_day_pct" '$v | round | tonumber' 2>/dev/null) || seven_day="${seven_day_pct%%.*}"
 
 # resets_at from statusline JSON is already epoch seconds.
-# Coerce non-numeric scalars to empty so the fallback branch below assigns a
-# sane default — non-numeric values otherwise crash the bash arithmetic in
-# the post-reset guard (set -u: unbound variable).
+# Coerce non-numeric scalars to empty so the missing-resets guard below catches
+# them — non-numeric values otherwise crash the bash arithmetic (set -u).
 resets_5h_epoch=$(jq -r '(.five_hour.resets_at // empty) | tonumber? // empty' "$cache_file" 2>/dev/null)
 resets_7d_epoch=$(jq -r '(.seven_day.resets_at // empty) | tonumber? // empty' "$cache_file" 2>/dev/null)
 
-# Fall back to sensible defaults if missing
-[[ -z "$resets_5h_epoch" ]] && resets_5h_epoch=$(( now_epoch + 18000 ))
-[[ -z "$resets_7d_epoch" ]] && resets_7d_epoch=$(( now_epoch + 604800 ))
+# Synthetic defaults masked corrupt caches: a missing resets_at silently
+# became "5h from now / 7d from now" → the gate proceeded as if budget were
+# fresh, which is the opposite of fail-closed. Now: missing or non-numeric
+# resets_at emits the unavailable sentinel so callers wait_retry until the
+# cache is refreshed.
+if [[ -z "$resets_5h_epoch" || -z "$resets_7d_epoch" ]]; then
+  if $strict; then
+    log_error "usage-cache.json missing or non-numeric resets_at (5h=${resets_5h_epoch:-empty}, 7d=${resets_7d_epoch:-empty})"
+    exit 1
+  fi
+  log_warn "usage-cache.json missing/non-numeric resets_at — emitting unavailable sentinel"
+  _sentinel "resets-at-missing"
+  exit 0
+fi
 
 # Post-reset stale guard: a resets_at in the past means the cache reflects a
 # previous window. Claude Code only refreshes rate_limits on its own API

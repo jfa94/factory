@@ -46,10 +46,14 @@ next_task=$(jq -r '
 
 next_stage=$(jq -r --arg t "$next_task" '
   (.tasks[$t].stage // "preflight")
-  | if . == "preflight_done"  then "preexec_tests"
-    elif . == "postexec_done" then "postreview"
-    elif . == "postreview_done" then "ship"
-    elif . == "ship_done"     then "finalize-run"
+  | if . == "preflight_done"        then "preexec_tests"
+    elif . == "preexec_tests_done"  then "postexec"
+    elif . == "postexec_spawn_pending" then "postexec"
+    elif . == "postexec_done"       then "postreview"
+    elif . == "postreview_pending_human" then "ship"
+    elif . == "postreview_exhausted" then "ship"
+    elif . == "postreview_done"     then "ship"
+    elif . == "ship_done"           then "finalize-run"
     else "preflight" end
 ' "$state_file" 2>/dev/null)
 

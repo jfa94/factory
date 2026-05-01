@@ -71,9 +71,10 @@ assert_eq "force-push develop blocked" "EXIT:2" "$(printf '%s' "$output" | grep 
 
 # ============================================================
 echo ""
-echo "=== branch-protection: allows push to staging ==="
+echo "=== branch-protection: blocks push to staging (now protected) ==="
 
-assert_exit "push staging allowed" 0 bash -c 'printf "{\"tool_input\":{\"command\":\"git push origin staging\"}}" | '"$HOOKS_DIR/branch-protection.sh"
+output=$(printf '{"tool_input":{"command":"git push origin staging"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+assert_eq "push staging blocked (interactive)" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
 
 # ============================================================
 echo ""
@@ -275,6 +276,23 @@ echo ""
 echo "=== subagent-stop-gate: no-op without active run ==="
 
 assert_exit "subagent no run exits 0" 0 bash -c 'printf "{\"agent_type\":\"implementation-reviewer\"}" | '"$HOOKS_DIR/subagent-stop-gate.sh"
+
+# ============================================================
+echo ""
+echo "=== subagent-stop-gate: fail-closed on broken current symlink ==="
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -sfn "$CLAUDE_PLUGIN_DATA/runs/does-not-exist" "$CLAUDE_PLUGIN_DATA/runs/current"
+set +e
+printf '{"agent_type":"implementation-reviewer"}' \
+  | bash "$HOOKS_DIR/subagent-stop-gate.sh" >/dev/null 2>/tmp/subagent-broken.err
+rc=$?
+set -e
+assert_eq "subagent broken-symlink exit nonzero" "1" "$rc"
+assert_eq "subagent broken-symlink logs diagnostic" "true" \
+  "$(grep -q 'runs/current symlink is broken' /tmp/subagent-broken.err && echo true || echo false)"
+rm -f /tmp/subagent-broken.err
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
 # ============================================================
 echo ""
@@ -492,14 +510,55 @@ assert_eq "override exit 0" "0" "$exit_code"
 assert_eq "override 1 check" "1" "$(echo "$output" | jq -r '.checks | length')"
 assert_eq "override only lint" "lint" "$(echo "$output" | jq -r '.checks[0].command')"
 
-# Fixture 4: missing package.json — graceful error
+# Fixture 4: missing package.json — non-JS repo, skipped cleanly (Task 4.9)
 qg_proj4=$(mktemp -d)
 set +e
 output=$("$QG" "$qg_run" "qt1" "$qg_proj4" 2>/dev/null)
 exit_code=$?
 set -e
-assert_eq "no package.json exit 1" "1" "$exit_code"
-assert_eq "no package.json ok=false" "false" "$(echo "$output" | jq -r '.ok')"
+assert_eq "no package.json exit 0 (skipped)" "0" "$exit_code"
+assert_eq "no package.json ok=true" "true" "$(echo "$output" | jq -r '.ok')"
+assert_eq "no package.json skipped=true" "true" "$(echo "$output" | jq -r '.skipped')"
+assert_eq "no package.json reason=no-package-json" "no-package-json" "$(echo "$output" | jq -r '.reason')"
+assert_eq "state.quality_gate.skipped=true" "true" \
+  "$(jq -r '.tasks.qt1.quality_gate.skipped' "$qg_run_dir/state.json")"
+
+# Fixture 5: package.json without any quality scripts — skipped cleanly (Task 4.9)
+qg_proj5=$(mktemp -d)
+cat > "$qg_proj5/package.json" << 'PJSON'
+{
+  "name": "qg-no-scripts",
+  "scripts": {
+    "build": "true",
+    "start": "true"
+  }
+}
+PJSON
+set +e
+output=$("$QG" "$qg_run" "qt1" "$qg_proj5" 2>/dev/null)
+exit_code=$?
+set -e
+assert_eq "no quality scripts exit 0" "0" "$exit_code"
+assert_eq "no quality scripts ok=true" "true" "$(echo "$output" | jq -r '.ok')"
+assert_eq "no quality scripts reason=no-quality-scripts" "no-quality-scripts" "$(echo "$output" | jq -r '.reason')"
+
+# Fixture 6: package.json with only lint script — runs only that command (Task 4.9)
+qg_proj6=$(mktemp -d)
+cat > "$qg_proj6/package.json" << 'PJSON'
+{
+  "name": "qg-only-lint",
+  "scripts": {
+    "lint": "true"
+  }
+}
+PJSON
+set +e
+output=$("$QG" "$qg_run" "qt1" "$qg_proj6" 2>/dev/null)
+exit_code=$?
+set -e
+assert_eq "only-lint exit 0" "0" "$exit_code"
+assert_eq "only-lint 1 check" "1" "$(echo "$output" | jq -r '.checks | length')"
+assert_eq "only-lint ran lint" "lint" "$(echo "$output" | jq -r '.checks[0].command')"
 
 # ============================================================
 echo ""
@@ -756,6 +815,33 @@ assert_eq "guards task-status-done exit 0" "0" "$rc"
 assert_eq "guards task-status-done denies" "deny" "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')"
 
 echo ""
+echo "=== pretooluse-pipeline-guards: cross-run task-status done in autonomous mode ==="
+
+# Active run is run-guards-done (seeded above). A command targeting a
+# DIFFERENT run-id must be denied when FACTORY_AUTONOMOUS_MODE=1.
+input='{"tool_input":{"command":"pipeline-state task-status run-other alpha-001 done"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "guards cross-run autonomous exit 0" "0" "$rc"
+decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')
+assert_eq "guards cross-run autonomous denies" "deny" "$decision"
+reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')
+case "$reason" in
+  *"cross-run"*) echo "  PASS: deny reason mentions cross-run"; pass=$((pass + 1)) ;;
+  *) echo "  FAIL: deny reason does not mention cross-run (got: $reason)"; fail=$((fail + 1)) ;;
+esac
+
+# Same input WITHOUT autonomous mode → not denied (legacy scope-check passes).
+set +e
+out_loose=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "guards cross-run non-autonomous exit 0" "0" "$rc"
+assert_eq "guards cross-run non-autonomous no output" "" "$out_loose"
+
+echo ""
 echo "=== pretooluse-pipeline-guards: no-op when no pipeline run ==="
 
 rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
@@ -766,6 +852,38 @@ rc=$?
 set -e
 assert_eq "guards no-run exit 0"    "0" "$rc"
 assert_eq "guards no-run no output" "" "$out"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: fail-closed on broken current symlink (Bash) ==="
+
+# Symlink exists but points at a missing run dir — must fail closed, not no-op.
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -sfn "$CLAUDE_PLUGIN_DATA/runs/does-not-exist" "$CLAUDE_PLUGIN_DATA/runs/current"
+input='{"tool_name":"Bash","tool_input":{"command":"gh pr create --head feat --base main"}}'
+set +e
+out=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>/tmp/guards-broken.err)
+rc=$?
+set -e
+assert_eq "guards broken-symlink Bash exit nonzero" "1" "$rc"
+assert_eq "guards broken-symlink Bash logs diagnostic" "true" \
+  "$(grep -q 'runs/current symlink is broken' /tmp/guards-broken.err && echo true || echo false)"
+rm -f /tmp/guards-broken.err
+
+echo ""
+echo "=== pretooluse-pipeline-guards: fail-closed on broken current symlink (non-Bash) ==="
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -sfn "$CLAUDE_PLUGIN_DATA/runs/does-not-exist" "$CLAUDE_PLUGIN_DATA/runs/current"
+input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.ts"}}'
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" >/dev/null 2>/tmp/guards-broken2.err
+rc=$?
+set -e
+assert_eq "guards broken-symlink non-Bash exit nonzero" "1" "$rc"
+assert_eq "guards broken-symlink non-Bash logs diagnostic" "true" \
+  "$(grep -q 'runs/current symlink is broken' /tmp/guards-broken2.err && echo true || echo false)"
+rm -f /tmp/guards-broken2.err
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
 # ============================================================
 echo ""
@@ -1064,6 +1182,37 @@ set +e
 out=$(printf '{"source":"resume"}' | bash "$HOOKS_DIR/session-start-resume.sh")
 set -e
 assert_eq "session-start terminal no output" "" "$out"
+
+echo ""
+echo "=== session-start-resume: complete stage map ==="
+
+# Each case: stage in state.json → expected --stage in resume command.
+_resume_stage_check() {
+  local label="$1" stage_in="$2" expect="$3"
+  local rid="run-resume-map-$(printf '%s' "$label" | tr -c '[:alnum:]' '-')"
+  _seed_run "$rid" "$(jq -cn --arg s "$stage_in" '{status:"running",tasks:{"t-1":{status:"executing",stage:$s}}}')"
+  export CLAUDE_ENV_FILE=$(mktemp)
+  local out ctx
+  out=$(printf '{"source":"resume"}' | bash "$HOOKS_DIR/session-start-resume.sh")
+  ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')
+  if [[ "$ctx" == *"--stage $expect"* ]]; then
+    echo "  PASS: stage map $stage_in → $expect"; pass=$((pass+1))
+  else
+    echo "  FAIL: stage map $stage_in expected '--stage $expect' in: $ctx"; fail=$((fail+1))
+  fi
+  rm -f "$CLAUDE_ENV_FILE"; unset CLAUDE_ENV_FILE
+  rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+}
+
+_resume_stage_check "preflight_done"            "preflight_done"            "preexec_tests"
+_resume_stage_check "preexec_tests_done"        "preexec_tests_done"        "postexec"
+_resume_stage_check "postexec_spawn_pending"    "postexec_spawn_pending"    "postexec"
+_resume_stage_check "postexec_done"             "postexec_done"             "postreview"
+_resume_stage_check "postreview_pending_human"  "postreview_pending_human"  "ship"
+_resume_stage_check "postreview_exhausted"      "postreview_exhausted"      "ship"
+_resume_stage_check "postreview_done"           "postreview_done"           "ship"
+_resume_stage_check "ship_done"                 "ship_done"                 "finalize-run"
+_resume_stage_check "unknown_stage_default"     "weird_state"               "preflight"
 
 # ============================================================
 echo ""
@@ -1576,6 +1725,209 @@ assert_eq "asyncrewake-ci: wake message includes --merge-status flag" "true" \
 rm -f "$REWAKE_STUB_LOG"
 rm -rf "$rewake_stubs"
 unset REWAKE_STUB_LOG
+
+# ============================================================
+echo ""
+echo "=== branch-protection: staging allowlist (autonomous + orchestrator worktree) ==="
+
+# Create fixture: a fake repo with an orchestrator worktree dir.
+_staging_tmp=$(mktemp -d)
+mkdir -p "$_staging_tmp/repo/.git"
+mkdir -p "$_staging_tmp/repo/.claude/worktrees/orchestrator-test"
+
+# staging push from autonomous mode inside orchestrator worktree → ALLOW
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push origin staging"}}' \
+  | (cd "$_staging_tmp/repo/.claude/worktrees/orchestrator-test" && \
+     FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "staging push from orch worktree allowed" "0" "$_rc"
+
+# staging push from interactive shell → DENY
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push origin staging"}}' \
+  | (cd /tmp && bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "staging push from interactive denied" "2" "$_rc"
+assert_eq "staging deny includes push_to_protected" "true" \
+  "$(printf '%s' "$out" | grep -q 'push_to_protected' && echo true || echo false)"
+
+# staging push autonomous BUT outside orchestrator worktree → DENY
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push origin staging"}}' \
+  | (cd /tmp && FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "staging push autonomous outside orch worktree denied" "2" "$_rc"
+
+# staging force push from autonomous orch worktree → DENY (force never allowed)
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push --force origin staging"}}' \
+  | (cd "$_staging_tmp/repo/.claude/worktrees/orchestrator-test" && \
+     FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "force push to staging denied even from orch" "2" "$_rc"
+assert_eq "force deny includes force_push_protected" "true" \
+  "$(printf '%s' "$out" | grep -q 'force_push_protected' && echo true || echo false)"
+
+# develop push from autonomous orch worktree → DENY (only staging is PIPELINE_MANAGED)
+_rc=0
+out=$(printf '{"tool_input":{"command":"git push origin develop"}}' \
+  | (cd "$_staging_tmp/repo/.claude/worktrees/orchestrator-test" && \
+     FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "develop push from orch worktree denied" "2" "$_rc"
+
+# single-quoted ref token strips correctly → DENY
+_rc=0
+out=$(printf '%s' '{"tool_input":{"command":"git push origin '"'"'staging'"'"'"}}' \
+  | (cd /tmp && bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "single-quoted staging ref denied" "2" "$_rc"
+
+# single-quoted --delete <branch> must DENY (regression: re-scan must also strip single quotes)
+_rc=0
+out=$(printf '%s' '{"tool_input":{"command":"git push origin --delete '"'"'staging'"'"'"}}' \
+  | (cd /tmp && bash "$HOOKS_DIR/branch-protection.sh" 2>&1)) || _rc=$?
+assert_eq "single-quoted --delete staging denied" "2" "$_rc"
+assert_eq "single-quoted --delete reason" "true" \
+  "$(printf '%s' "$out" | grep -q 'remote_delete_protected' && echo true || echo false)"
+
+rm -rf "$_staging_tmp"
+
+# ============================================================
+echo ""
+echo "=== nested-shell denylist ==="
+
+# bash -lc 'gh pr create' must DENY in autonomous mode (pretooluse-pipeline-guards)
+_seed_run "run-nested-shell" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"bash -lc \"gh pr create --base staging\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "bash -lc gh pr create denied (exit 0 with deny payload)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains() { local label="$1" needle="$2" haystack="$3"
+  if printf '%s' "$haystack" | grep -q "$needle"; then echo "  PASS: $label"; pass=$((pass+1))
+  else echo "  FAIL: $label (expected '$needle' in output)"; fail=$((fail+1)); fi; }
+assert_contains "bash -lc deny has permissionDecision" "permissionDecision" "$out"
+assert_contains "bash -lc deny decision=deny" "deny" "$out"
+
+# git -c hooksPath=/dev/null commit must DENY via secret-commit-guard (exit 2)
+out=$(printf '%s' '{"tool_input":{"command":"git -c hooksPath=/dev/null commit -m x"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "git -c hooksPath commit denied (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "git -c hooksPath commit reason=nested_shell_denied" "nested_shell_denied" "$out"
+
+# git -c core.hooksPath=/dev/null push must DENY by branch-protection (exit 2)
+out=$(printf '%s' '{"tool_input":{"command":"git -c core.hooksPath=/dev/null push origin staging"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+assert_eq "git -c core.hooksPath push denied (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "git -c core.hooksPath push reason=nested_shell_denied" "nested_shell_denied" "$out"
+
+# eval "rm -rf" must DENY in pretooluse-pipeline-guards
+_seed_run "run-eval-deny" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"eval \"rm -rf /\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "eval denied (exit 0 with deny payload)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "eval deny has deny decision" "deny" "$out"
+
+# Interactive (no FACTORY_AUTONOMOUS_MODE) — bash -lc should pass through
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+out=$(printf '%s' '{"tool_input":{"command":"bash -lc \"ls\""}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "bash -lc interactive allowed (no autonomous mode)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+# env wrapping bash -c (was the prior bypass)
+_seed_run "run-env-bash" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"env bash -c \"gh pr create\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_contains "env bash -c denied" "deny" "$out"
+
+# env with VAR=val prefix wrapping bash
+_seed_run "run-env-var-bash" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"env PATH=/tmp bash -c \"gh pr merge 1\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_contains "env VAR=val bash -c denied" "deny" "$out"
+
+# env -i sh -c
+_seed_run "run-env-i-sh" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"env -i sh -c \"gh pr create\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_contains "env -i sh -c denied" "deny" "$out"
+
+# Unquoted: bash myscript.sh
+_seed_run "run-unquoted-bash" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"bash /tmp/some.sh"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_contains "unquoted bash script denied" "deny" "$out"
+
+# Interactive (no autonomous) — env bash -c passes through
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+out=$(printf '%s' '{"tool_input":{"command":"env bash -c \"ls\""}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "env bash -c interactive allowed" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+# ============================================================
+echo ""
+echo "=== gh pr create requires task_id in autonomous mode ==="
+
+# In autonomous mode without a derivable task_id: DENY
+_seed_run "run-pr-notaskid" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"gh pr create --base staging --title random"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "gh pr create no task_id autonomous denied (exit 0)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "gh pr create no task_id deny payload" "permissionDecision" "$out"
+assert_contains "gh pr create no task_id deny reason mentions task_id" "task_id" "$out"
+
+# In autonomous mode without task_id: gh pr merge DENY
+_seed_run "run-merge-notaskid" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"gh pr merge 123 --merge"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "gh pr merge no task_id autonomous denied (exit 0)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "gh pr merge no task_id deny payload" "permissionDecision" "$out"
+
+# Interactive with no task_id: let through (no deny)
+_seed_run "run-pr-interactive" '{"status":"running","tasks":{}}'
+out=$(printf '%s' '{"tool_input":{"command":"gh pr create --base main --title test"}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+assert_eq "gh pr create no task_id interactive allowed" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+# ============================================================
+echo ""
+echo "=== git push scan in secret-commit-guard ==="
+
+# Construct fake AWS key at runtime to avoid triggering the secret guard when
+# this test file itself is committed (the pattern must not appear literally here).
+_fake_aws_key="AKIA""IOSFODNN7EXAMPLE"
+
+# Build a tmp git repo with a fake AWS key committed but not pushed.
+_push_tmp=$(mktemp -d)
+git -C "$_push_tmp" init -q
+git -C "$_push_tmp" commit --allow-empty -m "init" -q
+git -C "$_push_tmp" checkout -b "feat/test-push-scan" -q
+# Write a file with a fake AWS key pattern
+printf '%s\n' "export AWS_KEY=$_fake_aws_key" > "$_push_tmp/secrets.txt"
+git -C "$_push_tmp" add "$_push_tmp/secrets.txt"
+git -C "$_push_tmp" commit -m "add secrets" -q
+
+# Bare `git push` with no args and no upstream configured → fail-open with warning, exit 0.
+# Build a separate repo without upstream to test this path.
+_push_tmp2=$(mktemp -d)
+git -C "$_push_tmp2" init -q
+git -C "$_push_tmp2" commit --allow-empty -m "init" -q
+git -C "$_push_tmp2" checkout -b "feat/no-upstream" -q
+printf '%s\n' "export AWS_KEY=$_fake_aws_key" > "$_push_tmp2/secrets.txt"
+git -C "$_push_tmp2" add "$_push_tmp2/secrets.txt"
+git -C "$_push_tmp2" commit -m "add secrets" -q
+out=$(printf '%s' "{\"tool_input\":{\"command\":\"git -C $_push_tmp2 push\"}}" \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "push scan no upstream fail-open exit 0" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "push scan no upstream warning" "push scan skipped" "$out"
+rm -rf "$_push_tmp2"
+
+# Add a fake remote so range resolves; commit with AKIA key; expect EXIT:2
+git -C "$_push_tmp" remote add origin "file:///dev/null" 2>/dev/null || true
+# Simulate origin/feat/test-push-scan existing at init commit (before the secret)
+_init_sha=$(git -C "$_push_tmp" rev-list --max-parents=0 HEAD 2>/dev/null)
+git -C "$_push_tmp" update-ref refs/remotes/origin/feat/test-push-scan "$_init_sha"
+
+out=$(printf '%s' "{\"tool_input\":{\"command\":\"git -C $_push_tmp push origin feat/test-push-scan\"}}" \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "push scan detects AKIA key in unpushed commit (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "push scan block reason=secret_detected" "secret_detected" "$out"
+
+rm -rf "$_push_tmp"
 
 # ============================================================
 echo ""

@@ -18,7 +18,7 @@
 #   .scribe.status              (scribe)
 # Emits metric: pipeline.subagent.end agent_type=... status=...
 #
-# Exit: always 0; non-fatal on parse errors.
+# Exit: 0 normally; 1 if scribe state write fails (fatal).
 set -euo pipefail
 
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
@@ -103,16 +103,25 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
     implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer)
       pipeline-state task-write "$run_id" "$task_id" reviewer_status "\"$status\"" >/dev/null 2>&1 || true
       if [[ -n "$review_path" ]]; then
-        cur=$(jq -c --arg t "$task_id" '.tasks[$t].review_files // []' "$state_file" 2>/dev/null || printf '[]')
-        new=$(printf '%s' "$cur" | jq -c --arg p "$review_path" '. + [$p] | unique')
-        pipeline-state task-write "$run_id" "$task_id" review_files "$new" >/dev/null 2>&1 || true
+        pipeline-state task-array-append "$run_id" "$task_id" review_files "\"$review_path\"" >/dev/null \
+          || printf '[subagent-stop-transcript] WARN: review_files append failed for %s\n' "$task_id" >&2
       fi
       ;;
   esac
 fi
 
 if [[ "$agent_type" == "scribe" ]]; then
-  pipeline-state write "$run_id" '.scribe.status' "\"$( [[ "$status" == "DONE" || "$status" == "DONE_WITH_CONCERNS" ]] && echo done || echo failed )\"" >/dev/null 2>&1 || true
+  scribe_status=$( [[ "$status" == "DONE" || "$status" == "DONE_WITH_CONCERNS" ]] && echo done || echo failed )
+  if ! pipeline-state write "$run_id" '.scribe.status' "\"$scribe_status\"" 2>/dev/null; then
+    printf '[subagent-stop-transcript] ERROR: failed to write scribe.status=%s for run %s\n' \
+      "$scribe_status" "$run_id" >&2
+    exit 1
+  fi
+  # On terminal success, reset re-spawn attempts so a future re-entry is not
+  # falsely capped on stale state.
+  if [[ "$scribe_status" == "done" ]]; then
+    pipeline-state write "$run_id" '.scribe.attempts' '0' >/dev/null 2>&1 || true
+  fi
 fi
 
 # --- 6. Emit metric ---
