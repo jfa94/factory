@@ -6,6 +6,19 @@
 # Exit: always 0 (never blocks session end)
 set -euo pipefail
 
+# Resolve plugin bin so `pipeline-state` is callable even when Claude Code
+# invokes the hook with a sanitized PATH (the agent's tool-execution shell
+# gets plugin bins prepended; hook subshells do not always inherit it).
+_plugin_bin=""
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/bin" ]]; then
+  _plugin_bin="${CLAUDE_PLUGIN_ROOT}/bin"
+else
+  _plugin_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" 2>/dev/null && pwd || true)"
+fi
+if [[ -n "$_plugin_bin" && ":$PATH:" != *":$_plugin_bin:"* ]]; then
+  PATH="$_plugin_bin:$PATH"
+fi
+
 # Check for active run
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
 if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]] || [[ ! -L "$current_link" ]]; then
@@ -62,7 +75,14 @@ fi
 # This ensures the write goes through the run-level lock, preventing races
 # with any concurrent pipeline-state write call.
 run_id=$(basename "$run_dir")
-pipeline-state finalize-on-stop "$run_id" >&2
+if ! command -v pipeline-state >/dev/null 2>&1; then
+  echo "[stop-gate] WARN: pipeline-state not on PATH (CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT:-unset}); skipping finalize-on-stop for $run_id" >&2
+  exit 0
+fi
+if ! pipeline-state finalize-on-stop "$run_id" >&2; then
+  echo "[stop-gate] WARN: pipeline-state finalize-on-stop failed for $run_id" >&2
+  exit 0
+fi
 
 echo "[stop-gate] run $run_id finalized via pipeline-state" >&2
 

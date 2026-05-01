@@ -14,7 +14,10 @@
       "Edit",
       "Grep",
       "Glob",
-      "Agent"
+      "Agent",
+      "Read(~/.claude/plugins/data/factory-jfa94/**)",
+      "Edit(~/.claude/plugins/data/factory-jfa94/**)",
+      "Write(~/.claude/plugins/data/factory-jfa94/**)"
     ],
     "deny": [
       "Bash(rm -rf /)",
@@ -118,11 +121,6 @@
       "Edit(~/.claude/hooks/**)",
       "Write(~/.claude/CLAUDE.md)",
       "Edit(~/.claude/CLAUDE.md)"
-    ],
-    "allow": [
-      "Read(~/.claude/plugins/data/factory-jfa94/**)",
-      "Edit(~/.claude/plugins/data/factory-jfa94/**)",
-      "Write(~/.claude/plugins/data/factory-jfa94/**)"
     ]
   },
   "statusLine": {
