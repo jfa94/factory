@@ -1,4 +1,4 @@
-<!-- last-documented: 591951e602c30746e3f123fe5a47f842165bc71a -->
+<!-- last-documented: f326a0aa53bec392efc547a29567316ca289d52a -->
 
 # Dark Factory Plugin
 
@@ -41,6 +41,7 @@ The plugin automates the end-to-end software development workflow: reading a req
 - [Configuration Schema](./reference/configuration.md) - All runtime config options with types and defaults
 - [Bin Scripts](./reference/bin-scripts.md) - Deterministic pipeline utilities
 - [State Schema](./reference/state-schema.md) - Run state structure and task lifecycle
+- [Locking Model](./reference/locking.md) - Lock scopes and acquisition order
 - [Exit Codes](./reference/exit-codes.md) - Script exit codes and their meanings
 
 ### Explanation

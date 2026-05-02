@@ -168,6 +168,25 @@ Block tasks that decrease test coverage.
 
 Maximum allowed drop in coverage (percentage points) before the regression gate fails. Default `0.5` absorbs measurement noise from branch/line count shifts. This is a regression tolerance, NOT a minimum-coverage floor — projects that want to enforce a floor should add a dedicated CI step.
 
+### quality.redTestCommand
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | string |
+| Default  | (none) |
+
+Custom command for red-test verification in repos with exotic test runners (Go, Ruby, Deno, etc.). When set, the TDD gate uses this command instead of the default vitest/jest detection.
+
+**Security constraints:**
+
+- Every token must match `[A-Za-z0-9._/=:+-]+` (no shell metacharacters, globs, tildes, or unicode)
+- Command prefix must match an allowed runner sequence:
+  - Single-token: `pytest`, `vitest`, `jest`, `mocha`, `phpunit`, `rspec`
+  - Two-token: `go test`, `cargo test`, `deno test`
+  - Three-token: `bundle exec rspec`
+
+Commands that fail validation are rejected and the task is marked failed with `reason: "unsafe_command"` or `reason: "unallowed_runner"`.
+
 ---
 
 ## Task Execution
@@ -310,6 +329,54 @@ Metrics storage format.
 | Max      | 365    |
 
 Days to retain metrics data.
+
+---
+
+## Quota Management
+
+### quota.wallBudgetMin
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | number |
+| Default  | 30     |
+| Min      | 5      |
+| Max      | 120    |
+
+Maximum accumulated pause time (in minutes) before the quota gate surfaces a human gate. When rate limits force the pipeline to sleep, pause time accumulates in `.circuit_breaker.pause_minutes`. Once this budget is exhausted, further waits trigger `end_gracefully` rather than sleeping indefinitely.
+
+### quota.sleepCapSec
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | number |
+| Default  | 540    |
+| Min      | 60     |
+| Max      | 1800   |
+
+Maximum sleep duration per quota wait cycle (in seconds). The gate uses exponential back-off (120s base, doubling each cycle) capped at this value.
+
+### quota.maxWaitCycles
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | number |
+| Default  | 60     |
+| Min      | 1      |
+| Max      | 200    |
+
+Maximum consecutive wait cycles (utilization still over threshold) before `end_gracefully`. At default sleep cap of 540s, 60 cycles is approximately 9 hours.
+
+### quota.maxStaleCycles
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | number |
+| Default  | 6      |
+| Min      | 1      |
+| Max      | 20     |
+
+Maximum consecutive stale-cache yields (statusline silent) before `end_gracefully`. At default intervals, 6 cycles is approximately 1 hour.
 
 ---
 

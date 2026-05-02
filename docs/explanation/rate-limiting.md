@@ -39,16 +39,17 @@ Every gate goes through `pipeline_quota_gate` (`bin/pipeline-lib.sh`) — orches
 Each gate calls `pipeline-quota-check` → `pipeline-model-router` and handles the result:
 
 - `proceed` → continue
-- `wait` → sleep up to `.quota.sleepCapSec` (default 540 s), re-check, record pause time in `.circuit_breaker.pause_minutes`
+- `wait` → sleep with exponential back-off (120s base, doubles each cycle, capped at `.quota.sleepCapSec` default 540s), re-check, record pause time in `.circuit_breaker.pause_minutes`
 - `stale_yield` → `usage-cache.json` is missing or too old; yield `wait_retry` so the next agent turn refreshes the statusline
 - `end_gracefully` → drain in-flight tasks, mark run `partial`, run summary, cleanup
 
-Two independent counters bound the wait loop:
+Three independent bounds govern the wait loop:
 
+- **Wall-clock budget** — accumulated pause time (`.circuit_breaker.pause_minutes`) must not exceed `.quota.wallBudgetMin` (default 30). Checked before each sleep; if already at budget, surfaces a human gate immediately rather than sleeping further.
 - `.circuit_breaker.quota_wait_cycles` — consecutive "still over threshold" yields. Cap `.quota.maxWaitCycles` (default 60, ≈ 9 h).
 - `.circuit_breaker.quota_stale_cycles` — consecutive stale-cache yields (statusline silent). Cap `.quota.maxStaleCycles` (default 6, ≈ 1 h).
 
-Hitting either cap returns `end_gracefully`. Any successful `proceed` resets both counters.
+Hitting any cap returns `end_gracefully`. Any successful `proceed` resets cycle counters (pause_minutes is not reset — it accumulates across the run for audit).
 
 ## How the Pipeline Checks Limits
 

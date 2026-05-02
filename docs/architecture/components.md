@@ -350,7 +350,7 @@ Defined in `hooks/hooks.json`. All hooks fire for all plugin agents.
 
 ### branch-protection (PreToolUse)
 
-Blocks destructive git operations on protected branches (main, master, develop).
+Blocks destructive git operations on protected branches (main, master, develop, staging, production, release, prod).
 
 **Blocked operations:**
 

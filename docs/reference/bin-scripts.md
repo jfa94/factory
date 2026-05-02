@@ -140,15 +140,20 @@ pipeline-state <action> <run-id> [args...]
 
 **Actions:**
 
-| Action           | Arguments                     | Description                |
-| ---------------- | ----------------------------- | -------------------------- |
-| `read`           | `<run-id> [key]`              | Read full state or jq key  |
-| `write`          | `<run-id> <key> <value>`      | Atomic write to state key  |
-| `task-status`    | `<run-id> <task-id> <status>` | Update task status         |
-| `deps-satisfied` | `<run-id> <task-id>`          | Check if deps done         |
-| `interrupted`    | `<run-id>`                    | Check if run interrupted   |
-| `resume-point`   | `<run-id>`                    | Find first incomplete task |
-| `list`           | -                             | List all runs              |
+| Action           | Arguments                        | Description                                   |
+| ---------------- | -------------------------------- | --------------------------------------------- |
+| `read`           | `<run-id> [key]`                 | Read full state or jq key                     |
+| `write`          | `<run-id> <key> <value>`         | Atomic write to state key                     |
+| `task-init`      | `<run-id> <task-id> <task-json>` | Seed task record from tasks.json (idempotent) |
+| `task-status`    | `<run-id> <task-id> <status>`    | Update task status                            |
+| `deps-satisfied` | `<run-id> <task-id>`             | Check if deps done                            |
+| `interrupted`    | `<run-id>`                       | Check if run interrupted                      |
+| `resume-point`   | `<run-id>`                       | Find first incomplete task                    |
+| `list`           | -                                | List all runs                                 |
+
+**task-init behavior:**
+
+Seeds a task record with fields from a tasks.json row: `task_id`, `title`, `description`, `files`, `acceptance_criteria`, `tests_to_write`, `depends_on`. Idempotent: a second call merges on top of the existing record. The `<task-json>` argument must be a JSON object (arrays and scalars are rejected).
 
 **Task statuses:** pending, executing, reviewing, done, failed, interrupted, needs_human_review, ci_fixing
 
@@ -408,11 +413,11 @@ pipeline-classify-risk '<task-json>'
 
 **Risk patterns:**
 
-| Tier     | Patterns                                                                       |
-| -------- | ------------------------------------------------------------------------------ |
-| Security | auth/_, security/_, migration/_, payment/_, crypto/_, .env_, middleware/auth\* |
-| Feature  | api/_, routes/_, models/_, services/_, hooks/\*                                |
-| Routine  | Everything else                                                                |
+| Tier     | Patterns                                                                                 |
+| -------- | ---------------------------------------------------------------------------------------- |
+| Security | auth/_, security/_, migration/_, payment/_, crypto/_, .env_, middleware/auth\*, hooks/\* |
+| Feature  | api/_, routes/_, models/\_, services/\*                                                  |
+| Routine  | Everything else                                                                          |
 
 **Output:**
 
@@ -574,9 +579,10 @@ pipeline-codex-review --base <ref> --task-id <id> --spec-dir <path>
 1. Compute `git diff --unified=5 <base> HEAD`
 2. If diff is empty: emit auto-approve verdict and exit 0
 3. Build prompt from `skills/review-protocol/SKILL.md` + spec files + diff
-4. Invoke Codex with sandbox cascade: `read-only` → `workspace-read` → no sandbox
-5. Parse Codex JSON output via `schemas/codex-review.schema.json`
-6. Map to normalized verdict JSON (same shape as `pipeline-parse-review`)
+4. Verify Codex supports `--sandbox` flag (fail-closed: refuses to run unsandboxed)
+5. Invoke Codex with sandbox cascade: `read-only` → `workspace-read` (no unsandboxed fallback)
+6. Parse Codex JSON output via `schemas/codex-review.schema.json`
+7. Map to normalized verdict JSON (same shape as `pipeline-parse-review`)
 
 **Output:**
 
