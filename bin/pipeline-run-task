@@ -1114,6 +1114,115 @@ _stage_postreview() {
   return 0
 }
 
+# Run quality gates immediately after the residue commit at ship time.
+# Catches postreview re-execution drift and task-commit sweep artifacts.
+# Writes quality_gates.pregate = {ok, coverage, mutation} to state.
+# Returns 0 on pass, 1 on any gate failure.
+_run_ship_pregate() {
+  local wt="$1"
+
+  # 1. Re-run quality gate (lint / typecheck / test). Overwrites quality_gate in
+  #    state with the post-commit, post-reviewer-round result — the ship-time
+  #    reading is the authoritative one for the PR guard.
+  local qg_ok=false
+  if pipeline-quality-gate "$run_id" "$task_id" "$wt" >/dev/null; then
+    qg_ok=true
+  else
+    log_warn "ship pregate: quality gate failed for $task_id"
+  fi
+
+  # 2. Coverage regression check (if baseline captured by preflight).
+  local cov_before="$run_dir/.state/$run_id/$task_id.coverage-before.json"
+  local cov_after="$wt/coverage/coverage-summary.json"
+  local cov_gate="skipped"
+  if [[ -f "$cov_before" && -f "$cov_after" ]]; then
+    if pipeline-coverage-gate "$cov_before" "$cov_after" --task-id "$task_id" >/dev/null; then
+      cov_gate="ok"
+    else
+      log_warn "ship pregate: coverage gate failed for $task_id"
+      cov_gate="fail"
+    fi
+  fi
+
+  # 3. Tier-gated mutation testing (runs test:mutation if the task's risk tier is
+  #    listed in quality.mutationTestingTiers and the script exists).
+  local mut_gate="skipped"
+  local risk_tier
+  risk_tier=$(_task_field risk_tier 2>/dev/null || printf '')
+  risk_tier=$(_unquote_json_string "$risk_tier")
+  if [[ -n "$risk_tier" ]]; then
+    local mut_tiers
+    mut_tiers=$(read_config '.quality.mutationTestingTiers' '["feature","security"]')
+    local tier_match
+    tier_match=$(printf '%s' "$mut_tiers" \
+      | jq -r --arg t "$risk_tier" 'map(select(. == $t)) | first // empty' 2>/dev/null \
+      || printf '')
+    if [[ -n "$tier_match" && -f "$wt/package.json" ]]; then
+      local mut_script
+      mut_script=$(cd "$wt" && jq -r '.scripts["test:mutation"] // empty' package.json 2>/dev/null \
+        || printf '')
+      if [[ -n "$mut_script" ]]; then
+        local pkg_mgr
+        pkg_mgr=$(detect_pkg_manager "$wt")
+        local mut_log="$run_dir/${task_id}.mutation.pregate.log"
+        set +e
+        (cd "$wt" && "$pkg_mgr" run test:mutation) >"$mut_log" 2>&1
+        local mut_rc=$?
+        set -e
+        if [[ $mut_rc -eq 0 ]]; then
+          local mut_score_file="$wt/reports/mutation/mutation.json"
+          if [[ -f "$mut_score_file" ]]; then
+            local mut_score
+            mut_score=$(jq -r '.metrics.mutationScore // empty' "$mut_score_file" 2>/dev/null \
+              || printf '')
+            if [[ -n "$mut_score" ]]; then
+              _task_write mutation_score "$mut_score"
+              local mut_target
+              mut_target=$(read_config '.quality.mutationScoreTarget' '80')
+              if (( $(printf '%.0f' "$mut_score") >= mut_target )); then
+                mut_gate="ok"
+              else
+                log_warn "ship pregate: mutation score $mut_score < target $mut_target for $task_id"
+                mut_gate="fail"
+              fi
+            else
+              mut_gate="ok"
+            fi
+          else
+            mut_gate="ok"
+          fi
+        else
+          log_warn "ship pregate: mutation testing failed (exit $mut_rc) for $task_id — see $mut_log"
+          mut_gate="fail"
+        fi
+      fi
+    fi
+  fi
+
+  local overall_ok=true
+  [[ "$qg_ok" != "true" ]] && overall_ok=false
+  [[ "$cov_gate" == "fail" ]] && overall_ok=false
+  [[ "$mut_gate" == "fail" ]] && overall_ok=false
+
+  local pregate_json
+  pregate_json=$(jq -n \
+    --argjson ok "$([[ "$overall_ok" == "true" ]] && printf 'true' || printf 'false')" \
+    --arg coverage "$cov_gate" \
+    --arg mutation "$mut_gate" \
+    '{ok: $ok, coverage: $coverage, mutation: $mutation}')
+
+  if ! pipeline-state task-write "$run_id" "$task_id" quality_gates.pregate "$pregate_json" >/dev/null; then
+    log_error "failed to write quality_gates.pregate for $task_id"
+    return 1
+  fi
+
+  log_metric "task.gate.pregate" "task_id=\"$task_id\"" \
+    "status=\"$([[ "$overall_ok" == "true" ]] && echo pass || echo fail)\"" \
+    "coverage=\"$cov_gate\"" "mutation=\"$mut_gate\""
+
+  [[ "$overall_ok" == "true" ]]
+}
+
 # Write a ship checklist JSON to .tasks/<task_id>.ship_checklist.json inside
 # the run directory. Reads gate results already stored in state.
 _write_ship_checklist() {
@@ -1150,6 +1259,15 @@ _write_ship_checklist() {
   qok=$(jq -r --arg t "$task_id" '.tasks[$t].quality_gate.ok // false' "$state_file" 2>/dev/null || printf 'false')
   quality_gate=$([[ "$qok" == "true" ]] && printf 'ok' || printf 'fail')
 
+  # pregate_gate: from quality_gates.pregate.ok (true/false/absent).
+  local pg_ok pregate_gate
+  pg_ok=$(jq -r --arg t "$task_id" '.tasks[$t].quality_gates.pregate.ok // "null"' "$state_file" 2>/dev/null || printf 'null')
+  case "$pg_ok" in
+    true)  pregate_gate="ok" ;;
+    false) pregate_gate="fail" ;;
+    *)     pregate_gate="skipped" ;;
+  esac
+
   # review_blockers_resolved: true if postreview_done (no pending blockers).
   local stage_cur review_blockers_resolved
   stage_cur=$(_task_field stage 2>/dev/null || printf '')
@@ -1174,6 +1292,7 @@ _write_ship_checklist() {
     --arg tdd_gate       "$tdd_gate" \
     --arg coverage_gate  "$coverage_gate" \
     --arg quality_gate   "$quality_gate" \
+    --arg pregate_gate   "$pregate_gate" \
     --argjson review_blockers_resolved "$review_blockers_resolved" \
     --arg ci_status      "$ci_status" \
     --arg generated_at   "$iso_now" \
@@ -1182,13 +1301,15 @@ _write_ship_checklist() {
       tdd_gate:                 $tdd_gate,
       coverage_gate:            $coverage_gate,
       quality_gate:             $quality_gate,
+      pregate_gate:             $pregate_gate,
       review_blockers_resolved: $review_blockers_resolved,
       ci_status:                $ci_status,
       generated_at:             $generated_at
     }' > "${checklist_file}.tmp" && mv "${checklist_file}.tmp" "$checklist_file"
 
   log_metric "task.ship_checklist_written" "task_id=\"$task_id\"" "tdd=\"$tdd_gate\"" \
-    "coverage=\"$coverage_gate\"" "quality=\"$quality_gate\"" "ci=\"$ci_status\""
+    "coverage=\"$coverage_gate\"" "quality=\"$quality_gate\"" "pregate=\"$pregate_gate\"" \
+    "ci=\"$ci_status\""
 }
 
 # --- ship -------------------------------------------------------------------
@@ -1293,6 +1414,13 @@ _stage_ship() {
     log_error "task-commit failed"
     t1=$(_now_ms)
     log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\""
+    return 30
+  fi
+
+  if ! _run_ship_pregate "$wt"; then
+    log_warn "ship-time pregate failed for $task_id"
+    t1=$(_now_ms)
+    log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"pregate\""
     return 30
   fi
 

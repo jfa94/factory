@@ -73,7 +73,7 @@ _check_pr_status() {
 _check_pr_checks() {
   local out err
   err=$(mktemp)
-  if out=$(gh pr checks "$pr" --json name,state,conclusion 2>"$err"); then
+  if out=$(gh pr checks "$pr" --json name,state,bucket 2>"$err"); then
     rm -f "$err"
     _GH_LAST_ERROR=""
     printf '%s' "$out"
@@ -384,13 +384,12 @@ while true; do
     continue
   fi
   if [[ -n "$checks_data" ]]; then
-    # Treat any non-success terminal conclusion as red. GitHub uses several
-    # conclusions for failure-equivalent states; restricting to FAILURE alone
-    # silently ignored cancelled/timed-out/required runs.
-    failed_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "STARTUP_FAILURE" or .conclusion == "ACTION_REQUIRED")] | length')
+    # Treat any non-success terminal bucket as red. gh pr checks uses `bucket`
+    # (fail/cancel/pass/pending/skipping); `conclusion` is not a valid field.
+    failed_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length')
 
     if [[ "$failed_checks" -gt 0 ]]; then
-      failed_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.conclusion == "FAILURE" or .conclusion == "CANCELLED" or .conclusion == "TIMED_OUT" or .conclusion == "STARTUP_FAILURE" or .conclusion == "ACTION_REQUIRED") | "\(.name)=\(.conclusion)"] | join(", ")')
+      failed_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.bucket == "fail" or .bucket == "cancel") | "\(.name)=\(.bucket)"] | join(", ")')
       log_error "PR #${pr} CI failed: $failed_names"
       jq -n \
         --arg pr "$pr" \
