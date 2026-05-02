@@ -127,6 +127,17 @@ human_summary() {
   printf '%s\n' "$*" >&2
 }
 
+# Print JSON to stdout only when JSON mode is active.
+# Default off (simple/human mode). Opt in via --json flag or FACTORY_JSON=1.
+# Each script handles --json / --simple-output in its own arg-parse loop:
+#   --json)          export FACTORY_JSON=1 ; shift ;;
+#   --simple-output) export FACTORY_JSON=0 ; shift ;;
+# Usage: json_emit [string]  OR  some-cmd | json_emit
+json_emit() {
+  [[ "${FACTORY_JSON:-0}" == "1" ]] || return 0
+  if [[ $# -gt 0 ]]; then printf '%s\n' "$*"; else cat; fi
+}
+
 # Build a JSON object from key-value pairs and write to stdout
 # Usage: json_output key1 value1 key2 value2 ...
 json_output() {
@@ -408,7 +419,7 @@ pipeline_quota_gate() {
 
   local _qrc=0 _qerr
   _qerr=$(mktemp)
-  quota=$(pipeline-quota-check 2>"$_qerr") || _qrc=$?
+  quota=$(pipeline-quota-check --json 2>"$_qerr") || _qrc=$?
   if (( _qrc != 0 )); then
     log_warn "quota gate [$boundary_label]: pipeline-quota-check crashed (rc=$_qrc) — ending gracefully. stderr: $(cat "$_qerr")"
     rm -f "$_qerr"
@@ -526,7 +537,7 @@ pipeline_quota_gate() {
       # else yield via wait_cycles counter.
       _qrc=0
       _qerr=$(mktemp)
-      quota=$(pipeline-quota-check 2>"$_qerr") || _qrc=$?
+      quota=$(pipeline-quota-check --json 2>"$_qerr") || _qrc=$?
       if (( _qrc != 0 )); then
         log_warn "quota gate [$boundary_label]: post-wait pipeline-quota-check crashed (rc=$_qrc) — ending gracefully. stderr: $(cat "$_qerr")"
         rm -f "$_qerr"

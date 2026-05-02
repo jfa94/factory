@@ -21,7 +21,9 @@
 # --strict flag is for tests only — it restores legacy exit 1 behavior for
 # assertions that depend on a non-zero exit. No production caller uses it.
 #
-# Usage: pipeline-quota-check [--strict]
+# Usage: pipeline-quota-check [--strict] [--json] [--simple-output]
+# --json           Emit JSON on stdout (default: human-readable only)
+# --simple-output  Force human-readable mode (override FACTORY_JSON=1)
 # Exit: 0=data retrieved (JSON on stdout), 1=detection failed (--strict only)
 
 source "$(dirname "$0")/pipeline-lib.sh"
@@ -30,7 +32,9 @@ require_command jq
 strict=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --strict) strict=true; shift ;;
+    --strict)        strict=true;          shift ;;
+    --json)          export FACTORY_JSON=1; shift ;;
+    --simple-output) export FACTORY_JSON=0; shift ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -59,7 +63,7 @@ _sentinel() {
       resets_at_epoch: null
     },
     captured_at: null
-  }'
+  }' | json_emit
 }
 
 # --- Validate cache file ---
@@ -228,4 +232,4 @@ jq -n \
     },
     detection_method: "statusline",
     captured_at: $captured_at
-  }'
+  }' | json_emit

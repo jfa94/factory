@@ -77,7 +77,7 @@ The `AskUserQuestion` tool is used for the 20–40% pre-launch prompt; default t
 The pre-launch quota gate (step 5) reads `usage-cache.json`, which is only written by the factory `statusline-wrapper.sh` while running under `merged-settings.json`. In a non-autonomous session the cache is stale by design and every quota call returns `unavailable`. Verify autonomous mode FIRST — same pattern as `skills/pipeline-orchestrator/SKILL.md:108-122`.
 
 ```bash
-result=$(pipeline-ensure-autonomy)
+result=$(pipeline-ensure-autonomy --json)
 status=$(printf '%s' "$result" | jq -r '.status')
 settings_path=$(printf '%s' "$result" | jq -r '.settings_path')
 reason=$(printf '%s' "$result" | jq -r '.reason // empty')

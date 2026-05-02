@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Initialize a new pipeline run.
 # Creates directory structure, state.json, audit/metrics logs, symlink.
-# Usage: pipeline-init <run-id> [--issue <N>] [--mode <mode>]
+# Usage: pipeline-init <run-id> [--issue <N>] [--mode <mode>] [--json] [--simple-output]
+# --json           Emit JSON on stdout (default: human-readable only)
+# --simple-output  Force human-readable mode (override FACTORY_JSON=1)
 
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
@@ -18,9 +20,11 @@ force=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --issue) issue="$2"; shift 2 ;;
-    --mode) mode="$2"; shift 2 ;;
-    --force) force=1; shift ;;
+    --issue)         issue="$2"; shift 2 ;;
+    --mode)          mode="$2";  shift 2 ;;
+    --force)         force=1;    shift ;;
+    --json)          export FACTORY_JSON=1; shift ;;
+    --simple-output) export FACTORY_JSON=0; shift ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -157,4 +161,4 @@ jq -n \
   --arg run_id "$run_id" \
   --arg state_path "$run_dir/state.json" \
   --argjson created true \
-  '{run_id: $run_id, state_path: $state_path, created: $created}'
+  '{run_id: $run_id, state_path: $state_path, created: $created}' | json_emit

@@ -6,6 +6,10 @@
 # Usage:
 #   pipeline-quota-gate-cli --run-id <id> --tier <routine|feature|security>
 #                           --boundary <label> [--task-id <id>]
+#                           [--json] [--simple-output]
+#
+# --json           Emit JSON on stdout (default: human-readable only)
+# --simple-output  Force human-readable mode (override FACTORY_JSON=1)
 #
 # Exit codes mirror pipeline_quota_gate exactly:
 #   0 = proceed
@@ -25,12 +29,14 @@ task_id=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --run-id)   run_id="$2";   shift 2 ;;
-    --tier)     tier="$2";     shift 2 ;;
-    --boundary) boundary="$2"; shift 2 ;;
-    --task-id)  task_id="$2";  shift 2 ;;
+    --run-id)        run_id="$2";   shift 2 ;;
+    --tier)          tier="$2";     shift 2 ;;
+    --boundary)      boundary="$2"; shift 2 ;;
+    --task-id)       task_id="$2";  shift 2 ;;
+    --json)          export FACTORY_JSON=1; shift ;;
+    --simple-output) export FACTORY_JSON=0; shift ;;
     -h|--help)
-      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
@@ -54,6 +60,7 @@ case $rc in
   *) action="error" ;;
 esac
 
+human_summary "quota gate [$boundary]: $action (tier=$tier, rc=$rc)"
 jq -cn \
   --arg action "$action" \
   --argjson rc "$rc" \
@@ -61,6 +68,6 @@ jq -cn \
   --arg tier "$tier" \
   --arg boundary "$boundary" \
   --arg task_id "$task_id" \
-  '{action:$action, rc:$rc, run_id:$run_id, tier:$tier, boundary:$boundary, task_id:$task_id}'
+  '{action:$action, rc:$rc, run_id:$run_id, tier:$tier, boundary:$boundary, task_id:$task_id}' | json_emit
 
 exit $rc

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Pre-flight validation: checks git, gh auth, required agents/skills, data dir.
-# Usage: pipeline-validate [--strict] [--no-clean-check]
+# Usage: pipeline-validate [--strict] [--no-clean-check] [--json] [--simple-output]
+# --json           Emit JSON on stdout (default: human-readable only)
+# --simple-output  Force human-readable mode (override FACTORY_JSON=1)
 # Exit: 0=all pass, 1=failure
 
 source "$(dirname "$0")/pipeline-lib.sh"
@@ -11,8 +13,10 @@ clean_check=true
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --strict) strict=true; shift ;;
-    --no-clean-check) clean_check=false; shift ;;
+    --strict)        strict=true;          shift ;;
+    --no-clean-check) clean_check=false;   shift ;;
+    --json)          export FACTORY_JSON=1; shift ;;
+    --simple-output) export FACTORY_JSON=0; shift ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -122,7 +126,7 @@ fi
 jq -n \
   --argjson valid "$valid" \
   --argjson checks "$checks_json" \
-  '{valid: $valid, checks: $checks}'
+  '{valid: $valid, checks: $checks}' | json_emit
 
 if [[ "$failed" == "true" ]]; then
   exit 1

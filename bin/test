@@ -40,6 +40,10 @@ else
   requested=("${SUITES[@]}")
 fi
 
+# Tests rely on capturing JSON from pipeline scripts. Opt in globally so suites
+# don't need individual --json flags on each invocation.
+export FACTORY_JSON=1
+
 total_pass=0
 total_fail=0
 failed_suites=()

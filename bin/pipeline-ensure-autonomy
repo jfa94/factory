@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Verify that the current session has up-to-date autonomous-mode settings.
-# Usage: pipeline-ensure-autonomy
+# Usage: pipeline-ensure-autonomy [--json] [--simple-output]
+#
+# --json           Emit JSON on stdout (default: human-readable only)
+# --simple-output  Force human-readable mode (override FACTORY_JSON=1)
 #
 # Checks whether $CLAUDE_PLUGIN_DATA/merged-settings.json exists and was
 # generated from the current plugin version. Regenerates the file if it is
@@ -48,11 +51,20 @@ fi
 
 merged_settings="${CLAUDE_PLUGIN_DATA:-}/merged-settings.json"
 
+# Parse --json / --simple-output flags (no other positional args expected)
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json)          export FACTORY_JSON=1; shift ;;
+    --simple-output) export FACTORY_JSON=0; shift ;;
+    *) log_error "unknown flag: $1"; exit 1 ;;
+  esac
+done
+
 _emit() {
   local status="$1" message="$2"
   human_summary "autonomy check: $message"
-  printf '{"status":"%s","message":"%s","settings_path":"%s"}\n' \
-    "$status" "$message" "$merged_settings"
+  json_emit "$(printf '{"status":"%s","message":"%s","settings_path":"%s"}' \
+    "$status" "$message" "$merged_settings")"
 }
 
 _regenerate() {
@@ -208,16 +220,16 @@ if [[ "$cache_state" == "missing" || "$cache_state" == "too-stale" ]]; then
   fi
   log_warn "$msg"
   human_summary "autonomy check: stale-cache (${cache_state}, age=${cache_age}s)"
-  printf '{"status":"stale-cache","reason":"%s","message":"%s","settings_path":"%s","cache_age":%d}\n' \
-    "$cache_state" "$msg" "$merged_settings" "$cache_age"
+  json_emit "$(printf '{"status":"stale-cache","reason":"%s","message":"%s","settings_path":"%s","cache_age":%d}' \
+    "$cache_state" "$msg" "$merged_settings" "$cache_age")"
   exit 2
 fi
 
 if [[ "$cache_state" == "warn" ]]; then
   log_warn "usage-cache.json is ${cache_age}s old (>300s); statusline may have skipped a tick"
   human_summary "autonomy check: autonomous mode active (version $current_version) [cache ${cache_age}s old]"
-  printf '{"status":"ok","message":"autonomous mode active (version %s)","settings_path":"%s","cache_warning":"usage-cache.json is %ds old","cache_age":%d}\n' \
-    "$current_version" "$merged_settings" "$cache_age" "$cache_age"
+  json_emit "$(printf '{"status":"ok","message":"autonomous mode active (version %s)","settings_path":"%s","cache_warning":"usage-cache.json is %ds old","cache_age":%d}' \
+    "$current_version" "$merged_settings" "$cache_age" "$cache_age")"
 else
   _emit "ok" "autonomous mode active (version $current_version)"
 fi

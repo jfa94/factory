@@ -110,7 +110,7 @@ The two-phase TDD flow is fully handled by the wrapper:
 ### 1. Autonomy check
 
 ```bash
-result=$(pipeline-ensure-autonomy)
+result=$(pipeline-ensure-autonomy --json)
 status=$(printf '%s' "$result" | jq -r '.status')
 settings_path=$(printf '%s' "$result" | jq -r '.settings_path')
 ```
