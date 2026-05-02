@@ -216,13 +216,23 @@ The orchestrator worktree is created at Step 6a of `commands/run.md` to isolate 
 
 **Worktree field semantics:**
 
-The pipeline writes three worktree fields per task:
+The pipeline writes worktree fields per task:
 
 - `test_writer_worktree` — set when the test-writer subagent stops
 - `executor_worktree` — set when the task-executor subagent stops
+- `reviewer_worktree_<role>` — set when a reviewer subagent stops (e.g., `reviewer_worktree_quality_reviewer`, `reviewer_worktree_implementation_reviewer`)
 - `worktree` — bare field for backward compatibility; last-writer-wins (executor overwrites test-writer)
 
 Downstream readers (ship, cleanup, score, rescue, red-test verification) consume the bare `worktree` field. The namespaced fields exist for debugging and audit trails.
+
+**Reviewer status field semantics:**
+
+For reviewer roles (`implementation-reviewer`, `quality-reviewer`, `security-reviewer`, `architecture-reviewer`), the `SubagentStop` hook writes:
+
+- `reviewer_status` — shared field (last-writer-wins across all reviewer roles); retained for backward compatibility
+- `<role>_status` — per-role field (e.g., `implementation_reviewer_status`, `quality_reviewer_status`, `security_reviewer_status`, `architecture_reviewer_status`); underscores replace hyphens
+
+Per-role fields allow the orchestrator to track individual reviewer verdicts when multiple reviewers run in parallel for security-tier tasks.
 
 ---
 

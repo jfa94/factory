@@ -51,6 +51,7 @@ run_dir=$(readlink "$current_link" 2>/dev/null) || exit 0
 input=$(cat)
 
 agent_type=$(printf '%s' "$input" | jq -r '.agent_type // empty' 2>/dev/null)
+agent_type="${agent_type#factory:}"
 
 if [[ -z "$agent_type" ]]; then
   if [[ -n "$input" ]]; then

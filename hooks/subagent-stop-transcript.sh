@@ -32,6 +32,7 @@ run_id=$(basename "$run_dir")
 
 input=$(cat 2>/dev/null || printf '{}')
 agent_type=$(printf '%s' "$input" | jq -r '.agent_type // .subagent_type // empty')
+agent_type="${agent_type#factory:}"
 last_msg=$(printf '%s' "$input" | jq -r '.last_assistant_message // empty')
 transcript=$(printf '%s' "$input" | jq -r '.agent_transcript_path // .transcript_path // empty')
 [[ -z "$agent_type" ]] && exit 0
@@ -67,7 +68,10 @@ fi
 # For task-executor: scan transcript for `cwd` entries under the plugin's
 # ephemeral worktree root (.claude/worktrees/). First match wins.
 worktree=""
-if [[ ( "$agent_type" == "task-executor" || "$agent_type" == "test-writer" ) && -f "$transcript" ]]; then
+if [[ ( "$agent_type" == "task-executor" || "$agent_type" == "test-writer" \
+     || "$agent_type" == "implementation-reviewer" || "$agent_type" == "quality-reviewer" \
+     || "$agent_type" == "security-reviewer" || "$agent_type" == "architecture-reviewer" ) \
+     && -f "$transcript" ]]; then
   worktree=$({ grep -oE '"cwd":[[:space:]]*"[^"]*\.claude/worktrees/[^"]+"' "$transcript" 2>/dev/null || true; } \
     | head -1 \
     | sed -E 's/.*"cwd":[[:space:]]*"([^"]+)".*/\1/')
@@ -124,8 +128,17 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
       fi
       ;;
     implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer)
+      # Shared key (last-writer-wins, retained for back-compat)
       pipeline-state task-write "$run_id" "$task_id" reviewer_status "\"$status\"" \
         >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+      # Per-role key: implementation_reviewer_status, quality_reviewer_status, etc.
+      _role_key="${agent_type//-/_}_status"
+      pipeline-state task-write "$run_id" "$task_id" "$_role_key" "\"$status\"" \
+        >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+      if [[ -n "$worktree" ]]; then
+        pipeline-state task-write "$run_id" "$task_id" "reviewer_worktree_${agent_type//-/_}" "\"$worktree\"" \
+          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+      fi
       if [[ -n "$review_path" ]]; then
         pipeline-state task-array-append "$run_id" "$task_id" review_files "\"$review_path\"" >/dev/null \
           || printf '[subagent-stop-transcript] WARN: review_files append failed for %s\n' "$task_id" >&2

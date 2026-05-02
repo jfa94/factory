@@ -181,6 +181,17 @@ Rules:
 Final verdict: **APPROVED**, **REQUEST_CHANGES** (any finding with evidence), or **NEEDS_DISCUSSION** (unresolvable UNCERTAIN items that need human judgment).
 
 Keep total findings to 3–7. If you have more, prioritize by (likelihood × impact) and drop the rest.
+
+After the JSON block, emit this prose section (required as a fallback if the JSON block is unparseable):
+
+```
+## Verdict
+VERDICT: <APPROVE|REQUEST_CHANGES|NEEDS_DISCUSSION>
+CONFIDENCE: HIGH
+BLOCKERS: <count of critical/important findings>
+```
+
+Use `APPROVE` (not `APPROVED`) in this section. The JSON block remains canonical; this block is the parser's safety net.
 </EXTREMELY-IMPORTANT>
 
 Quote the code → trace the path → ship the verdict.

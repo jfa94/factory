@@ -215,6 +215,14 @@ case "$action" in
     name="${1:?missing branch name}"
     path="${2:?missing worktree path}"
     base="${3:-staging}"
+    # Always fork from the live remote tip rather than the local ref, which can
+    # be stale by the time a second worktree is created during a long run.
+    if [[ "$base" == "staging" ]]; then
+      git fetch origin staging --quiet 2>/dev/null || true
+      if git rev-parse --verify origin/staging >/dev/null 2>&1; then
+        base="origin/staging"
+      fi
+    fi
     if ! err=$(git worktree add -b "$name" "$path" "$base" 2>&1 >/dev/null); then
       log_error "git worktree add failed: $err"
       exit 1

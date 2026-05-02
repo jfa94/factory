@@ -173,7 +173,7 @@ This skill injects Actor-Critic methodology into any reviewer. It provides:
 
 **Structured output:**
 
-The skill enforces a specific output format so `pipeline-parse-review` can extract verdicts and findings programmatically.
+The skill enforces a specific output format so `pipeline-parse-review` can extract verdicts and findings programmatically. All reviewers emit a JSON code block as their primary output. Additionally, they append a prose `## Verdict` block after the JSON as a parser safety net — if the JSON block is malformed or unparseable, the parser falls back to extracting the verdict from this prose section.
 
 ---
 

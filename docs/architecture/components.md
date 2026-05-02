@@ -293,7 +293,7 @@ Fresh-context code review with semi-formal reasoning and structured findings.
 - Reviews cold (zero implementation context)
 - Uses evidence-first grounding: every finding quotes the code
 - Signal-over-noise filtering: scores likelihood × impact, drops low-signal findings
-- Output is structured and parseable by `pipeline-parse-review`
+- Output is a JSON code block followed by a prose `## Verdict` section (parser safety net)
 - Spawned for security-tier tasks alongside implementation-reviewer
 
 ---
@@ -421,6 +421,8 @@ Validates subagent artifacts on completion.
 
 - Verifies expected output files exist
 - Records completion status in parent state
+- For reviewer roles, writes both a shared `reviewer_status` field (last-writer-wins) and per-role fields (`implementation_reviewer_status`, `quality_reviewer_status`, etc.)
+- For reviewer roles, writes `reviewer_worktree_<role>` fields (e.g., `reviewer_worktree_quality_reviewer`)
 
 ---
 

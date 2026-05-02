@@ -352,16 +352,16 @@ pipeline-branch task-commit <task-id> --worktree <path> [--message <msg>]
 
 **Actions:**
 
-| Action            | Description                                        |
-| ----------------- | -------------------------------------------------- |
-| `staging-init`    | Create or reconcile staging branch from base       |
-| `commit-spec`     | Commit spec directory to staging                   |
-| `create`          | Create task branch from base (default: staging)    |
-| `worktree-create` | Create worktree for branch                         |
-| `worktree-remove` | Remove worktree and optionally delete branch       |
-| `exists`          | Check if branch exists (local or remote)           |
-| `naming`          | Generate branch name from task-id and issue number |
-| `task-commit`     | Finalize task changes in worktree                  |
+| Action            | Description                                            |
+| ----------------- | ------------------------------------------------------ |
+| `staging-init`    | Create or reconcile staging branch from base           |
+| `commit-spec`     | Commit spec directory to staging                       |
+| `create`          | Create task branch from base (default: staging)        |
+| `worktree-create` | Create worktree for branch (forks from origin/staging) |
+| `worktree-remove` | Remove worktree and optionally delete branch           |
+| `exists`          | Check if branch exists (local or remote)               |
+| `naming`          | Generate branch name from task-id and issue number     |
+| `task-commit`     | Finalize task changes in worktree                      |
 
 **task-commit flags:**
 
@@ -369,6 +369,10 @@ pipeline-branch task-commit <task-id> --worktree <path> [--message <msg>]
 | ------------ | -------- | --------------------- |
 | `--worktree` | Yes      | Path to task worktree |
 | `--message`  | No       | Custom commit message |
+
+**worktree-create behavior:**
+
+When the base is `staging` (the default), the script fetches `origin/staging` and resolves the base to `origin/staging` before running `git worktree add`. This ensures worktrees always fork from the live remote tip rather than a potentially stale local ref. This prevents drift issues when multiple worktrees are created during long-running pipeline executions.
 
 ---
 
