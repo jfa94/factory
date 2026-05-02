@@ -251,8 +251,8 @@ Runs once, before task execution.
    ```bash
    pipeline-validate-tasks ".state/$run_id/tasks.json" > ".state/$run_id/validated.json"
    for t in $(jq -r '.execution_order[].task_id' ".state/$run_id/validated.json"); do
-     row=$(jq -c --arg t "$t" '.tasks[] | select(.task_id == $t)' ".state/$run_id/tasks.json")
-     pipeline-state task-write "$run_id" "$t" "" "$row"
+     row=$(jq -c --arg t "$t" '(.tasks // .)[] | select(.task_id == $t)' ".state/$run_id/tasks.json")
+     pipeline-state task-init "$run_id" "$t" "$row"
    done
    pipeline-state write "$run_id" .execution_order "$(jq -c .execution_order ".state/$run_id/validated.json")"
    ```

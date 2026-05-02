@@ -73,6 +73,10 @@ CONTENT_PATTERNS=(
   'aws_secret_access_key[[:space:]]*=[[:space:]]*[A-Za-z0-9/+=]{40}'
   '"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN'
   '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----'
+  'github_pat_[A-Za-z0-9_]{60,}'
+  'sk-proj-[A-Za-z0-9_-]{40,}'
+  'nvapi-[A-Za-z0-9_-]{40,}'
+  'xai-[A-Za-z0-9]{40,}'
 )
 
 # Load user allowlist of safe patterns (regex). Absent config → empty list.

@@ -184,14 +184,17 @@ if [[ "$remove_worktrees" == "true" ]]; then
 fi
 
 # --- Delete spec-handoff/<run_id> branch (current run) ---
-# Consumed (merged into staging) before cleanup runs; safe to delete unconditionally.
 spec_handoff_branch="spec-handoff/${run_id}"
 spec_handoff_deleted=0
 
 if git show-ref --verify --quiet "refs/heads/${spec_handoff_branch}" 2>/dev/null; then
-  if git branch -D "$spec_handoff_branch" 2>/dev/null; then
-    log_info "deleted local spec-handoff branch: $spec_handoff_branch"
-    spec_handoff_deleted=1
+  if git merge-base --is-ancestor "$spec_handoff_branch" "origin/staging" 2>/dev/null; then
+    if git branch -d "$spec_handoff_branch" 2>/dev/null; then
+      log_info "deleted local spec-handoff branch: $spec_handoff_branch"
+      spec_handoff_deleted=1
+    fi
+  else
+    log_warn "spec-handoff branch '$spec_handoff_branch' is not an ancestor of origin/staging — skipping local delete"
   fi
 fi
 if git ls-remote --exit-code --heads origin "$spec_handoff_branch" &>/dev/null; then

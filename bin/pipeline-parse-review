@@ -197,8 +197,8 @@ esac
 declared_blockers=$(printf '%s\n' "$verdict_section" | awk -F: '/^BLOCKERS:/{gsub(/[ \t]/,"",$2); print $2; exit}')
 [[ -z "$declared_blockers" ]] && declared_blockers=0
 
-# Round is informational and may appear in the body or block — accept either.
-round=$(printf '%s' "$raw" | grep 'ROUND:' | grep -oE '[0-9]+' | head -1)
+# Round is informational — scope to verdict_section to avoid prose quoting "ROUND: N".
+round=$(printf '%s\n' "$verdict_section" | grep 'ROUND:' | grep -oE '[0-9]+' | head -1)
 round="${round:-1}"
 
 # Parse findings by iterating line-by-line through the file

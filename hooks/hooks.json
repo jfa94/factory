@@ -72,6 +72,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop-transcript.sh",
+            "timeout": 15,
+            "statusMessage": "Recording subagent artifacts to state"
+          },
+          {
+            "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop-gate.sh",
             "timeout": 10,
             "statusMessage": "Validating subagent artifacts"

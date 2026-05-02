@@ -30,6 +30,16 @@
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
+# Agent type name constants — single source of truth; update here when agent
+# definition files are renamed.
+readonly _AT_TEST_WRITER="test-writer"
+readonly _AT_TASK_EXECUTOR="task-executor"
+readonly _AT_IMPL_REVIEWER="implementation-reviewer"
+readonly _AT_QUALITY_REVIEWER="quality-reviewer"
+readonly _AT_SECURITY_REVIEWER="security-reviewer"
+readonly _AT_ARCH_REVIEWER="architecture-reviewer"
+readonly _AT_SCRIBE="scribe"
+
 run_id="${1:?missing run-id}"
 task_id="${2:?missing task-id}"
 shift 2
@@ -210,7 +220,7 @@ _stage_preflight() {
 
   _task_row=""
   if [[ -f "$spec_path/tasks.json" ]]; then
-    _task_row=$(jq -c --arg t "$task_id" '.tasks[] | select(.task_id == $t)' "$spec_path/tasks.json" 2>/dev/null || true)
+    _task_row=$(jq -c --arg t "$task_id" '(.tasks // .)[] | select(.task_id == $t)' "$spec_path/tasks.json" 2>/dev/null || true)
   fi
   _tw_criteria=$(printf '%s' "${_task_row:-{\}}" | jq -r '(.acceptance_criteria // []) | map("- " + .) | join("\n")' 2>/dev/null || true)
   _tw_tests_to_write=$(printf '%s' "${_task_row:-{\}}" | jq -r '(.tests_to_write // []) | map("- " + .) | join("\n")' 2>/dev/null || true)
@@ -358,10 +368,31 @@ _verify_red_tests() {
   custom_cmd=$(read_config '.quality.redTestCommand' '')
   if [[ -n "$custom_cmd" ]]; then
     log_info "red-test verification: using .quality.redTestCommand escape hatch task_id=\"$task_id\""
+    local cmd_array=()
+    read -ra cmd_array <<< "$custom_cmd"
+    # Guard: no shell metacharacters in any token
+    local _cc_elem
+    for _cc_elem in "${cmd_array[@]}"; do
+      if [[ "$_cc_elem" =~ [';''|''&''$''`''('\'')''\''<''>''!'\\] ]]; then
+        log_error "red-test verification: .quality.redTestCommand contains shell metacharacters — refusing task_id=\"$task_id\""
+        _task_write quality_gates.red_test '{"ok":false,"reason":"unsafe_command"}'
+        return 1
+      fi
+    done
+    # Guard: executable basename must be on allowlist
+    local _allowed_runners=( pytest vitest jest go cargo deno mocha phpunit rspec ruby bundle )
+    local _bin="${cmd_array[0]##*/}" _allowed=false _r
+    for _r in "${_allowed_runners[@]}"; do
+      [[ "$_bin" == "$_r" ]] && _allowed=true && break
+    done
+    if ! $_allowed; then
+      log_error "red-test verification: .quality.redTestCommand runner '$_bin' not in allowlist — refusing task_id=\"$task_id\""
+      _task_write quality_gates.red_test "{\"ok\":false,\"reason\":\"unallowed_runner\",\"runner\":\"$_bin\"}"
+      return 1
+    fi
     local out_log rc=0
     out_log=$(mktemp)
-    # shellcheck disable=SC2086
-    (cd "$tw_wt" && $custom_cmd "${new_tests[@]}" >"$out_log" 2>&1) || rc=$?
+    (cd "$tw_wt" && "${cmd_array[@]}" "${new_tests[@]}" >"$out_log" 2>&1) || rc=$?
     local out
     out=$(cat "$out_log" 2>/dev/null || printf '')
     rm -f "$out_log"
@@ -465,9 +496,17 @@ _stage_preexec_tests() {
   log_step_begin "preexec_tests" "task_id=\"$task_id\""
 
   if _already_past preexec_tests_done; then
-    t1=$(_now_ms)
-    log_step_end "preexec_tests" "skipped" "$((t1-t0))" "task_id=\"$task_id\""
-    return 0
+    # Guard: only skip if a prompt hash was recorded (i.e., executor was actually
+    # spawned with a real prompt, not a null-row prompt from a broken seed).
+    local _phash
+    _phash=$(_task_field last_prompt_hash 2>/dev/null || true)
+    _phash=$(_unquote_json_string "$_phash")
+    if [[ -n "$_phash" && "$_phash" != "null" ]]; then
+      t1=$(_now_ms)
+      log_step_end "preexec_tests" "skipped" "$((t1-t0))" "task_id=\"$task_id\""
+      return 0
+    fi
+    log_warn "preexec_tests_done set but last_prompt_hash missing — rebuilding executor prompt for $task_id"
   fi
 
   local tw_status
@@ -547,6 +586,11 @@ _stage_preexec_tests() {
   spec_path=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
   holdout_pct=$(read_config '.quality.holdoutPercent' '20')
   task_json=$(pipeline-state task-read "$run_id" "$task_id" 2>/dev/null)
+  # Fallback: if state doesn't have the task row yet (e.g., task-init wasn't
+  # called), read directly from the spec tasks.json so the prompt is never null.
+  if [[ -z "$task_json" || "$task_json" == "null" ]] && [[ -n "$spec_path" ]] && [[ -f "$spec_path/tasks.json" ]]; then
+    task_json=$(jq -c --arg t "$task_id" '(.tasks // .)[] | select(.task_id == $t)' "$spec_path/tasks.json" 2>/dev/null || true)
+  fi
   prompt_file=$(_prompt_path executor)
   local args=()
   [[ -n "$spec_path" ]] && args+=(--spec-path "$spec_path")
@@ -562,6 +606,9 @@ _stage_preexec_tests() {
   { printf '[task:%s]\n' "$task_id"; cat "$_tmp_prompt"; } > "$prompt_file"
   rm -f "$_tmp_prompt"
 
+  local _phash_val
+  _phash_val=$(sha256sum "$prompt_file" 2>/dev/null | awk '{print $1}' || md5sum "$prompt_file" 2>/dev/null | awk '{print $1}' || printf 'built')
+  _task_write last_prompt_hash "\"$_phash_val\""
   _task_write stage '"preexec_tests_done"'
 
   local classify_json model max_turns agents_json
@@ -578,7 +625,7 @@ _stage_preexec_tests() {
     --arg pf   "$prompt_file" \
     --arg m    "$model" \
     --argjson mt "$max_turns" \
-    '[{subagent_type:$role, isolation:"worktree", model:$m, maxTurns:$mt, prompt_file:$pf}]')
+    '[{subagent_type:$role, model:$m, maxTurns:$mt, prompt_file:$pf}]')
   _emit_manifest postexec "$agents_json"
 
   t1=$(_now_ms)
@@ -1055,7 +1102,7 @@ _stage_postreview() {
     } > "$pf"
     local agents_json
     agents_json=$(jq -cn --arg pf "$pf" \
-      '[{subagent_type:"task-executor", isolation:"worktree", model:"sonnet", maxTurns:60, prompt_file:$pf}]')
+      '[{subagent_type:"task-executor", model:"sonnet", maxTurns:60, prompt_file:$pf}]')
     _emit_manifest postexec "$agents_json"
     t1=$(_now_ms)
     log_step_end "postreview" "spawn" "$((t1-t0))" "task_id=\"$task_id\"" "attempt=$attempts"
@@ -1204,7 +1251,7 @@ _stage_ship() {
         printf '[task:%s]\nFix failing CI on PR for task %s.\nSTATUS: DONE|...\n' "$task_id" "$task_id" > "$pf"
         local agents_json
         agents_json=$(jq -cn --arg pf "$pf" \
-          '[{subagent_type:"task-executor", isolation:"worktree", model:"sonnet", maxTurns:60, prompt_file:$pf}]')
+          '[{subagent_type:"task-executor", model:"sonnet", maxTurns:60, prompt_file:$pf}]')
         _emit_manifest ship "$agents_json"
         t1=$(_now_ms)
         log_step_end "ship" "spawn" "$((t1-t0))" "task_id=\"$task_id\"" "attempt=$attempts"

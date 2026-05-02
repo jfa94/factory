@@ -89,19 +89,36 @@ esac
 if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
   case "$agent_type" in
     test-writer)
-      pipeline-state task-write "$run_id" "$task_id" test_writer_status "\"$status\"" >/dev/null 2>&1 || true
+      pipeline-state task-write "$run_id" "$task_id" test_writer_status "\"$status\"" \
+        >/dev/null 2>>"$run_dir/transcript-errors.log" || true
       if [[ -n "$worktree" ]]; then
-        pipeline-state task-write "$run_id" "$task_id" worktree "\"$worktree\"" >/dev/null 2>&1 || true
+        pipeline-state task-write "$run_id" "$task_id" test_writer_worktree "\"$worktree\"" \
+          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+        _tw_branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+        _tw_commit=$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)
+        if [[ -n "$_tw_branch" && "$_tw_branch" != "HEAD" ]]; then
+          pipeline-state task-write "$run_id" "$task_id" prior_work_dir "\"$worktree\"" \
+            >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+          pipeline-state task-write "$run_id" "$task_id" prior_branch "\"$_tw_branch\"" \
+            >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+        fi
+        if [[ -n "$_tw_commit" ]]; then
+          pipeline-state task-write "$run_id" "$task_id" prior_commit "\"$_tw_commit\"" \
+            >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+        fi
       fi
       ;;
     task-executor)
-      pipeline-state task-write "$run_id" "$task_id" executor_status "\"$status\"" >/dev/null 2>&1 || true
+      pipeline-state task-write "$run_id" "$task_id" executor_status "\"$status\"" \
+        >/dev/null 2>>"$run_dir/transcript-errors.log" || true
       if [[ -n "$worktree" ]]; then
-        pipeline-state task-write "$run_id" "$task_id" worktree "\"$worktree\"" >/dev/null 2>&1 || true
+        pipeline-state task-write "$run_id" "$task_id" executor_worktree "\"$worktree\"" \
+          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
       fi
       ;;
     implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer)
-      pipeline-state task-write "$run_id" "$task_id" reviewer_status "\"$status\"" >/dev/null 2>&1 || true
+      pipeline-state task-write "$run_id" "$task_id" reviewer_status "\"$status\"" \
+        >/dev/null 2>>"$run_dir/transcript-errors.log" || true
       if [[ -n "$review_path" ]]; then
         pipeline-state task-array-append "$run_id" "$task_id" review_files "\"$review_path\"" >/dev/null \
           || printf '[subagent-stop-transcript] WARN: review_files append failed for %s\n' "$task_id" >&2

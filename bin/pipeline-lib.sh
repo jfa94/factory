@@ -492,14 +492,21 @@ pipeline_quota_gate() {
         log_warn "quota gate [$boundary_label]: router returned wait with no wait_minutes — ending gracefully"
         return 2
       fi
-      local want_sleep_sec=$(( wait_min * 60 ))
-      local do_sleep_sec=$(( want_sleep_sec < sleep_cap_sec ? want_sleep_sec : sleep_cap_sec ))
-      local slept_min=$(( (do_sleep_sec + 59) / 60 ))
-      log_info "quota gate [$boundary_label]: over threshold — sleeping ${slept_min}m of ${wait_min}m (cycle $((cycles + 1))/${max_cycles})"
-      sleep "$do_sleep_sec"
-
-      # Record pause time so circuit breaker excludes it from runtime.
+      # Wall-clock budget: abort before sleeping if already spent >= 30 min waiting.
       prior=$(pipeline-state read "$run_id" '.circuit_breaker.pause_minutes // 0' 2>/dev/null || printf '0')
+      local wall_budget_min="${FACTORY_QUOTA_WALL_BUDGET_MIN:-$(read_config '.quota.wallBudgetMin' '30')}"
+      if (( prior >= wall_budget_min )); then
+        log_warn "quota gate [$boundary_label]: accumulated ${prior}m quota wait (budget=${wall_budget_min}m) — surfacing human gate"
+        return 2
+      fi
+      local want_sleep_sec=$(( wait_min * 60 ))
+      # Exponential back-off: 120s base, doubles each cycle, capped at sleep_cap_sec.
+      local exp_cap_sec=$(( 120 * (1 << cycles) ))
+      (( exp_cap_sec > sleep_cap_sec )) && exp_cap_sec=$sleep_cap_sec
+      local do_sleep_sec=$(( want_sleep_sec < exp_cap_sec ? want_sleep_sec : exp_cap_sec ))
+      local slept_min=$(( (do_sleep_sec + 59) / 60 ))
+      log_info "quota gate [$boundary_label]: over threshold — sleeping ${slept_min}m of ${wait_min}m (cycle $((cycles + 1))/${max_cycles}, exp_cap=${exp_cap_sec}s)"
+      sleep "$do_sleep_sec"
       if ! pipeline-state write "$run_id" '.circuit_breaker.pause_minutes' "$(( prior + slept_min ))" 2>/dev/null; then
         log_warn "quota gate [$boundary_label]: failed to write pause_minutes for run_id=$run_id"
       fi
@@ -772,7 +779,7 @@ task_tdd_exempt() {
   local tfile flag
   for tfile in "${spec_dir:+$spec_dir/tasks.json}" specs/current/tasks.json; do
     [[ -z "$tfile" || ! -f "$tfile" ]] && continue
-    flag=$(jq -r --arg id "$task_id" '.tasks[]? | select(.task_id==$id) | .tdd_exempt // false' "$tfile" 2>/dev/null || true)
+    flag=$(jq -r --arg id "$task_id" '(.tasks // .)[]? | select(.task_id==$id) | .tdd_exempt // false' "$tfile" 2>/dev/null || true)
     [[ "$flag" == "true" ]] && return 0
   done
   if [[ -f package.json ]]; then
@@ -916,7 +923,9 @@ validate_findings() {
   dropped=0
   for ((i=0; i<n; i++)); do
     q=$(printf '%s' "$json" | jq -r ".findings[$i].verbatim_line // \"\"")
-    if [[ ${#q} -ge 10 ]] && grep -qF -- "$q" "$diff_file"; then
+    q_norm=$(printf '%s' "$q" | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
+    diff_norm=$(tr -s '[:space:]' ' ' < "$diff_file")
+    if [[ ${#q_norm} -ge 10 ]] && printf '%s\n' "$diff_norm" | grep -qF -- "$q_norm"; then
       kept=$(printf '%s' "$json" | jq --argjson k "$kept" --argjson i "$i" '$k + [.findings[$i]]')
     else
       dropped=$((dropped + 1))

@@ -22,7 +22,7 @@ set -euo pipefail
 # shellcheck source=/dev/null
 source "$(dirname "$0")/_security-common.sh"
 
-PROTECTED_BRANCHES=("main" "master" "develop" "staging")
+PROTECTED_BRANCHES=("main" "master" "develop" "staging" "production" "release" "prod")
 PIPELINE_MANAGED=("staging")  # writable from autonomous mode in orchestrator worktree
 
 # Build an alternation regex with explicit anchors so `mainly-fixes` !~ main.

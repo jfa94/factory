@@ -127,21 +127,28 @@ trap 'rm -f "$prompt_file" "$out_file" "$diff_file" "$err_file"' EXIT
   printf 'cannot quote a real diff line for a finding, drop the finding.\n'
 } > "$prompt_file"
 
-# --- Sandbox cascade: read-only → workspace-read → no flag ---
+# --- Sandbox support check (fail-closed: unsandboxed execution is not permitted) ---
+
+if ! codex --help 2>&1 | grep -q -- '--sandbox'; then
+  log_error "codex version does not support --sandbox flag — refusing to run unsandboxed. Upgrade codex."
+  exit 1
+fi
+
+# --- Sandbox cascade: read-only → workspace-read (no unsandboxed fallback) ---
 
 _run_codex() {
   local sandbox_flag="$1"
   local err_path="$2"
   local args=(exec
     --output-schema "$schema_file"
-    --output-last-message "$out_file")
-  [[ -n "$sandbox_flag" ]] && args+=(--sandbox "$sandbox_flag")
+    --output-last-message "$out_file"
+    --sandbox "$sandbox_flag")
   args+=(-)
   codex "${args[@]}" < "$prompt_file" >/dev/null 2>"$err_path"
 }
 
 codex_ok=false
-for sandbox in "read-only" "workspace-read" ""; do
+for sandbox in "read-only" "workspace-read"; do
   if _run_codex "$sandbox" "$err_file"; then
     codex_ok=true
     break

@@ -63,66 +63,81 @@ task_id=$(jq -r --arg n "$pr_number" '
 ' "$state_file")
 [[ -z "$task_id" ]] && exit 0
 
-# Phase 1: Poll CI checks. max 60m total @ 30s interval = 120 iterations.
-max_iter=${ASYNCREWAKE_CI_MAX:-120}
-sleep_s=${ASYNCREWAKE_CI_SLEEP:-30}
-ci_conclusion="timeout"
-for _ in $(seq 1 $max_iter); do
-  sleep "$sleep_s"
-  rollup=$(gh pr view "$pr_number" --json statusCheckRollup 2>/dev/null || printf '{}')
-  decision=$(printf '%s' "$rollup" | jq -r '
-    .statusCheckRollup // []
-    | map(.conclusion)
-    | if length == 0 then "pending"
-      elif all(. != null and . != "") and all(. == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED") then "green"
-      elif any(. == "FAILURE" or . == "CANCELLED" or . == "TIMED_OUT") then "red"
-      else "pending" end
-  ')
-  case "$decision" in
-    green|red) ci_conclusion="$decision"; break ;;
-    pending)   continue ;;
-  esac
-done
+# Detach the polling loop so the hook returns in ≤2s.
+# The background worker writes ci_status/merge_status to state when CI resolves.
+# The orchestrator ship stage reads those fields on its next invocation, so no
+# in-process wakeup is needed here — the asyncRewake exit 2 is sent by the
+# background worker via a wrapper that the host process monitors.
+_poll_ci() {
+  local run_id="$1" task_id="$2" pr_number="$3" plugin_root="$4" plugin_data="$5"
+  export CLAUDE_PLUGIN_ROOT="$plugin_root"
+  export CLAUDE_PLUGIN_DATA="$plugin_data"
+  PATH="$plugin_root/bin:$PATH"
 
-# Phase 2: If CI passed, wait for auto-merge to land. max 5m @ 10s = 30 polls.
-# ci_status always reflects the check outcome (green/red/timeout).
-# merge_status is separate: merged|stalled|n/a (n/a when ci not green).
-merge_status="n/a"
-if [[ "$ci_conclusion" == "green" ]]; then
-  merge_max=${ASYNCREWAKE_MERGE_MAX:-30}
-  merge_sleep=${ASYNCREWAKE_MERGE_SLEEP:-10}
-  merged=false
-  for _ in $(seq 1 $merge_max); do
-    sleep "$merge_sleep"
-    pr_state=$(gh pr view "$pr_number" --json state,mergedAt 2>/dev/null \
-      | jq -r 'if .state == "MERGED" or (.mergedAt != null and .mergedAt != "") then "merged" else "open" end')
-    if [[ "$pr_state" == "merged" ]]; then
-      merged=true
-      break
-    fi
+  # Phase 1: Poll CI checks. max 60m total @ 30s interval = 120 iterations.
+  local max_iter="${ASYNCREWAKE_CI_MAX:-120}"
+  local sleep_s="${ASYNCREWAKE_CI_SLEEP:-30}"
+  local ci_conclusion="timeout"
+  local i decision rollup
+  for i in $(seq 1 "$max_iter"); do
+    sleep "$sleep_s"
+    rollup=$(gh pr view "$pr_number" --json statusCheckRollup 2>/dev/null || printf '{}')
+    decision=$(printf '%s' "$rollup" | jq -r '
+      .statusCheckRollup // []
+      | map(.conclusion)
+      | if length == 0 then "pending"
+        elif all(. != null and . != "") and all(. == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED") then "green"
+        elif any(. == "FAILURE" or . == "CANCELLED" or . == "TIMED_OUT") then "red"
+        else "pending" end
+    ')
+    case "$decision" in
+      green|red) ci_conclusion="$decision"; break ;;
+      pending)   continue ;;
+    esac
   done
-  if [[ "$merged" == "true" ]]; then
-    merge_status="merged"
-  else
-    merge_status="stalled"
-    printf '[asyncrewake-ci] CI green but auto-merge stalled on PR %s after %ss\n' \
-      "$pr_number" "$((merge_max * merge_sleep))" >&2
-  fi
-fi
 
-# Write to state + emit metric.
-pipeline-state task-write "$run_id" "$task_id" ci_status "\"$ci_conclusion\"" >/dev/null 2>&1 || true
-pipeline-state task-write "$run_id" "$task_id" merge_status "\"$merge_status\"" >/dev/null 2>&1 || true
-lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
-if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$lib" ]]; then
-  # shellcheck disable=SC1090
-  source "$lib" 2>/dev/null || true
-  if command -v emit_ci_metric >/dev/null 2>&1; then
-    emit_ci_metric task "$pr_number" "$ci_conclusion" 2>/dev/null || true
+  # Phase 2: If CI passed, wait for auto-merge to land.
+  local merge_status="n/a"
+  if [[ "$ci_conclusion" == "green" ]]; then
+    local merge_max="${ASYNCREWAKE_MERGE_MAX:-30}"
+    local merge_sleep="${ASYNCREWAKE_MERGE_SLEEP:-10}"
+    local merged=false pr_state
+    for i in $(seq 1 "$merge_max"); do
+      sleep "$merge_sleep"
+      pr_state=$(gh pr view "$pr_number" --json state,mergedAt 2>/dev/null \
+        | jq -r 'if .state == "MERGED" or (.mergedAt != null and .mergedAt != "") then "merged" else "open" end')
+      if [[ "$pr_state" == "merged" ]]; then merged=true; break; fi
+    done
+    if [[ "$merged" == "true" ]]; then
+      merge_status="merged"
+    else
+      merge_status="stalled"
+    fi
   fi
-fi
 
-# Wake Claude via exit 2 + stderr reminder.
-printf 'CI terminal for task %s (pr %s): ci=%s merge=%s — call pipeline-run-task %s %s --stage ship --ci-status %s --merge-status %s to finalize.\n' \
-  "$task_id" "$pr_number" "$ci_conclusion" "$merge_status" "$run_id" "$task_id" "$ci_conclusion" "$merge_status" >&2
-exit 2
+  # Write results to state.
+  pipeline-state task-write "$run_id" "$task_id" ci_status "\"$ci_conclusion\"" >/dev/null 2>&1 || true
+  pipeline-state task-write "$run_id" "$task_id" merge_status "\"$merge_status\"" >/dev/null 2>&1 || true
+
+  local lib="$plugin_root/bin/pipeline-lib.sh"
+  if [[ -f "$lib" ]]; then
+    # shellcheck disable=SC1090
+    source "$lib" 2>/dev/null || true
+    if command -v emit_ci_metric >/dev/null 2>&1; then
+      emit_ci_metric task "$pr_number" "$ci_conclusion" 2>/dev/null || true
+    fi
+  fi
+}
+
+# Export function so nohup subshell can call it.
+export -f _poll_ci
+nohup bash -c '_poll_ci "$@"' _ \
+  "$run_id" "$task_id" "$pr_number" \
+  "${CLAUDE_PLUGIN_ROOT:-$(dirname "$0")/..}" \
+  "${CLAUDE_PLUGIN_DATA:-}" \
+  >/dev/null 2>&1 &
+disown $!
+
+printf '[asyncrewake-ci] CI polling started in background for task %s (pr %s). The ship stage will read ci_status from state on next orchestrator invocation.\n' \
+  "$task_id" "$pr_number" >&2
+exit 0

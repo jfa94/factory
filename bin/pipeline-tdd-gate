@@ -42,12 +42,6 @@ _is_docs_path() {
     *) return 1 ;;
   esac
 }
-_is_config_path() {
-  case "$1" in
-    *.json|*.yml|*.yaml|*.toml|.gitignore) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
 _task_exempt() {
   task_tdd_exempt "$task_id" "$spec_dir"
@@ -100,7 +94,7 @@ while read -r sha; do
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
     if ! is_test_path "$f"; then
-      if ! _is_docs_path "$f" && ! _is_config_path "$f"; then
+      if ! _is_docs_path "$f"; then
         kind="impl"
       fi
     fi

@@ -58,12 +58,18 @@ fi
 # Supports both {total: {lines: {pct: N}}} and {total: {lines: N}} shapes
 extract_metrics() {
   local file="$1"
-  jq '{
-    lines: (if .total.lines | type == "object" then .total.lines.pct else .total.lines end // 0),
-    branches: (if .total.branches | type == "object" then .total.branches.pct else .total.branches end // 0),
-    functions: (if .total.functions | type == "object" then .total.functions.pct else .total.functions end // 0),
-    statements: (if .total.statements | type == "object" then .total.statements.pct else .total.statements end // 0)
-  }' "$file"
+  local result
+  result=$(jq '{
+    lines:      (if .total.lines      | type == "object" then .total.lines.pct      else .total.lines      end),
+    branches:   (if .total.branches   | type == "object" then .total.branches.pct   else .total.branches   end),
+    functions:  (if .total.functions  | type == "object" then .total.functions.pct  else .total.functions  end),
+    statements: (if .total.statements | type == "object" then .total.statements.pct else .total.statements end)
+  }' "$file")
+  if printf '%s' "$result" | jq -e '.lines == null or .branches == null or .functions == null or .statements == null' >/dev/null 2>&1; then
+    printf '[pipeline-coverage-gate] ERROR: coverage JSON missing required .total.lines/.branches/.functions/.statements in %s\n' "$file" >&2
+    exit 1
+  fi
+  printf '%s\n' "$result"
 }
 
 before=$(extract_metrics "$before_file")

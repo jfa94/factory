@@ -31,7 +31,7 @@ while IFS= read -r file; do
     routes/*|*/routes/*)                 pattern="routes/*";          new_tier="feature" ;;
     models/*|*/models/*)                 pattern="models/*";          new_tier="feature" ;;
     services/*|*/services/*)             pattern="services/*";        new_tier="feature" ;;
-    hooks/*|*/hooks/*)                   pattern="hooks/*";           new_tier="feature" ;;
+    hooks/*|*/hooks/*)                   pattern="hooks/*";           new_tier="security" ;;
   esac
 
   [[ -n "$pattern" ]] && matched+=("$pattern")

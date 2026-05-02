@@ -154,7 +154,8 @@ criteria_list=$(printf '%s' "$criteria_list" | sed -E 's/<<<(END:)?UNTRUSTED:[A-
 # Detect prior work (commits ahead of staging)
 prior_work=""
 if git rev-parse --git-dir &>/dev/null; then
-  ahead=$(git log staging..HEAD --oneline 2>/dev/null || true)
+  git fetch origin staging --quiet 2>/dev/null || true
+  ahead=$(git log origin/staging..HEAD --oneline 2>/dev/null || true)
   if [[ -n "$ahead" ]]; then
     prior_work="
 ## Prior Work

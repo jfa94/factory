@@ -117,7 +117,7 @@ case "$subcommand" in
           | $crits[$i] as $c
           | ($resp[$i] // null) as $r
           | { criterion: $c,
-              satisfied: ($r != null and ($r.satisfied == true)),
+              satisfied: ($r != null and ($r.satisfied == true) and ($r.evidence | (. != null and . != "" and (type == "string")))),
               evidence: ($r.evidence // null) } ]
       ')
 

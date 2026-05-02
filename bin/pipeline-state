@@ -5,6 +5,7 @@
 # Actions:
 #   read <run-id> [key]                         Read full state or jq key
 #   write <run-id> <key> <value>                Atomic write to state key
+#   task-init <run-id> <task-id> <task-json>    Seed task record from tasks.json row (idempotent)
 #   task-write <run-id> <task-id> <field> <value>  Atomic per-task write (hyphen-safe)
 #   task-array-append <run-id> <task-id> <field> <value>  Atomic append-to-array (unique)
 #   task-read <run-id> <task-id> [field]        Read a per-task field or whole record
@@ -28,7 +29,11 @@ shift
 _KNOWN_TASK_FIELDS=(
   status started_at ended_at depends_on stage
   classify risk risk_tier
+  task_id title description files acceptance_criteria tests_to_write
+  last_prompt_hash
   test_writer_status executor_status
+  test_writer_worktree executor_worktree
+  prior_work_dir prior_branch prior_commit
   worktree branch
   quality_gate quality_gates review_files review_attempts
   postexec_reviewer_only postreview_prior_blockers
@@ -297,6 +302,47 @@ case "$action" in
     _state_unlock "$run_id"
     trap - EXIT
     log_info "state updated: tasks[$task_id].$field"
+    ;;
+
+  task-init)
+    # Atomically seed a task record from a JSON row (as produced by tasks.json).
+    # Writes task_id, title, description, files, acceptance_criteria, tests_to_write,
+    # and depends_on — all fields that pipeline-run-task needs before the task starts.
+    # Idempotent: a second call merges on top of the existing record.
+    run_id="${1:?missing run-id}"
+    _validate_id "$run_id" "run-id" || exit 1
+    task_id="${2:?missing task-id}"
+    _validate_id "$task_id" "task-id" || exit 1
+    task_json="${3:?missing task-json}"
+    f=$(_state_file "$run_id")
+
+    if ! printf '%s' "$task_json" | jq empty 2>/dev/null; then
+      log_error "task-init: task-json is not valid JSON"
+      exit 1
+    fi
+
+    _state_lock "$run_id"
+    trap '_state_unlock "$run_id"' EXIT
+    state=$(_read_state_file "$run_id")
+
+    updated=$(printf '%s' "$state" | jq \
+      --arg tid "$task_id" \
+      --argjson row "$task_json" \
+      '.tasks[$tid] = (.tasks[$tid] // {}) + {
+         task_id:             ($row.task_id             // $tid),
+         title:               ($row.title               // null),
+         description:         ($row.description         // null),
+         files:               ($row.files               // []),
+         acceptance_criteria: ($row.acceptance_criteria // []),
+         tests_to_write:      ($row.tests_to_write      // []),
+         depends_on:          ($row.depends_on          // [])
+       }')
+    updated=$(printf '%s' "$updated" | jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.updated_at = $t')
+
+    atomic_write "$f" "$updated"
+    _state_unlock "$run_id"
+    trap - EXIT
+    log_info "task initialized: tasks[$task_id]"
     ;;
 
   task-array-append)
