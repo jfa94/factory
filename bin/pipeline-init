@@ -151,6 +151,7 @@ fi
 
 log_metric "run.start" "mode=\"$mode\"" "issue=\"$issue\""
 log_info "initialized run $run_id (mode=$mode, issue=$issue)"
+human_summary "initialized run $run_id (mode=$mode, issue=${issue:-none})"
 
 jq -n \
   --arg run_id "$run_id" \

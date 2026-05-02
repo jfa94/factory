@@ -40,6 +40,7 @@ cache_file="${PLUGIN_DATA}/usage-cache.json"
 
 _sentinel() {
   local reason="$1"
+  human_summary "quota: unavailable ($reason)"
   jq -n --arg reason "$reason" '{
     detection_method: "unavailable",
     reason: $reason,
@@ -191,6 +192,12 @@ seven_day_over=$(jq -n --argjson a "$seven_day" --argjson b "$daily_threshold" \
   'if $a > $b then true else false end')
 
 # --- Emit output ---
+
+if [[ "$five_hour_over" == "true" || "$seven_day_over" == "true" ]]; then
+  human_summary "quota: 5h ${five_hour}%/${hourly_threshold}% 7d ${seven_day}%/${daily_threshold}% (over threshold)"
+else
+  human_summary "quota: 5h ${five_hour}%/${hourly_threshold}% 7d ${seven_day}%/${daily_threshold}%"
+fi
 
 jq -n \
   --argjson five_hour      "$five_hour" \

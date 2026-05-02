@@ -111,6 +111,14 @@ if [[ "$failed" == "true" ]]; then
   valid=false
 fi
 
+if [[ "$failed" == "true" ]]; then
+  first_fail=$(printf '%s\n' "${checks[@]}" | jq -rs '[.[] | select(.status=="fail")] | first | .name + ": " + .detail')
+  human_summary "validation failed: $first_fail"
+else
+  total=$(printf '%s\n' "${checks[@]}" | jq -rs 'length')
+  human_summary "validation passed ($total checks)"
+fi
+
 jq -n \
   --argjson valid "$valid" \
   --argjson checks "$checks_json" \

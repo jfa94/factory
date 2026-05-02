@@ -119,6 +119,14 @@ require_command() {
   fi
 }
 
+# Emit a one-line human summary to stderr (visible in Bash tool output).
+# Suppressed when FACTORY_QUIET=1 (tests / nested invocations).
+# Usage: human_summary "message"
+human_summary() {
+  [[ "${FACTORY_QUIET:-0}" == "1" ]] && return 0
+  printf '%s\n' "$*" >&2
+}
+
 # Build a JSON object from key-value pairs and write to stdout
 # Usage: json_output key1 value1 key2 value2 ...
 json_output() {
