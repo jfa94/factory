@@ -714,8 +714,10 @@ if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then
   printf "main_test.go\n"; exit 0
 fi
 exec /usr/bin/git "$@"'
-# Point .quality.redTestCommand at a stub that exits 1 (tests are red)
-custom_cmd_stub="$ROOT_TMP/fake-test-runner"
+# Point .quality.redTestCommand at a stub that exits 1 (tests are red).
+# Stub basename must be on the allowlist (pytest/vitest/jest/mocha/phpunit/rspec
+# or "<go|cargo|deno> test" or "bundle exec rspec"); use "pytest" for the stub.
+custom_cmd_stub="$ROOT_TMP/pytest"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$custom_cmd_stub"
 chmod +x "$custom_cmd_stub"
 # Write to config.json (what read_config reads)

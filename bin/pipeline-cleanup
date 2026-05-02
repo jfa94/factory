@@ -198,9 +198,18 @@ if git show-ref --verify --quiet "refs/heads/${spec_handoff_branch}" 2>/dev/null
   fi
 fi
 if git ls-remote --exit-code --heads origin "$spec_handoff_branch" &>/dev/null; then
-  if git push origin --delete "$spec_handoff_branch" 2>/dev/null; then
-    log_info "deleted remote spec-handoff branch: $spec_handoff_branch"
-    spec_handoff_deleted=1
+  # Refresh staging tracking ref so ancestor check is not stale.
+  git fetch --quiet origin staging 2>/dev/null || true
+  remote_ref="refs/remotes/origin/${spec_handoff_branch}"
+  # Mirror the remote ref locally for is-ancestor; if absent, fetch it.
+  git fetch --quiet origin "$spec_handoff_branch:$remote_ref" 2>/dev/null || true
+  if git merge-base --is-ancestor "$remote_ref" "origin/staging" 2>/dev/null; then
+    if git push origin --delete "$spec_handoff_branch" 2>/dev/null; then
+      log_info "deleted remote spec-handoff branch: $spec_handoff_branch"
+      spec_handoff_deleted=1
+    fi
+  else
+    log_warn "remote spec-handoff branch '$spec_handoff_branch' is not an ancestor of origin/staging — skipping remote delete"
   fi
 fi
 

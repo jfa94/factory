@@ -320,6 +320,15 @@ case "$action" in
       log_error "task-init: task-json is not valid JSON"
       exit 1
     fi
+    # Shape: must be a JSON object (not array/scalar). The orchestrator caller
+    # may pass an empty {} for tasks without spec rows; that's OK as the jq
+    # expression below uses // defaults — but arrays/scalars would silently
+    # zero-out fields, so reject them.
+    _shape=$(printf '%s' "$task_json" | jq -r 'type' 2>/dev/null)
+    if [[ "$_shape" != "object" ]]; then
+      log_error "task-init: task-json must be a JSON object, got $_shape"
+      exit 1
+    fi
 
     _state_lock "$run_id"
     trap '_state_unlock "$run_id"' EXIT

@@ -494,6 +494,9 @@ pipeline_quota_gate() {
       fi
       # Wall-clock budget: abort before sleeping if already spent >= 30 min waiting.
       prior=$(pipeline-state read "$run_id" '.circuit_breaker.pause_minutes // 0' 2>/dev/null || printf '0')
+      # Clamp to non-negative integer — guards against state corruption / injection.
+      [[ "$prior" =~ ^-?[0-9]+$ ]] || prior=0
+      (( prior < 0 )) && prior=0
       local wall_budget_min="${FACTORY_QUOTA_WALL_BUDGET_MIN:-$(read_config '.quota.wallBudgetMin' '30')}"
       if (( prior >= wall_budget_min )); then
         log_warn "quota gate [$boundary_label]: accumulated ${prior}m quota wait (budget=${wall_budget_min}m) — surfacing human gate"

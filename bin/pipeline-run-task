@@ -30,16 +30,6 @@
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
-# Agent type name constants — single source of truth; update here when agent
-# definition files are renamed.
-readonly _AT_TEST_WRITER="test-writer"
-readonly _AT_TASK_EXECUTOR="task-executor"
-readonly _AT_IMPL_REVIEWER="implementation-reviewer"
-readonly _AT_QUALITY_REVIEWER="quality-reviewer"
-readonly _AT_SECURITY_REVIEWER="security-reviewer"
-readonly _AT_ARCH_REVIEWER="architecture-reviewer"
-readonly _AT_SCRIBE="scribe"
-
 run_id="${1:?missing run-id}"
 task_id="${2:?missing task-id}"
 shift 2
@@ -370,23 +360,30 @@ _verify_red_tests() {
     log_info "red-test verification: using .quality.redTestCommand escape hatch task_id=\"$task_id\""
     local cmd_array=()
     read -ra cmd_array <<< "$custom_cmd"
-    # Guard: no shell metacharacters in any token
+    # Guard: every token must match a strict positive-character allowlist.
+    # No shell metacharacters, no whitespace tricks, no globs.
     local _cc_elem
     for _cc_elem in "${cmd_array[@]}"; do
-      if [[ "$_cc_elem" =~ [';''|''&''$''`''('\'')''\''<''>''!'\\] ]]; then
-        log_error "red-test verification: .quality.redTestCommand contains shell metacharacters — refusing task_id=\"$task_id\""
+      if [[ ! "$_cc_elem" =~ ^[A-Za-z0-9._/=:+-]+$ ]]; then
+        log_error "red-test verification: .quality.redTestCommand token '$_cc_elem' contains unsafe characters — refusing task_id=\"$task_id\""
         _task_write quality_gates.red_test '{"ok":false,"reason":"unsafe_command"}'
         return 1
       fi
     done
-    # Guard: executable basename must be on allowlist
-    local _allowed_runners=( pytest vitest jest go cargo deno mocha phpunit rspec ruby bundle )
-    local _bin="${cmd_array[0]##*/}" _allowed=false _r
-    for _r in "${_allowed_runners[@]}"; do
-      [[ "$_bin" == "$_r" ]] && _allowed=true && break
-    done
+    # Guard: command-prefix must match an allowed runner sequence exactly.
+    # Multi-token entries (e.g. "bundle exec rspec") prevent smuggling
+    # arbitrary scripts via "bundle exec ruby ./malicious.rb".
+    local _bin="${cmd_array[0]##*/}"
+    local _bin1="${cmd_array[1]:-}"
+    local _bin2="${cmd_array[2]:-}"
+    local _allowed=false
+    case "$_bin" in
+      pytest|vitest|jest|mocha|phpunit|rspec) _allowed=true ;;
+      go|cargo|deno) [[ "$_bin1" == "test" ]] && _allowed=true ;;
+      bundle)        [[ "$_bin1" == "exec" && "$_bin2" == "rspec" ]] && _allowed=true ;;
+    esac
     if ! $_allowed; then
-      log_error "red-test verification: .quality.redTestCommand runner '$_bin' not in allowlist — refusing task_id=\"$task_id\""
+      log_error "red-test verification: .quality.redTestCommand prefix not in allowlist — refusing task_id=\"$task_id\" cmd=\"${cmd_array[*]:0:3}\""
       _task_write quality_gates.red_test "{\"ok\":false,\"reason\":\"unallowed_runner\",\"runner\":\"$_bin\"}"
       return 1
     fi

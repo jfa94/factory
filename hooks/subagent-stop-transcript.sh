@@ -94,6 +94,11 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
       if [[ -n "$worktree" ]]; then
         pipeline-state task-write "$run_id" "$task_id" test_writer_worktree "\"$worktree\"" \
           >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+        # Bare .worktree preserved for downstream readers (ship/cleanup/score).
+        # Test-writer writes first; executor will overwrite later (last-writer-wins
+        # is expected — bare field semantically tracks the executor's worktree).
+        pipeline-state task-write "$run_id" "$task_id" worktree "\"$worktree\"" \
+          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
         _tw_branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
         _tw_commit=$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)
         if [[ -n "$_tw_branch" && "$_tw_branch" != "HEAD" ]]; then
@@ -113,6 +118,8 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
         >/dev/null 2>>"$run_dir/transcript-errors.log" || true
       if [[ -n "$worktree" ]]; then
         pipeline-state task-write "$run_id" "$task_id" executor_worktree "\"$worktree\"" \
+          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+        pipeline-state task-write "$run_id" "$task_id" worktree "\"$worktree\"" \
           >/dev/null 2>>"$run_dir/transcript-errors.log" || true
       fi
       ;;
