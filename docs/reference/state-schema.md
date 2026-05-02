@@ -334,16 +334,20 @@ Tasks in the same `parallel_group` run concurrently. Groups execute sequentially
   "circuit_breaker": {
     "consecutive_failures": 0,
     "runtime_minutes": 45,
-    "pause_minutes": 10
+    "pause_minutes_total": 30,
+    "pause_minutes_consecutive": 10
   }
 }
 ```
 
-| Field                  | Type   | Description                              |
-| ---------------------- | ------ | ---------------------------------------- |
-| `consecutive_failures` | number | Consecutive failures (resets on success) |
-| `runtime_minutes`      | number | Active runtime (excludes pauses)         |
-| `pause_minutes`        | number | Time spent waiting (rate limits)         |
+| Field                       | Type   | Description                                                                 |
+| --------------------------- | ------ | --------------------------------------------------------------------------- |
+| `consecutive_failures`      | number | Consecutive failures (resets on success)                                    |
+| `runtime_minutes`           | number | Active runtime (excludes pauses)                                            |
+| `pause_minutes_total`       | number | Cumulative time spent waiting (audit, never reset)                          |
+| `pause_minutes_consecutive` | number | Consecutive pause time since last proceed (budget check, resets on proceed) |
+
+**Migration:** Legacy state files with `pause_minutes` are migrated on first write — the value is copied to both `pause_minutes_total` and `pause_minutes_consecutive`, then `pause_minutes` is removed.
 
 > Legacy state files from 0.1.x runs may contain `tasks_completed` and `turns_completed` fields. These are ignored from 0.2.0 onward — no migration is required.
 

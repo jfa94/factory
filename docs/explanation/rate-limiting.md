@@ -39,17 +39,17 @@ Every gate goes through `pipeline_quota_gate` (`bin/pipeline-lib.sh`) — orches
 Each gate calls `pipeline-quota-check` → `pipeline-model-router` and handles the result:
 
 - `proceed` → continue
-- `wait` → sleep with exponential back-off (120s base, doubles each cycle, capped at `.quota.sleepCapSec` default 540s), re-check, record pause time in `.circuit_breaker.pause_minutes`
+- `wait` → sleep with exponential back-off (120s base, doubles each cycle, capped at `.quota.sleepCapSec` default 540s), re-check, record pause time
 - `stale_yield` → `usage-cache.json` is missing or too old; yield `wait_retry` so the next agent turn refreshes the statusline
 - `end_gracefully` → drain in-flight tasks, mark run `partial`, run summary, cleanup
 
 Three independent bounds govern the wait loop:
 
-- **Wall-clock budget** — accumulated pause time (`.circuit_breaker.pause_minutes`) must not exceed `.quota.wallBudgetMin` (default 30). Checked before each sleep; if already at budget, surfaces a human gate immediately rather than sleeping further.
+- **Wall-clock budget** — consecutive pause time (`.circuit_breaker.pause_minutes_consecutive`) must not exceed `.quota.wallBudgetMin` (default 75). Resets to 0 on every `proceed`. Checked before each sleep; if already at budget, surfaces a human gate immediately rather than sleeping further.
 - `.circuit_breaker.quota_wait_cycles` — consecutive "still over threshold" yields. Cap `.quota.maxWaitCycles` (default 60, ≈ 9 h).
 - `.circuit_breaker.quota_stale_cycles` — consecutive stale-cache yields (statusline silent). Cap `.quota.maxStaleCycles` (default 6, ≈ 1 h).
 
-Hitting any cap returns `end_gracefully`. Any successful `proceed` resets cycle counters (pause_minutes is not reset — it accumulates across the run for audit).
+Hitting any cap returns `end_gracefully`. Any successful `proceed` resets cycle counters and `pause_minutes_consecutive`. `pause_minutes_total` (audit) accumulates across the entire run and is never reset.
 
 ## How the Pipeline Checks Limits
 
@@ -98,11 +98,19 @@ Normal operation. Use Claude.
 **Case: 5h over threshold, 7d within limits**
 
 ```json
-{ "provider": "anthropic", "action": "wait", "wait_minutes": 47 }
+{
+  "provider": "anthropic",
+  "action": "wait",
+  "wait_minutes": 23,
+  "milestone": "hour_3"
+}
 ```
 
-Wait for the 5h window reset. `wait_minutes` is derived from `resets_at_epoch`
-in the quota output — accurate to the actual session window, not a fixed UTC boundary.
+Wait until the **next hourly threshold milestone** — not the full window reset. The router computes the current hour within the 5h window using `resets_at_epoch`, finds the next hour boundary, and returns `wait_minutes` ≤ ~60. This means after one sleep the curve raises (e.g. 20% → 40%) and utilization typically fits the new threshold, so the run resumes automatically.
+
+`milestone` is `hour_N` (e.g. `"hour_3"`) for waits that end at a curve step, or `"window_reset"` for hour-5 exhaustion where no further step exists. The gate logs the milestone for observability.
+
+`wait_minutes` is bounded to at most ~60 min per check. The wall-clock budget (`pause_minutes_consecutive`, default 75 min) covers one full milestone wait with margin.
 
 **Case: 7d over threshold**
 
@@ -198,14 +206,16 @@ The orchestrator reads persisted state and continues from the first incomplete t
 
 ## Consecutive Wait Limit
 
-Two independent counters bound the wait loop:
+Four independent counters govern the wait loop:
 
 - `circuit_breaker.quota_wait_cycles` (cap `.quota.maxWaitCycles`, default 60) — consecutive yields where the cache is fresh but utilization is still over threshold.
 - `circuit_breaker.quota_stale_cycles` (cap `.quota.maxStaleCycles`, default 6) — consecutive yields where the cache is stale or missing (statusline silent).
+- `circuit_breaker.pause_minutes_consecutive` (cap `.quota.wallBudgetMin`, default 75) — cumulative minutes slept since the last `proceed`. Drives the wall-clock budget check; reset to 0 on each `proceed`.
+- `circuit_breaker.pause_minutes_total` — total minutes slept across the entire run. Audit-only; never reset.
 
-Hitting either cap returns `end_gracefully`. The split lets a quiet statusline (transient, e.g. during a long bash sleep) yield gracefully for a bounded window — instead of treating the very first stale read as a hard fail — while still capping total time spent waiting on permanently-broken telemetry.
+Hitting any cap returns `end_gracefully`. The split between `pause_minutes_consecutive` and `pause_minutes_total` means a pipeline that crosses multiple hourly thresholds in one run doesn't accumulate stale budget debt: each time the curve raises and utilization fits, `pause_minutes_consecutive` resets and the next threshold crossing gets a fresh 75-min window.
 
-Both counters reset to 0 on the first successful `proceed`.
+`quota_wait_cycles` and `quota_stale_cycles` reset to 0 on the first successful `proceed`.
 
 ---
 

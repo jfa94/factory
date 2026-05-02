@@ -483,13 +483,31 @@ pipeline_quota_gate() {
     "over_7d=$util7" \
     ${task_id_kv[@]+"${task_id_kv[@]}"}
 
+  # Lazy migration: rename legacy pause_minutes → pause_minutes_total + pause_minutes_consecutive.
+  # pause_minutes_total: cumulative audit counter, never reset.
+  # pause_minutes_consecutive: resets to 0 on each proceed; drives wall-clock budget.
+  # Runs once per gate invocation on old-schema state; idempotent (writes null, skipped on re-entry).
+  local _legacy_pm
+  _legacy_pm=$(pipeline-state read "$run_id" '.circuit_breaker.pause_minutes' 2>/dev/null || printf 'null')
+  if [[ "$_legacy_pm" != "null" && -n "$_legacy_pm" ]]; then
+    [[ "$_legacy_pm" =~ ^[0-9]+$ ]] || _legacy_pm=0
+    pipeline-state write "$run_id" '.circuit_breaker.pause_minutes_total' "$_legacy_pm" 2>/dev/null \
+      || log_warn "quota gate [$boundary_label]: migration: failed to write pause_minutes_total"
+    pipeline-state write "$run_id" '.circuit_breaker.pause_minutes_consecutive' '0' 2>/dev/null \
+      || log_warn "quota gate [$boundary_label]: migration: failed to write pause_minutes_consecutive"
+    pipeline-state write "$run_id" '.circuit_breaker.pause_minutes' 'null' 2>/dev/null \
+      || log_warn "quota gate [$boundary_label]: migration: failed to clear legacy pause_minutes"
+  fi
+
   case "$action" in
     proceed)
-      # Reset both counters on any successful proceed.
+      # Reset all per-phase counters on any successful proceed.
       pipeline-state write "$run_id" '.circuit_breaker.quota_wait_cycles' '0' 2>/dev/null \
         || log_warn "quota gate [$boundary_label]: failed to reset quota_wait_cycles"
       pipeline-state write "$run_id" '.circuit_breaker.quota_stale_cycles' '0' 2>/dev/null \
         || log_warn "quota gate [$boundary_label]: failed to reset quota_stale_cycles"
+      pipeline-state write "$run_id" '.circuit_breaker.pause_minutes_consecutive' '0' 2>/dev/null \
+        || log_warn "quota gate [$boundary_label]: failed to reset pause_minutes_consecutive"
       return 0
       ;;
     end_gracefully)
@@ -503,14 +521,16 @@ pipeline_quota_gate() {
         log_warn "quota gate [$boundary_label]: router returned wait with no wait_minutes — ending gracefully"
         return 2
       fi
-      # Wall-clock budget: abort before sleeping if already spent >= 30 min waiting.
-      prior=$(pipeline-state read "$run_id" '.circuit_breaker.pause_minutes // 0' 2>/dev/null || printf '0')
+      # Wall-clock budget: abort before sleeping if consecutive wait time >= budget.
+      # Uses pause_minutes_consecutive (resets on proceed) so a run that crosses
+      # multiple hourly thresholds does not accumulate an ever-growing total.
+      prior=$(pipeline-state read "$run_id" '.circuit_breaker.pause_minutes_consecutive // 0' 2>/dev/null || printf '0')
       # Clamp to non-negative integer — guards against state corruption / injection.
       [[ "$prior" =~ ^-?[0-9]+$ ]] || prior=0
       (( prior < 0 )) && prior=0
-      local wall_budget_min="${FACTORY_QUOTA_WALL_BUDGET_MIN:-$(read_config '.quota.wallBudgetMin' '30')}"
+      local wall_budget_min="${FACTORY_QUOTA_WALL_BUDGET_MIN:-$(read_config '.quota.wallBudgetMin' '75')}"
       if (( prior >= wall_budget_min )); then
-        log_warn "quota gate [$boundary_label]: accumulated ${prior}m quota wait (budget=${wall_budget_min}m) — surfacing human gate"
+        log_warn "quota gate [$boundary_label]: accumulated ${prior}m consecutive quota wait (budget=${wall_budget_min}m) — surfacing human gate"
         return 2
       fi
       local want_sleep_sec=$(( wait_min * 60 ))
@@ -519,17 +539,29 @@ pipeline_quota_gate() {
       (( exp_cap_sec > sleep_cap_sec )) && exp_cap_sec=$sleep_cap_sec
       local do_sleep_sec=$(( want_sleep_sec < exp_cap_sec ? want_sleep_sec : exp_cap_sec ))
       local slept_min=$(( (do_sleep_sec + 59) / 60 ))
-      log_info "quota gate [$boundary_label]: over threshold — sleeping ${slept_min}m of ${wait_min}m (cycle $((cycles + 1))/${max_cycles}, exp_cap=${exp_cap_sec}s)"
+      local milestone
+      milestone=$(printf '%s' "$route" | jq -r '.milestone // "unknown"')
+      log_info "quota gate [$boundary_label]: over threshold — sleeping ${slept_min}m of ${wait_min}m toward milestone $milestone (cycle $((cycles + 1))/${max_cycles}, exp_cap=${exp_cap_sec}s)"
       sleep "$do_sleep_sec"
-      if ! pipeline-state write "$run_id" '.circuit_breaker.pause_minutes' "$(( prior + slept_min ))" 2>/dev/null; then
-        log_warn "quota gate [$boundary_label]: failed to write pause_minutes for run_id=$run_id"
+      # Audit total (never reset).
+      local prior_total
+      prior_total=$(pipeline-state read "$run_id" '.circuit_breaker.pause_minutes_total // 0' 2>/dev/null || printf '0')
+      [[ "$prior_total" =~ ^-?[0-9]+$ ]] || prior_total=0
+      (( prior_total < 0 )) && prior_total=0
+      if ! pipeline-state write "$run_id" '.circuit_breaker.pause_minutes_total' "$(( prior_total + slept_min ))" 2>/dev/null; then
+        log_warn "quota gate [$boundary_label]: failed to write pause_minutes_total for run_id=$run_id"
+      fi
+      # Consecutive (resets on proceed).
+      if ! pipeline-state write "$run_id" '.circuit_breaker.pause_minutes_consecutive' "$(( prior + slept_min ))" 2>/dev/null; then
+        log_warn "quota gate [$boundary_label]: failed to write pause_minutes_consecutive for run_id=$run_id"
       fi
 
       log_metric "quota.wait" \
         "gate=\"$boundary_label\"" \
         "tier=\"$tier\"" \
         "minutes_slept=$slept_min" \
-        "cumulative_pause_minutes=$(( prior + slept_min ))" \
+        "cumulative_pause_minutes=$(( prior_total + slept_min ))" \
+        "milestone=\"$milestone\"" \
         "cycle=$((cycles + 1))" \
         ${task_id_kv[@]+"${task_id_kv[@]}"}
 
@@ -604,6 +636,8 @@ pipeline_quota_gate() {
       if [[ "$action" == "proceed" ]]; then
         pipeline-state write "$run_id" '.circuit_breaker.quota_wait_cycles' '0' 2>/dev/null \
           || log_warn "quota gate [$boundary_label]: failed to reset quota_wait_cycles"
+        pipeline-state write "$run_id" '.circuit_breaker.pause_minutes_consecutive' '0' 2>/dev/null \
+          || log_warn "quota gate [$boundary_label]: failed to reset pause_minutes_consecutive"
         return 0
       fi
       if [[ "$action" == "end_gracefully" ]]; then

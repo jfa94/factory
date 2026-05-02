@@ -253,8 +253,8 @@ _stub_router_sequence \
 set +e; pipeline_quota_gate run-3 feature gate-A >/dev/null 2>&1; rc=$?; set -e
 assert_eq "wait→proceed → exit 0" "0" "$rc"
 # Sleep cap is 1s; slept_min = ceil(1/60) = 1
-pause=$(pipeline-state read run-3 '.circuit_breaker.pause_minutes' 2>/dev/null)
-assert_eq "pause_minutes recorded" "1" "$pause"
+pause=$(pipeline-state read run-3 '.circuit_breaker.pause_minutes_total' 2>/dev/null)
+assert_eq "pause_minutes_total recorded" "1" "$pause"
 cycles=$(pipeline-state read run-3 '.circuit_breaker.quota_wait_cycles' 2>/dev/null)
 assert_eq "proceed-after-wait resets quota_wait_cycles" "0" "$cycles"
 
@@ -333,6 +333,136 @@ _stub_quota_check_sequence '{"detection_method":"statusline"}'
 _stub_router_sequence '{"action":"whatever"}'
 set +e; pipeline_quota_gate run-8 feature gate-A >/dev/null 2>&1; rc=$?; set -e
 assert_eq "unknown action → exit 2" "2" "$rc"
+
+# ============================================================
+echo ""
+echo "=== pipeline_quota_gate: pause_minutes_total audit + consecutive budget split ==="
+
+# wait→proceed: total accumulates, consecutive resets
+_reset_scratch run-split-1
+_stub_quota_check_sequence '{"detection_method":"statusline","one":1}' '{"detection_method":"statusline","two":2}'
+_stub_router_sequence \
+  '{"action":"wait","wait_minutes":1,"trigger":"5h_over","milestone":"hour_2"}' \
+  '{"action":"proceed","provider":"anthropic"}'
+set +e; pipeline_quota_gate run-split-1 feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "split: wait→proceed → exit 0" "0" "$rc"
+total=$(pipeline-state read run-split-1 '.circuit_breaker.pause_minutes_total' 2>/dev/null)
+assert_eq "split: pause_minutes_total accumulated" "1" "$total"
+consec=$(pipeline-state read run-split-1 '.circuit_breaker.pause_minutes_consecutive' 2>/dev/null)
+assert_eq "split: pause_minutes_consecutive reset to 0 on proceed" "0" "$consec"
+# Legacy field absent after migration
+legacy=$(pipeline-state read run-split-1 '.circuit_breaker.pause_minutes' 2>/dev/null || printf 'null')
+assert_eq "split: legacy pause_minutes absent" "null" "$legacy"
+
+# wall-budget uses consecutive, not total
+_reset_scratch run-split-budget
+# Pre-seed total=120 (way over old 30-min budget) but consecutive=5 (well under 75)
+printf '{"circuit_breaker":{"pause_minutes_total":120,"pause_minutes_consecutive":5}}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/run-split-budget/state.json"
+export FACTORY_QUOTA_WALL_BUDGET_MIN=75
+_stub_quota_check_sequence '{"detection_method":"statusline"}' '{"detection_method":"statusline"}'
+_stub_router_sequence \
+  '{"action":"wait","wait_minutes":1,"trigger":"5h_over","milestone":"hour_2"}' \
+  '{"action":"proceed","provider":"anthropic"}'
+set +e; pipeline_quota_gate run-split-budget feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "split: large total but small consec → proceeds (not halted)" "0" "$rc"
+unset FACTORY_QUOTA_WALL_BUDGET_MIN
+
+# wall-budget fires on consecutive when it exceeds budget
+_reset_scratch run-split-consec-cap
+printf '{"circuit_breaker":{"pause_minutes_total":80,"pause_minutes_consecutive":80}}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/run-split-consec-cap/state.json"
+export FACTORY_QUOTA_WALL_BUDGET_MIN=75
+_stub_quota_check_sequence '{"detection_method":"statusline"}'
+_stub_router_sequence '{"action":"wait","wait_minutes":1,"trigger":"5h_over","milestone":"hour_2"}'
+set +e; pipeline_quota_gate run-split-consec-cap feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "split: consecutive≥budget → halt (exit 2)" "2" "$rc"
+unset FACTORY_QUOTA_WALL_BUDGET_MIN
+
+# ============================================================
+echo ""
+echo "=== pipeline_quota_gate: state migration (legacy pause_minutes → split) ==="
+
+_reset_scratch run-migrate
+# Old-schema state: pause_minutes present, no total/consecutive fields.
+printf '{"circuit_breaker":{"pause_minutes":42}}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/run-migrate/state.json"
+_stub_quota_check_sequence '{"detection_method":"statusline"}'
+_stub_router_sequence '{"action":"proceed","provider":"anthropic"}'
+set +e; pipeline_quota_gate run-migrate feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "migrate: gate proceeds with legacy state" "0" "$rc"
+total=$(pipeline-state read run-migrate '.circuit_breaker.pause_minutes_total' 2>/dev/null)
+assert_eq "migrate: pause_minutes_total=42 (from legacy)" "42" "$total"
+consec=$(pipeline-state read run-migrate '.circuit_breaker.pause_minutes_consecutive' 2>/dev/null)
+assert_eq "migrate: pause_minutes_consecutive=0 (fresh)" "0" "$consec"
+legacy=$(pipeline-state read run-migrate '.circuit_breaker.pause_minutes' 2>/dev/null || printf 'null')
+assert_eq "migrate: legacy pause_minutes removed" "null" "$legacy"
+
+# ============================================================
+echo ""
+echo "=== pipeline-model-router: milestone-based wait_minutes ==="
+_reset_scratch run-router-milestone
+
+now=$(date +%s)
+
+# Hour 2 of window (≈200 min remaining, current_hour=2 since 1h elapsed)
+# window_start = resets_at - 18000; elapsed = 1h + 1min = 3660s → hour=2
+resets_at=$(( now + 18000 - 3660 ))   # window_start = now - 3660; resets_at = window_start + 18000
+quota_h2=$(jq -n \
+  --argjson five_over true \
+  --argjson seven_over false \
+  --argjson resets "$resets_at" \
+  '{detection_method:"statusline",
+    five_hour:{utilization:30,over_threshold:$five_over,window_hour:2,resets_at_epoch:$resets},
+    seven_day:{utilization:10,over_threshold:$seven_over}}')
+route=$(pipeline-model-router --quota "$quota_h2" --tier feature 2>/dev/null)
+action=$(printf '%s' "$route" | jq -r '.action')
+assert_eq "router h2: action=wait" "wait" "$action"
+wait_min=$(printf '%s' "$route" | jq -r '.wait_minutes')
+assert_eq "router h2: wait_minutes≤60" "1" "$(( wait_min <= 60 ? 1 : 0 ))"
+assert_eq "router h2: wait_minutes≥1" "1" "$(( wait_min >= 1 ? 1 : 0 ))"
+milestone=$(printf '%s' "$route" | jq -r '.milestone // ""')
+assert_eq "router h2: milestone=hour_3" "hour_3" "$milestone"
+
+# Hour 5 (last hour, no further curve step) → wait with milestone=window_reset
+# elapsed = 4h + 1min = 14460s → hour=5
+resets_at_h5=$(( now + 18000 - 14460 ))
+quota_h5=$(jq -n \
+  --argjson five_over true \
+  --argjson seven_over false \
+  --argjson resets "$resets_at_h5" \
+  '{detection_method:"statusline",
+    five_hour:{utilization:92,over_threshold:$five_over,window_hour:5,resets_at_epoch:$resets},
+    seven_day:{utilization:10,over_threshold:$seven_over}}')
+route_h5=$(pipeline-model-router --quota "$quota_h5" --tier feature 2>/dev/null)
+action_h5=$(printf '%s' "$route_h5" | jq -r '.action')
+assert_eq "router h5: action=wait" "wait" "$action_h5"
+milestone_h5=$(printf '%s' "$route_h5" | jq -r '.milestone // ""')
+assert_eq "router h5: milestone=window_reset" "window_reset" "$milestone_h5"
+
+# ============================================================
+echo ""
+echo "=== pipeline_quota_gate: default wallBudgetMin = 75 ==="
+
+_reset_scratch run-budget-default
+# 74 consecutive minutes → should NOT halt (74 < 75)
+printf '{"circuit_breaker":{"pause_minutes_total":74,"pause_minutes_consecutive":74}}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/run-budget-default/state.json"
+_stub_quota_check_sequence '{"detection_method":"statusline"}' '{"detection_method":"statusline"}'
+_stub_router_sequence \
+  '{"action":"wait","wait_minutes":1,"trigger":"5h_over","milestone":"hour_2"}' \
+  '{"action":"proceed","provider":"anthropic"}'
+set +e; pipeline_quota_gate run-budget-default feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "default budget: 74 consec min → can still sleep" "0" "$rc"
+
+# 75 consecutive minutes → HALT (75 >= 75)
+_reset_scratch run-budget-default-over
+printf '{"circuit_breaker":{"pause_minutes_total":75,"pause_minutes_consecutive":75}}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/run-budget-default-over/state.json"
+_stub_quota_check_sequence '{"detection_method":"statusline"}'
+_stub_router_sequence '{"action":"wait","wait_minutes":1,"trigger":"5h_over","milestone":"hour_2"}'
+set +e; pipeline_quota_gate run-budget-default-over feature gate-A >/dev/null 2>&1; rc=$?; set -e
+assert_eq "default budget: 75 consec min → halt (exit 2)" "2" "$rc"
 
 # ============================================================
 echo ""

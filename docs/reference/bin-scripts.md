@@ -497,7 +497,8 @@ The runtime check is skipped when `maxRuntimeMinutes` is `0`. The script trips o
 {
   "tripped": false,
   "runtime_minutes": 45,
-  "pause_minutes": 2,
+  "pause_minutes_total": 30,
+  "pause_minutes_consecutive": 2,
   "consecutive_failures": 0,
   "thresholds": {
     "max_runtime_minutes": 0,
@@ -991,9 +992,12 @@ pipeline-model-router --quota '<quota-json>' --tier <routine|feature|security>
   "action": "wait",
   "trigger": "5h_over",
   "wait_minutes": 47,
+  "milestone": "hour_3",
   "tier": "routine"
 }
 ```
+
+The `wait_minutes` value points to the next hourly threshold milestone rather than a full window reset. The `milestone` field indicates the target: `hour_N` (next hourly boundary within the 5h window) or `window_reset` (full 5h window reset).
 
 **Output (end gracefully — 7d over threshold):**
 

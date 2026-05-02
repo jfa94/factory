@@ -85,22 +85,39 @@ if [[ "$seven_day_over" == "true" ]]; then
   exit 0
 fi
 
-# 5h over, 7d within → wait for 5h window reset
-# Use resets_at_epoch from quota output (session-anchored, not UTC-boundary math)
+# 5h over, 7d within → wait until next hourly threshold milestone.
+# Use resets_at_epoch to compute the window boundaries (session-anchored, not UTC-clock).
 resets_at=$(printf '%s' "$quota" | jq -r '.five_hour.resets_at_epoch // empty')
 now=$(date +%s)
 
 if [[ -n "$resets_at" ]]; then
-  minutes_remaining=$(( (resets_at - now + 59) / 60 ))
+  window_start=$(( resets_at - 18000 ))
+  elapsed=$(( now - window_start ))
+  current_hour=$(( elapsed / 3600 + 1 ))
+  (( current_hour < 1 )) && current_hour=1
+  (( current_hour > 5 )) && current_hour=5
+
+  if (( current_hour < 5 )); then
+    # Wait until the start of the next hour in the window, where the threshold curve steps up.
+    next_milestone=$(( window_start + current_hour * 3600 ))
+    wait_minutes=$(( (next_milestone - now + 59) / 60 ))
+    milestone="hour_$(( current_hour + 1 ))"
+  else
+    # Last hour: no further curve step. Wait for full window reset.
+    wait_minutes=$(( (resets_at - now + 59) / 60 ))
+    milestone="window_reset"
+  fi
 else
-  # Fallback: 5h window is at most 300 minutes; use half as conservative estimate
-  minutes_remaining=150
+  # Fallback: resets_at missing; wait 60 min (one curve step) as a conservative estimate.
+  wait_minutes=60
+  milestone="window_reset"
 fi
-if (( minutes_remaining < 1 )); then minutes_remaining=1; fi
+if (( wait_minutes < 1 )); then wait_minutes=1; fi
 
 jq -n \
   --arg action "wait" \
   --arg trigger "5h_over" \
-  --argjson wait_minutes "$minutes_remaining" \
+  --argjson wait_minutes "$wait_minutes" \
+  --arg milestone "$milestone" \
   --arg tier "$tier" \
-  '{provider: "anthropic", action: $action, trigger: $trigger, wait_minutes: $wait_minutes, tier: $tier}'
+  '{provider: "anthropic", action: $action, trigger: $trigger, wait_minutes: $wait_minutes, milestone: $milestone, tier: $tier}'

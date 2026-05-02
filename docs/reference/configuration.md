@@ -339,11 +339,13 @@ Days to retain metrics data.
 | Property | Value  |
 | -------- | ------ |
 | Type     | number |
-| Default  | 30     |
+| Default  | 75     |
 | Min      | 5      |
 | Max      | 120    |
 
-Maximum accumulated pause time (in minutes) before the quota gate surfaces a human gate. When rate limits force the pipeline to sleep, pause time accumulates in `.circuit_breaker.pause_minutes`. Once this budget is exhausted, further waits trigger `end_gracefully` rather than sleeping indefinitely.
+Maximum accumulated consecutive pause time (in minutes) before the quota gate surfaces a human gate. When rate limits force the pipeline to sleep, pause time accumulates in `.circuit_breaker.pause_minutes_consecutive`. This counter resets to zero whenever the router returns `action: proceed`. Once this budget is exhausted, further waits trigger `end_gracefully` rather than sleeping indefinitely.
+
+A separate counter `.circuit_breaker.pause_minutes_total` tracks cumulative pause time for audit purposes and is never reset.
 
 ### quota.sleepCapSec
 
