@@ -23,6 +23,7 @@ SUITES=(
   audit-hooks
   routing
   quota-gate
+  mutation-gate
   run-command
   config
   integration

@@ -247,5 +247,9 @@ assert_eq "stryker green w/o report → exit 0" "0" "$rc"
 assert_eq "stryker green w/o report → reason" "no-report" "$(jq -r .reason <<<"$out")"
 
 echo ""
-echo "Total: $pass passed, $fail failed"
-[[ $fail -eq 0 ]]
+echo "=== Results ==="
+echo "  Passed: $pass"
+echo "  Failed: $fail"
+echo "  Total:  $((pass + fail))"
+
+[[ $fail -eq 0 ]] && exit 0 || exit 1
