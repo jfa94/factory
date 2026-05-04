@@ -86,10 +86,18 @@ fi
 # Mirror templates/.github/workflows/quality-gate.yml lines 86-96.
 # Use :(glob) pathspec magic so git expands ** regardless of shell globstar
 # settings (plain 'src/**/*.ts' silently matches nothing on macOS git 2.x).
+# Capture diff stderr to the gate log so unexpected failures (e.g., shallow
+# clones, transient corruption) are debuggable rather than silently producing
+# an empty scope.
+diff_err="$run_dir/${task_id}.mutation.gate.diff-stderr.log"
+mkdir -p "$run_dir"
 mapfile -t scope_files < <(
-  git -C "$worktree" diff --name-only --diff-filter=AM "origin/${base_ref}...HEAD" -- ':(glob)src/**/*.ts' 2>/dev/null \
+  git -C "$worktree" diff --name-only --diff-filter=AM "origin/${base_ref}...HEAD" -- ':(glob)src/**/*.ts' 2>"$diff_err" \
     | grep -Ev '\.(test|spec|d)\.ts$|/types/|/data/|/index\.ts$' || true
 )
+if [[ -s "$diff_err" ]]; then
+  log_warn "mutation gate: git diff produced stderr — see $diff_err"
+fi
 
 if [[ ${#scope_files[@]} -eq 0 ]]; then
   _emit true "no-mutable-changes" null null "" 0

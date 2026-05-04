@@ -229,8 +229,7 @@ Writes behavioral tests from specifications and type signatures, never from impl
 - Derives expected values from specs, type signatures, and JSDoc — never from reading implementation
 - Writes AAA-structured tests with specific value assertions (no tautological or presence-only assertions)
 - Writes property-based tests (fast-check) for pure functions and data transformations
-- In Phase 5: receives Stryker surviving-mutants report, writes targeted tests to kill each survivor
-- Spawned by orchestrator when mutation score < `quality.mutationScoreTarget`
+- Authors targeted tests to kill surviving Stryker mutants when invoked directly. Note: the ship pregate's `pipeline-mutation-gate` blocks PR creation on mutation failure rather than auto-spawning a kill-survivor loop; surviving-mutant remediation is a manual or task-level workflow.
 
 ### scribe
 
