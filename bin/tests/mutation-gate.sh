@@ -50,6 +50,8 @@ rc=$?
 assert_eq "no package.json → exit 0" "0" "$rc"
 assert_eq "no package.json → ok=true" "true" "$(jq -r .ok <<<"$out")"
 assert_eq "no package.json → reason" "no-package-json" "$(jq -r .reason <<<"$out")"
+state_reason=$(jq -r --arg t "$TASK_ID" '.tasks[$t].mutation_gate.reason' "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json")
+assert_eq "no package.json → state.mutation_gate.reason" "no-package-json" "$state_reason"
 
 echo "=== T2b: package.json without test:mutation → skip pass ==="
 WT=$(mktemp -d)

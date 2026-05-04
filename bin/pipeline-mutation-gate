@@ -51,8 +51,10 @@ _emit() {
     '{ok:$ok, reason:$reason, score:$score, target:$target, scope:$scope}')
 
   if [[ -f "$run_dir/state.json" ]]; then
-    pipeline-state task-write "$run_id" "$task_id" mutation_gate "$payload" >/dev/null \
-      || log_warn "failed to record mutation_gate for $task_id (non-fatal)"
+    if ! pipeline-state task-write "$run_id" "$task_id" mutation_gate "$payload" >/dev/null; then
+      log_error "failed to record mutation_gate result for $task_id"
+      exit 1
+    fi
   fi
 
   printf '%s\n' "$payload"
