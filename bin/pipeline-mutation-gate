@@ -26,3 +26,47 @@ if [[ ! -d "$worktree" ]]; then
   printf '{"ok":false,"reason":"worktree-missing"}\n'
   exit 1
 fi
+
+cd "$worktree"
+
+run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+
+# Helper: write {ok, reason, score, target, scope} to stdout and to
+# state.tasks.<task>.mutation_gate. Returns the requested exit code.
+_emit() {
+  local ok="$1" reason="$2" score="${3:-null}" target="${4:-null}" scope="${5:-}" exit_rc="$6"
+
+  local scope_json='[]'
+  if [[ -n "$scope" ]]; then
+    scope_json=$(printf '%s' "$scope" | tr ',' '\n' | jq -R -s 'split("\n") | map(select(length > 0))')
+  fi
+
+  local payload
+  payload=$(jq -n \
+    --argjson ok "$ok" \
+    --arg reason "$reason" \
+    --argjson score "$score" \
+    --argjson target "$target" \
+    --argjson scope "$scope_json" \
+    '{ok:$ok, reason:$reason, score:$score, target:$target, scope:$scope}')
+
+  if [[ -f "$run_dir/state.json" ]]; then
+    pipeline-state task-write "$run_id" "$task_id" mutation_gate "$payload" >/dev/null \
+      || log_warn "failed to record mutation_gate for $task_id (non-fatal)"
+  fi
+
+  printf '%s\n' "$payload"
+  log_metric "task.gate.mutation" "task_id=\"$task_id\"" \
+    "ok=\"$([[ "$ok" == "true" ]] && echo true || echo false)\"" \
+    "reason=\"$reason\""
+  exit "$exit_rc"
+}
+
+if [[ ! -f package.json ]]; then
+  _emit true "no-package-json" null null "" 0
+fi
+
+mut_script=$(jq -r '.scripts["test:mutation"] // empty' package.json 2>/dev/null || printf '')
+if [[ -z "$mut_script" ]]; then
+  _emit true "no-script" null null "" 0
+fi
