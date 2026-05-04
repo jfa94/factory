@@ -1153,13 +1153,12 @@ _run_ship_pregate() {
   local mut_rc=$?
   set -e
   local mut_reason
-  mut_reason=$(pipeline-state task-read "$run_id" "$task_id" mutation_gate.reason 2>/dev/null \
-    | tr -d '"' || printf '')
+  mut_reason=$(pipeline-state task-read "$run_id" "$task_id" mutation_gate.reason 2>/dev/null || printf '')
   case "$mut_rc:$mut_reason" in
     0:ok)                     mut_gate="ok" ;;
     0:no-package-json|0:no-script|0:no-mutable-changes|0:no-report|0:no-score)
                               mut_gate="skipped" ;;
-    0:*)                      mut_gate="ok" ;;
+    0:*)                      mut_gate="skipped" ;;
     *:*)                      mut_gate="fail" ;;
   esac
   if [[ "$mut_gate" == "fail" ]]; then
