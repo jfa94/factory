@@ -41,7 +41,7 @@ _KNOWN_TASK_FIELDS=(
   ci_fix_attempts subagent_retries failure_reason
   holdout_review_file
   tdd_exempt
-  mutation_gate
+  mutation_gate mutation_score
 )
 
 # Per-run advisory lock. Prefers flock(1) when available (Linux, util-linux on
