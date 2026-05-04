@@ -1144,59 +1144,33 @@ _run_ship_pregate() {
     fi
   fi
 
-  # 3. Tier-gated mutation testing (runs test:mutation if the task's risk tier is
-  #    listed in quality.mutationTestingTiers and the script exists).
+  # 3. Mutation testing — mirrors templates/.github/workflows/quality-gate.yml.
+  #    Runs unconditionally for every staging-bound task PR; scope-filters
+  #    inside pipeline-mutation-gate so we only mutate files actually changed.
   local mut_gate="skipped"
-  local risk_tier
-  risk_tier=$(_task_field risk_tier 2>/dev/null || printf '')
-  risk_tier=$(_unquote_json_string "$risk_tier")
-  if [[ -n "$risk_tier" ]]; then
-    local mut_tiers
-    mut_tiers=$(read_config '.quality.mutationTestingTiers' '["feature","security"]')
-    local tier_match
-    tier_match=$(printf '%s' "$mut_tiers" \
-      | jq -r --arg t "$risk_tier" 'map(select(. == $t)) | first // empty' 2>/dev/null \
-      || printf '')
-    if [[ -n "$tier_match" && -f "$wt/package.json" ]]; then
-      local mut_script
-      mut_script=$(cd "$wt" && jq -r '.scripts["test:mutation"] // empty' package.json 2>/dev/null \
-        || printf '')
-      if [[ -n "$mut_script" ]]; then
-        local pkg_mgr
-        pkg_mgr=$(detect_pkg_manager "$wt")
-        local mut_log="$run_dir/${task_id}.mutation.pregate.log"
-        set +e
-        (cd "$wt" && "$pkg_mgr" run test:mutation) >"$mut_log" 2>&1
-        local mut_rc=$?
-        set -e
-        if [[ $mut_rc -eq 0 ]]; then
-          local mut_score_file="$wt/reports/mutation/mutation.json"
-          if [[ -f "$mut_score_file" ]]; then
-            local mut_score
-            mut_score=$(jq -r '.metrics.mutationScore // empty' "$mut_score_file" 2>/dev/null \
-              || printf '')
-            if [[ -n "$mut_score" ]]; then
-              _task_write mutation_score "$mut_score"
-              local mut_target
-              mut_target=$(read_config '.quality.mutationScoreTarget' '80')
-              if (( $(printf '%.0f' "$mut_score") >= mut_target )); then
-                mut_gate="ok"
-              else
-                log_warn "ship pregate: mutation score $mut_score < target $mut_target for $task_id"
-                mut_gate="fail"
-              fi
-            else
-              mut_gate="ok"
-            fi
-          else
-            mut_gate="ok"
-          fi
-        else
-          log_warn "ship pregate: mutation testing failed (exit $mut_rc) for $task_id — see $mut_log"
-          mut_gate="fail"
-        fi
-      fi
-    fi
+  set +e
+  pipeline-mutation-gate "$run_id" "$task_id" "$wt" >/dev/null
+  local mut_rc=$?
+  set -e
+  local mut_reason
+  mut_reason=$(pipeline-state task-read "$run_id" "$task_id" mutation_gate.reason 2>/dev/null \
+    | tr -d '"' || printf '')
+  case "$mut_rc:$mut_reason" in
+    0:ok)                     mut_gate="ok" ;;
+    0:no-package-json|0:no-script|0:no-mutable-changes|0:no-report|0:no-score)
+                              mut_gate="skipped" ;;
+    0:*)                      mut_gate="ok" ;;
+    *:*)                      mut_gate="fail" ;;
+  esac
+  if [[ "$mut_gate" == "fail" ]]; then
+    log_warn "ship pregate: mutation gate failed for $task_id (reason=${mut_reason:-unknown})"
+  fi
+
+  # Surface score for downstream consumers (pipeline-summary, pipeline-score).
+  local mut_score
+  mut_score=$(pipeline-state task-read "$run_id" "$task_id" mutation_gate.score 2>/dev/null || printf 'null')
+  if [[ "$mut_score" != "null" && -n "$mut_score" ]]; then
+    _task_write mutation_score "$mut_score"
   fi
 
   local overall_ok=true
