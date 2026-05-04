@@ -105,3 +105,29 @@ set +e
 (cd "$worktree" && "$pkg_mgr" exec stryker run --mutate "$scope_csv") >"$mut_log" 2>&1
 mut_rc=$?
 set -e
+
+if [[ $mut_rc -ne 0 ]]; then
+  log_warn "mutation gate: stryker exited $mut_rc — see $mut_log"
+  _emit false "stryker-failed" null null "$scope_csv" 1
+fi
+
+target=$(read_config '.quality.mutationScoreTarget' '80')
+
+score_file="$worktree/reports/mutation/mutation.json"
+if [[ ! -f "$score_file" ]]; then
+  _emit true "no-report" null "$target" "$scope_csv" 0
+fi
+
+score=$(jq -r '.metrics.mutationScore // empty' "$score_file" 2>/dev/null || printf '')
+if [[ -z "$score" ]]; then
+  _emit true "no-score" null "$target" "$scope_csv" 0
+fi
+
+# Coerce to integer for comparison; preserve raw value in JSON output.
+score_int=$(printf '%.0f' "$score")
+if (( score_int < target )); then
+  log_warn "mutation gate: score $score < target $target"
+  _emit false "score-below-target" "$score" "$target" "$scope_csv" 1
+fi
+
+_emit true "ok" "$score" "$target" "$scope_csv" 0

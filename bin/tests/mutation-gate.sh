@@ -153,6 +153,96 @@ case "$scope_csv" in
   *)        echo "  PASS: scope excludes types/";                pass=$((pass+1)) ;;
 esac
 
+echo "=== T4a: stryker exits non-zero → fail ==="
+MOCKS=$(mktemp -d)
+export PATH="$MOCKS:$PATH"
+cat > "$MOCKS/pnpm" <<'EOM'
+#!/usr/bin/env bash
+echo "stryker exploded" >&2
+exit 7
+EOM
+chmod +x "$MOCKS/pnpm"
+WT=$(mktemp -d)
+_seed_repo "$WT" "src/foo.ts"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-t4a"; TASK_ID="t4a"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+set +e
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+set -e
+assert_eq "stryker fail → exit 1" "1" "$rc"
+assert_eq "stryker fail → reason" "stryker-failed" "$(jq -r .reason <<<"$out")"
+
+echo "=== T4b: score below target → fail ==="
+MOCKS=$(mktemp -d)
+export PATH="$MOCKS:$PATH"
+cat > "$MOCKS/pnpm" <<'EOM'
+#!/usr/bin/env bash
+mkdir -p "$WT/reports/mutation"
+printf '{"metrics":{"mutationScore":42}}' > "$WT/reports/mutation/mutation.json"
+exit 0
+EOM
+chmod +x "$MOCKS/pnpm"
+WT=$(mktemp -d)
+export WT
+_seed_repo "$WT" "src/foo.ts"
+printf '{"scripts":{"test:mutation":"stryker run"},"factory":{"quality":{"mutationScoreTarget":80}}}' > "$WT/package.json"
+RUN_ID="run-t4b"; TASK_ID="t4b"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+set +e
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+set -e
+assert_eq "low score → exit 1" "1" "$rc"
+assert_eq "low score → reason" "score-below-target" "$(jq -r .reason <<<"$out")"
+assert_eq "low score → score field" "42" "$(jq -r .score <<<"$out")"
+assert_eq "low score → target field" "80" "$(jq -r .target <<<"$out")"
+
+echo "=== T4c: score at/above target → pass ==="
+MOCKS=$(mktemp -d)
+export PATH="$MOCKS:$PATH"
+cat > "$MOCKS/pnpm" <<'EOM'
+#!/usr/bin/env bash
+mkdir -p "$WT/reports/mutation"
+printf '{"metrics":{"mutationScore":85}}' > "$WT/reports/mutation/mutation.json"
+exit 0
+EOM
+chmod +x "$MOCKS/pnpm"
+WT=$(mktemp -d)
+export WT
+_seed_repo "$WT" "src/foo.ts"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-t4c"; TASK_ID="t4c"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+assert_eq "good score → exit 0" "0" "$rc"
+assert_eq "good score → ok=true" "true" "$(jq -r .ok <<<"$out")"
+assert_eq "good score → score=85" "85" "$(jq -r .score <<<"$out")"
+
+echo "=== T4d: pass without report (stryker green, no JSON) → pass ==="
+MOCKS=$(mktemp -d)
+export PATH="$MOCKS:$PATH"
+cat > "$MOCKS/pnpm" <<'EOM'
+#!/usr/bin/env bash
+exit 0
+EOM
+chmod +x "$MOCKS/pnpm"
+WT=$(mktemp -d)
+_seed_repo "$WT" "src/foo.ts"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-t4d"; TASK_ID="t4d"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+assert_eq "stryker green w/o report → exit 0" "0" "$rc"
+assert_eq "stryker green w/o report → reason" "no-report" "$(jq -r .reason <<<"$out")"
+
 echo ""
 echo "Total: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
