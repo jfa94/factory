@@ -188,18 +188,21 @@ chmod +x "$MOCKS/pnpm"
 WT=$(mktemp -d)
 export WT
 _seed_repo "$WT" "src/foo.ts"
-printf '{"scripts":{"test:mutation":"stryker run"},"factory":{"quality":{"mutationScoreTarget":80}}}' > "$WT/package.json"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
 RUN_ID="run-t4b"; TASK_ID="t4b"
 mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
 printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+# Override the global config to set target=60 (not the default 80).
+printf '{"quality":{"mutationScoreTarget":60}}' > "$CLAUDE_PLUGIN_DATA/config.json"
 set +e
 out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
 rc=$?
 set -e
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"  # don't leak into later tests
 assert_eq "low score → exit 1" "1" "$rc"
 assert_eq "low score → reason" "score-below-target" "$(jq -r .reason <<<"$out")"
 assert_eq "low score → score field" "42" "$(jq -r .score <<<"$out")"
-assert_eq "low score → target field" "80" "$(jq -r .target <<<"$out")"
+assert_eq "low score → target field" "60" "$(jq -r .target <<<"$out")"
 
 echo "=== T4c: score at/above target → pass ==="
 MOCKS=$(mktemp -d)

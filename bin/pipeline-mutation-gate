@@ -9,8 +9,8 @@
 # Same JSON written to state under `.tasks.<task-id>.mutation_gate`.
 # Exit 0 on pass/skip, 1 on fail.
 #
-# Skip reasons: no-package-json, no-script, no-mutable-changes, base-missing.
-# Fail reasons: stryker-failed, score-below-target.
+# Skip reasons (exit 0): no-package-json, no-script, no-mutable-changes, no-report, no-score.
+# Fail reasons (exit 1): base-missing, stryker-failed, score-below-target.
 
 set -euo pipefail
 source "$(dirname "$0")/pipeline-lib.sh"
