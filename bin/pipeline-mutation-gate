@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Run scoped Stryker mutation testing locally with the same scope semantics
+# as templates/.github/workflows/quality-gate.yml. Mirrors CI exactly so a
+# task that fails mutation locally would also fail on CI, and vice versa.
+#
+# Usage: pipeline-mutation-gate <run-id> <task-id> <worktree>
+#
+# Output: structured JSON to stdout — `{ok, reason, score, target, scope}`.
+# Same JSON written to state under `.tasks.<task-id>.mutation_gate`.
+# Exit 0 on pass/skip, 1 on fail.
+#
+# Skip reasons: no-package-json, no-script, no-mutable-changes, base-missing.
+# Fail reasons: stryker-failed, score-below-target.
+
+set -euo pipefail
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+require_command git
+
+run_id="${1:?missing run-id}"
+task_id="${2:?missing task-id}"
+worktree="${3:-$PWD}"
+
+if [[ ! -d "$worktree" ]]; then
+  log_error "worktree does not exist: $worktree"
+  printf '{"ok":false,"reason":"worktree-missing"}\n'
+  exit 1
+fi
