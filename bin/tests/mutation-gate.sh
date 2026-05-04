@@ -42,7 +42,7 @@ _seed_repo() {
     git -C "$dir" config user.email "t@t"; git -C "$dir" config user.name "t"
     mkdir -p "$dir/src"
     printf 'baseline' > "$dir/src/baseline.ts"
-    git -C "$dir" add "$dir/src/baseline.ts"
+    git -C "$dir" add src/baseline.ts
     git -C "$dir" commit -q -m "baseline"
     git -C "$dir" branch -q staging
     git -C "$dir" remote add origin "$dir/.git"
@@ -131,6 +131,7 @@ EOM
 chmod +x "$MOCKS/pnpm"
 
 WT=$(mktemp -d)
+export WT
 export MOCKS_LOG="$WT/.pnpm-args"
 _seed_repo "$WT" "src/foo.ts" "src/foo.test.ts" "src/bar.ts" "src/types/y.d.ts"
 printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
