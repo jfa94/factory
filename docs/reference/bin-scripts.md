@@ -834,6 +834,62 @@ pipeline-coverage-gate <before.json> <after.json> [--tolerance <percent>] [--tas
 
 ---
 
+### pipeline-mutation-gate
+
+Run scoped Stryker mutation testing locally with the same scope semantics as `templates/.github/workflows/quality-gate.yml`. Invoked from `_run_ship_pregate` in `pipeline-run-task` for every staging-bound task PR (no risk-tier filter).
+
+**Usage:**
+
+```bash
+pipeline-mutation-gate <run-id> <task-id> <worktree>
+```
+
+**Behavior:**
+
+1. Compute mutation scope: `git diff --name-only --diff-filter=AM origin/<base_ref>...HEAD -- ':(glob)src/**/*.ts'`, then filter out `*.test.ts`, `*.spec.ts`, `*.d.ts`, `types/`, `data/`, `index.ts`. The `:(glob)` magic prefix ensures `**` matches recursively across all git versions.
+2. If scope is empty, exit 0 with reason `no-mutable-changes`.
+3. Otherwise invoke `<pkg-manager> exec stryker run --mutate <csv-scope>`.
+4. Read score from `reports/mutation/mutation.json`, compare against `quality.mutationScoreTarget` (default 80).
+
+**Base ref:** `origin/staging` by default. Override with `FACTORY_MUTATION_BASE` env var.
+
+**Output:** `{ok, reason, score, target, scope}` to stdout, mirrored into state at `tasks.<task-id>.mutation_gate`.
+
+**Exit codes:**
+
+- `0` — pass or skip
+- `1` — fail (`base-missing`, `stryker-failed`, `score-below-target`)
+
+**Skip reasons (exit 0):** `no-package-json`, `no-script`, `no-mutable-changes`, `no-report`, `no-score`.
+
+**Fail reasons (exit 1):** `base-missing`, `stryker-failed`, `score-below-target`.
+
+**Output (pass):**
+
+```json
+{
+  "ok": true,
+  "reason": "ok",
+  "score": 85,
+  "target": 80,
+  "scope": ["src/foo.ts", "src/bar.ts"]
+}
+```
+
+**Output (fail):**
+
+```json
+{
+  "ok": false,
+  "reason": "score-below-target",
+  "score": 42,
+  "target": 80,
+  "scope": ["src/foo.ts"]
+}
+```
+
+---
+
 ### pipeline-tdd-gate
 
 Validate that each implementation commit is preceded by a test-only commit with the same `[task-id]` tag.

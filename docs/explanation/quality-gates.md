@@ -146,26 +146,25 @@ A mutant like `return a - b` would make this test fail, but if the test only che
 
 Industry target is >80% mutation score. AI code has 15-25% higher mutation survival rates than human code.
 
-**Trigger:** After holdout validation passes. Only runs for feature-tier and security-tier tasks (routine tasks skip).
+**Trigger:** Ship-time pregate (`_run_ship_pregate` in `pipeline-run-task`), runs unconditionally for every staging-bound task PR. Local execution mirrors the GitHub `Quality Gate` workflow's mutation job exactly — same scope filter, same Stryker invocation — so a task that fails mutation locally would also fail on CI, and mutation regressions cannot reach CI undetected.
 
 **How it works:**
 
-1. Run mutation testing framework (Stryker)
-2. If score < 80%, spawn `test-writer` (bundled in plugin)
-3. `test-writer` generates targeted tests for surviving mutants
-4. Re-run mutation testing
-5. Max 2 rounds of mutation test improvement
+1. `pipeline-mutation-gate` computes scope: `git diff --name-only --diff-filter=AM origin/staging...HEAD -- ':(glob)src/**/*.ts'`, filtered to drop `*.test.ts`, `*.spec.ts`, `*.d.ts`, `types/`, `data/`, `index.ts`.
+2. If scope is empty, exit 0 (`no-mutable-changes`) — matches CI's skip behavior for PRs with no mutable src changes.
+3. Otherwise invoke `<pkg-manager> exec stryker run --mutate <scope>` and parse `reports/mutation/mutation.json`.
+4. Score below `quality.mutationScoreTarget` (default 80) blocks PR creation by causing `_run_ship_pregate` to fail before `gh pr create` runs.
 
 **Failure behavior:**
 
-If mutation score remains below 80% after 2 rounds, log a warning and continue. The goal is improvement, not perfection.
+A failed mutation gate (`stryker-failed`, `score-below-target`, or `base-missing`) causes `_run_ship_pregate` to return non-zero and prevents `gh pr create` from running. The task fails ship and gets retried per the pipeline's retry budget.
 
 **Configuration:**
 
-| Setting                        | Default                   | Description                           |
-| ------------------------------ | ------------------------- | ------------------------------------- |
-| `quality.mutationScoreTarget`  | 80                        | Minimum mutation score percentage     |
-| `quality.mutationTestingTiers` | `["feature", "security"]` | Risk tiers requiring mutation testing |
+| Setting                       | Default | Description                       |
+| ----------------------------- | ------- | --------------------------------- |
+| `quality.mutationScoreTarget` | 80      | Minimum mutation score percentage |
+| `FACTORY_MUTATION_BASE`       | staging | Base ref for scope computation    |
 
 ---
 
@@ -189,7 +188,7 @@ Individual layers can be disabled via configuration:
 
 - Coverage: `quality.coverageMustNotDecrease: false`
 - Holdout: `quality.holdoutPercent: 0`
-- Mutation: `quality.mutationTestingTiers: []`
+- Mutation: drop the `test:mutation` script from `package.json` (gate skips with reason `no-script`).
 
 Static analysis and test suite cannot be disabled; they are enforced by the user's existing hooks.
 

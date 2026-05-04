@@ -467,6 +467,7 @@ All scripts live in `bin/`. They source `pipeline-lib.sh` for shared functions.
 | `pipeline-codex-review`    | Codex exec wrapper for adversarial review        |
 | `pipeline-parse-review`    | Extract structured verdict from reviewer output  |
 | `pipeline-coverage-gate`   | Compare coverage before/after, block decreases   |
+| `pipeline-mutation-gate`   | Scoped Stryker mutation testing (CI-parity gate) |
 
 ### Rate Limiting
 
