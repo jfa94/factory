@@ -72,3 +72,36 @@ mut_script=$(jq -r '.scripts["test:mutation"] // empty' package.json 2>/dev/null
 if [[ -z "$mut_script" ]]; then
   _emit true "no-script" null null "" 0
 fi
+
+base_ref="${FACTORY_MUTATION_BASE:-staging}"
+
+# Verify origin/<base> exists. Without the base ref we cannot reproduce CI's
+# scope. Fail loudly rather than silently full-running, which would diverge
+# from CI and defeat the purpose of this gate.
+if ! git -C "$worktree" rev-parse --verify "origin/${base_ref}" >/dev/null 2>&1; then
+  log_error "mutation gate: origin/${base_ref} not found in $worktree — fetch it before running"
+  _emit false "base-missing" null null "" 1
+fi
+
+# Mirror templates/.github/workflows/quality-gate.yml lines 86-96.
+# Use :(glob) pathspec magic so git expands ** regardless of shell globstar
+# settings (plain 'src/**/*.ts' silently matches nothing on macOS git 2.x).
+mapfile -t scope_files < <(
+  git -C "$worktree" diff --name-only --diff-filter=AM "origin/${base_ref}...HEAD" -- ':(glob)src/**/*.ts' 2>/dev/null \
+    | grep -Ev '\.(test|spec|d)\.ts$|/types/|/data/|/index\.ts$' || true
+)
+
+if [[ ${#scope_files[@]} -eq 0 ]]; then
+  _emit true "no-mutable-changes" null null "" 0
+fi
+
+scope_csv=$(IFS=,; printf '%s' "${scope_files[*]}")
+
+pkg_mgr=$(detect_pkg_manager "$worktree")
+mut_log="$run_dir/${task_id}.mutation.gate.log"
+mkdir -p "$run_dir"
+
+set +e
+(cd "$worktree" && "$pkg_mgr" exec stryker run --mutate "$scope_csv") >"$mut_log" 2>&1
+mut_rc=$?
+set -e

@@ -32,6 +32,31 @@ assert_contains() {
   fi
 }
 
+# Build a minimal git worktree with an `origin/staging` ref that contains
+# baseline files and a HEAD that adds/modifies the listed src files.
+# Args: <out-dir> <added-or-modified-files...>
+_seed_repo() {
+  local dir="$1"; shift
+  ( set -e
+    git init -q -b main "$dir"
+    git -C "$dir" config user.email "t@t"; git -C "$dir" config user.name "t"
+    mkdir -p "$dir/src"
+    printf 'baseline' > "$dir/src/baseline.ts"
+    git -C "$dir" add "$dir/src/baseline.ts"
+    git -C "$dir" commit -q -m "baseline"
+    git -C "$dir" branch -q staging
+    git -C "$dir" remote add origin "$dir/.git"
+    git -C "$dir" fetch -q origin
+    git -C "$dir" checkout -q -b feature
+    for f in "$@"; do
+      mkdir -p "$dir/$(dirname "$f")"
+      printf 'export const x = %s;\n' "$RANDOM" > "$dir/$f"
+    done
+    git -C "$dir" add -A
+    git -C "$dir" commit -q -m "feature changes"
+  )
+}
+
 echo "=== T1: missing args exits non-zero ==="
 set +e
 out=$(pipeline-mutation-gate 2>&1)
@@ -66,6 +91,66 @@ assert_eq "no test:mutation → ok=true" "true" "$(jq -r .ok <<<"$out")"
 assert_eq "no test:mutation → reason" "no-script" "$(jq -r .reason <<<"$out")"
 state_reason=$(jq -r --arg t "$TASK_ID" '.tasks[$t].mutation_gate.reason' "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json")
 assert_eq "no test:mutation → state.mutation_gate.reason" "no-script" "$state_reason"
+
+echo "=== T3a: no src changes vs origin/staging → skip pass ==="
+WT=$(mktemp -d)
+_seed_repo "$WT" "docs/readme.md"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-t3a"; TASK_ID="t3a"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+assert_eq "no src changes → exit 0" "0" "$rc"
+assert_eq "no src changes → reason" "no-mutable-changes" "$(jq -r .reason <<<"$out")"
+
+echo "=== T3b: only test/d.ts changes → skip pass ==="
+WT=$(mktemp -d)
+_seed_repo "$WT" "src/foo.test.ts" "src/types/x.d.ts" "src/data/y.ts" "src/index.ts"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-t3b"; TASK_ID="t3b"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+assert_eq "only filtered files → exit 0" "0" "$rc"
+assert_eq "only filtered files → reason" "no-mutable-changes" "$(jq -r .reason <<<"$out")"
+
+echo "=== T3c: mixed src + filtered changes → scope contains only mutable ==="
+# Create env where stryker is mocked to a passing no-op so we exercise scope.
+MOCKS=$(mktemp -d)
+export PATH="$MOCKS:$PATH"
+cat > "$MOCKS/pnpm" <<'EOM'
+#!/usr/bin/env bash
+# Capture invocation for inspection; succeed silently.
+echo "$@" > "$MOCKS_LOG"
+mkdir -p "$WT/reports/mutation"
+printf '{"metrics":{"mutationScore":95}}' > "$WT/reports/mutation/mutation.json"
+exit 0
+EOM
+chmod +x "$MOCKS/pnpm"
+
+WT=$(mktemp -d)
+export MOCKS_LOG="$WT/.pnpm-args"
+_seed_repo "$WT" "src/foo.ts" "src/foo.test.ts" "src/bar.ts" "src/types/y.d.ts"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-t3c"; TASK_ID="t3c"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+assert_eq "mixed → exit 0 (mocked stryker green)" "0" "$rc"
+scope_csv=$(jq -r '.scope | join(",")' <<<"$out")
+assert_contains "scope contains src/foo.ts" "src/foo.ts" "$scope_csv"
+assert_contains "scope contains src/bar.ts" "src/bar.ts" "$scope_csv"
+case "$scope_csv" in
+  *foo.test.ts*) echo "  FAIL: scope must not contain test files"; fail=$((fail+1)) ;;
+  *)             echo "  PASS: scope excludes test files";       pass=$((pass+1)) ;;
+esac
+case "$scope_csv" in
+  *types/*) echo "  FAIL: scope must not contain types/";        fail=$((fail+1)) ;;
+  *)        echo "  PASS: scope excludes types/";                pass=$((pass+1)) ;;
+esac
 
 echo ""
 echo "Total: $pass passed, $fail failed"
