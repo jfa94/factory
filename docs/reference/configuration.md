@@ -35,7 +35,7 @@ Consecutive task failures before pipeline aborts.
 | Min      | 0      |
 | Max      | 4      |
 
-Human oversight level. Default (0) assumes CI branch protection and GitHub auto-merge are enabled.
+Human oversight level. Default (0) assumes CI branch protection and GitHub auto-merge are enabled. Note: the default was changed from 2 to 0 in version 0.9.1 to match the documented config example.
 
 | Value | Name              | Behavior                                             |
 | ----- | ----------------- | ---------------------------------------------------- |

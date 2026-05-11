@@ -115,9 +115,11 @@ Follow the `review-protocol` skill's BLOCKING / NON-BLOCKING structure for the b
 - `NEEDS_DISCUSSION` — the code meets the spec but you have material concerns that need orchestrator or user input.
 
 <EXTREMELY-IMPORTANT>
-## Required final block
+## Required final blocks
 
-The LAST section of your response MUST be a `## Verdict` block with this exact shape:
+Your response MUST end with these two blocks in order:
+
+**1. Verdict block** (parsed by `pipeline-parse-review`):
 
 ```
 ## Verdict
@@ -128,7 +130,23 @@ BLOCKERS: <integer count of BLOCKING findings, 0 if none>
 ROUND: <round number>
 ```
 
-`pipeline-parse-review` extracts verdict/confidence/blockers ONLY from inside this block. Writing the words VERDICT, CONFIDENCE, or BLOCKERS anywhere else (e.g. in prose like "I would not approve") does not satisfy the requirement and may be ignored. Omitting the block fails parsing.
+Writing VERDICT, CONFIDENCE, or BLOCKERS anywhere else does not satisfy the requirement.
+
+**2. STATUS line** (the absolute last line, parsed by the SubagentStop hook):
+
+```
+STATUS: DONE
+STATUS: DONE_WITH_CONCERNS — <1-line concern>
+STATUS: BLOCKED — <1-line reason>
+STATUS: NEEDS_CONTEXT — <1-line question>
+```
+
+- **DONE** — review complete, regardless of verdict.
+- **DONE_WITH_CONCERNS** — review complete but you have a material concern requiring orchestrator attention.
+- **BLOCKED** — could not complete the review (e.g., missing diff, unreadable spec).
+- **NEEDS_CONTEXT** — a question must be answered before the review can proceed.
+
+Missing or malformed STATUS line is treated as BLOCKED by the hook.
 </EXTREMELY-IMPORTANT>
 
 One criterion → one citation or one blocker. Trace the path before you ship the verdict.

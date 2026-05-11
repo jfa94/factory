@@ -50,6 +50,8 @@ if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; t
   if [[ "$has_verdict" == "true" && "$has_findings" == "true" ]]; then
     # Validate verdict value
     json_verdict=$(printf '%s' "$json_block" | jq -r '.verdict // ""')
+    # Normalize APPROVE → APPROVED so agents that emit either form are accepted.
+    [[ "$json_verdict" == "APPROVE" ]] && json_verdict="APPROVED"
     case "$json_verdict" in
       APPROVED|REQUEST_CHANGES|NEEDS_DISCUSSION) ;;
       *)

@@ -87,6 +87,9 @@ prompt_file=$(temp_file ".prompt.md")
 out_file=$(temp_file ".out.json")
 diff_file=$(temp_file ".diff")
 err_file=$(temp_file ".err.log")
+# Per-invocation nonce makes UNTRUSTED fence tokens unguessable so injected
+# content in a PRD or diff cannot close the fence and escape the trust boundary.
+_review_nonce=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 16 || printf '%s' "$(date +%s%N)$$")
 printf '%s\n' "$diff_output" > "$diff_file"
 trap 'rm -f "$prompt_file" "$out_file" "$diff_file" "$err_file"' EXIT
 
@@ -99,20 +102,22 @@ trap 'rm -f "$prompt_file" "$out_file" "$diff_file" "$err_file"' EXIT
 
   printf '# Task: %s\n\n' "$task_id"
 
-  # Spec files (acceptance criteria, holdout criteria)
+  # Spec files (acceptance criteria, holdout criteria) — wrapped in UNTRUSTED
+  # fences so PRD content cannot inject reviewer instructions.
   if [[ -n "$spec_dir" && -d "$spec_dir" ]]; then
     for f in "${spec_dir}"/spec.md "${spec_dir}"/acceptance.md "${spec_dir}"/holdout.md; do
       if [[ -f "$f" ]]; then
+        printf '<<<UNTRUSTED:SPEC:%s>>>\n' "$_review_nonce"
         printf '## %s\n\n' "$(basename "$f" .md)"
         cat "$f"
-        printf '\n\n'
+        printf '\n<<<END:UNTRUSTED:SPEC:%s>>>\n\n' "$_review_nonce"
       fi
     done
   fi
 
-  printf '## Diff (base: %s)\n\n```diff\n' "$base_ref"
+  printf '## Diff (base: %s)\n\n<<<UNTRUSTED:DIFF:%s>>>\n```diff\n' "$base_ref" "$_review_nonce"
   printf '%s\n' "$diff_output"
-  printf '```\n\n'
+  printf '```\n<<<END:UNTRUSTED:DIFF:%s>>>\n\n' "$_review_nonce"
 
   printf '## Instructions\n\n'
   printf 'Review the diff above against the spec. Output ONLY valid JSON matching '
@@ -147,18 +152,10 @@ _run_codex() {
   codex "${args[@]}" < "$prompt_file" >/dev/null 2>"$err_path"
 }
 
-codex_ok=false
-for sandbox in "read-only" "workspace-read"; do
-  if _run_codex "$sandbox" "$err_file"; then
-    codex_ok=true
-    break
-  fi
-done
-
-if [[ "$codex_ok" != "true" ]]; then
-  log_error "codex exec failed with all sandbox levels"
+if ! _run_codex "read-only" "$err_file"; then
+  log_error "codex exec failed at read-only sandbox level (not retrying at lower isolation)"
   if [[ -s "$err_file" ]]; then
-    log_error "last codex stderr (tail 2KB): $(tail -c 2000 "$err_file")"
+    log_error "codex stderr (tail 2KB): $(tail -c 2000 "$err_file")"
   fi
   exit 1
 fi

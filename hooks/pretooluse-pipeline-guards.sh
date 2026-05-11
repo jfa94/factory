@@ -168,7 +168,9 @@ if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
 fi
 
 # --- 0b. path-scope guard: scribe agent ---
-# When FACTORY_SUBAGENT_ROLE=scribe, Edit/Write/MultiEdit are restricted to:
+# Active when $run_dir/.scribe_active sentinel exists (written by pipeline-run-task
+# at scribe spawn time; FACTORY_SUBAGENT_ROLE is never exported to subagents).
+# Edit/Write/MultiEdit are restricted to:
 #   - docs/** or /docs/**
 #   - Version-bump files: package.json, plugin.json, pyproject.toml, Cargo.toml,
 #     VERSION, .version
@@ -176,7 +178,7 @@ fi
 # Bash is also restricted: write-equivalent shell ops (>, >>, tee, cp, mv,
 # cat >, mkdir, touch, dd of=) are parsed; if any target path is out-of-scope,
 # the command is denied. Unresolvable targets → fail-closed deny.
-if [[ "${FACTORY_SUBAGENT_ROLE:-}" == "scribe" ]]; then
+if [[ -f "$run_dir/.scribe_active" ]]; then
   _is_scribe_allowed_path() {
     local p="$1"
     [[ -z "$p" ]] && return 0
@@ -298,8 +300,8 @@ if [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]]; then
       deny_reasons+=("tdd_gate=$cl_tdd (must be ok or skipped)")
     [[ "$cl_cov" != "ok" && "$cl_cov" != "skipped" ]] && \
       deny_reasons+=("coverage_gate=$cl_cov (must be ok or skipped)")
-    [[ "$cl_qok" != "ok" ]] && \
-      deny_reasons+=("quality_gate=$cl_qok (must be ok)")
+    [[ "$cl_qok" != "ok" && "$cl_qok" != "skipped" ]] && \
+      deny_reasons+=("quality_gate=$cl_qok (must be ok or skipped)")
     [[ "$cl_pgk" != "ok" && "$cl_pgk" != "skipped" ]] && \
       deny_reasons+=("pregate_gate=$cl_pgk (must be ok or skipped)")
     [[ "$cl_rbr" != "true" ]] && \

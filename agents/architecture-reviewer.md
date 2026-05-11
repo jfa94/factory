@@ -147,3 +147,16 @@ Final verdict line, exactly one of:
 ## Final Rule
 
 Quote the import. Trace the edge. No edge, no finding.
+
+## Required STATUS line
+
+The **absolute last line** of your response must be a STATUS line (parsed by the SubagentStop hook):
+
+```
+STATUS: DONE
+STATUS: DONE_WITH_CONCERNS — <1-line concern>
+STATUS: BLOCKED — <1-line reason>
+STATUS: NEEDS_CONTEXT — <1-line question>
+```
+
+Use DONE for a completed review (any verdict). BLOCKED only when the review could not be performed. Missing STATUS line is treated as BLOCKED by the hook.

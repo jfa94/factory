@@ -696,7 +696,12 @@ _stage_postexec() {
   fi
   _task_write worktree "\"$wt\""
 
-  if ! pipeline-quality-gate "$run_id" "$task_id" "$wt" >/dev/null; then
+  set +e
+  pipeline-quality-gate "$run_id" "$task_id" "$wt" >/dev/null
+  local _qg_pe_rc=$?
+  set -e
+  if (( _qg_pe_rc != 0 && _qg_pe_rc != 2 )); then
+    # rc=2 = legitimately skipped (no package.json / no scripts); treat as pass.
     log_warn "quality gate failed for $task_id"
     t1=$(_now_ms)
     log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"quality\""
@@ -1014,8 +1019,18 @@ _stage_postreview() {
         # Extract last ```json...``` block from markdown (matches pipeline-parse-review behaviour)
         raw_json=$(awk '/^```json/{p=1;buf="";next}/^```/{if(p){last=buf;p=0};next}p{buf=buf $0 "\n"}END{printf "%s",last}' "$f" 2>/dev/null || printf '{}')
       fi
+      local _jq_err; _jq_err=$(mktemp)
       still_count=$(printf '%s' "$raw_json" | \
-        jq '[.prior_blocker_map // [] | .[] | select(.status == "still-present")] | length' 2>/dev/null || printf '0')
+        jq '[.prior_blocker_map // [] | .[] | select(.status == "still-present")] | length' 2>"$_jq_err")
+      local _jq_rc=$?
+      if (( _jq_rc != 0 )); then
+        log_error "postreview: malformed reviewer JSON in $f: $(cat "$_jq_err")"
+        rm -f "$_jq_err"
+        _task_write failure_reason "\"malformed reviewer output: $f\""
+        any_changes=true
+        continue
+      fi
+      rm -f "$_jq_err"
       if (( still_count > 0 )); then
         log_warn "postreview: $still_count prior blocker(s) still-present in $f"
         any_changes=true
@@ -1124,12 +1139,16 @@ _run_ship_pregate() {
   # 1. Re-run quality gate (lint / typecheck / test). Overwrites quality_gate in
   #    state with the post-commit, post-reviewer-round result — the ship-time
   #    reading is the authoritative one for the PR guard.
-  local qg_ok=false
-  if pipeline-quality-gate "$run_id" "$task_id" "$wt" >/dev/null; then
-    qg_ok=true
-  else
-    log_warn "ship pregate: quality gate failed for $task_id"
-  fi
+  local qg_ok=false qg_skipped=false
+  set +e
+  pipeline-quality-gate "$run_id" "$task_id" "$wt" >/dev/null
+  local _qg_rc=$?
+  set -e
+  case "$_qg_rc" in
+    0) qg_ok=true ;;
+    2) qg_skipped=true ;;  # rc=2: not applicable (no package.json / no scripts)
+    *) log_warn "ship pregate: quality gate failed for $task_id" ;;
+  esac
 
   # 2. Coverage regression check (if baseline captured by preflight).
   local cov_before="$run_dir/.state/$run_id/$task_id.coverage-before.json"
@@ -1173,16 +1192,20 @@ _run_ship_pregate() {
   fi
 
   local overall_ok=true
-  [[ "$qg_ok" != "true" ]] && overall_ok=false
+  [[ "$qg_ok" != "true" && "$qg_skipped" != "true" ]] && overall_ok=false
   [[ "$cov_gate" == "fail" ]] && overall_ok=false
   [[ "$mut_gate" == "fail" ]] && overall_ok=false
+
+  local _qg_status
+  [[ "$qg_ok" == "true" ]] && _qg_status="ok" || { [[ "$qg_skipped" == "true" ]] && _qg_status="skipped" || _qg_status="fail"; }
 
   local pregate_json
   pregate_json=$(jq -n \
     --argjson ok "$([[ "$overall_ok" == "true" ]] && printf 'true' || printf 'false')" \
+    --arg quality  "$_qg_status" \
     --arg coverage "$cov_gate" \
     --arg mutation "$mut_gate" \
-    '{ok: $ok, coverage: $coverage, mutation: $mutation}')
+    '{ok: $ok, quality: $quality, coverage: $coverage, mutation: $mutation}')
 
   if ! pipeline-state task-write "$run_id" "$task_id" quality_gates.pregate "$pregate_json" >/dev/null; then
     log_error "failed to write quality_gates.pregate for $task_id"
@@ -1191,7 +1214,7 @@ _run_ship_pregate() {
 
   log_metric "task.gate.pregate" "task_id=\"$task_id\"" \
     "status=\"$([[ "$overall_ok" == "true" ]] && echo pass || echo fail)\"" \
-    "coverage=\"$cov_gate\"" "mutation=\"$mut_gate\""
+    "quality=\"$_qg_status\"" "coverage=\"$cov_gate\"" "mutation=\"$mut_gate\""
 
   [[ "$overall_ok" == "true" ]]
 }
@@ -1227,10 +1250,17 @@ _write_ship_checklist() {
     *) coverage_gate="skipped" ;;
   esac
 
-  # quality_gate: from quality_gate.ok (true/false).
-  local qok quality_gate
+  # quality_gate: from quality_gate.ok + quality_gate.skipped.
+  local qok qskipped quality_gate
   qok=$(jq -r --arg t "$task_id" '.tasks[$t].quality_gate.ok // false' "$state_file" 2>/dev/null || printf 'false')
-  quality_gate=$([[ "$qok" == "true" ]] && printf 'ok' || printf 'fail')
+  qskipped=$(jq -r --arg t "$task_id" '.tasks[$t].quality_gate.skipped // false' "$state_file" 2>/dev/null || printf 'false')
+  if [[ "$qskipped" == "true" ]]; then
+    quality_gate="skipped"
+  elif [[ "$qok" == "true" ]]; then
+    quality_gate="ok"
+  else
+    quality_gate="fail"
+  fi
 
   # pregate_gate: from quality_gates.pregate.ok (true/false/absent).
   local pg_ok pregate_gate
@@ -1364,7 +1394,7 @@ _stage_ship() {
   (( _qrc != 0 )) && return $_qrc
 
   local gate_lvl
-  gate_lvl=$(read_config '.humanReviewLevel' '2')
+  gate_lvl=$(read_config '.humanReviewLevel' '0')
   if (( gate_lvl >= 1 )); then
     if ! pipeline-human-gate "$run_id" pre-merge; then
       t1=$(_now_ms)
@@ -1582,6 +1612,9 @@ _stage_finalize_run() {
     local agents_json
     agents_json=$(jq -cn --arg pf "$pf" \
       '[{subagent_type:"scribe", isolation:"worktree", model:"sonnet", maxTurns:40, prompt_file:$pf}]')
+    # Write sentinel so pretooluse-pipeline-guards.sh can activate the scribe path-scope
+    # guard. The hook cannot read FACTORY_SUBAGENT_ROLE (never exported at spawn time).
+    printf '%s' "$run_id" > "$run_dir/.scribe_active" 2>/dev/null || true
     pipeline-state write "$run_id" '.scribe.status' '"spawned"' >/dev/null \
       || log_warn "scribe.status spawned write failed (non-fatal; cap counter may not tick)"
     _emit_manifest finalize-run "$agents_json"

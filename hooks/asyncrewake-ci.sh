@@ -74,9 +74,11 @@ for _ in $(seq 1 $max_iter); do
     .statusCheckRollup // []
     | map(.conclusion)
     | if length == 0 then "pending"
-      elif all(. != null and . != "") and all(. == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED") then "green"
-      elif any(. == "FAILURE" or . == "CANCELLED" or . == "TIMED_OUT") then "red"
-      else "pending" end
+      elif any(. == null or . == "") then "pending"
+      elif any(. == "FAILURE" or . == "CANCELLED" or . == "TIMED_OUT"
+               or . == "STALE" or . == "ACTION_REQUIRED" or . == "STARTUP_FAILURE") then "red"
+      elif all(. == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED") then "green"
+      else "red" end
   ')
   case "$decision" in
     green|red) ci_conclusion="$decision"; break ;;

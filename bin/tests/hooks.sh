@@ -516,7 +516,7 @@ set +e
 output=$("$QG" "$qg_run" "qt1" "$qg_proj4" 2>/dev/null)
 exit_code=$?
 set -e
-assert_eq "no package.json exit 0 (skipped)" "0" "$exit_code"
+assert_eq "no package.json exit 2 (skipped)" "2" "$exit_code"
 assert_eq "no package.json ok=true" "true" "$(echo "$output" | jq -r '.ok')"
 assert_eq "no package.json skipped=true" "true" "$(echo "$output" | jq -r '.skipped')"
 assert_eq "no package.json reason=no-package-json" "no-package-json" "$(echo "$output" | jq -r '.reason')"
@@ -538,7 +538,7 @@ set +e
 output=$("$QG" "$qg_run" "qt1" "$qg_proj5" 2>/dev/null)
 exit_code=$?
 set -e
-assert_eq "no quality scripts exit 0" "0" "$exit_code"
+assert_eq "no quality scripts exit 2" "2" "$exit_code"
 assert_eq "no quality scripts ok=true" "true" "$(echo "$output" | jq -r '.ok')"
 assert_eq "no quality scripts reason=no-quality-scripts" "no-quality-scripts" "$(echo "$output" | jq -r '.reason')"
 
@@ -1530,9 +1530,10 @@ echo ""
 echo "=== pretooluse-pipeline-guards: scribe — blocks write to src/foo.ts ==="
 
 _seed_run "run-scribe-block" '{"status":"running","tasks":{}}'
+printf 'run-scribe-block' > "$CLAUDE_PLUGIN_DATA/runs/run-scribe-block/.scribe_active"
 input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.ts"}}'
 set +e
-out=$(printf '%s' "$input" | FACTORY_SUBAGENT_ROLE=scribe bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+out=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
 rc=$?
 set -e
 assert_eq "scribe block src/foo.ts exit 0" "0" "$rc"
@@ -1546,9 +1547,10 @@ echo ""
 echo "=== pretooluse-pipeline-guards: scribe — allows write to docs/api.md ==="
 
 _seed_run "run-scribe-allow-docs" '{"status":"running","tasks":{}}'
+printf 'run-scribe-allow-docs' > "$CLAUDE_PLUGIN_DATA/runs/run-scribe-allow-docs/.scribe_active"
 input='{"tool_name":"Write","tool_input":{"file_path":"docs/api.md"}}'
 set +e
-out=$(printf '%s' "$input" | FACTORY_SUBAGENT_ROLE=scribe bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+out=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
 rc=$?
 set -e
 assert_eq "scribe allow docs/api.md exit 0" "0" "$rc"
@@ -1558,9 +1560,10 @@ echo ""
 echo "=== pretooluse-pipeline-guards: scribe — allows write to docs/foo/bar.md ==="
 
 _seed_run "run-scribe-allow-nested" '{"status":"running","tasks":{}}'
+printf 'run-scribe-allow-nested' > "$CLAUDE_PLUGIN_DATA/runs/run-scribe-allow-nested/.scribe_active"
 input='{"tool_name":"Write","tool_input":{"file_path":"docs/foo/bar.md"}}'
 set +e
-out=$(printf '%s' "$input" | FACTORY_SUBAGENT_ROLE=scribe bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+out=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
 rc=$?
 set -e
 assert_eq "scribe allow docs/foo/bar.md exit 0" "0" "$rc"
@@ -1570,9 +1573,10 @@ echo ""
 echo "=== pretooluse-pipeline-guards: scribe guard skipped for non-scribe role ==="
 
 _seed_run "run-scribe-nonscribe" '{"status":"running","tasks":{"t1":{"status":"executing","stage":"postexec"}}}'
+# No .scribe_active sentinel — guard must not trigger.
 input='{"tool_name":"Write","tool_input":{"file_path":"src/foo.ts"}}'
 set +e
-out=$(printf '%s' "$input" | FACTORY_SUBAGENT_ROLE=task-executor bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+out=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
 rc=$?
 set -e
 assert_eq "non-scribe src/foo.ts exit 0" "0" "$rc"
@@ -1908,8 +1912,10 @@ printf '%s\n' "export AWS_KEY=$_fake_aws_key" > "$_push_tmp/secrets.txt"
 git -C "$_push_tmp" add "$_push_tmp/secrets.txt"
 git -C "$_push_tmp" commit -m "add secrets" -q
 
-# Bare `git push` with no args and no upstream configured → fail-open with warning, exit 0.
-# Build a separate repo without upstream to test this path.
+# First-push (no upstream) of a branch containing a secret → still blocked.
+# The previous behavior skipped the scan when no upstream was configured, which
+# meant the very first push of any branch was exempt. D10 closed that gap by
+# scanning all commits reachable from HEAD when remote_ref is unknown.
 _push_tmp2=$(mktemp -d)
 git -C "$_push_tmp2" init -q
 git -C "$_push_tmp2" commit --allow-empty -m "init" -q
@@ -1919,8 +1925,8 @@ git -C "$_push_tmp2" add "$_push_tmp2/secrets.txt"
 git -C "$_push_tmp2" commit -m "add secrets" -q
 out=$(printf '%s' "{\"tool_input\":{\"command\":\"git -C $_push_tmp2 push\"}}" \
   | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
-assert_eq "push scan no upstream fail-open exit 0" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
-assert_contains "push scan no upstream warning" "push scan skipped" "$out"
+assert_eq "push scan no upstream detects secret (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "push scan no upstream block reason=secret_detected" "secret_detected" "$out"
 rm -rf "$_push_tmp2"
 
 # Add a fake remote so range resolves; commit with AKIA key; expect EXIT:2

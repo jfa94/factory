@@ -67,7 +67,7 @@ extract_metrics() {
   }' "$file")
   if printf '%s' "$result" | jq -e '.lines == null or .branches == null or .functions == null or .statements == null' >/dev/null 2>&1; then
     printf '[pipeline-coverage-gate] ERROR: coverage JSON missing required .total.lines/.branches/.functions/.statements in %s\n' "$file" >&2
-    exit 1
+    exit 2  # rc=2: tool/parse error, distinct from rc=1 (threshold failure)
   fi
   printf '%s\n' "$result"
 }

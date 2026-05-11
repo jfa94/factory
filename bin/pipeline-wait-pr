@@ -293,7 +293,9 @@ _attempt_rebase() {
   # so we refuse to push and surface the situation for an authorized human to
   # finish the rebase manually (or merge staging in instead).
   log_error "rebase succeeded locally for $head_branch; refusing to publish (CLAUDE.md forbids force-push). An authorized human must finish this rebase manually."
-  _safe_checkout_back "$current_branch" || true
+  if ! _safe_checkout_back "$current_branch"; then
+    log_error "failed to restore branch $current_branch after refused rebase"
+  fi
   return 1
 }
 
@@ -402,6 +404,21 @@ while true; do
     # Distinguish "no checks defined" (defer to merge state) from "all passed".
     total_checks=$(printf '%s' "$checks_data" | jq 'length')
     pending_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.state == "IN_PROGRESS" or .state == "QUEUED" or .state == "PENDING")] | length')
+    # Fail fast when all checks have settled but some are bucket=skipping. A
+    # required check that stays in the skipping bucket can never unblock, so
+    # waiting out the full timeout is misleading. Surface it immediately so a
+    # human can investigate whether the check was supposed to be required.
+    skipping_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.bucket == "skipping")] | length')
+    if [[ "$pending_checks" -eq 0 && "$skipping_checks" -gt 0 ]]; then
+      skipping_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.bucket == "skipping") | .name] | join(", ")')
+      log_error "PR #${pr} has settled checks with bucket=skipping: $skipping_names — if any are required, the PR cannot merge"
+      jq -n \
+        --arg pr "$pr" \
+        --arg skipped "$skipping_names" \
+        '{status: "ci_skipping", pr: $pr, skipping_checks: $skipped}'
+      emit_ci_metric task "$pr" "red" "$checks_data"
+      exit 3
+    fi
     if (( total_checks == 0 )); then
       log_info "PR #${pr} has no checks defined; deferring to merge state"
     elif [[ "$pending_checks" -eq 0 ]]; then

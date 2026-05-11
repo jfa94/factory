@@ -538,6 +538,9 @@ pipeline_quota_gate() {
       local exp_cap_sec=$(( 120 * (1 << cycles) ))
       (( exp_cap_sec > sleep_cap_sec )) && exp_cap_sec=$sleep_cap_sec
       local do_sleep_sec=$(( want_sleep_sec < exp_cap_sec ? want_sleep_sec : exp_cap_sec ))
+      # Clamp to remaining wall-clock budget so we never overshoot by a full interval.
+      local remaining_sec=$(( (wall_budget_min - prior) * 60 ))
+      (( remaining_sec > 0 && do_sleep_sec > remaining_sec )) && do_sleep_sec=$remaining_sec
       local slept_min=$(( (do_sleep_sec + 59) / 60 ))
       local milestone
       milestone=$(printf '%s' "$route" | jq -r '.milestone // "unknown"')
@@ -969,16 +972,28 @@ validate_findings() {
   n=$(printf '%s' "$json" | jq '.findings | length')
   kept='[]'
   dropped=0
+  # Build normalized-line set from diff for exact-line matching. We normalize
+  # only intra-line whitespace (tabs/runs of spaces → single space) and trim
+  # leading/trailing blanks so reviewer-cited lines that have been re-flowed
+  # still match. Newlines are preserved (one line per record) so grep -x can
+  # require a full-line match.
+  local diff_lines_file; diff_lines_file=$(mktemp)
+  awk '{ gsub(/[\t ]+/, " "); sub(/^ /, ""); sub(/ $/, ""); print }' \
+    "$diff_file" > "$diff_lines_file"
+
   for ((i=0; i<n; i++)); do
     q=$(printf '%s' "$json" | jq -r ".findings[$i].verbatim_line // \"\"")
-    q_norm=$(printf '%s' "$q" | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
-    diff_norm=$(tr -s '[:space:]' ' ' < "$diff_file")
-    if [[ ${#q_norm} -ge 10 ]] && printf '%s\n' "$diff_norm" | grep -qF -- "$q_norm"; then
+    # Normalize verbatim_line the same way (strip CR + collapse blanks).
+    q_norm=$(printf '%s' "$q" | tr -d '\r' | awk '{ gsub(/[\t ]+/, " "); sub(/^ /, ""); sub(/ $/, ""); print }')
+    # Require full-line match (not substring). Prevents forged findings from
+    # passing by citing a short common string present anywhere in the diff.
+    if [[ ${#q_norm} -ge 10 ]] && grep -qxF -- "$q_norm" "$diff_lines_file"; then
       kept=$(printf '%s' "$json" | jq --argjson k "$kept" --argjson i "$i" '$k + [.findings[$i]]')
     else
       dropped=$((dropped + 1))
     fi
   done
+  rm -f "$diff_lines_file"
   printf '%s' "$json" | jq --argjson k "$kept" --argjson d "$dropped" '
     .findings = ($k | map(
       .blocking = (

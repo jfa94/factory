@@ -180,3 +180,19 @@ When done, print:
 ```
 
 Omit the "Sections skipped" block entirely if there are none.
+
+After the report block, emit a **STATUS line** as the absolute last line:
+
+```
+STATUS: DONE
+STATUS: DONE_WITH_CONCERNS — <1-line concern>
+STATUS: BLOCKED — <1-line reason>
+STATUS: NEEDS_CONTEXT — <1-line question>
+```
+
+- **DONE** — all documentation written successfully.
+- **DONE_WITH_CONCERNS** — documentation written but a section was skipped or a concern exists.
+- **BLOCKED** — could not complete (e.g., could not read codebase, could not write to /docs).
+- **NEEDS_CONTEXT** — a question must be answered before documentation can proceed.
+
+Missing STATUS line is treated as BLOCKED by the SubagentStop hook.

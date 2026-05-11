@@ -45,7 +45,7 @@ Each gate calls `pipeline-quota-check` → `pipeline-model-router` and handles t
 
 Three independent bounds govern the wait loop:
 
-- **Wall-clock budget** — consecutive pause time (`.circuit_breaker.pause_minutes_consecutive`) must not exceed `.quota.wallBudgetMin` (default 75). Resets to 0 on every `proceed`. Checked before each sleep; if already at budget, surfaces a human gate immediately rather than sleeping further.
+- **Wall-clock budget** — consecutive pause time (`.circuit_breaker.pause_minutes_consecutive`) must not exceed `.quota.wallBudgetMin` (default 75). Resets to 0 on every `proceed`. Checked before each sleep; if already at budget, surfaces a human gate immediately rather than sleeping further. Sleep duration is clamped to remaining budget (`(wall_budget_min - prior) * 60` seconds) to prevent overshooting by a full interval.
 - `.circuit_breaker.quota_wait_cycles` — consecutive "still over threshold" yields. Cap `.quota.maxWaitCycles` (default 60, ≈ 9 h).
 - `.circuit_breaker.quota_stale_cycles` — consecutive stale-cache yields (statusline silent). Cap `.quota.maxStaleCycles` (default 6, ≈ 1 h).
 

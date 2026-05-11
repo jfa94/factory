@@ -38,7 +38,7 @@ if [[ ! -f package.json ]]; then
     fi
   fi
   printf '%s\n' "$result"
-  exit 0
+  exit 2  # rc=2: legitimately skipped (not applicable), distinct from rc=1 (failure)
 fi
 
 pkg_mgr=$(detect_pkg_manager "$worktree")
@@ -64,7 +64,7 @@ if [[ -z "$commands" ]]; then
       fi
     fi
     printf '%s\n' "$result"
-    exit 0
+    exit 2  # rc=2: legitimately skipped (not applicable), distinct from rc=1 (failure)
   fi
 fi
 

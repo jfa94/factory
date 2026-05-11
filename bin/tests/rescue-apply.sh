@@ -119,7 +119,9 @@ pipeline-rescue-apply --plans="$plans2" >/dev/null
 status=$(pipeline-state read R1 '.tasks.T1.status' | tr -d '"')
 assert_eq "mark_failed sets status" "failed" "$status"
 reason=$(pipeline-state read R1 '.tasks.T1.failure_reason' | tr -d '"')
-assert_eq "mark_failed writes reason" "schema conflict" "$reason"
+# state_updates writes to .tasks.* are now blocked (security fix A2) — only
+# the plan's `reason` field propagates via _apply_plan_mark_failed.
+assert_eq "mark_failed writes reason" "schema conflict unresolvable" "$reason"
 
 echo "=== investigation plan: malformed decision → no_action ==="
 seed_run

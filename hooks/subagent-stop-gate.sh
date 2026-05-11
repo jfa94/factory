@@ -8,6 +8,21 @@
 #   1 — blocked (autonomous mode only, missing STATUS or zero commits)
 set -euo pipefail
 
+# Retry a pipeline-state write up to 2 times (300ms apart) before giving up.
+# Usage: _state_write_retry <run_id> <task_id> <key> <value>
+_state_write_retry() {
+  local _run="$1" _task="$2" _key="$3" _val="$4"
+  local _attempt
+  for _attempt in 1 2; do
+    if pipeline-state task-write "$_run" "$_task" "$_key" "$_val" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.3
+  done
+  printf '[subagent-stop-gate] WARN: state write failed after retries: key=%s task=%s\n' "$_key" "$_task" >&2
+  return 1
+}
+
 # Source pipeline-lib.sh for shared helpers (resolve_base_ref, etc.). Best-
 # effort: hooks must keep functioning when CLAUDE_PLUGIN_ROOT is unset (e.g.
 # tests). A minimal local fallback is defined below if the lib is missing.
@@ -67,18 +82,20 @@ _derive_task_id_from_transcript() {
   local transcript_path="$1"
   local state_file="$2"
   local tid=""
-  if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
-    tid=$(grep -oE '\[task:[^]]+\]' "$transcript_path" 2>/dev/null | head -1 | sed 's/\[task:\([^]]*\)\]/\1/' || true)
-  fi
+  # Prefer authoritative env var — transcript content is subagent-controlled and poisonable.
+  tid="${FACTORY_TASK_ID:-}"
   if [[ -z "$tid" ]]; then
-    # Fallback: use FACTORY_TASK_ID if set, or first executing task only when exactly 1 is executing
-    tid="${FACTORY_TASK_ID:-}"
-    if [[ -z "$tid" && -f "${state_file:-}" ]]; then
-      local executing_count
-      executing_count=$(jq -r '[.tasks | to_entries[] | select(.value.status == "executing")] | length' "$state_file" 2>/dev/null || printf '0')
-      if (( executing_count == 1 )); then
-        tid=$(jq -r '[.tasks | to_entries[] | select(.value.status == "executing") | .key] | first // empty' "$state_file" 2>/dev/null || true)
-      fi
+    # Fallback: transcript grep (attacker-influenced; only used when env var absent)
+    if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
+      tid=$(grep -oE '\[task:[^]]+\]' "$transcript_path" 2>/dev/null | head -1 | sed 's/\[task:\([^]]*\)\]/\1/' || true)
+    fi
+  fi
+  if [[ -z "$tid" && -f "${state_file:-}" ]]; then
+    # Last resort: unambiguous single-executing-task state
+    local executing_count
+    executing_count=$(jq -r '[.tasks | to_entries[] | select(.value.status == "executing")] | length' "$state_file" 2>/dev/null || printf '0')
+    if (( executing_count == 1 )); then
+      tid=$(jq -r '[.tasks | to_entries[] | select(.value.status == "executing") | .key] | first // empty' "$state_file" 2>/dev/null || true)
     fi
   fi
   printf '%s' "$tid"
@@ -168,8 +185,7 @@ if [[ "$autonomous" == "1" ]]; then
     retries=$(( retries + 1 ))
     if [[ -n "$task_id" && "$task_id" =~ ^[a-zA-Z0-9_-]+$ ]] && \
        [[ -f "$run_dir/state.json" ]] && command -v pipeline-state >/dev/null 2>&1; then
-      pipeline-state task-write "$run_id_for_retry" "$task_id" \
-        "subagent_retries" "$retries" >/dev/null 2>&1 || true
+      _state_write_retry "$run_id_for_retry" "$task_id" "subagent_retries" "$retries" || true
     fi
 
     # Budget: 1 retry (2 attempts total). On 2nd block, write BLOCKED to the
@@ -184,8 +200,7 @@ if [[ "$autonomous" == "1" ]]; then
           *)             status_field="" ;;
         esac
         if [[ -n "$status_field" ]]; then
-          pipeline-state task-write "$run_id_for_retry" "$task_id" \
-            "$status_field" '"BLOCKED"' >/dev/null 2>&1 || true
+          _state_write_retry "$run_id_for_retry" "$task_id" "$status_field" '"BLOCKED"' || true
         fi
       fi
     fi
@@ -202,8 +217,7 @@ if [[ "$autonomous" == "1" ]]; then
   if [[ -n "$task_id_for_cleanup" && "$task_id_for_cleanup" =~ ^[a-zA-Z0-9_-]+$ ]] && \
      command -v pipeline-state >/dev/null 2>&1; then
     run_id_cleanup=$(basename "$run_dir")
-    pipeline-state task-write "$run_id_cleanup" "$task_id_for_cleanup" \
-      "subagent_retries" "0" >/dev/null 2>&1 || true
+    _state_write_retry "$run_id_cleanup" "$task_id_for_cleanup" "subagent_retries" "0" || true
   fi
 fi
 

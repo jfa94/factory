@@ -159,6 +159,10 @@ if [[ "$agent_type" == "scribe" ]]; then
   if [[ "$scribe_status" == "done" ]]; then
     pipeline-state write "$run_id" '.scribe.attempts' '0' >/dev/null 2>&1 || true
   fi
+  # Remove path-scope sentinel regardless of outcome so the guard does not
+  # persist after scribe exits (even on failure/retry the next spawn writes a
+  # fresh sentinel).
+  rm -f "$run_dir/.scribe_active" 2>/dev/null || true
 fi
 
 # --- 6. Emit metric ---

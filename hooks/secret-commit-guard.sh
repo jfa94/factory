@@ -152,8 +152,9 @@ else
     if [[ -n "$upstream" ]]; then
       remote_ref="$upstream"
     else
-      printf '%s\n' "secret-commit-guard: git push without upstream — push scan skipped" >&2
-      exit 0
+      # No upstream configured — first push of this branch. Scan all commits
+      # reachable from HEAD so the initial push is not exempt from secret checks.
+      remote_ref=""
     fi
   else
     remote_ref="${push_remote}/${push_branch}"

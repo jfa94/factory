@@ -100,9 +100,9 @@ Reference for script exit codes and their meanings.
 
 ### pipeline-circuit-breaker
 
-| Exit Code | Meaning                                                            |
-| --------- | ------------------------------------------------------------------ |
-| 0         | Safe to proceed                                                    |
+| Exit Code | Meaning                                                                |
+| --------- | ---------------------------------------------------------------------- |
+| 0         | Safe to proceed                                                        |
 | 1         | Circuit breaker tripped (consecutive failures or runtime cap exceeded) |
 
 ---
@@ -124,17 +124,23 @@ Reference for script exit codes and their meanings.
 
 ### pipeline-coverage-gate
 
-| Exit Code | Meaning                             |
-| --------- | ----------------------------------- |
-| 0         | Coverage maintained or increased    |
-| 1         | Coverage decreased beyond tolerance |
+| Exit Code | Meaning                                            |
+| --------- | -------------------------------------------------- |
+| 0         | Coverage maintained or increased                   |
+| 1         | Coverage decreased beyond tolerance                |
+| 2         | Parse/tool error (distinct from threshold failure) |
+
+Exit code 2 indicates a tooling or parsing error (e.g., coverage file malformed, tool not installed) rather than a coverage regression. Callers treat rc=2 as a non-blocking error for diagnostic purposes.
 
 ### pipeline-quality-gate
 
-| Exit Code | Meaning                  |
-| --------- | ------------------------ |
-| 0         | All quality gates passed |
-| 1         | One or more gates failed |
+| Exit Code | Meaning                                                      |
+| --------- | ------------------------------------------------------------ |
+| 0         | All quality gates passed                                     |
+| 1         | One or more gates failed                                     |
+| 2         | Legitimately skipped (no package.json or no quality scripts) |
+
+Exit code 2 indicates the gate was not applicable (non-JS project or unconfigured quality scripts). `pipeline-run-task` interprets rc=2 as "not applicable, treat as pass" and records `quality_gate=skipped` in state. The ship checklist and PR-create guard accept `quality_gate=skipped` alongside `ok`.
 
 ---
 
@@ -160,13 +166,15 @@ Reference for script exit codes and their meanings.
 
 ### pipeline-wait-pr
 
-| Exit Code | Meaning                                       |
-| --------- | --------------------------------------------- |
-| 0         | PR merged successfully                        |
-| 1         | Timeout waiting for merge                     |
-| 2         | PR closed without merge (not due to conflict) |
-| 3         | CI checks failed                              |
-| 4         | Merge conflict detected                       |
+| Exit Code | Meaning                                          |
+| --------- | ------------------------------------------------ |
+| 0         | PR merged successfully                           |
+| 1         | Timeout waiting for merge                        |
+| 2         | PR closed without merge (not due to conflict)    |
+| 3         | CI checks failed or skipping (details on stdout) |
+| 4         | Merge conflict detected                          |
+
+Exit code 3 now covers both CI failure and CI skipping. When checks settle with `bucket=skipping`, the script fails fast with exit 3 and `status: ci_skipping` JSON instead of waiting out the full timeout.
 
 ### pipeline-gh-comment
 

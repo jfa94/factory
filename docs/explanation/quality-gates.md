@@ -198,7 +198,15 @@ Disabling layers reduces execution time but increases the risk of quality issues
 
 ## Non-JS / Unconfigured Project Handling
 
-When `pipeline-quality-gate` runs in a directory without a `package.json`, or where no quality scripts (`lint`, `typecheck`, `test:coverage`, `test`) are defined, it records `skipped: true` in the quality gate result and exits 0. This allows:
+When `pipeline-quality-gate` runs in a directory without a `package.json`, or where no quality scripts (`lint`, `typecheck`, `test:coverage`, `test`) are defined, it records `skipped: true` in the quality gate result and exits 2 (not 0). This exit code distinction allows callers to differentiate between:
+
+- Exit 0: All gates passed
+- Exit 1: One or more gates failed
+- Exit 2: Not applicable (legitimately skipped)
+
+`pipeline-run-task` interprets rc=2 as "not applicable, treat as pass" and records `quality_gate=skipped` in state. The ship checklist and PR-create pretooluse guard accept `quality_gate=skipped` alongside `ok`.
+
+This allows:
 
 - Non-JS projects (Go, Rust, Python) to pass through cleanly
 - JS projects with exotic build systems to proceed without blocking

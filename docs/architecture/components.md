@@ -175,6 +175,7 @@ Fresh-context adversarial code review with structured verdicts.
 - Validates acceptance criteria with file:line evidence
 - Validates holdout criteria (criteria executor did not see)
 - Outputs structured verdict: APPROVE, REQUEST_CHANGES, or NEEDS_DISCUSSION
+- MUST emit a final `STATUS: DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT` line (missing STATUS = BLOCKED per SubagentStop hook)
 
 ### architecture-reviewer
 
@@ -193,6 +194,7 @@ Validates architectural compliance: module boundaries, dependency direction, cou
 - Detects god objects (>300 lines or >15 exports), circular imports, leaky abstractions
 - Flags AI anti-patterns: over-engineering, barrel file abuse, swallowed errors, hallucinated packages
 - Spawned for feature-tier and security-tier tasks
+- MUST emit a final `STATUS: DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT` line (missing STATUS = BLOCKED per SubagentStop hook)
 
 ### security-reviewer
 
@@ -213,6 +215,7 @@ Audits code for security vulnerabilities following OWASP Top 10 and AI-specific 
 - Verifies new dependencies exist (no typosquatting, no hallucinated subpath imports)
 - Checks AI-specific insecure defaults: wildcard CORS, Math.random() for crypto, disabled TLS, missing rate limits
 - Spawned for security-tier tasks only
+- MUST emit a final `STATUS: DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT` line (missing STATUS = BLOCKED per SubagentStop hook)
 
 ### test-writer
 
@@ -251,13 +254,19 @@ Incrementally updates `/docs` after each pipeline run using the Diátaxis framew
 
 **Path scope enforcement:**
 
-When `FACTORY_SUBAGENT_ROLE=scribe`, the `pretooluse-pipeline-guards.sh` hook restricts Edit/Write/MultiEdit to:
+The `pretooluse-pipeline-guards.sh` hook restricts scribe writes based on a sentinel file mechanism: `pipeline-run-task` writes `$run_dir/.scribe_active` when spawning scribe, and `hooks/subagent-stop-transcript.sh` removes it on stop. The hook reads this sentinel rather than relying on the `FACTORY_SUBAGENT_ROLE=scribe` env var (which was never exported in prod).
+
+When the scribe sentinel is active, Edit/Write/MultiEdit are restricted to:
 
 - `docs/**` or `/docs/**`
 - Version-bump files: `package.json`, `plugin.json`, `pyproject.toml`, `Cargo.toml`, `VERSION`, `.version`
 - Root `README.md` (kept as a short intro + link to `/docs`)
 
 Bash write-equivalent operations (redirections, `tee`, `cp`, `mv`, `mkdir`, `touch`, `dd of=`) are also scoped. If the target path cannot be determined, the hook fails closed.
+
+**STATUS requirement:**
+
+Scribe MUST emit a final `STATUS: DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT` line (missing STATUS = BLOCKED per SubagentStop hook).
 
 ### spec-reviewer
 
@@ -294,6 +303,7 @@ Fresh-context code review with semi-formal reasoning and structured findings.
 - Signal-over-noise filtering: scores likelihood × impact, drops low-signal findings
 - Output is a JSON code block followed by a prose `## Verdict` section (parser safety net)
 - Spawned for security-tier tasks alongside implementation-reviewer
+- MUST emit a final `STATUS: DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT` line (missing STATUS = BLOCKED per SubagentStop hook)
 
 ---
 
@@ -358,6 +368,10 @@ Blocks destructive git operations on protected branches (main, master, develop, 
 - Delete protected branch (local or remote)
 - Hard reset to protected branch
 
+**Git directory handling:**
+
+The hook respects `git -C <dir>` so `symbolic-ref` resolves against the targeted repo, not the cwd.
+
 **Exit codes:**
 
 - 0: Allow operation
@@ -375,7 +389,7 @@ Enforces pipeline invariants during active runs. Only fires when `${CLAUDE_PLUGI
 4. **Broken `runs/current` symlink** — if the symlink exists but its target is missing, the hook fails closed with a deny rather than silently passing through. This prevents operations on corrupted pipeline state.
 5. **Nested-shell / hook-bypass** — in autonomous mode, commands that would spawn a subshell or bypass hooks are denied.
 6. **Test-writer path scope** — during `preexec_tests` stage, Edit/Write/MultiEdit are restricted to test files and configured fixture directories.
-7. **Scribe path scope** — when `FACTORY_SUBAGENT_ROLE=scribe`, writes are restricted to `/docs/**` and version-bump files.
+7. **Scribe path scope** — when the scribe sentinel (`$run_dir/.scribe_active`) is present, writes are restricted to `/docs/**` and version-bump files.
 
 ### session-start-resume (SessionStart)
 
@@ -422,6 +436,35 @@ Validates subagent artifacts on completion.
 - Records completion status in parent state
 - For reviewer roles, writes both a shared `reviewer_status` field (last-writer-wins) and per-role fields (`implementation_reviewer_status`, `quality_reviewer_status`, etc.)
 - For reviewer roles, writes `reviewer_worktree_<role>` fields (e.g., `reviewer_worktree_quality_reviewer`)
+- State writes use `_state_write_retry` (2 attempts, 300ms sleep, WARN on final failure)
+- For all reviewer agents plus scribe: missing `STATUS:` line in transcript → BLOCKED
+
+**Task ID derivation:**
+
+`_derive_task_id_from_transcript` now prioritizes `FACTORY_TASK_ID` env var; transcript grep is the fallback. This prevents poisoning via attacker-controlled transcript content.
+
+**STATUS enforcement:**
+
+All 4 reviewer agents (architecture, implementation, quality, security) plus scribe MUST emit a final `STATUS: DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT` line. Missing STATUS is treated as BLOCKED.
+
+### secret-commit-guard (PreToolUse)
+
+Scans for secrets before git commit and push operations.
+
+**Behavior:**
+
+- Runs on `git commit` and `git push` commands
+- Scans staged files for secret patterns (API keys, tokens, credentials)
+- Optionally runs TruffleHog when `safety.useTruffleHog` is enabled
+- First push with no upstream now scans all reachable commits (previously skipped with warning)
+
+### asyncrewake-ci (async notification handler)
+
+Handles CI status notifications for async PR monitoring.
+
+**CI conclusion mapping:**
+
+The conclusion enum has been expanded: `STALE`, `ACTION_REQUIRED`, `STARTUP_FAILURE` are now mapped to red (failure). Unknown conclusions default to red (fail-safe) instead of pending, which previously caused infinite wake-loops on unrecognized CI states.
 
 ---
 

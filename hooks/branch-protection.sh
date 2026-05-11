@@ -90,6 +90,7 @@ _parse_git_invocation() {
   _git_named_arg=""
   _git_is_force="0"
   _git_is_plus_ref="0"
+  _git_work_dir=""  # directory from -C flag (if present)
 
   # Tokenise: split on whitespace, strip env-var prefixes (VAR=value tokens),
   # and strip a leading directory path from the git binary so that
@@ -124,8 +125,14 @@ _parse_git_invocation() {
   # Skip -C <dir> and other git-global flags that appear before the subcommand.
   while (( i < n )); do
     local tok="${tokens[i]}"
-    if [[ "$tok" == "-C" || "$tok" == "--work-tree" || "$tok" == "--git-dir" ]]; then
-      # These consume the next token as their argument.
+    if [[ "$tok" == "-C" ]]; then
+      # Capture -C <dir> so symbolic-ref calls can use the correct repo root.
+      [[ $(( i + 1 )) -lt $n ]] && _git_work_dir="${tokens[i+1]}"
+      i=$((i + 2))
+      continue
+    fi
+    if [[ "$tok" == "--work-tree" || "$tok" == "--git-dir" ]]; then
+      # These consume the next token as their argument (not captured — uncommon).
       i=$((i + 2))
       continue
     fi
@@ -261,16 +268,25 @@ _parse_git_invocation() {
 
   # If push had no refspec, fall back to current branch (implicit push).
   if [[ "$_git_subcommand" == "push" && -z "$_git_dest_branch" && $saw_remote -eq 1 ]]; then
-    _git_dest_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    local _sym_ref_args=()
+    [[ -n "$_git_work_dir" ]] && _sym_ref_args+=(-C "$_git_work_dir")
+    _git_dest_branch=$(git "${_sym_ref_args[@]}" symbolic-ref --short HEAD 2>/dev/null || echo "")
   fi
 }
 
 # Ensure parsed on first access.
 _parse_git_invocation
 
+# Helper: run git symbolic-ref rooted at the repo the command targets.
+_git_current_branch() {
+  local _args=()
+  [[ -n "$_git_work_dir" ]] && _args+=(-C "$_git_work_dir")
+  git "${_args[@]}" symbolic-ref --short HEAD 2>/dev/null || echo ""
+}
+
 # --- Check 1: are we currently on a protected branch and pushing implicitly? ---
 if [[ "$_git_subcommand" == "push" ]]; then
-  current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+  current_branch=$(_git_current_branch)
   if [[ -n "$current_branch" ]] && _is_protected "$current_branch"; then
     if [[ -z "$_git_dest_branch" || "$_git_dest_branch" == "$current_branch" ]]; then
       _pipeline_can_write "$current_branch" || \

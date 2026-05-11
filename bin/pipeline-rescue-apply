@@ -22,7 +22,7 @@ run_id_arg=""
 dry_run=0
 
 # Protected branch set (mirrors branch-protection.sh; kept in sync manually).
-_RESCUE_PROTECTED_BRANCHES=("main" "master" "develop")
+_RESCUE_PROTECTED_BRANCHES=("main" "master" "develop" "staging" "production")
 
 # Validate a branch name received from a rescue-plan JSON field.
 # Returns 0 (valid) or 1 (invalid — caller must skip the git operation).
@@ -43,6 +43,8 @@ _is_rescue_protected() {
   for p in "${_RESCUE_PROTECTED_BRANCHES[@]}"; do
     [[ "$b" == "$p" ]] && return 0
   done
+  # glob patterns: release/*
+  [[ "$b" == release/* ]] && return 0
   return 1
 }
 
@@ -134,15 +136,19 @@ _apply_I_04() {
     rescue_audit "$run_id" safe I-04 "$task_id" backfill_pr_url dry_run ""
     return 0
   fi
-  local pr_num
+  local pr_num err=0
   if [[ "$pr_url" =~ /pull/([0-9]+) ]]; then
     pr_num="${BASH_REMATCH[1]}"
   else
     pr_num=''
   fi
-  pipeline-state task-write "$run_id" "$task_id" pr_url "\"$pr_url\"" >/dev/null
-  [[ -n "$pr_num" ]] && pipeline-state task-write "$run_id" "$task_id" pr_number "$pr_num" >/dev/null
-  rescue_audit "$run_id" safe I-04 "$task_id" backfill_pr_url ok ""
+  pipeline-state task-write "$run_id" "$task_id" pr_url "\"$pr_url\"" >/dev/null || err=1
+  [[ -n "$pr_num" ]] && { pipeline-state task-write "$run_id" "$task_id" pr_number "$pr_num" >/dev/null || err=1; }
+  if (( err )); then
+    rescue_audit "$run_id" safe I-04 "$task_id" backfill_pr_url error "state write failed"
+  else
+    rescue_audit "$run_id" safe I-04 "$task_id" backfill_pr_url ok ""
+  fi
 }
 
 _apply_I_05() {
@@ -151,16 +157,24 @@ _apply_I_05() {
     rescue_audit "$run_id" safe I-05 "$task_id" refresh_ci_status dry_run ""
     return 0
   fi
-  pipeline-state task-write "$run_id" "$task_id" ci_status "\"$latest\"" >/dev/null
-  rescue_audit "$run_id" safe I-05 "$task_id" refresh_ci_status ok ""
+  if pipeline-state task-write "$run_id" "$task_id" ci_status "\"$latest\"" >/dev/null; then
+    rescue_audit "$run_id" safe I-05 "$task_id" refresh_ci_status ok ""
+  else
+    rescue_audit "$run_id" safe I-05 "$task_id" refresh_ci_status error "state write failed"
+  fi
 }
 
 _apply_I_06() {
   local run_id="$1" task_id="$2"
   if (( dry_run )); then rescue_audit "$run_id" mechanical I-06 "$task_id" reset_to_ci_fixing dry_run ""; return 0; fi
-  pipeline-state task-write "$run_id" "$task_id" stage '"postreview_done"' >/dev/null
-  pipeline-state task-status "$run_id" "$task_id" ci_fixing >/dev/null
-  rescue_audit "$run_id" mechanical I-06 "$task_id" reset_to_ci_fixing ok ""
+  local err=0
+  pipeline-state task-write "$run_id" "$task_id" stage '"postreview_done"' >/dev/null || err=1
+  pipeline-state task-status "$run_id" "$task_id" ci_fixing >/dev/null || err=1
+  if (( err )); then
+    rescue_audit "$run_id" mechanical I-06 "$task_id" reset_to_ci_fixing error "state write failed"
+  else
+    rescue_audit "$run_id" mechanical I-06 "$task_id" reset_to_ci_fixing ok ""
+  fi
 }
 
 _apply_I_07() {
@@ -188,8 +202,16 @@ _apply_I_07() {
   fi
   if (( dry_run )); then rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr dry_run ""; return 0; fi
   if (git -C "$wt" fetch origin "$base" && git -C "$wt" rebase "origin/$base") >/dev/null 2>&1; then
-    git -C "$wt" push --force-with-lease >/dev/null 2>&1 || true
-    rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr ok ""
+    # Push without force flags (CLAUDE.md bans all force-push forms). If the task
+    # branch diverged on origin since the scan, the push will fail and we escalate
+    # to investigation rather than overwrite upstream work.
+    if git -C "$wt" push origin HEAD >/dev/null 2>&1; then
+      rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr ok ""
+    else
+      pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
+      pipeline-state task-write "$run_id" "$task_id" failure_reason '"push rejected after rebase (I-13)"' >/dev/null
+      rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr error "push rejected after rebase; escalated to investigation (I-13)"
+    fi
   else
     git -C "$wt" rebase --abort >/dev/null 2>&1 || true
     pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
@@ -201,32 +223,50 @@ _apply_I_07() {
 _apply_I_08() {
   local run_id="$1" task_id="$2"
   if (( dry_run )); then rescue_audit "$run_id" mechanical I-08 "$task_id" mark_failed dry_run ""; return 0; fi
-  pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" failure_reason '"PR closed without merge"' >/dev/null
-  rescue_audit "$run_id" mechanical I-08 "$task_id" mark_failed ok ""
+  local err=0
+  pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" failure_reason '"PR closed without merge"' >/dev/null || err=1
+  if (( err )); then
+    rescue_audit "$run_id" mechanical I-08 "$task_id" mark_failed error "state write failed"
+  else
+    rescue_audit "$run_id" mechanical I-08 "$task_id" mark_failed ok ""
+  fi
 }
 
 _apply_I_09() {
   local run_id="$1" task_id="$2"
   if (( dry_run )); then rescue_audit "$run_id" mechanical I-09 "$task_id" reset_review dry_run ""; return 0; fi
-  pipeline-state task-write "$run_id" "$task_id" stage '"postexec_done"' >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null
-  rescue_audit "$run_id" mechanical I-09 "$task_id" reset_review ok ""
+  local err=0
+  pipeline-state task-write "$run_id" "$task_id" stage '"postexec_done"' >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null || err=1
+  if (( err )); then
+    rescue_audit "$run_id" mechanical I-09 "$task_id" reset_review error "state write failed"
+  else
+    rescue_audit "$run_id" mechanical I-09 "$task_id" reset_review ok ""
+  fi
 }
 
 _apply_I_10() {
   local run_id="$1" task_id="$2"
   if (( dry_run )); then rescue_audit "$run_id" mechanical I-10 "$task_id" reset_pending dry_run ""; return 0; fi
-  pipeline-state task-status "$run_id" "$task_id" pending >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" stage 'null' >/dev/null
-  rescue_audit "$run_id" mechanical I-10 "$task_id" reset_pending ok ""
+  local err=0
+  pipeline-state task-status "$run_id" "$task_id" pending >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" stage 'null' >/dev/null || err=1
+  if (( err )); then
+    rescue_audit "$run_id" mechanical I-10 "$task_id" reset_pending error "state write failed"
+  else
+    rescue_audit "$run_id" mechanical I-10 "$task_id" reset_pending ok ""
+  fi
 }
 
 _apply_I_11() {
   local run_id="$1"
   if (( dry_run )); then rescue_audit "$run_id" mechanical I-11 "" reset_spec_phase dry_run ""; return 0; fi
-  pipeline-state write "$run_id" '.spec.status' '"pending"' >/dev/null
-  rescue_audit "$run_id" mechanical I-11 "" reset_spec_phase ok ""
+  if pipeline-state write "$run_id" '.spec.status' '"pending"' >/dev/null; then
+    rescue_audit "$run_id" mechanical I-11 "" reset_spec_phase ok ""
+  else
+    rescue_audit "$run_id" mechanical I-11 "" reset_spec_phase error "state write failed"
+  fi
 }
 
 _apply_I_12() {
@@ -291,20 +331,22 @@ _apply_I_15() {
 }
 
 _apply_plan_reset_pending() {
-  local run_id="$1" task_id="$2"
-  pipeline-state task-status "$run_id" "$task_id" pending >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" stage 'null' >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" worktree 'null' >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" pr_url 'null' >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" pr_number 'null' >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" ci_status 'null' >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null
+  local run_id="$1" task_id="$2" err=0
+  pipeline-state task-status "$run_id" "$task_id" pending >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" stage 'null' >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" worktree 'null' >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" pr_url 'null' >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" pr_number 'null' >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" ci_status 'null' >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null || err=1
+  return "$err"
 }
 
 _apply_plan_mark_failed() {
-  local run_id="$1" task_id="$2" reason="$3"
-  pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" failure_reason "$(jq -n --arg r "$reason" '$r')" >/dev/null
+  local run_id="$1" task_id="$2" reason="$3" err=0
+  pipeline-state task-status "$run_id" "$task_id" failed >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" failure_reason "$(jq -n --arg r "$reason" '$r')" >/dev/null || err=1
+  return "$err"
 }
 
 _apply_plan_delete_branch() {
@@ -324,8 +366,10 @@ _apply_plan_delete_branch() {
 
 _apply_plan_reset_postreview() {
   local run_id="$1" task_id="$2"
-  pipeline-state task-write "$run_id" "$task_id" stage '"postexec_done"' >/dev/null
-  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null
+  local err=0
+  pipeline-state task-write "$run_id" "$task_id" stage '"postexec_done"' >/dev/null || err=1
+  pipeline-state task-write "$run_id" "$task_id" review_files '[]' >/dev/null || err=1
+  return "$err"
 }
 
 _apply_plan_state_updates() {
@@ -333,7 +377,18 @@ _apply_plan_state_updates() {
   [[ "$updates_json" == "null" || "$updates_json" == "{}" || -z "$updates_json" ]] && return 0
   while IFS=$'\t' read -r key value; do
     [[ -z "$key" ]] && continue
-    pipeline-state write "$run_id" "$key" "$value" >/dev/null
+    # Block writes to .tasks.* — task state must go through pipeline-state task-write
+    # which enforces _KNOWN_TASK_FIELDS and per-field guards. Allowing arbitrary
+    # plan-JSON keys to reach .tasks means a corrupted plan can spoof task status.
+    if [[ "$key" == .tasks* || "$key" == .tasks ]]; then
+      log_error "_apply_plan_state_updates: rejected write to task-level key '$key' (use task-write)"
+      rescue_audit "$run_id" investigation "" "" state_update error "blocked task-level key: $key"
+      continue
+    fi
+    if ! pipeline-state write "$run_id" "$key" "$value" >/dev/null; then
+      log_error "_apply_plan_state_updates: state write failed for key '$key'"
+      rescue_audit "$run_id" investigation "" "" state_update error "write failed for key: $key"
+    fi
   done < <(jq -r 'to_entries[] | [.key, (.value | @json)] | @tsv' <<<"$updates_json")
 }
 
@@ -343,22 +398,35 @@ _dispatch_plans() {
   run_id=$(jq -r '.run_id' "$plans_file")
   while IFS=$'\t' read -r task_id decision reason updates branch; do
     [[ -z "$task_id" ]] && continue
+    local _rc=0
     case "$decision" in
       reset_pending)
-        _apply_plan_reset_pending "$run_id" "$task_id"
-        rescue_audit "$run_id" investigation "" "$task_id" reset_pending ok "$reason"
+        _apply_plan_reset_pending "$run_id" "$task_id" || _rc=$?
+        if (( _rc )); then
+          rescue_audit "$run_id" investigation "" "$task_id" reset_pending error "state write failed"
+        else
+          rescue_audit "$run_id" investigation "" "$task_id" reset_pending ok "$reason"
+        fi
         ;;
       mark_failed)
-        _apply_plan_mark_failed "$run_id" "$task_id" "$reason"
-        rescue_audit "$run_id" investigation "" "$task_id" mark_failed ok "$reason"
+        _apply_plan_mark_failed "$run_id" "$task_id" "$reason" || _rc=$?
+        if (( _rc )); then
+          rescue_audit "$run_id" investigation "" "$task_id" mark_failed error "state write failed"
+        else
+          rescue_audit "$run_id" investigation "" "$task_id" mark_failed ok "$reason"
+        fi
         ;;
       delete_branch)
-        _apply_plan_delete_branch "$run_id" "$task_id" "$branch"
+        _apply_plan_delete_branch "$run_id" "$task_id" "$branch" || _rc=$?
         rescue_audit "$run_id" investigation "" "$task_id" delete_branch ok "$branch"
         ;;
       reset_postreview)
-        _apply_plan_reset_postreview "$run_id" "$task_id"
-        rescue_audit "$run_id" investigation "" "$task_id" reset_postreview ok "$reason"
+        _apply_plan_reset_postreview "$run_id" "$task_id" || _rc=$?
+        if (( _rc )); then
+          rescue_audit "$run_id" investigation "" "$task_id" reset_postreview error "state write failed"
+        else
+          rescue_audit "$run_id" investigation "" "$task_id" reset_postreview ok "$reason"
+        fi
         ;;
       no_action)
         rescue_audit "$run_id" investigation "" "$task_id" no_action ok "$reason"

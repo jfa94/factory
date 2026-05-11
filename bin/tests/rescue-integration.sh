@@ -133,12 +133,19 @@ i07_a=$(jq '[.mechanical_issues[] | select(.id == "I-07" and .task_id == "T3" an
 assert_eq "Phase 5 scan: I-07 emitted with base=staging" "1" "$i07_a"
 
 pipeline-rescue-apply --tier=risky --plan="$CLAUDE_PLUGIN_DATA/report_i07a.json" >/dev/null
-t3_audit=$(pipeline-state read R2 '.rescue.applied_actions // []' | jq '[.[] | select(.issue_id == "I-07" and .task_id == "T3" and .action == "rebase_pr" and .result == "ok")] | length')
-assert_eq "Phase 5 apply: rebase_pr ok in audit" "1" "$t3_audit"
+# I-07 now refuses to publish a rebased branch (force-push is banned per CLAUDE.md).
+# Even a "clean" local rebase produces commits that diverge from origin/factory/112/t3,
+# so plain `git push origin HEAD` is rejected and the rescue escalates to I-13.
+t3_audit=$(pipeline-state read R2 '.rescue.applied_actions // []' | jq '[.[] | select(.issue_id == "I-07" and .task_id == "T3" and .action == "rebase_pr" and .result == "error")] | length')
+assert_eq "Phase 5 apply: rebase_pr error (push rejected, escalated to I-13)" "1" "$t3_audit"
 t3_status=$(pipeline-state read R2 '.tasks.T3.status')
-assert_eq "Phase 5: T3 status unchanged (executing)" "executing" "$t3_status"
+assert_eq "Phase 5: T3 status=failed" "failed" "$t3_status"
+t3_reason=$(pipeline-state read R2 '.tasks.T3.failure_reason')
+assert_eq "Phase 5: T3 failure_reason mentions I-13" "push rejected after rebase (I-13)" "$t3_reason"
+# Local rebase still happened — the file from staging is present locally even though
+# we refused to publish.
 rebase_done=0; [[ -f "$wt_a/other.txt" ]] && rebase_done=1
-assert_eq "Phase 5: staging file present after rebase" "1" "$rebase_done"
+assert_eq "Phase 5: staging file present after local rebase" "1" "$rebase_done"
 
 # Phase 6: I-07 scan→apply, conflicting rebase escalates to I-13 (R3/T4/PR44)
 fix_dir_b=$(mktemp -d "$CLAUDE_PLUGIN_DATA/i07b.XXXXXX")

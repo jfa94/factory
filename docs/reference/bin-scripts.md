@@ -18,23 +18,25 @@ When a factory script is invoked from a bash block inside another plugin's comma
 
 **Functions:**
 
-| Function                 | Description                                                                |
-| ------------------------ | -------------------------------------------------------------------------- |
-| `log_info`               | Log info message to stderr                                                 |
-| `log_warn`               | Log warning message to stderr                                              |
-| `log_error`              | Log error message to stderr                                                |
-| `read_config`            | Read config value with default fallback                                    |
-| `read_config_strict`     | Read config value; null/missing → empty (no default)                       |
-| `atomic_write`           | Write file atomically via temp + mv                                        |
-| `current_run_id`         | Get current run ID from symlink                                            |
-| `require_command`        | Exit if command not found                                                  |
-| `slugify`                | Convert string to slug                                                     |
-| `temp_file`              | Create temp file with cleanup trap                                         |
-| `detect_pkg_manager`     | Detect npm/yarn/pnpm/bun                                                   |
-| `parse_iso8601_to_epoch` | Parse ISO timestamp to epoch seconds                                       |
-| `resolve_base_ref`       | Resolve `staging` or `origin/staging` in a git dir; rc=1 if neither exists |
-| `is_test_path`           | Classify a file path as test (return 0) or non-test (return 1)             |
-| `task_tdd_exempt`        | Check if task has `tdd_exempt: true` in tasks.json                         |
+| Function                 | Description                                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| `log_info`               | Log info message to stderr                                                         |
+| `log_warn`               | Log warning message to stderr                                                      |
+| `log_error`              | Log error message to stderr                                                        |
+| `read_config`            | Read config value with default fallback                                            |
+| `read_config_strict`     | Read config value; null/missing → empty (no default)                               |
+| `atomic_write`           | Write file atomically via temp + mv                                                |
+| `current_run_id`         | Get current run ID from symlink                                                    |
+| `require_command`        | Exit if command not found                                                          |
+| `slugify`                | Convert string to slug                                                             |
+| `temp_file`              | Create temp file with cleanup trap                                                 |
+| `detect_pkg_manager`     | Detect npm/yarn/pnpm/bun                                                           |
+| `parse_iso8601_to_epoch` | Parse ISO timestamp to epoch seconds                                               |
+| `resolve_base_ref`       | Resolve `staging` or `origin/staging` in a git dir; rc=1 if neither exists         |
+| `is_test_path`           | Classify a file path as test (return 0) or non-test (return 1)                     |
+| `task_tdd_exempt`        | Check if task has `tdd_exempt: true` in tasks.json                                 |
+| `validate_findings`      | Validate review findings against diff (full-line match, rejects forged substrings) |
+| `pipeline_quota_gate`    | Quota enforcement with sleep clamped to remaining wall-clock budget                |
 
 ---
 
@@ -207,6 +209,10 @@ pipeline-run-task <run-id> RUN --stage finalize-run
 | `ship`          | Human gate, task-commit, PR create, CI wait                   |
 | `finalize-run`  | Scribe spawn (isolation: worktree), final PR, cleanup         |
 
+**Postreview error handling:**
+
+Malformed reviewer JSON now fails loud: writes `failure_reason` to state and blocks the task, instead of defaulting to 0 blockers. This prevents silent progression when review parsing fails.
+
 **Exit codes:**
 
 | Code | Meaning                                                        |
@@ -374,6 +380,10 @@ pipeline-branch task-commit <task-id> --worktree <path> [--message <msg>]
 
 When the base is `staging` (the default), the script fetches `origin/staging` and resolves the base to `origin/staging` before running `git worktree add`. This ensures worktrees always fork from the live remote tip rather than a potentially stale local ref. This prevents drift issues when multiple worktrees are created during long-running pipeline executions.
 
+**staging-init fetch:**
+
+The `git fetch origin staging` call is now fatal on failure (previously silent). This ensures staging-init fails fast when the remote is unreachable rather than proceeding with stale state.
+
 ---
 
 ### pipeline-classify-task
@@ -463,6 +473,10 @@ When `--holdout` is specified, the script:
 1. Randomly selects N% of acceptance criteria
 2. Saves withheld criteria to `${CLAUDE_PLUGIN_DATA}/runs/<run-id>/holdouts/<task-id>.json`
 3. Returns prompt with only visible criteria
+
+**Input validation:**
+
+The `task_id` argument is validated against `^[a-zA-Z0-9_-]+$` to block directory traversal attacks. `git fetch` failures now emit warnings (previously silent).
 
 **Prompt-fencing redaction:**
 
@@ -585,9 +599,13 @@ pipeline-codex-review --base <ref> --task-id <id> --spec-dir <path>
 2. If diff is empty: emit auto-approve verdict and exit 0
 3. Build prompt from `skills/review-protocol/SKILL.md` + spec files + diff
 4. Verify Codex supports `--sandbox` flag (fail-closed: refuses to run unsandboxed)
-5. Invoke Codex with sandbox cascade: `read-only` → `workspace-read` (no unsandboxed fallback)
+5. Invoke Codex with `--sandbox read-only` only; aborts on failure (sandbox cascade removed)
 6. Parse Codex JSON output via `schemas/codex-review.schema.json`
 7. Map to normalized verdict JSON (same shape as `pipeline-parse-review`)
+
+**Trust boundary fencing:**
+
+Spec text and diff content are wrapped in `<<<UNTRUSTED:SPEC:<nonce>>>>` / `<<<UNTRUSTED:DIFF:<nonce>>>>` fences with a per-invocation 16-char random nonce. This prevents prompt injection attacks where attacker-controlled content attempts to break out of fenced regions by embedding literal close tags.
 
 **Output:**
 
@@ -670,6 +688,14 @@ echo "<reviewer output>" | pipeline-parse-review [--reviewer <codex|claude-code>
   "summary": "..."
 }
 ```
+
+**Verdict normalization:**
+
+Accepts `APPROVE` from JSON block (normalized to `APPROVED` for validation).
+
+**Findings validation (via `validate_findings` in `pipeline-lib.sh`):**
+
+Blocking findings are validated against the diff using exact full-line match (`grep -qxF`) against a normalized line-set built from the diff. Forged 10-char substring blockers are rejected. Whitespace-normalization is intra-line only (newlines preserved).
 
 ---
 
@@ -969,7 +995,7 @@ Runs layers in sequence: static analysis, tests, coverage, holdout, mutation.
 
 **Non-JS skip:**
 
-When the project has no `package.json` or tests are not configured, the gate logs a skip reason and exits 0 rather than failing. This allows non-JS projects to pass through the gate cleanly.
+When the project has no `package.json` or tests are not configured, the gate logs a skip reason and exits 2 (not 0) to distinguish "not applicable" from "passed". Exit code 2 is interpreted by `pipeline-run-task` as "not applicable, treat as pass". Exit code 1 remains a hard failure. This allows non-JS projects to pass through cleanly while preserving the distinction between success and skip.
 
 ---
 
@@ -991,7 +1017,7 @@ pipeline-quota-check [--strict]
 | ---------- | ----------------------------------------------------------- |
 | `--strict` | Exit 1 on detection failure (test-only; prod uses sentinel) |
 
-**Reads:** `${CLAUDE_PLUGIN_DATA}/usage-cache.json` (written by `bin/statusline-wrapper.sh`)
+**Reads:** `${CLAUDE_PLUGIN_DATA}/usage-cache.json` (written by `bin/statusline-wrapper.sh`). Requires `CLAUDE_PLUGIN_DATA` env var to be set; hardcoded fallback path removed.
 
 **Fail-closed behavior:**
 
@@ -1100,7 +1126,11 @@ The script treats a PR as CI-red when any required check reports `failure`, `tim
 
 **Rebase error surfacing:**
 
-When auto-rebase fails, stderr from `git rebase --abort` and `git checkout <branch>` is captured and logged via `log_warn` / `log_error` instead of being silently swallowed. This makes debugging stuck worktrees easier.
+When auto-rebase fails, stderr from `git rebase --abort` and `git checkout <branch>` is captured and logged via `log_warn` / `log_error` instead of being silently swallowed. This makes debugging stuck worktrees easier. The `_safe_checkout_back` helper also logs failures (previously swallowed with `|| true`).
+
+**CI skipping detection:**
+
+When CI checks settle with `bucket=skipping`, the script fails fast with exit 3 and `status: ci_skipping` JSON output instead of waiting out the full timeout. This prevents indefinite waits on PRs where CI has been explicitly skipped.
 
 ---
 
@@ -1352,6 +1382,22 @@ pipeline-rescue-apply --dry-run ...
 **Rehydrate action:**
 
 Restores an archived run from `${CLAUDE_PLUGIN_DATA}/archive/<run-id>/` back to `runs/<run-id>/` and re-creates the `runs/current` symlink if absent. Archive copy is preserved.
+
+**Protected branches:**
+
+The `_RESCUE_PROTECTED_BRANCHES` list includes `main`, `master`, `staging`, `production`, and `release/*` glob. Rescue operations that would affect these branches are blocked.
+
+**I-07 rebase safety:**
+
+Force-push is removed from the I-07 rebase path. If rebase succeeds but push is rejected (e.g., branch protection rules), or if rebase fails due to unresolvable conflicts, the task escalates to I-13 with audit `error` and `failure_reason` set to `"push rejected after rebase (I-13)"` or `"unresolvable merge conflict (I-13)"`.
+
+**State update validation:**
+
+Plan `state_updates` maps now reject keys starting with `.tasks` — task-level state modifications must go through `task-write` whitelist to prevent unauthorized task state manipulation.
+
+**Audit integrity:**
+
+All `rescue_audit` calls check state-write return codes. When writes fail, an `error` audit entry is emitted before the operation fails.
 
 **Exit codes:** 0=success, 1=fatal
 

@@ -192,6 +192,17 @@ BLOCKERS: <count of critical/important findings>
 ```
 
 Use `APPROVE` (not `APPROVED`) in this section. The JSON block remains canonical; this block is the parser's safety net.
+
+After the Verdict block, emit a **STATUS line** as the absolute last line:
+
+```
+STATUS: DONE
+STATUS: DONE_WITH_CONCERNS — <1-line concern>
+STATUS: BLOCKED — <1-line reason>
+STATUS: NEEDS_CONTEXT — <1-line question>
+```
+
+Use DONE for a completed review (any verdict). BLOCKED only when the review could not be performed. Missing STATUS line is treated as BLOCKED by the SubagentStop hook.
 </EXTREMELY-IMPORTANT>
 
 Quote the code → trace the path → ship the verdict.

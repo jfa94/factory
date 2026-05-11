@@ -218,7 +218,10 @@ case "$action" in
     # Always fork from the live remote tip rather than the local ref, which can
     # be stale by the time a second worktree is created during a long run.
     if [[ "$base" == "staging" ]]; then
-      git fetch origin staging --quiet 2>/dev/null || true
+      if ! git fetch origin staging --quiet 2>/dev/null; then
+        log_error "git fetch origin staging failed — origin/staging may be stale"
+        exit 1
+      fi
       if git rev-parse --verify origin/staging >/dev/null 2>&1; then
         base="origin/staging"
       fi
