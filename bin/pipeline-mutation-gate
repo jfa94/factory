@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Run scoped Stryker mutation testing locally with the same scope semantics
+# as templates/.github/workflows/quality-gate.yml. Mirrors CI exactly so a
+# task that fails mutation locally would also fail on CI, and vice versa.
+#
+# Usage: pipeline-mutation-gate <run-id> <task-id> <worktree>
+#
+# Output: structured JSON to stdout — `{ok, reason, score, target, scope}`.
+# Same JSON written to state under `.tasks.<task-id>.mutation_gate`.
+# Exit 0 on pass/skip, 1 on fail.
+#
+# Skip reasons (exit 0): no-package-json, no-script, no-mutable-changes, no-report, no-score.
+# Fail reasons (exit 1): base-missing, stryker-failed, score-below-target.
+
+set -euo pipefail
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+require_command git
+
+run_id="${1:?missing run-id}"
+task_id="${2:?missing task-id}"
+worktree="${3:-$PWD}"
+
+if [[ ! -d "$worktree" ]]; then
+  log_error "worktree does not exist: $worktree"
+  printf '{"ok":false,"reason":"worktree-missing"}\n'
+  exit 1
+fi
+
+cd "$worktree"
+
+run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+
+# Helper: write {ok, reason, score, target, scope} to stdout and to
+# state.tasks.<task>.mutation_gate. Returns the requested exit code.
+_emit() {
+  local ok="$1" reason="$2" score="${3:-null}" target="${4:-null}" scope="${5:-}" exit_rc="$6"
+
+  local scope_json='[]'
+  if [[ -n "$scope" ]]; then
+    scope_json=$(printf '%s' "$scope" | tr ',' '\n' | jq -R -s 'split("\n") | map(select(length > 0))')
+  fi
+
+  local payload
+  payload=$(jq -n \
+    --argjson ok "$ok" \
+    --arg reason "$reason" \
+    --argjson score "$score" \
+    --argjson target "$target" \
+    --argjson scope "$scope_json" \
+    '{ok:$ok, reason:$reason, score:$score, target:$target, scope:$scope}')
+
+  if [[ -f "$run_dir/state.json" ]]; then
+    if ! pipeline-state task-write "$run_id" "$task_id" mutation_gate "$payload" >/dev/null; then
+      log_error "failed to record mutation_gate result for $task_id"
+      exit 1
+    fi
+  fi
+
+  printf '%s\n' "$payload"
+  log_metric "task.gate.mutation" "task_id=\"$task_id\"" \
+    "ok=\"$([[ "$ok" == "true" ]] && echo true || echo false)\"" \
+    "reason=\"$reason\""
+  exit "$exit_rc"
+}
+
+if [[ ! -f package.json ]]; then
+  _emit true "no-package-json" null null "" 0
+fi
+
+mut_script=$(jq -r '.scripts["test:mutation"] // empty' package.json 2>/dev/null || printf '')
+if [[ -z "$mut_script" ]]; then
+  _emit true "no-script" null null "" 0
+fi
+
+base_ref="${FACTORY_MUTATION_BASE:-staging}"
+
+# Verify origin/<base> exists. Without the base ref we cannot reproduce CI's
+# scope. Fail loudly rather than silently full-running, which would diverge
+# from CI and defeat the purpose of this gate.
+if ! git -C "$worktree" rev-parse --verify "origin/${base_ref}" >/dev/null 2>&1; then
+  log_error "mutation gate: origin/${base_ref} not found in $worktree — fetch it before running"
+  _emit false "base-missing" null null "" 1
+fi
+
+# Mirror templates/.github/workflows/quality-gate.yml lines 86-96.
+# Use :(glob) pathspec magic so git expands ** regardless of shell globstar
+# settings (plain 'src/**/*.ts' silently matches nothing on macOS git 2.x).
+# Capture diff stderr to the gate log so unexpected failures (e.g., shallow
+# clones, transient corruption) are debuggable rather than silently producing
+# an empty scope.
+diff_err="$run_dir/${task_id}.mutation.gate.diff-stderr.log"
+mkdir -p "$run_dir"
+mapfile -t scope_files < <(
+  git -C "$worktree" diff --name-only --diff-filter=AM "origin/${base_ref}...HEAD" -- ':(glob)src/**/*.ts' 2>"$diff_err" \
+    | grep -Ev '\.(test|spec|d)\.ts$|/types/|/data/|/index\.ts$' || true
+)
+if [[ -s "$diff_err" ]]; then
+  log_warn "mutation gate: git diff produced stderr — see $diff_err"
+fi
+
+if [[ ${#scope_files[@]} -eq 0 ]]; then
+  _emit true "no-mutable-changes" null null "" 0
+fi
+
+scope_csv=$(IFS=,; printf '%s' "${scope_files[*]}")
+
+pkg_mgr=$(detect_pkg_manager "$worktree")
+mut_log="$run_dir/${task_id}.mutation.gate.log"
+mkdir -p "$run_dir"
+
+set +e
+(cd "$worktree" && "$pkg_mgr" exec stryker run --mutate "$scope_csv") >"$mut_log" 2>&1
+mut_rc=$?
+set -e
+
+if [[ $mut_rc -ne 0 ]]; then
+  log_warn "mutation gate: stryker exited $mut_rc — see $mut_log"
+  _emit false "stryker-failed" null null "$scope_csv" 1
+fi
+
+target=$(read_config '.quality.mutationScoreTarget' '80')
+
+score_file="$worktree/reports/mutation/mutation.json"
+if [[ ! -f "$score_file" ]]; then
+  _emit true "no-report" null "$target" "$scope_csv" 0
+fi
+
+score=$(jq -r '.metrics.mutationScore // empty' "$score_file" 2>/dev/null || printf '')
+if [[ -z "$score" ]]; then
+  _emit true "no-score" null "$target" "$scope_csv" 0
+fi
+
+# Coerce to integer for comparison; preserve raw value in JSON output.
+score_int=$(printf '%.0f' "$score")
+if (( score_int < target )); then
+  log_warn "mutation gate: score $score < target $target"
+  _emit false "score-below-target" "$score" "$target" "$scope_csv" 1
+fi
+
+_emit true "ok" "$score" "$target" "$scope_csv" 0

@@ -85,7 +85,7 @@ jobs:
         run: |
           git fetch origin "$BASE_REF" --depth=50
           mapfile -t files < <(
-              git diff --name-only --diff-filter=AM "origin/$BASE_REF"...HEAD -- 'src/**/*.ts' \
+              git diff --name-only --diff-filter=AM "origin/$BASE_REF"...HEAD -- ':(glob)src/**/*.ts' \
               | grep -Ev '\.(test|spec|d)\.ts$|/types/|/data/|/index\.ts$' || true
           )
           if [ ${#files[@]} -eq 0 ]; then

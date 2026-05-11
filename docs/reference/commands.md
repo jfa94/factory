@@ -171,7 +171,7 @@ When invoked without arguments, enters a conversational loop:
 - `quality.holdoutPercent` - Holdout percentage
 - `quality.holdoutPassRate` - Holdout pass rate
 - `quality.mutationScoreTarget` - Mutation score target
-- `quality.mutationTestingTiers` - Tiers requiring mutation testing
+- `quality.mutationTestingTiers` - (deprecated, no-op — mutation runs unconditionally now)
 - `quality.coverageMustNotDecrease` - Block coverage decreases
 
 **Parallel Execution**

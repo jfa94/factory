@@ -147,12 +147,9 @@ Minimum mutation score percentage for feature and security tier tasks.
 
 **Default:** `["feature", "security"]`
 
-Risk tiers that require mutation testing. Routine tasks skip mutation testing by default.
+**Deprecated, no-op.** Mutation testing now runs unconditionally for every staging-bound task PR (matches CI). The risk-tier filter has been removed. This setting is read but ignored.
 
-**When to change:**
-
-- Add `"routine"` if you want mutation testing on all tasks
-- Remove tiers if mutation testing is too slow for your codebase
+**To disable mutation locally:** drop the `test:mutation` script from `package.json` (the gate then skips with reason `no-script`).
 
 ### quality.coverageMustNotDecrease
 

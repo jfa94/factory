@@ -146,7 +146,7 @@ Minimum mutation score percentage.
 | Type     | array                     |
 | Default  | `["feature", "security"]` |
 
-Risk tiers that require mutation testing. Empty array disables mutation testing.
+**Deprecated, no-op.** Mutation testing now runs unconditionally for every staging-bound task PR (matching CI). The risk-tier filter has been removed. This setting is read but ignored. To disable mutation locally, drop the `test:mutation` script from `package.json` (the gate then skips with reason `no-script`).
 
 ### quality.coverageMustNotDecrease
 
