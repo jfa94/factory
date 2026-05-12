@@ -174,6 +174,7 @@ Detection is deterministic: `pipeline-detect-reviewer` checks Codex availability
 **7-day behavior:**
 
 - Over threshold: end gracefully, mark partial
+- Override: `/factory:run resume --allow-7d-over` bypasses the local circuit-breaker decision (see [Rate Limiting: Override](./rate-limiting.md#override))
 
 **Why source from statusline?**
 

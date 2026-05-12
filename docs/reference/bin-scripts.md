@@ -1096,6 +1096,10 @@ The `wait_minutes` value points to the next hourly threshold milestone rather th
 }
 ```
 
+**7-day bypass:**
+
+When `FACTORY_ALLOW_7D_OVER=1` is set in the environment, the router skips the `seven_day → end_gracefully` branch and falls through to the 5h logic. This allows the pipeline to wait for hourly threshold milestones even when the 7d window is over. The flag is propagated by `pipeline_quota_gate` when run state has `.flags.allow_7d_over=true`. See [Rate Limiting: Override](../explanation/rate-limiting.md#override).
+
 ---
 
 ## Completion

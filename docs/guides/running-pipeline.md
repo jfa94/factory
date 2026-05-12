@@ -82,6 +82,16 @@ Runs can be interrupted by:
 
 All state is persisted to JSON, so resume is reliable.
 
+**Bypassing the 7-day circuit breaker:**
+
+If you have confirmed headroom (separate billing, near-reset, or willingness to use the remaining reserve), you can bypass the 7d-over → `end_gracefully` decision:
+
+```
+/factory:run resume --allow-7d-over
+```
+
+The flag is written to run state as `.flags.allow_7d_over` and cleared automatically when the run finalizes. See [Rate Limiting](../explanation/rate-limiting.md#override) for details.
+
 ---
 
 ## Validation Options
@@ -194,7 +204,7 @@ cat "${CLAUDE_PLUGIN_DATA}/usage-cache.json" | jq '.five_hour.used_percentage'
 /factory:run resume
 ```
 
-The pipeline automatically waits when 5h limits approach. If it ended due to 7d limits, wait for the window to reset before resuming.
+The pipeline automatically waits when 5h limits approach. If it ended due to 7d limits, wait for the window to reset before resuming — or use `--allow-7d-over` to bypass the local circuit breaker if you have confirmed headroom (see [Rate Limiting: Override](../explanation/rate-limiting.md#override)).
 
 ---
 

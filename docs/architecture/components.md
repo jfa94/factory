@@ -43,14 +43,15 @@ Entry point for all pipeline invocations.
 
 **Arguments:**
 
-| Argument     | Required        | Default    | Description                                         |
-| ------------ | --------------- | ---------- | --------------------------------------------------- |
-| `mode`       | No              | `discover` | Operating mode: `discover`, `prd`, `task`, `resume` |
-| `--issue`    | For `prd` mode  | -          | GitHub issue number                                 |
-| `--task-id`  | For `task` mode | -          | Task ID to execute                                  |
-| `--spec-dir` | For `task` mode | -          | Path to spec directory                              |
-| `--strict`   | No              | -          | Require [PRD] marker on issues                      |
-| `--dry-run`  | No              | -          | Validate without executing                          |
+| Argument          | Required         | Default    | Description                                                                                  |
+| ----------------- | ---------------- | ---------- | -------------------------------------------------------------------------------------------- |
+| `mode`            | No               | `discover` | Operating mode: `discover`, `prd`, `task`, `resume`                                          |
+| `--issue`         | For `prd` mode   | -          | GitHub issue number                                                                          |
+| `--task-id`       | For `task` mode  | -          | Task ID to execute                                                                           |
+| `--spec-dir`      | For `task` mode  | -          | Path to spec directory                                                                       |
+| `--strict`        | No               | -          | Require [PRD] marker on issues                                                               |
+| `--dry-run`       | No               | -          | Validate without executing                                                                   |
+| `--allow-7d-over` | Resume mode only | -          | Bypass 7d circuit breaker for this run (see [commands](../reference/commands.md#factoryrun)) |
 
 **Behavior:**
 
