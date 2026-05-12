@@ -140,11 +140,23 @@ Stop on failure.
 
 Validate args; stop on miss.
 
+Parse `allow-7d-over` arg (default: `false`).
+If `allow-7d-over=true` and `mode != resume`: stop with error "Error: --allow-7d-over is only valid with resume mode."
+
 ### 4. Run init
 
 For new runs: `pipeline-init "run-$(date +%Y%m%d-%H%M%S)" --issue <N> --mode <mode>`.
 
 For `resume`: `pipeline-state resume-point "$(pipeline-state list | jq -r 'last')"`.
+
+After `$run_id` is resolved in `resume` mode, if `allow_7d_over=true`:
+
+```bash
+if [[ "$allow_7d_over" == "true" ]]; then
+  pipeline-state write "$run_id" '.flags.allow_7d_over' 'true'
+  log_warn "resume: 7d usage bypass active for run $run_id — operator accepted the risk"
+fi
+```
 
 ### 5. Dry run
 

@@ -1,6 +1,6 @@
 ---
 description: "Run the factory autonomous coding pipeline"
-argument-hint: "[discover|prd|task|resume] [--issue <N>] [--task-id <T>] [--spec-dir <D>] [--strict] [--dry-run]"
+argument-hint: "[discover|prd|task|resume] [--issue <N>] [--task-id <T>] [--spec-dir <D>] [--strict] [--dry-run] [--allow-7d-over]"
 arguments:
   - name: mode
     description: "Operating mode: discover, prd, task, or resume"
@@ -21,6 +21,9 @@ arguments:
   - name: "--dry-run"
     description: "Validate inputs and show plan without executing"
     required: false
+  - name: "--allow-7d-over"
+    description: "Bypass the 7-day usage circuit breaker for this resume (resume mode only)"
+    required: false
 ---
 
 # /factory:run
@@ -36,10 +39,12 @@ Parse `mode` from the user's input. Validate required args for the chosen mode:
 | `task`     | `--task-id T --spec-dir D` |
 | `resume`   | —                          |
 
+`--allow-7d-over` is only valid in `resume` mode. The skill must stop with a clear error if it is supplied with any other mode.
+
 Then load the skill:
 
 ```
-Skill(pipeline-orchestrator, "mode=<mode> issue=<N> task-id=<T> spec-dir=<D> strict=<bool> dry-run=<bool>")
+Skill(pipeline-orchestrator, "mode=<mode> issue=<N> task-id=<T> spec-dir=<D> strict=<bool> dry-run=<bool> allow-7d-over=<bool>")
 ```
 
 All orchestration logic lives in `skills/pipeline-orchestrator/SKILL.md` and its `reference/` + `prompts/` directories. Do not duplicate it here.
