@@ -537,6 +537,96 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# 7d bypass flag: when .flags.allow_7d_over=true is set on run state and the
+# usage-cache reports 7d over threshold, pipeline_quota_gate must return 0
+# (proceed) rather than 2 (end_gracefully).
+# ---------------------------------------------------------------------------
+test_quota_gate_7d_bypass() {
+  new_scenario "quota-gate-7d-bypass"
+
+  # Manually create state (same pattern as test_quota_gate_catches_quota_check_crash)
+  # to avoid the pre-existing pipeline-init SIGPIPE under set -euo pipefail.
+  local run_id="quota-7d-bypass-$$"
+  local run_state="$CLAUDE_PLUGIN_DATA/runs/$run_id"
+  mkdir -p "$run_state"
+  printf '{"circuit_breaker":{"quota_wait_cycles":0,"quota_stale_cycles":0},"flags":{}}' \
+    > "$run_state/state.json"
+
+  # Write the bypass flag to run state.
+  pipeline-state write "$run_id" '.flags.allow_7d_over' true >/dev/null
+
+  # Seed usage-cache.json with 7d over threshold and 5h under threshold.
+  local now resets_5h_epoch resets_7d_epoch
+  now=$(date +%s)
+  resets_5h_epoch=$(( now + 3600 ))
+  resets_7d_epoch=$(( now + 86400 ))
+
+  jq -n \
+    --argjson resets_5h "$resets_5h_epoch" \
+    --argjson resets_7d "$resets_7d_epoch" \
+    --argjson now "$now" \
+    '{
+      "five_hour":  {"used_percentage": 30, "resets_at": $resets_5h},
+      "seven_day":  {"used_percentage": 100, "resets_at": $resets_7d},
+      "captured_at": $now
+    }' > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+
+  # Verify flag is stored correctly in state.
+  local stored_flag
+  stored_flag=$(pipeline-state read "$run_id" '.flags.allow_7d_over // false' 2>/dev/null)
+  assert_eq "bypass flag persists in state" "true" "$stored_flag"
+
+  # Use a subshell (set +e) for all pipeline calls that trigger the pre-existing
+  # jq|json_emit SIGPIPE, matching the pattern in test_quota_gate_catches_quota_check_crash.
+  # The gate call with bypass active: expect rc=0 (proceed).
+  local gate_log="$ROOT_TMP/7d-bypass.log"
+  set +e
+  PATH="$BIN_DIR:$PATH" CLAUDE_PLUGIN_DATA="$CLAUDE_PLUGIN_DATA" bash -c '
+    source "'"$BIN_DIR"'/pipeline-lib.sh"
+    pipeline_quota_gate "'"$run_id"'" "feature" "test-7d-bypass" ""
+    exit $?
+  ' >"$gate_log" 2>&1
+  local rc=$?
+  set -e
+
+  assert_eq "gate with .flags.allow_7d_over=true → proceed (rc=0)" "0" "$rc"
+  assert "gate log mentions bypass warning" \
+    grep -q '7d usage bypass active' "$gate_log"
+
+  # Same gate WITHOUT bypass flag: expect rc=2 (end_gracefully).
+  # Use a stub run that has no bypass flag set.
+  local run_id_nobypass="quota-7d-nobypass-$$"
+  local nobypass_state="$CLAUDE_PLUGIN_DATA/runs/$run_id_nobypass"
+  mkdir -p "$nobypass_state"
+  printf '{"circuit_breaker":{"quota_wait_cycles":0,"quota_stale_cycles":0},"flags":{}}' \
+    > "$nobypass_state/state.json"
+
+  local gate_log_nb="$ROOT_TMP/7d-nobypass.log"
+  set +e
+  PATH="$BIN_DIR:$PATH" CLAUDE_PLUGIN_DATA="$CLAUDE_PLUGIN_DATA" bash -c '
+    source "'"$BIN_DIR"'/pipeline-lib.sh"
+    pipeline_quota_gate "'"$run_id_nobypass"'" "feature" "test-7d-nobypass" ""
+    exit $?
+  ' >"$gate_log_nb" 2>&1
+  local rc_nb=$?
+  set -e
+
+  assert_eq "gate without bypass → end_gracefully (rc=2)" "2" "$rc_nb"
+
+  # Confirm FACTORY_ALLOW_7D_OVER is NOT leaked into the child process's
+  # environment after pipeline_quota_gate returns (unset-after guard).
+  local leaked
+  set +e
+  leaked=$(PATH="$BIN_DIR:$PATH" CLAUDE_PLUGIN_DATA="$CLAUDE_PLUGIN_DATA" bash -c '
+    source "'"$BIN_DIR"'/pipeline-lib.sh"
+    pipeline_quota_gate "'"$run_id"'" feature test-7d-bypass-leak "" >/dev/null 2>&1
+    printf "%s" "${FACTORY_ALLOW_7D_OVER:-unset}"
+  ')
+  set -e
+  assert_eq "FACTORY_ALLOW_7D_OVER unset after gate returns" "unset" "$leaked"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 test_spec_handoff
@@ -547,6 +637,7 @@ test_post_reset_stale_yields_unavailable
 test_statusline_wrapper_post_reset_display
 test_non_numeric_cache_fields_yield_unavailable
 test_quota_gate_catches_quota_check_crash
+test_quota_gate_7d_bypass
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
