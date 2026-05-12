@@ -667,6 +667,9 @@ case "$action" in
       .resume_point = (if $resume != "" then $resume else null end)
     ')
 
+    # Clear one-shot bypass flags so future resumes start clean.
+    updated=$(printf '%s' "$updated" | jq 'if .flags then .flags.allow_7d_over = false else . end')
+
     atomic_write "$f" "$updated"
     _state_unlock "$run_id"
     trap - EXIT
