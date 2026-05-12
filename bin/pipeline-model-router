@@ -33,6 +33,7 @@ esac
 detection_method=$(printf '%s' "$quota" | jq -r '.detection_method // "statusline"')
 five_hour_over=$(printf '%s' "$quota" | jq -r '.five_hour.over_threshold')
 seven_day_over=$(printf '%s' "$quota" | jq -r '.seven_day.over_threshold')
+allow_7d_over="${FACTORY_ALLOW_7D_OVER:-0}"
 
 # Unavailable sentinel: quota data could not be read → halt the pipeline loudly
 if [[ "$detection_method" == "unavailable" ]]; then
@@ -76,12 +77,26 @@ if [[ "$five_hour_over" != "true" ]] && [[ "$seven_day_over" != "true" ]]; then
 fi
 
 # 7d over → end gracefully (cannot wait for 7d reset mid-run)
-if [[ "$seven_day_over" == "true" ]]; then
+# Skip when operator has set FACTORY_ALLOW_7D_OVER=1.
+if [[ "$seven_day_over" == "true" && "$allow_7d_over" != "1" ]]; then
   jq -n \
     --arg action "end_gracefully" \
     --arg trigger "7d_over" \
     --arg tier "$tier" \
     '{provider: "anthropic", action: $action, trigger: $trigger, tier: $tier}'
+  exit 0
+fi
+
+# 7d over + bypass active + 5h within → proceed (operator accepted the risk)
+if [[ "$seven_day_over" == "true" && "$allow_7d_over" == "1" && "$five_hour_over" != "true" ]]; then
+  cap=$(_review_cap)
+  jq -n \
+    --arg action "proceed" \
+    --arg provider "anthropic" \
+    --argjson review_cap "$cap" \
+    --arg tier "$tier" \
+    --argjson bypass_7d true \
+    '{provider: $provider, action: $action, review_cap: $review_cap, tier: $tier, bypass_7d: $bypass_7d}'
   exit 0
 fi
 
@@ -120,4 +135,5 @@ jq -n \
   --argjson wait_minutes "$wait_minutes" \
   --arg milestone "$milestone" \
   --arg tier "$tier" \
-  '{provider: "anthropic", action: $action, trigger: $trigger, wait_minutes: $wait_minutes, milestone: $milestone, tier: $tier}'
+  --argjson bypass_7d "$([ "$allow_7d_over" == "1" ] && echo true || echo false)" \
+  '{provider: "anthropic", action: $action, trigger: $trigger, wait_minutes: $wait_minutes, milestone: $milestone, tier: $tier, bypass_7d: $bypass_7d}'

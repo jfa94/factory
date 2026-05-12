@@ -272,6 +272,43 @@ assert_eq "7d over trigger" "7d_over" "$(printf '%s' "$output" | jq -r '.trigger
 
 # ============================================================
 echo ""
+echo "=== pipeline-model-router (7d over, bypass active, 5h within) ==="
+# 7d over + bypass + 5h within → action=proceed + bypass_7d=true
+quota_bypass='{"five_hour":{"utilization":30,"hourly_threshold":60,"over_threshold":false,"window_hour":3,"resets_at_epoch":9999999999},"seven_day":{"utilization":100,"daily_threshold":57,"over_threshold":true,"window_day":4,"resets_at_epoch":9999999999},"detection_method":"statusline"}'
+output=$(FACTORY_ALLOW_7D_OVER=1 pipeline-model-router --quota "$quota_bypass" --tier feature 2>/dev/null)
+assert_eq "7d+bypass → proceed" "proceed" "$(printf '%s' "$output" | jq -r '.action')"
+assert_eq "7d+bypass → bypass_7d=true" "true" "$(printf '%s' "$output" | jq -r '.bypass_7d')"
+
+# ============================================================
+echo ""
+echo "=== pipeline-model-router (7d over, bypass active, 5h over) ==="
+# 7d over + bypass + 5h over → action=wait (5h wait path), bypass_7d=true
+future_5h=$(( $(date +%s) + 3600 ))
+quota_both_over='{"five_hour":{"utilization":95,"hourly_threshold":60,"over_threshold":true,"window_hour":3,"resets_at_epoch":'"$future_5h"'},"seven_day":{"utilization":100,"daily_threshold":57,"over_threshold":true,"window_day":4,"resets_at_epoch":9999999999},"detection_method":"statusline"}'
+output=$(FACTORY_ALLOW_7D_OVER=1 pipeline-model-router --quota "$quota_both_over" --tier feature 2>/dev/null)
+assert_eq "7d+bypass+5h over → wait" "wait" "$(printf '%s' "$output" | jq -r '.action')"
+assert_eq "7d+bypass+5h over → bypass_7d=true" "true" "$(printf '%s' "$output" | jq -r '.bypass_7d')"
+
+# ============================================================
+echo ""
+echo "=== pipeline-model-router (7d over, no bypass — regression guard) ==="
+# Verify default behavior unchanged
+quota_no_bypass='{"five_hour":{"utilization":95,"hourly_threshold":60,"over_threshold":true,"window_hour":3,"resets_at_epoch":9999999999},"seven_day":{"utilization":100,"daily_threshold":57,"over_threshold":true,"window_day":4,"resets_at_epoch":9999999999},"detection_method":"statusline"}'
+output=$(pipeline-model-router --quota "$quota_no_bypass" --tier feature 2>/dev/null)
+assert_eq "7d over, no bypass → end_gracefully" "end_gracefully" "$(printf '%s' "$output" | jq -r '.action')"
+assert_eq "7d over, no bypass → trigger=7d_over" "7d_over" "$(printf '%s' "$output" | jq -r '.trigger')"
+
+# ============================================================
+echo ""
+echo "=== pipeline-model-router (7d within, bypass set — no false positive) ==="
+# Bypass on but 7d actually within limits → normal proceed, no bypass_7d leakage
+quota_7d_within='{"five_hour":{"utilization":10,"hourly_threshold":60,"over_threshold":false,"window_hour":1,"resets_at_epoch":9999999999},"seven_day":{"utilization":10,"daily_threshold":57,"over_threshold":false,"window_day":2,"resets_at_epoch":9999999999},"detection_method":"statusline"}'
+output=$(FACTORY_ALLOW_7D_OVER=1 pipeline-model-router --quota "$quota_7d_within" --tier routine 2>/dev/null)
+assert_eq "7d within + bypass → still proceed" "proceed" "$(printf '%s' "$output" | jq -r '.action')"
+assert_eq "7d within + bypass → no bypass_7d in normal proceed" "null" "$(printf '%s' "$output" | jq -r '.bypass_7d // "null"')"
+
+# ============================================================
+echo ""
 echo "=== pipeline-model-router (unavailable sentinel) ==="
 
 unavailable_quota='{"detection_method":"unavailable","reason":"usage-cache-missing","five_hour":{"over_threshold":true},"seven_day":{"over_threshold":true}}'
