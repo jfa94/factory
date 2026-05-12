@@ -458,18 +458,18 @@ pipeline_quota_gate() {
   # Load 7d bypass flag from run state — set by orchestrator on /factory:run resume --allow-7d-over.
   local allow_7d_over_flag
   allow_7d_over_flag=$(pipeline-state read "$run_id" '.flags.allow_7d_over // false' 2>/dev/null || printf 'false')
-  if [[ "$allow_7d_over_flag" == "true" ]]; then
-    export FACTORY_ALLOW_7D_OVER=1
+  local _allow_7d_env=0
+  [[ "$allow_7d_over_flag" == "true" ]] && _allow_7d_env=1
+  if (( _allow_7d_env == 1 )); then
     log_warn "quota gate [$boundary_label]: 7d usage bypass active for run $run_id"
   fi
 
   local _rrc=0 _rerr
   _rerr=$(mktemp)
-  route=$(pipeline-model-router --quota "$quota" --tier "$tier" 2>"$_rerr") || _rrc=$?
+  route=$(FACTORY_ALLOW_7D_OVER="$_allow_7d_env" pipeline-model-router --quota "$quota" --tier "$tier" 2>"$_rerr") || _rrc=$?
   if (( _rrc != 0 )); then
     log_warn "quota gate [$boundary_label]: pipeline-model-router crashed (rc=$_rrc) — ending gracefully. stderr: $(cat "$_rerr")"
     rm -f "$_rerr"
-    unset FACTORY_ALLOW_7D_OVER
     log_metric "quota.check" \
       "gate=\"$boundary_label\"" \
       "action=\"error\"" \
@@ -479,7 +479,6 @@ pipeline_quota_gate() {
     return 2
   fi
   rm -f "$_rerr"
-  unset FACTORY_ALLOW_7D_OVER
   action=$(printf '%s' "$route" | jq -r '.action')
 
   local util5 util7
@@ -617,7 +616,7 @@ pipeline_quota_gate() {
 
       _rrc=0
       _rerr=$(mktemp)
-      route=$(pipeline-model-router --quota "$quota" --tier "$tier" 2>"$_rerr") || _rrc=$?
+      route=$(FACTORY_ALLOW_7D_OVER="$_allow_7d_env" pipeline-model-router --quota "$quota" --tier "$tier" 2>"$_rerr") || _rrc=$?
       if (( _rrc != 0 )); then
         log_warn "quota gate [$boundary_label]: post-wait pipeline-model-router crashed (rc=$_rrc) — ending gracefully. stderr: $(cat "$_rerr")"
         rm -f "$_rerr"

@@ -627,6 +627,75 @@ test_quota_gate_7d_bypass() {
 }
 
 # ---------------------------------------------------------------------------
+# 7d bypass + 5h over: when both 7d AND 5h quotas are over and the bypass
+# flag is set, the gate must first sleep for the 5h milestone (wait), then
+# on the post-wait re-check (still both over) return rc=3 (wait_retry) rather
+# than rc=2 (end_gracefully). The bypass must propagate to the second router
+# call inside the wait branch.
+# ---------------------------------------------------------------------------
+test_quota_gate_7d_bypass_both_over() {
+  new_scenario "quota-gate-7d-bypass-both-over"
+
+  local run_id="quota-7d-both-$$"
+  local run_state="$CLAUDE_PLUGIN_DATA/runs/$run_id"
+  mkdir -p "$run_state"
+  printf '{"circuit_breaker":{"quota_wait_cycles":0,"quota_stale_cycles":0},"flags":{}}' \
+    > "$run_state/state.json"
+
+  # Write the bypass flag to run state.
+  pipeline-state write "$run_id" '.flags.allow_7d_over' true >/dev/null
+
+  # Seed usage-cache.json with BOTH 5h and 7d over threshold.
+  local now resets_5h_epoch resets_7d_epoch
+  now=$(date +%s)
+  resets_5h_epoch=$(( now + 600 ))   # 5h resets in 10 minutes
+  resets_7d_epoch=$(( now + 86400 )) # 7d resets in a day
+
+  jq -n \
+    --argjson resets_5h "$resets_5h_epoch" \
+    --argjson resets_7d "$resets_7d_epoch" \
+    --argjson now "$now" \
+    '{
+      "five_hour": {"used_percentage": 95, "resets_at": $resets_5h},
+      "seven_day": {"used_percentage": 96, "resets_at": $resets_7d},
+      "captured_at": $now
+    }' > "$CLAUDE_PLUGIN_DATA/usage-cache.json"
+
+  # Stub pipeline-quota-check to always return the same over-threshold data
+  # so the post-wait re-check is also over, and sleep is replaced with a no-op.
+  local stub_dir="$ROOT_TMP/7d-both-stubs"
+  mkdir -p "$stub_dir"
+
+  # Override sleep to a no-op so the test doesn't actually wait.
+  cat > "$stub_dir/sleep" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+  chmod +x "$stub_dir/sleep"
+
+  local gate_log="$ROOT_TMP/7d-both-over.log"
+  set +e
+  PATH="$stub_dir:$BIN_DIR:$PATH" CLAUDE_PLUGIN_DATA="$CLAUDE_PLUGIN_DATA" \
+  FACTORY_QUOTA_GATE_SLEEP_CAP_SEC=0 \
+  bash -c '
+    source "'"$BIN_DIR"'/pipeline-lib.sh"
+    pipeline_quota_gate "'"$run_id"'" "feature" "test-7d-both-over" ""
+    exit $?
+  ' >"$gate_log" 2>&1
+  local rc=$?
+  set -e
+
+  # With bypass active, 7d-over alone would proceed; but 5h is also over so the
+  # router emits wait on the first call (5h_over trigger). After sleeping, the
+  # post-wait re-check still shows both over. The post-wait router call must also
+  # receive FACTORY_ALLOW_7D_OVER=1, so it should again emit wait (not end_gracefully).
+  # The gate then increments wait_cycles and returns rc=3 (wait_retry).
+  assert_eq "7d+5h both over with bypass → wait_retry (rc=3)" "3" "$rc"
+  assert "gate log mentions bypass warning" \
+    grep -q '7d usage bypass active' "$gate_log"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 test_spec_handoff
@@ -638,6 +707,7 @@ test_statusline_wrapper_post_reset_display
 test_non_numeric_cache_fields_yield_unavailable
 test_quota_gate_catches_quota_check_crash
 test_quota_gate_7d_bypass
+test_quota_gate_7d_bypass_both_over
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
