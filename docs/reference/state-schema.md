@@ -359,6 +359,26 @@ Tasks in the same `parallel_group` run concurrently. Groups execute sequentially
 
 **Migration:** Legacy state files with `pause_minutes` are migrated on first write — the value is copied to both `pause_minutes_total` and `pause_minutes_consecutive`, then `pause_minutes` is removed.
 
+---
+
+## Run Flags
+
+```json
+{
+  "flags": {
+    "allow_7d_over": false
+  }
+}
+```
+
+### .flags.allow_7d_over
+
+| Type    | boolean |
+| ------- | ------- |
+| Default | false   |
+
+Set to `true` by the orchestrator when `/factory:run resume --allow-7d-over` is used. Causes `pipeline_quota_gate` to export `FACTORY_ALLOW_7D_OVER=1` before calling `pipeline-model-router`, bypassing the 7d-over → `end_gracefully` branch for the remainder of the run. Cleared by `pipeline-state finalize-on-stop`.
+
 > Legacy state files from 0.1.x runs may contain `tasks_completed` and `turns_completed` fields. These are ignored from 0.2.0 onward — no migration is required.
 
 ---

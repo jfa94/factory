@@ -235,6 +235,12 @@ The user can resume later:
 /factory:run resume
 ```
 
+### Override
+
+`/factory:run resume --allow-7d-over` bypasses the 7d-over → `end_gracefully` decision for the remainder of that resumed run. The router still routes via the 5h logic — if the 5-hour window is also over, the pipeline waits for the hourly threshold milestone; if the 5-hour window is within limits, the pipeline proceeds.
+
+The flag is written to run state as `.flags.allow_7d_over` and cleared automatically when the run finalizes. It does **not** suppress Anthropic API enforcement — if the upstream account truly refuses requests, subagents fail normally. Use only when you have confirmed headroom (separate billing, near-reset, willingness to use the remaining reserve).
+
 ---
 
 ## Monitoring Usage
