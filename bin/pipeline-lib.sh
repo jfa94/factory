@@ -959,7 +959,9 @@ _validate_id() {
   return 0
 }
 
-# Drop reviewer findings whose verbatim_line is not a substring of the diff.
+# Drop reviewer findings whose verbatim_line is not a full-line match against
+# the diff (after stripping the +/-/space column-1 prefix and normalizing
+# intra-line whitespace).
 # Stdin: normalized review JSON (with .findings[].verbatim_line set).
 # Args:  $1 = path to a file containing the diff text to grep against.
 # Stdout: filtered review JSON. Recomputes blocking_count / non_blocking_count /
@@ -981,13 +983,13 @@ validate_findings() {
   n=$(printf '%s' "$json" | jq '.findings | length')
   kept='[]'
   dropped=0
-  # Build normalized-line set from diff for exact-line matching. We normalize
-  # only intra-line whitespace (tabs/runs of spaces → single space) and trim
-  # leading/trailing blanks so reviewer-cited lines that have been re-flowed
-  # still match. Newlines are preserved (one line per record) so grep -x can
-  # require a full-line match.
+  # Build normalized-line set from diff for exact-line matching. Strip the
+  # diff column-1 prefix (+/-/space) first, then collapse intra-line
+  # whitespace and trim leading/trailing blanks. Reviewers cite source lines
+  # without the prefix; stripping here lets grep -x do like-for-like matching
+  # while still requiring a full-line match (anti-forgery preserved).
   local diff_lines_file; diff_lines_file=$(mktemp)
-  awk '{ gsub(/[\t ]+/, " "); sub(/^ /, ""); sub(/ $/, ""); print }' \
+  awk '{ sub(/^[+\- ]/, ""); gsub(/[\t ]+/, " "); sub(/^ /, ""); sub(/ $/, ""); print }' \
     "$diff_file" > "$diff_lines_file"
 
   for ((i=0; i<n; i++)); do

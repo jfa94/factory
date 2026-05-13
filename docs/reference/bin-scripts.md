@@ -695,7 +695,7 @@ Accepts `APPROVE` from JSON block (normalized to `APPROVED` for validation).
 
 **Findings validation (via `validate_findings` in `pipeline-lib.sh`):**
 
-Blocking findings are validated against the diff using exact full-line match (`grep -qxF`) against a normalized line-set built from the diff. Forged 10-char substring blockers are rejected. Whitespace-normalization is intra-line only (newlines preserved).
+Blocking findings are validated against the diff using exact full-line match (`grep -qxF`) against a normalized line-set built from the diff. Normalization strips the diff column-1 prefix (`+`/`-`/space) before collapsing intra-line whitespace and trimming — reviewers cite source lines without prefixes, so stripping here enables like-for-like matching while preserving full-line anti-forgery. Forged 10-char substring blockers are rejected.
 
 ---
 
