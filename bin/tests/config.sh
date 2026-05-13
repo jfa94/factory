@@ -699,7 +699,10 @@ assert_contains "quality-gate template has quality job" "name: Quality" "$QG_TEM
 assert_contains "quality-gate template has security job" "name: Security Scan" "$QG_TEMPLATE"
 assert_contains "quality-gate template has mutation job" "name: Mutation Testing" "$QG_TEMPLATE"
 assert_contains "quality-gate template has auto-merge job" "name: Auto Merge" "$QG_TEMPLATE"
-assert_contains "quality-gate template auto-merges via gh pr merge --auto" "gh pr merge" "$QG_TEMPLATE"
+assert_contains "quality-gate template squashes task PRs into staging" "squash --auto" "$QG_TEMPLATE"
+assert_contains "quality-gate template merge-commits rollup into develop" "merge --auto" "$QG_TEMPLATE"
+assert_contains "quality-gate template gates squash on staging base" "github.base_ref == 'staging'" "$QG_TEMPLATE"
+assert_contains "quality-gate template gates merge on develop base" "github.base_ref == 'develop'" "$QG_TEMPLATE"
 assert_contains "quality-gate template differentiates incremental vs full mutation" "Mutation (full scope" "$QG_TEMPLATE"
 assert_contains "quality-gate template uses git since-ref for incremental mutation" 'origin/$BASE_REF' "$QG_TEMPLATE"
 

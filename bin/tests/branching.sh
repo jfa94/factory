@@ -888,6 +888,36 @@ assert_eq "conflict leaves no MERGE_HEAD" "no" "$(cat "$sandbox/merge_head")"
 assert_eq "conflict leaves no conflict index entries" "0" "$(cat "$sandbox/dirty")"
 cleanup_sandbox "$sandbox"
 
+# --- Case 5: develop has merge commit from prior run — staging FFs cleanly ---
+sandbox=$(setup_git_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  git checkout -b staging --quiet
+  echo "s1" > s1.txt; git add s1.txt
+  git commit -m "staging-feature-1" --quiet
+  git push -u origin staging --quiet 2>/dev/null || true
+  # Simulate GitHub auto-merge with --merge: develop gets a merge commit
+  # whose second parent is the staging tip (preserves staging as ancestor of develop).
+  git checkout develop --quiet
+  git merge --no-ff staging -m "Merge staging into develop" --quiet
+  git push origin develop --quiet 2>/dev/null || true
+  git checkout develop --quiet
+
+  output=$(pipeline-branch staging-init 2>/dev/null)
+  reconcile=$(echo "$output" | jq -r '.reconcile')
+  staging_sha=$(git rev-parse HEAD)
+  develop_sha=$(git rev-parse origin/develop)
+  printf '%s\n' "$reconcile" > "$sandbox/reconcile"
+  printf '%s\n' "$staging_sha" > "$sandbox/staging_sha"
+  printf '%s\n' "$develop_sha" > "$sandbox/develop_sha"
+)
+assert_eq "reconcile FFs after prior-run merge commit on develop" \
+  "fast-forwarded" "$(cat "$sandbox/reconcile")"
+assert_eq "staging tip equals develop tip after FF" \
+  "$(cat "$sandbox/develop_sha")" "$(cat "$sandbox/staging_sha")"
+cleanup_sandbox "$sandbox"
+
 cd "$orig_cwd"
 trap - EXIT
 
