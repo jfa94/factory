@@ -983,6 +983,78 @@ ea_out_bypass=$(CLAUDE_PLUGIN_DATA="$EA_DIR2" FACTORY_AUTONOMOUS_MODE=1 \
 ea_status_bypass=$(printf '%s' "$ea_out_bypass" | jq -r '.status')
 assert_eq "ensure-autonomy: bypass status when no file and mode=1" "bypass" "$ea_status_bypass"
 
+# Stable wrapper path: regenerate must copy bin/statusline-wrapper.sh into
+# $CLAUDE_PLUGIN_DATA and bake that path into statusLine.command so plugin
+# version cycles don't strand long-lived sessions on a deleted cache dir.
+stable_wrapper="$EA_DIR/statusline-wrapper.sh"
+if [[ -f "$stable_wrapper" && -x "$stable_wrapper" ]]; then
+  echo "  PASS: ensure-autonomy copies wrapper into \$CLAUDE_PLUGIN_DATA and marks executable"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: ensure-autonomy did not copy wrapper into \$CLAUDE_PLUGIN_DATA (or not executable)"
+  fail=$((fail + 1))
+fi
+
+baked_statusline=$(jq -r '.statusLine.command // empty' "$EA_DIR/merged-settings.json")
+assert_eq "ensure-autonomy bakes stable wrapper path into statusLine.command" \
+  "$stable_wrapper" "$baked_statusline"
+
+# Legacy migration: a current-version merged-settings whose statusLine.command
+# is under .../plugins/cache/<owner>/<plugin>/<ver>/bin/... must be regenerated
+# even though _factoryVersion matches.
+EA_DIR_MIG=$(mktemp -d "${TMPDIR:-/tmp}/ensure-autonomy-mig-XXXXXX")
+trap '[[ -n "${EA_DIR_MIG:-}" && "$EA_DIR_MIG" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$EA_DIR_MIG"' EXIT
+jq --arg ver "$plugin_version" \
+   '._factoryVersion = $ver
+    | .env.CLAUDE_PLUGIN_DATA = "'"$EA_DIR_MIG"'"
+    | .statusLine.command = "/Users/example/.claude/plugins/cache/owner/plugin/0.0.1/bin/statusline-wrapper.sh"' \
+  "$EA_DIR/merged-settings.json" > "$EA_DIR_MIG/merged-settings.json"
+printf '{"captured_at": %d}' "$(date +%s)" > "$EA_DIR_MIG/usage-cache.json"
+ea_out_mig=$(FACTORY_JSON=1 CLAUDE_PLUGIN_DATA="$EA_DIR_MIG" FACTORY_AUTONOMOUS_MODE=1 \
+  PATH="$PLUGIN_ROOT/bin:$PATH" "$ENSURE_SCRIPT" 2>/dev/null) || true
+ea_status_mig=$(printf '%s' "$ea_out_mig" | jq -r '.status')
+assert_eq "ensure-autonomy: stale status on legacy cache-pinned wrapper path" \
+  "stale" "$ea_status_mig"
+mig_statusline=$(jq -r '.statusLine.command // empty' "$EA_DIR_MIG/merged-settings.json")
+assert_eq "ensure-autonomy: migration rewrites statusLine.command to stable path" \
+  "$EA_DIR_MIG/statusline-wrapper.sh" "$mig_statusline"
+
+# Wrapper-missing path probe: when statusLine.command resolves to a missing
+# file AND regenerate cannot fix it (no $CLAUDE_PLUGIN_DATA), surface a
+# dedicated status instead of a misleading stale-cache reason.
+EA_DIR_WM=$(mktemp -d "${TMPDIR:-/tmp}/ensure-autonomy-wm-XXXXXX")
+trap '[[ -n "${EA_DIR_WM:-}" && "$EA_DIR_WM" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$EA_DIR_WM"' EXIT
+jq --arg ver "$plugin_version" \
+   '._factoryVersion = $ver
+    | .env.CLAUDE_PLUGIN_DATA = "'"$EA_DIR_WM"'"
+    | .statusLine.command = "/definitely/not/here/wrapper.sh"' \
+  "$EA_DIR/merged-settings.json" > "$EA_DIR_WM/merged-settings.json"
+printf '{"captured_at": %d}' "$(date +%s)" > "$EA_DIR_WM/usage-cache.json"
+# Regenerate will create a working stable-path wrapper at $EA_DIR_WM, so the
+# probe self-heals and returns "stale" (caller relaunches). This is the
+# happy-recovery path; the dedicated wrapper-missing status fires only when
+# regenerate itself cannot land an executable wrapper.
+ea_out_wm=$(FACTORY_JSON=1 CLAUDE_PLUGIN_DATA="$EA_DIR_WM" FACTORY_AUTONOMOUS_MODE=1 \
+  PATH="$PLUGIN_ROOT/bin:$PATH" "$ENSURE_SCRIPT" 2>/dev/null) || true
+ea_status_wm=$(printf '%s' "$ea_out_wm" | jq -r '.status')
+# Acceptable outcomes: "stale" (legacy-path migration fired first, repaired
+# wrapper) or "stale" again from the path probe. Either way, never "ok".
+if [[ "$ea_status_wm" == "stale" || "$ea_status_wm" == "wrapper-missing" ]]; then
+  echo "  PASS: ensure-autonomy: probe halts on missing wrapper (status=$ea_status_wm)"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: ensure-autonomy: probe did not halt on missing wrapper (got '$ea_status_wm')"
+  fail=$((fail + 1))
+fi
+wm_wrapper="$EA_DIR_WM/statusline-wrapper.sh"
+if [[ -f "$wm_wrapper" && -x "$wm_wrapper" ]]; then
+  echo "  PASS: ensure-autonomy: probe self-heals wrapper at stable path"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: ensure-autonomy: probe did not restore wrapper at stable path"
+  fail=$((fail + 1))
+fi
+
 # ============================================================
 echo ""
 echo "=== read_config_strict (JSON-null semantics) ==="

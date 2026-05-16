@@ -139,8 +139,21 @@ This design unifies the previous fail-closed-on-first-stale behavior with the re
 `usage-cache.json` is written by `bin/statusline-wrapper.sh`. The wrapper is
 **auto-installed for all pipeline sessions** via `templates/settings.autonomous.json`,
 which declares `statusLine.command` pointing at the wrapper. `pipeline-ensure-autonomy`
-regenerates `merged-settings.json` on version bumps, resolving the
-`${CLAUDE_PLUGIN_ROOT}` path — no user setup required.
+regenerates `merged-settings.json` on version bumps — no user setup required.
+
+**Stable wrapper path.** On regenerate, `pipeline-ensure-autonomy` copies the
+shipping wrapper to `$CLAUDE_PLUGIN_DATA/statusline-wrapper.sh` and bakes that
+path into `statusLine.command`. The data dir survives plugin version cycles, so
+a session launched with `--settings merged-settings.json` keeps its wrapper
+binding alive even after Claude Code garbage-collects older cache directories.
+Earlier installs that baked the version-pinned `${CLAUDE_PLUGIN_ROOT}` path are
+auto-migrated on the next `/factory:run` (status=`stale`, relaunch once).
+
+**Wrapper-path probe.** If `statusLine.command` ever resolves to a missing or
+non-executable file (e.g. a hand-edited path, a broken symlink), the autonomy
+check tries one regenerate then halts with `status=wrapper-missing` and the
+exact `claude --settings …` command needed to recover — instead of letting the
+failure surface later as a stale-cache halt with a misleading reason.
 
 **Coexistence with a user's existing statusline.** When `pipeline-ensure-autonomy`
 regenerates `merged-settings.json`, it reads `~/.claude/settings.json` for an
