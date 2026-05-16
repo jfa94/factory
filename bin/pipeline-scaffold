@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Create project scaffolding files if absent (idempotent).
 # Usage: pipeline-scaffold <project-root> [--force] [--merge-package-json]
+#                                         [--check] [--migrate-workflows]
 # Exit: 0=success
 
 source "$(dirname "$0")/pipeline-lib.sh"
@@ -14,11 +15,13 @@ shift
 force=false
 merge_pkg_json=false
 check_only=false
+migrate_workflows=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force) force=true; shift ;;
     --merge-package-json) merge_pkg_json=true; shift ;;
     --check) check_only=true; shift ;;
+    --migrate-workflows) migrate_workflows=true; shift ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -56,6 +59,48 @@ if [[ "$check_only" == "true" ]]; then
 fi
 
 created=()
+migrated=()
+
+# Surgical, idempotent patches applied to existing workflow files. Each
+# migration is a no-op when the target file is already up to date. Always runs
+# so an already-scaffolded repo picks up fixes shipped after the original copy.
+_migrate_quality_gate_delete_branch() {
+  local wf="$root/.github/workflows/quality-gate.yml"
+  [[ -f "$wf" ]] || return 0
+  # Only patch staging-target line if --delete-branch is absent.
+  if grep -qE '^        run: gh pr merge "\$PR_NUMBER" --squash --auto$' "$wf"; then
+    local tmp
+    tmp=$(mktemp "${wf}.XXXXXX")
+    awk '
+      /^        run: gh pr merge "\$PR_NUMBER" --squash --auto$/ {
+        print "        run: gh pr merge \"$PR_NUMBER\" --squash --auto --delete-branch"
+        next
+      }
+      { print }
+    ' "$wf" > "$tmp" && mv -f "$tmp" "$wf"
+    migrated+=("$wf: add --delete-branch to staging auto-merge")
+    log_info "migrated $wf (added --delete-branch)"
+  fi
+}
+
+_run_migrations() {
+  _migrate_quality_gate_delete_branch
+}
+
+# --migrate-workflows: run only the workflow migrations and emit a JSON report.
+# Useful for /factory:configure to apply post-release fixes without touching
+# any other scaffolded file.
+if [[ "$migrate_workflows" == "true" ]]; then
+  _run_migrations
+  if [[ ${#migrated[@]} -gt 0 ]]; then
+    migrated_json=$(printf '%s\n' "${migrated[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')
+  else
+    migrated_json='[]'
+  fi
+  jq -n --argjson migrations "$migrated_json" \
+    '{action:"migrate-workflows", migrations:$migrations, count:($migrations|length)}'
+  exit 0
+fi
 
 _create_if_absent() {
   local path="$1" content="$2"
@@ -178,13 +223,24 @@ else
   created+=("$gitignore")
 fi
 
+# Apply workflow migrations after scaffold's create-if-absent passes. Ensures
+# already-scaffolded repos pick up post-release workflow fixes on every run.
+_run_migrations
+
 if [[ ${#created[@]} -gt 0 ]]; then
   created_json=$(printf '%s\n' "${created[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')
 else
   created_json='[]'
 fi
 
+if [[ ${#migrated[@]} -gt 0 ]]; then
+  migrated_json=$(printf '%s\n' "${migrated[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')
+else
+  migrated_json='[]'
+fi
+
 jq -n \
   --argjson files_created "$created_json" \
   --argjson count "${#created[@]}" \
-  '{files_created: $files_created, count: $count}'
+  --argjson migrations "$migrated_json" \
+  '{files_created: $files_created, count: $count, migrations: $migrations}'

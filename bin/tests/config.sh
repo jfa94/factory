@@ -706,6 +706,45 @@ assert_contains "quality-gate template gates merge on develop base" "github.base
 assert_contains "quality-gate template differentiates incremental vs full mutation" "Mutation (full scope" "$QG_TEMPLATE"
 assert_contains "quality-gate template uses git since-ref for incremental mutation" 'origin/$BASE_REF' "$QG_TEMPLATE"
 
+# Branch cleanup on auto-merge: staging-target step must delete head branch
+# (task branches are ephemeral); develop-target step must NOT delete (head is
+# the long-lived `staging` branch).
+assert_contains "quality-gate template deletes branch after staging merge" \
+  'gh pr merge "$PR_NUMBER" --squash --auto --delete-branch' "$QG_TEMPLATE"
+develop_line=$(awk '/--merge --auto/ {print; exit}' "$QG_TEMPLATE")
+if printf '%s' "$develop_line" | grep -qF -- "--delete-branch"; then
+  echo "  FAIL: quality-gate template must NOT delete the staging branch on develop-target merge"
+  fail=$((fail + 1))
+else
+  echo "  PASS: quality-gate template preserves staging branch on develop-target merge"
+  pass=$((pass + 1))
+fi
+
+# pipeline-scaffold --migrate-workflows: idempotent surgical patch that
+# upgrades a previously scaffolded quality-gate.yml to add --delete-branch.
+MIGRATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/phase9-migrate-XXXXXX")
+mkdir -p "$MIGRATE_DIR/.github/workflows"
+# Seed with an older copy of the template that lacks --delete-branch.
+sed 's| --squash --auto --delete-branch| --squash --auto|' "$QG_TEMPLATE" \
+  > "$MIGRATE_DIR/.github/workflows/quality-gate.yml"
+assert_contains "seed lacks --delete-branch before migration" \
+  'gh pr merge "$PR_NUMBER" --squash --auto' \
+  "$MIGRATE_DIR/.github/workflows/quality-gate.yml"
+
+migrate_out=$("$SCAFFOLD" "$MIGRATE_DIR" --migrate-workflows 2>/dev/null)
+migrate_count=$(printf '%s' "$migrate_out" | jq -r '.count')
+assert_eq "first --migrate-workflows reports one patch" "1" "$migrate_count"
+assert_contains "migrated workflow now has --delete-branch" \
+  'gh pr merge "$PR_NUMBER" --squash --auto --delete-branch' \
+  "$MIGRATE_DIR/.github/workflows/quality-gate.yml"
+
+# Second invocation must be a no-op (idempotent).
+migrate_out2=$("$SCAFFOLD" "$MIGRATE_DIR" --migrate-workflows 2>/dev/null)
+migrate_count2=$(printf '%s' "$migrate_out2" | jq -r '.count')
+assert_eq "second --migrate-workflows is a no-op" "0" "$migrate_count2"
+
+rm -rf "$MIGRATE_DIR"
+
 # ============================================================
 echo ""
 echo "=== templates: stryker + dep-cruiser + package.scaffold (task_10_02/03) ==="

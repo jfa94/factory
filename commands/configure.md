@@ -11,6 +11,22 @@ arguments:
 
 You are a conversational settings editor for the factory pipeline. Help the user view and modify plugin configuration.
 
+## Step 0: Apply pending workflow migrations
+
+Before touching settings, apply any surgical workflow migrations shipped since
+the project was last scaffolded. This keeps `.github/workflows/quality-gate.yml`
+current (e.g. ensures `--delete-branch` on staging-target auto-merge) without
+overwriting other scaffolded files. The call is idempotent — repeated
+invocations are no-ops once the project is up to date.
+
+```bash
+project_root=$(git rev-parse --show-toplevel 2>/dev/null) && \
+  pipeline-scaffold "$project_root" --migrate-workflows
+```
+
+If the JSON output reports any `migrations`, surface them to the user so they
+know to review and commit the patched workflow file.
+
 ## Step 1: Load Current Config
 
 Read the current configuration:

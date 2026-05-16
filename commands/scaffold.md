@@ -29,7 +29,14 @@ This creates (idempotently) the minimum set of files the pipeline expects:
 - `.github/workflows/quality-gate.yml` (CI template)
 - `.stryker.config.json` and `.dependency-cruiser.cjs` (quality gate configs)
 
-Report any files that were newly created versus already present.
+Scaffold also applies surgical workflow migrations on every run, so existing
+projects pick up post-release fixes to `quality-gate.yml` (e.g. the
+`--delete-branch` flag on staging-target auto-merge) without losing local
+customizations. The migration JSON output's `migrations` array names any files
+patched.
+
+Report any files that were newly created versus already present, and surface
+any migrations applied.
 
 ## Step 3: Check optional tool dependencies
 
