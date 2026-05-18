@@ -15,15 +15,21 @@ set -euo pipefail
 
 input=$(cat)
 
-# Determine plugin data directory. CLAUDE_PLUGIN_DATA is set by the plugin
-# system when the pipeline runs; for the statusline (which runs in user env)
-# we fall back to the canonical plugin-runtime path so wrapper writes and
-# pipeline-quota-check reads agree without env pinning.
-PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/plugins/data/factory-jfa94}"
+# Plugin data directory. Required: pipeline-ensure-autonomy bakes
+# env.CLAUDE_PLUGIN_DATA into merged-settings.json, and Claude Code loads
+# that env when the session is launched with --settings. If this is unset,
+# we are running outside a properly-launched pipeline session and writing
+# usage-cache.json to a guessed path would silently mismatch what
+# pipeline-quota-check reads. Skip the cache write in that case.
+if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
+  PLUGIN_DATA=""
+else
+  PLUGIN_DATA="$CLAUDE_PLUGIN_DATA"
+fi
 
 # Write rate limit data to usage-cache.json if rate_limits are present.
 # Fail silently so a broken jq or missing dir never breaks the statusline output.
-if command -v jq >/dev/null 2>&1; then
+if [[ -n "$PLUGIN_DATA" ]] && command -v jq >/dev/null 2>&1; then
   if printf '%s' "$input" | jq -e '.rate_limits' >/dev/null 2>&1; then
     mkdir -p "$PLUGIN_DATA" 2>/dev/null || true
     cache_file="${PLUGIN_DATA}/usage-cache.json"
