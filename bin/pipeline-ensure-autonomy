@@ -78,6 +78,10 @@ _regenerate() {
   # belt-and-braces — it lets a non-default install (e.g. a forked marketplace id)
   # still keep wrapper writes and gate reads on the same path.
   local plugin_data="${CLAUDE_PLUGIN_DATA:-}"
+  if [[ -z "$plugin_data" ]]; then
+    log_error "CLAUDE_PLUGIN_DATA is not set; cannot materialize merged-settings.json"
+    exit 1
+  fi
 
   # Wrapper stable-path copy. Without this, statusLine.command is baked as the
   # version-pinned $PLUGIN_ROOT/bin/statusline-wrapper.sh — and when Claude Code
@@ -120,8 +124,10 @@ _regenerate() {
        --arg plugin_data "$plugin_data" \
        --arg wrapper_dest "$wrapper_dest" '
       walk(
-        if type == "string" and test("\\$\\{CLAUDE_PLUGIN_ROOT\\}")
-        then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root)
+        if type == "string"
+        then
+          (if test("\\$\\{CLAUDE_PLUGIN_ROOT\\}") then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root) else . end)
+          | (if test("\\$\\{CLAUDE_PLUGIN_DATA\\}") then gsub("\\$\\{CLAUDE_PLUGIN_DATA\\}"; $plugin_data) else . end)
         else . end
       ) | . + {_factoryVersion: $ver}
         | .env.FACTORY_ORIGINAL_STATUSLINE = $original_statusline
@@ -134,8 +140,10 @@ _regenerate() {
        --arg plugin_data "$plugin_data" \
        --arg wrapper_dest "$wrapper_dest" '
       walk(
-        if type == "string" and test("\\$\\{CLAUDE_PLUGIN_ROOT\\}")
-        then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root)
+        if type == "string"
+        then
+          (if test("\\$\\{CLAUDE_PLUGIN_ROOT\\}") then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root) else . end)
+          | (if test("\\$\\{CLAUDE_PLUGIN_DATA\\}") then gsub("\\$\\{CLAUDE_PLUGIN_DATA\\}"; $plugin_data) else . end)
         else . end
       ) | . + {_factoryVersion: $ver}
         | (if $plugin_data != "" then .env.CLAUDE_PLUGIN_DATA = $plugin_data else . end)

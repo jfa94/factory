@@ -377,6 +377,58 @@ export PATH="$SCG_OLD_PATH"
 rm -rf "$SCG_TRUF" "$S1" "$S2" "$S3" "$S4"
 unset CLAUDE_PLUGIN_DATA
 
+# ============================================================
+echo ""
+echo "=== task_C_03: pipeline-ensure-autonomy substitutes \${CLAUDE_PLUGIN_DATA} placeholder ==="
+
+PD_DATA=$(mktemp -d)
+PD_TEMPLATE=$(mktemp)
+PD_OUT="$PD_DATA/merged-settings.json"
+
+# Minimal template with the placeholder in multiple positions
+cat > "$PD_TEMPLATE" <<'JSON'
+{
+  "permissions": {
+    "allow": [
+      "Read(${CLAUDE_PLUGIN_DATA}/**)",
+      "Edit(${CLAUDE_PLUGIN_DATA}/**)",
+      "Write(${CLAUDE_PLUGIN_DATA}/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "echo ${CLAUDE_PLUGIN_DATA}/x" }
+        ]
+      }
+    ]
+  }
+}
+JSON
+
+# Stub plugin.json so the script reads a version
+PD_ROOT=$(mktemp -d)
+mkdir -p "$PD_ROOT/.claude-plugin" "$PD_ROOT/bin" "$PD_ROOT/templates"
+echo '{"version":"99.0.0"}' > "$PD_ROOT/.claude-plugin/plugin.json"
+cp "$PD_TEMPLATE" "$PD_ROOT/templates/settings.autonomous.json"
+
+# Run the real script against the stub root
+env CLAUDE_PLUGIN_DATA="$PD_DATA" \
+    bash -c "PLUGIN_ROOT='$PD_ROOT' '$PLUGIN_ROOT/bin/pipeline-ensure-autonomy' --json" \
+    >/dev/null 2>&1 || true
+
+# Assert: the placeholder was replaced with the resolved data dir
+substituted=$(jq -r '[.. | strings | select(test("\\$\\{CLAUDE_PLUGIN_DATA\\}"))] | length' "$PD_OUT" 2>/dev/null || echo "missing")
+assert_eq "pipeline-ensure-autonomy: no \${CLAUDE_PLUGIN_DATA} placeholder remains in merged-settings.json" "0" "$substituted"
+
+resolved=$(jq -r '[.. | strings | select(test("'"$PD_DATA"'"))] | length' "$PD_OUT" 2>/dev/null || echo "0")
+[[ "$resolved" -gt 0 ]] || { echo "FAIL: resolved path $PD_DATA does not appear in merged-settings.json"; exit 1; }
+echo "  PASS: resolved CLAUDE_PLUGIN_DATA appears $resolved times in merged-settings.json"
+
+rm -rf "$PD_DATA" "$PD_ROOT" "$PD_TEMPLATE"
+
 echo ""
 echo "================================"
 echo "Hook tests: $pass passed, $fail failed"
