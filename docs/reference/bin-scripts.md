@@ -1421,9 +1421,13 @@ pipeline-ensure-autonomy
 
 1. Self-heal exec bits on entry-point scripts (statusline-wrapper.sh, pipeline-\*)
 2. Check if `merged-settings.json` exists and matches current plugin version
-3. Regenerate if missing or stale
+3. Regenerate if missing or stale — substitutes `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` placeholders from the template at materialization time
 4. Check FACTORY_AUTONOMOUS_MODE env var
 5. Check usage-cache.json freshness (>3600s = fail-closed)
+
+**Environment requirements:**
+
+`$CLAUDE_PLUGIN_DATA` must be set. The script exits 1 if the env var is unset — there is no hardcoded fallback path. This ensures `merged-settings.json` is portable across marketplace installs (different users get different plugin-data suffixes).
 
 **Output:**
 

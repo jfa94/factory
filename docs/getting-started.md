@@ -123,7 +123,7 @@ Start Claude Code normally and run the pipeline command:
 
 Because autonomous mode is not yet active, the command will:
 
-1. Materialize `$CLAUDE_PLUGIN_DATA/merged-settings.json` (resolving all `${CLAUDE_PLUGIN_ROOT}` paths inside the template)
+1. Materialize `$CLAUDE_PLUGIN_DATA/merged-settings.json` (resolving all `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` placeholders inside the template)
 2. Print the relaunch command
 3. Stop — it will not proceed
 
