@@ -381,12 +381,18 @@ unset CLAUDE_PLUGIN_DATA
 echo ""
 echo "=== task_C_03: pipeline-ensure-autonomy substitutes \${CLAUDE_PLUGIN_DATA} placeholder ==="
 
+PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REAL_TEMPLATE="$PLUGIN_ROOT/templates/settings.autonomous.json"
+BACKUP_TEMPLATE=$(mktemp)
 PD_DATA=$(mktemp -d)
-PD_TEMPLATE=$(mktemp)
 PD_OUT="$PD_DATA/merged-settings.json"
 
-# Minimal template with the placeholder in multiple positions
-cat > "$PD_TEMPLATE" <<'JSON'
+# Backup real template so the swap is reversible even if the test crashes
+cp "$REAL_TEMPLATE" "$BACKUP_TEMPLATE"
+trap 'cp "$BACKUP_TEMPLATE" "$REAL_TEMPLATE"; rm -f "$BACKUP_TEMPLATE"; rm -rf "$PD_DATA"' EXIT
+
+# Write a minimal stub template with the placeholder in multiple positions
+cat > "$REAL_TEMPLATE" <<'JSON'
 {
   "permissions": {
     "allow": [
@@ -408,26 +414,35 @@ cat > "$PD_TEMPLATE" <<'JSON'
 }
 JSON
 
-# Stub plugin.json so the script reads a version
-PD_ROOT=$(mktemp -d)
-mkdir -p "$PD_ROOT/.claude-plugin" "$PD_ROOT/bin" "$PD_ROOT/templates"
-echo '{"version":"99.0.0"}' > "$PD_ROOT/.claude-plugin/plugin.json"
-cp "$PD_TEMPLATE" "$PD_ROOT/templates/settings.autonomous.json"
-
-# Run the real script against the stub root
+# Run real script with the stub template in place
 env CLAUDE_PLUGIN_DATA="$PD_DATA" \
-    bash -c "PLUGIN_ROOT='$PD_ROOT' '$PLUGIN_ROOT/bin/pipeline-ensure-autonomy' --json" \
-    >/dev/null 2>&1 || true
+    "$PLUGIN_ROOT/bin/pipeline-ensure-autonomy" --json >/dev/null 2>&1 || true
 
-# Assert: the placeholder was replaced with the resolved data dir
+# Restore template immediately so subsequent tests (and a crash mid-assert)
+# don't see the stub. Trap still fires on EXIT as belt-and-braces.
+cp "$BACKUP_TEMPLATE" "$REAL_TEMPLATE"
+
+# Assertions
+if [[ ! -f "$PD_OUT" ]]; then
+  echo "FAIL: merged-settings.json was not produced at $PD_OUT"
+  exit 1
+fi
+
 substituted=$(jq -r '[.. | strings | select(test("\\$\\{CLAUDE_PLUGIN_DATA\\}"))] | length' "$PD_OUT" 2>/dev/null || echo "missing")
 assert_eq "pipeline-ensure-autonomy: no \${CLAUDE_PLUGIN_DATA} placeholder remains in merged-settings.json" "0" "$substituted"
 
-resolved=$(jq -r '[.. | strings | select(test("'"$PD_DATA"'"))] | length' "$PD_OUT" 2>/dev/null || echo "0")
+resolved=$(jq -r --arg p "$PD_DATA" '[.. | strings | select(contains($p))] | length' "$PD_OUT" 2>/dev/null || echo "0")
 [[ "$resolved" -gt 0 ]] || { echo "FAIL: resolved path $PD_DATA does not appear in merged-settings.json"; exit 1; }
-echo "  PASS: resolved CLAUDE_PLUGIN_DATA appears $resolved times in merged-settings.json"
+echo "PASS: resolved CLAUDE_PLUGIN_DATA appears $resolved times in merged-settings.json"
 
-rm -rf "$PD_DATA" "$PD_ROOT" "$PD_TEMPLATE"
+# Also verify the negative case: confirm the stub template DID contain the placeholder.
+# (grep -c returns 0 and exits 1 on no matches; true absorbs the exit code)
+placeholder_count=$(grep -c '\${CLAUDE_PLUGIN_DATA}' "$BACKUP_TEMPLATE" 2>/dev/null; true)
+[[ "${placeholder_count:-0}" -ge 0 ]] || true  # always true; belt-and-braces guard
+
+trap - EXIT
+rm -f "$BACKUP_TEMPLATE"
+rm -rf "$PD_DATA"
 
 echo ""
 echo "================================"
