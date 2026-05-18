@@ -148,6 +148,16 @@ Industry target is >80% mutation score. AI code has 15-25% higher mutation survi
 
 **Trigger:** Ship-time pregate (`_run_ship_pregate` in `pipeline-run-task`), runs unconditionally for every staging-bound task PR. Local execution mirrors the GitHub `Quality Gate` workflow's mutation job exactly — same scope filter, same Stryker invocation — so a task that fails mutation locally would also fail on CI, and mutation regressions cannot reach CI undetected.
 
+**CI workflow architecture:**
+
+The GitHub workflow (`templates/.github/workflows/quality-gate.yml`) runs mutation testing in a 4-shard matrix for parallelism:
+
+1. `mutation-scope` job: diffs HEAD against `origin/<base_ref>`, splits changed src files round-robin into 4 shards (JSON output).
+2. `mutation` job (matrix x4): each shard runs `stryker run --mutate <slice>` with its own incremental cache.
+3. `mutation-testing` aggregator job: collapses shard outcomes into a single "Mutation Testing" status check.
+
+The aggregator exists because branch protection on `staging` and `develop` requires a status check named exactly "Mutation Testing", but the matrix produces "Mutation (1)".."Mutation (4)" checks. The aggregator (`needs: [mutation-scope, mutation]`, `if: always()`) exits non-zero if any upstream job failed, satisfying branch protection with a stable check name regardless of shard count changes.
+
 **How it works:**
 
 1. `pipeline-mutation-gate` computes scope: `git diff --name-only --diff-filter=AM origin/staging...HEAD -- ':(glob)src/**/*.ts'`, filtered to drop `*.test.ts`, `*.spec.ts`, `*.d.ts`, `types/`, `data/`, `index.ts`.
