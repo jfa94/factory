@@ -2,7 +2,7 @@
 # Print scores.jsonl as a table, sorted by ts descending.
 set -euo pipefail
 
-: "${CLAUDE_PLUGIN_DATA:=$HOME/.claude/plugins/data/factory-jfa94}"
+: "${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA must be set (e.g. export CLAUDE_PLUGIN_DATA=\"\$HOME/.claude/plugins/data/factory-<your-marketplace-id>\")}"
 history_file="${CLAUDE_PLUGIN_DATA}/scores.jsonl"
 
 [[ -f "$history_file" ]] || { echo "no history at $history_file"; exit 0; }

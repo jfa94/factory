@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-: "${CLAUDE_PLUGIN_DATA:=$HOME/.claude/plugins/data/factory-jfa94}"
+: "${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA must be set (e.g. export CLAUDE_PLUGIN_DATA=\"\$HOME/.claude/plugins/data/factory-<your-marketplace-id>\")}"
 
 # shellcheck disable=SC1091
 source "$REPO_ROOT/bin/pipeline-score-steps.sh"

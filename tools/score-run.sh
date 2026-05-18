@@ -15,7 +15,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="$REPO_ROOT/bin:$PATH"
 
-: "${CLAUDE_PLUGIN_DATA:=$HOME/.claude/plugins/data/factory-jfa94}"
+: "${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA must be set (e.g. export CLAUDE_PLUGIN_DATA=\"\$HOME/.claude/plugins/data/factory-<your-marketplace-id>\")}"
 export CLAUDE_PLUGIN_DATA
 
 sub="${1:-pick}"
