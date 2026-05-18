@@ -381,7 +381,6 @@ unset CLAUDE_PLUGIN_DATA
 echo ""
 echo "=== task_C_03: pipeline-ensure-autonomy substitutes \${CLAUDE_PLUGIN_DATA} placeholder ==="
 
-PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 REAL_TEMPLATE="$PLUGIN_ROOT/templates/settings.autonomous.json"
 BACKUP_TEMPLATE=$(mktemp)
 PD_DATA=$(mktemp -d)
@@ -414,6 +413,9 @@ cat > "$REAL_TEMPLATE" <<'JSON'
 }
 JSON
 
+# Capture placeholder count in stub before restoration
+stub_placeholder_count=$(grep -c '\${CLAUDE_PLUGIN_DATA}' "$REAL_TEMPLATE" 2>/dev/null || true)
+
 # Run real script with the stub template in place
 env CLAUDE_PLUGIN_DATA="$PD_DATA" \
     "$PLUGIN_ROOT/bin/pipeline-ensure-autonomy" --json >/dev/null 2>&1 || true
@@ -435,10 +437,10 @@ resolved=$(jq -r --arg p "$PD_DATA" '[.. | strings | select(contains($p))] | len
 [[ "$resolved" -gt 0 ]] || { echo "FAIL: resolved path $PD_DATA does not appear in merged-settings.json"; exit 1; }
 echo "PASS: resolved CLAUDE_PLUGIN_DATA appears $resolved times in merged-settings.json"
 
-# Also verify the negative case: confirm the stub template DID contain the placeholder.
-# (grep -c returns 0 and exits 1 on no matches; true absorbs the exit code)
-placeholder_count=$(grep -c '\${CLAUDE_PLUGIN_DATA}' "$BACKUP_TEMPLATE" 2>/dev/null; true)
-[[ "${placeholder_count:-0}" -ge 0 ]] || true  # always true; belt-and-braces guard
+# Verify the stub template DID contain the placeholder before substitution.
+# (Captured above after writing stub, before restoration)
+[[ "${stub_placeholder_count:-0}" -ge 1 ]] || { echo "FAIL: stub template had no \${CLAUDE_PLUGIN_DATA} placeholder — test would be vacuous"; exit 1; }
+echo "PASS: stub template contained $stub_placeholder_count placeholder(s)"
 
 trap - EXIT
 rm -f "$BACKUP_TEMPLATE"
