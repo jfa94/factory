@@ -79,36 +79,21 @@ Same treatment as `gh`.
 
 The pipeline's ISO 8601 parser falls back across `gdate`, `date -d`, and BSD `date -j`. Warn only if none of the three work on the current system.
 
-## Step 4: Offer to pre-populate `safety.writeBlockedPaths`
+## Step 4: Optional write-blocklist (advanced)
 
-`safety.writeBlockedPaths` is a glob blocklist enforced by the `write-protection.sh` PreToolUse hook on every `Edit`, `Write`, and `MultiEdit` call. When a path matches, the hook denies the tool call (exit 2, reason `write_blocked`) — blocking both the autonomous pipeline **and** interactive Claude sessions from modifying that file. Matching runs against the raw path, resolved absolute path, and basename.
+`safety.writeBlockedPaths` is an opt-in glob blocklist enforced by the `write-protection.sh` PreToolUse hook on every `Edit`, `Write`, and `MultiEdit` call. When a path matches, the hook denies the tool call (exit 2, reason `write_blocked`). It blocks the autonomous pipeline **and** interactive Claude sessions.
 
-Inspect the project for common sensitive-path patterns:
+The blocklist defaults to empty. The autonomous pipeline is designed to author migrations, environment scaffolding, infrastructure code, and similar files without human intervention; adding patterns here removes that autonomy for the matched paths.
 
-- `supabase/migrations/**` if a `supabase/` dir exists
-- `.env*` if any `.env` file exists at the root
-- `prisma/migrations/**` if a `prisma/` dir exists
-- `terraform/**/*.tfstate` if a `.terraform/` dir exists
+Most users should skip this step. Add entries only when you have a concrete reason to require a human gate on a specific path (e.g. a regulated path your org policy forbids agents from modifying, a generated artifact that must stay reproducible from source).
 
-For each detected, show the user both outcomes before asking:
+Ask the user once:
 
-```
-Detected `supabase/migrations/`. Add `supabase/migrations/**` to safety.writeBlockedPaths?
-  y → write-protection hook will deny any Edit/Write/MultiEdit to files matching this glob.
-      Blocks the pipeline from authoring migrations.
-  n → no protection added. Pipeline tasks can freely create/modify these files.
-Reversible: /factory:configure safety.writeBlockedPaths <array>  or edit ${CLAUDE_PLUGIN_DATA}/config.json directly.
-```
+> Want to add any glob patterns to `safety.writeBlockedPaths`? (Press Enter to skip; otherwise enter a comma-separated list of globs.)
 
-Tailor the blocked-action description per pattern:
+If the user enters nothing, proceed to Step 5 without writing anything.
 
-- `supabase/migrations/**` / `prisma/migrations/**` → "Blocks the pipeline from authoring migrations."
-- `.env*` → "Blocks tasks from rewriting secrets."
-- `terraform/**/*.tfstate` → "Blocks tasks from mutating terraform state."
-
-If yes, run `/factory:configure safety.writeBlockedPaths` with the resulting array (the configure command handles the jq merge).
-
-Never add defaults without explicit confirmation — the blocklist is permissive by design so the autonomous pipeline can make as many changes as possible.
+If the user enters one or more globs, run `/factory:configure safety.writeBlockedPaths` with the resulting array. Reversible later via `/factory:configure` or by editing `${CLAUDE_PLUGIN_DATA}/config.json` directly.
 
 ## Step 5: Summary
 
