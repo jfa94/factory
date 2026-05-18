@@ -73,10 +73,10 @@ _regenerate() {
   tmp=$(mktemp)
 
   # CLAUDE_PLUGIN_DATA pin: bake the current plugin data dir into the merged-settings
-  # env block. Both statusline-wrapper.sh and pipeline-quota-check now default to
-  # ~/.claude/plugins/data/factory-jfa94 when the env var is unset, so this pin is
-  # belt-and-braces — it lets a non-default install (e.g. a forked marketplace id)
-  # still keep wrapper writes and gate reads on the same path.
+  # env block. statusline-wrapper.sh and pipeline-quota-check both require this env
+  # var to be set (no install-specific fallback). Pinning it here ensures every
+  # session launched via --settings $merged_settings agrees on the same path,
+  # regardless of marketplace id or future plugin renames.
   local plugin_data="${CLAUDE_PLUGIN_DATA:-}"
   if [[ -z "$plugin_data" ]]; then
     log_error "CLAUDE_PLUGIN_DATA is not set; cannot materialize merged-settings.json"
@@ -196,10 +196,9 @@ if [[ "$file_version" != "$current_version" ]]; then
 fi
 
 # Self-heal: 0.6.2 and earlier did not bake CLAUDE_PLUGIN_DATA into the env block.
-# Both the wrapper and the quota gate now default to ~/.claude/plugins/data/factory-jfa94
-# when the env var is unset, so a missing env entry is no longer load-bearing — but
-# regenerating still ensures forks with custom plugin ids stay aligned, and the
-# relaunch keeps merged-settings consistent with on-disk state.
+# The wrapper and quota gate now require the env var (no fallback), so a missing
+# entry would break statusline writes and quota reads. Regenerate to restore the
+# pin; the relaunch keeps merged-settings consistent with on-disk state.
 file_plugin_data=$(jq -r '.env.CLAUDE_PLUGIN_DATA // empty' "$merged_settings" 2>/dev/null || true)
 if [[ -z "$file_plugin_data" ]] && [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
   _regenerate
