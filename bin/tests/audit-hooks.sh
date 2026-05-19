@@ -386,9 +386,16 @@ BACKUP_TEMPLATE=$(mktemp)
 PD_DATA=$(mktemp -d)
 PD_OUT="$PD_DATA/merged-settings.json"
 
-# Backup real template so the swap is reversible even if the test crashes
+# Backup real template so the swap is reversible even if the test crashes.
+# Additive trap: preserves the outer TMPROOT cleanup so the early test fixture
+# doesn't leak when any of the assertions below exit non-zero.
 cp "$REAL_TEMPLATE" "$BACKUP_TEMPLATE"
-trap 'cp "$BACKUP_TEMPLATE" "$REAL_TEMPLATE"; rm -f "$BACKUP_TEMPLATE"; rm -rf "$PD_DATA"' EXIT
+trap '
+  cp "$BACKUP_TEMPLATE" "$REAL_TEMPLATE" 2>/dev/null
+  rm -f "$BACKUP_TEMPLATE"
+  rm -rf "$PD_DATA"
+  [[ -n "${TMPROOT:-}" && ( "$TMPROOT" == /tmp/* || "$TMPROOT" == /var/folders/* ) ]] && rm -rf "$TMPROOT"
+' EXIT
 
 # Write a minimal stub template with the placeholder in multiple positions
 cat > "$REAL_TEMPLATE" <<'JSON'
@@ -416,9 +423,11 @@ JSON
 # Capture placeholder count in stub before restoration
 stub_placeholder_count=$(grep -c '\${CLAUDE_PLUGIN_DATA}' "$REAL_TEMPLATE" 2>/dev/null || true)
 
-# Run real script with the stub template in place
-env CLAUDE_PLUGIN_DATA="$PD_DATA" \
-    "$PLUGIN_ROOT/bin/pipeline-ensure-autonomy" --json >/dev/null 2>&1 || true
+# Run real script with the stub template in place. Capture stderr so that a
+# regression (e.g. jq parse error, missing dep) doesn't leave the operator
+# guessing — the produced-file assertion below dumps the captured output.
+ea_stderr=$(env CLAUDE_PLUGIN_DATA="$PD_DATA" \
+  "$PLUGIN_ROOT/bin/pipeline-ensure-autonomy" --json 2>&1 >/dev/null) || true
 
 # Restore template immediately so subsequent tests (and a crash mid-assert)
 # don't see the stub. Trap still fires on EXIT as belt-and-braces.
@@ -427,6 +436,8 @@ cp "$BACKUP_TEMPLATE" "$REAL_TEMPLATE"
 # Assertions
 if [[ ! -f "$PD_OUT" ]]; then
   echo "FAIL: merged-settings.json was not produced at $PD_OUT"
+  echo "--- pipeline-ensure-autonomy stderr ---"
+  echo "$ea_stderr"
   exit 1
 fi
 
@@ -446,12 +457,108 @@ trap - EXIT
 rm -f "$BACKUP_TEMPLATE"
 rm -rf "$PD_DATA"
 
+# ============================================================
+echo ""
+echo "=== task_C_04: pipeline-ensure-autonomy fails loud when CLAUDE_PLUGIN_DATA unset ==="
+
+# Drop CLAUDE_PLUGIN_DATA and confirm the canonical entrypoint exits non-zero
+# with a user-actionable stderr — NOT a generic mkdir error from accidental
+# unguarded usage of an empty env var. Mutation-test target: removing the
+# require_plugin_data guard would let mkdir -p "" fire instead.
+#
+# Note: pipeline-lib.sh's _factory_expected_data_dir auto-sets CLAUDE_PLUGIN_DATA
+# when the script lives under ~/.claude/plugins/cache/. In dev checkouts (which
+# is what `bin/test` exercises) the canonicalization is a no-op, so the require
+# guard is the only line of defense and this test exercises it directly.
+set +e
+ec04_stderr=$(env -u CLAUDE_PLUGIN_DATA "$PLUGIN_ROOT/bin/pipeline-ensure-autonomy" --json 2>&1 >/dev/null)
+ec04=$?
+set -e
+assert_eq "ensure-autonomy without CLAUDE_PLUGIN_DATA exits non-zero" "true" "$([[ $ec04 -ne 0 ]] && echo true || echo false)"
+assert_eq "ensure-autonomy stderr mentions CLAUDE_PLUGIN_DATA" "true" \
+  "$(printf '%s' "$ec04_stderr" | grep -q CLAUDE_PLUGIN_DATA && echo true || echo false)"
+# Negative-control: stderr must NOT be the unguarded mkdir error
+if printf '%s' "$ec04_stderr" | grep -q 'mkdir:.*No such file or directory'; then
+  echo "FAIL: stderr leaked unguarded mkdir error — require_plugin_data guard not firing first"
+  fail=$((fail + 1))
+else
+  echo "  PASS: stderr did not leak unguarded mkdir error"
+  pass=$((pass + 1))
+fi
+
+# ============================================================
+echo ""
+echo "=== task_C_05: .claude/ access hook blocks when CLAUDE_PLUGIN_DATA placeholders unset ==="
+
+# Materialize a real merged-settings.json so we can extract the inline hook
+# command and drive it directly with synthetic JSON inputs. Confirms the
+# defense-in-depth guard against the case-pattern bypass that triggered when
+# CLAUDE_PLUGIN_DATA expansion collapsed to /*.
+HOOK_DATA=$(mktemp -d)
+trap '
+  rm -rf "$HOOK_DATA"
+  [[ -n "${TMPROOT:-}" && ( "$TMPROOT" == /tmp/* || "$TMPROOT" == /var/folders/* ) ]] && rm -rf "$TMPROOT"
+' EXIT
+
+env CLAUDE_PLUGIN_DATA="$HOOK_DATA" \
+  "$PLUGIN_ROOT/bin/pipeline-ensure-autonomy" --json >/dev/null 2>&1 || true
+HOOK_OUT="$HOOK_DATA/merged-settings.json"
+
+if [[ ! -f "$HOOK_OUT" ]]; then
+  echo "FAIL: could not materialize merged-settings.json for hook test"
+  fail=$((fail + 1))
+else
+  # Extract the .claude/ access hook command (first PreToolUse hook on the
+  # Glob|Grep|Read|Edit|Write matcher).
+  HOOK_CMD=$(jq -r '.hooks.PreToolUse[] | select(.matcher | test("Glob|Grep|Read|Edit|Write")) | .hooks[0].command' "$HOOK_OUT" \
+             | head -1)
+
+  if [[ -z "$HOOK_CMD" ]]; then
+    echo "FAIL: hook command extraction returned empty"
+    fail=$((fail + 1))
+  else
+    # 1. Placeholder substitution check — neither literal placeholder may remain.
+    if printf '%s' "$HOOK_CMD" | grep -qE '\$\{CLAUDE_PLUGIN_DATA(_TILDE)?\}'; then
+      echo "FAIL: materialized hook still contains \${CLAUDE_PLUGIN_DATA} or \${CLAUDE_PLUGIN_DATA_TILDE} placeholder"
+      fail=$((fail + 1))
+    else
+      echo "  PASS: both placeholders substituted in materialized hook"
+      pass=$((pass + 1))
+    fi
+
+    # 2. Path under data dir → allow (exit 0, no block JSON on stdout).
+    h_allow_out=$(printf '{"tool_input":{"file_path":"%s/runs/foo"}}' "$HOOK_DATA" \
+                  | env CLAUDE_PLUGIN_DATA="$HOOK_DATA" bash -c "$HOOK_CMD" 2>/dev/null)
+    h_allow_rc=$?
+    assert_eq "hook: path under data dir → exit 0" "0" "$h_allow_rc"
+    assert_eq "hook: path under data dir → no block JSON" "" "$h_allow_out"
+
+    # 3. Path under ~/.claude that is NOT data dir → block JSON emitted.
+    h_block_out=$(printf '{"tool_input":{"file_path":"%s/.claude/settings.json"}}' "$HOME" \
+                  | env CLAUDE_PLUGIN_DATA="$HOOK_DATA" bash -c "$HOOK_CMD" 2>/dev/null)
+    assert_eq "hook: path under ~/.claude (not data dir) → block JSON reason" "block" \
+      "$(printf '%s' "$h_block_out" | jq -r '.decision' 2>/dev/null)"
+
+    # 4. Path under ~/.claude with env UNSET — the critical bypass test.
+    #    Pre-fix: case "$FP" in ""/*|""/*) collapsed to /* and allowed the
+    #    write. Post-fix: hook still blocks because the materialized literal
+    #    paths don't depend on the runtime env.
+    h_bypass_out=$(printf '{"tool_input":{"file_path":"%s/.claude/settings.json"}}' "$HOME" \
+                   | env -u CLAUDE_PLUGIN_DATA bash -c "$HOOK_CMD" 2>/dev/null)
+    assert_eq "hook: env UNSET + path under ~/.claude → still blocks (no defense-in-depth bypass)" "block" \
+      "$(printf '%s' "$h_bypass_out" | jq -r '.decision' 2>/dev/null)"
+  fi
+fi
+
 echo ""
 echo "================================"
 echo "Hook tests: $pass passed, $fail failed"
 echo "================================"
 
-[[ -n "${TMPROOT:-}" && ( "$TMPROOT" == /tmp/* || "$TMPROOT" == /var/folders/* ) ]] && rm -rf "$TMPROOT"
+# task_C_05 set its own EXIT trap that already covers HOOK_DATA + TMPROOT.
+# Clear before manual cleanup so we don't double-rm on exit.
 trap - EXIT
+rm -rf "${HOOK_DATA:-}" 2>/dev/null
+[[ -n "${TMPROOT:-}" && ( "$TMPROOT" == /tmp/* || "$TMPROOT" == /var/folders/* ) ]] && rm -rf "$TMPROOT"
 
 [[ $fail -eq 0 ]]
