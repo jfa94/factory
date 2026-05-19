@@ -152,11 +152,15 @@ Industry target is >80% mutation score. AI code has 15-25% higher mutation survi
 
 The GitHub workflow (`templates/.github/workflows/quality-gate.yml`) runs mutation testing in a 4-shard matrix for parallelism:
 
-1. `mutation-scope` job: diffs HEAD against `origin/<base_ref>`, splits changed src files round-robin into 4 shards (JSON output).
-2. `mutation` job (matrix x4): each shard runs `stryker run --mutate <slice>` with its own incremental cache.
+1. `mutation-scope` job: diffs HEAD against `origin/<base_ref>`, splits changed src files round-robin into 4 shards (JSON output). Filters exclude `*.test.ts`, `*.spec.ts`, `*.d.ts`, `types/`, `data/`, `index.ts`, and `src/app/(robots|sitemap).ts`.
+2. `mutation` job (matrix x4): each shard runs `stryker run --mutate <slice>` with its own incremental cache and `incrementalFile` per shard.
 3. `mutation-testing` aggregator job: collapses shard outcomes into a single "Mutation Testing" status check.
 
+The sharding was introduced in 2026-05-18 to address develop-target full-scope runs hitting ~3.5h wall-clock time as the mutable surface grew. Tight scope + 4-way sharding drops typical rollups to ~10-30 min slowest-shard. Empty slices no-op.
+
 The aggregator exists because branch protection on `staging` and `develop` requires a status check named exactly "Mutation Testing", but the matrix produces "Mutation (1)".."Mutation (4)" checks. The aggregator (`needs: [mutation-scope, mutation]`, `if: always()`) exits non-zero if any upstream job failed, satisfying branch protection with a stable check name regardless of shard count changes.
+
+The workflow uses `upload-artifact@v5` (node24-compatible) for shard artifacts.
 
 **How it works:**
 

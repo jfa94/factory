@@ -20,6 +20,7 @@ When a factory script is invoked from a bash block inside another plugin's comma
 
 | Function                 | Description                                                                        |
 | ------------------------ | ---------------------------------------------------------------------------------- |
+| `require_plugin_data`    | Exit 1 if `CLAUDE_PLUGIN_DATA` env var unset; emits actionable error message       |
 | `log_info`               | Log info message to stderr                                                         |
 | `log_warn`               | Log warning message to stderr                                                      |
 | `log_error`              | Log error message to stderr                                                        |
@@ -823,6 +824,8 @@ ESCALATED path=/absolute/path/to/escalation.md
 3. Writes `escalation.md` with run metadata, findings JSON, and executor message
 4. Prints the `ESCALATED path=<path>` marker
 
+**Environment:** Invokes `require_plugin_data` — exits 1 with actionable error if `CLAUDE_PLUGIN_DATA` is unset.
+
 **Exit codes:** 0=success, 1=IO failure or missing required inputs
 
 ---
@@ -1017,7 +1020,7 @@ pipeline-quota-check [--strict]
 | ---------- | ----------------------------------------------------------- |
 | `--strict` | Exit 1 on detection failure (test-only; prod uses sentinel) |
 
-**Reads:** `${CLAUDE_PLUGIN_DATA}/usage-cache.json` (written by `bin/statusline-wrapper.sh`). Requires `CLAUDE_PLUGIN_DATA` env var to be set; hardcoded fallback path removed.
+**Reads:** `${CLAUDE_PLUGIN_DATA}/usage-cache.json` (written by `bin/statusline-wrapper.sh`). Invokes `require_plugin_data` at the top — exits 1 with actionable error if `CLAUDE_PLUGIN_DATA` is unset. No hardcoded fallback path.
 
 **Fail-closed behavior:**
 
@@ -1429,6 +1432,15 @@ pipeline-ensure-autonomy
 
 `$CLAUDE_PLUGIN_DATA` must be set. The script invokes `require_plugin_data` (from `pipeline-lib.sh`) at the top, which exits 1 with a verbose `export CLAUDE_PLUGIN_DATA=...` example when the env var is unset. There is no hardcoded fallback path. This ensures `merged-settings.json` is portable across marketplace installs (different users get different plugin-data suffixes) and that downstream paths (cache file, merged settings, wrapper destination) cannot silently resolve to root-relative locations. The `FACTORY_AUTONOMOUS_MODE=1` bypass path runs **after** the env-var guard — bypass callers must still export `CLAUDE_PLUGIN_DATA` so the bypass status report's `settings_path` field points at a real location.
 
+**Placeholder substitution:**
+
+The template contains `${CLAUDE_PLUGIN_DATA}` and `${CLAUDE_PLUGIN_DATA_TILDE}` placeholders. At regeneration time:
+
+- `${CLAUDE_PLUGIN_DATA}` is replaced with the absolute data dir path
+- `${CLAUDE_PLUGIN_DATA_TILDE}` is replaced with the tilde-shortened form (e.g., `~/.claude/plugins/data/factory-xyz`)
+
+The tilde form is used in the inline `.claude/` access hook's `case` pattern so it works as a pure POSIX literal with no runtime bash expansion.
+
 **Output:**
 
 ```json
@@ -1471,19 +1483,19 @@ bin/test [suite...] [--list]
 
 **Available suites:**
 
-| Suite       | Coverage                                       |
-| ----------- | ---------------------------------------------- |
-| state       | pipeline-state, pipeline-init, circuit breaker |
-| spec-intake | PRD fetch, spec validation, task validation    |
-| task-prep   | classify-task, classify-risk, build-prompt     |
-| branching   | pipeline-branch operations, worktree lifecycle |
-| cleanup     | pipeline-cleanup, archive operations           |
-| hooks       | branch-protection, run-tracker, stop-gate      |
-| audit-hooks | Audit log integrity, tamper detection          |
-| routing     | quota-check, model-router decisions            |
-| run-command | commands/run.md structural integrity           |
-| config      | Config parsing, defaults, validation           |
-| integration | End-to-end multi-script workflows              |
+| Suite       | Coverage                                                       |
+| ----------- | -------------------------------------------------------------- |
+| state       | pipeline-state, pipeline-init, circuit breaker                 |
+| spec-intake | PRD fetch, spec validation, task validation                    |
+| task-prep   | classify-task, classify-risk, build-prompt                     |
+| branching   | pipeline-branch operations, worktree lifecycle                 |
+| cleanup     | pipeline-cleanup, archive operations                           |
+| hooks       | branch-protection, run-tracker, stop-gate                      |
+| audit-hooks | Audit log integrity, tamper detection, env guards, hook bypass |
+| routing     | quota-check, model-router decisions                            |
+| run-command | commands/run.md structural integrity                           |
+| config      | Config parsing, defaults, validation                           |
+| integration | End-to-end multi-script workflows                              |
 
 **Examples:**
 
