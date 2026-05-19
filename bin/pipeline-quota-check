@@ -39,8 +39,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:?CLAUDE_PLUGIN_DATA must be set}"
-cache_file="${PLUGIN_DATA}/usage-cache.json"
+require_plugin_data
+cache_file="${CLAUDE_PLUGIN_DATA}/usage-cache.json"
 
 _sentinel() {
   local reason="$1"
