@@ -172,6 +172,24 @@ out=$("$wrapper" --run run-fix-001 --format json --no-gh --no-log)
 run_id=$(printf '%s' "$out" | jq -r '.run_id')
 assert_eq "wrapper passes --run" "run-fix-001" "$run_id"
 
+echo "=== tools/score-run* fail loud when CLAUDE_PLUGIN_DATA unset ==="
+
+# No-fallback contract: each wrapper must exit non-zero with a stderr message
+# pointing at CLAUDE_PLUGIN_DATA, NOT silently default to factory-jfa94 or any
+# other guessed path. Mutation-test target: changing `:?` back to `:=` would
+# resurrect the silent-fallback bug across all three tools.
+tools_dir="$(cd "$(dirname "$0")/../../tools" && pwd)"
+for tool in score-run.sh score-run-history.sh score-run-backfill.sh; do
+  set +e
+  unset_out=$(env -u CLAUDE_PLUGIN_DATA "$tools_dir/$tool" --help 2>&1)
+  unset_rc=$?
+  set -e
+  assert_eq "$tool without CLAUDE_PLUGIN_DATA exits non-zero" "true" \
+    "$([[ $unset_rc -ne 0 ]] && echo true || echo false)"
+  assert_eq "$tool error message mentions CLAUDE_PLUGIN_DATA" "true" \
+    "$(printf '%s' "$unset_out" | grep -q 'CLAUDE_PLUGIN_DATA' && echo true || echo false)"
+done
+
 echo "=== backfill version stamping ==="
 
 mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-no-version"

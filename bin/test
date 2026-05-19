@@ -24,6 +24,7 @@ SUITES=(
   routing
   quota-gate
   mutation-gate
+  mutation-workflow
   run-command
   config
   integration
