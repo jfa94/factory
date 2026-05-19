@@ -39,6 +39,18 @@ if _factory_expected=$(_factory_expected_data_dir 2>/dev/null); then
 fi
 unset _factory_expected
 
+# Loud-fail guard for the CLAUDE_PLUGIN_DATA env-var contract. Used by entry
+# points that cannot rely on _factory_expected_data_dir (dev checkouts outside
+# the marketplace cache, scripts invoked before pipeline-lib.sh sourcing
+# completes, scripts that intentionally bypass the cache canonicalization).
+# Uniform message + exit code across every enforcement site.
+require_plugin_data() {
+  if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
+    log_error "CLAUDE_PLUGIN_DATA must be set (e.g. export CLAUDE_PLUGIN_DATA=\"\$HOME/.claude/plugins/data/factory-<your-marketplace-id>\")"
+    exit 1
+  fi
+}
+
 # --- Logging ---
 
 _SCRIPT_NAME="${0##*/}"

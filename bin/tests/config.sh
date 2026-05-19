@@ -153,6 +153,22 @@ assert_eq "commands/scaffold.md exists" "true" \
 assert_contains "scaffold.md has frontmatter description" "description:" "$PLUGIN_ROOT/commands/scaffold.md"
 assert_contains "scaffold.md mentions trufflehog" "trufflehog" "$PLUGIN_ROOT/commands/scaffold.md"
 
+# scaffold blocklist neutrality regression guard. The writeBlockedPaths default
+# is empty + opt-in (commit 2679ae7); a docs revert that re-introduces canned
+# suggestions like `supabase/migrations/**` or `.env*` silently re-removes
+# pipeline autonomy on those paths. The terraform tfstate gap is now covered
+# by template denies (see Write/Edit(**/*.tfstate)) rather than scaffold prompts.
+scaffold_md="$PLUGIN_ROOT/commands/scaffold.md"
+neutral_count=$( (grep -c 'defaults to empty' "$scaffold_md" 2>/dev/null || true) | tr -d '[:space:]')
+assert_eq "scaffold.md documents empty default for writeBlockedPaths" "1" "${neutral_count:-0}"
+suggestions=$( (grep -cE 'Add `(supabase/migrations|\.env|prisma/migrations|terraform/)' "$scaffold_md" 2>/dev/null || true) | tr -d '[:space:]')
+assert_eq "scaffold.md does NOT pre-suggest canned blocklist entries" "0" "${suggestions:-0}"
+
+# Template deny list covers terraform tfstate (replaces the removed scaffold prompt).
+TEMPLATE_AUTONOMOUS="$PLUGIN_ROOT/templates/settings.autonomous.json"
+tfstate_denies=$(jq -r '[.permissions.deny[] | select(test("\\*\\.tfstate"))] | length' "$TEMPLATE_AUTONOMOUS")
+assert_eq "settings.autonomous.json deny list covers *.tfstate (Write + Edit, base + .backup)" "4" "$tfstate_denies"
+
 # pipeline-scaffold --check: empty tempdir → exit 1
 scaffold_empty=$(mktemp -d)
 set +e
@@ -703,22 +719,21 @@ assert_contains "quality-gate template squashes task PRs into staging" "squash -
 assert_contains "quality-gate template merge-commits rollup into develop" "merge --auto" "$QG_TEMPLATE"
 assert_contains "quality-gate template gates squash on staging base" "github.base_ref == 'staging'" "$QG_TEMPLATE"
 assert_contains "quality-gate template gates merge on develop base" "github.base_ref == 'develop'" "$QG_TEMPLATE"
-assert_contains "quality-gate template differentiates incremental vs full mutation" "Mutation (full scope" "$QG_TEMPLATE"
+# Post-port (commit 075ad77): mutation runs as a 4-way matrix with an
+# aggregator named "Mutation Testing". The old per-job "Mutation (full scope"
+# naming is gone. Keep the incremental-scope assertion (still load-bearing —
+# scope is computed from origin/$BASE_REF diff) and add the new structure pin.
 assert_contains "quality-gate template uses git since-ref for incremental mutation" 'origin/$BASE_REF' "$QG_TEMPLATE"
+assert_contains "quality-gate template has 4-way mutation shard matrix" 'shard: [1, 2, 3, 4]' "$QG_TEMPLATE"
+assert_contains "quality-gate template has mutation-testing aggregator job" 'mutation-testing:' "$QG_TEMPLATE"
 
-# Branch cleanup on auto-merge: staging-target step must delete head branch
-# (task branches are ephemeral); develop-target step must NOT delete (head is
-# the long-lived `staging` branch).
+# Branch cleanup on auto-merge: both staging-target (task branches are
+# ephemeral) AND develop-target (commit 075ad77 added --delete-branch to
+# clean up the staging rollup branch after merge) delete the head branch.
 assert_contains "quality-gate template deletes branch after staging merge" \
   'gh pr merge "$PR_NUMBER" --squash --auto --delete-branch' "$QG_TEMPLATE"
-develop_line=$(awk '/--merge --auto/ {print; exit}' "$QG_TEMPLATE")
-if printf '%s' "$develop_line" | grep -qF -- "--delete-branch"; then
-  echo "  FAIL: quality-gate template must NOT delete the staging branch on develop-target merge"
-  fail=$((fail + 1))
-else
-  echo "  PASS: quality-gate template preserves staging branch on develop-target merge"
-  pass=$((pass + 1))
-fi
+assert_contains "quality-gate template deletes branch after develop-target merge" \
+  'gh pr merge "$PR_NUMBER" --merge --auto --delete-branch' "$QG_TEMPLATE"
 
 # pipeline-scaffold --migrate-workflows: idempotent surgical patch that
 # upgrades a previously scaffolded quality-gate.yml to add --delete-branch.

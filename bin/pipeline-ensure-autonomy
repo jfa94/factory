@@ -25,6 +25,13 @@ set -euo pipefail
 
 source "$(dirname "$0")/pipeline-lib.sh"
 
+# CLAUDE_PLUGIN_DATA is load-bearing: merged_settings path, env block baked
+# into Claude Code, hook fall-back paths, wrapper destination — all derived
+# from it. _factory_expected_data_dir canonicalizes it for normal cache
+# installs, but dev checkouts or broken layouts need a loud failure here
+# rather than silent path corruption downstream.
+require_plugin_data
+
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
 TEMPLATE="$PLUGIN_ROOT/templates/settings.autonomous.json"
@@ -49,7 +56,7 @@ if [[ -z "$current_version" ]]; then
   exit 1
 fi
 
-merged_settings="${CLAUDE_PLUGIN_DATA:-}/merged-settings.json"
+merged_settings="${CLAUDE_PLUGIN_DATA}/merged-settings.json"
 
 # Parse --json / --simple-output flags (no other positional args expected)
 while [[ $# -gt 0 ]]; do
@@ -68,7 +75,7 @@ _emit() {
 }
 
 _regenerate() {
-  mkdir -p "${CLAUDE_PLUGIN_DATA:-}"
+  mkdir -p "$CLAUDE_PLUGIN_DATA"
   local tmp user_cmd expanded_cmd
   tmp=$(mktemp)
 
@@ -76,12 +83,15 @@ _regenerate() {
   # env block. statusline-wrapper.sh and pipeline-quota-check both require this env
   # var to be set (no install-specific fallback). Pinning it here ensures every
   # session launched via --settings $merged_settings agrees on the same path,
-  # regardless of marketplace id or future plugin renames.
-  local plugin_data="${CLAUDE_PLUGIN_DATA:-}"
-  if [[ -z "$plugin_data" ]]; then
-    log_error "CLAUDE_PLUGIN_DATA is not set; cannot materialize merged-settings.json"
-    exit 1
-  fi
+  # regardless of marketplace id or future plugin renames. Guaranteed non-empty
+  # by the top-level require_plugin_data call above.
+  local plugin_data="$CLAUDE_PLUGIN_DATA"
+  # Tilde-shortened form for the inline .claude/ access hook's case statement.
+  # Materializing both forms eliminates the runtime bash parameter expansion
+  # that previously read $CLAUDE_PLUGIN_DATA from the hook env — when that env
+  # was missing the case pattern collapsed to /* and bypassed the .claude/
+  # guard for every absolute path.
+  local plugin_data_tilde="${plugin_data/#$HOME/~}"
 
   # Wrapper stable-path copy. Without this, statusLine.command is baked as the
   # version-pinned $PLUGIN_ROOT/bin/statusline-wrapper.sh — and when Claude Code
@@ -92,16 +102,25 @@ _regenerate() {
   # sessions launched against an older merged-settings.json.
   local wrapper_src="$PLUGIN_ROOT/bin/statusline-wrapper.sh"
   local wrapper_dest=""
-  if [[ -n "$plugin_data" && -f "$wrapper_src" ]]; then
+  if [[ -f "$wrapper_src" ]]; then
     wrapper_dest="$plugin_data/statusline-wrapper.sh"
     cp -f "$wrapper_src" "$wrapper_dest"
-    chmod +x "$wrapper_dest" 2>/dev/null || true
+    if ! chmod +x "$wrapper_dest" 2>/dev/null; then
+      log_warn "could not chmod +x $wrapper_dest; statusline will not fire — check filesystem permissions"
+    fi
   fi
 
   # Detect user's existing statusLine.command so the wrapper can chain to it.
   # Read from ~/.claude/settings.json only (project-level statuslines are rare
   # and pipeline runs in the project root with the merged file taking precedence).
-  user_cmd=$(jq -r '.statusLine.command // empty' "$HOME/.claude/settings.json" 2>/dev/null || true)
+  # Separate file-missing (silent skip) from file-unparseable (warn).
+  user_cmd=""
+  if [[ -f "$HOME/.claude/settings.json" ]]; then
+    if ! user_cmd=$(jq -r '.statusLine.command // empty' "$HOME/.claude/settings.json" 2>&1); then
+      log_warn "could not parse $HOME/.claude/settings.json (statusline chaining skipped): $user_cmd"
+      user_cmd=""
+    fi
+  fi
   # Skip injection only when the user's command resolves to THIS install's wrapper
   # (path compare, not basename — different plugin installs can share the name).
   local user_cmd_path="" our_wrapper_real="" user_cmd_real=""
@@ -122,31 +141,35 @@ _regenerate() {
     jq --arg root "$PLUGIN_ROOT" --arg ver "$current_version" \
        --arg original_statusline "$expanded_cmd" \
        --arg plugin_data "$plugin_data" \
+       --arg plugin_data_tilde "$plugin_data_tilde" \
        --arg wrapper_dest "$wrapper_dest" '
       walk(
         if type == "string"
         then
           (if test("\\$\\{CLAUDE_PLUGIN_ROOT\\}") then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root) else . end)
+          | (if test("\\$\\{CLAUDE_PLUGIN_DATA_TILDE\\}") then gsub("\\$\\{CLAUDE_PLUGIN_DATA_TILDE\\}"; $plugin_data_tilde) else . end)
           | (if test("\\$\\{CLAUDE_PLUGIN_DATA\\}") then gsub("\\$\\{CLAUDE_PLUGIN_DATA\\}"; $plugin_data) else . end)
         else . end
       ) | . + {_factoryVersion: $ver}
         | .env.FACTORY_ORIGINAL_STATUSLINE = $original_statusline
-        | (if $plugin_data != "" then .env.CLAUDE_PLUGIN_DATA = $plugin_data else . end)
+        | .env.CLAUDE_PLUGIN_DATA = $plugin_data
         | (if $wrapper_dest != "" then .statusLine.command = $wrapper_dest else . end)
     ' "$TEMPLATE" > "$tmp"
     log_info "detected user statusline; will chain via FACTORY_ORIGINAL_STATUSLINE=$expanded_cmd"
   else
     jq --arg root "$PLUGIN_ROOT" --arg ver "$current_version" \
        --arg plugin_data "$plugin_data" \
+       --arg plugin_data_tilde "$plugin_data_tilde" \
        --arg wrapper_dest "$wrapper_dest" '
       walk(
         if type == "string"
         then
           (if test("\\$\\{CLAUDE_PLUGIN_ROOT\\}") then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $root) else . end)
+          | (if test("\\$\\{CLAUDE_PLUGIN_DATA_TILDE\\}") then gsub("\\$\\{CLAUDE_PLUGIN_DATA_TILDE\\}"; $plugin_data_tilde) else . end)
           | (if test("\\$\\{CLAUDE_PLUGIN_DATA\\}") then gsub("\\$\\{CLAUDE_PLUGIN_DATA\\}"; $plugin_data) else . end)
         else . end
       ) | . + {_factoryVersion: $ver}
-        | (if $plugin_data != "" then .env.CLAUDE_PLUGIN_DATA = $plugin_data else . end)
+        | .env.CLAUDE_PLUGIN_DATA = $plugin_data
         | (if $wrapper_dest != "" then .statusLine.command = $wrapper_dest else . end)
     ' "$TEMPLATE" > "$tmp"
   fi

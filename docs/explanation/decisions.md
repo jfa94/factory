@@ -269,8 +269,7 @@ Users may customize files after first run. Overwriting would destroy customizati
 
 The workflow uses `gh pr merge --merge --auto --delete-branch` for staging-to-develop rollup PRs. This deletes the `staging` branch after the PR merges. This is safe because:
 
-- `bin/pipeline-branch staging-init` (lines 85-106) checks whether `origin/staging` exists.
-- If missing, it recreates `staging` from `origin/develop` (or the configured base branch).
+- `bin/pipeline-branch staging-init` checks whether `origin/staging` exists (line 41) and recreates it from `origin/develop` (or the configured base branch) when missing (lines 85-106).
 - The concern in this section is about merge _strategy_ preserving history within develop, not about the `staging` ref persisting between runs.
 
 **Migration:** Already-scaffolded repos retain the old single-squash workflow. To pick up both this fix and the Node 24 action-runtime upgrade: delete `.github/workflows/quality-gate.yml` and re-run `pipeline-scaffold`, or patch the file manually to match the new template (asymmetric auto-merge + `checkout@v6`, `setup-node@v6`, `pnpm/action-setup@v6`, `cache@v5`).

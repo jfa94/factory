@@ -23,6 +23,8 @@ input=$(cat)
 # pipeline-quota-check reads. Skip the cache write in that case.
 if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
   PLUGIN_DATA=""
+  [[ "${FACTORY_DEBUG:-0}" == "1" ]] && \
+    printf 'statusline-wrapper: CLAUDE_PLUGIN_DATA unset; usage-cache.json write skipped\n' >&2
 else
   PLUGIN_DATA="$CLAUDE_PLUGIN_DATA"
 fi
