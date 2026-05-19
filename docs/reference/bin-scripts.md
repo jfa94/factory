@@ -1421,13 +1421,13 @@ pipeline-ensure-autonomy
 
 1. Self-heal exec bits on entry-point scripts (statusline-wrapper.sh, pipeline-\*)
 2. Check if `merged-settings.json` exists and matches current plugin version
-3. Regenerate if missing or stale — substitutes `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` placeholders from the template at materialization time
+3. Regenerate if missing or stale — substitutes `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, and `${CLAUDE_PLUGIN_DATA_TILDE}` placeholders from the template at materialization time. The tilde form is the home-shortened version of the data dir, used inside the inline `.claude/` access hook so its `case` pattern is a pure POSIX literal with no runtime bash dependency.
 4. Check FACTORY_AUTONOMOUS_MODE env var
 5. Check usage-cache.json freshness (>3600s = fail-closed)
 
 **Environment requirements:**
 
-`$CLAUDE_PLUGIN_DATA` must be set. The script exits 1 if the env var is unset — there is no hardcoded fallback path. This ensures `merged-settings.json` is portable across marketplace installs (different users get different plugin-data suffixes).
+`$CLAUDE_PLUGIN_DATA` must be set. The script invokes `require_plugin_data` (from `pipeline-lib.sh`) at the top, which exits 1 with a verbose `export CLAUDE_PLUGIN_DATA=...` example when the env var is unset. There is no hardcoded fallback path. This ensures `merged-settings.json` is portable across marketplace installs (different users get different plugin-data suffixes) and that downstream paths (cache file, merged settings, wrapper destination) cannot silently resolve to root-relative locations. The `FACTORY_AUTONOMOUS_MODE=1` bypass path runs **after** the env-var guard — bypass callers must still export `CLAUDE_PLUGIN_DATA` so the bypass status report's `settings_path` field points at a real location.
 
 **Output:**
 
