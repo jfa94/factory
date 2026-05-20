@@ -65,13 +65,15 @@ For each task in execution order:
 
 ### Stage E: Quality Gates
 
-5-layer stack, sequential:
+6-layer stack, sequential:
 
 1. **Static Analysis**: Pre-commit hooks (lint, format, type-check)
 2. **Test Suite**: Run via existing Stop hook
-3. **Coverage Regression**: `pipeline-coverage-gate` blocks decreases
-4. **Holdout Validation**: Verify withheld criteria are satisfied
-5. **Mutation Testing**: Target 80% mutation score for feature/security tiers
+3. **Security Gate** (opt-in): `pipeline-security-gate` runs configured SAST command
+4. **TDD Gate**: `pipeline-tdd-gate` enforces test-before-impl commit ordering
+5. **Coverage Regression**: `pipeline-coverage-gate` blocks decreases
+6. **Holdout Validation**: Verify withheld criteria are satisfied
+7. **Mutation Testing**: Target 80% mutation score (ship-time pregate)
 
 ### Stage F: Adversarial Review
 
@@ -79,6 +81,7 @@ For each task in execution order:
 - Spawn `implementation-reviewer` agent with `review-protocol` skill
 - Multi-round loop: REQUEST_CHANGES triggers fix and re-review
 - Security tier adds `security-reviewer` and `architecture-reviewer`
+- Security-tier tasks: `security-reviewer` triages `pipeline-security-gate` findings before manual review
 - Parse verdicts via `pipeline-parse-review`
 
 ### Stage G: PR Creation & Dependency Resolution

@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Run a configured security-analysis command and write structured results to state.
+# Usage: pipeline-security-gate <run-id> <task-id> [<worktree>]
+#
+# Reads `.quality.securityCommand` from factory config. If unset the gate is
+# skipped (exit 2). The command is validated against a token allowlist and a
+# runner-prefix allowlist before execution (same discipline as redTestCommand).
+#
+# Stdout from the command is treated as the findings artifact and written to
+# `$CLAUDE_PLUGIN_DATA/runs/<run-id>/<task-id>.security-findings.json`. The
+# structured gate result is written to state under `.tasks.<id>.security_gate`.
+#
+# Exit codes:
+#   0  — gate passed (no findings or allowFailures=true)
+#   1  — gate failed (findings present)
+#   2  — gate skipped (no securityCommand configured or worktree/package.json absent)
+
+source "$(dirname "$0")/pipeline-lib.sh"
+require_command jq
+
+run_id="${1:?missing run-id}"
+task_id="${2:?missing task-id}"
+worktree="${3:-$PWD}"
+
+if [[ ! -d "$worktree" ]]; then
+  log_error "worktree does not exist: $worktree"
+  printf '{"ok":false,"error":"worktree_missing"}\n'
+  exit 1
+fi
+
+# --- Config ---
+security_cmd=$(read_config '.quality.securityCommand' '')
+if [[ -z "$security_cmd" ]]; then
+  log_info "no .quality.securityCommand configured — security gate skipped task_id=\"$task_id\""
+  result='{"ok":true,"skipped":true,"reason":"no-security-command"}'
+  run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+  if [[ -f "$run_dir/state.json" ]]; then
+    if ! pipeline-state task-write "$run_id" "$task_id" security_gate "$result" >/dev/null; then
+      log_error "failed to record security_gate result for $task_id"
+      exit 1
+    fi
+  fi
+  printf '%s\n' "$result"
+  exit 2
+fi
+
+allow_failures=$(read_config '.quality.securityAllowFailures' 'false' | tr '[:upper:]' '[:lower:]')
+
+# --- Validate command tokens ---
+# Tokens are split on whitespace (IFS); paths with spaces are not supported —
+# the token allowlist rejects spaces, so any path containing one will fail
+# validation with reason "unsafe_command". This matches redTestCommand behavior.
+cmd_array=()
+read -ra cmd_array <<< "$security_cmd"
+
+for _token in "${cmd_array[@]}"; do
+  if [[ ! "$_token" =~ ^[A-Za-z0-9._/=:+-]+$ ]]; then
+    log_error "security gate: .quality.securityCommand token '$_token' contains unsafe characters task_id=\"$task_id\""
+    result='{"ok":false,"skipped":false,"reason":"unsafe_command"}'
+    run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+    if [[ -f "$run_dir/state.json" ]]; then
+      if ! pipeline-state task-write "$run_id" "$task_id" security_gate "$result" >/dev/null; then
+        log_error "failed to record security_gate result for $task_id"
+        exit 1
+      fi
+    fi
+    printf '%s\n' "$result"
+    exit 1
+  fi
+done
+
+# Runner-prefix allowlist — prevents arbitrary script execution.
+_bin="${cmd_array[0]##*/}"
+_bin1="${cmd_array[1]:-}"
+_bin2="${cmd_array[2]:-}"
+_allowed=false
+case "$_bin" in
+  semgrep|pytest|vitest|jest|mocha|phpunit|rspec) _allowed=true ;;
+  go|cargo|deno) [[ "$_bin1" == "test" ]] && _allowed=true ;;
+  bundle)        [[ "$_bin1" == "exec" && "$_bin2" == "rspec" ]] && _allowed=true ;;
+esac
+if ! $_allowed; then
+  log_error "security gate: .quality.securityCommand prefix not in allowlist task_id=\"$task_id\" cmd=\"${cmd_array[*]:0:3}\""
+  result="{\"ok\":false,\"skipped\":false,\"reason\":\"unallowed_runner\",\"runner\":\"$_bin\"}"
+  run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+  if [[ -f "$run_dir/state.json" ]]; then
+    if ! pipeline-state task-write "$run_id" "$task_id" security_gate "$result" >/dev/null; then
+      log_error "failed to record security_gate result for $task_id"
+      exit 1
+    fi
+  fi
+  printf '%s\n' "$result"
+  exit 1
+fi
+
+# --- Run ---
+run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+mkdir -p "$run_dir"
+
+findings_file="$run_dir/${task_id}.security-findings.json"
+log_file="$run_dir/${task_id}.security-gate.log"
+
+start=$(date +%s)
+set +e
+( cd "$worktree" && "${cmd_array[@]}" ) > "$findings_file" 2> "$log_file"
+rc=$?
+set -e
+duration=$(( $(date +%s) - start ))
+
+# If stdout wasn't JSON, wrap it so downstream consumers always get a JSON file.
+if ! jq -e '.' "$findings_file" >/dev/null 2>&1; then
+  raw_output=$(cat "$findings_file" 2>/dev/null || printf '')
+  jq -n --arg out "$raw_output" --argjson rc "$rc" \
+    '{"raw_output":$out,"exit_code":$rc}' > "$findings_file"
+fi
+
+if [[ $rc -eq 0 ]]; then
+  gate_ok=true
+  status="passed"
+else
+  gate_ok=false
+  status="failed"
+fi
+
+summary=$(jq -n \
+  --argjson ok "$gate_ok" \
+  --arg status "$status" \
+  --arg cmd "$security_cmd" \
+  --argjson duration "$duration" \
+  --arg findings "$findings_file" \
+  --arg log "$log_file" \
+  '{ok:$ok, status:$status, command:$cmd, duration_s:$duration, findings_file:$findings, log:$log}')
+
+if [[ -f "$run_dir/state.json" ]]; then
+  if ! pipeline-state task-write "$run_id" "$task_id" security_gate "$summary" >/dev/null; then
+    log_error "failed to record security_gate result for $task_id"
+    exit 1
+  fi
+fi
+
+printf '%s\n' "$summary"
+
+log_metric "task.gate.security" "task_id=\"$task_id\"" \
+  "status=\"$status\"" "duration_s=\"$duration\""
+
+if [[ "$gate_ok" == "true" ]]; then
+  exit 0
+elif [[ "$allow_failures" == "true" ]]; then
+  log_warn "security gate failed but securityAllowFailures=true — not blocking task_id=\"$task_id\""
+  exit 0
+else
+  exit 1
+fi

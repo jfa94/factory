@@ -210,6 +210,7 @@ Audits code for security vulnerabilities following OWASP Top 10 and AI-specific 
 
 **Key behaviors:**
 
+- When static security analysis findings are provided (via `security-findings.json` path in prompt), triages those findings first before manual review
 - Traces all user-input sources to sinks (SQL, HTML, shell, file paths, redirects)
 - Checks auth/authz: IDOR prevention, ownership verification, RLS (if Supabase), JWT validation
 - Scans for hardcoded secrets using pattern + Shannon-entropy analysis
@@ -509,6 +510,7 @@ All scripts live in `bin/`. They source `pipeline-lib.sh` for shared functions.
 | `pipeline-detect-reviewer` | Check Codex availability, return reviewer config |
 | `pipeline-codex-review`    | Codex exec wrapper for adversarial review        |
 | `pipeline-parse-review`    | Extract structured verdict from reviewer output  |
+| `pipeline-security-gate`   | Opt-in SAST gate via configured command          |
 | `pipeline-coverage-gate`   | Compare coverage before/after, block decreases   |
 | `pipeline-mutation-gate`   | Scoped Stryker mutation testing (CI-parity gate) |
 
@@ -535,7 +537,7 @@ All scripts live in `bin/`. They source `pipeline-lib.sh` for shared functions.
 
 ## Metrics
 
-Pipeline execution metrics are written to `$run_dir/metrics.jsonl` (one JSONL line per event) by the `log_metric` helper in `bin/pipeline-lib.sh`. Every event carries `ts`, `run_id`, and `event` fields plus optional key-value pairs. Events of note: `run.start`, `run.summary`, `task.start`, `task.end`, `task.executor_spawned`, `task.gate.quality`, `task.gate.coverage`, `task.coverage.snapshot`, `task.review.provider`, `task.pr_created`, `pipeline.step.begin/end`, `quota.check`, `quota.wait`, `quota.env_misalignment`, `circuit_breaker`. `quota.check` carries an `action` field (`proceed | wait | end_gracefully | stale_yield`) so the scorer can distinguish over-threshold yields from stale-cache yields. The scorer (`bin/pipeline-score`) reads this file to derive run quality scores.
+Pipeline execution metrics are written to `$run_dir/metrics.jsonl` (one JSONL line per event) by the `log_metric` helper in `bin/pipeline-lib.sh`. Every event carries `ts`, `run_id`, and `event` fields plus optional key-value pairs. Events of note: `run.start`, `run.summary`, `task.start`, `task.end`, `task.executor_spawned`, `task.gate.quality`, `task.gate.security`, `task.gate.coverage`, `task.coverage.snapshot`, `task.review.provider`, `task.pr_created`, `pipeline.step.begin/end`, `quota.check`, `quota.wait`, `quota.env_misalignment`, `circuit_breaker`. `quota.check` carries an `action` field (`proceed | wait | end_gracefully | stale_yield`) so the scorer can distinguish over-threshold yields from stale-cache yields. The scorer (`bin/pipeline-score`) reads this file to derive run quality scores.
 
 The MCP metrics server (`servers/pipeline-metrics/`) was removed in version 0.3.5 as it was orphaned and unused. Metrics are now written directly to JSONL files.
 

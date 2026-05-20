@@ -708,6 +708,17 @@ _stage_postexec() {
     return 30
   fi
 
+  set +e
+  pipeline-security-gate "$run_id" "$task_id" "$wt" >/dev/null
+  local _sg_pe_rc=$?
+  set -e
+  if (( _sg_pe_rc == 1 )); then
+    log_warn "security gate failed for $task_id"
+    t1=$(_now_ms)
+    log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"security\""
+    return 30
+  fi
+
   if ! ( cd "$wt" && pipeline-tdd-gate --task-id "$task_id" --run-id "$run_id" ) >/dev/null; then
     # pipeline-tdd-gate is the sole writer of quality_gates.tdd (it persists
     # the structured result via pipeline-state task-write). Do not duplicate
@@ -823,6 +834,16 @@ _emit_postexec_manifest() {
       printf '\nPrior blockers:\n'
       printf '%s' "$prior_blockers" | jq -r '.[] | "  [\(.id)] \(.severity // "?"): \(.description // "(none)") [\(.file // "?"):\(.line // "?")]"' 2>/dev/null || true
     } >> "$pf"
+  fi
+
+  # When static security analysis ran, pass findings to the security-reviewer
+  # so it triages tool output rather than re-running the scan itself.
+  if [[ "$tier" == "security" ]]; then
+    local _sec_findings="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/${task_id}.security-findings.json"
+    if [[ -f "$_sec_findings" ]]; then
+      printf '\nStatic security analysis findings are at: %s\n' "$_sec_findings" >> "$pf"
+      printf 'Triage these findings before starting your review — do not re-run the scan.\n' >> "$pf"
+    fi
   fi
 
   if [[ "$provider" == "codex" ]]; then
