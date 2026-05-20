@@ -264,5 +264,48 @@ STUB
   pass "case10: state write failure on error path → still exits 1"
 }
 
-case1; case2; case3; case4; case5; case6; case7; case8; case9; case10
+# Case 11: CLAUDE_PLUGIN_DATA unset → require_plugin_data must hard-fail (exit 1)
+# and mention CLAUDE_PLUGIN_DATA in stderr. Validates RC-1 fix.
+case11() {
+  local stub wt
+  stub=$(_mk_stub_dir)
+  wt=$(mktemp -d)
+  set +e
+  err=$(env -u CLAUDE_PLUGIN_DATA PATH="$stub:$PATH" "$GATE" run-001 task-001 "$wt" 2>&1 >/dev/null)
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 || $rc -eq 2 ]]; then
+    fail "case11: expected non-zero exit when CLAUDE_PLUGIN_DATA unset, got $rc"
+  fi
+  printf '%s' "$err" | grep -q 'CLAUDE_PLUGIN_DATA' \
+    || fail "case11: expected CLAUDE_PLUGIN_DATA in stderr; got: $err"
+  rm -rf "$stub" "$wt"
+  pass "case11: CLAUDE_PLUGIN_DATA unset → hard exit, mentions CLAUDE_PLUGIN_DATA in stderr"
+}
+
+# Case 12: command exits 127 (binary not found) → gate must fail (exit 1), ok=false.
+# Validates RI-1 fix: the gate must treat any non-zero/non-2 rc as failure.
+case12() {
+  local env stub wt
+  env=$(_mk_env "semgrep --config auto")
+  stub=$(_mk_stub_dir)
+  # Stub semgrep to exit 127 (simulates command not found).
+  cat > "$stub/semgrep" <<'CMD'
+#!/usr/bin/env bash
+exit 127
+CMD
+  chmod +x "$stub/semgrep"
+  wt=$(mktemp -d)
+  set +e
+  out=$(CLAUDE_PLUGIN_DATA="$env" PATH="$stub:$PATH" "$GATE" run-001 task-001 "$wt" 2>/dev/null)
+  rc=$?
+  set -e
+  if [[ $rc -ne 1 ]]; then fail "case12: expected exit 1 when binary exits 127, got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == false' >/dev/null \
+    || fail "case12: expected ok=false; got $out"
+  rm -rf "$env" "$stub" "$wt"
+  pass "case12: binary exits 127 → gate exit 1, ok=false"
+}
+
+case1; case2; case3; case4; case5; case6; case7; case8; case9; case10; case11; case12
 printf 'all security-gate tests passed\n'
