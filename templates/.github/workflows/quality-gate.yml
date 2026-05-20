@@ -43,6 +43,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+      # NOTE: The semgrep action binary is SHA-pinned, but the rulesets
+      # below (p/typescript, p/security-audit, p/secrets) are fetched
+      # unpinned from the live Semgrep registry at run time. This is an
+      # accepted supply-chain trade-off for now; vendor rules into a
+      # .semgrep/ directory and pin them if this becomes load-bearing.
       - name: Semgrep SAST
         uses: semgrep/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
         with:
@@ -209,7 +214,9 @@ jobs:
             echo "::error::mutation-scope did not succeed"
             exit 1
           fi
-          if [[ "$MUTATION_RESULT" != "success" ]]; then
+          # Treat `cancelled` as non-blocking — happens during force-push
+          # rebases or queued-run supersession; not a real failure.
+          if [[ "$MUTATION_RESULT" != "success" && "$MUTATION_RESULT" != "cancelled" ]]; then
             echo "::error::one or more mutation shards did not succeed"
             exit 1
           fi

@@ -1496,6 +1496,8 @@ pipeline-ensure-autonomy
 
 1. Self-heal exec bits on entry-point scripts (statusline-wrapper.sh, pipeline-\*)
 2. Check if `merged-settings.json` exists and matches current plugin version
+   - 2a. Migrate legacy cache-pinned `statusLine.command` paths (pre-0.6.2 layouts that baked a versioned cache path) to the stable wrapper path, regenerating settings
+   - 2b. Detect and repair statusLine wrapper-missing state (pre-0.8.6 compat: dangling wrapper symlinks reported a misleading `stale-cache` status; now surfaces a dedicated `wrapper-missing` or self-heals via regeneration)
 3. Regenerate if missing or stale — substitutes `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, and `${CLAUDE_PLUGIN_DATA_TILDE}` placeholders from the template at materialization time. The tilde form is the home-shortened version of the data dir, used inside the inline `.claude/` access hook so its `case` pattern is a pure POSIX literal with no runtime bash dependency.
 4. Check FACTORY_AUTONOMOUS_MODE env var
 5. Check usage-cache.json freshness (>3600s = fail-closed)
@@ -1518,7 +1520,7 @@ The tilde form is used in the inline `.claude/` access hook's `case` pattern so 
 ```json
 {
   "status": "ok",
-  "message": "autonomous mode active (version 0.6.3)",
+  "message": "autonomous mode active (version <current-version>)",
   "settings_path": "/path/to/merged-settings.json"
 }
 ```
