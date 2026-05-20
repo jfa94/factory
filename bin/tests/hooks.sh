@@ -318,9 +318,22 @@ assert_eq "warns no reviews" "true" "$(printf '%s' "$output" | grep -q 'no revie
 echo ""
 echo "=== subagent-stop-gate: no warning with review files present ==="
 
-echo '{"verdict":"APPROVE"}' > "$run_dir/reviews/T1.json"
+# H6 regression: previously the warning checked $run_dir/reviews/*.json — a
+# path the pipeline never writes to. The actual canonical location is
+# $run_dir/.state/<run_id>/<task>.review.codex.json, and the state pointer is
+# .tasks[].review_files. Both must satisfy the absent-warning case.
+mkdir -p "$run_dir/.state/test-subagent"
+echo '{"verdict":"APPROVE"}' > "$run_dir/.state/test-subagent/T1.review.codex.json"
 output=$(printf '{"agent_type":"implementation-reviewer"}' | "$HOOKS_DIR/subagent-stop-gate.sh" 2>&1)
-assert_eq "no warning with reviews" "false" "$(printf '%s' "$output" | grep -q 'WARNING' && echo true || echo false)"
+assert_eq "no warning with canonical review file" "false" "$(printf '%s' "$output" | grep -q 'WARNING' && echo true || echo false)"
+
+# Also verify the state-pointer path: review_files non-empty silences warning.
+rm -f "$run_dir/.state/test-subagent/T1.review.codex.json"
+printf '{"run_id":"test-subagent","status":"running","tasks":{"T1":{"review_files":["x.json"]}}}' > "$run_dir/state.json"
+output=$(printf '{"agent_type":"implementation-reviewer"}' | "$HOOKS_DIR/subagent-stop-gate.sh" 2>&1)
+assert_eq "no warning with state review_files" "false" "$(printf '%s' "$output" | grep -q 'WARNING' && echo true || echo false)"
+# Restore state for following tests.
+printf '{"run_id":"test-subagent","status":"running","tasks":{}}' > "$run_dir/state.json"
 
 # ============================================================
 echo ""
@@ -426,6 +439,50 @@ output=$(printf '%s' "$blockers_input" | "$BIN_DIR/pipeline-parse-review" 2>/dev
 assert_eq "BLOCKERS: 3 parsed" "3" "$(echo "$output" | jq -r '.declared_blockers')"
 assert_eq "REQUEST_CHANGES verdict" "REQUEST_CHANGES" "$(echo "$output" | jq -r '.verdict')"
 assert_eq "blocking_count tally agrees" "3" "$(echo "$output" | jq -r '.blocking_count')"
+
+# H7 regression: JSON-block path must tally blocking_count from .blocking, not
+# from severity. A reviewer can mark a minor finding `blocking:true` (legitimate
+# escalation) or a critical finding `blocking:false` (judgment call). The parser
+# must honor the explicit field. Severity-only counting silently downgraded such
+# reviews to REQUEST_CHANGES.
+json_blocking_input='```json
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "review",
+  "findings": [
+    {"file":"a.ts","line":1,"verbatim_line":"const x = 1;","severity":"minor","blocking":true,"description":"reviewer-escalated minor"},
+    {"file":"b.ts","line":2,"verbatim_line":"const y = 2;","severity":"critical","blocking":false,"description":"reviewer-deprioritized critical"}
+  ]
+}
+```'
+output=$(printf '%s' "$json_blocking_input" | "$BIN_DIR/pipeline-parse-review" 2>/dev/null)
+assert_eq "JSON-block: blocking_count counts .blocking==true (minor escalated)" "1" \
+  "$(echo "$output" | jq -r '.blocking_count')"
+assert_eq "JSON-block: non_blocking_count counts the rest (critical deprioritized)" "1" \
+  "$(echo "$output" | jq -r '.non_blocking_count')"
+assert_eq "JSON-block: blocking field on minor finding preserved" "true" \
+  "$(echo "$output" | jq -r '.findings[0].blocking')"
+assert_eq "JSON-block: blocking field on critical finding preserved" "false" \
+  "$(echo "$output" | jq -r '.findings[1].blocking')"
+
+# JSON-block: when reviewer omits .blocking, derive from severity (critical|high|important → true).
+json_default_input='```json
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "default-blocking",
+  "findings": [
+    {"file":"a.ts","line":1,"verbatim_line":"const x = 1;","severity":"critical","description":"no blocking field"},
+    {"file":"b.ts","line":2,"verbatim_line":"const y = 2;","severity":"minor","description":"no blocking field"}
+  ]
+}
+```'
+output=$(printf '%s' "$json_default_input" | "$BIN_DIR/pipeline-parse-review" 2>/dev/null)
+assert_eq "JSON-block: derived blocking from critical severity" "1" \
+  "$(echo "$output" | jq -r '.blocking_count')"
+assert_eq "JSON-block: derived blocking on critical finding" "true" \
+  "$(echo "$output" | jq -r '.findings[0].blocking')"
+assert_eq "JSON-block: derived blocking on minor finding" "false" \
+  "$(echo "$output" | jq -r '.findings[1].blocking')"
 
 # ============================================================
 echo ""
@@ -1625,6 +1682,33 @@ assert_eq "checklist-tdd-fail denies" "deny" "$decision"
 reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')
 assert_eq "checklist-tdd-fail reason mentions tdd_gate" "true" \
   "$(printf '%s' "$reason" | grep -q 'tdd_gate' && echo true || echo false)"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: ship checklist — PR blocked when security_gate=fail ==="
+
+# H4 regression: a failed semgrep finding (state.security_gate.ok=false,
+# allow_failures=false) must surface as security_gate=fail in the checklist
+# and the PR-create guard must deny on it. Before this fix the field was not
+# emitted by _write_ship_checklist nor checked by the guard.
+_seed_run "run-checklist-sec-fail" '{"status":"running","tasks":{"task-sc":{"status":"reviewing","quality_gate":{"ok":true},"security_gate":{"ok":false,"allow_failures":false}}}}'
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-checklist-sec-fail/.tasks"
+jq -n '{
+  task_id:"task-sc", tdd_gate:"ok", coverage_gate:"ok",
+  quality_gate:"ok", pregate_gate:"ok", security_gate:"fail",
+  review_blockers_resolved:true,
+  ci_status:"pending", generated_at:"2026-05-20T00:00:00Z"
+}' > "$CLAUDE_PLUGIN_DATA/runs/run-checklist-sec-fail/.tasks/task-sc.ship_checklist.json"
+input='{"tool_input":{"command":"gh pr create --base staging --title foo"}}'
+set +e
+out=$(printf '%s' "$input" | FACTORY_TASK_ID=task-sc bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+rc=$?
+set -e
+assert_eq "checklist-sec-fail exit 0" "0" "$rc"
+decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')
+assert_eq "checklist-sec-fail denies" "deny" "$decision"
+reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')
+assert_eq "checklist-sec-fail reason mentions security_gate" "true" \
+  "$(printf '%s' "$reason" | grep -q 'security_gate' && echo true || echo false)"
 
 echo ""
 echo "=== pretooluse-pipeline-guards: ship checklist — PR blocked when checklist missing + quality_gate not ok ==="

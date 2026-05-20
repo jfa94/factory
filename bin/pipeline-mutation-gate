@@ -131,9 +131,10 @@ if [[ -z "$score" ]]; then
   _emit true "no-score" null "$target" "$scope_csv" 0
 fi
 
-# Coerce to integer for comparison; preserve raw value in JSON output.
-score_int=$(printf '%.0f' "$score")
-if (( score_int < target )); then
+# Strict float comparison — printf '%.0f' rounds half-up, so a score of
+# 79.5 with target 80 would silently round to 80 and pass. awk gives us a
+# direct float < int comparison preserving the original score in JSON.
+if awk -v s="$score" -v t="$target" 'BEGIN { exit (s < t) ? 0 : 1 }'; then
   log_warn "mutation gate: score $score < target $target"
   _emit false "score-below-target" "$score" "$target" "$scope_csv" 1
 fi

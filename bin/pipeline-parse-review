@@ -70,11 +70,18 @@ if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; t
     # Strip findings missing evidence (length < 5), log warnings.
     # Normalize legacy `.evidence` field into `.verbatim_line` so downstream
     # validate_findings (which reads .verbatim_line) can grep it against the diff.
+    # Also normalize the `.blocking` field: respect an explicit reviewer-set
+    # value, else derive from severity (critical|high|important → true). This
+    # aligns the JSON-block schema with the prose-path schema so blocking_count
+    # below is consistent across both code paths.
     valid_findings=$(printf '%s' "$json_block" | jq '[
       .findings[] |
       . as $f |
       ((.verbatim_line // .evidence // "")) as $vl |
-      if ($vl | length) >= 5 then ($f + {verbatim_line: $vl}) else empty end
+      ((if ($f | has("blocking")) then $f.blocking
+         else ((.severity // "") | ascii_downcase | (. == "critical" or . == "high" or . == "important"))
+         end)) as $blk |
+      if ($vl | length) >= 5 then ($f + {verbatim_line: $vl, blocking: $blk}) else empty end
     ]')
 
     # Count stripped findings and warn
@@ -109,9 +116,15 @@ if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; t
       exit 1
     fi
 
-    # Build normalized output matching the prose parser's schema
-    blocking_count=$(printf '%s' "$valid_findings" | jq '[.[] | select(.severity == "critical" or .severity == "high")] | length')
-    non_blocking_count=$(printf '%s' "$valid_findings" | jq '[.[] | select(.severity != "critical" and .severity != "high")] | length')
+    # Build normalized output matching the prose parser's schema. The prose
+    # parser counts `[BLOCKING]`-tagged findings as blockers regardless of
+    # severity. We mirror that here by counting `.blocking == true` rather
+    # than severity ∈ {critical,high}. Without this, a reviewer can legitimately
+    # tag a medium-severity finding `[BLOCKING]` and the parser would silently
+    # downgrade to REQUEST_CHANGES on the declared/observed mismatch check at
+    # line 336.
+    blocking_count=$(printf '%s' "$valid_findings" | jq '[.[] | select(.blocking == true)] | length')
+    non_blocking_count=$(printf '%s' "$valid_findings" | jq '[.[] | select(.blocking != true)] | length')
 
     out_json=$(jq -n \
       --arg verdict "$normalized_verdict" \

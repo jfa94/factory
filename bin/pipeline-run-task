@@ -1292,6 +1292,26 @@ _write_ship_checklist() {
     *)     pregate_gate="skipped" ;;
   esac
 
+  # security_gate: from state.tasks[].security_gate. Skipped paths set
+  # `skipped:true`; pass paths set `ok:true,status:"passed"`; `allow_failures`
+  # mode reports ok=false but exits 0 (informational) — map to ok here so the
+  # checklist matches the gate's actual block/no-block behavior.
+  local sg_ok sg_skipped sg_allow security_gate
+  sg_ok=$(jq -r --arg t "$task_id" '.tasks[$t].security_gate.ok // "null"' "$state_file" 2>/dev/null || printf 'null')
+  sg_skipped=$(jq -r --arg t "$task_id" '.tasks[$t].security_gate.skipped // false' "$state_file" 2>/dev/null || printf 'false')
+  sg_allow=$(jq -r --arg t "$task_id" '.tasks[$t].security_gate.allow_failures // false' "$state_file" 2>/dev/null || printf 'false')
+  if [[ "$sg_skipped" == "true" ]]; then
+    security_gate="skipped"
+  elif [[ "$sg_ok" == "true" ]]; then
+    security_gate="ok"
+  elif [[ "$sg_ok" == "false" && "$sg_allow" == "true" ]]; then
+    security_gate="ok"
+  elif [[ "$sg_ok" == "false" ]]; then
+    security_gate="fail"
+  else
+    security_gate="skipped"
+  fi
+
   # review_blockers_resolved: true if postreview_done (no pending blockers).
   local stage_cur review_blockers_resolved
   stage_cur=$(_task_field stage 2>/dev/null || printf '')
@@ -1317,6 +1337,7 @@ _write_ship_checklist() {
     --arg coverage_gate  "$coverage_gate" \
     --arg quality_gate   "$quality_gate" \
     --arg pregate_gate   "$pregate_gate" \
+    --arg security_gate  "$security_gate" \
     --argjson review_blockers_resolved "$review_blockers_resolved" \
     --arg ci_status      "$ci_status" \
     --arg generated_at   "$iso_now" \
@@ -1326,6 +1347,7 @@ _write_ship_checklist() {
       coverage_gate:            $coverage_gate,
       quality_gate:             $quality_gate,
       pregate_gate:             $pregate_gate,
+      security_gate:            $security_gate,
       review_blockers_resolved: $review_blockers_resolved,
       ci_status:                $ci_status,
       generated_at:             $generated_at
@@ -1333,7 +1355,7 @@ _write_ship_checklist() {
 
   log_metric "task.ship_checklist_written" "task_id=\"$task_id\"" "tdd=\"$tdd_gate\"" \
     "coverage=\"$coverage_gate\"" "quality=\"$quality_gate\"" "pregate=\"$pregate_gate\"" \
-    "ci=\"$ci_status\""
+    "security=\"$security_gate\"" "ci=\"$ci_status\""
 }
 
 # --- ship -------------------------------------------------------------------
@@ -1478,22 +1500,64 @@ _stage_ship() {
 
   if [[ "${FACTORY_ASYNC_CI:-auto}" == "off" ]]; then
     _ensure_prompt_dir
-    if pipeline-wait-pr "$pr_number" > "$run_dir/.state/$run_id/$task_id.ci.json"; then
-      emit_ci_metric task "$pr_number" green
-      if ! pipeline-state task-status "$run_id" "$task_id" done >/dev/null; then
-        log_error "task-status done write failed for $task_id"
+    local _wait_rc=0
+    pipeline-wait-pr "$pr_number" > "$run_dir/.state/$run_id/$task_id.ci.json" || _wait_rc=$?
+    case "$_wait_rc" in
+      0)
+        emit_ci_metric task "$pr_number" green
+        if ! pipeline-state task-status "$run_id" "$task_id" done >/dev/null; then
+          log_error "task-status done write failed for $task_id"
+          return 30
+        fi
+        _task_write stage '"ship_done"'
+        _task_write ci_status '"green"'
+        t1=$(_now_ms)
+        log_step_end "ship" "ok" "$((t1-t0))" "task_id=\"$task_id\"" "ci=\"green\""
+        return 0
+        ;;
+      1)
+        emit_ci_metric task "$pr_number" timeout
+        _task_write ci_status '"timeout"'
+        _task_write failure_reason '"ci_timeout"'
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_timeout\""
         return 30
-      fi
-      _task_write stage '"ship_done"'
-      _task_write ci_status '"green"'
-      t1=$(_now_ms)
-      log_step_end "ship" "ok" "$((t1-t0))" "task_id=\"$task_id\"" "ci=\"green\""
-      return 0
-    fi
-    emit_ci_metric task "$pr_number" red
-    t1=$(_now_ms)
-    log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_red\""
-    return 30
+        ;;
+      2)
+        emit_ci_metric task "$pr_number" closed
+        _task_write ci_status '"closed"'
+        _task_write failure_reason '"pr_closed"'
+        pipeline-state task-status "$run_id" "$task_id" failed >/dev/null \
+          || log_warn "task-status failed write failed for $task_id"
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"pr_closed\""
+        return 30
+        ;;
+      3)
+        emit_ci_metric task "$pr_number" red
+        _task_write ci_status '"red"'
+        _task_write failure_reason '"ci_red"'
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_red\""
+        return 30
+        ;;
+      4)
+        emit_ci_metric task "$pr_number" conflict
+        _task_write ci_status '"conflict"'
+        _task_write failure_reason '"merge_conflict"'
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"merge_conflict\""
+        return 30
+        ;;
+      *)
+        emit_ci_metric task "$pr_number" red
+        _task_write ci_status '"red"'
+        _task_write failure_reason "\"wait_pr_unexpected_rc_${_wait_rc}\""
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"wait_pr_unexpected_rc_${_wait_rc}\""
+        return 30
+        ;;
+    esac
   fi
 
   t1=$(_now_ms)

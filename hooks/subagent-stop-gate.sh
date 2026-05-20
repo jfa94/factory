@@ -291,13 +291,28 @@ case "$agent_type" in
     ;;
 
   implementation-reviewer|quality-reviewer)
-    # Expect a review verdict file
+    # Expect a review verdict file. Reviewers write to
+    # $run_dir/.state/$run_id/<task_id>.review.codex.json and pipeline-run-task
+    # records the path in state.tasks[].review_files. Check both: the canonical
+    # state pointer first, then the actual file presence on disk.
     state_file="$run_dir/state.json"
     if [[ -f "$state_file" ]]; then
-      # Check if any review files were generated
-      review_count=$(find "$run_dir/reviews" -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' ')
+      review_count=$(jq '[.tasks // {} | to_entries[] | (.value.review_files // [])[]] | length' "$state_file" 2>/dev/null || printf '0')
       if [[ "$review_count" -eq 0 ]]; then
-        warnings+=("no review files found in $run_dir/reviews")
+        # Fall back to filesystem scan for the canonical path before warning,
+        # in case state has not been updated yet (race with task-write). The
+        # `|| true` keeps a missing directory from aborting under pipefail —
+        # absence of the dir is itself the "no reviews" condition we want to
+        # warn about.
+        rid=$(basename "$run_dir")
+        if [[ -d "$run_dir/.state/$rid" ]]; then
+          review_count=$(find "$run_dir/.state/$rid" -maxdepth 1 -name '*.review.codex.json' -type f 2>/dev/null | wc -l | tr -d ' ' || true)
+        else
+          review_count=0
+        fi
+        if [[ "$review_count" -eq 0 ]]; then
+          warnings+=("no review files found for run $rid (checked state.tasks[].review_files and $run_dir/.state/$rid/*.review.codex.json)")
+        fi
       fi
     fi
     ;;

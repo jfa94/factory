@@ -300,7 +300,7 @@ log_step_end() {
 }
 
 # Emit a structured CI-outcome metric.
-# Usage: emit_ci_metric <kind: task|run> <pr_number> <status: green|red|timeout> [<checks_json>]
+# Usage: emit_ci_metric <kind: task|run> <pr_number> <status: green|red|timeout|closed|conflict> [<checks_json>]
 emit_ci_metric() {
   local kind="$1" pr="$2" status="$3" checks="${4:-[]}"
   local event

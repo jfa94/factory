@@ -294,6 +294,35 @@ assert_eq "ship sync: exit 0" "0" "$RC"
 assert_eq "ship sync: pr_number=4242" "4242" "$(field_of pr_number)"
 assert_eq "ship sync: stage=ship_done" "ship_done" "$(stage_of)"
 
+# --- 10b (T9): ship sync — pipeline-wait-pr rc=1/2/3/4 distinct branching ---
+# Before this fix the sync path collapsed all non-zero wait-pr exits into
+# return 30 with reason="ci_red", erasing the difference between timeout,
+# PR closed, CI failed, and merge conflict. Per docs/reference/exit-codes.md
+# the orchestrator routes these to different recovery paths.
+_ship_sync_case() {
+  local case_label="$1" wait_rc="$2" want_ci="$3" want_reason="$4"
+  new_run "ship-sync-rc${wait_rc}"
+  wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+  pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+  pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+  write_stub pipeline-wait-pr "echo '{\"status\":\"x\"}'; exit ${wait_rc}"
+  set +e
+  FACTORY_ASYNC_CI=off pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1
+  RC=$?
+  set -e
+  assert_eq "$case_label: exit 30" "30" "$RC"
+  assert_eq "$case_label: ci_status=$want_ci" "$want_ci" \
+    "$(field_of ci_status | tr -d '"')"
+  assert_eq "$case_label: failure_reason=$want_reason" "$want_reason" \
+    "$(field_of failure_reason | tr -d '"')"
+  # Reset stub for following tests.
+  write_stub pipeline-wait-pr 'echo "{\"status\":\"green\"}"; exit 0'
+}
+_ship_sync_case "ship rc=1 (timeout)"         1 timeout       ci_timeout
+_ship_sync_case "ship rc=2 (pr closed)"       2 closed        pr_closed
+_ship_sync_case "ship rc=3 (ci failed)"       3 red           ci_red
+_ship_sync_case "ship rc=4 (merge conflict)"  4 conflict      merge_conflict
+
 # --- 11: finalize-run — pending blocks ------------------------------------
 new_run finalize-pending
 set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e

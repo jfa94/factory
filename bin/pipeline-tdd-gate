@@ -114,7 +114,7 @@ for c in "${classes[@]}"; do
   IFS='|' read -r _ kind _ <<<"$c"
   [[ "$kind" == "impl" ]] && has_impl=1
 done
-if (( has_impl == 0 )); then _emit true true '[]'; exit 0; fi
+if (( has_impl == 0 )); then _emit true false '[]'; exit 0; fi
 if _task_exempt;           then _emit true true '[]'; exit 0; fi
 
 seen_test_only=0

@@ -204,6 +204,36 @@ assert_eq "low score → reason" "score-below-target" "$(jq -r .reason <<<"$out"
 assert_eq "low score → score field" "42" "$(jq -r .score <<<"$out")"
 assert_eq "low score → target field" "60" "$(jq -r .target <<<"$out")"
 
+# T8 regression: any fractional score < target must fail, even if it rounds
+# up to target. printf '%.0f' previously coerced 79.5 → 80 (banker's/half-up
+# rounding) and let the comparison pass — a silent gate bypass for the
+# [target-0.5, target) range.
+echo "=== T4b2 (T8): score 79.5 with target 80 → fail (boundary) ==="
+MOCKS=$(mktemp -d)
+export PATH="$MOCKS:$PATH"
+cat > "$MOCKS/pnpm" <<'EOM'
+#!/usr/bin/env bash
+mkdir -p "$WT/reports/mutation"
+printf '{"metrics":{"mutationScore":79.5}}' > "$WT/reports/mutation/mutation.json"
+exit 0
+EOM
+chmod +x "$MOCKS/pnpm"
+WT=$(mktemp -d)
+export WT
+_seed_repo "$WT" "src/foo.ts"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-t4b2"; TASK_ID="t4b2"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+# Default target is 80 — no config override.
+set +e
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+set -e
+assert_eq "79.5 vs 80 → exit 1" "1" "$rc"
+assert_eq "79.5 vs 80 → reason" "score-below-target" "$(jq -r .reason <<<"$out")"
+assert_eq "79.5 vs 80 → score preserved as 79.5" "79.5" "$(jq -r .score <<<"$out")"
+
 echo "=== T4c: score at/above target → pass ==="
 MOCKS=$(mktemp -d)
 export PATH="$MOCKS:$PATH"

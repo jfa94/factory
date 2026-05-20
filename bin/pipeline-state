@@ -42,6 +42,7 @@ _KNOWN_TASK_FIELDS=(
   holdout_review_file
   tdd_exempt
   mutation_gate mutation_score
+  security_gate
 )
 
 # Per-run advisory lock. Prefers flock(1) when available (Linux, util-linux on

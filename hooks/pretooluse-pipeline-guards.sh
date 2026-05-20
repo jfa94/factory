@@ -293,6 +293,7 @@ if [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]]; then
     cl_cov=$(jq -r '.coverage_gate // "fail"' "$checklist_file" 2>/dev/null)
     cl_qok=$(jq -r '.quality_gate // "fail"' "$checklist_file" 2>/dev/null)
     cl_pgk=$(jq -r '.pregate_gate // "skipped"' "$checklist_file" 2>/dev/null)
+    cl_sec=$(jq -r '.security_gate // "skipped"' "$checklist_file" 2>/dev/null)
     cl_rbr=$(jq -r '.review_blockers_resolved // false' "$checklist_file" 2>/dev/null)
 
     deny_reasons=()
@@ -304,6 +305,8 @@ if [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]]; then
       deny_reasons+=("quality_gate=$cl_qok (must be ok or skipped)")
     [[ "$cl_pgk" != "ok" && "$cl_pgk" != "skipped" ]] && \
       deny_reasons+=("pregate_gate=$cl_pgk (must be ok or skipped)")
+    [[ "$cl_sec" != "ok" && "$cl_sec" != "skipped" ]] && \
+      deny_reasons+=("security_gate=$cl_sec (must be ok or skipped)")
     [[ "$cl_rbr" != "true" ]] && \
       deny_reasons+=("review_blockers_resolved=false")
 

@@ -55,7 +55,11 @@ case2() {
   pass "case2: impl-without-test fails gate (exit 1, ok=false)"
 }
 
-# Test 3: skip case — diff is tests-only.
+# Test 3 (T7 regression): tests-only diff passes the gate without claiming
+# exemption. `exempt=true` must only be emitted when the task opts out via
+# tdd_exempt in tasks.json (case 4) — never as a side effect of "no impl yet".
+# Persisting exempt=true here would let the ship checklist mark the gate as
+# "skipped" (pipeline-run-task:1254), silently bypassing TDD.
 case3() {
   local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
   _commit "$repo" "test(x): only tests [task-001]" "tests/x.test.ts"
@@ -64,9 +68,9 @@ case3() {
   rc=$?
   set -e
   if [[ $rc -ne 0 ]]; then fail "case3 expected exit 0, got $rc"; fi
-  printf '%s' "$out" | jq -e '.exempt == true' >/dev/null \
-    || fail "case3 expected exempt=true in JSON"
-  pass "case3: tests-only diff is exempt"
+  printf '%s' "$out" | jq -e '.ok == true and .exempt == false' >/dev/null \
+    || fail "case3 expected ok=true exempt=false in JSON (got: $out)"
+  pass "case3: tests-only diff passes without claiming exemption"
 }
 
 # Test 4: exempt case — tasks.json marks task as tdd_exempt.
