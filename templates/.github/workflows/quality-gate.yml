@@ -218,7 +218,7 @@ jobs:
   auto-merge:
     name: Auto Merge
     runs-on: ubuntu-latest
-    needs: [quality, mutation, security]
+    needs: [quality, mutation-testing, security]
     if: github.actor != 'dependabot[bot]'
     permissions:
       contents: write
