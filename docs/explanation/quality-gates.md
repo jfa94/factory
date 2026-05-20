@@ -1,13 +1,14 @@
 # Quality Gates
 
-This document explains the 6-layer quality gate stack and the rationale behind each layer.
+This document explains the 7-layer quality gate stack and the rationale behind each layer.
 
-## Why 6 Layers
+## Why 7 Layers
 
 AI-generated code has a 67.3% PR rejection rate (LinearB study). The failures cluster around specific patterns:
 
 - **Syntax and style errors** that static analysis catches
 - **Security vulnerabilities** that SAST tools detect (injection, hardcoded secrets, etc.)
+- **Test-after-implementation shortcuts** where agents write tests post-hoc rather than driving design with them
 - **Broken tests** that the test suite catches
 - **Coverage regression** where agents delete failing tests rather than fixing implementations
 - **Surface-level implementations** that satisfy the letter but not the spirit of requirements
@@ -71,7 +72,33 @@ By default, a non-zero exit from the security command fails the task. Set `quali
 
 ---
 
-## Layer 3: Test Suite
+## Layer 3: TDD Gate
+
+**Purpose:** Enforce test-before-implementation commit ordering so tests drive design rather than ratifying it.
+
+**Trigger:** After security gate passes. Called by `pipeline-run-task` via `pipeline-tdd-gate` in the `postexec` stage.
+
+**Why this layer exists:**
+
+Writing tests after the fact is a known failure mode for AI code generators: the model knows the implementation and writes tests that confirm it rather than testing edge cases it hasn't considered. The TDD gate prevents this by verifying that at least one test commit exists before the first implementation commit on the task branch.
+
+**How it works:**
+
+`pipeline-tdd-gate` inspects the git log between the base branch and HEAD. It looks for commits matching the `test(task-id):` prefix convention. If the first non-empty commit is an implementation commit (no test prefix), the gate fails. Tasks can opt out via `tdd_exempt: true` in `spec/tasks.json`, or project-wide via `package.json.factory.tddExempt`.
+
+**Failure behavior:**
+
+The gate exits non-zero, which `pipeline-run-task` treats as a blocking failure (exit 30). The task is escalated for human review rather than automatically retried — an impl-first commit ordering is a structural violation, not a transient error.
+
+**Configuration:**
+
+- Per-task: `tdd_exempt: true` in `spec/tasks.json` (read at spec load time, never from `state.json`)
+- Global: `tddExempt: true` in `package.json > factory`
+- Custom runner: `.quality.redTestCommand` in config (for non-standard test runners like Go, Ruby, Deno)
+
+---
+
+## Layer 4: Test Suite
 
 **Purpose:** Verify implementation correctness against existing and new tests.
 
@@ -91,7 +118,7 @@ Uses the project's test runner. No plugin-specific settings.
 
 ---
 
-## Layer 4: Coverage Regression
+## Layer 5: Coverage Regression
 
 **Purpose:** Ensure new code doesn't decrease test coverage.
 
@@ -118,7 +145,7 @@ The task-executor must add tests to restore coverage. The orchestrator re-runs t
 
 ---
 
-## Layer 5: Holdout Validation
+## Layer 6: Holdout Validation
 
 **Purpose:** Verify that the implementation genuinely satisfies the spec, not just the explicit instructions.
 
@@ -144,9 +171,9 @@ Since task-executors run in worktrees and holdouts live in plugin data, the exec
 
 If fewer than 80% of withheld criteria are satisfied, the implementation is surface-level. The task-executor receives the full spec (including previously withheld criteria) and re-implements. Holdout validation is NOT repeated on re-implementation (that would be unfair - the executor now knows all criteria).
 
-**Graceful skip behavior:**
+**Missing reviewer output (fail-closed):**
 
-When a holdout file exists but the `SubagentStop` hook has not wired the `holdout_review_file` field to state, the pipeline records `.tasks.<id>.quality_gates.holdout = "skipped"` and continues rather than blocking. This was refined in version 0.3.5 to avoid infinite re-entry loops when the holdout reviewer output is not yet available. The scorer treats `skipped` as `skipped_na` (not applicable) rather than a failure.
+When a holdout file exists but the `SubagentStop` hook has not wired the `holdout_review_file` field to state — meaning the reviewer never wrote its output — the pipeline records `.tasks.<id>.quality_gates.holdout = "missing-reviewer-output"`, marks the task `needs_human_review`, and returns exit 30 (blocking). It does not continue. This fail-closed behavior prevents a missing reviewer output from silently passing as an approval.
 
 **Configuration:**
 
@@ -157,7 +184,7 @@ When a holdout file exists but the `SubagentStop` hook has not wired the `holdou
 
 ---
 
-## Layer 6: Mutation Testing
+## Layer 7: Mutation Testing
 
 **Purpose:** Verify test quality by measuring mutation score.
 
@@ -223,10 +250,11 @@ The layers are designed to complement each other:
 
 1. **Static analysis** catches form errors early, before expensive test runs
 2. **Security gate** catches common vulnerability patterns that SAST tools detect
-3. **Test suite** catches functional errors
-4. **Coverage regression** prevents gaming by deleting tests
-5. **Holdout validation** prevents surface-level implementations
-6. **Mutation testing** prevents tautological tests
+3. **TDD gate** enforces test-before-implementation ordering
+4. **Test suite** catches functional errors
+5. **Coverage regression** prevents gaming by deleting tests
+6. **Holdout validation** prevents surface-level implementations
+7. **Mutation testing** prevents tautological tests
 
 Each layer addresses a failure mode that previous layers miss. Together, they form a defense-in-depth strategy against AI-generated code quality issues.
 
@@ -237,6 +265,7 @@ Each layer addresses a failure mode that previous layers miss. Together, they fo
 Individual layers can be disabled via configuration:
 
 - Security: leave `quality.securityCommand` unset (gate skips by default)
+- TDD: `tdd_exempt: true` per-task in `spec/tasks.json`, or `tddExempt: true` globally in `package.json > factory`
 - Coverage: `quality.coverageMustNotDecrease: false`
 - Holdout: `quality.holdoutPercent: 0`
 - Mutation: drop the `test:mutation` script from `package.json` (gate skips with reason `no-script`)
