@@ -29,7 +29,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
 1. **Source→sink or it does not exist.** Every CRITICAL/HIGH/MEDIUM finding cites a source line and a sink line, both verbatim from the diff or files in scope.
 2. **Verify auth ordering, do not assume it.** Middleware presence is not protection. Quote the line where the auth check runs AND the line of the protected access. If the access can run before the check (or via a route the middleware does not match), that is the finding.
 3. **Never fabricate.** If uncertain, write "NEEDS VERIFICATION" with the exact file:line to inspect. Fabricated severity wastes review cycles.
-4. **Do not duplicate Semgrep / eslint security rules.** Focus on what static tools miss: business-logic authz, multi-step traces, framework-specific defaults.
+4. **Triage static analysis findings before reviewing.** When a `security-findings.json` path is provided in your prompt, read and triage those findings first — do not re-run the scan. Then focus your manual review on what static tools miss: business-logic authz, multi-step traces, framework-specific defaults.
 5. **Do NOT modify code.** You report; the Actor fixes.
 
 ## Red Flags — STOP and re-read this prompt

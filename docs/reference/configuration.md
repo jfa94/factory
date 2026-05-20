@@ -187,6 +187,34 @@ Custom command for red-test verification in repos with exotic test runners (Go, 
 
 Commands that fail validation are rejected and the task is marked failed with `reason: "unsafe_command"` or `reason: "unallowed_runner"`.
 
+### quality.securityCommand
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | string |
+| Default  | (none) |
+
+Command to run as a static security analysis gate during `pipeline-run-task` postexec. When unset, the gate is skipped entirely (opt-in). When set, the command is executed in the task worktree; stdout is saved as the findings artifact; non-zero exit fails the task (unless `quality.securityAllowFailures` is `true`).
+
+**Security constraints** (same as `redTestCommand`):
+
+- Every token must match `[A-Za-z0-9._/=:+-]+` (no shell metacharacters or spaces)
+- Command prefix must match an allowed runner:
+  - Single-token: `semgrep`, `pytest`, `vitest`, `jest`, `mocha`, `phpunit`, `rspec`
+  - Two-token: `go test`, `cargo test`, `deno test`
+  - Three-token: `bundle exec rspec`
+
+**Example:** `"semgrep --config auto --error"`
+
+### quality.securityAllowFailures
+
+| Property | Value   |
+| -------- | ------- |
+| Type     | boolean |
+| Default  | false   |
+
+When `true`, `pipeline-security-gate` records findings but does not block the task. Useful during initial rollout to observe findings without breaking the pipeline.
+
 ---
 
 ## Task Execution
