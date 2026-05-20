@@ -109,6 +109,23 @@ Reference for script exit codes and their meanings.
 
 ## Review and Quality
 
+### pipeline-security-gate
+
+| Exit Code | Meaning                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------ |
+| 0         | Gate passed (no findings or allowFailures=true)                                                  |
+| 1         | Gate failed (findings present) or validation error (e.g., unsafe command, binary missing rc=127) |
+| 2         | Gate skipped (no securityCommand configured)                                                     |
+
+`pipeline-run-task` interprets rc=2 as "not applicable, treat as pass". Any other non-zero exit (including rc=127 for missing binary) blocks the task with exit 30.
+
+### pipeline-tdd-gate
+
+| Exit Code | Meaning                                        |
+| --------- | ---------------------------------------------- |
+| 0         | Commit ordering valid or task is tdd_exempt    |
+| 1         | Violation (impl commit without preceding test) |
+
 ### pipeline-detect-reviewer
 
 | Exit Code | Meaning                                               |

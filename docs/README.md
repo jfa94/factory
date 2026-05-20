@@ -1,4 +1,4 @@
-<!-- last-documented: b376598bc483ed49618db26e48b5ce73f5a863e8 -->
+<!-- last-documented: 3ec8e05e09323ae5608d69000ece83d8f061e876 -->
 
 # Dark Factory Plugin
 
@@ -12,7 +12,7 @@ The plugin automates the end-to-end software development workflow: reading a req
 
 **Deterministic-first architecture.** The plugin maintains a 3.5:1 ratio of deterministic components (bin scripts, hooks) to non-deterministic (agents). Agent instructions are followed approximately 70% of the time; hooks and scripts enforce at 100%. This hybrid approach uses agents for judgment tasks (code generation, review) while delegating all validation, state management, classification, and parsing to shell scripts.
 
-**Quality over speed.** Every task output passes through a 5-layer quality gate stack (static analysis, tests, coverage regression, holdout validation, mutation testing) and multi-round adversarial code review before reaching a pull request.
+**Quality over speed.** Every task output passes through a 7-layer quality gate stack (static analysis, security gate, TDD gate, tests, coverage regression, holdout validation, mutation testing) and multi-round adversarial code review before reaching a pull request.
 
 **Resumable execution.** All state is persisted to JSON files. Interrupted runs recover from the last checkpoint via `/factory:run resume`.
 
@@ -46,7 +46,7 @@ The plugin automates the end-to-end software development workflow: reading a req
 
 ### Explanation
 
-- [Quality Gates](./explanation/quality-gates.md) - The 5-layer quality stack and why each layer exists
+- [Quality Gates](./explanation/quality-gates.md) - The 7-layer quality stack and why each layer exists
 - [Adversarial Review](./explanation/adversarial-review.md) - Actor-Critic pattern and review protocol
 - [Rate Limiting](./explanation/rate-limiting.md) - 5h and 7d budget management with pause/end_gracefully behavior
 - [Design Decisions](./explanation/decisions.md) - Key architectural choices and their rationale
