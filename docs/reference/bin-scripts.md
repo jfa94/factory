@@ -201,14 +201,14 @@ pipeline-run-task <run-id> RUN --stage finalize-run
 
 **Stages:**
 
-| Stage           | Purpose                                                       |
-| --------------- | ------------------------------------------------------------- |
-| `preflight`     | Circuit breaker, dep check, classify, quota gate, test-writer |
-| `preexec_tests` | Red-test verification, then task-executor spawn               |
-| `postexec`      | Quality gate, coverage gate, holdout, review dispatch         |
-| `postreview`    | Parse verdicts, retry or advance                              |
-| `ship`          | Human gate, task-commit, PR create, CI wait                   |
-| `finalize-run`  | Scribe spawn (isolation: worktree), final PR, cleanup         |
+| Stage           | Purpose                                                               |
+| --------------- | --------------------------------------------------------------------- |
+| `preflight`     | Circuit breaker, dep check, classify, quota gate, test-writer         |
+| `preexec_tests` | Red-test verification, then task-executor spawn                       |
+| `postexec`      | Quality gate, security gate, TDD gate, coverage gate, holdout, review |
+| `postreview`    | Parse verdicts, retry or advance                                      |
+| `ship`          | Human gate, task-commit, PR create, CI wait                           |
+| `finalize-run`  | Scribe spawn (isolation: worktree), final PR, cleanup                 |
 
 **Postreview error handling:**
 
@@ -827,6 +827,78 @@ ESCALATED path=/absolute/path/to/escalation.md
 **Environment:** Invokes `require_plugin_data` — exits 1 with actionable error if `CLAUDE_PLUGIN_DATA` is unset.
 
 **Exit codes:** 0=success, 1=IO failure or missing required inputs
+
+---
+
+### pipeline-security-gate
+
+Run a configured security-analysis command and write structured results to state.
+
+**Usage:**
+
+```bash
+pipeline-security-gate <run-id> <task-id> [<worktree>]
+```
+
+**Arguments:**
+
+| Argument   | Required | Default | Description           |
+| ---------- | -------- | ------- | --------------------- |
+| `run-id`   | Yes      | -       | Run identifier        |
+| `task-id`  | Yes      | -       | Task identifier       |
+| `worktree` | No       | `$PWD`  | Path to task worktree |
+
+**Behavior:**
+
+1. Read `.quality.securityCommand` from factory config
+2. If unset, skip gate (exit 2) and record `skipped: true` with reason `no-security-command`
+3. Validate command tokens against allowlist (same discipline as `redTestCommand`)
+4. Validate command prefix against allowed runners: `semgrep`, `pytest`, `vitest`, `jest`, `mocha`, `phpunit`, `rspec`, `go test`, `cargo test`, `deno test`, `bundle exec rspec`
+5. Execute command in task worktree
+6. Save stdout to `$CLAUDE_PLUGIN_DATA/runs/<run-id>/<task-id>.security-findings.json`
+7. If stdout is not valid JSON, wrap raw output in `{"raw_output": "...", "exit_code": N}`
+8. Write structured result to state at `.tasks.<task-id>.security_gate`
+
+**Output (pass):**
+
+```json
+{
+  "ok": true,
+  "status": "passed",
+  "command": "semgrep --config auto --error",
+  "duration_s": 12,
+  "findings_file": "/path/to/task_01.security-findings.json",
+  "log": "/path/to/task_01.security-gate.log"
+}
+```
+
+**Output (fail):**
+
+```json
+{
+  "ok": false,
+  "status": "failed",
+  "command": "semgrep --config auto --error",
+  "duration_s": 15,
+  "findings_file": "/path/to/task_01.security-findings.json",
+  "log": "/path/to/task_01.security-gate.log"
+}
+```
+
+**Exit codes:**
+
+| Code | Meaning                                                                |
+| ---- | ---------------------------------------------------------------------- |
+| 0    | Gate passed (no findings OR `securityAllowFailures=true`)              |
+| 1    | Gate failed (findings present) or validation error (unsafe command)    |
+| 2    | Gate skipped (no `securityCommand` configured or worktree/pkg missing) |
+
+**Configuration:**
+
+| Setting                         | Default | Description                                       |
+| ------------------------------- | ------- | ------------------------------------------------- |
+| `quality.securityCommand`       | (none)  | Command to run; unset = gate skipped              |
+| `quality.securityAllowFailures` | false   | When true, findings are recorded but non-blocking |
 
 ---
 

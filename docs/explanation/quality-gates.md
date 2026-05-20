@@ -1,12 +1,13 @@
 # Quality Gates
 
-This document explains the 5-layer quality gate stack and the rationale behind each layer.
+This document explains the 6-layer quality gate stack and the rationale behind each layer.
 
-## Why 5 Layers
+## Why 6 Layers
 
 AI-generated code has a 67.3% PR rejection rate (LinearB study). The failures cluster around specific patterns:
 
 - **Syntax and style errors** that static analysis catches
+- **Security vulnerabilities** that SAST tools detect (injection, hardcoded secrets, etc.)
 - **Broken tests** that the test suite catches
 - **Coverage regression** where agents delete failing tests rather than fixing implementations
 - **Surface-level implementations** that satisfy the letter but not the spirit of requirements
@@ -36,7 +37,41 @@ This layer uses the user's existing hook configuration. No plugin-specific setti
 
 ---
 
-## Layer 2: Test Suite
+## Layer 2: Security Gate (Opt-in)
+
+**Purpose:** Run static application security testing (SAST) to catch vulnerabilities before tests run.
+
+**Trigger:** After static analysis, before tests. Called by `pipeline-run-task` in the `postexec` stage.
+
+**Why this layer exists:**
+
+AI-generated code has 2.74x more vulnerabilities than human code (research finding cited in the security-reviewer agent). Common issues include SQL injection, hardcoded secrets, missing input validation, and insecure defaults like wildcard CORS. Static analysis tools like Semgrep can catch many of these patterns automatically, freeing human and AI reviewers to focus on business-logic issues that tools miss.
+
+This layer is opt-in because not all projects have SAST tooling configured. Once configured, it runs automatically on every task.
+
+**How it works:**
+
+1. `pipeline-security-gate` reads `.quality.securityCommand` from config
+2. If unset, the gate is skipped (exit 2) and the pipeline continues
+3. If set, the command is validated against a strict allowlist (same discipline as `redTestCommand`)
+4. Command runs in the task worktree; stdout is captured as the findings artifact
+5. Findings are written to `$CLAUDE_PLUGIN_DATA/runs/<run-id>/<task-id>.security-findings.json`
+6. For security-tier tasks, the `security-reviewer` agent receives the findings path and triages them before manual review
+
+**Failure behavior:**
+
+By default, a non-zero exit from the security command fails the task. Set `quality.securityAllowFailures: true` to record findings without blocking — useful during initial rollout to observe findings without breaking the pipeline.
+
+**Configuration:**
+
+| Setting                         | Default | Description                                                |
+| ------------------------------- | ------- | ---------------------------------------------------------- |
+| `quality.securityCommand`       | (none)  | Command to run (e.g., `semgrep --config auto --error`)     |
+| `quality.securityAllowFailures` | false   | When true, findings are recorded but do not block the task |
+
+---
+
+## Layer 3: Test Suite
 
 **Purpose:** Verify implementation correctness against existing and new tests.
 
@@ -56,7 +91,7 @@ Uses the project's test runner. No plugin-specific settings.
 
 ---
 
-## Layer 3: Coverage Regression
+## Layer 4: Coverage Regression
 
 **Purpose:** Ensure new code doesn't decrease test coverage.
 
@@ -83,7 +118,7 @@ The task-executor must add tests to restore coverage. The orchestrator re-runs t
 
 ---
 
-## Layer 4: Holdout Validation
+## Layer 5: Holdout Validation
 
 **Purpose:** Verify that the implementation genuinely satisfies the spec, not just the explicit instructions.
 
@@ -122,7 +157,7 @@ When a holdout file exists but the `SubagentStop` hook has not wired the `holdou
 
 ---
 
-## Layer 5: Mutation Testing
+## Layer 6: Mutation Testing
 
 **Purpose:** Verify test quality by measuring mutation score.
 
@@ -187,10 +222,11 @@ A failed mutation gate (`stryker-failed`, `score-below-target`, or `base-missing
 The layers are designed to complement each other:
 
 1. **Static analysis** catches form errors early, before expensive test runs
-2. **Test suite** catches functional errors
-3. **Coverage regression** prevents gaming by deleting tests
-4. **Holdout validation** prevents surface-level implementations
-5. **Mutation testing** prevents tautological tests
+2. **Security gate** catches common vulnerability patterns that SAST tools detect
+3. **Test suite** catches functional errors
+4. **Coverage regression** prevents gaming by deleting tests
+5. **Holdout validation** prevents surface-level implementations
+6. **Mutation testing** prevents tautological tests
 
 Each layer addresses a failure mode that previous layers miss. Together, they form a defense-in-depth strategy against AI-generated code quality issues.
 
@@ -200,9 +236,10 @@ Each layer addresses a failure mode that previous layers miss. Together, they fo
 
 Individual layers can be disabled via configuration:
 
+- Security: leave `quality.securityCommand` unset (gate skips by default)
 - Coverage: `quality.coverageMustNotDecrease: false`
 - Holdout: `quality.holdoutPercent: 0`
-- Mutation: drop the `test:mutation` script from `package.json` (gate skips with reason `no-script`).
+- Mutation: drop the `test:mutation` script from `package.json` (gate skips with reason `no-script`)
 
 Static analysis and test suite cannot be disabled; they are enforced by the user's existing hooks.
 
