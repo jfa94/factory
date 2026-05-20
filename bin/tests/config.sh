@@ -6,6 +6,21 @@ set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
+# Single combined EXIT trap covering every tmpdir this suite creates. Avoids
+# the prior overwriting-trap pattern (each `trap '...' EXIT` overwrote prior
+# cleanup, leaking earlier dirs on abnormal exit). Each guard checks that
+# the var is set AND inside $TMPDIR to refuse to rm anything else.
+_config_cleanup() {
+  local _td="${TMPDIR:-/tmp}"
+  local _d
+  for _d in MATERIALIZE_DIR SCAFFOLD_DIR EA_DIR EA_DIR_HEAL EA_DIR2 \
+            EA_DIR_MIG EA_DIR_WM RCS_DIR; do
+    local _v="${!_d:-}"
+    [[ -n "$_v" && "$_v" == "$_td"/* ]] && rm -rf "$_v"
+  done
+}
+trap _config_cleanup EXIT
+
 pass=0
 fail=0
 
@@ -535,7 +550,6 @@ fi
 # plugin-relative paths (with ${CLAUDE_PLUGIN_ROOT}) and user-env paths that must
 # NOT be rewritten.
 MATERIALIZE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/phase9-materialize-XXXXXX")
-trap '[[ -n "${MATERIALIZE_DIR:-}" && "$MATERIALIZE_DIR" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$MATERIALIZE_DIR"' EXIT
 
 FIXTURE="$MATERIALIZE_DIR/fixture.json"
 cat > "$FIXTURE" <<'EOF'
@@ -679,7 +693,6 @@ SCAFFOLD="$PLUGIN_ROOT/bin/pipeline-scaffold"
 assert_file_exists "pipeline-scaffold exists" "$SCAFFOLD"
 
 SCAFFOLD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/phase9-scaffold-XXXXXX")
-trap '[[ -n "${SCAFFOLD_DIR:-}" && "$SCAFFOLD_DIR" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$SCAFFOLD_DIR"' EXIT
 
 _scaffold_with_lockfile() {
   local fixture="$1" lockfile="$2"
@@ -955,7 +968,6 @@ fi
 
 # _factoryVersion stamped on first-run (missing path)
 EA_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ensure-autonomy-test-XXXXXX")
-trap '[[ -n "${EA_DIR:-}" && "$EA_DIR" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$EA_DIR"' EXIT
 
 ea_out=$(CLAUDE_PLUGIN_DATA="$EA_DIR" FACTORY_AUTONOMOUS_MODE="" \
   PATH="$PLUGIN_ROOT/bin:$PATH" "$ENSURE_SCRIPT" 2>/dev/null) || true
@@ -983,7 +995,6 @@ assert_eq "ensure-autonomy injects env.CLAUDE_PLUGIN_DATA into merged-settings" 
 
 # Self-heal: existing merged-settings missing env.CLAUDE_PLUGIN_DATA → regenerate
 EA_DIR_HEAL=$(mktemp -d "${TMPDIR:-/tmp}/ensure-autonomy-heal-XXXXXX")
-trap '[[ -n "${EA_DIR_HEAL:-}" && "$EA_DIR_HEAL" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$EA_DIR_HEAL"' EXIT
 # Seed a current-version merged-settings WITHOUT env.CLAUDE_PLUGIN_DATA
 jq --arg ver "$plugin_version" 'del(.env.CLAUDE_PLUGIN_DATA) | ._factoryVersion = $ver' \
   "$EA_DIR/merged-settings.json" > "$EA_DIR_HEAL/merged-settings.json"
@@ -1030,7 +1041,6 @@ assert_eq "ensure-autonomy regenerates to current version after stale" \
 
 # bypass path — no file, mode=1
 EA_DIR2=$(mktemp -d "${TMPDIR:-/tmp}/ensure-autonomy-bypass-XXXXXX")
-trap '[[ -n "${EA_DIR2:-}" && "$EA_DIR2" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$EA_DIR2"' EXIT
 
 ea_out_bypass=$(CLAUDE_PLUGIN_DATA="$EA_DIR2" FACTORY_AUTONOMOUS_MODE=1 \
   PATH="$PLUGIN_ROOT/bin:$PATH" "$ENSURE_SCRIPT" 2>/dev/null)
@@ -1057,7 +1067,6 @@ assert_eq "ensure-autonomy bakes stable wrapper path into statusLine.command" \
 # is under .../plugins/cache/<owner>/<plugin>/<ver>/bin/... must be regenerated
 # even though _factoryVersion matches.
 EA_DIR_MIG=$(mktemp -d "${TMPDIR:-/tmp}/ensure-autonomy-mig-XXXXXX")
-trap '[[ -n "${EA_DIR_MIG:-}" && "$EA_DIR_MIG" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$EA_DIR_MIG"' EXIT
 jq --arg ver "$plugin_version" \
    '._factoryVersion = $ver
     | .env.CLAUDE_PLUGIN_DATA = "'"$EA_DIR_MIG"'"
@@ -1077,7 +1086,6 @@ assert_eq "ensure-autonomy: migration rewrites statusLine.command to stable path
 # file AND regenerate cannot fix it (no $CLAUDE_PLUGIN_DATA), surface a
 # dedicated status instead of a misleading stale-cache reason.
 EA_DIR_WM=$(mktemp -d "${TMPDIR:-/tmp}/ensure-autonomy-wm-XXXXXX")
-trap '[[ -n "${EA_DIR_WM:-}" && "$EA_DIR_WM" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$EA_DIR_WM"' EXIT
 jq --arg ver "$plugin_version" \
    '._factoryVersion = $ver
     | .env.CLAUDE_PLUGIN_DATA = "'"$EA_DIR_WM"'"
@@ -1114,7 +1122,6 @@ echo ""
 echo "=== read_config_strict (JSON-null semantics) ==="
 
 RCS_DIR=$(mktemp -d "${TMPDIR:-/tmp}/read-config-strict-XXXXXX")
-trap '[[ -n "${RCS_DIR:-}" && "$RCS_DIR" == "${TMPDIR:-/tmp}"/* ]] && rm -rf "$RCS_DIR"' EXIT
 
 # Seed config.json with explicit JSON null, present non-null, and missing path.
 cat > "$RCS_DIR/config.json" <<'JSON'

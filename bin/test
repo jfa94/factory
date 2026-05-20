@@ -67,9 +67,18 @@ for name in "${requested[@]}"; do
     ec=$?
   fi
   printf '%s\n' "$output"
-  # Parse the trailing "Results: N passed, M failed" / "Passed: N" line.
-  p=$(printf '%s' "$output" | grep -oE '(Passed|passed):?[[:space:]]+[0-9]+' | tail -1 | grep -oE '[0-9]+' || echo 0)
-  f=$(printf '%s' "$output" | grep -oE '(Failed|failed):?[[:space:]]+[0-9]+' | tail -1 | grep -oE '[0-9]+' || echo 0)
+  # Parse pass/fail counts. Suites use two trailing formats:
+  #   "Passed: N" / "Failed: N"      (label first; e.g. config.sh)
+  #   "N passed, M failed"           (count first; e.g. integration.sh,
+  #                                   run-wrapper.sh, score.sh)
+  # Match both. Take the last occurrence so RESULTS/Results lines win over
+  # interim PASS/FAIL lines.
+  p=$(printf '%s' "$output" \
+      | grep -oE '((Passed|passed):?[[:space:]]+[0-9]+)|([0-9]+[[:space:]]+passed)' \
+      | tail -1 | grep -oE '[0-9]+' || echo 0)
+  f=$(printf '%s' "$output" \
+      | grep -oE '((Failed|failed):?[[:space:]]+[0-9]+)|([0-9]+[[:space:]]+failed)' \
+      | tail -1 | grep -oE '[0-9]+' || echo 0)
   total_pass=$((total_pass + p))
   total_fail=$((total_fail + f))
   if (( ec != 0 || f > 0 )); then

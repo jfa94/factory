@@ -13,9 +13,10 @@
 # Exit codes:
 #   0  — gate passed (no findings or allowFailures=true)
 #   1  — gate failed (findings present)
-#   2  — gate skipped (no securityCommand configured or worktree/package.json absent)
+#   2  — gate skipped (no securityCommand configured)
 
 source "$(dirname "$0")/pipeline-lib.sh"
+require_plugin_data
 require_command jq
 
 run_id="${1:?missing run-id}"
@@ -40,6 +41,8 @@ if [[ -z "$security_cmd" ]]; then
       exit 1
     fi
   fi
+  log_metric "task.gate.security" "task_id=\"$task_id\"" \
+    "status=\"skipped\"" "reason=\"no-security-command\""
   printf '%s\n' "$result"
   exit 2
 fi
@@ -122,6 +125,8 @@ else
   status="failed"
 fi
 
+_allow_json=false
+[[ "$allow_failures" == "true" ]] && _allow_json=true
 summary=$(jq -n \
   --argjson ok "$gate_ok" \
   --arg status "$status" \
@@ -129,7 +134,8 @@ summary=$(jq -n \
   --argjson duration "$duration" \
   --arg findings "$findings_file" \
   --arg log "$log_file" \
-  '{ok:$ok, status:$status, command:$cmd, duration_s:$duration, findings_file:$findings, log:$log}')
+  --argjson allow "$_allow_json" \
+  '{ok:$ok, status:$status, command:$cmd, duration_s:$duration, findings_file:$findings, log:$log, allow_failures:$allow}')
 
 if [[ -f "$run_dir/state.json" ]]; then
   if ! pipeline-state task-write "$run_id" "$task_id" security_gate "$summary" >/dev/null; then

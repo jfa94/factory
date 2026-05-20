@@ -65,7 +65,7 @@ For each task in execution order:
 
 ### Stage E: Quality Gates
 
-6-layer stack, sequential:
+7-layer stack, sequential (layers 1–6 run in `_stage_postexec`; layer 7 runs at ship time):
 
 1. **Static Analysis**: Pre-commit hooks (lint, format, type-check)
 2. **Test Suite**: Run via existing Stop hook

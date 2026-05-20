@@ -43,6 +43,7 @@ write_stub pipeline-quota-check 'cat <<EOF
 EOF'
 
 write_stub pipeline-quality-gate 'exit 0'
+write_stub pipeline-security-gate 'exit 0'
 write_stub pipeline-tdd-gate 'exit 0'
 write_stub pipeline-coverage-gate 'exit 0'
 write_stub pipeline-holdout-validate 'exit 0'
@@ -1168,6 +1169,19 @@ else
   fail "parse-failure: log_error missing captured stderr (got: $ERR)"
 fi
 write_stub pipeline-parse-review 'cat'
+
+# --- 49: RI-1/RI-4 — security gate rc=127 must block postexec (exit 30) ------
+# Validates that pipeline-run-task treats any non-zero/non-2 exit from
+# pipeline-security-gate as blocking. Before RI-1 fix (== 1 check), rc=127
+# silently passed. With fix (!= 0 && != 2), it must return 30.
+new_run postexec-secgate-127
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+write_stub pipeline-security-gate 'exit 127'
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage postexec >/dev/null 2>&1; RC=$?; set -e
+assert_eq "postexec-secgate-127: exit 30 (blocked by rc=127)" "30" "$RC"
+write_stub pipeline-security-gate 'exit 0'
 
 # --- 51: Task 5.1 Step 1 — finalize-run reuses existing PR from gh pr list ---
 # When `gh pr list` returns an existing open PR, finalize must not re-create it
