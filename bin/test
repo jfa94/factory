@@ -25,6 +25,7 @@ SUITES=(
   quota-gate
   mutation-gate
   mutation-workflow
+  version-parity
   run-command
   config
   integration
