@@ -875,6 +875,12 @@ _emit_postexec_manifest() {
       _task_write review_files "$(jq -n --arg f "$review_file" '[$f]')"
       # Codex review is synchronous — no crash window, advance directly to postexec_done.
       _task_write stage '"postexec_done"'
+      # Reviewer model is intentionally fixed (sonnet or opus), not routed through
+      # pipeline-model-router. Routing reviewer model by quota tier would let two
+      # reviews of the same task disagree because they ran on different models —
+      # review consistency outweighs quota economy. See docs/explanation/decisions.md
+      # "Decision 18: Reviewer Model is Fixed, Not Quota-Routed". Do not change
+      # without updating that decision.
       local codex_agents_json
       codex_agents_json=$(jq -cn --arg pf "$pf" \
         '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:1, prompt_file:$pf}]')

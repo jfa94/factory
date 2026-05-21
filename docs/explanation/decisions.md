@@ -302,6 +302,22 @@ Every narrowing has been tried and produces the same failure mode: the pipeline 
 
 ---
 
+## Decision 18: Reviewer Model is Fixed, Not Quota-Routed
+
+**Choice:** Reviewer subagents (`quality-reviewer`, `implementation-reviewer`) spawn with a fixed model (`sonnet` for routine reviews, `opus` for escalations). They do not consult `pipeline-model-router`.
+
+**Why:**
+
+- Review consistency outweighs quota economy. Two reviews of the same task that ran on different models can disagree, which inflates `request_changes` cycles and confuses reviewers' own retry logic.
+- The Actor–Critic discipline (see Decision 9) is strongest when the Critic is held constant; varying the Critic by quota tier collapses the value of repeat reviews.
+- Reviewer cost is small relative to executor cost; routing reviewers by tier would save little.
+
+**Trade-off:** Reviewers consume quota at the higher tier even on routine tasks. Accepted.
+
+**Scope:** Applies to `bin/pipeline-run-task` reviewer spawn manifests only. The model router still governs executor and test-writer spawns.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent
