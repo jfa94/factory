@@ -18,9 +18,13 @@ done
 if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
   if [[ "$base_explicit" == "false" ]] && git rev-parse --verify origin/staging >/dev/null 2>&1; then
     base_ref="origin/staging"
+  else
+    # Surface the silent fallback: previously a missing base ref was passed
+    # through as-is, which only blew up downstream in pipeline-codex-review.
+    # detect-reviewer still exits 0 (its contract), but the operator now sees
+    # the signal in structured logs.
+    log_warn "pipeline-detect-reviewer: base ref '$base_ref' not resolvable; passing through (downstream review tools may fail)"
   fi
-  # detect-reviewer never fails (exit 0 always); if base ref missing, pass through
-  # as-is and let the downstream tool (pipeline-codex-review) fail loudly.
 fi
 
 # Check Codex availability

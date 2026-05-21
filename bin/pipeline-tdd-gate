@@ -62,7 +62,11 @@ _emit() {
     fi
     rm -f "$_err"
   fi
-  command -v log_metric >/dev/null && log_metric "task.gate.tdd" "task_id=\"$task_id\"" "ok=$ok" "exempt=$exempt" || true
+  if command -v log_metric >/dev/null; then
+    if ! log_metric "task.gate.tdd" "task_id=\"$task_id\"" "ok=$ok" "exempt=$exempt"; then
+      log_warn "pipeline-tdd-gate: metric write failed for task.gate.tdd (task_id=$task_id)"
+    fi
+  fi
 }
 
 # Classify ALL commits in base..HEAD, not just task-tagged ones.
