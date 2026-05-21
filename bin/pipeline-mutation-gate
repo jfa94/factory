@@ -103,7 +103,8 @@ if [[ ${#scope_files[@]} -eq 0 ]]; then
   _emit true "no-mutable-changes" null null "" 0
 fi
 
-scope_csv=$(IFS=,; printf '%s' "${scope_files[*]}")
+scope_csv=$(printf '%s,' "${scope_files[@]}")
+scope_csv="${scope_csv%,}"
 
 pkg_mgr=$(detect_pkg_manager "$worktree")
 mut_log="$run_dir/${task_id}.mutation.gate.log"
