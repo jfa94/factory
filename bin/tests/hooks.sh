@@ -1143,6 +1143,26 @@ wt=$(jq -r '.tasks."gamma-001".worktree // empty' "$CLAUDE_PLUGIN_DATA/runs/run-
 assert_eq "active-spawn: worktree written from file" "/tmp/fake/.claude/worktrees/agent-active" "$wt"
 
 echo ""
+echo "=== subagent-stop-transcript: missing active-spawn + transcript markers -> warn but exit 0 ==="
+
+_seed_run "run-sag-warn" '{"status":"running","tasks":{"delta-001":{"status":"executing"}}}'
+# No .active-spawn.json; transcript has no prompt-file path and no cwd entry.
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-warn/transcript.jsonl"
+printf '{"role":"assistant","content":"opaque transcript"}\n' > "$transcript"
+input=$(jq -cn --arg t "$transcript" --arg msg "Done.
+STATUS: DONE" '{agent_type:"task-executor", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+stderr=$(printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" 2>&1 >/dev/null)
+rc=$?
+set -e
+assert_eq "warn-path: exit 0 (advisory)" "0" "$rc"
+[[ "$stderr" == *"could not derive task_id"* ]] && { echo "  PASS: warn-path stderr contains warning"; pass=$((pass+1)); } || { echo "  FAIL: warn-path stderr missing warning (got: $stderr)"; fail=$((fail+1)); }
+log_file="$CLAUDE_PLUGIN_DATA/runs/run-sag-warn/transcript-errors.log"
+[[ -f "$log_file" ]] && grep -q "could not derive task_id" "$log_file" \
+  && { echo "  PASS: warn-path appended to transcript-errors.log"; pass=$((pass+1)); } \
+  || { echo "  FAIL: warn-path transcript-errors.log missing entry"; fail=$((fail+1)); }
+
+echo ""
 echo "=== subagent-stop-transcript: scribe writes .scribe.status ==="
 
 _seed_run "run-sag-scribe" '{"status":"running","tasks":{}}'

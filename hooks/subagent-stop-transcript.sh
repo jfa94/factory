@@ -81,6 +81,20 @@ if [[ -z "$task_id" && "$agent_type" == "scribe" ]]; then
   task_id="RUN"
 fi
 
+# Fail-loud: when neither source yielded a task_id for an agent that needs one,
+# log a warning and append to transcript-errors.log so the orchestrator can
+# see why the worktree write was skipped. scribe legitimately resolves to RUN
+# above so it is excluded.
+if [[ -z "$task_id" && "$agent_type" != "scribe" ]]; then
+  printf '[%s] [WARN] subagent-stop-transcript: could not derive task_id for agent=%s run=%s (active-spawn=%s, transcript=%s)\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent_type" "$run_id" \
+    "$([[ -f "$active_file" ]] && echo present || echo absent)" \
+    "$([[ -f "$transcript" ]] && echo present || echo absent)" \
+    >> "$run_dir/transcript-errors.log" 2>/dev/null || true
+  printf '[subagent-stop-transcript] WARN: could not derive task_id for agent=%s run=%s\n' \
+    "$agent_type" "$run_id" >&2
+fi
+
 # --- 3. Extract worktree from transcript ---
 # For task-executor: scan transcript for `cwd` entries under the plugin's
 # ephemeral worktree root (.claude/worktrees/). First match wins. Skipped when
@@ -115,12 +129,14 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
         >/dev/null 2>>"$run_dir/transcript-errors.log" || true
       if [[ -n "$worktree" ]]; then
         pipeline-state task-write "$run_id" "$task_id" test_writer_worktree "\"$worktree\"" \
-          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+          >/dev/null 2>>"$run_dir/transcript-errors.log" \
+          || printf '[subagent-stop-transcript] WARN: test_writer_worktree write failed for %s/%s\n' "$run_id" "$task_id" >&2
         # Bare .worktree preserved for downstream readers (ship/cleanup/score).
         # Test-writer writes first; executor will overwrite later (last-writer-wins
         # is expected — bare field semantically tracks the executor's worktree).
         pipeline-state task-write "$run_id" "$task_id" worktree "\"$worktree\"" \
-          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+          >/dev/null 2>>"$run_dir/transcript-errors.log" \
+          || printf '[subagent-stop-transcript] WARN: worktree write failed for %s/%s (test-writer)\n' "$run_id" "$task_id" >&2
         _tw_branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
         _tw_commit=$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)
         if [[ -n "$_tw_branch" && "$_tw_branch" != "HEAD" ]]; then
@@ -140,9 +156,11 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
         >/dev/null 2>>"$run_dir/transcript-errors.log" || true
       if [[ -n "$worktree" ]]; then
         pipeline-state task-write "$run_id" "$task_id" executor_worktree "\"$worktree\"" \
-          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+          >/dev/null 2>>"$run_dir/transcript-errors.log" \
+          || printf '[subagent-stop-transcript] WARN: executor_worktree write failed for %s/%s\n' "$run_id" "$task_id" >&2
         pipeline-state task-write "$run_id" "$task_id" worktree "\"$worktree\"" \
-          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+          >/dev/null 2>>"$run_dir/transcript-errors.log" \
+          || printf '[subagent-stop-transcript] WARN: worktree write failed for %s/%s (task-executor)\n' "$run_id" "$task_id" >&2
       fi
       ;;
     implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer)
