@@ -1120,6 +1120,29 @@ first=$(jq -r '.tasks."alpha-001".review_files[0] // empty' "$CLAUDE_PLUGIN_DATA
 assert_eq "review_file exists on disk" "true" "$([[ -f "$first" ]] && echo true || echo false)"
 
 echo ""
+echo "=== subagent-stop-transcript: .active-spawn.json supplies task_id + worktree ==="
+
+_seed_run "run-sag-active" '{"status":"running","tasks":{"gamma-001":{"status":"executing"}}}'
+# Transcript intentionally omits both the prompt-file path AND a worktree cwd
+# entry — the legacy fallbacks must NOT fire; .active-spawn.json must win.
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-active/transcript.jsonl"
+printf '{"role":"assistant","content":"work done"}\n' > "$transcript"
+jq -n --arg t "gamma-001" --arg wt "/tmp/fake/.claude/worktrees/agent-active" \
+  '{run_id:"run-sag-active", task_id:$t, worktree:$wt, written_at:"2026-05-21T00:00:00Z"}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/run-sag-active/.active-spawn.json"
+input=$(jq -cn --arg t "$transcript" --arg msg "Done.
+STATUS: DONE" '{agent_type:"task-executor", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+rc=$?
+set -e
+assert_eq "active-spawn: exit 0" "0" "$rc"
+exec_status=$(jq -r '.tasks."gamma-001".executor_status // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-active/state.json")
+assert_eq "active-spawn: executor_status written" "DONE" "$exec_status"
+wt=$(jq -r '.tasks."gamma-001".worktree // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-active/state.json")
+assert_eq "active-spawn: worktree written from file" "/tmp/fake/.claude/worktrees/agent-active" "$wt"
+
+echo ""
 echo "=== subagent-stop-transcript: scribe writes .scribe.status ==="
 
 _seed_run "run-sag-scribe" '{"status":"running","tasks":{}}'

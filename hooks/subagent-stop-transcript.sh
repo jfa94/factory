@@ -49,9 +49,26 @@ fi
 [[ -z "$status" ]] && status="BLOCKED"  # missing STATUS line => treat as blocked
 
 # --- 2. Derive task_id ---
-# Priority: explicit FACTORY_TASK_ID, then prompt file in transcript, then
-# worktree path pattern in transcript.
+# Priority order:
+#   1. explicit FACTORY_TASK_ID env (legacy passthrough, rarely set)
+#   2. orchestrator-written .active-spawn.json (preferred — written by
+#      _record_active_task_for_stop_hook before every task-scoped manifest)
+#   3. transcript-grep for the prompt-file path (legacy fallback, fragile
+#      because some subagent tool patterns omit the prompt-file reference)
 task_id="${FACTORY_TASK_ID:-}"
+
+# Pre-declare worktree so the active-spawn fallback can populate it before
+# the transcript-grep block below.
+worktree=""
+
+# Source #2: orchestrator-written active-spawn file.
+active_file="$run_dir/.active-spawn.json"
+if [[ -z "$task_id" && -f "$active_file" ]]; then
+  task_id=$(jq -r '.task_id // empty' "$active_file" 2>/dev/null || printf '')
+  if [[ -n "$task_id" ]]; then
+    worktree=$(jq -r '.worktree // empty' "$active_file" 2>/dev/null || printf '')
+  fi
+fi
 
 if [[ -z "$task_id" && -f "$transcript" ]]; then
   # Look for `<run-id>/<task-id>.<role>-prompt.md` reference in transcript.
@@ -66,9 +83,10 @@ fi
 
 # --- 3. Extract worktree from transcript ---
 # For task-executor: scan transcript for `cwd` entries under the plugin's
-# ephemeral worktree root (.claude/worktrees/). First match wins.
-worktree=""
-if [[ ( "$agent_type" == "task-executor" || "$agent_type" == "test-writer" \
+# ephemeral worktree root (.claude/worktrees/). First match wins. Skipped when
+# the active-spawn file already provided a worktree above.
+if [[ -z "$worktree" \
+     && ( "$agent_type" == "task-executor" || "$agent_type" == "test-writer" \
      || "$agent_type" == "implementation-reviewer" || "$agent_type" == "quality-reviewer" \
      || "$agent_type" == "security-reviewer" || "$agent_type" == "architecture-reviewer" ) \
      && -f "$transcript" ]]; then
