@@ -2238,6 +2238,72 @@ rm -rf "$_m1_tmp"
 
 # ============================================================
 echo ""
+echo "=== T5: _is_nested_shell_or_hook_bypass adversarial matrix ==="
+
+# Direct unit test of hooks/_security-common.sh helper. Source once; assert
+# rc==0 (match) for each detection pattern and rc!=0 (no match) for benign
+# commands. Per-case PASS/FAIL increments the suite counter.
+source "$HOOKS_DIR/_security-common.sh"
+
+_t5_match() {
+  local label="$1" cmd="$2"
+  if _is_nested_shell_or_hook_bypass "$cmd"; then
+    echo "  PASS: $label (matched)"; pass=$((pass + 1))
+  else
+    echo "  FAIL: $label (expected MATCH for: $cmd)"; fail=$((fail + 1))
+  fi
+}
+_t5_no_match() {
+  local label="$1" cmd="$2"
+  if _is_nested_shell_or_hook_bypass "$cmd"; then
+    echo "  FAIL: $label (expected NO MATCH for: $cmd)"; fail=$((fail + 1))
+  else
+    echo "  PASS: $label (no match)"; pass=$((pass + 1))
+  fi
+}
+
+# Pattern 1: bash/sh/zsh -[lic] 'cmd'
+_t5_match "bash -c quoted"        'bash -c "gh pr create"'
+_t5_match "sh -c quoted"          "sh -c 'rm -rf /tmp/x'"
+_t5_match "zsh -lc quoted"        'zsh -lc "ls"'
+_t5_match "bash -lc quoted"       'bash -lc "git push"'
+
+# Pattern 2: env wrapping a shell binary
+_t5_match "env bash"              'env bash -c "ls"'
+_t5_match "env -i bash"           'env -i bash -c "ls"'
+_t5_match "env VAR=val bash"      'env PATH=/tmp bash -c "ls"'
+_t5_match "env multi-var sh"      'env FOO=bar BAZ=qux sh -c "ls"'
+
+# Pattern 3: env -flag 'cmd' (env-as-shell-itself)
+_t5_match "env -i quoted cmd"     "env -i 'echo hi'"
+
+# Pattern 4: unquoted bash/sh/zsh script invocation
+_t5_match "bash script.sh"        'bash /tmp/run.sh'
+_t5_match "sh path/to/x.sh"       'sh some/path.sh arg1'
+
+# Pattern 5: eval
+_t5_match "eval rm"               'eval "rm -rf /"'
+_t5_match "eval at start"         'eval foo'
+
+# Pattern 6: git -c hooksPath= / -c core.hooksPath=
+_t5_match "git -c hooksPath"      'git -c hooksPath=/dev/null commit -m x'
+_t5_match "git -c core.hooksPath" 'git -c core.hooksPath=/tmp/h push'
+
+# Pattern 7: absolute-path shell -c
+_t5_match "/bin/bash -c"          '/bin/bash -c "ls"'
+_t5_match "/usr/bin/env bash"     "/usr/bin/env bash -c 'ls'"
+
+# Negative cases — benign commands that must NOT trip the helper.
+_t5_no_match "plain git commit"   'git commit -m "feat: x"'
+_t5_no_match "plain git push"     'git push origin staging'
+_t5_no_match "gh pr create"       'gh pr create --base staging --title t'
+_t5_no_match "ls"                 'ls -la'
+_t5_no_match "pipeline-state read" 'pipeline-state read run-1 .status'
+_t5_no_match "git config --global" 'git config --global user.email foo@bar'
+_t5_no_match "git -c user.email"  'git -c user.email=foo@bar commit -m x'
+
+# ============================================================
+echo ""
 echo "=== T3: secret-commit-guard content-regex coverage matrix ==="
 
 # One positive + one negative case per regex in CONTENT_PATTERNS. Concatenate
