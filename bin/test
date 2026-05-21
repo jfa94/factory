@@ -29,6 +29,7 @@ SUITES=(
   config
   integration
   score
+  rescue-apply
 )
 
 if [[ "${1:-}" == "--list" ]]; then
