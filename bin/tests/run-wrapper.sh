@@ -323,6 +323,39 @@ _ship_sync_case "ship rc=2 (pr closed)"       2 closed        pr_closed
 _ship_sync_case "ship rc=3 (ci failed)"       3 red           ci_red
 _ship_sync_case "ship rc=4 (merge conflict)"  4 conflict      merge_conflict
 
+# --- 10c (H4): emit-ship-checklist — security_gate maps to fail when blocking ---
+# A failed semgrep finding with allow_failures=false must surface as
+# security_gate="fail" in the per-task ship checklist JSON. Before H4 the
+# field was either missing or hardcoded to "ok"/"skipped", which let the
+# PR-create guard wave the PR through despite a real block.
+new_run ship-checklist-security-gate-fail
+pipeline-state task-write "$RUN_ID" alpha-001 security_gate \
+  '{"ok":false,"skipped":false,"allow_failures":false}' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage emit-ship-checklist >/dev/null 2>&1; RC=$?; set -e
+assert_eq "checklist sec-fail: exit 0" "0" "$RC"
+checklist_file="$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/.tasks/alpha-001.ship_checklist.json"
+assert_eq "checklist sec-fail: file written" "true" \
+  "$([[ -f $checklist_file ]] && echo true || echo false)"
+assert_eq "checklist sec-fail: security_gate=fail" "fail" \
+  "$(jq -r '.security_gate' "$checklist_file")"
+
+# --- 10d (H4): emit-ship-checklist — allow_failures=true demotes to ok ---
+# allow_failures=true is the informational mode — the gate reports ok=false
+# but exits 0, so the checklist must map it to "ok" (no block). Guards this
+# against a regression that would treat informational findings as blocking.
+new_run ship-checklist-security-gate-allow-failures
+pipeline-state task-write "$RUN_ID" alpha-001 security_gate \
+  '{"ok":false,"skipped":false,"allow_failures":true}' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage emit-ship-checklist >/dev/null 2>&1; RC=$?; set -e
+assert_eq "checklist sec-allow: exit 0" "0" "$RC"
+checklist_file="$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/.tasks/alpha-001.ship_checklist.json"
+assert_eq "checklist sec-allow: file written" "true" \
+  "$([[ -f $checklist_file ]] && echo true || echo false)"
+assert_eq "checklist sec-allow: security_gate=ok (informational)" "ok" \
+  "$(jq -r '.security_gate' "$checklist_file")"
+
 # --- 11: finalize-run — pending blocks ------------------------------------
 new_run finalize-pending
 set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e

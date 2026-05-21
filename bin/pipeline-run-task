@@ -1299,8 +1299,14 @@ _write_ship_checklist() {
   # `skipped:true`; pass paths set `ok:true,status:"passed"`; `allow_failures`
   # mode reports ok=false but exits 0 (informational) — map to ok here so the
   # checklist matches the gate's actual block/no-block behavior.
+  # NOTE: `// "null"` coerces a real `false` value to "null" (jq treats `false`
+  # as falsy for `//`), which would mask a failing gate as absent → "skipped".
+  # Use `has()` + tostring to distinguish missing-field from boolean false.
   local sg_ok sg_skipped sg_allow security_gate
-  sg_ok=$(jq -r --arg t "$task_id" '.tasks[$t].security_gate.ok // "null"' "$state_file" 2>/dev/null || printf 'null')
+  sg_ok=$(jq -r --arg t "$task_id" '
+    .tasks[$t].security_gate as $sg
+    | if ($sg | type == "object") and ($sg | has("ok")) then $sg.ok | tostring else "null" end
+  ' "$state_file" 2>/dev/null || printf 'null')
   sg_skipped=$(jq -r --arg t "$task_id" '.tasks[$t].security_gate.skipped // false' "$state_file" 2>/dev/null || printf 'false')
   sg_allow=$(jq -r --arg t "$task_id" '.tasks[$t].security_gate.allow_failures // false' "$state_file" 2>/dev/null || printf 'false')
   if [[ "$sg_skipped" == "true" ]]; then
