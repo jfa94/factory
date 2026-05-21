@@ -99,7 +99,7 @@ You receive a structured prompt containing:
 After you finish, the orchestrator will:
 
 1. Run `<pkg-manager> format` and `<pkg-manager> lint:fix` (auto-committed).
-2. Run quality gates: `pipeline-quality-gate`, `pipeline-tdd-gate`, `pipeline-coverage-gate`, holdout, mutation.
+2. Run quality gates: `pipeline-quality-gate`, `pipeline-security-gate`, `pipeline-tdd-gate`, `pipeline-coverage-gate`, holdout, mutation. (Canonical list and order: see `docs/explanation/quality-gates.md`.)
 3. Spawn two adversarial reviewers in parallel: `implementation-reviewer` (spec alignment) and `quality-reviewer` (code quality; via Codex when available).
 
 ## Verification Checklist (MUST pass before STATUS: DONE)

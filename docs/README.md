@@ -2,7 +2,7 @@
 
 # Dark Factory Plugin
 
-A Claude Code plugin that converts GitHub PRD (Product Requirements Document) issues into merged pull requests with minimal human intervention. The plugin implements a 9-phase autonomous coding pipeline with quality-first review gates and adversarial code review.
+A Claude Code plugin that converts GitHub PRD (Product Requirements Document) issues into merged pull requests with minimal human intervention. The plugin implements an 8-stage autonomous coding pipeline with quality-first review gates and adversarial code review.
 
 ## What Problem It Solves
 

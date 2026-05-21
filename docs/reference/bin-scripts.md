@@ -1464,7 +1464,7 @@ Restores an archived run from `${CLAUDE_PLUGIN_DATA}/archive/<run-id>/` back to 
 
 **Protected branches:**
 
-The `_RESCUE_PROTECTED_BRANCHES` list includes `main`, `master`, `staging`, `production`, and `release/*` glob. Rescue operations that would affect these branches are blocked.
+The `_RESCUE_PROTECTED_BRANCHES` flat list is `("main" "master" "develop" "staging" "production")`. A `release/*` glob is also matched via `_is_rescue_protected`. Rescue operations that would affect any of these branches are blocked.
 
 **I-07 rebase safety:**
 
@@ -1557,25 +1557,13 @@ bin/test [suite...] [--list]
 
 **Available suites:**
 
-| Suite       | Coverage                                                       |
-| ----------- | -------------------------------------------------------------- |
-| state       | pipeline-state, pipeline-init, circuit breaker                 |
-| spec-intake | PRD fetch, spec validation, task validation                    |
-| task-prep   | classify-task, classify-risk, build-prompt                     |
-| branching   | pipeline-branch operations, worktree lifecycle                 |
-| cleanup     | pipeline-cleanup, archive operations                           |
-| hooks       | branch-protection, run-tracker, stop-gate                      |
-| audit-hooks | Audit log integrity, tamper detection, env guards, hook bypass |
-| routing     | quota-check, model-router decisions                            |
-| run-command | commands/run.md structural integrity                           |
-| config      | Config parsing, defaults, validation                           |
-| integration | End-to-end multi-script workflows                              |
+All `bin/tests/*.sh` files are discovered automatically by `bin/test`. Run `bin/test --list` for the current inventory of suite names; suite domains are encoded in the filename (e.g., `state.sh` covers `pipeline-state` / `pipeline-init` / circuit breaker; `routing.sh` covers quota and model routing).
 
 **Examples:**
 
 ```bash
-bin/test                     # Run all suites (654 tests)
-bin/test state hooks         # Run only state and hooks suites
+bin/test                     # Run every discovered suite (see `bin/test --list` for the current inventory)
+bin/test state hooks         # Run only the state and hooks suites
 bin/test --list              # Show available suite names
 ```
 

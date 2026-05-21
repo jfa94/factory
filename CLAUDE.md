@@ -21,7 +21,7 @@ Reviewer roles:
 
 - `bin/pipeline-run-task` — per-task stage machine (preflight → preexec_tests → postexec → postreview → ship)
 - `bin/pipeline-tdd-gate` — test-before-impl commit-order validation
-- `bin/pipeline-orchestrator` — main entry point (invoked by the `pipeline-orchestrator` skill)
+- `commands/run.md` — main entry point (orchestrator runs in the invoking Claude Code session; see `skills/pipeline-orchestrator/SKILL.md` for the protocol)
 
 ## Skills
 

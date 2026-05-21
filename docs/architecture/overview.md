@@ -1,6 +1,6 @@
 # System Overview
 
-The factory plugin implements a 9-stage autonomous coding pipeline that converts GitHub PRD issues into merged pull requests. This document describes the pipeline stages, component relationships, and data flow.
+The factory plugin implements an 8-stage autonomous coding pipeline that converts GitHub PRD issues into merged pull requests. This document describes the pipeline stages, component relationships, and data flow.
 
 ## Pipeline Stages
 
@@ -68,9 +68,9 @@ For each task in execution order:
 7-layer stack, sequential (layers 1–6 run in `_stage_postexec`; layer 7 runs at ship time):
 
 1. **Static Analysis**: Pre-commit hooks (lint, format, type-check)
-2. **Test Suite**: Run via existing Stop hook
-3. **Security Gate** (opt-in): `pipeline-security-gate` runs configured SAST command
-4. **TDD Gate**: `pipeline-tdd-gate` enforces test-before-impl commit ordering
+2. **Security Gate** (opt-in): `pipeline-security-gate` runs configured SAST command
+3. **TDD Gate**: `pipeline-tdd-gate` enforces test-before-impl commit ordering
+4. **Test Suite**: Run via existing Stop hook
 5. **Coverage Regression**: `pipeline-coverage-gate` blocks decreases
 6. **Holdout Validation**: Verify withheld criteria are satisfied
 7. **Mutation Testing**: Target 80% mutation score (ship-time pregate)
@@ -123,7 +123,7 @@ For each task in execution order:
 │ (Deterministic) │      │(Non-deterministic)     │ (Un-bypassable) │
 ├─────────────────┤      ├─────────────────┤      ├─────────────────┤
 │ pipeline-*      │      │ spec-generator  │      │ branch-protection│
-│ (21 scripts)    │      │ task-executor   │      │ run-tracker     │
+│ (41 scripts)    │      │ task-executor   │      │ run-tracker     │
 │                 │      │ implementation-reviewer   │      │ stop-gate       │
 │ Validation      │      │ quality-reviewer   │      │ subagent-stop   │
 │ State mgmt      │      │ security-       │      │                 │
