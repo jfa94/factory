@@ -211,6 +211,145 @@ write_stub pipeline-codex-review '
 echo "{\"decision\":\"APPROVE\",\"blockers\":[],\"concerns\":[]}"'
 echo claude > "$STUB_DIR/reviewer"
 
+# --- 3.e: postexec — holdout first-pass spawns holdout-reviewer (Layer A) ---
+# Regression (Issue 2a): when a holdout file exists for the task but no
+# `holdout_review_file` is wired in state, the wrapper MUST spawn a focused
+# implementation-reviewer with the holdout-reviewer prompt (NOT fall closed
+# to needs_human_review). Returns 10 with a single-agent manifest whose
+# `role=holdout-reviewer` and `stage_after=postexec`.
+new_run postexec-holdout-spawn
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+# Seed a holdout file so the postexec block enters the holdout branch.
+hd="$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts"
+mkdir -p "$hd"
+cat > "$hd/alpha-001.json" <<EOF
+{"task_id":"alpha-001","withheld_criteria":["ac one"],"total_criteria":2,"withheld_count":1}
+EOF
+# Stub holdout-validate to emit a prompt for the `prompt` subcommand.
+write_stub pipeline-holdout-validate '
+case "$1" in
+  prompt) printf "Layer 4 holdout validation for task %s\n" "$3" ;;
+  check)  exit 0 ;;
+  *)      exit 2 ;;
+esac'
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec holdout-spawn: exit 10" "10" "$RC"
+assert_eq "postexec holdout-spawn: 1 agent" "1" \
+  "$(printf '%s' "$OUT" | jq -r '.agents | length')"
+assert_eq "postexec holdout-spawn: agent=implementation-reviewer" "implementation-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+assert_eq "postexec holdout-spawn: agent role=holdout-reviewer" "holdout-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].role')"
+assert_eq "postexec holdout-spawn: stage_after=postexec" "postexec" \
+  "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+# Verify the prompt file path points at the holdout-reviewer-prompt.md naming
+# (the SubagentStop hook keys off this suffix to route output to
+# .tasks.<id>.holdout_review_file).
+pf=$(printf '%s' "$OUT" | jq -r '.agents[0].prompt_file')
+[[ "$pf" == *".holdout-reviewer-prompt.md" ]] \
+  && pass "postexec holdout-spawn: prompt file is holdout-reviewer-prompt.md" \
+  || fail "postexec holdout-spawn: wrong prompt file ($pf)"
+[[ -f "$pf" ]] \
+  && pass "postexec holdout-spawn: prompt file exists on disk" \
+  || fail "postexec holdout-spawn: prompt file missing ($pf)"
+# State must NOT be mutated to needs_human_review; quality_gates.holdout should
+# be "pending" while the reviewer is in flight.
+assert_eq "postexec holdout-spawn: status not needs_human_review" "executing" "$(status_of)"
+assert_eq "postexec holdout-spawn: holdout_attempts=1" "1" "$(field_of holdout_attempts)"
+assert_eq "postexec holdout-spawn: quality_gates.holdout=pending" "pending" \
+  "$(pipeline-state read "$RUN_ID" '.tasks.alpha-001.quality_gates.holdout' 2>/dev/null)"
+# Restore default holdout-validate stub for subsequent cases.
+write_stub pipeline-holdout-validate 'exit 0'
+
+# --- 3.f: postexec — holdout second-pass runs check after review wired ------
+# When `holdout_review_file` is populated (Layer B in production, simulated
+# here by direct state write), the next postexec call must run `check` and
+# proceed to the reviewer manifest instead of re-spawning.
+new_run postexec-holdout-check
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+hd="$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts"
+mkdir -p "$hd"
+cat > "$hd/alpha-001.json" <<EOF
+{"task_id":"alpha-001","withheld_criteria":["ac one"],"total_criteria":2,"withheld_count":1}
+EOF
+# Simulate Layer B: hook wrote holdout_review_file pointing at the
+# reviewer's output.
+rf_holdout="$ROOT_TMP/$current-holdout-review.md"
+printf '{"criteria":[{"criterion":"ac one","satisfied":true,"evidence":"src/x.ts:1"}]}' > "$rf_holdout"
+pipeline-state task-write "$RUN_ID" alpha-001 holdout_review_file "\"$rf_holdout\"" >/dev/null
+# check stub returns 0 (pass)
+write_stub pipeline-holdout-validate '
+case "$1" in
+  check) exit 0 ;;
+  *)     exit 2 ;;
+esac'
+echo codex > "$STUB_DIR/reviewer"
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec holdout-check: exit 10" "10" "$RC"
+assert_eq "postexec holdout-check: agent=implementation-reviewer (postreview path)" \
+  "implementation-reviewer" "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+assert_eq "postexec holdout-check: stage_after=postreview" "postreview" \
+  "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+assert_eq "postexec holdout-check: quality_gates.holdout=pass" "pass" \
+  "$(pipeline-state read "$RUN_ID" '.tasks.alpha-001.quality_gates.holdout' 2>/dev/null)"
+echo claude > "$STUB_DIR/reviewer"
+write_stub pipeline-holdout-validate 'exit 0'
+
+# --- 3.g: postexec — no holdout file, no spawn, no fail-close --------------
+# Boundary requirement: tasks WITHOUT a holdout file (no withheld AC) must
+# skip the holdout block entirely — no holdout reviewer spawn, no
+# fail-closed, no holdout_attempts increment.
+new_run postexec-no-holdout
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+# No holdouts/<task>.json file seeded — confirm it doesn't exist.
+[[ ! -f "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts/alpha-001.json" ]] \
+  && pass "postexec no-holdout: holdout file absent" \
+  || fail "postexec no-holdout: holdout file unexpectedly present"
+echo codex > "$STUB_DIR/reviewer"
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec no-holdout: exit 10" "10" "$RC"
+assert_eq "postexec no-holdout: stage_after=postreview" "postreview" \
+  "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+# Reviewer is the regular postreview implementation-reviewer, not holdout.
+assert_eq "postexec no-holdout: no holdout role" "null" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].role // null')"
+assert_eq "postexec no-holdout: holdout_attempts unset" "null" "$(field_of holdout_attempts)"
+echo claude > "$STUB_DIR/reviewer"
+
+# --- 3.h: postexec — holdout escalates to human after 2 attempts ------------
+# Defense in depth: if the SubagentStop hook fails to write holdout_review_file
+# after two spawn rounds, fall closed to needs_human_review rather than loop.
+new_run postexec-holdout-cap
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+hd="$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts"
+mkdir -p "$hd"
+cat > "$hd/alpha-001.json" <<EOF
+{"task_id":"alpha-001","withheld_criteria":["ac one"],"total_criteria":2,"withheld_count":1}
+EOF
+# Pre-seed holdout_attempts=2 (two prior unsuccessful spawn rounds).
+pipeline-state task-write "$RUN_ID" alpha-001 holdout_attempts '2' >/dev/null
+write_stub pipeline-holdout-validate '
+case "$1" in
+  prompt) printf "prompt body\n" ;;
+  check)  exit 0 ;;
+  *)      exit 2 ;;
+esac'
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec holdout-cap: exit 30" "30" "$RC"
+assert_eq "postexec holdout-cap: status=needs_human_review" "needs_human_review" "$(status_of)"
+assert_eq "postexec holdout-cap: quality_gates.holdout=missing-reviewer-output" \
+  "missing-reviewer-output" \
+  "$(pipeline-state read "$RUN_ID" '.tasks.alpha-001.quality_gates.holdout' 2>/dev/null)"
+write_stub pipeline-holdout-validate 'exit 0'
+
 # --- 4: postexec — claude fan-out (security tier) -------------------------
 new_run postexec-claude
 run_wrapper alpha-001 --stage preflight
@@ -323,11 +462,38 @@ _ship_sync_case "ship rc=2 (pr closed)"       2 closed        pr_closed
 _ship_sync_case "ship rc=3 (ci failed)"       3 red           ci_red
 _ship_sync_case "ship rc=4 (merge conflict)"  4 conflict      merge_conflict
 
-# --- 10c (H4): emit-ship-checklist — security_gate maps to fail when blocking ---
-# A failed semgrep finding with allow_failures=false must surface as
-# security_gate="fail" in the per-task ship checklist JSON. Before H4 the
-# field was either missing or hardcoded to "ok"/"skipped", which let the
-# PR-create guard wave the PR through despite a real block.
+# --- 10c (A4): ship — pipeline-human-gate rc=42 (pause) vs rc=1 (error) ---
+current="ship-human-gate-rc"
+new_run ship-human-gate-pause
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+printf '{"humanReviewLevel":1}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+write_stub pipeline-human-gate 'exit 42'
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1
+RC=$?
+set -e
+assert_eq "ship human-gate rc=42 → return 20 (pause)" "20" "$RC"
+
+new_run ship-human-gate-error
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+printf '{"humanReviewLevel":1}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+write_stub pipeline-human-gate 'exit 1'
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1
+RC=$?
+set -e
+assert_eq "ship human-gate rc=1 → return 30 (error)" "30" "$RC"
+
+# Reset stub for following tests.
+write_stub pipeline-human-gate 'exit 0'
+
+# --- 10d (H4): emit-ship-checklist — security_gate maps to fail when blocking ---
 new_run ship-checklist-security-gate-fail
 pipeline-state task-write "$RUN_ID" alpha-001 security_gate \
   '{"ok":false,"skipped":false,"allow_failures":false}' >/dev/null
@@ -340,10 +506,7 @@ assert_eq "checklist sec-fail: file written" "true" \
 assert_eq "checklist sec-fail: security_gate=fail" "fail" \
   "$(jq -r '.security_gate' "$checklist_file")"
 
-# --- 10d (H4): emit-ship-checklist — allow_failures=true demotes to ok ---
-# allow_failures=true is the informational mode — the gate reports ok=false
-# but exits 0, so the checklist must map it to "ok" (no block). Guards this
-# against a regression that would treat informational findings as blocking.
+# --- 10e (H4): emit-ship-checklist — allow_failures=true demotes to ok ---
 new_run ship-checklist-security-gate-allow-failures
 pipeline-state task-write "$RUN_ID" alpha-001 security_gate \
   '{"ok":false,"skipped":false,"allow_failures":true}' >/dev/null
@@ -1287,7 +1450,7 @@ case "$1 $2" in
   *) exit 0 ;;
 esac'
 
-# --- 52: holdout fail-closed — holdout_review_file field unset ---------------
+# --- 17 (T2): holdout fail-closed — holdout_review_file field unset ----------
 # When a holdout file is present on disk but the state field
 # `holdout_review_file` was never written, postexec must fail closed (return 30)
 # and mark the task needs_human_review. A regression that "silently skips" lets
@@ -1343,6 +1506,76 @@ assert_eq "holdout-validator-fail: exit 30" "30" "$RC"
 assert_eq "holdout-validator-fail: quality_gates.holdout=fail" "fail" \
   "$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.holdout 2>/dev/null | tr -d '"')"
 write_stub pipeline-holdout-validate 'exit 0'
+
+# --- 20 (D.1/A1): emit-ship-checklist routes state reads through pipeline-state -
+# Regression for the single-reader contract on state.json. _write_ship_checklist
+# previously called `jq -r ... "$state_file"` directly for eight gate fields,
+# bypassing the per-run advisory lock owned by pipeline-state. Migration moves
+# every read to `pipeline-state task-read`.
+#
+# This case (a) seeds gate values, (b) wraps jq with a logger that records
+# any invocation that names the state file, (c) emits the checklist, and
+# (d) asserts the log is empty AND the checklist JSON has the expected
+# values. Without the migration the log is non-empty (8 jq → state.json
+# reads from _write_ship_checklist).
+new_run emit-ship-checklist-no-direct-jq
+pipeline-state task-write "$RUN_ID" alpha-001 quality_gates.tdd.ok       'true' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 quality_gate.skipped       'true' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 quality_gates.pregate.ok   'false' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 security_gate.ok           'true' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage                      '"postreview_done"' >/dev/null
+
+jq_log="$ROOT_TMP/$current.jq.log"
+: > "$jq_log"
+real_jq=$(command -v jq)
+# Wrap jq: log invocations that name the run's state.json (the file
+# _write_ship_checklist previously read), then delegate to the real jq.
+# Other jq invocations are not logged so we don't capture unrelated
+# pipeline-state internals.
+cat > "$STUB_DIR/jq" <<JQ_STUB
+#!/usr/bin/env bash
+state_file_re="${CLAUDE_PLUGIN_DATA}/runs/${RUN_ID}/state.json"
+for arg in "\$@"; do
+  if [[ "\$arg" == "\$state_file_re" ]]; then
+    printf '%s\n' "\$*" >> "$jq_log"
+    break
+  fi
+done
+exec "$real_jq" "\$@"
+JQ_STUB
+chmod +x "$STUB_DIR/jq"
+
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage emit-ship-checklist >/dev/null 2>&1
+RC=$?
+set -e
+
+rm -f "$STUB_DIR/jq"
+
+assert_eq "emit-ship-checklist: exit 0" "0" "$RC"
+
+checklist_file="${CLAUDE_PLUGIN_DATA}/runs/${RUN_ID}/.tasks/alpha-001.ship_checklist.json"
+if [[ ! -f "$checklist_file" ]]; then
+  fail "emit-ship-checklist: checklist file missing"
+else
+  assert_eq "emit-ship-checklist: tdd_gate=ok"          "ok"       "$("$real_jq" -r .tdd_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: quality_gate=skipped" "skipped"  "$("$real_jq" -r .quality_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: pregate_gate=fail"    "fail"     "$("$real_jq" -r .pregate_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: security_gate=ok"     "ok"       "$("$real_jq" -r .security_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: coverage_gate=skipped" "skipped" "$("$real_jq" -r .coverage_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: review_blockers_resolved=true" "true" \
+    "$("$real_jq" -r .review_blockers_resolved "$checklist_file")"
+fi
+
+# Core assertion: no direct jq reads against state.json. Migration moves
+# all 8 gate reads to `pipeline-state task-read` (which still uses jq
+# internally — but via the locked pipeline-state CLI, not the raw file).
+direct_reads=$(wc -l < "$jq_log" | awk '{print $1}')
+assert_eq "emit-ship-checklist: zero direct jq reads against state.json" "0" "$direct_reads"
+if (( direct_reads > 0 )); then
+  printf '    --- jq invocations that hit state.json ---\n' >&2
+  sed 's/^/    /' < "$jq_log" >&2
+fi
 
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

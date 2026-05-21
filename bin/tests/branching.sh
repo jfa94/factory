@@ -1623,6 +1623,189 @@ JSON
 
 # ============================================================
 echo ""
+echo "=== pipeline-branch worktree-create: refresh stale base ==="
+# Issue 1: worktree-create only fetched when caller passed the literal
+# string "staging". Callers passing "origin/staging" (or any non-literal
+# form) bypassed the fetch and spawned worktrees from a stale local cache.
+# The widened guard must fetch for "staging" AND any "origin/<branch>" form,
+# but NOT for SHA-pinned bases or local-only branches.
+
+orig_cwd=$(pwd)
+
+# Helper: build a sandbox where origin/staging has been advanced past the
+# local clone's cached origin/staging ref. Calls to `git fetch origin staging`
+# from the clone will pick up the advanced tip; skipping the fetch will not.
+setup_stale_origin_sandbox() {
+  local sandbox
+  sandbox=$(mktemp -d "${TMPDIR:-/tmp}/factory-phase4-XXXXXX")
+  (
+    cd "$sandbox"
+    git init --bare --quiet origin.git
+    git clone --quiet origin.git repo
+    cd repo
+    git config user.email "test@test.local"
+    git config user.name "phase4-test"
+    git commit --allow-empty -m "root" --quiet
+    git checkout -b staging --quiet
+    echo "s0" > s.txt; git add s.txt
+    git commit -m "staging-cached" --quiet
+    git push -u origin staging --quiet 2>/dev/null || true
+  )
+  # Advance origin/staging directly in the bare repo (simulates an upstream
+  # commit landing while the local clone's remote-tracking ref is stale).
+  (
+    cd "$sandbox"
+    git clone --quiet origin.git advancer
+    cd advancer
+    git config user.email "test@test.local"
+    git config user.name "phase4-test"
+    git checkout staging --quiet
+    echo "s1" > s2.txt; git add s2.txt
+    git commit -m "staging-advanced" --quiet
+    git push origin staging --quiet 2>/dev/null || true
+  )
+  rm -rf "$sandbox/advancer"
+  printf '%s' "$sandbox"
+}
+
+# --- Case 1: base="staging" → fetches, worktree at advanced tip ---
+sandbox=$(setup_stale_origin_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  # Confirm precondition: local origin/staging is BEHIND bare origin's staging
+  local_cached=$(git rev-parse origin/staging)
+  upstream_tip=$(git ls-remote origin staging | awk '{print $1}')
+  printf '%s\n' "$local_cached" > "$sandbox/local_cached"
+  printf '%s\n' "$upstream_tip" > "$sandbox/upstream_tip"
+
+  pipeline-branch worktree-create wt/case1 "$sandbox/wt_case1" staging >/dev/null 2>&1
+  wt_head=$(git -C "$sandbox/wt_case1" rev-parse HEAD)
+  printf '%s\n' "$wt_head" > "$sandbox/wt_head"
+)
+# Sanity: precondition held
+assert_eq "case1 precondition: local stale ≠ upstream tip" "false" \
+  "$([[ "$(cat "$sandbox/local_cached")" == "$(cat "$sandbox/upstream_tip")" ]] && echo true || echo false)"
+assert_eq "case1 base=staging → worktree HEAD == upstream tip (fetch fired)" \
+  "$(cat "$sandbox/upstream_tip")" "$(cat "$sandbox/wt_head")"
+cleanup_sandbox "$sandbox"
+
+# --- Case 2: base="origin/staging" → must also fetch + use advanced tip ---
+sandbox=$(setup_stale_origin_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  upstream_tip=$(git ls-remote origin staging | awk '{print $1}')
+  printf '%s\n' "$upstream_tip" > "$sandbox/upstream_tip"
+
+  pipeline-branch worktree-create wt/case2 "$sandbox/wt_case2" origin/staging >/dev/null 2>&1
+  wt_head=$(git -C "$sandbox/wt_case2" rev-parse HEAD)
+  printf '%s\n' "$wt_head" > "$sandbox/wt_head"
+)
+assert_eq "case2 base=origin/staging → worktree HEAD == upstream tip (fetch widened)" \
+  "$(cat "$sandbox/upstream_tip")" "$(cat "$sandbox/wt_head")"
+cleanup_sandbox "$sandbox"
+
+# --- Case 3: base="origin/<other-branch>" → fetches that branch, not staging ---
+sandbox=$(setup_stale_origin_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox"
+  # Add a second branch upstream and advance it after the local clone exists.
+  git clone --quiet origin.git advancer2
+  cd advancer2
+  git config user.email "test@test.local"
+  git config user.name "phase4-test"
+  git checkout -b feature/x --quiet
+  echo "fx0" > fx.txt; git add fx.txt
+  git commit -m "feature-x-initial" --quiet
+  git push -u origin feature/x --quiet 2>/dev/null || true
+)
+# Local clone fetches feature/x once (so origin/feature/x exists but stale),
+# then upstream advances feature/x.
+(
+  cd "$sandbox/repo"
+  git fetch origin feature/x --quiet 2>/dev/null || true
+)
+(
+  cd "$sandbox/advancer2"
+  echo "fx1" > fx2.txt; git add fx2.txt
+  git commit -m "feature-x-advanced" --quiet
+  git push origin feature/x --quiet 2>/dev/null || true
+)
+rm -rf "$sandbox/advancer2"
+(
+  cd "$sandbox/repo"
+  upstream_tip=$(git ls-remote origin feature/x | awk '{print $1}')
+  cached_tip=$(git rev-parse origin/feature/x)
+  printf '%s\n' "$upstream_tip" > "$sandbox/upstream_tip_fx"
+  printf '%s\n' "$cached_tip" > "$sandbox/cached_tip_fx"
+
+  pipeline-branch worktree-create wt/case3 "$sandbox/wt_case3" origin/feature/x >/dev/null 2>&1
+  wt_head=$(git -C "$sandbox/wt_case3" rev-parse HEAD)
+  printf '%s\n' "$wt_head" > "$sandbox/wt_head_fx"
+)
+assert_eq "case3 precondition: feature/x local stale ≠ upstream" "false" \
+  "$([[ "$(cat "$sandbox/cached_tip_fx")" == "$(cat "$sandbox/upstream_tip_fx")" ]] && echo true || echo false)"
+assert_eq "case3 base=origin/feature/x → worktree HEAD == upstream tip" \
+  "$(cat "$sandbox/upstream_tip_fx")" "$(cat "$sandbox/wt_head_fx")"
+cleanup_sandbox "$sandbox"
+
+# --- Case 4: base=<sha> → no fetch attempted; worktree pinned at that SHA ---
+# We use PATH injection to wrap `git` and record whether `fetch origin` ran.
+sandbox=$(setup_stale_origin_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+_git_wrap_dir=$(mktemp -d)
+cat > "$_git_wrap_dir/git" <<SH
+#!/usr/bin/env bash
+# Record any fetch invocation, then delegate to the real git.
+if [[ "\$1" == "fetch" ]]; then
+  printf '%s\n' "\$*" >> "$sandbox/fetch.log"
+fi
+exec "$(command -v git)" "\$@"
+SH
+chmod +x "$_git_wrap_dir/git"
+(
+  cd "$sandbox/repo"
+  # Pin to the cached (pre-advance) staging SHA.
+  pinned_sha=$(git rev-parse origin/staging)
+  printf '%s\n' "$pinned_sha" > "$sandbox/pinned_sha"
+  : > "$sandbox/fetch.log"
+  env PATH="$_git_wrap_dir:$PATH" pipeline-branch worktree-create wt/case4 "$sandbox/wt_case4" "$pinned_sha" >/dev/null 2>&1
+  wt_head=$(git -C "$sandbox/wt_case4" rev-parse HEAD)
+  printf '%s\n' "$wt_head" > "$sandbox/wt_head_sha"
+)
+assert_eq "case4 base=<sha>: worktree pinned at exact SHA" \
+  "$(cat "$sandbox/pinned_sha")" "$(cat "$sandbox/wt_head_sha")"
+# fetch.log must not contain any `fetch origin <branch>` lines triggered by
+# the SHA path. Note: `git worktree add` itself does not fetch, so an empty
+# log proves the worktree-create guard correctly skipped the fetch.
+fetch_count=$(wc -l < "$sandbox/fetch.log" | tr -d ' ')
+assert_eq "case4 base=<sha>: no git fetch invoked" "0" "$fetch_count"
+rm -rf "$_git_wrap_dir"
+cleanup_sandbox "$sandbox"
+
+# --- Case 5: base="" (default) → defaults to staging, fetches ---
+sandbox=$(setup_stale_origin_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  upstream_tip=$(git ls-remote origin staging | awk '{print $1}')
+  printf '%s\n' "$upstream_tip" > "$sandbox/upstream_tip"
+
+  pipeline-branch worktree-create wt/case5 "$sandbox/wt_case5" >/dev/null 2>&1
+  wt_head=$(git -C "$sandbox/wt_case5" rev-parse HEAD)
+  printf '%s\n' "$wt_head" > "$sandbox/wt_head"
+)
+assert_eq "case5 base default → worktree HEAD == upstream staging tip" \
+  "$(cat "$sandbox/upstream_tip")" "$(cat "$sandbox/wt_head")"
+cleanup_sandbox "$sandbox"
+
+cd "$orig_cwd"
+trap - EXIT
+
+# ============================================================
+echo ""
 echo "=== Skill & Agent files exist ==="
 
 assert_eq "review-protocol SKILL.md exists" "true" \

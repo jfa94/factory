@@ -7,26 +7,49 @@ This document provides a detailed inventory of all plugin components: agents, ho
 ```
 factory-plugin/
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin manifest (name, version, description)
-├── commands/
+│   ├── plugin.json              # Plugin manifest (name, version, description)
+│   └── marketplace.json         # Marketplace listing for /plugin install
+├── commands/                    # (5 commands)
 │   ├── run.md                   # /factory:run entry point
-│   └── configure.md             # /factory:configure settings editor
-├── agents/
-│   ├── spec-generator.md        # PRD to spec conversion
+│   ├── configure.md             # /factory:configure settings editor
+│   ├── debug.md                 # /factory:debug reviewer ⇄ implementer loop
+│   ├── rescue.md                # /factory:rescue recovery flow
+│   └── scaffold.md              # /factory:scaffold project bootstrap
+├── agents/                      # (10 agents)
+│   ├── architecture-reviewer.md # Module boundaries, coupling, AI anti-patterns
+│   ├── implementation-reviewer.md # Spec-alignment adversarial review
+│   ├── quality-reviewer.md      # Adversarial code-quality review (Codex-preferred)
+│   ├── rescue-diagnostic.md     # Diagnostic agent for failed-task rescue
+│   ├── scribe.md                # /docs updater (Diátaxis framework)
+│   ├── security-reviewer.md     # OWASP + AI-specific security audit
+│   ├── spec-generator.md        # PRD → spec conversion
+│   ├── spec-reviewer.md         # Spec quality validation
 │   ├── task-executor.md         # Code generation in worktree
-│   └── implementation-reviewer.md         # Adversarial code review
-├── skills/
-│   └── review-protocol/
-│       └── SKILL.md             # Actor-Critic review methodology
+│   └── test-writer.md           # Red-phase test author / mutation kill
+├── skills/                      # (6 skills)
+│   ├── debug/                   # /factory:debug ladder + protocol
+│   ├── pipeline-orchestrator/   # Orchestrator main-session protocol
+│   ├── prd-to-spec/             # PRD → spec conversion methodology
+│   ├── rescue-protocol/         # Rescue scan / apply / handoff sequencing
+│   ├── review-protocol/         # Actor-Critic review methodology
+│   └── test-driven-development/ # Red-first commit discipline
 ├── hooks/
 │   ├── hooks.json               # Hook definitions
+│   ├── _security-common.sh      # Shared hook helpers
+│   ├── asyncrewake-ci.sh        # Async CI wake notifications
 │   ├── branch-protection.sh     # Block destructive git operations
+│   ├── native-tool-nudge.sh     # Prefer-native-tools nudge
+│   ├── pretooluse-pipeline-guards.sh # Pipeline-invariant enforcement
 │   ├── run-tracker.sh           # Audit logging
+│   ├── secret-commit-guard.sh   # Secret scan on commit/push
+│   ├── session-start/           # SessionStart helpers
+│   ├── session-start-resume.sh  # Resume-stage snapshot injection
 │   ├── stop-gate.sh             # Session end validation
-│   └── subagent-stop-gate.sh    # Subagent artifact validation
+│   ├── subagent-stop-gate.sh    # Subagent artifact validation
+│   ├── subagent-stop-transcript.sh # Reviewer/scribe STATUS enforcement
+│   └── write-protection.sh      # Protected-path write guard
 ├── bin/
-│   └── (21 scripts)             # Deterministic pipeline utilities
-├── servers/                     # (empty — orphaned MCP server removed in 0.3.5)
+│   └── (41 scripts)             # Deterministic pipeline utilities
 ├── templates/
 │   └── settings.autonomous.json # Safety settings for autonomous mode
 ├── settings.json                # Default permission grants
@@ -537,9 +560,9 @@ All scripts live in `bin/`. They source `pipeline-lib.sh` for shared functions.
 
 ## Metrics
 
-Pipeline execution metrics are written to `$run_dir/metrics.jsonl` (one JSONL line per event) by the `log_metric` helper in `bin/pipeline-lib.sh`. Every event carries `ts`, `run_id`, and `event` fields plus optional key-value pairs. Events of note: `run.start`, `run.summary`, `task.start`, `task.end`, `task.executor_spawned`, `task.gate.quality`, `task.gate.security`, `task.gate.coverage`, `task.coverage.snapshot`, `task.review.provider`, `task.pr_created`, `pipeline.step.begin/end`, `quota.check`, `quota.wait`, `quota.env_misalignment`, `circuit_breaker`. `quota.check` carries an `action` field (`proceed | wait | end_gracefully | stale_yield`) so the scorer can distinguish over-threshold yields from stale-cache yields. The scorer (`bin/pipeline-score`) reads this file to derive run quality scores.
+Pipeline execution metrics are written to `$run_dir/metrics.jsonl` (one JSONL line per event) by the `log_metric` helper in `bin/pipeline-lib.sh`. Every event carries `ts`, `run_id`, and `event` fields plus optional key-value pairs. Events of note: `run.start`, `run.summary`, `task.start`, `task.end`, `task.executor_spawned`, `task.gate.quality`, `task.gate.security`, `task.gate.tdd`, `task.gate.coverage`, `task.gate.mutation`, `task.coverage.snapshot`, `task.review.provider`, `task.pr_created`, `pipeline.step.begin/end`, `quota.check`, `quota.wait`, `quota.env_misalignment`, `circuit_breaker`. `quota.check` carries an `action` field (`proceed | wait | end_gracefully | stale_yield`) so the scorer can distinguish over-threshold yields from stale-cache yields. The scorer (`bin/pipeline-score`) reads this file to derive run quality scores.
 
-The MCP metrics server (`servers/pipeline-metrics/`) was removed in version 0.3.5 as it was orphaned and unused. Metrics are now written directly to JSONL files.
+The MCP metrics server was removed in version 0.3.5; metrics are now written directly to JSONL files.
 
 ---
 

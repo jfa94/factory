@@ -57,7 +57,26 @@ assert_eq "matrix shard list is [1, 2, 3, 4]" "1" "$shard_line"
 matrix_name=$(grep -cE '^    name: Mutation$' "$WORKFLOW" || true)
 assert_eq "matrix job display name is 'Mutation'" "1" "$matrix_name"
 
-# 7. auto-merge must depend on quality, mutation-testing, AND security. A
+# 7. Aggregator must exempt both `cancelled` (force-push supersession) and
+#    `skipped` (docs-only / tests-only PRs leave the matrix shard skipped).
+#    Without `skipped`, the Mutation Testing check fails on docs-only PRs and
+#    auto-merge never fires. Regression lock for H14.
+# Extract the mutation-testing job block. awk range would re-match the
+# start line against the end pattern; instead, start the range from the
+# line after the header and stop at the next top-level job.
+agg_block=$(awk '/^  mutation-testing:/{flag=1; next} flag && /^  [a-z]/{flag=0} flag' "$WORKFLOW")
+if grep -q 'cancelled' <<<"$agg_block"; then
+  echo "  PASS: aggregator exempts 'cancelled' outcomes"; pass=$((pass+1))
+else
+  echo "  FAIL: aggregator missing 'cancelled' exemption"; fail=$((fail+1))
+fi
+if grep -q 'skipped' <<<"$agg_block"; then
+  echo "  PASS: aggregator exempts 'skipped' outcomes (H14)"; pass=$((pass+1))
+else
+  echo "  FAIL: aggregator missing 'skipped' exemption (regression for H14)"; fail=$((fail+1))
+fi
+
+# 8. auto-merge must depend on quality, mutation-testing, AND security. A
 #    regression of 6c417e2 (auto-merge ran before the mutation aggregator
 #    landed) silently shipped PRs without gating on mutation. Lock the
 #    needs list so the order can drift but membership cannot.
