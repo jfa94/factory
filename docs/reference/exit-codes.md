@@ -163,7 +163,7 @@ Exit code 2 indicates the gate was not applicable (non-JS project or unconfigure
 
 | Exit Code | Meaning                                                              |
 | --------- | -------------------------------------------------------------------- |
-| 0         | Gate passed (humanReviewLevel below threshold); proceed              |
+| 0         | Gate evaluated and not tripped (proceed)                             |
 | 1         | Argument error or state-write failure (refuses to mark gate tripped) |
 | 42        | Gate tripped; run marked `awaiting_human` and comment posted         |
 

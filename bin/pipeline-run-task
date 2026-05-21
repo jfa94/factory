@@ -1476,7 +1476,10 @@ _stage_ship() {
       *)
         log_error "pipeline-human-gate failed unexpectedly: rc=$_hg_rc"
         t1=$(_now_ms)
-        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"human_gate_error\" rc=$_hg_rc"
+        log_step_end "ship" "failed" "$((t1-t0))" \
+          "task_id=\"$task_id\"" \
+          "reason=\"human_gate_error\"" \
+          "rc=$_hg_rc"
         return 30
         ;;
     esac
