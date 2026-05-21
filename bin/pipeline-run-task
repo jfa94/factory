@@ -91,7 +91,8 @@ _already_past() {
   if (( cur_rank < 0 )); then
     # Unknown stage (legacy state file). Treat as "past terminal" only when
     # the task already reached a terminal status — otherwise re-run the stage.
-    status=$(pipeline-state task-read "$run_id" "$task_id" status 2>/dev/null | tr -d '"')
+    status=$(pipeline-state task-read "$run_id" "$task_id" status 2>/dev/null)
+    status=$(_unquote_json_string "$status")
     case "$status" in failed|needs_human_review) return 0 ;; esac
     return 1
   fi
@@ -1672,7 +1673,8 @@ _stage_finalize_run() {
   fi
 
   local scribe_state
-  scribe_state=$(pipeline-state read "$run_id" '.scribe.status // "pending"' 2>/dev/null | tr -d '"')
+  scribe_state=$(pipeline-state read "$run_id" '.scribe.status // "pending"' 2>/dev/null)
+  scribe_state=$(_unquote_json_string "$scribe_state")
 
   if [[ "$scribe_state" == "spawned" ]]; then
     # Spawned previously; SubagentStop hook should advance to done|failed.
