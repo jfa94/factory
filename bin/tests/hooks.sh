@@ -2238,6 +2238,110 @@ rm -rf "$_m1_tmp"
 
 # ============================================================
 echo ""
+echo "=== T3: secret-commit-guard content-regex coverage matrix ==="
+
+# One positive + one negative case per regex in CONTENT_PATTERNS. Concatenate
+# the fixture strings at runtime so the hook can't trigger on this file itself.
+#
+# Helper: stage $value in a fresh git repo, run secret-commit-guard for the
+# implicit `git -C <repo> commit`, return EXIT:<code>. Negative variants pass
+# a string that the regex must NOT match.
+_t3_run() {
+  local label="$1" value="$2" want_exit="$3"
+  local repo; repo=$(mktemp -d)
+  git -C "$repo" init -q
+  git -C "$repo" commit --allow-empty -m "init" -q
+  printf '%s\n' "$value" > "$repo/leak.txt"
+  git -C "$repo" add leak.txt
+  local out rc
+  out=$(jq -cn --arg c "git -C $repo commit -m wip" '{tool_input:{command:$c}}' \
+    | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+  rc=$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')
+  assert_eq "$label exit=$want_exit" "EXIT:$want_exit" "$rc"
+  if [[ "$want_exit" == "2" ]]; then
+    assert_contains "$label reason=secret_detected" "secret_detected" "$out"
+  fi
+  rm -rf "$repo"
+}
+
+# 1. AWS access key id (AKIA…)
+_t3_run "AKIA positive"  "AKIA""IOSFODNN7EXAMPLE" 2
+_t3_run "AKIA negative"  "AKIA""IOSFODNN7EXAMPL"  0    # 15 chars after AKIA (need 16)
+
+# 2. GitHub personal token (ghp_…36 alnum)
+_t3_run "ghp_ positive" "ghp_""0123456789abcdefghijABCDEFGHIJ0123ZZ" 2
+_t3_run "ghp_ negative" "ghp_""0123456789abcdefghijABCDEFGHIJ0123" 0   # 34 chars (need 36)
+
+# 3. GitHub server-to-server (ghs_)
+_t3_run "ghs_ positive" "ghs_""0123456789abcdefghijABCDEFGHIJ0123ZZ" 2
+_t3_run "ghs_ negative" "ghs_""TOOSHORT" 0
+
+# 4. GitHub OAuth (gho_)
+_t3_run "gho_ positive" "gho_""0123456789abcdefghijABCDEFGHIJ0123ZZ" 2
+_t3_run "gho_ negative" "gho_""TOOSHORT" 0
+
+# 5. GitHub refresh (ghr_)
+_t3_run "ghr_ positive" "ghr_""0123456789abcdefghijABCDEFGHIJ0123ZZ" 2
+_t3_run "ghr_ negative" "ghr_""TOOSHORT" 0
+
+# 6. Anthropic key (sk-ant-…)
+_t3_run "sk-ant positive" "sk-""ant-api03-AAAAAAAAAAAAAAAAAAAA-ZZ" 2
+_t3_run "sk-ant negative" "sk-""ant-tiny" 0
+
+# 7. Generic OpenAI-style sk- (20+ alnum)
+_t3_run "sk- positive" "sk-""0123456789abcdefghijklmnopqrstuv" 2
+_t3_run "sk- negative" "sk-""shorttoken" 0
+
+# 8. Slack xox[bpars]-
+_t3_run "xoxb positive" "xoxb""-1234567890-abcdefghij" 2
+_t3_run "xoxb negative" "xoxb""-short" 0
+
+# 9. Google API key (AIza…35)
+_t3_run "AIza positive" "AIza""0123456789abcdefghijABCDEFGHIJ01234" 2
+_t3_run "AIza negative" "AIza""shorttoken" 0
+
+# 10. Stripe live secret (sk_live_…20+)
+_t3_run "sk_live positive" "sk_""live_0123456789abcdefghijZZ" 2
+_t3_run "sk_live negative" "sk_""live_short" 0
+
+# 11. Stripe restricted live (rk_live_…)
+_t3_run "rk_live positive" "rk_""live_0123456789abcdefghijZZ" 2
+_t3_run "rk_live negative" "rk_""live_short" 0
+
+# 12. JWT eyJ…eyJ…tail
+_t3_run "JWT positive" "eyJ""abcdefghij.eyJabcdefghij.signaturepart" 2
+_t3_run "JWT negative" "eyJ""abcdefghij_no_dots_here" 0
+
+# 13. aws_secret_access_key = <40 b64>
+_t3_run "aws_secret positive" "aws_""secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEYY" 2
+_t3_run "aws_secret negative" "aws_""secret_access_key=tooshort" 0
+
+# 14. JSON service-account private-key + PEM-BEGIN block (JSON-embedded PEM)
+_t3_run "json privkey positive" '"private_'"key"'":"-----'"BEGIN" 2
+_t3_run "json privkey negative" '"public_'"key"'":"-----'"BEGIN" 0
+
+# 15. PEM PRIVATE KEY block header
+_t3_run "PEM positive" "-----""BEGIN RSA PRIVATE KEY-----" 2
+_t3_run "PEM negative" "-----""BEGIN CERTIFICATE-----" 0
+
+# 16. GitHub fine-grained PAT (github_pat_…60+)
+_t3_run "github_pat positive" "github_""pat_$(printf 'X%.0s' {1..60})" 2
+_t3_run "github_pat negative" "github_""pat_shortvalue" 0
+
+# 17. OpenAI project key (sk-proj-…40+)
+_t3_run "sk-proj positive" "sk-""proj-$(printf 'X%.0s' {1..40})" 2
+_t3_run "sk-proj negative" "sk-""proj-short" 0
+
+# 18. NVIDIA api key (nvapi-…40+)
+_t3_run "nvapi positive" "nvapi""-$(printf 'X%.0s' {1..40})" 2
+_t3_run "nvapi negative" "nvapi""-short" 0
+
+# 19. xAI key (xai-…40+ alnum)
+_t3_run "xai positive" "xai""-$(printf 'X%.0s' {1..40})" 2
+_t3_run "xai negative" "xai""-short" 0
+
+# ============================================================
+echo ""
 echo "=== All hook scripts are executable ==="
 
 assert_eq "branch-protection executable" "true" "$([[ -x "$HOOKS_DIR/branch-protection.sh" ]] && echo true || echo false)"

@@ -222,7 +222,7 @@ if [[ -n "$scan_diff" ]]; then
       if ! _is_allowed "$hit"; then
         blocks+=("content:$(_redact "$hit") (matched /$pat/)")
       fi
-    done < <(printf '%s' "$scan_diff" | grep -Eo "$pat" 2>/dev/null || true)
+    done < <(printf '%s' "$scan_diff" | grep -Eo -e "$pat" 2>/dev/null || true)
   done
 fi
 
