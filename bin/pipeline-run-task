@@ -9,6 +9,9 @@
 #   pipeline-run-task <run-id> <task-id> --stage <stage> [--worktree <path>]
 #                     [--review-file <path>]... [--ci-status <green|red|timeout>]
 #   pipeline-run-task <run-id> RUN       --stage finalize-run
+#   pipeline-run-task <run-id> <task-id> --stage emit-ship-checklist
+#     (diagnostic: rewrites .tasks/<task-id>.ship_checklist.json from state;
+#      read-only against state.json; used by run-wrapper tests)
 #
 # Exit codes (common across stages):
 #    0   stage complete -> advance to next
@@ -1772,5 +1775,11 @@ case "$stage" in
   postreview)     _stage_postreview ;;
   ship)           _stage_ship ;;
   finalize-run)   _stage_finalize_run ;;
+  # Diagnostic entry point: write the ship-checklist JSON from current task
+  # state without running the rest of the ship stage. Used by tests that
+  # exercise _write_ship_checklist in isolation; safe in production because
+  # the function is read-only against state and writes to .tasks/<id>.ship_checklist.json
+  # which the orchestrator only consults at the postreview-done boundary.
+  emit-ship-checklist) _write_ship_checklist ;;
   *) log_error "unknown stage: $stage"; exit 1 ;;
 esac
