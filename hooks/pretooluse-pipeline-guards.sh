@@ -219,6 +219,45 @@ if [[ -f "$run_dir/.scribe_active" ]]; then
       #   dd of=<file>
       # If we can't determine any target, deny fail-closed.
       if [[ -n "$cmd" ]]; then
+        # Early fail-closed deny for write-capable interpreters whose write
+        # targets cannot be reliably parsed (python scripts, sed -i, perl -i,
+        # install, ln -s). Parsing the path out of these is unsound — one
+        # missed pattern leaks. Deny outright; scribe ships docs updates only
+        # and has no legitimate need to invoke these.
+        #
+        # Word-boundary anchored so substrings like "sedutil" or "python_lint"
+        # don't trip. Leading char class includes `/` so absolute-path
+        # invocations (`/usr/bin/python`, `/bin/sed -i`, `/bin/ln -s`) are
+        # caught alongside bare command words.
+        # python / python3 / python3.N / python3.N.M as a command word
+        _scribe_re_py='(^|[|;&[:space:]/])python3?(\.[0-9]+){0,2}([[:space:]]|$)'
+        # sed with -i bundled into any short-flag cluster (-i, -iE, -nEi,
+        # -i.bak, -Ei.bak, ...) as its own token.
+        _scribe_re_sedi='(^|[|;&[:space:]/])sed([[:space:]]+[^[:space:]]+)*[[:space:]]+-[a-zA-Z]*i[a-zA-Z]*(\.[^[:space:]]+)?([[:space:]]|$)'
+        # perl with -i bundled into any short-flag cluster (-i, -pi, -ipe,
+        # -i.bak, -pi.orig, ...) as its own token.
+        _scribe_re_perli='(^|[|;&[:space:]/])perl([[:space:]]+[^[:space:]]+)*[[:space:]]+-[a-zA-Z]*i[a-zA-Z]*(\.[^[:space:]]+)?([[:space:]]|$)'
+        # install as a command word
+        _scribe_re_install='(^|[|;&[:space:]/])install([[:space:]]|$)'
+        # ln with -s (grouped short flags allowed: -s, -sf, -fs, -snf, ...)
+        _scribe_re_lns='(^|[|;&[:space:]/])ln([[:space:]]+-[a-zA-Z]*s[a-zA-Z]*)+([[:space:]]|$)'
+
+        if printf '%s' "$cmd" | grep -qE "$_scribe_re_py"; then
+          deny "Scribe Bash guard: python denied — scribe is restricted to /docs/** writes."
+        fi
+        if printf '%s' "$cmd" | grep -qE "$_scribe_re_sedi"; then
+          deny "Scribe Bash guard: sed -i denied — scribe is restricted to /docs/** writes."
+        fi
+        if printf '%s' "$cmd" | grep -qE "$_scribe_re_perli"; then
+          deny "Scribe Bash guard: perl -i denied — scribe is restricted to /docs/** writes."
+        fi
+        if printf '%s' "$cmd" | grep -qE "$_scribe_re_install"; then
+          deny "Scribe Bash guard: install denied — scribe is restricted to /docs/** writes."
+        fi
+        if printf '%s' "$cmd" | grep -qE "$_scribe_re_lns"; then
+          deny "Scribe Bash guard: ln -s denied — scribe is restricted to /docs/** writes."
+        fi
+
         _scribe_bash_targets=()
 
         # Redirections: capture token after > or >>

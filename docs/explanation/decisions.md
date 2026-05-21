@@ -276,6 +276,32 @@ The workflow uses `gh pr merge --merge --auto --delete-branch` for staging-to-de
 
 ---
 
+## Decision 17: Coarse Bash Allow with Hook-Enforced Defense-in-Depth
+
+**Choice:** `templates/settings.autonomous.json` lists `Bash(*)` in `permissions.allow`. The allow-list is intentionally coarse; the security boundary lives in hooks and `permissions.deny`, not in the allow-list.
+
+**Why:**
+
+- In fully autonomous mode there is no human in the loop to approve granular `Bash(...)` permission prompts. A missing allow rule would deadlock the pipeline mid-task.
+- The LLM cannot enumerate every shell invocation it will need up front (build tools, test runners, ad-hoc `jq`/`awk`/`grep`, git plumbing, project-specific scripts). Coarse allow + hook-enforced denial is more reliable than fine allow + perpetually-missing rules.
+- The real boundary is enforced at execution time by hooks, which fire on every Bash call and cannot be bypassed by an LLM that "didn't get the memo."
+
+**Where the boundary actually lives:**
+
+- `hooks/secret-commit-guard.sh` — blocks `git commit`/`push` when staged content matches the secret regex.
+- `hooks/pretooluse-pipeline-guards.sh` — blocks scribe Bash writes outside `/docs/**`, blocks `gh pr create` without an attributable `task_id`, and similar pipeline-shape guards.
+- `hooks/_security-common.sh` — shared deny library; `_is_nested_shell_or_hook_bypass` blocks nested-shell and hook-bypass attempts.
+- `hooks/write-protection.sh` — blocks `Edit`/`Write` on `main`/`master` and protected files.
+- The `permissions.deny` block in the same `templates/settings.autonomous.json` — dense list covering destructive shell patterns (`rm -rf /`, `git push --force*`, `--no-verify`), language `-e`/`-c` interpreters (`python -c`, `node -e`, `eval`), AWS destructive APIs (`iam delete-*`, `s3 rb`, `rds delete-*`), and writes to `~/.ssh`, `~/.aws`, `~/.claude/**`, etc.
+
+**Why not narrow the allow-list?**
+
+Every narrowing has been tried and produces the same failure mode: the pipeline halts on a command the allow-list did not anticipate, and there is no operator to approve it. The cost of one missed allow rule is a stalled run; the cost of one missed deny rule is bounded by the hook layer.
+
+**Scope:** This design applies only to autonomous mode (sessions launched with `templates/settings.autonomous.json`, identified by `FACTORY_AUTONOMOUS_MODE=1`). Interactive sessions use the user's normal settings, which can — and typically do — enforce a tighter allow-list because a human is present to approve prompts.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

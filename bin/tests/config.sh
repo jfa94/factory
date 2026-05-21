@@ -1210,6 +1210,120 @@ rm -rf "$RCS_BAD_DIR" "$RCS_OK_DIR"
 
 # ============================================================
 echo ""
+echo "=== read_config key regex guard (M13) ==="
+
+# Lock the read_config / read_config_strict key contract: only dot-notation
+# identifiers are allowed; everything that smells like a jq expression
+# (pipes, subscripts, backticks, semicolons, whitespace, empty, digit-start)
+# must be rejected loudly with the default returned. There is no current
+# dynamic caller, but the API has no guard — this fences off the injection
+# surface before it exists.
+RCS_M13_DIR=$(mktemp -d "${TMPDIR:-/tmp}/read-config-m13-XXXXXX")
+printf '{"present":"value"}' > "$RCS_M13_DIR/config.json"
+
+# Helper: run read_config / read_config_strict and capture both stdout and stderr.
+_m13_run() {
+  # $1 = fn (read_config or read_config_strict)
+  # $2 = key
+  # $3 = default (only used for read_config)
+  local fn="$1" key="$2" default="${3:-}"
+  if [[ "$fn" == "read_config" ]]; then
+    CLAUDE_PLUGIN_DATA="$RCS_M13_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; $fn \"\$1\" \"\$2\"" _ "$key" "$default"
+  else
+    CLAUDE_PLUGIN_DATA="$RCS_M13_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; $fn \"\$1\"" _ "$key"
+  fi
+}
+
+_m13_run_stderr() {
+  local fn="$1" key="$2" default="${3:-}"
+  if [[ "$fn" == "read_config" ]]; then
+    CLAUDE_PLUGIN_DATA="$RCS_M13_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; $fn \"\$1\" \"\$2\"" _ "$key" "$default" 2>&1 >/dev/null
+  else
+    CLAUDE_PLUGIN_DATA="$RCS_M13_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; $fn \"\$1\"" _ "$key" 2>&1 >/dev/null
+  fi
+}
+
+# Run one negative case for read_config: assert stdout==default AND stderr
+# contains ERROR + 'non-conforming key'.
+_m13_assert_reject() {
+  local label="$1" key="$2"
+  local out err
+  out=$(_m13_run read_config "$key" 'fallback' 2>/dev/null)
+  err=$(_m13_run_stderr read_config "$key" 'fallback')
+  assert_eq "M13: $label → default returned" "fallback" "$out"
+  if [[ "$err" == *"ERROR"* && "$err" == *"non-conforming key"* ]]; then
+    echo "  PASS: M13: $label → ERROR log mentions 'non-conforming key'"
+    pass=$((pass + 1))
+  else
+    echo "  FAIL: M13: $label → expected ERROR + 'non-conforming key' in stderr; got: ${err}"
+    fail=$((fail + 1))
+  fi
+}
+
+# 1. Pipe injection — would let a caller smuggle arbitrary jq.
+_m13_assert_reject "pipe injection" '.present | error("pwn")'
+
+# 2. Subscript — array/object indexing is not a key path.
+_m13_assert_reject "subscript" '.present[0]'
+
+# 3. Backtick — command-substitution shape.
+_m13_assert_reject "backtick" '`whoami`'
+
+# 4. Semicolon — statement separator inside jq filter.
+_m13_assert_reject "semicolon" '.foo;rm -rf /'
+
+# 5. Whitespace — space inside the key is never a valid dot path.
+_m13_assert_reject "whitespace" '.foo bar'
+
+# 6. Empty string — caller forgot to pass a key.
+_m13_assert_reject "empty key" ''
+
+# 7. Starts with digit — identifiers must start letter/underscore.
+_m13_assert_reject "digit-start" '.1foo'
+
+# 8. Positive: .present in valid config round-trips, no ERROR.
+m13_ok_out=$(_m13_run read_config '.present' 'fallback' 2>/dev/null)
+assert_eq "M13: positive .present → returns value" "value" "$m13_ok_out"
+m13_ok_err=$(_m13_run_stderr read_config '.present' 'fallback')
+if [[ "$m13_ok_err" != *"ERROR"* ]]; then
+  echo "  PASS: M13: positive .present → no ERROR on stderr"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: M13: positive .present produced unexpected ERROR: ${m13_ok_err}"
+  fail=$((fail + 1))
+fi
+
+# 9. Positive: missing key (jq path) — guard passes, missing-key fallback applies, no ERROR.
+m13_missing_out=$(_m13_run read_config '.does_not_exist' 'fallback' 2>/dev/null)
+assert_eq "M13: positive .does_not_exist → default (jq missing-key path)" "fallback" "$m13_missing_out"
+m13_missing_err=$(_m13_run_stderr read_config '.does_not_exist' 'fallback')
+if [[ "$m13_missing_err" != *"ERROR"* ]]; then
+  echo "  PASS: M13: missing-key path still silent (M13 guard does not trigger)"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: M13: missing-key path should be silent; got: ${m13_missing_err}"
+  fail=$((fail + 1))
+fi
+
+# 10. read_config_strict — at least one positive + one negative case.
+m13_strict_ok=$(_m13_run read_config_strict '.present' 2>/dev/null)
+assert_eq "M13: read_config_strict positive .present → value" "value" "$m13_strict_ok"
+
+m13_strict_bad_out=$(_m13_run read_config_strict '.foo | something' 2>/dev/null)
+assert_eq "M13: read_config_strict pipe injection → empty" "" "$m13_strict_bad_out"
+m13_strict_bad_err=$(_m13_run_stderr read_config_strict '.foo | something')
+if [[ "$m13_strict_bad_err" == *"ERROR"* && "$m13_strict_bad_err" == *"non-conforming key"* ]]; then
+  echo "  PASS: M13: read_config_strict pipe injection → ERROR log mentions 'non-conforming key'"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: M13: read_config_strict pipe injection → expected ERROR + 'non-conforming key'; got: ${m13_strict_bad_err}"
+  fail=$((fail + 1))
+fi
+
+rm -rf "$RCS_M13_DIR"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"

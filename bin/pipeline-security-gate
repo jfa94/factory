@@ -10,6 +10,22 @@
 # `$CLAUDE_PLUGIN_DATA/runs/<run-id>/<task-id>.security-findings.json`. The
 # structured gate result is written to state under `.tasks.<id>.security_gate`.
 #
+# Security note (M14): the findings artifact is the raw stdout of the
+# configured security command (typically `semgrep --json …`). Many semgrep
+# rules embed offending source snippets in their findings, which means the
+# persisted file may contain secret-bearing material (API keys, tokens,
+# credentials) lifted from the codebase under audit. `$CLAUDE_PLUGIN_DATA`
+# is treated as private operator state, not a secret store, so:
+#   - do NOT publish findings files to PRs, gists, telemetry, or remote
+#     review tools without an explicit redaction pass;
+#   - retention sweeps in `pipeline-cleanup` should treat these files as
+#     sensitive (they already inherit the runs/<run-id> lifetime);
+#   - any future code path that surfaces findings to humans or external
+#     systems must scrub matches against the secret regex set used by
+#     `hooks/secret-commit-guard.sh`.
+# Implementing a redaction pass here is out of scope for the comprehensive-
+# review fix batch — flag for follow-up if findings are ever exported.
+#
 # Exit codes:
 #   0  — gate passed (no findings or allowFailures=true)
 #   1  — gate failed (findings present)
@@ -102,6 +118,8 @@ mkdir -p "$run_dir"
 
 findings_file="$run_dir/${task_id}.security-findings.json"
 log_file="$run_dir/${task_id}.security-gate.log"
+# M14: see header — findings_file may contain secret-bearing source snippets.
+# Treat as sensitive; do not export without a redaction pass.
 
 start=$(date +%s)
 set +e

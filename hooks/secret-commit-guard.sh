@@ -36,9 +36,31 @@ is_push="false"
 _is_git_commit "$command" && is_commit="true"
 _is_git_push "$command" && is_push="true"
 
-# If neither commit nor push, nothing to scan.
+# If neither commit nor push, nothing to scan — BUT first check whether the
+# command uses a git-dir/work-tree override form that our paired-flag regex
+# above cannot recognise as a commit/push (e.g. `git --git-dir=X commit`).
+# In that case we still want to refuse, since the override is the bypass.
 if [[ "$is_commit" == "false" && "$is_push" == "false" ]]; then
-  exit 0
+  # Detect "git ... commit|push" with potentially fused override flags or env
+  # prefixes, so we can deny instead of fall-open. Word-anchored on commit/push.
+  _gd_subcmd_re='(^|[[:space:]]|&|;)git([[:space:]]+[^[:space:]]+)*[[:space:]]+(commit|push)([[:space:]]|$)'
+  if [[ ! "$command" =~ $_gd_subcmd_re ]]; then
+    exit 0
+  fi
+fi
+
+# --- Deny git-dir/work-tree override bypass ---
+# A malicious caller could redirect the scan target with --git-dir, --work-tree,
+# GIT_DIR=, or GIT_WORK_TREE= and stage secrets in a different repo than the
+# one we'd scan. Autonomous-mode commits never need these flags, so detect and
+# refuse rather than try to normalise. Fail-closed.
+_gd_re_flag='(^|[[:space:]])--git-dir(=|[[:space:]])'
+_gd_re_wt='(^|[[:space:]])--work-tree(=|[[:space:]])'
+_gd_re_env='^[[:space:]]*([A-Z_][A-Z0-9_]*=[^[:space:]]+[[:space:]]+)*GIT_(DIR|WORK_TREE)='
+if [[ "$command" =~ $_gd_re_flag ]] || [[ "$command" =~ $_gd_re_wt ]] || [[ "$command" =~ $_gd_re_env ]]; then
+  jq -cn --arg r "git_dir_override_denied" --arg d "git-dir/work-tree override blocked: $command" \
+    '{decision:"block", reason:$r, detail:$d}' >&2
+  exit 2
 fi
 
 # --- Built-in path blocklist (file names that should never be committed) ---

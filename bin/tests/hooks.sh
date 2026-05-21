@@ -1640,6 +1640,158 @@ assert_eq "non-scribe src/foo.ts exit 0" "0" "$rc"
 assert_eq "non-scribe src/foo.ts no deny" "" "$out"
 
 # ============================================================
+# Scribe Bash interpreter guard (M2 — Task 34): deny write-capable
+# interpreters whose write targets cannot be reliably parsed
+# (python / python3, sed -i, perl -i, install, ln -s).
+# ============================================================
+
+# Helper: assert that running the given Bash command under .scribe_active
+# yields exit 0 + permissionDecision=deny + reason mentioning the substring.
+_scribe_bash_deny() {
+  local label="$1" run_name="$2" cmd="$3" reason_substr="$4"
+  _seed_run "$run_name" '{"status":"running","tasks":{}}'
+  printf '%s' "$run_name" > "$CLAUDE_PLUGIN_DATA/runs/$run_name/.scribe_active"
+  local input
+  input=$(jq -cn --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}')
+  set +e
+  local out rc
+  out=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+  rc=$?
+  set -e
+  assert_eq "$label exit 0" "0" "$rc"
+  local decision
+  decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')
+  assert_eq "$label denies" "deny" "$decision"
+  local reason
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')
+  assert_eq "$label reason mentions $reason_substr" "true" \
+    "$(printf '%s' "$reason" | grep -qF "$reason_substr" && echo true || echo false)"
+}
+
+# Helper: assert that running the given Bash command under .scribe_active
+# yields exit 0 + no deny output.
+_scribe_bash_allow() {
+  local label="$1" run_name="$2" cmd="$3"
+  _seed_run "$run_name" '{"status":"running","tasks":{}}'
+  printf '%s' "$run_name" > "$CLAUDE_PLUGIN_DATA/runs/$run_name/.scribe_active"
+  local input
+  input=$(jq -cn --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}')
+  set +e
+  local out rc
+  out=$(printf '%s' "$input" | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh")
+  rc=$?
+  set -e
+  assert_eq "$label exit 0" "0" "$rc"
+  local decision
+  decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty')
+  assert_eq "$label no deny" "" "$decision"
+}
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — python -c denied ==="
+_scribe_bash_deny "scribe python -c" "run-scribe-py-c" \
+  "python -c \"open('/etc/foo','w').write('x')\"" "python"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — python3 script.py denied ==="
+_scribe_bash_deny "scribe python3 script" "run-scribe-py3-script" \
+  "python3 script.py" "python"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — sed -i denied ==="
+_scribe_bash_deny "scribe sed -i" "run-scribe-sed-i" \
+  "sed -i 's/x/y/' /etc/foo" "sed -i"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — sed -i.bak denied ==="
+_scribe_bash_deny "scribe sed -i.bak" "run-scribe-sed-i-bak" \
+  "sed -i.bak -e 's/x/y/' file" "sed -i"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — perl -i denied ==="
+_scribe_bash_deny "scribe perl -i" "run-scribe-perl-i" \
+  "perl -i -pe 's/x/y/' /etc/foo" "perl -i"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — perl -i.bak denied ==="
+_scribe_bash_deny "scribe perl -i.bak" "run-scribe-perl-i-bak" \
+  "perl -i.bak -pe 's/x/y/' file" "perl -i"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — install denied ==="
+_scribe_bash_deny "scribe install" "run-scribe-install" \
+  "install -m 644 src /etc/dst" "install"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — ln -s denied ==="
+_scribe_bash_deny "scribe ln -s" "run-scribe-ln-s" \
+  "ln -s /etc/passwd /tmp/link" "ln -s"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — ln -sf denied ==="
+_scribe_bash_deny "scribe ln -sf" "run-scribe-ln-sf" \
+  "ln -sf /etc/passwd /tmp/link" "ln -s"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — sed (no -i) allowed into docs/ ==="
+_scribe_bash_allow "scribe sed no -i" "run-scribe-sed-allow" \
+  "sed 's/x/y/' docs/input.md > docs/out.md"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — perl -e (no -i) allowed ==="
+_scribe_bash_allow "scribe perl -e" "run-scribe-perl-e" \
+  "perl -e 'print \"x\"'"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — piped sed into docs/ allowed ==="
+_scribe_bash_allow "scribe piped sed" "run-scribe-piped-sed" \
+  "cat docs/README.md | sed 's/x/y/' > docs/README.new.md"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — substring 'perl' inside echo arg allowed ==="
+_scribe_bash_allow "scribe echo perl-substring" "run-scribe-echo-perl-substr" \
+  "echo perl-not-an-invocation > docs/note.md"
+
+# Bypass-coverage additions (close I1/I2/I3 from quality review):
+#   I1 absolute-path invocations (/usr/bin/python, /bin/sed, /bin/ln)
+#   I2 versioned python binaries (python3.11)
+#   I3 -i bundled with other short flags (-pi, -Ei) and split (-p -i)
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — /usr/bin/python denied ==="
+_scribe_bash_deny "scribe absolute python" "run-scribe-abs-py" \
+  "/usr/bin/python -c \"open('/etc/foo','w').write('x')\"" "python"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — python3.11 denied ==="
+_scribe_bash_deny "scribe versioned python" "run-scribe-py311" \
+  "python3.11 script.py" "python"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — /bin/sed -i denied ==="
+_scribe_bash_deny "scribe absolute sed -i" "run-scribe-abs-sedi" \
+  "/bin/sed -i 's/x/y/' /etc/foo" "sed -i"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — sed -Ei (bundled) denied ==="
+_scribe_bash_deny "scribe sed -Ei bundled" "run-scribe-sed-Ei" \
+  "sed -Ei 's/x/y/' file" "sed -i"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — perl -p -i (split) denied ==="
+_scribe_bash_deny "scribe perl -p -i split" "run-scribe-perl-p-i" \
+  "perl -p -i -e 's/x/y/' file" "perl -i"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — perl -pi (bundled) denied ==="
+_scribe_bash_deny "scribe perl -pi bundled" "run-scribe-perl-pi" \
+  "perl -pi -e 's/x/y/' file" "perl -i"
+
+echo ""
+echo "=== pretooluse-pipeline-guards: scribe Bash — /bin/ln -s denied ==="
+_scribe_bash_deny "scribe absolute ln -s" "run-scribe-abs-lns" \
+  "/bin/ln -s /etc/passwd /tmp/link" "ln -s"
+
+# ============================================================
 # Ship checklist guard tests
 # ============================================================
 
@@ -2025,6 +2177,64 @@ assert_eq "push scan detects AKIA key in unpushed commit (exit 2)" "EXIT:2" "$(p
 assert_contains "push scan block reason=secret_detected" "secret_detected" "$out"
 
 rm -rf "$_push_tmp"
+
+# ============================================================
+echo ""
+echo "=== M1: secret-commit-guard denies git-dir/work-tree override bypass ==="
+
+# Task 33 (M1): commands using --git-dir, --work-tree, GIT_DIR=, or GIT_WORK_TREE=
+# could redirect the staged-diff scan away from the real commit target. Detect
+# and refuse rather than try to normalise. Exit 2, reason=git_dir_override_denied.
+_m1_tmp=$(mktemp -d)
+git -C "$_m1_tmp" init -q
+git -C "$_m1_tmp" commit --allow-empty -m "init" -q
+
+_m1_run() {
+  local label="$1" cmd="$2"
+  local out rc
+  out=$(jq -cn --arg c "$cmd" '{tool_input:{command:$c}}' \
+    | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+  rc=$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')
+  assert_eq "$label exit 2" "EXIT:2" "$rc"
+  assert_contains "$label reason=git_dir_override_denied" "git_dir_override_denied" "$out"
+}
+
+_m1_run "--git-dir= flag (fused)" "git --git-dir=/tmp/foo/.git commit -m wip"
+_m1_run "--git-dir flag (space-separated)" "git --git-dir /tmp/foo/.git commit -m wip"
+_m1_run "--work-tree= flag (fused)" "git --work-tree=/tmp/foo commit -m wip"
+_m1_run "--git-dir + --work-tree combo" "git --git-dir=/tmp/foo/.git --work-tree=/tmp/foo commit -m wip"
+_m1_run "GIT_DIR= env prefix" "GIT_DIR=/tmp/foo/.git git commit -m wip"
+_m1_run "GIT_WORK_TREE= env prefix" "GIT_WORK_TREE=/tmp/foo git commit -m wip"
+_m1_run "FOO=bar GIT_DIR= multi-env prefix" "FOO=bar GIT_DIR=/tmp/foo/.git git commit -m wip"
+_m1_run "GIT_DIR= env prefix on push" "GIT_DIR=/tmp/foo/.git git push origin staging"
+
+# Negative case: plain commit in a real repo with no secrets must still allow.
+out=$(jq -cn --arg c "git -C $_m1_tmp commit --allow-empty -m wip" '{tool_input:{command:$c}}' \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "plain commit (no override) still allowed" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+# Negative case: unrelated command mentioning --git-dir as plain text — not a
+# git commit/push, so the deny check must not fire (early-return at line 47).
+out=$(printf '%s' '{"tool_input":{"command":"echo see git --git-dir docs"}}' \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "unrelated echo mentioning --git-dir allowed" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+# Negative case: `git config` with no commit/push — must not fire.
+out=$(printf '%s' '{"tool_input":{"command":"git config user.email foo@bar"}}' \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "git config (no commit/push) allowed" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+# Known false positive — quoted-string check: a commit message mentioning
+# `--git-dir` inside `-m "..."` will trip the deny. This is acceptable
+# fail-closed behavior (the cost is one rejected commit; the cost of a missed
+# override is a leaked secret). Documenting the behavior explicitly so a
+# regression in the regex doesn't silently change semantics.
+out=$(jq -cn --arg c 'git commit -m "use --git-dir to point at the bare repo"' '{tool_input:{command:$c}}' \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "quoted --git-dir in commit message denied (known false positive — fail-closed)" \
+  "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+rm -rf "$_m1_tmp"
 
 # ============================================================
 echo ""

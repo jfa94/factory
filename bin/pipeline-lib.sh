@@ -74,6 +74,11 @@ log_error() { printf '[%s] [ERROR] %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$
 # silently reverts every threshold to its compiled default.
 read_config() {
   local key="$1" default="${2:-}"
+  if [[ ! "$key" =~ ^\.?[a-zA-Z_][.a-zA-Z0-9_]*$ ]]; then
+    log_error "read_config: rejecting non-conforming key expression: '$key' — only dot-notation keys allowed (e.g. .foo or .foo.bar)"
+    printf '%s' "$default"
+    return
+  fi
   local config_file="${CLAUDE_PLUGIN_DATA}/config.json"
   if [[ ! -f "$config_file" ]]; then
     printf '%s' "$default"
@@ -110,6 +115,11 @@ read_config() {
 # Usage: read_config_strict <jq-key>
 read_config_strict() {
   local key="$1"
+  if [[ ! "$key" =~ ^\.?[a-zA-Z_][.a-zA-Z0-9_]*$ ]]; then
+    log_error "read_config_strict: rejecting non-conforming key expression: '$key' — only dot-notation keys allowed (e.g. .foo or .foo.bar)"
+    printf ''
+    return
+  fi
   local config_file="${CLAUDE_PLUGIN_DATA}/config.json"
   [[ -f "$config_file" ]] || { printf ''; return; }
   local val
