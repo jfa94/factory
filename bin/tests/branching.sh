@@ -1632,6 +1632,16 @@ assert_eq "implementation-reviewer.md exists" "true" \
 
 # ============================================================
 echo ""
+echo "=== M5: pipeline-parse-review uses a single EXIT trap ==="
+# Multiple `trap … EXIT` statements overwrite each other; only the last-set
+# trap runs, leaking the others' tempfiles. The fix consolidates to one
+# registry-walking trap.
+PARSE_REVIEW_SRC="$(cd "$(dirname "$0")/.." && pwd)/pipeline-parse-review"
+exit_trap_count=$(grep -cE "^[[:space:]]*trap .*EXIT" "$PARSE_REVIEW_SRC" || true)
+assert_eq "parse-review: exactly one EXIT trap" "1" "$exit_trap_count"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"
