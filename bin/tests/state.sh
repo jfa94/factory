@@ -298,6 +298,15 @@ has_max_turns=$(echo "$output" | jq '.thresholds | has("max_orchestrator_turns")
 assert_eq "output.thresholds does NOT include max_tasks" "false" "$has_max_tasks"
 assert_eq "output.thresholds does NOT include max_orchestrator_turns" "false" "$has_max_turns"
 
+# H12: fail-closed on corrupt consecutive_failures. Previous behavior:
+# jq failure → consecutive_failures="" → `[[ "" -ge 5 ]] == false` → breaker
+# never trips on corrupt state. New: non-numeric value or jq error → trip.
+pipeline-state write "run-test-001" '.circuit_breaker.consecutive_failures' '"not-a-number"' >/dev/null 2>&1
+assert_exit "H12: circuit breaker trips on non-numeric consecutive_failures" 1 pipeline-circuit-breaker "run-test-001"
+
+# Reset for downstream tests.
+pipeline-state write "run-test-001" '.circuit_breaker.consecutive_failures' '0' >/dev/null 2>&1
+
 # Restore shared default config for downstream tests.
 echo '{"maxRuntimeMinutes":0,"maxConsecutiveFailures":5}' > "$CLAUDE_PLUGIN_DATA/config.json"
 pipeline-state write "run-test-001" '.started_at' '"2099-01-01T00:00:00Z"' >/dev/null 2>&1

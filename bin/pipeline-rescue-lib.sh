@@ -46,7 +46,17 @@ rescue_audit() {
     --arg error "$error" \
     '{ts: $ts, phase: $phase, issue_id: $issue_id, task_id: $task_id, action: $action, result: $result, error: (if $error == "" then null else $error end)}')
   local current new
-  current=$(pipeline-state read "$run_id" '.rescue.applied_actions // []' 2>/dev/null || echo '[]')
+  # H11: do NOT default to '[]' on read failure — that overwrites the existing
+  # audit history when the read transient-fails (lock contention, jq parse
+  # error). Abort the audit-merge instead so the prior entries survive.
+  if ! current=$(pipeline-state read "$run_id" '.rescue.applied_actions // []' 2>/dev/null); then
+    log_error "rescue_audit: pipeline-state read failed for $run_id — refusing to overwrite audit history (action=$action result=$result lost from audit, run state intact)"
+    return 1
+  fi
+  # If state has never had this field, read may emit empty or "null".
+  if [[ -z "$current" || "$current" == "null" ]]; then
+    current='[]'
+  fi
   new=$(jq --argjson entry "$entry" '. + [$entry]' <<<"$current")
   pipeline-state write "$run_id" '.rescue.applied_actions' "$new" >/dev/null
 }

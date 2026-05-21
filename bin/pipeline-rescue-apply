@@ -105,8 +105,14 @@ _apply_I_01() {
     rescue_audit "$run_id" safe I-01 "" clear_stale_lock dry_run ""
     return 0
   fi
+  local _rmdir_err=""
   [[ -f "$lock/pid" ]] && rm -f "$lock/pid"
-  rmdir "$lock" 2>/dev/null || true
+  # M6: capture rmdir failure (e.g. lock recreated by concurrent writer) instead
+  # of claiming `ok` for a no-op.
+  if ! _rmdir_err=$(rmdir "$lock" 2>&1); then
+    rescue_audit "$run_id" safe I-01 "" clear_stale_lock partial_failure "$_rmdir_err"
+    return 0
+  fi
   rescue_audit "$run_id" safe I-01 "" clear_stale_lock ok ""
 }
 
@@ -120,7 +126,13 @@ _apply_I_02() {
     rescue_audit "$run_id" safe I-02 "" remove_orphan_worktree dry_run ""
     return 0
   fi
-  git worktree remove --force "$wt_path" 2>/dev/null || true
+  local _wt_err=""
+  # M6: capture worktree removal failure (locked, missing admin dir) — claiming
+  # `ok` masked real failures from the audit.
+  if ! _wt_err=$(git worktree remove --force "$wt_path" 2>&1); then
+    rescue_audit "$run_id" safe I-02 "" remove_orphan_worktree partial_failure "$_wt_err"
+    return 0
+  fi
   rescue_audit "$run_id" safe I-02 "" remove_orphan_worktree ok "$wt_path"
 }
 
@@ -213,7 +225,11 @@ _apply_I_07() {
       rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr error "push rejected after rebase; escalated to investigation (I-13)"
     fi
   else
-    git -C "$wt" rebase --abort >/dev/null 2>&1 || true
+    # M6: capture abort failure (rebase was never started, .git/rebase-merge
+    # missing) — surface in the audit trail rather than claim success.
+    local _abort_err
+    _abort_err=$(git -C "$wt" rebase --abort 2>&1) \
+      || log_warn "rescue I-07: rebase --abort failed in $wt: ${_abort_err//$'\n'/ }"
     pipeline-state task-status "$run_id" "$task_id" failed >/dev/null
     pipeline-state task-write "$run_id" "$task_id" failure_reason '"unresolvable merge conflict (I-13)"' >/dev/null
     rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr error "rebase failed; escalated to investigation (I-13)"

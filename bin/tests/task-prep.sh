@@ -87,6 +87,28 @@ output=$(pipeline-classify-task '{"files":["a.ts"],"depends_on":[]}' 2>/dev/null
 assert_eq "default simple model is haiku" "haiku" "$(echo "$output" | jq -r '.model')"
 assert_eq "default simple maxTurns is 40" "40" "$(echo "$output" | jq -r '.maxTurns')"
 
+# H8: fail-closed on malformed task JSON. Previous behavior: jq -r failure
+# silently produced empty file_count/dep_count → arithmetic on empty evaluated
+# `[[ "" -le 1 ]] == true` → tier=simple. Security/feature tasks silently
+# downgraded to haiku, security-reviewer never spawned.
+set +e
+output=$(pipeline-classify-task 'not valid json' 2>/dev/null)
+rc=$?
+set -e
+assert_eq "H8: classify-task malformed JSON exits non-zero (fail-closed)" "1" "$rc"
+
+# When jq output is non-numeric (shouldn't happen normally, but if json has
+# files as object instead of array). pipeline-classify-task must reject.
+set +e
+output=$(pipeline-classify-task '{"files":{"not":"array"}}' 2>/dev/null)
+rc=$?
+set -e
+# `.files | length` on an object returns the number of keys (1), so it IS
+# numeric. The fail-closed path triggers only on jq parse error or non-numeric.
+# This test documents that the type-mismatch case is left to the caller's spec
+# validation; classify-task only fail-closes on jq-level errors.
+assert_eq "H8: classify-task object-as-files coerces via length (caller validates type)" "0" "$rc"
+
 echo ""
 echo "=== pipeline-classify-risk ==="
 
@@ -174,6 +196,17 @@ assert_eq "bare api/ → feature" "feature" "$(echo "$output" | jq -r '.tier')"
 # Deep nested still works
 output=$(pipeline-classify-risk '{"files":["a/b/c/auth/x.ts"]}' 2>/dev/null)
 assert_eq "deep nested auth → security" "security" "$(echo "$output" | jq -r '.tier')"
+
+# H8: malformed task JSON must NOT silently classify as routine — the previous
+# behavior would silently downgrade a security/feature task to routine so the
+# security-reviewer would never spawn. Fail-closed default: security tier.
+set +e
+risk_bad=$(pipeline-classify-risk 'definitely not json' 2>/dev/null)
+risk_bad_rc=$?
+set -e
+assert_eq "H8: classify-risk malformed JSON exits non-zero" "1" "$risk_bad_rc"
+assert_eq "H8: classify-risk malformed JSON fail-closes to security tier" "security" "$(printf '%s' "$risk_bad" | jq -r '.tier')"
+assert_eq "H8: classify-risk fail-closed sets review_rounds=6" "6" "$(printf '%s' "$risk_bad" | jq -r '.review_rounds')"
 
 echo ""
 echo "=== pipeline-validate-tasks (valid DAG) ==="

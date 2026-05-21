@@ -43,11 +43,28 @@ fi
 
 pkg_mgr=$(detect_pkg_manager "$worktree")
 
+# M8: validate package.json is parseable up-front. Previously the
+# `2>/dev/null || true` form silently collapsed "corrupt package.json" into
+# "no factory.quality override" and fell through to the default command list —
+# a corrupt manifest would run defaults instead of failing closed.
+_pkg_jq_err=$(jq -e . package.json 2>&1 >/dev/null) || {
+  log_error "package.json could not be parsed by jq: ${_pkg_jq_err//$'\n'/ } — refusing to fall back to default quality command list (fail-closed)"
+  result=$(jq -nc --arg err "$_pkg_jq_err" '{ok:false, error:"package_json_parse_error", detail:$err, checks:[]}')
+  run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+  if [[ -f "$run_dir/state.json" ]]; then
+    pipeline-state task-write "$run_id" "$task_id" quality_gate "$result" >/dev/null || \
+      log_error "could not record quality_gate parse-error result for $task_id"
+  fi
+  printf '%s\n' "$result"
+  exit 1
+}
+unset _pkg_jq_err
+
 # Discover the command list. Prefer the factory.quality override; fall
 # back to npm scripts that actually exist (lint / typecheck|tsc /
 # test:coverage|test). Skip cleanly if none are configured — a JS repo
 # without any quality scripts is a real config, not a failure.
-commands=$(jq -r '.["factory"].quality // empty | .[]?' package.json 2>/dev/null || true)
+commands=$(jq -r '.["factory"].quality // empty | .[]?' package.json)
 if [[ -z "$commands" ]]; then
   commands=""
   jq -e '.scripts.lint' package.json >/dev/null 2>&1 && commands+="lint"$'\n'

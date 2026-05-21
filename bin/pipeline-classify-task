@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 # Classify task complexity → model/turns config.
 # Usage: pipeline-classify-task <task-json>
-# Exit: 0=success
+# Exit: 0=success, 1=jq failed / non-numeric count (fail-closed: H8)
+
+set -euo pipefail
 
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
 task_json="${1:?missing task JSON}"
 
-file_count=$(printf '%s' "$task_json" | jq '(.files // []) | length')
-dep_count=$(printf '%s' "$task_json" | jq '(.depends_on // []) | length')
+if ! file_count=$(printf '%s' "$task_json" | jq '(.files // []) | length'); then
+  log_error "jq failed to compute file_count from task JSON"
+  exit 1
+fi
+if ! dep_count=$(printf '%s' "$task_json" | jq '(.depends_on // []) | length'); then
+  log_error "jq failed to compute dep_count from task JSON"
+  exit 1
+fi
+if ! [[ "$file_count" =~ ^[0-9]+$ ]]; then
+  log_error "file_count not numeric: '$file_count' — refusing to classify (fail-closed)"
+  exit 1
+fi
+if ! [[ "$dep_count" =~ ^[0-9]+$ ]]; then
+  log_error "dep_count not numeric: '$dep_count' — refusing to classify (fail-closed)"
+  exit 1
+fi
 
 # File tier: 1=simple, 2=medium, 3+=complex
 if [[ "$file_count" -le 1 ]]; then

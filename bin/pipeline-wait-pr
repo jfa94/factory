@@ -155,7 +155,14 @@ _resolve_safe_conflict() {
               "$_pkg_tmp/ours.json" "$_pkg_tmp/base.json" "$_pkg_tmp/theirs.json" \
               > "$_pkg_tmp/merged.json" 2>/dev/null; then
         cp "$_pkg_tmp/merged.json" package.json
-        git add -- package.json 2>/dev/null
+        # M4: do NOT swallow `git add` failure — falling through to `return 0`
+        # leaves the unstaged merge result and lets a subsequent push include
+        # merge artifacts (or skip the resolved file entirely).
+        if ! git add -- package.json; then
+          rm -rf "$_pkg_tmp"
+          log_error "auto-resolved package.json but \`git add\` failed — refusing to claim success"
+          return 1
+        fi
         rm -rf "$_pkg_tmp"
         log_info "auto-resolved package.json formatting conflict"
         return 0

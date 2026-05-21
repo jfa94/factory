@@ -63,6 +63,15 @@ log_error() { printf '[%s] [ERROR] %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$
 
 # Read a value from the plugin config file.
 # Usage: read_config <jq-key> [default]
+#
+# H13: distinguish three cases:
+#   1. File missing       → silent default (legitimate "no config" path)
+#   2. Key absent         → silent default (legitimate "no override" path)
+#   3. jq parse error     → loud log_error; default returned but operator sees it
+#
+# The previous `2>/dev/null || true` form collapsed (2) and (3) into the same
+# silent-default behavior, which is the f1f5264 class of bug: corrupted config
+# silently reverts every threshold to its compiled default.
 read_config() {
   local key="$1" default="${2:-}"
   local config_file="${CLAUDE_PLUGIN_DATA}/config.json"
@@ -70,9 +79,29 @@ read_config() {
     printf '%s' "$default"
     return
   fi
-  local val
-  val=$(jq -r "$key // empty" "$config_file" 2>/dev/null) || true
-  printf '%s' "${val:-$default}"
+  local val jq_err
+  jq_err=$(mktemp 2>/dev/null) || jq_err=""
+  if [[ -z "$jq_err" ]]; then
+    # Could not mktemp — fall back to old behavior but at least try to surface failures.
+    val=$(jq -r "$key // empty" "$config_file" 2>/dev/null) || {
+      log_error "read_config: jq failed reading '$key' from $config_file (mktemp unavailable, no diagnostic)"
+      printf '%s' "$default"
+      return
+    }
+    printf '%s' "${val:-$default}"
+    return
+  fi
+  if val=$(jq -r "$key // empty" "$config_file" 2>"$jq_err"); then
+    rm -f "$jq_err"
+    printf '%s' "${val:-$default}"
+    return
+  fi
+  # jq returned non-zero — parse error (or invalid key expression). Surface it.
+  local err_msg
+  err_msg=$(<"$jq_err")
+  rm -f "$jq_err"
+  log_error "read_config: jq parse error reading '$key' from $config_file: ${err_msg//$'\n'/ } — returning default '$default'"
+  printf '%s' "$default"
 }
 
 # Like read_config, but emits empty string when the key is JSON null or

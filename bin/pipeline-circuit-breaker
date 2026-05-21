@@ -3,6 +3,8 @@
 # Exit 0 = safe to proceed, Exit 1 = tripped (reason on stderr)
 # Usage: pipeline-circuit-breaker <run-id>
 
+set -euo pipefail
+
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
@@ -14,7 +16,10 @@ if [[ ! -f "$state_file" ]]; then
   exit 1
 fi
 
-state=$(cat "$state_file")
+if ! state=$(cat "$state_file"); then
+  log_error "could not read state file: $state_file"
+  exit 1
+fi
 
 # Read thresholds from config (with defaults).
 # Keys match the canonical schema in .claude-plugin/plugin.json (top-level).
@@ -22,9 +27,24 @@ state=$(cat "$state_file")
 max_runtime=$(read_config '.maxRuntimeMinutes' '0')
 max_failures=$(read_config '.maxConsecutiveFailures' '5')
 
-# Read current values from state
-consecutive_failures=$(printf '%s' "$state" | jq -r '.circuit_breaker.consecutive_failures // 0')
-pause_minutes=$(printf '%s' "$state" | jq -r '.circuit_breaker.pause_minutes // 0')
+# H12: fail-closed on corrupt state. jq parse failure or non-numeric value must
+# trip the breaker rather than leave it disarmed (`[[ "" -ge 5 ]] == false`).
+if ! consecutive_failures=$(printf '%s' "$state" | jq -r '.circuit_breaker.consecutive_failures // 0' 2>&1); then
+  log_error "circuit_breaker: jq failed to read consecutive_failures: $consecutive_failures — tripping (fail-closed)"
+  exit 1
+fi
+if ! [[ "$consecutive_failures" =~ ^[0-9]+$ ]]; then
+  log_error "circuit_breaker: consecutive_failures non-numeric: '$consecutive_failures' — tripping (fail-closed)"
+  exit 1
+fi
+if ! pause_minutes=$(printf '%s' "$state" | jq -r '.circuit_breaker.pause_minutes // 0' 2>&1); then
+  log_error "circuit_breaker: jq failed to read pause_minutes: $pause_minutes — tripping (fail-closed)"
+  exit 1
+fi
+if ! [[ "$pause_minutes" =~ ^[0-9]+$ ]]; then
+  log_error "circuit_breaker: pause_minutes non-numeric: '$pause_minutes' — tripping (fail-closed)"
+  exit 1
+fi
 
 # Calculate runtime, deducting time the run was paused (e.g. rate-limit waits).
 # pause_minutes is maintained by the orchestrator via pipeline-state when

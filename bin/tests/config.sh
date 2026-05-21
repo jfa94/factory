@@ -1160,6 +1160,56 @@ rm -rf "$RCS_NO_DIR"
 
 # ============================================================
 echo ""
+echo "=== read_config parse-error distinction (H13) ==="
+
+# Seed a corrupt config.json — jq must fail to parse → read_config emits
+# log_error on stderr (previously a parse error was indistinguishable from
+# a missing key, silently reverting every threshold to its compiled default).
+RCS_BAD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/read-config-bad-XXXXXX")
+printf '{ "broken": "missing-close-brace"' > "$RCS_BAD_DIR/config.json"
+
+# 1. Default is returned (does not crash the caller).
+bad_default=$(CLAUDE_PLUGIN_DATA="$RCS_BAD_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config '.anything' 'compiled-default'" 2>/dev/null)
+assert_eq "H13: corrupt config.json returns compiled default" "compiled-default" "$bad_default"
+
+# 2. stderr contains an ERROR log so the operator can see the parse failure.
+#    Previously this was silent. Look for 'parse error' phrase from log_error.
+bad_stderr=$(CLAUDE_PLUGIN_DATA="$RCS_BAD_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config '.anything' 'd'" 2>&1 >/dev/null)
+if [[ "$bad_stderr" == *"parse error"* && "$bad_stderr" == *"ERROR"* ]]; then
+  echo "  PASS: H13: corrupt config.json emits ERROR-level log on stderr"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: H13: expected ERROR + 'parse error' in stderr; got: ${bad_stderr}"
+  fail=$((fail + 1))
+fi
+
+# 3. Sanity: a present key in a valid config.json must NOT log an error.
+RCS_OK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/read-config-ok-XXXXXX")
+printf '{"present": "value"}' > "$RCS_OK_DIR/config.json"
+ok_stderr=$(CLAUDE_PLUGIN_DATA="$RCS_OK_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config '.present' 'd'" 2>&1 >/dev/null)
+if [[ "$ok_stderr" != *"ERROR"* ]]; then
+  echo "  PASS: H13: valid config.json with present key emits no ERROR"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: H13: unexpected ERROR for valid config: ${ok_stderr}"
+  fail=$((fail + 1))
+fi
+
+# 4. Sanity: missing key in a valid config.json must NOT log an error either
+#    (only true parse errors should be loud).
+missing_stderr=$(CLAUDE_PLUGIN_DATA="$RCS_OK_DIR" bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh'; read_config '.does_not_exist' 'd'" 2>&1 >/dev/null)
+if [[ "$missing_stderr" != *"ERROR"* ]]; then
+  echo "  PASS: H13: valid config.json with missing key emits no ERROR (silent default is correct)"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: H13: missing-key path should be silent; got: ${missing_stderr}"
+  fail=$((fail + 1))
+fi
+
+rm -rf "$RCS_BAD_DIR" "$RCS_OK_DIR"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"

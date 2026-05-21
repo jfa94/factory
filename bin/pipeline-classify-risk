@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 # Classify task risk from file paths → review rounds + extra reviewers.
 # Usage: pipeline-classify-risk <task-json>
-# Exit: 0=success
+# Exit: 0=success, 1=jq failed (fail-closed → security tier already emitted, caller decides)
+
+set -euo pipefail
 
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
 task_json="${1:?missing task JSON}"
 
-files=$(printf '%s' "$task_json" | jq -r '(.files // [])[]')
+# Fail-closed: if jq cannot parse the task JSON, classify as security tier so
+# downstream picks max reviewers rather than silently downgrading to routine (H8).
+if ! files=$(printf '%s' "$task_json" | jq -r '(.files // [])[]'); then
+  log_error "jq failed to extract files from task JSON — defaulting to security tier"
+  jq -n '{tier:"security", review_rounds:6, extra_reviewers:["security-reviewer","architecture-reviewer"], matched_patterns:[], reasoning:"jq parse failure → fail-closed security tier"}'
+  exit 1
+fi
 
 tier="routine"
 tier_trigger=""

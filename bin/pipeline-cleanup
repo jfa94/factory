@@ -215,7 +215,17 @@ fi
 
 # --- Sweep orphan spec-handoff/* branches (other runs) ---
 # Cross-reference active runs so we don't delete a branch mid spec-generation.
-mapfile -t active_runs < <(pipeline-state list 2>/dev/null | jq -r '.[]' 2>/dev/null)
+# H9: fail-closed — if pipeline-state list errors, refuse to sweep (otherwise
+# empty active_runs[] causes live runs' branches to be classified as orphan).
+if ! _active_runs_raw=$(pipeline-state list); then
+  log_error "pipeline-state list failed — refusing orphan spec-handoff sweep to avoid deleting live-run branches"
+  exit 1
+fi
+if ! mapfile -t active_runs < <(printf '%s' "$_active_runs_raw" | jq -r '.[]'); then
+  log_error "could not parse pipeline-state list output as JSON array — refusing orphan spec-handoff sweep"
+  exit 1
+fi
+unset _active_runs_raw
 orphan_spec_deleted=0
 
 while IFS= read -r sh_branch; do

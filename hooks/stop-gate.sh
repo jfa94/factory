@@ -79,10 +79,19 @@ if ! command -v pipeline-state >/dev/null 2>&1; then
   echo "[stop-gate] WARN: pipeline-state not on PATH (CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT:-unset}); skipping finalize-on-stop for $run_id" >&2
   exit 0
 fi
-if ! pipeline-state finalize-on-stop "$run_id" >&2; then
-  echo "[stop-gate] WARN: pipeline-state finalize-on-stop failed for $run_id" >&2
+# M9: previously fail-open — finalize-on-stop failure logged a WARN and exited
+# 0, leaving the run in `running` state. On resume the orchestrator thinks the
+# run is still live (status check + lock-file derivation), opening the door to
+# double-execution and stale-state writes. Emit decision:block so the user
+# sees the failure and can rerun finalize or escalate, instead of silently
+# accepting the stop with a corrupt state.
+_finalize_err=$(pipeline-state finalize-on-stop "$run_id" 2>&1) || {
+  echo "[stop-gate] ERROR: pipeline-state finalize-on-stop failed for $run_id: ${_finalize_err//$'\n'/ }" >&2
+  reason="finalize-on-stop failed for $run_id: ${_finalize_err//$'\n'/ }. Run state may be inconsistent; rerun \`pipeline-state finalize-on-stop $run_id\` or investigate before stopping."
+  jq -cn --arg reason "$reason" '{decision:"block", reason:$reason}'
   exit 0
-fi
+}
+unset _finalize_err
 
 echo "[stop-gate] run $run_id finalized via pipeline-state" >&2
 

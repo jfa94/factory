@@ -45,8 +45,16 @@ if (( level < threshold )); then
 fi
 
 # Gate tripped — pause the run. Mark run-level status as awaiting_human.
-pipeline-state write "$run_id" '.status' '"awaiting_human"' >/dev/null 2>&1 || \
-  log_warn "could not update run status to awaiting_human"
+# M10: state-write failure was previously logged as a warning and the gate
+# returned 42 anyway. On resume the orchestrator re-runs the stage because
+# `.status` is not awaiting_human → the same human-gate trips again and we
+# loop. Promote to log_error + non-zero exit so the orchestrator stops rather
+# than spinning.
+if ! _hg_state_err=$(pipeline-state write "$run_id" '.status' '"awaiting_human"' 2>&1 >/dev/null); then
+  log_error "could not update run status to awaiting_human: ${_hg_state_err//$'\n'/ } — refusing to mark gate tripped without state persistence"
+  exit 1
+fi
+unset _hg_state_err
 
 # Post a human-gate comment on the run's primary issue (if recorded).
 state_file="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/state.json"

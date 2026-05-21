@@ -113,8 +113,15 @@ if [[ "$ci_conclusion" == "green" ]]; then
 fi
 
 # Write to state + emit metric.
-pipeline-state task-write "$run_id" "$task_id" ci_status "\"$ci_conclusion\"" >/dev/null 2>&1 || true
-pipeline-state task-write "$run_id" "$task_id" merge_status "\"$merge_status\"" >/dev/null 2>&1 || true
+# H10: do NOT silently swallow state-write failure — wake payload would tell the
+# orchestrator "green" while state.json keeps the old value (drift class:
+# f1f5264 / 2158366). Capture stderr, log on failure, but proceed with the wake
+# so the operator at least sees the stderr reminder (exit 2 below).
+_state_err=$(pipeline-state task-write "$run_id" "$task_id" ci_status "\"$ci_conclusion\"" 2>&1 >/dev/null) \
+  || printf '[asyncrewake-ci] WARN: ci_status state write failed: %s\n' "$_state_err" >&2
+_state_err=$(pipeline-state task-write "$run_id" "$task_id" merge_status "\"$merge_status\"" 2>&1 >/dev/null) \
+  || printf '[asyncrewake-ci] WARN: merge_status state write failed: %s\n' "$_state_err" >&2
+unset _state_err
 lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$lib" ]]; then
   # shellcheck disable=SC1090

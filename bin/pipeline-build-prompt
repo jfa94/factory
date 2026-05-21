@@ -156,22 +156,30 @@ spec_content=$(printf '%s' "$spec_content" | sed -E 's/<<<(END:)?UNTRUSTED:[A-Z_
 criteria_list=$(printf '%s' "$visible_criteria" | jq -r '.[] | "- " + .')
 criteria_list=$(printf '%s' "$criteria_list" | sed -E 's/<<<(END:)?UNTRUSTED:[A-Z_]+(:[A-Za-z0-9]+)?>>>/[redacted-fence]/g')
 
-# Detect prior work (commits ahead of staging)
+# Detect prior work (commits ahead of staging).
+# M7: when `git fetch` fails, skip the prior-work block entirely. Computing
+# `git log origin/staging..HEAD` against a stale ref can report commits as
+# "prior work" that the new origin/staging already contains, telling the
+# executor not to redo work that the executor must actually redo.
 prior_work=""
 if git rev-parse --git-dir &>/dev/null; then
-  if ! git fetch origin staging --quiet 2>/dev/null; then
-    log_warn "git fetch origin staging failed — prior-work detection may be incomplete"
-  fi
-  ahead=$(git log origin/staging..HEAD --oneline 2>/dev/null || true)
-  if [[ -n "$ahead" ]]; then
-    prior_work="
+  # pipeline-lib.sh sets `set -euo pipefail`; the assign+rc capture must live
+  # in an `if` so non-zero `git fetch` does NOT abort the script.
+  if _fetch_err=$(git fetch origin staging --quiet 2>&1); then
+    ahead=$(git log origin/staging..HEAD --oneline 2>/dev/null || true)
+    if [[ -n "$ahead" ]]; then
+      prior_work="
 ## Prior Work
 The following commits already exist on this branch. Do NOT redo this work:
 \`\`\`
 ${ahead}
 \`\`\`
 Review the existing changes before implementing anything new."
+    fi
+  else
+    log_error "git fetch origin staging failed: ${_fetch_err//$'\n'/ } — skipping prior-work block to avoid using stale origin/staging"
   fi
+  unset _fetch_err
 fi
 
 # Resume context — emitted when state has prior_work_dir/branch/commit recorded
