@@ -72,9 +72,23 @@ fi
 
 if [[ -z "$task_id" && -f "$transcript" ]]; then
   # Look for `<run-id>/<task-id>.<role>-prompt.md` reference in transcript.
-  task_id=$({ grep -oE "\.state/${run_id}/[a-zA-Z0-9_-]+\.(test-writer|executor|executor-fix|executor-ci-fix|reviewer|holdout)-prompt\.md" "$transcript" 2>/dev/null || true; } \
+  task_id=$({ grep -oE "\.state/${run_id}/[a-zA-Z0-9_-]+\.(test-writer|executor-ci-fix|executor-fix|executor|holdout-reviewer|reviewer|holdout)-prompt\.md" "$transcript" 2>/dev/null || true; } \
     | head -1 \
     | sed -E "s|.*\.state/${run_id}/([a-zA-Z0-9_-]+)\..*|\1|")
+fi
+
+# --- Holdout-reviewer role detection ---
+# The holdout reviewer reuses subagent_type=implementation-reviewer (no dedicated
+# subagent exists), so agent_type alone cannot discriminate it from a regular
+# postreview implementation-reviewer. Detect by grepping the transcript for the
+# `holdout-reviewer-prompt.md` path written by `_stage_postexec`. When matched,
+# the review output flows to `.tasks.<id>.holdout_review_file` instead of the
+# regular `review_files[]` array (which postreview consumes).
+is_holdout_reviewer=false
+if [[ "$agent_type" == "implementation-reviewer" && -f "$transcript" ]]; then
+  if grep -qE "\.state/${run_id}/[a-zA-Z0-9_-]+\.holdout-reviewer-prompt\.md" "$transcript" 2>/dev/null; then
+    is_holdout_reviewer=true
+  fi
 fi
 
 if [[ -z "$task_id" && "$agent_type" == "scribe" ]]; then
@@ -115,7 +129,14 @@ case "$agent_type" in
   implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer)
     if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
       mkdir -p "$run_dir/.state/$run_id"
-      review_path="$run_dir/.state/$run_id/$task_id.review.$agent_type.md"
+      if $is_holdout_reviewer; then
+        # Holdout reviewer output is consumed by `pipeline-holdout-validate
+        # check`, NOT by postreview's `review_files[]` parser. Route it to a
+        # distinct file so the two streams cannot collide.
+        review_path="$run_dir/.state/$run_id/$task_id.review.holdout-reviewer.md"
+      else
+        review_path="$run_dir/.state/$run_id/$task_id.review.$agent_type.md"
+      fi
       printf '%s' "$last_msg" > "$review_path"
     fi
     ;;
@@ -176,8 +197,18 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
           >/dev/null 2>>"$run_dir/transcript-errors.log" || true
       fi
       if [[ -n "$review_path" ]]; then
-        pipeline-state task-array-append "$run_id" "$task_id" review_files "\"$review_path\"" >/dev/null \
-          || printf '[subagent-stop-transcript] WARN: review_files append failed for %s\n' "$task_id" >&2
+        if $is_holdout_reviewer; then
+          # Layer 4 holdout output is consumed by `pipeline-holdout-validate
+          # check` at the next postexec invocation, NOT by postreview. Write
+          # to the dedicated single-value field so postreview's review_files[]
+          # parser never sees this artifact.
+          pipeline-state task-write "$run_id" "$task_id" holdout_review_file "\"$review_path\"" \
+            >/dev/null 2>>"$run_dir/transcript-errors.log" \
+            || printf '[subagent-stop-transcript] WARN: holdout_review_file write failed for %s\n' "$task_id" >&2
+        else
+          pipeline-state task-array-append "$run_id" "$task_id" review_files "\"$review_path\"" >/dev/null \
+            || printf '[subagent-stop-transcript] WARN: review_files append failed for %s\n' "$task_id" >&2
+        fi
       fi
       ;;
   esac
