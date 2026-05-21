@@ -13,6 +13,11 @@ trap 'rm -rf "$ROOT_TMP"' EXIT INT TERM
 
 export PATH="$STUB_DIR:$BIN_DIR:$PATH"
 
+# Production callers resolve pipeline-codex-review via script-relative absolute
+# path (defends against PATH shadows). Tests still need their write_stub to
+# intercept, so redirect the wrapper to the stub directory.
+export FACTORY_CODEX_REVIEW_BIN="$STUB_DIR/pipeline-codex-review"
+
 passed=0
 failed=0
 current=""

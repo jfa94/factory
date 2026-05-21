@@ -33,6 +33,14 @@
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
+# Script-relative resolution for sibling bin scripts. Bare names rely on PATH,
+# which can be shadowed by stale binaries in user PATH dirs (see issue: a
+# legacy /Users/.../dark-factory/pipeline-codex-review on PATH silently
+# swallowed reviews). FACTORY_CODEX_REVIEW_BIN is a test-only override —
+# production must leave it unset.
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_CODEX_REVIEW_BIN="${FACTORY_CODEX_REVIEW_BIN:-$_SCRIPT_DIR/pipeline-codex-review}"
+
 run_id="${1:?missing run-id}"
 task_id="${2:?missing task-id}"
 shift 2
@@ -927,7 +935,7 @@ _emit_postexec_manifest() {
     [[ -n "$spec_path" ]] && cargs+=(--spec-dir "$spec_path")
     local _codex_err_file _codex_rc=0
     _codex_err_file=$(mktemp "${TMPDIR:-/tmp}/codex-review-err.XXXXXX")
-    pipeline-codex-review "${cargs[@]}" > "$review_file" 2> "$_codex_err_file" || _codex_rc=$?
+    "$_CODEX_REVIEW_BIN" "${cargs[@]}" > "$review_file" 2> "$_codex_err_file" || _codex_rc=$?
     if (( _codex_rc != 0 )); then
       local _codex_err
       _codex_err=$(cat "$_codex_err_file" 2>/dev/null || printf '')

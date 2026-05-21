@@ -18,6 +18,12 @@ set -euo pipefail
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
 
+# Script-relative path for the codex review wrapper. PATH-based resolution can
+# pick up stale shadows (see pipeline-run-task header). FACTORY_CODEX_REVIEW_BIN
+# is a test-only override; production leaves it unset.
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_CODEX_REVIEW_BIN="${FACTORY_CODEX_REVIEW_BIN:-$_SCRIPT_DIR/pipeline-codex-review}"
+
 base_ref=""
 severity="medium"
 out_dir=""
@@ -47,7 +53,7 @@ if [[ "$reviewer" != "codex" ]]; then
   exit 1
 fi
 
-raw_review=$(pipeline-codex-review --base "$base_ref" --task-id "debug-r${round}") \
+raw_review=$("$_CODEX_REVIEW_BIN" --base "$base_ref" --task-id "debug-r${round}") \
   || { log_error "pipeline-codex-review failed"; exit 1; }
 
 printf '%s' "$raw_review" \

@@ -89,6 +89,22 @@ else
   _add_check "plugin_data" "fail" "CLAUDE_PLUGIN_DATA not writable: $CLAUDE_PLUGIN_DATA"
 fi
 
+# 6b. Codex-review wrapper not shadowed on PATH. Production callers now use an
+# absolute path so a shadow no longer affects the pipeline itself, but a shadow
+# still bites operator-shell invocations (e.g. ad-hoc `pipeline-codex-review
+# --base main`). Warn so the user sees it; do not fail.
+_plugin_bin="$_plugin_root/bin"
+_resolved_codex_review="$(command -v pipeline-codex-review 2>/dev/null || true)"
+if [[ -z "$_resolved_codex_review" ]]; then
+  _add_check "codex_review_path" "warn" \
+    "pipeline-codex-review not on PATH (plugin uses absolute path; informational only)"
+elif [[ "$(cd "$(dirname "$_resolved_codex_review")" 2>/dev/null && pwd)" != "$_plugin_bin" ]]; then
+  _add_check "codex_review_path" "warn" \
+    "pipeline-codex-review on PATH is shadowed by $_resolved_codex_review (plugin uses $_plugin_bin/pipeline-codex-review)"
+else
+  _add_check "codex_review_path" "pass" "pipeline-codex-review resolves to plugin bin"
+fi
+
 # 7. Strict mode: optional agents — search project, home, and plugin locations
 if [[ "$strict" == "true" ]]; then
   optional_agents=("scout")

@@ -12,6 +12,10 @@ trap 'rm -rf "$ROOT_TMP"' EXIT INT TERM
 
 export PATH="$STUB_DIR:$BIN_DIR:$PATH"
 
+# pipeline-debug-review now resolves pipeline-codex-review via absolute path
+# to defeat PATH shadows. Redirect the wrapper to the stub for tests.
+export FACTORY_CODEX_REVIEW_BIN="$STUB_DIR/pipeline-codex-review"
+
 passed=0; failed=0; current=""
 pass() { passed=$((passed+1)); printf '  PASS [%s] %s\n' "$current" "$1"; }
 fail() { failed=$((failed+1)); printf '  FAIL [%s] %s\n' "$current" "$1"; }
