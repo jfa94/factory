@@ -211,6 +211,145 @@ write_stub pipeline-codex-review '
 echo "{\"decision\":\"APPROVE\",\"blockers\":[],\"concerns\":[]}"'
 echo claude > "$STUB_DIR/reviewer"
 
+# --- 3.e: postexec — holdout first-pass spawns holdout-reviewer (Layer A) ---
+# Regression (Issue 2a): when a holdout file exists for the task but no
+# `holdout_review_file` is wired in state, the wrapper MUST spawn a focused
+# implementation-reviewer with the holdout-reviewer prompt (NOT fall closed
+# to needs_human_review). Returns 10 with a single-agent manifest whose
+# `role=holdout-reviewer` and `stage_after=postexec`.
+new_run postexec-holdout-spawn
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+# Seed a holdout file so the postexec block enters the holdout branch.
+hd="$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts"
+mkdir -p "$hd"
+cat > "$hd/alpha-001.json" <<EOF
+{"task_id":"alpha-001","withheld_criteria":["ac one"],"total_criteria":2,"withheld_count":1}
+EOF
+# Stub holdout-validate to emit a prompt for the `prompt` subcommand.
+write_stub pipeline-holdout-validate '
+case "$1" in
+  prompt) printf "Layer 4 holdout validation for task %s\n" "$3" ;;
+  check)  exit 0 ;;
+  *)      exit 2 ;;
+esac'
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec holdout-spawn: exit 10" "10" "$RC"
+assert_eq "postexec holdout-spawn: 1 agent" "1" \
+  "$(printf '%s' "$OUT" | jq -r '.agents | length')"
+assert_eq "postexec holdout-spawn: agent=implementation-reviewer" "implementation-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+assert_eq "postexec holdout-spawn: agent role=holdout-reviewer" "holdout-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].role')"
+assert_eq "postexec holdout-spawn: stage_after=postexec" "postexec" \
+  "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+# Verify the prompt file path points at the holdout-reviewer-prompt.md naming
+# (the SubagentStop hook keys off this suffix to route output to
+# .tasks.<id>.holdout_review_file).
+pf=$(printf '%s' "$OUT" | jq -r '.agents[0].prompt_file')
+[[ "$pf" == *".holdout-reviewer-prompt.md" ]] \
+  && pass "postexec holdout-spawn: prompt file is holdout-reviewer-prompt.md" \
+  || fail "postexec holdout-spawn: wrong prompt file ($pf)"
+[[ -f "$pf" ]] \
+  && pass "postexec holdout-spawn: prompt file exists on disk" \
+  || fail "postexec holdout-spawn: prompt file missing ($pf)"
+# State must NOT be mutated to needs_human_review; quality_gates.holdout should
+# be "pending" while the reviewer is in flight.
+assert_eq "postexec holdout-spawn: status not needs_human_review" "executing" "$(status_of)"
+assert_eq "postexec holdout-spawn: holdout_attempts=1" "1" "$(field_of holdout_attempts)"
+assert_eq "postexec holdout-spawn: quality_gates.holdout=pending" "pending" \
+  "$(pipeline-state read "$RUN_ID" '.tasks.alpha-001.quality_gates.holdout' 2>/dev/null)"
+# Restore default holdout-validate stub for subsequent cases.
+write_stub pipeline-holdout-validate 'exit 0'
+
+# --- 3.f: postexec — holdout second-pass runs check after review wired ------
+# When `holdout_review_file` is populated (Layer B in production, simulated
+# here by direct state write), the next postexec call must run `check` and
+# proceed to the reviewer manifest instead of re-spawning.
+new_run postexec-holdout-check
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+hd="$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts"
+mkdir -p "$hd"
+cat > "$hd/alpha-001.json" <<EOF
+{"task_id":"alpha-001","withheld_criteria":["ac one"],"total_criteria":2,"withheld_count":1}
+EOF
+# Simulate Layer B: hook wrote holdout_review_file pointing at the
+# reviewer's output.
+rf_holdout="$ROOT_TMP/$current-holdout-review.md"
+printf '{"criteria":[{"criterion":"ac one","satisfied":true,"evidence":"src/x.ts:1"}]}' > "$rf_holdout"
+pipeline-state task-write "$RUN_ID" alpha-001 holdout_review_file "\"$rf_holdout\"" >/dev/null
+# check stub returns 0 (pass)
+write_stub pipeline-holdout-validate '
+case "$1" in
+  check) exit 0 ;;
+  *)     exit 2 ;;
+esac'
+echo codex > "$STUB_DIR/reviewer"
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec holdout-check: exit 10" "10" "$RC"
+assert_eq "postexec holdout-check: agent=implementation-reviewer (postreview path)" \
+  "implementation-reviewer" "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+assert_eq "postexec holdout-check: stage_after=postreview" "postreview" \
+  "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+assert_eq "postexec holdout-check: quality_gates.holdout=pass" "pass" \
+  "$(pipeline-state read "$RUN_ID" '.tasks.alpha-001.quality_gates.holdout' 2>/dev/null)"
+echo claude > "$STUB_DIR/reviewer"
+write_stub pipeline-holdout-validate 'exit 0'
+
+# --- 3.g: postexec — no holdout file, no spawn, no fail-close --------------
+# Boundary requirement: tasks WITHOUT a holdout file (no withheld AC) must
+# skip the holdout block entirely — no holdout reviewer spawn, no
+# fail-closed, no holdout_attempts increment.
+new_run postexec-no-holdout
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+# No holdouts/<task>.json file seeded — confirm it doesn't exist.
+[[ ! -f "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts/alpha-001.json" ]] \
+  && pass "postexec no-holdout: holdout file absent" \
+  || fail "postexec no-holdout: holdout file unexpectedly present"
+echo codex > "$STUB_DIR/reviewer"
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec no-holdout: exit 10" "10" "$RC"
+assert_eq "postexec no-holdout: stage_after=postreview" "postreview" \
+  "$(printf '%s' "$OUT" | jq -r '.stage_after')"
+# Reviewer is the regular postreview implementation-reviewer, not holdout.
+assert_eq "postexec no-holdout: no holdout role" "null" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].role // null')"
+assert_eq "postexec no-holdout: holdout_attempts unset" "null" "$(field_of holdout_attempts)"
+echo claude > "$STUB_DIR/reviewer"
+
+# --- 3.h: postexec — holdout escalates to human after 2 attempts ------------
+# Defense in depth: if the SubagentStop hook fails to write holdout_review_file
+# after two spawn rounds, fall closed to needs_human_review rather than loop.
+new_run postexec-holdout-cap
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+hd="$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts"
+mkdir -p "$hd"
+cat > "$hd/alpha-001.json" <<EOF
+{"task_id":"alpha-001","withheld_criteria":["ac one"],"total_criteria":2,"withheld_count":1}
+EOF
+# Pre-seed holdout_attempts=2 (two prior unsuccessful spawn rounds).
+pipeline-state task-write "$RUN_ID" alpha-001 holdout_attempts '2' >/dev/null
+write_stub pipeline-holdout-validate '
+case "$1" in
+  prompt) printf "prompt body\n" ;;
+  check)  exit 0 ;;
+  *)      exit 2 ;;
+esac'
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec holdout-cap: exit 30" "30" "$RC"
+assert_eq "postexec holdout-cap: status=needs_human_review" "needs_human_review" "$(status_of)"
+assert_eq "postexec holdout-cap: quality_gates.holdout=missing-reviewer-output" \
+  "missing-reviewer-output" \
+  "$(pipeline-state read "$RUN_ID" '.tasks.alpha-001.quality_gates.holdout' 2>/dev/null)"
+write_stub pipeline-holdout-validate 'exit 0'
+
 # --- 4: postexec — claude fan-out (security tier) -------------------------
 new_run postexec-claude
 run_wrapper alpha-001 --stage preflight

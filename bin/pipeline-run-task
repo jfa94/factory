@@ -785,10 +785,54 @@ _stage_postexec() {
         return 30
       fi
     else
-      # holdout_review_file unwired — fail closed. Silently skipping let real
-      # holdout failures merge unchecked; a reviewer-output gap means we cannot
-      # verify Layer 4 and must escalate.
-      log_error "holdout file $holdout_file present but holdout_review_file unwired for $task_id — escalating to human"
+      # No holdout review yet — first-pass spawn. The dedicated holdout-reviewer
+      # gets a focused prompt (criterion-by-criterion verification) built by
+      # `pipeline-holdout-validate prompt`. The subagent-stop-transcript hook
+      # detects the holdout-reviewer prompt path and writes the review output
+      # back to `.tasks.<id>.holdout_review_file` so the next postexec invocation
+      # finds it above and runs `check`.
+      local _ho_attempts _ho_attempts_n
+      _ho_attempts=$(_task_field holdout_attempts)
+      _ho_attempts=$(_unquote_json_string "$_ho_attempts")
+      _ho_attempts_n=${_ho_attempts:-0}
+      [[ "$_ho_attempts_n" =~ ^[0-9]+$ ]] || _ho_attempts_n=0
+
+      if (( _ho_attempts_n < 2 )); then
+        _ensure_prompt_dir
+        local _ho_prompt_file
+        _ho_prompt_file=$(_prompt_path holdout-reviewer)
+        # `pipeline-holdout-validate prompt` produces a criterion-by-criterion
+        # prompt body on stdout. Wrap with the standard `[task:<id>]` header so
+        # transcript-grep / task_id derivation in the SubagentStop hook works.
+        {
+          printf '[task:%s]\n' "$task_id"
+          pipeline-holdout-validate prompt "$run_id" "$task_id"
+        } > "$_ho_prompt_file" || {
+          log_error "pipeline-holdout-validate prompt failed for $task_id"
+          t1=$(_now_ms)
+          log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout_prompt\""
+          return 30
+        }
+
+        _task_write holdout_attempts "$((_ho_attempts_n + 1))"
+        _task_write quality_gates.holdout '"pending"'
+
+        local _ho_agents_json
+        _ho_agents_json=$(jq -cn --arg pf "$_ho_prompt_file" \
+          '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:40, prompt_file:$pf, role:"holdout-reviewer"}]')
+        _record_active_task_for_stop_hook "$run_id" "$task_id" "$wt"
+        # stage_after=postexec so the orchestrator re-invokes this stage; the
+        # next entry finds holdout_review_file populated and runs `check`.
+        _emit_manifest postexec "$_ho_agents_json"
+        t1=$(_now_ms)
+        log_step_end "postexec" "spawn_holdout_reviewer" "$((t1-t0))" "task_id=\"$task_id\"" "attempt=\"$((_ho_attempts_n + 1))\""
+        return 10
+      fi
+
+      # Spawn already attempted twice without a review-file write — fail closed.
+      # Layer B (subagent-stop hook) is the writer; reaching this branch means
+      # the hook failed to capture the holdout-reviewer output path.
+      log_error "holdout reviewer spawned but holdout_review_file unwired for $task_id after $_ho_attempts_n attempts — escalating to human"
       _task_write quality_gates.holdout '"missing-reviewer-output"'
       pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null \
         || log_error "task-status needs_human_review write failed for $task_id"
