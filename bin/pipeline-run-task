@@ -1456,11 +1456,30 @@ _stage_ship() {
   local gate_lvl
   gate_lvl=$(read_config '.humanReviewLevel' '0')
   if (( gate_lvl >= 1 )); then
-    if ! pipeline-human-gate "$run_id" pre-merge; then
-      t1=$(_now_ms)
-      log_step_end "ship" "human_gate_pause" "$((t1-t0))" "task_id=\"$task_id\""
-      return 20
-    fi
+    # A4: distinguish rc=42 (legitimate pause) from rc=1 (misuse/state-write
+    # failure). Previously `if ! pipeline-human-gate ...` collapsed both into
+    # return 20 (pause), hiding broken invocations from operators.
+    # See docs/reference/exit-codes.md#pipeline-human-gate.
+    # Note: lib sets `set -e`, so we use `|| rc=$?` to capture non-zero
+    # exits without aborting the function.
+    local _hg_rc=0
+    pipeline-human-gate "$run_id" pre-merge || _hg_rc=$?
+    case "$_hg_rc" in
+      0)
+        : # gate passed, fall through to PR-create path
+        ;;
+      42)
+        t1=$(_now_ms)
+        log_step_end "ship" "human_gate_pause" "$((t1-t0))" "task_id=\"$task_id\""
+        return 20
+        ;;
+      *)
+        log_error "pipeline-human-gate failed unexpectedly: rc=$_hg_rc"
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"human_gate_error\" rc=$_hg_rc"
+        return 30
+        ;;
+    esac
   fi
 
   local wt

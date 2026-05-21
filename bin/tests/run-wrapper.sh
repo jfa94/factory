@@ -323,6 +323,43 @@ _ship_sync_case "ship rc=2 (pr closed)"       2 closed        pr_closed
 _ship_sync_case "ship rc=3 (ci failed)"       3 red           ci_red
 _ship_sync_case "ship rc=4 (merge conflict)"  4 conflict      merge_conflict
 
+# --- 10c (A4): ship — pipeline-human-gate rc=42 (pause) vs rc=1 (error) ---
+# Before this fix `if ! pipeline-human-gate ...` collapsed rc=1 and rc=42
+# into the same `return 20` (human_gate_pause). A broken/misused gate
+# invocation looked identical to a legitimate pause. Per
+# docs/reference/exit-codes.md the orchestrator must route rc=42 to a
+# pause (return 20) and rc=1 (or any other non-zero) to a hard error
+# (return 30) so an operator can debug a misuse.
+current="ship-human-gate-rc"
+new_run ship-human-gate-pause
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+printf '{"humanReviewLevel":1}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+write_stub pipeline-human-gate 'exit 42'
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1
+RC=$?
+set -e
+assert_eq "ship human-gate rc=42 → return 20 (pause)" "20" "$RC"
+
+new_run ship-human-gate-error
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+printf '{"humanReviewLevel":1}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+write_stub pipeline-human-gate 'exit 1'
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1
+RC=$?
+set -e
+assert_eq "ship human-gate rc=1 → return 30 (error)" "30" "$RC"
+
+# Reset stub for following tests.
+write_stub pipeline-human-gate 'exit 0'
+
 # --- 11: finalize-run — pending blocks ------------------------------------
 new_run finalize-pending
 set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e

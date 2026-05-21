@@ -159,6 +159,16 @@ Exit code 2 indicates a tooling or parsing error (e.g., coverage file malformed,
 
 Exit code 2 indicates the gate was not applicable (non-JS project or unconfigured quality scripts). `pipeline-run-task` interprets rc=2 as "not applicable, treat as pass" and records `quality_gate=skipped` in state. The ship checklist and PR-create guard accept `quality_gate=skipped` alongside `ok`.
 
+### pipeline-human-gate
+
+| Exit Code | Meaning                                                              |
+| --------- | -------------------------------------------------------------------- |
+| 0         | Gate passed (humanReviewLevel below threshold); proceed              |
+| 1         | Argument error or state-write failure (refuses to mark gate tripped) |
+| 42        | Gate tripped; run marked `awaiting_human` and comment posted         |
+
+Callers MUST distinguish rc=1 from rc=42. rc=42 is a legitimate pause; rc=1 is a misuse and should fail the stage. The ship stage in `pipeline-run-task` maps rc=42 → `return 20` (pause for human action) and rc=1 (or any other non-zero) → `return 30` (hard error with `reason="human_gate_error"`).
+
 ---
 
 ## Rate Limiting
