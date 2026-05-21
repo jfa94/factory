@@ -1815,6 +1815,43 @@ assert_eq "implementation-reviewer.md exists" "true" \
 
 # ============================================================
 echo ""
+echo "=== _quiet_or_warn: success path is silent ==="
+# shellcheck source=../pipeline-lib.sh
+source "$(cd "$(dirname "$0")/.." && pwd)/pipeline-lib.sh"
+qow_out=$(_quiet_or_warn "noop" -- true 2>&1)
+assert_eq "_quiet_or_warn: zero output on success" "" "$qow_out"
+
+echo "=== _quiet_or_warn: failure path emits log_warn with stderr ==="
+qow_fail_out=$(_quiet_or_warn "boom check" -- bash -c 'printf "boom-stderr-token\n" >&2; exit 1' 2>&1)
+if [[ "$qow_fail_out" == *"boom check failed"* ]]; then
+  pass=$((pass + 1)); echo "  PASS: _quiet_or_warn carries description in log_warn"
+else
+  fail=$((fail + 1)); echo "  FAIL: _quiet_or_warn missing 'boom check failed' (got: $qow_fail_out)"
+fi
+if [[ "$qow_fail_out" == *"boom-stderr-token"* ]]; then
+  pass=$((pass + 1)); echo "  PASS: _quiet_or_warn carries captured stderr in log_warn"
+else
+  fail=$((fail + 1)); echo "  FAIL: _quiet_or_warn missing stderr token (got: $qow_fail_out)"
+fi
+
+echo "=== _quiet_or_warn: missing '--' separator log_warns and returns 0 ==="
+qow_sep_out=$(_quiet_or_warn "bad call" true 2>&1)
+if [[ "$qow_sep_out" == *"missing '--' separator"* ]]; then
+  pass=$((pass + 1)); echo "  PASS: _quiet_or_warn flags missing -- separator"
+else
+  fail=$((fail + 1)); echo "  FAIL: _quiet_or_warn did not flag missing separator (got: $qow_sep_out)"
+fi
+
+echo "=== M5: pipeline-parse-review uses a single EXIT trap ==="
+# Multiple `trap … EXIT` statements overwrite each other; only the last-set
+# trap runs, leaking the others' tempfiles. The fix consolidates to one
+# registry-walking trap.
+PARSE_REVIEW_SRC="$(cd "$(dirname "$0")/.." && pwd)/pipeline-parse-review"
+exit_trap_count=$(grep -cE "^[[:space:]]*trap .*EXIT" "$PARSE_REVIEW_SRC" || true)
+assert_eq "parse-review: exactly one EXIT trap" "1" "$exit_trap_count"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"

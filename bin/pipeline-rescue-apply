@@ -193,7 +193,8 @@ _apply_I_07() {
   local run_id="$1" task_id="$2" base="${3:-}"
   # Attempt rebase in task worktree; on failure, leave for investigation.
   local wt
-  wt=$(pipeline-state read "$run_id" ".tasks.${task_id}.worktree" 2>/dev/null | tr -d '"')
+  wt=$(pipeline-state read "$run_id" ".tasks.${task_id}.worktree" 2>/dev/null)
+  wt=$(_unquote_json_string "$wt")
   if [[ -z "$wt" || "$wt" == "null" || ! -d "$wt" ]]; then
     rescue_audit "$run_id" mechanical I-07 "$task_id" rebase_pr skipped "worktree missing"
     return 0

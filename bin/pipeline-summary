@@ -120,7 +120,11 @@ log_metric "run.summary" "status=\"$run_status\"" \
 # Post to GitHub issue if requested
 if [[ "$post_to_issue" == "true" ]]; then
   issue_number=$(printf '%s' "$state" | jq -r '.input.issue_numbers[0] // empty')
-  if [[ -n "$issue_number" ]]; then
+  if [[ -z "$issue_number" ]]; then
+    # Surface the silent-skip: operator asked for post-to-issue but no issue is
+    # bound to the run, so the summary never reached GitHub.
+    log_warn "pipeline-summary: --post-to-issue requested but state has no .input.issue_numbers[0] for run $run_id"
+  else
     tasks_done=$(printf '%s' "$task_summary" | jq -r '.done')
     tasks_total=$(printf '%s' "$task_summary" | jq -r '.total')
 
@@ -137,13 +141,17 @@ if [[ "$post_to_issue" == "true" ]]; then
 | Failed | $(printf '%s' "$task_summary" | jq -r '.failed') |
 | Needs Human Review | $(printf '%s' "$task_summary" | jq -r '.needs_human') |"
 
-    pipeline-gh-comment "$issue_number" "run-summary" --update \
-      --data "$(jq -n \
-        --arg summary "$summary_text" \
-        --arg status "$run_status" \
-        --argjson tasks_done "$tasks_done" \
-        --argjson tasks_total "$tasks_total" \
-        '{summary: $summary, status: $status, tasks_done: $tasks_done, tasks_total: $tasks_total}'
-      )" 2>/dev/null || log_warn "could not post summary to issue $issue_number"
+    # Capture stderr so the warning carries the actual gh failure (rate limit,
+    # auth, network), instead of dropping it on the floor.
+    if ! _gh_comment_out=$(pipeline-gh-comment "$issue_number" "run-summary" --update \
+        --data "$(jq -n \
+          --arg summary "$summary_text" \
+          --arg status "$run_status" \
+          --argjson tasks_done "$tasks_done" \
+          --argjson tasks_total "$tasks_total" \
+          '{summary: $summary, status: $status, tasks_done: $tasks_done, tasks_total: $tasks_total}'
+        )" 2>&1); then
+      log_warn "pipeline-summary: gh-comment failed for issue $issue_number: ${_gh_comment_out//$'\n'/ }"
+    fi
   fi
 fi

@@ -174,6 +174,34 @@ BIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 assert_eq "rescue-apply: no FACTORY_BASE_BRANCH:-develop in rebase path" "false" \
   "$(grep -E 'FACTORY_BASE_BRANCH.*develop|:-develop' "$BIN_DIR/pipeline-rescue-apply" 2>/dev/null | grep -qi 'rebase\|base\|I-07' && echo true || echo false)"
 
+echo "=== M12: pipeline-rescue-apply uses _unquote_json_string, not bare tr -d '\"' ==="
+# Bare `tr -d '"'` strips ALL quote chars (including embedded escaped ones from
+# JSON-encoded values). _unquote_json_string strips only the outer pair.
+bare_tr_count=$(grep -c "tr -d '\"'" "$BIN_DIR/pipeline-rescue-apply" || true)
+assert_eq "rescue-apply: zero bare 'tr -d \"\"' calls" "0" "$bare_tr_count"
+
+echo "=== M12: pipeline-run-task uses _unquote_json_string, not bare tr -d '\"' ==="
+bare_tr_count_rt=$(grep -c "tr -d '\"'" "$BIN_DIR/pipeline-run-task" || true)
+assert_eq "pipeline-run-task: zero bare 'tr -d \"\"' calls" "0" "$bare_tr_count_rt"
+
+echo "=== M12: _unquote_json_string preserves embedded quotes in field values ==="
+# Behavioral check: seed a state where a field value contains embedded escaped
+# quotes. Reading the value via `pipeline-state read` returns it with the inner
+# quotes intact; routing through `_unquote_json_string` must leave those quotes
+# alone (only the outer JSON quoting is stripped, which jq -r has already done).
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/R2"
+cat > "$CLAUDE_PLUGIN_DATA/runs/R2/state.json" <<'JSON'
+{"run_id":"R2","tasks":{"T1":{"task_id":"T1","failure_reason":"got error: \"foo\" not found"}}}
+JSON
+raw=$(pipeline-state read R2 '.tasks.T1.failure_reason')
+# shellcheck source=../pipeline-lib.sh
+source "$BIN_DIR/pipeline-lib.sh"
+unquoted=$(_unquote_json_string "$raw")
+assert_eq "M12: helper preserves embedded quotes" 'got error: "foo" not found' "$unquoted"
+# And demonstrate bare `tr -d '"'` would have stripped them:
+stripped=$(printf '%s' "$raw" | tr -d '"')
+assert_eq "M12: bare tr -d strips embedded quotes (negative control)" 'got error: foo not found' "$stripped"
+
 echo
 echo "Passed: $pass | Failed: $fail"
 [[ $fail -eq 0 ]]

@@ -240,7 +240,11 @@ while IFS= read -r sh_branch; do
     log_info "deleted orphan spec-handoff branch: $sh_branch"
     orphan_spec_deleted=$((orphan_spec_deleted + 1))
   fi
-  git push origin --delete "$sh_branch" 2>/dev/null || true
+  # Surface remote-delete failures (auth, no-such-ref, network) instead of
+  # silently swallowing them — operator can tell whether the remote orphan
+  # actually got cleaned up.
+  _quiet_or_warn "remote delete spec-handoff/$sh_branch" -- \
+    git push origin --delete "$sh_branch"
 done < <(git branch --list 'spec-handoff/*' --format='%(refname:short)' 2>/dev/null)
 
 # --- Sweep orphan orchestrator-run-* worktrees and branches ---
@@ -443,7 +447,8 @@ if [[ "$audit_enabled" == "true" ]]; then
       # Guard destructive edits via the same helper.
       assert_in_plugin_data "$jsonl" || continue
       tmp_trim=$(mktemp "${jsonl}.trim.XXXXXX")
-      jq -c --argjson cutoff "$cutoff_epoch" '
+      jq_stderr=$(mktemp)
+      if jq -c --argjson cutoff "$cutoff_epoch" '
         . as $row
         | (.ts // "") as $t
         | if $t == "" then $row
@@ -454,8 +459,15 @@ if [[ "$audit_enabled" == "true" ]]; then
               else empty
               end
           end
-      ' "$jsonl" > "$tmp_trim" 2>/dev/null && mv -f "$tmp_trim" "$jsonl" \
-        || rm -f "$tmp_trim"
+      ' "$jsonl" > "$tmp_trim" 2>"$jq_stderr"; then
+        mv -f "$tmp_trim" "$jsonl"
+      else
+        # Surface the silent skip: malformed JSONL or jq error means we leave
+        # the original file untouched; operator should know the trim didn't run.
+        log_warn "pipeline-cleanup: jq trim failed for $jsonl: $(tr '\n' ' ' < "$jq_stderr" | head -c 200)"
+        rm -f "$tmp_trim"
+      fi
+      rm -f "$jq_stderr"
     done < <(find "${CLAUDE_PLUGIN_DATA}" \( -name 'audit.jsonl' -o -name 'metrics.jsonl' \) -type f -print0 2>/dev/null || true)
   fi
 fi

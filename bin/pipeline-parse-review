@@ -25,10 +25,23 @@ if [[ -z "$raw" ]]; then
   exit 1
 fi
 
+# Cleanup registry — every tempfile/diff file registered here is removed by the
+# single EXIT trap below. Multiple `trap … EXIT` statements would overwrite
+# each other (only the last-set trap fires), silently leaking earlier files.
+_PARSE_REVIEW_CLEANUP=()
+_cleanup_register() { _PARSE_REVIEW_CLEANUP+=("$1"); }
+_cleanup_run() {
+  local f
+  for f in "${_PARSE_REVIEW_CLEANUP[@]:-}"; do
+    [[ -n "$f" && -e "$f" ]] && rm -rf "$f"
+  done
+}
+trap _cleanup_run EXIT
+
 # Save raw to temp file for multi-pass parsing
 tmpfile=$(mktemp)
 printf '%s' "$raw" > "$tmpfile"
-trap 'rm -f "$tmpfile"' EXIT
+_cleanup_register "$tmpfile"
 
 # =============================================================================
 # --- JSON schema path: extract last ```json ... ``` block ---
@@ -158,7 +171,7 @@ if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; t
 
     if [[ -n "$base_ref" ]]; then
       diff_file=$(mktemp)
-      trap 'rm -f "$tmpfile" "$diff_file"' EXIT
+      _cleanup_register "$diff_file"
       if git diff --unified=5 "$base_ref" HEAD > "$diff_file" 2>/dev/null && [[ -s "$diff_file" ]]; then
         printf '%s' "$out_json" | validate_findings "$diff_file"
       else
@@ -389,7 +402,7 @@ out_json=$(jq -n \
 # validate_findings in pipeline-lib.sh).
 if [[ -n "$base_ref" ]]; then
   diff_file=$(mktemp)
-  trap 'rm -f "$tmpfile" "$diff_file"' EXIT
+  _cleanup_register "$diff_file"
   if git diff --unified=5 "$base_ref" HEAD > "$diff_file" 2>/dev/null && [[ -s "$diff_file" ]]; then
     printf '%s' "$out_json" | validate_findings "$diff_file"
   else

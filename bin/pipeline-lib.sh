@@ -925,6 +925,31 @@ _unquote_json_string() {
   printf '%s' "$s"
 }
 
+# Run a command silently; on non-zero exit, emit a log_warn carrying the
+# description and captured stderr. Always returns 0 — the helper exists to
+# replace the `2>/dev/null || true` idiom that drops every failure signal.
+#
+# Usage: _quiet_or_warn <description> -- <command> [args...]
+#
+#   _quiet_or_warn "cleanup tempfile" -- rm -f "$tmp"
+#   _quiet_or_warn "gh login probe"   -- gh auth status
+_quiet_or_warn() {
+  local desc="${1:?missing description}"
+  shift
+  if [[ "${1:-}" != "--" ]]; then
+    log_warn "_quiet_or_warn: missing '--' separator before command (desc=$desc)"
+    return 0
+  fi
+  shift
+  local _stderr
+  _stderr=$(mktemp)
+  if ! "$@" 2>"$_stderr" >/dev/null; then
+    log_warn "$desc failed: $(tr '\n' ' ' < "$_stderr")"
+  fi
+  rm -f "$_stderr"
+  return 0
+}
+
 # Load and render a prompt template from
 # skills/pipeline-orchestrator/prompts/<stage>.tmpl.
 # Variables in the template are expanded using ${VAR} syntax (envsubst-style).
