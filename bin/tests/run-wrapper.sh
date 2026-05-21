@@ -1254,5 +1254,75 @@ case "$1 $2" in
   *) exit 0 ;;
 esac'
 
+# --- 16 (D.1/A1): emit-ship-checklist routes state reads through pipeline-state -
+# Regression for the single-reader contract on state.json. _write_ship_checklist
+# previously called `jq -r ... "$state_file"` directly for eight gate fields,
+# bypassing the per-run advisory lock owned by pipeline-state. Migration moves
+# every read to `pipeline-state task-read`.
+#
+# This case (a) seeds gate values, (b) wraps jq with a logger that records
+# any invocation that names the state file, (c) emits the checklist, and
+# (d) asserts the log is empty AND the checklist JSON has the expected
+# values. Without the migration the log is non-empty (8 jq → state.json
+# reads from _write_ship_checklist).
+new_run emit-ship-checklist-no-direct-jq
+pipeline-state task-write "$RUN_ID" alpha-001 quality_gates.tdd.ok       'true' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 quality_gate.skipped       'true' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 quality_gates.pregate.ok   'false' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 security_gate.ok           'true' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage                      '"postreview_done"' >/dev/null
+
+jq_log="$ROOT_TMP/$current.jq.log"
+: > "$jq_log"
+real_jq=$(command -v jq)
+# Wrap jq: log invocations that name the run's state.json (the file
+# _write_ship_checklist previously read), then delegate to the real jq.
+# Other jq invocations are not logged so we don't capture unrelated
+# pipeline-state internals.
+cat > "$STUB_DIR/jq" <<JQ_STUB
+#!/usr/bin/env bash
+state_file_re="${CLAUDE_PLUGIN_DATA}/runs/${RUN_ID}/state.json"
+for arg in "\$@"; do
+  if [[ "\$arg" == "\$state_file_re" ]]; then
+    printf '%s\n' "\$*" >> "$jq_log"
+    break
+  fi
+done
+exec "$real_jq" "\$@"
+JQ_STUB
+chmod +x "$STUB_DIR/jq"
+
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage emit-ship-checklist >/dev/null 2>&1
+RC=$?
+set -e
+
+rm -f "$STUB_DIR/jq"
+
+assert_eq "emit-ship-checklist: exit 0" "0" "$RC"
+
+checklist_file="${CLAUDE_PLUGIN_DATA}/runs/${RUN_ID}/.tasks/alpha-001.ship_checklist.json"
+if [[ ! -f "$checklist_file" ]]; then
+  fail "emit-ship-checklist: checklist file missing"
+else
+  assert_eq "emit-ship-checklist: tdd_gate=ok"          "ok"       "$("$real_jq" -r .tdd_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: quality_gate=skipped" "skipped"  "$("$real_jq" -r .quality_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: pregate_gate=fail"    "fail"     "$("$real_jq" -r .pregate_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: security_gate=ok"     "ok"       "$("$real_jq" -r .security_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: coverage_gate=skipped" "skipped" "$("$real_jq" -r .coverage_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: review_blockers_resolved=true" "true" \
+    "$("$real_jq" -r .review_blockers_resolved "$checklist_file")"
+fi
+
+# Core assertion: no direct jq reads against state.json. Migration moves
+# all 8 gate reads to `pipeline-state task-read` (which still uses jq
+# internally — but via the locked pipeline-state CLI, not the raw file).
+direct_reads=$(wc -l < "$jq_log" | awk '{print $1}')
+assert_eq "emit-ship-checklist: zero direct jq reads against state.json" "0" "$direct_reads"
+if (( direct_reads > 0 )); then
+  printf '    --- jq invocations that hit state.json ---\n' >&2
+  sed 's/^/    /' < "$jq_log" >&2
+fi
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
