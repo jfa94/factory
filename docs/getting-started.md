@@ -9,9 +9,8 @@ Before installing the plugin, ensure you have:
 1. **Claude Code** installed and authenticated
 2. **Git** with a configured remote repository
 3. **GitHub CLI** (`gh`) installed and authenticated (`gh auth login`)
-4. **Node.js 18+** for the metrics MCP server (optional — only needed if you enable observability)
 
-All required agents and skills (`spec-reviewer`, `quality-reviewer`, `prd-to-spec`) ship with the plugin.
+All required agents and skills ship with the plugin. Bundled agents: `architecture-reviewer`, `implementation-reviewer`, `quality-reviewer`, `rescue-diagnostic`, `scribe`, `security-reviewer`, `spec-generator`, `spec-reviewer`, `task-executor`, `test-writer`.
 
 Verify prerequisites with:
 
