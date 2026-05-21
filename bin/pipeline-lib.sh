@@ -185,8 +185,21 @@ human_summary() {
 #   --simple-output) export FACTORY_JSON=0 ; shift ;;
 # Usage: json_emit [string]  OR  some-cmd | json_emit
 json_emit() {
-  [[ "${FACTORY_JSON:-0}" == "1" ]] || return 0
-  if [[ $# -gt 0 ]]; then printf '%s\n' "$*"; else cat; fi
+  if [[ "${FACTORY_JSON:-0}" == "1" ]]; then
+    if [[ $# -gt 0 ]]; then printf '%s\n' "$*"; else cat; fi
+  else
+    # Drain non-terminal stdin to prevent SIGPIPE on the upstream producer
+    # when this function is used as `jq … | json_emit` and FACTORY_JSON=0.
+    # Without the drain, the upstream's next write triggers SIGPIPE (141),
+    # which `set -o pipefail` (inherited from line 5) propagates as the
+    # script's exit code. `! -t 0` excludes interactive terminals so the
+    # helper never blocks waiting for input when called with no pipe.
+    # The explicit `return 0` keeps the function's exit status independent
+    # of the guard's result (a false `[[ ]]` would otherwise become the
+    # function's rc under set -e).
+    [[ $# -eq 0 && ! -t 0 ]] && cat >/dev/null
+    return 0
+  fi
 }
 
 # Build a JSON object from key-value pairs and write to stdout
