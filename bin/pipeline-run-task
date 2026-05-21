@@ -103,6 +103,27 @@ _emit_manifest() {
     '{action:"spawn_agents", stage_after:$after, agents:$agents}'
 }
 
+# Persist the currently-spawning task identity so the SubagentStop hook can
+# write task-scoped state (worktree, etc.) without reverse-engineering it
+# from the transcript. Called immediately before each _emit_manifest that
+# spawns a task-scoped subagent (test-writer / task-executor / reviewer).
+# A single per-run file; later spawns overwrite earlier ones.
+_record_active_task_for_stop_hook() {
+  local _r="${1:?run-id}"
+  local _t="${2:?task-id}"
+  local _wt="${3:-}"
+  local _dir="$CLAUDE_PLUGIN_DATA/runs/$_r"
+  mkdir -p "$_dir"
+  local _now
+  _now=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')
+  jq -n \
+    --arg r "$_r" --arg t "$_t" --arg wt "$_wt" --arg ts "$_now" \
+    '{run_id:$r, task_id:$t, worktree:$wt, written_at:$ts}' \
+    > "$_dir/.active-spawn.json.tmp" 2>/dev/null && \
+  mv "$_dir/.active-spawn.json.tmp" "$_dir/.active-spawn.json" 2>/dev/null || \
+    log_warn "could not write .active-spawn.json for $_r/$_t (subagent-stop hook may be unreliable)"
+}
+
 # Resolve the per-task risk tier from state (written in preflight). Falls back
 # to "routine" when missing — keeps mid-task gates working even on resumes
 # from runs that predate per-task tier persistence.
@@ -290,6 +311,7 @@ PROMPT
   local agents_json
   agents_json=$(jq -cn --arg pf "$prompt_file" \
     '[{subagent_type:"test-writer", isolation:"worktree", model:"opus", maxTurns:25, prompt_file:$pf}]')
+  _record_active_task_for_stop_hook "$run_id" "$task_id" ""
   _emit_manifest preexec_tests "$agents_json"
 
   t1=$(_now_ms)
@@ -543,6 +565,7 @@ _stage_preexec_tests() {
     local agents_json
     agents_json=$(jq -cn --arg pf "$pf" \
       '[{subagent_type:"test-writer", isolation:"worktree", model:"opus", maxTurns:25, prompt_file:$pf}]')
+    _record_active_task_for_stop_hook "$run_id" "$task_id" ""
     _emit_manifest preexec_tests "$agents_json"
     t1=$(_now_ms)
     log_step_end "preexec_tests" "spawn_test_writer" "$((t1-t0))" "task_id=\"$task_id\""
@@ -623,6 +646,7 @@ _stage_preexec_tests() {
     --arg m    "$model" \
     --argjson mt "$max_turns" \
     '[{subagent_type:$role, model:$m, maxTurns:$mt, prompt_file:$pf}]')
+  _record_active_task_for_stop_hook "$run_id" "$task_id" "$tw_wt"
   _emit_manifest postexec "$agents_json"
 
   t1=$(_now_ms)
@@ -761,10 +785,54 @@ _stage_postexec() {
         return 30
       fi
     else
-      # holdout_review_file unwired — fail closed. Silently skipping let real
-      # holdout failures merge unchecked; a reviewer-output gap means we cannot
-      # verify Layer 4 and must escalate.
-      log_error "holdout file $holdout_file present but holdout_review_file unwired for $task_id — escalating to human"
+      # No holdout review yet — first-pass spawn. The dedicated holdout-reviewer
+      # gets a focused prompt (criterion-by-criterion verification) built by
+      # `pipeline-holdout-validate prompt`. The subagent-stop-transcript hook
+      # detects the holdout-reviewer prompt path and writes the review output
+      # back to `.tasks.<id>.holdout_review_file` so the next postexec invocation
+      # finds it above and runs `check`.
+      local _ho_attempts _ho_attempts_n
+      _ho_attempts=$(_task_field holdout_attempts)
+      _ho_attempts=$(_unquote_json_string "$_ho_attempts")
+      _ho_attempts_n=${_ho_attempts:-0}
+      [[ "$_ho_attempts_n" =~ ^[0-9]+$ ]] || _ho_attempts_n=0
+
+      if (( _ho_attempts_n < 2 )); then
+        _ensure_prompt_dir
+        local _ho_prompt_file
+        _ho_prompt_file=$(_prompt_path holdout-reviewer)
+        # `pipeline-holdout-validate prompt` produces a criterion-by-criterion
+        # prompt body on stdout. Wrap with the standard `[task:<id>]` header so
+        # transcript-grep / task_id derivation in the SubagentStop hook works.
+        {
+          printf '[task:%s]\n' "$task_id"
+          pipeline-holdout-validate prompt "$run_id" "$task_id"
+        } > "$_ho_prompt_file" || {
+          log_error "pipeline-holdout-validate prompt failed for $task_id"
+          t1=$(_now_ms)
+          log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout_prompt\""
+          return 30
+        }
+
+        _task_write holdout_attempts "$((_ho_attempts_n + 1))"
+        _task_write quality_gates.holdout '"pending"'
+
+        local _ho_agents_json
+        _ho_agents_json=$(jq -cn --arg pf "$_ho_prompt_file" \
+          '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:40, prompt_file:$pf, role:"holdout-reviewer"}]')
+        _record_active_task_for_stop_hook "$run_id" "$task_id" "$wt"
+        # stage_after=postexec so the orchestrator re-invokes this stage; the
+        # next entry finds holdout_review_file populated and runs `check`.
+        _emit_manifest postexec "$_ho_agents_json"
+        t1=$(_now_ms)
+        log_step_end "postexec" "spawn_holdout_reviewer" "$((t1-t0))" "task_id=\"$task_id\"" "attempt=\"$((_ho_attempts_n + 1))\""
+        return 10
+      fi
+
+      # Spawn already attempted twice without a review-file write — fail closed.
+      # Layer B (subagent-stop hook) is the writer; reaching this branch means
+      # the hook failed to capture the holdout-reviewer output path.
+      log_error "holdout reviewer spawned but holdout_review_file unwired for $task_id after $_ho_attempts_n attempts — escalating to human"
       _task_write quality_gates.holdout '"missing-reviewer-output"'
       pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null \
         || log_error "task-status needs_human_review write failed for $task_id"
@@ -802,6 +870,7 @@ _stage_postexec() {
 # Returns 30 on failure.
 _emit_postexec_manifest() {
   local wt="$1"
+  _record_active_task_for_stop_hook "$run_id" "$task_id" "$wt"
   local detect provider
   detect=$(pipeline-detect-reviewer)
   provider=$(printf '%s' "$detect" | jq -r '.reviewer')
@@ -1136,6 +1205,7 @@ _stage_postreview() {
     local agents_json
     agents_json=$(jq -cn --arg pf "$pf" \
       '[{subagent_type:"task-executor", model:"sonnet", maxTurns:60, prompt_file:$pf}]')
+    _record_active_task_for_stop_hook "$run_id" "$task_id" "$pr_wt"
     _emit_manifest postexec "$agents_json"
     t1=$(_now_ms)
     log_step_end "postreview" "spawn" "$((t1-t0))" "task_id=\"$task_id\"" "attempt=$attempts"
@@ -1416,6 +1486,10 @@ _stage_ship() {
         local agents_json
         agents_json=$(jq -cn --arg pf "$pf" \
           '[{subagent_type:"task-executor", model:"sonnet", maxTurns:60, prompt_file:$pf}]')
+        local _ship_wt
+        _ship_wt=$(_task_field worktree)
+        _ship_wt=$(_unquote_json_string "$_ship_wt")
+        _record_active_task_for_stop_hook "$run_id" "$task_id" "$_ship_wt"
         _emit_manifest ship "$agents_json"
         t1=$(_now_ms)
         log_step_end "ship" "spawn" "$((t1-t0))" "task_id=\"$task_id\"" "attempt=$attempts"

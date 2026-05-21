@@ -1120,6 +1120,105 @@ first=$(jq -r '.tasks."alpha-001".review_files[0] // empty' "$CLAUDE_PLUGIN_DATA
 assert_eq "review_file exists on disk" "true" "$([[ -f "$first" ]] && echo true || echo false)"
 
 echo ""
+echo "=== subagent-stop-transcript: holdout-reviewer routes output to holdout_review_file ==="
+
+# Regression (Issue 2b): the holdout reviewer reuses subagent_type=
+# implementation-reviewer; the hook must detect the role from the
+# `<task>.holdout-reviewer-prompt.md` reference in the transcript and write
+# the review file path to `.tasks.<id>.holdout_review_file` (single field),
+# NOT to `.tasks.<id>.review_files[]` (which postreview consumes).
+_seed_run "run-sag-holdout" '{"status":"running","tasks":{"alpha-001":{"status":"executing"}}}'
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-holdout/transcript.jsonl"
+printf '{"content":".state/run-sag-holdout/alpha-001.holdout-reviewer-prompt.md"}\n' > "$transcript"
+msg='{"criteria":[{"criterion":"x","satisfied":true,"evidence":"src/a.ts:1"}]}
+STATUS: DONE'
+input=$(jq -cn --arg t "$transcript" --arg msg "$msg" '{agent_type:"implementation-reviewer", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+rc=$?
+set -e
+assert_eq "holdout-reviewer: exit 0" "0" "$rc"
+hf=$(jq -r '.tasks."alpha-001".holdout_review_file // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-holdout/state.json")
+assert_eq "holdout-reviewer: holdout_review_file populated" "true" \
+  "$([[ -n "$hf" && -f "$hf" ]] && echo true || echo false)"
+# File content should be the reviewer's JSON (last_assistant_message).
+[[ -n "$hf" && -f "$hf" ]] && grep -q '"criterion":"x"' "$hf" \
+  && { echo "  PASS: holdout-reviewer review body persisted"; pass=$((pass+1)); } \
+  || { echo "  FAIL: holdout-reviewer review body missing"; fail=$((fail+1)); }
+# review_files[] MUST stay empty — postreview consumes that array and should
+# not see the holdout artifact.
+rev_files_len=$(jq -r '(.tasks."alpha-001".review_files // []) | length' "$CLAUDE_PLUGIN_DATA/runs/run-sag-holdout/state.json")
+assert_eq "holdout-reviewer: review_files[] empty" "0" "$rev_files_len"
+# Distinct review-path filename so the holdout artifact never collides with
+# a regular implementation-reviewer output written for the same task.
+[[ "$hf" == *".holdout-reviewer.md" ]] \
+  && { echo "  PASS: holdout-reviewer file named *.holdout-reviewer.md"; pass=$((pass+1)); } \
+  || { echo "  FAIL: holdout-reviewer file misnamed ($hf)"; fail=$((fail+1)); }
+
+echo ""
+echo "=== subagent-stop-transcript: regular implementation-reviewer still uses review_files ==="
+
+# Sanity: when the transcript references the regular reviewer-prompt.md (not
+# the holdout-reviewer-prompt.md), the hook must continue writing to
+# review_files[] and leave holdout_review_file unset.
+_seed_run "run-sag-reg-impl" '{"status":"running","tasks":{"alpha-001":{"status":"reviewing"}}}'
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-reg-impl/transcript.jsonl"
+printf '{"content":".state/run-sag-reg-impl/alpha-001.reviewer-prompt.md"}\n' > "$transcript"
+msg='{"decision":"APPROVE","blockers":[],"concerns":[]}
+STATUS: DONE'
+input=$(jq -cn --arg t "$transcript" --arg msg "$msg" '{agent_type:"implementation-reviewer", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+set -e
+hf_empty=$(jq -r '.tasks."alpha-001".holdout_review_file // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-reg-impl/state.json")
+assert_eq "regular impl-reviewer: holdout_review_file unset" "" "$hf_empty"
+rev_files_len=$(jq -r '(.tasks."alpha-001".review_files // []) | length' "$CLAUDE_PLUGIN_DATA/runs/run-sag-reg-impl/state.json")
+assert_eq "regular impl-reviewer: review_files[] has 1 entry" "1" "$rev_files_len"
+
+echo ""
+echo "=== subagent-stop-transcript: .active-spawn.json supplies task_id + worktree ==="
+
+_seed_run "run-sag-active" '{"status":"running","tasks":{"gamma-001":{"status":"executing"}}}'
+# Transcript intentionally omits both the prompt-file path AND a worktree cwd
+# entry — the legacy fallbacks must NOT fire; .active-spawn.json must win.
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-active/transcript.jsonl"
+printf '{"role":"assistant","content":"work done"}\n' > "$transcript"
+jq -n --arg t "gamma-001" --arg wt "/tmp/fake/.claude/worktrees/agent-active" \
+  '{run_id:"run-sag-active", task_id:$t, worktree:$wt, written_at:"2026-05-21T00:00:00Z"}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/run-sag-active/.active-spawn.json"
+input=$(jq -cn --arg t "$transcript" --arg msg "Done.
+STATUS: DONE" '{agent_type:"task-executor", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+rc=$?
+set -e
+assert_eq "active-spawn: exit 0" "0" "$rc"
+exec_status=$(jq -r '.tasks."gamma-001".executor_status // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-active/state.json")
+assert_eq "active-spawn: executor_status written" "DONE" "$exec_status"
+wt=$(jq -r '.tasks."gamma-001".worktree // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-active/state.json")
+assert_eq "active-spawn: worktree written from file" "/tmp/fake/.claude/worktrees/agent-active" "$wt"
+
+echo ""
+echo "=== subagent-stop-transcript: missing active-spawn + transcript markers -> warn but exit 0 ==="
+
+_seed_run "run-sag-warn" '{"status":"running","tasks":{"delta-001":{"status":"executing"}}}'
+# No .active-spawn.json; transcript has no prompt-file path and no cwd entry.
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-warn/transcript.jsonl"
+printf '{"role":"assistant","content":"opaque transcript"}\n' > "$transcript"
+input=$(jq -cn --arg t "$transcript" --arg msg "Done.
+STATUS: DONE" '{agent_type:"task-executor", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+stderr=$(printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" 2>&1 >/dev/null)
+rc=$?
+set -e
+assert_eq "warn-path: exit 0 (advisory)" "0" "$rc"
+[[ "$stderr" == *"could not derive task_id"* ]] && { echo "  PASS: warn-path stderr contains warning"; pass=$((pass+1)); } || { echo "  FAIL: warn-path stderr missing warning (got: $stderr)"; fail=$((fail+1)); }
+log_file="$CLAUDE_PLUGIN_DATA/runs/run-sag-warn/transcript-errors.log"
+[[ -f "$log_file" ]] && grep -q "could not derive task_id" "$log_file" \
+  && { echo "  PASS: warn-path appended to transcript-errors.log"; pass=$((pass+1)); } \
+  || { echo "  FAIL: warn-path transcript-errors.log missing entry"; fail=$((fail+1)); }
+
+echo ""
 echo "=== subagent-stop-transcript: scribe writes .scribe.status ==="
 
 _seed_run "run-sag-scribe" '{"status":"running","tasks":{}}'

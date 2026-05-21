@@ -217,13 +217,25 @@ case "$action" in
     base="${3:-staging}"
     # Always fork from the live remote tip rather than the local ref, which can
     # be stale by the time a second worktree is created during a long run.
+    # The fetch must fire whether the caller passes the literal "staging" or
+    # an `origin/<branch>` ref — otherwise worktrees get spawned from whatever
+    # the local cache happens to hold, which may be many commits behind upstream.
+    _fetch_branch=""
     if [[ "$base" == "staging" ]]; then
-      if ! git fetch origin staging --quiet 2>/dev/null; then
-        log_error "git fetch origin staging failed — origin/staging may be stale"
+      _fetch_branch="staging"
+    elif [[ "$base" == origin/* ]]; then
+      _fetch_branch="${base#origin/}"
+    fi
+    # SHA-pinned bases (40 hex chars or short SHAs) and local-only branches
+    # fall through without a fetch; if the ref is missing, `git worktree add`
+    # will fail loudly below.
+    if [[ -n "$_fetch_branch" ]]; then
+      if ! git fetch origin "$_fetch_branch" --quiet 2>/dev/null; then
+        log_error "git fetch origin $_fetch_branch failed — origin/$_fetch_branch may be stale"
         exit 1
       fi
-      if git rev-parse --verify origin/staging >/dev/null 2>&1; then
-        base="origin/staging"
+      if git rev-parse --verify "origin/$_fetch_branch" >/dev/null 2>&1; then
+        base="origin/$_fetch_branch"
       fi
     fi
     if ! err=$(git worktree add -b "$name" "$path" "$base" 2>&1 >/dev/null); then

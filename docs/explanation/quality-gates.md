@@ -171,9 +171,13 @@ Since task-executors run in worktrees and holdouts live in plugin data, the exec
 
 If fewer than 80% of withheld criteria are satisfied, the implementation is surface-level. The task-executor receives the full spec (including previously withheld criteria) and re-implements. Holdout validation is NOT repeated on re-implementation (that would be unfair - the executor now knows all criteria).
 
+**Spawn-then-check flow:**
+
+When a holdout file exists for a task, `postexec` runs in two passes. First pass (no `holdout_review_file` in state yet): the wrapper builds a focused reviewer prompt via `pipeline-holdout-validate prompt` and spawns an `implementation-reviewer` (role: `holdout-reviewer`) with `stage_after=postexec`. The `SubagentStop` hook detects the holdout-reviewer prompt-file path in the transcript and routes the reviewer's output to `.tasks.<id>.holdout_review_file` (a single-value field, distinct from the postreview `review_files[]` array). Second pass (re-entry into postexec): the wrapper finds `holdout_review_file` populated and runs `pipeline-holdout-validate check`.
+
 **Missing reviewer output (fail-closed):**
 
-When a holdout file exists but the `SubagentStop` hook has not wired the `holdout_review_file` field to state — meaning the reviewer never wrote its output — the pipeline records `.tasks.<id>.quality_gates.holdout = "missing-reviewer-output"`, marks the task `needs_human_review`, and returns exit 30 (blocking). It does not continue. This fail-closed behavior prevents a missing reviewer output from silently passing as an approval.
+If the holdout-reviewer is spawned twice (`holdout_attempts >= 2`) without `holdout_review_file` ever being wired — meaning the `SubagentStop` hook failed to capture the review output path — the pipeline records `.tasks.<id>.quality_gates.holdout = "missing-reviewer-output"`, marks the task `needs_human_review`, and returns exit 30 (blocking). It does not continue. This fail-closed behavior prevents a missing reviewer output from silently passing as an approval.
 
 **Configuration:**
 

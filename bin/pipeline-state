@@ -40,6 +40,7 @@ _KNOWN_TASK_FIELDS=(
   pr_number pr_url ci_status merge_status
   ci_fix_attempts subagent_retries failure_reason
   holdout_review_file
+  holdout_attempts
   tdd_exempt
   mutation_gate mutation_score
   security_gate
