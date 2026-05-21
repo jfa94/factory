@@ -214,9 +214,9 @@ jobs:
             echo "::error::mutation-scope did not succeed"
             exit 1
           fi
-          # Treat `cancelled` as non-blocking — happens during force-push
-          # rebases or queued-run supersession; not a real failure.
-          if [[ "$MUTATION_RESULT" != "success" && "$MUTATION_RESULT" != "cancelled" ]]; then
+          # Exempt cancelled (force-push supersession) and skipped (no mutable
+          # source files in this PR — e.g. docs-only or tests-only changes).
+          if [[ "$MUTATION_RESULT" != "success" && "$MUTATION_RESULT" != "cancelled" && "$MUTATION_RESULT" != "skipped" ]]; then
             echo "::error::one or more mutation shards did not succeed"
             exit 1
           fi
