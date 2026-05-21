@@ -240,7 +240,11 @@ while IFS= read -r sh_branch; do
     log_info "deleted orphan spec-handoff branch: $sh_branch"
     orphan_spec_deleted=$((orphan_spec_deleted + 1))
   fi
-  git push origin --delete "$sh_branch" 2>/dev/null || true
+  # Surface remote-delete failures (auth, no-such-ref, network) instead of
+  # silently swallowing them — operator can tell whether the remote orphan
+  # actually got cleaned up.
+  _quiet_or_warn "remote delete spec-handoff/$sh_branch" -- \
+    git push origin --delete "$sh_branch"
 done < <(git branch --list 'spec-handoff/*' --format='%(refname:short)' 2>/dev/null)
 
 # --- Sweep orphan orchestrator-run-* worktrees and branches ---

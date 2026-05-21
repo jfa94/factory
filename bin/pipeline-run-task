@@ -1701,7 +1701,11 @@ _stage_finalize_run() {
       '[{subagent_type:"scribe", isolation:"worktree", model:"sonnet", maxTurns:40, prompt_file:$pf}]')
     # Write sentinel so pretooluse-pipeline-guards.sh can activate the scribe path-scope
     # guard. The hook cannot read FACTORY_SUBAGENT_ROLE (never exported at spawn time).
-    printf '%s' "$run_id" > "$run_dir/.scribe_active" 2>/dev/null || true
+    # The guard depends on this sentinel — surface write failures instead of
+    # silently swallowing them.
+    if ! printf '%s' "$run_id" > "$run_dir/.scribe_active" 2>/dev/null; then
+      log_warn "scribe sentinel write failed at $run_dir/.scribe_active (guard may not activate)"
+    fi
     pipeline-state write "$run_id" '.scribe.status' '"spawned"' >/dev/null \
       || log_warn "scribe.status spawned write failed (non-fatal; cap counter may not tick)"
     _emit_manifest finalize-run "$agents_json"
