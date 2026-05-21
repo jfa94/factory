@@ -462,6 +462,43 @@ _ship_sync_case "ship rc=2 (pr closed)"       2 closed        pr_closed
 _ship_sync_case "ship rc=3 (ci failed)"       3 red           ci_red
 _ship_sync_case "ship rc=4 (merge conflict)"  4 conflict      merge_conflict
 
+# --- 10c (A4): ship — pipeline-human-gate rc=42 (pause) vs rc=1 (error) ---
+# Before this fix `if ! pipeline-human-gate ...` collapsed rc=1 and rc=42
+# into the same `return 20` (human_gate_pause). A broken/misused gate
+# invocation looked identical to a legitimate pause. Per
+# docs/reference/exit-codes.md the orchestrator must route rc=42 to a
+# pause (return 20) and rc=1 (or any other non-zero) to a hard error
+# (return 30) so an operator can debug a misuse.
+current="ship-human-gate-rc"
+new_run ship-human-gate-pause
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+printf '{"humanReviewLevel":1}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+write_stub pipeline-human-gate 'exit 42'
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1
+RC=$?
+set -e
+assert_eq "ship human-gate rc=42 → return 20 (pause)" "20" "$RC"
+
+new_run ship-human-gate-error
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+printf '{"humanReviewLevel":1}' > "$CLAUDE_PLUGIN_DATA/config.json"
+
+write_stub pipeline-human-gate 'exit 1'
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1
+RC=$?
+set -e
+assert_eq "ship human-gate rc=1 → return 30 (error)" "30" "$RC"
+
+# Reset stub for following tests.
+write_stub pipeline-human-gate 'exit 0'
+
 # --- 11: finalize-run — pending blocks ------------------------------------
 new_run finalize-pending
 set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
@@ -1392,6 +1429,76 @@ case "$1 $2" in
   "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
   *) exit 0 ;;
 esac'
+
+# --- 16 (D.1/A1): emit-ship-checklist routes state reads through pipeline-state -
+# Regression for the single-reader contract on state.json. _write_ship_checklist
+# previously called `jq -r ... "$state_file"` directly for eight gate fields,
+# bypassing the per-run advisory lock owned by pipeline-state. Migration moves
+# every read to `pipeline-state task-read`.
+#
+# This case (a) seeds gate values, (b) wraps jq with a logger that records
+# any invocation that names the state file, (c) emits the checklist, and
+# (d) asserts the log is empty AND the checklist JSON has the expected
+# values. Without the migration the log is non-empty (8 jq → state.json
+# reads from _write_ship_checklist).
+new_run emit-ship-checklist-no-direct-jq
+pipeline-state task-write "$RUN_ID" alpha-001 quality_gates.tdd.ok       'true' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 quality_gate.skipped       'true' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 quality_gates.pregate.ok   'false' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 security_gate.ok           'true' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage                      '"postreview_done"' >/dev/null
+
+jq_log="$ROOT_TMP/$current.jq.log"
+: > "$jq_log"
+real_jq=$(command -v jq)
+# Wrap jq: log invocations that name the run's state.json (the file
+# _write_ship_checklist previously read), then delegate to the real jq.
+# Other jq invocations are not logged so we don't capture unrelated
+# pipeline-state internals.
+cat > "$STUB_DIR/jq" <<JQ_STUB
+#!/usr/bin/env bash
+state_file_re="${CLAUDE_PLUGIN_DATA}/runs/${RUN_ID}/state.json"
+for arg in "\$@"; do
+  if [[ "\$arg" == "\$state_file_re" ]]; then
+    printf '%s\n' "\$*" >> "$jq_log"
+    break
+  fi
+done
+exec "$real_jq" "\$@"
+JQ_STUB
+chmod +x "$STUB_DIR/jq"
+
+set +e
+pipeline-run-task "$RUN_ID" alpha-001 --stage emit-ship-checklist >/dev/null 2>&1
+RC=$?
+set -e
+
+rm -f "$STUB_DIR/jq"
+
+assert_eq "emit-ship-checklist: exit 0" "0" "$RC"
+
+checklist_file="${CLAUDE_PLUGIN_DATA}/runs/${RUN_ID}/.tasks/alpha-001.ship_checklist.json"
+if [[ ! -f "$checklist_file" ]]; then
+  fail "emit-ship-checklist: checklist file missing"
+else
+  assert_eq "emit-ship-checklist: tdd_gate=ok"          "ok"       "$("$real_jq" -r .tdd_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: quality_gate=skipped" "skipped"  "$("$real_jq" -r .quality_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: pregate_gate=fail"    "fail"     "$("$real_jq" -r .pregate_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: security_gate=ok"     "ok"       "$("$real_jq" -r .security_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: coverage_gate=skipped" "skipped" "$("$real_jq" -r .coverage_gate "$checklist_file")"
+  assert_eq "emit-ship-checklist: review_blockers_resolved=true" "true" \
+    "$("$real_jq" -r .review_blockers_resolved "$checklist_file")"
+fi
+
+# Core assertion: no direct jq reads against state.json. Migration moves
+# all 8 gate reads to `pipeline-state task-read` (which still uses jq
+# internally — but via the locked pipeline-state CLI, not the raw file).
+direct_reads=$(wc -l < "$jq_log" | awk '{print $1}')
+assert_eq "emit-ship-checklist: zero direct jq reads against state.json" "0" "$direct_reads"
+if (( direct_reads > 0 )); then
+  printf '    --- jq invocations that hit state.json ---\n' >&2
+  sed 's/^/    /' < "$jq_log" >&2
+fi
 
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

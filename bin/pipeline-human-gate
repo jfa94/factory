@@ -57,9 +57,15 @@ fi
 unset _hg_state_err
 
 # Post a human-gate comment on the run's primary issue (if recorded).
+# Route the read through pipeline-state (A1: single-reader contract on state.json)
+# so it shares the per-run advisory lock with gate-script writers.
 state_file="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/state.json"
 if [[ -f "$state_file" ]]; then
-  issue_number=$(jq -r '.input.issue_numbers[0] // empty' "$state_file" 2>/dev/null)
+  issue_number=$(pipeline-state read "$run_id" '.input.issue_numbers[0]' 2>/dev/null || printf '')
+  issue_number=$(_unquote_json_string "${issue_number:-}")
+  # pipeline-state returns the literal string "null" for missing values;
+  # treat that and any non-numeric value as "no issue recorded".
+  [[ "$issue_number" == "null" ]] && issue_number=""
   if [[ -n "$issue_number" ]]; then
     data=$(jq -n \
       --arg run_id "$run_id" \
