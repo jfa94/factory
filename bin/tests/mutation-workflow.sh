@@ -76,6 +76,19 @@ else
   echo "  FAIL: aggregator missing 'skipped' exemption (regression for H14)"; fail=$((fail+1))
 fi
 
+# 8. auto-merge must depend on quality, mutation-testing, AND security. A
+#    regression of 6c417e2 (auto-merge ran before the mutation aggregator
+#    landed) silently shipped PRs without gating on mutation. Lock the
+#    needs list so the order can drift but membership cannot.
+needs_block=$(awk '/^  auto-merge:/{flag=1;next} flag && /^  [a-z]/{exit} flag' "$WORKFLOW")
+for required in quality mutation-testing security; do
+  if grep -qE "(needs:.*\[.*\<$required\>|^[[:space:]]*-[[:space:]]*$required\>)" <<<"$needs_block"; then
+    echo "  PASS: auto-merge.needs includes '$required'"; pass=$((pass+1))
+  else
+    echo "  FAIL: auto-merge.needs missing '$required'"; fail=$((fail+1))
+  fi
+done
+
 echo ""
 echo "================================"
 echo "Mutation-workflow tests: $pass passed, $fail failed"

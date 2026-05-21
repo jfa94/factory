@@ -234,6 +234,59 @@ assert_eq "79.5 vs 80 → exit 1" "1" "$rc"
 assert_eq "79.5 vs 80 → reason" "score-below-target" "$(jq -r .reason <<<"$out")"
 assert_eq "79.5 vs 80 → score preserved as 79.5" "79.5" "$(jq -r .score <<<"$out")"
 
+# T8 regression (boundary equality): score exactly equals target → pass.
+# Guards against off-by-one errors in the awk comparison (strict < vs <=).
+echo "=== T4b3 (T8): score 80.0 with target 80 → pass (equality boundary) ==="
+MOCKS=$(mktemp -d)
+export PATH="$MOCKS:$PATH"
+cat > "$MOCKS/pnpm" <<'EOM'
+#!/usr/bin/env bash
+mkdir -p "$WT/reports/mutation"
+printf '{"metrics":{"mutationScore":80.0}}' > "$WT/reports/mutation/mutation.json"
+exit 0
+EOM
+chmod +x "$MOCKS/pnpm"
+WT=$(mktemp -d)
+export WT
+_seed_repo "$WT" "src/foo.ts"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-t4b3"; TASK_ID="t4b3"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+set +e
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+set -e
+assert_eq "80.0 vs 80 → exit 0" "0" "$rc"
+assert_eq "80.0 vs 80 → ok=true" "true" "$(jq -r .ok <<<"$out")"
+
+# T8 regression (just-under boundary): 79.999 < 80 must fail. printf '%.0f'
+# would round 79.999 → 80 and silently bypass; awk strict-float comparison
+# correctly fails.
+echo "=== T4b4 (T8): score 79.999 with target 80 → fail (just under) ==="
+MOCKS=$(mktemp -d)
+export PATH="$MOCKS:$PATH"
+cat > "$MOCKS/pnpm" <<'EOM'
+#!/usr/bin/env bash
+mkdir -p "$WT/reports/mutation"
+printf '{"metrics":{"mutationScore":79.999}}' > "$WT/reports/mutation/mutation.json"
+exit 0
+EOM
+chmod +x "$MOCKS/pnpm"
+WT=$(mktemp -d)
+export WT
+_seed_repo "$WT" "src/foo.ts"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-t4b4"; TASK_ID="t4b4"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+set +e
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+set -e
+assert_eq "79.999 vs 80 → exit 1" "1" "$rc"
+assert_eq "79.999 vs 80 → reason" "score-below-target" "$(jq -r .reason <<<"$out")"
+
 echo "=== T4c: score at/above target → pass ==="
 MOCKS=$(mktemp -d)
 export PATH="$MOCKS:$PATH"

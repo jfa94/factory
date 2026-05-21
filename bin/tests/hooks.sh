@@ -2337,6 +2337,176 @@ rm -rf "$_m1_tmp"
 
 # ============================================================
 echo ""
+echo "=== T5: _is_nested_shell_or_hook_bypass adversarial matrix ==="
+
+# Direct unit test of hooks/_security-common.sh helper. Source once; assert
+# rc==0 (match) for each detection pattern and rc!=0 (no match) for benign
+# commands. Per-case PASS/FAIL increments the suite counter.
+source "$HOOKS_DIR/_security-common.sh"
+
+_t5_match() {
+  local label="$1" cmd="$2"
+  if _is_nested_shell_or_hook_bypass "$cmd"; then
+    echo "  PASS: $label (matched)"; pass=$((pass + 1))
+  else
+    echo "  FAIL: $label (expected MATCH for: $cmd)"; fail=$((fail + 1))
+  fi
+}
+_t5_no_match() {
+  local label="$1" cmd="$2"
+  if _is_nested_shell_or_hook_bypass "$cmd"; then
+    echo "  FAIL: $label (expected NO MATCH for: $cmd)"; fail=$((fail + 1))
+  else
+    echo "  PASS: $label (no match)"; pass=$((pass + 1))
+  fi
+}
+
+# Pattern 1: bash/sh/zsh -[lic] 'cmd'
+_t5_match "bash -c quoted"        'bash -c "gh pr create"'
+_t5_match "sh -c quoted"          "sh -c 'rm -rf /tmp/x'"
+_t5_match "zsh -lc quoted"        'zsh -lc "ls"'
+_t5_match "bash -lc quoted"       'bash -lc "git push"'
+
+# Pattern 2: env wrapping a shell binary
+_t5_match "env bash"              'env bash -c "ls"'
+_t5_match "env -i bash"           'env -i bash -c "ls"'
+_t5_match "env VAR=val bash"      'env PATH=/tmp bash -c "ls"'
+_t5_match "env multi-var sh"      'env FOO=bar BAZ=qux sh -c "ls"'
+
+# Pattern 3: env -flag 'cmd' (env-as-shell-itself)
+_t5_match "env -i quoted cmd"     "env -i 'echo hi'"
+
+# Pattern 4: unquoted bash/sh/zsh script invocation
+_t5_match "bash script.sh"        'bash /tmp/run.sh'
+_t5_match "sh path/to/x.sh"       'sh some/path.sh arg1'
+
+# Pattern 5: eval
+_t5_match "eval rm"               'eval "rm -rf /"'
+_t5_match "eval at start"         'eval foo'
+
+# Pattern 6: git -c hooksPath= / -c core.hooksPath=
+_t5_match "git -c hooksPath"      'git -c hooksPath=/dev/null commit -m x'
+_t5_match "git -c core.hooksPath" 'git -c core.hooksPath=/tmp/h push'
+
+# Pattern 7: absolute-path shell -c
+_t5_match "/bin/bash -c"          '/bin/bash -c "ls"'
+_t5_match "/usr/bin/env bash"     "/usr/bin/env bash -c 'ls'"
+
+# Negative cases — benign commands that must NOT trip the helper.
+_t5_no_match "plain git commit"   'git commit -m "feat: x"'
+_t5_no_match "plain git push"     'git push origin staging'
+_t5_no_match "gh pr create"       'gh pr create --base staging --title t'
+_t5_no_match "ls"                 'ls -la'
+_t5_no_match "pipeline-state read" 'pipeline-state read run-1 .status'
+_t5_no_match "git config --global" 'git config --global user.email foo@bar'
+_t5_no_match "git -c user.email"  'git -c user.email=foo@bar commit -m x'
+
+# ============================================================
+echo ""
+echo "=== T3: secret-commit-guard content-regex coverage matrix ==="
+
+# One positive + one negative case per regex in CONTENT_PATTERNS. Concatenate
+# the fixture strings at runtime so the hook can't trigger on this file itself.
+#
+# Helper: stage $value in a fresh git repo, run secret-commit-guard for the
+# implicit `git -C <repo> commit`, return EXIT:<code>. Negative variants pass
+# a string that the regex must NOT match.
+_t3_run() {
+  local label="$1" value="$2" want_exit="$3"
+  local repo; repo=$(mktemp -d)
+  git -C "$repo" init -q
+  git -C "$repo" commit --allow-empty -m "init" -q
+  printf '%s\n' "$value" > "$repo/leak.txt"
+  git -C "$repo" add leak.txt
+  local out rc
+  out=$(jq -cn --arg c "git -C $repo commit -m wip" '{tool_input:{command:$c}}' \
+    | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+  rc=$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')
+  assert_eq "$label exit=$want_exit" "EXIT:$want_exit" "$rc"
+  if [[ "$want_exit" == "2" ]]; then
+    assert_contains "$label reason=secret_detected" "secret_detected" "$out"
+  fi
+  rm -rf "$repo"
+}
+
+# 1. AWS access key id (AKIA…)
+_t3_run "AKIA positive"  "AKIA""IOSFODNN7EXAMPLE" 2
+_t3_run "AKIA negative"  "AKIA""IOSFODNN7EXAMPL"  0    # 15 chars after AKIA (need 16)
+
+# 2. GitHub personal token (ghp_…36 alnum)
+_t3_run "ghp_ positive" "ghp_""0123456789abcdefghijABCDEFGHIJ0123ZZ" 2
+_t3_run "ghp_ negative" "ghp_""0123456789abcdefghijABCDEFGHIJ0123" 0   # 34 chars (need 36)
+
+# 3. GitHub server-to-server (ghs_)
+_t3_run "ghs_ positive" "ghs_""0123456789abcdefghijABCDEFGHIJ0123ZZ" 2
+_t3_run "ghs_ negative" "ghs_""TOOSHORT" 0
+
+# 4. GitHub OAuth (gho_)
+_t3_run "gho_ positive" "gho_""0123456789abcdefghijABCDEFGHIJ0123ZZ" 2
+_t3_run "gho_ negative" "gho_""TOOSHORT" 0
+
+# 5. GitHub refresh (ghr_)
+_t3_run "ghr_ positive" "ghr_""0123456789abcdefghijABCDEFGHIJ0123ZZ" 2
+_t3_run "ghr_ negative" "ghr_""TOOSHORT" 0
+
+# 6. Anthropic key (sk-ant-…)
+_t3_run "sk-ant positive" "sk-""ant-api03-AAAAAAAAAAAAAAAAAAAA-ZZ" 2
+_t3_run "sk-ant negative" "sk-""ant-tiny" 0
+
+# 7. Generic OpenAI-style sk- (20+ alnum)
+_t3_run "sk- positive" "sk-""0123456789abcdefghijklmnopqrstuv" 2
+_t3_run "sk- negative" "sk-""shorttoken" 0
+
+# 8. Slack xox[bpars]-
+_t3_run "xoxb positive" "xoxb""-1234567890-abcdefghij" 2
+_t3_run "xoxb negative" "xoxb""-short" 0
+
+# 9. Google API key (AIza…35)
+_t3_run "AIza positive" "AIza""0123456789abcdefghijABCDEFGHIJ01234" 2
+_t3_run "AIza negative" "AIza""shorttoken" 0
+
+# 10. Stripe live secret (sk_live_…20+)
+_t3_run "sk_live positive" "sk_""live_0123456789abcdefghijZZ" 2
+_t3_run "sk_live negative" "sk_""live_short" 0
+
+# 11. Stripe restricted live (rk_live_…)
+_t3_run "rk_live positive" "rk_""live_0123456789abcdefghijZZ" 2
+_t3_run "rk_live negative" "rk_""live_short" 0
+
+# 12. JWT eyJ…eyJ…tail
+_t3_run "JWT positive" "eyJ""abcdefghij.eyJabcdefghij.signaturepart" 2
+_t3_run "JWT negative" "eyJ""abcdefghij_no_dots_here" 0
+
+# 13. aws_secret_access_key = <40 b64>
+_t3_run "aws_secret positive" "aws_""secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEYY" 2
+_t3_run "aws_secret negative" "aws_""secret_access_key=tooshort" 0
+
+# 14. JSON service-account private-key + PEM-BEGIN block (JSON-embedded PEM)
+_t3_run "json privkey positive" '"private_'"key"'":"-----'"BEGIN" 2
+_t3_run "json privkey negative" '"public_'"key"'":"-----'"BEGIN" 0
+
+# 15. PEM PRIVATE KEY block header
+_t3_run "PEM positive" "-----""BEGIN RSA PRIVATE KEY-----" 2
+_t3_run "PEM negative" "-----""BEGIN CERTIFICATE-----" 0
+
+# 16. GitHub fine-grained PAT (github_pat_…60+)
+_t3_run "github_pat positive" "github_""pat_$(printf 'X%.0s' {1..60})" 2
+_t3_run "github_pat negative" "github_""pat_shortvalue" 0
+
+# 17. OpenAI project key (sk-proj-…40+)
+_t3_run "sk-proj positive" "sk-""proj-$(printf 'X%.0s' {1..40})" 2
+_t3_run "sk-proj negative" "sk-""proj-short" 0
+
+# 18. NVIDIA api key (nvapi-…40+)
+_t3_run "nvapi positive" "nvapi""-$(printf 'X%.0s' {1..40})" 2
+_t3_run "nvapi negative" "nvapi""-short" 0
+
+# 19. xAI key (xai-…40+ alnum)
+_t3_run "xai positive" "xai""-$(printf 'X%.0s' {1..40})" 2
+_t3_run "xai negative" "xai""-short" 0
+
+# ============================================================
+echo ""
 echo "=== All hook scripts are executable ==="
 
 assert_eq "branch-protection executable" "true" "$([[ -x "$HOOKS_DIR/branch-protection.sh" ]] && echo true || echo false)"

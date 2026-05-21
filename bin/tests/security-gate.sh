@@ -307,5 +307,44 @@ CMD
   pass "case12: binary exits 127 → gate exit 1, ok=false"
 }
 
-case1; case2; case3; case4; case5; case6; case7; case8; case9; case10; case11; case12
+# Case 13: securityAllowFailures=true → state summary records the
+# informational path explicitly. exit 0 (case5 already covers this), AND
+# security_gate.allow_failures=true, security_gate.ok=false. A regression
+# that flipped allow_failures to false in the summary would let the
+# downstream ship-checklist consumer mistakenly treat a failed scan as
+# a hard pass.
+case13() {
+  local env cmd wt
+  env=$(_mk_env "semgrep --config auto" "true")
+  cmd=$(_mk_fail_cmd)
+  wt=$(mktemp -d)
+  # Use the real pipeline-state on PATH (no stub) so the summary actually
+  # lands in state.json and we can read it back via task-read.
+  set +e
+  out=$(CLAUDE_PLUGIN_DATA="$env" PATH="$cmd:$PLUGIN_ROOT/bin:$PATH" "$GATE" run-001 task-001 "$wt" 2>/dev/null)
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case13: expected exit 0 (allowFailures), got $rc; out=$out"; fi
+  # Inline JSON (stdout) carries the summary used by callers that don't
+  # round-trip through state.
+  printf '%s' "$out" | jq -e '.allow_failures == true' >/dev/null \
+    || fail "case13: stdout summary.allow_failures expected true; got $out"
+  printf '%s' "$out" | jq -e '.ok == false' >/dev/null \
+    || fail "case13: stdout summary.ok expected false; got $out"
+  # Round-trip via pipeline-state task-read — what downstream consumers see.
+  local af ok status
+  af=$(CLAUDE_PLUGIN_DATA="$env" PATH="$PLUGIN_ROOT/bin:$PATH" \
+    pipeline-state task-read run-001 task-001 security_gate.allow_failures 2>/dev/null)
+  ok=$(CLAUDE_PLUGIN_DATA="$env" PATH="$PLUGIN_ROOT/bin:$PATH" \
+    pipeline-state task-read run-001 task-001 security_gate.ok 2>/dev/null)
+  status=$(CLAUDE_PLUGIN_DATA="$env" PATH="$PLUGIN_ROOT/bin:$PATH" \
+    pipeline-state task-read run-001 task-001 security_gate.status 2>/dev/null | tr -d '"')
+  [[ "$af" == "true" ]]  || fail "case13: state security_gate.allow_failures=true expected; got '$af'"
+  [[ "$ok" == "false" ]] || fail "case13: state security_gate.ok=false expected; got '$ok'"
+  [[ "$status" == "failed" ]] || fail "case13: state security_gate.status=failed expected; got '$status'"
+  rm -rf "$env" "$cmd" "$wt"
+  pass "case13: allowFailures=true → exit 0, state records allow_failures=true + ok=false + status=failed"
+}
+
+case1; case2; case3; case4; case5; case6; case7; case8; case9; case10; case11; case12; case13
 printf 'all security-gate tests passed\n'
