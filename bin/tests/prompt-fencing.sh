@@ -106,6 +106,29 @@ output_fix=$("$BIN_DIR/pipeline-build-prompt" "$TASK_JSON" --fix-instructions "$
 assert_matches "review feedback open fence" '<<<UNTRUSTED:REVIEW_FEEDBACK:[A-Za-z0-9]+>>>' "$output_fix"
 assert_matches "review feedback close fence" '<<<END:UNTRUSTED:REVIEW_FEEDBACK:[A-Za-z0-9]+>>>' "$output_fix"
 
+# Malformed fix_instructions JSON must fail (rc != 0) with a diagnostic on stderr
+MALFORMED_JSON='{"findings":['
+set +e
+malformed_out=$("$BIN_DIR/pipeline-build-prompt" "$TASK_JSON" --fix-instructions "$MALFORMED_JSON" 2>/tmp/_build_prompt_stderr_$$)
+malformed_rc=$?
+malformed_err=$(cat /tmp/_build_prompt_stderr_$$ 2>/dev/null); rm -f /tmp/_build_prompt_stderr_$$
+set -e
+if [[ "$malformed_rc" -ne 0 ]]; then
+  ok "malformed fix_instructions: non-zero exit"
+else
+  fail "malformed fix_instructions: expected non-zero exit, got 0"
+fi
+if printf '%s' "$malformed_err" | grep -qiE 'malformed|parse|fix_instructions'; then
+  ok "malformed fix_instructions: stderr contains diagnostic"
+else
+  fail "malformed fix_instructions: stderr missing diagnostic (got: $malformed_err)"
+fi
+if ! printf '%s' "$malformed_out" | grep -qF '{"findings":['; then
+  ok "malformed fix_instructions: raw JSON not echoed into output"
+else
+  fail "malformed fix_instructions: raw broken JSON leaked into output"
+fi
+
 # ---------------------------------------------------------------------------
 # Section 2: pipeline-validate-tasks — unsafe description rejection
 # ---------------------------------------------------------------------------
