@@ -86,6 +86,10 @@ Writing tests after the fact is a known failure mode for AI code generators: the
 
 `pipeline-tdd-gate` inspects the git log between the base branch and HEAD. It looks for commits matching the `test(task-id):` prefix convention. If the first non-empty commit is an implementation commit (no test prefix), the gate fails. Tasks can opt out via `tdd_exempt: true` in `spec/tasks.json`, or project-wide via `package.json.factory.tddExempt`.
 
+**Red-test verification (infra-failure detection):**
+
+Earlier in the pipeline, the `preexec_tests` stage runs `_verify_red_tests` to confirm the test-writer's tests actually fail (the RED phase of TDD). This check distinguishes a genuine red test from an infra failure: a non-zero exit caused by import errors, syntax errors, compile errors, no-tests-collected, or — for vitest — `No test files found` / `No test files matching` is classified as `infra_failure`, not as a passing RED gate. This prevents an undiscoverable or unparseable test file from being mistaken for a legitimate failing test and allowing the task to proceed without real test coverage.
+
 **Failure behavior:**
 
 The gate exits non-zero, which `pipeline-run-task` treats as a blocking failure (exit 30). The task is escalated for human review rather than automatically retried — an impl-first commit ordering is a structural violation, not a transient error.

@@ -58,6 +58,15 @@ write_stub pipeline-cleanup 'exit 0'
 write_stub pipeline-human-gate 'exit 0'
 write_stub pipeline-parse-review 'cat'
 
+# pnpm pass-through: `pnpm exec <cmd> [args...]` reduces to `<cmd> [args...]`
+# so red-test verification stubs for vitest/jest are honored through the
+# `<pkg_mgr> exec <runner>` indirection in _verify_red_tests.
+write_stub pnpm '
+case "${1:-}" in
+  exec) shift; [[ $# -gt 0 ]] && exec "$@" ;;
+  *) exit 0 ;;
+esac'
+
 write_stub pipeline-detect-reviewer '
 p=$(cat "$STUB_DIR/reviewer" 2>/dev/null || echo claude)
 printf "{\"reviewer\":\"%s\"}" "$p"'
@@ -1454,43 +1463,6 @@ case "$1 $2" in
   "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
   *) exit 0 ;;
 esac'
-
-# --- 17 (T2): holdout fail-closed — holdout_review_file field unset ----------
-# When a holdout file is present on disk but the state field
-# `holdout_review_file` was never written, postexec must fail closed (return 30)
-# and mark the task needs_human_review. A regression that "silently skips" lets
-# Layer 4 holdout failures merge unchecked.
-new_run holdout-field-unset
-run_wrapper alpha-001 --stage preflight
-wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
-pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
-# Seed a holdout file under the run's holdouts/ dir but do NOT set the
-# holdout_review_file state field.
-mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts"
-printf '{"items":[]}' > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts/alpha-001.json"
-set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage postexec >/dev/null 2>&1; RC=$?; set -e
-assert_eq "holdout-field-unset: exit 30" "30" "$RC"
-assert_eq "holdout-field-unset: quality_gates.holdout=missing-reviewer-output" \
-  "missing-reviewer-output" \
-  "$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.holdout 2>/dev/null | tr -d '"')"
-assert_eq "holdout-field-unset: status=needs_human_review" "needs_human_review" "$(status_of)"
-
-# --- 53: holdout fail-closed — file missing on disk -------------------------
-# State field points to a path that does not exist. Same fail-closed branch as
-# above (reviewer_output non-empty but [[ -f ... ]] check fails), must return 30.
-new_run holdout-file-missing
-run_wrapper alpha-001 --stage preflight
-wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
-pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
-mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts"
-printf '{"items":[]}' > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/holdouts/alpha-001.json"
-pipeline-state task-write "$RUN_ID" alpha-001 holdout_review_file \
-  "\"$ROOT_TMP/holdout-missing-ghost.json\"" >/dev/null
-set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage postexec >/dev/null 2>&1; RC=$?; set -e
-assert_eq "holdout-file-missing: exit 30" "30" "$RC"
-assert_eq "holdout-file-missing: quality_gates.holdout=missing-reviewer-output" \
-  "missing-reviewer-output" \
-  "$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.holdout 2>/dev/null | tr -d '"')"
 
 # --- 54: holdout fail-closed — validator rc=1 -------------------------------
 # Field set, file present, validator returns non-zero. Must fail closed

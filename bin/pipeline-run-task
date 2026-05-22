@@ -509,7 +509,7 @@ _verify_red_tests() {
 
   # Detect infra-level failure patterns in output regardless of rc
   if printf '%s' "$out" | grep -qE \
-    'ModuleNotFoundError|ImportError|SyntaxError|collection error|compile error|error\[E[0-9]+\]|^panic:|no tests ran|ran 0 tests|0 passed.*0 failed|0 tests collected|FAILED TO COLLECT'; then
+    'ModuleNotFoundError|ImportError|SyntaxError|collection error|compile error|error\[E[0-9]+\]|^panic:|no tests ran|ran 0 tests|0 passed.*0 failed|0 tests collected|FAILED TO COLLECT|No test files found|No test files matching'; then
     log_error "red-test verification: infra/compile failure detected in output task_id=\"$task_id\""
     _task_write quality_gates.red_test '{"ok":false,"reason":"infra_failure"}'
     return 1
