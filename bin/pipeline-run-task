@@ -959,7 +959,15 @@ _emit_postexec_manifest() {
       _verdict=$(jq -r '.verdict // ""' "$review_file" 2>/dev/null)
       _blk=$(jq -r '.blocking_count // 0' "$review_file" 2>/dev/null)
       _nblk=$(jq -r '.non_blocking_count // 0' "$review_file" 2>/dev/null)
-      if [[ "$_verdict" == "REQUEST_CHANGES" ]] && (( _blk == 0 && _nblk == 0 )); then
+      if [[ "$_verdict" == "APPROVE" || "$_verdict" == "APPROVED" ]] && (( _blk > 0 )); then
+        _codex_err="codex_inverse_hallucination: APPROVE with $_blk blocking finding(s)"
+        log_metric "task.review.codex_inverse_hallucination" \
+          "task_id=\"$task_id\"" \
+          "kind=\"approve_with_blockers\"" \
+          "blocking=$_blk"
+        rm -f "$review_file"
+        _need_fallback=1
+      elif [[ "$_verdict" == "REQUEST_CHANGES" ]] && (( _blk == 0 && _nblk == 0 )); then
         _codex_err="codex_inverse_hallucination: REQUEST_CHANGES with zero verified findings"
         log_metric "task.review.codex_inverse_hallucination" \
           "task_id=\"$task_id\"" \

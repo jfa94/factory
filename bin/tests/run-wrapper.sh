@@ -255,6 +255,28 @@ write_stub pipeline-codex-review '
 echo "{\"decision\":\"APPROVE\",\"blockers\":[],\"concerns\":[]}"'
 echo claude > "$STUB_DIR/reviewer"
 
+# --- 3.d2: postexec — codex APPROVE with blocking_count > 0 triggers fallback ---
+# Second inverse-hallucination: codex schema decouples verdict from findings, so
+# it can emit APPROVE with blocking_count > 0. Must fall back to agent reviewers.
+new_run postexec-codex-approve-with-blockers
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+echo codex > "$STUB_DIR/reviewer"
+write_stub pipeline-codex-review '
+cat <<JSON
+{"verdict":"APPROVE","blocking_count":2,"non_blocking_count":0,"summary":"patch is correct","findings":[{"severity":"critical","title":"Bug","description":"desc","file":"foo.sh","line":1}]}
+JSON'
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec approve-with-blockers: exit 10" "10" "$RC"
+assert_eq "postexec approve-with-blockers: includes quality-reviewer" "quality-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[] | select(.subagent_type=="quality-reviewer") | .subagent_type' | head -1)"
+assert_eq "postexec approve-with-blockers: stage=postexec_spawn_pending" "postexec_spawn_pending" "$(stage_of)"
+# Restore default codex-review stub for subsequent cases.
+write_stub pipeline-codex-review '
+echo "{\"decision\":\"APPROVE\",\"blockers\":[],\"concerns\":[]}"'
+echo claude > "$STUB_DIR/reviewer"
+
 # --- 3.e: postexec — holdout first-pass spawns holdout-reviewer (Layer A) ---
 # Regression (Issue 2a): when a holdout file exists for the task but no
 # `holdout_review_file` is wired in state, the wrapper MUST spawn a focused
