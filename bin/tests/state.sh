@@ -159,6 +159,30 @@ pipeline-state write "run-test-001" '.tasks.task_3' '{"status":"pending","depend
 # task_99 doesn't exist, so its status will be "unknown" → not done
 assert_exit "deps not satisfied (missing dep)" 1 pipeline-state deps-satisfied "run-test-001" "task_3"
 
+# H_DEPS_1: corrupt/unparseable state.json must exit non-zero (fail-closed)
+_deps_corrupt_run=$(mktemp -d)
+mkdir -p "$_deps_corrupt_run/runs/run-corrupt"
+printf '{' > "$_deps_corrupt_run/runs/run-corrupt/state.json"
+set +e
+_deps_corrupt_out=$(CLAUDE_PLUGIN_DATA="$_deps_corrupt_run" pipeline-state deps-satisfied "run-corrupt" "task_1" 2>&1)
+_deps_corrupt_rc=$?
+set -e
+if (( _deps_corrupt_rc != 0 )); then
+  echo "  PASS: H_DEPS_1: deps-satisfied exits non-zero on corrupt state.json (rc=$_deps_corrupt_rc)"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: H_DEPS_1: deps-satisfied returned rc=0 on corrupt state.json (expected non-zero)"
+  fail=$((fail + 1))
+fi
+if printf '%s' "$_deps_corrupt_out" | grep -qi 'state parse\|parse fail\|jq.*fail\|parse.*error\|invalid\|corrupt'; then
+  echo "  PASS: H_DEPS_1: stderr contains error text about state parse"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: H_DEPS_1: stderr missing error text about state parse; got: $_deps_corrupt_out"
+  fail=$((fail + 1))
+fi
+rm -rf "$_deps_corrupt_run"
+
 echo ""
 echo "=== pipeline-state resume-point ==="
 

@@ -517,9 +517,19 @@ case "$action" in
     state=$(_read_state_file "$run_id")
 
     # Check each dependency's status
+    _jq_err_file=$(mktemp)
+    set +e
     deps=$(printf '%s' "$state" | jq -r --arg tid "$task_id" '
       if .tasks[$tid].depends_on then .tasks[$tid].depends_on[] else empty end
-    ' 2>/dev/null || true)
+    ' 2>"$_jq_err_file")
+    _jq_rc=$?
+    set -e
+    if (( _jq_rc != 0 )); then
+      log_error "deps-satisfied: state parse failed (jq rc=$_jq_rc): $(cat "$_jq_err_file")"
+      rm -f "$_jq_err_file"
+      exit 2
+    fi
+    rm -f "$_jq_err_file"
 
     if [[ -z "$deps" ]]; then
       exit 0
