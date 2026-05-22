@@ -56,6 +56,8 @@ _scribe_max_turns="$(read_config '.scribe.maxTurns' '60')"
 run_id="${1:?missing run-id}"
 task_id="${2:?missing task-id}"
 shift 2
+_validate_id "$run_id" "run-id" || exit 1
+_validate_id "$task_id" "task-id" || exit 1
 
 stage=""
 worktree=""
@@ -896,8 +898,7 @@ _stage_postexec() {
 
 # Helper: build + emit reviewer manifest. Writes postexec_spawn_pending before
 # any asynchronous work so a crash leaves a recoverable intermediate stage.
-# Returns 0 for Codex (sync, caller falls through to postreview).
-# Returns 10 for agent path (caller should exit 10 to yield to subagent).
+# Returns 10 for both Codex and agent paths (caller exits 10 to yield to subagents).
 # Returns 30 on failure.
 _emit_postexec_manifest() {
   local wt="$1"

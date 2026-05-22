@@ -185,6 +185,10 @@ fi
 # where codex's built-in default is not supported. Reading .codex.model from
 # the project config mirrors the FACTORY_QUOTA_GATE_* pattern in pipeline-lib.
 _codex_model="${FACTORY_CODEX_MODEL:-$(read_config '.codex.model' '')}"
+if [[ -n "$_codex_model" && ! "$_codex_model" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  log_error "FACTORY_CODEX_MODEL contains invalid characters: $_codex_model"
+  exit 1
+fi
 
 # --- Sandbox cascade: read-only → workspace-read (no unsandboxed fallback) ---
 
