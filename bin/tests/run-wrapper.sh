@@ -429,6 +429,25 @@ assert_eq "postexec security: 4 reviewers" "4" \
 assert_eq "postexec security: stage_after=postreview" "postreview" \
   "$(printf '%s' "$OUT" | jq -r '.stage_after')"
 
+# --- 4a: postexec — config override: review.model=opus flows to reviewer agents ----
+# Regression guard: when package.json.factory sets review.model=opus, the
+# emitted manifest must use "opus" for all reviewer agents (not hardcoded "sonnet").
+new_run postexec-config-override-model
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+# Write review.model=opus into config.json (what read_config reads).
+printf '{"review":{"model":"opus"}}' > "$CLAUDE_PLUGIN_DATA/config.json"
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec config-override-model: exit 10" "10" "$RC"
+assert_eq "postexec config-override-model: reviewer model=opus" "opus" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[] | select(.subagent_type=="implementation-reviewer") | .model' | head -1)"
+assert_eq "postexec config-override-model: quality-reviewer model=opus" "opus" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[] | select(.subagent_type=="quality-reviewer") | .model' | head -1)"
+# Restore (new_run in next test creates a fresh CLAUDE_PLUGIN_DATA anyway,
+# but clear here for clarity).
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+
 # --- 5: postreview — APPROVE ----------------------------------------------
 new_run postreview-approve
 pipeline-state task-write "$RUN_ID" alpha-001 stage '"postexec_done"' >/dev/null

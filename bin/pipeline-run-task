@@ -45,6 +45,14 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _STATE_BIN="$_SCRIPT_DIR/pipeline-state"
 _CODEX_REVIEW_BIN="${FACTORY_CODEX_REVIEW_BIN:-$_SCRIPT_DIR/pipeline-codex-review}"
 
+# Config-driven model and turn limits — overridable via package.json.factory.
+# Defaults match the historically hardcoded values.
+_reviewer_model="$(read_config '.review.model' 'sonnet')"
+_reviewer_max_turns_quick="$(read_config '.review.maxTurnsQuick' '25')"
+_reviewer_max_turns_deep="$(read_config '.review.maxTurnsDeep' '30')"
+_test_writer_max_turns="$(read_config '.testWriter.maxTurns' '40')"
+_scribe_max_turns="$(read_config '.scribe.maxTurns' '60')"
+
 run_id="${1:?missing run-id}"
 task_id="${2:?missing task-id}"
 shift 2
@@ -328,8 +336,8 @@ PROMPT
   log_metric "task.coverage.snapshot" "task_id=\"$task_id\"" "snapshotted=$snapshotted"
 
   local agents_json
-  agents_json=$(jq -cn --arg pf "$prompt_file" \
-    '[{subagent_type:"test-writer", isolation:"worktree", model:"opus", maxTurns:25, prompt_file:$pf}]')
+  agents_json=$(jq -cn --arg pf "$prompt_file" --argjson _max_turns "$_test_writer_max_turns" \
+    '[{subagent_type:"test-writer", isolation:"worktree", model:"opus", maxTurns:$_max_turns, prompt_file:$pf}]')
   _record_active_task_for_stop_hook "$run_id" "$task_id" ""
   _emit_manifest preexec_tests "$agents_json"
 
@@ -582,8 +590,8 @@ _stage_preexec_tests() {
       printf 'End with STATUS: RED_READY or STATUS: BLOCKED.\n'
     } > "$pf"
     local agents_json
-    agents_json=$(jq -cn --arg pf "$pf" \
-      '[{subagent_type:"test-writer", isolation:"worktree", model:"opus", maxTurns:25, prompt_file:$pf}]')
+    agents_json=$(jq -cn --arg pf "$pf" --argjson _max_turns "$_test_writer_max_turns" \
+      '[{subagent_type:"test-writer", isolation:"worktree", model:"opus", maxTurns:$_max_turns, prompt_file:$pf}]')
     _record_active_task_for_stop_hook "$run_id" "$task_id" ""
     _emit_manifest preexec_tests "$agents_json"
     t1=$(_now_ms)
@@ -840,8 +848,9 @@ _stage_postexec() {
         _task_write quality_gates.holdout '"pending"'
 
         local _ho_agents_json
-        _ho_agents_json=$(jq -cn --arg pf "$_ho_prompt_file" \
-          '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:40, prompt_file:$pf, role:"holdout-reviewer"}]')
+        _ho_agents_json=$(jq -cn --arg pf "$_ho_prompt_file" --arg _model "$_reviewer_model" \
+          --argjson _max_turns "$_reviewer_max_turns_deep" \
+          '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf, role:"holdout-reviewer"}]')
         _record_active_task_for_stop_hook "$run_id" "$task_id" "$wt"
         # stage_after=postexec so the orchestrator re-invokes this stage; the
         # next entry finds holdout_review_file populated and runs `check`.
@@ -998,16 +1007,18 @@ _emit_postexec_manifest() {
       # "Decision 18: Reviewer Model is Fixed, Not Quota-Routed". Do not change
       # without updating that decision.
       local codex_agents_json
-      codex_agents_json=$(jq -cn --arg pf "$pf" \
-        '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:1, prompt_file:$pf}]')
+      codex_agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_reviewer_model" \
+        '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:$_model, maxTurns:1, prompt_file:$pf}]')
       case "$tier" in
         feature)
           codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
-            '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+            --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+            '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]') ;;
         security)
           codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
-            '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf},
-                  {subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+            --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+            '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf},
+                  {subagent_type:"architecture-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]') ;;
       esac
       _emit_manifest postreview "$codex_agents_json"
       return 10
@@ -1019,21 +1030,25 @@ _emit_postexec_manifest() {
   _task_write stage '"postexec_spawn_pending"'
 
   local agents_json
-  agents_json=$(jq -cn --arg pf "$pf" \
-    '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]')
+  agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_reviewer_model" \
+    --argjson _max_turns "$_reviewer_max_turns_deep" \
+    '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
 
   case "$tier" in
     feature)
       agents_json=$(printf '%s' "$agents_json" | jq -c --arg pf "$pf" \
-        '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+        --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+        '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]') ;;
     security)
       agents_json=$(printf '%s' "$agents_json" | jq -c --arg pf "$pf" \
-        '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf},
-              {subagent_type:"architecture-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]') ;;
+        --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+        '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf},
+              {subagent_type:"architecture-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]') ;;
   esac
 
   agents_json=$(printf '%s' "$agents_json" | jq -c --arg pf "$pf" \
-    '. + [{subagent_type:"quality-reviewer", isolation:"worktree", model:"sonnet", maxTurns:30, prompt_file:$pf}]')
+    --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+    '. + [{subagent_type:"quality-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
 
   _emit_manifest postreview "$agents_json"
   return 10
@@ -1259,8 +1274,9 @@ _stage_postreview() {
       printf 'End with STATUS: DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT.\n'
     } > "$pf"
     local agents_json
-    agents_json=$(jq -cn --arg pf "$pf" \
-      '[{subagent_type:"task-executor", model:"sonnet", maxTurns:60, prompt_file:$pf}]')
+    agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_reviewer_model" \
+      --argjson _max_turns "$_scribe_max_turns" \
+      '[{subagent_type:"task-executor", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
     _record_active_task_for_stop_hook "$run_id" "$task_id" "$pr_wt"
     _emit_manifest postexec "$agents_json"
     t1=$(_now_ms)
@@ -1551,8 +1567,9 @@ _stage_ship() {
         local pf; pf=$(_prompt_path executor-ci-fix)
         printf '[task:%s]\nFix failing CI on PR for task %s.\nSTATUS: DONE|...\n' "$task_id" "$task_id" > "$pf"
         local agents_json
-        agents_json=$(jq -cn --arg pf "$pf" \
-          '[{subagent_type:"task-executor", model:"sonnet", maxTurns:60, prompt_file:$pf}]')
+        agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_reviewer_model" \
+          --argjson _max_turns "$_scribe_max_turns" \
+          '[{subagent_type:"task-executor", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
         local _ship_wt
         _ship_wt=$(_task_field worktree)
         _ship_wt=$(_unquote_json_string "$_ship_wt")
@@ -1871,8 +1888,9 @@ _stage_finalize_run() {
     local pf="$run_dir/.state/$run_id/RUN.scribe-prompt.md"
     printf 'Update /docs based on git diff for run %s.\nEnd with STATUS:.\n' "$run_id" > "$pf"
     local agents_json
-    agents_json=$(jq -cn --arg pf "$pf" \
-      '[{subagent_type:"scribe", isolation:"worktree", model:"sonnet", maxTurns:40, prompt_file:$pf}]')
+    agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_reviewer_model" \
+      --argjson _max_turns "$_scribe_max_turns" \
+      '[{subagent_type:"scribe", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
     # Write sentinel so pretooluse-pipeline-guards.sh can activate the scribe path-scope
     # guard. The hook cannot read FACTORY_SUBAGENT_ROLE (never exported at spawn time).
     # The guard depends on this sentinel — surface write failures instead of

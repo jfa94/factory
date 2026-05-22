@@ -123,6 +123,28 @@ from `~/.codex/config.toml`). When empty/unset, no `-c model=` is appended.
 See `docs/reference/bin-scripts.md` (`pipeline-codex-review`) for the full
 description, including the inverse-hallucination fallback behaviour.
 
+### review.model / review.maxTurnsQuick / review.maxTurnsDeep / testWriter.maxTurns / scribe.maxTurns
+
+Controls the Claude model and turn limits for subagent reviewers, test writers, and the Scribe agent.
+
+| Key                    | Default  | Description                                                                                          |
+| ---------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `review.model`         | `sonnet` | Claude model for implementation-reviewer, quality-reviewer, security-reviewer, architecture-reviewer |
+| `review.maxTurnsQuick` | `25`     | maxTurns for quick reviewer passes (currently unused; reserved)                                      |
+| `review.maxTurnsDeep`  | `30`     | maxTurns for deep reviewer passes                                                                    |
+| `testWriter.maxTurns`  | `40`     | maxTurns for the test-writer subagent                                                                |
+| `scribe.maxTurns`      | `60`     | maxTurns for the Scribe documentation agent                                                          |
+
+Set in `package.json` under the `factory` key:
+
+```json
+{
+  "factory": {
+    "review": { "model": "opus", "maxTurnsDeep": 40 }
+  }
+}
+```
+
 ---
 
 ## Quality Gates
