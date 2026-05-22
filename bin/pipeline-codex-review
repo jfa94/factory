@@ -18,12 +18,14 @@ base_ref="staging"
 base_explicit=false
 task_id=""
 spec_dir=""
+worktree=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --base)     base_ref="$2"; base_explicit=true; shift 2 ;;
-    --task-id)  task_id="$2";  shift 2 ;;
-    --spec-dir) spec_dir="$2"; shift 2 ;;
+    --base)      base_ref="$2"; base_explicit=true; shift 2 ;;
+    --task-id)   task_id="$2";  shift 2 ;;
+    --spec-dir)  spec_dir="$2"; shift 2 ;;
+    --worktree)  worktree="$2"; shift 2 ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -31,6 +33,18 @@ done
 if [[ -z "$task_id" ]]; then
   log_error "--task-id is required"
   exit 1
+fi
+
+if [[ -n "$worktree" ]]; then
+  if [[ ! -d "$worktree" ]]; then
+    log_error "--worktree path does not exist or is not a directory: $worktree"
+    exit 1
+  fi
+  if ! git -C "$worktree" rev-parse --show-toplevel >/dev/null 2>&1; then
+    log_error "--worktree path is not a git repository: $worktree"
+    exit 1
+  fi
+  cd "$worktree"
 fi
 
 if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
@@ -102,6 +116,22 @@ trap 'rm -f "$prompt_file" "$out_file" "$diff_file" "$err_file"' EXIT
 
   printf '# Task: %s\n\n' "$task_id"
 
+  # Per-task acceptance criteria extracted from tasks.json — presented before
+  # the full spec dump so codex anchors scope to the structured list, not
+  # narrative inference. tasks.json is authoritative; acceptance.md is context.
+  if [[ -n "$spec_dir" && -f "${spec_dir}/tasks.json" ]]; then
+    _task_ac=$(jq -r --arg id "$task_id" '
+      (.tasks // [])[] | select(.id == $id) |
+      (.acceptance_criteria // []) | map("- " + .) | join("\n")
+    ' "${spec_dir}/tasks.json" 2>/dev/null || printf '')
+    if [[ -n "$_task_ac" ]]; then
+      printf '## Authoritative acceptance criteria for %s\n\n' "$task_id"
+      printf 'Judge scope against THIS list, not narrative inference from spec.md.\n'
+      printf 'Do not flag missing items that are not in this list.\n\n'
+      printf '%s\n\n' "$_task_ac"
+    fi
+  fi
+
   # Spec files (acceptance criteria, holdout criteria) — wrapped in UNTRUSTED
   # fences so PRD content cannot inject reviewer instructions.
   if [[ -n "$spec_dir" && -d "$spec_dir" ]]; then
@@ -124,7 +154,8 @@ trap 'rm -f "$prompt_file" "$out_file" "$diff_file" "$err_file"' EXIT
   printf 'the provided schema. Do not include any prose, markdown, or explanation '
   printf 'outside the JSON.\n\n'
   printf 'Map severity: critical/high findings are BLOCKING; medium/low are NON-BLOCKING.\n'
-  printf 'Set overall_correctness to "patch is correct" only if there are zero BLOCKING findings.\n\n'
+  printf 'Set overall_correctness to "patch is correct" only if there are zero BLOCKING findings.\n'
+  printf 'When in conflict, the Authoritative acceptance criteria list above wins over narrative in spec.md.\n\n'
   printf 'Each finding MUST include verbatim_line — an exact 10+-character substring '
   printf 'copied verbatim from the diff above (a single line within a hunk, including '
   printf 'leading +/- if present). The harness drops findings whose verbatim_line does '

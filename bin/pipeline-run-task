@@ -931,25 +931,25 @@ _emit_postexec_manifest() {
     local review_file="$run_dir/.state/$run_id/$task_id.review.codex.json"
     local spec_path
     spec_path=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
-    local cargs=(--task-id "$task_id")
+    local cargs=(--task-id "$task_id" --worktree "$wt")
     [[ -n "$spec_path" ]] && cargs+=(--spec-dir "$spec_path")
     local _codex_err_file _codex_rc=0
     _codex_err_file=$(mktemp "${TMPDIR:-/tmp}/codex-review-err.XXXXXX")
     "$_CODEX_REVIEW_BIN" "${cargs[@]}" > "$review_file" 2> "$_codex_err_file" || _codex_rc=$?
+    local _codex_err="" _need_fallback=0
     if (( _codex_rc != 0 )); then
-      local _codex_err
       _codex_err=$(cat "$_codex_err_file" 2>/dev/null || printf '')
-      rm -f "$_codex_err_file"
-      if printf '%s' "$_codex_err" | grep -qE 'codex: command not found|codex CLI not found'; then
-        log_warn "codex CLI unavailable for $task_id; falling back to agent reviewers"
-        provider="agent"
-        # fall through to agent-path block below
-      else
-        log_error "codex review failed for $task_id: $_codex_err"
-        return 30
-      fi
+      _need_fallback=1
+    elif [[ ! -s "$review_file" ]] || ! jq -e . "$review_file" >/dev/null 2>&1; then
+      _codex_err=$(cat "$_codex_err_file" 2>/dev/null || printf '')
+      _need_fallback=1
+    fi
+    rm -f "$_codex_err_file"
+    if (( _need_fallback )); then
+      log_warn "codex review unavailable for $task_id (rc=$_codex_rc); falling back to agent reviewers. codex stderr tail: $(printf '%s' "$_codex_err" | tail -c 500)"
+      provider="agent"
+      # fall through to agent-path block below
     else
-      rm -f "$_codex_err_file"
       _task_write review_files "$(jq -n --arg f "$review_file" '[$f]')"
       # Codex review is synchronous — no crash window, advance directly to postexec_done.
       _task_write stage '"postexec_done"'
