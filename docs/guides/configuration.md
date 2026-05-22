@@ -123,6 +123,8 @@ from `~/.codex/config.toml`). When empty/unset, no `-c model=` is appended.
 See `docs/reference/bin-scripts.md` (`pipeline-codex-review`) for the full
 description, including the inverse-hallucination fallback behaviour.
 
+**ChatGPT-account installs:** OpenAI's hosted codex CLI restricts which models a ChatGPT-account user may invoke. As of 2026-05-22 the developer's ChatGPT account rejects `gpt-5.2-codex` (codex default), `gpt-5-codex`, `gpt-5`, `gpt-5-codex-medium`, `codex-mini-latest`, `o3`, `gpt-4o`, `gpt-4`, `chatgpt-4o-latest`, `codex-1`, `gpt-4.1`, and `o4-mini`. Run `codex login status` and consult `~/.codex/config.toml` after `codex login` to discover the model the OpenAI dashboard provisioned for your subscription tier, then set `FACTORY_CODEX_MODEL` accordingly. If no model is supported, the pipeline falls through to agent reviewers — this is safe but loses Codex's adversarial reads.
+
 ### review.model / review.maxTurnsQuick / review.maxTurnsDeep / testWriter.maxTurns / scribe.maxTurns
 
 Controls the Claude model and turn limits for subagent reviewers, test writers, and the Scribe agent.
