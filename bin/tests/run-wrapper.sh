@@ -1667,5 +1667,34 @@ if (( direct_reads > 0 )); then
   sed 's/^/    /' < "$jq_log" >&2
 fi
 
+# --- 55: finalize-run — corrupt state.json must fail-closed (exit 30) ---------
+# Previously: jq silently fell back to 0, making non_done=0 and bad_stage=0,
+# so finalize-run declared the run complete with possibly unfinished tasks.
+# Now: log_error + return 30.
+new_run finalize-corrupt-state
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '555' >/dev/null
+_stub_git_finalize_ok
+# Truncate state.json to make it unparseable by jq
+state_json="$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+printf '{broken json' > "$state_json"
+set +e
+CORRUPT_OUT=$(pipeline-run-task "$RUN_ID" RUN --stage finalize-run 2>&1)
+RC=$?
+set -e
+assert_eq "finalize-corrupt-state: exit 30" "30" "$RC"
+if printf '%s' "$CORRUPT_OUT" | grep -q "finalize-run"; then
+  pass "finalize-corrupt-state: stderr contains 'finalize-run'"
+else
+  fail "finalize-corrupt-state: stderr missing 'finalize-run' (got: $CORRUPT_OUT)"
+fi
+if printf '%s' "$CORRUPT_OUT" | grep -q "parse"; then
+  pass "finalize-corrupt-state: stderr contains 'parse'"
+else
+  fail "finalize-corrupt-state: stderr missing 'parse' (got: $CORRUPT_OUT)"
+fi
+rm -f "$STUB_DIR/git"
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
