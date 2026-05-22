@@ -39,6 +39,11 @@ require_command jq
 # swallowed reviews). FACTORY_CODEX_REVIEW_BIN is a test-only override —
 # production must leave it unset.
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Ensure sibling binaries resolve from _SCRIPT_DIR first, preventing any
+# shadowing binary earlier in PATH from intercepting pipeline-state,
+# pipeline-tdd-gate, pipeline-quality-gate, and other sibling calls.
+PATH="$_SCRIPT_DIR:$PATH"
+export PATH
 _CODEX_REVIEW_BIN="${FACTORY_CODEX_REVIEW_BIN:-$_SCRIPT_DIR/pipeline-codex-review}"
 
 run_id="${1:?missing run-id}"

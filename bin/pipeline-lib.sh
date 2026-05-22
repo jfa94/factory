@@ -168,16 +168,6 @@ read_config_strict() {
   printf '%s' "$val"
 }
 
-# --- State shortcuts ---
-
-# Read state (delegates to pipeline-state)
-# Usage: read_state <run_id> [key]
-read_state() { pipeline-state read "$@"; }
-
-# Write state (delegates to pipeline-state)
-# Usage: write_state <run_id> <key> <value>
-write_state() { pipeline-state write "$@"; }
-
 # --- Utilities ---
 
 # Convert string to branch-safe slug: lowercase, hyphens, max 50 chars
