@@ -252,9 +252,17 @@ ${prior_work}${resume_context}"
 
 # Append fix instructions if provided
 if [[ -n "$fix_instructions" ]]; then
+  _jq_err=$(mktemp)
+  _jq_rc=0
   findings=$(printf '%s' "$fix_instructions" | jq -r '
     .findings // [] | .[] | "- [\(.severity // "unknown")] \(.title // "untitled"): \(.description // "no description")"
-  ' 2>/dev/null || echo "$fix_instructions")
+  ' 2>"$_jq_err") || _jq_rc=$?
+  if [[ "$_jq_rc" -ne 0 ]]; then
+    log_error "build-prompt: fix_instructions is malformed JSON: $(cat "$_jq_err")"
+    rm -f "$_jq_err"
+    exit 1
+  fi
+  rm -f "$_jq_err"
   findings=$(printf '%s' "$findings" | sed -E 's/<<<(END:)?UNTRUSTED:[A-Z_]+(:[A-Za-z0-9]+)?>>>/[redacted-fence]/g')
   prompt+="
 
