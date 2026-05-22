@@ -115,5 +115,26 @@ else
   pass "ac-unknown: AC block absent for unknown task_id"
 fi
 
+# --- Case 4: FACTORY_CODEX_MODEL set → `-c model="..."` in argv ---
+new_case model-env array
+FACTORY_CODEX_MODEL=gpt-5-codex pipeline-codex-review \
+  --task-id alpha-001 --spec-dir "$SPEC_DIR" --worktree "$WT" >/dev/null 2>&1 \
+  || fail "model-env: wrapper exited non-zero"
+argv=$(cat "$CODEX_STUB_ARGV" 2>/dev/null || printf '')
+assert_contains "model-env: argv contains -c" "-c" "$argv"
+assert_contains "model-env: argv contains model=\"gpt-5-codex\"" 'model="gpt-5-codex"' "$argv"
+
+# --- Case 5: FACTORY_CODEX_MODEL unset → no `-c model=` injected ---
+new_case model-unset array
+unset FACTORY_CODEX_MODEL
+pipeline-codex-review --task-id alpha-001 --spec-dir "$SPEC_DIR" --worktree "$WT" >/dev/null 2>&1 \
+  || fail "model-unset: wrapper exited non-zero"
+argv=$(cat "$CODEX_STUB_ARGV" 2>/dev/null || printf '')
+if [[ "$argv" == *'model='* ]]; then
+  fail "model-unset: argv should not contain model= (got: $argv)"
+else
+  pass "model-unset: argv omits model= override"
+fi
+
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

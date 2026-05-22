@@ -175,15 +175,24 @@ if ! codex --help 2>&1 | grep -q -- '--sandbox'; then
   exit 1
 fi
 
+# --- Model override (env wins; falls back to codex's config.toml default) ---
+# FACTORY_CODEX_MODEL is the operator-facing knob for ChatGPT-account installs
+# where codex's built-in default is not supported. Reading .codex.model from
+# the project config mirrors the FACTORY_QUOTA_GATE_* pattern in pipeline-lib.
+_codex_model="${FACTORY_CODEX_MODEL:-$(read_config '.codex.model' '')}"
+
 # --- Sandbox cascade: read-only → workspace-read (no unsandboxed fallback) ---
 
 _run_codex() {
   local sandbox_flag="$1"
   local err_path="$2"
-  local args=(exec
-    --output-schema "$schema_file"
-    --output-last-message "$out_file"
-    --sandbox "$sandbox_flag")
+  local args=(exec)
+  if [[ -n "$_codex_model" ]]; then
+    args+=(-c "model=\"${_codex_model}\"")
+  fi
+  args+=(--output-schema "$schema_file"
+         --output-last-message "$out_file"
+         --sandbox "$sandbox_flag")
   args+=(-)
   codex "${args[@]}" < "$prompt_file" >/dev/null 2>"$err_path"
 }
