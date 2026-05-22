@@ -243,7 +243,10 @@ _stage_preflight() {
 
   _task_row=""
   if [[ -f "$spec_path/tasks.json" ]]; then
-    _task_row=$(jq -c --arg t "$task_id" '(.tasks // .)[] | select(.task_id == $t)' "$spec_path/tasks.json" 2>/dev/null || true)
+    _task_row=$(jq -c --arg t "$task_id" '
+      (if type == "array" then .[] else (.tasks // [])[] end) |
+      select(.task_id == $t)
+    ' "$spec_path/tasks.json" 2>/dev/null || true)
   fi
   _tw_criteria=$(printf '%s' "${_task_row:-{\}}" | jq -r '(.acceptance_criteria // []) | map("- " + .) | join("\n")' 2>/dev/null || true)
   _tw_tests_to_write=$(printf '%s' "${_task_row:-{\}}" | jq -r '(.tests_to_write // []) | map("- " + .) | join("\n")' 2>/dev/null || true)
@@ -621,7 +624,10 @@ _stage_preexec_tests() {
   # Fallback: if state doesn't have the task row yet (e.g., task-init wasn't
   # called), read directly from the spec tasks.json so the prompt is never null.
   if [[ -z "$task_json" || "$task_json" == "null" ]] && [[ -n "$spec_path" ]] && [[ -f "$spec_path/tasks.json" ]]; then
-    task_json=$(jq -c --arg t "$task_id" '(.tasks // .)[] | select(.task_id == $t)' "$spec_path/tasks.json" 2>/dev/null || true)
+    task_json=$(jq -c --arg t "$task_id" '
+      (if type == "array" then .[] else (.tasks // [])[] end) |
+      select(.task_id == $t)
+    ' "$spec_path/tasks.json" 2>/dev/null || true)
   fi
   prompt_file=$(_prompt_path executor)
   local args=()

@@ -1025,6 +1025,26 @@ assert_eq "preexec-resume-origin-staging: spawns executor" "task-executor" \
   "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
 rm -f "$STUB_DIR/git" "$STUB_DIR/vitest"
 
+# --- 19.e: preflight — bare-array tasks.json (outsidey schema) yields criteria in test-writer prompt ---
+# Regression: `(.tasks // .)[]` errors on arrays (Cannot index array with string "tasks").
+# type-aware jq fix must populate _task_row and render acceptance_criteria in the test-writer prompt.
+new_run preflight-bare-array-tasks
+# Create a spec dir with a bare-array tasks.json (outsidey schema).
+ba_spec_dir="$ROOT_TMP/$current-spec"; mkdir -p "$ba_spec_dir"
+cp "$REPO_ROOT/bin/tests/fixtures/codex-review/tasks-array.json" "$ba_spec_dir/tasks.json"
+pipeline-state write "$RUN_ID" .spec.path "\"$ba_spec_dir\"" >/dev/null
+run_wrapper alpha-001 --stage preflight
+assert_eq "preflight-bare-array-tasks: exit 10" "10" "$RC"
+assert_eq "preflight-bare-array-tasks: agent=test-writer" "test-writer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+# The test-writer prompt must contain at least one AC from the bare-array fixture's alpha-001.
+pf_bare=$(printf '%s' "$OUT" | jq -r '.agents[0].prompt_file')
+if [[ -f "$pf_bare" ]] && grep -q "AC1: declares CREATE TABLE alpha" "$pf_bare"; then
+  pass "preflight-bare-array-tasks: prompt contains alpha-001 acceptance_criteria"
+else
+  fail "preflight-bare-array-tasks: prompt missing alpha-001 acceptance_criteria (file=$pf_bare)"
+fi
+
 # Restore the cat stub for scenarios 20-23 (they use JSON review files)
 write_stub pipeline-parse-review 'cat'
 
