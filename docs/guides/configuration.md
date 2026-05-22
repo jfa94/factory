@@ -106,6 +106,23 @@ Use OpenAI Codex for adversarial review when available, fall back to Claude Code
 - Set false if Codex is unavailable or you prefer Claude Code review
 - Keep true for Codex's purpose-built adversarial review mode
 
+### codex.model / `FACTORY_CODEX_MODEL`
+
+**Default:** _(empty)_
+
+Model passed to `codex exec` as `-c model="..."`. Precedence:
+`FACTORY_CODEX_MODEL` env → `.codex.model` config → codex default (resolved
+from `~/.codex/config.toml`). When empty/unset, no `-c model=` is appended.
+
+**When to change:**
+
+- Set on ChatGPT (Plus/Pro) auth accounts where codex's built-in default
+  model is not supported — e.g. `gpt-5-codex`.
+- Leave empty on API-key installs to let codex pick its default.
+
+See `docs/reference/bin-scripts.md` (`pipeline-codex-review`) for the full
+description, including the inverse-hallucination fallback behaviour.
+
 ---
 
 ## Quality Gates

@@ -658,6 +658,29 @@ The Codex output schema defines:
 
 Priority mapping: `critical`/`high` = blocking, `medium`/`low` = non-blocking.
 
+**Configuration:**
+
+- `FACTORY_CODEX_MODEL` (env) — explicit `model` value passed to `codex exec`
+  via `-c model="..."`. Use this on ChatGPT (Plus/Pro) auth accounts where
+  codex's built-in default model is not supported. Example: `gpt-5-codex`.
+- `.codex.model` (project config) — same value resolved from the project's
+  configuration (read via `read_config` in `pipeline-lib.sh`). Env wins on
+  conflict.
+- Empty / unset → no `-c model=` is appended; codex resolves from
+  `~/.codex/config.toml`.
+
+**Inverse-hallucination fallback:**
+
+When `validate_findings` (`pipeline-lib.sh:1102`) drops every reviewer
+finding because each `verbatim_line` failed exact-line match against the
+diff, the verdict is intentionally preserved (see the comment block at
+`pipeline-lib.sh:1097`). A resulting `verdict="REQUEST_CHANGES"` with
+`blocking_count=0` and `non_blocking_count=0` is not actionable — the
+executor has nothing to fix. `pipeline-run-task` detects this shape, logs
+a `task.review.codex_inverse_hallucination` metric, discards the unusable
+verdict file, and falls through to the agent-reviewer path. Behaviour is
+identical to a non-zero codex rc.
+
 ---
 
 ### pipeline-parse-review
