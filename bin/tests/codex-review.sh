@@ -145,5 +145,93 @@ exit_code=$?
 assert_eq "ac-malformed-json: exits 0 on parse failure" "0" "$exit_code"
 assert_contains "ac-malformed-json: stderr contains parse-failure warning" "tasks.json parse failed" "$stderr_out"
 
+# --- Case 7: schema-conformance — codex emits valid schema → output is normalized JSON with verdict ---
+new_case schema-conformance array
+# Write a codex stub that emits a codex-schema-conformant response (not the pipeline schema)
+cat > "$STUB_DIR/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${CODEX_STUB_ARGV:-/dev/null}"
+cat > "${CODEX_STUB_STDIN:-/dev/null}"
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-last-message) out="$2"; shift 2 ;;
+    --help) printf -- '--sandbox\n'; exit 0 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$out" ]] && cat > "$out" <<'JSON'
+{"overall_correctness":"patch is correct","overall_explanation":"ok","overall_confidence_score":0.9,"findings":[]}
+JSON
+exit 0
+STUB
+chmod +x "$STUB_DIR/codex"
+out_json=$(pipeline-codex-review --task-id alpha-001 --spec-dir "$SPEC_DIR" --worktree "$WT" 2>/dev/null)
+exit_code=$?
+assert_eq "schema-conformance: exits 0" "0" "$exit_code"
+if jq -e . <<< "$out_json" >/dev/null 2>&1; then
+  pass "schema-conformance: output is valid JSON"
+else
+  fail "schema-conformance: output is not valid JSON (got: $out_json)"
+fi
+verdict_field=$(jq -r '.verdict // empty' <<< "$out_json" 2>/dev/null || printf '')
+if [[ -n "$verdict_field" ]]; then
+  pass "schema-conformance: output contains verdict field"
+else
+  fail "schema-conformance: output missing verdict field (got: $out_json)"
+fi
+
+# --- Case 8: sandbox-cascade negative — codex --help lacks --sandbox → rc=1 with error ---
+new_case sandbox-neg array
+cat > "$STUB_DIR/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${CODEX_STUB_ARGV:-/dev/null}"
+cat > "${CODEX_STUB_STDIN:-/dev/null}"
+# --help output deliberately omits --sandbox
+case "$1" in
+  --help) printf 'Usage: codex exec [options]\n'; exit 0 ;;
+esac
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-last-message) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$out" ]] && printf '{"overall_correctness":"patch is correct","overall_explanation":"ok","overall_confidence_score":0.9,"findings":[]}\n' > "$out"
+exit 0
+STUB
+chmod +x "$STUB_DIR/codex"
+stderr_sandbox=""
+stderr_sandbox=$(pipeline-codex-review --task-id alpha-001 --spec-dir "$SPEC_DIR" --worktree "$WT" 2>&1 >/dev/null) && exit_code_sandbox=0 || exit_code_sandbox=$?
+assert_eq "sandbox-neg: exits 1" "1" "$exit_code_sandbox"
+assert_contains "sandbox-neg: stderr mentions --sandbox" "does not support --sandbox" "$stderr_sandbox"
+
+# --- Case 9: invalid-JSON branch — codex writes non-JSON output → rc=1 with error ---
+new_case invalid-json array
+cat > "$STUB_DIR/codex" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${CODEX_STUB_ARGV:-/dev/null}"
+cat > "${CODEX_STUB_STDIN:-/dev/null}"
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-last-message) out="$2"; shift 2 ;;
+    --help) printf -- '--sandbox\n'; exit 0 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$out" ]] && printf 'not json\n' > "$out"
+exit 0
+STUB
+chmod +x "$STUB_DIR/codex"
+stderr_json=""
+stderr_json=$(pipeline-codex-review --task-id alpha-001 --spec-dir "$SPEC_DIR" --worktree "$WT" 2>&1 >/dev/null) && exit_code_json=0 || exit_code_json=$?
+assert_eq "invalid-json: exits 1" "1" "$exit_code_json"
+assert_contains "invalid-json: stderr mentions not valid JSON" "not valid JSON" "$stderr_json"
+
+# Restore default stub for any subsequent cases
+write_codex_stub
+
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
