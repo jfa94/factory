@@ -124,11 +124,16 @@ trap 'rm -f "$prompt_file" "$out_file" "$diff_file" "$err_file"' EXIT
     # `(.tasks // .)[]` errors on bare arrays (Cannot index array with string),
     # so discriminate on type first; matches the canonical .task_id field used
     # everywhere else (pipeline-run-task:246,624; SKILL.md:266).
+    _err_file=$(mktemp)
     _task_ac=$(jq -r --arg id "$task_id" '
       (if type == "array" then .[] else (.tasks // [])[] end) |
       select(.task_id == $id) |
       (.acceptance_criteria // []) | map("- " + .) | join("\n")
-    ' "${spec_dir}/tasks.json" 2>/dev/null || printf '')
+    ' "${spec_dir}/tasks.json" 2>"$_err_file") || {
+      log_warn "tasks.json parse failed (codex prompt will lack AC anchor): $(tail -c 500 "$_err_file")"
+      _task_ac=""
+    }
+    rm -f "$_err_file"
     if [[ -n "$_task_ac" ]]; then
       printf '## Authoritative acceptance criteria for %s\n\n' "$task_id"
       printf 'Judge scope against THIS list, not narrative inference from spec.md.\n'

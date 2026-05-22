@@ -136,5 +136,14 @@ else
   pass "model-unset: argv omits model= override"
 fi
 
+# --- Case 6: malformed tasks.json → log_warn emitted, script still exits 0 ---
+new_case ac-malformed-json array
+# Overwrite tasks.json with invalid JSON to trigger a jq parse error
+printf '{' > "$SPEC_DIR/tasks.json"
+stderr_out=$(pipeline-codex-review --task-id alpha-001 --spec-dir "$SPEC_DIR" --worktree "$WT" 2>&1 >/dev/null)
+exit_code=$?
+assert_eq "ac-malformed-json: exits 0 on parse failure" "0" "$exit_code"
+assert_contains "ac-malformed-json: stderr contains parse-failure warning" "tasks.json parse failed" "$stderr_out"
+
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
