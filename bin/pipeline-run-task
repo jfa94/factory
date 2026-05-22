@@ -1754,11 +1754,17 @@ _stage_finalize_run() {
     non_done_filter='.value.status != "done"'
   fi
 
+  local _jq_err; _jq_err=$(mktemp)
   local non_done_detail non_done
   non_done_detail=$(jq -r --argjson empty 0 \
     "[.tasks | to_entries[] | select($non_done_filter) | \"\(.key)=\(.value.status // \"null\")\"] | join(\",\")" \
     "$state_file" 2>/dev/null || printf '')
-  non_done=$(jq -r "[.tasks | to_entries[] | select($non_done_filter)] | length" "$state_file" 2>/dev/null || printf '0')
+  non_done=$(jq -r "[.tasks | to_entries[] | select($non_done_filter)] | length" "$state_file" 2>"$_jq_err") || {
+    log_error "finalize-run: state.json parse failed: $(cat "$_jq_err")"
+    rm -f "$_jq_err"
+    return 30
+  }
+  rm -f "$_jq_err"
   if (( non_done > 0 )); then
     log_warn "finalize-run: $non_done task(s) not done: $non_done_detail (allow_partial=$allow_partial)"
     t1=$(_now_ms)
@@ -1771,7 +1777,13 @@ _stage_finalize_run() {
   # mutated without the stage transition.
   local bad_stage_detail bad_stage
   bad_stage_detail=$(jq -r '[.tasks | to_entries[] | select(.value.status == "done" and .value.stage != "ship_done") | "\(.key)=\(.value.stage // "null")"] | join(",")' "$state_file" 2>/dev/null || printf '')
-  bad_stage=$(jq -r '[.tasks | to_entries[] | select(.value.status == "done" and .value.stage != "ship_done")] | length' "$state_file" 2>/dev/null || printf '0')
+  local _jq_err2; _jq_err2=$(mktemp)
+  bad_stage=$(jq -r '[.tasks | to_entries[] | select(.value.status == "done" and .value.stage != "ship_done")] | length' "$state_file" 2>"$_jq_err2") || {
+    log_error "finalize-run: state.json parse failed: $(cat "$_jq_err2")"
+    rm -f "$_jq_err2"
+    return 30
+  }
+  rm -f "$_jq_err2"
   if (( bad_stage > 0 )); then
     log_error "finalize-run: $bad_stage done task(s) with stage!=ship_done: $bad_stage_detail"
     t1=$(_now_ms)
