@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# codex-review.sh — bin/pipeline-codex-review unit tests.
+# Stubs the `codex` CLI so we can inspect the generated prompt and argv
+# without invoking the real model.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+BIN_DIR="$REPO_ROOT/bin"
+FIXTURES="$REPO_ROOT/bin/tests/fixtures/codex-review"
+ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/factory-codex-review.XXXXXX")"
+STUB_DIR="$ROOT_TMP/stubs"
+mkdir -p "$STUB_DIR"
+trap 'rm -rf "$ROOT_TMP"' EXIT INT TERM
+
+export PATH="$STUB_DIR:$BIN_DIR:$PATH"
+# Isolate plugin data dir so temp_file mktemp calls do not collide with
+# real plugin state or across test cases. Kept under ROOT_TMP so the trap
+# cleans it up. Outside ~/.claude/plugins/data so the foreign-plugin
+# canonicalization in pipeline-lib.sh does not rewrite it.
+export CLAUDE_PLUGIN_DATA="$ROOT_TMP/plugin-data"
+mkdir -p "$CLAUDE_PLUGIN_DATA/tmp"
+
+passed=0
+failed=0
+current=""
+
+pass() { passed=$((passed+1)); printf '  PASS [%s] %s\n' "$current" "$1"; }
+fail() { failed=$((failed+1)); printf '  FAIL [%s] %s\n' "$current" "$1"; }
+assert_eq() {
+  local desc="$1" want="$2" got="$3"
+  if [[ "$want" == "$got" ]]; then pass "$desc"
+  else fail "$desc (want=$want got=$got)"; fi
+}
+assert_contains() {
+  local desc="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then pass "$desc"
+  else fail "$desc (missing: $needle)"; fi
+}
+
+# Stub codex CLI: emits a fake successful JSON to --output-last-message and
+# copies its stdin (the prompt) + argv to inspection files for assertions.
+write_codex_stub() {
+  cat > "$STUB_DIR/codex" <<'STUB'
+#!/usr/bin/env bash
+# Record argv and stdin so the test can inspect them.
+printf '%s\n' "$@" > "${CODEX_STUB_ARGV:-/dev/null}"
+cat > "${CODEX_STUB_STDIN:-/dev/null}"
+# Find --output-last-message <path>; write a minimal valid codex schema response.
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-last-message) out="$2"; shift 2 ;;
+    --help) printf -- '--sandbox\n'; exit 0 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$out" ]] && cat > "$out" <<'JSON'
+{"overall_correctness":"patch is correct","overall_explanation":"ok","overall_confidence_score":0.9,"findings":[]}
+JSON
+exit 0
+STUB
+  chmod +x "$STUB_DIR/codex"
+}
+
+# Helper: build a minimal spec_dir with the chosen tasks.json + a trivial diff
+# in a temp git repo so the wrapper's `git diff` produces non-empty output.
+new_case() {
+  current="$1"
+  local schema="$2"   # array | object
+  CASE_DIR="$ROOT_TMP/$current"
+  SPEC_DIR="$CASE_DIR/spec"
+  WT="$CASE_DIR/wt"
+  mkdir -p "$SPEC_DIR" "$WT"
+  cp "$FIXTURES/tasks-${schema}.json" "$SPEC_DIR/tasks.json"
+  printf '# Spec narrative\n\nRLS belongs in a separate later migration.\n' \
+    > "$SPEC_DIR/spec.md"
+  ( cd "$WT" && git init -q && git config user.email t@t && git config user.name t \
+    && git commit -q --allow-empty -m base && git checkout -q -b staging \
+    && git checkout -q -b feature && echo a > a.ts && git add a.ts \
+    && git commit -q -m work )
+  export CODEX_STUB_ARGV="$CASE_DIR/argv.txt"
+  export CODEX_STUB_STDIN="$CASE_DIR/prompt.txt"
+}
+
+write_codex_stub
+
+# --- Case 1: bare-array schema → AC block appears ---
+new_case ac-array array
+pipeline-codex-review --task-id alpha-001 --spec-dir "$SPEC_DIR" --worktree "$WT" >/dev/null 2>&1 \
+  || fail "ac-array: wrapper exited non-zero"
+prompt=$(cat "$CODEX_STUB_STDIN" 2>/dev/null || printf '')
+assert_contains "ac-array: prompt has AC header" "Authoritative acceptance criteria for alpha-001" "$prompt"
+assert_contains "ac-array: prompt has AC1" "AC1: declares CREATE TABLE alpha" "$prompt"
+assert_contains "ac-array: prompt has AC3 (RLS)" "AC3: enables RLS in this migration" "$prompt"
+
+# --- Case 2: {tasks:[...]} schema → AC block also appears ---
+new_case ac-object object
+pipeline-codex-review --task-id alpha-001 --spec-dir "$SPEC_DIR" --worktree "$WT" >/dev/null 2>&1 \
+  || fail "ac-object: wrapper exited non-zero"
+prompt=$(cat "$CODEX_STUB_STDIN" 2>/dev/null || printf '')
+assert_contains "ac-object: prompt has AC header" "Authoritative acceptance criteria for alpha-001" "$prompt"
+assert_contains "ac-object: prompt has AC1" "AC1: declares CREATE TABLE alpha" "$prompt"
+
+# --- Case 3: unknown task_id → no AC block, but wrapper still succeeds ---
+new_case ac-unknown array
+pipeline-codex-review --task-id ghost-999 --spec-dir "$SPEC_DIR" --worktree "$WT" >/dev/null 2>&1 \
+  || fail "ac-unknown: wrapper exited non-zero"
+prompt=$(cat "$CODEX_STUB_STDIN" 2>/dev/null || printf '')
+# Look for the task-specific injected header (## Authoritative acceptance
+# criteria for <task_id>), not the generic instruction line that mentions
+# "Authoritative acceptance criteria list" in the prompt's static text.
+if [[ "$prompt" == *"Authoritative acceptance criteria for ghost-999"* ]]; then
+  fail "ac-unknown: AC block should be absent for unknown task_id"
+else
+  pass "ac-unknown: AC block absent for unknown task_id"
+fi
+
+printf '\n%d passed, %d failed\n' "$passed" "$failed"
+exit $(( failed > 0 ? 1 : 0 ))

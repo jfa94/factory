@@ -120,8 +120,13 @@ trap 'rm -f "$prompt_file" "$out_file" "$diff_file" "$err_file"' EXIT
   # the full spec dump so codex anchors scope to the structured list, not
   # narrative inference. tasks.json is authoritative; acceptance.md is context.
   if [[ -n "$spec_dir" && -f "${spec_dir}/tasks.json" ]]; then
+    # Handle both schemas: bare-array root (outsidey) and {tasks:[...]} root.
+    # `(.tasks // .)[]` errors on bare arrays (Cannot index array with string),
+    # so discriminate on type first; matches the canonical .task_id field used
+    # everywhere else (pipeline-run-task:246,624; SKILL.md:266).
     _task_ac=$(jq -r --arg id "$task_id" '
-      (.tasks // [])[] | select(.id == $id) |
+      (if type == "array" then .[] else (.tasks // [])[] end) |
+      select(.task_id == $id) |
       (.acceptance_criteria // []) | map("- " + .) | join("\n")
     ' "${spec_dir}/tasks.json" 2>/dev/null || printf '')
     if [[ -n "$_task_ac" ]]; then

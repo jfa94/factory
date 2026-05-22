@@ -1,0 +1,17 @@
+{
+  "tasks": [
+    {
+      "task_id": "alpha-001",
+      "title": "alpha",
+      "description": "first task",
+      "files": ["src/a.ts"],
+      "acceptance_criteria": [
+        "AC1: declares CREATE TABLE alpha",
+        "AC2: seeds expected rows",
+        "AC3: enables RLS in this migration"
+      ],
+      "tests_to_write": ["t1"],
+      "depends_on": []
+    }
+  ]
+}
