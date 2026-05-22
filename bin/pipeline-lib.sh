@@ -9,31 +9,69 @@ set -euo pipefail
 # Claude Code sets CLAUDE_PLUGIN_DATA per the active plugin context. When a
 # factory script is invoked from a bash block inside another plugin's command
 # or hook chain, the inherited CLAUDE_PLUGIN_DATA can point at the wrong
-# plugin's data dir (e.g. codex-openai-codex/), which leaks factory state
+# plugin's data dir (e.g. codex-openai-codex/), leaking factory state
 # (merged-settings.json, runs/, state/) into foreign directories.
 #
-# Detect the marketplace-cache install layout (~/.claude/plugins/cache/
-# <marketplace>/<plugin>/<version>/) and rewrite CLAUDE_PLUGIN_DATA to
-# <plugin>-<marketplace> whenever it does not already match. Dev checkouts
-# (plugin not under the cache root) are left untouched so local runs keep
-# whatever CLAUDE_PLUGIN_DATA the session was launched with.
+# Strategy: if CLAUDE_PLUGIN_DATA is under ~/.claude/plugins/data/ but its
+# basename doesn't start with this plugin's name, it's a foreign-plugin leak.
+# Derive the correct id from the marketplace-cache path layout first (for
+# installed builds), falling back to .claude-plugin/marketplace.json (for dev
+# checkouts). Temp dirs, custom paths, and inline installs (factory-inline)
+# are left untouched. Rewrites are warned on stderr.
 _factory_expected_data_dir() {
-  local lib_dir plugin_root plugin_name marketplace_name cache_anchor
+  local lib_dir plugin_root plugin_json manifest_name current_basename
   lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd) || return 1
   plugin_root=$(cd "$lib_dir/.." 2>/dev/null && pwd) || return 1
-  plugin_name=$(basename "$(dirname "$plugin_root")")
-  marketplace_name=$(basename "$(dirname "$(dirname "$plugin_root")")")
-  cache_anchor=$(cd "$plugin_root/../../.." 2>/dev/null && pwd) || return 1
-  case "$cache_anchor" in
-    "$HOME/.claude/plugins/cache") ;;
-    *) return 1 ;;
-  esac
-  [[ -n "$plugin_name" && -n "$marketplace_name" ]] || return 1
-  printf '%s' "$HOME/.claude/plugins/data/${plugin_name}-${marketplace_name}"
+
+  plugin_json="$plugin_root/.claude-plugin/plugin.json"
+  manifest_name=$(jq -r '.name // empty' "$plugin_json" 2>/dev/null)
+  [[ -n "$manifest_name" ]] || return 1
+
+  # Only correct paths that are explicitly under ~/.claude/plugins/data/ —
+  # temp dirs, custom paths, and unset vars are left untouched.
+  local data_root="$HOME/.claude/plugins/data"
+  if [[ "${CLAUDE_PLUGIN_DATA:-}" != "$data_root/"* ]]; then
+    return 1
+  fi
+
+  # Already ours: basename starts with "<name>-" or equals "<name>" exactly.
+  # Covers factory-jfa94, factory-inline, factory-<future-marketplace>.
+  current_basename=$(basename "${CLAUDE_PLUGIN_DATA}")
+  if [[ "$current_basename" == "${manifest_name}-"* || \
+        "$current_basename" == "$manifest_name" ]]; then
+    return 1
+  fi
+
+  # Foreign-plugin leak under plugins/data/. Derive the canonical id.
+  # 1. Cache-install layout: cache/<marketplace>/<plugin>/<version>/
+  local cache_anchor plugin_from_path marketplace_from_path
+  plugin_from_path=$(basename "$(dirname "$plugin_root")")
+  marketplace_from_path=$(basename "$(dirname "$(dirname "$plugin_root")")")
+  cache_anchor=$(cd "$plugin_root/../../.." 2>/dev/null && pwd) || true
+  if [[ "$cache_anchor" == "$HOME/.claude/plugins/cache" ]] && \
+     [[ -n "$plugin_from_path" && -n "$marketplace_from_path" ]]; then
+    printf '%s' "$HOME/.claude/plugins/data/${plugin_from_path}-${marketplace_from_path}"
+    return 0
+  fi
+
+  # 2. Dev checkout: derive marketplace from .claude-plugin/marketplace.json.
+  local marketplace_json marketplace_name
+  marketplace_json="$plugin_root/.claude-plugin/marketplace.json"
+  if [[ -f "$marketplace_json" ]]; then
+    marketplace_name=$(jq -r '.name // empty' "$marketplace_json" 2>/dev/null)
+    if [[ -n "$marketplace_name" ]]; then
+      printf '%s' "$HOME/.claude/plugins/data/${manifest_name}-${marketplace_name}"
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 if _factory_expected=$(_factory_expected_data_dir 2>/dev/null); then
   if [[ "${CLAUDE_PLUGIN_DATA:-}" != "$_factory_expected" ]]; then
+    printf '[WARN] pipeline-lib: CLAUDE_PLUGIN_DATA points at foreign plugin dir '\''%s'\''; redirecting to '\''%s'\''\n' \
+      "${CLAUDE_PLUGIN_DATA:-}" "$_factory_expected" >&2
     export CLAUDE_PLUGIN_DATA="$_factory_expected"
   fi
 fi

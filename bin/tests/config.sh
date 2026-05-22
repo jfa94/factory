@@ -1323,6 +1323,46 @@ fi
 rm -rf "$RCS_M13_DIR"
 
 # ============================================================
+# Data-dir canonicalization (pipeline-lib.sh _factory_expected_data_dir)
+# ============================================================
+echo ""
+echo "--- data-dir canonicalization ---"
+
+# Helper: source pipeline-lib.sh in a clean subshell and emit the resulting
+# CLAUDE_PLUGIN_DATA value. We always run from PLUGIN_ROOT (a dev checkout
+# outside ~/.claude/plugins/cache/), so the manifest-based fallback path
+# is exercised here.
+_canon_result() {
+  local poisoned_dir="$1"
+  CLAUDE_PLUGIN_DATA="$poisoned_dir" \
+    bash -c "source '$PLUGIN_ROOT/bin/pipeline-lib.sh' 2>/dev/null; printf '%s' \"\$CLAUDE_PLUGIN_DATA\""
+}
+
+# Expected canonical dir: factory + marketplace name from marketplace.json.
+_canon_marketplace=$(jq -r '.name // empty' "$PLUGIN_ROOT/.claude-plugin/marketplace.json" 2>/dev/null)
+_canon_plugin=$(jq -r '.name // empty' "$PLUGIN_ROOT/.claude-plugin/plugin.json" 2>/dev/null)
+_canon_expected="$HOME/.claude/plugins/data/${_canon_plugin}-${_canon_marketplace}"
+
+# Case 1: poisoned to a foreign plugin dir → must rewrite to factory-<marketplace>.
+_canon_foreign_result=$(_canon_result "$HOME/.claude/plugins/data/codex-openai-codex")
+assert_eq "canonicalize: foreign plugin dir → rewritten to factory canonical" \
+  "$_canon_expected" "$_canon_foreign_result"
+
+# Case 2: factory-inline (--plugin-dir install flavor) → must be left untouched.
+_canon_inline="$HOME/.claude/plugins/data/${_canon_plugin}-inline"
+_canon_inline_result=$(_canon_result "$_canon_inline")
+assert_eq "canonicalize: factory-inline → left untouched (own-plugin variant)" \
+  "$_canon_inline" "$_canon_inline_result"
+
+# Case 3: already-correct factory-<marketplace> → left untouched.
+_canon_correct_result=$(_canon_result "$_canon_expected")
+assert_eq "canonicalize: correct factory-<marketplace> → left untouched" \
+  "$_canon_expected" "$_canon_correct_result"
+
+unset _canon_marketplace _canon_plugin _canon_expected _canon_foreign_result \
+      _canon_inline _canon_inline_result _canon_correct_result _canon_result
+
+# ============================================================
 echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
