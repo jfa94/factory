@@ -943,6 +943,26 @@ _emit_postexec_manifest() {
     elif [[ ! -s "$review_file" ]] || ! jq -e . "$review_file" >/dev/null 2>&1; then
       _codex_err=$(cat "$_codex_err_file" 2>/dev/null || printf '')
       _need_fallback=1
+    else
+      # Inverse-hallucination guard: validate_findings preserves the verdict
+      # when it drops unverifiable findings, so codex output can arrive as
+      # REQUEST_CHANGES with zero verified findings (blocking + non-blocking).
+      # That is not actionable — there is nothing for the executor to fix.
+      # Treat it the same as a codex failure so the agent reviewer takes over.
+      local _verdict _blk _nblk
+      _verdict=$(jq -r '.verdict // ""' "$review_file" 2>/dev/null)
+      _blk=$(jq -r '.blocking_count // 0' "$review_file" 2>/dev/null)
+      _nblk=$(jq -r '.non_blocking_count // 0' "$review_file" 2>/dev/null)
+      if [[ "$_verdict" == "REQUEST_CHANGES" ]] && (( _blk == 0 && _nblk == 0 )); then
+        _codex_err="codex_inverse_hallucination: REQUEST_CHANGES with zero verified findings"
+        log_metric "task.review.codex_inverse_hallucination" \
+          "task_id=\"$task_id\"" \
+          "summary=\"$(jq -r '.summary // ""' "$review_file" 2>/dev/null | tr '\n' ' ' | cut -c1-200)\""
+        # Discard the unusable verdict file so the orchestrator does not
+        # accidentally re-read it on resume.
+        rm -f "$review_file"
+        _need_fallback=1
+      fi
     fi
     rm -f "$_codex_err_file"
     if (( _need_fallback )); then

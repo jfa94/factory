@@ -204,10 +204,11 @@ write_stub pipeline-codex-review '
 echo "{\"decision\":\"APPROVE\",\"blockers\":[],\"concerns\":[]}"'
 echo claude > "$STUB_DIR/reviewer"
 
-# --- 3.d: postexec — codex review fails for non-CLI reason → rc=30 ----------
-# Regression (Task 4.2): if pipeline-codex-review fails with stderr that does
-# not indicate a missing CLI, surface the error and exit 30 instead of falling
-# back to the agent path silently.
+# --- 3.d: postexec — codex review fails for a non-CLI reason → agent fallback
+# Regression (Task 4.2 → revised post-8f3f8db): when pipeline-codex-review exits
+# non-zero (any reason — auth, network, schema), the wrapper must broaden the
+# fallback to the agent path with rc=10 (not surface rc=30). Commit 8f3f8db
+# made the fallback unconditional on nonzero rc; this assertion follows that.
 new_run postexec-codex-error
 run_wrapper alpha-001 --stage preflight
 wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
@@ -216,11 +217,40 @@ echo codex > "$STUB_DIR/reviewer"
 write_stub pipeline-codex-review '
 echo "boom: model auth failure" >&2
 exit 1'
-set +e
-pipeline-run-task "$RUN_ID" alpha-001 --stage postexec >/dev/null 2>&1
-RC=$?
-set -e
-assert_eq "postexec codex-error: exit 30" "30" "$RC"
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec codex-error: exit 10" "10" "$RC"
+assert_eq "postexec codex-error: includes quality-reviewer" "quality-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[] | select(.subagent_type=="quality-reviewer") | .subagent_type' | head -1)"
+assert_eq "postexec codex-error: stage=postexec_spawn_pending" "postexec_spawn_pending" "$(stage_of)"
+# Restore default codex-review stub for subsequent cases.
+write_stub pipeline-codex-review '
+echo "{\"decision\":\"APPROVE\",\"blockers\":[],\"concerns\":[]}"'
+echo claude > "$STUB_DIR/reviewer"
+
+# --- 3.d2: postexec — codex returns REQUEST_CHANGES + 0 findings → agent fallback
+# Regression: when validate_findings drops every finding as unverifiable, the
+# codex output is `verdict=REQUEST_CHANGES, blocking_count=0,
+# non_blocking_count=0`. That is an inverse hallucination; the wrapper MUST
+# treat it the same as an exec failure and fall through to the agent path.
+new_run postexec-codex-inverse-hallucination
+run_wrapper alpha-001 --stage preflight
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+echo codex > "$STUB_DIR/reviewer"
+write_stub pipeline-codex-review '
+cat <<JSON
+{"verdict":"REQUEST_CHANGES","round":1,"confidence":"HIGH","findings":[],
+ "blocking_count":0,"non_blocking_count":0,"declared_blockers":0,
+ "criteria_passed":0,"criteria_failed":0,"holdout_passed":0,"holdout_failed":0,
+ "summary":"[validator: dropped 1 unverifiable finding(s)]",
+ "reviewer":"codex","generator":"pipeline-codex-review-v1"}
+JSON'
+run_wrapper alpha-001 --stage postexec
+assert_eq "postexec inverse-hallucination: exit 10" "10" "$RC"
+assert_eq "postexec inverse-hallucination: includes quality-reviewer" "quality-reviewer" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[] | select(.subagent_type=="quality-reviewer") | .subagent_type' | head -1)"
+assert_eq "postexec inverse-hallucination: stage=postexec_spawn_pending" "postexec_spawn_pending" "$(stage_of)"
+# Restore default codex-review stub for subsequent cases.
 write_stub pipeline-codex-review '
 echo "{\"decision\":\"APPROVE\",\"blockers\":[],\"concerns\":[]}"'
 echo claude > "$STUB_DIR/reviewer"
