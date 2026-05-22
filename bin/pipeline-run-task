@@ -39,11 +39,10 @@ require_command jq
 # swallowed reviews). FACTORY_CODEX_REVIEW_BIN is a test-only override —
 # production must leave it unset.
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Ensure sibling binaries resolve from _SCRIPT_DIR first, preventing any
-# shadowing binary earlier in PATH from intercepting pipeline-state,
-# pipeline-tdd-gate, pipeline-quality-gate, and other sibling calls.
-PATH="$_SCRIPT_DIR:$PATH"
-export PATH
+# Resolve pipeline-state via _SCRIPT_DIR so a shadowing binary earlier in PATH
+# cannot intercept state reads/writes (e.g. a stale copy in ~/bin or a legacy
+# plugin path). Other sibling calls remain PATH-resolved so test stubs work.
+_STATE_BIN="$_SCRIPT_DIR/pipeline-state"
 _CODEX_REVIEW_BIN="${FACTORY_CODEX_REVIEW_BIN:-$_SCRIPT_DIR/pipeline-codex-review}"
 
 run_id="${1:?missing run-id}"
@@ -82,12 +81,12 @@ _now_ms() {
 
 _task_field() {
   local v
-  v=$(pipeline-state task-read "$run_id" "$task_id" "$1" 2>/dev/null || printf '')
+  v=$("$_STATE_BIN" task-read "$run_id" "$task_id" "$1" 2>/dev/null || printf '')
   [[ "$v" == "null" ]] && printf '' || printf '%s' "$v"
 }
 
 _task_write() {
-  pipeline-state task-write "$run_id" "$task_id" "$1" "$2" >/dev/null
+  "$_STATE_BIN" task-write "$run_id" "$task_id" "$1" "$2" >/dev/null
 }
 
 # Idempotent resume: every stage records its terminal marker in
@@ -107,7 +106,7 @@ _already_past() {
   if (( cur_rank < 0 )); then
     # Unknown stage (legacy state file). Treat as "past terminal" only when
     # the task already reached a terminal status — otherwise re-run the stage.
-    status=$(pipeline-state task-read "$run_id" "$task_id" status 2>/dev/null)
+    status=$("$_STATE_BIN" task-read "$run_id" "$task_id" status 2>/dev/null)
     status=$(_unquote_json_string "$status")
     case "$status" in failed|needs_human_review) return 0 ;; esac
     return 1
@@ -196,14 +195,14 @@ _stage_preflight() {
     return 2
   fi
 
-  if ! pipeline-state deps-satisfied "$run_id" "$task_id"; then
+  if ! "$_STATE_BIN" deps-satisfied "$run_id" "$task_id"; then
     t1=$(_now_ms)
     log_step_end "preflight" "skipped" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"deps_unsatisfied\""
     return 30
   fi
 
   local task_json
-  task_json=$(pipeline-state task-read "$run_id" "$task_id" 2>/dev/null)
+  task_json=$("$_STATE_BIN" task-read "$run_id" "$task_id" 2>/dev/null)
   if [[ -z "$task_json" || "$task_json" == "null" ]]; then
     log_error "task $task_id not found in state"
     t1=$(_now_ms)
@@ -231,7 +230,7 @@ _stage_preflight() {
 
   _ensure_prompt_dir
   local spec_path prompt_file
-  spec_path=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
+  spec_path=$("$_STATE_BIN" read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
   prompt_file=$(_prompt_path test-writer)
 
   # Build inline prompt with spec content embedded (so the test-writer does not
@@ -309,11 +308,11 @@ PROMPT
   } > "$prompt_file"
 
   _task_write stage '"preflight_done"'
-  pipeline-state task-status "$run_id" "$task_id" executing >/dev/null \
+  "$_STATE_BIN" task-status "$run_id" "$task_id" executing >/dev/null \
     || log_warn "task-status executing write failed for $task_id (non-fatal)"
 
   local cov_base snapshotted="false"
-  cov_base=$(pipeline-state read "$run_id" '.orchestrator.worktree // empty' 2>/dev/null || true)
+  cov_base=$("$_STATE_BIN" read "$run_id" '.orchestrator.worktree // empty' 2>/dev/null || true)
   if [[ -n "$cov_base" && -d "$cov_base" ]]; then
     local cov_before="$run_dir/.state/$run_id/$task_id.coverage-before.json"
     mkdir -p "$(dirname "$cov_before")"
@@ -371,7 +370,7 @@ _verify_red_tests() {
 
   # Skip for tdd_exempt tasks — read from tasks.json (single source of truth)
   local spec_path_for_exempt
-  spec_path_for_exempt=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
+  spec_path_for_exempt=$("$_STATE_BIN" read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
   if task_tdd_exempt "$task_id" "$spec_path_for_exempt"; then
     log_info "red-test verification skipped (tdd_exempt) task_id=\"$task_id\""
     return 0
@@ -571,7 +570,7 @@ _stage_preexec_tests() {
   if [[ -z "$tw_status" ]]; then
     _ensure_prompt_dir
     local spec_path pf
-    spec_path=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
+    spec_path=$("$_STATE_BIN" read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
     pf=$(_prompt_path test-writer)
     {
       printf '[task:%s]\n' "$task_id"
@@ -594,7 +593,7 @@ _stage_preexec_tests() {
 
   if [[ "$tw_status" == "BLOCKED" ]]; then
     log_warn "test-writer blocked for $task_id"
-    if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+    if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
       log_error "task-status failed write failed for $task_id"
       return 30
     fi
@@ -611,7 +610,7 @@ _stage_preexec_tests() {
 
   if ! _verify_red_tests "$tw_wt"; then
     _task_write test_writer_status '"BLOCKED"'
-    if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+    if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
       log_error "task-status failed write failed for $task_id"
       return 30
     fi
@@ -623,9 +622,9 @@ _stage_preexec_tests() {
   # Spawn task-executor for GREEN phase.
   _ensure_prompt_dir
   local spec_path prompt_file holdout_pct task_json
-  spec_path=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
+  spec_path=$("$_STATE_BIN" read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
   holdout_pct=$(read_config '.quality.holdoutPercent' '20')
-  task_json=$(pipeline-state task-read "$run_id" "$task_id" 2>/dev/null)
+  task_json=$("$_STATE_BIN" task-read "$run_id" "$task_id" 2>/dev/null)
   # Fallback: if state doesn't have the task row yet (e.g., task-init wasn't
   # called), read directly from the spec tasks.json so the prompt is never null.
   if [[ -z "$task_json" || "$task_json" == "null" ]] && [[ -n "$spec_path" ]] && [[ -f "$spec_path/tasks.json" ]]; then
@@ -768,7 +767,7 @@ _stage_postexec() {
 
   if ! ( cd "$wt" && pipeline-tdd-gate --task-id "$task_id" --run-id "$run_id" ) >/dev/null; then
     # pipeline-tdd-gate is the sole writer of quality_gates.tdd (it persists
-    # the structured result via pipeline-state task-write). Do not duplicate
+    # the structured result via "$_STATE_BIN" task-write). Do not duplicate
     # the write here — that would clobber violation details with a bare
     # {"ok":false} object.
     log_warn "tdd gate failed for $task_id"
@@ -857,7 +856,7 @@ _stage_postexec() {
       # the hook failed to capture the holdout-reviewer output path.
       log_error "holdout reviewer spawned but holdout_review_file unwired for $task_id after $_ho_attempts_n attempts — escalating to human"
       _task_write quality_gates.holdout '"missing-reviewer-output"'
-      pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null \
+      "$_STATE_BIN" task-status "$run_id" "$task_id" needs_human_review >/dev/null \
         || log_error "task-status needs_human_review write failed for $task_id"
       t1=$(_now_ms)
       log_step_end "postexec" "needs_human_review" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout_unwired\""
@@ -941,7 +940,7 @@ _emit_postexec_manifest() {
   if [[ "$provider" == "codex" ]]; then
     local review_file="$run_dir/.state/$run_id/$task_id.review.codex.json"
     local spec_path
-    spec_path=$(pipeline-state read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
+    spec_path=$("$_STATE_BIN" read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
     local cargs=(--task-id "$task_id" --worktree "$wt")
     [[ -n "$spec_path" ]] && cargs+=(--spec-dir "$spec_path")
     local _codex_err_file _codex_rc=0
@@ -1187,7 +1186,7 @@ _stage_postreview() {
 
   if $any_discuss; then
     _task_write stage '"postreview_pending_human"'
-    if ! pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null; then
+    if ! "$_STATE_BIN" task-status "$run_id" "$task_id" needs_human_review >/dev/null; then
       log_error "task-status needs_human_review write failed for $task_id"
       return 30
     fi
@@ -1204,7 +1203,7 @@ _stage_postreview() {
     _task_write review_attempts "$attempts"
     if (( attempts > 3 )); then
       _task_write stage '"postreview_exhausted"'
-      if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+      if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
         log_error "task-status failed write failed for $task_id"
         return 30
       fi
@@ -1320,7 +1319,7 @@ _run_ship_pregate() {
   local mut_rc=$?
   set -e
   local mut_reason
-  mut_reason=$(pipeline-state task-read "$run_id" "$task_id" mutation_gate.reason 2>/dev/null || printf '')
+  mut_reason=$("$_STATE_BIN" task-read "$run_id" "$task_id" mutation_gate.reason 2>/dev/null || printf '')
   case "$mut_rc:$mut_reason" in
     0:ok)                     mut_gate="ok" ;;
     0:no-package-json|0:no-script|0:no-mutable-changes|0:no-report|0:no-score)
@@ -1334,7 +1333,7 @@ _run_ship_pregate() {
 
   # Surface score for downstream consumers (pipeline-summary, pipeline-score).
   local mut_score
-  mut_score=$(pipeline-state task-read "$run_id" "$task_id" mutation_gate.score 2>/dev/null || printf 'null')
+  mut_score=$("$_STATE_BIN" task-read "$run_id" "$task_id" mutation_gate.score 2>/dev/null || printf 'null')
   if [[ "$mut_score" != "null" && -n "$mut_score" ]]; then
     _task_write mutation_score "$mut_score"
   fi
@@ -1355,7 +1354,7 @@ _run_ship_pregate() {
     --arg mutation "$mut_gate" \
     '{ok: $ok, quality: $quality, coverage: $coverage, mutation: $mutation}')
 
-  if ! pipeline-state task-write "$run_id" "$task_id" quality_gates.pregate "$pregate_json" >/dev/null; then
+  if ! "$_STATE_BIN" task-write "$run_id" "$task_id" quality_gates.pregate "$pregate_json" >/dev/null; then
     log_error "failed to write quality_gates.pregate for $task_id"
     return 1
   fi
@@ -1375,7 +1374,7 @@ _write_ship_checklist() {
   local checklist_file="$checklist_dir/${task_id}.ship_checklist.json"
 
   # tdd_gate: read from quality_gates.tdd.ok (true/false/null) + exempt flag.
-  # Reads route through `pipeline-state task-read` so they participate in the
+  # Reads route through `"$_STATE_BIN" task-read` so they participate in the
   # per-run advisory lock and single-reader contract on state.json (A1).
   # _task_field normalises jq's literal `null` to empty so we test for that
   # case below as "neither true nor false". A literal `false` (e.g. pregate
@@ -1514,7 +1513,7 @@ _stage_ship() {
     case "$ci_status" in
       green)
         if [[ "$merge_status" == "stalled" ]]; then
-          if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+          if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
             log_error "task-status failed write failed for $task_id"
             return 30
           fi
@@ -1523,7 +1522,7 @@ _stage_ship() {
           log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"merge_stalled\""
           return 30
         fi
-        if ! pipeline-state task-status "$run_id" "$task_id" done >/dev/null; then
+        if ! "$_STATE_BIN" task-status "$run_id" "$task_id" done >/dev/null; then
           log_error "task-status done write failed for $task_id"
           return 30
         fi
@@ -1538,7 +1537,7 @@ _stage_ship() {
         attempts=$((attempts + 1))
         _task_write ci_fix_attempts "$attempts"
         if (( attempts > 2 )); then
-          if ! pipeline-state task-status "$run_id" "$task_id" failed >/dev/null; then
+          if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
             log_error "task-status failed write failed for $task_id"
             return 30
           fi
@@ -1546,7 +1545,7 @@ _stage_ship() {
           log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_exhausted\""
           return 30
         fi
-        pipeline-state task-status "$run_id" "$task_id" ci_fixing >/dev/null \
+        "$_STATE_BIN" task-status "$run_id" "$task_id" ci_fixing >/dev/null \
           || log_warn "task-status ci_fixing write failed for $task_id (non-fatal)"
         _ensure_prompt_dir
         local pf; pf=$(_prompt_path executor-ci-fix)
@@ -1564,7 +1563,7 @@ _stage_ship() {
         return 10 ;;
       *)
         log_warn "ci_status=$ci_status treated as timeout"
-        if ! pipeline-state task-status "$run_id" "$task_id" needs_human_review >/dev/null; then
+        if ! "$_STATE_BIN" task-status "$run_id" "$task_id" needs_human_review >/dev/null; then
           log_error "task-status needs_human_review write failed for $task_id"
           return 30
         fi
@@ -1658,7 +1657,7 @@ _stage_ship() {
   fi
   _task_write pr_number "$pr_number"
   _task_write pr_url    "\"$pr_url\""
-  pipeline-state task-status "$run_id" "$task_id" reviewing >/dev/null \
+  "$_STATE_BIN" task-status "$run_id" "$task_id" reviewing >/dev/null \
     || log_warn "task-status reviewing write failed for $task_id (non-fatal)"
   log_metric "task.pr_created" "task_id=\"$task_id\"" "pr_number=$pr_number"
 
@@ -1669,7 +1668,7 @@ _stage_ship() {
     case "$_wait_rc" in
       0)
         emit_ci_metric task "$pr_number" green
-        if ! pipeline-state task-status "$run_id" "$task_id" done >/dev/null; then
+        if ! "$_STATE_BIN" task-status "$run_id" "$task_id" done >/dev/null; then
           log_error "task-status done write failed for $task_id"
           return 30
         fi
@@ -1691,7 +1690,7 @@ _stage_ship() {
         emit_ci_metric task "$pr_number" closed
         _task_write ci_status '"closed"'
         _task_write failure_reason '"pr_closed"'
-        pipeline-state task-status "$run_id" "$task_id" failed >/dev/null \
+        "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null \
           || log_warn "task-status failed write failed for $task_id"
         t1=$(_now_ms)
         log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"pr_closed\""
@@ -1836,22 +1835,22 @@ _stage_finalize_run() {
   fi
 
   local scribe_state
-  scribe_state=$(pipeline-state read "$run_id" '.scribe.status // "pending"' 2>/dev/null)
+  scribe_state=$("$_STATE_BIN" read "$run_id" '.scribe.status // "pending"' 2>/dev/null)
   scribe_state=$(_unquote_json_string "$scribe_state")
 
   if [[ "$scribe_state" == "spawned" ]]; then
     # Spawned previously; SubagentStop hook should advance to done|failed.
     # If we still see "spawned" on re-entry, the hook failed — cap re-spawns.
     local scribe_attempts
-    scribe_attempts=$(pipeline-state read "$run_id" '.scribe.attempts // 0' 2>/dev/null)
+    scribe_attempts=$("$_STATE_BIN" read "$run_id" '.scribe.attempts // 0' 2>/dev/null)
     if (( scribe_attempts >= 2 )); then
       log_error "finalize-run: scribe re-spawn cap hit (attempts=$scribe_attempts)"
-      pipeline-state write "$run_id" '.scribe.status' '"failed"' >/dev/null
-      pipeline-state write "$run_id" '.scribe.failure_reason' '"hook_did_not_terminate"' >/dev/null
+      "$_STATE_BIN" write "$run_id" '.scribe.status' '"failed"' >/dev/null
+      "$_STATE_BIN" write "$run_id" '.scribe.failure_reason' '"hook_did_not_terminate"' >/dev/null
       t1=$(_now_ms); log_step_end "finalize-run" "failed" "$((t1-t0))" "reason=\"scribe_loop\""
       return 30
     fi
-    pipeline-state write "$run_id" '.scribe.attempts' "$((scribe_attempts + 1))" >/dev/null
+    "$_STATE_BIN" write "$run_id" '.scribe.attempts' "$((scribe_attempts + 1))" >/dev/null
     scribe_state="pending"
   fi
 
@@ -1869,7 +1868,7 @@ _stage_finalize_run() {
     if ! printf '%s' "$run_id" > "$run_dir/.scribe_active" 2>/dev/null; then
       log_warn "scribe sentinel write failed at $run_dir/.scribe_active (guard may not activate)"
     fi
-    pipeline-state write "$run_id" '.scribe.status' '"spawned"' >/dev/null \
+    "$_STATE_BIN" write "$run_id" '.scribe.status' '"spawned"' >/dev/null \
       || log_warn "scribe.status spawned write failed (non-fatal; cap counter may not tick)"
     _emit_manifest finalize-run "$agents_json"
     t1=$(_now_ms)
@@ -1878,7 +1877,7 @@ _stage_finalize_run() {
   fi
 
   local final_pr_url final_pr_num
-  final_pr_url=$(pipeline-state read "$run_id" '.final_pr.pr_url // ""' 2>/dev/null || printf '')
+  final_pr_url=$("$_STATE_BIN" read "$run_id" '.final_pr.pr_url // ""' 2>/dev/null || printf '')
 
   if [[ -z "$final_pr_url" ]]; then
     local _existing _err
@@ -1906,10 +1905,10 @@ _stage_finalize_run() {
       rm -f "$_err"
     fi
 
-    pipeline-state write "$run_id" '.final_pr.pr_url' "\"$final_pr_url\"" >/dev/null \
+    "$_STATE_BIN" write "$run_id" '.final_pr.pr_url' "\"$final_pr_url\"" >/dev/null \
       || { log_error "finalize-run: state write final_pr.pr_url failed"; return 3; }
     final_pr_num=$(printf '%s' "$final_pr_url" | grep -oE '[0-9]+$' || printf '')
-    [[ -n "$final_pr_num" ]] && pipeline-state write "$run_id" '.final_pr.pr_number' "$final_pr_num" >/dev/null
+    [[ -n "$final_pr_num" ]] && "$_STATE_BIN" write "$run_id" '.final_pr.pr_number' "$final_pr_num" >/dev/null
     log_metric "run.final_pr_created" "url=\"$final_pr_url\""
   fi
 
@@ -1922,11 +1921,11 @@ _stage_finalize_run() {
   fi
   rm -f "$_cl_err"
 
-  if ! pipeline-state write "$run_id" '.status' '"done"' >/dev/null; then
+  if ! "$_STATE_BIN" write "$run_id" '.status' '"done"' >/dev/null; then
     log_error "finalize-run: failed to write final status=done"
     return 3
   fi
-  pipeline-state write "$run_id" '.ended_at' "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >/dev/null \
+  "$_STATE_BIN" write "$run_id" '.ended_at' "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >/dev/null \
     || log_warn "finalize-run: failed to write ended_at (non-fatal)"
 
   t1=$(_now_ms)
