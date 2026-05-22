@@ -85,15 +85,23 @@ while read -r sha; do
   # not reachable from the first parent before the merge). This prevents a merge
   # commit that brings impl files from being silently skipped.
   num_parents=$(git show -s --format='%P' "$sha" | wc -w | tr -d ' ')
+  _dt_err=$(mktemp)
+  _dt_rc=0
   if (( num_parents > 1 )); then
     # Merge commit: classify files the merge introduces relative to its first parent.
     # Use explicit "<first-parent> <sha>" form so we get the full diff, not the
     # combined (intersection) diff that `git diff-tree <sha>` emits for merges.
     first_parent=$(git show -s --format='%P' "$sha" | cut -d' ' -f1)
-    files=$(git diff-tree --no-commit-id --name-only -r "$first_parent" "$sha" 2>/dev/null || true)
+    files=$(git diff-tree --no-commit-id --name-only -r "$first_parent" "$sha" 2>"$_dt_err") || _dt_rc=$?
   else
-    files=$(git diff-tree --no-commit-id --name-only -r "$sha" 2>/dev/null || true)
+    files=$(git diff-tree --no-commit-id --name-only -r "$sha" 2>"$_dt_err") || _dt_rc=$?
   fi
+  if (( _dt_rc != 0 )); then
+    log_error "tdd-gate: git diff-tree failed for $sha: $(cat "$_dt_err")"
+    rm -f "$_dt_err"
+    exit 1
+  fi
+  rm -f "$_dt_err"
   kind="test-only"
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue

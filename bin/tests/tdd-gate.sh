@@ -561,6 +561,46 @@ STUB
   pass "case_state_write_success_still_passes: successful state write keeps gate passing"
 }
 
+# Task 7: non-existent SHA must fail the gate (fail-closed on diff-tree error).
+# Before the fix: rc=0, ok=true exempt=true (false TDD-pass via empty file list).
+# After the fix:  rc=1, stderr contains "diff-tree failed".
+case_diff_tree_bad_sha() {
+  local repo out rc err real_git stub_dir
+  repo=$(mktemp -d); _mk_repo "$repo"
+  _commit "$repo" "test(x): failing [task-bad]" "tests/x.test.ts"
+
+  # Capture real git path before shadowing it.
+  real_git=$(command -v git)
+  stub_dir=$(mktemp -d)
+  # Shadow `git` so that `git diff-tree` calls return rc=128 (unknown revision)
+  # while all other git calls pass through to the real git.
+  cat > "$stub_dir/git" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "diff-tree" ]]; then
+  printf 'fatal: bad object deadbeef\\n' >&2
+  exit 128
+fi
+exec "$real_git" "\$@"
+STUB
+  chmod +x "$stub_dir/git"
+
+  err=$(mktemp)
+  set +e
+  out=$( cd "$repo" && PATH="$stub_dir:$PATH" "$GATE" --task-id task-bad --base staging 2>"$err" )
+  rc=$?
+  set -e
+  rm -rf "$stub_dir"
+
+  if [[ $rc -eq 0 ]]; then
+    fail "case_diff_tree_bad_sha: expected exit non-zero, got rc=0; out=$out; stderr=$(cat "$err")"
+  fi
+  if ! grep -qi "diff-tree" "$err"; then
+    fail "case_diff_tree_bad_sha: expected 'diff-tree' in stderr; got: $(cat "$err")"
+  fi
+  rm -f "$err"
+  pass "case_diff_tree_bad_sha: diff-tree failure causes gate to fail-closed"
+}
+
 case1; case2; case3; case4; case4b; case5; case6; case7; case8
 case_go_test; case_ruby_spec; case_java_test; case_kotlin_test
 case_python_test; case_swift_tests; case_csharp_tests; case_go_impl_rejected
@@ -570,4 +610,5 @@ case_monorepo_apps_spec; case_root_double_underscore_tests
 case_is_test_path_unit
 case9; case10; case11
 case_state_write_failure_propagates; case_state_write_success_still_passes
+case_diff_tree_bad_sha
 printf 'all tdd-gate tests passed\n'
