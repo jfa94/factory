@@ -1045,6 +1045,47 @@ else
   fail "preflight-bare-array-tasks: prompt missing alpha-001 acceptance_criteria (file=$pf_bare)"
 fi
 
+# --- 19.f: preexec_tests — executor fallback reads bare-array tasks.json ------
+# Regression: when pipeline-state task-read returns empty (task row not in state),
+# the executor fallback path re-reads tasks.json. With a bare-array schema the old
+# `(.tasks // .)[]` expression produced empty; the type-aware fix at line 628 must
+# extract the correct task row and pass non-empty JSON to pipeline-build-prompt.
+new_run preexec-executor-bare-array-tasks
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+ba_exec_spec_dir="$ROOT_TMP/$current-spec"; mkdir -p "$ba_exec_spec_dir"
+cp "$REPO_ROOT/bin/tests/fixtures/codex-review/tasks-array.json" "$ba_exec_spec_dir/tasks.json"
+pipeline-state write "$RUN_ID" .spec.path "\"$ba_exec_spec_dir\"" >/dev/null
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+echo '{"devDependencies":{"vitest":"^1.0.0"}}' > "$wt/package.json"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+# git stub: staging exists; diff returns a test file so _verify_red_tests proceeds
+write_stub git '
+if [[ "$*" == *"rev-parse --verify staging"* ]] && [[ "$*" != *"origin/"* ]]; then exit 0; fi
+if [[ "$*" == *"diff staging..HEAD --name-only --diff-filter=AM"* ]]; then printf "src/foo.test.ts\n"; exit 0; fi
+exec /usr/bin/git "$@"'
+# vitest stub exits 1 (tests are red — correct state)
+write_stub vitest 'exit 1'
+# Capture the first arg to pipeline-build-prompt (the task_json) and exit 0
+bp_capture="$ROOT_TMP/$current-bp-arg.json"
+write_stub pipeline-build-prompt "printf '%s' \"\$1\" > \"$bp_capture\"; echo 'prompt body'"
+# Stub pipeline-state to return empty for full task-record read but delegate everything else
+write_stub pipeline-state "
+case \"\$*\" in
+  \"task-read $RUN_ID alpha-001\") printf '' ;;
+  *) exec \"$BIN_DIR/pipeline-state\" \"\$@\" ;;
+esac"
+run_wrapper alpha-001 --stage preexec_tests
+rm -f "$STUB_DIR/pipeline-state" "$STUB_DIR/git" "$STUB_DIR/vitest" "$STUB_DIR/pipeline-build-prompt"
+assert_eq "preexec-executor-bare-array-tasks: exit 10" "10" "$RC"
+assert_eq "preexec-executor-bare-array-tasks: spawns executor" "task-executor" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+# Core assertion: fallback populated task_json with the correct task row
+if [[ -f "$bp_capture" ]] && jq -e '.task_id == "alpha-001"' "$bp_capture" >/dev/null 2>&1; then
+  pass "preexec-executor-bare-array-tasks: pipeline-build-prompt received alpha-001 task row"
+else
+  fail "preexec-executor-bare-array-tasks: pipeline-build-prompt did NOT receive alpha-001 task row (file=$bp_capture, contents=$(cat "$bp_capture" 2>/dev/null || echo '<missing>'))"
+fi
+
 # Restore the cat stub for scenarios 20-23 (they use JSON review files)
 write_stub pipeline-parse-review 'cat'
 
