@@ -102,6 +102,60 @@ Maximum adversarial review rounds for security-tier tasks.
 
 Use Codex adversarial review when available, fall back to Claude Code.
 
+### review.model
+
+| Property | Value    |
+| -------- | -------- |
+| Type     | string   |
+| Default  | `sonnet` |
+
+Claude model passed to every reviewer spawn manifest in `bin/pipeline-run-task` (`implementation-reviewer`, `quality-reviewer`, `security-reviewer`, `architecture-reviewer`, holdout-reviewer). Also threaded into `task-executor` re-spawns (review-fix loop, CI fix) and `scribe` so the entire post-execution surface runs on the same model. Set under `package.json.factory.review.model`. See `docs/guides/configuration.md` for the operator-facing description.
+
+### review.maxTurnsQuick
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | number |
+| Default  | 25     |
+
+`maxTurns` for quick reviewer passes. Currently unused; reserved for future per-pass differentiation.
+
+### review.maxTurnsDeep
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | number |
+| Default  | 30     |
+
+`maxTurns` applied to every deep reviewer pass (all reviewer subagents plus holdout-reviewer and parallel architecture/security reviewers).
+
+### testWriter.maxTurns
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | number |
+| Default  | 40     |
+
+`maxTurns` for the `test-writer` subagent spawned in `preexec_tests`.
+
+### scribe.maxTurns
+
+| Property | Value  |
+| -------- | ------ |
+| Type     | number |
+| Default  | 60     |
+
+`maxTurns` for the `scribe` subagent spawned in `finalize-run`, and for `task-executor` re-spawns during the review-fix loop and CI fix paths.
+
+### codex.model
+
+| Property | Value   |
+| -------- | ------- |
+| Type     | string  |
+| Default  | (empty) |
+
+Model passed to `codex exec` as `-c model="..."`. Read from `package.json.factory.codex.model`; overridden by the `FACTORY_CODEX_MODEL` env var when set. Empty/unset leaves codex to resolve its default from `~/.codex/config.toml`. Charset-validated against `^[a-zA-Z0-9._-]+$`; invalid values exit `pipeline-codex-review` with rc=1. See `docs/guides/configuration.md#codexmodel--factory_codex_model` for ChatGPT-account installation guidance.
+
 ---
 
 ## Quality Gates

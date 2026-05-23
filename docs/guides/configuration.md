@@ -127,15 +127,17 @@ description, including the inverse-hallucination fallback behaviour.
 
 ### review.model / review.maxTurnsQuick / review.maxTurnsDeep / testWriter.maxTurns / scribe.maxTurns
 
-Controls the Claude model and turn limits for subagent reviewers, test writers, and the Scribe agent.
+Controls the Claude model and turn limits that `bin/pipeline-run-task` threads into every subagent spawn manifest. Defaults reproduce the values previously hardcoded in the script.
 
-| Key                    | Default  | Description                                                                                          |
-| ---------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `review.model`         | `sonnet` | Claude model for implementation-reviewer, quality-reviewer, security-reviewer, architecture-reviewer |
-| `review.maxTurnsQuick` | `25`     | maxTurns for quick reviewer passes (currently unused; reserved)                                      |
-| `review.maxTurnsDeep`  | `30`     | maxTurns for deep reviewer passes                                                                    |
-| `testWriter.maxTurns`  | `40`     | maxTurns for the test-writer subagent                                                                |
-| `scribe.maxTurns`      | `60`     | maxTurns for the Scribe documentation agent                                                          |
+| Key                    | Default  | Applied to                                                                                                                                                         |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `review.model`         | `sonnet` | `implementation-reviewer`, `quality-reviewer`, `security-reviewer`, `architecture-reviewer`, plus `task-executor` re-spawns (review-fix loop, CI fix) and `scribe` |
+| `review.maxTurnsQuick` | `25`     | maxTurns for quick reviewer passes (currently unused; reserved)                                                                                                    |
+| `review.maxTurnsDeep`  | `30`     | maxTurns for deep reviewer passes (`implementation-reviewer`, `quality-reviewer`, `architecture-reviewer`, `security-reviewer`, holdout-reviewer)                  |
+| `testWriter.maxTurns`  | `40`     | maxTurns for the `test-writer` subagent                                                                                                                            |
+| `scribe.maxTurns`      | `60`     | maxTurns for the `scribe` subagent **and** for `task-executor` re-spawns (review-fix loop, CI fix)                                                                 |
+
+The frontmatter defaults inside `agents/<name>.md` remain authoritative when an agent is invoked outside the pipeline (e.g. directly via `/agents`). The pipeline overrides are read once per run via `read_config` and threaded uniformly into every relevant spawn manifest — see Decision 18 in `docs/explanation/decisions.md`.
 
 Set in `package.json` under the `factory` key:
 

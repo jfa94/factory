@@ -14,7 +14,13 @@ Shared library sourced by all scripts.
 
 **Plugin Data Directory Canonicalization:**
 
-When a factory script is invoked from a bash block inside another plugin's command or hook chain, the inherited `CLAUDE_PLUGIN_DATA` can point at the wrong plugin's data directory. The library detects the marketplace-cache install layout (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`) and rewrites `CLAUDE_PLUGIN_DATA` to `<plugin>-<marketplace>` when it does not match. Dev checkouts (plugin not under the cache root) are left untouched.
+When a factory script is invoked from a bash block inside another plugin's command or hook chain, the inherited `CLAUDE_PLUGIN_DATA` can point at the wrong plugin's data directory and leak factory state (merged-settings.json, runs/, state/) into a foreign location. The library only rewrites paths under `~/.claude/plugins/data/`; temp dirs, custom paths, and unset values are left untouched. Within that root, the basename is checked against the plugin's manifest `name`:
+
+1. If the basename starts with `<name>-` (or equals `<name>` exactly), the value is already ours — no rewrite. Covers `factory-<marketplace>` (cache installs) and `factory-inline` (inline installs).
+2. Otherwise it is a foreign-plugin leak. The canonical id is derived from one of two sources:
+   - **Cache-install layout** (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`): id = `<plugin>-<marketplace>` derived from the path.
+   - **Dev checkout fallback**: id = `<manifest.name>-<marketplace>` where `marketplace` is read from `.claude-plugin/marketplace.json`.
+3. Rewrites emit a `[WARN] pipeline-lib: CLAUDE_PLUGIN_DATA points at foreign plugin dir '<old>'; redirecting to '<new>'` line on stderr so leaks are visible in audit logs.
 
 **Functions:**
 
@@ -158,9 +164,21 @@ pipeline-state <action> <run-id> [args...]
 
 Seeds a task record with fields from a tasks.json row: `task_id`, `title`, `description`, `files`, `acceptance_criteria`, `tests_to_write`, `depends_on`. Idempotent: a second call merges on top of the existing record. The `<task-json>` argument must be a JSON object (arrays and scalars are rejected).
 
+The caller is responsible for extracting individual task rows. `tasks.json` may be either a bare array `[ {task_id...}, ... ]` or an object wrapper `{ "tasks": [ ... ] }`; the orchestrator uses a type-aware jq idiom (`(if type == "array" then .[] else (.tasks // [])[] end)`) to handle both shapes consistently with `pipeline-run-task` (preflight, executor fallback) and `pipeline-codex-review`.
+
 **Task statuses:** pending, executing, reviewing, done, failed, interrupted, needs_human_review, ci_fixing
 
-**Exit codes:** 0=success/true, 1=failure/false
+**deps-satisfied fail-closed parsing:**
+
+When the `state.json` file is unparseable (jq error), `deps-satisfied` now exits 2 with `log_error` on stderr instead of silently treating the failure as "no deps recorded → satisfied". Callers must distinguish:
+
+- exit 0 — deps satisfied (proceed)
+- exit 1 — deps not satisfied (wait)
+- exit 2 — state.json parse failure (do NOT proceed; investigate)
+
+`pipeline-run-task` treats any non-zero from `deps-satisfied` as "not ready" and short-circuits the task; the explicit exit-2 prevents a corrupt state from silently advancing a task whose deps cannot be evaluated.
+
+**Exit codes:** 0=success/true, 1=failure/false, 2=state parse failure (deps-satisfied only)
 
 ---
 
@@ -213,6 +231,18 @@ pipeline-run-task <run-id> RUN --stage finalize-run
 **Postreview error handling:**
 
 Malformed reviewer JSON now fails loud: writes `failure_reason` to state and blocks the task, instead of defaulting to 0 blockers. This prevents silent progression when review parsing fails.
+
+**ID validation:**
+
+`run-id` and `task-id` are validated against `^[a-zA-Z0-9_-]{1,64}$` immediately after argument parsing (via `_validate_id` in `pipeline-lib.sh`). Invalid IDs exit 1 before any state read or worktree resolution. This blocks path-traversal and shell-meta payloads from reaching downstream `pipeline-state` and `git` calls.
+
+**Sibling-binary resolution (PATH-shadow hardening):**
+
+`pipeline-state` is invoked through `_STATE_BIN="$_SCRIPT_DIR/pipeline-state"` (an absolute path derived from `BASH_SOURCE`), not via PATH. This prevents a stale or malicious `pipeline-state` earlier on PATH (e.g. `~/bin`, a legacy plugin install) from intercepting state reads and writes for the current run. Other sibling bin tools (`pipeline-tdd-gate`, `pipeline-mutation-gate`, `pipeline-quality-gate`, etc.) remain PATH-resolved so test harnesses can stub them.
+
+**Configurable reviewer model and turn limits:**
+
+The wrapper reads `review.model`, `review.maxTurnsQuick`, `review.maxTurnsDeep`, `testWriter.maxTurns`, and `scribe.maxTurns` from `package.json.factory` via `read_config` and threads them into every reviewer / test-writer / scribe spawn manifest in this script. Defaults reproduce the previously-hardcoded values (`sonnet`, `25`, `30`, `40`, `60`). See `docs/guides/configuration.md` for the operator-facing description.
 
 **Exit codes:**
 
@@ -489,6 +519,10 @@ Untrusted content (`title`, `description`, `files`, `tests_to_write`, `acceptanc
 
 This prevents prompt-injection attacks where attacker-controlled content (e.g., GitHub issue titles) attempts to break out of fenced regions.
 
+**Malformed `--fix-instructions` rejection (fail-closed):**
+
+When `--fix-instructions` is supplied, the script parses it through jq to extract `.findings[]` and format them as bullet lines. If jq exits non-zero (invalid JSON, wrong shape, unparseable input), the script now exits 1 with `log_error "build-prompt: fix_instructions is malformed JSON: <stderr>"`. Previously the failure fell back to pasting the raw `fix_instructions` blob into the prompt, which exposed unparseable reviewer output to the executor verbatim. Callers that pass `--fix-instructions` must ensure the payload is valid JSON with a `findings` array.
+
 ---
 
 ### pipeline-circuit-breaker
@@ -583,7 +617,7 @@ Codex exec wrapper for adversarial code review. Builds a prompt from task metada
 **Usage:**
 
 ```bash
-pipeline-codex-review --base <ref> --task-id <id> --spec-dir <path>
+pipeline-codex-review --base <ref> --task-id <id> --spec-dir <path> [--worktree <path>]
 ```
 
 **Arguments:**
@@ -593,6 +627,11 @@ pipeline-codex-review --base <ref> --task-id <id> --spec-dir <path>
 | `--base`     | No       | `staging` | Git ref for diff base                                       |
 | `--task-id`  | Yes      | -         | Task identifier for prompt context                          |
 | `--spec-dir` | No       | -         | Path to spec directory (spec.md, acceptance.md, holdout.md) |
+| `--worktree` | No       | -         | Task worktree to `cd` into before computing the diff        |
+
+**Worktree handling:**
+
+When `--worktree` is set, the script validates that the path exists and is a git repository, then `cd`s in before running `git diff`. `pipeline-run-task` passes the task worktree via this flag so codex always sees the executor's working tree, not whichever cwd the orchestrator was launched in. Missing or non-git paths exit 1 with `log_error`.
 
 **Behavior:**
 
@@ -603,6 +642,10 @@ pipeline-codex-review --base <ref> --task-id <id> --spec-dir <path>
 5. Invoke Codex with `--sandbox read-only` only; aborts on failure (sandbox cascade removed)
 6. Parse Codex JSON output via `schemas/codex-review.schema.json`
 7. Map to normalized verdict JSON (same shape as `pipeline-parse-review`)
+
+**Authoritative acceptance-criteria anchor:**
+
+Before the spec dump, the prompt prepends an `## Authoritative acceptance criteria for <task-id>` section built from the matching row in `tasks.json` (via the type-aware jq idiom that handles both bare-array and `{tasks:[...]}` shapes). The prompt then instructs codex: "Judge scope against THIS list, not narrative inference from spec.md" and "When in conflict, the Authoritative acceptance criteria list above wins over narrative in spec.md." This narrows codex's scope to the structured AC list and prevents it from flagging spec.md narrative as missing functionality. `tasks.json` parse failures emit `log_warn "tasks.json parse failed (codex prompt will lack AC anchor): ..."` and continue without the anchor section.
 
 **Trust boundary fencing:**
 
@@ -669,17 +712,29 @@ Priority mapping: `critical`/`high` = blocking, `medium`/`low` = non-blocking.
 - Empty / unset → no `-c model=` is appended; codex resolves from
   `~/.codex/config.toml`.
 
+The resolved value is charset-validated against `^[a-zA-Z0-9._-]+$` before
+being embedded in the `-c model="..."` argument. Values containing spaces,
+quotes, or shell metacharacters exit 1 with `log_error` and never reach the
+codex CLI.
+
 **Inverse-hallucination fallback:**
 
-When `validate_findings` (`pipeline-lib.sh:1102`) drops every reviewer
-finding because each `verbatim_line` failed exact-line match against the
-diff, the verdict is intentionally preserved (see the comment block at
-`pipeline-lib.sh:1097`). A resulting `verdict="REQUEST_CHANGES"` with
-`blocking_count=0` and `non_blocking_count=0` is not actionable — the
-executor has nothing to fix. `pipeline-run-task` detects this shape, logs
-a `task.review.codex_inverse_hallucination` metric, discards the unusable
-verdict file, and falls through to the agent-reviewer path. Behaviour is
-identical to a non-zero codex rc.
+`pipeline-run-task` guards against two known codex output pathologies in its postexec spawn manifest. Both discard the codex verdict file, log a `task.review.codex_inverse_hallucination` metric (with `kind` describing which case), and fall through to the agent-reviewer path — behaviour identical to a non-zero codex rc.
+
+1. **`REQUEST_CHANGES` with zero verified findings** (`kind=""` — default):
+   When `validate_findings` (`pipeline-lib.sh:1102`) drops every reviewer
+   finding because each `verbatim_line` failed exact-line match against the
+   diff, the verdict is intentionally preserved (see the comment block at
+   `pipeline-lib.sh:1097`). The resulting `REQUEST_CHANGES` with
+   `blocking_count=0` and `non_blocking_count=0` is not actionable — the
+   executor has nothing to fix.
+
+2. **`APPROVE` / `APPROVED` with non-zero `blocking_count`** (`kind="approve_with_blockers"`):
+   Codex declared the patch correct while simultaneously emitting blocking
+   findings. This is an internal contradiction — the review cannot be
+   trusted to gate the task. The verdict is discarded for the same reason.
+
+Both checks run after the existing JSON-validity and empty-file gates: codex output that is truncated, malformed, or simply empty also routes to the agent reviewer with the same metric kinds as the rc-nonzero path.
 
 ---
 
@@ -1052,6 +1107,10 @@ The `is_test_path` helper (used by TDD gate and red-test verification) recognize
 **State write:**
 
 When `--run-id` is provided, the result is written to `.tasks.<task-id>.quality_gates.tdd`. If the write fails, the script logs to stderr and returns exit code 1 (propagating the state-write failure rather than silently succeeding).
+
+**`git diff-tree` fail-closed:**
+
+Both branches of the per-commit file-classification loop (merge-commit and regular-commit) capture `git diff-tree` stderr to a temp file and exit 1 with `log_error "tdd-gate: git diff-tree failed for <sha>: <stderr>"` when the call fails. The previous `|| true` silently treated missing trees or corrupt refs as "no files in this commit" and let the gate pass. The strict path ensures a git error never masquerades as a clean commit.
 
 **Output:**
 

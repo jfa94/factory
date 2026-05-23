@@ -122,6 +122,16 @@ Conversational settings editor.
 
 ## Agents
 
+The `Model` and `Max Turns` rows in the tables below describe each agent's frontmatter defaults (the values declared inside `agents/<name>.md`). At spawn time, `bin/pipeline-run-task` overrides them per the operator-configurable knobs in `package.json.factory`:
+
+- `review.model` (default `sonnet`) — applied to `implementation-reviewer`, `quality-reviewer`, `security-reviewer`, `architecture-reviewer` spawns
+- `review.maxTurnsDeep` (default `30`) — applied to deep reviewer passes
+- `review.maxTurnsQuick` (default `25`) — reserved for quick reviewer passes
+- `testWriter.maxTurns` (default `40`) — applied to `test-writer` spawns
+- `scribe.maxTurns` (default `60`) — applied to `scribe` spawns and task-executor re-spawns for review-fix loops and CI fixes
+
+The frontmatter defaults remain authoritative when an agent is invoked outside the pipeline (e.g. via `/agents` directly). See `docs/guides/configuration.md` for the operator-facing description.
+
 ### Orchestrator (main session via `commands/run.md`)
 
 The orchestrator is not a sub-agent — it is the main Claude Code session that invoked `/factory:run`. The command body at `commands/run.md` encodes the full control loop: DAG iteration, sub-agent spawning, retry logic, review rounds, and human escalation.

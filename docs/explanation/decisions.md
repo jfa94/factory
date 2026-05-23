@@ -156,6 +156,15 @@ The lock (`pipeline-lock`) exists only to prevent two orchestrator instances fro
 
 Detection is deterministic: `pipeline-detect-reviewer` checks Codex availability via CLI commands.
 
+**Inverse-hallucination guards (fall through to fallback):**
+
+In addition to "codex unavailable" and "codex rc non-zero", the orchestrator treats two pathological codex outputs as faults and routes through the Claude Code fallback path (with a `task.review.codex_inverse_hallucination` metric logged):
+
+1. `REQUEST_CHANGES` with zero verified findings — every finding's `verbatim_line` failed exact-line match against the diff, leaving the executor nothing to fix.
+2. `APPROVE` / `APPROVED` with non-zero `blocking_count` — internal contradiction; the review cannot be trusted to gate the task.
+
+The fallback path is identical to a codex CLI failure: the bogus verdict file is discarded, agent reviewers are spawned, and the task continues. See `docs/reference/bin-scripts.md` (`pipeline-codex-review` and `pipeline-run-task`) for details.
+
 ---
 
 ## Decision 10: Dual Usage Checks (5h and 7d)
@@ -304,17 +313,22 @@ Every narrowing has been tried and produces the same failure mode: the pipeline 
 
 ## Decision 18: Reviewer Model is Fixed, Not Quota-Routed
 
-**Choice:** Reviewer subagents (`quality-reviewer`, `implementation-reviewer`) spawn with a fixed model (`sonnet` for routine reviews, `opus` for escalations). They do not consult `pipeline-model-router`.
+**Choice:** Reviewer subagents (`quality-reviewer`, `implementation-reviewer`, `security-reviewer`, `architecture-reviewer`) spawn with a fixed model. They do not consult `pipeline-model-router`. Default is `sonnet`; operator can override the entire reviewer surface via `package.json.factory.review.model` (and the parallel `review.maxTurnsDeep` / `review.maxTurnsQuick` / `testWriter.maxTurns` / `scribe.maxTurns` knobs).
 
-**Why:**
+**Why fixed (not quota-routed):**
 
 - Review consistency outweighs quota economy. Two reviews of the same task that ran on different models can disagree, which inflates `request_changes` cycles and confuses reviewers' own retry logic.
 - The Actor–Critic discipline (see Decision 9) is strongest when the Critic is held constant; varying the Critic by quota tier collapses the value of repeat reviews.
 - Reviewer cost is small relative to executor cost; routing reviewers by tier would save little.
 
-**Trade-off:** Reviewers consume quota at the higher tier even on routine tasks. Accepted.
+**Why operator-configurable (added 2026-05-22):**
 
-**Scope:** Applies to `bin/pipeline-run-task` reviewer spawn manifests only. The model router still governs executor and test-writer spawns.
+- Different installs land on different default models (ChatGPT-account Codex restrictions, opus availability, cost ceilings). A hardcoded `sonnet` was making it impossible to opt into `opus` reviews on cost-tolerant installs or to downgrade to a cheaper model on tight-quota installs.
+- The override is applied once per run via `read_config` in `bin/pipeline-run-task` (single read, threaded through every reviewer spawn manifest). Consistency-within-a-run is preserved; only the model identity is operator-controlled.
+
+**Trade-off:** Reviewers consume quota at the configured tier even on routine tasks. Accepted.
+
+**Scope:** Applies to `bin/pipeline-run-task` reviewer / test-writer / scribe / executor-respawn spawn manifests. The model router still governs initial executor spawn decisions. The frontmatter defaults inside `agents/<name>.md` remain authoritative outside the pipeline.
 
 ---
 

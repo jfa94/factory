@@ -30,10 +30,11 @@ Reference for script exit codes and their meanings.
 
 ### pipeline-state
 
-| Exit Code | Meaning                                                               |
-| --------- | --------------------------------------------------------------------- |
-| 0         | Success (read/write), or condition true (deps-satisfied, interrupted) |
-| 1         | Failure, or condition false, or no incomplete task found              |
+| Exit Code | Meaning                                                                                               |
+| --------- | ----------------------------------------------------------------------------------------------------- |
+| 0         | Success (read/write), or condition true (deps-satisfied, interrupted)                                 |
+| 1         | Failure, or condition false, or no incomplete task found                                              |
+| 2         | `deps-satisfied` only: `state.json` is unparseable. Callers must NOT proceed; investigate corruption. |
 
 ### pipeline-lock
 
@@ -93,10 +94,10 @@ Reference for script exit codes and their meanings.
 
 ### pipeline-build-prompt
 
-| Exit Code | Meaning                   |
-| --------- | ------------------------- |
-| 0         | Prompt built successfully |
-| 1         | Unknown flag              |
+| Exit Code | Meaning                                                         |
+| --------- | --------------------------------------------------------------- |
+| 0         | Prompt built successfully                                       |
+| 1         | Unknown flag, or `--fix-instructions` payload is malformed JSON |
 
 ### pipeline-circuit-breaker
 
@@ -121,10 +122,10 @@ Reference for script exit codes and their meanings.
 
 ### pipeline-tdd-gate
 
-| Exit Code | Meaning                                        |
-| --------- | ---------------------------------------------- |
-| 0         | Commit ordering valid or task is tdd_exempt    |
-| 1         | Violation (impl commit without preceding test) |
+| Exit Code | Meaning                                                                                       |
+| --------- | --------------------------------------------------------------------------------------------- |
+| 0         | Commit ordering valid or task is tdd_exempt                                                   |
+| 1         | Violation (impl commit without preceding test), state-write failure, or `git diff-tree` error |
 
 ### pipeline-detect-reviewer
 
