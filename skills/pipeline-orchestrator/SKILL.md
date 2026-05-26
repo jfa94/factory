@@ -237,22 +237,26 @@ Runs once, before task execution.
    handoff_ref=$(pipeline-state read "$run_id" .spec.handoff_ref)
    spec_path=$(pipeline-state read "$run_id" .spec.path)
    [[ -z "$handoff_branch" ]] && { pipeline-gh-comment <issue> ci-escalation --data '{"reason":"spec handoff missing"}'; pipeline-state write "$run_id" .status '"failed"'; exit 1; }
-   # Push handoff branch so the fetch below is reliable across worktree boundaries.
-   git push origin "$handoff_branch" 2>/dev/null || true
-   git fetch origin "$handoff_branch" 2>/dev/null || git rev-parse --verify "$handoff_ref" >/dev/null
-   mkdir -p ".state/$run_id"
-   git show "$handoff_ref:$spec_path/spec.md"    > ".state/$run_id/spec.md"
-   git show "$handoff_ref:$spec_path/tasks.json" > ".state/$run_id/tasks.json"
-   git checkout staging
-   git merge --ff-only "$handoff_ref" || git merge --no-ff "$handoff_ref" -m "chore: merge spec handoff for $run_id"
-   git push origin --delete "$handoff_branch" 2>/dev/null || true
-   git branch -D "$handoff_branch" 2>/dev/null || true
-   pipeline-state write "$run_id" .spec.path "\"$(pwd)/.state/$run_id\""
+
+   # Resolve the worktree that owns `staging` so all staging mutations run in it
+   # — works whether the orchestrator runs in main or a separate worktree.
+   staging_wt=$(git worktree list --porcelain 2>/dev/null \
+     | awk '/^worktree / { wt = substr($0, 10); next } /^branch refs\/heads\/staging$/ { print wt; exit }')
+   [[ -z "$staging_wt" ]] && staging_wt="$(pwd)"  # fallback: assume current cwd is staging-owning
+
+   git -C "$staging_wt" push origin "$handoff_branch" 2>/dev/null || true
+   git -C "$staging_wt" fetch origin "$handoff_branch" 2>/dev/null || git -C "$staging_wt" rev-parse --verify "$handoff_ref" >/dev/null
+   mkdir -p "$staging_wt/.state/$run_id"
+   git -C "$staging_wt" show "$handoff_ref:$spec_path/spec.md"    > "$staging_wt/.state/$run_id/spec.md"
+   git -C "$staging_wt" show "$handoff_ref:$spec_path/tasks.json" > "$staging_wt/.state/$run_id/tasks.json"
+   git -C "$staging_wt" checkout staging 2>/dev/null || true   # no-op if already on staging
+   git -C "$staging_wt" merge --ff-only "$handoff_ref" || git -C "$staging_wt" merge --no-ff "$handoff_ref" -m "chore: merge spec handoff for $run_id"
+   git -C "$staging_wt" push origin --delete "$handoff_branch" 2>/dev/null || true
+   git -C "$staging_wt" branch -D "$handoff_branch" 2>/dev/null || true
+   pipeline-state write "$run_id" .spec.path "\"$staging_wt/.state/$run_id\""
    pipeline-state write "$run_id" .spec.committed true
-   # commit-spec also pushes origin/staging so subagent worktrees see the spec.
    pipeline-branch commit-spec ".state/$run_id"
-   # Verify staging was pushed before fan-out.
-   git ls-remote --exit-code --heads origin staging >/dev/null \
+   git -C "$staging_wt" ls-remote --exit-code --heads origin staging >/dev/null \
      || { log_error "origin/staging missing after commit-spec — aborting before task fan-out"; exit 1; }
    ```
 
