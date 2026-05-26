@@ -157,6 +157,22 @@ log_metric "run.start" "mode=\"$mode\"" "issue=\"$issue\""
 log_info "initialized run $run_id (mode=$mode, issue=$issue)"
 human_summary "initialized run $run_id (mode=$mode, issue=${issue:-none})"
 
+# Post-init sanity check: the symlink must exist and point at our run_dir.
+# An atomic-rename failure that returned 0 (e.g. across-filesystem mv) would
+# otherwise leave the run-dir in place without a symlink, and every hook would
+# silent-exit because $CLAUDE_PLUGIN_DATA/runs/current is missing.
+if [[ ! -L "$current_link" ]]; then
+  log_error "pipeline-init: 'current' symlink missing after creation — atomic rename failed silently"
+  rm -rf "$run_dir"
+  exit 1
+fi
+actual_target=$(readlink "$current_link" 2>/dev/null || true)
+if [[ "$actual_target" != "$run_dir" ]]; then
+  log_error "pipeline-init: 'current' symlink points at '$actual_target', expected '$run_dir'"
+  rm -rf "$run_dir"
+  exit 1
+fi
+
 jq -n \
   --arg run_id "$run_id" \
   --arg state_path "$run_dir/state.json" \

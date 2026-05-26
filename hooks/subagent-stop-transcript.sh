@@ -21,8 +21,31 @@
 # Exit: 0 normally; 1 if scribe state write fails (fatal).
 set -euo pipefail
 
+# Canonicalize CLAUDE_PLUGIN_DATA before reading from it. When a foreign plugin
+# (e.g. codex) leaks its CLAUDE_PLUGIN_DATA into this session, pipeline-lib.sh's
+# top-level redirect rewrites the env var to factory's data dir. Without this,
+# the hook reads from the wrong runs/current and silent-exits, losing all state
+# writes for the run.
+_lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$_lib" ]]; then
+  # shellcheck disable=SC1090
+  source "$_lib" 2>/dev/null || true
+fi
+
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
-if [[ -z "${CLAUDE_PLUGIN_DATA:-}" || ! -L "$current_link" ]]; then
+if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
+  # No plugin data dir — hook not configured for this run. Silent exit is OK.
+  exit 0
+fi
+if [[ ! -L "$current_link" ]]; then
+  # Plugin data dir IS set AND has been canonicalized above, yet the symlink
+  # is genuinely missing. This is the failure mode that hides all subagent
+  # state writes. Log loudly so it surfaces in transcripts and stderr.
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '[%s] [WARN] subagent-stop-transcript: runs/current symlink missing under %s — state writes skipped\n' \
+    "$ts" "$CLAUDE_PLUGIN_DATA" >&2
+  err_log="$CLAUDE_PLUGIN_DATA/hook-errors.log"
+  printf '[%s] subagent-stop-transcript: symlink missing\n' "$ts" >> "$err_log" 2>/dev/null || true
   exit 0
 fi
 run_dir=$(readlink "$current_link" 2>/dev/null) || exit 0
@@ -233,16 +256,13 @@ if [[ "$agent_type" == "scribe" ]]; then
 fi
 
 # --- 6. Emit metric ---
-lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
-if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$lib" ]]; then
-  # shellcheck disable=SC1090
-  source "$lib" 2>/dev/null || true
-  if command -v log_metric >/dev/null 2>&1; then
-    log_metric "pipeline.subagent.end" \
-      "agent_type=\"$agent_type\"" \
-      "status=\"$status\"" \
-      "task_id=\"${task_id:-}\"" 2>/dev/null || true
-  fi
+# pipeline-lib.sh was sourced at the top of this hook for env-var
+# canonicalization, so log_metric is already available here.
+if command -v log_metric >/dev/null 2>&1; then
+  log_metric "pipeline.subagent.end" \
+    "agent_type=\"$agent_type\"" \
+    "status=\"$status\"" \
+    "task_id=\"${task_id:-}\"" 2>/dev/null || true
 fi
 
 exit 0

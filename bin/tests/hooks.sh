@@ -1231,6 +1231,119 @@ assert_eq "subagent-stop sets .scribe.status=done" "done" "$scribe_status"
 
 # ============================================================
 echo ""
+echo "=== Bug 1: hooks source pipeline-lib.sh in top 15 lines (canonicalization) ==="
+
+# Static check: every hook that reads ${CLAUDE_PLUGIN_DATA} before guarding on
+# the symlink must source pipeline-lib.sh near the top so a foreign-plugin
+# leak (CLAUDE_PLUGIN_DATA pointing at e.g. codex-openai-codex/) is rewritten
+# by the lib's _factory_expected_data_dir redirect before any state lookup.
+# Threshold = 35 lines accommodates the docstring + set -euo prelude in each
+# hook; the load-bearing requirement is "before the first CLAUDE_PLUGIN_DATA
+# read", not a specific line number.
+# subagent-stop-gate.sh is included — it already sourced the lib pre-fix.
+# asyncrewake-ci.sh is skipped: its lib-source sits below the version-gate
+# preflight (intentional — that hook short-circuits before any state read on
+# Claude versions below the minimum, so canonicalization order is moot).
+for _hook in subagent-stop-transcript.sh run-tracker.sh pretooluse-pipeline-guards.sh \
+             session-start-resume.sh stop-gate.sh secret-commit-guard.sh \
+             write-protection.sh subagent-stop-gate.sh; do
+  top_lines=$(head -35 "$HOOKS_DIR/$_hook")
+  matches=$(printf '%s\n' "$top_lines" | grep -c 'pipeline-lib.sh' || true)
+  if [[ "$matches" -ge 1 ]]; then
+    assert_eq "$_hook sources pipeline-lib.sh near top" "ok" "ok"
+  else
+    assert_eq "$_hook sources pipeline-lib.sh near top" "ok" "MISSING"
+  fi
+done
+
+echo ""
+echo "=== subagent-stop-transcript: canonicalizes foreign CLAUDE_PLUGIN_DATA ==="
+
+# Integration check (option ii from the spec): drive the actual redirect path
+# in pipeline-lib.sh. Requires CLAUDE_PLUGIN_DATA to start with
+# $HOME/.claude/plugins/data/ and a manifest under $HOME/.claude/plugins/cache/
+# whose name disagrees with the env-var basename.
+#
+# Strategy: hijack HOME for the duration of this single hook invocation.
+_canon_home=$(mktemp -d)
+mkdir -p "$_canon_home/.claude/plugins/data"
+# Mock cache layout: cache/<marketplace>/<plugin>/<version>/.claude-plugin/plugin.json
+_plugin_name=$(jq -r '.name' "$BIN_DIR/../.claude-plugin/plugin.json")
+_mp_name="testmp"
+_cache_plugin_root="$_canon_home/.claude/plugins/cache/$_mp_name/$_plugin_name/0.1.0"
+mkdir -p "$_cache_plugin_root/.claude-plugin" "$_cache_plugin_root/bin" "$_cache_plugin_root/hooks"
+printf '{"name":"%s","version":"0.1.0"}' "$_plugin_name" > "$_cache_plugin_root/.claude-plugin/plugin.json"
+# Copy the real pipeline-lib so _factory_expected_data_dir resolves under the fake HOME.
+cp "$BIN_DIR/pipeline-lib.sh" "$_cache_plugin_root/bin/pipeline-lib.sh"
+# Copy the hook (since CLAUDE_PLUGIN_ROOT must be the cache root for the
+# redirect to derive `<plugin>-<marketplace>`).
+cp "$HOOKS_DIR/subagent-stop-transcript.sh" "$_cache_plugin_root/hooks/subagent-stop-transcript.sh"
+
+# Set up correct (factory's) and foreign data dirs under the fake HOME.
+_correct_data="$_canon_home/.claude/plugins/data/${_plugin_name}-${_mp_name}"
+_foreign_data="$_canon_home/.claude/plugins/data/codex-openai-codex"
+mkdir -p "$_correct_data/runs" "$_foreign_data/runs"
+
+# Seed an active run in the CORRECT data dir.
+_run_id="run-canon-x"
+mkdir -p "$_correct_data/runs/$_run_id"
+printf '{"status":"running","tasks":{"task_zz":{"status":"executing"}}}' \
+  > "$_correct_data/runs/$_run_id/state.json"
+ln -sfn "$_correct_data/runs/$_run_id" "$_correct_data/runs/current"
+printf '{"task_id":"task_zz"}' > "$_correct_data/runs/$_run_id/.active-spawn.json"
+
+# Invoke the hook with the FOREIGN data dir env-var. The lib's redirect must
+# rewrite CLAUDE_PLUGIN_DATA inside the hook, so the state write lands in
+# $_correct_data, not $_foreign_data.
+input='{"agent_type":"task-executor","last_assistant_message":"STATUS: DONE"}'
+set +e
+HOME="$_canon_home" \
+  CLAUDE_PLUGIN_DATA="$_foreign_data" \
+  CLAUDE_PLUGIN_ROOT="$_cache_plugin_root" \
+  PATH="$BIN_DIR:$PATH" \
+  bash "$_cache_plugin_root/hooks/subagent-stop-transcript.sh" <<<"$input" >/dev/null 2>&1
+_canon_rc=$?
+set -e
+assert_eq "canonicalize: hook exit 0" "0" "$_canon_rc"
+_canon_status=$(jq -r '.tasks.task_zz.executor_status // empty' "$_correct_data/runs/$_run_id/state.json")
+assert_eq "canonicalize: state landed in correct data dir" "DONE" "$_canon_status"
+# Foreign data dir must remain untouched (no runs/<run-id> ever created there).
+[[ ! -e "$_foreign_data/runs/$_run_id" ]] \
+  && { echo "  PASS: canonicalize: foreign data dir untouched"; pass=$((pass+1)); } \
+  || { echo "  FAIL: canonicalize: foreign data dir got written to"; fail=$((fail+1)); }
+
+rm -rf "$_canon_home"
+
+echo ""
+echo "=== subagent-stop-transcript: loud-on-missing symlink ==="
+
+# When CLAUDE_PLUGIN_DATA IS set but runs/current symlink is genuinely missing
+# (post-canonicalization), the hook must log loudly to stderr + hook-errors.log
+# and still exit 0 (best-effort).
+_loud_data=$(mktemp -d)
+mkdir -p "$_loud_data/runs"
+# Intentionally NO symlink at $_loud_data/runs/current.
+set +e
+_loud_err=$(printf '%s' '{"agent_type":"task-executor","last_assistant_message":"STATUS: DONE"}' \
+  | CLAUDE_PLUGIN_DATA="$_loud_data" \
+    bash "$HOOKS_DIR/subagent-stop-transcript.sh" 2>&1 >/dev/null)
+_loud_rc=$?
+set -e
+assert_eq "loud-on-missing: hook exit 0 (best-effort)" "0" "$_loud_rc"
+if printf '%s' "$_loud_err" | grep -q 'symlink missing'; then
+  echo "  PASS: loud-on-missing: stderr contains 'symlink missing'"; pass=$((pass+1))
+else
+  echo "  FAIL: loud-on-missing: stderr missing diagnostic (got: $_loud_err)"; fail=$((fail+1))
+fi
+if [[ -f "$_loud_data/hook-errors.log" ]] && grep -q 'symlink missing' "$_loud_data/hook-errors.log"; then
+  echo "  PASS: loud-on-missing: hook-errors.log written"; pass=$((pass+1))
+else
+  echo "  FAIL: loud-on-missing: hook-errors.log missing or empty"; fail=$((fail+1))
+fi
+rm -rf "$_loud_data"
+
+# ============================================================
+echo ""
 echo "=== session-start (Iron Laws): emits valid JSON with Iron Laws digest ==="
 
 set +e

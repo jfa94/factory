@@ -1462,6 +1462,55 @@ race_result=$(_lock_race_test)
 assert_eq "lock race: file is valid JSON after concurrent dead-PID acquire" "valid" "$race_result"
 
 echo ""
+echo "=== Bug 1: pipeline-state ensure-current ==="
+
+# 1. ensure-current restores a missing symlink for the requested run.
+pipeline-init "run-canon-y" --mode task --force >/dev/null 2>&1
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+pipeline-state ensure-current "run-canon-y" >/dev/null 2>&1
+if [[ -L "$CLAUDE_PLUGIN_DATA/runs/current" ]]; then
+  echo "  PASS: ensure-current restores missing symlink"; pass=$((pass+1))
+else
+  echo "  FAIL: ensure-current did not create symlink"; fail=$((fail+1))
+fi
+_ec_target=$(readlink "$CLAUDE_PLUGIN_DATA/runs/current" 2>/dev/null || true)
+assert_eq "ensure-current symlink points at run dir" "$CLAUDE_PLUGIN_DATA/runs/run-canon-y" "$_ec_target"
+
+# 2. ensure-current refuses to clobber an active run.
+pipeline-init "run-canon-z" --mode task --force >/dev/null 2>&1
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+# Plant a separate "running" run that owns the current symlink.
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/active-other"
+printf '{"status":"running"}' > "$CLAUDE_PLUGIN_DATA/runs/active-other/state.json"
+ln -sfn "$CLAUDE_PLUGIN_DATA/runs/active-other" "$CLAUDE_PLUGIN_DATA/runs/current"
+set +e
+pipeline-state ensure-current "run-canon-z" >/dev/null 2>&1
+_ec_rc=$?
+set -e
+assert_eq "ensure-current refuses to clobber active run (exit 1)" "1" "$_ec_rc"
+# Symlink target should be unchanged (still active-other).
+_ec_target=$(readlink "$CLAUDE_PLUGIN_DATA/runs/current" 2>/dev/null || true)
+assert_eq "ensure-current preserves active run symlink" "$CLAUDE_PLUGIN_DATA/runs/active-other" "$_ec_target"
+
+# 3. ensure-current fails when the run dir does not exist.
+set +e
+pipeline-state ensure-current "run-canon-missing" >/dev/null 2>&1
+_ec_rc=$?
+set -e
+assert_eq "ensure-current rejects missing run dir (exit 1)" "1" "$_ec_rc"
+
+# 4. ensure-current happy path when the existing current symlink targets a
+#    terminal (non-running) run — should succeed and swap to the requested run.
+pipeline-init "run-canon-terminal" --mode task --force >/dev/null 2>&1
+# Plant a different "done" run targeted by current.
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/old-done"
+printf '{"status":"done"}' > "$CLAUDE_PLUGIN_DATA/runs/old-done/state.json"
+ln -sfn "$CLAUDE_PLUGIN_DATA/runs/old-done" "$CLAUDE_PLUGIN_DATA/runs/current"
+pipeline-state ensure-current "run-canon-terminal" >/dev/null 2>&1
+_ec_target=$(readlink "$CLAUDE_PLUGIN_DATA/runs/current" 2>/dev/null || true)
+assert_eq "ensure-current swaps over terminal run" "$CLAUDE_PLUGIN_DATA/runs/run-canon-terminal" "$_ec_target"
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"
