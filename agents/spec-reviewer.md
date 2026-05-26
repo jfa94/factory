@@ -1,5 +1,6 @@
 ---
-model: sonnet
+model: opus
+effort: high
 maxTurns: 20
 description: "Reviews prd-to-spec output (spec files + tasks.json) for task granularity, dependency correctness, acceptance criteria quality, test coverage, and vertical slice integrity. Triggered when the spec-generator needs fresh-context validation before execution. Returns a structured PASS/NEEDS_REVISION verdict."
 tools:
@@ -135,7 +136,7 @@ Compile your findings into this exact structure (return as text, not a file):
 
 **Verdict:** PASS | NEEDS_REVISION
 **Total Score:** X/60
-**Pass Threshold:** 54/60
+**Pass Threshold:** 56/60
 
 ### Scores
 | Dimension | Score | Status |
@@ -160,6 +161,6 @@ Compile your findings into this exact structure (return as text, not a file):
 Verdict is **PASS** only when:
 
 - Zero blocking issues AND
-- Total score >= 54/60
+- Total score >= 56/60
 
 Keep total findings to 5-12. If you have more, prioritize by impact on pipeline execution success.
