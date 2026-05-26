@@ -1245,7 +1245,8 @@ echo "=== Bug 1: hooks source pipeline-lib.sh in top 15 lines (canonicalization)
 # the version-gate's reads under CLAUDE_PLUGIN_DATA are canonicalized first.
 for _hook in subagent-stop-transcript.sh run-tracker.sh pretooluse-pipeline-guards.sh \
              session-start-resume.sh stop-gate.sh secret-commit-guard.sh \
-             write-protection.sh subagent-stop-gate.sh asyncrewake-ci.sh; do
+             write-protection.sh subagent-stop-gate.sh asyncrewake-ci.sh \
+             session-start; do
   top_lines=$(head -35 "$HOOKS_DIR/$_hook")
   matches=$(printf '%s\n' "$top_lines" | grep -c 'pipeline-lib.sh' || true)
   if [[ "$matches" -ge 1 ]]; then
