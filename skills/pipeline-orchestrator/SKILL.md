@@ -255,7 +255,7 @@ Runs once, before task execution.
    git -C "$staging_wt" branch -D "$handoff_branch" 2>/dev/null || true
    pipeline-state write "$run_id" .spec.path "\"$staging_wt/.state/$run_id\""
    pipeline-state write "$run_id" .spec.committed true
-   pipeline-branch commit-spec ".state/$run_id"
+   pipeline-branch commit-spec "$staging_wt/.state/$run_id"
    git -C "$staging_wt" ls-remote --exit-code --heads origin staging >/dev/null \
      || { log_error "origin/staging missing after commit-spec — aborting before task fan-out"; exit 1; }
    ```
