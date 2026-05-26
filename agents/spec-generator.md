@@ -1,5 +1,6 @@
 ---
 model: opus
+effort: xhigh
 maxTurns: 60
 isolation: worktree
 description: "Converts a PRD (GitHub issue) into a validated spec directory (spec.md + tasks.json) using the prd-to-spec skill. Invoked by the orchestrator when a PRD issue needs to be turned into an executable spec."
