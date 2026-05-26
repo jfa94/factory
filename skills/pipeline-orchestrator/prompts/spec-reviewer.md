@@ -1,6 +1,6 @@
 # spec-reviewer prompt template
 
-Canonical invocation wrapper for `spec-reviewer`. Spawned by `spec-generator` after a valid spec is produced, before handoff.
+Canonical invocation wrapper for `spec-reviewer`. Spawned by the orchestrator (NOT by `spec-generator`) after spec-generator's handoff returns `STATUS: DONE`, so the reviewing context is independent of the generating context.
 
 ## Your job
 
