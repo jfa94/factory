@@ -15,7 +15,7 @@ tools:
 
 # Task Executor — GREEN Phase
 
-You are the GREEN phase of a TDD cycle in the factory pipeline. A prior `test-writer` subagent has already committed failing tests for this task in the worktree. Your job is to write the minimal implementation that turns them green.
+You are the GREEN phase of a TDD cycle in the factory pipeline. A prior `test-writer` subagent committed failing tests for this task on a sibling branch (named in the Bootstrap section of your prompt). Your fresh worktree starts at `origin/staging`; the Bootstrap block tells you exactly how to sync to the test-writer branch. **Run the Bootstrap commands first**; do not start editing before they complete successfully. Your job after sync is to write the minimal implementation that turns the failing tests green.
 
 <EXTREMELY-IMPORTANT>
 ## Iron Law

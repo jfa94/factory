@@ -1715,5 +1715,96 @@ else
 fi
 rm -f "$STUB_DIR/git"
 
+# ============================================================
+# Bug 2: test-writer → task-executor branch handoff
+# ============================================================
+# After _verify_red_tests passes, _stage_preexec_tests must:
+#   (a) push the test-writer's branch to origin
+#   (b) record the branch name in state.test_writer_branch
+#   (c) emit an executor manifest whose prompt file embeds a Bootstrap
+#       block (git fetch + git reset --hard origin/<branch>) so the
+#       executor's fresh worktree can sync to the RED commits.
+
+new_run handoff-bug2
+
+# 1) Build a sandbox: a working repo + a bare clone serving as origin.
+sandbox=$(mktemp -d "$ROOT_TMP/handoff-sandbox.XXXXXX")
+(
+  cd "$sandbox"
+  git init --quiet -b staging
+  git config user.email "t@t"
+  git config user.name "t"
+  printf 'seed\n' > seed.txt
+  git add seed.txt
+  git -c user.email=t@t -c user.name=t commit -m "seed" --quiet
+) >/dev/null 2>&1
+
+# Bare clone serves as origin so `git push -u origin <branch>` succeeds.
+git clone --bare "$sandbox" "$sandbox/origin.git" >/dev/null 2>&1
+(
+  cd "$sandbox"
+  git remote add origin "$sandbox/origin.git"
+  git push -u origin staging --quiet
+) >/dev/null 2>&1
+
+# 2) Create the test-writer worktree on its own branch with the RED commit.
+tw_wt="$ROOT_TMP/$current-tw-wt"
+(
+  cd "$sandbox"
+  git worktree add -b worktree-agent-DEADBEEF "$tw_wt" --quiet
+) >/dev/null 2>&1
+(
+  cd "$tw_wt"
+  # Needs package.json (vitest detected) and a *new* test file ahead of staging.
+  printf '{"devDependencies":{"vitest":"^1.0.0"}}\n' > package.json
+  mkdir -p tests
+  printf 'test("demo", () => { throw new Error("RED"); });\n' > tests/demo.test.ts
+  git add package.json tests/demo.test.ts
+  git -c user.email=t@t -c user.name=t commit -m "test(demo): failing tests for alpha-001 [alpha-001]" --quiet
+) >/dev/null 2>&1
+
+# 3) Seed state so preexec_tests skips the spawn-test-writer branch and runs
+#    _verify_red_tests directly. The stub vitest exits 1 (red), so verification
+#    will pass and we exercise the push + bootstrap path.
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$tw_wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+
+# vitest stub: exit 1 (tests are red — the desired state)
+write_stub vitest 'exit 1'
+
+# 4) Drive preexec_tests.
+run_wrapper alpha-001 --stage preexec_tests
+assert_eq "handoff: preexec_tests exit 10" "10" "$RC"
+
+# Assertion 1: branch pushed to origin.
+if git -C "$tw_wt" rev-parse --verify --quiet refs/remotes/origin/worktree-agent-DEADBEEF >/dev/null 2>&1; then
+  pass "handoff: test-writer branch pushed to origin"
+else
+  fail "handoff: test-writer branch pushed to origin"
+fi
+
+# Assertion 2: executor prompt contains the Bootstrap block targeting the branch.
+prompt_file=$(printf '%s' "$OUT" | jq -r '.agents[0].prompt_file // empty')
+if [[ -n "$prompt_file" && -f "$prompt_file" ]] \
+   && grep -q 'git fetch origin worktree-agent-DEADBEEF' "$prompt_file" \
+   && grep -q 'git reset --hard origin/worktree-agent-DEADBEEF' "$prompt_file"; then
+  pass "handoff: executor prompt contains bootstrap block"
+else
+  fail "handoff: executor prompt missing bootstrap block ($prompt_file)"
+fi
+
+# Assertion 3: test_writer_branch recorded in state.
+branch_in_state=$(pipeline-state task-read "$RUN_ID" alpha-001 test_writer_branch 2>/dev/null | tr -d '"')
+if [[ "$branch_in_state" == "worktree-agent-DEADBEEF" ]]; then
+  pass "handoff: test_writer_branch recorded in state"
+else
+  fail "handoff: test_writer_branch recorded in state (got=$branch_in_state)"
+fi
+
+# Cleanup the worktree so the sandbox can be removed.
+git -C "$sandbox" worktree remove --force "$tw_wt" >/dev/null 2>&1 || true
+rm -rf "$sandbox"
+rm -f "$STUB_DIR/vitest"
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

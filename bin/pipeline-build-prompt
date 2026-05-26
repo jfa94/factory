@@ -27,6 +27,7 @@ fi
 holdout_percent=0
 fix_instructions=""
 holdout_seed=""
+bootstrap_branch=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,9 +35,19 @@ while [[ $# -gt 0 ]]; do
     --holdout) holdout_percent="$2"; shift 2 ;;
     --fix-instructions) fix_instructions="$2"; shift 2 ;;
     --seed) holdout_seed="$2"; shift 2 ;;
+    --bootstrap-branch) bootstrap_branch="$2"; shift 2 ;;
     *) log_error "unknown flag: $1"; exit 1 ;;
   esac
 done
+
+# Validate --bootstrap-branch: only allow safe git ref names (alphanum, dash,
+# underscore, slash, dot). Reject empty after the flag and any shell-metacharacter.
+if [[ -n "$bootstrap_branch" ]]; then
+  if [[ ! "$bootstrap_branch" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    log_error "invalid --bootstrap-branch '$bootstrap_branch' — must match [A-Za-z0-9._/-]+"
+    exit 1
+  fi
+fi
 
 # Resolve current run id once — used for both .spec.path and prior-work lookup.
 state_run_id=$(current_run_id 2>/dev/null || true)
@@ -211,8 +222,28 @@ Before starting new work:
   fi
 fi
 
+# Bootstrap block — prepended when --bootstrap-branch <name> is supplied. The
+# executor starts in a fresh worktree pinned to `origin/staging`; the prior
+# test-writer phase committed failing tests on a sibling branch, so we have to
+# tell the executor to sync to that branch BEFORE doing anything else.
+bootstrap_block=""
+if [[ -n "$bootstrap_branch" ]]; then
+  bootstrap_block="## Bootstrap (run these commands BEFORE anything else)
+
+You spawned into a fresh worktree at \`origin/staging\`. The prior test-writer phase committed failing tests on branch \`${bootstrap_branch}\`. Sync to that branch so you can see (and turn green) those tests:
+
+\`\`\`bash
+git fetch origin ${bootstrap_branch} staging --depth=50
+git reset --hard origin/${bootstrap_branch}
+\`\`\`
+
+Verify: \`git log --oneline -1\` should show the test-writer's \`test(...): failing tests for <task_id>\` commit.
+
+"
+fi
+
 # Build prompt
-prompt="# Task: ${title}
+prompt="${bootstrap_block}# Task: ${title}
 
 ## Task ID
 ${task_id}
