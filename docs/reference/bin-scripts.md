@@ -112,6 +112,10 @@ pipeline-init <run-id> [--issue <N>] [--mode <mode>] [--force]
 
 The `runs/current` symlink is updated atomically via `ln -sfn` to a temp link followed by `mv -fh` (BSD) or `mv -fT` (GNU). Observers never see the symlink missing during the swap.
 
+**Post-init verification (added 0.10.2):**
+
+After the symlink swap completes, the script re-checks that `runs/current` exists as a symlink and that `readlink` resolves to the just-created `run_dir`. A silent atomic-rename failure (e.g., cross-filesystem `mv` returning 0 without moving the link) is otherwise invisible — every downstream hook would then silent-exit because `$CLAUDE_PLUGIN_DATA/runs/current` is missing, hiding all state writes. On verification failure the script removes the run dir and exits 1 with a `log_error` describing the symlink state observed.
+
 **Creates:**
 
 ```
@@ -149,16 +153,17 @@ pipeline-state <action> <run-id> [args...]
 
 **Actions:**
 
-| Action           | Arguments                        | Description                                   |
-| ---------------- | -------------------------------- | --------------------------------------------- |
-| `read`           | `<run-id> [key]`                 | Read full state or jq key                     |
-| `write`          | `<run-id> <key> <value>`         | Atomic write to state key                     |
-| `task-init`      | `<run-id> <task-id> <task-json>` | Seed task record from tasks.json (idempotent) |
-| `task-status`    | `<run-id> <task-id> <status>`    | Update task status                            |
-| `deps-satisfied` | `<run-id> <task-id>`             | Check if deps done                            |
-| `interrupted`    | `<run-id>`                       | Check if run interrupted                      |
-| `resume-point`   | `<run-id>`                       | Find first incomplete task                    |
-| `list`           | -                                | List all runs                                 |
+| Action           | Arguments                        | Description                                                    |
+| ---------------- | -------------------------------- | -------------------------------------------------------------- |
+| `read`           | `<run-id> [key]`                 | Read full state or jq key                                      |
+| `write`          | `<run-id> <key> <value>`         | Atomic write to state key                                      |
+| `task-init`      | `<run-id> <task-id> <task-json>` | Seed task record from tasks.json (idempotent)                  |
+| `task-status`    | `<run-id> <task-id> <status>`    | Update task status                                             |
+| `deps-satisfied` | `<run-id> <task-id>`             | Check if deps done                                             |
+| `interrupted`    | `<run-id>`                       | Check if run interrupted                                       |
+| `resume-point`   | `<run-id>`                       | Find first incomplete task                                     |
+| `list`           | -                                | List all runs                                                  |
+| `ensure-current` | `<run-id>`                       | Restore `runs/current` symlink (refuses to clobber active run) |
 
 **task-init behavior:**
 
@@ -179,6 +184,12 @@ When the `state.json` file is unparseable (jq error), `deps-satisfied` now exits
 `pipeline-run-task` treats any non-zero from `deps-satisfied` as "not ready" and short-circuits the task; the explicit exit-2 prevents a corrupt state from silently advancing a task whose deps cannot be evaluated.
 
 **Exit codes:** 0=success/true, 1=failure/false, 2=state parse failure (deps-satisfied only)
+
+**ensure-current behavior:**
+
+Defensive restore of the `runs/current` symlink. Used by operator recovery and by `pipeline-init`'s post-init verification path when the symlink is found missing. Refuses to clobber a different run whose `state.json.status` is `"running"`, so the action is safe to call unconditionally. Atomic-rename via `mv -fh` (BSD) or `mv -fT` (GNU) of a `.tmp.$$` symlink to the target name. Emits `{"action":"ensure-current","run_id":...,"target":...,"restored":true}` on stdout.
+
+Exits 1 when the run dir is absent or when the symlink already points at an active (`status=running`) run with a different `run_id`.
 
 ---
 
@@ -243,6 +254,17 @@ Malformed reviewer JSON now fails loud: writes `failure_reason` to state and blo
 **Configurable reviewer model and turn limits:**
 
 The wrapper reads `review.model`, `review.maxTurnsQuick`, `review.maxTurnsDeep`, `testWriter.maxTurns`, and `scribe.maxTurns` from `package.json.factory` via `read_config` and threads them into every reviewer / test-writer / scribe spawn manifest in this script. Defaults reproduce the previously-hardcoded values (`sonnet`, `25`, `30`, `40`, `60`). See `docs/guides/configuration.md` for the operator-facing description.
+
+**Test-writer → executor branch handoff (`_stage_preexec_tests`, added 0.10.2):**
+
+The two-phase TDD flow runs test-writer and task-executor in separate worktrees. After RED-verification succeeds, the executor would spawn into a fresh worktree pinned at `origin/staging` and see none of the test-writer's failing-test commits. To bridge the gap, `_stage_preexec_tests` now:
+
+1. Resolves the test-writer's branch via `git -C "$tw_wt" rev-parse --abbrev-ref HEAD`.
+2. Pushes that branch to `origin` (`git push -u origin "$tw_branch"`). A push failure marks `test_writer_status: BLOCKED`, sets the task to `failed`, and returns exit 30.
+3. Records the branch name to state at `.tasks.<task-id>.test_writer_branch`.
+4. Passes `--bootstrap-branch "$tw_branch"` to `pipeline-build-prompt` so the executor prompt starts with a `## Bootstrap` block (see `pipeline-build-prompt`).
+
+Fallback: if the test-writer worktree is not a git repo, has a detached HEAD, or has no `origin` remote (legacy / offline test fixtures), the wrapper logs a warning and spawns the executor without the bootstrap block (`local-only` mode). This preserves backward compatibility with tests that don't drive a real RED commit.
 
 **Exit codes:**
 
@@ -344,7 +366,7 @@ pipeline-validate-tasks <tasks-json-path>
 6. Dependency cycle detection (DFS)
 7. Topological sort via Kahn's algorithm
 8. Parallel group assignment
-9. **Prompt-injection guards**: descriptions are rejected if they contain control chars, shell metas, or leading `--`
+9. **Prompt-injection guards**: descriptions are rejected if they contain control chars, command-substitution syntax (backtick, `$(...)`), or leading `--`. The previously-rejected shell metacharacters `;&|<>` are now **allowed** — descriptions are embedded inside untrusted-data fences by `pipeline-build-prompt` and never shell-eval'd, and the rejected set blocked legitimate TypeScript syntax (unions, generics, intersections, statement terminators). Tab and CR remain allowed.
 
 **Environment variables:**
 
@@ -414,6 +436,28 @@ When the base is `staging` (the default), the script fetches `origin/staging` an
 **staging-init fetch:**
 
 The `git fetch origin staging` call is now fatal on failure (previously silent). This ensures staging-init fails fast when the remote is unreachable rather than proceeding with stale state.
+
+**commit-spec staging-worktree resolution (added 0.10.2):**
+
+`commit-spec` no longer assumes the invoking cwd owns the `staging` branch. It resolves the worktree that has `staging` checked out via `git worktree list --porcelain` and routes every git operation through `git -C "$staging_wt"`. This is required when the orchestrator runs in a separate worktree (`.claude/worktrees/orchestrator-<run_id>/`) — without it, `git checkout staging` and `git add` would fail because another worktree already owns the `staging` ref.
+
+The spec directory is mirrored from the caller's path into `$staging_wt/<rel-spec-dir>` before staging. A `pwd -P` symlink-resolution check on both source and target prevents an in-place self-copy from `rm -rf` + `cp -R` wiping the source when the two paths differ only by symlink resolution (macOS `/tmp` vs `/private/tmp`).
+
+The JSON output gained a `staging_worktree` field carrying the resolved absolute path:
+
+```json
+{
+  "action": "commit-spec",
+  "result": "committed",
+  "spec_dir": ".state/run-20260526-154940",
+  "branch": "staging",
+  "sha": "abc1234...",
+  "push": "ok",
+  "staging_worktree": "/path/to/staging-worktree"
+}
+```
+
+The orchestrator's spec-handoff sequence (`skills/pipeline-orchestrator/SKILL.md` step 6) passes an **absolute** spec path (`$staging_wt/.state/$run_id`) to `commit-spec` for the same reason.
 
 ---
 
@@ -485,17 +529,18 @@ Build structured prompt for task executor.
 **Usage:**
 
 ```bash
-pipeline-build-prompt '<task-json>' [--spec-path <path>] [--holdout <percent>] [--fix-instructions <json>]
+pipeline-build-prompt '<task-json>' [--spec-path <path>] [--holdout <percent>] [--fix-instructions <json>] [--bootstrap-branch <name>]
 ```
 
 **Flags:**
 
-| Flag                 | Description                               |
-| -------------------- | ----------------------------------------- |
-| `--spec-path`        | Path to spec directory                    |
-| `--holdout`          | Percentage of criteria to withhold (0-50) |
-| `--fix-instructions` | JSON with review findings to address      |
-| `--seed`             | Seed for holdout randomization            |
+| Flag                 | Description                                                          |
+| -------------------- | -------------------------------------------------------------------- |
+| `--spec-path`        | Path to spec directory                                               |
+| `--holdout`          | Percentage of criteria to withhold (0-50)                            |
+| `--fix-instructions` | JSON with review findings to address                                 |
+| `--seed`             | Seed for holdout randomization                                       |
+| `--bootstrap-branch` | Branch name to fetch + `reset --hard` to before starting (see below) |
 
 **Holdout behavior:**
 
@@ -522,6 +567,14 @@ This prevents prompt-injection attacks where attacker-controlled content (e.g., 
 **Malformed `--fix-instructions` rejection (fail-closed):**
 
 When `--fix-instructions` is supplied, the script parses it through jq to extract `.findings[]` and format them as bullet lines. If jq exits non-zero (invalid JSON, wrong shape, unparseable input), the script now exits 1 with `log_error "build-prompt: fix_instructions is malformed JSON: <stderr>"`. Previously the failure fell back to pasting the raw `fix_instructions` blob into the prompt, which exposed unparseable reviewer output to the executor verbatim. Callers that pass `--fix-instructions` must ensure the payload is valid JSON with a `findings` array.
+
+**`--bootstrap-branch` (test-writer → executor handoff, added 0.10.2):**
+
+When supplied, prepends a `## Bootstrap` section to the executor prompt instructing it to `git fetch origin <branch> staging --depth=50` and `git reset --hard origin/<branch>` before doing anything else. This exists because the executor spawns into a fresh worktree pinned at `origin/staging`, and cannot otherwise see the RED commits the test-writer made on a sibling-worktree branch.
+
+The branch name is validated against `^[A-Za-z0-9._/-]+$` before substitution into the bash block; shell metacharacters or empty values exit 1.
+
+Caller responsibility: the branch must already be reachable from `origin` (i.e., pushed) before the executor spawns. `pipeline-run-task`'s `_stage_preexec_tests` performs the push and only adds `--bootstrap-branch` when the test-writer's worktree has an `origin` remote — legacy / offline test fixtures fall through to a "local-only" mode without bootstrap.
 
 ---
 
