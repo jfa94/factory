@@ -1241,12 +1241,11 @@ echo "=== Bug 1: hooks source pipeline-lib.sh in top 15 lines (canonicalization)
 # hook; the load-bearing requirement is "before the first CLAUDE_PLUGIN_DATA
 # read", not a specific line number.
 # subagent-stop-gate.sh is included — it already sourced the lib pre-fix.
-# asyncrewake-ci.sh is skipped: its lib-source sits below the version-gate
-# preflight (intentional — that hook short-circuits before any state read on
-# Claude versions below the minimum, so canonicalization order is moot).
+# asyncrewake-ci.sh: lib is sourced early (right after `set -euo pipefail`) so
+# the version-gate's reads under CLAUDE_PLUGIN_DATA are canonicalized first.
 for _hook in subagent-stop-transcript.sh run-tracker.sh pretooluse-pipeline-guards.sh \
              session-start-resume.sh stop-gate.sh secret-commit-guard.sh \
-             write-protection.sh subagent-stop-gate.sh; do
+             write-protection.sh subagent-stop-gate.sh asyncrewake-ci.sh; do
   top_lines=$(head -35 "$HOOKS_DIR/$_hook")
   matches=$(printf '%s\n' "$top_lines" | grep -c 'pipeline-lib.sh' || true)
   if [[ "$matches" -ge 1 ]]; then
