@@ -259,9 +259,10 @@ output=$(pipeline-validate 2>/dev/null)
 valid=$(echo "$output" | jq -r '.valid')
 assert_eq "valid project passes" "true" "$valid"
 
-# Check count: git_remote, clean_tree, gh_cli, skill_prd_to_spec, plugin_data = 5
+# Check count: git_remote, clean_tree, gh_cli, skill_prd_to_spec, plugin_data,
+# codex_review_path = 6
 check_count=$(echo "$output" | jq '.checks | length')
-assert_eq "has expected check count" "5" "$check_count"
+assert_eq "has expected check count" "6" "$check_count"
 
 # Missing skill
 rm -rf .claude/skills/prd-to-spec
@@ -276,9 +277,10 @@ git add -A
 git diff --cached --quiet || git commit -q -m "restore"
 output=$(pipeline-validate --strict --no-clean-check 2>/dev/null)
 check_count=$(echo "$output" | jq '.checks | length')
-# 5 base + 1 optional agent (scout; architecture-reviewer, security-reviewer,
-# test-writer, scribe are now bundled in agents/) = 6
-assert_eq "strict mode adds optional checks" "6" "$check_count"
+# 6 base (git_remote, clean_tree, gh_cli, skill_prd_to_spec, plugin_data,
+# codex_review_path) + 1 optional agent (scout; architecture-reviewer,
+# security-reviewer, test-writer, scribe are now bundled in agents/) = 7
+assert_eq "strict mode adds optional checks" "7" "$check_count"
 
 echo ""
 echo "=== pipeline-gh-comment ==="

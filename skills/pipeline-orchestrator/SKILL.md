@@ -219,9 +219,23 @@ Runs once, before task execution.
 
 2. **Fetch PRD.** `pipeline-fetch-prd <issue>`.
 
-3. **Spawn spec-generator.** `Agent({subagent_type: "spec-generator", isolation: "worktree", prompt_file: skills/pipeline-orchestrator/prompts/spec-generator.md})`. The agent commits spec.md + tasks.json on `spec-handoff/$run_id` and writes `.spec.handoff_branch`, `.spec.handoff_ref`, `.spec.path` to state.
+3. **Spawn spec-generator.** `Agent({subagent_type: "spec-generator", isolation: "worktree", prompt_file: skills/pipeline-orchestrator/prompts/spec-generator.md})`. The agent commits spec.md + tasks.json on `spec-handoff/$run_id` and writes `.spec.handoff_branch`, `.spec.handoff_ref`, `.spec.path` to state. It MUST NOT spawn `spec-reviewer` itself — review is your responsibility (next step).
 
-4. **Persist review score.**
+4. **Spawn spec-reviewer (Iron Law: review independence).** After spec-generator returns `STATUS: DONE`, build a prompt that contains the verbatim contents of the spec files from the handoff (use `git show "$handoff_ref:$spec_path/spec.md"` and `git show "$handoff_ref:$spec_path/tasks.json"` to extract them — read from `handoff_ref`/`spec_path` already captured in state). Then:
+
+   ```
+   Agent({
+     subagent_type: "spec-reviewer",
+     isolation: "worktree",
+     prompt_file: <path to per-run prompt with embedded spec/tasks>
+   })
+   ```
+
+   Parse the reviewer STATUS line and review-file output via `pipeline-parse-review`. If score < 54/60:
+   - If iteration budget (max 5) not exhausted: re-spawn spec-generator with the reviewer's findings embedded as `REVIEW_FEEDBACK` in the prompt, then re-spawn spec-reviewer. Loop.
+   - If budget exhausted: `pipeline-gh-comment <issue> spec-failure --data '{"reason":"spec-reviewer below threshold","score":<score>}'`, `pipeline-state write "$run_id" .status '"failed"'`, exit 1.
+
+5. **Persist review score.**
 
    ```bash
    if [[ -f "$spec_reviewer_output" ]]; then
@@ -230,35 +244,39 @@ Runs once, before task execution.
    fi
    ```
 
-5. **Resolve handoff onto staging.**
+6. **Resolve handoff onto staging.**
 
    ```bash
    handoff_branch=$(pipeline-state read "$run_id" .spec.handoff_branch)
    handoff_ref=$(pipeline-state read "$run_id" .spec.handoff_ref)
    spec_path=$(pipeline-state read "$run_id" .spec.path)
    [[ -z "$handoff_branch" ]] && { pipeline-gh-comment <issue> ci-escalation --data '{"reason":"spec handoff missing"}'; pipeline-state write "$run_id" .status '"failed"'; exit 1; }
-   # Push handoff branch so the fetch below is reliable across worktree boundaries.
-   git push origin "$handoff_branch" 2>/dev/null || true
-   git fetch origin "$handoff_branch" 2>/dev/null || git rev-parse --verify "$handoff_ref" >/dev/null
-   mkdir -p ".state/$run_id"
-   git show "$handoff_ref:$spec_path/spec.md"    > ".state/$run_id/spec.md"
-   git show "$handoff_ref:$spec_path/tasks.json" > ".state/$run_id/tasks.json"
-   git checkout staging
-   git merge --ff-only "$handoff_ref" || git merge --no-ff "$handoff_ref" -m "chore: merge spec handoff for $run_id"
-   git push origin --delete "$handoff_branch" 2>/dev/null || true
-   git branch -D "$handoff_branch" 2>/dev/null || true
-   pipeline-state write "$run_id" .spec.path "\"$(pwd)/.state/$run_id\""
+
+   # Resolve the worktree that owns `staging` so all staging mutations run in it
+   # — works whether the orchestrator runs in main or a separate worktree.
+   staging_wt=$(git worktree list --porcelain 2>/dev/null \
+     | awk '/^worktree / { wt = substr($0, 10); next } /^branch refs\/heads\/staging$/ { print wt; exit }')
+   [[ -z "$staging_wt" ]] && staging_wt="$(pwd)"  # fallback: assume current cwd is staging-owning
+
+   git -C "$staging_wt" push origin "$handoff_branch" 2>/dev/null || true
+   git -C "$staging_wt" fetch origin "$handoff_branch" 2>/dev/null || git -C "$staging_wt" rev-parse --verify "$handoff_ref" >/dev/null
+   mkdir -p "$staging_wt/.state/$run_id"
+   git -C "$staging_wt" show "$handoff_ref:$spec_path/spec.md"    > "$staging_wt/.state/$run_id/spec.md"
+   git -C "$staging_wt" show "$handoff_ref:$spec_path/tasks.json" > "$staging_wt/.state/$run_id/tasks.json"
+   git -C "$staging_wt" checkout staging 2>/dev/null || true   # no-op if already on staging
+   git -C "$staging_wt" merge --ff-only "$handoff_ref" || git -C "$staging_wt" merge --no-ff "$handoff_ref" -m "chore: merge spec handoff for $run_id"
+   git -C "$staging_wt" push origin --delete "$handoff_branch" 2>/dev/null || true
+   git -C "$staging_wt" branch -D "$handoff_branch" 2>/dev/null || true
+   pipeline-state write "$run_id" .spec.path "\"$staging_wt/.state/$run_id\""
    pipeline-state write "$run_id" .spec.committed true
-   # commit-spec also pushes origin/staging so subagent worktrees see the spec.
-   pipeline-branch commit-spec ".state/$run_id"
-   # Verify staging was pushed before fan-out.
-   git ls-remote --exit-code --heads origin staging >/dev/null \
+   pipeline-branch commit-spec "$staging_wt/.state/$run_id"
+   git -C "$staging_wt" ls-remote --exit-code --heads origin staging >/dev/null \
      || { log_error "origin/staging missing after commit-spec — aborting before task fan-out"; exit 1; }
    ```
 
-6. **Human gate.** `pipeline-human-gate "$run_id" spec`. Exit 42 pauses (status `awaiting_human`, GH comment posted). Resume via `/factory:run resume`.
+7. **Human gate.** `pipeline-human-gate "$run_id" spec`. Exit 42 pauses (status `awaiting_human`, GH comment posted). Resume via `/factory:run resume`.
 
-7. **Validate tasks + seed state.**
+8. **Validate tasks + seed state.**
 
    ```bash
    pipeline-validate-tasks ".state/$run_id/tasks.json" > ".state/$run_id/validated.json"
@@ -269,7 +287,7 @@ Runs once, before task execution.
    pipeline-state write "$run_id" .execution_order "$(jq -c .execution_order ".state/$run_id/validated.json")"
    ```
 
-For `task` mode: skip 1–6, read spec from `--spec-dir`, write `.spec.path` to state, then run 7.
+For `task` mode: skip 1–7, read spec from `--spec-dir`, write `.spec.path` to state, then run 8.
 
 ## Execution
 

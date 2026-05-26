@@ -113,45 +113,85 @@ case "$action" in
       exit 1
     fi
 
-    # Must be on staging (let the orchestrator decide when to call this).
-    current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [[ "$current_branch" != "staging" ]]; then
-      git checkout staging &>/dev/null || {
-        log_error "cannot checkout staging branch"
+    # Find the worktree that has 'staging' checked out. `git worktree list --porcelain`
+    # emits per-worktree records:
+    #   worktree <abs-path>
+    #   HEAD <sha>
+    #   branch refs/heads/<name>
+    # We need the <abs-path> whose branch line is `refs/heads/staging`.
+    staging_wt=$(git worktree list --porcelain 2>/dev/null \
+      | awk '
+          /^worktree / { wt = substr($0, 10); next }
+          /^branch refs\/heads\/staging$/ { print wt; exit }
+        ')
+
+    if [[ -z "$staging_wt" ]]; then
+      # No worktree owns staging — create it locally and check it out here.
+      if ! git checkout staging &>/dev/null; then
+        # staging branch may not exist yet — let staging-init handle that.
+        log_error "no worktree owns 'staging' and local checkout failed"
         exit 1
-      }
+      fi
+      staging_wt=$(pwd)
     fi
 
-    if ! git add -- "$spec_dir"; then
-      log_error "git add $spec_dir failed; cannot commit spec"
+    # Resolve spec_dir to a physical absolute path so `git -C "$staging_wt"` can
+    # see it regardless of which worktree we were invoked from. We use `pwd -P`
+    # to defeat symlinks (e.g. macOS `/tmp` -> `/private/tmp`) so the source-vs-
+    # target equality check below cannot be defeated by symlink differences
+    # between `git worktree list` (physical) and the shell's logical cwd.
+    abs_spec_dir=$(cd "$spec_dir" 2>/dev/null && pwd -P) || {
+      log_error "cannot resolve spec_dir to absolute path: $spec_dir"
+      exit 1
+    }
+
+    # Mirror the spec into the staging worktree under the same relative path.
+    rel_spec_dir="$spec_dir"
+    target_spec_dir="$staging_wt/$rel_spec_dir"
+    # Resolve to a physical absolute path *if it exists* so we can compare
+    # against $abs_spec_dir without an in-place self-copy (rm -rf + cp -R wipes
+    # the source when src and dst differ only by symlink resolution).
+    abs_target_spec_dir=""
+    if [[ -d "$target_spec_dir" ]]; then
+      abs_target_spec_dir=$(cd "$target_spec_dir" && pwd -P)
+    fi
+    if [[ "$abs_target_spec_dir" != "$abs_spec_dir" ]]; then
+      mkdir -p "$(dirname "$target_spec_dir")"
+      # Copy spec files (idempotent — repeated commit-spec calls overwrite).
+      rm -rf "$target_spec_dir"
+      cp -R "$abs_spec_dir" "$target_spec_dir"
+    fi
+
+    if ! git -C "$staging_wt" add -- "$rel_spec_dir"; then
+      log_error "git add $rel_spec_dir in $staging_wt failed; cannot commit spec"
       exit 1
     fi
 
     push_result="ok"
-    if git diff --cached --quiet 2>/dev/null; then
-      sha=$(git rev-parse HEAD)
+    if git -C "$staging_wt" diff --cached --quiet 2>/dev/null; then
+      sha=$(git -C "$staging_wt" rev-parse HEAD)
       result="no-op"
     else
-      git -c user.email=factory@local \
+      git -C "$staging_wt" \
+          -c user.email=factory@local \
           -c user.name="factory" \
-          commit -m "chore: add spec directory $spec_dir" --quiet
-      sha=$(git rev-parse HEAD)
+          commit -m "chore: add spec directory $rel_spec_dir" --quiet
+      sha=$(git -C "$staging_wt" rev-parse HEAD)
       result="committed"
     fi
 
-    # Push staging so subagent worktrees (which fork from main via Agent isolation)
-    # can reach the spec via `git fetch origin staging`.
-    if ! git push origin staging --quiet 2>/dev/null; then
+    if ! git -C "$staging_wt" push origin staging --quiet 2>/dev/null; then
       log_warn "git push origin staging failed; subagents may not see the spec"
       push_result="failed"
     fi
 
     json_output action "commit-spec" \
                 result "$result" \
-                spec_dir "$spec_dir" \
+                spec_dir "$rel_spec_dir" \
                 branch "staging" \
                 sha "$sha" \
-                push "$push_result"
+                push "$push_result" \
+                staging_worktree "$staging_wt"
     ;;
 
   create)

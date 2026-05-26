@@ -25,6 +25,17 @@
 #                         / 1 (broken) — used by tests and operators
 set -euo pipefail
 
+# Canonicalize CLAUDE_PLUGIN_DATA before reading from it. When a foreign plugin
+# (e.g. codex) leaks its CLAUDE_PLUGIN_DATA into this session, pipeline-lib.sh's
+# top-level redirect rewrites the env var to factory's data dir. Without this,
+# the hook reads from the wrong runs/current and silent-exits, losing all state
+# writes for the run.
+_lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$_lib" ]]; then
+  # shellcheck disable=SC1090
+  source "$_lib" 2>/dev/null || true
+fi
+
 # Portable sha256 digest: Linux provides `sha256sum` (coreutils), macOS provides
 # `shasum -a 256`. Prefer sha256sum where available so CI Linux runners don't
 # depend on Perl (shasum is a Perl script). Emits the 64-hex-char digest only.

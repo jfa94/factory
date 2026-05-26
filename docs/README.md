@@ -1,4 +1,4 @@
-<!-- last-documented: b20284eb5b4fc19728bdc60c061161c36bb0654e -->
+<!-- last-documented: 625f59fed80e7285e613c386b8e8d03d6d031f1b -->
 
 # Dark Factory Plugin
 
@@ -49,4 +49,5 @@ The plugin automates the end-to-end software development workflow: reading a req
 - [Quality Gates](./explanation/quality-gates.md) - The 7-layer quality stack and why each layer exists
 - [Adversarial Review](./explanation/adversarial-review.md) - Actor-Critic pattern and review protocol
 - [Rate Limiting](./explanation/rate-limiting.md) - 5h and 7d budget management with pause/end_gracefully behavior
+- [Hook Env-Var Canonicalization](./explanation/hook-env-canonicalization.md) - Why hooks source `pipeline-lib.sh` early to defeat foreign-plugin `CLAUDE_PLUGIN_DATA` leaks
 - [Design Decisions](./explanation/decisions.md) - Key architectural choices and their rationale

@@ -6,6 +6,17 @@
 # Stdin: hook input JSON with .tool_name and .tool_input
 # Exit 0 = allow, Exit 2 = block (JSON reason on stderr)
 set -euo pipefail
+
+# Canonicalize CLAUDE_PLUGIN_DATA before reading from it. When a foreign plugin
+# (e.g. codex) leaks its CLAUDE_PLUGIN_DATA into this session, pipeline-lib.sh's
+# top-level redirect rewrites the env var to factory's data dir. Without this,
+# the hook reads config from the wrong dir.
+_lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$_lib" ]]; then
+  # shellcheck disable=SC1090
+  source "$_lib" 2>/dev/null || true
+fi
+
 shopt -s globstar extglob nullglob
 
 input=$(cat)

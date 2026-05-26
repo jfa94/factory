@@ -4,7 +4,7 @@ Canonical invocation wrapper for the `spec-generator` agent. The agent's own car
 
 ## Your job
 
-Convert the PRD into `<spec-dir>/spec.md` + `<spec-dir>/tasks.json`, validate, obtain spec-reviewer approval, execute the Handoff Protocol.
+Convert the PRD into `<spec-dir>/spec.md` + `<spec-dir>/tasks.json`, validate, and execute the Handoff Protocol. The orchestrator runs `spec-reviewer` downstream — do not invoke it yourself.
 
 ## Inputs
 
@@ -19,8 +19,8 @@ Follow `skills/prd-to-spec/SKILL.md`. **Skip "quiz the user" — you are autonom
 After writing spec.md + tasks.json:
 
 1. `pipeline-validate-spec <spec-dir>` — max 5 validation retries.
-2. Spawn `spec-reviewer` via Agent. Min score 54/60. Max 5 review iterations.
-3. On exhaustion: `pipeline-gh-comment <issue> spec-failure --data '{"reason":"..."}'` and exit.
+2. Execute the Handoff Protocol. **DO NOT spawn `spec-reviewer`** — the orchestrator owns review-spawn for independence guarantees.
+3. On validation exhaustion: `pipeline-gh-comment <issue> spec-failure --data '{"reason":"..."}'` and exit.
 
 ## Handoff Protocol
 

@@ -15,6 +15,17 @@
 # Env:   CLAUDE_PLUGIN_DATA, CLAUDE_VERSION (optional).
 set -euo pipefail
 
+# Canonicalize CLAUDE_PLUGIN_DATA before reading from it. When a foreign plugin
+# (e.g. codex) leaks its CLAUDE_PLUGIN_DATA into this session, pipeline-lib.sh's
+# top-level redirect rewrites the env var to factory's data dir. Without this,
+# the hook reads from the wrong runs/current and silent-exits, losing CI tracking
+# for the run.
+_lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$_lib" ]]; then
+  # shellcheck disable=SC1090
+  source "$_lib" 2>/dev/null || true
+fi
+
 min_major=2
 min_minor=1
 min_patch=116
@@ -122,13 +133,10 @@ _state_err=$(pipeline-state task-write "$run_id" "$task_id" ci_status "\"$ci_con
 _state_err=$(pipeline-state task-write "$run_id" "$task_id" merge_status "\"$merge_status\"" 2>&1 >/dev/null) \
   || printf '[asyncrewake-ci] WARN: merge_status state write failed: %s\n' "$_state_err" >&2
 unset _state_err
-lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
-if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$lib" ]]; then
-  # shellcheck disable=SC1090
-  source "$lib" 2>/dev/null || true
-  if command -v emit_ci_metric >/dev/null 2>&1; then
-    emit_ci_metric task "$pr_number" "$ci_conclusion" 2>/dev/null || true
-  fi
+# pipeline-lib.sh was sourced near the top (for CLAUDE_PLUGIN_DATA canonicalization);
+# emit_ci_metric is exported from that source.
+if command -v emit_ci_metric >/dev/null 2>&1; then
+  emit_ci_metric task "$pr_number" "$ci_conclusion" 2>/dev/null || true
 fi
 
 # Wake Claude via exit 2 + stderr reminder.

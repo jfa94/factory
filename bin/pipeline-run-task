@@ -629,6 +629,40 @@ _stage_preexec_tests() {
     return 30
   fi
 
+  # Bug 2 — branch handoff: the executor will spawn into a fresh worktree at
+  # `origin/staging`, so it cannot see the RED commits the test-writer made on
+  # its sibling worktree branch unless we (a) push that branch to origin and
+  # (b) tell the executor (via the prompt's Bootstrap block) how to sync to it.
+  #
+  # When `$tw_wt` is not a git worktree (legacy test fixtures, plain dirs)
+  # or has no `origin` remote, fall through to local-only mode: the executor
+  # spawns without the bootstrap block. This preserves backward compatibility
+  # with offline test scenarios that don't drive a real RED commit.
+  local tw_branch="" _has_origin=false
+  if git -C "$tw_wt" rev-parse --git-dir >/dev/null 2>&1; then
+    tw_branch=$(git -C "$tw_wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [[ -z "$tw_branch" || "$tw_branch" == "HEAD" ]]; then
+      log_warn "cannot resolve test-writer branch in $tw_wt; executor will run without bootstrap block"
+      tw_branch=""
+    fi
+  fi
+
+  if [[ -n "$tw_branch" ]] && git -C "$tw_wt" remote get-url origin >/dev/null 2>&1; then
+    _has_origin=true
+    local _push_err
+    if ! _push_err=$(git -C "$tw_wt" push -u origin "$tw_branch" 2>&1); then
+      log_error "git push origin $tw_branch from $tw_wt failed: ${_push_err//$'\n'/ }"
+      _task_write test_writer_status '"BLOCKED"'
+      "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null || true
+      t1=$(_now_ms)
+      log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"tw_branch_push_failed\""
+      return 30
+    fi
+    _task_write test_writer_branch "\"$tw_branch\""
+  elif [[ -n "$tw_branch" ]]; then
+    log_warn "no origin remote in $tw_wt; executor will run without fetched RED commits (local-only mode)"
+  fi
+
   # Spawn task-executor for GREEN phase.
   _ensure_prompt_dir
   local spec_path prompt_file holdout_pct task_json
@@ -647,6 +681,11 @@ _stage_preexec_tests() {
   local args=()
   [[ -n "$spec_path" ]] && args+=(--spec-path "$spec_path")
   args+=(--holdout "$holdout_pct")
+  # Bug 2: tell pipeline-build-prompt to prepend the Bootstrap block so the
+  # executor's fresh worktree can fetch + reset to the test-writer's branch.
+  if [[ "$_has_origin" == "true" ]]; then
+    args+=(--bootstrap-branch "$tw_branch")
+  fi
   local _tmp_prompt; _tmp_prompt=$(mktemp)
   if ! pipeline-build-prompt "$task_json" "${args[@]}" > "$_tmp_prompt"; then
     rm -f "$_tmp_prompt"

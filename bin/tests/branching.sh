@@ -974,6 +974,55 @@ cleanup_sandbox "$sandbox"
 cd "$orig_cwd"
 trap - EXIT
 
+# --- Case C: commit-spec works when staging is checked out in a sibling worktree ---
+sandbox=$(setup_git_sandbox)
+trap 'cleanup_sandbox "$sandbox"; cd "$orig_cwd"' EXIT
+(
+  cd "$sandbox/repo"
+  git checkout -b staging --quiet
+  git push -u origin staging --quiet 2>/dev/null || true
+
+  # Create a sibling worktree that owns staging, then leave the original on a non-staging branch.
+  staging_wt="$sandbox/staging-sibling"
+  git checkout -b ad-hoc-branch-2 --quiet
+  git worktree add "$staging_wt" staging --quiet
+
+  mkdir -p .state/run-xwt
+  printf '# spec\n' > .state/run-xwt/spec.md
+  printf '[]\n'    > .state/run-xwt/tasks.json
+
+  output=$(pipeline-branch commit-spec .state/run-xwt 2>/dev/null) || rc=$?
+  result=$(echo "$output" | jq -r '.result')
+  push=$(echo "$output" | jq -r '.push')
+  reported_wt=$(echo "$output" | jq -r '.staging_worktree')
+  branch_after=$(git rev-parse --abbrev-ref HEAD)
+  spec_in_staging=$(git -C "$staging_wt" ls-files .state/run-xwt/spec.md | head -1)
+  # Resolve to physical path so the assert against pipeline-branch's
+  # `git worktree list --porcelain` output (which emits physical paths)
+  # is symlink-stable on macOS (/tmp -> /private/tmp).
+  expected_wt=$(cd "$staging_wt" && pwd -P)
+
+  printf '%s\n' "${rc:-0}" > "$sandbox/xwt_rc"
+  printf '%s\n' "$result" > "$sandbox/xwt_result"
+  printf '%s\n' "$push" > "$sandbox/xwt_push"
+  printf '%s\n' "$reported_wt" > "$sandbox/xwt_wt"
+  printf '%s\n' "$expected_wt" > "$sandbox/xwt_expected"
+  printf '%s\n' "$branch_after" > "$sandbox/xwt_branch_after"
+  printf '%s\n' "$spec_in_staging" > "$sandbox/xwt_tracked"
+
+  git worktree remove --force "$staging_wt" >/dev/null 2>&1 || true
+)
+assert_eq "cross-wt commit-spec exits 0" "0" "$(cat "$sandbox/xwt_rc")"
+assert_eq "cross-wt commit-spec result committed" "committed" "$(cat "$sandbox/xwt_result")"
+assert_eq "cross-wt commit-spec pushes staging" "ok" "$(cat "$sandbox/xwt_push")"
+assert_eq "cross-wt commit-spec reports staging worktree" "$(cat "$sandbox/xwt_expected")" "$(cat "$sandbox/xwt_wt")"
+assert_eq "cross-wt commit-spec leaves caller branch unchanged" "ad-hoc-branch-2" "$(cat "$sandbox/xwt_branch_after")"
+assert_eq "cross-wt commit-spec tracks spec.md in staging wt" ".state/run-xwt/spec.md" "$(cat "$sandbox/xwt_tracked")"
+cleanup_sandbox "$sandbox"
+
+cd "$orig_cwd"
+trap - EXIT
+
 # ============================================================
 echo ""
 echo "=== task_05_01: pipeline-branch staging-init anchored grep ==="

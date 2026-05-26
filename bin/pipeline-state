@@ -14,6 +14,7 @@
 #   interrupted <run-id>                        Check if run interrupted (exit 0/1)
 #   resume-point <run-id>                       Find first incomplete task
 #   list                                        List all runs
+#   ensure-current <run-id>                     Restore runs/current symlink if missing (refuses to clobber an active run)
 
 source "$(dirname "$0")/pipeline-lib.sh"
 require_command jq
@@ -693,9 +694,53 @@ case "$action" in
     log_info "run $run_id finalized: $final_status (resume: ${resume_task:-none})"
     ;;
 
+  # ensure-current — defensive restore of the runs/current symlink. Used by
+  # operator recovery and by the orchestrator's post-init verification path
+  # when the symlink is found missing. Refuses to clobber a different run
+  # whose status is "running" so the action is safe to call unconditionally.
+  # Usage: pipeline-state ensure-current <run-id>
+  ensure-current)
+    run_id="${1:?missing run id}"
+    _validate_id "$run_id" "run-id" || exit 1
+    require_plugin_data
+    runs_dir="${CLAUDE_PLUGIN_DATA}/runs"
+    run_dir="${runs_dir}/${run_id}"
+    if [[ ! -d "$run_dir" ]]; then
+      log_error "ensure-current: run dir not found: $run_dir"
+      exit 1
+    fi
+    current_link="${runs_dir}/current"
+    if [[ -L "$current_link" ]]; then
+      target=$(readlink "$current_link" 2>/dev/null || true)
+      if [[ -n "$target" && "$target" != "$run_dir" && -f "$target/state.json" ]]; then
+        status=$(jq -r '.status // "unknown"' "$target/state.json" 2>/dev/null || echo "unknown")
+        if [[ "$status" == "running" ]]; then
+          other=$(basename "$target")
+          log_error "ensure-current: current symlink points at active run '$other' — refusing to clobber"
+          exit 1
+        fi
+      fi
+    fi
+    tmp="${current_link}.tmp.$$"
+    if ! ln -sfn "$run_dir" "$tmp"; then
+      log_error "ensure-current: ln -s tmp failed"
+      exit 1
+    fi
+    if mv -fh "$tmp" "$current_link" 2>/dev/null \
+       || mv -fT "$tmp" "$current_link" 2>/dev/null; then
+      :
+    else
+      rm -f "$tmp"
+      log_error "ensure-current: atomic rename failed for $current_link"
+      exit 1
+    fi
+    jq -n --arg run_id "$run_id" --arg target "$run_dir" \
+       '{action: "ensure-current", run_id: $run_id, target: $target, restored: true}'
+    ;;
+
   *)
     log_error "unknown action: $action"
-    echo "Usage: pipeline-state <read|write|task-status|deps-satisfied|interrupted|resume-point|list|finalize-on-stop> <run-id> [args...]" >&2
+    echo "Usage: pipeline-state <read|write|task-status|deps-satisfied|interrupted|resume-point|list|finalize-on-stop|ensure-current> <run-id> [args...]" >&2
     exit 1
     ;;
 esac

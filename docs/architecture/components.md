@@ -162,7 +162,7 @@ Converts a PRD issue body into a spec directory with `spec.md` and `tasks.json`.
 
 - Skips step 5 (user quiz) in autonomous mode
 - Validates output via `pipeline-validate-spec`
-- Spawns `spec-reviewer` for quality validation
+- Hands off to the orchestrator without self-review; the orchestrator (not spec-generator) spawns `spec-reviewer` downstream for quality validation
 - Completes handoff protocol to transfer spec across worktree boundary
 
 ### task-executor
@@ -318,7 +318,7 @@ Validates spec output before task execution begins.
 - Reviews with fresh context — did not write the spec
 - Scores across 6 dimensions: granularity, deps, criteria, tests, vertical slices, alignment
 - Returns structured PASS/NEEDS_REVISION verdict (score >= 54/60 required)
-- Spawned by spec-generator; failure triggers regeneration (max 5 iterations)
+- Spawned by the orchestrator (not by `spec-generator`) after `spec-generator` hands off — keeps the reviewing context provably independent of the generating context. Failure triggers regeneration (max 5 iterations)
 
 ### quality-reviewer
 

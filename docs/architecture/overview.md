@@ -40,7 +40,7 @@ Stage H: Completion
 - Spawn `spec-generator` agent in isolated worktree
 - Generate `spec.md` and `tasks.json` using `prd-to-spec` skill
 - Validate output via `pipeline-validate-spec`
-- Review via `spec-reviewer` agent (score >= 54/60)
+- Spec-generator hands off (no self-review); orchestrator spawns `spec-reviewer` independently (score >= 54/60). Below-threshold scores re-spawn spec-generator with the reviewer's findings as `REVIEW_FEEDBACK`, up to 5 iterations. Exhaustion posts a `spec-failure` GH comment and marks the run `failed`.
 - Handoff spec to staging branch via commit
 
 ### Stage C: Task Decomposition
