@@ -219,9 +219,23 @@ Runs once, before task execution.
 
 2. **Fetch PRD.** `pipeline-fetch-prd <issue>`.
 
-3. **Spawn spec-generator.** `Agent({subagent_type: "spec-generator", isolation: "worktree", prompt_file: skills/pipeline-orchestrator/prompts/spec-generator.md})`. The agent commits spec.md + tasks.json on `spec-handoff/$run_id` and writes `.spec.handoff_branch`, `.spec.handoff_ref`, `.spec.path` to state.
+3. **Spawn spec-generator.** `Agent({subagent_type: "spec-generator", isolation: "worktree", prompt_file: skills/pipeline-orchestrator/prompts/spec-generator.md})`. The agent commits spec.md + tasks.json on `spec-handoff/$run_id` and writes `.spec.handoff_branch`, `.spec.handoff_ref`, `.spec.path` to state. It MUST NOT spawn `spec-reviewer` itself — review is your responsibility (next step).
 
-4. **Persist review score.**
+4. **Spawn spec-reviewer (Iron Law: review independence).** After spec-generator returns `STATUS: DONE`, build a prompt that contains the verbatim contents of the spec files from the handoff (use `git show "$handoff_ref:$spec_path/spec.md"` and `git show "$handoff_ref:$spec_path/tasks.json"` to extract them — read from `handoff_ref`/`spec_path` already captured in state). Then:
+
+   ```
+   Agent({
+     subagent_type: "spec-reviewer",
+     isolation: "worktree",
+     prompt_file: <path to per-run prompt with embedded spec/tasks>
+   })
+   ```
+
+   Parse the reviewer STATUS line and review-file output via `pipeline-parse-review`. If score < 54/60:
+   - If iteration budget (max 5) not exhausted: re-spawn spec-generator with the reviewer's findings embedded as `REVIEW_FEEDBACK` in the prompt, then re-spawn spec-reviewer. Loop.
+   - If budget exhausted: `pipeline-gh-comment <issue> spec-failure --data '{"reason":"spec-reviewer below threshold","score":<score>}'`, `pipeline-state write "$run_id" .status '"failed"'`, exit 1.
+
+5. **Persist review score.**
 
    ```bash
    if [[ -f "$spec_reviewer_output" ]]; then
@@ -230,7 +244,7 @@ Runs once, before task execution.
    fi
    ```
 
-5. **Resolve handoff onto staging.**
+6. **Resolve handoff onto staging.**
 
    ```bash
    handoff_branch=$(pipeline-state read "$run_id" .spec.handoff_branch)
@@ -260,9 +274,9 @@ Runs once, before task execution.
      || { log_error "origin/staging missing after commit-spec — aborting before task fan-out"; exit 1; }
    ```
 
-6. **Human gate.** `pipeline-human-gate "$run_id" spec`. Exit 42 pauses (status `awaiting_human`, GH comment posted). Resume via `/factory:run resume`.
+7. **Human gate.** `pipeline-human-gate "$run_id" spec`. Exit 42 pauses (status `awaiting_human`, GH comment posted). Resume via `/factory:run resume`.
 
-7. **Validate tasks + seed state.**
+8. **Validate tasks + seed state.**
 
    ```bash
    pipeline-validate-tasks ".state/$run_id/tasks.json" > ".state/$run_id/validated.json"
@@ -273,7 +287,7 @@ Runs once, before task execution.
    pipeline-state write "$run_id" .execution_order "$(jq -c .execution_order ".state/$run_id/validated.json")"
    ```
 
-For `task` mode: skip 1–6, read spec from `--spec-dir`, write `.spec.path` to state, then run 7.
+For `task` mode: skip 1–7, read spec from `--spec-dir`, write `.spec.path` to state, then run 8.
 
 ## Execution
 
