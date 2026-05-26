@@ -184,84 +184,36 @@ else
   fail "dollar-paren description rejected (expected valid=false)"
 fi
 
-# semicolon should be rejected
-TASKS_SEMI=$(make_tasks "Run; rm -rf /")
-TASKS_SEMI_FILE="$ROOT_TMP/tasks_semi.json"
-printf '%s' "$TASKS_SEMI" > "$TASKS_SEMI_FILE"
-result_semi=$("$BIN_DIR/pipeline-validate-tasks" "$TASKS_SEMI_FILE" 2>/dev/null || true)
-if printf '%s' "$result_semi" | jq -e '.valid == false' >/dev/null 2>&1; then
-  ok "semicolon description rejected"
+# TypeScript-style descriptions should be accepted (regression: factory bug 3)
+# These were over-rejected by the prior regex.
+TASKS_TS_PIPE=$(make_tasks "Add 'home' | 'activity' union to view kind")
+TASKS_TS_PIPE_FILE="$ROOT_TMP/tasks_ts_pipe.json"
+printf '%s' "$TASKS_TS_PIPE" > "$TASKS_TS_PIPE_FILE"
+result_ts_pipe=$("$BIN_DIR/pipeline-validate-tasks" "$TASKS_TS_PIPE_FILE" 2>/dev/null || true)
+if printf '%s' "$result_ts_pipe" | jq -e '.valid == true' >/dev/null 2>&1; then
+  ok "TS union | in description accepted"
 else
-  fail "semicolon description rejected (expected valid=false)"
-fi
-if printf '%s' "$result_semi" | jq -r '.errors[]' 2>/dev/null | grep -q "unsafe description"; then
-  ok "semicolon rejection message contains 'unsafe description'"
-else
-  fail "semicolon rejection message contains 'unsafe description'"
+  fail "TS union | in description accepted (expected valid=true)"
 fi
 
-# ampersand should be rejected
-TASKS_AMP=$(make_tasks "Background & malicious")
-TASKS_AMP_FILE="$ROOT_TMP/tasks_amp.json"
-printf '%s' "$TASKS_AMP" > "$TASKS_AMP_FILE"
-result_amp=$("$BIN_DIR/pipeline-validate-tasks" "$TASKS_AMP_FILE" 2>/dev/null || true)
-if printf '%s' "$result_amp" | jq -e '.valid == false' >/dev/null 2>&1; then
-  ok "ampersand description rejected"
+TASKS_TS_GENERIC=$(make_tasks "Implement createEventBus<T>() factory returning Promise<void>;")
+TASKS_TS_GENERIC_FILE="$ROOT_TMP/tasks_ts_generic.json"
+printf '%s' "$TASKS_TS_GENERIC" > "$TASKS_TS_GENERIC_FILE"
+result_ts_generic=$("$BIN_DIR/pipeline-validate-tasks" "$TASKS_TS_GENERIC_FILE" 2>/dev/null || true)
+if printf '%s' "$result_ts_generic" | jq -e '.valid == true' >/dev/null 2>&1; then
+  ok "TS generics <T> and trailing ; accepted"
 else
-  fail "ampersand description rejected (expected valid=false)"
-fi
-if printf '%s' "$result_amp" | jq -r '.errors[]' 2>/dev/null | grep -q "unsafe description"; then
-  ok "ampersand rejection message contains 'unsafe description'"
-else
-  fail "ampersand rejection message contains 'unsafe description'"
+  fail "TS generics <T> and trailing ; accepted (expected valid=true)"
 fi
 
-# pipe should be rejected
-TASKS_PIPE=$(make_tasks "Pipe | through evil")
-TASKS_PIPE_FILE="$ROOT_TMP/tasks_pipe.json"
-printf '%s' "$TASKS_PIPE" > "$TASKS_PIPE_FILE"
-result_pipe=$("$BIN_DIR/pipeline-validate-tasks" "$TASKS_PIPE_FILE" 2>/dev/null || true)
-if printf '%s' "$result_pipe" | jq -e '.valid == false' >/dev/null 2>&1; then
-  ok "pipe description rejected"
+TASKS_TS_AMP=$(make_tasks "Intersection: A & B")
+TASKS_TS_AMP_FILE="$ROOT_TMP/tasks_ts_amp.json"
+printf '%s' "$TASKS_TS_AMP" > "$TASKS_TS_AMP_FILE"
+result_ts_amp=$("$BIN_DIR/pipeline-validate-tasks" "$TASKS_TS_AMP_FILE" 2>/dev/null || true)
+if printf '%s' "$result_ts_amp" | jq -e '.valid == true' >/dev/null 2>&1; then
+  ok "TS intersection & accepted"
 else
-  fail "pipe description rejected (expected valid=false)"
-fi
-if printf '%s' "$result_pipe" | jq -r '.errors[]' 2>/dev/null | grep -q "unsafe description"; then
-  ok "pipe rejection message contains 'unsafe description'"
-else
-  fail "pipe rejection message contains 'unsafe description'"
-fi
-
-# less-than should be rejected
-TASKS_LT=$(make_tasks "Redirect < /etc/passwd")
-TASKS_LT_FILE="$ROOT_TMP/tasks_lt.json"
-printf '%s' "$TASKS_LT" > "$TASKS_LT_FILE"
-result_lt=$("$BIN_DIR/pipeline-validate-tasks" "$TASKS_LT_FILE" 2>/dev/null || true)
-if printf '%s' "$result_lt" | jq -e '.valid == false' >/dev/null 2>&1; then
-  ok "less-than description rejected"
-else
-  fail "less-than description rejected (expected valid=false)"
-fi
-if printf '%s' "$result_lt" | jq -r '.errors[]' 2>/dev/null | grep -q "unsafe description"; then
-  ok "less-than rejection message contains 'unsafe description'"
-else
-  fail "less-than rejection message contains 'unsafe description'"
-fi
-
-# greater-than should be rejected
-TASKS_GT=$(make_tasks "Overwrite > /tmp/x")
-TASKS_GT_FILE="$ROOT_TMP/tasks_gt.json"
-printf '%s' "$TASKS_GT" > "$TASKS_GT_FILE"
-result_gt=$("$BIN_DIR/pipeline-validate-tasks" "$TASKS_GT_FILE" 2>/dev/null || true)
-if printf '%s' "$result_gt" | jq -e '.valid == false' >/dev/null 2>&1; then
-  ok "greater-than description rejected"
-else
-  fail "greater-than description rejected (expected valid=false)"
-fi
-if printf '%s' "$result_gt" | jq -r '.errors[]' 2>/dev/null | grep -q "unsafe description"; then
-  ok "greater-than rejection message contains 'unsafe description'"
-else
-  fail "greater-than rejection message contains 'unsafe description'"
+  fail "TS intersection & accepted (expected valid=true)"
 fi
 
 # embedded newline should be rejected
