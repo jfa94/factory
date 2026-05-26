@@ -22,6 +22,9 @@ When a factory script is invoked from a bash block inside another plugin's comma
    - **Dev checkout fallback**: id = `<manifest.name>-<marketplace>` where `marketplace` is read from `.claude-plugin/marketplace.json`.
 3. Rewrites emit a `[WARN] pipeline-lib: CLAUDE_PLUGIN_DATA points at foreign plugin dir '<old>'; redirecting to '<new>'` line on stderr so leaks are visible in audit logs.
 
+**Known leak source — codex plugin (`openai-codex/codex`):**
+The `codex` plugin's `SessionStart` hook (`scripts/session-lifecycle-hook.mjs:78`) writes `export CLAUDE_PLUGIN_DATA=<codex's dir>` into `$CLAUDE_ENV_FILE`. Claude Code sources that file into the parent shell for every subsequent Bash tool call, pinning codex's data dir session-wide. Because `CLAUDE_PLUGIN_DATA` is meant to be scoped per-plugin by the Claude Code runtime, this promotion to session-global is a bug in the codex plugin. The correct fix is upstream: remove the `appendEnvVar(PLUGIN_DATA_ENV, ...)` call (or export under a private `CODEX_PLUGIN_DATA` name and update `scripts/lib/state.mjs` to read it). Factory's canonicalization guard above is the defensive safety net until the upstream fix ships. Issue draft staged at `docs/superpowers/plans/2026-05-26-codex-plugin-data-leak-issue.md` for filing at https://github.com/openai/codex-plugin-cc/issues.
+
 **Functions:**
 
 | Function                 | Description                                                                        |
