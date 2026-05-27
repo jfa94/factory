@@ -3,6 +3,10 @@
 # pipeline-validate, pipeline-gh-comment, cross-location skill discovery.
 set -euo pipefail
 
+# All pipeline-* scripts default to human-readable output (commit 3fc2060).
+# Tests parse JSON via jq, so opt into machine output for the whole file.
+export FACTORY_JSON=1
+
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
 export PATH="$(cd "$(dirname "$0")/.." && pwd):$PATH"
 
