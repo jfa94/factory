@@ -4,6 +4,10 @@
 # commands/run.md materialization, .mcp.json.
 set -euo pipefail
 
+# All pipeline-* scripts default to human-readable output (commit 3fc2060).
+# Tests parse JSON via jq, so opt into machine output for the whole file.
+export FACTORY_JSON=1
+
 PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 # Single combined EXIT trap covering every tmpdir this suite creates. Avoids
