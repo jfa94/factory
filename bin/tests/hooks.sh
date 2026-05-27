@@ -2417,6 +2417,65 @@ assert_eq "env bash -c interactive allowed" "EXIT:0" "$(printf '%s' "$out" | gre
 
 # ============================================================
 echo ""
+echo "=== S1: pipeline-guards nested-shell bypass fires on active run without FACTORY_AUTONOMOUS_MODE ==="
+
+# Active run exists (resume / dev shell scenario), but FACTORY_AUTONOMOUS_MODE is
+# NOT set. The nested-shell / hook-bypass guard must still fire — leaving it inert
+# on resume is a defense-in-depth bypass (S1).
+_seed_run "run-s1-bypass" '{"status":"running","tasks":{}}'
+set +e
+out=$(unset FACTORY_AUTONOMOUS_MODE; printf '%s' '{"tool_name":"Bash","tool_input":{"command":"bash -lc \"gh pr create\""}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+set -e
+assert_eq "S1: bypass on active run (no env) exit 0 with deny payload" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "S1: bypass on active run has permissionDecision" "permissionDecision" "$out"
+assert_contains "S1: bypass on active run decision=deny" "deny" "$out"
+assert_contains "S1: bypass deny reason mentions nested-shell or hook-bypass" "nested-shell\|hook-bypass" "$out"
+
+# Negative control: no active run AND no env var → guard MUST NOT fire.
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+set +e
+out=$(unset FACTORY_AUTONOMOUS_MODE; printf '%s' '{"tool_name":"Bash","tool_input":{"command":"bash -lc \"gh pr create\""}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+set -e
+assert_eq "S1: no active run, no env -> bypass guard does not fire (exit 0)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+if printf '%s' "$out" | grep -q 'permissionDecision'; then
+  echo "  FAIL: S1: no active run should produce no deny payload (got: $out)"; fail=$((fail + 1))
+else
+  echo "  PASS: S1: no active run produces no deny payload"; pass=$((pass + 1))
+fi
+
+echo ""
+echo "=== S1: path-scope preexec_tests guard fires on active run without FACTORY_AUTONOMOUS_MODE ==="
+
+_seed_run "run-s1-pathscope" '{"status":"running","tasks":{"task-1":{"task_id":"task-1","status":"executing","stage":"preexec_tests"}}}'
+
+# Non-test write must be DENIED even with env var unset.
+set +e
+out=$(unset FACTORY_AUTONOMOUS_MODE; FACTORY_TASK_ID=task-1 printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"src/main.ts","content":"x"}}' \
+  | FACTORY_TASK_ID=task-1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+set -e
+assert_eq "S1: path-scope denies src/ write on active preexec_tests (exit 0 with deny)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "S1: path-scope deny has permissionDecision" "permissionDecision" "$out"
+assert_contains "S1: path-scope deny decision=deny" "deny" "$out"
+assert_contains "S1: path-scope deny reason mentions src/main.ts" "src/main.ts" "$out"
+
+# Positive control: Write to a test path passes.
+set +e
+out=$(unset FACTORY_AUTONOMOUS_MODE; FACTORY_TASK_ID=task-1 printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"tests/main.test.ts","content":"x"}}' \
+  | FACTORY_TASK_ID=task-1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+set -e
+assert_eq "S1: path-scope allows test path on active preexec_tests" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+if printf '%s' "$out" | grep -q 'permissionDecision'; then
+  echo "  FAIL: S1: path-scope test path produced unexpected deny (got: $out)"; fail=$((fail + 1))
+else
+  echo "  PASS: S1: path-scope test path produced no deny"; pass=$((pass + 1))
+fi
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# ============================================================
+echo ""
 echo "=== gh pr create requires task_id in autonomous mode ==="
 
 # In autonomous mode without a derivable task_id: DENY

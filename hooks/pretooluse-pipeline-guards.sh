@@ -94,15 +94,26 @@ if [[ -z "$task_id" ]]; then
   fi
 fi
 
-# Nested-shell / hook-bypass check (autonomous mode only).
-if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]] && _is_nested_shell_or_hook_bypass "$cmd"; then
-  deny "nested-shell or hook-bypass not allowed in autonomous mode: $cmd"
+# S1: enforce active-run-scoped guards regardless of FACTORY_AUTONOMOUS_MODE.
+# Resume paths and dev shells leave the env var unset; we still want
+# defense-in-depth invariants while a managed run is active. The earlier
+# block already resolved run_dir/state_file from $current_link — reaching
+# this point implies the symlink resolved cleanly, so the run is active.
+_pipeline_active=1
+if [[ "${FACTORY_AUTONOMOUS_MODE:-}" != "1" && -z "${run_dir:-}" ]]; then
+  _pipeline_active=0
+fi
+
+# Nested-shell / hook-bypass check (any active pipeline run).
+if (( _pipeline_active )) && _is_nested_shell_or_hook_bypass "$cmd"; then
+  deny "nested-shell or hook-bypass not allowed while a pipeline run is active: $cmd"
 fi
 
 # --- 0. path-scope guard: preexec_tests phase (test-writer) ---
-# Only fires in autonomous mode for Edit/Write/MultiEdit when the active task
-# stage is exactly "preexec_tests". Blocks writes to non-test paths.
-if [[ "${FACTORY_AUTONOMOUS_MODE:-}" == "1" ]]; then
+# Fires whenever a pipeline run is active (env var OR active runs/current) for
+# Edit/Write/MultiEdit when the active task stage is exactly "preexec_tests".
+# Blocks writes to non-test paths.
+if (( _pipeline_active )); then
   case "$tool_name" in
     Edit|Write|MultiEdit)
       # Determine the active task's stage.
