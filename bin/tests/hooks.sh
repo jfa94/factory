@@ -1103,6 +1103,48 @@ exec_status=$(jq -r '.tasks."alpha-001".executor_status // empty' "$CLAUDE_PLUGI
 assert_eq "subagent-stop missing STATUS = BLOCKED" "BLOCKED" "$exec_status"
 
 echo ""
+echo "=== subagent-stop-transcript: STATUS regex accepts NO_WORK and SKIP ==="
+
+# Regression (P2 from 2026-05-27 audit): hooks/subagent-stop-gate.sh accepts
+# STATUS values NO_WORK and SKIP as legitimate no-op exits, but the transcript
+# hook's STATUS regex omitted them — so a subagent that emitted STATUS: NO_WORK
+# cleared the gate yet got recorded as BLOCKED in state, and the orchestrator
+# treated the legitimate no-op as a stall. The two regexes must agree.
+
+# (a) Static check: the regex line must list all 7 statuses.
+_regex_line=$(grep -nE 'STATUS:\[\[:space:\]\]\+' "$HOOKS_DIR/subagent-stop-transcript.sh" | head -1)
+assert_eq "transcript STATUS regex line found" "true" \
+  "$([[ -n "$_regex_line" ]] && echo true || echo false)"
+for _tok in DONE DONE_WITH_CONCERNS BLOCKED NEEDS_CONTEXT RED_READY NO_WORK SKIP; do
+  assert_eq "transcript STATUS regex contains $_tok" "true" \
+    "$(printf '%s' "$_regex_line" | grep -q "$_tok" && echo true || echo false)"
+done
+
+# (b) Behavioral check: STATUS: NO_WORK must be recorded as NO_WORK, not BLOCKED.
+_seed_run "run-sag-nowork" '{"status":"running","tasks":{"alpha-001":{"status":"executing"}}}'
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-nowork/transcript.jsonl"
+printf '{"content":".state/run-sag-nowork/alpha-001.test-writer-prompt.md"}\n' > "$transcript"
+input=$(jq -cn --arg t "$transcript" --arg msg "No missing tests.
+STATUS: NO_WORK" '{agent_type:"test-writer", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+set -e
+tw_status=$(jq -r '.tasks."alpha-001".test_writer_status // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-nowork/state.json")
+assert_eq "transcript records NO_WORK (not BLOCKED)" "NO_WORK" "$tw_status"
+
+# (c) Behavioral check: STATUS: SKIP must be recorded as SKIP, not BLOCKED.
+_seed_run "run-sag-skip" '{"status":"running","tasks":{"alpha-001":{"status":"executing"}}}'
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-skip/transcript.jsonl"
+printf '{"content":".state/run-sag-skip/alpha-001.test-writer-prompt.md"}\n' > "$transcript"
+input=$(jq -cn --arg t "$transcript" --arg msg "Skipping per spec.
+STATUS: SKIP" '{agent_type:"test-writer", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+set -e
+tw_status=$(jq -r '.tasks."alpha-001".test_writer_status // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-skip/state.json")
+assert_eq "transcript records SKIP (not BLOCKED)" "SKIP" "$tw_status"
+
+echo ""
 echo "=== subagent-stop-transcript: reviewer writes review_files ==="
 
 _seed_run "run-sag-rev" '{"status":"running","tasks":{"alpha-001":{"status":"reviewing"}}}'
