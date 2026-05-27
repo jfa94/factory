@@ -1,0 +1,53 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same ref when a new commit lands.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bin-tests:
+    name: bin/tests/*.sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history; some tests inspect commit graph
+
+      - name: Install jq + gh
+        run: |
+          set -euo pipefail
+          # jq is preinstalled on ubuntu-latest, but verify in case the
+          # runner image changes.
+          jq --version
+          gh --version
+
+      - name: Run bin/tests/run-all.sh
+        env:
+          # The runner provides a default token; some tests may call
+          # `gh api` for read-only metadata. Auth scope is repo-read-only,
+          # so this is safe.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail   # not -e: we want the artifact upload to run on failure
+          bash bin/tests/run-all.sh 2>&1 | tee /tmp/run-all.log
+          # Preserve the runner's exit code through the tee.
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload baseline log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-all-output
+          path: /tmp/run-all.log
+          retention-days: 7
+          if-no-files-found: ignore
