@@ -1339,27 +1339,53 @@ _fos_lock_test() {
     ended_at: null, tasks: {}
   }' > "$sandbox/runs/$run_id/state.json"
   ln -s "$sandbox/runs/$run_id" "$sandbox/runs/current"
-  # Acquire the state lock externally (mkdir-based)
+  # Acquire the state lock externally. pipeline-state uses flock when
+  # available (Linux), otherwise an mkdir-based fallback (some macOS
+  # boxes). We must hold whichever lock the impl will try to take, or
+  # the test silently false-passes on Linux (flock acquires instantly
+  # because we only held mkdir) and false-fails inverse on macOS.
   local lock_dir="$sandbox/runs/$run_id/state.lock"
+  local lock_file="${lock_dir}.flock"
   mkdir -p "$lock_dir"
   printf '%s' "$$" > "$lock_dir/pid"
+  local holder_pid=''
+  if command -v flock >/dev/null 2>&1; then
+    # Hold the flock in a subshell that idles until killed. The subshell
+    # owns FD 9 → flock on lock_file; finalize-on-stop will block on
+    # `flock -x -w 10 9` against the same file.
+    : > "$lock_file"
+    ( exec 9>"$lock_file"; flock -x 9; sleep 30 ) &
+    holder_pid=$!
+    # Wait briefly for the holder to actually acquire the flock before
+    # spawning the background finalize.
+    local h=0
+    while (( h < 50 )); do
+      if command -v fuser >/dev/null 2>&1; then
+        fuser "$lock_file" >/dev/null 2>&1 && break
+      fi
+      sleep 0.05
+      h=$((h + 1))
+    done
+  fi
   # Run finalize-on-stop in background with locked state
   local done_marker="$sandbox/done"
   ( CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state finalize-on-stop "$run_id" >/dev/null 2>&1
     touch "$done_marker" ) &
   local bg_pid=$!
-  # Give it 1.5s — it must NOT complete while lock is held. (Was 0.5s; CI
-  # runners need more headroom for the background subshell to spawn,
-  # source pipeline-lib.sh, and actually reach the lock-wait point. The
-  # marker file race window was tight enough to false-pass on macOS but
-  # tight enough to false-fail on slower Linux runners.)
+  # Give it 1.5s — it must NOT complete while lock is held. Both the
+  # mkdir lock_dir and (on Linux) the flock on lock_file are held; the
+  # impl will block on whichever path it takes.
   sleep 1.5
   local blocked=false
   if [[ ! -f "$done_marker" ]]; then
     blocked=true
   fi
-  # Release the lock; background job should complete shortly
+  # Release locks; background job should complete shortly.
   rm -rf "$lock_dir"
+  if [[ -n "$holder_pid" ]]; then
+    kill "$holder_pid" 2>/dev/null || true
+    wait "$holder_pid" 2>/dev/null || true
+  fi
   wait "$bg_pid" 2>/dev/null || true
   rm -rf "$sandbox"
   printf '%s' "$blocked"
