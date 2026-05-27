@@ -23,10 +23,10 @@ jobs:
         with:
           fetch-depth: 0 # full history; some tests inspect commit graph
 
-      - name: Install jq + gh
+      - name: Verify jq + gh present
         run: |
           set -euo pipefail
-          # jq is preinstalled on ubuntu-latest, but verify in case the
+          # Both are preinstalled on ubuntu-latest; smoke-check in case the
           # runner image changes.
           jq --version
           gh --version
