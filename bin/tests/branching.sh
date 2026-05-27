@@ -1495,16 +1495,17 @@ cat > "$MERGEABLE_MOCK/gh" << 'MOCK'
 #!/usr/bin/env bash
 queue_file="$MERGEABLE_MOCK_QUEUE"
 case "$*" in
-  "pr view "*" --json state,mergedAt,mergeable,headRefName")
+  # pipeline-wait-pr (since the statusCheckRollup unification) calls
+  # `gh pr view <pr> --json state,mergedAt,mergeable,headRefName,statusCheckRollup`
+  # as a single combined fetch. Queue payloads should include `statusCheckRollup`
+  # (or omit it — the impl tolerates an absent field via `// []`).
+  "pr view "*" --json state,mergedAt,mergeable,headRefName,statusCheckRollup")
     if [[ -s "$queue_file" ]]; then
       head -1 "$queue_file"
       tail -n +2 "$queue_file" > "${queue_file}.tmp" && mv "${queue_file}.tmp" "$queue_file"
     else
-      printf '{"state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","headRefName":"feature"}'
+      printf '{"state":"OPEN","mergedAt":null,"mergeable":"MERGEABLE","headRefName":"feature","statusCheckRollup":[]}'
     fi
-    ;;
-  "pr checks "*)
-    printf '[]'
     ;;
   *)
     exit 0
