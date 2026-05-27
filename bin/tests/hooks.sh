@@ -96,6 +96,24 @@ assert_exit "+refspec feature allowed" 0 bash -c 'printf "{\"tool_input\":{\"com
 
 # ============================================================
 echo ""
+echo "=== S2: branch-protection blocks --force-if-includes ==="
+
+output=$(printf '{"tool_input":{"command":"git push --force-if-includes origin main"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+assert_eq "--force-if-includes main blocked" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
+assert_eq "--force-if-includes detected as force" "true" \
+  "$(printf '%s' "$output" | grep -q 'force_push_protected' && echo true || echo false)"
+
+# ============================================================
+echo ""
+echo "=== S2: branch-protection blocks --force-with-lease=<ref> ==="
+
+output=$(printf '{"tool_input":{"command":"git push --force-with-lease=main origin main"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+assert_eq "--force-with-lease=<ref> main blocked" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
+assert_eq "--force-with-lease=<ref> detected as force" "true" \
+  "$(printf '%s' "$output" | grep -q 'force_push_protected' && echo true || echo false)"
+
+# ============================================================
+echo ""
 echo "=== branch-protection: blocks hard reset on main ==="
 
 output=$(printf '{"tool_input":{"command":"git reset --hard main"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
