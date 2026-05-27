@@ -4,6 +4,10 @@
 # pause_minutes accounting.
 set -euo pipefail
 
+# All pipeline-* scripts default to human-readable output (commit 3fc2060).
+# Tests parse JSON via jq, so opt into machine output for the whole file.
+export FACTORY_JSON=1
+
 PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export PATH="$PLUGIN_ROOT/bin:$PATH"
 
