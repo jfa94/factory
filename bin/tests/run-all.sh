@@ -114,9 +114,11 @@ for t in "${tests[@]}"; do
     failed_names+=("$t")
     if (( ! verbose )); then
       printf '    --- captured output ---\n'
-      while IFS= read -r line; do
-        printf '    %s\n' "$line"
-      done <<< "$out"
+      if [[ -n "$out" ]]; then
+        while IFS= read -r line; do
+          printf '    %s\n' "$line"
+        done <<< "$out"
+      fi
       printf '    --- end ---\n'
     fi
   fi
