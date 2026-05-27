@@ -134,6 +134,35 @@ set -e
 assert_eq "FAILURE among mixed → exit 3" "3" "$rc_f"
 assert_contains "FAILURE reported as build=FAILURE" "build=FAILURE" "$out_f"
 
+# --- Case G: STALE conclusion → exit 3 ---
+checks_g=$(mktemp)
+cat > "$checks_g" <<'JSON'
+[{"__typename":"CheckRun","name":"required","status":"COMPLETED","conclusion":"STALE"}]
+JSON
+set +e
+out_g=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_g" \
+  pipeline-wait-pr 999 --timeout 1 --interval 1 2>&1)
+rc_g=$?
+set -e
+assert_eq "STALE → exit 3" "3" "$rc_g"
+assert_contains "STALE reported as required=STALE" "required=STALE" "$out_g"
+
+# --- Case H: unrecognized conclusion → exit 3 (fails closed) ---
+checks_h=$(mktemp)
+cat > "$checks_h" <<'JSON'
+[{"__typename":"CheckRun","name":"future","status":"COMPLETED","conclusion":"NEWLY_INVENTED_CONCLUSION"}]
+JSON
+set +e
+out_h=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_h" \
+  pipeline-wait-pr 999 --timeout 1 --interval 1 2>&1)
+rc_h=$?
+set -e
+assert_eq "unrecognized conclusion → exit 3 (fails closed)" "3" "$rc_h"
+assert_contains "unrecognized conclusion reported as future=NEWLY_INVENTED_CONCLUSION" \
+  "future=NEWLY_INVENTED_CONCLUSION" "$out_h"
+assert_contains "unrecognized conclusion log mentions unrecognized" \
+  "unrecognized conclusions" "$out_h"
+
 # ============================================================
 echo ""
 echo "=== ship-stage ci-fix spawn uses classified per-task model (not reviewer model) ==="

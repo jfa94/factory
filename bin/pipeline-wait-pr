@@ -404,7 +404,7 @@ while true; do
             {label: $label, outcome: "skipped", conclusion: $o}
           elif $o == "CANCELLED" then
             {label: $label, outcome: "cancel", conclusion: $o}
-          elif ["FAILURE","TIMED_OUT","STARTUP_FAILURE","ACTION_REQUIRED","ERROR"] | index($o) then
+          elif ["FAILURE","TIMED_OUT","STARTUP_FAILURE","ACTION_REQUIRED","ERROR","STALE"] | index($o) then
             {label: $label, outcome: "fail", conclusion: $o}
           else
             {label: $label, outcome: "unknown", conclusion: $o}
@@ -441,6 +441,17 @@ while true; do
         --arg pr "$pr" \
         --arg skipped "$skipping_names" \
         '{status: "ci_skipping", pr: $pr, skipping_checks: $skipped}'
+      emit_ci_metric task "$pr" "red" "$checks_data"
+      exit 3
+    fi
+    unknown_checks=$(printf '%s' "$classified" | jq '[.[] | select(.outcome == "unknown")] | length')
+    if [[ "$pending_checks" -eq 0 && "$unknown_checks" -gt 0 ]]; then
+      unknown_names=$(printf '%s' "$classified" | jq -r '[.[] | select(.outcome == "unknown") | "\(.label)=\(.conclusion)"] | join(", ")')
+      log_error "PR #${pr} has settled checks with unrecognized conclusions: $unknown_names — failing closed"
+      jq -n \
+        --arg pr "$pr" \
+        --arg unk "$unknown_names" \
+        '{status: "ci_unknown", pr: $pr, unknown_checks: $unk}'
       emit_ci_metric task "$pr" "red" "$checks_data"
       exit 3
     fi
