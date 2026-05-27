@@ -89,6 +89,24 @@ require_plugin_data() {
   fi
 }
 
+# Idempotently prepend the plugin's bin/ dir to PATH so hooks invoked by
+# Claude Code (which sanitizes PATH) can still find pipeline-* binaries.
+# Resolution order:
+#   1. ${CLAUDE_PLUGIN_ROOT}/bin (preferred — set by merged-settings.json env)
+#   2. $(dirname "${BASH_SOURCE[0]}") (fallback — script-relative)
+# Safe to call multiple times; no-op if the bin dir is already first on PATH.
+_factory_ensure_plugin_bin_path() {
+  local _bin=""
+  if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/bin" ]]; then
+    _bin="${CLAUDE_PLUGIN_ROOT}/bin"
+  else
+    _bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  fi
+  if [[ -n "$_bin" && ":$PATH:" != *":$_bin:"* ]]; then
+    PATH="$_bin:$PATH"
+  fi
+}
+
 # --- Logging ---
 
 _SCRIPT_NAME="${0##*/}"

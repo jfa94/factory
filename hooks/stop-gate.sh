@@ -17,17 +17,9 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$_lib" ]]; then
   source "$_lib" 2>/dev/null || true
 fi
 
-# Resolve plugin bin so `pipeline-state` is callable even when Claude Code
-# invokes the hook with a sanitized PATH (the agent's tool-execution shell
-# gets plugin bins prepended; hook subshells do not always inherit it).
-_plugin_bin=""
-if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/bin" ]]; then
-  _plugin_bin="${CLAUDE_PLUGIN_ROOT}/bin"
-else
-  _plugin_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" 2>/dev/null && pwd || true)"
-fi
-if [[ -n "$_plugin_bin" && ":$PATH:" != *":$_plugin_bin:"* ]]; then
-  PATH="$_plugin_bin:$PATH"
+# PATH harden: see _factory_ensure_plugin_bin_path in pipeline-lib.sh.
+if command -v _factory_ensure_plugin_bin_path >/dev/null 2>&1; then
+  _factory_ensure_plugin_bin_path
 fi
 
 # Check for active run
