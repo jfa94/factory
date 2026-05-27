@@ -26,7 +26,9 @@ PROTECTED_BRANCHES=("main" "master" "develop" "staging" "production" "release" "
 PIPELINE_MANAGED=("staging")  # writable from autonomous mode in orchestrator worktree
 
 # Build an alternation regex with explicit anchors so `mainly-fixes` !~ main.
-PROTECTED_RE="^($(IFS='|'; echo "${PROTECTED_BRANCHES[*]}"))$"
+# Avoid global IFS tampering (semgrep bash.lang.security.ifs-tampering): join
+# the array via printf | paste so IFS stays at default.
+PROTECTED_RE="^($(printf '%s\n' "${PROTECTED_BRANCHES[@]}" | paste -sd '|' -))$"
 
 # Read hook input from stdin
 input=$(cat)
