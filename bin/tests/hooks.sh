@@ -1666,6 +1666,62 @@ ARW_STALL_COUNT=$(printf '%s' "$ARW_ERR" | grep -c "stalled" || true)
 rm -rf "$ARW_DATA" "$ARW_STUBS"
 
 # ============================================================
+echo ""
+echo "=== asyncrewake-ci: persistent gh failure → ci_status=gh_error ==="
+
+ARW_DATA=$(mktemp -d)
+ARW_STUBS=$(mktemp -d)
+ARW_LOG=$(mktemp)
+ARW_PR=8888
+
+# pipeline-state stub: log all invocations + args, succeed.
+cat > "$ARW_STUBS/pipeline-state" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$ARW_LOG"
+exit 0
+SH
+chmod +x "$ARW_STUBS/pipeline-state"
+
+# gh stub: always fail with auth error.
+cat > "$ARW_STUBS/gh" <<'SH'
+#!/usr/bin/env bash
+echo "gh: authentication required" >&2
+exit 4
+SH
+chmod +x "$ARW_STUBS/gh"
+
+mkdir -p "$ARW_DATA/runs/run-gh-fail"
+ln -sf "$ARW_DATA/runs/run-gh-fail" "$ARW_DATA/runs/current"
+printf '{"tasks":{"task-1":{"task_id":"task-1","status":"executing","pr_number":%s}}}' \
+  "$ARW_PR" > "$ARW_DATA/runs/run-gh-fail/state.json"
+
+ARW_INPUT=$(jq -n --arg pr "https://github.com/acme/repo/pull/$ARW_PR" \
+  '{"tool_input":{"command":"gh pr create"},"tool_response":{"stdout":$pr}}')
+
+set +e
+ARW_STDERR=$(
+  ASYNCREWAKE_CI_MAX=10 ASYNCREWAKE_CI_SLEEP=0 \
+  ASYNCREWAKE_GH_FAIL_BUDGET=2 \
+  CLAUDE_PLUGIN_DATA="$ARW_DATA" CLAUDE_VERSION=99.0.0 \
+  PATH="$ARW_STUBS:$PATH" \
+  bash "$HOOKS_DIR/asyncrewake-ci.sh" <<< "$ARW_INPUT" 2>&1 >/dev/null
+)
+ARW_RC=$?
+set -e
+assert_eq "asyncrewake gh-fail: exit 2 (wake)" "2" "$ARW_RC"
+ARW_GHFAIL_COUNT=$(printf '%s' "$ARW_STDERR" | grep -c "gh pr view failed" || true)
+[[ "$ARW_GHFAIL_COUNT" -ge 1 ]] \
+  && { echo "  PASS: asyncrewake gh-fail: stderr surfaces gh failure"; pass=$((pass+1)); } \
+  || { echo "  FAIL: asyncrewake gh-fail: stderr missing 'gh pr view failed' (got: $ARW_STDERR)"; fail=$((fail+1)); }
+state_writes=$(cat "$ARW_LOG")
+ARW_GHERR_WRITES=$(printf '%s' "$state_writes" | grep -c 'ci_status "gh_error"' || true)
+[[ "$ARW_GHERR_WRITES" -ge 1 ]] \
+  && { echo "  PASS: asyncrewake gh-fail: writes ci_status=gh_error"; pass=$((pass+1)); } \
+  || { echo "  FAIL: asyncrewake gh-fail: missing ci_status=gh_error write (got: $state_writes)"; fail=$((fail+1)); }
+
+rm -rf "$ARW_DATA" "$ARW_STUBS" "$ARW_LOG"
+
+# ============================================================
 # subagent-stop-gate: autonomous blocking tests
 # ============================================================
 
