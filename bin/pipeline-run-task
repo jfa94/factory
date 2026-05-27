@@ -1334,9 +1334,18 @@ _stage_postreview() {
       printf '\nIron Law reminder: verify each finding (technically + against task intent) before planning a fix; address root causes, not symptoms; if a root cause is a fundamental design/architecture flaw outside scope, end with STATUS: BLOCKED — escalate: <reason>.\n'
       printf 'End with STATUS: DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT.\n'
     } > "$pf"
+    local _pr_classify _pr_model _pr_max_turns
+    _pr_classify=$(_task_field classify)
+    if [[ -n "$_pr_classify" && "$_pr_classify" != "null" ]]; then
+      _pr_model=$(printf '%s' "$_pr_classify" | jq -r '.model // "sonnet"' 2>/dev/null || printf 'sonnet')
+      _pr_max_turns=$(printf '%s' "$_pr_classify" | jq -r '.maxTurns // .max_turns // 60' 2>/dev/null || printf '60')
+    else
+      _pr_model="sonnet"
+      _pr_max_turns="60"
+    fi
     local agents_json
-    agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_reviewer_model" \
-      --argjson _max_turns "$_scribe_max_turns" \
+    agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_pr_model" \
+      --argjson _max_turns "$_pr_max_turns" \
       '[{subagent_type:"task-executor", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
     _record_active_task_for_stop_hook "$run_id" "$task_id" "$pr_wt"
     _emit_manifest postexec "$agents_json"

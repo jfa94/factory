@@ -110,6 +110,33 @@ set -e
 assert_eq "missing-worktree: rc=30" "30" "$rc"
 assert_eq "missing-worktree: status=failed" "failed" "$(status_of)"
 
+# ----------------------------------------------------------------------------
+echo ""
+echo "=== postreview-fix spawn uses classified per-task model (not reviewer model) ==="
+# Locate the executor-fix prompt-file declaration line, then inspect the
+# ~20 lines that follow it (which contain the spawn manifest jq block).
+prt_file="$BIN_DIR/pipeline-run-task"
+fix_line=$(grep -n '_prompt_path executor-fix' "$prt_file" | head -1 | cut -d: -f1)
+if [[ -z "$fix_line" ]]; then
+  echo "  FAIL: postreview-fix: could not locate executor-fix prompt declaration"
+  fail=$((fail + 1))
+else
+  end_line=$(( fix_line + 25 ))
+  block=$(sed -n "${fix_line},${end_line}p" "$prt_file")
+  if printf '%s\n' "$block" | grep -q '_reviewer_model'; then
+    has_reviewer_model="yes"
+  else
+    has_reviewer_model="no"
+  fi
+  if printf '%s\n' "$block" | grep -Eq '_pr_classify|_task_field classify'; then
+    has_per_task_model="yes"
+  else
+    has_per_task_model="no"
+  fi
+  assert_eq "postreview-fix: spawn block does NOT reference _reviewer_model" "no" "$has_reviewer_model"
+  assert_eq "postreview-fix: spawn block derives per-task model from classify" "yes" "$has_per_task_model"
+fi
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 exit $(( fail > 0 ? 1 : 0 ))
