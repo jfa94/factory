@@ -136,6 +136,34 @@ assert_contains "FAILURE reported as build=FAILURE" "build=FAILURE" "$out_f"
 
 # ============================================================
 echo ""
+echo "=== ship-stage ci-fix spawn uses classified per-task model (not reviewer model) ==="
+# Locate the executor-ci-fix prompt-file declaration line, then inspect the
+# ~25 lines that follow it (which contain the spawn manifest jq block).
+BIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+prt_file="$BIN_DIR/pipeline-run-task"
+fix_line=$(grep -n '_prompt_path executor-ci-fix' "$prt_file" | head -1 | cut -d: -f1)
+if [[ -z "$fix_line" ]]; then
+  echo "  FAIL: ship-ci-fix: could not locate executor-ci-fix prompt declaration"
+  fail=$((fail + 1))
+else
+  end_line=$(( fix_line + 25 ))
+  block=$(sed -n "${fix_line},${end_line}p" "$prt_file")
+  if printf '%s\n' "$block" | grep -q '_reviewer_model'; then
+    has_reviewer_model="yes"
+  else
+    has_reviewer_model="no"
+  fi
+  if printf '%s\n' "$block" | grep -Eq '_ci_classify|_task_field classify'; then
+    has_per_task_model="yes"
+  else
+    has_per_task_model="no"
+  fi
+  assert_eq "ship-ci-fix: spawn block does NOT reference _reviewer_model" "no" "$has_reviewer_model"
+  assert_eq "ship-ci-fix: spawn block derives per-task model from classify" "yes" "$has_per_task_model"
+fi
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "Passed: $pass"
 echo "Failed: $fail"

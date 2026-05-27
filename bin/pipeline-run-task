@@ -1636,9 +1636,18 @@ _stage_ship() {
         _ensure_prompt_dir
         local pf; pf=$(_prompt_path executor-ci-fix)
         printf '[task:%s]\nFix failing CI on PR for task %s.\nSTATUS: DONE|...\n' "$task_id" "$task_id" > "$pf"
+        local _ci_classify _ci_model _ci_max_turns
+        _ci_classify=$(_task_field classify)
+        if [[ -n "$_ci_classify" && "$_ci_classify" != "null" ]]; then
+          _ci_model=$(printf '%s' "$_ci_classify" | jq -r '.model // "sonnet"' 2>/dev/null || printf 'sonnet')
+          _ci_max_turns=$(printf '%s' "$_ci_classify" | jq -r '.maxTurns // .max_turns // 60' 2>/dev/null || printf '60')
+        else
+          _ci_model="sonnet"
+          _ci_max_turns="60"
+        fi
         local agents_json
-        agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_reviewer_model" \
-          --argjson _max_turns "$_scribe_max_turns" \
+        agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_ci_model" \
+          --argjson _max_turns "$_ci_max_turns" \
           '[{subagent_type:"task-executor", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
         local _ship_wt
         _ship_wt=$(_task_field worktree)
