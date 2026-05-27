@@ -25,6 +25,11 @@
 #                         / 1 (broken) — used by tests and operators
 set -euo pipefail
 
+# Mutex retry knobs. Overridable via env so tests can drive the contention
+# path (lock_timeout sentinel) deterministically without burning ~10s.
+: "${RUN_TRACKER_MAX_ATTEMPTS:=200}"
+: "${RUN_TRACKER_LOCK_SLEEP_S:=0.05}"
+
 # Canonicalize CLAUDE_PLUGIN_DATA before reading from it. When a foreign plugin
 # (e.g. codex) leaks its CLAUDE_PLUGIN_DATA into this session, pipeline-lib.sh's
 # top-level redirect rewrites the env var to factory's data dir. Without this,
@@ -146,11 +151,23 @@ lock_dir="$run_dir/.run-tracker.lock"
 attempts=0
 while ! mkdir "$lock_dir" 2>/dev/null; do
   attempts=$((attempts + 1))
-  if (( attempts >= 200 )); then
-    echo "[run-tracker] ERROR: failed to acquire mutex after 200 attempts ($lock_dir)" >&2
+  if (( attempts >= RUN_TRACKER_MAX_ATTEMPTS )); then
+    # F1 fix: write a tamper-evident sentinel under best-effort append so the
+    # audit chain visibly breaks instead of silently swallowing the gap. We
+    # intentionally don't hold the lock here (we couldn't acquire it) and
+    # don't compute a chain hash — the broken chain IS the signal.
+    sentinel=$(jq -cn \
+      --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --arg run_id "$run_id" \
+      --argjson attempts "$attempts" \
+      '{event:"lock_timeout", timestamp:$ts, run_id:$run_id, attempts:$attempts, hook:"run-tracker"}' 2>/dev/null)
+    if [[ -n "$sentinel" ]]; then
+      printf '%s\n' "$sentinel" >> "$audit_file" 2>/dev/null || true
+    fi
+    echo "[run-tracker] ERROR: failed to acquire mutex after $attempts attempts ($lock_dir) — sentinel written" >&2
     exit 0
   fi
-  sleep 0.05
+  sleep "$RUN_TRACKER_LOCK_SLEEP_S"
 done
 trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
 

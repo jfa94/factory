@@ -88,6 +88,35 @@ fi
 
 # ===========================================================================
 echo ""
+echo "=== F1: run-tracker writes lock_timeout sentinel on contention ==="
+
+# Set up a fresh run dir so we don't pollute run-tracker-01's chain.
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout"
+: > "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout/audit.jsonl"
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -s "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# Hold the lock so the hook cannot acquire it.
+mkdir "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout/.run-tracker.lock"
+
+# Invoke the hook with tight retry knobs so the contention path returns fast.
+RUN_TRACKER_MAX_ATTEMPTS=3 RUN_TRACKER_LOCK_SLEEP_S=0.01 \
+  printf '{"tool_name":"Bash","tool_input":{"command":"contended"}}' \
+  | bash "$RUN_TRACKER" >/dev/null 2>&1 || true
+
+sentinel_count=$(jq -r 'select(.event == "lock_timeout") | .event' \
+  "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout/audit.jsonl" 2>/dev/null \
+  | wc -l | tr -d ' ')
+assert_eq "lock_timeout sentinel appears in audit.jsonl on contention" "1" "$sentinel_count"
+
+# Release the held lock and restore runs/current so subsequent tests
+# (task_09_02 verifies run-tracker-01's chain) see the original fixture.
+rmdir "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout/.run-tracker.lock" 2>/dev/null || true
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -s "$CLAUDE_PLUGIN_DATA/runs/run-tracker-01" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# ===========================================================================
+echo ""
 echo "=== task_09_02: prev_hash chain links every entry ==="
 
 # Verify the parallel-write log forms a valid chain.
