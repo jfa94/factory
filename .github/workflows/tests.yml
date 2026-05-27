@@ -31,6 +31,14 @@ jobs:
           jq --version
           gh --version
 
+      - name: Configure git identity for tests
+        # Tests under bin/tests/ create commits inside their tmpdir
+        # workspaces; without an identity, `git commit` aborts with exit
+        # 128. CI runners ship without one, so we set a throwaway here.
+        run: |
+          git config --global user.email "tests@factory.ci"
+          git config --global user.name "factory-tests"
+
       - name: Run bin/tests/run-all.sh
         env:
           # The runner provides a default token; some tests may call
