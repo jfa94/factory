@@ -24,7 +24,12 @@
 .claude/settings.local.json
 .claude/CLAUDE.local.md
 .claude/tool-audit.jsonl
+.claude/scheduled_tasks.lock
 CLAUDE.local.md
+
+# Superpowers plans — treated as private session scratch. Already-tracked
+# plans remain tracked; this pattern hides new plan files going forward.
+docs/superpowers/plans/
 
 # Temporary files
 .temp/
