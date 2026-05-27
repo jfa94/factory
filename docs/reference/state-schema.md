@@ -141,6 +141,8 @@ ${CLAUDE_PLUGIN_DATA}/
 
 The orchestrator worktree is created at Step 6a of `commands/run.md` to isolate git operations from the user's primary checkout. `project_root` preserves the original cwd so sub-agents and scripts can reference user files outside the worktree when needed.
 
+**Reuse fast-forward (0.10.3):** When Step 6 of `skills/pipeline-orchestrator/SKILL.md` reuses an existing orchestrator worktree (resume, retry), it now fetches and `merge --ff-only origin/staging` before any sub-agent is spawned. `Agent({ isolation: 'worktree' })` clones the orchestrator's CWD HEAD into the subagent worktree, so a stale orchestrator HEAD would contaminate every test-writer / executor / reviewer spawn with an out-of-date `package.json` or missing fixtures. A divergent (non-fast-forwardable) reuse path now aborts with `[ERROR] orchestrator worktree at <path> diverged from origin/staging; manual recovery needed` rather than silently propagating drift.
+
 ---
 
 ## Task Object
