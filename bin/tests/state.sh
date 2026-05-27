@@ -699,7 +699,11 @@ assert_eq "pipeline-init seeds pause_minutes=0" "0" "$default_pause"
 # maxRuntimeMinutes=180. With pause_minutes=120 → effective 120 min, safe.
 # With pause_minutes=0 → 240 min, tripped.
 past_240m=""
-if command -v gdate &>/dev/null; then
+# Linux: `date` is GNU and supports `-d`. macOS: `date` is BSD and uses
+# `-v`. Probe the GNU form first so vanilla Linux CI works without gdate.
+if date -u -d '240 minutes ago' +%Y-%m-%dT%H:%M:%SZ >/dev/null 2>&1; then
+  past_240m=$(date -u -d '240 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+elif command -v gdate >/dev/null 2>&1; then
   past_240m=$(gdate -u -d '240 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
 else
   past_240m=$(date -u -v-240M +%Y-%m-%dT%H:%M:%SZ)
