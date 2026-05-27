@@ -56,24 +56,15 @@ _elapsed() {
 # contract stays clean while the poll loop can surface the actual error
 # (rate limit, auth, network) when a fetch returns empty.
 _GH_LAST_ERROR=""
+# Combined fetch: pr metadata + statusCheckRollup in one call. The rollup
+# is the GraphQL union of CheckRun and StatusContext records, both of which
+# expose .conclusion (when applicable) — unlike `gh pr checks --json` which
+# whitelists out `conclusion` and forced an information-lossy `bucket` mapping
+# (see commit 79c1927).
 _check_pr_status() {
   local out err
   err=$(mktemp)
-  if out=$(gh pr view "$pr" --json state,mergedAt,mergeable,headRefName 2>"$err"); then
-    rm -f "$err"
-    _GH_LAST_ERROR=""
-    printf '%s' "$out"
-  else
-    _GH_LAST_ERROR=$(<"$err")
-    rm -f "$err"
-    return 1
-  fi
-}
-
-_check_pr_checks() {
-  local out err
-  err=$(mktemp)
-  if out=$(gh pr checks "$pr" --json name,state,bucket 2>"$err"); then
+  if out=$(gh pr view "$pr" --json state,mergedAt,mergeable,headRefName,statusCheckRollup 2>"$err"); then
     rm -f "$err"
     _GH_LAST_ERROR=""
     printf '%s' "$out"
@@ -386,19 +377,48 @@ while true; do
     continue
   fi
 
-  # Check CI status — exit 3 on failure so orchestrator can push a fix and re-invoke
-  if ! checks_data=$(_check_pr_checks); then
-    log_warn "could not fetch PR #${pr} checks (${_GH_LAST_ERROR:-empty response}); retrying in ${interval_seconds}s"
-    sleep "$interval_seconds"
-    continue
-  fi
-  if [[ -n "$checks_data" ]]; then
-    # Treat any non-success terminal bucket as red. gh pr checks uses `bucket`
-    # (fail/cancel/pass/pending/skipping); `conclusion` is not a valid field.
-    failed_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length')
+  # Check CI status — exit 3 on failure so orchestrator can push a fix and re-invoke.
+  # checks_data is now extracted from the rollup we already fetched above; no
+  # separate API call.
+  checks_data=$(printf '%s' "$pr_data" | jq -c '.statusCheckRollup // []')
+  if [[ -n "$checks_data" && "$checks_data" != "[]" ]]; then
+    # Classify each rollup entry using status/state/conclusion (a CheckRun has
+    # .status+.conclusion; a StatusContext has .state). Mirrors the classifier
+    # in bin/pipeline-score-steps.sh but keeps conclusion in the output for
+    # operator diagnostics.
+    classified=$(printf '%s' "$checks_data" | jq -c '
+      def classify:
+        (.status // "" | ascii_upcase) as $st |
+        (.state  // "" | ascii_upcase) as $se |
+        (.conclusion // "" | ascii_upcase) as $c |
+        (.name // .context // "unnamed") as $label |
+        if ($st == "QUEUED" or $st == "IN_PROGRESS" or $st == "WAITING" or $st == "PENDING"
+            or $se == "PENDING" or $se == "EXPECTED"
+            or ($st == "COMPLETED" and $c == "")) then
+          {label: $label, outcome: "pending", conclusion: $c}
+        else
+          (if $c != "" then $c else $se end) as $o |
+          if ["SUCCESS","NEUTRAL"] | index($o) then
+            {label: $label, outcome: "pass", conclusion: $o}
+          elif $o == "SKIPPED" then
+            {label: $label, outcome: "skipped", conclusion: $o}
+          elif $o == "CANCELLED" then
+            {label: $label, outcome: "cancel", conclusion: $o}
+          elif ["FAILURE","TIMED_OUT","STARTUP_FAILURE","ACTION_REQUIRED","ERROR"] | index($o) then
+            {label: $label, outcome: "fail", conclusion: $o}
+          else
+            {label: $label, outcome: "unknown", conclusion: $o}
+          end
+        end;
+      map(classify)
+    ')
+
+    failed_checks=$(printf '%s' "$classified" | jq '[.[] | select(.outcome == "fail" or .outcome == "cancel")] | length')
 
     if [[ "$failed_checks" -gt 0 ]]; then
-      failed_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.bucket == "fail" or .bucket == "cancel") | "\(.name)=\(.bucket)"] | join(", ")')
+      failed_names=$(printf '%s' "$classified" | jq -r '
+        [.[] | select(.outcome == "fail" or .outcome == "cancel") | "\(.label)=\(.conclusion)"] | join(", ")
+      ')
       log_error "PR #${pr} CI failed: $failed_names"
       jq -n \
         --arg pr "$pr" \
@@ -408,17 +428,15 @@ while true; do
       exit 3
     fi
 
-    # Distinguish "no checks defined" (defer to merge state) from "all passed".
-    total_checks=$(printf '%s' "$checks_data" | jq 'length')
-    pending_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.state == "IN_PROGRESS" or .state == "QUEUED" or .state == "PENDING")] | length')
-    # Fail fast when all checks have settled but some are bucket=skipping. A
-    # required check that stays in the skipping bucket can never unblock, so
-    # waiting out the full timeout is misleading. Surface it immediately so a
-    # human can investigate whether the check was supposed to be required.
-    skipping_checks=$(printf '%s' "$checks_data" | jq '[.[] | select(.bucket == "skipping")] | length')
+    total_checks=$(printf '%s' "$classified" | jq 'length')
+    pending_checks=$(printf '%s' "$classified" | jq '[.[] | select(.outcome == "pending")] | length')
+    # Preserve current behaviour: if all checks are settled and some are
+    # SKIPPED, a *required* skipped check would never unblock the merge,
+    # so fail fast rather than wait out the timeout.
+    skipping_checks=$(printf '%s' "$classified" | jq '[.[] | select(.outcome == "skipped")] | length')
     if [[ "$pending_checks" -eq 0 && "$skipping_checks" -gt 0 ]]; then
-      skipping_names=$(printf '%s' "$checks_data" | jq -r '[.[] | select(.bucket == "skipping") | .name] | join(", ")')
-      log_error "PR #${pr} has settled checks with bucket=skipping: $skipping_names — if any are required, the PR cannot merge"
+      skipping_names=$(printf '%s' "$classified" | jq -r '[.[] | select(.outcome == "skipped") | .label] | join(", ")')
+      log_error "PR #${pr} has settled checks with conclusion=SKIPPED: $skipping_names — if any are required, the PR cannot merge"
       jq -n \
         --arg pr "$pr" \
         --arg skipped "$skipping_names" \
@@ -431,6 +449,8 @@ while true; do
     elif [[ "$pending_checks" -eq 0 ]]; then
       log_info "all $total_checks check(s) passed for PR #${pr}, waiting for merge..."
     fi
+  else
+    log_info "PR #${pr} has no checks defined; deferring to merge state"
   fi
 
   remaining=$(( (timeout_seconds - elapsed) / 60 ))
