@@ -404,9 +404,22 @@ _verify_red_tests() {
     _task_write quality_gates.red_test '{"ok":false,"reason":"missing_base_ref"}'
     return 1
   fi
+  local _diff_err _diff_out _diff_rc
+  _diff_err=$(mktemp)
+  set +e
+  _diff_out=$(cd "$tw_wt" && git diff "$base_ref..HEAD" --name-only --diff-filter=AM 2>"$_diff_err")
+  _diff_rc=$?
+  set -e
+  if (( _diff_rc != 0 )); then
+    log_error "red-test verification: git diff failed (base=$base_ref, rc=$_diff_rc) task_id=\"$task_id\" stderr=\"$(tr -d '\n' < "$_diff_err")\""
+    rm -f "$_diff_err"
+    _task_write quality_gates.red_test '{"ok":false,"reason":"git_diff_failed"}'
+    return 1
+  fi
+  rm -f "$_diff_err"
   while IFS= read -r f; do
     if [[ -n "$f" ]] && is_test_path "$f"; then new_tests+=("$f"); fi
-  done < <(cd "$tw_wt" && git diff "$base_ref..HEAD" --name-only --diff-filter=AM || true)
+  done <<< "$_diff_out"
 
   if [[ ${#new_tests[@]} -eq 0 ]]; then
     log_error "red-test verification: no new or modified test files found task_id=\"$task_id\""
