@@ -4,6 +4,10 @@
 # 12_01..12_04. Run: bash bin/tests/integration.sh
 set -euo pipefail
 
+# All pipeline-* scripts default to human-readable output (commit 3fc2060).
+# Tests parse JSON via jq, so opt into machine output for the whole file.
+export FACTORY_JSON=1
+
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN_DIR="$REPO_ROOT/bin"
 ROOT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/factory-integration.XXXXXX")"
