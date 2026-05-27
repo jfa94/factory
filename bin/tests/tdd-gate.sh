@@ -2,6 +2,11 @@
 # tdd-gate.sh — structural tests for bin/pipeline-tdd-gate.
 set -euo pipefail
 
+# Match the convention used by every other bin/tests/*.sh: mint a fresh
+# data dir before invoking any pipeline-* script, since pipeline-lib.sh
+# references $CLAUDE_PLUGIN_DATA under set -u.
+export CLAUDE_PLUGIN_DATA=$(mktemp -d)
+
 PLUGIN_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GATE="$PLUGIN_ROOT/bin/pipeline-tdd-gate"
 
