@@ -99,6 +99,17 @@ _task_write() {
   "$_STATE_BIN" task-write "$run_id" "$task_id" "$1" "$2" >/dev/null
 }
 
+# Write task-status=failed and log a uniform error message. Used by every
+# terminal `return 30` site in _stage_postexec and _stage_postreview so the
+# orchestrator's finalize-run group-completion check can drain instead of
+# blocking on tasks stuck in status=executing.
+_fail_task() {
+  local _reason="${1:-unspecified}"
+  if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
+    log_error "task-status failed write failed for $task_id (reason=$_reason)"
+  fi
+}
+
 # Idempotent resume: every stage records its terminal marker in
 # .tasks.<id>.stage. If invoked after a successful stage run (crash,
 # resume, manual repeat), short-circuit so we don't double-spawn.
@@ -785,6 +796,7 @@ _stage_postexec() {
   [[ -z "$wt" ]] && wt="$worktree"
   if [[ -z "$wt" ]]; then
     log_error "worktree not set for task $task_id (SubagentStop hook missing?); pass --worktree"
+    _fail_task "missing_worktree"
     t1=$(_now_ms)
     log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\""
     return 30
@@ -798,6 +810,7 @@ _stage_postexec() {
   if (( _qg_pe_rc != 0 && _qg_pe_rc != 2 )); then
     # rc=2 = legitimately skipped (no package.json / no scripts); treat as pass.
     log_warn "quality gate failed for $task_id"
+    _fail_task "quality"
     t1=$(_now_ms)
     log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"quality\""
     return 30
@@ -809,6 +822,7 @@ _stage_postexec() {
   set -e
   if (( _sg_pe_rc != 0 && _sg_pe_rc != 2 )); then
     log_warn "security gate failed for $task_id"
+    _fail_task "security"
     t1=$(_now_ms)
     log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"security\""
     return 30
@@ -820,6 +834,7 @@ _stage_postexec() {
     # the write here — that would clobber violation details with a bare
     # {"ok":false} object.
     log_warn "tdd gate failed for $task_id"
+    _fail_task "tdd"
     t1=$(_now_ms)
     log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"tdd\""
     return 30
@@ -831,6 +846,7 @@ _stage_postexec() {
     if ! pipeline-coverage-gate "$cov_before" "$cov_after" --task-id "$task_id" >/dev/null; then
       log_warn "coverage gate failed for $task_id"
       _task_write quality_gates.coverage '"fail"'
+      _fail_task "coverage"
       t1=$(_now_ms)
       log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"coverage\""
       return 30
@@ -851,6 +867,7 @@ _stage_postexec() {
       else
         _task_write quality_gates.holdout '"fail"'
         log_warn "holdout failed for $task_id"
+        _fail_task "holdout"
         t1=$(_now_ms)
         log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout\""
         return 30
@@ -880,6 +897,7 @@ _stage_postexec() {
           pipeline-holdout-validate prompt "$run_id" "$task_id"
         } > "$_ho_prompt_file" || {
           log_error "pipeline-holdout-validate prompt failed for $task_id"
+          _fail_task "holdout_prompt"
           t1=$(_now_ms)
           log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout_prompt\""
           return 30
@@ -926,6 +944,7 @@ _stage_postexec() {
   local _manifest_rc
   _emit_postexec_manifest "$wt" && _manifest_rc=$? || _manifest_rc=$?
   if (( _manifest_rc == 30 )); then
+    _fail_task "manifest"
     t1=$(_now_ms)
     log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"manifest\""
     return 30
@@ -1122,6 +1141,7 @@ _stage_postreview() {
   fi
   if (( ${#files[@]} == 0 )); then
     log_error "no review files provided"
+    _fail_task "no_review_files"
     t1=$(_now_ms)
     log_step_end "postreview" "failed" "$((t1-t0))" "task_id=\"$task_id\""
     return 30
@@ -1131,6 +1151,7 @@ _stage_postreview() {
   for f in "${files[@]}"; do
     if [[ ! -f "$f" ]]; then
       log_error "review file missing: $f"
+      _fail_task "missing_review_file"
       t1=$(_now_ms)
       log_step_end "postreview" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"missing_review_file\""
       return 30

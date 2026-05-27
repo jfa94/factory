@@ -32,6 +32,13 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$_lib" ]]; then
   source "$_lib" 2>/dev/null || true
 fi
 
+# Hooks fire with sanitized PATH; the helper prepends ${CLAUDE_PLUGIN_ROOT}/bin
+# so the pipeline-state writes below resolve. Without this, every state write
+# silently fails with "command not found" and the orchestrator sees null fields.
+if command -v _factory_ensure_plugin_bin_path >/dev/null 2>&1; then
+  _factory_ensure_plugin_bin_path
+fi
+
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
 if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
   # No plugin data dir — hook not configured for this run. Silent exit is OK.
@@ -170,7 +177,8 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
   case "$agent_type" in
     test-writer)
       pipeline-state task-write "$run_id" "$task_id" test_writer_status "\"$status\"" \
-        >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+        >/dev/null 2>>"$run_dir/transcript-errors.log" \
+        || printf '[subagent-stop-transcript] WARN: task-write test_writer_status failed for %s\n' "$task_id" >&2
       if [[ -n "$worktree" ]]; then
         pipeline-state task-write "$run_id" "$task_id" test_writer_worktree "\"$worktree\"" \
           >/dev/null 2>>"$run_dir/transcript-errors.log" \
@@ -185,19 +193,23 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
         _tw_commit=$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)
         if [[ -n "$_tw_branch" && "$_tw_branch" != "HEAD" ]]; then
           pipeline-state task-write "$run_id" "$task_id" prior_work_dir "\"$worktree\"" \
-            >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+            >/dev/null 2>>"$run_dir/transcript-errors.log" \
+            || printf '[subagent-stop-transcript] WARN: task-write prior_work_dir failed for %s\n' "$task_id" >&2
           pipeline-state task-write "$run_id" "$task_id" prior_branch "\"$_tw_branch\"" \
-            >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+            >/dev/null 2>>"$run_dir/transcript-errors.log" \
+            || printf '[subagent-stop-transcript] WARN: task-write prior_branch failed for %s\n' "$task_id" >&2
         fi
         if [[ -n "$_tw_commit" ]]; then
           pipeline-state task-write "$run_id" "$task_id" prior_commit "\"$_tw_commit\"" \
-            >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+            >/dev/null 2>>"$run_dir/transcript-errors.log" \
+            || printf '[subagent-stop-transcript] WARN: task-write prior_commit failed for %s\n' "$task_id" >&2
         fi
       fi
       ;;
     task-executor)
       pipeline-state task-write "$run_id" "$task_id" executor_status "\"$status\"" \
-        >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+        >/dev/null 2>>"$run_dir/transcript-errors.log" \
+        || printf '[subagent-stop-transcript] WARN: task-write executor_status failed for %s\n' "$task_id" >&2
       if [[ -n "$worktree" ]]; then
         pipeline-state task-write "$run_id" "$task_id" executor_worktree "\"$worktree\"" \
           >/dev/null 2>>"$run_dir/transcript-errors.log" \
@@ -210,14 +222,17 @@ if [[ -n "$task_id" && "$task_id" != "RUN" ]]; then
     implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer)
       # Shared key (last-writer-wins, retained for back-compat)
       pipeline-state task-write "$run_id" "$task_id" reviewer_status "\"$status\"" \
-        >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+        >/dev/null 2>>"$run_dir/transcript-errors.log" \
+        || printf '[subagent-stop-transcript] WARN: task-write reviewer_status failed for %s\n' "$task_id" >&2
       # Per-role key: implementation_reviewer_status, quality_reviewer_status, etc.
       _role_key="${agent_type//-/_}_status"
       pipeline-state task-write "$run_id" "$task_id" "$_role_key" "\"$status\"" \
-        >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+        >/dev/null 2>>"$run_dir/transcript-errors.log" \
+        || printf '[subagent-stop-transcript] WARN: task-write %s failed for %s\n' "$_role_key" "$task_id" >&2
       if [[ -n "$worktree" ]]; then
         pipeline-state task-write "$run_id" "$task_id" "reviewer_worktree_${agent_type//-/_}" "\"$worktree\"" \
-          >/dev/null 2>>"$run_dir/transcript-errors.log" || true
+          >/dev/null 2>>"$run_dir/transcript-errors.log" \
+          || printf '[subagent-stop-transcript] WARN: task-write reviewer_worktree_%s failed for %s\n' "${agent_type//-/_}" "$task_id" >&2
       fi
       if [[ -n "$review_path" ]]; then
         if $is_holdout_reviewer; then

@@ -26,6 +26,10 @@ if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$_lib" ]]; then
   source "$_lib" 2>/dev/null || true
 fi
 
+if command -v _factory_ensure_plugin_bin_path >/dev/null 2>&1; then
+  _factory_ensure_plugin_bin_path
+fi
+
 min_major=2
 min_minor=1
 min_patch=116

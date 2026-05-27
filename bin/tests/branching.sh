@@ -1899,6 +1899,87 @@ PARSE_REVIEW_SRC="$(cd "$(dirname "$0")/.." && pwd)/pipeline-parse-review"
 exit_trap_count=$(grep -cE "^[[:space:]]*trap .*EXIT" "$PARSE_REVIEW_SRC" || true)
 assert_eq "parse-review: exactly one EXIT trap" "1" "$exit_trap_count"
 
+echo ""
+echo "=== orchestrator worktree reuse fast-forwards to origin/staging ==="
+
+# Set up a bare origin + a working clone whose default branch is "staging".
+# All git commands use `-C` so we never change branching.sh's CWD.
+_orch_tmp=$(mktemp -d)
+_origin="$_orch_tmp/origin.git"
+_local="$_orch_tmp/work"
+_orch_wt="$_local/.claude/worktrees/orchestrator-test"
+
+git init --bare -b staging "$_origin" >/dev/null
+git clone "$_origin" "$_local" >/dev/null 2>&1
+
+# Seed v1 on origin/staging. Use -c to set user identity inside the test
+# clone so commits work even on CI runners with no global git config.
+git -C "$_local" config user.email "test@factory.local"
+git -C "$_local" config user.name  "factory test"
+git -C "$_local" checkout -b staging >/dev/null 2>&1
+printf 'v1\n' > "$_local/version.txt"
+git -C "$_local" add version.txt
+git -C "$_local" commit -m "v1" >/dev/null
+git -C "$_local" push origin staging >/dev/null 2>&1
+
+# Create the orchestrator worktree on its own branch forked from staging.
+mkdir -p "$(dirname "$_orch_wt")"
+git -C "$_local" worktree add -b "orch-test" "$_orch_wt" staging >/dev/null 2>&1
+v1_sha=$(git -C "$_orch_wt" rev-parse HEAD)
+git -C "$_orch_wt" config user.email "test@factory.local"
+git -C "$_orch_wt" config user.name  "factory test"
+
+# Advance origin/staging to v2 (on the main clone, which is still on staging).
+printf 'v2\n' > "$_local/version.txt"
+git -C "$_local" add version.txt
+git -C "$_local" commit -m "v2" >/dev/null
+git -C "$_local" push origin staging >/dev/null 2>&1
+v2_sha=$(git -C "$_local" rev-parse HEAD)
+
+# Sanity: the orchestrator worktree is still at v1 (stale relative to origin).
+assert_eq "orch-test: worktree starts stale at v1" "$v1_sha" "$(git -C "$_orch_wt" rev-parse HEAD)"
+
+# Exercise the SKILL.md step 6 reuse logic: fetch + ff-only inside the
+# orchestrator worktree. The test pins the COMMAND CONTRACT so future
+# SKILL.md drift breaks the test loudly.
+set +e
+git -C "$_orch_wt" fetch origin staging --quiet
+fetch_rc=$?
+git -C "$_orch_wt" merge --ff-only origin/staging --quiet
+merge_rc=$?
+set -e
+
+assert_eq "orch-test: fetch rc=0" "0" "$fetch_rc"
+assert_eq "orch-test: ff-merge rc=0" "0" "$merge_rc"
+assert_eq "orch-test: worktree advances to origin/staging" "$v2_sha" \
+  "$(git -C "$_orch_wt" rev-parse HEAD)"
+
+# Divergence path: add a local commit to the orchestrator worktree, then
+# advance origin/staging — FF-only must refuse.
+printf 'local\n' > "$_orch_wt/local-only.txt"
+git -C "$_orch_wt" add local-only.txt
+git -C "$_orch_wt" commit -m "local divergence" >/dev/null
+
+printf 'v3\n' > "$_local/version.txt"
+git -C "$_local" add version.txt
+git -C "$_local" commit -m "v3" >/dev/null
+git -C "$_local" push origin staging >/dev/null 2>&1
+
+set +e
+git -C "$_orch_wt" fetch origin staging --quiet
+git -C "$_orch_wt" merge --ff-only origin/staging --quiet 2>/dev/null
+diverge_rc=$?
+set -e
+
+if (( diverge_rc != 0 )); then
+  assert_eq "orch-test: divergence refuses ff-only" "non-zero" "non-zero"
+else
+  assert_eq "orch-test: divergence refuses ff-only" "non-zero" "zero(rc=0)"
+fi
+
+git -C "$_local" worktree remove --force "$_orch_wt" >/dev/null 2>&1 || true
+rm -rf "$_orch_tmp"
+
 # ============================================================
 echo ""
 echo "=== Results ==="

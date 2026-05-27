@@ -170,7 +170,24 @@ orchestrator_wt="$PROJECT_ROOT/.claude/worktrees/orchestrator-$run_id"
 mkdir -p "$(dirname "$orchestrator_wt")"
 
 if [[ -d "$orchestrator_wt/.git" ]] || git -C "$PROJECT_ROOT" worktree list --porcelain | grep -q "^worktree $orchestrator_wt$"; then
-  : # reuse
+  # Resume path: the orchestrator worktree exists from a previous launch and
+  # may be many commits behind origin/staging. Refresh it before any subagent
+  # spawns, otherwise Agent({isolation: "worktree"}) inherits a stale HEAD and
+  # every subagent worktree sees an out-of-date package.json / lockfile / etc.
+  # Fail-closed on divergence — an operator who hits this must reconcile
+  # manually before resuming; silently running on a stale tree is the bug.
+  if ! git -C "$orchestrator_wt" fetch origin staging --quiet; then
+    echo "[ERROR] orchestrator worktree fetch failed at $orchestrator_wt — origin unreachable" >&2
+    exit 1
+  fi
+  _orch_ff_err=$(mktemp)
+  if ! git -C "$orchestrator_wt" merge --ff-only origin/staging --quiet 2>"$_orch_ff_err"; then
+    echo "[ERROR] orchestrator worktree at $orchestrator_wt diverged from origin/staging; manual recovery needed" >&2
+    cat "$_orch_ff_err" >&2
+    rm -f "$_orch_ff_err"
+    exit 1
+  fi
+  rm -f "$_orch_ff_err"
 else
   pipeline-branch worktree-create "orchestrator-$run_id" "$orchestrator_wt" staging
 fi
