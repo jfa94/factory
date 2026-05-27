@@ -84,7 +84,12 @@ Writing tests after the fact is a known failure mode for AI code generators: the
 
 **How it works:**
 
-`pipeline-tdd-gate` inspects the git log between the base branch and HEAD. It looks for commits matching the `test(task-id):` prefix convention. If the first non-empty commit is an implementation commit (no test prefix), the gate fails. Tasks can opt out via `tdd_exempt: true` in `spec/tasks.json`, or project-wide via `package.json.factory.tddExempt`.
+`pipeline-tdd-gate` walks every commit in `base..HEAD` and classifies each as test-only (touches only test or docs paths), impl (touches at least one non-test, non-docs path), or empty. Tagging convention: every commit must carry `[<task-id>]` somewhere in the subject or body — a literal-bracket match (`grep -qF "[$task_id]"`), not a conventional-commit prefix. The gate enforces two rules:
+
+1. **Test before impl.** For each impl commit, a test-only commit tagged with the same task id must appear earlier in the chain (`seen_test_only == 1`). An impl commit that precedes any tagged test-only commit fails with reason `impl-without-preceding-test`.
+2. **All impl commits tagged.** Any impl commit missing the `[<task-id>]` tag fails with reason `impl-commit-untagged`.
+
+A task with no impl commits at all passes vacuously. A task with zero commits in `base..HEAD` fails closed — the executor produced nothing. Tasks marked `tdd_exempt: true` in `spec/tasks.json` (or project-wide via `package.json.factory.tddExempt`) pass with `exempt=true`.
 
 **Red-test verification (infra-failure detection):**
 
