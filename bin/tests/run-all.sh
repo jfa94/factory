@@ -21,7 +21,7 @@
 set -uo pipefail   # NOT -e: per-test failures must not abort the loop
 
 cd "$(dirname "$0")"
-RUN_DIR="$(pwd)"
+shopt -s nullglob
 
 verbose=0
 filter='*'
@@ -29,7 +29,9 @@ list_only=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --verbose) verbose=1; shift ;;
-    --filter)  filter="$2"; shift 2 ;;
+    --filter)
+      [[ $# -lt 2 ]] && { echo "--filter requires an argument" >&2; exit 2; }
+      filter="$2"; shift 2 ;;
     --list)    list_only=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -63,7 +65,11 @@ for t in "${all_tests[@]}"; do
 done
 
 if (( list_only )); then
-  printf '%s\n' "${tests[@]}"
+  if (( ${#tests[@]} == 0 )); then
+    echo "no tests matched filter '$filter' (after skip-list)" >&2
+  else
+    printf '%s\n' "${tests[@]}"
+  fi
   exit 0
 fi
 
@@ -107,8 +113,11 @@ for t in "${tests[@]}"; do
     fail=$((fail + 1))
     failed_names+=("$t")
     if (( ! verbose )); then
-      printf '    --- captured output ---\n%s\n    --- end ---\n' "$out" \
-        | sed 's/^/    /'
+      printf '    --- captured output ---\n'
+      while IFS= read -r line; do
+        printf '    %s\n' "$line"
+      done <<< "$out"
+      printf '    --- end ---\n'
     fi
   fi
 done
