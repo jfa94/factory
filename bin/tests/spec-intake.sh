@@ -8,7 +8,9 @@ set -euo pipefail
 export FACTORY_JSON=1
 
 export CLAUDE_PLUGIN_DATA=$(mktemp -d)
-export PATH="$(cd "$(dirname "$0")/.." && pwd):$PATH"
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export PLUGIN_ROOT
+export PATH="$PLUGIN_ROOT:$PATH"
 
 pass=0
 fail=0
@@ -455,7 +457,7 @@ esac
 MOCK_GH2
 chmod +x "$MOCK_DIR2/gh"
 OLD_PATH="$PATH"
-export PATH="$MOCK_DIR2:$(cd "$(dirname "$0")/.." && pwd):$OLD_PATH"
+export PATH="$MOCK_DIR2:$PLUGIN_ROOT:$OLD_PATH"
 set +e
 pipeline-gh-comment 42 spec-failure --data '{"reason":"test","run_id":"run-t02"}' >/dev/null 2>&1
 exit_code=$?
