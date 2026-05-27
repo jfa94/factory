@@ -91,6 +91,7 @@ out_c=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_c" \
 rc_c=$?
 set -e
 assert_eq "STARTUP_FAILURE (bucket=fail) → exit 3" "3" "$rc_c"
+assert_contains "STARTUP_FAILURE reported as lint=fail" "lint=fail" "$out_c"
 
 # --- Case D: ACTION_REQUIRED → exit 3 (bucket=fail) ---
 checks_d=$(mktemp)
@@ -103,6 +104,7 @@ out_d=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_d" \
 rc_d=$?
 set -e
 assert_eq "ACTION_REQUIRED (bucket=fail) → exit 3" "3" "$rc_d"
+assert_contains "ACTION_REQUIRED reported as deploy=fail" "deploy=fail" "$out_d"
 
 # --- Case E: empty checks list → no "all checks passed" log; defer to merge ---
 checks_e=$(mktemp)
