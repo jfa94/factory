@@ -54,55 +54,55 @@ esac
 MOCK
 chmod +x "$MOCK/gh"
 
-# --- Case A: CANCELLED conclusion → exit 3 (was previously ignored) ---
+# --- Case A: CANCELLED conclusion → exit 3 (bucket=cancel) ---
 checks_a=$(mktemp)
 cat > "$checks_a" <<'JSON'
-[{"name":"build","state":"COMPLETED","conclusion":"CANCELLED"}]
+[{"name":"build","state":"COMPLETED","bucket":"cancel","conclusion":"CANCELLED"}]
 JSON
 set +e
 out_a=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_a" \
   pipeline-wait-pr 999 --timeout 1 --interval 1 2>&1)
 rc_a=$?
 set -e
-assert_eq "CANCELLED conclusion → exit 3" "3" "$rc_a"
-assert_contains "CANCELLED reported with name=conclusion" "build=CANCELLED" "$out_a"
+assert_eq "CANCELLED (bucket=cancel) → exit 3" "3" "$rc_a"
+assert_contains "CANCELLED reported as build=cancel" "build=cancel" "$out_a"
 
-# --- Case B: TIMED_OUT → exit 3 ---
+# --- Case B: TIMED_OUT → exit 3 (bucket=fail) ---
 checks_b=$(mktemp)
 cat > "$checks_b" <<'JSON'
-[{"name":"e2e","state":"COMPLETED","conclusion":"TIMED_OUT"}]
+[{"name":"e2e","state":"COMPLETED","bucket":"fail","conclusion":"TIMED_OUT"}]
 JSON
 set +e
 out_b=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_b" \
   pipeline-wait-pr 999 --timeout 1 --interval 1 2>&1)
 rc_b=$?
 set -e
-assert_eq "TIMED_OUT conclusion → exit 3" "3" "$rc_b"
-assert_contains "TIMED_OUT reported with name=conclusion" "e2e=TIMED_OUT" "$out_b"
+assert_eq "TIMED_OUT (bucket=fail) → exit 3" "3" "$rc_b"
+assert_contains "TIMED_OUT reported as e2e=fail" "e2e=fail" "$out_b"
 
-# --- Case C: STARTUP_FAILURE → exit 3 ---
+# --- Case C: STARTUP_FAILURE → exit 3 (bucket=fail) ---
 checks_c=$(mktemp)
 cat > "$checks_c" <<'JSON'
-[{"name":"lint","state":"COMPLETED","conclusion":"STARTUP_FAILURE"}]
+[{"name":"lint","state":"COMPLETED","bucket":"fail","conclusion":"STARTUP_FAILURE"}]
 JSON
 set +e
 out_c=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_c" \
   pipeline-wait-pr 999 --timeout 1 --interval 1 2>&1)
 rc_c=$?
 set -e
-assert_eq "STARTUP_FAILURE conclusion → exit 3" "3" "$rc_c"
+assert_eq "STARTUP_FAILURE (bucket=fail) → exit 3" "3" "$rc_c"
 
-# --- Case D: ACTION_REQUIRED → exit 3 ---
+# --- Case D: ACTION_REQUIRED → exit 3 (bucket=fail) ---
 checks_d=$(mktemp)
 cat > "$checks_d" <<'JSON'
-[{"name":"deploy","state":"COMPLETED","conclusion":"ACTION_REQUIRED"}]
+[{"name":"deploy","state":"COMPLETED","bucket":"fail","conclusion":"ACTION_REQUIRED"}]
 JSON
 set +e
 out_d=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_d" \
   pipeline-wait-pr 999 --timeout 1 --interval 1 2>&1)
 rc_d=$?
 set -e
-assert_eq "ACTION_REQUIRED conclusion → exit 3" "3" "$rc_d"
+assert_eq "ACTION_REQUIRED (bucket=fail) → exit 3" "3" "$rc_d"
 
 # --- Case E: empty checks list → no "all checks passed" log; defer to merge ---
 checks_e=$(mktemp)
@@ -119,15 +119,15 @@ assert_contains "empty checks logs deferral" "no checks defined" "$out_e"
 # --- Case F: mixed checks with at least one SUCCESS and one FAILURE → exit 3 ---
 checks_f=$(mktemp)
 cat > "$checks_f" <<'JSON'
-[{"name":"unit","state":"COMPLETED","conclusion":"SUCCESS"},{"name":"build","state":"COMPLETED","conclusion":"FAILURE"}]
+[{"name":"unit","state":"COMPLETED","bucket":"pass","conclusion":"SUCCESS"},{"name":"build","state":"COMPLETED","bucket":"fail","conclusion":"FAILURE"}]
 JSON
 set +e
 out_f=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_f" \
   pipeline-wait-pr 999 --timeout 1 --interval 1 2>&1)
 rc_f=$?
 set -e
-assert_eq "FAILURE among mixed → exit 3" "3" "$rc_f"
-assert_contains "FAILURE reported with name=conclusion" "build=FAILURE" "$out_f"
+assert_eq "FAILURE among mixed (bucket=fail) → exit 3" "3" "$rc_f"
+assert_contains "FAILURE reported as build=fail" "build=fail" "$out_f"
 
 # ============================================================
 echo ""
