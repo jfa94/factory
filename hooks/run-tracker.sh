@@ -66,10 +66,19 @@ verify_chain() {
 
   local prev="GENESIS"
   local line_num=0
-  local entry_prev entry_hash
+  local sentinel_count=0
+  local entry_prev entry_hash entry_event
   while IFS= read -r line; do
     line_num=$((line_num + 1))
     [[ -z "$line" ]] && continue
+    # Skip non-chain sentinel rows (e.g. lock_timeout). These intentionally
+    # carry no chain fields and represent observability events, not chain
+    # entries — the broken-chain signal is preserved via a separate counter.
+    entry_event=$(printf '%s' "$line" | jq -r '.event // ""' 2>/dev/null)
+    if [[ -n "$entry_event" ]]; then
+      sentinel_count=$((sentinel_count + 1))
+      continue
+    fi
     entry_prev=$(printf '%s' "$line" | jq -r '.prev_hash // ""' 2>/dev/null)
     entry_hash=$(printf '%s' "$line" | jq -r '.hash // ""' 2>/dev/null)
     if [[ -z "$entry_prev" || -z "$entry_hash" ]]; then
@@ -84,7 +93,11 @@ verify_chain() {
     prev="$entry_hash"
   done < "$audit_file"
 
-  printf '{"status":"valid","entries":%d}\n' "$line_num"
+  if (( sentinel_count > 0 )); then
+    printf '{"status":"valid","entries":%d,"sentinels":%d}\n' "$line_num" "$sentinel_count"
+  else
+    printf '{"status":"valid","entries":%d}\n' "$line_num"
+  fi
   return 0
 }
 
@@ -177,7 +190,10 @@ seq_num=$((seq_num + 1))
 
 # task_09_02: read the previous chain hash from the last audit entry.
 # Reading under the mutex guarantees we see the latest committed entry.
-prev_hash=$(tail -n 1 "$audit_file" 2>/dev/null | jq -r '.hash // empty' 2>/dev/null)
+# F1 followup: skip sentinel rows (no .hash, .event != null) when deriving
+# prev_hash so the chain links only chain-entries, not observability
+# sentinels appended on lock contention.
+prev_hash=$(jq -r 'select(.event == null) | .hash' "$audit_file" 2>/dev/null | tail -n 1)
 if [[ -z "$prev_hash" ]]; then
   prev_hash="GENESIS"
 fi
