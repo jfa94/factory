@@ -1348,8 +1348,12 @@ _fos_lock_test() {
   ( CLAUDE_PLUGIN_DATA="$sandbox" pipeline-state finalize-on-stop "$run_id" >/dev/null 2>&1
     touch "$done_marker" ) &
   local bg_pid=$!
-  # Give it 0.5s — it must NOT complete while lock is held
-  sleep 0.5
+  # Give it 1.5s — it must NOT complete while lock is held. (Was 0.5s; CI
+  # runners need more headroom for the background subshell to spawn,
+  # source pipeline-lib.sh, and actually reach the lock-wait point. The
+  # marker file race window was tight enough to false-pass on macOS but
+  # tight enough to false-fail on slower Linux runners.)
+  sleep 1.5
   local blocked=false
   if [[ ! -f "$done_marker" ]]; then
     blocked=true

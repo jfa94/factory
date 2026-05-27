@@ -404,7 +404,12 @@ assert_eq "fix finding present" "true" "$( echo "$output" | grep -q "Missing nul
 echo ""
 echo "=== task_13_06: build-prompt --seed determinism ==="
 
-seed_task='{"task_id":"seed1","title":"Seed test","description":"D","files":["a.ts"],"acceptance_criteria":["c1","c2","c3","c4","c5","c6"],"tests_to_write":["t"],"depends_on":[]}'
+# 20 criteria with 50% holdout gives C(20,10)=184756 possible selections,
+# so two arbitrary seeds colliding is astronomically unlikely (~5e-6).
+# The earlier 6-criteria fixture had C(6,3)=20 selections and a real ~5%
+# collision risk between seeds 42 and 99 — passed on macOS by luck, failed
+# on Linux CI when the hash mapped both to the same subset.
+seed_task='{"task_id":"seed1","title":"Seed test","description":"D","files":["a.ts"],"acceptance_criteria":["c01","c02","c03","c04","c05","c06","c07","c08","c09","c10","c11","c12","c13","c14","c15","c16","c17","c18","c19","c20"],"tests_to_write":["t"],"depends_on":[]}'
 
 pipeline-build-prompt "$seed_task" --holdout 50 --seed 42 2>/dev/null >/dev/null
 h1=$(jq -Sc '.withheld_criteria' "${CLAUDE_PLUGIN_DATA}/runs/run-prompt-test/holdouts/seed1.json")

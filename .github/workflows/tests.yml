@@ -39,6 +39,16 @@ jobs:
           git config --global user.email "tests@factory.ci"
           git config --global user.name "factory-tests"
 
+      - name: Install pnpm
+        # pipeline-quality-gate detects a default package manager of `pnpm`
+        # when no lockfile is present (see bin/pipeline-lib.sh:detect_pkg_manager).
+        # hooks.sh fixtures rely on this — invoke `pnpm run <script>` against
+        # fixture package.json files. Without pnpm the gate exits non-zero
+        # and four hooks.sh assertions fail.
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - name: Run bin/tests/run-all.sh
         env:
           # The runner provides a default token; some tests may call
