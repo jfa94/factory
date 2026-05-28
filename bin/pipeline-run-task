@@ -1738,6 +1738,19 @@ _stage_ship() {
     return 30
   fi
 
+  local _ship_branch="task/${task_id}"
+  if git -C "$wt" remote get-url origin >/dev/null 2>&1; then
+    local _ship_push_err
+    if ! _ship_push_err=$(git -C "$wt" push -u origin "$_ship_branch" 2>&1); then
+      log_error "ship: git push origin $_ship_branch failed: ${_ship_push_err//$'\n'/ }"
+      _task_write failure_reason "$(jq -Rs . <<<"ship push failed: ${_ship_push_err:0:300}")"
+      t1=$(_now_ms); log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ship_push\""
+      return 30
+    fi
+  else
+    log_warn "ship: no origin remote in $wt; skipping push (offline/test mode)"
+  fi
+
   if ! _run_ship_pregate "$wt"; then
     log_warn "ship-time pregate failed for $task_id"
     t1=$(_now_ms)
@@ -1750,7 +1763,7 @@ _stage_ship() {
   local pr_url pr_number pr_title _gh_err
   pr_title=$(pipeline-branch task-pr-title "$task_id" --run-id "$run_id")
   _gh_err=$(mktemp)
-  pr_url=$(cd "$wt" && gh pr create --base staging --title "$pr_title" \
+  pr_url=$(cd "$wt" && gh pr create --base staging --head "$_ship_branch" --title "$pr_title" \
     --body "Automated task PR for $task_id in run $run_id." 2>"$_gh_err") || pr_url=""
   if [[ -z "$pr_url" ]]; then
     local err_text; err_text=$(<"$_gh_err"); rm -f "$_gh_err"

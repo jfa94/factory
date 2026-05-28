@@ -2018,6 +2018,30 @@ rm -rf "$ROOT_TMP"
 
 # ============================================================
 echo ""
+echo "=== ship push: task/<id> reaches origin ==="
+
+SP_ORIGIN="$(mktemp -d)/ship-origin.git"
+SP_WT="$(mktemp -d)/ship-wt"
+git init -q --bare "$SP_ORIGIN"
+git init -q "$SP_WT"
+git -C "$SP_WT" config user.email t@t
+git -C "$SP_WT" config user.name t
+git -C "$SP_WT" commit -q --allow-empty -m init
+git -C "$SP_WT" branch -M staging
+git -C "$SP_WT" remote add origin "$SP_ORIGIN"
+git -C "$SP_WT" checkout -q -b worktree-agent-cafef00d
+printf 'y' > "$SP_WT/f.txt"
+BIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+"$BIN_DIR/pipeline-branch" task-commit ship-task --worktree "$SP_WT" --message "feat: y" >/dev/null 2>&1
+git -C "$SP_WT" push -u origin task/ship-task >/dev/null 2>&1
+git -C "$SP_ORIGIN" show-ref --verify --quiet refs/heads/task/ship-task \
+  && { echo "  PASS: task/ship-task exists on origin after push"; pass=$((pass + 1)); } \
+  || { echo "  FAIL: task/ship-task exists on origin after push"; fail=$((fail + 1)); }
+
+rm -rf "$SP_ORIGIN" "$SP_WT"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"
