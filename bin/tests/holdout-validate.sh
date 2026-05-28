@@ -59,6 +59,12 @@ printf '\n=== check: genuinely missing JSON fails closed ===\n'
 run_check 'I could not find the file. No JSON here.'
 [[ "$RC" -eq 2 ]] && ok "no-JSON output → exit 2 (fail-closed)" \
   || fail "no-JSON output → exit 2 (got $RC)"
+[[ "$(printf '%s' "$SUMMARY" | jq -r '.status' 2>/dev/null)" == "error" ]] \
+  && ok "no-JSON output → status error" \
+  || fail "no-JSON output → status error (got $(printf '%s' "$SUMMARY" | jq -r '.status' 2>/dev/null))"
+[[ "$(printf '%s' "$SUMMARY" | jq -r '.reason' 2>/dev/null)" == "invalid_reviewer_output" ]] \
+  && ok "no-JSON output → reason invalid_reviewer_output" \
+  || fail "no-JSON output → reason invalid_reviewer_output (got $(printf '%s' "$SUMMARY" | jq -r '.reason' 2>/dev/null))"
 
 printf '\n=== prompt: embeds worktree path + diff instruction (#2) ===\n'
 PROMPT_OUT=$("$BIN_DIR/pipeline-holdout-validate" prompt "$RUN_ID" t1 --worktree /tmp/wt-xyz 2>/dev/null)
