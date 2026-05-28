@@ -1545,6 +1545,22 @@ _ec_target=$(readlink "$CLAUDE_PLUGIN_DATA/runs/current" 2>/dev/null || true)
 assert_eq "ensure-current swaps over terminal run" "$CLAUDE_PLUGIN_DATA/runs/run-canon-terminal" "$_ec_target"
 
 echo ""
+echo "=== allowlist: fields the pipeline writes must be known (no warn) ==="
+
+_run="allowlist-$$"
+pipeline-init "$_run" --mode task --force >/dev/null 2>&1
+pipeline-state task-init "$_run" rev-001 '{}' >/dev/null 2>&1
+for _f in test_writer_branch reviewer_status implementation_reviewer_status \
+          quality_reviewer_status security_reviewer_status architecture_reviewer_status \
+          reviewer_worktree_implementation_reviewer reviewer_worktree_quality_reviewer \
+          reviewer_worktree_security_reviewer reviewer_worktree_architecture_reviewer \
+          rescue_last_decision rescue_last_reason; do
+  _warn=$(pipeline-state task-write "$_run" rev-001 "$_f" '"x"' 2>&1 >/dev/null)
+  assert_eq "allowlist knows $_f (no warn)" "" \
+    "$(printf '%s' "$_warn" | grep -o 'unknown field' | head -1)"
+done
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"

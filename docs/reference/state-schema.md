@@ -191,30 +191,42 @@ The orchestrator worktree is created at Step 6a of `commands/run.md` to isolate 
 
 ### Task Fields
 
-| Field                  | Type           | Description                                        |
-| ---------------------- | -------------- | -------------------------------------------------- |
-| `status`               | string         | Task status                                        |
-| `tier`                 | string         | Complexity tier (simple/medium/complex)            |
-| `risk_tier`            | string         | Risk tier (routine/feature/security)               |
-| `model_used`           | string         | Model that executed task                           |
-| `provider`             | string         | anthropic                                          |
-| `depends_on`           | array          | Task IDs this depends on                           |
-| `branch`               | string         | Git branch name                                    |
-| `worktree`             | string         | Path to worktree (last-writer-wins for downstream) |
-| `test_writer_worktree` | string         | Worktree path used by test-writer phase            |
-| `executor_worktree`    | string         | Worktree path used by task-executor phase          |
-| `pr_number`            | number         | Pull request number                                |
-| `pr_url`               | string         | Pull request URL                                   |
-| `pr_status`            | string         | open/merged/closed                                 |
-| `review_rounds`        | array          | Review round records                               |
-| `quality_gates`        | object         | Quality gate results                               |
-| `started_at`           | string         | ISO 8601 timestamp                                 |
-| `ended_at`             | string         | ISO 8601 timestamp                                 |
-| `tokens_used`          | number         | Tokens consumed                                    |
-| `error`                | string or null | Error message if failed                            |
-| `prior_work_dir`       | string         | Worktree path from previous attempt                |
-| `prior_branch`         | string         | Branch from previous attempt                       |
-| `prior_commit`         | string         | Last commit from previous attempt                  |
+| Field                                       | Type           | Description                                                                                                                           |
+| ------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`                                    | string         | Task status                                                                                                                           |
+| `tier`                                      | string         | Complexity tier (simple/medium/complex)                                                                                               |
+| `risk_tier`                                 | string         | Risk tier (routine/feature/security)                                                                                                  |
+| `model_used`                                | string         | Model that executed task                                                                                                              |
+| `provider`                                  | string         | anthropic                                                                                                                             |
+| `depends_on`                                | array          | Task IDs this depends on                                                                                                              |
+| `branch`                                    | string         | Git branch name                                                                                                                       |
+| `worktree`                                  | string         | Path to worktree (last-writer-wins for downstream)                                                                                    |
+| `test_writer_worktree`                      | string         | Worktree path used by test-writer phase                                                                                               |
+| `test_writer_branch`                        | string         | Branch name pushed by the test-writer phase                                                                                           |
+| `executor_worktree`                         | string         | Worktree path used by task-executor phase                                                                                             |
+| `reviewer_worktree_implementation_reviewer` | string         | Worktree path used by the implementation-reviewer                                                                                     |
+| `reviewer_worktree_quality_reviewer`        | string         | Worktree path used by the quality-reviewer                                                                                            |
+| `reviewer_worktree_security_reviewer`       | string         | Worktree path used by the security-reviewer                                                                                           |
+| `reviewer_worktree_architecture_reviewer`   | string         | Worktree path used by the architecture-reviewer                                                                                       |
+| `reviewer_status`                           | string         | Shared last-writer-wins key written alongside per-role `<role>_status` fields for back-compat; prefer per-role fields (authoritative) |
+| `implementation_reviewer_status`            | string         | Per-role verdict from implementation-reviewer                                                                                         |
+| `quality_reviewer_status`                   | string         | Per-role verdict from quality-reviewer                                                                                                |
+| `security_reviewer_status`                  | string         | Per-role verdict from security-reviewer                                                                                               |
+| `architecture_reviewer_status`              | string         | Per-role verdict from architecture-reviewer                                                                                           |
+| `pr_number`                                 | number         | Pull request number                                                                                                                   |
+| `pr_url`                                    | string         | Pull request URL                                                                                                                      |
+| `pr_status`                                 | string         | open/merged/closed                                                                                                                    |
+| `review_rounds`                             | array          | Review round records                                                                                                                  |
+| `quality_gates`                             | object         | Quality gate results                                                                                                                  |
+| `started_at`                                | string         | ISO 8601 timestamp                                                                                                                    |
+| `ended_at`                                  | string         | ISO 8601 timestamp                                                                                                                    |
+| `tokens_used`                               | number         | Tokens consumed                                                                                                                       |
+| `error`                                     | string or null | Error message if failed                                                                                                               |
+| `prior_work_dir`                            | string         | Worktree path from previous attempt                                                                                                   |
+| `prior_branch`                              | string         | Branch from previous attempt                                                                                                          |
+| `prior_commit`                              | string         | Last commit from previous attempt                                                                                                     |
+| `rescue_last_decision`                      | string         | Last decision from the rescue protocol                                                                                                |
+| `rescue_last_reason`                        | string         | Reason text from the last rescue decision                                                                                             |
 
 **Worktree field semantics:**
 
