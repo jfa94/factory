@@ -87,15 +87,47 @@ case "$subcommand" in
     withheld=$(jq -rc '.withheld_criteria' "$holdout_file")
     withheld_count=$(jq -r '.withheld_count // 0' "$holdout_file")
 
-    # Extract a JSON object from the reviewer output. Reviewers occasionally
-    # wrap the JSON in code fences; strip a single ```json ... ``` block if
-    # present, otherwise pass the file through as-is.
+    # Extract a JSON object from the reviewer output. Reviewers frequently wrap
+    # the verdict in prose and/or code fences. Try, in order:
+    #   1. whole file parses as JSON,
+    #   2. a fenced ```json ... ``` block,
+    #   3. the span from the first '{' to the last '}' (prose-wrapped object).
+    # The prompt asks for "no prose" but models routinely ignore that, so the
+    # parser must be tolerant — fence-only parsing was root cause #3.
     raw=$(cat "$output_file")
-    cleaned=$(printf '%s' "$raw" \
-      | sed -n '/```json/,/```/p' \
-      | sed '1d;$d')
-    if [[ -z "$cleaned" ]]; then
-      cleaned="$raw"
+    _extract_criteria() {
+      # echo a JSON string that has a .criteria key, or nothing on failure.
+      local candidate
+      # 1. whole file
+      if printf '%s' "$raw" | jq -e '.criteria' >/dev/null 2>&1; then
+        printf '%s' "$raw"; return 0
+      fi
+      # 2. fenced ```json block
+      candidate=$(printf '%s' "$raw" | sed -n '/```json/,/```/p' | sed '1d;$d')
+      if [[ -n "$candidate" ]] && printf '%s' "$candidate" | jq -e '.criteria' >/dev/null 2>&1; then
+        printf '%s' "$candidate"; return 0
+      fi
+      # 3. first '{' .. last '}' span (greedy outer object)
+      candidate=$(printf '%s' "$raw" | awk '
+        { lines[NR] = $0 }
+        END {
+          start = 0; end = 0
+          for (i = 1; i <= NR; i++) if (index(lines[i], "{") && start == 0) { start = i; break }
+          for (i = NR; i >= 1; i--) if (index(lines[i], "}")) { end = i; break }
+          if (start && end && end >= start)
+            for (i = start; i <= end; i++) print lines[i]
+        }')
+      if [[ -n "$candidate" ]] && printf '%s' "$candidate" | jq -e '.criteria' >/dev/null 2>&1; then
+        printf '%s' "$candidate"; return 0
+      fi
+      return 1
+    }
+
+    if ! cleaned=$(_extract_criteria); then
+      log_error "reviewer output has no parseable JSON object with .criteria"
+      jq -cn --arg run_id "$run_id" --arg task_id "$task_id" --arg reason "invalid_reviewer_output" \
+        '{run_id:$run_id, task_id:$task_id, status:"error", reason:$reason}'
+      exit 2
     fi
 
     if ! parsed=$(printf '%s' "$cleaned" | jq -ec '.criteria // []' 2>/dev/null); then
