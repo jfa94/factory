@@ -128,7 +128,7 @@ case "$subcommand" in
         { lines[NR] = $0 }
         END {
           start = 0; end = 0
-          for (i = 1; i <= NR; i++) if (index(lines[i], "{") && start == 0) { start = i; break }
+          for (i = 1; i <= NR; i++) if (index(lines[i], "{")) { start = i; break }
           for (i = NR; i >= 1; i--) if (index(lines[i], "}")) { end = i; break }
           if (start && end && end >= start)
             for (i = start; i <= end; i++) print lines[i]
