@@ -1945,5 +1945,45 @@ assert_eq "ship-pregate-fail: exit 30" "30" "$RC"
 
 rm -f "$STUB_DIR/git" "$STUB_DIR/gh" "$STUB_DIR/pipeline-quality-gate" "$ROOT_TMP/git-push-pg.log"
 
+
+# --- ship-push-fail: push rejection sets failure_reason and skips gh pr create --
+new_run ship-push-fail
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+
+# git stub: push FAILS; everything else (task-commit, rev-parse, remote) succeeds.
+# Match on the git SUBCOMMAND (arg after the `-C <wt>` prefix), not a substring
+# of "$*" — the worktree path itself contains "push" (ship-push-fail-wt), which
+# would otherwise misfire the push branch for every call.
+write_stub git '
+sub="$1"; [[ "$1" == "-C" ]] && sub="$3"
+case "$sub" in
+  push)   echo "remote rejected: protected branch" >&2; exit 1 ;;
+  rev-parse) echo "task/alpha-001"; exit 0 ;;
+  remote) echo "https://github.com/acme/repo.git"; exit 0 ;;
+  *) exit 0 ;;
+esac'
+# gh stub: if pr create is ever called, log it so we can assert it was NOT.
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "pr-create-was-called" >> "'"$ROOT_TMP"'/gh-prcreate.log"; echo "https://github.com/acme/repo/pull/1" ;;
+  *) exit 0 ;;
+esac'
+# Pregate must pass so we reach the push (rc=2 = skipped = pass).
+write_stub pipeline-quality-gate 'exit 2'
+
+set +e; FACTORY_ASYNC_CI=off pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1; RC=$?; set -e
+assert_eq "ship-push-fail: exit 30" "30" "$RC"
+fr=$(field_of failure_reason | tr -d '"' || true)
+case "$fr" in
+  *"ship push failed"*) pass "ship-push-fail: failure_reason records push failure" ;;
+  *) fail "ship-push-fail: failure_reason records push failure (got '$fr')" ;;
+esac
+[[ ! -f "$ROOT_TMP/gh-prcreate.log" ]] \
+  && pass "ship-push-fail: gh pr create not reached after push failure" \
+  || fail "ship-push-fail: gh pr create ran despite push failure"
+
+rm -f "$STUB_DIR/git" "$STUB_DIR/gh" "$STUB_DIR/pipeline-quality-gate" "$ROOT_TMP/gh-prcreate.log"
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
