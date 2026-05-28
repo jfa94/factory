@@ -223,21 +223,27 @@ Before starting new work:
 fi
 
 # Bootstrap block — prepended when --bootstrap-branch <name> is supplied. The
-# executor starts in a fresh worktree pinned to `origin/staging`; the prior
-# test-writer phase committed failing tests on a sibling branch, so we have to
-# tell the executor to sync to that branch BEFORE doing anything else.
+# executor worktree is born from origin/<default-branch> (harness baseRef=fresh).
+# The prior test-writer phase committed failing tests on a sibling branch, so we
+# re-base the executor's worktree onto that branch via `git checkout -B` BEFORE
+# doing anything else. `git reset --hard` is blocked in agent worktrees by
+# branch-protection.sh (protected target) and the Bash(git reset --hard*) deny.
 bootstrap_block=""
 if [[ -n "$bootstrap_branch" ]]; then
   bootstrap_block="## Bootstrap (run these commands BEFORE anything else)
 
-You spawned into a fresh worktree at \`origin/staging\`. The prior test-writer phase committed failing tests on branch \`${bootstrap_branch}\`. Sync to that branch so you can see (and turn green) those tests:
+You spawned into a fresh worktree born from origin/<default-branch>. The prior test-writer phase committed failing tests on branch \`${bootstrap_branch}\`. Re-base your worktree onto that branch so you can see (and turn green) those tests:
 
 \`\`\`bash
 git fetch origin ${bootstrap_branch} staging --depth=50
-git reset --hard origin/${bootstrap_branch}
+_wt_branch=\$(git branch --show-current)
+[ -n \"\$_wt_branch\" ] || { echo \"STATUS: BLOCKED — detached HEAD; cannot resolve worktree branch\"; exit 1; }
+git checkout -B \"\$_wt_branch\" origin/${bootstrap_branch}
+[ \"\$(git rev-parse HEAD)\" = \"\$(git rev-parse origin/${bootstrap_branch})\" ] \\
+  || { echo \"STATUS: BLOCKED — worktree not on origin/${bootstrap_branch} after checkout\"; exit 1; }
 \`\`\`
 
-Verify: \`git log --oneline -1\` should show the test-writer's \`test(...): failing tests for <task_id>\` commit.
+Verify: \`git log --oneline -1\` should show the test-writer's \`test(...): failing tests for ${task_id}\` commit.
 
 "
 fi

@@ -295,7 +295,11 @@ Each fence closes with the matching \`<<<END:UNTRUSTED:*:${_tw_nonce}>>>\` tag.
 git fetch origin staging --depth=50
 git rev-parse --verify origin/staging >/dev/null 2>&1 \
   || { echo "STATUS: BLOCKED — origin/staging missing"; exit 1; }
-git reset --hard origin/staging
+_wt_branch=\$(git branch --show-current)
+[ -n "\$_wt_branch" ] || { echo "STATUS: BLOCKED — detached HEAD; cannot resolve worktree branch"; exit 1; }
+git checkout -B "\$_wt_branch" origin/staging
+[ "\$(git rev-parse HEAD)" = "\$(git rev-parse origin/staging)" ] \
+  || { echo "STATUS: BLOCKED — worktree not on origin/staging after checkout"; exit 1; }
 test -f "${spec_path}/spec.md" \
   || { echo "STATUS: BLOCKED — spec.md missing on origin/staging: ${spec_path}"; exit 1; }
 \`\`\`
@@ -654,10 +658,12 @@ _stage_preexec_tests() {
     return 30
   fi
 
-  # Bug 2 — branch handoff: the executor will spawn into a fresh worktree at
-  # `origin/staging`, so it cannot see the RED commits the test-writer made on
+  # Bug 2 — branch handoff: the executor worktree is born from origin/<default-branch>
+  # (harness baseRef=fresh); it cannot see the RED commits the test-writer made on
   # its sibling worktree branch unless we (a) push that branch to origin and
-  # (b) tell the executor (via the prompt's Bootstrap block) how to sync to it.
+  # (b) tell the executor (via the prompt's Bootstrap block) to re-base onto it via
+  # `git checkout -B` (`git reset --hard` is blocked by branch-protection.sh and
+  # the Bash(git reset --hard*) deny).
   #
   # When `$tw_wt` is not a git worktree (legacy test fixtures, plain dirs)
   # or has no `origin` remote, fall through to local-only mode: the executor

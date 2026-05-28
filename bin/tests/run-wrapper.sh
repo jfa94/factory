@@ -1779,8 +1779,8 @@ rm -f "$STUB_DIR/git"
 #   (a) push the test-writer's branch to origin
 #   (b) record the branch name in state.test_writer_branch
 #   (c) emit an executor manifest whose prompt file embeds a Bootstrap
-#       block (git fetch + git reset --hard origin/<branch>) so the
-#       executor's fresh worktree can sync to the RED commits.
+#       block (git fetch + git checkout -B "$(git branch --show-current)" origin/<branch>)
+#       so the executor's fresh worktree can sync to the RED commits.
 
 new_run handoff-bug2
 
@@ -1844,7 +1844,7 @@ fi
 prompt_file=$(printf '%s' "$OUT" | jq -r '.agents[0].prompt_file // empty')
 if [[ -n "$prompt_file" && -f "$prompt_file" ]] \
    && grep -q 'git fetch origin worktree-agent-DEADBEEF' "$prompt_file" \
-   && grep -q 'git reset --hard origin/worktree-agent-DEADBEEF' "$prompt_file"; then
+   && grep -qF 'git checkout -B "$_wt_branch" origin/worktree-agent-DEADBEEF' "$prompt_file"; then
   pass "handoff: executor prompt contains bootstrap block"
 else
   fail "handoff: executor prompt missing bootstrap block ($prompt_file)"

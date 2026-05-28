@@ -651,7 +651,13 @@ tw_prompt=$(cat <<PROMPT
 ## Setup (run before reading any file)
 \`\`\`bash
 git fetch origin staging --depth=50
-git reset --hard origin/staging
+git rev-parse --verify origin/staging >/dev/null 2>&1 \
+  || { echo "STATUS: BLOCKED — origin/staging missing"; exit 1; }
+_wt_branch=\$(git branch --show-current)
+[ -n "\$_wt_branch" ] || { echo "STATUS: BLOCKED — detached HEAD; cannot resolve worktree branch"; exit 1; }
+git checkout -B "\$_wt_branch" origin/staging
+[ "\$(git rev-parse HEAD)" = "\$(git rev-parse origin/staging)" ] \
+  || { echo "STATUS: BLOCKED — worktree not on origin/staging after checkout"; exit 1; }
 \`\`\`
 ## Task ID
 ${task_id}
@@ -674,8 +680,14 @@ assert_eq "tw-prompt has fenced SPEC block" "true" \
   "$( printf '%s' "$tw_prompt" | grep -q '<<<UNTRUSTED:SPEC:' && echo true || echo false )"
 assert_eq "tw-prompt embeds spec content" "true" \
   "$( printf '%s' "$tw_prompt" | grep -q 'TW Spec' && echo true || echo false )"
-assert_eq "tw-prompt has staging reset preamble" "true" \
-  "$( printf '%s' "$tw_prompt" | grep -q 'git reset --hard origin/staging' && echo true || echo false )"
+assert_eq "tw-prompt has staging checkout preamble" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -qF 'git checkout -B "$_wt_branch" origin/staging' && echo true || echo false )"
+assert_eq "tw-prompt has detached-HEAD guard" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -qF '_wt_branch=$(git branch --show-current)' && echo true || echo false )"
+assert_eq "tw-prompt has HEAD verification" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -qF 'git rev-parse origin/staging' && echo true || echo false )"
+assert_eq "tw-prompt has NO blocked reset --hard" "true" \
+  "$( printf '%s' "$tw_prompt" | grep -q 'git reset --hard' && echo false || echo true )"
 assert_eq "tw-prompt has STATUS: RED_READY" "true" \
   "$( printf '%s' "$tw_prompt" | grep -q 'STATUS: RED_READY' && echo true || echo false )"
 assert_eq "tw-prompt has acceptance criteria" "true" \
