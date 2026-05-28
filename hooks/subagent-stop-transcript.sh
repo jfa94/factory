@@ -81,25 +81,36 @@ fi
 # --- 2. Derive task_id ---
 # Priority order:
 #   1. explicit FACTORY_TASK_ID env (legacy passthrough, rarely set)
-#   2. orchestrator-written .active-spawn.json (preferred — written by
-#      _record_active_task_for_stop_hook before every task-scoped manifest)
-#   3. transcript-grep for the prompt-file path (legacy fallback, fragile
-#      because some subagent tool patterns omit the prompt-file reference)
+#   2. inlined [task:<id>] prompt-header marker in the transcript (preferred —
+#      parallel-safe; each agent has its own transcript)
+#   3. orchestrator-written .active-spawn.json (legacy fallback — raced when
+#      maxParallelTasks>1, retained only when no header is present)
+#   4. transcript-grep for the prompt-file path (last resort, fragile because
+#      some subagent tool patterns omit the prompt-file reference)
 task_id="${FACTORY_TASK_ID:-}"
 
-# Pre-declare worktree so the active-spawn fallback can populate it before
-# the transcript-grep block below.
+# Pre-declare worktree so the cwd grep below can populate it.
 worktree=""
 
-# Source #2: orchestrator-written active-spawn file.
+# Source #2 (preferred): inlined `[task:<id>]` prompt-header marker. The wrapper
+# prepends this to every task prompt; the orchestrator inlines prompt CONTENT
+# into Agent(prompt=...), so the header lands in this subagent's transcript.
+# Parallel-safe: each agent has its own transcript (unlike .active-spawn.json).
+if [[ -z "$task_id" && -f "$transcript" ]]; then
+  task_id=$({ grep -oE '\[task:[a-zA-Z0-9_-]+\]' "$transcript" 2>/dev/null || true; } \
+    | head -1 | sed -E 's/\[task:([a-zA-Z0-9_-]+)\]/\1/')
+fi
+
+# Source #3 (fallback): orchestrator-written active-spawn file (legacy; raced
+# under parallel batches, retained only as a fallback when no header is present).
+# NOTE: worktree is intentionally NOT read from active-spawn — it must come from
+# the transcript cwd grep below so the executor's REAL tree is always captured.
 active_file="$run_dir/.active-spawn.json"
 if [[ -z "$task_id" && -f "$active_file" ]]; then
   task_id=$(jq -r '.task_id // empty' "$active_file" 2>/dev/null || printf '')
-  if [[ -n "$task_id" ]]; then
-    worktree=$(jq -r '.worktree // empty' "$active_file" 2>/dev/null || printf '')
-  fi
 fi
 
+# Source #4 (last resort): legacy prompt-file path grep.
 if [[ -z "$task_id" && -f "$transcript" ]]; then
   # Look for `<run-id>/<task-id>.<role>-prompt.md` reference in transcript.
   task_id=$({ grep -oE "\.state/${run_id}/[a-zA-Z0-9_-]+\.(test-writer|executor-ci-fix|executor-fix|executor|holdout-reviewer|reviewer|holdout)-prompt\.md" "$transcript" 2>/dev/null || true; } \
@@ -110,13 +121,14 @@ fi
 # --- Holdout-reviewer role detection ---
 # The holdout reviewer reuses subagent_type=implementation-reviewer (no dedicated
 # subagent exists), so agent_type alone cannot discriminate it from a regular
-# postreview implementation-reviewer. Detect by grepping the transcript for the
-# `holdout-reviewer-prompt.md` path written by `_stage_postexec`. When matched,
-# the review output flows to `.tasks.<id>.holdout_review_file` instead of the
-# regular `review_files[]` array (which postreview consumes).
+# postreview implementation-reviewer. Detect first by grepping the transcript for
+# the inlined `[role:holdout-reviewer]` header (parallel-safe, inline-prompt-
+# compatible), falling back to the legacy prompt-file path grep.
 is_holdout_reviewer=false
 if [[ "$agent_type" == "implementation-reviewer" && -f "$transcript" ]]; then
-  if grep -qE "\.state/${run_id}/[a-zA-Z0-9_-]+\.holdout-reviewer-prompt\.md" "$transcript" 2>/dev/null; then
+  if grep -qE '\[role:holdout-reviewer\]' "$transcript" 2>/dev/null; then
+    is_holdout_reviewer=true
+  elif grep -qE "\.state/${run_id}/[a-zA-Z0-9_-]+\.holdout-reviewer-prompt\.md" "$transcript" 2>/dev/null; then
     is_holdout_reviewer=true
   fi
 fi

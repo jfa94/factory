@@ -1236,15 +1236,56 @@ rev_files_len=$(jq -r '(.tasks."alpha-001".review_files // []) | length' "$CLAUD
 assert_eq "regular impl-reviewer: review_files[] has 1 entry" "1" "$rev_files_len"
 
 echo ""
+echo "=== subagent-stop-transcript: header-marker derivation (task_id + holdout + worktree from transcript) ==="
+
+# Regression: when the orchestrator inlines prompt CONTENT into Agent(prompt=...),
+# the [task:<id>] and [role:holdout-reviewer] headers land in the agent's transcript.
+# The hook must derive task_id from [task:<id>], detect holdout from [role:holdout-reviewer],
+# and derive worktree from the transcript cwd — with NO .active-spawn.json present.
+HMRUN="run-hdr-$$"
+HMDIR="$CLAUDE_PLUGIN_DATA/runs/$HMRUN"
+mkdir -p "$HMDIR/.state/$HMRUN"
+printf '{"status":"running","tasks":{"events-bus-factory":{"status":"reviewing"}}}' > "$HMDIR/state.json"
+ln -sfn "$HMDIR" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+HM_TS="$HMDIR/transcript-hdr.jsonl"
+cat > "$HM_TS" <<'JSONL'
+{"type":"user","message":{"content":"[task:events-bus-factory]\n[role:holdout-reviewer]\nLayer 4 holdout validation..."}}
+{"type":"assistant","cwd":"/Users/x/proj/.claude/worktrees/agent-deadbeef","message":{"content":"STATUS: DONE"}}
+JSONL
+
+input=$(jq -cn --arg t "$HM_TS" --arg msg "Review done.
+STATUS: DONE" '{agent_type:"implementation-reviewer", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+set -e
+
+HR_FILE=$(jq -r '.tasks."events-bus-factory".holdout_review_file // empty' "$HMDIR/state.json" 2>/dev/null)
+[[ -n "$HR_FILE" && "$HR_FILE" != "null" ]] \
+  && { echo "  PASS: holdout_review_file wired from [role:holdout-reviewer] header"; pass=$((pass+1)); } \
+  || { echo "  FAIL: holdout_review_file wired from header (got '$HR_FILE')"; fail=$((fail+1)); }
+
+# implementation-reviewer writes worktree to reviewer_worktree_implementation_reviewer
+# (not the bare .worktree field, which only task-executor/test-writer populate).
+WT=$(jq -r '.tasks."events-bus-factory".reviewer_worktree_implementation_reviewer // empty' "$HMDIR/state.json" 2>/dev/null)
+[[ "$WT" == *"/agent-deadbeef" ]] \
+  && { echo "  PASS: worktree derived from transcript cwd"; pass=$((pass+1)); } \
+  || { echo "  FAIL: worktree derived from transcript cwd (got '$WT')"; fail=$((fail+1)); }
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+echo ""
 echo "=== subagent-stop-transcript: .active-spawn.json supplies task_id + worktree ==="
 
 _seed_run "run-sag-active" '{"status":"running","tasks":{"gamma-001":{"status":"executing"}}}'
-# Transcript intentionally omits both the prompt-file path AND a worktree cwd
-# entry — the legacy fallbacks must NOT fire; .active-spawn.json must win.
+# .active-spawn.json supplies task_id (no [task:...] header in transcript).
+# Worktree now comes from the transcript cwd (active-spawn worktree read is dropped
+# in favor of the parallel-safe cwd grep). The transcript includes a cwd entry that
+# matches the expected worktree so both sources are exercised.
 transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-active/transcript.jsonl"
-printf '{"role":"assistant","content":"work done"}\n' > "$transcript"
-jq -n --arg t "gamma-001" --arg wt "/tmp/fake/.claude/worktrees/agent-active" \
-  '{run_id:"run-sag-active", task_id:$t, worktree:$wt, written_at:"2026-05-21T00:00:00Z"}' \
+printf '{"role":"assistant","content":"work done","cwd":"/tmp/fake/.claude/worktrees/agent-active"}\n' > "$transcript"
+jq -n --arg t "gamma-001" \
+  '{run_id:"run-sag-active", task_id:$t, written_at:"2026-05-21T00:00:00Z"}' \
   > "$CLAUDE_PLUGIN_DATA/runs/run-sag-active/.active-spawn.json"
 input=$(jq -cn --arg t "$transcript" --arg msg "Done.
 STATUS: DONE" '{agent_type:"task-executor", last_assistant_message:$msg, agent_transcript_path:$t}')
@@ -1256,7 +1297,7 @@ assert_eq "active-spawn: exit 0" "0" "$rc"
 exec_status=$(jq -r '.tasks."gamma-001".executor_status // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-active/state.json")
 assert_eq "active-spawn: executor_status written" "DONE" "$exec_status"
 wt=$(jq -r '.tasks."gamma-001".worktree // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-active/state.json")
-assert_eq "active-spawn: worktree written from file" "/tmp/fake/.claude/worktrees/agent-active" "$wt"
+assert_eq "active-spawn: worktree written from transcript cwd" "/tmp/fake/.claude/worktrees/agent-active" "$wt"
 
 echo ""
 echo "=== subagent-stop-transcript: missing active-spawn + transcript markers -> warn but exit 0 ==="

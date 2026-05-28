@@ -35,12 +35,19 @@ _seed_run() {
 echo "=== subagent-stop-transcript writes worktree under sanitized PATH ==="
 
 _seed_run "run-path-hard" '{"status":"running","tasks":{"task-aa":{"status":"executing"}}}'
-jq -n --arg t "task-aa" --arg wt "/tmp/fake/.claude/worktrees/agent-aa" \
-  '{run_id:"run-path-hard", task_id:$t, worktree:$wt, written_at:"2026-05-27T00:00:00Z"}' \
+# Provide a transcript with [task:task-aa] header and cwd entry so the hook
+# can derive task_id and worktree without .active-spawn.json (parallel-safe path).
+_ht_ts="$CLAUDE_PLUGIN_DATA/runs/run-path-hard/transcript.jsonl"
+printf '[task:task-aa]\n' > "$_ht_ts"
+printf '{"cwd":"/tmp/fake/.claude/worktrees/agent-aa","content":"work done"}\n' >> "$_ht_ts"
+# Keep .active-spawn.json as a task_id fallback (without worktree — worktree
+# now comes exclusively from the transcript cwd).
+jq -n --arg t "task-aa" \
+  '{run_id:"run-path-hard", task_id:$t, written_at:"2026-05-27T00:00:00Z"}' \
   > "$CLAUDE_PLUGIN_DATA/runs/run-path-hard/.active-spawn.json"
 
-input=$(jq -cn --arg msg "Done.
-STATUS: DONE" '{agent_type:"task-executor", last_assistant_message:$msg}')
+input=$(jq -cn --arg ts "$_ht_ts" --arg msg "Done.
+STATUS: DONE" '{agent_type:"task-executor", last_assistant_message:$msg, agent_transcript_path:$ts}')
 
 set +e
 printf '%s' "$input" \

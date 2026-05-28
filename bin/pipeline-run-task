@@ -608,6 +608,7 @@ _stage_preexec_tests() {
     pf=$(_prompt_path test-writer)
     {
       printf '[task:%s]\n' "$task_id"
+      printf '[role:test-writer]\n'
       printf 'mode: pre-impl\n'
       printf 'task_id: %s\n' "$task_id"
       [[ -n "$spec_path" ]] && printf 'spec_path: %s\n' "$spec_path"
@@ -718,7 +719,7 @@ _stage_preexec_tests() {
     log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\""
     return 30
   fi
-  { printf '[task:%s]\n' "$task_id"; cat "$_tmp_prompt"; } > "$prompt_file"
+  { printf '[task:%s]\n' "$task_id"; printf '[role:task-executor]\n'; cat "$_tmp_prompt"; } > "$prompt_file"
   rm -f "$_tmp_prompt"
 
   local _phash_val
@@ -1336,6 +1337,7 @@ _stage_postreview() {
     pf=$(_prompt_path executor-fix)
     {
       printf '[task:%s]\n' "$task_id"
+      printf '[role:task-executor]\n'
       printf 'Fix reviewer-reported blockers for task %s.\n' "$task_id"
       printf 'Review files:\n'
       for f in "${files[@]}"; do printf '  - %s\n' "$f"; done
@@ -1649,7 +1651,7 @@ _stage_ship() {
           || log_warn "task-status ci_fixing write failed for $task_id (non-fatal)"
         _ensure_prompt_dir
         local pf; pf=$(_prompt_path executor-ci-fix)
-        printf '[task:%s]\nFix failing CI on PR for task %s.\nSTATUS: DONE|...\n' "$task_id" "$task_id" > "$pf"
+        printf '[task:%s]\n[role:task-executor]\nFix failing CI on PR for task %s.\nSTATUS: DONE|...\n' "$task_id" "$task_id" > "$pf"
         local _ci_classify _ci_model _ci_max_turns
         _ci_classify=$(_task_field classify)
         if [[ -n "$_ci_classify" && "$_ci_classify" != "null" ]]; then
