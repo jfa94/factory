@@ -953,7 +953,64 @@ assert_eq "preexec-red-tests-fail: spawns executor" "task-executor" \
   "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
 red_test_ok=$(pipeline-state task-read "$RUN_ID" alpha-001 quality_gates.red_test 2>/dev/null | jq -r '.ok | tostring')
 assert_eq "preexec-red-tests-fail: red_test.ok=true" "true" "$red_test_ok"
+# Task 6: offline (no origin) — executor manifest must NOT have isolation field.
+assert_eq "executor offline: no isolation (reuses tw_wt)" "null" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].isolation // "null"')"
 rm -f "$STUB_DIR/git" "$STUB_DIR/vitest"
+
+# --- 18.a: preexec_tests — executor online: isolation=worktree when origin present --
+# When tw_wt is a real git repo with an origin remote, _has_origin=true and the
+# executor manifest must include isolation:"worktree" so parallel executors each
+# get a fresh worktree (the bootstrap block fetches+resets to the RED branch).
+new_run preexec-executor-online-isolation
+pipeline-state task-write "$RUN_ID" alpha-001 test_writer_status '"RED_READY"' >/dev/null
+
+# Build a sandbox repo with an origin remote (mirrors handoff-bug2 setup).
+sandbox_iso=$(mktemp -d "$ROOT_TMP/iso-sandbox.XXXXXX")
+(
+  cd "$sandbox_iso"
+  git init --quiet -b staging
+  git config user.email "t@t"
+  git config user.name "t"
+  printf 'seed\n' > seed.txt
+  git add seed.txt
+  git -c user.email=t@t -c user.name=t commit -m "seed" --quiet
+) >/dev/null 2>&1
+git clone --bare "$sandbox_iso" "$sandbox_iso/origin.git" >/dev/null 2>&1
+(
+  cd "$sandbox_iso"
+  git remote add origin "$sandbox_iso/origin.git"
+  git push -u origin staging --quiet
+) >/dev/null 2>&1
+
+# Create the test-writer worktree on its own branch with a RED commit.
+tw_wt_iso="$ROOT_TMP/$current-tw-wt"
+(
+  cd "$sandbox_iso"
+  git worktree add -b worktree-agent-ISO "$tw_wt_iso" --quiet
+) >/dev/null 2>&1
+(
+  cd "$tw_wt_iso"
+  printf '{"devDependencies":{"vitest":"^1.0.0"}}\n' > package.json
+  mkdir -p tests
+  printf 'test("iso", () => { throw new Error("RED"); });\n' > tests/iso.test.ts
+  git add package.json tests/iso.test.ts
+  git -c user.email=t@t -c user.name=t commit -m "test(iso): failing tests for alpha-001 [alpha-001]" --quiet
+) >/dev/null 2>&1
+
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$tw_wt_iso\"" >/dev/null
+write_stub vitest 'exit 1'
+run_wrapper alpha-001 --stage preexec_tests
+assert_eq "executor online: exit 10" "10" "$RC"
+assert_eq "executor online: spawns executor" "task-executor" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].subagent_type')"
+assert_eq "executor online: isolation=worktree" "worktree" \
+  "$(printf '%s' "$OUT" | jq -r '.agents[0].isolation // "null"')"
+
+# Cleanup sandbox worktree.
+git -C "$sandbox_iso" worktree remove --force "$tw_wt_iso" >/dev/null 2>&1 || true
+rm -rf "$sandbox_iso"
+rm -f "$STUB_DIR/vitest"
 
 # --- 19: preexec_tests — red-test verify: tdd_exempt skips check -----------
 new_run preexec-red-tdd-exempt

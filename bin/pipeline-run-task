@@ -736,12 +736,18 @@ _stage_preexec_tests() {
     model="sonnet"
     max_turns="60"
   fi
+  local _exec_isolation='null'
+  if [[ "$_has_origin" == "true" ]]; then
+    _exec_isolation='"worktree"'
+  fi
   agents_json=$(jq -cn \
     --arg role "task-executor" \
     --arg pf   "$prompt_file" \
     --arg m    "$model" \
     --argjson mt "$max_turns" \
-    '[{subagent_type:$role, model:$m, maxTurns:$mt, prompt_file:$pf}]')
+    --argjson iso "$_exec_isolation" \
+    '[{subagent_type:$role, model:$m, maxTurns:$mt, prompt_file:$pf}
+      + (if $iso == null then {} else {isolation:$iso} end)]')
   _record_active_task_for_stop_hook "$run_id" "$task_id" "$tw_wt"
   _emit_manifest postexec "$agents_json"
 

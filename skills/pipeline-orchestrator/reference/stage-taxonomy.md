@@ -48,6 +48,12 @@ Emitted on stdout with exit 10.
 }
 ```
 
+> The executor manifest sets `isolation: "worktree"` **only when the test-writer
+> branch was pushed to origin** (the normal case). The executor's fresh worktree
+> then fetches + `reset --hard`s to that branch via the prompt's Bootstrap block.
+> In offline/test runs with no origin, isolation is omitted so the executor
+> reuses the test-writer worktree directly.
+
 Pass every field through to `Agent()` verbatim. The `prompt_file` is already written by the wrapper from the externalized template under `skills/pipeline-orchestrator/prompts/`; load and inline its content, do not modify.
 
 Multiple entries in `agents` run in parallel — emit them in a single assistant message.
