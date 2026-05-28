@@ -2,7 +2,7 @@
 # Layer 4 — Holdout validation gate.
 #
 # Two subcommands:
-#   prompt <run-id> <task-id>
+#   prompt <run-id> <task-id> [--worktree <path>]
 #     Read the holdout file written by `pipeline-build-prompt --holdout` and
 #     emit a focused reviewer prompt asking for criterion-by-criterion
 #     verification. Stdout is the prompt body, ready to feed implementation-reviewer

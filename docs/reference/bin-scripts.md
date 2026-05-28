@@ -302,6 +302,8 @@ Fallback: if the test-writer worktree is not a git repo, has a detached HEAD, or
 }
 ```
 
+> `isolation` is present only when the test-writer branch was pushed to origin (the normal online case); in offline/test runs with no origin remote the field is omitted and the executor reuses the test-writer worktree.
+
 ---
 
 ## Input and Discovery

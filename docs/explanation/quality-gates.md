@@ -182,7 +182,7 @@ If fewer than 80% of withheld criteria are satisfied, the implementation is surf
 
 **Spawn-then-check flow:**
 
-When a holdout file exists for a task, `postexec` runs in two passes. First pass (no `holdout_review_file` in state yet): the wrapper builds a focused reviewer prompt via `pipeline-holdout-validate prompt` and spawns an `implementation-reviewer` (role: `holdout-reviewer`) with `stage_after=postexec`. The `SubagentStop` hook detects the holdout-reviewer prompt-file path in the transcript and routes the reviewer's output to `.tasks.<id>.holdout_review_file` (a single-value field, distinct from the postreview `review_files[]` array). Second pass (re-entry into postexec): the wrapper finds `holdout_review_file` populated and runs `pipeline-holdout-validate check`.
+When a holdout file exists for a task, `postexec` runs in two passes. First pass (no `holdout_review_file` in state yet): the wrapper builds a focused reviewer prompt via `pipeline-holdout-validate prompt` and spawns an `implementation-reviewer` (role: `holdout-reviewer`) with `stage_after=postexec`. The `SubagentStop` hook detects the holdout reviewer via the inlined `[role:holdout-reviewer]` header in the transcript (falling back to the legacy holdout-reviewer prompt-file path), and routes the reviewer's output to `.tasks.<id>.holdout_review_file` (a single-value field, distinct from the postreview `review_files[]` array). Second pass (re-entry into postexec): the wrapper finds `holdout_review_file` populated and runs `pipeline-holdout-validate check`.
 
 **Missing reviewer output (fail-closed):**
 
