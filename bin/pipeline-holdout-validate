@@ -38,6 +38,14 @@ case "$subcommand" in
   prompt)
     run_id="${1:?missing run-id}"
     task_id="${2:?missing task-id}"
+    shift 2
+    worktree=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --worktree) worktree="$2"; shift 2 ;;
+        *) log_error "unknown flag: $1"; exit 1 ;;
+      esac
+    done
     holdout_file="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/holdouts/${task_id}.json"
 
     if [[ ! -f "$holdout_file" ]]; then
@@ -49,6 +57,14 @@ case "$subcommand" in
     if [[ "$withheld_count" -lt 1 ]]; then
       log_error "holdout file has zero withheld criteria; nothing to validate"
       exit 2
+    fi
+
+    # Prepend worktree location when provided so isolation:worktree reviewers
+    # know where the implementation lives (they get a fresh checkout with no diff).
+    if [[ -n "$worktree" ]]; then
+      printf 'The implementation lives in the task worktree at: %s\n' "$worktree"
+      printf 'Inspect it with: git -C %s diff staging\n' "$worktree"
+      printf 'Do NOT rely on your own working directory — it is a fresh checkout with no diff.\n\n'
     fi
 
     # Build the reviewer prompt. The instructions are intentionally strict

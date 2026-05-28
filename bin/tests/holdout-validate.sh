@@ -60,6 +60,22 @@ run_check 'I could not find the file. No JSON here.'
 [[ "$RC" -eq 2 ]] && ok "no-JSON output → exit 2 (fail-closed)" \
   || fail "no-JSON output → exit 2 (got $RC)"
 
+printf '\n=== prompt: embeds worktree path + diff instruction (#2) ===\n'
+PROMPT_OUT=$("$BIN_DIR/pipeline-holdout-validate" prompt "$RUN_ID" t1 --worktree /tmp/wt-xyz 2>/dev/null)
+printf '%s' "$PROMPT_OUT" | grep -qF '/tmp/wt-xyz' \
+  && ok "prompt includes worktree path" \
+  || fail "prompt includes worktree path"
+printf '%s' "$PROMPT_OUT" | grep -qE 'git -C /tmp/wt-xyz diff' \
+  && ok "prompt includes git -C <wt> diff instruction" \
+  || fail "prompt includes git -C <wt> diff instruction"
+
+printf '\n=== prompt: still works without --worktree (back-compat) ===\n'
+set +e
+"$BIN_DIR/pipeline-holdout-validate" prompt "$RUN_ID" t1 >/dev/null 2>&1
+PRC=$?
+set -e
+[[ "$PRC" -eq 0 ]] && ok "prompt without --worktree exits 0" || fail "prompt without --worktree exits 0 (got $PRC)"
+
 printf '\n=== Results ===\n'
 printf '  Passed: %d  Failed: %d\n' "$pass" "$fail_count"
 [[ "$fail_count" -eq 0 ]] || exit 1

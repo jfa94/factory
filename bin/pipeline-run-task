@@ -907,7 +907,8 @@ _stage_postexec() {
         # transcript-grep / task_id derivation in the SubagentStop hook works.
         {
           printf '[task:%s]\n' "$task_id"
-          pipeline-holdout-validate prompt "$run_id" "$task_id"
+          printf '[role:holdout-reviewer]\n'
+          pipeline-holdout-validate prompt "$run_id" "$task_id" --worktree "$wt"
         } > "$_ho_prompt_file" || {
           log_error "pipeline-holdout-validate prompt failed for $task_id"
           _fail_task "holdout_prompt"
