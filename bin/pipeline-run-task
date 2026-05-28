@@ -85,7 +85,11 @@ state_file="$run_dir/state.json"
 # SubagentStop transcript hook silent-exits when it is missing, skipping state
 # writes. Restore it at stage entry. ensure-current refuses to clobber a
 # different active run, so this is safe even if another run holds the symlink.
-"$_STATE_BIN" ensure-current "$run_id" >/dev/null 2>&1 || true
+# Don't abort the stage on failure, but DO surface it: a missing symlink means
+# the SubagentStop hook will silently drop state writes — exactly the failure
+# this guards against — so swallowing it silently would defeat the purpose.
+"$_STATE_BIN" ensure-current "$run_id" >/dev/null 2>&1 \
+  || log_warn "ensure-current failed for $run_id; SubagentStop state writes may be dropped"
 
 _now_ms() {
   if command -v gdate &>/dev/null; then gdate +%s%3N; return; fi

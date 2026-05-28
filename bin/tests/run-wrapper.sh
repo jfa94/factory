@@ -119,6 +119,17 @@ assert_eq "preflight: agent=test-writer" "test-writer" \
 prompt_file=$(printf '%s' "$OUT" | jq -r '.agents[0].prompt_file')
 if [[ -f "$prompt_file" ]]; then pass "preflight: prompt file written"
 else fail "preflight: prompt file missing ($prompt_file)"; fi
+# Verify the bootstrap heredoc escaping survived into the ACTUAL emitted file
+# (not just a hand-built fixture): $(git branch --show-current) must be LITERAL
+# so the agent evaluates it at runtime; and no blocked `reset --hard` may remain.
+if [[ -f "$prompt_file" ]]; then
+  assert_eq "preflight: emitted prompt keeps literal \$(git branch --show-current)" "true" \
+    "$(grep -qF '_wt_branch=$(git branch --show-current)' "$prompt_file" && echo true || echo false)"
+  assert_eq "preflight: emitted prompt uses checkout -B origin/staging" "true" \
+    "$(grep -qF 'git checkout -B "$_wt_branch" origin/staging' "$prompt_file" && echo true || echo false)"
+  assert_eq "preflight: emitted prompt has NO blocked reset --hard" "true" \
+    "$(grep -q 'git reset --hard' "$prompt_file" && echo false || echo true)"
+fi
 assert_eq "preflight: stage=preflight_done" "preflight_done" "$(stage_of)"
 assert_eq "preflight: status=executing" "executing" "$(status_of)"
 
