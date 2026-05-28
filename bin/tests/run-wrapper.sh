@@ -1914,5 +1914,36 @@ case "$1 $2" in
 esac'
 rm -f "$STUB_DIR/git"
 
+# --- ship-pregate-fail: push must NOT happen before a failing ship pregate -----
+# Regression guard (Codex finding): the push was reordered to run AFTER the
+# pregate so a failing gate never publishes the branch.
+new_run ship-pregate-fail
+wt="$ROOT_TMP/$current-wt"; mkdir -p "$wt"
+pipeline-state task-write "$RUN_ID" alpha-001 worktree "\"$wt\"" >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"postreview_done"' >/dev/null
+
+write_stub git '
+case "$*" in
+  *"push"*) echo "$*" >> "'"$ROOT_TMP"'/git-push-pg.log"; exit 0 ;;
+  *"rev-parse --abbrev-ref HEAD"*) echo "task/alpha-001"; exit 0 ;;
+  *"remote get-url origin"*) echo "https://github.com/acme/repo.git"; exit 0 ;;
+  *) exit 0 ;;
+esac'
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/repo/pull/9001" ;;
+  *) exit 0 ;;
+esac'
+# Force the ship-time pregate to fail (quality gate returns non-zero).
+write_stub pipeline-quality-gate 'exit 1'
+
+set +e; FACTORY_ASYNC_CI=off pipeline-run-task "$RUN_ID" alpha-001 --stage ship >/dev/null 2>&1; RC=$?; set -e
+assert_eq "ship-pregate-fail: exit 30" "30" "$RC"
+[[ ! -f "$ROOT_TMP/git-push-pg.log" ]] \
+  && pass "ship-pregate-fail: no push when pregate fails" \
+  || fail "ship-pregate-fail: pushed despite pregate failure ($(cat "$ROOT_TMP/git-push-pg.log" 2>/dev/null))"
+
+rm -f "$STUB_DIR/git" "$STUB_DIR/gh" "$STUB_DIR/pipeline-quality-gate" "$ROOT_TMP/git-push-pg.log"
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))

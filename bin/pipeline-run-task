@@ -1750,6 +1750,16 @@ _stage_ship() {
   fi
 
   local _ship_branch="task/${task_id}"
+
+  if ! _run_ship_pregate "$wt"; then
+    log_warn "ship-time pregate failed for $task_id"
+    t1=$(_now_ms)
+    log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"pregate\""
+    return 30
+  fi
+
+  _write_ship_checklist
+
   if git -C "$wt" remote get-url origin >/dev/null 2>&1; then
     local _ship_push_err
     if ! _ship_push_err=$(git -C "$wt" push -u origin "$_ship_branch" 2>&1); then
@@ -1761,15 +1771,6 @@ _stage_ship() {
   else
     log_warn "ship: no origin remote in $wt; skipping push (offline/test mode)"
   fi
-
-  if ! _run_ship_pregate "$wt"; then
-    log_warn "ship-time pregate failed for $task_id"
-    t1=$(_now_ms)
-    log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"pregate\""
-    return 30
-  fi
-
-  _write_ship_checklist
 
   local pr_url pr_number pr_title _gh_err
   pr_title=$(pipeline-branch task-pr-title "$task_id" --run-id "$run_id")
