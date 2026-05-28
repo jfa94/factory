@@ -127,6 +127,21 @@ current="preflight-idem"
 run_wrapper alpha-001 --stage preflight
 assert_eq "preflight rerun: exit 0" "0" "$RC"
 
+# --- 2.a: resume restores runs/current symlink ----------------------------
+# finalize-on-stop removes runs/current; on resume the SubagentStop transcript
+# hook silent-exits when it is missing. Stage entry must call ensure-current to
+# restore it. Simulate a finalized run by deleting the symlink, then re-enter a
+# stage and assert the symlink is back and points at this run's dir.
+new_run resume-symlink
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+assert_eq "resume-symlink: precondition (symlink removed)" "false" \
+  "$( [[ -L "$CLAUDE_PLUGIN_DATA/runs/current" ]] && echo true || echo false )"
+run_wrapper alpha-001 --stage preflight
+assert_eq "resume-symlink: current restored" "true" \
+  "$( [[ -L "$CLAUDE_PLUGIN_DATA/runs/current" ]] && echo true || echo false )"
+assert_eq "resume-symlink: points at run dir" "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID" \
+  "$(readlink "$CLAUDE_PLUGIN_DATA/runs/current" 2>/dev/null || true)"
+
 # --- 3: postexec — codex path ---------------------------------------------
 new_run postexec-codex
 run_wrapper alpha-001 --stage preflight

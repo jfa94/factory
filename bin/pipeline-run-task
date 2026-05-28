@@ -81,6 +81,12 @@ run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
 state_file="$run_dir/state.json"
 [[ -f "$state_file" ]] || { log_error "state file not found: $state_file"; exit 1; }
 
+# Resume safety: finalize-on-stop removes runs/current; on resume the
+# SubagentStop transcript hook silent-exits when it is missing, skipping state
+# writes. Restore it at stage entry. ensure-current refuses to clobber a
+# different active run, so this is safe even if another run holds the symlink.
+"$_STATE_BIN" ensure-current "$run_id" >/dev/null 2>&1 || true
+
 _now_ms() {
   if command -v gdate &>/dev/null; then gdate +%s%3N; return; fi
   local v; v=$(date +%s%3N 2>/dev/null)
