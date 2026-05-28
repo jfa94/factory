@@ -2018,6 +2018,57 @@ rm -rf "$ROOT_TMP"
 
 # ============================================================
 echo ""
+echo "=== task-commit: aborts when target task/<id> already exists ==="
+
+AE_TMP=$(mktemp -d); AE_DIR="$AE_TMP/ae"
+mkdir -p "$AE_DIR"
+git -C "$AE_DIR" init -q
+git -C "$AE_DIR" config user.email t@t
+git -C "$AE_DIR" config user.name t
+git -C "$AE_DIR" commit -q --allow-empty -m init
+# Pre-existing target branch on a DIFFERENT commit.
+git -C "$AE_DIR" checkout -q -b task/dup-task
+git -C "$AE_DIR" commit -q --allow-empty -m other
+# Harness worktree branch with a pending change.
+git -C "$AE_DIR" checkout -q -b worktree-agent-dup
+printf 'x' > "$AE_DIR/f.txt"
+
+set +e
+pipeline-branch task-commit dup-task --worktree "$AE_DIR" --message "feat: x" >/dev/null 2>&1
+ae_rc=$?
+set -e
+[[ "$ae_rc" -ne 0 ]] \
+  && { echo "  PASS: task-commit aborts on existing target branch"; pass=$((pass + 1)); } \
+  || { echo "  FAIL: task-commit should abort on existing target (rc=$ae_rc)"; fail=$((fail + 1)); }
+
+rm -rf "$AE_TMP"
+
+# ============================================================
+echo ""
+echo "=== task-commit: aborts on detached HEAD ==="
+
+DH_TMP=$(mktemp -d); DH_DIR="$DH_TMP/dh"
+mkdir -p "$DH_DIR"
+git -C "$DH_DIR" init -q
+git -C "$DH_DIR" config user.email t@t
+git -C "$DH_DIR" config user.name t
+git -C "$DH_DIR" commit -q --allow-empty -m init
+git -C "$DH_DIR" commit -q --allow-empty -m second
+git -C "$DH_DIR" checkout -q --detach HEAD
+printf 'x' > "$DH_DIR/f.txt"
+
+set +e
+pipeline-branch task-commit dh-task --worktree "$DH_DIR" --message "feat: x" >/dev/null 2>&1
+dh_rc=$?
+set -e
+[[ "$dh_rc" -ne 0 ]] \
+  && { echo "  PASS: task-commit aborts on detached HEAD"; pass=$((pass + 1)); } \
+  || { echo "  FAIL: task-commit should abort on detached HEAD (rc=$dh_rc)"; fail=$((fail + 1)); }
+
+rm -rf "$DH_TMP"
+
+# ============================================================
+echo ""
 echo "=== ship push: task/<id> reaches origin ==="
 
 SP_ORIGIN="$(mktemp -d)/ship-origin.git"
