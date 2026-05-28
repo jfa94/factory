@@ -2034,12 +2034,12 @@ git -C "$AE_DIR" checkout -q -b worktree-agent-dup
 printf 'x' > "$AE_DIR/f.txt"
 
 set +e
-pipeline-branch task-commit dup-task --worktree "$AE_DIR" --message "feat: x" >/dev/null 2>&1
+ae_err=$(pipeline-branch task-commit dup-task --worktree "$AE_DIR" --message "feat: x" 2>&1 >/dev/null)
 ae_rc=$?
 set -e
-[[ "$ae_rc" -ne 0 ]] \
+{ [[ "$ae_rc" -ne 0 ]] && printf '%s' "$ae_err" | grep -qF "target branch already exists"; } \
   && { echo "  PASS: task-commit aborts on existing target branch"; pass=$((pass + 1)); } \
-  || { echo "  FAIL: task-commit should abort on existing target (rc=$ae_rc)"; fail=$((fail + 1)); }
+  || { echo "  FAIL: task-commit should abort on existing target via guard (rc=$ae_rc, err='$ae_err')"; fail=$((fail + 1)); }
 
 rm -rf "$AE_TMP"
 
@@ -2058,12 +2058,12 @@ git -C "$DH_DIR" checkout -q --detach HEAD
 printf 'x' > "$DH_DIR/f.txt"
 
 set +e
-pipeline-branch task-commit dh-task --worktree "$DH_DIR" --message "feat: x" >/dev/null 2>&1
+dh_err=$(pipeline-branch task-commit dh-task --worktree "$DH_DIR" --message "feat: x" 2>&1 >/dev/null)
 dh_rc=$?
 set -e
-[[ "$dh_rc" -ne 0 ]] \
+{ [[ "$dh_rc" -ne 0 ]] && printf '%s' "$dh_err" | grep -qF "detached HEAD"; } \
   && { echo "  PASS: task-commit aborts on detached HEAD"; pass=$((pass + 1)); } \
-  || { echo "  FAIL: task-commit should abort on detached HEAD (rc=$dh_rc)"; fail=$((fail + 1)); }
+  || { echo "  FAIL: task-commit should abort on detached HEAD via guard (rc=$dh_rc, err='$dh_err')"; fail=$((fail + 1)); }
 
 rm -rf "$DH_TMP"
 
