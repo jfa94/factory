@@ -88,6 +88,94 @@ fi
 
 # ===========================================================================
 echo ""
+echo "=== F1: run-tracker writes lock_timeout sentinel on contention ==="
+
+# Set up a fresh run dir so we don't pollute run-tracker-01's chain.
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout"
+: > "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout/audit.jsonl"
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -s "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# Hold the lock so the hook cannot acquire it.
+mkdir "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout/.run-tracker.lock"
+
+# Invoke the hook with tight retry knobs so the contention path returns fast.
+RUN_TRACKER_MAX_ATTEMPTS=3 RUN_TRACKER_LOCK_SLEEP_S=0.01 \
+  printf '{"tool_name":"Bash","tool_input":{"command":"contended"}}' \
+  | bash "$RUN_TRACKER" >/dev/null 2>&1 || true
+
+sentinel_count=$(jq -r 'select(.event == "lock_timeout") | .event' \
+  "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout/audit.jsonl" 2>/dev/null \
+  | wc -l | tr -d ' ')
+assert_eq "lock_timeout sentinel appears in audit.jsonl on contention" "1" "$sentinel_count"
+
+# Release the held lock and restore runs/current so subsequent tests
+# (task_09_02 verifies run-tracker-01's chain) see the original fixture.
+rmdir "$CLAUDE_PLUGIN_DATA/runs/run-tracker-lock-timeout/.run-tracker.lock" 2>/dev/null || true
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -s "$CLAUDE_PLUGIN_DATA/runs/run-tracker-01" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# ===========================================================================
+echo ""
+echo "=== F1b: verify_chain skips lock_timeout sentinels ==="
+
+# Regression for code-quality review of commit 6b6d374: the lock_timeout
+# sentinel row appended on contention has no chain fields, so the previous
+# verify_chain treated it as a corrupted entry (missing_chain_field) and the
+# next legitimate entry's prev_hash linkage broke. Both code paths must now
+# filter sentinel rows.
+ver_dir="$CLAUDE_PLUGIN_DATA/runs/run-tracker-verify-skip"
+mkdir -p "$ver_dir"
+: > "$ver_dir/audit.jsonl"
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -s "$ver_dir" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# Write 2 chain entries via the hook.
+for i in 1 2; do
+  printf '{"tool_name":"Bash","tool_input":{"command":"e%d"}}' "$i" \
+    | bash "$RUN_TRACKER"
+done
+# Append a sentinel (simulating an in-the-wild lock_timeout).
+jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg rid "run-tracker-verify-skip" \
+  '{event:"lock_timeout", timestamp:$ts, run_id:$rid, attempts:200, hook:"run-tracker"}' \
+  >> "$ver_dir/audit.jsonl"
+# Write 1 more chain entry via the hook — must chain off the last legitimate
+# entry, not the sentinel.
+printf '{"tool_name":"Bash","tool_input":{"command":"e3"}}' \
+  | bash "$RUN_TRACKER"
+
+# Verify the chain.
+set +e
+out=$(bash "$RUN_TRACKER" --verify "$ver_dir/audit.jsonl")
+rc=$?
+set -e
+assert_eq "verify_chain returns 0 after sentinel" "0" "$rc"
+status=$(printf '%s' "$out" | jq -r '.status')
+assert_eq "verify_chain status=valid after sentinel" "valid" "$status"
+sentinels=$(printf '%s' "$out" | jq -r '.sentinels // 0')
+assert_eq "verify_chain reports 1 sentinel" "1" "$sentinels"
+
+# Sanity: tampering one of the chain entries should still be detected.
+# Mutate a chain-validated field (.hash) — verify_chain checks prev_hash and
+# .hash, not params_hash, so tampering params_hash alone wouldn't surface.
+# Target only the first occurrence so we break the linkage on entry 2.
+awk 'BEGIN{done=0} !done && /"hash":"[a-f0-9]/ {sub(/"hash":"[a-f0-9]+"/, "\"hash\":\"TAMPERED\""); done=1} 1' \
+  "$ver_dir/audit.jsonl" > "$ver_dir/audit.jsonl.tmp"
+mv "$ver_dir/audit.jsonl.tmp" "$ver_dir/audit.jsonl"
+set +e
+out_t=$(bash "$RUN_TRACKER" --verify "$ver_dir/audit.jsonl" 2>&1)
+rc_t=$?
+set -e
+assert_eq "verify_chain detects tampering even with sentinel present" "1" "$rc_t"
+status_t=$(printf '%s' "$out_t" | jq -r '.status' 2>/dev/null)
+assert_eq "tampered chain status=broken" "broken" "$status_t"
+
+# Restore runs/current for following tests.
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+ln -s "$CLAUDE_PLUGIN_DATA/runs/run-tracker-01" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+# ===========================================================================
+echo ""
 echo "=== task_09_02: prev_hash chain links every entry ==="
 
 # Verify the parallel-write log forms a valid chain.

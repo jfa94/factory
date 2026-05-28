@@ -110,6 +110,57 @@ set -e
 assert_eq "missing-worktree: rc=30" "30" "$rc"
 assert_eq "missing-worktree: status=failed" "failed" "$(status_of)"
 
+# ----------------------------------------------------------------------------
+echo ""
+echo "=== postreview-fix spawn uses classified per-task model (not reviewer model) ==="
+# Locate the executor-fix prompt-file declaration line, then inspect the
+# ~20 lines that follow it (which contain the spawn manifest jq block).
+prt_file="$BIN_DIR/pipeline-run-task"
+fix_line=$(grep -n '_prompt_path executor-fix' "$prt_file" | head -1 | cut -d: -f1)
+if [[ -z "$fix_line" ]]; then
+  echo "  FAIL: postreview-fix: could not locate executor-fix prompt declaration"
+  fail=$((fail + 1))
+else
+  end_line=$(( fix_line + 25 ))
+  block=$(sed -n "${fix_line},${end_line}p" "$prt_file")
+  if printf '%s\n' "$block" | grep -q '_reviewer_model'; then
+    has_reviewer_model="yes"
+  else
+    has_reviewer_model="no"
+  fi
+  if printf '%s\n' "$block" | grep -Eq '_pr_classify|_task_field classify'; then
+    has_per_task_model="yes"
+  else
+    has_per_task_model="no"
+  fi
+  assert_eq "postreview-fix: spawn block does NOT reference _reviewer_model" "no" "$has_reviewer_model"
+  assert_eq "postreview-fix: spawn block derives per-task model from classify" "yes" "$has_per_task_model"
+fi
+
+echo ""
+echo "=== red-test verification: _verify_red_tests does NOT swallow git errors with || true ==="
+PIPELINE_RUN_TASK="$BIN_DIR/pipeline-run-task"
+# Locate the _verify_red_tests function and inspect a window for the git diff call.
+verify_line=$(grep -n '^_verify_red_tests()' "$PIPELINE_RUN_TASK" | head -1 | cut -d: -f1)
+if [[ -z "$verify_line" ]]; then
+  echo "  FAIL: _verify_red_tests function not found"; fail=$((fail + 1))
+else
+  end_line=$(( verify_line + 40 ))
+  block=$(sed -n "${verify_line},${end_line}p" "$PIPELINE_RUN_TASK")
+  # Negative assertion: the git diff line must not end with '|| true'.
+  if printf '%s' "$block" | grep -qE 'git diff[^|]*\|\| true'; then
+    echo "  FAIL: _verify_red_tests still swallows git diff with '|| true'"; fail=$((fail + 1))
+  else
+    echo "  PASS: _verify_red_tests does not swallow git diff errors with || true"; pass=$((pass + 1))
+  fi
+  # Positive assertion: the function must explicitly check git's rc and write a git_diff_failed reason.
+  if ! printf '%s' "$block" | grep -q 'git_diff_failed'; then
+    echo "  FAIL: _verify_red_tests does not surface git_diff_failed reason"; fail=$((fail + 1))
+  else
+    echo "  PASS: _verify_red_tests surfaces git_diff_failed reason"; pass=$((pass + 1))
+  fi
+fi
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 exit $(( fail > 0 ? 1 : 0 ))

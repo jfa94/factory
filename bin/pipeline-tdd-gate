@@ -72,8 +72,12 @@ _emit() {
 # Classify ALL commits in base..HEAD, not just task-tagged ones.
 all_commits=$(git log --format='%H' "${base_ref}..HEAD" 2>/dev/null)
 if [[ -z "$all_commits" ]]; then
-  _emit true true '[]'
-  exit 0
+  # Defense-in-depth: zero commits between base and HEAD means the executor
+  # produced no work. Upstream callers should catch this before invoking the
+  # gate, but if we ever get here we fail closed rather than mark exempt.
+  log_error "pipeline-tdd-gate: no commits in ${base_ref}..HEAD (executor produced nothing) task_id=\"$task_id\""
+  _emit false false '[]'
+  exit 1
 fi
 
 all_commits_oldest=$(printf '%s\n' "$all_commits" | awk '{a[NR]=$0} END{for(i=NR;i>0;i--) print a[i]}')

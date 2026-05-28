@@ -1,6 +1,6 @@
 # Legacy Per-Task Protocol (archive)
 
-Human-readable archive of the 280-line prose protocol the `pipeline-run-task` wrapper replaced. Preserved for audit / incident review. **Not linked from `SKILL.md`.** Do not paste this into an orchestrator session — the wrapper owns every step listed here.
+Human-readable archive of the prose protocol the `pipeline-run-task` wrapper replaced. Preserved for audit / incident review. Do not paste this into an orchestrator session — the wrapper owns every step listed here.
 
 This file is frozen against the wrapper's first release. If the wrapper gains/loses a step, update the wrapper + `reference/stage-taxonomy.md`, not this file.
 

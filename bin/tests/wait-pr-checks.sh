@@ -134,6 +134,63 @@ set -e
 assert_eq "FAILURE among mixed → exit 3" "3" "$rc_f"
 assert_contains "FAILURE reported as build=FAILURE" "build=FAILURE" "$out_f"
 
+# --- Case G: STALE conclusion → exit 3 ---
+checks_g=$(mktemp)
+cat > "$checks_g" <<'JSON'
+[{"__typename":"CheckRun","name":"required","status":"COMPLETED","conclusion":"STALE"}]
+JSON
+set +e
+out_g=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_g" \
+  pipeline-wait-pr 999 --timeout 1 --interval 1 2>&1)
+rc_g=$?
+set -e
+assert_eq "STALE → exit 3" "3" "$rc_g"
+assert_contains "STALE reported as required=STALE" "required=STALE" "$out_g"
+
+# --- Case H: unrecognized conclusion → exit 3 (fails closed) ---
+checks_h=$(mktemp)
+cat > "$checks_h" <<'JSON'
+[{"__typename":"CheckRun","name":"future","status":"COMPLETED","conclusion":"NEWLY_INVENTED_CONCLUSION"}]
+JSON
+set +e
+out_h=$(PATH="$MOCK:$PATH" CHECKS_FILE="$checks_h" \
+  pipeline-wait-pr 999 --timeout 1 --interval 1 2>&1)
+rc_h=$?
+set -e
+assert_eq "unrecognized conclusion → exit 3 (fails closed)" "3" "$rc_h"
+assert_contains "unrecognized conclusion reported as future=NEWLY_INVENTED_CONCLUSION" \
+  "future=NEWLY_INVENTED_CONCLUSION" "$out_h"
+assert_contains "unrecognized conclusion log mentions unrecognized" \
+  "unrecognized conclusions" "$out_h"
+
+# ============================================================
+echo ""
+echo "=== ship-stage ci-fix spawn uses classified per-task model (not reviewer model) ==="
+# Locate the executor-ci-fix prompt-file declaration line, then inspect the
+# ~25 lines that follow it (which contain the spawn manifest jq block).
+BIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+prt_file="$BIN_DIR/pipeline-run-task"
+fix_line=$(grep -n '_prompt_path executor-ci-fix' "$prt_file" | head -1 | cut -d: -f1)
+if [[ -z "$fix_line" ]]; then
+  echo "  FAIL: ship-ci-fix: could not locate executor-ci-fix prompt declaration"
+  fail=$((fail + 1))
+else
+  end_line=$(( fix_line + 25 ))
+  block=$(sed -n "${fix_line},${end_line}p" "$prt_file")
+  if printf '%s\n' "$block" | grep -q '_reviewer_model'; then
+    has_reviewer_model="yes"
+  else
+    has_reviewer_model="no"
+  fi
+  if printf '%s\n' "$block" | grep -Eq '_ci_classify|_task_field classify'; then
+    has_per_task_model="yes"
+  else
+    has_per_task_model="no"
+  fi
+  assert_eq "ship-ci-fix: spawn block does NOT reference _reviewer_model" "no" "$has_reviewer_model"
+  assert_eq "ship-ci-fix: spawn block derives per-task model from classify" "yes" "$has_per_task_model"
+fi
+
 # ============================================================
 echo ""
 echo "=== Results ==="

@@ -52,6 +52,12 @@ fi
 
 `CLAUDE_PLUGIN_ROOT` is set by Claude Code's plugin runtime and points at the plugin's install directory. Sourcing is best-effort (`|| true`) so a missing or broken library never breaks the hook outright — the hook degrades to "reads whatever `CLAUDE_PLUGIN_DATA` it inherited", which is the pre-fix behavior.
 
+## PATH prepend for hook-invoked binaries (0.10.3)
+
+`pipeline-lib.sh` exports a helper that prepends `${CLAUDE_PLUGIN_ROOT}/bin` to `PATH` when sourced. Hooks that subsequently invoke `pipeline-state`, `pipeline-lock`, or any other sibling bin tool by bare name (e.g., from inside an `$(pipeline-state read ...)` substitution) now resolve to the plugin's own binaries reliably, regardless of the inherited `PATH` shape of the firing tool call. This complements the absolute-path resolution already used by `pipeline-run-task` (which pins `pipeline-state` via `$_SCRIPT_DIR`) — bare-name calls from hooks were the gap.
+
+The prepend is idempotent: re-sourcing `pipeline-lib.sh` does not duplicate the entry. Order matters — plugin `bin/` is placed first so a foreign `pipeline-state` earlier on the user's `PATH` cannot intercept hook-driven state reads.
+
 ## Loud diagnostic on missing symlink
 
 `subagent-stop-transcript.sh` previously silent-exited when `runs/current` was absent. With the env-var fix, a missing symlink after canonicalization is a genuine pipeline-state corruption — not a foreign-plugin leak — and must surface loudly. The hook now distinguishes:

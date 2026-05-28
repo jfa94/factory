@@ -26,7 +26,9 @@ PROTECTED_BRANCHES=("main" "master" "develop" "staging" "production" "release" "
 PIPELINE_MANAGED=("staging")  # writable from autonomous mode in orchestrator worktree
 
 # Build an alternation regex with explicit anchors so `mainly-fixes` !~ main.
-PROTECTED_RE="^($(IFS='|'; echo "${PROTECTED_BRANCHES[*]}"))$"
+# Avoid global IFS tampering (semgrep bash.lang.security.ifs-tampering): join
+# the array via printf | paste so IFS stays at default.
+PROTECTED_RE="^($(printf '%s\n' "${PROTECTED_BRANCHES[@]}" | paste -sd '|' -))$"
 
 # Read hook input from stdin
 input=$(cat)
@@ -76,7 +78,7 @@ _pipeline_can_write() {
 #   _git_subflags     space-joined flags found after the subcommand
 #   _git_dest_branch  resolved destination branch for push (may be empty)
 #   _git_named_arg    branch/ref after --delete / --hard / -D / -d
-#   _git_is_force     "1" if --force / -f / --force-with-lease present
+#   _git_is_force     "1" if --force / -f / --force-with-lease[=<ref>] / --force-if-includes[=<ref>] present
 #   _git_is_plus_ref  "1" if a +<refspec> token was seen
 # ---------------------------------------------------------------------------
 _parse_git_invocation() {
@@ -164,7 +166,12 @@ _parse_git_invocation() {
     case "$_git_subcommand" in
       push)
         # Detect force flags.
-        if [[ "$tok" == "--force" || "$tok" == "-f" || "$tok" == "--force-with-lease" ]]; then
+        if [[ "$tok" == "--force" \
+           || "$tok" == "-f" \
+           || "$tok" == "--force-with-lease" \
+           || "$tok" == --force-with-lease=* \
+           || "$tok" == "--force-if-includes" \
+           || "$tok" == --force-if-includes=* ]]; then
           _git_is_force="1"
           i=$((i + 1)); continue
         fi
@@ -295,7 +302,7 @@ if [[ "$_git_subcommand" == "push" ]]; then
   fi
 fi
 
-# --- Check 2: git push --force / -f / --force-with-lease to a protected target ---
+# --- Check 2: git push --force / -f / --force-with-lease[=<ref>] / --force-if-includes[=<ref>] to a protected target ---
 if [[ "$_git_subcommand" == "push" && "$_git_is_force" == "1" ]]; then
   if [[ -n "$_git_dest_branch" ]] && _is_protected "$_git_dest_branch"; then
     _block "force_push_protected" "force-push targets protected branch '$_git_dest_branch'"

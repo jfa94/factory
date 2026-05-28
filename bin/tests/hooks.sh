@@ -96,6 +96,24 @@ assert_exit "+refspec feature allowed" 0 bash -c 'printf "{\"tool_input\":{\"com
 
 # ============================================================
 echo ""
+echo "=== S2: branch-protection blocks --force-if-includes ==="
+
+output=$(printf '{"tool_input":{"command":"git push --force-if-includes origin main"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+assert_eq "--force-if-includes main blocked" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
+assert_eq "--force-if-includes detected as force" "true" \
+  "$(printf '%s' "$output" | grep -q 'force_push_protected' && echo true || echo false)"
+
+# ============================================================
+echo ""
+echo "=== S2: branch-protection blocks --force-with-lease=<ref> ==="
+
+output=$(printf '{"tool_input":{"command":"git push --force-with-lease=main origin main"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+assert_eq "--force-with-lease=<ref> main blocked" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
+assert_eq "--force-with-lease=<ref> detected as force" "true" \
+  "$(printf '%s' "$output" | grep -q 'force_push_protected' && echo true || echo false)"
+
+# ============================================================
+echo ""
 echo "=== branch-protection: blocks hard reset on main ==="
 
 output=$(printf '{"tool_input":{"command":"git reset --hard main"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
@@ -1103,6 +1121,48 @@ exec_status=$(jq -r '.tasks."alpha-001".executor_status // empty' "$CLAUDE_PLUGI
 assert_eq "subagent-stop missing STATUS = BLOCKED" "BLOCKED" "$exec_status"
 
 echo ""
+echo "=== subagent-stop-transcript: STATUS regex accepts NO_WORK and SKIP ==="
+
+# Regression (P2 from 2026-05-27 audit): hooks/subagent-stop-gate.sh accepts
+# STATUS values NO_WORK and SKIP as legitimate no-op exits, but the transcript
+# hook's STATUS regex omitted them — so a subagent that emitted STATUS: NO_WORK
+# cleared the gate yet got recorded as BLOCKED in state, and the orchestrator
+# treated the legitimate no-op as a stall. The two regexes must agree.
+
+# (a) Static check: the regex line must list all 7 statuses.
+_regex_line=$(grep -nE 'STATUS:\[\[:space:\]\]\+' "$HOOKS_DIR/subagent-stop-transcript.sh" | head -1)
+assert_eq "transcript STATUS regex line found" "true" \
+  "$([[ -n "$_regex_line" ]] && echo true || echo false)"
+for _tok in DONE DONE_WITH_CONCERNS BLOCKED NEEDS_CONTEXT RED_READY NO_WORK SKIP; do
+  assert_eq "transcript STATUS regex contains $_tok" "true" \
+    "$(printf '%s' "$_regex_line" | grep -q "$_tok" && echo true || echo false)"
+done
+
+# (b) Behavioral check: STATUS: NO_WORK must be recorded as NO_WORK, not BLOCKED.
+_seed_run "run-sag-nowork" '{"status":"running","tasks":{"alpha-001":{"status":"executing"}}}'
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-nowork/transcript.jsonl"
+printf '{"content":".state/run-sag-nowork/alpha-001.test-writer-prompt.md"}\n' > "$transcript"
+input=$(jq -cn --arg t "$transcript" --arg msg "No missing tests.
+STATUS: NO_WORK" '{agent_type:"test-writer", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+set -e
+tw_status=$(jq -r '.tasks."alpha-001".test_writer_status // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-nowork/state.json")
+assert_eq "transcript records NO_WORK (not BLOCKED)" "NO_WORK" "$tw_status"
+
+# (c) Behavioral check: STATUS: SKIP must be recorded as SKIP, not BLOCKED.
+_seed_run "run-sag-skip" '{"status":"running","tasks":{"alpha-001":{"status":"executing"}}}'
+transcript="$CLAUDE_PLUGIN_DATA/runs/run-sag-skip/transcript.jsonl"
+printf '{"content":".state/run-sag-skip/alpha-001.test-writer-prompt.md"}\n' > "$transcript"
+input=$(jq -cn --arg t "$transcript" --arg msg "Skipping per spec.
+STATUS: SKIP" '{agent_type:"test-writer", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+set -e
+tw_status=$(jq -r '.tasks."alpha-001".test_writer_status // empty' "$CLAUDE_PLUGIN_DATA/runs/run-sag-skip/state.json")
+assert_eq "transcript records SKIP (not BLOCKED)" "SKIP" "$tw_status"
+
+echo ""
 echo "=== subagent-stop-transcript: reviewer writes review_files ==="
 
 _seed_run "run-sag-rev" '{"status":"running","tasks":{"alpha-001":{"status":"reviewing"}}}'
@@ -1622,6 +1682,62 @@ ARW_STALL_COUNT=$(printf '%s' "$ARW_ERR" | grep -c "stalled" || true)
   && { echo "  PASS: asyncrewake stalled: stderr mentions stalled"; pass=$((pass+1)); } \
   || { echo "  FAIL: asyncrewake stalled: stderr missing 'stalled' (got: $ARW_ERR)"; fail=$((fail+1)); }
 rm -rf "$ARW_DATA" "$ARW_STUBS"
+
+# ============================================================
+echo ""
+echo "=== asyncrewake-ci: persistent gh failure → ci_status=gh_error ==="
+
+ARW_DATA=$(mktemp -d)
+ARW_STUBS=$(mktemp -d)
+ARW_LOG=$(mktemp)
+ARW_PR=8888
+
+# pipeline-state stub: log all invocations + args, succeed.
+cat > "$ARW_STUBS/pipeline-state" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$ARW_LOG"
+exit 0
+SH
+chmod +x "$ARW_STUBS/pipeline-state"
+
+# gh stub: always fail with auth error.
+cat > "$ARW_STUBS/gh" <<'SH'
+#!/usr/bin/env bash
+echo "gh: authentication required" >&2
+exit 4
+SH
+chmod +x "$ARW_STUBS/gh"
+
+mkdir -p "$ARW_DATA/runs/run-gh-fail"
+ln -sf "$ARW_DATA/runs/run-gh-fail" "$ARW_DATA/runs/current"
+printf '{"tasks":{"task-1":{"task_id":"task-1","status":"executing","pr_number":%s}}}' \
+  "$ARW_PR" > "$ARW_DATA/runs/run-gh-fail/state.json"
+
+ARW_INPUT=$(jq -n --arg pr "https://github.com/acme/repo/pull/$ARW_PR" \
+  '{"tool_input":{"command":"gh pr create"},"tool_response":{"stdout":$pr}}')
+
+set +e
+ARW_STDERR=$(
+  ASYNCREWAKE_CI_MAX=10 ASYNCREWAKE_CI_SLEEP=0 \
+  ASYNCREWAKE_GH_FAIL_BUDGET=2 \
+  CLAUDE_PLUGIN_DATA="$ARW_DATA" CLAUDE_VERSION=99.0.0 \
+  PATH="$ARW_STUBS:$PATH" \
+  bash "$HOOKS_DIR/asyncrewake-ci.sh" <<< "$ARW_INPUT" 2>&1 >/dev/null
+)
+ARW_RC=$?
+set -e
+assert_eq "asyncrewake gh-fail: exit 2 (wake)" "2" "$ARW_RC"
+ARW_GHFAIL_COUNT=$(printf '%s' "$ARW_STDERR" | grep -c "gh pr view failed" || true)
+[[ "$ARW_GHFAIL_COUNT" -ge 1 ]] \
+  && { echo "  PASS: asyncrewake gh-fail: stderr surfaces gh failure"; pass=$((pass+1)); } \
+  || { echo "  FAIL: asyncrewake gh-fail: stderr missing 'gh pr view failed' (got: $ARW_STDERR)"; fail=$((fail+1)); }
+state_writes=$(cat "$ARW_LOG")
+ARW_GHERR_WRITES=$(printf '%s' "$state_writes" | grep -c 'ci_status "gh_error"' || true)
+[[ "$ARW_GHERR_WRITES" -ge 1 ]] \
+  && { echo "  PASS: asyncrewake gh-fail: writes ci_status=gh_error"; pass=$((pass+1)); } \
+  || { echo "  FAIL: asyncrewake gh-fail: missing ci_status=gh_error write (got: $state_writes)"; fail=$((fail+1)); }
+
+rm -rf "$ARW_DATA" "$ARW_STUBS" "$ARW_LOG"
 
 # ============================================================
 # subagent-stop-gate: autonomous blocking tests
@@ -2316,6 +2432,65 @@ rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 out=$(printf '%s' '{"tool_input":{"command":"env bash -c \"ls\""}}' \
   | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
 assert_eq "env bash -c interactive allowed" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
+# ============================================================
+echo ""
+echo "=== S1: pipeline-guards nested-shell bypass fires on active run without FACTORY_AUTONOMOUS_MODE ==="
+
+# Active run exists (resume / dev shell scenario), but FACTORY_AUTONOMOUS_MODE is
+# NOT set. The nested-shell / hook-bypass guard must still fire — leaving it inert
+# on resume is a defense-in-depth bypass (S1).
+_seed_run "run-s1-bypass" '{"status":"running","tasks":{}}'
+set +e
+out=$(unset FACTORY_AUTONOMOUS_MODE; printf '%s' '{"tool_name":"Bash","tool_input":{"command":"bash -lc \"gh pr create\""}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+set -e
+assert_eq "S1: bypass on active run (no env) exit 0 with deny payload" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "S1: bypass on active run has permissionDecision" "permissionDecision" "$out"
+assert_contains "S1: bypass on active run decision=deny" "deny" "$out"
+assert_contains "S1: bypass deny reason mentions nested-shell or hook-bypass" "nested-shell\|hook-bypass" "$out"
+
+# Negative control: no active run AND no env var → guard MUST NOT fire.
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+set +e
+out=$(unset FACTORY_AUTONOMOUS_MODE; printf '%s' '{"tool_name":"Bash","tool_input":{"command":"bash -lc \"gh pr create\""}}' \
+  | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+set -e
+assert_eq "S1: no active run, no env -> bypass guard does not fire (exit 0)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+if printf '%s' "$out" | grep -q 'permissionDecision'; then
+  echo "  FAIL: S1: no active run should produce no deny payload (got: $out)"; fail=$((fail + 1))
+else
+  echo "  PASS: S1: no active run produces no deny payload"; pass=$((pass + 1))
+fi
+
+echo ""
+echo "=== S1: path-scope preexec_tests guard fires on active run without FACTORY_AUTONOMOUS_MODE ==="
+
+_seed_run "run-s1-pathscope" '{"status":"running","tasks":{"task-1":{"task_id":"task-1","status":"executing","stage":"preexec_tests"}}}'
+
+# Non-test write must be DENIED even with env var unset.
+set +e
+out=$(unset FACTORY_AUTONOMOUS_MODE; FACTORY_TASK_ID=task-1 printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"src/main.ts","content":"x"}}' \
+  | FACTORY_TASK_ID=task-1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+set -e
+assert_eq "S1: path-scope denies src/ write on active preexec_tests (exit 0 with deny)" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "S1: path-scope deny has permissionDecision" "permissionDecision" "$out"
+assert_contains "S1: path-scope deny decision=deny" "deny" "$out"
+assert_contains "S1: path-scope deny reason mentions src/main.ts" "src/main.ts" "$out"
+
+# Positive control: Write to a test path passes.
+set +e
+out=$(unset FACTORY_AUTONOMOUS_MODE; FACTORY_TASK_ID=task-1 printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"tests/main.test.ts","content":"x"}}' \
+  | FACTORY_TASK_ID=task-1 bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
+set -e
+assert_eq "S1: path-scope allows test path on active preexec_tests" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+if printf '%s' "$out" | grep -q 'permissionDecision'; then
+  echo "  FAIL: S1: path-scope test path produced unexpected deny (got: $out)"; fail=$((fail + 1))
+else
+  echo "  PASS: S1: path-scope test path produced no deny"; pass=$((pass + 1))
+fi
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
 # ============================================================
 echo ""

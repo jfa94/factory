@@ -246,6 +246,10 @@ pipeline-run-task <run-id> RUN --stage finalize-run
 
 Malformed reviewer JSON now fails loud: writes `failure_reason` to state and blocks the task, instead of defaulting to 0 blockers. This prevents silent progression when review parsing fails.
 
+**Terminal-failure status writes in postexec / postreview (added 0.10.3):**
+
+When `_stage_postexec` and `_stage_postreview` reach a terminal failure path (e.g., review parse failure with no recoverable state, hard quality-gate fail with retries exhausted), the wrapper now writes `status=failed` to the task record before returning exit 30. Previously these paths returned 30 while leaving the task status at the prior in-flight value (`executing`, `reviewing`), producing a state that looked recoverable but was not. The explicit `failed` write makes the terminal classification visible to the orchestrator, rescue scan (I-16), and resume logic.
+
 **ID validation:**
 
 `run-id` and `task-id` are validated against `^[a-zA-Z0-9_-]{1,64}$` immediately after argument parsing (via `_validate_id` in `pipeline-lib.sh`). Invalid IDs exit 1 before any state read or worktree resolution. This blocks path-traversal and shell-meta payloads from reaching downstream `pipeline-state` and `git` calls.
@@ -1341,6 +1345,12 @@ pipeline-wait-pr <pr-number> [--timeout <minutes>] [--interval <seconds>]
 
 The script treats a PR as CI-red when any required check reports `failure`, `timed_out`, `action_required`, or `cancelled`. Pending checks do not block; only terminal failure states.
 
+**Single-call PR + checks fetch via `statusCheckRollup` (added 0.10.3):**
+
+PR metadata and check results are fetched in a single `gh pr view --json state,mergedAt,mergeable,headRefName,statusCheckRollup` call. The rollup is the GraphQL union of `CheckRun` and `StatusContext` records — both expose `.conclusion` (where applicable) and `.status` / `.state`. The previous two-call pattern (`gh pr view` + `gh pr checks --json`) lost conclusion-level granularity because `gh pr checks --json` whitelists `conclusion` out and forces a lossy `bucket` mapping.
+
+Each rollup entry is classified using `status` + `state` + `conclusion`, mirroring the existing classifier semantics. The `failed_names` field emitted on CI-red exits is now formatted as `<check>=<CONCLUSION>` (e.g., `build=FAILURE, deploy=ACTION_REQUIRED`) so operators can distinguish hard failures from `ACTION_REQUIRED` / `TIMED_OUT` / `CANCELLED` without re-querying GitHub.
+
 **Rebase error surfacing:**
 
 When auto-rebase fails, stderr from `git rebase --abort` and `git checkout <branch>` is captured and logged via `log_warn` / `log_error` instead of being silently swallowed. This makes debugging stuck worktrees easier. The `_safe_checkout_back` helper also logs failures (previously swallowed with `|| true`).
@@ -1706,3 +1716,21 @@ bin/test --list              # Show available suite names
 ```
 
 Suites live in `bin/tests/` with domain-scoped names (e.g., `state.sh`, `routing.sh`).
+
+---
+
+### bin/tests/run-all.sh
+
+Aggregator script that discovers every sibling `*.sh` suite via `shopt -s nullglob`, runs each serially in a subshell (so a suite's `set -euo pipefail` cannot abort the runner), records exit code + wall time, and prints one line per suite plus an aggregate summary. Exits 0 iff every executed suite exited 0.
+
+**Flags:**
+
+| Flag            | Description                                                                   |
+| --------------- | ----------------------------------------------------------------------------- |
+| `--verbose`     | Stream each suite's stdout/stderr live (default: capture, print only on fail) |
+| `--filter GLOB` | Run only suites whose basename matches GLOB (e.g., `wait-pr-*`)               |
+| `--list`        | Print the discovered + filtered + post-skip test list and exit 0 (CI debug)   |
+
+**Skip list:** `bin/tests/.skip` — one basename per line, `#` comments allowed. Every skip entry MUST carry an inline `# reason: ...` comment. Quarantine env-dependent tests only; never mask a regression.
+
+**CI gating (added 0.10.3):** `.github/workflows/tests.yml` runs `bash bin/tests/run-all.sh` on every push and PR to `main` (ubuntu-latest, 30-min timeout, concurrency group `tests-${{ github.ref }}` cancels in-progress runs). The workflow installs `pnpm@9` (required by `hooks.sh` quality-gate fixtures via `detect_pkg_manager`'s default), configures a throwaway git identity, and uploads `/tmp/run-all.log` as an artifact on failure. Exists because a 30-day regression in `wait-pr-checks.sh` shipped undetected — local-only invocation discipline was insufficient.

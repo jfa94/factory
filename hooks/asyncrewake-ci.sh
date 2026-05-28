@@ -81,10 +81,25 @@ task_id=$(jq -r --arg n "$pr_number" '
 # Phase 1: Poll CI checks. max 60m total @ 30s interval = 120 iterations.
 max_iter=${ASYNCREWAKE_CI_MAX:-120}
 sleep_s=${ASYNCREWAKE_CI_SLEEP:-30}
+max_consecutive_gh_failures=${ASYNCREWAKE_GH_FAIL_BUDGET:-3}
 ci_conclusion="timeout"
+gh_fail_count=0
 for _ in $(seq 1 $max_iter); do
   sleep "$sleep_s"
-  rollup=$(gh pr view "$pr_number" --json statusCheckRollup 2>/dev/null || printf '{}')
+  _gh_err=$(mktemp)
+  if ! rollup=$(gh pr view "$pr_number" --json statusCheckRollup 2>"$_gh_err"); then
+    gh_fail_count=$((gh_fail_count + 1))
+    printf '[asyncrewake-ci] WARN: gh pr view failed (attempt %d/%d) for PR %s: %s\n' \
+      "$gh_fail_count" "$max_consecutive_gh_failures" "$pr_number" "$(tr -d '\n' < "$_gh_err")" >&2
+    rm -f "$_gh_err"
+    if (( gh_fail_count >= max_consecutive_gh_failures )); then
+      ci_conclusion="gh_error"
+      break
+    fi
+    continue
+  fi
+  rm -f "$_gh_err"
+  gh_fail_count=0
   decision=$(printf '%s' "$rollup" | jq -r '
     .statusCheckRollup // []
     | map(.conclusion)
@@ -102,28 +117,45 @@ for _ in $(seq 1 $max_iter); do
 done
 
 # Phase 2: If CI passed, wait for auto-merge to land. max 5m @ 10s = 30 polls.
-# ci_status always reflects the check outcome (green/red/timeout).
-# merge_status is separate: merged|stalled|n/a (n/a when ci not green).
+# ci_status always reflects the check outcome (green/red/timeout/gh_error).
+# merge_status is separate: merged|stalled|gh_error|n/a (n/a when ci not green).
 merge_status="n/a"
 if [[ "$ci_conclusion" == "green" ]]; then
   merge_max=${ASYNCREWAKE_MERGE_MAX:-30}
   merge_sleep=${ASYNCREWAKE_MERGE_SLEEP:-10}
   merged=false
+  gh_fail_count=0
   for _ in $(seq 1 $merge_max); do
     sleep "$merge_sleep"
-    pr_state=$(gh pr view "$pr_number" --json state,mergedAt 2>/dev/null \
+    _gh_err=$(mktemp)
+    if ! pr_state_raw=$(gh pr view "$pr_number" --json state,mergedAt 2>"$_gh_err"); then
+      gh_fail_count=$((gh_fail_count + 1))
+      printf '[asyncrewake-ci] WARN: gh pr view merge-poll failed (attempt %d/%d) for PR %s: %s\n' \
+        "$gh_fail_count" "$max_consecutive_gh_failures" "$pr_number" "$(tr -d '\n' < "$_gh_err")" >&2
+      rm -f "$_gh_err"
+      if (( gh_fail_count >= max_consecutive_gh_failures )); then
+        merge_status="gh_error"
+        break
+      fi
+      continue
+    fi
+    rm -f "$_gh_err"
+    gh_fail_count=0
+    pr_state=$(printf '%s' "$pr_state_raw" \
       | jq -r 'if .state == "MERGED" or (.mergedAt != null and .mergedAt != "") then "merged" else "open" end')
     if [[ "$pr_state" == "merged" ]]; then
       merged=true
       break
     fi
   done
-  if [[ "$merged" == "true" ]]; then
-    merge_status="merged"
-  else
-    merge_status="stalled"
-    printf '[asyncrewake-ci] CI green but auto-merge stalled on PR %s after %ss\n' \
-      "$pr_number" "$((merge_max * merge_sleep))" >&2
+  if [[ "$merge_status" != "gh_error" ]]; then
+    if [[ "$merged" == "true" ]]; then
+      merge_status="merged"
+    else
+      merge_status="stalled"
+      printf '[asyncrewake-ci] CI green but auto-merge stalled on PR %s after %ss\n' \
+        "$pr_number" "$((merge_max * merge_sleep))" >&2
+    fi
   fi
 fi
 

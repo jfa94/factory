@@ -73,7 +73,7 @@ transcript=$(printf '%s' "$input" | jq -r '.agent_transcript_path // .transcript
 status=""
 if [[ -n "$last_msg" ]]; then
   status=$(printf '%s' "$last_msg" \
-    | { grep -oE 'STATUS:[[:space:]]+(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|RED_READY)' || true; } \
+    | { grep -oE 'STATUS:[[:space:]]+(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|RED_READY|NO_WORK|SKIP)' || true; } \
     | tail -1 | awk '{print $2}')
 fi
 [[ -z "$status" ]] && status="BLOCKED"  # missing STATUS line => treat as blocked

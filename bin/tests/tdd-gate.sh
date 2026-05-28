@@ -606,6 +606,25 @@ STUB
   pass "case_diff_tree_bad_sha: diff-tree failure causes gate to fail-closed"
 }
 
+# P5: zero commits in base..HEAD must fail closed, not pass with exempt=true.
+# Defense-in-depth: an upstream bug that invokes the gate against an empty
+# branch must not silently bypass TDD enforcement.
+case_zero_commits_fails_closed() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  # _mk_repo leaves HEAD at feat/task-001, at the same SHA as staging.
+  # So staging..HEAD is empty.
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-001 --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 1 ]]; then
+    fail "case_zero_commits_fails_closed: expected exit 1, got $rc; out=$out"
+  fi
+  printf '%s' "$out" | jq -e '.ok == false and .exempt == false' >/dev/null \
+    || fail "case_zero_commits_fails_closed: expected ok=false exempt=false; got $out"
+  pass "case_zero_commits_fails_closed: empty base..HEAD fails closed"
+}
+
 case1; case2; case3; case4; case4b; case5; case6; case7; case8
 case_go_test; case_ruby_spec; case_java_test; case_kotlin_test
 case_python_test; case_swift_tests; case_csharp_tests; case_go_impl_rejected
@@ -616,4 +635,5 @@ case_is_test_path_unit
 case9; case10; case11
 case_state_write_failure_propagates; case_state_write_success_still_passes
 case_diff_tree_bad_sha
+case_zero_commits_fails_closed
 printf 'all tdd-gate tests passed\n'

@@ -23,4 +23,4 @@ bin/test version-parity
 bin/test
 ```
 
-Both must report `0 failed`.
+Both must report `0 failed`. As of 0.10.3, `.github/workflows/tests.yml` also runs `bin/tests/run-all.sh` on every push and PR to `main`; the workflow must be green before tagging. See `docs/reference/bin-scripts.md#bintestsrun-allsh` for runner details.
