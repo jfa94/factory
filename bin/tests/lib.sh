@@ -95,6 +95,33 @@ set -e
 assert_eq "jq | json_emit, FACTORY_JSON=0: rc=0 (no SIGPIPE)" "0" "$rc"
 assert_eq "jq | json_emit, FACTORY_JSON=0: no stdout" "" "$out"
 
+# --- _factory_ensure_plugin_bin_path -------------------------------------
+
+# Regression guard: v0.10.x hooks flooded logs with
+# "pipeline-state: command not found" because the plugin bin/ was absent from
+# the sanitized PATH that Claude Code uses when invoking hooks.
+# _factory_ensure_plugin_bin_path must prepend ${CLAUDE_PLUGIN_ROOT}/bin so
+# pipeline-* binaries become resolvable.
+
+# 6. With CLAUDE_PLUGIN_ROOT set and plugin bin excluded from PATH,
+#    calling the helper must make pipeline-state resolvable.
+set +e
+out=$(bash -c '
+  set -euo pipefail
+  BIN_DIR="'"$BIN_DIR"'"
+  export CLAUDE_PLUGIN_ROOT="$(cd "$BIN_DIR/.." && pwd)"
+  # Sanitized PATH: system paths only — no plugin bin.
+  export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+  source "$BIN_DIR/pipeline-lib.sh"
+  _factory_ensure_plugin_bin_path
+  command -v pipeline-state
+' 2>&1)
+rc=$?
+set -e
+assert_eq "_factory_ensure_plugin_bin_path: rc=0" "0" "$rc"
+assert_eq "_factory_ensure_plugin_bin_path: pipeline-state resolves" \
+  "${BIN_DIR}/pipeline-state" "$out"
+
 # --- summary --------------------------------------------------------------
 
 echo
