@@ -1983,6 +1983,41 @@ rm -rf "$_orch_tmp"
 
 # ============================================================
 echo ""
+echo "=== task-commit: renames harness branch to task/<id> ==="
+
+ROOT_TMP=$(mktemp -d)
+TC_DIR="$ROOT_TMP/taskcommit"
+mkdir -p "$TC_DIR"
+git -C "$TC_DIR" init -q
+git -C "$TC_DIR" config user.email t@t
+git -C "$TC_DIR" config user.name t
+git -C "$TC_DIR" commit -q --allow-empty -m init
+git -C "$TC_DIR" checkout -q -b staging
+# Simulate a harness worktree branch (worktree-agent-<hash>) with a change.
+git -C "$TC_DIR" checkout -q -b worktree-agent-deadbeef
+printf 'x' > "$TC_DIR/file.txt"
+
+set +e
+pipeline-branch task-commit my-task --worktree "$TC_DIR" --message "feat: x" >/dev/null 2>&1
+tc_rc=$?
+set -e
+
+cur=$(git -C "$TC_DIR" rev-parse --abbrev-ref HEAD)
+[[ "$tc_rc" -eq 0 ]] \
+  && { echo "  PASS: task-commit succeeds on harness branch"; pass=$((pass + 1)); } \
+  || { echo "  FAIL: task-commit succeeds (rc=$tc_rc)"; fail=$((fail + 1)); }
+[[ "$cur" == "task/my-task" ]] \
+  && { echo "  PASS: branch renamed to task/my-task"; pass=$((pass + 1)); } \
+  || { echo "  FAIL: branch renamed (got $cur)"; fail=$((fail + 1)); }
+commit_msg=$(git -C "$TC_DIR" log -1 --pretty=%s 2>/dev/null || echo "")
+printf '%s' "$commit_msg" | grep -qF "feat: x" \
+  && { echo "  PASS: change committed on task/my-task"; pass=$((pass + 1)); } \
+  || { echo "  FAIL: change committed (msg='$commit_msg')"; fail=$((fail + 1)); }
+
+rm -rf "$ROOT_TMP"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"

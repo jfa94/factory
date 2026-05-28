@@ -337,9 +337,23 @@ case "$action" in
 
     expected_branch="task/${task_id}"
     current_branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [[ "$current_branch" != "$expected_branch" ]]; then
-      log_error "worktree is on branch '$current_branch', expected '$expected_branch'"
+    if [[ -z "$current_branch" || "$current_branch" == "HEAD" ]]; then
+      log_error "worktree $worktree is not on a named branch (detached HEAD)"
       exit 1
+    fi
+    if [[ "$current_branch" != "$expected_branch" ]]; then
+      # Harness-created worktrees are on opaque branch names (worktree-agent-<hash>).
+      # Rename to the stable task/<id> so the PR head + downstream tooling are
+      # deterministic. Abort only if task/<id> already exists as a DIFFERENT ref.
+      if git -C "$worktree" show-ref --verify --quiet "refs/heads/$expected_branch"; then
+        log_error "cannot rename '$current_branch' to '$expected_branch': target branch already exists"
+        exit 1
+      fi
+      if ! git -C "$worktree" branch -m "$current_branch" "$expected_branch"; then
+        log_error "failed to rename worktree branch '$current_branch' -> '$expected_branch'"
+        exit 1
+      fi
+      log_info "renamed worktree branch '$current_branch' -> '$expected_branch'"
     fi
 
     if ! git -C "$worktree" add -A; then
