@@ -719,7 +719,12 @@ _stage_preexec_tests() {
     log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\""
     return 30
   fi
-  { printf '[task:%s]\n' "$task_id"; printf '[role:task-executor]\n'; cat "$_tmp_prompt"; } > "$prompt_file"
+  {
+    printf '[task:%s]\n' "$task_id"
+    printf '[role:task-executor]\n'
+    [[ "$_has_origin" == "true" ]] && printf '[isolation:worktree]\n'
+    cat "$_tmp_prompt"
+  } > "$prompt_file"
   rm -f "$_tmp_prompt"
 
   local _phash_val

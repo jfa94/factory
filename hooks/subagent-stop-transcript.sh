@@ -151,10 +151,23 @@ if [[ -z "$task_id" && "$agent_type" != "scribe" ]]; then
     "$agent_type" "$run_id" >&2
 fi
 
-# --- 3. Extract worktree from transcript ---
-# For task-executor: scan transcript for `cwd` entries under the plugin's
-# ephemeral worktree root (.claude/worktrees/). First match wins. Skipped when
-# the active-spawn file already provided a worktree above.
+# --- 3. Extract worktree ---
+# A non-isolated task-executor (the postreview executor-fix / ship CI-fix retries)
+# runs in the orchestrator's cwd, NOT the task tree, so the transcript cwd grep
+# below would capture the wrong worktree. Isolated spawns carry an inlined
+# [isolation:worktree] marker; without it, trust the authoritative per-task
+# worktree already recorded in state (keyed by task_id, so it is race-free under
+# parallel batches). Isolated executors, test-writer, and reviewers fall through
+# to the cwd grep because their cwd IS their real tree.
+if [[ -z "$worktree" && "$agent_type" == "task-executor" && -n "$task_id" && -f "$transcript" ]] \
+   && ! grep -qE '\[isolation:worktree\]' "$transcript" 2>/dev/null; then
+  worktree=$(jq -r --arg t "$task_id" '.tasks[$t].worktree // empty' "$state_file" 2>/dev/null || printf '')
+fi
+
+# Transcript cwd grep: scan for `cwd` entries under the plugin's ephemeral
+# worktree root (.claude/worktrees/). First match wins. Runs for isolated
+# executors, test-writer, reviewers, and as the fallback when the state lookup
+# above found nothing.
 if [[ -z "$worktree" \
      && ( "$agent_type" == "task-executor" || "$agent_type" == "test-writer" \
      || "$agent_type" == "implementation-reviewer" || "$agent_type" == "quality-reviewer" \

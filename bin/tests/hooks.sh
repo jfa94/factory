@@ -1275,6 +1275,67 @@ WT=$(jq -r '.tasks."events-bus-factory".reviewer_worktree_implementation_reviewe
 rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
 
 echo ""
+echo "=== subagent-stop-transcript: non-isolated executor keeps authoritative state worktree (retry path) ==="
+
+# Regression (review critical finding): executor-fix / executor-ci-fix retries spawn
+# task-executor WITHOUT isolation, so their transcript cwd is the orchestrator tree.
+# The hook must NOT overwrite the authoritative .tasks.<id>.worktree already in state.
+NIRUN="run-noiso-$$"
+NIDIR="$CLAUDE_PLUGIN_DATA/runs/$NIRUN"
+mkdir -p "$NIDIR/.state/$NIRUN"
+printf '{"status":"running","tasks":{"beta-task":{"status":"executing","worktree":"/real/task/.claude/worktrees/agent-REAL"}}}' > "$NIDIR/state.json"
+ln -sfn "$NIDIR" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+NI_TS="$NIDIR/transcript-noiso.jsonl"
+cat > "$NI_TS" <<'JSONL'
+{"type":"user","message":{"content":"[task:beta-task]\n[role:task-executor]\nFix reviewer-reported blockers..."}}
+{"type":"assistant","cwd":"/orchestrator/.claude/worktrees/agent-ORCH","message":{"content":"STATUS: DONE"}}
+JSONL
+
+input=$(jq -cn --arg t "$NI_TS" --arg msg "Fixed.
+STATUS: DONE" '{agent_type:"task-executor", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+set -e
+
+NI_WT=$(jq -r '.tasks."beta-task".worktree // empty' "$NIDIR/state.json" 2>/dev/null)
+[[ "$NI_WT" == "/real/task/.claude/worktrees/agent-REAL" ]] \
+  && { echo "  PASS: non-isolated executor keeps authoritative state worktree"; pass=$((pass+1)); } \
+  || { echo "  FAIL: state worktree clobbered by orchestrator cwd (got '$NI_WT')"; fail=$((fail+1)); }
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+echo ""
+echo "=== subagent-stop-transcript: isolated executor uses fresh transcript cwd ==="
+
+# Counterpart: an isolated executor carries [isolation:worktree]; its fresh tree is
+# only discoverable from the transcript cwd, so cwd must win over the stale state value.
+ISORUN="run-iso-$$"
+ISODIR="$CLAUDE_PLUGIN_DATA/runs/$ISORUN"
+mkdir -p "$ISODIR/.state/$ISORUN"
+printf '{"status":"running","tasks":{"gamma-iso":{"status":"executing","worktree":"/old/tw/.claude/worktrees/agent-OLD"}}}' > "$ISODIR/state.json"
+ln -sfn "$ISODIR" "$CLAUDE_PLUGIN_DATA/runs/current"
+
+ISO_TS="$ISODIR/transcript-iso.jsonl"
+cat > "$ISO_TS" <<'JSONL'
+{"type":"user","message":{"content":"[task:gamma-iso]\n[role:task-executor]\n[isolation:worktree]\nBootstrap: git fetch..."}}
+{"type":"assistant","cwd":"/fresh/.claude/worktrees/agent-FRESH","message":{"content":"STATUS: DONE"}}
+JSONL
+
+input=$(jq -cn --arg t "$ISO_TS" --arg msg "Done.
+STATUS: DONE" '{agent_type:"task-executor", last_assistant_message:$msg, agent_transcript_path:$t}')
+set +e
+printf '%s' "$input" | bash "$HOOKS_DIR/subagent-stop-transcript.sh" >/dev/null 2>&1
+set -e
+
+ISO_WT=$(jq -r '.tasks."gamma-iso".worktree // empty' "$ISODIR/state.json" 2>/dev/null)
+[[ "$ISO_WT" == "/fresh/.claude/worktrees/agent-FRESH" ]] \
+  && { echo "  PASS: isolated executor uses fresh transcript cwd"; pass=$((pass+1)); } \
+  || { echo "  FAIL: isolated executor worktree (got '$ISO_WT')"; fail=$((fail+1)); }
+
+rm -f "$CLAUDE_PLUGIN_DATA/runs/current"
+
+echo ""
 echo "=== subagent-stop-transcript: .active-spawn.json supplies task_id + worktree ==="
 
 _seed_run "run-sag-active" '{"status":"running","tasks":{"gamma-001":{"status":"executing"}}}'
