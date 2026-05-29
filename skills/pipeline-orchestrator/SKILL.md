@@ -172,8 +172,13 @@ mkdir -p "$(dirname "$orchestrator_wt")"
 if [[ -d "$orchestrator_wt/.git" ]] || git -C "$PROJECT_ROOT" worktree list --porcelain | grep -q "^worktree $orchestrator_wt$"; then
   # Resume path: the orchestrator worktree exists from a previous launch and
   # may be many commits behind origin/staging. Refresh it before any subagent
-  # spawns, otherwise Agent({isolation: "worktree"}) inherits a stale HEAD and
-  # every subagent worktree sees an out-of-date package.json / lockfile / etc.
+  # spawns. This FF is LOAD-BEARING under `worktree.baseRef: "head"` (set in
+  # .claude/settings.json): every Agent({isolation: "worktree"}) subagent
+  # worktree branches from THIS orchestrator worktree's local HEAD, so a stale
+  # HEAD here means every subagent worktree sees an out-of-date
+  # package.json / lockfile / etc. (Under the harness default `fresh`, subagents
+  # would instead birth from origin/<default-branch> = origin/main, missing
+  # staging entirely — the 2026-05-28 root cause this setting fixes.)
   # Fail-closed on divergence — an operator who hits this must reconcile
   # manually before resuming; silently running on a stale tree is the bug.
   if ! git -C "$orchestrator_wt" fetch origin staging --quiet; then
@@ -198,6 +203,17 @@ cd "$orchestrator_wt"
 ```
 
 Every subsequent Bash call runs with this cwd.
+
+Both paths above land the orchestrator worktree HEAD on `origin/staging` before
+this `cd` (resume = FF; fresh-create = `worktree-create … staging`, which
+fetches and forks from `origin/staging`). With `worktree.baseRef: "head"` in
+`.claude/settings.json`, every later `Agent({isolation: "worktree"})` spawn
+branches its worktree from this HEAD — so all subagents (test-writer, executor,
+reviewers, rescue) start on the current staging tip, not stale `origin/main`.
+The test-writer/executor `checkout -B origin/staging` step in
+`bin/pipeline-run-task` remains as an idempotent fallback (a no-op once the
+worktree already births on staging) so correctness degrades gracefully if the
+setting is ever absent or overridden.
 
 ### 7. Scaffold + circuit breaker
 

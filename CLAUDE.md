@@ -23,6 +23,10 @@ Reviewer roles:
 - `bin/pipeline-tdd-gate` — test-before-impl commit-order validation
 - `commands/run.md` — main entry point (orchestrator runs in the invoking Claude Code session; see `skills/pipeline-orchestrator/SKILL.md` for the protocol)
 
+## Worktree base invariant
+
+`.claude/settings.json` sets `worktree.baseRef: "head"` so every `Agent({isolation:"worktree"})` subagent worktree branches from the orchestrator's staging HEAD, not stale `origin/main`. The orchestrator FFs/forks its worktree to `origin/staging` before any spawn; `bin/pipeline-run-task:310`'s `checkout -B … origin/staging` stays as an idempotent fallback. The `worktree` block is read at session start (not mid-session) and is project-wide — see `docs/explanation/decisions.md` Decision 12.
+
 ## Skills
 
 - `skills/pipeline-orchestrator/SKILL.md` — full orchestrator protocol
