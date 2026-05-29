@@ -310,7 +310,10 @@ assert_eq "good score → exit 0" "0" "$rc"
 assert_eq "good score → ok=true" "true" "$(jq -r .ok <<<"$out")"
 assert_eq "good score → score=85" "85" "$(jq -r .score <<<"$out")"
 
-echo "=== T4d: pass without report (stryker green, no JSON) → pass ==="
+# A2 regression: previously this asserted exit 0 (fail-open). Scope is
+# non-empty here, so stryker exiting green without writing any report is an
+# anomaly — the gate must fail closed rather than silently waive the target.
+echo "=== T4d: stryker green but no report (non-empty scope) → fail closed ==="
 MOCKS=$(mktemp -d)
 export PATH="$MOCKS:$PATH"
 cat > "$MOCKS/pnpm" <<'EOM'
@@ -324,10 +327,42 @@ printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
 RUN_ID="run-t4d"; TASK_ID="t4d"
 mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
 printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+set +e
 out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
 rc=$?
-assert_eq "stryker green w/o report → exit 0" "0" "$rc"
-assert_eq "stryker green w/o report → reason" "no-report" "$(jq -r .reason <<<"$out")"
+set -e
+assert_eq "no report → exit 1 (fail-closed)" "1" "$rc"
+assert_eq "no report → ok=false" "false" "$(jq -r .ok <<<"$out")"
+assert_eq "no report → reason" "no-report" "$(jq -r .reason <<<"$out")"
+
+# A2: stryker succeeds but the report has no .metrics.mutationScore. Scope is
+# non-empty (no-mutable-changes already exited earlier), so a scoreless run is
+# an anomaly and must fail closed rather than silently waiving the target.
+echo "=== A2: no-score with non-empty scope → fail closed ==="
+MOCKS=$(mktemp -d)
+export PATH="$MOCKS:$PATH"
+cat > "$MOCKS/pnpm" <<'EOM'
+#!/usr/bin/env bash
+# stryker exits 0 and writes a report, but with no mutationScore metric.
+mkdir -p "$WT/reports/mutation"
+printf '{"metrics":{}}' > "$WT/reports/mutation/mutation.json"
+exit 0
+EOM
+chmod +x "$MOCKS/pnpm"
+WT=$(mktemp -d)
+export WT
+_seed_repo "$WT" "src/foo.ts"
+printf '{"scripts":{"test:mutation":"stryker run"}}' > "$WT/package.json"
+RUN_ID="run-a2"; TASK_ID="a2"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID"
+printf '{"tasks":{"%s":{}}}' "$TASK_ID" > "$CLAUDE_PLUGIN_DATA/runs/$RUN_ID/state.json"
+set +e
+out=$(pipeline-mutation-gate "$RUN_ID" "$TASK_ID" "$WT")
+rc=$?
+set -e
+assert_eq "no-score → exit 1 (fail-closed)" "1" "$rc"
+assert_eq "no-score → ok=false" "false" "$(jq -r .ok <<<"$out")"
+assert_eq "no-score → reason" "no-score" "$(jq -r .reason <<<"$out")"
 
 echo ""
 echo "=== Results ==="

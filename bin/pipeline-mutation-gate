@@ -9,8 +9,9 @@
 # Same JSON written to state under `.tasks.<task-id>.mutation_gate`.
 # Exit 0 on pass/skip, 1 on fail.
 #
-# Skip reasons (exit 0): no-package-json, no-script, no-mutable-changes, no-report, no-score.
-# Fail reasons (exit 1): base-missing, stryker-failed, score-below-target.
+# Skip reasons (exit 0): no-package-json, no-script, no-mutable-changes.
+# Fail reasons (exit 1): base-missing, stryker-failed, score-below-target,
+#                        no-report, no-score (scope non-empty → fail closed).
 
 set -euo pipefail
 source "$(dirname "$0")/pipeline-lib.sh"
@@ -124,12 +125,18 @@ target=$(read_config '.quality.mutationScoreTarget' '80')
 
 score_file="$worktree/reports/mutation/mutation.json"
 if [[ ! -f "$score_file" ]]; then
-  _emit true "no-report" null "$target" "$scope_csv" 0
+  # Scope is non-empty (the no-mutable-changes case already exited above), so a
+  # stryker run that produced no report is an anomaly — fail closed rather than
+  # silently waiving the mutation-score target. See $mut_log for stryker output.
+  log_error "mutation gate: stryker produced no report at $score_file despite mutable file(s) — see $mut_log"
+  _emit false "no-report" null "$target" "$scope_csv" 1
 fi
 
 score=$(jq -r '.metrics.mutationScore // empty' "$score_file" 2>/dev/null || printf '')
 if [[ -z "$score" ]]; then
-  _emit true "no-score" null "$target" "$scope_csv" 0
+  # Report exists but carries no score — also an anomaly with non-empty scope.
+  log_error "mutation gate: report at $score_file has no .metrics.mutationScore — see $mut_log"
+  _emit false "no-score" null "$target" "$scope_csv" 1
 fi
 
 # Strict float comparison — printf '%.0f' rounds half-up, so a score of
