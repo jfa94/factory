@@ -2078,6 +2078,17 @@ _stage_finalize_run() {
     log_metric "run.final_pr_created" "url=\"$final_pr_url\""
   fi
 
+  # Write terminal status BEFORE cleanup so the state pipeline-cleanup archives
+  # already reflects the completed run. pipeline-cleanup copies state.json to
+  # archive/ then rm -rf's runs/$run_id, so any write after cleanup would land
+  # in a deleted directory and the archived copy would be missing status=done.
+  if ! "$_STATE_BIN" write "$run_id" '.status' '"done"' >/dev/null; then
+    log_error "finalize-run: failed to write final status=done"
+    return 3
+  fi
+  "$_STATE_BIN" write "$run_id" '.ended_at' "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >/dev/null \
+    || log_warn "finalize-run: failed to write ended_at (non-fatal)"
+
   local _cl_err; _cl_err=$(mktemp)
   if ! pipeline-cleanup "$run_id" --delete-branches --remove-worktrees --close-issues >"$_cl_err" 2>&1; then
     log_error "finalize-run: cleanup failed: $(cat "$_cl_err")"
@@ -2086,13 +2097,6 @@ _stage_finalize_run() {
     return 3
   fi
   rm -f "$_cl_err"
-
-  if ! "$_STATE_BIN" write "$run_id" '.status' '"done"' >/dev/null; then
-    log_error "finalize-run: failed to write final status=done"
-    return 3
-  fi
-  "$_STATE_BIN" write "$run_id" '.ended_at' "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" >/dev/null \
-    || log_warn "finalize-run: failed to write ended_at (non-fatal)"
 
   t1=$(_now_ms)
   log_step_end "finalize-run" "ok" "$((t1-t0))"

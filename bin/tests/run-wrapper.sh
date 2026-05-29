@@ -2011,5 +2011,56 @@ esac
   || fail "ship-push-fail: gh pr create ran despite push failure"
 
 rm -f "$STUB_DIR/git" "$STUB_DIR/gh" "$STUB_DIR/pipeline-quality-gate" "$ROOT_TMP/gh-prcreate.log"
+# --- A1: finalize-run writes terminal status into the ARCHIVED state -------
+# pipeline-cleanup copies state.json to archive/ then rm -rf's runs/$run_id.
+# The terminal .status="done"/.ended_at writes MUST happen before cleanup so
+# the archived copy reflects the completed run. Here we run the REAL
+# pipeline-cleanup (the default stub is removed for this case) and assert the
+# ARCHIVED state has status=done.
+new_run finalize-archive-done
+pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship_done"' >/dev/null
+pipeline-state task-write "$RUN_ID" alpha-001 pr_number '303' >/dev/null
+pipeline-state write "$RUN_ID" .scribe.status '"done"' >/dev/null
+# gh: PR merged (passes the staging-settled gate); pr create / pr list no-op.
+write_stub gh '
+case "$*" in
+  "pr view 303 --json state,mergeCommit,headRefOid")
+    printf '"'"'{"state":"MERGED","mergeCommit":{"oid":"feedface"},"headRefOid":"feedface"}'"'"' ;;
+  "pr create"*) echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+# git: fetch + merge-base succeed; all branch listings empty and all deletes
+# no-op so the REAL pipeline-cleanup cannot mutate the host repo.
+write_stub git '
+case "$1 $2 $3" in
+  "fetch origin staging") exit 0 ;;
+esac
+case "$1 $2" in
+  "merge-base --is-ancestor") exit 0 ;;
+esac
+case "$1" in
+  branch|"worktree"|"for-each-ref"|"ls-remote"|"show-ref"|"push"|"rev-parse"|"merge-base"|"fetch")
+    exit 0 ;;
+  *) exit 0 ;;
+esac'
+# Remove the cleanup stub so the REAL bin/pipeline-cleanup runs (archive + rm).
+rm -f "$STUB_DIR/pipeline-cleanup"
+set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; rc=$?; set -e
+archived="$CLAUDE_PLUGIN_DATA/archive/$RUN_ID/state.json"
+if [[ -f "$archived" ]] && [[ "$(jq -r '.status' "$archived" 2>/dev/null)" == "done" ]]; then
+  pass "A1: archived state has status=done"
+else
+  fail "A1: archived state status=$(jq -r '.status' "$archived" 2>/dev/null) rc=$rc"
+fi
+# Restore default stubs for any later additions.
+write_stub pipeline-cleanup 'exit 0'
+rm -f "$STUB_DIR/git"
+write_stub gh '
+case "$1 $2" in
+  "pr create") echo "https://github.com/acme/repo/pull/4242" ;;
+  *) exit 0 ;;
+esac'
+
 printf '\n=== RESULTS: %d passed, %d failed ===\n' "$passed" "$failed"
 exit $(( failed > 0 ? 1 : 0 ))
