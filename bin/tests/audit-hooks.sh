@@ -380,6 +380,36 @@ status=$( cd "$ORCH_DIR" && printf '{"tool_input":{"command":"git reset --hard o
   | bash "$BRANCH_PROTECTION" >/dev/null 2>&1; echo $? )
 assert_eq "orchestrator worktree without autonomous on staging → block" "2" "$status"
 
+# --- Check 6: --git-dir must resolve the correct repo's current branch ---
+# A `--git-dir=<protected>/.git reset --hard` invoked from an unrelated,
+# non-protected cwd must still gate on the TARGET repo's current branch.
+GITDIR_PROTECTED="$TMPROOT/gitdir-protected"
+mkdir -p "$GITDIR_PROTECTED"
+git -C "$GITDIR_PROTECTED" init -q -b main
+git -C "$GITDIR_PROTECTED" -c user.email=t@test -c user.name=t commit -q --allow-empty -m "init"
+
+# 26. equals form: --git-dir=<protected>/.git reset --hard (bare) → block.
+status=$(_call_protect "$REPO_FEATURE" "git --git-dir=$GITDIR_PROTECTED/.git reset --hard")
+assert_eq "--git-dir=<protected> reset --hard (equals form) → block" "2" "$status"
+
+# 27. space form: --git-dir <protected>/.git reset --hard (bare) → block.
+status=$(_call_protect "$REPO_FEATURE" "git --git-dir $GITDIR_PROTECTED/.git reset --hard")
+assert_eq "--git-dir <protected> reset --hard (space form) → block" "2" "$status"
+
+# 28. Sanity guard: --git-dir pointing at a NON-protected repo (feature-x) → allow.
+status=$(_call_protect "$REPO_MAIN" "git --git-dir=$REPO_FEATURE/.git reset --hard")
+assert_eq "--git-dir=<feature> reset --hard → allow" "0" "$status"
+
+# 29. Minor-3 coverage: orchestrator worktree + autonomous, but on a protected
+#     branch NOT in PIPELINE_MANAGED (main, not staging) → still block.
+ORCH_MAIN_DIR="$TMPROOT/proj-main/.claude/worktrees/orchestrator-main"
+mkdir -p "$ORCH_MAIN_DIR"
+git -C "$ORCH_MAIN_DIR" init -q -b main
+git -C "$ORCH_MAIN_DIR" -c user.email=t@test -c user.name=t commit -q --allow-empty -m "init"
+status=$( cd "$ORCH_MAIN_DIR" && printf '{"tool_input":{"command":"git reset --hard"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$BRANCH_PROTECTION" >/dev/null 2>&1; echo $? )
+assert_eq "orchestrator worktree + autonomous on non-managed protected (main) → block" "2" "$status"
+
 # ===========================================================================
 echo ""
 echo "=== task_16_01: write-protection hook ==="

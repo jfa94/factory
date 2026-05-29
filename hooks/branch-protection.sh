@@ -7,6 +7,7 @@
 # The parser recognises all of:
 #   git push origin main
 #   git -C <dir> push origin main
+#   git --git-dir=<dir>/.git reset --hard   (--git-dir, both forms, honored)
 #   /usr/bin/git push origin main
 #   GIT_DIR=... git push origin main
 #   git push origin "main"
@@ -24,6 +25,11 @@
 # harmless; resetting while standing on a protected branch is destructive even
 # with no ref (`git reset --hard`). The orchestrator-worktree exception
 # (_pipeline_can_write) still applies for pipeline-managed branches.
+#
+# Current-branch resolution honors -C <dir> AND --git-dir <path> (both the
+# space and `--git-dir=<path>` forms). Without --git-dir capture, a command
+# like `git --git-dir=<protected>/.git reset --hard` run from an unrelated cwd
+# would resolve the wrong repo's branch and bypass Check 6.
 set -euo pipefail
 
 # shellcheck source=/dev/null
@@ -85,7 +91,7 @@ _pipeline_can_write() {
 #   _git_subflags     space-joined flags found after the subcommand
 #                     (e.g. contains "--hard" for `git reset --hard`)
 #   _git_dest_branch  resolved destination branch for push (may be empty)
-#   _git_named_arg    branch/ref after --delete / --hard / -D / -d
+#   _git_named_arg    branch after push --delete / branch -D / -d (not reset)
 #   _git_is_force     "1" if --force / -f / --force-with-lease[=<ref>] / --force-if-includes[=<ref>] present
 #   _git_is_plus_ref  "1" if a +<refspec> token was seen
 # ---------------------------------------------------------------------------
@@ -101,6 +107,7 @@ _parse_git_invocation() {
   _git_is_force="0"
   _git_is_plus_ref="0"
   _git_work_dir=""  # directory from -C flag (if present)
+  _git_dir=""       # path from --git-dir flag (if present)
 
   # Tokenise: split on whitespace, strip env-var prefixes (VAR=value tokens),
   # and strip a leading directory path from the git binary so that
@@ -141,8 +148,18 @@ _parse_git_invocation() {
       i=$((i + 2))
       continue
     fi
+    # Equals form: --git-dir=<path>. Must be handled before the generic -* skip.
+    if [[ "$tok" == --git-dir=* ]]; then
+      _git_dir="${tok#--git-dir=}"
+      i=$((i + 1))
+      continue
+    fi
     if [[ "$tok" == "--work-tree" || "$tok" == "--git-dir" ]]; then
-      # These consume the next token as their argument (not captured — uncommon).
+      # Space form: these consume the next token as their argument. Capture
+      # --git-dir so current-branch resolution targets the correct repo
+      # (otherwise `git --git-dir=<protected>/.git reset --hard` from an
+      # unrelated cwd would resolve the wrong branch and bypass Check 6).
+      [[ "$tok" == "--git-dir" && $((i + 1)) -lt $n ]] && _git_dir="${tokens[i+1]}"
       i=$((i + 2))
       continue
     fi
@@ -219,19 +236,12 @@ _parse_git_invocation() {
         ;;
 
       reset)
+        # Check 6 gates on the CURRENT branch, so the reset arm only needs to
+        # record whether --hard is present (no ref capture — _git_named_arg is
+        # unused for reset). Leading space is significant: Check 6 matches the
+        # word-boundary token " --hard".
         if [[ "$tok" == "--hard" ]]; then
-          # Record the --hard marker so Check 6 can detect a hard reset even
-          # when no ref follows (bare `git reset --hard`).
           _git_subflags+=" --hard"
-          # Next non-flag token is the ref.
-          local j=$((i + 1))
-          while (( j < n )); do
-            local nt="${tokens[j]}"
-            [[ "$nt" == -* ]] && { j=$((j + 1)); continue; }
-            # Strip remote prefix (origin/main → main).
-            _git_named_arg="${nt##*/}"
-            break
-          done
         fi
         ;;
 
@@ -296,9 +306,13 @@ _parse_git_invocation() {
 _parse_git_invocation
 
 # Helper: run git symbolic-ref rooted at the repo the command targets.
+# Honors both -C <dir> and --git-dir <path> (either form) so the current
+# branch is resolved against the repo the command actually operates on, not
+# the process cwd. Detached HEAD / bad path → empty (treated as unprotected).
 _git_current_branch() {
   local _args=()
   [[ -n "$_git_work_dir" ]] && _args+=(-C "$_git_work_dir")
+  [[ -n "$_git_dir" ]] && _args+=(--git-dir "$_git_dir")
   git "${_args[@]}" symbolic-ref --short HEAD 2>/dev/null || echo ""
 }
 
@@ -347,7 +361,7 @@ fi
 # the branch you are on. Resetting a disposable branch to any ref is harmless;
 # resetting (to HEAD~N, a sha, a remote ref, or nothing) while on a protected
 # branch is destructive. --hard only — soft/mixed resets are not blocked.
-if [[ "$_git_subcommand" == "reset" && "$_git_subflags" == *--hard* ]]; then
+if [[ "$_git_subcommand" == "reset" && "$_git_subflags" == *" --hard"* ]]; then
   reset_current=$(_git_current_branch)
   if [[ -n "$reset_current" ]] && _is_protected "$reset_current"; then
     _pipeline_can_write "$reset_current" || \
