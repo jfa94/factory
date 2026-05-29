@@ -1451,7 +1451,7 @@ _run_ship_pregate() {
   mut_reason=$("$_STATE_BIN" task-read "$run_id" "$task_id" mutation_gate.reason 2>/dev/null || printf '')
   case "$mut_rc:$mut_reason" in
     0:ok)                     mut_gate="ok" ;;
-    0:no-package-json|0:no-script|0:no-mutable-changes|0:no-report|0:no-score)
+    0:no-package-json|0:no-script|0:no-mutable-changes)
                               mut_gate="skipped" ;;
     0:*)                      mut_gate="skipped" ;;
     *:*)                      mut_gate="fail" ;;
