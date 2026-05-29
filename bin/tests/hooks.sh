@@ -98,7 +98,16 @@ assert_exit "+refspec feature allowed" 0 bash -c 'printf "{\"tool_input\":{\"com
 echo ""
 echo "=== S2: branch-protection blocks --force-if-includes ==="
 
-output=$(printf '{"tool_input":{"command":"git push --force-if-includes origin main"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+# These assert the Check 2 reason (force_push_protected). Run from a repo on a
+# NON-protected branch: otherwise Check 1 (on_protected_branch) pre-empts and
+# the push is blocked with a different reason. Hermetic — independent of the
+# branch the suite runner happens to be on.
+fp_repo=$(mktemp -d "${TMPDIR:-/tmp}/branch-protect-fp-XXXXXX")
+git -C "$fp_repo" init -q -b feature-x
+git -C "$fp_repo" -c user.email=t@test -c user.name=t commit -q --allow-empty -m "init"
+
+output=$( cd "$fp_repo" && printf '{"tool_input":{"command":"git push --force-if-includes origin main"}}' \
+  | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
 assert_eq "--force-if-includes main blocked" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
 assert_eq "--force-if-includes detected as force" "true" \
   "$(printf '%s' "$output" | grep -q 'force_push_protected' && echo true || echo false)"
@@ -107,10 +116,12 @@ assert_eq "--force-if-includes detected as force" "true" \
 echo ""
 echo "=== S2: branch-protection blocks --force-with-lease=<ref> ==="
 
-output=$(printf '{"tool_input":{"command":"git push --force-with-lease=main origin main"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+output=$( cd "$fp_repo" && printf '{"tool_input":{"command":"git push --force-with-lease=main origin main"}}' \
+  | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
 assert_eq "--force-with-lease=<ref> main blocked" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
 assert_eq "--force-with-lease=<ref> detected as force" "true" \
   "$(printf '%s' "$output" | grep -q 'force_push_protected' && echo true || echo false)"
+rm -rf "$fp_repo"
 
 # ============================================================
 echo ""
