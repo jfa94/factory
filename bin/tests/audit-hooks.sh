@@ -305,9 +305,11 @@ assert_eq "git push (no args) from main → block" "2" "$status"
 status=$(_call_protect "$REPO_FEATURE" "git push origin --delete main")
 assert_eq "git push origin --delete main → block" "2" "$status"
 
-# 12. git reset --hard origin/develop → block (strip remote prefix).
+# 12. git reset --hard origin/develop on a disposable branch → allow.
+#     Check 6 now gates on the CURRENT branch (feature-x, not protected); the
+#     target ref is irrelevant — resetting a disposable branch is harmless.
 status=$(_call_protect "$REPO_FEATURE" "git reset --hard origin/develop")
-assert_eq "git reset --hard origin/develop → block" "2" "$status"
+assert_eq "git reset --hard origin/develop on disposable branch → allow" "0" "$status"
 
 # 13. git branch -D master → block.
 status=$(_call_protect "$REPO_FEATURE" "git branch -D master")
@@ -320,6 +322,63 @@ assert_eq "git branch -D some-feature → allow" "0" "$status"
 # 15. Empty / non-Bash input is allowed (no command field).
 status=$( ( printf '{}' | bash "$BRANCH_PROTECTION" >/dev/null 2>&1 ); echo $? )
 assert_eq "empty hook input → allow" "0" "$status"
+
+# --- Check 6 (current-branch gating) regression matrix ---
+
+# 16. git reset --hard HEAD~3 on a disposable branch → allow.
+status=$(_call_protect "$REPO_FEATURE" "git reset --hard HEAD~3")
+assert_eq "reset --hard HEAD~3 on disposable branch → allow" "0" "$status"
+
+# 17. git reset --hard HEAD~3 while on main (protected) → block.
+status=$(_call_protect "$REPO_MAIN" "git reset --hard HEAD~3")
+assert_eq "reset --hard HEAD~3 on protected branch → block" "2" "$status"
+
+# 18. git reset --hard origin/staging while on main → block (current protected,
+#     target irrelevant).
+status=$(_call_protect "$REPO_MAIN" "git reset --hard origin/staging")
+assert_eq "reset --hard origin/staging on protected branch → block" "2" "$status"
+
+# 19. Bare `git reset --hard` (no ref) on main → block.
+status=$(_call_protect "$REPO_MAIN" "git reset --hard")
+assert_eq "bare reset --hard on protected branch → block" "2" "$status"
+
+# 20. Bare `git reset --hard` on a disposable branch → allow.
+status=$(_call_protect "$REPO_FEATURE" "git reset --hard")
+assert_eq "bare reset --hard on disposable branch → allow" "0" "$status"
+
+# 21. git reset HEAD somefile (mixed, default) on disposable → allow.
+status=$(_call_protect "$REPO_FEATURE" "git reset HEAD somefile")
+assert_eq "mixed reset on disposable branch → allow" "0" "$status"
+
+# 22. git reset --soft HEAD~1 on main → allow (only --hard is blocked).
+status=$(_call_protect "$REPO_MAIN" "git reset --soft HEAD~1")
+assert_eq "soft reset on protected branch → allow" "0" "$status"
+
+# 23. Detached HEAD: reset --hard <sha> → allow (no current branch ref).
+REPO_DETACHED="$TMPROOT/repo-detached"
+mkdir -p "$REPO_DETACHED"
+git -C "$REPO_DETACHED" init -q -b main
+git -C "$REPO_DETACHED" -c user.email=t@test -c user.name=t commit -q --allow-empty -m "c1"
+DETACHED_SHA=$(git -C "$REPO_DETACHED" rev-parse HEAD)
+git -C "$REPO_DETACHED" -c user.email=t@test -c user.name=t commit -q --allow-empty -m "c2"
+git -C "$REPO_DETACHED" checkout -q "$DETACHED_SHA"
+status=$(_call_protect "$REPO_DETACHED" "git reset --hard $DETACHED_SHA")
+assert_eq "reset --hard on detached HEAD → allow" "0" "$status"
+
+# 24. Orchestrator exception: autonomous mode + orchestrator worktree on staging
+#     → allow even though staging is protected (pipeline manages it).
+ORCH_DIR="$TMPROOT/proj/.claude/worktrees/orchestrator-test"
+mkdir -p "$ORCH_DIR"
+git -C "$ORCH_DIR" init -q -b staging
+git -C "$ORCH_DIR" -c user.email=t@test -c user.name=t commit -q --allow-empty -m "init"
+status=$( cd "$ORCH_DIR" && printf '{"tool_input":{"command":"git reset --hard origin/staging"}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$BRANCH_PROTECTION" >/dev/null 2>&1; echo $? )
+assert_eq "orchestrator worktree + autonomous on staging → allow" "0" "$status"
+
+# 25. Same orchestrator dir WITHOUT autonomous mode → block (staging protected).
+status=$( cd "$ORCH_DIR" && printf '{"tool_input":{"command":"git reset --hard origin/staging"}}' \
+  | bash "$BRANCH_PROTECTION" >/dev/null 2>&1; echo $? )
+assert_eq "orchestrator worktree without autonomous on staging → block" "2" "$status"
 
 # ===========================================================================
 echo ""

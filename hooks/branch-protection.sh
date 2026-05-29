@@ -17,6 +17,13 @@
 # Implementation:
 #   _parse_git_invocation() is called once and populates shared variables.
 #   All checks (1-7) read from those variables — no re-tokenisation.
+#
+# Check 6 (`git reset --hard`) gates on the CURRENT branch being protected,
+# not on the target ref: a hard reset only endangers the branch you are on.
+# Resetting a disposable branch to any ref (including a protected ref) is
+# harmless; resetting while standing on a protected branch is destructive even
+# with no ref (`git reset --hard`). The orchestrator-worktree exception
+# (_pipeline_can_write) still applies for pipeline-managed branches.
 set -euo pipefail
 
 # shellcheck source=/dev/null
@@ -76,6 +83,7 @@ _pipeline_can_write() {
 # Populates global variables (memoised — call once, read many):
 #   _git_subcommand   push | reset | branch | (empty if no git found)
 #   _git_subflags     space-joined flags found after the subcommand
+#                     (e.g. contains "--hard" for `git reset --hard`)
 #   _git_dest_branch  resolved destination branch for push (may be empty)
 #   _git_named_arg    branch/ref after --delete / --hard / -D / -d
 #   _git_is_force     "1" if --force / -f / --force-with-lease[=<ref>] / --force-if-includes[=<ref>] present
@@ -212,6 +220,9 @@ _parse_git_invocation() {
 
       reset)
         if [[ "$tok" == "--hard" ]]; then
+          # Record the --hard marker so Check 6 can detect a hard reset even
+          # when no ref follows (bare `git reset --hard`).
+          _git_subflags+=" --hard"
           # Next non-flag token is the ref.
           local j=$((i + 1))
           while (( j < n )); do
@@ -331,10 +342,16 @@ if [[ "$_git_subcommand" == "push" && -n "$_git_named_arg" ]]; then
   fi
 fi
 
-# --- Check 6: git reset --hard <protected> ---
-if [[ "$_git_subcommand" == "reset" && -n "$_git_named_arg" ]]; then
-  if _is_protected "$_git_named_arg"; then
-    _block "hard_reset_protected" "hard reset targets protected branch '$_git_named_arg'"
+# --- Check 6: git reset --hard while standing on a protected branch ---
+# Gate on the CURRENT branch, not the target ref: a hard reset only endangers
+# the branch you are on. Resetting a disposable branch to any ref is harmless;
+# resetting (to HEAD~N, a sha, a remote ref, or nothing) while on a protected
+# branch is destructive. --hard only — soft/mixed resets are not blocked.
+if [[ "$_git_subcommand" == "reset" && "$_git_subflags" == *--hard* ]]; then
+  reset_current=$(_git_current_branch)
+  if [[ -n "$reset_current" ]] && _is_protected "$reset_current"; then
+    _pipeline_can_write "$reset_current" || \
+      _block "hard_reset_on_protected" "hard reset while on protected branch '$reset_current'"
   fi
 fi
 

@@ -114,10 +114,17 @@ assert_eq "--force-with-lease=<ref> detected as force" "true" \
 
 # ============================================================
 echo ""
-echo "=== branch-protection: blocks hard reset on main ==="
+echo "=== branch-protection: blocks hard reset on a protected branch ==="
 
-output=$(printf '{"tool_input":{"command":"git reset --hard main"}}' | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
-assert_eq "hard reset main blocked" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
+# Check 6 gates on the CURRENT branch, so run the hook from a repo that is
+# checked out on a protected branch (main) and confirm a hard reset is blocked.
+hr_repo=$(mktemp -d "${TMPDIR:-/tmp}/branch-protect-hr-XXXXXX")
+git -C "$hr_repo" init -q -b main
+git -C "$hr_repo" -c user.email=t@test -c user.name=t commit -q --allow-empty -m "init"
+output=$( cd "$hr_repo" && printf '{"tool_input":{"command":"git reset --hard HEAD~1"}}' \
+  | "$HOOKS_DIR/branch-protection.sh" 2>&1; echo "EXIT:$?")
+assert_eq "hard reset on protected branch blocked" "EXIT:2" "$(printf '%s' "$output" | grep -o 'EXIT:[0-9]*')"
+rm -rf "$hr_repo"
 
 # ============================================================
 echo ""
