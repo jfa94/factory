@@ -2743,6 +2743,19 @@ assert_eq "quoted --git-dir in commit message denied (known false positive — f
 
 rm -rf "$_m1_tmp"
 
+# --- B2: secret-guard fails CLOSED when target dir is not a git repo ------
+# A `git -C <nonrepo>` commit with no override flags reaches the rev-parse
+# guard. We cannot scan an unscannable target, so deny (exit 2) rather than
+# fall open. A real git commit/push in a non-repo would error anyway, so
+# denying blocks nothing that would have worked.
+_b2_dir=$(mktemp -d "${TMPDIR:-/tmp}/scg-b2-XXXXXX")   # plain dir, not a repo
+out=$(printf '{"tool_input":{"command":"git -C %s commit -m x"}}' "$_b2_dir" \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "B2: non-git target denied (exit 2)" "EXIT:2" \
+  "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "B2: non-git target block reason=non_git_target" "non_git_target" "$out"
+rm -rf "$_b2_dir"
+
 # ============================================================
 echo ""
 echo "=== T5: _is_nested_shell_or_hook_bypass adversarial matrix ==="
