@@ -254,7 +254,15 @@ if [[ "$use_trufflehog" == "true" ]]; then
     set -e
     if (( th_rc != 0 )); then
       th_stderr=$(<"$th_err")
-      printf '%s\n' "secret-commit-guard: trufflehog exited $th_rc — falling back to regex-only scan; stderr: ${th_stderr:0:300}" >&2
+      rm -f "$th_err"
+      # TruffleHog was EXPLICITLY enabled (safety.useTruffleHog=true) — we are
+      # only inside this branch because use_trufflehog=="true". The operator
+      # opted into the stronger scan, so its failure must NOT silently downgrade
+      # to regex-only. Fail closed so the failure is visible.
+      jq -cn --arg r "trufflehog_failed" \
+        --arg d "secret-commit-guard: trufflehog (explicitly enabled via safety.useTruffleHog) exited $th_rc — refusing to downgrade to regex-only; stderr: ${th_stderr:0:200}" \
+        '{decision:"block", reason:$r, detail:$d}' >&2
+      exit 2
     fi
     rm -f "$th_err"
     if [[ -n "$trufflehog_output" ]]; then

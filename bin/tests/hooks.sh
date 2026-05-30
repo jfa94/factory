@@ -2756,6 +2756,56 @@ assert_eq "B2: non-git target denied (exit 2)" "EXIT:2" \
 assert_contains "B2: non-git target block reason=non_git_target" "non_git_target" "$out"
 rm -rf "$_b2_dir"
 
+# --- B3: secret-guard distinguishes git errors from an empty diff ----------
+# Invariant 1 (no false positive): a clean, legitimately-empty-or-safe staged
+# diff must STILL be allowed (exit 0). This locks against a regression where
+# the fail-closed branch fires on an empty diff.
+_b3_repo=$(mktemp -d "${TMPDIR:-/tmp}/scg-b3-XXXXXX")
+git -C "$_b3_repo" init -q
+git -C "$_b3_repo" config user.email t@t
+git -C "$_b3_repo" config user.name t
+printf 'safe content\n' > "$_b3_repo/a.txt"
+git -C "$_b3_repo" add -A
+out=$(printf '{"tool_input":{"command":"git -C %s commit -m x"}}' "$_b3_repo" \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "B3: clean staged diff still allowed (exit 0)" "EXIT:0" \
+  "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+rm -rf "$_b3_repo"
+
+# Invariant 2 (fail closed on error): if the `git diff --cached` calls error
+# (rc!=0), the guard must NOT silently fall open. We shadow `git` on PATH with
+# a stub that succeeds for rev-parse (so the repo check passes) but fails for
+# `diff`, simulating a git-command failure. The guard must deny (exit 2) with a
+# reason naming the git-diff failure, not exit 0 on an "empty" diff.
+_b3_stubdir=$(mktemp -d "${TMPDIR:-/tmp}/scg-b3stub-XXXXXX")
+cat > "$_b3_stubdir/git" <<'STUB'
+#!/usr/bin/env bash
+# Walk past `-C <dir>` and any leading flags to find the subcommand.
+args=("$@")
+sub=""
+i=0
+while (( i < ${#args[@]} )); do
+  case "${args[i]}" in
+    -C) i=$((i+2)); continue ;;
+    -*) i=$((i+1)); continue ;;
+    *)  sub="${args[i]}"; break ;;
+  esac
+done
+case "$sub" in
+  rev-parse) exit 0 ;;        # repo check + upstream resolution succeed
+  diff)      exit 1 ;;        # simulate git-command failure
+  *)         exit 0 ;;
+esac
+STUB
+chmod +x "$_b3_stubdir/git"
+out=$(PATH="$_b3_stubdir:$PATH" \
+  printf '{"tool_input":{"command":"git -C %s commit -m x"}}' "$PWD" \
+  | PATH="$_b3_stubdir:$PATH" bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "B3: git diff failure fails closed (exit 2)" "EXIT:2" \
+  "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "B3: diff-failure reason mentions git diff" "git diff failed" "$out"
+rm -rf "$_b3_stubdir"
+
 # ============================================================
 echo ""
 echo "=== T5: _is_nested_shell_or_hook_bypass adversarial matrix ==="
