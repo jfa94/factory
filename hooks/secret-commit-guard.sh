@@ -163,8 +163,18 @@ scan_paths=""
 scan_diff=""
 
 if [[ "$is_commit" == "true" ]]; then
-  scan_paths=$(git -C "$commit_dir" diff --cached --name-only 2>/dev/null || true)
-  scan_diff=$(git -C "$commit_dir" diff --cached -U0 2>/dev/null || true)
+  # Capture git's rc explicitly. A git FAILURE (rc!=0) must fail closed — an
+  # empty scan_diff from a crashed command is indistinguishable from "nothing
+  # staged" and would skip the regex loop, silently falling open. A legitimately
+  # empty staged diff (rc==0) still proceeds and exits 0.
+  _gd_rc=0
+  scan_paths=$(git -C "$commit_dir" diff --cached --name-only 2>/dev/null) || _gd_rc=$?
+  scan_diff=$(git -C "$commit_dir" diff --cached -U0 2>/dev/null) || _gd_rc=$?
+  if (( _gd_rc != 0 )); then
+    jq -cn --arg r "git_diff_failed" --arg d "secret-commit-guard: git diff failed (rc=$_gd_rc) — cannot verify staged changes" \
+      '{decision:"block", reason:$r, detail:$d}' >&2
+    exit 2
+  fi
 else
   # Push scan: determine the range of unpushed commits.
   push_remote=""
@@ -209,8 +219,19 @@ else
     range_arg="${remote_ref}..HEAD"
   fi
 
-  scan_paths=$(git -C "$commit_dir" log "$range_arg" --name-only --format= 2>/dev/null | sort -u || true)
-  scan_diff=$(git -C "$commit_dir" log -p "$range_arg" -U0 2>/dev/null || true)
+  # Split the `log | sort -u` pipe so git's rc is captured directly. The
+  # original one-liner masked a git failure two ways: `| sort -u` returns
+  # sort's rc, and `|| true` discards any nonzero. A git log FAILURE must fail
+  # closed rather than yield an empty diff that skips the regex loop.
+  _gl_rc=0
+  _raw_paths=$(git -C "$commit_dir" log "$range_arg" --name-only --format= 2>/dev/null) || _gl_rc=$?
+  scan_paths=$(printf '%s\n' "$_raw_paths" | sort -u)
+  scan_diff=$(git -C "$commit_dir" log -p "$range_arg" -U0 2>/dev/null) || _gl_rc=$?
+  if (( _gl_rc != 0 )); then
+    jq -cn --arg r "git_log_failed" --arg d "secret-commit-guard: git log failed (rc=$_gl_rc) for range $range_arg — cannot verify pushed commits" \
+      '{decision:"block", reason:$r, detail:$d}' >&2
+    exit 2
+  fi
 fi
 
 # --- Path scan ---
@@ -254,15 +275,7 @@ if [[ "$use_trufflehog" == "true" ]]; then
     set -e
     if (( th_rc != 0 )); then
       th_stderr=$(<"$th_err")
-      rm -f "$th_err"
-      # TruffleHog was EXPLICITLY enabled (safety.useTruffleHog=true) — we are
-      # only inside this branch because use_trufflehog=="true". The operator
-      # opted into the stronger scan, so its failure must NOT silently downgrade
-      # to regex-only. Fail closed so the failure is visible.
-      jq -cn --arg r "trufflehog_failed" \
-        --arg d "secret-commit-guard: trufflehog (explicitly enabled via safety.useTruffleHog) exited $th_rc — refusing to downgrade to regex-only; stderr: ${th_stderr:0:200}" \
-        '{decision:"block", reason:$r, detail:$d}' >&2
-      exit 2
+      printf '%s\n' "secret-commit-guard: trufflehog exited $th_rc — falling back to regex-only scan; stderr: ${th_stderr:0:300}" >&2
     fi
     rm -f "$th_err"
     if [[ -n "$trufflehog_output" ]]; then
