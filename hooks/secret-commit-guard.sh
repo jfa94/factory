@@ -149,9 +149,13 @@ if [[ -n "$commit_c" ]] && [[ -d "$commit_c" ]]; then
   commit_dir="$commit_c"
 fi
 
-# If the dir isn't actually a git repo, we can't scan — fail open.
+# If the dir isn't actually a git repo we cannot scan for secrets. A real
+# git commit/push here would fail anyway, so deny (fail closed) rather than
+# letting an unscannable commit slip past the guard.
 if ! git -C "$commit_dir" rev-parse --git-dir >/dev/null 2>&1; then
-  exit 0
+  jq -cn --arg r "non_git_target" --arg d "secret-commit-guard: cannot scan, $commit_dir is not a git repository" \
+    '{decision:"block", reason:$r, detail:$d}' >&2
+  exit 2
 fi
 
 # Determine scan_paths and scan_diff based on commit vs push.
