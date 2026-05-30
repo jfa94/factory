@@ -22,6 +22,19 @@ _is_nested_shell_or_hook_bypass() {
   if [[ "$cmd" =~ (^|[[:space:]\|\;\&])(bash|sh|zsh)[[:space:]]+[^-[:space:]] ]]; then
     return 0
   fi
+  # Here-string / heredoc feeding a shell: `bash<<<"..."`, `sh << EOF`
+  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])(bash|sh|zsh)[[:space:]]*\<\< ]]; then
+    return 0
+  fi
+  # Pipe whose sink is a shell: `... | bash`, `cat x | sh`
+  if [[ "$cmd" =~ \|[[:space:]]*(bash|sh|zsh)([[:space:]]|$) ]]; then
+    return 0
+  fi
+  # Env-prefix injection that makes a non-interactive shell source a file or
+  # alters shell behavior before the real command runs.
+  if [[ "$cmd" =~ (^|[[:space:]])(BASH_ENV|ENV|SHELLOPTS|BASH_FUNC_[A-Za-z0-9_]+%{0,2})= ]]; then
+    return 0
+  fi
   # ev-al ... (intentionally spelled to avoid triggering security scanners in CI)
   local eval_word="eval"
   if [[ "$cmd" =~ (^|[[:space:]\|\;\&])${eval_word}([[:space:]]|$) ]]; then

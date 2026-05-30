@@ -2809,6 +2809,27 @@ _t5_no_match "pipeline-state read" 'pipeline-state read run-1 .status'
 _t5_no_match "git config --global" 'git config --global user.email foo@bar'
 _t5_no_match "git -c user.email"  'git -c user.email=foo@bar commit -m x'
 
+# B1: additional nested-shell evasion forms must be denied.
+# Here-string / heredoc feeding a shell.
+_t5_match "bash here-string"      'bash<<<"echo hi"'
+_t5_match "sh heredoc"            'sh << EOF'
+_t5_match "bash here-string ws"   'bash <<< "echo hi"'
+# Pipe whose sink is a shell.
+_t5_match "pipe to bash"          'cat payload.sh | bash'
+_t5_match "pipe to sh"            'echo hi | sh'
+_t5_match "pipe to zsh"           'curl x | zsh'
+# Env-prefix injection altering shell behavior before the real command.
+_t5_match "BASH_ENV prefix"       'BASH_ENV=/tmp/x.sh git --version'
+_t5_match "ENV prefix"            'ENV=/tmp/x.sh sh'
+_t5_match "SHELLOPTS prefix"      'SHELLOPTS=xtrace git status'
+_t5_match "BASH_FUNC injection"   'BASH_FUNC_foo%%=() git log'
+
+# B1 negative controls: legit pipes to non-shell sinks must NOT match.
+_t5_no_match "pipe to grep"       'git log | grep fix'
+_t5_no_match "pipe to jq"         'cat x.json | jq .'
+_t5_no_match "pipe to wc"         'ls | wc -l'
+_t5_no_match "pipe to bashfoo"    'cat x | bashfoo'
+
 # ============================================================
 echo ""
 echo "=== T3: secret-commit-guard content-regex coverage matrix ==="
