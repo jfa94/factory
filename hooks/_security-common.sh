@@ -31,8 +31,12 @@ _is_nested_shell_or_hook_bypass() {
     return 0
   fi
   # Env-prefix injection that makes a non-interactive shell source a file or
-  # alters shell behavior before the real command runs.
-  if [[ "$cmd" =~ (^[[:space:]]*|[;\&\|][[:space:]]*)(BASH_ENV|ENV|SHELLOPTS|BASH_FUNC_[A-Za-z0-9_]+%{0,2})= ]]; then
+  # alters shell behavior before the real command runs. Anchored to a command
+  # boundary (start, or after ; & |) so quoted occurrences like `-m "set ENV=x"`
+  # are not matched. `BASH_FUNC_<name>%*` covers exported-function smuggling:
+  # bash names these vars `BASH_FUNC_foo%%` (one or more trailing `%`), so `%*`
+  # matches any count, including zero.
+  if [[ "$cmd" =~ (^[[:space:]]*|[;\&\|][[:space:]]*)(BASH_ENV|ENV|SHELLOPTS|BASH_FUNC_[A-Za-z0-9_]+%*)= ]]; then
     return 0
   fi
   # ev-al ... (intentionally spelled to avoid triggering security scanners in CI)
