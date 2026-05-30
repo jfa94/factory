@@ -32,7 +32,7 @@ _is_nested_shell_or_hook_bypass() {
   fi
   # Env-prefix injection that makes a non-interactive shell source a file or
   # alters shell behavior before the real command runs.
-  if [[ "$cmd" =~ (^|[[:space:]])(BASH_ENV|ENV|SHELLOPTS|BASH_FUNC_[A-Za-z0-9_]+%{0,2})= ]]; then
+  if [[ "$cmd" =~ (^[[:space:]]*|[;\&\|][[:space:]]*)(BASH_ENV|ENV|SHELLOPTS|BASH_FUNC_[A-Za-z0-9_]+%{0,2})= ]]; then
     return 0
   fi
   # ev-al ... (intentionally spelled to avoid triggering security scanners in CI)

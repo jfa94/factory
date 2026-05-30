@@ -2830,6 +2830,17 @@ _t5_no_match "pipe to jq"         'cat x.json | jq .'
 _t5_no_match "pipe to wc"         'ls | wc -l'
 _t5_no_match "pipe to bashfoo"    'cat x | bashfoo'
 
+# B1 follow-up: env-prefix guard must anchor to a command boundary. VAR= inside
+# a quoted arg (after an ordinary word) is NOT an env-prefix and must NOT match.
+_t5_no_match "ENV= in commit msg" 'git commit -m "set ENV=prod"'
+_t5_no_match "ENV= in echo arg"   'echo "FOO ENV=bar"'
+_t5_no_match "ENV= mid-sentence"  'echo "configure ENV=staging please"'
+
+# B1 follow-up: env-prefix injection at a control-operator boundary must match.
+_t5_match "env-prefix after ;"    'foo; BASH_ENV=/tmp/x sh script.sh'
+_t5_match "env-prefix after &&"   'true && ENV=/tmp/x sh script.sh'
+_t5_match "env-prefix after pipe" 'cat x | BASH_ENV=y bash'
+
 # ============================================================
 echo ""
 echo "=== T3: secret-commit-guard content-regex coverage matrix ==="
