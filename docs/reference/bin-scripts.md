@@ -545,13 +545,13 @@ pipeline-build-prompt '<task-json>' [--spec-path <path>] [--holdout <percent>] [
 
 **Flags:**
 
-| Flag                 | Description                                                          |
-| -------------------- | -------------------------------------------------------------------- |
-| `--spec-path`        | Path to spec directory                                               |
-| `--holdout`          | Percentage of criteria to withhold (0-50)                            |
-| `--fix-instructions` | JSON with review findings to address                                 |
-| `--seed`             | Seed for holdout randomization                                       |
-| `--bootstrap-branch` | Branch name to fetch + `reset --hard` to before starting (see below) |
+| Flag                 | Description                                                           |
+| -------------------- | --------------------------------------------------------------------- |
+| `--spec-path`        | Path to spec directory                                                |
+| `--holdout`          | Percentage of criteria to withhold (0-50)                             |
+| `--fix-instructions` | JSON with review findings to address                                  |
+| `--seed`             | Seed for holdout randomization                                        |
+| `--bootstrap-branch` | Branch name to fetch + `checkout -B` onto before starting (see below) |
 
 **Holdout behavior:**
 
@@ -581,7 +581,7 @@ When `--fix-instructions` is supplied, the script parses it through jq to extrac
 
 **`--bootstrap-branch` (test-writer → executor handoff, added 0.10.2):**
 
-When supplied, prepends a `## Bootstrap` section to the executor prompt instructing it to `git fetch origin <branch> staging --depth=50` and `git reset --hard origin/<branch>` before doing anything else. This exists because the executor spawns into a fresh worktree pinned at `origin/staging`, and cannot otherwise see the RED commits the test-writer made on a sibling-worktree branch.
+When supplied, prepends a `## Bootstrap` section to the executor prompt instructing it to `git fetch origin <branch> staging --depth=50` and `git checkout -B <wt-branch> origin/<branch>` before doing anything else. (`git reset --hard` is blocked in agent worktrees by `branch-protection.sh` and the `Bash(git reset --hard*)` deny.) This exists because the executor spawns into a fresh worktree pinned at `origin/staging`, and cannot otherwise see the RED commits the test-writer made on a sibling-worktree branch.
 
 The branch name is validated against `^[A-Za-z0-9._/-]+$` before substitution into the bash block; shell metacharacters or empty values exit 1.
 

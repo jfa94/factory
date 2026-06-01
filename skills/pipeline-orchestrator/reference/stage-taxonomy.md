@@ -50,7 +50,9 @@ Emitted on stdout with exit 10.
 
 > The executor manifest sets `isolation: "worktree"` **only when the test-writer
 > branch was pushed to origin** (the normal case). The executor's fresh worktree
-> then fetches + `reset --hard`s to that branch via the prompt's Bootstrap block.
+> then fetches + `checkout -B`s its worktree branch onto that branch via the
+> prompt's Bootstrap block. (`git reset --hard` is blocked by `branch-protection.sh`
+> and the `Bash(git reset --hard*)` deny.)
 > In offline/test runs with no origin, isolation is omitted so the executor
 > reuses the test-writer worktree directly.
 
