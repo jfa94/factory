@@ -189,12 +189,10 @@ case "$action" in
       alive="true"
     fi
 
-    # Calculate age in seconds
-    if command -v gdate &>/dev/null; then
-      lock_epoch=$(gdate -d "$timestamp" +%s 2>/dev/null || echo 0)
-    else
-      lock_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s 2>/dev/null || echo 0)
-    fi
+    # Calculate age in seconds. Reuse the portable shared helper instead of an
+    # inline date branch: the old `else` arm used a BSD-only `date -j` form that
+    # silently yielded 0 on GNU/Linux without gdate (age_seconds == now_epoch).
+    lock_epoch=$(parse_iso8601_to_epoch "$timestamp" 2>/dev/null || echo 0)
     now_epoch=$(date +%s)
     age_seconds=$((now_epoch - lock_epoch))
 
