@@ -1133,8 +1133,21 @@ validate_findings() {
 
   for ((i=0; i<n; i++)); do
     q=$(printf '%s' "$json" | jq -r ".findings[$i].verbatim_line // \"\"")
-    # Normalize verbatim_line the same way (strip CR + collapse blanks).
-    q_norm=$(printf '%s' "$q" | tr -d '\r' | awk '{ gsub(/[\t ]+/, " "); sub(/^ /, ""); sub(/ $/, ""); print }')
+    # Anti-forgery: a multi-line verbatim_line lets `grep -qxF` match on ANY one
+    # of its lines (an embedded newline is an OR in a fixed-string pattern), so a
+    # fabricated finding could smuggle one real diff line alongside invented
+    # text. The contract is a single source line — reject anything multi-line.
+    if [[ "$q" == *$'\n'* ]]; then
+      dropped=$((dropped + 1))
+      continue
+    fi
+    # Normalize verbatim_line the SAME way the diff side was normalized: strip
+    # CR, strip the leading diff column prefix (+/-/space) — reviewers are told
+    # to copy the line "including leading +/- if present" — then collapse
+    # intra-line whitespace and trim leading/trailing blanks. Without the prefix
+    # strip, a compliant reviewer's `+`-prefixed quote never matches the
+    # prefix-stripped diff set.
+    q_norm=$(printf '%s' "$q" | tr -d '\r' | awk '{ sub(/^[+\- ]/, ""); gsub(/[\t ]+/, " "); sub(/^ /, ""); sub(/ $/, ""); print }')
     # Require full-line match (not substring). Prevents forged findings from
     # passing by citing a short common string present anywhere in the diff.
     if [[ ${#q_norm} -ge 10 ]] && grep -qxF -- "$q_norm" "$diff_lines_file"; then

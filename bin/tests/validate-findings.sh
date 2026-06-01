@@ -39,5 +39,26 @@ verdict=$(printf '%s' "$out" | jq -r '.verdict')
 [[ "$verdict" == "REQUEST_CHANGES" ]] && pass "verifiable: verdict preserved" || fail "verifiable verdict: $verdict"
 rm -f "$diff_file"
 
+# Test 4 (CRITICAL anti-forgery): a multi-line verbatim_line must NOT pass by
+# matching just one of its lines against the diff. grep -F treats embedded
+# newlines as OR-separated patterns, so a forged finding could smuggle a real
+# diff line alongside fabricated ones. The contract is a single source line.
+diff_file=$(mktemp); printf 'real diff line here\n' > "$diff_file"
+input='{"verdict":"REQUEST_CHANGES","findings":[{"severity":"critical","verbatim_line":"FABRICATED BLOCKER CLAIM\nreal diff line here"}],"summary":"x","blocking_count":1,"non_blocking_count":0,"declared_blockers":1}'
+out=$(printf '%s' "$input" | validate_findings "$diff_file")
+blocking=$(printf '%s' "$out" | jq -r '.blocking_count')
+[[ "$blocking" == "0" ]] && pass "multi-line verbatim_line dropped (anti-forgery)" || fail "multi-line bypass: blocking_count=$blocking (expected 0)"
+rm -f "$diff_file"
+
+# Test 5 (IMPORTANT false-drop): a reviewer who copies the diff line WITH its
+# leading +/- column prefix (the documented contract) must still match. The
+# diff side strips the prefix; the verbatim side must too.
+diff_file=$(mktemp); printf '+    const token = realSecretValue;\n' > "$diff_file"
+input='{"verdict":"REQUEST_CHANGES","findings":[{"severity":"critical","verbatim_line":"+    const token = realSecretValue;"}],"summary":"x","blocking_count":1,"non_blocking_count":0,"declared_blockers":1}'
+out=$(printf '%s' "$input" | validate_findings "$diff_file")
+blocking=$(printf '%s' "$out" | jq -r '.blocking_count')
+[[ "$blocking" == "1" ]] && pass "prefixed verbatim_line retained (no false drop)" || fail "false drop: blocking_count=$blocking (expected 1)"
+rm -f "$diff_file"
+
 printf 'Results: %d passed, %d failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" == 0 ]] || exit 1
