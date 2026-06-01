@@ -52,6 +52,8 @@ fi
 
 `CLAUDE_PLUGIN_ROOT` is set by Claude Code's plugin runtime and points at the plugin's install directory. Sourcing is best-effort (`|| true`) so a missing or broken library never breaks the hook outright — the hook degrades to "reads whatever `CLAUDE_PLUGIN_DATA` it inherited", which is the pre-fix behavior.
 
+Because sourcing is gated on `CLAUDE_PLUGIN_ROOT`, any shared helper a hook depends on for a fail-closed decision must also have a local fallback for the unsourced path. `subagent-stop-gate.sh` keeps a **load-bearing** local copy of `resolve_base_ref` (the canonical definition lives in `pipeline-lib.sh`): when `CLAUDE_PLUGIN_ROOT` is unset — e.g. tests, which deliberately leave it unset to avoid the lib's top-level canonicalization side effects — the fallback is the only definition, and it gates the hook's fail-closed block path. The two definitions must stay behaviorally identical; a drift guard in `bin/tests/hooks.sh` fails the build if they diverge. The fallback must not be replaced with a fail-open `exit 0`, which would regress the base-ref guarantee.
+
 ## PATH prepend for hook-invoked binaries (0.10.3)
 
 `pipeline-lib.sh` exports a helper that prepends `${CLAUDE_PLUGIN_ROOT}/bin` to `PATH` when sourced. Hooks that subsequently invoke `pipeline-state`, `pipeline-lock`, or any other sibling bin tool by bare name (e.g., from inside an `$(pipeline-state read ...)` substitution) now resolve to the plugin's own binaries reliably, regardless of the inherited `PATH` shape of the firing tool call. This complements the absolute-path resolution already used by `pipeline-run-task` (which pins `pipeline-state` via `$_SCRIPT_DIR`) — bare-name calls from hooks were the gap.
