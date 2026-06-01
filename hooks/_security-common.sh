@@ -22,21 +22,28 @@ _is_nested_shell_or_hook_bypass() {
   if [[ "$cmd" =~ (^|[[:space:]\|\;\&])(bash|sh|zsh)[[:space:]]+[^-[:space:]] ]]; then
     return 0
   fi
-  # Here-string / heredoc feeding a shell: `bash<<<"..."`, `sh << EOF`
-  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])(bash|sh|zsh)[[:space:]]*\<\< ]]; then
+  # Here-string / heredoc feeding a shell: `bash<<<"..."`, `sh << EOF`,
+  # `/bin/sh << EOF`. The optional `(/[^[:space:]]*/)?` matches an absolute/path
+  # prefix as a whole path component (trailing slash) so `/bin/sh` is caught but
+  # a script file like `evil.sh` is not (its `sh` is preceded by `.`, not `/`).
+  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])(/[^[:space:]]*/)?(bash|sh|zsh)[[:space:]]*\<\< ]]; then
     return 0
   fi
-  # Pipe whose sink is a shell: `... | bash`, `cat x | sh`
-  if [[ "$cmd" =~ \|[[:space:]]*(bash|sh|zsh)([[:space:]]|$) ]]; then
+  # Pipe whose sink is a shell: `... | bash`, `cat x | sh`, `cat x | /bin/bash`.
+  # Same path-component prefix as above (matches `/usr/bin/sh`, not `transform.sh`).
+  if [[ "$cmd" =~ \|[[:space:]]*(/[^[:space:]]*/)?(bash|sh|zsh)([[:space:]]|$) ]]; then
     return 0
   fi
   # Env-prefix injection that makes a non-interactive shell source a file or
   # alters shell behavior before the real command runs. Anchored to a command
   # boundary (start, or after ; & |) so quoted occurrences like `-m "set ENV=x"`
-  # are not matched. `BASH_FUNC_<name>%*` covers exported-function smuggling:
-  # bash names these vars `BASH_FUNC_foo%%` (one or more trailing `%`), so `%*`
-  # matches any count, including zero.
-  if [[ "$cmd" =~ (^[[:space:]]*|[;\&\|][[:space:]]*)(BASH_ENV|ENV|SHELLOPTS|BASH_FUNC_[A-Za-z0-9_]+%*)= ]]; then
+  # are not matched. The `([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*`
+  # run swallows any leading benign assignments so a decoy prefix cannot push the
+  # shell-affecting var past the anchor (e.g. `X=1 BASH_ENV=/tmp/x git commit`).
+  # `BASH_FUNC_<name>%*` covers exported-function smuggling: bash names these
+  # vars `BASH_FUNC_foo%%` (one or more trailing `%`), so `%*` matches any count,
+  # including zero.
+  if [[ "$cmd" =~ (^[[:space:]]*|[;\&\|][[:space:]]*)([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(BASH_ENV|ENV|SHELLOPTS|BASH_FUNC_[A-Za-z0-9_]+%*)= ]]; then
     return 0
   fi
   # ev-al ... (intentionally spelled to avoid triggering security scanners in CI)

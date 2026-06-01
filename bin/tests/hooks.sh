@@ -2917,6 +2917,14 @@ _t5_match "bash here-string ws"   'bash <<< "echo hi"'
 _t5_match "pipe to bash"          'cat payload.sh | bash'
 _t5_match "pipe to sh"            'echo hi | sh'
 _t5_match "pipe to zsh"           'curl x | zsh'
+# Absolute/path-prefixed shells must also match (path component, not script file).
+_t5_match "pipe to /bin/bash"     'cat payload.sh | /bin/bash'
+_t5_match "pipe to /usr/bin/sh"   'echo hi | /usr/bin/sh'
+_t5_match "heredoc /bin/sh"       '/bin/sh << EOF'
+# ...but a piped/exec'd .sh SCRIPT file is not the shell binary — must NOT match
+# (else legit data pipelines like `cat data | ./transform.sh` would be blocked).
+_t5_no_match "pipe to abs .sh"    'cat data | /tmp/evil.sh'
+_t5_no_match "pipe to rel .sh"    'cat data | ./scripts/transform.sh'
 # Env-prefix injection altering shell behavior before the real command.
 _t5_match "BASH_ENV prefix"       'BASH_ENV=/tmp/x.sh git --version'
 _t5_match "ENV prefix"            'ENV=/tmp/x.sh sh'
@@ -2939,6 +2947,13 @@ _t5_no_match "ENV= mid-sentence"  'echo "configure ENV=staging please"'
 _t5_match "env-prefix after ;"    'foo; BASH_ENV=/tmp/x sh script.sh'
 _t5_match "env-prefix after &&"   'true && ENV=/tmp/x sh script.sh'
 _t5_match "env-prefix after pipe" 'cat x | BASH_ENV=y bash'
+
+# B-review follow-up: a decoy leading assignment must not push the shell-affecting
+# var past the start-of-command anchor — stacked prefixes must still match.
+_t5_match "stacked X= BASH_ENV"   'X=1 BASH_ENV=/tmp/x.sh git commit'
+_t5_match "stacked multi-var ENV" 'A=1 B=2 SHELLOPTS=xtrace git status'
+# A benign env-var prefix that is NOT a shell-affecting var must still NOT match.
+_t5_no_match "benign FOO= prefix"  'FOO=bar git commit -m x'
 
 # ============================================================
 echo ""

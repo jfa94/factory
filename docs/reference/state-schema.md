@@ -312,20 +312,22 @@ Written by `pipeline-run-task` at the `finalize-run` stage, only after all task 
 ```json
 {
   "quality_gates": {
-    "coverage": {
-      "passed": true,
-      "delta": 0.9
-    },
+    "coverage": "ok",
     "holdout": "pass",
-    "mutation": {
-      "passed": true,
-      "score": 85
+    "pregate": {
+      "ok": true,
+      "quality": "pass",
+      "coverage": "ok",
+      "mutation": "ok"
     }
-  }
+  },
+  "mutation_score": 85
 }
 ```
 
-Unlike `coverage` and `mutation` — which are **objects** (`{ "passed": …, … }`) — `holdout` is a bare **string** enum (written as `_task_write quality_gates.holdout '"pass"'` in `bin/pipeline-run-task`). It takes one of four values (`pass | fail | pending | missing-reviewer-output`):
+All `quality_gates` status fields are **bare string** scalars, not objects. `coverage` (written `_task_write quality_gates.coverage '"ok"'`) is one of `ok | fail | skipped`, read back as a scalar (`bin/pipeline-run-task` `case "$cov_raw" in ok|fail|skipped`). `holdout` (written `_task_write quality_gates.holdout '"pass"'`) is a string enum. The `pregate` object — written once at the `ship` stage as `{ok, quality, coverage, mutation}` — bundles the final per-gate verdicts, each itself a string status. The mutation **score** is a number stored at the **top level** as `mutation_score`, not under `quality_gates`.
+
+The four `holdout` values (`pass | fail | pending | missing-reviewer-output`):
 
 | Value                     | Meaning                                                                                      |
 | ------------------------- | -------------------------------------------------------------------------------------------- |
