@@ -653,6 +653,17 @@ assert_eq "only-lint exit 0" "0" "$exit_code"
 assert_eq "only-lint 1 check" "1" "$(echo "$output" | jq -r '.checks | length')"
 assert_eq "only-lint ran lint" "lint" "$(echo "$output" | jq -r '.checks[0].command')"
 
+# M8: a package.json that fails `jq -e .` must fail closed (exit 1,
+# error=package_json_parse_error), not fall through to default commands.
+qg_bad=$(mktemp -d)
+printf '{ this is not valid json ' > "$qg_bad/package.json"
+set +e
+out=$("$QG" "$qg_run" "qt1" "$qg_bad" 2>/dev/null); rc=$?
+set -e
+assert_eq "corrupt package.json exit 1" "1" "$rc"
+assert_eq "corrupt package.json error code" "package_json_parse_error" "$(echo "$out" | jq -r '.error')"
+rm -rf "$qg_bad"
+
 # ============================================================
 echo ""
 echo "=== task_13_05: pipeline-coverage-gate tolerance ==="
