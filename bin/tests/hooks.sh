@@ -1969,6 +1969,32 @@ assert_eq "no-staging ref: reason mentions staging" "true" \
 rm -rf "$_ssg_tmp"
 
 echo ""
+echo "=== subagent-stop-gate: resolve_base_ref drift guard ==="
+# G2: the hook keeps a local fallback copy of resolve_base_ref for when
+# pipeline-lib.sh is not sourced (CLAUDE_PLUGIN_ROOT unset, e.g. tests). That
+# fallback is load-bearing, so it cannot simply be deleted; instead this guard
+# fails the build if it ever drifts BEHAVIORALLY from the canonical definition
+# in pipeline-lib.sh. Normalization neutralizes pure formatting differences (the
+# hook compresses `printf ...; return 0` onto one line) by splitting on `;`,
+# trimming, and dropping blank lines — so only a real logic change trips it.
+_extract_resolve_body() {  # <file> — prints the body of resolve_base_ref()
+  awk '
+    /resolve_base_ref\(\)[[:space:]]*\{/ { f=1; next }
+    f && /^[[:space:]]*\}[[:space:]]*$/  { exit }
+    f { print }
+  ' "$1"
+}
+_norm_body() {  # stdin -> normalized token lines
+  tr ';' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^[[:space:]]*$'
+}
+_lib_body_norm=$(_extract_resolve_body "$BIN_DIR/pipeline-lib.sh" | _norm_body)
+_hook_body_norm=$(_extract_resolve_body "$HOOKS_DIR/subagent-stop-gate.sh" | _norm_body)
+assert_eq "resolve_base_ref: both definitions extracted (non-empty)" "true" \
+  "$( [[ -n "$_lib_body_norm" && -n "$_hook_body_norm" ]] && echo true || echo false )"
+assert_eq "resolve_base_ref: hook fallback matches lib (no behavioral drift)" \
+  "$_lib_body_norm" "$_hook_body_norm"
+
+echo ""
 echo "=== subagent-stop-gate: retry counter increments and writes BLOCKED on 2nd block ==="
 
 _seed_run "run-ssg-retry" '{"status":"running","tasks":{"t3":{"status":"executing","branch":"factory/test-nonexistent-branch-xyz"}}}'

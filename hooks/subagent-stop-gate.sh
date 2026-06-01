@@ -23,14 +23,24 @@ _state_write_retry() {
   return 1
 }
 
-# Source pipeline-lib.sh for shared helpers (resolve_base_ref, etc.). Best-
-# effort: hooks must keep functioning when CLAUDE_PLUGIN_ROOT is unset (e.g.
-# tests). A minimal local fallback is defined below if the lib is missing.
+# Source pipeline-lib.sh for shared helpers (resolve_base_ref, etc.). Sourcing
+# is GATED on CLAUDE_PLUGIN_ROOT because pipeline-lib.sh has top-level side
+# effects (it canonicalizes CLAUDE_PLUGIN_DATA to defeat foreign-plugin leaks);
+# we only want those when the factory plugin root is known. When
+# CLAUDE_PLUGIN_ROOT is unset (e.g. tests), the lib is NOT sourced and the local
+# fallback below is the ONLY definition of resolve_base_ref — it is
+# load-bearing, not a dead shadow.
 _lib="${CLAUDE_PLUGIN_ROOT:-}/bin/pipeline-lib.sh"
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "$_lib" ]]; then
   # shellcheck disable=SC1090
   source "$_lib" 2>/dev/null || true
 fi
+# CONTRACT: this fallback MUST stay behaviorally identical to pipeline-lib.sh's
+# resolve_base_ref (same `staging` > `origin/staging` precedence and return
+# codes). Enforced by the "resolve_base_ref drift guard" test in
+# bin/tests/hooks.sh. Do NOT replace it with `exit 0`: in autonomous mode this
+# function gates the fail-closed block path below, so fail-open here would
+# regress the F3 base-ref guarantee and break bin/tests/hooks.sh.
 if ! declare -F resolve_base_ref >/dev/null 2>&1; then
   resolve_base_ref() {
     local git_dir="$1"

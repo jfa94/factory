@@ -902,6 +902,10 @@ compute_daily_threshold() {
 # to `origin/staging`. Prints the ref name on success and returns 0; prints
 # nothing and returns 1 when neither ref exists. Callers MUST check rc — an
 # empty stdout alone cannot be distinguished from a captured-stderr glitch.
+# NOTE: hooks/subagent-stop-gate.sh keeps a behaviorally-identical local copy of
+# this function as a fallback for when pipeline-lib.sh is not sourced (tests run
+# with CLAUDE_PLUGIN_ROOT unset). Keep the two in sync — a drift guard in
+# bin/tests/hooks.sh fails the build if they diverge behaviorally.
 resolve_base_ref() {
   local git_dir="$1"
   if git -C "$git_dir" rev-parse --verify staging >/dev/null 2>&1; then
