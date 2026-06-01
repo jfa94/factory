@@ -66,6 +66,62 @@ The orchestration runs to completion inside the invoking session — there is no
 
 ---
 
+## /factory:debug
+
+Reviewer-implementer loop for iterative code quality fixes.
+
+### Arguments
+
+| Argument        | Required | Default  | Description                                                      |
+| --------------- | -------- | -------- | ---------------------------------------------------------------- |
+| `--base`        | No       | `HEAD~1` | Git ref to diff against (mutually exclusive with --full)         |
+| `--full`        | No       | -        | Review entire codebase (empty-tree SHA as base)                  |
+| `--limit`       | No       | 0        | Soft time limit in seconds (0 = unlimited)                       |
+| `--fixSeverity` | No       | `medium` | Minimum severity to address: `critical`, `high`, `medium`, `all` |
+| `--quick`       | No       | -        | Skip Phase 0 all-hands sweep; go straight to Phase 1 loop        |
+
+### Execution Flow
+
+**Phase 0 — All-hands sweep (parallel fan-out):**
+
+1. Dispatch `architecture-reviewer`, `security-reviewer`, `quality-reviewer`, `implementation-reviewer` in parallel + optional Codex review.
+2. Orchestrator performs its own exhaustive diff review.
+3. Validate, deduplicate, and classify findings (`confirmed | dismissed | uncertain`).
+4. Build remediation plan; spawn `task-executor` to implement it.
+
+**Phase 1 — Reviewer ⇄ Implementer loop:**
+
+5. Review diff between base and HEAD.
+6. Filter findings by `--fixSeverity`.
+7. If blocking findings exist, spawn `task-executor` to fix them.
+8. Repeat until clean, escalated, or `--limit` reached.
+
+Requires autonomous session (`claude --settings <merged-settings.json>` or `FACTORY_AUTONOMOUS_MODE=1`). Budget is checked before Phase 0 and between phases via `pipeline-quota-check`.
+
+---
+
+## /factory:scaffold
+
+One-time project bootstrap for the factory pipeline. Run before any `/factory:run` in a new repository.
+
+### Arguments
+
+None.
+
+### Execution Flow
+
+1. Confirm `cwd` is a git repository (`git rev-parse --show-toplevel`).
+2. Run `pipeline-scaffold "$PROJECT_ROOT"` to create (idempotently):
+   - `claude-progress.json`, `feature-status.json` (progress tracking)
+   - `init.sh` (per-run setup hook)
+   - `.github/workflows/quality-gate.yml` (CI template)
+   - `.stryker.config.json`, `.dependency-cruiser.cjs` (quality gate configs)
+3. Apply surgical workflow migrations for post-release fixes (names any patched files).
+4. Check optional tool dependencies (TruffleHog, Stryker, dependency-cruiser); prompt before installing.
+5. Report newly created files vs already-present files, and any migrations applied.
+
+---
+
 ## /factory:rescue
 
 Recover a pipeline run from complex issues that `/factory:run resume` cannot handle: merge conflicts, unmerged PRs, orphan branches, failed tasks, review deadlocks, state corruption. Produces a clean state that resume picks up naturally.
