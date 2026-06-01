@@ -57,7 +57,7 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
 _is_pr_create=false
 _is_wrapper_ship=false
 [[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]] && _is_pr_create=true
-[[ "$cmd" =~ pipeline-run-task.*--stage[[:space:]]+ship ]] && _is_wrapper_ship=true
+[[ "$cmd" =~ pipeline-run-task.*--stage[[:space:]]+ship([[:space:]]|$) ]] && _is_wrapper_ship=true
 [[ "$_is_pr_create" == "true" || "$_is_wrapper_ship" == "true" ]] || exit 0
 
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
@@ -75,25 +75,50 @@ resp=$(printf '%s' "$input" | jq -r '.tool_response.stdout // .tool_response // 
 pr_url=$(printf '%s' "$resp" | grep -oE 'https://github\.com/[^[:space:]]+/pull/[0-9]+' | head -1 || printf '')
 pr_number=$(printf '%s' "$pr_url" | grep -oE '[0-9]+$' || printf '')
 
-# Wrapper invocations do not print the PR URL to stdout. Fall back to the most
-# recently reviewing task that has a pr_number and no terminal ci_status.
-if [[ -z "$pr_number" ]]; then
-  pr_number=$(jq -r '
-    [ .tasks | to_entries[]
-      | select(.value.status == "reviewing")
-      | select((.value.pr_number // "") != "")
-      | select((.value.ci_status // "") | (. == "" or . == "pending"))
-      | .value.pr_number ] | last // empty
-  ' "$state_file" 2>/dev/null)
+# Wrapper invocations do not print the PR URL to stdout. The wrapper command
+# carries the task id (`pipeline-run-task <run_id> <task_id> --stage ship`), so
+# resolve that task's PR directly. Under parallel tasks multiple tasks can be
+# `reviewing` at once, so picking "the last reviewing task" would mis-resolve
+# the PR; the task_id from the command is the unambiguous key.
+wrapper_task_id=""
+if [[ -z "$pr_number" && "$_is_wrapper_ship" == "true" ]]; then
+  # Tokenise; the 2nd non-flag token after `pipeline-run-task` is the task id.
+  read -r -a _ct <<< "$cmd"
+  for ((i=0; i<${#_ct[@]}; i++)); do
+    if [[ "${_ct[i]}" == *pipeline-run-task ]]; then
+      _seen_pos=0
+      for ((j=i+1; j<${#_ct[@]}; j++)); do
+        [[ "${_ct[j]}" == -* ]] && continue
+        _seen_pos=$((_seen_pos+1))
+        if (( _seen_pos == 2 )); then wrapper_task_id="${_ct[j]}"; break; fi
+      done
+      break
+    fi
+  done
+  if [[ -n "$wrapper_task_id" ]]; then
+    pr_number=$(jq -r --arg t "$wrapper_task_id" '
+      .tasks[$t]
+      | select(. != null)
+      | select(.status == "reviewing")
+      | select((.pr_number // "") != "")
+      | select((.ci_status // "") | (. == "" or . == "pending"))
+      | .pr_number // empty
+    ' "$state_file" 2>/dev/null)
+  fi
 fi
 [[ -z "$pr_number" ]] && exit 0
 
-# Derive task_id: the task whose pr_number just got written.
-task_id=$(jq -r --arg n "$pr_number" '
-  [.tasks | to_entries[]
-   | select((.value.pr_number // "" | tostring) == $n)
-   | .key] | first // empty
-' "$state_file")
+# Derive task_id. For the wrapper path we already have it from the command;
+# otherwise (direct `gh pr create`) look up the task whose pr_number matches.
+if [[ -n "$wrapper_task_id" ]]; then
+  task_id="$wrapper_task_id"
+else
+  task_id=$(jq -r --arg n "$pr_number" '
+    [.tasks | to_entries[]
+     | select((.value.pr_number // "" | tostring) == $n)
+     | .key] | first // empty
+  ' "$state_file")
+fi
 [[ -z "$task_id" ]] && exit 0
 
 # Phase 1: Poll CI checks. max 60m total @ 30s interval = 120 iterations.
