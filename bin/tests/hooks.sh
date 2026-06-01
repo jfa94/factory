@@ -3145,6 +3145,27 @@ assert_eq "asyncrewake-ci executable" "true" "$([[ -x "$HOOKS_DIR/asyncrewake-ci
 
 # ============================================================
 echo ""
+echo "=== pipeline-run-task ship-checklist: terminal ci_status is not 'pending' ==="
+
+_sc_run="sc-citest"; _sc_task="ct1"
+_sc_dir="$CLAUDE_PLUGIN_DATA/runs/$_sc_run"
+mkdir -p "$_sc_dir"
+printf '{"run_id":"%s","status":"running","tasks":{"%s":{"status":"executing","ci_status":"timeout"}}}' "$_sc_run" "$_sc_task" > "$_sc_dir/state.json"
+"$BIN_DIR/pipeline-run-task" "$_sc_run" "$_sc_task" --stage emit-ship-checklist >/dev/null 2>&1 || true
+_sc_ci=$(jq -r '.ci_status' "$_sc_dir/.tasks/$_sc_task.ship_checklist.json")
+assert_eq "ci_status=timeout maps to red (not pending)" "red" "$_sc_ci"
+
+# Same alternation arm — cover the other two terminal-failure values so all of
+# timeout|closed|conflict are documented as non-pending, not just the first.
+for _sc_term in closed conflict; do
+  printf '{"run_id":"%s","status":"running","tasks":{"%s":{"status":"executing","ci_status":"%s"}}}' "$_sc_run" "$_sc_task" "$_sc_term" > "$_sc_dir/state.json"
+  "$BIN_DIR/pipeline-run-task" "$_sc_run" "$_sc_task" --stage emit-ship-checklist >/dev/null 2>&1 || true
+  _sc_ci=$(jq -r '.ci_status' "$_sc_dir/.tasks/$_sc_task.ship_checklist.json")
+  assert_eq "ci_status=$_sc_term maps to red (not pending)" "red" "$_sc_ci"
+done
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"

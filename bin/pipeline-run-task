@@ -1585,14 +1585,16 @@ _write_ship_checklist() {
   stage_cur=$(_unquote_json_string "$stage_cur")
   review_blockers_resolved=$([[ "$stage_cur" == "postreview_done" ]] && printf 'true' || printf 'false')
 
-  # ci_status: from task state (green|pending|red). Map to checklist values.
+  # ci_status: from task state. Terminal failure values (timeout|closed|conflict)
+  # map to "red" so the checklist reflects a non-shippable PR; only an actual
+  # green CI maps to green. Anything else (e.g. literally pending) → pending.
   local ci_raw ci_status
   ci_raw=$(_task_field ci_status 2>/dev/null || printf '')
   ci_raw=$(_unquote_json_string "$ci_raw")
   case "$ci_raw" in
-    green) ci_status="green" ;;
-    red)   ci_status="red"   ;;
-    *)     ci_status="pending" ;;
+    green)                       ci_status="green" ;;
+    red|timeout|closed|conflict) ci_status="red" ;;
+    *)                           ci_status="pending" ;;
   esac
 
   local iso_now
