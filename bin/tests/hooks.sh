@@ -2756,6 +2756,16 @@ assert_eq "B2: non-git target denied (exit 2)" "EXIT:2" \
 assert_contains "B2: non-git target block reason=non_git_target" "non_git_target" "$out"
 rm -rf "$_b2_dir"
 
+# B2 (regression): a `git -C <nonexistent>` token must adopt that path and fail
+# closed — NOT fall back to $PWD (a real repo) and scan the wrong tree, exiting
+# 0. Run from inside the plugin repo so $PWD is a valid git repo: a $PWD
+# fallback would (wrongly) allow.
+out=$(printf '{"tool_input":{"command":"git -C /nonexistent/scg/xyz commit -m x"}}' \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "B2: nonexistent -C dir denied, no \$PWD fallback (exit 2)" "EXIT:2" \
+  "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "B2: nonexistent -C dir reason=non_git_target" "non_git_target" "$out"
+
 # --- B3: secret-guard distinguishes git errors from an empty diff ----------
 # Invariant 1 (no false positive): a clean, legitimately-empty-or-safe staged
 # diff must STILL be allowed (exit 0). This locks against a regression where

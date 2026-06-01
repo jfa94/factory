@@ -142,10 +142,14 @@ _redact() {
 blocks=()
 
 # Resolve where the git op is happening. For `git -C <dir> ...` use that dir.
+# When a -C token is present we adopt it UNCONDITIONALLY — even if the path
+# does not exist — so the non-git-repo check below fails closed on it. Falling
+# back to $PWD when the -C dir is missing would scan the wrong (real) repo and
+# let an unscannable target slip past with exit 0.
 commit_dir="$PWD"
 # shellcheck disable=SC2016
 commit_c=$(printf '%s' "$command" | grep -oE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $NF}' || true)
-if [[ -n "$commit_c" ]] && [[ -d "$commit_c" ]]; then
+if [[ -n "$commit_c" ]]; then
   commit_dir="$commit_c"
 fi
 
