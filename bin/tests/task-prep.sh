@@ -750,6 +750,18 @@ assert_eq "tw-prompt spec content not empty" "true" \
 rm -rf "$tw_spec_dir"
 
 echo ""
+echo "=== pipeline-validate-tasks: accepts both array and {tasks:[…]} roots ==="
+
+_vt_task='{"task_id":"t1","title":"T","description":"d","files":["a.ts"],"acceptance_criteria":["c"],"tests_to_write":["t"],"depends_on":[]}'
+_vt_arr=$(mktemp); printf '[%s]' "$_vt_task" > "$_vt_arr"
+_vt_obj=$(mktemp); printf '{"tasks":[%s]}' "$_vt_task" > "$_vt_obj"
+_vt_bad=$(mktemp); printf '42' > "$_vt_bad"
+assert_exit "validate-tasks: bare array root valid" 0 pipeline-validate-tasks "$_vt_arr"
+assert_exit "validate-tasks: {tasks:[…]} root valid" 0 pipeline-validate-tasks "$_vt_obj"
+assert_exit "validate-tasks: scalar root rejected" 1 pipeline-validate-tasks "$_vt_bad"
+rm -f "$_vt_arr" "$_vt_obj" "$_vt_bad"
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"

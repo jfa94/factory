@@ -495,6 +495,20 @@ export PATH="$OLD_PATH"
 cd "$validate_proj"
 
 echo ""
+echo "=== pipeline-validate-spec delegates tasks.json contract to validate-tasks ==="
+
+# A task_id with disallowed chars is caught by validate-tasks but was missed by
+# the old validate-spec subset. After delegation, validate-spec must reject it.
+_vs_dir=$(mktemp -d)
+printf '# Spec\n\nNon-empty spec body.\n' > "$_vs_dir/spec.md"
+printf '[{"task_id":"bad id!","title":"T","description":"d","files":["a.ts"],"acceptance_criteria":["c"],"tests_to_write":["t"],"depends_on":[]}]' > "$_vs_dir/tasks.json"
+assert_exit "validate-spec rejects bad task_id via delegation" 1 pipeline-validate-spec "$_vs_dir"
+# Sanity: a fully valid spec dir still passes.
+printf '[{"task_id":"t1","title":"T","description":"d","files":["a.ts"],"acceptance_criteria":["c"],"tests_to_write":["t"],"depends_on":[]}]' > "$_vs_dir/tasks.json"
+assert_exit "validate-spec accepts a valid spec dir" 0 pipeline-validate-spec "$_vs_dir"
+rm -rf "$_vs_dir"
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"

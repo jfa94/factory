@@ -43,9 +43,19 @@ if ! jq empty "$tasks_file" 2>/dev/null; then
 fi
 
 if [[ ${#errors[@]} -eq 0 ]]; then
-  is_array=$(jq 'type == "array"' "$tasks_file")
-  if [[ "$is_array" != "true" ]]; then
-    errors+=("tasks.json must be a JSON array")
+  root_type=$(jq -r 'type' "$tasks_file")
+  if [[ "$root_type" == "object" && "$(jq -r 'has("tasks") and ((.tasks | type) == "array")' "$tasks_file")" == "true" ]]; then
+    # Accept the {tasks:[…]} envelope that every consumer also accepts
+    # (pipeline-run-task, pipeline-codex-review, pipeline-lib.sh). Normalize to a
+    # bare array so the rest of this validator — which indexes via .[] /
+    # to_entries[] — is unchanged. One canonical contract across validators and
+    # consumers.
+    _norm_tasks=$(mktemp)
+    trap 'rm -f "$_norm_tasks"' EXIT
+    jq '.tasks' "$tasks_file" > "$_norm_tasks"
+    tasks_file="$_norm_tasks"
+  elif [[ "$root_type" != "array" ]]; then
+    errors+=("tasks.json must be a JSON array or an object with a 'tasks' array")
   fi
 fi
 

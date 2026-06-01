@@ -18,61 +18,23 @@ elif [[ ! -s "$spec_file" ]]; then
   errors+=("spec.md is empty")
 fi
 
-# Check tasks.json
+# Check tasks.json — delegate to pipeline-validate-tasks, the single source of
+# truth for the tasks.json contract. This script previously re-implemented a
+# weaker subset (no task_id charset / control-char / array-type / enum checks)
+# and drifted from validate-tasks.
 tasks_file="$spec_dir/tasks.json"
 if [[ ! -f "$tasks_file" ]]; then
   errors+=("tasks.json not found in $spec_dir")
 else
-  # Validate JSON
-  if ! jq empty "$tasks_file" 2>/dev/null; then
-    errors+=("tasks.json is not valid JSON")
-  else
-    # Must be array
-    is_array=$(jq 'type == "array"' "$tasks_file")
-    if [[ "$is_array" != "true" ]]; then
-      errors+=("tasks.json must be a JSON array")
-    else
-      task_count=$(jq 'length' "$tasks_file")
-      if [[ "$task_count" -lt 1 ]]; then
-        errors+=("tasks.json must contain at least 1 task")
-      else
-        # Validate each task
-        required_fields=("task_id" "title" "description" "files" "acceptance_criteria" "tests_to_write" "depends_on")
-        for field in "${required_fields[@]}"; do
-          missing=$(jq --arg f "$field" '[to_entries[] | select(.value[$f] == null) | .key] | length' "$tasks_file")
-          if [[ "$missing" -gt 0 ]]; then
-            indices=$(jq -r --arg f "$field" '[to_entries[] | select(.value[$f] == null) | .key | tostring] | join(", ")' "$tasks_file")
-            errors+=("missing field '$field' in task(s) at index: $indices")
-          fi
-        done
-
-        # Validate files array length <= 3
-        over_limit=$(jq '[to_entries[] | select((.value.files // []) | length > 3) | .key] | length' "$tasks_file")
-        if [[ "$over_limit" -gt 0 ]]; then
-          indices=$(jq -r '[to_entries[] | select((.value.files // []) | length > 3) | .key | tostring] | join(", ")' "$tasks_file")
-          errors+=("files array exceeds 3 in task(s) at index: $indices")
-        fi
-
-        # Validate task_id uniqueness
-        unique_ids=$(jq '[.[].task_id] | unique | length' "$tasks_file")
-        total_ids=$(jq '[.[].task_id] | length' "$tasks_file")
-        if [[ "$unique_ids" != "$total_ids" ]]; then
-          errors+=("duplicate task_id values found")
-        fi
-
-        # Validate depends_on references exist
-        dangling=$(jq '
-          [.[].task_id] as $all_ids |
-          [.[] | (.depends_on // [])[] | select(. as $d | $all_ids | index($d) | not)] | unique
-        ' "$tasks_file" 2>/dev/null)
-        dangling_count=$(printf '%s' "$dangling" | jq 'length' 2>/dev/null || echo 0)
-        if [[ "$dangling_count" -gt 0 ]]; then
-          dangling_list=$(printf '%s' "$dangling" | jq -r 'join(", ")')
-          errors+=("dangling depends_on references: $dangling_list")
-        fi
-      fi
-    fi
+  vt_out=$("$(dirname "$0")/pipeline-validate-tasks" "$tasks_file" 2>/dev/null) || true
+  if [[ "$(printf '%s' "$vt_out" | jq -r '.valid // false' 2>/dev/null)" != "true" ]]; then
+    _before=${#errors[@]}
+    while IFS= read -r _e; do
+      [[ -n "$_e" ]] && errors+=("$_e")
+    done < <(printf '%s' "$vt_out" | jq -r '.errors[]?' 2>/dev/null)
+    [[ ${#errors[@]} -eq "$_before" ]] && errors+=("tasks.json failed validation (pipeline-validate-tasks)")
   fi
+  task_count=$(printf '%s' "$vt_out" | jq -r '.task_count // 0' 2>/dev/null)
 fi
 
 # Build output
