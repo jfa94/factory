@@ -60,7 +60,7 @@ _emit() {
 
   printf '%s\n' "$payload"
   log_metric "task.gate.mutation" "task_id=\"$task_id\"" \
-    "ok=\"$([[ "$ok" == "true" ]] && echo true || echo false)\"" \
+    "ok=\"$ok\"" \
     "reason=\"$reason\""
   exit "$exit_rc"
 }

@@ -1478,7 +1478,7 @@ _run_ship_pregate() {
 
   local pregate_json
   pregate_json=$(jq -n \
-    --argjson ok "$([[ "$overall_ok" == "true" ]] && printf 'true' || printf 'false')" \
+    --argjson ok "$overall_ok" \
     --arg quality  "$_qg_status" \
     --arg coverage "$cov_gate" \
     --arg mutation "$mut_gate" \
