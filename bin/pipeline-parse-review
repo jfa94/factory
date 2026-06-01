@@ -80,7 +80,7 @@ if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; t
       exit 1
     fi
 
-    # Strip findings missing evidence (length < 5), log warnings.
+    # Strip findings missing evidence (length < 10), log warnings.
     # Normalize legacy `.evidence` field into `.verbatim_line` so downstream
     # validate_findings (which reads .verbatim_line) can grep it against the diff.
     # Also normalize the `.blocking` field: respect an explicit reviewer-set
@@ -94,7 +94,7 @@ if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; t
       ((if ($f | has("blocking")) then $f.blocking
          else ((.severity // "") | ascii_downcase | (. == "critical" or . == "high" or . == "important"))
          end)) as $blk |
-      if ($vl | length) >= 5 then ($f + {verbatim_line: $vl, blocking: $blk}) else empty end
+      if ($vl | length) >= 10 then ($f + {verbatim_line: $vl, blocking: $blk}) else empty end
     ]')
 
     # Count stripped findings and warn
@@ -102,7 +102,7 @@ if [[ -n "$json_block" ]] && printf '%s' "$json_block" | jq empty 2>/dev/null; t
     valid_count=$(printf '%s' "$valid_findings" | jq 'length')
     if (( valid_count < total_findings )); then
       stripped=$(( total_findings - valid_count ))
-      log_warn "stripped $stripped finding(s) missing required evidence (>= 5 chars)"
+      log_warn "stripped $stripped finding(s) missing required evidence (>= 10 chars)"
     fi
 
     # Normalize verdict: map APPROVED -> APPROVE for pipeline-run-task compat

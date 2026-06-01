@@ -2093,6 +2093,43 @@ rm -rf "$SP_ORIGIN" "$SP_WT"
 
 # ============================================================
 echo ""
+echo "=== pipeline-parse-review (JSON-block: verbatim_line length floor is 10) ==="
+_short_vl_review='Review text.
+
+```json
+{
+  "verdict": "NEEDS_DISCUSSION",
+  "summary": "Short verbatim",
+  "findings": [{
+    "title": "Shorty",
+    "severity": "critical",
+    "evidence": "sufficient evidence here",
+    "verbatim_line": "abcdefg"
+  }]
+}
+```'
+output=$(printf '%s' "$_short_vl_review" | pipeline-parse-review 2>/dev/null)
+assert_eq "verbatim_line < 10 chars stripped by parser" "0" "$(echo "$output" | jq '.findings | length')"
+
+_ok_vl_review='Review text.
+
+```json
+{
+  "verdict": "REQUEST_CHANGES",
+  "summary": "OK verbatim",
+  "findings": [{
+    "title": "Longy",
+    "severity": "critical",
+    "evidence": "sufficient evidence here",
+    "verbatim_line": "abcdefghij"
+  }]
+}
+```'
+output=$(printf '%s' "$_ok_vl_review" | pipeline-parse-review 2>/dev/null)
+assert_eq "verbatim_line >= 10 chars retained by parser" "1" "$(echo "$output" | jq '.findings | length')"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"
