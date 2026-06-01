@@ -534,6 +534,33 @@ eo_valid=$(echo "$output" | jq '.execution_order | map(.task_id) | all(type == "
 assert_eq "execution_order task_ids are JSON strings" "true" "$eo_valid"
 
 echo ""
+echo "=== D2: type validation (array fields + risk_tier/tdd_exempt) ==="
+# files as a string instead of an array → invalid
+cat > "$tasks_dir/d2-badfiles.json" << 'EOF'
+[{"task_id":"t1","title":"x","description":"d","files":"src/a.ts","acceptance_criteria":["a"],"tests_to_write":["t"],"depends_on":[]}]
+EOF
+output=$(pipeline-validate-tasks "$tasks_dir/d2-badfiles.json" 2>/dev/null) || true
+assert_eq "D2: non-array files rejected" "false" "$(echo "$output" | jq -r '.valid')"
+# tdd_exempt as a string instead of boolean → invalid
+cat > "$tasks_dir/d2-badtdd.json" << 'EOF'
+[{"task_id":"t2","title":"x","description":"d","files":["src/a.ts"],"acceptance_criteria":["a"],"tests_to_write":["t"],"depends_on":[],"tdd_exempt":"yes"}]
+EOF
+output=$(pipeline-validate-tasks "$tasks_dir/d2-badtdd.json" 2>/dev/null) || true
+assert_eq "D2: non-boolean tdd_exempt rejected" "false" "$(echo "$output" | jq -r '.valid')"
+# bad risk_tier → invalid
+cat > "$tasks_dir/d2-badrisk.json" << 'EOF'
+[{"task_id":"t2b","title":"x","description":"d","files":["src/a.ts"],"acceptance_criteria":["a"],"tests_to_write":["t"],"depends_on":[],"risk_tier":"wizard"}]
+EOF
+output=$(pipeline-validate-tasks "$tasks_dir/d2-badrisk.json" 2>/dev/null) || true
+assert_eq "D2: bad risk_tier rejected" "false" "$(echo "$output" | jq -r '.valid')"
+# valid row with optional tdd_exempt:true + risk_tier:feature → valid
+cat > "$tasks_dir/d2-ok.json" << 'EOF'
+[{"task_id":"t3","title":"x","description":"d","files":["src/a.ts"],"acceptance_criteria":["a"],"tests_to_write":["t"],"depends_on":[],"tdd_exempt":true,"risk_tier":"feature"}]
+EOF
+output=$(pipeline-validate-tasks "$tasks_dir/d2-ok.json" 2>/dev/null) || true
+assert_eq "D2: valid row accepted" "true" "$(echo "$output" | jq -r '.valid')"
+
+echo ""
 echo "=== pipeline-holdout-validate ==="
 
 # Seed a holdout file as pipeline-build-prompt would have.

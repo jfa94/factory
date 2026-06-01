@@ -117,6 +117,24 @@ if (( bad_desc > 0 )); then
   errors+=("$bad_desc task(s) have unsafe description (control chars / command-substitution / leading --)")
 fi
 
+# Type validation: array fields must be arrays; tdd_exempt (optional) boolean;
+# risk_tier (optional) one of routine/feature/security. The presence-only checks
+# above accept a string `files`, which then mis-trips the files<=3 budget (jq
+# length counts characters of a string). Append any violations to errors[] so the
+# bail block below emits {valid:false}.
+while IFS= read -r _terr; do
+  [[ -n "$_terr" ]] && errors+=("$_terr")
+done < <(jq -r '
+  to_entries[]
+  | .key as $k | .value as $t
+  | [ (if ($t.files? // [])               | type != "array" then "task \($t.task_id // $k): files must be an array" else empty end),
+      (if ($t.acceptance_criteria? // [])  | type != "array" then "task \($t.task_id // $k): acceptance_criteria must be an array" else empty end),
+      (if ($t.tests_to_write? // [])       | type != "array" then "task \($t.task_id // $k): tests_to_write must be an array" else empty end),
+      (if ($t | has("tdd_exempt")) and ($t.tdd_exempt | type != "boolean") then "task \($t.task_id // $k): tdd_exempt must be boolean" else empty end),
+      (if ($t | has("risk_tier")) and (([ "routine","feature","security" ] | index($t.risk_tier)) == null) then "task \($t.task_id // $k): risk_tier must be routine|feature|security" else empty end)
+    ] | .[]
+' "$tasks_file" 2>/dev/null || true)
+
 # Bail on field errors before graph algorithms
 if [[ ${#errors[@]} -gt 0 ]]; then
   errors_json=$(printf '%s\n' "${errors[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')
