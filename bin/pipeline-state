@@ -211,6 +211,23 @@ _parse_state_key() {
   printf '%s' "$json_array"
 }
 
+# _setpath_value <jq_path> <value> <jq_expr>
+# Reads state JSON from stdin; writes updated state to stdout.
+# Chooses --argjson when value is valid JSON, --arg otherwise.
+_setpath_value() {
+  local jq_path="$1" value="$2" jq_expr="$3"
+  if printf '%s' "$value" | jq empty 2>/dev/null; then
+    jq --argjson path "$jq_path" --argjson v "$value" "$jq_expr"
+  else
+    jq --argjson path "$jq_path" --arg v "$value" "$jq_expr"
+  fi
+}
+
+# _stamp_updated_at: reads state JSON from stdin; stamps .updated_at; writes to stdout.
+_stamp_updated_at() {
+  jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.updated_at = $t'
+}
+
 _state_file() {
   local run_id="$1"
   printf '%s/runs/%s/state.json' "$CLAUDE_PLUGIN_DATA" "$run_id"
@@ -284,15 +301,8 @@ case "$action" in
     trap '_state_unlock "$run_id"' EXIT
     state=$(_read_state_file "$run_id")
 
-    # Determine if value is valid JSON; if so, use argjson
-    if printf '%s' "$value" | jq empty 2>/dev/null; then
-      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --argjson v "$value" 'setpath($path; $v)')
-    else
-      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --arg v "$value" 'setpath($path; $v)')
-    fi
-
-    # Update the updated_at timestamp
-    updated=$(printf '%s' "$updated" | jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.updated_at = $t')
+    updated=$(printf '%s' "$state" | _setpath_value "$jq_path" "$value" 'setpath($path; $v)')
+    updated=$(printf '%s' "$updated" | _stamp_updated_at)
 
     atomic_write "$f" "$updated"
     _state_unlock "$run_id"
@@ -350,12 +360,8 @@ case "$action" in
     trap '_state_unlock "$run_id"' EXIT
     state=$(_read_state_file "$run_id")
 
-    if printf '%s' "$value" | jq empty 2>/dev/null; then
-      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --argjson v "$value" 'setpath($path; $v)')
-    else
-      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --arg v "$value" 'setpath($path; $v)')
-    fi
-    updated=$(printf '%s' "$updated" | jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.updated_at = $t')
+    updated=$(printf '%s' "$state" | _setpath_value "$jq_path" "$value" 'setpath($path; $v)')
+    updated=$(printf '%s' "$updated" | _stamp_updated_at)
 
     atomic_write "$f" "$updated"
     _state_unlock "$run_id"
@@ -451,14 +457,9 @@ case "$action" in
     trap '_state_unlock "$run_id"' EXIT
     state=$(_read_state_file "$run_id")
 
-    if printf '%s' "$value" | jq empty 2>/dev/null; then
-      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --argjson v "$value" \
-        'setpath($path; ((getpath($path) // []) + [$v] | unique))')
-    else
-      updated=$(printf '%s' "$state" | jq --argjson path "$jq_path" --arg v "$value" \
-        'setpath($path; ((getpath($path) // []) + [$v] | unique))')
-    fi
-    updated=$(printf '%s' "$updated" | jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.updated_at = $t')
+    updated=$(printf '%s' "$state" | _setpath_value "$jq_path" "$value" \
+      'setpath($path; ((getpath($path) // []) + [$v] | unique))')
+    updated=$(printf '%s' "$updated" | _stamp_updated_at)
 
     atomic_write "$f" "$updated"
     _state_unlock "$run_id"
