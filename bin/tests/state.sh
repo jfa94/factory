@@ -1613,6 +1613,34 @@ assert_exit "D1: unguarded field bypasses enum guard" 0 \
   pipeline-state task-write "$D1_RID" t1 failure_reason '"anything goes here"'
 
 echo ""
+echo "=== E2: repeated task-status done does not double-count ==="
+
+# A repeated terminal-status write (done/done or failed/failed) must NOT
+# advance the circuit-breaker counters again; only an actual transition INTO
+# the terminal state counts. Otherwise a retried done/failed silently drifts
+# tasks_completed / consecutive_failures and skews the breaker.
+E2_RID="run-e2-$$"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$E2_RID"
+jq -n '{run_id:"run-e2",tasks:{"t1":{status:"executing"}},
+        circuit_breaker:{tasks_completed:0,consecutive_failures:0}}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/$E2_RID/state.json"
+pipeline-state task-status "$E2_RID" t1 done >/dev/null 2>&1
+pipeline-state task-status "$E2_RID" t1 done >/dev/null 2>&1
+e2_completed=$(jq -r '.circuit_breaker.tasks_completed' "$CLAUDE_PLUGIN_DATA/runs/$E2_RID/state.json")
+assert_eq "E2: tasks_completed=1 after double done" "1" "$e2_completed"
+
+# A repeated 'failed' write must likewise increment consecutive_failures once.
+E2F_RID="run-e2f-$$"
+mkdir -p "$CLAUDE_PLUGIN_DATA/runs/$E2F_RID"
+jq -n '{run_id:"run-e2f",tasks:{"t1":{status:"executing"}},
+        circuit_breaker:{tasks_completed:0,consecutive_failures:0}}' \
+  > "$CLAUDE_PLUGIN_DATA/runs/$E2F_RID/state.json"
+pipeline-state task-status "$E2F_RID" t1 failed >/dev/null 2>&1
+pipeline-state task-status "$E2F_RID" t1 failed >/dev/null 2>&1
+e2_failures=$(jq -r '.circuit_breaker.consecutive_failures' "$CLAUDE_PLUGIN_DATA/runs/$E2F_RID/state.json")
+assert_eq "E2: consecutive_failures=1 after double failed" "1" "$e2_failures"
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"

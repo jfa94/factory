@@ -537,16 +537,18 @@ case "$action" in
       --arg tid "$task_id" \
       --arg s "$status" \
       --arg now "$now" '
+      (.tasks[$tid].status) as $prev |
       .tasks[$tid].status = $s |
       .updated_at = $now |
       if $s == "executing" then .tasks[$tid].started_at = $now
       elif ($s == "done" or $s == "failed") then .tasks[$tid].ended_at = $now
       else . end |
-      # Update circuit breaker counters
-      if $s == "done" then
+      # Update circuit breaker counters — only on an actual transition INTO the
+      # terminal state, so a repeated done/failed write is idempotent.
+      if $s == "done" and $prev != "done" then
         .circuit_breaker.tasks_completed = (.circuit_breaker.tasks_completed + 1) |
         .circuit_breaker.consecutive_failures = 0
-      elif $s == "failed" then
+      elif $s == "failed" and $prev != "failed" then
         .circuit_breaker.consecutive_failures = (.circuit_breaker.consecutive_failures + 1)
       else . end
     ')
