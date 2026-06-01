@@ -35,13 +35,9 @@ Read the current configuration:
 cat "${CLAUDE_PLUGIN_DATA}/config.json" 2>/dev/null || echo '{}'
 ```
 
-Also read the plugin defaults from the manifest:
+Config defaults are compiled as `read_config '<key>' '<default>'` fallbacks in the bin scripts (e.g. `pipeline-lib.sh`, `pipeline-run-task`); there is no separate defaults file. The canonical reference for all keys, types, and defaults is `docs/reference/configuration.md`.
 
-```bash
-cat "$(dirname "$(which pipeline-state)")/../.claude-plugin/plugin.json"
-```
-
-Merge: user config takes precedence, plugin defaults fill in missing values.
+Merge: user config takes precedence; `read_config` fallbacks supply missing values at runtime.
 
 ## Step 2: Present Settings
 
@@ -92,9 +88,10 @@ Fill in the "Current" column with actual values from the loaded config.
 
 If the user specifies a setting to change:
 
-1. **Validate the value** — check type and range against the canonical schema in
-   `.claude-plugin/plugin.json`. Examples (canonical key names — these are the
-   ones the rest of the plugin reads):
+1. **Validate the value** — check type and range using the inline constraints
+   below (defaults live as `read_config '<key>' '<default>'` fallbacks in the
+   bin scripts; there is no schema file in `plugin.json`). Canonical key names —
+   these are the ones the rest of the plugin reads:
    - `humanReviewLevel`: integer 0-4
    - `maxRuntimeMinutes`: integer 0-1440 (0 = unlimited)
    - `maxConsecutiveFailures`: integer 1-10

@@ -191,10 +191,9 @@ Interactive settings editor.
 ### Execution Flow
 
 1. Load current config from `${CLAUDE_PLUGIN_DATA}/config.json`
-2. Load defaults from `plugin.json`
+2. Merge with built-in defaults (compiled as `read_config '<key>' '<default>'` fallbacks in the bin scripts; canonical reference is `docs/reference/configuration.md`)
 3. Present settings grouped by category
 4. Validate and apply changes
-5. Validate changes against schema
 
 ### Interactive Mode
 
@@ -237,12 +236,11 @@ When invoked without arguments, enters a conversational loop:
 
 ### Validation
 
-Settings are validated against the schema in `plugin.json`:
+Settings are validated inline by the command against the ranges listed in `docs/reference/configuration.md` (not via a schema in `plugin.json` — no such schema exists):
 
-- Numbers: checked against `min` and `max` constraints
-- Enums: checked against allowed values
+- Numbers: checked against expected `min` / `max` (e.g. `humanReviewLevel` 0-4)
+- Enums: checked against allowed values (e.g. `execution.defaultModel`)
 - Booleans: must be `true` or `false`
-- URLs: must start with `http`
 
 Invalid values are rejected with an error message.
 
