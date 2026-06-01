@@ -164,6 +164,8 @@ case "$subcommand" in
     (( threshold < 1 )) && threshold=1
 
     # Walk the withheld criteria one by one. Missing entries count as fails.
+    # `$r.criterion == $c` is the anti-spoof guard: a positionally-misaligned
+    # answer (right index, wrong criterion text) must not be credited.
     summary=$(jq -nc \
       --argjson crits "$withheld" \
       --argjson resp "$parsed" \
@@ -173,7 +175,10 @@ case "$subcommand" in
           | $crits[$i] as $c
           | ($resp[$i] // null) as $r
           | { criterion: $c,
-              satisfied: ($r != null and ($r.satisfied == true) and ($r.evidence | (. != null and (type == "string") and test("\\S")))),
+              satisfied: ($r != null
+                          and ($r.criterion == $c)
+                          and ($r.satisfied == true)
+                          and ($r.evidence | (. != null and (type == "string") and test("\\S")))),
               evidence: ($r.evidence // null) } ]
       ')
 

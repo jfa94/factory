@@ -107,6 +107,12 @@ run_check '{ "criteria": [] }'
 [[ "$(printf '%s' "$SUMMARY" | jq -r '.status')" == "fail" ]] \
   && ok "F1: missing-entry → fail" || fail "F1: missing-entry passed"
 
+printf '\n=== TX: criterion-text mismatch is not credited (positional spoof) ===\n'
+run_check '{ "criteria": [ { "criterion": "criterion B (wrong)", "satisfied": true, "evidence": "x:1" } ] }'
+printf '%s' "$SUMMARY" | jq -e '.status == "fail"' >/dev/null \
+  && ok "TX: mismatched criterion text → fail" || fail "TX: mismatched criterion credited as satisfied"
+[[ "$RC" -eq 1 ]] && ok "TX: mismatched criterion → exit 1" || fail "TX: mismatched criterion exit=$RC"
+
 printf '\n=== Results ===\n'
 printf '  Passed: %d  Failed: %d\n' "$pass" "$fail_count"
 [[ "$fail_count" -eq 0 ]] || exit 1
