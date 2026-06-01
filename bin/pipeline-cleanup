@@ -106,6 +106,10 @@ if [[ "$delete_branches" == "true" ]]; then
       deleted_any=true
     fi
 
+    if [[ "$deleted_any" != "true" ]]; then
+      log_warn "failed to delete branch (remote and local): $branch"
+    fi
+
     if [[ "$deleted_any" == "true" ]]; then
       branches_deleted=$((branches_deleted + 1))
     fi

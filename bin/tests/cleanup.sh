@@ -814,6 +814,39 @@ rm -rf "$decoy_cleanup"
 
 # ============================================================
 echo ""
+echo "=== pipeline-cleanup (warn when both remote and local branch deletes fail) ==="
+# When neither git push origin --delete nor git branch -d succeeds, the
+# existing code silently skips the branch (deleted_any stays false). This
+# test asserts that a warning containing "failed to delete branch" is emitted.
+
+_create_test_run "test-delete-both-fail" '{
+  "run_id": "test-delete-both-fail",
+  "status": "completed",
+  "mode": "prd",
+  "started_at": "2026-01-01T00:00:00Z",
+  "ended_at": "2026-01-01T01:00:00Z",
+  "updated_at": "2026-01-01T01:00:00Z",
+  "input": {"issue_numbers": [], "resumed_from": null},
+  "tasks": {
+    "T1": {"status": "done", "pr_number": 8001, "branch": "no/such/branch-xyz-$$"}
+  },
+  "circuit_breaker": {"tasks_completed": 1, "consecutive_failures": 0},
+  "cost": {"total_tokens": 0, "estimated_usd": 0}
+}'
+# PR mock defaults to MERGED for unknown pr_num; the branch does not exist
+# locally or on origin, so both deletes fail → deleted_any stays false.
+printf 'MERGED' > "$MOCK_DIR/pr-state/8001"
+set +e
+_both_fail_out=$(pipeline-cleanup "test-delete-both-fail" --delete-branches 2>&1)
+set -e
+assert_contains \
+  "double-failed branch delete warns" \
+  "failed to delete branch" \
+  "$_both_fail_out"
+rm -f "$MOCK_DIR/pr-state/8001"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"
