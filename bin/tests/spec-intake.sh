@@ -352,6 +352,34 @@ assert_eq "human-gate comment posted" "created" "$action"
 type=$(echo "$output" | jq -r '.type')
 assert_eq "human-gate type correct" "human-gate" "$type"
 
+# Case 6: a failing PATCH on the update path must surface as non-zero exit AND
+# emit an explicit log_error message (not just silently die via set -e). Stub a
+# gh whose PATCH exits 1 but whose comment-list call returns an existing comment
+# id (forcing the update branch).
+_ghfail_dir=$(mktemp -d)
+cat > "$_ghfail_dir/gh" <<'MOCK'
+#!/usr/bin/env bash
+case "$*" in
+  "auth status") exit 0 ;;
+  "repo view --json nameWithOwner -q .nameWithOwner") echo "test/test" ;;
+  *"issues/"*"/comments"*"--jq"*) echo "12345" ;;
+  *"-X PATCH"*) exit 1 ;;
+  "issue comment"*) exit 0 ;;
+  "issue edit"*) exit 0 ;;
+  api*) echo "[]" ;;
+  *) exit 0 ;;
+esac
+MOCK
+chmod +x "$_ghfail_dir/gh"
+_patch_err=$( set +e
+  PATH="$_ghfail_dir:$PATH" pipeline-gh-comment 42 run-summary --update \
+    --data '{"summary":"x","status":"partial","tasks_done":1,"tasks_total":2}' 2>&1 >/dev/null
+  set -e )
+_has_error=0
+echo "$_patch_err" | grep -qi "failed to update" && _has_error=1
+assert_eq "failed comment-update PATCH emits error message" "1" "$_has_error"
+rm -rf "$_ghfail_dir"
+
 echo ""
 echo "=== pipeline-validate: cross-location skill discovery ==="
 

@@ -250,7 +250,10 @@ if [[ "$update" == "true" ]]; then
   if [[ -n "$existing_id" ]]; then
     gh api "repos/${REPO_SLUG}/issues/comments/${existing_id}" \
       -X PATCH \
-      -f body="$body" &>/dev/null
+      -f body="$body" &>/dev/null || {
+      log_error "failed to update comment $existing_id on issue $issue"
+      exit 1
+    }
     log_info "updated existing $comment_type comment on issue $issue"
     json_output action "updated" issue "$issue" type "$comment_type" comment_id "$existing_id"
     exit 0
