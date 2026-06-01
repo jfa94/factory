@@ -205,6 +205,59 @@ assert_eq "M12: helper preserves embedded quotes" 'got error: "foo" not found' "
 stripped=$(printf '%s' "$raw" | tr -d '"')
 assert_eq "M12: bare tr -d strips embedded quotes (negative control)" 'got error: foo not found' "$stripped"
 
+echo "=== F2: delete-branch refuses protected + invalid names ==="
+# _apply_plan_delete_branch (pipeline-rescue-apply:369) must refuse to delete a
+# protected branch (main/staging/...) and refuse a refspec-injection branch name
+# BEFORE any git runs. The script is not safely sourceable (set -euo + arg
+# parsing at load), so drive it through the investigation CLI with delete_branch
+# decisions whose `.branch` field carries the dangerous name. Git ops run against
+# the CWD repo, so execute inside a throwaway repo holding the target branches.
+seed_run
+f2_repo="$CLAUDE_PLUGIN_DATA/f2_repo"
+git init -q "$f2_repo"
+git -C "$f2_repo" config user.email t@t
+git -C "$f2_repo" config user.name t
+git -C "$f2_repo" commit -q --allow-empty -m init
+# Ensure a 'main' branch exists regardless of init.defaultBranch, plus a
+# disposable non-protected branch used to bound the injection assertion.
+git -C "$f2_repo" branch main 2>/dev/null || true
+git -C "$f2_repo" branch feature/x 2>/dev/null || true
+
+# (a) delete_branch targeting protected 'main' — must be preserved.
+f2_protected="$CLAUDE_PLUGIN_DATA/f2_protected.json"
+cat > "$f2_protected" <<'JSON'
+{
+  "run_id": "R1",
+  "plans": [
+    {"task_id": "T1", "decision": "delete_branch", "branch": "main",
+     "reason": "stale", "evidence": [], "state_updates": {}, "confidence": "high"}
+  ]
+}
+JSON
+( cd "$f2_repo" && pipeline-rescue-apply --plans="$f2_protected" >/dev/null 2>&1 )
+if git -C "$f2_repo" show-ref --verify --quiet refs/heads/main; then
+  echo "  PASS: F2 protected 'main' preserved"; pass=$((pass + 1))
+else
+  echo "  FAIL: F2 protected 'main' deleted"; fail=$((fail + 1))
+fi
+
+# (b) refspec-injection branch name — refused by _validate_branch_name before
+# any git runs, so the local branch set is unchanged.
+before_count=$(git -C "$f2_repo" branch | wc -l | tr -d ' ')
+f2_inject="$CLAUDE_PLUGIN_DATA/f2_inject.json"
+cat > "$f2_inject" <<'JSON'
+{
+  "run_id": "R1",
+  "plans": [
+    {"task_id": "T1", "decision": "delete_branch", "branch": "feature/x:refs/heads/main",
+     "reason": "cleanup", "evidence": [], "state_updates": {}, "confidence": "high"}
+  ]
+}
+JSON
+( cd "$f2_repo" && pipeline-rescue-apply --plans="$f2_inject" >/dev/null 2>&1 )
+after_count=$(git -C "$f2_repo" branch | wc -l | tr -d ' ')
+assert_eq "F2 refspec-injection name refused (branch set unchanged)" "$before_count" "$after_count"
+
 echo
 echo "Passed: $pass | Failed: $fail"
 [[ $fail -eq 0 ]]
