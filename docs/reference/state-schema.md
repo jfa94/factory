@@ -281,6 +281,8 @@ Per-role fields allow the orchestrator to track individual reviewer verdicts whe
 | `blocking_findings` | number | Count of blocking issues                 |
 | `timestamp`         | string | ISO 8601 timestamp                       |
 
+**Codex verdict mapping:** the codex review schema emits `overall_correctness` (`"patch is correct"` / `"patch is incorrect"`), not the state's `verdict` vocabulary. The review glue code in `bin/pipeline-codex-review` maps `overall_correctness == "patch is correct"` → `APPROVE`, otherwise → `REQUEST_CHANGES`, before the verdict is recorded here. `NEEDS_DISCUSSION` is not produced by codex; it originates from Claude-Code reviewers (`bin/pipeline-parse-review`).
+
 ---
 
 ## Final PR Object
@@ -323,7 +325,7 @@ Written by `pipeline-run-task` at the `finalize-run` stage, only after all task 
 }
 ```
 
-The `holdout` field is a string with one of four values:
+Unlike `coverage` and `mutation` — which are **objects** (`{ "passed": …, … }`) — `holdout` is a bare **string** enum (written as `_task_write quality_gates.holdout '"pass"'` in `bin/pipeline-run-task`). It takes one of four values (`pass | fail | pending | missing-reviewer-output`):
 
 | Value                     | Meaning                                                                                      |
 | ------------------------- | -------------------------------------------------------------------------------------------- |
