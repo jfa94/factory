@@ -482,6 +482,28 @@ case_is_test_path_unit() {
   pass "case_is_test_path_unit: monorepo + root test dir patterns classified correctly"
 }
 
+# E1: task_tdd_exempt must read a bare-array tasks.json (no {tasks:[...]} wrapper).
+# Regression: `(.tasks // .)[]?` raises "Cannot index array with string" on a
+# bare array before `//` can fall back; the error was swallowed and an
+# operator-set tdd_exempt:true task was wrongly treated as non-exempt.
+case_e1_bare_array_tdd_exempt() {
+  # shellcheck disable=SC1091
+  source "$PLUGIN_ROOT/bin/pipeline-lib.sh"
+  local e1 rc
+  e1=$(mktemp -d "${TMPDIR:-/tmp}/factory-e1.XXXXXX")
+  mkdir -p "$e1/specs/current"
+  # Bare-array shape (no {tasks:[...]} wrapper).
+  jq -n '[{task_id:"t1",tdd_exempt:true}]' > "$e1/specs/current/tasks.json"
+  set +e
+  ( cd "$e1" && task_tdd_exempt t1 )
+  rc=$?
+  set -e
+  rm -rf "$e1"
+  [[ "$rc" -eq 0 ]] \
+    || fail "case_e1_bare_array_tdd_exempt: bare-array tdd_exempt:true not detected (rc=$rc)"
+  pass "case_e1_bare_array_tdd_exempt: bare-array tdd_exempt:true -> exempt"
+}
+
 # Test 11: tagged --allow-empty commit must not advance seen_test_only
 case11() {
   local repo out rc ok reason; repo=$(mktemp -d); _mk_repo "$repo"
@@ -632,6 +654,7 @@ case_b3_merge_with_tests; case_b3_merge_with_impl
 case_monorepo_packages_tests; case_monorepo_packages_test_singular
 case_monorepo_apps_spec; case_root_double_underscore_tests
 case_is_test_path_unit
+case_e1_bare_array_tdd_exempt
 case9; case10; case11
 case_state_write_failure_propagates; case_state_write_success_still_passes
 case_diff_tree_bad_sha
