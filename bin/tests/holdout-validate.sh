@@ -91,6 +91,22 @@ run_check '{ "criteria": [ { "criterion": "criterion A", "satisfied": false, "ev
   || fail "B5: threshold=0 vacuously passed (status=$(printf '%s' "$SUMMARY" | jq -r '.status'))"
 rm -f "$CLAUDE_PLUGIN_DATA/config.json"
 
+printf '\n=== F1: holdout gate fails when criterion unsatisfied ===\n'
+run_check '{ "criteria": [ { "criterion": "criterion A", "satisfied": false, "evidence": "x" } ] }'
+[[ "$(printf '%s' "$SUMMARY" | jq -r '.status')" == "fail" ]] \
+  && ok "F1: unsatisfied → status fail" || fail "F1: unsatisfied not failed"
+[[ "$RC" -eq 1 ]] && ok "F1: unsatisfied → exit 1" || fail "F1: unsatisfied exit=$RC"
+
+printf '\n=== F1: empty evidence counts as unsatisfied ===\n'
+run_check '{ "criteria": [ { "criterion": "criterion A", "satisfied": true, "evidence": "" } ] }'
+[[ "$(printf '%s' "$SUMMARY" | jq -r '.status')" == "fail" ]] \
+  && ok "F1: empty-evidence → fail" || fail "F1: empty-evidence passed"
+
+printf '\n=== F1: missing entry counts as failure ===\n'
+run_check '{ "criteria": [] }'
+[[ "$(printf '%s' "$SUMMARY" | jq -r '.status')" == "fail" ]] \
+  && ok "F1: missing-entry → fail" || fail "F1: missing-entry passed"
+
 printf '\n=== Results ===\n'
 printf '  Passed: %d  Failed: %d\n' "$pass" "$fail_count"
 [[ "$fail_count" -eq 0 ]] || exit 1
