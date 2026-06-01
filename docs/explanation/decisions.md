@@ -4,7 +4,7 @@ This document explains key architectural choices and their rationale.
 
 ## Decision 1: Deterministic-First Architecture
 
-**Choice:** Approximately 3:1 ratio of deterministic components (bin scripts, hooks) to non-deterministic (agents). If a step CAN be a script, it MUST be a script.
+**Choice:** Approximately 5.5:1 ratio of deterministic components (bin scripts, hooks) to non-deterministic (agents). If a step CAN be a script, it MUST be a script.
 
 **Why:**
 
