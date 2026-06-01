@@ -51,8 +51,14 @@ fi
 
 input=$(cat 2>/dev/null || printf '{}')
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
-# Fire only on successful `gh pr create`.
-[[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]] || exit 0
+# Fire on a direct `gh pr create` OR on a pipeline-run-task ship invocation
+# (the wrapper creates the PR internally, so PostToolUse sees the wrapper
+# command, not the nested gh call).
+_is_pr_create=false
+_is_wrapper_ship=false
+[[ "$cmd" =~ ^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create ]] && _is_pr_create=true
+[[ "$cmd" =~ pipeline-run-task.*--stage[[:space:]]+ship ]] && _is_wrapper_ship=true
+[[ "$_is_pr_create" == "true" || "$_is_wrapper_ship" == "true" ]] || exit 0
 
 current_link="${CLAUDE_PLUGIN_DATA:-}/runs/current"
 if [[ -z "${CLAUDE_PLUGIN_DATA:-}" || ! -L "$current_link" ]]; then
@@ -66,8 +72,20 @@ run_id=$(basename "$run_dir")
 # Find the most recently created PR for this run. The tool_response usually
 # contains the URL (e.g., https://github.com/org/repo/pull/1234).
 resp=$(printf '%s' "$input" | jq -r '.tool_response.stdout // .tool_response // ""' 2>/dev/null)
-pr_url=$(printf '%s' "$resp" | grep -oE 'https://github\.com/[^[:space:]]+/pull/[0-9]+' | head -1)
+pr_url=$(printf '%s' "$resp" | grep -oE 'https://github\.com/[^[:space:]]+/pull/[0-9]+' | head -1 || printf '')
 pr_number=$(printf '%s' "$pr_url" | grep -oE '[0-9]+$' || printf '')
+
+# Wrapper invocations do not print the PR URL to stdout. Fall back to the most
+# recently reviewing task that has a pr_number and no terminal ci_status.
+if [[ -z "$pr_number" ]]; then
+  pr_number=$(jq -r '
+    [ .tasks | to_entries[]
+      | select(.value.status == "reviewing")
+      | select((.value.pr_number // "") != "")
+      | select((.value.ci_status // "") | (. == "" or . == "pending"))
+      | .value.pr_number ] | last // empty
+  ' "$state_file" 2>/dev/null)
+fi
 [[ -z "$pr_number" ]] && exit 0
 
 # Derive task_id: the task whose pr_number just got written.
