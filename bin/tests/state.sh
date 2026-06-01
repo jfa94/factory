@@ -477,6 +477,30 @@ action=$(printf '%s' "$output" | jq -r '.action')
 assert_eq "dead-holder lock is released by any caller" "released" "$action"
 
 echo ""
+echo "=== F4: release refused when lock held by another alive PID ==="
+
+# pipeline-lock:136 refuses to release a lock actively held by a *different,
+# still-alive* PID. Mirror the existing Case-1 setup: the real CLI keys the
+# lock at $CLAUDE_PLUGIN_DATA/pipeline.lock (no run-id arg) and impersonates
+# the caller via FACTORY_LOCK_TEST_PID — NOT the brief's LOCK_PID/run-id form.
+# Use a backgrounded sleep as the guaranteed-alive holder.
+sleep 30 &
+f4_peer_pid=$!
+printf '{"pid":%d,"timestamp":"2026-01-01T00:00:00Z"}' "$f4_peer_pid" > "$CLAUDE_PLUGIN_DATA/pipeline.lock"
+set +e
+FACTORY_LOCK_TEST_PID=99989 pipeline-lock release >/dev/null 2>&1
+f4_rc=$?
+set -e
+assert_eq "F4: foreign-alive-PID release refused (exit non-zero)" "1" "$f4_rc"
+assert_eq "F4: lockfile intact after refused release" "true" \
+  "$([[ -f "$CLAUDE_PLUGIN_DATA/pipeline.lock" ]] && echo true || echo false)"
+# Owner releases cleanly; tear down the backgrounded peer.
+FACTORY_LOCK_TEST_PID=$f4_peer_pid pipeline-lock release >/dev/null 2>&1 || true
+kill "$f4_peer_pid" 2>/dev/null || true
+wait "$f4_peer_pid" 2>/dev/null || true
+rm -f "$CLAUDE_PLUGIN_DATA/pipeline.lock"
+
+echo ""
 echo "=== task_01_01: pipeline-state write injection hardening ==="
 
 # Injection attempts must be rejected (exit non-zero)
