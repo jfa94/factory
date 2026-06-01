@@ -25,13 +25,13 @@ Controlled by `humanReviewLevel` in plugin config (default: 0). Consulted by `pi
 | spec             | After spec-generator + spec-reviewer return      | Orchestrator (S6 in spec phase) | 3, 4            |
 | pre-execute      | Before each task-executor spawn                  | Wrapper preflight (future)      | 4               |
 | post-execute     | After task-executor returns, before quality gate | Wrapper postexec (future)       | 4               |
-| pre-merge / ship | Before `gh pr create`                            | Wrapper ship                    | 2, 3, 4         |
+| pre-merge / ship | Before `gh pr create`                            | Wrapper ship                    | 1, 2, 3, 4      |
 
 The wrapper owns all per-task gates. The orchestrator only calls `pipeline-human-gate "$run_id" spec` (after spec generation). Every other gate is internal.
 
 ## Current wrapper behavior
 
-`ship` stage consults `humanReviewLevel`: if `>= 3`, calls `pipeline-human-gate "$run_id" "ship-$task_id"` and returns exit 20 on non-zero.
+`ship` stage consults `humanReviewLevel`: if `>= 1`, calls `pipeline-human-gate "$run_id" pre-merge` and returns exit 20 on rc=42.
 
 Other per-task gates (pre-execute, post-execute) are not yet wired — they were not called in the baseline prose protocol and are captured here for future parity. If `humanReviewLevel == 4` today, you still get ship-stage pauses, but not per-task pre/post pauses. Treat this as the current ceiling.
 

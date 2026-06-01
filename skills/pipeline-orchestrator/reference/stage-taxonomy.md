@@ -125,7 +125,7 @@ Each stage starts by calling `_already_past`: if `.tasks.<id>.stage` is already 
   - `red` → increment `ci_fix_attempts`; `>2` → status `failed`, exit 30; else executor-ci-fix manifest, `stage_after=ship`, exit 10.
   - other → treat as timeout → status `needs_human_review`, exit 30.
 - Else (first ship invocation):
-  - `humanReviewLevel >= 3` → `pipeline-human-gate ship-<id>`; fail → exit 20.
+  - `humanReviewLevel >= 1` → `pipeline-human-gate <run-id> pre-merge`; rc=42 → exit 20.
   - `pipeline-branch task-commit` → commit remaining changes.
   - `gh pr create --fill --base staging` → records `.pr_number`, `.pr_url`, status `reviewing`, emits `task.pr_created`.
   - If `FACTORY_ASYNC_CI=off`: runs `pipeline-wait-pr` inline; on green → status `done`, `stage=ship_done`, exit 0; on red → exit 30. (Used in tests and as asyncRewake fallback.)
