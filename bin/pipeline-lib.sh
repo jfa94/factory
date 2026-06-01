@@ -993,6 +993,18 @@ PIPELINE_STAGE_ORDER=(
   ship_done
 )
 
+# extract_last_json_block: read stdin, print the LAST ```json … ``` fenced block
+# body (or `{}` if none). Single source of truth for fenced-JSON extraction —
+# shared by pipeline-parse-review and pipeline-run-task's postreview re-read.
+extract_last_json_block() {
+  awk '
+    /^```json/ { in_block=1; buf=""; next }
+    /^```/ && in_block { last=buf; in_block=0; next }
+    in_block { buf = buf $0 "\n" }
+    END { if (last == "") printf "{}"; else printf "%s", last }
+  '
+}
+
 # Strip exactly one leading and one trailing double-quote from a JSON-encoded
 # string value. Semantically equivalent to `jq -r` for simple string values.
 # Usage: _unquote_json_string <value>

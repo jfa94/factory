@@ -1282,7 +1282,7 @@ _stage_postreview() {
         raw_json=$(cat "$f" 2>/dev/null || printf '{}')
       else
         # Extract last ```json...``` block from markdown (matches pipeline-parse-review behaviour)
-        raw_json=$(awk '/^```json/{p=1;buf="";next}/^```/{if(p){last=buf;p=0};next}p{buf=buf $0 "\n"}END{printf "%s",last}' "$f" 2>/dev/null || printf '{}')
+        raw_json=$(extract_last_json_block < "$f")
       fi
       local _jq_err; _jq_err=$(mktemp)
       still_count=$(printf '%s' "$raw_json" | \

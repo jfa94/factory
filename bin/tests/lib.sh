@@ -148,6 +148,16 @@ rm -rf "$_rg_dir" "$_rg_stub"
 export CLAUDE_PLUGIN_DATA="$_rg_old"
 unset _rg_old _rg_dir _rg_stub _rg_rc
 
+# --- extract_last_json_block -----------------------------------------------
+# Returns the LAST ```json fenced block; {} when none present.
+
+_in=$'pre\n```json\n{"a":1}\n```\nmid\n```json\n{"b":2}\n```\npost'
+assert_eq "extract_last_json_block picks last block" '{"b":2}' \
+  "$(printf '%s' "$_in" | extract_last_json_block | tr -d '[:space:]')"
+assert_eq "extract_last_json_block no block → {}" '{}' \
+  "$(printf 'no fences here' | extract_last_json_block | tr -d '[:space:]')"
+unset _in
+
 # --- summary --------------------------------------------------------------
 
 echo
