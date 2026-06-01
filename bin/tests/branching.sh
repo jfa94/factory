@@ -2130,6 +2130,48 @@ assert_eq "verbatim_line >= 10 chars retained by parser" "1" "$(echo "$output" |
 
 # ============================================================
 echo ""
+echo "=== pipeline-parse-review (prose declared/observed blocker downgrade) ==="
+
+# Mismatch path: reviewer declares BLOCKERS:0 / VERDICT:APPROVE but prose
+# contains a ### [BLOCKING] header (observed=1). Parser must downgrade to
+# REQUEST_CHANGES and embed the parser-downgrade marker in .summary.
+_pd_review='## Findings
+
+### [BLOCKING] Off-by-one in retry loop
+The counter uses <= instead of <.
+
+## Summary
+One real blocker but I under-counted.
+
+## Verdict
+
+VERDICT: APPROVE
+CONFIDENCE: HIGH
+BLOCKERS: 0
+ROUND: 1'
+output=$(printf '%s' "$_pd_review" | pipeline-parse-review 2>/dev/null)
+assert_eq "prose declared/observed mismatch → REQUEST_CHANGES" "REQUEST_CHANGES" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "prose mismatch tags summary with parser-downgrade" "true" "$(echo "$output" | jq -r '.summary | contains("parser-downgrade")')"
+
+# Control: same fixture minus the ### [BLOCKING] header (observed=0, declared=0 →
+# they agree). Parser must NOT downgrade and must NOT add the marker.
+_pd_control='## Findings
+
+## Summary
+One comment but no blockers.
+
+## Verdict
+
+VERDICT: APPROVE
+CONFIDENCE: HIGH
+BLOCKERS: 0
+ROUND: 1'
+output=$(printf '%s' "$_pd_control" | pipeline-parse-review 2>/dev/null)
+assert_eq "prose matched declared/observed → APPROVE (no downgrade)" "APPROVE" "$(echo "$output" | jq -r '.verdict')"
+assert_eq "prose matched: no parser-downgrade marker" "false" "$(echo "$output" | jq -r '.summary | contains("parser-downgrade")')"
+
+# ============================================================
+echo ""
 echo "=== Results ==="
 echo "  Passed: $pass"
 echo "  Failed: $fail"
