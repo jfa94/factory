@@ -2745,6 +2745,68 @@ assert_contains "push scan block reason=secret_detected" "secret_detected" "$out
 
 rm -rf "$_push_tmp"
 
+# --- B4: push-path git log failure must fail closed (exit 2, git_log_failed) ---
+# If `git log` crashes while scanning unpushed commits on the PUSH path,
+# an empty diff must NOT be read as "nothing to scan". The hook must deny
+# (exit 2, reason=git_log_failed) rather than silently fall open.
+# Mirror of B3 (commit-path git diff failure), adapted for the push subcommand.
+_b4_stubdir=$(mktemp -d "${TMPDIR:-/tmp}/scg-b4stub-XXXXXX")
+cat > "$_b4_stubdir/git" <<'STUB'
+#!/usr/bin/env bash
+# Walk past `-C <dir>` and any leading flags to find the subcommand.
+args=("$@")
+sub=""
+i=0
+while (( i < ${#args[@]} )); do
+  case "${args[i]}" in
+    -C) i=$((i+2)); continue ;;
+    -*) i=$((i+1)); continue ;;
+    *)  sub="${args[i]}"; break ;;
+  esac
+done
+case "$sub" in
+  log)      exit 1 ;;        # simulate git log failure
+  *)        exit 0 ;;        # rev-parse, fetch, etc. succeed
+esac
+STUB
+chmod +x "$_b4_stubdir/git"
+out=$(PATH="$_b4_stubdir:$PATH" \
+  printf '{"tool_input":{"command":"git -C %s push origin feat/b4-test"}}' "$PWD" \
+  | PATH="$_b4_stubdir:$PATH" bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "B4: push-path git log failure fails closed (exit 2)" "EXIT:2" \
+  "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "B4: push-path git log failure reason=git_log_failed" "git_log_failed" "$out"
+
+# Non-hollow proof: the SAME push command against a healthy repo (git log
+# succeeds, no secrets in unpushed commits) must NOT exit 2 / NOT emit
+# git_log_failed. This confirms the test catches the log-failure branch
+# specifically, not a generic denial.
+_b4_healthy=$(mktemp -d "${TMPDIR:-/tmp}/scg-b4healthy-XXXXXX")
+git -C "$_b4_healthy" init -q
+git -C "$_b4_healthy" config user.email t@t
+git -C "$_b4_healthy" config user.name t
+git -C "$_b4_healthy" commit --allow-empty -m "init" -q
+git -C "$_b4_healthy" checkout -b "feat/b4-test" -q
+printf 'safe content\n' > "$_b4_healthy/safe.txt"
+git -C "$_b4_healthy" add "$_b4_healthy/safe.txt"
+git -C "$_b4_healthy" commit -m "safe commit" -q
+# Simulate origin/feat/b4-test at the initial commit (so range resolves to the
+# one safe commit, and git log succeeds with no secrets found).
+_b4_init_sha=$(git -C "$_b4_healthy" rev-list --max-parents=0 HEAD 2>/dev/null)
+git -C "$_b4_healthy" remote add origin "file:///dev/null" 2>/dev/null || true
+git -C "$_b4_healthy" update-ref refs/remotes/origin/feat/b4-test "$_b4_init_sha"
+out=$(printf '{"tool_input":{"command":"git -C %s push origin feat/b4-test"}}' "$_b4_healthy" \
+  | bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "B4: healthy push (no secrets, log ok) NOT denied (exit 0)" "EXIT:0" \
+  "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+if printf '%s' "$out" | grep -q 'git_log_failed'; then
+  echo "  FAIL: B4: healthy push emitted git_log_failed unexpectedly"; fail=$((fail + 1))
+else
+  echo "  PASS: B4: healthy push did not emit git_log_failed"; pass=$((pass + 1))
+fi
+
+rm -rf "$_b4_stubdir" "$_b4_healthy"
+
 # ============================================================
 echo ""
 echo "=== M1: secret-commit-guard denies git-dir/work-tree override bypass ==="
