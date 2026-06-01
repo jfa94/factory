@@ -82,6 +82,15 @@ PRC=$?
 set -e
 [[ "$PRC" -eq 0 ]] && ok "prompt without --worktree exits 0" || fail "prompt without --worktree exits 0 (got $PRC)"
 
+printf '\n=== B5: threshold=0 does not vacuously pass an unsatisfied holdout ===\n'
+mkdir -p "$CLAUDE_PLUGIN_DATA"
+printf '{"quality":{"holdoutPassRate":0}}\n' > "$CLAUDE_PLUGIN_DATA/config.json"
+run_check '{ "criteria": [ { "criterion": "criterion A", "satisfied": false, "evidence": "" } ] }'
+[[ "$(printf '%s' "$SUMMARY" | jq -r '.status')" == "fail" ]] \
+  && ok "B5: threshold=0 + unsatisfied → fail" \
+  || fail "B5: threshold=0 vacuously passed (status=$(printf '%s' "$SUMMARY" | jq -r '.status'))"
+rm -f "$CLAUDE_PLUGIN_DATA/config.json"
+
 printf '\n=== Results ===\n'
 printf '  Passed: %d  Failed: %d\n' "$pass" "$fail_count"
 [[ "$fail_count" -eq 0 ]] || exit 1

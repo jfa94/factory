@@ -154,6 +154,14 @@ case "$subcommand" in
     fi
 
     threshold=$(read_config '.quality.holdoutPassRate' '80')
+    # Guard against non-integer or zero config: a non-numeric value would crash
+    # the (( )) comparison and --argjson; a 0 would make any result pass
+    # vacuously. Floor at 1 and fall back to the default on garbage.
+    if ! [[ "$threshold" =~ ^[0-9]+$ ]]; then
+      log_warn "holdout: non-integer holdoutPassRate='$threshold' — using default 80"
+      threshold=80
+    fi
+    (( threshold < 1 )) && threshold=1
 
     # Walk the withheld criteria one by one. Missing entries count as fails.
     summary=$(jq -nc \
