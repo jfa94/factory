@@ -99,10 +99,10 @@ Each stage starts by calling `_already_past`: if `.tasks.<id>.stage` is already 
 
 - Reads `.tasks.<id>.worktree` (written by `SubagentStop` hook); falls back to `--worktree` arg.
 - Quality gate (`pipeline-quality-gate`) — fail → exit 30.
-- TDD gate (`pipeline-tdd-gate --task-id <id> --run-id <run-id> --base staging`) — fail → exit 30. Validates test-before-impl commit ordering (test commits must precede impl commits).
+- TDD gate (`pipeline-tdd-gate --task-id <id> --run-id <run-id>`) — fail → exit 30. Validates test-before-impl commit ordering (test commits must precede impl commits). (`--base` is not passed; the gate derives its own base reference.)
 - Coverage gate (`pipeline-coverage-gate --task-id <id>`) — fail → exit 30. Emitted metric is `task.gate.coverage task_id=<id>`.
 - Holdout (`pipeline-holdout-validate`) — if a holdout file exists and no prior reviewer output, spawns a `implementation-reviewer` manifest (exit 10, re-invoke `postexec`). Second pass runs `check` → fail → exit 30, pass → continue.
-- Reviewer detection (`pipeline-detect-reviewer --base staging`) + provider metric.
+- Reviewer detection (`pipeline-detect-reviewer`) + provider metric. (`--base` is not passed.)
 - Always emits two parallel reviewers:
   - Slot 1: **implementation-reviewer** (spec alignment — does the code satisfy spec intent?).
   - Slot 2 Codex path: runs `pipeline-codex-review` inline as quality-reviewer, writes `.state/<run-id>/<id>.review.codex.json`, adds path to `.tasks.<id>.review_files`.
