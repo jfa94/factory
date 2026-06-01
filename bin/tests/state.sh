@@ -1665,6 +1665,53 @@ e2_failures=$(jq -r '.circuit_breaker.consecutive_failures' "$CLAUDE_PLUGIN_DATA
 assert_eq "E2: consecutive_failures=1 after double failed" "1" "$e2_failures"
 
 echo ""
+echo "=== task_04_CB: circuit-breaker deducts migrated pause_minutes_consecutive ==="
+
+# After the quota-gate migration, .circuit_breaker.pause_minutes is nulled out
+# and .pause_minutes_consecutive holds the actual accumulated pause. The breaker
+# must prefer pause_minutes_consecutive over the (null) legacy key so that
+# quota-wait time is not counted as active runtime.
+#
+# Setup: wall time ~120 min, pause_minutes=null, pause_minutes_consecutive=119.
+# ceiling=60 min.
+# Legacy read  → pause=0  → runtime≈120 >= 60 → trips  (regression).
+# Correct read → pause=119 → runtime≈1  <  60 → safe   (expected).
+
+pipeline-init "run-cb-consecutive" --mode prd --force >/dev/null 2>&1
+_cbc_state="$CLAUDE_PLUGIN_DATA/runs/run-cb-consecutive/state.json"
+
+_cbc_past=""
+if date -u -d '120 minutes ago' +%Y-%m-%dT%H:%M:%SZ >/dev/null 2>&1; then
+  _cbc_past=$(date -u -d '120 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+elif command -v gdate >/dev/null 2>&1; then
+  _cbc_past=$(gdate -u -d '120 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+else
+  _cbc_past=$(date -u -v-120M +%Y-%m-%dT%H:%M:%SZ)
+fi
+
+jq --arg s "$_cbc_past" \
+  '.started_at=$s
+   | .circuit_breaker.consecutive_failures=0
+   | .circuit_breaker.pause_minutes=null
+   | .circuit_breaker.pause_minutes_consecutive=119
+   | .circuit_breaker.pause_minutes_total=119' \
+  "$_cbc_state" > "$_cbc_state.tmp" && mv "$_cbc_state.tmp" "$_cbc_state"
+
+echo '{"maxRuntimeMinutes":60,"maxConsecutiveFailures":5}' \
+  > "$CLAUDE_PLUGIN_DATA/config.json"
+
+set +e
+pipeline-circuit-breaker "run-cb-consecutive" >/dev/null 2>&1
+_cbc_rc=$?
+set -e
+
+assert_eq "breaker does not trip when wall-time was quota-pause (consecutive key)" "0" "$_cbc_rc"
+
+# Restore default config for any downstream tests.
+echo '{"maxRuntimeMinutes":0,"maxConsecutiveFailures":5}' \
+  > "$CLAUDE_PLUGIN_DATA/config.json"
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"

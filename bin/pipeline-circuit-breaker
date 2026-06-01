@@ -37,7 +37,7 @@ if ! [[ "$consecutive_failures" =~ ^[0-9]+$ ]]; then
   log_error "circuit_breaker: consecutive_failures non-numeric: '$consecutive_failures' — tripping (fail-closed)"
   exit 1
 fi
-if ! pause_minutes=$(printf '%s' "$state" | jq -r '.circuit_breaker.pause_minutes // 0' 2>&1); then
+if ! pause_minutes=$(printf '%s' "$state" | jq -r '(.circuit_breaker.pause_minutes_consecutive // .circuit_breaker.pause_minutes // 0)' 2>&1); then
   log_error "circuit_breaker: jq failed to read pause_minutes: $pause_minutes — tripping (fail-closed)"
   exit 1
 fi
