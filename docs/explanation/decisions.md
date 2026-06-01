@@ -12,7 +12,7 @@ This document explains key architectural choices and their rationale.
 - Hooks and scripts enforce at 100%
 - Concrete operational rules outperform abstract directives by 123% (research)
 
-**Result:** 21 bin scripts, 4 plugin agents, 4 hooks. Scripts handle validation, state, classification, parsing. Agents handle code generation, review, spec creation.
+**Result:** 41 bin scripts, 10 plugin agents, 13 hooks. Scripts handle validation, state, classification, parsing. Agents handle code generation, review, spec creation.
 
 ---
 
