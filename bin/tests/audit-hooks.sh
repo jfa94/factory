@@ -497,8 +497,24 @@ _scg_exit() {
 S1=$(_scg_sandbox)
 assert_eq "scg: non-commit command → allow" "0" "$(_scg_exit "$S1" "ls -la")"
 
-# 2. git push is explicitly NOT covered → allow
-assert_eq "scg: git push not covered → allow" "0" "$(_scg_exit "$S1" "git push origin main")"
+# 2. git push on an unborn HEAD (no commits) → nothing to scan → allow.
+#    B3 regression guard: the git-log fail-closed branch must NOT fire here —
+#    an unborn HEAD is benign, not a git malfunction.
+assert_eq "scg: push on unborn HEAD → allow" "0" "$(_scg_exit "$S1" "git push origin main")"
+
+# 2b. First push of a repo whose HEAD commit holds a secret → block.
+S1b=$(_scg_sandbox)
+printf 'const aws_key = "AKIAIOSFODNN7EXAMPLE";\n' > "$S1b/leak.ts"
+git -C "$S1b" add leak.ts
+git -C "$S1b" commit -qm seed
+assert_eq "scg: push with committed secret → block" "2" "$(_scg_exit "$S1b" "git push origin main")"
+
+# 2c. First push of a repo with only clean commits → allow.
+S1c=$(_scg_sandbox)
+printf 'hello world\n' > "$S1c/ok.txt"
+git -C "$S1c" add ok.txt
+git -C "$S1c" commit -qm seed
+assert_eq "scg: push clean committed repo → allow" "0" "$(_scg_exit "$S1c" "git push origin main")"
 
 # 3. git commit with nothing staged → allow
 assert_eq "scg: empty staged diff → allow" "0" "$(_scg_exit "$S1" "git commit -m nothing")"

@@ -219,18 +219,28 @@ else
     range_arg="${remote_ref}..HEAD"
   fi
 
-  # Split the `log | sort -u` pipe so git's rc is captured directly. The
-  # original one-liner masked a git failure two ways: `| sort -u` returns
-  # sort's rc, and `|| true` discards any nonzero. A git log FAILURE must fail
-  # closed rather than yield an empty diff that skips the regex loop.
-  _gl_rc=0
-  _raw_paths=$(git -C "$commit_dir" log "$range_arg" --name-only --format= 2>/dev/null) || _gl_rc=$?
-  scan_paths=$(printf '%s\n' "$_raw_paths" | sort -u)
-  scan_diff=$(git -C "$commit_dir" log -p "$range_arg" -U0 2>/dev/null) || _gl_rc=$?
-  if (( _gl_rc != 0 )); then
-    jq -cn --arg r "git_log_failed" --arg d "secret-commit-guard: git log failed (rc=$_gl_rc) for range $range_arg — cannot verify pushed commits" \
-      '{decision:"block", reason:$r, detail:$d}' >&2
-    exit 2
+  # An unborn HEAD (repo with no commits) is not a git malfunction — there is
+  # simply nothing to scan, so allow. Distinguishing this from a genuine
+  # `git log` failure is what keeps the fail-closed branch below from firing a
+  # false positive on a first push of an empty repo.
+  if ! git -C "$commit_dir" rev-parse --verify HEAD >/dev/null 2>&1; then
+    scan_paths=""
+    scan_diff=""
+  else
+    # Split the `log | sort -u` pipe so git's rc is captured directly. The
+    # original one-liner masked a git failure two ways: `| sort -u` returns
+    # sort's rc, and `|| true` discards any nonzero. A git log FAILURE (HEAD
+    # exists but log still errors) must fail closed rather than yield an empty
+    # diff that skips the regex loop.
+    _gl_rc=0
+    _raw_paths=$(git -C "$commit_dir" log "$range_arg" --name-only --format= 2>/dev/null) || _gl_rc=$?
+    scan_paths=$(printf '%s\n' "$_raw_paths" | sort -u)
+    scan_diff=$(git -C "$commit_dir" log -p "$range_arg" -U0 2>/dev/null) || _gl_rc=$?
+    if (( _gl_rc != 0 )); then
+      jq -cn --arg r "git_log_failed" --arg d "secret-commit-guard: git log failed (rc=$_gl_rc) for range $range_arg — cannot verify pushed commits" \
+        '{decision:"block", reason:$r, detail:$d}' >&2
+      exit 2
+    fi
   fi
 fi
 
