@@ -1,6 +1,6 @@
 # Bin Scripts
 
-Reference for all deterministic pipeline utilities in `bin/`.
+Reference for core deterministic pipeline utilities in `bin/`. Shared libraries (`pipeline-lib.sh`, `pipeline-rescue-lib.sh`) and the test runner (`bin/test`) are also covered below; they are not standalone pipeline scripts.
 
 All scripts source `pipeline-lib.sh` for shared functions. Scripts output JSON where applicable and use exit codes for flow control.
 
@@ -1370,6 +1370,33 @@ The `wait_minutes` value points to the next hourly threshold milestone rather th
 
 When `FACTORY_ALLOW_7D_OVER=1` is set in the environment, the router skips the `seven_day → end_gracefully` branch and falls through to the 5h logic. This allows the pipeline to wait for hourly threshold milestones even when the 7d window is over. The flag is propagated by `pipeline_quota_gate` when run state has `.flags.allow_7d_over=true`. See [Rate Limiting: Override](../explanation/rate-limiting.md#override).
 
+### pipeline-quota-gate-cli
+
+Thin CLI wrapper around `pipeline_quota_gate` (from `pipeline-lib.sh`) for callers that are not sourcing the library directly (orchestrator skill, debug skill, ad-hoc shell).
+
+**Usage:**
+
+```bash
+pipeline-quota-gate-cli --run-id <id> --tier <routine|feature|security> \
+                        --boundary <label> [--task-id <id>] \
+                        [--json] [--simple-output]
+```
+
+**Flags:**
+
+| Flag              | Description                                            |
+| ----------------- | ------------------------------------------------------ |
+| `--run-id`        | Run identifier                                         |
+| `--tier`          | Risk tier: `routine`, `feature`, or `security`         |
+| `--boundary`      | Label for the quota-check boundary (e.g., `task-001`)  |
+| `--task-id`       | Optional task identifier (passed through to gate)      |
+| `--json`          | Emit JSON on stdout (sets `FACTORY_JSON=1`)            |
+| `--simple-output` | Force human-readable mode (overrides `FACTORY_JSON=1`) |
+
+**Exit codes** mirror `pipeline_quota_gate`: `0` = proceed, `2` = end_gracefully, `3` = wait_retry.
+
+**Stdout:** a single JSON line `{action, rc, run_id, tier, boundary, task_id}`.
+
 ---
 
 ## Completion
@@ -1580,6 +1607,70 @@ Configure as `statusLine.command` in `~/.claude/settings.json`:
 - Fails silently on cache write errors to never break statusline output
 - The statusline runs in the user's shell environment, NOT in the plugin command runtime, so `CLAUDE_PLUGIN_DATA` is not set automatically. `pipeline-ensure-autonomy` bakes `CLAUDE_PLUGIN_DATA` into the merged-settings `env` block; Claude Code loads that env when the session is launched with `--settings`, which is how both the wrapper and `pipeline-quota-check` see a consistent path. If the env var is unset, the wrapper silently skips its cache write (no guessed path), and `pipeline-quota-check` errors out — a missing env means the session wasn't launched via the pipeline's `--settings` flag.
 - Required for `pipeline-quota-check` to function
+
+---
+
+## Human Gate
+
+### pipeline-human-gate
+
+Deterministic gate between pipeline stages. Compares `humanReviewLevel` against a per-stage threshold and either proceeds or pauses the run awaiting human action.
+
+**Usage:**
+
+```bash
+pipeline-human-gate <run-id> <stage>
+```
+
+`<stage>` must be one of: `spec`, `pre-execute`, `post-execute`, `pre-merge`.
+
+**Stage thresholds** (gate trips when `humanReviewLevel >= threshold`):
+
+| Stage          | Threshold | Meaning                            |
+| -------------- | --------- | ---------------------------------- |
+| `pre-merge`    | 1         | Default level 1 gate — PR approval |
+| `post-execute` | 2         | Review checkpoint                  |
+| `spec`         | 3         | Spec approval                      |
+| `pre-execute`  | 4         | Full per-task supervision          |
+
+**Exit codes:**
+
+| Code | Meaning                                                              |
+| ---- | -------------------------------------------------------------------- |
+| 0    | Gate passed — proceed                                                |
+| 42   | Gate tripped — run marked `awaiting_human`, GH comment posted        |
+| 1    | Argument error or state-write failure (gate refused to mark tripped) |
+
+When the gate trips (rc=42) the caller (`pipeline-run-task` ship stage) returns exit 20 to the orchestrator, which stops the run. Resume via `/factory:run resume`.
+
+---
+
+## Scoring
+
+### pipeline-score
+
+Score a pipeline run against the expected-steps checklist.
+
+**Usage:**
+
+```bash
+pipeline-score --run <run-id> [--format json|table] [--no-gh] [--no-log]
+```
+
+**Flags:**
+
+| Flag       | Description                                                    |
+| ---------- | -------------------------------------------------------------- |
+| `--run`    | Run identifier (required)                                      |
+| `--format` | Output format: `json` (default) or `table` (terminal-friendly) |
+| `--no-gh`  | Skip GitHub PR/issue lookups                                   |
+| `--no-log` | Do not append result to `${CLAUDE_PLUGIN_DATA}/scores.jsonl`   |
+
+Sources step definitions from `pipeline-score-steps.sh` and metrics from `$run_dir/metrics.jsonl`.
+
+### pipeline-score-steps.sh
+
+Sourced library (not a standalone script) that defines the expected-steps checklist used by `pipeline-score`. Contains the step table, scoring weights, and per-step evaluation functions. Not intended to be invoked directly.
 
 ---
 
