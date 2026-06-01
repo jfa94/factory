@@ -416,6 +416,7 @@ pipeline-branch worktree-remove <worktree-path>
 pipeline-branch exists <branch-name>
 pipeline-branch naming <task-id> <issue-number>
 pipeline-branch task-commit <task-id> --worktree <path> [--message <msg>]
+pipeline-branch task-pr-title <task-id> [--run-id <run-id>]
 ```
 
 **Actions:**
@@ -430,6 +431,7 @@ pipeline-branch task-commit <task-id> --worktree <path> [--message <msg>]
 | `exists`          | Check if branch exists (local or remote)               |
 | `naming`          | Generate branch name from task-id and issue number     |
 | `task-commit`     | Finalize task changes in worktree                      |
+| `task-pr-title`   | Emit the default PR title for a task (commit subject)  |
 
 **task-commit flags:**
 
@@ -1128,6 +1130,55 @@ pipeline-mutation-gate <run-id> <task-id> <worktree>
   "scope": ["src/foo.ts"]
 }
 ```
+
+---
+
+### pipeline-holdout-validate
+
+Layer-4 holdout validation gate. Verifies the implementation against a subset of acceptance criteria withheld from the executor, checked by an independent reviewer to detect overfitting.
+
+**Usage:**
+
+```bash
+pipeline-holdout-validate prompt <run-id> <task-id> [--worktree <path>]
+pipeline-holdout-validate check <run-id> <task-id> <reviewer-output-file>
+```
+
+**Actions:**
+
+| Action   | Description                                                                                                                                                                         |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prompt` | Read the holdout file (written by `pipeline-build-prompt --holdout`) and emit a criterion-by-criterion reviewer prompt on stdout.                                                   |
+| `check`  | Parse the reviewer output, compute the pass rate, and compare against `quality.holdoutPassRate` (default 80). Always emits a summary JSON object on stdout regardless of exit code. |
+
+**`check` output:**
+
+```json
+{
+  "run_id": "...",
+  "task_id": "...",
+  "status": "pass",
+  "satisfied": 4,
+  "withheld": 5,
+  "pass_pct": 80,
+  "threshold": 80,
+  "criteria": [{ "criterion": "...", "satisfied": true, "evidence": "..." }]
+}
+```
+
+**Exit codes:**
+
+| Code | Meaning                                           |
+| ---- | ------------------------------------------------- |
+| 0    | Gate passed (`pass_pct >= threshold`)             |
+| 1    | Gate failed (`pass_pct < threshold`)              |
+| 2    | Input/parse error (missing or empty holdout file) |
+
+**Configuration:**
+
+| Setting                   | Default | Description                                                 |
+| ------------------------- | ------- | ----------------------------------------------------------- |
+| `quality.holdoutPassRate` | 80      | Minimum percent of withheld criteria that must be satisfied |
 
 ---
 
