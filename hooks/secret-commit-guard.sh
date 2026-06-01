@@ -151,6 +151,18 @@ commit_dir="$PWD"
 commit_c=$(printf '%s' "$command" | grep -oE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $NF}' || true)
 if [[ -n "$commit_c" ]]; then
   commit_dir="$commit_c"
+else
+  # No explicit `git -C <dir>`: a leading `cd <dir> && git …` / `pushd <dir>; git …`
+  # changes the repo the op runs in. Adopt the last static cd/pushd target (last cd wins for cwd) so we
+  # scan the RIGHT repo. We only handle a single literal path token; anything we
+  # cannot resolve (cd with no arg, command substitution) falls through to $PWD
+  # and is then caught fail-closed by the rev-parse check below.
+  cd_target=$(printf '%s' "$command" \
+    | grep -oE '(^|[;&|][[:space:]]*)(cd|pushd)[[:space:]]+[^[:space:];&|]+' \
+    | tail -1 | awk '{print $NF}' || true)
+  if [[ -n "$cd_target" ]]; then
+    commit_dir="$cd_target"
+  fi
 fi
 
 # If the dir isn't actually a git repo we cannot scan for secrets. A real

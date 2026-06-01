@@ -3061,6 +3061,52 @@ _t3_run "xai negative" "xai""-short" 0
 
 # ============================================================
 echo ""
+echo "=== T4: secret-commit-guard scans cd/pushd target, not \$PWD ==="
+
+# `cd <repo> && git commit` must scan <repo>, not $PWD. Stage a fake AWS key in
+# a throwaway repo; the guard must detect it (exit 2) even though the hook runs
+# with $PWD elsewhere (we run from /tmp).
+_cd_repo=$(mktemp -d)
+git -C "$_cd_repo" init -q
+git -C "$_cd_repo" -c user.email=t@t -c user.name=t commit --allow-empty -m init -q
+_cd_key="AKIA""I44QH8DHBEXAMPLE"
+printf 'aws_key=%s\n' "$_cd_key" > "$_cd_repo/creds.txt"
+git -C "$_cd_repo" add creds.txt
+out=$(printf '%s' "{\"tool_input\":{\"command\":\"cd $_cd_repo && git commit -m wip\"}}" \
+  | (cd /tmp && bash "$HOOKS_DIR/secret-commit-guard.sh") 2>&1; echo "EXIT:$?")
+assert_eq "cd <repo> && git commit scans the cd target (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "cd-target scan block reason=secret_detected" "secret_detected" "$out"
+
+# pushd variant: `pushd <repo>; git commit` must also adopt the pushd target.
+_pushd_repo=$(mktemp -d)
+git -C "$_pushd_repo" init -q
+git -C "$_pushd_repo" -c user.email=t@t -c user.name=t commit --allow-empty -m init -q
+printf 'aws_key=%s\n' "$_cd_key" > "$_pushd_repo/creds.txt"
+git -C "$_pushd_repo" add creds.txt
+out=$(printf '%s' "{\"tool_input\":{\"command\":\"pushd $_pushd_repo; git commit -m wip\"}}" \
+  | (cd /tmp && bash "$HOOKS_DIR/secret-commit-guard.sh") 2>&1; echo "EXIT:$?")
+assert_eq "pushd <repo>; git commit scans the pushd target (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "pushd-target scan block reason=secret_detected" "secret_detected" "$out"
+
+rm -rf "$_cd_repo" "$_pushd_repo"
+
+# multi-cd: last cd wins — scanner must adopt the LAST cd target, not the first
+_multi_repo=$(mktemp -d)
+git -C "$_multi_repo" init -q
+git -C "$_multi_repo" -c user.email=t@t -c user.name=t commit --allow-empty -m init -q
+printf 'aws_key=%s\n' "$_cd_key" > "$_multi_repo/creds.txt"
+git -C "$_multi_repo" add creds.txt
+_clean_repo=$(mktemp -d)   # clean repo — scanning this (first cd) would be wrong
+git -C "$_clean_repo" init -q
+git -C "$_clean_repo" -c user.email=t@t -c user.name=t commit --allow-empty -m init -q
+out=$(printf '%s' "{\"tool_input\":{\"command\":\"cd $_clean_repo && cd $_multi_repo && git commit -m wip\"}}" \
+  | (cd /tmp && bash "$HOOKS_DIR/secret-commit-guard.sh") 2>&1; echo "EXIT:$?")
+assert_eq "multi-cd: last cd target is scanned (exit 2)" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+assert_contains "multi-cd: block reason=secret_detected" "secret_detected" "$out"
+rm -rf "$_multi_repo" "$_clean_repo"
+
+# ============================================================
+echo ""
 echo "=== All hook scripts are executable ==="
 
 assert_eq "branch-protection executable" "true" "$([[ -x "$HOOKS_DIR/branch-protection.sh" ]] && echo true || echo false)"
