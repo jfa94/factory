@@ -109,7 +109,7 @@ Use Codex adversarial review when available, fall back to Claude Code.
 | Type     | string   |
 | Default  | `sonnet` |
 
-Claude model passed to every reviewer spawn manifest in `bin/pipeline-run-task` (`implementation-reviewer`, `quality-reviewer`, `security-reviewer`, `architecture-reviewer`, holdout-reviewer). Also threaded into `task-executor` re-spawns (review-fix loop, CI fix) and `scribe` so the entire post-execution surface runs on the same model. Set under `package.json.factory.review.model`. See `docs/guides/configuration.md` for the operator-facing description.
+Claude model passed to every reviewer spawn manifest in `bin/pipeline-run-task` (`implementation-reviewer`, `quality-reviewer`, `security-reviewer`, `architecture-reviewer`, holdout-reviewer). Also threaded into `task-executor` re-spawns (review-fix loop, CI fix) and `scribe` so the entire post-execution surface runs on the same model. Read from `.review.model` in `config.json` (via `read_config`). See `docs/guides/configuration.md` for the operator-facing description.
 
 ### review.maxTurnsQuick
 
@@ -154,7 +154,7 @@ Claude model passed to every reviewer spawn manifest in `bin/pipeline-run-task` 
 | Type     | string  |
 | Default  | (empty) |
 
-Model passed to `codex exec` as `-c model="..."`. Read from `package.json.factory.codex.model`; overridden by the `FACTORY_CODEX_MODEL` env var when set. Empty/unset leaves codex to resolve its default from `~/.codex/config.toml`. Charset-validated against `^[a-zA-Z0-9._-]+$`; invalid values exit `pipeline-codex-review` with rc=1. See `docs/guides/configuration.md#codexmodel--factory_codex_model` for ChatGPT-account installation guidance.
+Model passed to `codex exec` as `-c model="..."`. Read from `.codex.model` in `config.json` (via `read_config`); overridden by the `FACTORY_CODEX_MODEL` env var when set. Empty/unset leaves codex to resolve its default from `~/.codex/config.toml`. Charset-validated against `^[a-zA-Z0-9._-]+$`; invalid values exit `pipeline-codex-review` with rc=1. See `docs/guides/configuration.md#codexmodel--factory_codex_model` for ChatGPT-account installation guidance.
 
 ---
 

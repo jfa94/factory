@@ -260,7 +260,7 @@ When `_stage_postexec` and `_stage_postreview` reach a terminal failure path (e.
 
 **Configurable reviewer model and turn limits:**
 
-The wrapper reads `review.model`, `review.maxTurnsQuick`, `review.maxTurnsDeep`, `testWriter.maxTurns`, and `scribe.maxTurns` from `package.json.factory` via `read_config` and threads them into every reviewer / test-writer / scribe spawn manifest in this script. Defaults reproduce the previously-hardcoded values (`sonnet`, `25`, `30`, `40`, `60`). See `docs/guides/configuration.md` for the operator-facing description.
+The wrapper reads `review.model`, `review.maxTurnsQuick`, `review.maxTurnsDeep`, `testWriter.maxTurns`, and `scribe.maxTurns` from `config.json` via `read_config` and threads them into every reviewer / test-writer / scribe spawn manifest in this script. Defaults reproduce the previously-hardcoded values (`sonnet`, `25`, `30`, `40`, `60`). See `docs/guides/configuration.md` for the operator-facing description.
 
 **Test-writer → executor branch handoff (`_stage_preexec_tests`, added 0.10.2):**
 
