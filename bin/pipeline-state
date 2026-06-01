@@ -60,10 +60,21 @@ _KNOWN_TASK_FIELDS=(
 # non-strings (objects/null) and empty strings pass through (clears allowed).
 _validate_task_field_value() {
   local field="$1" raw="$2" val
-  val=$(printf '%s' "$raw" | jq -r 'if type=="string" then . else empty end' 2>/dev/null) || return 0
+  # Compute the string value task-write will actually persist, mirroring the
+  # write branch below (the `jq empty` check at the setpath): a valid-JSON
+  # value is written as-is (enum-check it only if it is a JSON string); a
+  # value that is NOT valid JSON is written verbatim as a string via --arg, so
+  # the effective value is $raw itself and must be enum-checked. Without this,
+  # an unquoted out-of-domain value (e.g. `status bogus`) bypasses the guard.
+  if printf '%s' "$raw" | jq empty 2>/dev/null; then
+    val=$(printf '%s' "$raw" | jq -r 'if type=="string" then . else empty end' 2>/dev/null)
+  else
+    val="$raw"
+  fi
   [[ -z "$val" ]] && return 0
   case "$field" in
     status)
+      # keep in sync with the task-status enum (line ~524)
       case "$val" in
         pending|executing|reviewing|done|failed|interrupted|needs_human_review|ci_fixing) return 0 ;;
         *) log_error "task-write: invalid status value: $val"; return 1 ;;
@@ -512,6 +523,7 @@ case "$action" in
     f=$(_state_file "$run_id")
 
     # Validate status before acquiring lock to fail fast on bad input.
+    # keep in sync with the task-write enum guard (_validate_task_field_value, line ~66)
     case "$status" in
       pending|executing|reviewing|done|failed|interrupted|needs_human_review|ci_fixing) ;;
       *) log_error "invalid task status: $status"; exit 1 ;;

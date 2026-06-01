@@ -1591,6 +1591,20 @@ assert_exit "D1: invalid risk_tier rejected (security fail-open guard)" 1 \
 assert_exit "D1: invalid holdout rejected" 1 \
   pipeline-state task-write "$D1_RID" t1 quality_gates.holdout '"maybe"'
 
+# Unquoted / non-JSON out-of-domain values must ALSO be rejected. task-write
+# persists a non-JSON value verbatim as a string via --arg, so the guard must
+# enum-check the raw value itself — not just JSON-quoted strings. These would
+# pass (fail-open) against the pre-fix guard whose `jq -r ... || return 0`
+# swallowed the parse failure.
+assert_exit "D1: invalid unquoted status rejected" 1 \
+  pipeline-state task-write "$D1_RID" t1 status bogus
+assert_exit "D1: invalid unquoted risk_tier rejected (fail-open guard)" 1 \
+  pipeline-state task-write "$D1_RID" t1 risk_tier wizard
+# A bare in-enum token must still be accepted (not over-rejected): the effective
+# persisted string `pending` is in the status enum.
+assert_exit "D1: valid unquoted status accepted" 0 \
+  pipeline-state task-write "$D1_RID" t1 status pending
+
 # Non-string values and clears must pass through unchanged (objects/null/empty).
 assert_exit "D1: non-string status passes through (object write)" 0 \
   pipeline-state task-write "$D1_RID" t1 status 'null'
