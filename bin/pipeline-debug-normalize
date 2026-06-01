@@ -62,13 +62,11 @@ threshold_set() {
 }
 allowed=$(threshold_set "$severity")
 
-blocking=$(jq --arg allowed "$allowed" '
-  [.findings[] | select((.severity // "medium") as $s
-                        | ($allowed | split(" ")) | index($s))] | length
-' "$review_file")
-below=$(jq --arg allowed "$allowed" '
-  [.findings[] | select(((.severity // "medium") as $s
-                        | ($allowed | split(" ")) | index($s)) | not)] | length
+read -r blocking below < <(jq -r --arg allowed "$allowed" '
+  (.findings // []) as $f |
+  ($allowed | split(" ")) as $set |
+  ($f | map(select((.severity // "medium") as $s | ($set | index($s)) != null)) | length) as $b |
+  "\($b) \(($f | length) - $b)"
 ' "$review_file")
 verdict=$(jq -r '.verdict // "UNKNOWN"' "$review_file")
 
