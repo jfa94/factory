@@ -48,25 +48,19 @@ if [[ "$detection_method" == "unavailable" ]]; then
   exit 0
 fi
 
-# Standard review caps (from config or defaults)
-routine_cap=$(read_config '.review.routineRounds' '2')
-feature_cap=$(read_config '.review.featureRounds' '4')
-security_cap=$(read_config '.review.securityRounds' '6')
-
-# Get review cap for current tier
-_review_cap() {
-  case "$tier" in
-    routine)  echo "$routine_cap" ;;
-    feature)  echo "$feature_cap" ;;
-    security) echo "$security_cap" ;;
-  esac
-}
+# Resolve review cap for this tier (config or per-tier default)
+case "$tier" in
+  routine)  _cap_default=2 ;;
+  feature)  _cap_default=4 ;;
+  security) _cap_default=6 ;;
+esac
+cap=$(read_config ".review.${tier}Rounds" "$_cap_default")
+unset _cap_default
 
 # --- Routing logic ---
 
 # Both within limits → proceed with Anthropic
 if [[ "$five_hour_over" != "true" ]] && [[ "$seven_day_over" != "true" ]]; then
-  cap=$(_review_cap)
   jq -n \
     --arg action "proceed" \
     --arg provider "anthropic" \
@@ -89,7 +83,6 @@ fi
 
 # 7d over + bypass active + 5h within → proceed (operator accepted the risk)
 if [[ "$seven_day_over" == "true" && "$allow_7d_over" == "1" && "$five_hour_over" != "true" ]]; then
-  cap=$(_review_cap)
   jq -n \
     --arg action "proceed" \
     --arg provider "anthropic" \
