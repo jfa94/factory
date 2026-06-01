@@ -324,6 +324,21 @@ current_run_id() {
   basename "$dir"
 }
 
+# Persist a gate result to state, but only when the run's state.json exists
+# (test fixtures legitimately run a gate without one). Returns nonzero on write
+# failure so the caller chooses fail-hard (`|| exit 1`) or fail-soft (`|| true`).
+# Usage: record_gate_result <run_id> <task_id> <field> <json>
+record_gate_result() {
+  local run_id="$1" task_id="$2" field="$3" result="$4"
+  local run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
+  [[ -f "$run_dir/state.json" ]] || return 0
+  if ! pipeline-state task-write "$run_id" "$task_id" "$field" "$result" >/dev/null; then
+    log_error "failed to record $field result for $task_id"
+    return 1
+  fi
+  return 0
+}
+
 # --- Observability ---
 
 # Append a structured JSONL metric line to the current run's metrics.jsonl.

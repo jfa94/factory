@@ -51,12 +51,7 @@ _emit() {
     --argjson scope "$scope_json" \
     '{ok:$ok, reason:$reason, score:$score, target:$target, scope:$scope}')
 
-  if [[ -f "$run_dir/state.json" ]]; then
-    if ! pipeline-state task-write "$run_id" "$task_id" mutation_gate "$payload" >/dev/null; then
-      log_error "failed to record mutation_gate result for $task_id"
-      exit 1
-    fi
-  fi
+  record_gate_result "$run_id" "$task_id" mutation_gate "$payload" || exit 1
 
   printf '%s\n' "$payload"
   log_metric "task.gate.mutation" "task_id=\"$task_id\"" \

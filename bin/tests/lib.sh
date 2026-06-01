@@ -122,6 +122,32 @@ assert_eq "_factory_ensure_plugin_bin_path: rc=0" "0" "$rc"
 assert_eq "_factory_ensure_plugin_bin_path: pipeline-state resolves" \
   "${BIN_DIR}/pipeline-state" "$out"
 
+# --- record_gate_result ---------------------------------------------------
+# record_gate_result: writes only when state.json exists; returns nonzero on
+# write failure so the caller decides whether to exit.
+
+# Save any CLAUDE_PLUGIN_DATA the sourced lib may have set.
+_rg_old="${CLAUDE_PLUGIN_DATA:-}"
+_rg_dir=$(mktemp -d); export CLAUDE_PLUGIN_DATA="$_rg_dir"
+
+# 7. No state.json → no-op, returns 0.
+mkdir -p "$_rg_dir/runs/r1"
+set +e; record_gate_result r1 t1 quality_gate '{"ok":true}'; _rg_rc=$?; set -e
+assert_eq "record_gate_result no-state → rc 0" "0" "$_rg_rc"
+
+# 8. With state.json, a stubbed failing pipeline-state → rc 1.
+printf '{"tasks":{"t1":{}}}' > "$_rg_dir/runs/r1/state.json"
+_rg_stub=$(mktemp -d)
+printf '#!/usr/bin/env bash\nexit 1\n' > "$_rg_stub/pipeline-state"
+chmod +x "$_rg_stub/pipeline-state"
+set +e; PATH="$_rg_stub:$PATH" record_gate_result r1 t1 quality_gate '{"ok":true}'; _rg_rc=$?; set -e
+assert_eq "record_gate_result write-failure → rc 1" "1" "$_rg_rc"
+
+rm -rf "$_rg_dir" "$_rg_stub"
+# Restore CLAUDE_PLUGIN_DATA.
+export CLAUDE_PLUGIN_DATA="$_rg_old"
+unset _rg_old _rg_dir _rg_stub _rg_rc
+
 # --- summary --------------------------------------------------------------
 
 echo

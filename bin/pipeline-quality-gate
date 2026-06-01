@@ -30,13 +30,7 @@ cd "$worktree"
 if [[ ! -f package.json ]]; then
   log_info "no package.json in $worktree — quality gate not applicable; recording skipped"
   result='{"ok":true,"skipped":true,"reason":"no-package-json","checks":[]}'
-  run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
-  if [[ -f "$run_dir/state.json" ]]; then
-    if ! pipeline-state task-write "$run_id" "$task_id" quality_gate "$result" >/dev/null; then
-      log_error "failed to record quality_gate result for $task_id (state.json present but write failed)"
-      exit 1
-    fi
-  fi
+  record_gate_result "$run_id" "$task_id" quality_gate "$result" || exit 1
   printf '%s\n' "$result"
   exit 2  # rc=2: legitimately skipped (not applicable), distinct from rc=1 (failure)
 fi
@@ -50,11 +44,7 @@ pkg_mgr=$(detect_pkg_manager "$worktree")
 _pkg_jq_err=$(jq -e . package.json 2>&1 >/dev/null) || {
   log_error "package.json could not be parsed by jq: ${_pkg_jq_err//$'\n'/ } — refusing to fall back to default quality command list (fail-closed)"
   result=$(jq -nc --arg err "$_pkg_jq_err" '{ok:false, error:"package_json_parse_error", detail:$err, checks:[]}')
-  run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
-  if [[ -f "$run_dir/state.json" ]]; then
-    pipeline-state task-write "$run_id" "$task_id" quality_gate "$result" >/dev/null || \
-      log_error "could not record quality_gate parse-error result for $task_id"
-  fi
+  record_gate_result "$run_id" "$task_id" quality_gate "$result" || true
   printf '%s\n' "$result"
   exit 1
 }
@@ -73,13 +63,7 @@ if [[ -z "$commands" ]]; then
   if [[ -z "$commands" ]]; then
     log_info "no factory.quality override and no recognized scripts in $worktree — skipping"
     result='{"ok":true,"skipped":true,"reason":"no-quality-scripts","checks":[]}'
-    run_dir="${CLAUDE_PLUGIN_DATA}/runs/${run_id}"
-    if [[ -f "$run_dir/state.json" ]]; then
-      if ! pipeline-state task-write "$run_id" "$task_id" quality_gate "$result" >/dev/null; then
-        log_error "failed to record quality_gate result for $task_id (state.json present but write failed)"
-        exit 1
-      fi
-    fi
+    record_gate_result "$run_id" "$task_id" quality_gate "$result" || exit 1
     printf '%s\n' "$result"
     exit 2  # rc=2: legitimately skipped (not applicable), distinct from rc=1 (failure)
   fi
@@ -141,12 +125,7 @@ summary=$(jq -n --argjson ok "$ok_json" --argjson checks "$results_json" \
 # with what actually ran. Test fixtures that set up a run dir without a
 # state.json (e.g. integration tests for this script in isolation) are the
 # only legitimate skip path.
-if [[ -f "$run_dir/state.json" ]]; then
-  if ! pipeline-state task-write "$run_id" "$task_id" quality_gate "$summary" >/dev/null; then
-    log_error "failed to record quality_gate result for $task_id"
-    exit 1
-  fi
-fi
+record_gate_result "$run_id" "$task_id" quality_gate "$summary" || exit 1
 
 printf '%s\n' "$summary"
 
