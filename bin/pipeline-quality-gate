@@ -56,7 +56,6 @@ unset _pkg_jq_err
 # without any quality scripts is a real config, not a failure.
 commands=$(jq -r '.["factory"].quality // empty | .[]?' package.json)
 if [[ -z "$commands" ]]; then
-  commands=""
   jq -e '.scripts.lint' package.json >/dev/null 2>&1 && commands+="lint"$'\n'
   jq -e '.scripts.typecheck // .scripts.tsc' package.json >/dev/null 2>&1 && commands+="typecheck"$'\n'
   jq -e '.scripts."test:coverage" // .scripts.test' package.json >/dev/null 2>&1 && commands+="test:coverage"$'\n'
