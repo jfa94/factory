@@ -113,10 +113,9 @@ Conversational settings editor.
 **Behavior:**
 
 1. Load current config from `${CLAUDE_PLUGIN_DATA}/config.json`
-2. Load defaults from `plugin.json`
+2. Merge with built-in defaults (compiled as `read_config '<key>' '<default>'` fallbacks in the bin scripts; canonical reference is `docs/reference/configuration.md`)
 3. Present settings grouped by category
 4. Validate and apply changes
-5. Validate changes against schema
 
 ---
 

@@ -1676,6 +1676,28 @@ Sourced library (not a standalone script) that defines the expected-steps checkl
 
 ## Rescue Scripts
 
+### pipeline-rescue-lib.sh
+
+Shared library sourced by `pipeline-rescue-scan` and `pipeline-rescue-apply`. Not executed directly.
+
+**Source pattern:**
+
+```bash
+source "$(dirname "$0")/pipeline-rescue-lib.sh"
+```
+
+**Functions:**
+
+| Function                    | Description                                                                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `rescue_now_iso`            | Emit current UTC timestamp in ISO-8601 format                                                                                      |
+| `rescue_issue_for_run`      | Return the parent PRD issue number for a run ID (from state.json)                                                                  |
+| `rescue_pr_belongs_to_run`  | Check whether a PR title belongs to the given issue number (return 0/1)                                                            |
+| `rescue_task_id_from_title` | Parse `task_id` out of a standardized PR title; empty on no match                                                                  |
+| `rescue_audit`              | Append a structured audit entry to `.rescue.applied_actions[]` in run state (refuses to overwrite history on a state-read failure) |
+
+---
+
 ### pipeline-rescue-scan
 
 Scan a pipeline run for rescue-actionable issues.

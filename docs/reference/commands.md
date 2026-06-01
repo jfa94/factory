@@ -117,7 +117,7 @@ None.
    - `.github/workflows/quality-gate.yml` (CI template)
    - `.stryker.config.json`, `.dependency-cruiser.cjs` (quality gate configs)
 3. Apply surgical workflow migrations for post-release fixes (names any patched files).
-4. Check optional tool dependencies (TruffleHog, Stryker, dependency-cruiser); prompt before installing.
+4. Evaluate tool dependencies: prompt before installing the optional **TruffleHog** secret scanner (never auto-installed); verify the hard deps `gh` and `jq` (error out if missing). Stryker and dependency-cruiser are not installed here — their configs are written as files in step 2.
 5. Report newly created files vs already-present files, and any migrations applied.
 
 ---

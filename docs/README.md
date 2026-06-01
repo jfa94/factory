@@ -10,7 +10,7 @@ The plugin automates the end-to-end software development workflow: reading a req
 
 ## Design Philosophy
 
-**Deterministic-first architecture.** The plugin maintains a 5.5:1 ratio of deterministic components to non-deterministic agents (55 deterministic: 42 non-test bin scripts + 13 hooks; 10 agents). Agent instructions are followed approximately 70% of the time; hooks and scripts enforce at 100%. This hybrid approach uses agents for judgment tasks (code generation, review) while delegating all validation, state management, classification, and parsing to shell scripts.
+**Deterministic-first architecture.** The plugin maintains a ≈5.4:1 ratio of deterministic components to non-deterministic agents (54 deterministic: 41 pipeline-\* bin scripts + 13 hooks; 10 agents). Agent instructions are followed approximately 70% of the time; hooks and scripts enforce at 100%. This hybrid approach uses agents for judgment tasks (code generation, review) while delegating all validation, state management, classification, and parsing to shell scripts.
 
 **Quality over speed.** Every task output passes through a 7-layer quality gate stack (static analysis, security gate, TDD gate, tests, coverage regression, holdout validation, mutation testing) and multi-round adversarial code review before reaching a pull request.
 

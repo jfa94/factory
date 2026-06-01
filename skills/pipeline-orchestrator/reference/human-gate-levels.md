@@ -24,7 +24,7 @@ Controlled by `humanReviewLevel` in plugin config (default: 0). Consulted by `pi
 | ---------------- | ------------------------------------------------ | ------------------------------- | --------------- |
 | spec             | After spec-generator + spec-reviewer return      | Orchestrator (S6 in spec phase) | 3, 4            |
 | pre-execute      | Before each task-executor spawn                  | Wrapper preflight (future)      | 4               |
-| post-execute     | After task-executor returns, before quality gate | Wrapper postexec (future)       | 4               |
+| post-execute     | After task-executor returns, before quality gate | Wrapper postexec (future)       | 2, 3, 4         |
 | pre-merge / ship | Before `gh pr create`                            | Wrapper ship                    | 1, 2, 3, 4      |
 
 The wrapper owns all per-task gates. The orchestrator only calls `pipeline-human-gate "$run_id" spec` (after spec generation). Every other gate is internal.

@@ -4,7 +4,7 @@ This document explains key architectural choices and their rationale.
 
 ## Decision 1: Deterministic-First Architecture
 
-**Choice:** Approximately 5.5:1 ratio of deterministic components (bin scripts, hooks) to non-deterministic (agents). If a step CAN be a script, it MUST be a script.
+**Choice:** Approximately 5.4:1 ratio of deterministic components (bin scripts, hooks) to non-deterministic (agents). If a step CAN be a script, it MUST be a script.
 
 **Why:**
 
@@ -12,7 +12,7 @@ This document explains key architectural choices and their rationale.
 - Hooks and scripts enforce at 100%
 - Concrete operational rules outperform abstract directives by 123% (research)
 
-**Result:** 41 bin scripts, 10 plugin agents, 13 hooks. Scripts handle validation, state, classification, parsing. Agents handle code generation, review, spec creation.
+**Result:** 41 pipeline-\* bin scripts, 10 plugin agents, 13 hooks. Scripts handle validation, state, classification, parsing. Agents handle code generation, review, spec creation.
 
 ---
 
