@@ -1004,8 +1004,9 @@ _emit_postexec_manifest() {
   local wt="$1"
   _record_active_task_for_stop_hook "$run_id" "$task_id" "$wt"
   local detect provider
-  detect=$(pipeline-detect-reviewer)
-  provider=$(printf '%s' "$detect" | jq -r '.reviewer')
+  detect=$(pipeline-detect-reviewer) || log_warn "detect-reviewer exited non-zero — defaulting provider to agent"
+  provider=$(printf '%s' "$detect" | jq -r '.reviewer // "agent"' 2>/dev/null)
+  [[ -z "$provider" || "$provider" == "null" ]] && provider="agent"
   log_metric "task.review.provider" "task_id=\"$task_id\"" "reviewer=\"$provider\""
 
   local tier
