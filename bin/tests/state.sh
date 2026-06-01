@@ -1561,6 +1561,44 @@ for _f in test_writer_branch reviewer_status implementation_reviewer_status \
 done
 
 echo ""
+echo "=== D1: task-write rejects out-of-enum values ==="
+
+# The generic task-write path must enum-validate the four security-sensitive
+# field paths (status / stage / risk_tier / quality_gates.holdout) so no
+# mutation route can write an out-of-domain value (e.g. a risk_tier that
+# silently skips the security review — fail-open).
+D1_RID="run-d1-$$"
+pipeline-init "$D1_RID" --mode task --force >/dev/null 2>&1
+pipeline-state task-init "$D1_RID" t1 '{}' >/dev/null 2>&1
+
+# Valid values on each guarded path must still succeed.
+assert_exit "D1: valid stage accepted" 0 \
+  pipeline-state task-write "$D1_RID" t1 stage '"ship_done"'
+assert_exit "D1: valid status accepted" 0 \
+  pipeline-state task-write "$D1_RID" t1 status '"executing"'
+assert_exit "D1: valid risk_tier accepted" 0 \
+  pipeline-state task-write "$D1_RID" t1 risk_tier '"security"'
+assert_exit "D1: valid holdout accepted" 0 \
+  pipeline-state task-write "$D1_RID" t1 quality_gates.holdout '"pass"'
+
+# Out-of-enum values on each guarded path must be rejected (exit non-zero).
+assert_exit "D1: invalid status rejected" 1 \
+  pipeline-state task-write "$D1_RID" t1 status '"bogus"'
+assert_exit "D1: invalid stage rejected" 1 \
+  pipeline-state task-write "$D1_RID" t1 stage '"bogus_stage"'
+assert_exit "D1: invalid risk_tier rejected (security fail-open guard)" 1 \
+  pipeline-state task-write "$D1_RID" t1 risk_tier '"wizard"'
+assert_exit "D1: invalid holdout rejected" 1 \
+  pipeline-state task-write "$D1_RID" t1 quality_gates.holdout '"maybe"'
+
+# Non-string values and clears must pass through unchanged (objects/null/empty).
+assert_exit "D1: non-string status passes through (object write)" 0 \
+  pipeline-state task-write "$D1_RID" t1 status 'null'
+# An unguarded field with an arbitrary value is untouched by the enum guard.
+assert_exit "D1: unguarded field bypasses enum guard" 0 \
+  pipeline-state task-write "$D1_RID" t1 failure_reason '"anything goes here"'
+
+echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
 echo "================================"

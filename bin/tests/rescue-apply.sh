@@ -74,7 +74,10 @@ assert_eq "I-08 marks failed" "failed" "$status"
 
 echo "=== I-06: reset ship stage to ci_fixing ==="
 seed_run
-pipeline-state task-write R1 T1 stage '"ship"' >/dev/null
+# Forge a non-canonical in-flight stage (production writes only ship_done; the
+# rescue scanner reads bare "ship" defensively). Use the generic write path,
+# not enum-guarded task-write (D1), to plant this legacy-shaped state.
+pipeline-state write R1 .tasks.T1.stage '"ship"' >/dev/null
 report3="$CLAUDE_PLUGIN_DATA/report3.json"
 cat > "$report3" <<'JSON'
 {"run_id":"R1","mechanical_issues":[{"id":"I-06","tier":2,"task_id":"T1","description":"ci red"}]}

@@ -53,6 +53,40 @@ _KNOWN_TASK_FIELDS=(
   reviewer_worktree_security_reviewer reviewer_worktree_architecture_reviewer
 )
 
+# Value-enum guard for the generic task-write path. Mirrors the status enum
+# the task-status action enforces, extended to stage / risk_tier / holdout so
+# no mutation route can write an out-of-domain value (e.g. a risk_tier that
+# silently skips security review). Validates only non-empty string values;
+# non-strings (objects/null) and empty strings pass through (clears allowed).
+_validate_task_field_value() {
+  local field="$1" raw="$2" val
+  val=$(printf '%s' "$raw" | jq -r 'if type=="string" then . else empty end' 2>/dev/null) || return 0
+  [[ -z "$val" ]] && return 0
+  case "$field" in
+    status)
+      case "$val" in
+        pending|executing|reviewing|done|failed|interrupted|needs_human_review|ci_fixing) return 0 ;;
+        *) log_error "task-write: invalid status value: $val"; return 1 ;;
+      esac ;;
+    stage)
+      case "$val" in
+        preflight_done|preexec_tests_done|postexec_done|postexec_spawn_pending|postreview_done|postreview_exhausted|postreview_pending_human|ship_done) return 0 ;;
+        *) log_error "task-write: invalid stage value: $val"; return 1 ;;
+      esac ;;
+    risk_tier)
+      case "$val" in
+        routine|feature|security) return 0 ;;
+        *) log_error "task-write: invalid risk_tier value: $val"; return 1 ;;
+      esac ;;
+    quality_gates.holdout)
+      case "$val" in
+        pass|fail|pending|missing-reviewer-output) return 0 ;;
+        *) log_error "task-write: invalid holdout value: $val"; return 1 ;;
+      esac ;;
+    *) return 0 ;;
+  esac
+}
+
 # Per-run advisory lock. Prefers flock(1) when available (Linux, util-linux on
 # macOS); falls back to atomic mkdir + PID-reaper for systems without flock.
 # Serialises concurrent read-modify-write cycles in write and task-status actions.
@@ -289,6 +323,10 @@ case "$action" in
       log_warn "task-write unknown field: $field (known roots: ${_KNOWN_TASK_FIELDS[*]})"
     fi
     unset _known _k
+
+    if ! _validate_task_field_value "$field" "$value"; then
+      exit 1
+    fi
 
     # Build path array ["tasks", $tid, <field segments>] via jq.
     jq_path=$(jq -n --arg tid "$task_id" --arg f "$field" \

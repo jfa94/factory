@@ -777,7 +777,9 @@ rm -f "$STUB_DIR/git"
 # --- 14b: finalize-run — failed task blocks (default strict) → exit 3 -------
 new_run finalize-failed-strict
 pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"failed"' >/dev/null
-pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship"' >/dev/null
+# Non-canonical "ship" stage forged via the generic write path (enum-guarded
+# task-write rejects it — D1; production only writes ship_done).
+pipeline-state write "$RUN_ID" .tasks.alpha-001.stage '"ship"' >/dev/null
 _stub_git_finalize_ok
 set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
 assert_eq "finalize-run failed strict: exit 3" "3" "$RC"
@@ -786,7 +788,9 @@ rm -f "$STUB_DIR/git"
 # --- 14c: finalize-run — needs_human_review blocks (default strict) → exit 3
 new_run finalize-nhr-strict
 pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"needs_human_review"' >/dev/null
-pipeline-state task-write "$RUN_ID" alpha-001 stage '"ship"' >/dev/null
+# Non-canonical "ship" stage forged via the generic write path (enum-guarded
+# task-write rejects it — D1; production only writes ship_done).
+pipeline-state write "$RUN_ID" .tasks.alpha-001.stage '"ship"' >/dev/null
 _stub_git_finalize_ok
 set +e; pipeline-run-task "$RUN_ID" RUN --stage finalize-run >/dev/null 2>&1; RC=$?; set -e
 assert_eq "finalize-run nhr strict: exit 3" "3" "$RC"
@@ -1525,7 +1529,11 @@ assert_eq "no-early-write: stage unchanged from spawn_pending" "postexec_spawn_p
 # Legacy state file with unrecognised stage but terminal status (failed) →
 # preflight short-circuits (exit 0).
 new_run already-past-terminal
-pipeline-state task-write "$RUN_ID" alpha-001 stage '"unrecognized_legacy_stage"' >/dev/null
+# Legacy/forward-compat state: an unknown stage value. Written via the generic
+# `write` path (not enum-guarded task-write, which now rejects out-of-domain
+# stage values — D1) to faithfully simulate a state file produced by an older
+# or newer pipeline version.
+pipeline-state write "$RUN_ID" .tasks.alpha-001.stage '"unrecognized_legacy_stage"' >/dev/null
 pipeline-state write "$RUN_ID" .tasks.alpha-001.status '"failed"' >/dev/null
 set +e; pipeline-run-task "$RUN_ID" alpha-001 --stage preflight >/dev/null 2>&1; RC=$?; set -e
 assert_eq "already-past-terminal: preflight skipped on terminal task" "0" "$RC"
