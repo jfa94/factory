@@ -34,7 +34,7 @@ State management, circuit breakers, DAG traversal, and classification MUST be 10
 
 **Isolation:**
 
-The orchestrator creates a dedicated worktree at `.claude/worktrees/orchestrator-<run_id>/` (Step 6a of `commands/run.md`) and runs all git operations there. The user's primary checkout is never touched. Sub-agents (`spec-generator`, `task-executor`, reviewers, `scribe`) continue to run with `isolation: worktree`.
+The orchestrator creates a dedicated worktree at `.claude/worktrees/orchestrator-<run_id>/` (Step 6 of `skills/pipeline-orchestrator/SKILL.md`) and runs all git operations there. The user's primary checkout is never touched. Sub-agents (`spec-generator`, `task-executor`, reviewers, `scribe`) continue to run with `isolation: worktree`.
 
 **Mitigations:**
 

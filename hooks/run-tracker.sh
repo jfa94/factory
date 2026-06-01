@@ -3,7 +3,7 @@
 # Only logs when an active run exists (${CLAUDE_PLUGIN_DATA}/runs/current).
 #
 # Stdin: JSON with tool name and input
-# Exit: always 0 (never blocks)
+# Exit (hook mode): always 0 (never blocks); --verify mode returns 0/1/2.
 #
 # task_09_01: parallel PostToolUse hooks raced on the seq counter (`wc -l + 1`),
 #   producing duplicate sequence numbers. We now serialize the entire
