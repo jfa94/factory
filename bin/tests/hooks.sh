@@ -2579,6 +2579,20 @@ out=$(printf '%s' '{"tool_input":{"command":"env bash -c \"ls\""}}' \
   | bash "$HOOKS_DIR/pretooluse-pipeline-guards.sh" 2>&1; echo "EXIT:$?")
 assert_eq "env bash -c interactive allowed" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
 
+# Heredoc-fed shells WITH flags between the shell name and << must be denied
+# (nested stdin-fed shell). Pre-fix the regex only allowed whitespace there.
+for _hc in "/bin/sh -s << EOF" "/bin/bash -eu << EOF" "sh -s << EOF" "bash -e <<EOF"; do
+  out=$(printf '%s' "{\"tool_input\":{\"command\":\"$_hc\\necho hi\\nEOF\"}}" \
+    | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+  assert_eq "flag-bearing heredoc shell denied: $_hc" "EXIT:2" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+done
+
+# Over-match guard: a plain commit message containing "<<" prose must NOT be
+# misclassified as a nested shell.
+out=$(printf '%s' '{"tool_input":{"command":"git commit -m \"docs: explain a << b shift\""}}' \
+  | FACTORY_AUTONOMOUS_MODE=1 bash "$HOOKS_DIR/secret-commit-guard.sh" 2>&1; echo "EXIT:$?")
+assert_eq "prose << in commit message not denied as nested shell" "EXIT:0" "$(printf '%s' "$out" | grep -o 'EXIT:[0-9]*')"
+
 # ============================================================
 echo ""
 echo "=== S1: pipeline-guards nested-shell bypass fires on active run without FACTORY_AUTONOMOUS_MODE ==="
@@ -2954,6 +2968,16 @@ _t5_match "stacked X= BASH_ENV"   'X=1 BASH_ENV=/tmp/x.sh git commit'
 _t5_match "stacked multi-var ENV" 'A=1 B=2 SHELLOPTS=xtrace git status'
 # A benign env-var prefix that is NOT a shell-affecting var must still NOT match.
 _t5_no_match "benign FOO= prefix"  'FOO=bar git commit -m x'
+
+# B2: flag-bearing heredoc shells — flags between shell name and << must match.
+# Pre-fix the regex only allowed whitespace; flags like -s/-eu slipped through.
+_t5_match "sh -s heredoc"          'sh -s << EOF'
+_t5_match "/bin/sh -s heredoc"     '/bin/sh -s << EOF'
+_t5_match "bash -eu heredoc"       'bash -eu << EOF'
+_t5_match "/bin/bash -eu heredoc"  '/bin/bash -eu << EOF'
+_t5_match "bash -e heredoc nows"   'bash -e <<EOF'
+# Over-match guard: prose << in a commit message must NOT trip the helper.
+_t5_no_match "prose << in msg"     'git commit -m "explain a << b shift"'
 
 # ============================================================
 echo ""

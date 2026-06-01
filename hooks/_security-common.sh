@@ -23,10 +23,14 @@ _is_nested_shell_or_hook_bypass() {
     return 0
   fi
   # Here-string / heredoc feeding a shell: `bash<<<"..."`, `sh << EOF`,
-  # `/bin/sh << EOF`. The optional `(/[^[:space:]]*/)?` matches an absolute/path
-  # prefix as a whole path component (trailing slash) so `/bin/sh` is caught but
-  # a script file like `evil.sh` is not (its `sh` is preceded by `.`, not `/`).
-  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])(/[^[:space:]]*/)?(bash|sh|zsh)[[:space:]]*\<\< ]]; then
+  # `/bin/sh << EOF`, `/bin/bash -eu << EOF`, `sh -s << EOF`.
+  # The optional `(/[^[:space:]]*/)?` matches an absolute/path prefix as a whole
+  # path component (trailing slash) so `/bin/sh` is caught but a script file like
+  # `evil.sh` is not (its `sh` is preceded by `.`, not `/`).
+  # `([[:space:]]+-[^[:space:]<]+)*` tolerates flag tokens (e.g. -s, -eu) between
+  # the shell name and `<<`; `<` is excluded from the flag char-class so it cannot
+  # consume the `<<` operator itself.
+  if [[ "$cmd" =~ (^|[[:space:]\|\;\&])(/[^[:space:]]*/)?(bash|sh|zsh)([[:space:]]+-[^[:space:]<]+)*[[:space:]]*\<\< ]]; then
     return 0
   fi
   # Pipe whose sink is a shell: `... | bash`, `cat x | sh`, `cat x | /bin/bash`.
