@@ -110,11 +110,7 @@ while IFS= read -r cmd; do
     '. + [{command:$c, status:$s, duration_s:$d, log:$log}]')
 done <<< "$commands"
 
-if [[ "$overall_ok" == "true" ]]; then
-  ok_json=true
-else
-  ok_json=false
-fi
+ok_json="$overall_ok"
 
 summary=$(jq -n --argjson ok "$ok_json" --argjson checks "$results_json" \
   '{ok:$ok, checks:$checks}')
