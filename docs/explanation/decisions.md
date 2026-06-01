@@ -342,6 +342,28 @@ Every narrowing has been tried and produces the same failure mode: the pipeline 
 
 ---
 
+## Decision 19: Full Autonomy — No Sanctioned Human-Escalation Valve
+
+**Choice:** Within the domain boundary (PRD → task PRs merged onto the integration branch), the pipeline targets _full_ autonomy. There is no designed human-escalation valve. The `NEEDS_DISCUSSION` review verdict that currently halts a Run for human input, and the human handoff after CI-fix retries are exhausted (Decision 14), are interim crutches — not endorsed end-states. The intent is that the system resolves every within-domain situation itself, including off-path auto-merge failures.
+
+**Why:**
+
+- Autonomy is the domain's primary reason-for-being, not a means to a quality end. Quality gates, holdout validation, and review exist to _earn_ the trust to act unattended — not to route work to a human.
+- A standing human valve would re-introduce the very dependency the domain exists to remove, and would let reliability gaps hide behind "escalate to a human" instead of being closed.
+- Treating escalation as a bug (not a feature) keeps pressure on the real fix: more reliable reviewers and more capable autonomous recovery.
+
+**Scope / boundary clarification:**
+
+- The domain ends at merge to the **integration branch** (`staging`). Human control over promotion from `staging` to `develop`/`main` (Decisions 12 and 16) is **downstream and out of scope** — that is deliberate human ownership of the protected-branch boundary, not a contradiction of within-domain autonomy.
+- What _is_ in scope, and therefore a crutch to retire over time: `NEEDS_DISCUSSION` → human (`bin/pipeline-run-task` postreview), and CI-retry-exhaustion → human (Decision 14).
+
+**Trade-off:**
+
+- Higher bar on reviewer reliability and recovery automation: every disagreement or failure the system cannot resolve is a gap to close in the agents/scripts, not a supported off-ramp.
+- Until the crutches are retired, a Run can still stop for a human in those two cases. This is accepted as interim, and should be tracked as debt against the autonomy goal rather than relied upon.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent
