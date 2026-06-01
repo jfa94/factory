@@ -565,9 +565,26 @@ assert_eq "scg: trufflehog mock finding → block" "2" "$(_scg_exit "$S4" "git c
 # 10. TruffleHog finding matched by allowlist → filtered, allow
 _scg_write_config '{"safety.useTruffleHog":true,"safety.allowedSecretPatterns":["AKIA1234567890FAKE"]}'
 assert_eq "scg: trufflehog finding in allowlist → allow" "0" "$(_scg_exit "$S4" "git commit -m feat")"
-
 export PATH="$SCG_OLD_PATH"
-rm -rf "$SCG_TRUF" "$S1" "$S2" "$S3" "$S4"
+rm -rf "$SCG_TRUF"
+
+# 11. B4: TruffleHog explicitly enabled + installed-but-crashes → fail closed.
+#     The operator opted into the stronger scan; a silent downgrade to
+#     regex-only is a justified-fallback violation, so block (exit 2).
+SCG_TRUF_FAIL=$(mktemp -d "${TMPDIR:-/tmp}/scg-truf-fail-XXXXXX")
+cat > "$SCG_TRUF_FAIL/trufflehog" <<'MOCKEOF'
+#!/usr/bin/env bash
+echo "trufflehog: simulated crash" >&2
+exit 3
+MOCKEOF
+chmod +x "$SCG_TRUF_FAIL/trufflehog"
+export PATH="$SCG_TRUF_FAIL:$PATH"
+_scg_write_config '{"safety.useTruffleHog":true}'
+assert_eq "scg: trufflehog enabled + crashes → block" "2" "$(_scg_exit "$S4" "git commit -m feat")"
+export PATH="$SCG_OLD_PATH"
+rm -rf "$SCG_TRUF_FAIL"
+
+rm -rf "$S1" "$S2" "$S3" "$S4"
 unset CLAUDE_PLUGIN_DATA
 
 # ============================================================
