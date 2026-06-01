@@ -708,6 +708,15 @@ set -e
 assert_eq "--tolerance 2 allows 1.5% decrease" "0" "$exit_code"
 assert_eq "--tolerance 2 tolerance in output" "2" "$(echo "$output" | jq -r '.tolerance')"
 
+# rc=2: valid JSON but missing .total.{lines,branches,functions,statements}
+# must exit 2 (parse/tool error), distinct from rc=1 (threshold failure).
+cov_bad="$cov_dir/missing-fields.json"
+printf '{"total":{"lines":{"pct":80}}}' > "$cov_bad"
+set +e
+"$BIN_DIR/pipeline-coverage-gate" "$cov_dir/before.json" "$cov_bad" >/dev/null 2>&1; rc=$?
+set -e
+assert_eq "coverage missing .total fields → exit 2" "2" "$rc"
+
 rm -rf "$cov_dir"
 
 # ============================================================
