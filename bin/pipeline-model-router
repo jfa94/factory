@@ -107,10 +107,7 @@ now=$(date +%s)
 
 if [[ -n "$resets_at" ]]; then
   window_start=$(( resets_at - 18000 ))
-  elapsed=$(( now - window_start ))
-  current_hour=$(( elapsed / 3600 + 1 ))
-  (( current_hour < 1 )) && current_hour=1
-  (( current_hour > 5 )) && current_hour=5
+  current_hour=$(compute_window_hour "$resets_at" "$now")
 
   if (( current_hour < 5 )); then
     # Wait until the start of the next hour in the window, where the threshold curve steps up.
