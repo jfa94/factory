@@ -307,6 +307,24 @@ case_go_impl_rejected() {
   pass "case_go_impl_rejected: plain .go file classified as impl (not test)"
 }
 
+# F3: docs-only commit must NOT be classified as impl. A commit whose only
+# changed paths match _is_docs_path (docs/* or *.md) yields has_impl=0, so the
+# gate passes WITHOUT a preceding test-only commit. Covers both glob arms:
+# a docs/ path and a root *.md path.
+case_f3_docs_only_commit() {
+  local repo out rc; repo=$(mktemp -d); _mk_repo "$repo"
+  # Single commit touching only docs paths; no preceding test commit.
+  _commit "$repo" "docs(x): notes [task-docs]" "docs/foo.md" "README.md"
+  set +e
+  out=$( cd "$repo" && "$GATE" --task-id task-docs --base staging )
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then fail "case_f3_docs_only_commit expected exit 0 (docs not impl), got $rc; out=$out"; fi
+  printf '%s' "$out" | jq -e '.ok == true and .violations == []' >/dev/null \
+    || fail "case_f3_docs_only_commit expected ok=true with no violations; got $out"
+  pass "case_f3_docs_only_commit: docs-only commit passes gate without preceding test"
+}
+
 # ---- B3: merge-commit first-parent classification ----
 
 # B3a: merge commit that brings ONLY test files — classified as test-only,
@@ -650,6 +668,7 @@ case_zero_commits_fails_closed() {
 case1; case2; case3; case4; case4b; case5; case6; case7; case8
 case_go_test; case_ruby_spec; case_java_test; case_kotlin_test
 case_python_test; case_swift_tests; case_csharp_tests; case_go_impl_rejected
+case_f3_docs_only_commit
 case_b3_merge_with_tests; case_b3_merge_with_impl
 case_monorepo_packages_tests; case_monorepo_packages_test_singular
 case_monorepo_apps_spec; case_root_double_underscore_tests
