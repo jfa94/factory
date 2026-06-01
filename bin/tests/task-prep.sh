@@ -541,6 +541,27 @@ cat > "$tasks_dir/d2-badfiles.json" << 'EOF'
 EOF
 output=$(pipeline-validate-tasks "$tasks_dir/d2-badfiles.json" 2>/dev/null) || true
 assert_eq "D2: non-array files rejected" "false" "$(echo "$output" | jq -r '.valid')"
+assert_eq "D2: files error message present" "true" "$(echo "$output" | jq -r '.errors | any(. == "task t1: files must be an array")')"
+# non-array acceptance_criteria (string) — caught ONLY by the new array check
+cat > "$tasks_dir/d2-badac.json" << 'EOF'
+[{"task_id":"t4","title":"x","description":"d","files":["src/a.ts"],"acceptance_criteria":"a","tests_to_write":["t"],"depends_on":[]}]
+EOF
+output=$(pipeline-validate-tasks "$tasks_dir/d2-badac.json" 2>/dev/null) || true
+assert_eq "D2: non-array acceptance_criteria rejected" "false" "$(echo "$output" | jq -r '.valid')"
+assert_eq "D2: acceptance_criteria error message present" "true" "$(echo "$output" | jq -r '.errors | any(. == "task t4: acceptance_criteria must be an array")')"
+# non-array tests_to_write (string) — caught ONLY by the new array check
+cat > "$tasks_dir/d2-badtests.json" << 'EOF'
+[{"task_id":"t5","title":"x","description":"d","files":["src/a.ts"],"acceptance_criteria":["a"],"tests_to_write":"t","depends_on":[]}]
+EOF
+output=$(pipeline-validate-tasks "$tasks_dir/d2-badtests.json" 2>/dev/null) || true
+assert_eq "D2: non-array tests_to_write rejected" "false" "$(echo "$output" | jq -r '.valid')"
+assert_eq "D2: tests_to_write error message present" "true" "$(echo "$output" | jq -r '.errors | any(. == "task t5: tests_to_write must be an array")')"
+# non-object task element (bare string) — must bail cleanly, not crash
+cat > "$tasks_dir/d2-nonobj.json" << 'EOF'
+["not-an-object"]
+EOF
+output=$(pipeline-validate-tasks "$tasks_dir/d2-nonobj.json" 2>/dev/null) || true
+assert_eq "D2: non-object task element rejected cleanly" "false" "$(echo "$output" | jq -r '.valid')"
 # tdd_exempt as a string instead of boolean → invalid
 cat > "$tasks_dir/d2-badtdd.json" << 'EOF'
 [{"task_id":"t2","title":"x","description":"d","files":["src/a.ts"],"acceptance_criteria":["a"],"tests_to_write":["t"],"depends_on":[],"tdd_exempt":"yes"}]

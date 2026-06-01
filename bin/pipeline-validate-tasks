@@ -63,6 +63,19 @@ if [[ ${#errors[@]} -gt 0 ]]; then
   exit 1
 fi
 
+# Every task element must be a JSON object. The field, type, and dependency
+# checks below index into each element; a bare string/number element would
+# otherwise abort jq mid-stream (e.g. has() throws on a string), so guard the
+# shape up front and emit a clean {valid:false} rather than crashing.
+non_objects=$(jq -r '[to_entries[] | select((.value | type) != "object") | .key | tostring] | join(", ")' "$tasks_file" 2>/dev/null || true)
+if [[ -n "$non_objects" ]]; then
+  errors+=("task(s) at index $non_objects are not JSON objects")
+  errors_json=$(printf '%s\n' "${errors[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')
+  jq -n --argjson valid false --argjson errors "$errors_json" --argjson task_count "$task_count" \
+    '{valid: $valid, task_count: $task_count, execution_order: [], errors: $errors}'
+  exit 1
+fi
+
 # --- Field validation ---
 
 required_fields=("task_id" "title" "description" "files" "acceptance_criteria" "tests_to_write" "depends_on")
