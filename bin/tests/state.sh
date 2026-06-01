@@ -704,6 +704,41 @@ assert_eq "level 4 stage pre-execute → trips (exit 42)" "42" "$ec"
 # --- Invalid stage → exit 1 ---
 assert_exit "invalid stage exits 1" 1 pipeline-human-gate "run-hg" bogus-stage
 
+# --- M10: state-write failure → gate exits 1, not 42 ---
+# Non-hollow baseline: confirm a real trip (no stub) exits 42 so the
+# following stub test isolates the write-failure path specifically.
+printf '{"humanReviewLevel":3}' > "$CLAUDE_PLUGIN_DATA/config.json"
+pipeline-state write "run-hg" '.status' '"running"' >/dev/null 2>&1
+set +e
+pipeline-human-gate "run-hg" "pre-merge" >/dev/null 2>&1; _hg_m10_baseline=$?
+set -e
+assert_eq "M10 baseline: real trip exits 42" "42" "$_hg_m10_baseline"
+
+# Now stub pipeline-state so the .status write fails; the gate must exit 1
+# (refuse to mark tripped) rather than 42 (which would cause a resume loop).
+# The gate has no prior pipeline-state calls before the status write, so a
+# simple fail-on-.status / pass-through-otherwise stub is safe.
+pipeline-init "run-hg-m10" --mode prd --issue 91 --force >/dev/null 2>&1
+_hg_m10_stub=$(mktemp -d)
+cat > "$_hg_m10_stub/pipeline-state" <<'STUB'
+#!/usr/bin/env bash
+# Fail only the .status write; forward everything else to the real binary.
+if [[ "$1" == "write" && "$3" == ".status" ]]; then exit 1; fi
+# Strip this stub's OWN dir (not the binary path) from PATH before resolving,
+# so the lookup finds the real pipeline-state and cannot recurse into the stub.
+_self_dir=$(dirname "$BASH_SOURCE")
+_real=$(PATH="${PATH/"$_self_dir":/}" command -v pipeline-state 2>/dev/null || true)
+[[ -n "$_real" ]] && exec "$_real" "$@"
+exit 1
+STUB
+chmod +x "$_hg_m10_stub/pipeline-state"
+set +e
+PATH="$_hg_m10_stub:$PATH" pipeline-human-gate "run-hg-m10" "pre-merge" >/dev/null 2>&1; _hg_m10_rc=$?
+set -e
+assert_eq "M10: state-write failure → exit 1 (not 42)" "1" "$_hg_m10_rc"
+rm -rf "$_hg_m10_stub"
+unset _hg_m10_stub _hg_m10_rc _hg_m10_baseline
+
 # Cleanup
 rm -f "$CLAUDE_PLUGIN_DATA/config.json"
 export PATH="$HG_OLD_PATH"
