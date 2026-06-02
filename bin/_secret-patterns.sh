@@ -31,14 +31,27 @@ FACTORY_SECRET_CONTENT_PATTERNS=(
   'xai-[A-Za-z0-9]{40,}'
 )
 
-# redact_secrets — stdin → stdout filter. Replaces every substring matching any
+# redact_secrets — stdin → stdout filter. Replaces every substring matching a
 # known secret pattern with the literal "[REDACTED]". One combined-alternation
-# sed pass; delimiter "#" is absent from every pattern and from the replacement.
-# Matches stay within JSON string values (the token char-classes exclude `"`),
-# so redacting a valid-JSON findings file keeps it valid JSON.
+# `sed -E` pass; delimiter "#" is absent from every pattern and from the
+# replacement.
+#
+# Redaction excludes any pattern containing a literal double-quote. Such a
+# pattern (e.g. the `"private_key": "-----BEGIN` detection pattern) anchors on
+# JSON structural quotes; redacting it would consume those quotes and could
+# invalidate the findings artifact. That is a detection-only refinement — the
+# secret's real key material is still caught by a value-only sibling pattern
+# (the `-----BEGIN … PRIVATE KEY-----` marker), so excluding it loses no
+# coverage. All other patterns match only within JSON string values (their
+# char-classes exclude `"`), so redacting valid JSON keeps it valid JSON.
 redact_secrets() {
+  local pats=() p
+  for p in "${FACTORY_SECRET_CONTENT_PATTERNS[@]}"; do
+    if [[ "$p" == *'"'* ]]; then continue; fi
+    pats+=("$p")
+  done
   local IFS='|' combined
-  combined="${FACTORY_SECRET_CONTENT_PATTERNS[*]}"   # join with '|' (ERE alternation)
-  if [[ -z "$combined" ]]; then cat; return; fi      # never empty in practice; guard anyway
+  combined="${pats[*]}"
+  if [[ -z "$combined" ]]; then cat; return; fi
   sed -E "s#(${combined})#[REDACTED]#g"
 }

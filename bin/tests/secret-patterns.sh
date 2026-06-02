@@ -57,5 +57,18 @@ t_empty() {
   pass "empty input yields empty output"
 }
 
-t_redacts_akia; t_keeps_benign; t_preserves_json; t_redacts_multiple; t_empty
+# Case 6: a literal "private_key" JSON object stays valid JSON after redaction
+# (the quote-anchored pattern must not consume JSON structural syntax), and the
+# PEM marker is still redacted by the value-only sibling pattern.
+t_private_key_json() {
+  local in out
+  in='{"private_key": "-----BEGIN PRIVATE KEY-----"}'
+  out=$(printf '%s\n' "$in" | redact_secrets)
+  printf '%s' "$out" | jq -e '.' >/dev/null || fail "pk: not valid JSON after redaction: '$out'"
+  if printf '%s' "$out" | grep -q 'BEGIN PRIVATE KEY'; then fail "pk: PEM marker leaked: '$out'"; fi
+  printf '%s' "$out" | jq -e 'has("private_key")' >/dev/null || fail "pk: private_key key destroyed: '$out'"
+  pass "private_key JSON stays valid + marker redacted"
+}
+
+t_redacts_akia; t_keeps_benign; t_preserves_json; t_redacts_multiple; t_empty; t_private_key_json
 printf 'all secret-patterns tests passed\n'
