@@ -306,6 +306,20 @@ Fallback: if the test-writer worktree is not a git repo, has a detached HEAD, or
 
 ---
 
+### pipeline-run-task-stages.sh
+
+Sourced library (not a standalone script, mode 644) that defines the six stage
+handlers (`_stage_preflight`, `_stage_preexec_tests`, `_stage_postexec`,
+`_stage_postreview`, `_stage_ship`, `_stage_finalize_run`) and their private
+helpers (`_detect_red_test_runner`, `_verify_red_tests`, `_emit_postexec_manifest`,
+`_run_ship_pregate`, `_write_ship_checklist`). `pipeline-run-task` sources it and
+dispatches into it via the `case "$stage"` block. The handlers read closure
+variables (`run_id`, `task_id`, `run_dir`, `state_file`, `_STATE_BIN`, the
+`_reviewer_*`/`_*_max_turns` config knobs, …) and shared helpers that remain in
+the main wrapper. Not intended to be invoked directly.
+
+---
+
 ## Input and Discovery
 
 ### pipeline-fetch-prd
