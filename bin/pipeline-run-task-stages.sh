@@ -1441,3 +1441,260 @@ _write_ship_checklist() {
     "security=\"$security_gate\"" "ci=\"$ci_status\""
 }
 
+# --- ship -------------------------------------------------------------------
+_stage_ship() {
+  local t0 t1
+  t0=$(_now_ms)
+  log_step_begin "ship" "task_id=\"$task_id\""
+
+  if _already_past ship_done; then
+    t1=$(_now_ms)
+    log_step_end "ship" "skipped" "$((t1-t0))" "task_id=\"$task_id\""
+    return 0
+  fi
+
+  if [[ -n "$ci_status" ]]; then
+    _task_write ci_status "\"$ci_status\""
+    [[ -n "$merge_status" ]] && _task_write merge_status "\"$merge_status\""
+    case "$ci_status" in
+      green)
+        if [[ "$merge_status" == "stalled" ]]; then
+          if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
+            log_error "task-status failed write failed for $task_id"
+            return 30
+          fi
+          _task_write failure_reason '"auto-merge stalled despite green CI; manual investigation required"'
+          t1=$(_now_ms)
+          log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"merge_stalled\""
+          return 30
+        fi
+        if ! "$_STATE_BIN" task-status "$run_id" "$task_id" done >/dev/null; then
+          log_error "task-status done write failed for $task_id"
+          return 30
+        fi
+        _task_write stage '"ship_done"'
+        t1=$(_now_ms)
+        log_step_end "ship" "ok" "$((t1-t0))" "task_id=\"$task_id\"" "ci=\"green\""
+        return 0 ;;
+      red)
+        local attempts
+        attempts=$(_task_field ci_fix_attempts)
+        [[ -z "$attempts" ]] && attempts=0
+        attempts=$((attempts + 1))
+        _task_write ci_fix_attempts "$attempts"
+        if (( attempts > 2 )); then
+          if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
+            log_error "task-status failed write failed for $task_id"
+            return 30
+          fi
+          t1=$(_now_ms)
+          log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_exhausted\""
+          return 30
+        fi
+        "$_STATE_BIN" task-status "$run_id" "$task_id" ci_fixing >/dev/null \
+          || log_warn "task-status ci_fixing write failed for $task_id (non-fatal)"
+        _ensure_prompt_dir
+        local pf; pf=$(_prompt_path executor-ci-fix)
+        printf '[task:%s]\n[role:task-executor]\nFix failing CI on PR for task %s.\nSTATUS: DONE|...\n' "$task_id" "$task_id" > "$pf"
+        local _ci_classify _ci_model _ci_max_turns
+        _ci_classify=$(_task_field classify)
+        if [[ -n "$_ci_classify" && "$_ci_classify" != "null" ]]; then
+          _ci_model=$(printf '%s' "$_ci_classify" | jq -r '.model // "sonnet"' 2>/dev/null || printf 'sonnet')
+          _ci_max_turns=$(printf '%s' "$_ci_classify" | jq -r '.maxTurns // .max_turns // 60' 2>/dev/null || printf '60')
+        else
+          _ci_model="sonnet"
+          _ci_max_turns="60"
+        fi
+        local agents_json
+        agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_ci_model" \
+          --argjson _max_turns "$_ci_max_turns" \
+          '[{subagent_type:"task-executor", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
+        local _ship_wt
+        _ship_wt=$(_task_field worktree)
+        _ship_wt=$(_unquote_json_string "$_ship_wt")
+        _record_active_task_for_stop_hook "$run_id" "$task_id" "$_ship_wt"
+        _emit_manifest ship "$agents_json"
+        t1=$(_now_ms)
+        log_step_end "ship" "spawn" "$((t1-t0))" "task_id=\"$task_id\"" "attempt=$attempts"
+        return 10 ;;
+      *)
+        log_warn "ci_status=$ci_status treated as timeout"
+        if ! "$_STATE_BIN" task-status "$run_id" "$task_id" needs_human_review >/dev/null; then
+          log_error "task-status needs_human_review write failed for $task_id"
+          return 30
+        fi
+        t1=$(_now_ms)
+        log_step_end "ship" "needs_human_review" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_timeout\""
+        return 30 ;;
+    esac
+  fi
+
+  _run_stage_quota_gate ship "$t0"
+  local _qrc=$?
+  (( _qrc != 0 )) && return $_qrc
+
+  local gate_lvl
+  gate_lvl=$(read_config '.humanReviewLevel' '0')
+  if (( gate_lvl >= 1 )); then
+    # A4: distinguish rc=42 (legitimate pause) from rc=1 (misuse/state-write
+    # failure). Previously `if ! pipeline-human-gate ...` collapsed both into
+    # return 20 (pause), hiding broken invocations from operators.
+    # See docs/reference/exit-codes.md#pipeline-human-gate.
+    # Note: lib sets `set -e`, so we use `|| rc=$?` to capture non-zero
+    # exits without aborting the function.
+    local _hg_rc=0
+    pipeline-human-gate "$run_id" pre-merge || _hg_rc=$?
+    case "$_hg_rc" in
+      0)
+        : # gate passed, fall through to PR-create path
+        ;;
+      42)
+        t1=$(_now_ms)
+        log_step_end "ship" "human_gate_pause" "$((t1-t0))" "task_id=\"$task_id\""
+        return 20
+        ;;
+      *)
+        log_error "pipeline-human-gate failed unexpectedly: rc=$_hg_rc"
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" \
+          "task_id=\"$task_id\"" \
+          "reason=\"human_gate_error\"" \
+          "rc=$_hg_rc"
+        return 30
+        ;;
+    esac
+  fi
+
+  local wt
+  wt=$(_task_field worktree)
+  wt=$(_unquote_json_string "$wt")
+  if [[ -z "$wt" ]]; then
+    log_error "worktree missing at ship stage"
+    t1=$(_now_ms)
+    log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\""
+    return 30
+  fi
+
+  if ! pipeline-branch task-commit "$task_id" --worktree "$wt" --run-id "$run_id" >/dev/null; then
+    log_error "task-commit failed"
+    t1=$(_now_ms)
+    log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\""
+    return 30
+  fi
+
+  local _ship_branch="task/${task_id}"
+
+  if ! _run_ship_pregate "$wt"; then
+    log_warn "ship-time pregate failed for $task_id"
+    t1=$(_now_ms)
+    log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"pregate\""
+    return 30
+  fi
+
+  _write_ship_checklist
+
+  if git -C "$wt" remote get-url origin >/dev/null 2>&1; then
+    local _ship_push_err
+    if ! _ship_push_err=$(git -C "$wt" push -u origin "$_ship_branch" 2>&1); then
+      log_error "ship: git push origin $_ship_branch failed: ${_ship_push_err//$'\n'/ }"
+      _task_write failure_reason "$(jq -Rs . <<<"ship push failed: ${_ship_push_err:0:300}")"
+      t1=$(_now_ms); log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ship_push\""
+      return 30
+    fi
+  else
+    log_warn "ship: no origin remote in $wt; skipping push (offline/test mode)"
+  fi
+
+  local pr_url pr_number pr_title _gh_err
+  pr_title=$(pipeline-branch task-pr-title "$task_id" --run-id "$run_id")
+  _gh_err=$(mktemp)
+  pr_url=$(cd "$wt" && gh pr create --base staging --head "$_ship_branch" --title "$pr_title" \
+    --body "Automated task PR for $task_id in run $run_id." 2>"$_gh_err") || pr_url=""
+  if [[ -z "$pr_url" ]]; then
+    local err_text; err_text=$(<"$_gh_err"); rm -f "$_gh_err"
+    log_error "gh pr create failed for $task_id: ${err_text:-no stderr captured}"
+    _task_write failure_reason "$(jq -Rs . <<<"gh pr create failed: ${err_text:0:500}")"
+    t1=$(_now_ms); log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"gh_pr_create\""
+    return 30
+  fi
+  rm -f "$_gh_err"
+  pr_number=$(printf '%s' "$pr_url" | grep -oE '[0-9]+$' || printf '')
+  if [[ -z "$pr_number" ]]; then
+    log_error "gh pr create returned non-numeric URL: $pr_url"
+    _task_write failure_reason "$(jq -Rs . <<<"gh pr create returned non-numeric URL: $pr_url")"
+    t1=$(_now_ms); log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"gh_pr_url_malformed\""
+    return 30
+  fi
+  _task_write pr_number "$pr_number"
+  _task_write pr_url    "\"$pr_url\""
+  "$_STATE_BIN" task-status "$run_id" "$task_id" reviewing >/dev/null \
+    || log_warn "task-status reviewing write failed for $task_id (non-fatal)"
+  log_metric "task.pr_created" "task_id=\"$task_id\"" "pr_number=$pr_number"
+
+  if [[ "${FACTORY_ASYNC_CI:-auto}" == "off" ]]; then
+    _ensure_prompt_dir
+    local _wait_rc=0
+    pipeline-wait-pr "$pr_number" > "$run_dir/.state/$run_id/$task_id.ci.json" || _wait_rc=$?
+    case "$_wait_rc" in
+      0)
+        emit_ci_metric task "$pr_number" green
+        if ! "$_STATE_BIN" task-status "$run_id" "$task_id" done >/dev/null; then
+          log_error "task-status done write failed for $task_id"
+          return 30
+        fi
+        _task_write stage '"ship_done"'
+        _task_write ci_status '"green"'
+        t1=$(_now_ms)
+        log_step_end "ship" "ok" "$((t1-t0))" "task_id=\"$task_id\"" "ci=\"green\""
+        return 0
+        ;;
+      1)
+        emit_ci_metric task "$pr_number" timeout
+        _task_write ci_status '"timeout"'
+        _task_write failure_reason '"ci_timeout"'
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_timeout\""
+        return 30
+        ;;
+      2)
+        emit_ci_metric task "$pr_number" closed
+        _task_write ci_status '"closed"'
+        _task_write failure_reason '"pr_closed"'
+        "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null \
+          || log_warn "task-status failed write failed for $task_id"
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"pr_closed\""
+        return 30
+        ;;
+      3)
+        emit_ci_metric task "$pr_number" red
+        _task_write ci_status '"red"'
+        _task_write failure_reason '"ci_red"'
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"ci_red\""
+        return 30
+        ;;
+      4)
+        emit_ci_metric task "$pr_number" conflict
+        _task_write ci_status '"conflict"'
+        _task_write failure_reason '"merge_conflict"'
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"merge_conflict\""
+        return 30
+        ;;
+      *)
+        emit_ci_metric task "$pr_number" red
+        _task_write ci_status '"red"'
+        _task_write failure_reason "\"wait_pr_unexpected_rc_${_wait_rc}\""
+        t1=$(_now_ms)
+        log_step_end "ship" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"wait_pr_unexpected_rc_${_wait_rc}\""
+        return 30
+        ;;
+    esac
+  fi
+
+  t1=$(_now_ms)
+  log_step_end "ship" "wait_ci" "$((t1-t0))" "task_id=\"$task_id\"" "pr_number=$pr_number"
+  return 0
+}
+
