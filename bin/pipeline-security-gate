@@ -30,6 +30,12 @@
 #   - retention sweeps in `pipeline-cleanup` treat these files as sensitive
 #     (they inherit the runs/<run-id> lifetime).
 #
+# Scope: only the findings artifact (scanner stdout) is redacted. The companion
+# `<task-id>.security-gate.log` (scanner stderr) is NOT redacted, regardless of
+# the flag — a verbose/error-mode scanner that echoes offending snippets to
+# stderr could leave secrets there. Treat that log as sensitive too (it shares
+# the runs/<run-id> lifetime).
+#
 # Exit codes:
 #   0  — gate passed (no findings or allowFailures=true)
 #   1  — gate failed (findings present)
