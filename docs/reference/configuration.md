@@ -276,9 +276,9 @@ When `true`, `pipeline-security-gate` records findings but does not block the ta
 | Type     | boolean |
 | Default  | true    |
 
-When `true` (default), `pipeline-security-gate` passes the security command's
-stdout through a secret-redaction pass before writing the findings artifact,
-replacing any matched secret token (the same pattern set as
+When `true` (default), `pipeline-security-gate` redacts the security command's
+captured stdout in place — after the scan runs, before anything reads the
+findings artifact — replacing any matched secret token (the same pattern set as
 `hooks/secret-commit-guard.sh`) with `[REDACTED]`. This keeps secret-bearing
 source snippets — which scanners like Semgrep embed in their findings — out of
 `$CLAUDE_PLUGIN_DATA` at rest.

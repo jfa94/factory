@@ -998,7 +998,7 @@ pipeline-security-gate <run-id> <task-id> [<worktree>]
 4. Validate command prefix against allowed runners: `semgrep`, `pytest`, `vitest`, `jest`, `mocha`, `phpunit`, `rspec`, `go test`, `cargo test`, `deno test`, `bundle exec rspec`
 5. Execute command in task worktree
 6. Save stdout to `$CLAUDE_PLUGIN_DATA/runs/<run-id>/<task-id>.security-findings.json`
-7. Unless `quality.securityRedactFindings` is `false`, redact secret-bearing matches from the stdout before persisting (replace with `[REDACTED]`); on redaction error, fail closed by writing `{"error": "redaction_failed", "exit_code": N}`
+7. Unless `quality.securityRedactFindings` is `false`, redact secret-bearing matches from the saved findings file in place (replace with `[REDACTED]`); on redaction error, fail closed by writing `{"error": "redaction_failed", "exit_code": N}`
 8. If stdout is not valid JSON, wrap raw output in `{"raw_output": "...", "exit_code": N}`
 9. Write structured result to state at `.tasks.<task-id>.security_gate`
 
