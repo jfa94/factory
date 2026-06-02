@@ -65,6 +65,8 @@ allow_failures=$(read_config '.quality.securityAllowFailures' 'false' | tr '[:up
 # Note: read_config uses `// empty` which collapses JSON false to the default.
 # Use jq directly so an explicit false is honoured, defaulting to true when the
 # key is absent or the config file is missing.
+# Redaction is skipped only when the flag is explicitly false; any other value
+# (absent, malformed) redacts (fail-closed).
 _cfg_file="${CLAUDE_PLUGIN_DATA}/config.json"
 if [[ -f "$_cfg_file" ]]; then
   redact_findings=$(jq -r 'if has("quality") and (.quality | has("securityRedactFindings")) then .quality.securityRedactFindings | tostring else "true" end' "$_cfg_file" 2>/dev/null || printf 'true')
@@ -128,7 +130,7 @@ duration=$(( $(date +%s) - start ))
 # keys, tokens) lifted from the audited codebase. Fail closed: if the redaction
 # pass errors, replace the artifact with an error envelope rather than leaving
 # raw output on disk.
-if [[ "$redact_findings" == "true" ]]; then
+if [[ "$redact_findings" != "false" ]]; then
   if redact_secrets < "$findings_file" > "$findings_file.tmp" 2>/dev/null; then
     mv "$findings_file.tmp" "$findings_file"
   else

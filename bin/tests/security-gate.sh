@@ -434,5 +434,27 @@ case16() {
   pass "case16: non-JSON output redacted before raw_output wrap"
 }
 
-case1; case2; case3; case4; case5; case6; case7; case8; case9; case10; case11; case12; case13; case14; case15; case16
+# Case 17: a malformed (non-boolean) flag value must still redact (fail-closed).
+# Only an explicit `false` is a valid opt-out; null/garbage must not leak secrets.
+case17() {
+  local env stub cmd wt findings
+  env=$(_mk_env "semgrep --config auto")
+  jq '.quality.securityRedactFindings = null' "$env/config.json" > "$env/config.json.tmp" \
+    && mv "$env/config.json.tmp" "$env/config.json"
+  cmd=$(_mk_secret_cmd)
+  stub=$(_mk_stub_dir)
+  wt=$(mktemp -d)
+  set +e
+  CLAUDE_PLUGIN_DATA="$env" PATH="$cmd:$stub:$PATH" "$GATE" run-001 task-001 "$wt" >/dev/null 2>/dev/null
+  rc=$?
+  set -e
+  [[ $rc -eq 0 ]] || fail "case17: expected exit 0, got $rc"
+  findings="$env/runs/run-001/task-001.security-findings.json"
+  if grep -Eq 'AKIA[0-9A-Z]{16}' "$findings"; then fail "case17: malformed flag must NOT disable redaction (fail-open leak): $(cat "$findings")"; fi
+  grep -q 'REDACTED' "$findings" || fail "case17: expected REDACTED marker; got $(cat "$findings")"
+  rm -rf "$env" "$cmd" "$stub" "$wt"
+  pass "case17: malformed flag value still redacts (fail-closed)"
+}
+
+case1; case2; case3; case4; case5; case6; case7; case8; case9; case10; case11; case12; case13; case14; case15; case16; case17
 printf 'all security-gate tests passed\n'
