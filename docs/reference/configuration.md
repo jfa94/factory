@@ -276,17 +276,21 @@ When `true`, `pipeline-security-gate` records findings but does not block the ta
 | Type     | boolean |
 | Default  | true    |
 
-When `true` (default), `pipeline-security-gate` redacts the security command's
-captured stdout in place — after the scan runs, before anything reads the
-findings artifact — replacing any matched secret token (the same pattern set as
-`hooks/secret-commit-guard.sh`) with `[REDACTED]`. This keeps secret-bearing
-source snippets — which scanners like Semgrep embed in their findings — out of
-`$CLAUDE_PLUGIN_DATA` at rest.
+When `true` (default), `pipeline-security-gate` redacts **both** of the security
+command's captured streams in place — after the scan runs, before anything reads
+them — replacing any matched secret token (the same pattern set as
+`hooks/secret-commit-guard.sh`) with `[REDACTED]`: the findings artifact
+(stdout) and the companion `<task-id>.security-gate.log` (stderr, since
+verbose/error-mode scanners can echo offending source lines there). This keeps
+secret-bearing source snippets — which scanners like Semgrep embed in their
+findings — out of `$CLAUDE_PLUGIN_DATA` at rest. Each artifact fails closed on a
+redaction error (findings → JSON error envelope; log → plain-text withheld
+marker), so a failed pass never leaves raw output on disk.
 
 Set to `false` to persist the raw scanner output verbatim. This keeps full
-fidelity for local debugging but means the findings file may contain secrets;
-do not export it (PR comment, gist, telemetry, artifact upload) without
-re-running it through redaction.
+fidelity for local debugging but means both the findings file and the stderr log
+may contain secrets; do not export either (PR comment, gist, telemetry, artifact
+upload) without re-running it through redaction.
 
 ---
 

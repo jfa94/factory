@@ -22,19 +22,21 @@
 # `quality.securityRedactFindings=false` to keep full fidelity for local
 # debugging.
 #
-# Residual risk (opt-out path only): when securityRedactFindings=false the
-# artifact may contain secrets. `$CLAUDE_PLUGIN_DATA` is operator-private state,
-# so when redaction is disabled:
-#   - do NOT publish findings files to PRs, gists, telemetry, or remote review
-#     tools without re-running them through `redact_secrets`;
-#   - retention sweeps in `pipeline-cleanup` treat these files as sensitive
-#     (they inherit the runs/<run-id> lifetime).
+# Scope: BOTH gate artifacts are redacted under the same flag — the findings
+# artifact (scanner stdout) and the companion `<task-id>.security-gate.log`
+# (scanner stderr). A verbose/error-mode scanner can echo offending snippets to
+# stderr, so the log is scrubbed in place too. Each fails closed independently:
+# the findings file is replaced with a JSON error envelope on redaction failure,
+# the log with a plain-text withheld marker.
 #
-# Scope: only the findings artifact (scanner stdout) is redacted. The companion
-# `<task-id>.security-gate.log` (scanner stderr) is NOT redacted, regardless of
-# the flag — a verbose/error-mode scanner that echoes offending snippets to
-# stderr could leave secrets there. Treat that log as sensitive too (it shares
-# the runs/<run-id> lifetime).
+# Residual risk (opt-out path only): when securityRedactFindings=false both
+# artifacts may contain secrets. `$CLAUDE_PLUGIN_DATA` is operator-private state,
+# so when redaction is disabled:
+#   - do NOT publish the findings file OR the stderr log to PRs, gists,
+#     telemetry, or remote review tools without re-running them through
+#     `redact_secrets`;
+#   - retention sweeps in `pipeline-cleanup` treat both files as sensitive
+#     (they inherit the runs/<run-id> lifetime).
 #
 # Exit codes:
 #   0  — gate passed (no findings or allowFailures=true)
@@ -125,8 +127,9 @@ mkdir -p "$run_dir"
 
 findings_file="$run_dir/${task_id}.security-findings.json"
 log_file="$run_dir/${task_id}.security-gate.log"
-# M14: stdout is redacted in place below via redact_secrets before persistence
-# (unless quality.securityRedactFindings=false). See header.
+# M14: both stdout (findings) and stderr (log) are redacted in place below via
+# redact_secrets before persistence (unless quality.securityRedactFindings=false).
+# See header.
 
 start=$(date +%s)
 set +e
@@ -147,6 +150,21 @@ if [[ "$redact_findings" != "false" ]]; then
     rm -f "$findings_file.tmp"
     log_warn "security gate: redaction pass failed — replacing findings with error envelope (fail-closed) task_id=\"$task_id\""
     jq -n --argjson rc "$rc" '{"error":"redaction_failed","exit_code":$rc}' > "$findings_file"
+  fi
+fi
+
+# M14 (stderr companion): the scanner's stderr log can also carry secret-bearing
+# snippets — verbose/error-mode scanners echo offending source lines. Redact it
+# in place under the SAME securityRedactFindings flag, fail closed: if the pass
+# errors, withhold the raw stderr (plain-text marker, the log is not a JSON
+# artifact) rather than leave secrets on disk.
+if [[ "$redact_findings" != "false" && -f "$log_file" ]]; then
+  if redact_secrets < "$log_file" > "$log_file.tmp" 2>/dev/null; then
+    mv "$log_file.tmp" "$log_file"
+  else
+    rm -f "$log_file.tmp"
+    log_warn "security gate: stderr-log redaction pass failed — withholding raw scanner stderr (fail-closed) task_id=\"$task_id\""
+    printf '[redaction_failed: raw scanner stderr withheld to avoid secrets at rest; exit_code=%s]\n' "$rc" > "$log_file"
   fi
 fi
 
