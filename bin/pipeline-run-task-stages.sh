@@ -389,3 +389,206 @@ _verify_red_tests() {
   return 0
 }
 
+# --- preexec_tests ----------------------------------------------------------
+_stage_preexec_tests() {
+  local t0 t1
+  t0=$(_now_ms)
+  log_step_begin "preexec_tests" "task_id=\"$task_id\""
+
+  if _already_past preexec_tests_done; then
+    # Guard: only skip if a prompt hash was recorded (i.e., executor was actually
+    # spawned with a real prompt, not a null-row prompt from a broken seed).
+    local _phash
+    _phash=$(_task_field last_prompt_hash 2>/dev/null || true)
+    _phash=$(_unquote_json_string "$_phash")
+    if [[ -n "$_phash" && "$_phash" != "null" ]]; then
+      t1=$(_now_ms)
+      log_step_end "preexec_tests" "skipped" "$((t1-t0))" "task_id=\"$task_id\""
+      return 0
+    fi
+    log_warn "preexec_tests_done set but last_prompt_hash missing — rebuilding executor prompt for $task_id"
+  fi
+
+  local tw_status
+  tw_status=$(_task_field test_writer_status)
+  tw_status=$(_unquote_json_string "$tw_status")
+
+  # Resume path: status not recorded; check for an existing test commit.
+  if [[ -z "$tw_status" ]]; then
+    local tw_wt
+    tw_wt=$(_task_field worktree)
+    tw_wt=$(_unquote_json_string "$tw_wt")
+    [[ -z "$tw_wt" ]] && tw_wt="$worktree"
+    if [[ -n "$tw_wt" && -d "$tw_wt" ]]; then
+      local resume_base
+      if resume_base=$(resolve_base_ref "$tw_wt") \
+         && ( cd "$tw_wt" && git log --format=%s "$resume_base..HEAD" 2>/dev/null \
+                | grep -qE "^test\(.*\):.*\[${task_id}\]" 2>/dev/null ); then
+        tw_status="RED_READY"
+      fi
+    fi
+  fi
+
+  if [[ -z "$tw_status" ]]; then
+    _ensure_prompt_dir
+    local spec_path pf
+    spec_path=$("$_STATE_BIN" read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
+    pf=$(_prompt_path test-writer)
+    {
+      printf '[task:%s]\n' "$task_id"
+      printf '[role:test-writer]\n'
+      printf 'mode: pre-impl\n'
+      printf 'task_id: %s\n' "$task_id"
+      [[ -n "$spec_path" ]] && printf 'spec_path: %s\n' "$spec_path"
+      printf 'Write failing tests derived purely from the spec.\n'
+      printf 'Commit: test(<scope>): failing tests for %s [%s]\n' "$task_id" "$task_id"
+      printf 'End with STATUS: RED_READY or STATUS: BLOCKED.\n'
+    } > "$pf"
+    local agents_json
+    agents_json=$(jq -cn --arg pf "$pf" --argjson _max_turns "$_test_writer_max_turns" \
+      '[{subagent_type:"test-writer", isolation:"worktree", model:"opus", maxTurns:$_max_turns, prompt_file:$pf}]')
+    _record_active_task_for_stop_hook "$run_id" "$task_id" ""
+    _emit_manifest preexec_tests "$agents_json"
+    t1=$(_now_ms)
+    log_step_end "preexec_tests" "spawn_test_writer" "$((t1-t0))" "task_id=\"$task_id\""
+    return 10
+  fi
+
+  if [[ "$tw_status" == "BLOCKED" ]]; then
+    log_warn "test-writer blocked for $task_id"
+    if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
+      log_error "task-status failed write failed for $task_id"
+      return 30
+    fi
+    t1=$(_now_ms)
+    log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"test_writer_blocked\""
+    return 30
+  fi
+
+  # RED_READY (or other non-blocked): verify tests are actually red before spawning executor.
+  local tw_wt
+  tw_wt=$(_task_field worktree)
+  tw_wt=$(_unquote_json_string "$tw_wt")
+  [[ -z "$tw_wt" ]] && tw_wt="$worktree"
+
+  if ! _verify_red_tests "$tw_wt"; then
+    _task_write test_writer_status '"BLOCKED"'
+    if ! "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null; then
+      log_error "task-status failed write failed for $task_id"
+      return 30
+    fi
+    t1=$(_now_ms)
+    log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"red_tests_not_verified\""
+    return 30
+  fi
+
+  # Bug 2 — branch handoff: the executor worktree is born from origin/<default-branch>
+  # (harness baseRef=fresh); it cannot see the RED commits the test-writer made on
+  # its sibling worktree branch unless we (a) push that branch to origin and
+  # (b) tell the executor (via the prompt's Bootstrap block) to re-base onto it via
+  # `git checkout -B` (`git reset --hard` is blocked by branch-protection.sh and
+  # the Bash(git reset --hard*) deny).
+  #
+  # When `$tw_wt` is not a git worktree (legacy test fixtures, plain dirs)
+  # or has no `origin` remote, fall through to local-only mode: the executor
+  # spawns without the bootstrap block. This preserves backward compatibility
+  # with offline test scenarios that don't drive a real RED commit.
+  local tw_branch="" _has_origin=false
+  if git -C "$tw_wt" rev-parse --git-dir >/dev/null 2>&1; then
+    tw_branch=$(git -C "$tw_wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [[ -z "$tw_branch" || "$tw_branch" == "HEAD" ]]; then
+      log_warn "cannot resolve test-writer branch in $tw_wt; executor will run without bootstrap block"
+      tw_branch=""
+    fi
+  fi
+
+  if [[ -n "$tw_branch" ]] && git -C "$tw_wt" remote get-url origin >/dev/null 2>&1; then
+    _has_origin=true
+    local _push_err
+    if ! _push_err=$(git -C "$tw_wt" push -u origin "$tw_branch" 2>&1); then
+      log_error "git push origin $tw_branch from $tw_wt failed: ${_push_err//$'\n'/ }"
+      _task_write test_writer_status '"BLOCKED"'
+      "$_STATE_BIN" task-status "$run_id" "$task_id" failed >/dev/null || true
+      t1=$(_now_ms)
+      log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"tw_branch_push_failed\""
+      return 30
+    fi
+    _task_write test_writer_branch "\"$tw_branch\""
+  elif [[ -n "$tw_branch" ]]; then
+    log_warn "no origin remote in $tw_wt; executor will run without fetched RED commits (local-only mode)"
+  fi
+
+  # Spawn task-executor for GREEN phase.
+  _ensure_prompt_dir
+  local spec_path prompt_file holdout_pct task_json
+  spec_path=$("$_STATE_BIN" read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
+  holdout_pct=$(read_config '.quality.holdoutPercent' '20')
+  task_json=$("$_STATE_BIN" task-read "$run_id" "$task_id" 2>/dev/null)
+  # Fallback: if state doesn't have the task row yet (e.g., task-init wasn't
+  # called), read directly from the spec tasks.json so the prompt is never null.
+  if [[ -z "$task_json" || "$task_json" == "null" ]] && [[ -n "$spec_path" ]] && [[ -f "$spec_path/tasks.json" ]]; then
+    task_json=$(jq -c --arg t "$task_id" '
+      (if type == "array" then .[] else (.tasks // [])[] end) |
+      select(.task_id == $t)
+    ' "$spec_path/tasks.json" 2>/dev/null || true)
+  fi
+  prompt_file=$(_prompt_path executor)
+  local args=()
+  [[ -n "$spec_path" ]] && args+=(--spec-path "$spec_path")
+  args+=(--holdout "$holdout_pct")
+  # Bug 2: tell pipeline-build-prompt to prepend the Bootstrap block so the
+  # executor's fresh worktree can fetch + reset to the test-writer's branch.
+  if [[ "$_has_origin" == "true" ]]; then
+    args+=(--bootstrap-branch "$tw_branch")
+  fi
+  local _tmp_prompt; _tmp_prompt=$(mktemp)
+  if ! pipeline-build-prompt "$task_json" "${args[@]}" > "$_tmp_prompt"; then
+    rm -f "$_tmp_prompt"
+    log_error "build-prompt failed"
+    t1=$(_now_ms)
+    log_step_end "preexec_tests" "failed" "$((t1-t0))" "task_id=\"$task_id\""
+    return 30
+  fi
+  {
+    printf '[task:%s]\n' "$task_id"
+    printf '[role:task-executor]\n'
+    [[ "$_has_origin" == "true" ]] && printf '[isolation:worktree]\n'
+    cat "$_tmp_prompt"
+  } > "$prompt_file"
+  rm -f "$_tmp_prompt"
+
+  local _phash_val
+  _phash_val=$(sha256sum "$prompt_file" 2>/dev/null | awk '{print $1}' || md5sum "$prompt_file" 2>/dev/null | awk '{print $1}' || printf 'built')
+  _task_write last_prompt_hash "\"$_phash_val\""
+  _task_write stage '"preexec_tests_done"'
+
+  local classify_json model max_turns agents_json
+  classify_json=$(_task_field classify)
+  if [[ -n "$classify_json" && "$classify_json" != "null" ]]; then
+    model=$(printf '%s' "$classify_json" | jq -r '.model // "sonnet"' 2>/dev/null || printf 'sonnet')
+    max_turns=$(printf '%s' "$classify_json" | jq -r '.maxTurns // .max_turns // 60' 2>/dev/null || printf '60')
+  else
+    model="sonnet"
+    max_turns="60"
+  fi
+  local _exec_isolation='null'
+  if [[ "$_has_origin" == "true" ]]; then
+    _exec_isolation='"worktree"'
+  fi
+  agents_json=$(jq -cn \
+    --arg role "task-executor" \
+    --arg pf   "$prompt_file" \
+    --arg m    "$model" \
+    --argjson mt "$max_turns" \
+    --argjson iso "$_exec_isolation" \
+    '[{subagent_type:$role, model:$m, maxTurns:$mt, prompt_file:$pf}
+      + (if $iso == null then {} else {isolation:$iso} end)]')
+  _record_active_task_for_stop_hook "$run_id" "$task_id" "$tw_wt"
+  _emit_manifest postexec "$agents_json"
+
+  t1=$(_now_ms)
+  log_step_end "preexec_tests" "spawn_executor" "$((t1-t0))" "task_id=\"$task_id\""
+  log_metric "task.executor_spawned" "task_id=\"$task_id\"" "model=\"$model\""
+  return 10
+}
+
