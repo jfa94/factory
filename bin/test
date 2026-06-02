@@ -27,6 +27,7 @@ SUITES=(
   mutation-gate
   mutation-workflow
   version-parity
+  secret-patterns
   security-gate
   run-command
   config
