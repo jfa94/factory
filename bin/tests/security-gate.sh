@@ -75,6 +75,34 @@ CMD
   printf '%s' "$d"
 }
 
+# A passing security command whose findings JSON embeds a secret in extra.lines.
+# The AKIA token is assembled at the stub's runtime so this test file carries no
+# committable secret.
+_mk_secret_cmd() {
+  local d; d=$(mktemp -d)
+  cat > "$d/semgrep" <<'CMD'
+#!/usr/bin/env bash
+key="AKIA""IOSFODNN7EXAMPLE"
+printf '{"results":[{"check_id":"r","path":"a.ts","extra":{"lines":"const k = \"%s\""}}],"errors":[]}\n' "$key"
+exit 0
+CMD
+  chmod +x "$d/semgrep"
+  printf '%s' "$d"
+}
+
+# A passing command that emits NON-JSON stdout containing a secret.
+_mk_secret_nonjson_cmd() {
+  local d; d=$(mktemp -d)
+  cat > "$d/semgrep" <<'CMD'
+#!/usr/bin/env bash
+key="AKIA""IOSFODNN7EXAMPLE"
+printf 'scan error near %s\n' "$key"
+exit 0
+CMD
+  chmod +x "$d/semgrep"
+  printf '%s' "$d"
+}
+
 # --- Test cases ---
 
 # Case 1: no securityCommand configured → skip (exit 2).
@@ -346,5 +374,65 @@ case13() {
   pass "case13: allowFailures=true → exit 0, state records allow_failures=true + ok=false + status=failed"
 }
 
-case1; case2; case3; case4; case5; case6; case7; case8; case9; case10; case11; case12; case13
+# Case 14: a secret embedded in findings JSON is redacted at rest (default on).
+case14() {
+  local env stub cmd wt
+  env=$(_mk_env "semgrep --config auto")   # securityRedactFindings defaults true
+  cmd=$(_mk_secret_cmd)
+  stub=$(_mk_stub_dir)
+  wt=$(mktemp -d)
+  set +e
+  out=$(CLAUDE_PLUGIN_DATA="$env" PATH="$cmd:$stub:$PATH" "$GATE" run-001 task-001 "$wt" 2>/dev/null)
+  rc=$?
+  set -e
+  [[ $rc -eq 0 ]] || fail "case14: expected exit 0, got $rc; out=$out"
+  local findings="$env/runs/run-001/task-001.security-findings.json"
+  [[ -f "$findings" ]] || fail "case14: findings file missing"
+  jq -e '.' "$findings" >/dev/null || fail "case14: findings not valid JSON after redaction: $(cat "$findings")"
+  # Match the key by pattern (no literal key in this test file).
+  if grep -Eq 'AKIA[0-9A-Z]{16}' "$findings"; then fail "case14: raw AWS key leaked: $(cat "$findings")"; fi
+  grep -q 'REDACTED' "$findings" || fail "case14: expected REDACTED marker; got $(cat "$findings")"
+  rm -rf "$env" "$cmd" "$stub" "$wt"
+  pass "case14: secret in findings JSON redacted at rest (default on)"
+}
+
+# Case 15: quality.securityRedactFindings=false preserves the raw findings.
+case15() {
+  local env stub cmd wt findings
+  env=$(_mk_env "semgrep --config auto")
+  jq '.quality.securityRedactFindings = false' "$env/config.json" > "$env/config.json.tmp" \
+    && mv "$env/config.json.tmp" "$env/config.json"
+  cmd=$(_mk_secret_cmd)
+  stub=$(_mk_stub_dir)
+  wt=$(mktemp -d)
+  set +e
+  CLAUDE_PLUGIN_DATA="$env" PATH="$cmd:$stub:$PATH" "$GATE" run-001 task-001 "$wt" >/dev/null 2>/dev/null
+  rc=$?
+  set -e
+  [[ $rc -eq 0 ]] || fail "case15: expected exit 0, got $rc"
+  findings="$env/runs/run-001/task-001.security-findings.json"
+  grep -Eq 'AKIA[0-9A-Z]{16}' "$findings" || fail "case15: opt-out must preserve raw key; got $(cat "$findings")"
+  rm -rf "$env" "$cmd" "$stub" "$wt"
+  pass "case15: securityRedactFindings=false preserves raw findings (opt-out)"
+}
+
+# Case 16: non-JSON stdout is redacted BEFORE being wrapped as raw_output.
+case16() {
+  local env stub cmd wt findings
+  env=$(_mk_env "semgrep --config auto")
+  cmd=$(_mk_secret_nonjson_cmd)
+  stub=$(_mk_stub_dir)
+  wt=$(mktemp -d)
+  set +e
+  CLAUDE_PLUGIN_DATA="$env" PATH="$cmd:$stub:$PATH" "$GATE" run-001 task-001 "$wt" >/dev/null 2>/dev/null
+  rc=$?
+  set -e
+  findings="$env/runs/run-001/task-001.security-findings.json"
+  jq -e '.raw_output' "$findings" >/dev/null || fail "case16: expected raw_output envelope; got $(cat "$findings")"
+  if grep -Eq 'AKIA[0-9A-Z]{16}' "$findings"; then fail "case16: raw key leaked in raw_output: $(cat "$findings")"; fi
+  rm -rf "$env" "$cmd" "$stub" "$wt"
+  pass "case16: non-JSON output redacted before raw_output wrap"
+}
+
+case1; case2; case3; case4; case5; case6; case7; case8; case9; case10; case11; case12; case13; case14; case15; case16
 printf 'all security-gate tests passed\n'
