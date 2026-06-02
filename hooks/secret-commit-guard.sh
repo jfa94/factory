@@ -21,6 +21,8 @@ fi
 
 # shellcheck source=/dev/null
 source "$(dirname "$0")/_security-common.sh"
+# shellcheck source=../bin/_secret-patterns.sh
+source "$(dirname "$0")/../bin/_secret-patterns.sh"
 
 input=$(cat)
 command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)
@@ -89,27 +91,10 @@ PATH_BLOCKLIST=(
 )
 
 # --- Built-in content-regex patterns ---
-CONTENT_PATTERNS=(
-  'AKIA[0-9A-Z]{16}'
-  'ghp_[A-Za-z0-9]{36}'
-  'ghs_[A-Za-z0-9]{36}'
-  'gho_[A-Za-z0-9]{36}'
-  'ghr_[A-Za-z0-9]{36}'
-  'sk-ant-(api03-)?[A-Za-z0-9_-]{20,}'
-  'sk-[A-Za-z0-9]{20,}'
-  'xox[bpars]-[A-Za-z0-9-]{10,}'
-  'AIza[A-Za-z0-9_-]{35}'
-  'sk_live_[A-Za-z0-9]{20,}'
-  'rk_live_[A-Za-z0-9]{20,}'
-  'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+'
-  'aws_secret_access_key[[:space:]]*=[[:space:]]*[A-Za-z0-9/+=]{40}'
-  '"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN'
-  '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----'
-  'github_pat_[A-Za-z0-9_]{60,}'
-  'sk-proj-[A-Za-z0-9_-]{40,}'
-  'nvapi-[A-Za-z0-9_-]{40,}'
-  'xai-[A-Za-z0-9]{40,}'
-)
+# Single source of truth lives in bin/_secret-patterns.sh (shared with
+# pipeline-security-gate's redact_secrets). Alias to the local name so the
+# scan loop below is unchanged.
+CONTENT_PATTERNS=("${FACTORY_SECRET_CONTENT_PATTERNS[@]}")
 
 # Load user allowlist of safe patterns (regex). Absent config → empty list.
 allowed_patterns=()
