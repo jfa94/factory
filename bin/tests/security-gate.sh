@@ -103,6 +103,22 @@ CMD
   printf '%s' "$d"
 }
 
+# A passing command that emits a secret to STDERR (verbose/error mode) while
+# stdout stays valid JSON. The AKIA token is assembled at runtime so this test
+# file carries no committable secret.
+_mk_secret_stderr_cmd() {
+  local d; d=$(mktemp -d)
+  cat > "$d/semgrep" <<'CMD'
+#!/usr/bin/env bash
+key="AKIA""IOSFODNN7EXAMPLE"
+printf 'verbose: scanning, offending line const k = "%s"\n' "$key" >&2
+printf '{"results":[],"errors":[]}\n'
+exit 0
+CMD
+  chmod +x "$d/semgrep"
+  printf '%s' "$d"
+}
+
 # --- Test cases ---
 
 # Case 1: no securityCommand configured → skip (exit 2).
@@ -456,5 +472,47 @@ case17() {
   pass "case17: malformed flag value still redacts (fail-closed)"
 }
 
-case1; case2; case3; case4; case5; case6; case7; case8; case9; case10; case11; case12; case13; case14; case15; case16; case17
+# Case 18: a secret echoed to the scanner's STDERR is redacted in the companion
+# .security-gate.log at rest (default on). Mirrors case14 but targets stderr.
+case18() {
+  local env stub cmd wt logf
+  env=$(_mk_env "semgrep --config auto")   # securityRedactFindings defaults true
+  cmd=$(_mk_secret_stderr_cmd)
+  stub=$(_mk_stub_dir)
+  wt=$(mktemp -d)
+  set +e
+  out=$(CLAUDE_PLUGIN_DATA="$env" PATH="$cmd:$stub:$PATH" "$GATE" run-001 task-001 "$wt" 2>/dev/null)
+  rc=$?
+  set -e
+  [[ $rc -eq 0 ]] || fail "case18: expected exit 0, got $rc; out=$out"
+  logf="$env/runs/run-001/task-001.security-gate.log"
+  [[ -f "$logf" ]] || fail "case18: stderr log file missing at $logf"
+  if grep -Eq 'AKIA[0-9A-Z]{16}' "$logf"; then fail "case18: raw AWS key leaked in stderr log: $(cat "$logf")"; fi
+  grep -q 'REDACTED' "$logf" || fail "case18: expected REDACTED marker in log; got $(cat "$logf")"
+  rm -rf "$env" "$cmd" "$stub" "$wt"
+  pass "case18: secret on scanner stderr redacted in .security-gate.log (default on)"
+}
+
+# Case 19: quality.securityRedactFindings=false preserves the raw stderr log
+# (same opt-out that case15 covers for the findings artifact).
+case19() {
+  local env stub cmd wt logf
+  env=$(_mk_env "semgrep --config auto")
+  jq '.quality.securityRedactFindings = false' "$env/config.json" > "$env/config.json.tmp" \
+    && mv "$env/config.json.tmp" "$env/config.json"
+  cmd=$(_mk_secret_stderr_cmd)
+  stub=$(_mk_stub_dir)
+  wt=$(mktemp -d)
+  set +e
+  CLAUDE_PLUGIN_DATA="$env" PATH="$cmd:$stub:$PATH" "$GATE" run-001 task-001 "$wt" >/dev/null 2>/dev/null
+  rc=$?
+  set -e
+  [[ $rc -eq 0 ]] || fail "case19: expected exit 0, got $rc"
+  logf="$env/runs/run-001/task-001.security-gate.log"
+  grep -Eq 'AKIA[0-9A-Z]{16}' "$logf" || fail "case19: opt-out must preserve raw stderr key; got $(cat "$logf")"
+  rm -rf "$env" "$cmd" "$stub" "$wt"
+  pass "case19: securityRedactFindings=false preserves raw stderr log (opt-out)"
+}
+
+case1; case2; case3; case4; case5; case6; case7; case8; case9; case10; case11; case12; case13; case14; case15; case16; case17; case18; case19
 printf 'all security-gate tests passed\n'

@@ -998,7 +998,7 @@ pipeline-security-gate <run-id> <task-id> [<worktree>]
 4. Validate command prefix against allowed runners: `semgrep`, `pytest`, `vitest`, `jest`, `mocha`, `phpunit`, `rspec`, `go test`, `cargo test`, `deno test`, `bundle exec rspec`
 5. Execute command in task worktree
 6. Save stdout to `$CLAUDE_PLUGIN_DATA/runs/<run-id>/<task-id>.security-findings.json`
-7. Unless `quality.securityRedactFindings` is `false`, redact secret-bearing matches from the saved findings file in place (replace with `[REDACTED]`); on redaction error, fail closed by writing `{"error": "redaction_failed", "exit_code": N}`
+7. Unless `quality.securityRedactFindings` is `false`, redact secret-bearing matches from **both** at-rest artifacts in place (replace with `[REDACTED]`): the findings file (stdout) and the `.security-gate.log` (stderr — verbose/error-mode scanners can echo offending lines there). Each fails closed on a redaction error: the findings file is replaced with `{"error": "redaction_failed", "exit_code": N}`, and the log with the plain-text marker `[redaction_failed: raw scanner stderr withheld to avoid secrets at rest; exit_code=N]`
 8. If stdout is not valid JSON, wrap raw output in `{"raw_output": "...", "exit_code": N}`
 9. Write structured result to state at `.tasks.<task-id>.security_gate`
 
@@ -1038,11 +1038,11 @@ pipeline-security-gate <run-id> <task-id> [<worktree>]
 
 **Configuration:**
 
-| Setting                          | Default | Description                                                                      |
-| -------------------------------- | ------- | -------------------------------------------------------------------------------- |
-| `quality.securityCommand`        | (none)  | Command to run; unset = gate skipped                                             |
-| `quality.securityAllowFailures`  | false   | When true, findings are recorded but non-blocking                                |
-| `quality.securityRedactFindings` | true    | Redact secrets from the findings artifact before write; `false` keeps raw output |
+| Setting                          | Default | Description                                                                                                                       |
+| -------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `quality.securityCommand`        | (none)  | Command to run; unset = gate skipped                                                                                              |
+| `quality.securityAllowFailures`  | false   | When true, findings are recorded but non-blocking                                                                                 |
+| `quality.securityRedactFindings` | true    | Redact secrets from both at-rest artifacts (findings stdout + `.security-gate.log` stderr) before write; `false` keeps raw output |
 
 ---
 
