@@ -592,3 +592,381 @@ _stage_preexec_tests() {
   return 10
 }
 
+# --- postexec ---------------------------------------------------------------
+_stage_postexec() {
+  local t0 t1
+  t0=$(_now_ms)
+  log_step_begin "postexec" "task_id=\"$task_id\""
+
+  # REQUEST_CHANGES re-entry: postreview set reviewer_only=true and spawned an
+  # executor-fix. Executor has now committed fixes; gates MUST re-run regardless
+  # of current stage rank. Check this BEFORE the spawn-pending crash-recovery
+  # guard so stale review_files from the prior round don't trigger a spurious skip.
+  local _reviewer_only_pending=false
+  if _already_past postexec_done; then
+    local reviewer_only
+    reviewer_only=$(_task_field postexec_reviewer_only)
+    reviewer_only=$(_unquote_json_string "$reviewer_only")
+    if [[ "$reviewer_only" != "true" ]]; then
+      t1=$(_now_ms)
+      log_step_end "postexec" "skipped" "$((t1-t0))" "task_id=\"$task_id\""
+      return 0
+    fi
+    # Re-entry: defer clears until after manifest emission so a crash in this
+    # window doesn't lose the reviewer_only signal.
+    _reviewer_only_pending=true
+  fi
+
+  # postexec_spawn_pending: gates passed + manifest emitted last run but
+  # postreview hasn't written postexec_done yet (crash window).
+  # Skipped for reviewer_only re-entry (handled above) — we want gates + a fresh manifest.
+  # Re-check review_files: populated means Codex ran sync — resume into postreview.
+  # Empty means agent path — re-emit manifest (idempotent).
+  if ! $_reviewer_only_pending && _already_past postexec_spawn_pending; then
+    local existing_rf
+    existing_rf=$(_task_field review_files 2>/dev/null || printf 'null')
+    local rf_count
+    rf_count=$(printf '%s' "$existing_rf" | jq 'if type=="array" then length else 0 end' 2>/dev/null || printf '0')
+    if (( rf_count > 0 )); then
+      t1=$(_now_ms)
+      log_step_end "postexec" "skipped_resume_codex" "$((t1-t0))" "task_id=\"$task_id\""
+      return 0
+    fi
+    local wt_resume
+    wt_resume=$(_task_field worktree)
+    wt_resume=$(_unquote_json_string "$wt_resume")
+    _emit_postexec_manifest "$wt_resume"
+    t1=$(_now_ms)
+    log_step_end "postexec" "re_emit_manifest" "$((t1-t0))" "task_id=\"$task_id\""
+    return 10
+  fi
+
+  _run_stage_quota_gate postexec "$t0"
+  local _qrc=$?
+  (( _qrc != 0 )) && return $_qrc
+
+  local wt
+  wt=$(_task_field worktree)
+  wt=$(_unquote_json_string "$wt")
+  [[ -z "$wt" ]] && wt="$worktree"
+  if [[ -z "$wt" ]]; then
+    log_error "worktree not set for task $task_id (SubagentStop hook missing?); pass --worktree"
+    _fail_task "missing_worktree"
+    t1=$(_now_ms)
+    log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\""
+    return 30
+  fi
+  _task_write worktree "\"$wt\""
+
+  set +e
+  pipeline-quality-gate "$run_id" "$task_id" "$wt" >/dev/null
+  local _qg_pe_rc=$?
+  set -e
+  if (( _qg_pe_rc != 0 && _qg_pe_rc != 2 )); then
+    # rc=2 = legitimately skipped (no package.json / no scripts); treat as pass.
+    log_warn "quality gate failed for $task_id"
+    _fail_task "quality"
+    t1=$(_now_ms)
+    log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"quality\""
+    return 30
+  fi
+
+  set +e
+  pipeline-security-gate "$run_id" "$task_id" "$wt" >/dev/null
+  local _sg_pe_rc=$?
+  set -e
+  if (( _sg_pe_rc != 0 && _sg_pe_rc != 2 )); then
+    log_warn "security gate failed for $task_id"
+    _fail_task "security"
+    t1=$(_now_ms)
+    log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"security\""
+    return 30
+  fi
+
+  if ! ( cd "$wt" && pipeline-tdd-gate --task-id "$task_id" --run-id "$run_id" ) >/dev/null; then
+    # pipeline-tdd-gate is the sole writer of quality_gates.tdd (it persists
+    # the structured result via "$_STATE_BIN" task-write). Do not duplicate
+    # the write here — that would clobber violation details with a bare
+    # {"ok":false} object.
+    log_warn "tdd gate failed for $task_id"
+    _fail_task "tdd"
+    t1=$(_now_ms)
+    log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"tdd\""
+    return 30
+  fi
+
+  local cov_before="$run_dir/.state/$run_id/$task_id.coverage-before.json"
+  local cov_after="$wt/coverage/coverage-summary.json"
+  if [[ -f "$cov_before" && -f "$cov_after" ]]; then
+    if ! pipeline-coverage-gate "$cov_before" "$cov_after" --task-id "$task_id" >/dev/null; then
+      log_warn "coverage gate failed for $task_id"
+      _task_write quality_gates.coverage '"fail"'
+      _fail_task "coverage"
+      t1=$(_now_ms)
+      log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"coverage\""
+      return 30
+    fi
+    _task_write quality_gates.coverage '"ok"'
+  else
+    _task_write quality_gates.coverage '"skipped"'
+  fi
+
+  local holdout_file="$run_dir/holdouts/$task_id.json"
+  if [[ -f "$holdout_file" ]]; then
+    local reviewer_output
+    reviewer_output=$(_task_field holdout_review_file)
+    reviewer_output=$(_unquote_json_string "$reviewer_output")
+    if [[ -n "$reviewer_output" && -f "$reviewer_output" ]]; then
+      if pipeline-holdout-validate check "$run_id" "$task_id" "$reviewer_output" >/dev/null; then
+        _task_write quality_gates.holdout '"pass"'
+      else
+        _task_write quality_gates.holdout '"fail"'
+        log_warn "holdout failed for $task_id"
+        _fail_task "holdout"
+        t1=$(_now_ms)
+        log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout\""
+        return 30
+      fi
+    else
+      # No holdout review yet — first-pass spawn. The dedicated holdout-reviewer
+      # gets a focused prompt (criterion-by-criterion verification) built by
+      # `pipeline-holdout-validate prompt`. The subagent-stop-transcript hook
+      # detects the holdout-reviewer prompt path and writes the review output
+      # back to `.tasks.<id>.holdout_review_file` so the next postexec invocation
+      # finds it above and runs `check`.
+      local _ho_attempts _ho_attempts_n
+      _ho_attempts=$(_task_field holdout_attempts)
+      _ho_attempts=$(_unquote_json_string "$_ho_attempts")
+      _ho_attempts_n=${_ho_attempts:-0}
+      [[ "$_ho_attempts_n" =~ ^[0-9]+$ ]] || _ho_attempts_n=0
+
+      if (( _ho_attempts_n < 2 )); then
+        _ensure_prompt_dir
+        local _ho_prompt_file
+        _ho_prompt_file=$(_prompt_path holdout-reviewer)
+        # `pipeline-holdout-validate prompt` produces a criterion-by-criterion
+        # prompt body on stdout. Wrap with the standard `[task:<id>]` header so
+        # transcript-grep / task_id derivation in the SubagentStop hook works.
+        {
+          printf '[task:%s]\n' "$task_id"
+          printf '[role:holdout-reviewer]\n'
+          pipeline-holdout-validate prompt "$run_id" "$task_id" --worktree "$wt"
+        } > "$_ho_prompt_file" || {
+          log_error "pipeline-holdout-validate prompt failed for $task_id"
+          _fail_task "holdout_prompt"
+          t1=$(_now_ms)
+          log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout_prompt\""
+          return 30
+        }
+
+        _task_write holdout_attempts "$((_ho_attempts_n + 1))"
+        _task_write quality_gates.holdout '"pending"'
+
+        local _ho_agents_json
+        _ho_agents_json=$(jq -cn --arg pf "$_ho_prompt_file" --arg _model "$_reviewer_model" \
+          --argjson _max_turns "$_reviewer_max_turns_deep" \
+          '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf, role:"holdout-reviewer"}]')
+        _record_active_task_for_stop_hook "$run_id" "$task_id" "$wt"
+        # stage_after=postexec so the orchestrator re-invokes this stage; the
+        # next entry finds holdout_review_file populated and runs `check`.
+        _emit_manifest postexec "$_ho_agents_json"
+        t1=$(_now_ms)
+        log_step_end "postexec" "spawn_holdout_reviewer" "$((t1-t0))" "task_id=\"$task_id\"" "attempt=\"$((_ho_attempts_n + 1))\""
+        return 10
+      fi
+
+      # Spawn already attempted twice without a review-file write — fail closed.
+      # Layer B (subagent-stop hook) is the writer; reaching this branch means
+      # the hook failed to capture the holdout-reviewer output path.
+      log_error "holdout reviewer spawned but holdout_review_file unwired for $task_id after $_ho_attempts_n attempts — escalating to human"
+      _task_write quality_gates.holdout '"missing-reviewer-output"'
+      "$_STATE_BIN" task-status "$run_id" "$task_id" needs_human_review >/dev/null \
+        || log_error "task-status needs_human_review write failed for $task_id"
+      t1=$(_now_ms)
+      log_step_end "postexec" "needs_human_review" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"holdout_unwired\""
+      return 30
+    fi
+  fi
+
+  if $_reviewer_only_pending; then
+    # Gates passed for the reviewer_only re-entry; safe to clear the signal and
+    # rewind stage so _emit_postexec_manifest advances cleanly. A crash before
+    # this point preserves postexec_reviewer_only=true so resume re-enters here.
+    _task_write postexec_reviewer_only 'null'
+    _task_write review_files '[]'
+    _task_write stage '"preexec_tests_done"'
+  fi
+
+  local _manifest_rc
+  _emit_postexec_manifest "$wt" && _manifest_rc=$? || _manifest_rc=$?
+  if (( _manifest_rc == 30 )); then
+    _fail_task "manifest"
+    t1=$(_now_ms)
+    log_step_end "postexec" "failed" "$((t1-t0))" "task_id=\"$task_id\"" "reason=\"manifest\""
+    return 30
+  fi
+  t1=$(_now_ms)
+  log_step_end "postexec" "spawn" "$((t1-t0))" "task_id=\"$task_id\"" "reviewers=\"implementation+quality\""
+  return 10
+}
+
+# Helper: build + emit reviewer manifest. Writes postexec_spawn_pending before
+# any asynchronous work so a crash leaves a recoverable intermediate stage.
+# Returns 10 for both Codex and agent paths (caller exits 10 to yield to subagents).
+# Returns 30 on failure.
+_emit_postexec_manifest() {
+  local wt="$1"
+  _record_active_task_for_stop_hook "$run_id" "$task_id" "$wt"
+  local detect provider
+  detect=$(pipeline-detect-reviewer) || log_warn "detect-reviewer exited non-zero — defaulting provider to agent"
+  provider=$(printf '%s' "$detect" | jq -r '.reviewer // "agent"' 2>/dev/null)
+  [[ -z "$provider" || "$provider" == "null" ]] && provider="agent"
+  log_metric "task.review.provider" "task_id=\"$task_id\"" "reviewer=\"$provider\""
+
+  local tier
+  tier=$(_task_field risk_tier)
+  tier=$(_unquote_json_string "$tier")
+  [[ -z "$tier" ]] && tier="routine"
+
+  _ensure_prompt_dir
+  local pf
+  pf=$(_prompt_path reviewer)
+  {
+    printf '[task:%s]\n' "$task_id"
+    printf 'Review task %s in the worktree at %s.\n' "$task_id" "$wt"
+    printf 'End your response with exactly one of:\n'
+    printf '  STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT\n'
+  } > "$pf"
+
+  local prior_blockers
+  prior_blockers=$(_task_field postreview_prior_blockers 2>/dev/null || printf 'null')
+  local pb_len
+  pb_len=$(printf '%s' "$prior_blockers" | jq 'if type=="array" then length else 0 end' 2>/dev/null || printf '0')
+  if (( pb_len > 0 )); then
+    {
+      printf '\nPrior review round raised these blockers. For EACH blocker, include a\n'
+      printf '"prior_blocker_map" array in your JSON verdict section:\n'
+      printf '  {"prior_blocker_map": [{"id": <N>, "status": "resolved|still-present|invalidated", "notes": "..."}]}\n'
+      printf '\nPrior blockers:\n'
+      printf '%s' "$prior_blockers" | jq -r '.[] | "  [\(.id)] \(.severity // "?"): \(.description // "(none)") [\(.file // "?"):\(.line // "?")]"' 2>/dev/null || true
+    } >> "$pf"
+  fi
+
+  # When static security analysis ran, pass findings to the security-reviewer
+  # so it triages tool output rather than re-running the scan itself.
+  if [[ "$tier" == "security" ]]; then
+    local _sec_findings="${CLAUDE_PLUGIN_DATA}/runs/${run_id}/${task_id}.security-findings.json"
+    if [[ -f "$_sec_findings" ]]; then
+      printf '\nStatic security analysis findings are at: %s\n' "$_sec_findings" >> "$pf"
+      printf 'Triage these findings before starting your review — do not re-run the scan.\n' >> "$pf"
+    fi
+  fi
+
+  if [[ "$provider" == "codex" ]]; then
+    local review_file="$run_dir/.state/$run_id/$task_id.review.codex.json"
+    local spec_path
+    spec_path=$("$_STATE_BIN" read "$run_id" '.spec.path // ""' 2>/dev/null || printf '')
+    local cargs=(--task-id "$task_id" --worktree "$wt")
+    [[ -n "$spec_path" ]] && cargs+=(--spec-dir "$spec_path")
+    local _codex_err_file _codex_rc=0
+    _codex_err_file=$(mktemp "${TMPDIR:-/tmp}/codex-review-err.XXXXXX")
+    "$_CODEX_REVIEW_BIN" "${cargs[@]}" > "$review_file" 2> "$_codex_err_file" || _codex_rc=$?
+    local _codex_err="" _need_fallback=0
+    if (( _codex_rc != 0 )); then
+      _codex_err=$(cat "$_codex_err_file" 2>/dev/null || printf '')
+      _need_fallback=1
+    elif [[ ! -s "$review_file" ]] || ! jq -e . "$review_file" >/dev/null 2>&1; then
+      _codex_err=$(cat "$_codex_err_file" 2>/dev/null || printf '')
+      _need_fallback=1
+    else
+      # Inverse-hallucination guard: validate_findings preserves the verdict
+      # when it drops unverifiable findings, so codex output can arrive as
+      # REQUEST_CHANGES with zero verified findings (blocking + non-blocking).
+      # That is not actionable — there is nothing for the executor to fix.
+      # Treat it the same as a codex failure so the agent reviewer takes over.
+      local _verdict _blk _nblk
+      _verdict=$(jq -r '.verdict // ""' "$review_file" 2>/dev/null)
+      _blk=$(jq -r '.blocking_count // 0' "$review_file" 2>/dev/null)
+      _nblk=$(jq -r '.non_blocking_count // 0' "$review_file" 2>/dev/null)
+      if [[ "$_verdict" == "APPROVE" || "$_verdict" == "APPROVED" ]] && (( _blk > 0 )); then
+        _codex_err="codex_inverse_hallucination: APPROVE with $_blk blocking finding(s)"
+        log_metric "task.review.codex_inverse_hallucination" \
+          "task_id=\"$task_id\"" \
+          "kind=\"approve_with_blockers\"" \
+          "blocking=$_blk"
+        rm -f "$review_file"
+        _need_fallback=1
+      elif [[ "$_verdict" == "REQUEST_CHANGES" ]] && (( _blk == 0 && _nblk == 0 )); then
+        _codex_err="codex_inverse_hallucination: REQUEST_CHANGES with zero verified findings"
+        log_metric "task.review.codex_inverse_hallucination" \
+          "task_id=\"$task_id\"" \
+          "summary=\"$(jq -r '.summary // ""' "$review_file" 2>/dev/null | tr '\n' ' ' | cut -c1-200)\""
+        # Discard the unusable verdict file so the orchestrator does not
+        # accidentally re-read it on resume.
+        rm -f "$review_file"
+        _need_fallback=1
+      fi
+    fi
+    rm -f "$_codex_err_file"
+    if (( _need_fallback )); then
+      log_warn "codex review unavailable for $task_id (rc=$_codex_rc); falling back to agent reviewers. codex stderr tail: $(printf '%s' "$_codex_err" | tail -c 500)"
+      provider="agent"
+      # fall through to agent-path block below
+    else
+      _task_write review_files "$(jq -n --arg f "$review_file" '[$f]')"
+      # Codex review is synchronous — no crash window, advance directly to postexec_done.
+      _task_write stage '"postexec_done"'
+      # Reviewer model is intentionally fixed (sonnet or opus), not routed through
+      # pipeline-model-router. Routing reviewer model by quota tier would let two
+      # reviews of the same task disagree because they ran on different models —
+      # review consistency outweighs quota economy. See docs/explanation/decisions.md
+      # "Decision 18: Reviewer Model is Fixed, Not Quota-Routed". Do not change
+      # without updating that decision.
+      local codex_agents_json
+      codex_agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_reviewer_model" \
+        '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:$_model, maxTurns:1, prompt_file:$pf}]')
+      case "$tier" in
+        feature)
+          codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
+            --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+            '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]') ;;
+        security)
+          codex_agents_json=$(printf '%s' "$codex_agents_json" | jq -c --arg pf "$pf" \
+            --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+            '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf},
+                  {subagent_type:"architecture-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]') ;;
+      esac
+      _emit_manifest postreview "$codex_agents_json"
+      return 10
+    fi
+  fi
+
+  # Agent path: write stage before manifest emission — crash between means
+  # resume re-enters postexec_spawn_pending and re-emits (idempotent).
+  _task_write stage '"postexec_spawn_pending"'
+
+  local agents_json
+  agents_json=$(jq -cn --arg pf "$pf" --arg _model "$_reviewer_model" \
+    --argjson _max_turns "$_reviewer_max_turns_deep" \
+    '[{subagent_type:"implementation-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
+
+  case "$tier" in
+    feature)
+      agents_json=$(printf '%s' "$agents_json" | jq -c --arg pf "$pf" \
+        --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+        '. + [{subagent_type:"architecture-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]') ;;
+    security)
+      agents_json=$(printf '%s' "$agents_json" | jq -c --arg pf "$pf" \
+        --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+        '. + [{subagent_type:"security-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf},
+              {subagent_type:"architecture-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]') ;;
+  esac
+
+  agents_json=$(printf '%s' "$agents_json" | jq -c --arg pf "$pf" \
+    --arg _model "$_reviewer_model" --argjson _max_turns "$_reviewer_max_turns_deep" \
+    '. + [{subagent_type:"quality-reviewer", isolation:"worktree", model:$_model, maxTurns:$_max_turns, prompt_file:$pf}]')
+
+  _emit_manifest postreview "$agents_json"
+  return 10
+}
+
