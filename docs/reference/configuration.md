@@ -269,6 +269,25 @@ Command to run as a static security analysis gate during `pipeline-run-task` pos
 
 When `true`, `pipeline-security-gate` records findings but does not block the task. Useful during initial rollout to observe findings without breaking the pipeline.
 
+### quality.securityRedactFindings
+
+| Property | Value   |
+| -------- | ------- |
+| Type     | boolean |
+| Default  | true    |
+
+When `true` (default), `pipeline-security-gate` passes the security command's
+stdout through a secret-redaction pass before writing the findings artifact,
+replacing any matched secret token (the same pattern set as
+`hooks/secret-commit-guard.sh`) with `[REDACTED]`. This keeps secret-bearing
+source snippets — which scanners like Semgrep embed in their findings — out of
+`$CLAUDE_PLUGIN_DATA` at rest.
+
+Set to `false` to persist the raw scanner output verbatim. This keeps full
+fidelity for local debugging but means the findings file may contain secrets;
+do not export it (PR comment, gist, telemetry, artifact upload) without
+re-running it through redaction.
+
 ---
 
 ## Task Execution

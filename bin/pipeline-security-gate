@@ -12,19 +12,23 @@
 #
 # Security note (M14): the findings artifact is the raw stdout of the
 # configured security command (typically `semgrep --json …`). Many semgrep
-# rules embed offending source snippets in their findings, which means the
-# persisted file may contain secret-bearing material (API keys, tokens,
-# credentials) lifted from the codebase under audit. `$CLAUDE_PLUGIN_DATA`
-# is treated as private operator state, not a secret store, so:
-#   - do NOT publish findings files to PRs, gists, telemetry, or remote
-#     review tools without an explicit redaction pass;
-#   - retention sweeps in `pipeline-cleanup` should treat these files as
-#     sensitive (they already inherit the runs/<run-id> lifetime);
-#   - any future code path that surfaces findings to humans or external
-#     systems must scrub matches against the secret regex set used by
-#     `hooks/secret-commit-guard.sh`.
-# Implementing a redaction pass here is out of scope for the comprehensive-
-# review fix batch — flag for follow-up if findings are ever exported.
+# rules embed offending source snippets, so raw stdout can contain
+# secret-bearing material (API keys, tokens) lifted from the audited codebase.
+#
+# To keep secrets out of state at rest, stdout is passed through
+# `redact_secrets` (bin/_secret-patterns.sh — the same pattern set as
+# hooks/secret-commit-guard.sh) before the artifact is written, replacing each
+# match with `[REDACTED]`. This is on by default; set
+# `quality.securityRedactFindings=false` to keep full fidelity for local
+# debugging.
+#
+# Residual risk (opt-out path only): when securityRedactFindings=false the
+# artifact may contain secrets. `$CLAUDE_PLUGIN_DATA` is operator-private state,
+# so when redaction is disabled:
+#   - do NOT publish findings files to PRs, gists, telemetry, or remote review
+#     tools without re-running them through `redact_secrets`;
+#   - retention sweeps in `pipeline-cleanup` treat these files as sensitive
+#     (they inherit the runs/<run-id> lifetime).
 #
 # Exit codes:
 #   0  — gate passed (no findings or allowFailures=true)
@@ -115,8 +119,8 @@ mkdir -p "$run_dir"
 
 findings_file="$run_dir/${task_id}.security-findings.json"
 log_file="$run_dir/${task_id}.security-gate.log"
-# M14: see header — findings_file may contain secret-bearing source snippets.
-# Treat as sensitive; do not export without a redaction pass.
+# M14: stdout is redacted in place below via redact_secrets before persistence
+# (unless quality.securityRedactFindings=false). See header.
 
 start=$(date +%s)
 set +e

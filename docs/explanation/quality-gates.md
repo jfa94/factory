@@ -56,8 +56,9 @@ This layer is opt-in because not all projects have SAST tooling configured. Once
 2. If unset, the gate is skipped (exit 2) and the pipeline continues
 3. If set, the command is validated against a strict allowlist (same discipline as `redTestCommand`)
 4. Command runs in the task worktree; stdout is captured as the findings artifact
-5. Findings are written to `$CLAUDE_PLUGIN_DATA/runs/<run-id>/<task-id>.security-findings.json`
-6. For security-tier tasks, the `security-reviewer` agent receives the findings path and triages them before manual review
+5. Unless `quality.securityRedactFindings` is `false`, the artifact is passed through a secret-redaction pass (the same pattern set as `hooks/secret-commit-guard.sh`) so secret-bearing source snippets lifted by the scanner are replaced with `[REDACTED]` before anything reads the file
+6. Findings are written to `$CLAUDE_PLUGIN_DATA/runs/<run-id>/<task-id>.security-findings.json`
+7. For security-tier tasks, the `security-reviewer` agent receives the findings path and triages them before manual review
 
 **Failure behavior:**
 
@@ -65,10 +66,11 @@ By default, a non-zero exit from the security command fails the task. Set `quali
 
 **Configuration:**
 
-| Setting                         | Default | Description                                                |
-| ------------------------------- | ------- | ---------------------------------------------------------- |
-| `quality.securityCommand`       | (none)  | Command to run (e.g., `semgrep --config auto --error`)     |
-| `quality.securityAllowFailures` | false   | When true, findings are recorded but do not block the task |
+| Setting                          | Default | Description                                                                                                            |
+| -------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `quality.securityCommand`        | (none)  | Command to run (e.g., `semgrep --config auto --error`)                                                                 |
+| `quality.securityAllowFailures`  | false   | When true, findings are recorded but do not block the task                                                             |
+| `quality.securityRedactFindings` | true    | Redact secrets from the findings artifact before it is written. Set `false` to keep full fidelity for local debugging. |
 
 ---
 
