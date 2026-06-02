@@ -184,7 +184,10 @@ bare_tr_count=$(grep -c "tr -d '\"'" "$BIN_DIR/pipeline-rescue-apply" || true)
 assert_eq "rescue-apply: zero bare 'tr -d \"\"' calls" "0" "$bare_tr_count"
 
 echo "=== M12: pipeline-run-task uses _unquote_json_string, not bare tr -d '\"' ==="
-bare_tr_count_rt=$(grep -c "tr -d '\"'" "$BIN_DIR/pipeline-run-task" || true)
+# Count across the combined program text: stage handlers may live in
+# pipeline-run-task or its sourced pipeline-run-task-stages.sh, and a bare
+# `tr -d '"'` is forbidden in either (2>/dev/null tolerates an absent stages file).
+bare_tr_count_rt=$(cat "$BIN_DIR/pipeline-run-task" "$BIN_DIR/pipeline-run-task-stages.sh" 2>/dev/null | grep -c "tr -d '\"'" || true)
 assert_eq "pipeline-run-task: zero bare 'tr -d \"\"' calls" "0" "$bare_tr_count_rt"
 
 echo "=== M12: _unquote_json_string preserves embedded quotes in field values ==="

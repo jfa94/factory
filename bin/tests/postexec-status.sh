@@ -13,6 +13,15 @@ trap 'rm -rf "$ROOT_TMP"' EXIT INT TERM
 
 export PATH="$STUB_DIR:$BIN_DIR:$PATH"
 
+# Stage handlers may live in pipeline-run-task or its sourced
+# pipeline-run-task-stages.sh. Build a combined program text so the static
+# source-inspection assertions below follow functions across the file split
+# (2>/dev/null tolerates a layout where the stages file does not exist).
+PRT_COMBINED="$ROOT_TMP/prt-combined.sh"
+# `|| true` because cat returns non-zero when the stages file is absent, which
+# would trip `set -e`; we still get the main file's content in that case.
+cat "$BIN_DIR/pipeline-run-task" "$BIN_DIR/pipeline-run-task-stages.sh" 2>/dev/null > "$PRT_COMBINED" || true
+
 pass=0
 fail=0
 
@@ -115,7 +124,9 @@ echo ""
 echo "=== postreview-fix spawn uses classified per-task model (not reviewer model) ==="
 # Locate the executor-fix prompt-file declaration line, then inspect the
 # ~20 lines that follow it (which contain the spawn manifest jq block).
-prt_file="$BIN_DIR/pipeline-run-task"
+# Search the combined program text so the assertion follows the spawn block
+# wherever it lives after the run-task/stages file split.
+prt_file="$PRT_COMBINED"
 fix_line=$(grep -n '_prompt_path executor-fix' "$prt_file" | head -1 | cut -d: -f1)
 if [[ -z "$fix_line" ]]; then
   echo "  FAIL: postreview-fix: could not locate executor-fix prompt declaration"
@@ -139,7 +150,9 @@ fi
 
 echo ""
 echo "=== red-test verification: _verify_red_tests does NOT swallow git errors with || true ==="
-PIPELINE_RUN_TASK="$BIN_DIR/pipeline-run-task"
+# Search the combined program text so the function locator follows _verify_red_tests
+# wherever it lives after the run-task/stages file split.
+PIPELINE_RUN_TASK="$PRT_COMBINED"
 # Locate the _verify_red_tests function and inspect a window for the git diff call.
 verify_line=$(grep -n '^_verify_red_tests()' "$PIPELINE_RUN_TASK" | head -1 | cut -d: -f1)
 if [[ -z "$verify_line" ]]; then

@@ -169,7 +169,14 @@ echo "=== ship-stage ci-fix spawn uses classified per-task model (not reviewer m
 # Locate the executor-ci-fix prompt-file declaration line, then inspect the
 # ~25 lines that follow it (which contain the spawn manifest jq block).
 BIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-prt_file="$BIN_DIR/pipeline-run-task"
+# Stage handlers may live in pipeline-run-task or its sourced
+# pipeline-run-task-stages.sh. Search the combined program text so the
+# assertion follows the ship ci-fix spawn block across the file split
+# (2>/dev/null tolerates a layout where the stages file does not exist).
+prt_file="$CLAUDE_PLUGIN_DATA/prt-combined.sh"
+# `|| true` because cat returns non-zero when the stages file is absent, which
+# would trip `set -e`; we still get the main file's content in that case.
+cat "$BIN_DIR/pipeline-run-task" "$BIN_DIR/pipeline-run-task-stages.sh" 2>/dev/null > "$prt_file" || true
 fix_line=$(grep -n '_prompt_path executor-ci-fix' "$prt_file" | head -1 | cut -d: -f1)
 if [[ -z "$fix_line" ]]; then
   echo "  FAIL: ship-ci-fix: could not locate executor-ci-fix prompt declaration"
