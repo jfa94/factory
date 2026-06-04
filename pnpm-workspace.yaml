@@ -1,0 +1,13 @@
+# pnpm 11 moved per-project settings out of package.json's "pnpm" field into
+# this file (https://pnpm.io/settings).
+#
+# esbuild ships its platform binary via a postinstall build script. pnpm blocks
+# build scripts by default and the pre-run dep check HARD-FAILS with
+# ERR_PNPM_IGNORED_BUILDS unless the dependency's build is explicitly approved.
+# `allowBuilds.esbuild: true` is pnpm 11's per-dependency approval; the
+# `onlyBuiltDependencies` list is kept for forward/back compatibility. Both name
+# esbuild as the sole package allowed to run install scripts.
+allowBuilds:
+  esbuild: true
+onlyBuiltDependencies:
+  - esbuild

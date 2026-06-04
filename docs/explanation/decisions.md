@@ -323,6 +323,8 @@ Every narrowing has been tried and produces the same failure mode: the pipeline 
 
 ## Decision 18: Reviewer Model is Fixed, Not Quota-Routed
 
+> **Refined by Decision 21** (layered model/effort): the "fixed, not quota-routed" principle stands; the canonical tier becomes Opus and an effort dimension is added.
+
 **Choice:** Reviewer subagents (`quality-reviewer`, `implementation-reviewer`, `security-reviewer`, `architecture-reviewer`) spawn with a fixed model. They do not consult `pipeline-model-router`. Default is `sonnet`; operator can override the entire reviewer surface via `package.json.factory.review.model` (and the parallel `review.maxTurnsDeep` / `review.maxTurnsQuick` / `testWriter.maxTurns` / `scribe.maxTurns` knobs).
 
 **Why fixed (not quota-routed):**
@@ -344,23 +346,186 @@ Every narrowing has been tried and produces the same failure mode: the pipeline 
 
 ## Decision 19: Full Autonomy — No Sanctioned Human-Escalation Valve
 
-**Choice:** Within the domain boundary (PRD → task PRs merged onto the integration branch), the pipeline targets _full_ autonomy. There is no designed human-escalation valve. The `NEEDS_DISCUSSION` review verdict that currently halts a Run for human input, and the human handoff after CI-fix retries are exhausted (Decision 14), are interim crutches — not endorsed end-states. The intent is that the system resolves every within-domain situation itself, including off-path auto-merge failures.
+> **Aligned with Decision 20.** Autonomy and quality are both fundamental; they differ in _kind_, not importance — autonomy is binary-assurable (a hard _condition_), quality has no objective yes/no (the _maximand_). The no-escalation stance below is the operational consequence of the autonomy condition.
+
+**Choice:** Within the domain boundary (PRD → `develop`), the pipeline targets _full_ autonomy. There is no designed human-escalation valve. The `NEEDS_DISCUSSION` review verdict that currently halts a Run for human input, and the human handoff after CI-fix retries are exhausted (Decision 14), are interim crutches — not endorsed end-states. The intent is that the system resolves every within-domain situation itself, including off-path auto-merge failures.
 
 **Why:**
 
-- Autonomy is the domain's primary reason-for-being, not a means to a quality end. Quality gates, holdout validation, and review exist to _earn_ the trust to act unattended — not to route work to a human.
+- Autonomy is a **fundamental condition** of the project — not a means to a quality end, nor an end that subordinates quality; both are the point (Decision 20). It is held as a hard _condition_ because it is binary-assurable ("did a human intervene?" is yes/no), whereas quality, lacking any objective yes/no, is the _maximand_. Quality gates, holdout validation, and review exist to _earn_ the trust to act unattended — not to route work to a human.
 - A standing human valve would re-introduce the very dependency the domain exists to remove, and would let reliability gaps hide behind "escalate to a human" instead of being closed.
 - Treating escalation as a bug (not a feature) keeps pressure on the real fix: more reliable reviewers and more capable autonomous recovery.
 
 **Scope / boundary clarification:**
 
-- The domain ends at merge to the **integration branch** (`staging`). Human control over promotion from `staging` to `develop`/`main` (Decisions 12 and 16) is **downstream and out of scope** — that is deliberate human ownership of the protected-branch boundary, not a contradiction of within-domain autonomy.
+- The domain ends at the auto-merged rollup into **`develop`**: task PRs auto-merge onto `staging`, then the `staging → develop` rollup auto-merges (Decision 16) — both without human approval. Human control begins only at promotion from `develop` to **`main`**, which is **downstream and out of scope** — deliberate human ownership of the release boundary, not a contradiction of within-domain autonomy. The factory never touches `main`.
 - What _is_ in scope, and therefore a crutch to retire over time: `NEEDS_DISCUSSION` → human (`bin/pipeline-run-task` postreview), and CI-retry-exhaustion → human (Decision 14).
 
 **Trade-off:**
 
 - Higher bar on reviewer reliability and recovery automation: every disagreement or failure the system cannot resolve is a gap to close in the agents/scripts, not a supported off-ramp.
 - Until the crutches are retired, a Run can still stop for a human in those two cases. This is accepted as interim, and should be tracked as debt against the autonomy goal rather than relied upon.
+
+---
+
+## Decision 20: Objective Ranking — Quality Maximised Under an Autonomy Constraint
+
+**Choice:** The project's objective is to produce **high-quality code without human intervention** — quality and autonomy are _both_ fundamental. They are not symmetric, though: **autonomy is a hard condition** (no human in the loop between PRD and the `develop` rollup) and **quality is the maximand**. **Cost** (tokens + wall-clock) is the free variable that flexes with quota. The human acts only at the boundaries: authoring the PRD, owning `develop → main`, and handling loud failures.
+
+**Why the asymmetry is verifiability, not priority:**
+
+- **Autonomy is binary-assurable.** "Did a human intervene between the PRD and the `develop` rollup?" has an objective yes/no answer, so autonomy can be enforced as a hard condition — a predicate every run either satisfies or fails.
+- **Quality cannot be objectively guaranteed.** There is no binary certificate of "high quality." A property you cannot gate on, you can only push toward — so quality is the maximand: maximised, never proven complete. _If_ "high quality" were an objective yes/no, both quality and autonomy would be hard conditions; it is quality's non-verifiability — not a ranking of importance — that makes it the maximand instead.
+- **This is the root of the whole trust architecture.** Because quality has no ground-truth certificate, the verifier layer (Decision 21) is the system's best _synthetic_ approximation of one — the closest thing to a quality yes/no it can manufacture. "Quality is the maximand" and "the verifier is the floor" are the same fact seen twice.
+- **Downstream:** when quality and cost conflict, cost yields (within quota); when quality cannot be reached autonomously, the system drops loudly (Decision 22) rather than ship uncertain quality or call a human. Cost-flexes-with-quota makes throughput the shock absorber — under pressure the system slows or suspends, never lowers the bar.
+
+**Relationship to Decision 19:** Decision 19 (no human-escalation valve) stands — it is the operational consequence of the autonomy _condition_. Decision 19's body has been **aligned** with this framing: where it once called autonomy "the domain's primary reason-for-being, not a means to a quality end," it now states that autonomy and quality are both fundamental, split into condition vs maximand by **verifiability** rather than by importance.
+
+**Trade-off:** A run that cannot reach the quality bar autonomously gets no shortcut — it drops loudly (Decision 22), even at high cost or zero delivery. A confident-wrong merge is worse than a loud failure.
+
+**Scope:** Autonomy is bounded by the subscription-quota envelope — quota is _environmental_, outside the autonomy domain; a quota-forced human relaunch (Decision 24) is mechanical, not a quality-escalation valve, so it does not violate this ranking.
+
+---
+
+## Decision 21: Layered Model/Effort Allocation
+
+**Choice:** Allocate model tier and reasoning effort per layer by each layer's role in the quality chain:
+
+| Layer                      | Model                       | Effort  |
+| -------------------------- | --------------------------- | ------- |
+| Spec (generation + review) | Opus                        | **Max** |
+| Verifier (reviewers)       | Opus                        | Default |
+| Producer (executor)        | **Adaptive** (by task risk) | Default |
+
+**Why:**
+
+- **Spec is the apex.** Acceptance criteria are the operational definition of quality and the one gate with no machine-checkable ground truth (its only anchor is the PRD). A defect here is certified downstream as success, so it gets the most expensive configuration in the system.
+- **The verifier is the trust anchor and is never cheapened on model.** It stands in for the absent human; review consistency (Decision 18) and credibility outweigh quota economy. Default effort suffices once the model is top-tier.
+- **The producer is a tunable commodity.** Quality can't exceed what it can produce (the ceiling), so its model **adapts up** for high-risk/important tasks (e.g. security) and down for routine ones. This is where cost flexes.
+
+**Relationship to Decision 18:** This **refines Decision 18** (reviewers fixed, not quota-routed). The "fixed, not quota-routed" principle is kept and extended to the whole verifier surface; the canonical fixed tier becomes **Opus** (Decision 18's `sonnet` default was a cost compromise, not the design intent), and the **effort** dimension plus the spec/producer allocations are added.
+
+**Trade-off:** Top-tier verification plus max-effort spec work is a fixed, non-trivial expense every run. Accepted as the price of the trust anchor; savings come from the producer dial, never from review.
+
+---
+
+## Decision 22: Loud, Classified Drop with Partial Delivery
+
+**Choice:** When the system cannot complete a task to standard, it **drops** the task — and a drop is **loud and classified**:
+
+- Any permanently dropped task ⇒ the **run is marked a failure** and the **PRD stays open**, even if every other task passed.
+- The drop is **classified** by cause — at least _capability/budget exhausted_, _spec defect_, _blocked/environmental_ — so the failure report tells the human what to do.
+- Completed work is **delivered**: the dependency-closed set of passed tasks (each a vertical slice, Decision 23) ships, loudly flagged as a partial result. A red **rollup full-CI gate** is likewise a run-level failure even when all tasks passed individually. The only forbidden outcome is **silent** absorption of a drop.
+
+**Why:**
+
+- Under the autonomy constraint (Decisions 19/20) there is no human to escalate to mid-run; the loud, classified drop is the _boundary handback_ — it returns precisely the un-certifiable work to the human, with a reason, after the run.
+- Silence is the one behavior incompatible with a quality objective: a quietly-closed PRD with a missing task is a confident-wrong outcome.
+- Partial delivery preserves verified high-quality work instead of discarding it to all-or-nothing; coherence is guaranteed by the vertical-slice contract plus the integration gate, not by hoping.
+
+**Trade-off:** `develop` can carry an incomplete PRD (a partial feature). Bounded by: vertical slices leave no broken surface, the rollup gate certifies integration, and the loud failure + open PRD make the remaining work explicit.
+
+---
+
+## Decision 23: Vertical-Slice Decomposition (Hard Rule)
+
+**Choice:** Every task in a spec must be an **independently-shippable vertical slice** — it adds standalone value and leaves no broken or dead surface if its sibling tasks are absent. This is a hard decomposition rule, enforced at spec generation/review, not a preference.
+
+**Why:**
+
+- It is the precondition that makes **partial delivery** (Decision 22) coherent: a dropped task then leaves a smaller-but-whole result, not a half-built feature.
+- It bounds integration risk: slices compose along explicit dependencies rather than through hidden horizontal coupling.
+- It is good decomposition hygiene regardless of failure handling — vertical slices are independently reviewable, testable, and reversible.
+
+**Trade-off:** Some PRDs resist clean vertical slicing (cross-cutting concerns, large migrations); the spec generator must work harder to find slice boundaries and may emit more tasks with explicit dependencies than a horizontal cut would. Accepted as the cost of coherent partial delivery and per-slice verifiability.
+
+---
+
+## Decision 24: Quota Pacing and the Execution-Mode Caveat
+
+**Choice:** The pipeline bounds its own subscription-quota consumption by **proactive pacing**, not reactive backoff. Quota is **never a reason to drop work — only to pause it** (distinct from the Decision 22 retry-budget drop).
+
+- **Two windows, paced linearly with a 10% reserve floor:**
+  - **5-hour window** — burn ≤ 20%/hr; milestones at 80 / 60 / 40 / 20% remaining at hours 1 / 2 / 3 / 4; never below 10% remaining.
+  - **7-day window** — the same shape pro-rated: ≤ 14.29%/day (100% ÷ 7); never below 10% remaining.
+- **Over the curve → pause.** The binding (more-constrained) window wins.
+- **5h breach → pause in place.** Self-heals within ≤ 5h as the curve descends with elapsed time and the window resets; the run holds.
+- **7d breach → graceful stop.** The recovery horizon is too long to hold a live process, so the run exits cleanly — _paused, not failed_: the PRD stays open, completed tasks stay committed, and a **human relaunch resumes it from checkpoint** (chosen for implementation simplicity over automatic resume).
+
+**Execution-mode caveat:** pacing needs an observable usage signal, which only the **orchestrated-session** mode has.
+
+- **Session mode (default):** fully paced as above.
+- **Workflow mode** — the pipeline driven as a background multi-agent Workflow script — **cannot observe usage**, so there is **no pacing**. The user is **warned at opt-in**, and the run simply **hard-stops** when the allowance runs out. The pause-not-drop guarantee still holds: the stop lands on committed-task boundaries, so a relaunch resumes; only the in-flight task's uncommitted work is lost (same guarantee, weaker mechanism).
+
+**Why:**
+
+- Proactive pacing keeps the run under the subscription wall, so the 5h window never _exhausts_ — quota pressure becomes a pause, never a failure. This is what "cost flexes with quota" (Decision 20) operationally means.
+- The 5h / 7d split is about **recovery horizon**: a ≤ 5h pause is holdable in-process; a multi-day wait is not, so the long window forces a clean stop-and-resume instead.
+- Quota is **environmental**, outside the autonomy domain (Decisions 19/20) — like the host losing power. A quota-induced human relaunch is _mechanical_ (resource), not a _quality/judgment_ escalation valve, so it does not violate the autonomy condition; it **bounds** it: end-to-end autonomy holds within the paced quota envelope, and a mechanical relaunch continues a run that exceeds it.
+- Workflow mode trades pacing for the throughput of the Workflow runtime; the up-front warning plus task-boundary resumability keep cost bounded and the no-drop guarantee intact.
+
+**Trade-off:** Proactive pacing can leave allowance unused (idling under-pace) rather than racing to the wall — deliberate, to respect subscription limits. The graceful-stop choice accepts a mechanical human touch-point on 7d-cap stops (vs the more-autonomous but more-complex auto-resume). Workflow mode accepts a hard, unpaced stop as the price of an unmonitorable runtime.
+
+**Scope:** The milestone percentages (80 / 60 / 40 / 20, the 10% floor, 14.29%/day) are tuning parameters, not load-bearing. The load-bearing choices are: proactive-pacing-over-backoff, quota-pauses-never-drops, the 5h-pause / 7d-stop split, and the session/workflow mode caveat.
+
+---
+
+## Decision 25: Risk Determination and the Producer Escalation Ladder
+
+**Choice:** A task's risk/importance — the input to the producer-model dial (Decision 21) — is a **spec-time judgment made by the spec generator** (Opus/Max), recorded as part of the task's acceptance criteria. It sets the **starting rung** of a failure-driven **escalation ladder**, and is never re-assessed mid-run.
+
+- **Judgment, not heuristic.** Risk is assigned by the apex already reasoning over the whole PRD at max effort. Deterministic signals (auth/crypto/payment paths, blast radius, task type) and any human/PRD flags are _inputs_ to that judgment, not separate mechanisms.
+- **One unified dial — difficulty and stakes folded together.** The producer dial is a single judgment of _how much model strength the task warrants_, blending **difficulty** (likelihood the producer gets it wrong) and **stakes** (cost if it does) — risk as P(error) × impact. This **supersedes** the earlier two-axis model (`proposals/design-intent-and-redesign.md` §7), which split a count-based _complexity_ dial (→ producer model) from a path-based _risk_ dial (→ review depth): the review-depth axis is gone (the verifier floor is now risk-invariant, Decision 26), and "risk tier" now denotes this single producer dial.
+- **Static tier = starting rung.** The risk tier fixes where on the producer-model ladder the task's first attempt begins (low-risk low; high-risk high).
+- **Escalation is the only dynamic.** Each nuke-and-retry (Decision 22) bumps the rung — better model / max effort / more context. **A drop is the top rung exhausted.** A high-risk task starts further up, so it reaches the top in fewer retries.
+- **No mid-run re-assessment.** Under-estimation self-corrects for free: a task riskier than tagged simply fails review and escalates.
+
+**Why:**
+
+- **Risk-tiering is a performance optimization, not a safety control.** The dial sets only the **ceiling**; the verifier stays Opus regardless (Decision 21), so the **floor never moves**. A mis-classified task therefore **degrades gracefully** — a too-cheap producer fails review → more retries, or a loud drop — and **never ships bad code**. Because errors are safe, risk can be a judgment call rather than a brittle (if auditable) heuristic.
+- **Spec-time is the right moment.** Risk is part of the operational definition of the task (the "target"), and the generator is already doing whole-PRD max-effort reasoning — the cheapest place to add the judgment, and the apex best positioned to make it.
+- **One judgment + one ladder is the minimal mechanism.** Because escalation absorbs under-estimation, a separate mid-run risk-reclassifier would be redundant machinery.
+
+**Trade-off:** A badly under-tagged high-risk task pays in wasted retries before it climbs to the tier it needed (or drops) — accepted, since the alternative (mid-run re-assessment) is more machinery for a failure mode the ladder already covers, and the floor guarantees the under-tagging never reaches `develop` as bad code.
+
+**Relationship:** Refines Decision 21 (how the _adaptive_ producer dial is driven) and Decision 22 (its "nuke-and-retry outer bound" = the ladder's top rung; the risk tier = its starting rung).
+
+---
+
+## Decision 26: The Two-Layer Verifier and the Risk-Invariant Floor
+
+**Choice:** Verification is **two layers** — a **deterministic layer** (tests, mutation, coverage, SAST, type-check, lint, build: machine-checkable facts) and a **judgment layer** (the **review panel** — independent, single-purpose reviewers). The **entire floor is risk-invariant**: model, effort, review depth, and panel membership are fixed for every task in a run and do **not** vary with a task's risk. Only the **producer** (the ceiling) is risk-adaptive (Decision 25). **TDD exists to maximise the deterministic layer** — to convert as much of "quality" as possible into machine-checkable fact that needs no judgment.
+
+- **Determinism-first, with TDD as the lever.** A deterministic fact can't be argued down; the judgment layer covers only what determinism can't reach. TDD grows the deterministic layer (every behaviour gets a test-first assertion), shrinking both the judgment surface and the producer's room to rationalise.
+- **The floor does not move with risk — the safety counterpart to Decision 25.** The producer dial sets only the _ceiling_, so it can mis-classify and still degrade gracefully — _but only because the floor is constant_. A risk-sized panel (lighter review for "routine" work) would mean a task mis-tagged low-risk **skips the very reviewer that would have caught its defect** → bad code ships. So every reviewer runs on every task (a no-op when not applicable); the verifier is never thinned for "low-risk" work.
+- **It is also forced by Decision 21.** "Widen scrutiny for risk" only makes sense if the baseline is cheap or narrow — but the verifier is always Opus at full depth, so there is no narrower baseline to widen _from_. Fixed-at-max is the only floor consistent with a never-cheapened verifier.
+- **The panel evolves across versions, not across tasks.** "Fixed" means risk-invariant _within_ a run; the set of reviewers is still expected to change over time as industry standards do (Decision 9; the planned CCR borrows). Two senses of "not fixed": across-risk (forbidden) vs across-versions (expected).
+
+**Why:** With no human judge, the verifier _is_ the quality floor and the trust anchor (Decision 20). A floor that moves with a fallible spec-time guess is not a floor. Holding the whole verifier constant is exactly what makes risk-misclassification a _performance_ question (wasted producer retries) instead of a _safety_ one (a missed defect) — the property that licenses the producer dial to be cheap and adaptive in the first place.
+
+**Trade-off:** Every task pays full verification cost, trivial ones included. Accepted: the verifier is never the cost-flex point (cost flexes on the producer, Decision 21, and via pacing, Decision 24).
+
+**Supersedes:** the "two orthogonal axes" model in `proposals/design-intent-and-redesign.md` §7–§8, where **risk sized the review panel** (routine / feature / security → 2 / 4 / 6 rounds + extra dimensions) and a separate **complexity** dial drove the producer. Review depth no longer varies with risk; risk drives only the producer (Decision 25, unified dial); and spec review is unconditionally max (Decision 21), not "scaled to the maximum risk tier across tasks."
+
+**Relationship:** Pairs with Decision 25 (ceiling moves / floor fixed), realises Decision 20 (verifier = floor + trust anchor), depends on Decision 21 (fixed verifier model/effort), and is the structure whose output Decision 27 governs.
+
+---
+
+## Decision 27: Verify-Then-Fix — Reviewer Findings Are Confirmed Before They Act
+
+**Choice:** A reviewer's blocker reaches the producer only after an **independent verifier confirms it against ground truth**. Unverified findings never trigger a fix or a retry. This is the false-_positive_ twin of Decision 1's derive-don't-store: the system already refuses to trust a _PASS_ the producer claims (re-derive the verdict → guard false _negatives_, bad code merging); it now also refuses to trust a _FAIL_ a reviewer claims (re-derive the finding → guard false _positives_, good code needlessly "fixed").
+
+- **Why this matters more here than in industry tools.** Every shipped AI reviewer inserts a verification pass (Anthropic Code Review's "verification step checks candidates against actual code behavior"; the `claude-code-security-review` `findings_filter`; Cloudflare; Datadog) — but each has a _human_ reading the output, for whom a false positive is ignorable noise. This loop has **no human filter**: the producer acts on every finding, so a false positive becomes a **harmful fix to working code**. Precision is non-negotiable, not a nicety. (The "recall beats precision" stance only holds when something downstream filters; nothing does here.)
+- **The verifier must be independent.** LLM self-review carries a leniency bias and shares blind spots with the finder ("fail in correlated ways"). Verification runs in a fresh context, cross-vendor where available — never the finder re-checking itself (extends Decision 9 independence to finding-verification).
+- **Evidence bar, not confidence vibes.** A finding must carry ground-truth evidence — a `file:line` citation / repro that substring-matches real code — not an inference from naming. (This is the deterministic citation-verify filter already planned in `design-intent-and-redesign.md` §8 / Delta K; determinism-first applied to reviewer output.)
+- **Adversarial framing, single bounded pass.** The verifier is asked _"does this finding hold against the code?"_, never _"is this a false alarm?"_ — confirmation-bias framing swings detection 16–93%. And it runs **once** per finding: "more rounds, more noise" — an iterative debate measurably degrades versus a single pass.
+- **"Account for every blocker" = fix-or-justify, bounded.** A confirmed blocker returns the task to the producer (the floor is conjunctive — _unanimous_ approval to ship). The producer may **rebut** a verified finding once, with evidence, adjudicated by the independent verifier (not the original reviewer) — a single shot, not a multi-round contest.
+
+**Why:** The verifier is the trust anchor (Decision 20); a _noisy_ floor corrodes trust as surely as a _low_ one. In an autonomous loop a false positive doesn't merely churn quota — it degrades the very code quality that is the maximand. Verification is the cheapest way to keep the floor _trustworthy_, not merely _present_. The pattern is the frontier default (Anthropic, Cloudflare, Datadog), and the research around it (leniency bias, confirmation-bias framing, "more rounds, more noise") dictates the four constraints above.
+
+**Trade-off:** A verification pass per finding costs tokens and latency, and a wrong verifier could suppress a _real_ finding — mitigated, not eliminated, by independence + adversarial framing + the evidence bar. The residual is accepted as strictly smaller than the false-positive-fix risk it removes.
+
+**Relationship:** Extends Decision 1 (derive-don't-store — the false-negative side), Decision 9 (independent review), and Decision 26 (the judgment layer whose output this governs); realises the trust property in `proposals/quality-architecture.md` §3.
 
 ---
 

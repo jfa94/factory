@@ -1,0 +1,54 @@
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { dispatch, cliRegistry } from "./main.js";
+import { EXIT } from "./exit-codes.js";
+
+describe("cli dispatch", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("config-defaults returns OK and emits a parseable, well-shaped config", async () => {
+    // NOTE: this asserts STRUCTURE, not exact values. `config-defaults` runs
+    // loadConfig(), which reads any real <dataDir>/config.json present on the
+    // host and merges it over the schema defaults — so concrete values are
+    // machine-dependent. Pure-default value assertions live in schema.test.ts
+    // (against ConfigSchema.parse({})). That this command picks up a live
+    // override is itself the proof the loader works end-to-end.
+    const chunks: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    });
+
+    const code = await dispatch(["config-defaults"]);
+    expect(code).toBe(EXIT.OK);
+
+    const parsed = JSON.parse(chunks.join("")) as Record<string, any>;
+    // The full schema shape must be present (every block defaults).
+    expect(parsed).toHaveProperty("quota.sleepCapSec");
+    expect(parsed).toHaveProperty("quality.holdoutPercent");
+    expect(Array.isArray(parsed.quota.hourlyThresholds)).toBe(true);
+    expect(parsed.quota.hourlyThresholds).toHaveLength(5);
+    expect(parsed.quota.dailyThresholds).toHaveLength(7);
+    // Retired human-gate keys must never appear.
+    expect(parsed).not.toHaveProperty("humanReviewLevel");
+  });
+
+  it("--help returns OK", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    expect(await dispatch(["--help"])).toBe(EXIT.OK);
+    expect(await dispatch([])).toBe(EXIT.OK);
+  });
+
+  it("unknown subcommand returns USAGE (2)", async () => {
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    expect(await dispatch(["definitely-not-a-command"])).toBe(EXIT.USAGE);
+  });
+
+  it("registry is an extensible seam (downstream can register)", async () => {
+    cliRegistry["__test-ext"] = { describe: "test", run: () => EXIT.OK };
+    try {
+      expect(await dispatch(["__test-ext"])).toBe(EXIT.OK);
+    } finally {
+      delete cliRegistry["__test-ext"];
+    }
+  });
+});

@@ -379,3 +379,17 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# --- factory-plugin Node+TS rewrite (WS0): check in ONLY the two built bundles ---
+# The bare `dist`/`dist/` ignores above keep everything in dist/ out of git by
+# default. A bare `!dist/factory.js` is a no-op (git won't descend into an
+# ignored dir), so this 5-line block re-includes the directory shell, re-ignores
+# its contents, then un-ignores exactly the two checked-in single-file bundles.
+# `git add -An dist/` stages ONLY these two files; all scratch files / subdirs
+# stay ignored. A trailing negation overrides the earlier ignores (append-only;
+# the additive rule forbids editing the existing `dist` lines).
+dist/
+!dist/
+dist/*
+!dist/factory.js
+!dist/factory-hook.js
