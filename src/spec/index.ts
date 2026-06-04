@@ -1,0 +1,80 @@
+/**
+ * `src/spec` — WS5 public surface. The ONE addressable WS5 import surface for
+ * WS10 (the in-session driver) and any other downstream consumer. Deep-importing
+ * `src/spec/*` is a smell; import from here.
+ *
+ * Re-exports: the durable spec schema (SpecTask/SpecManifest + parsers), the
+ * injectable GhClient (interface + real impl + typed errors), the SpecStore, the
+ * apex-pinned SpecAgentRunner boundary + spawn builders, the three deterministic
+ * gates, the review adjudication (single 56/60 threshold + floor), and the
+ * top-level runSpecPipeline orchestration.
+ */
+
+// Durable on-disk spec artifact.
+export {
+  SpecTaskSchema,
+  SpecTasksSchema,
+  SpecManifestSchema,
+  parseSpecTasks,
+  parseSpecManifest,
+  type SpecTask,
+  type SpecManifest,
+} from "./schema.js";
+
+// PRD fetch (injectable gh wrapper).
+export {
+  RealGhClient,
+  GhAuthError,
+  IssueNotFoundError,
+  type GhClient,
+  type Prd,
+  type ExecFn,
+} from "./gh.js";
+
+// Durable spec store (Δ X reuse-by-issue).
+export { SpecStore, makeSpecId } from "./store.js";
+
+// Apex-pinned spec-agent boundary (Decision 21).
+export {
+  buildGenerateSpawn,
+  buildReviewSpawn,
+  type SpecAgentRunner,
+  type SpecAgentRole,
+  type SpecSpawnSpec,
+  type GenerateResult,
+} from "./agents.js";
+
+// Deterministic spec gates.
+export {
+  verticalSliceGate,
+  testabilityGate,
+  traceabilityGate,
+  runSpecGates,
+  combineGates,
+  extractPrdRequirements,
+  type GateResult,
+} from "./gates.js";
+
+// Review adjudication (single 56/60 threshold + floor, Δ I).
+export {
+  parseReviewVerdict,
+  decideSpecReview,
+  ReviewVerdictSchema,
+  PerDimensionSchema,
+  type ReviewVerdict,
+  type PerDimension,
+  type SpecReviewResult,
+  type SpecReviewDecision,
+  type DecideOptions,
+} from "./review.js";
+
+// Top-level orchestration.
+export { runSpecPipeline, SpecDefectError, type RunSpecPipelineOpts } from "./pipeline.js";
+
+// Spec-pipeline constants (staged here; see config-defaults.ts header).
+export {
+  SPEC_DEFAULTS,
+  REVIEW_DIMENSION_COUNT,
+  REVIEW_MAX_TOTAL,
+  type SpecConfig,
+} from "./config-defaults.js";

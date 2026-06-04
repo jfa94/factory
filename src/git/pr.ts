@@ -1,0 +1,64 @@
+/**
+ * WS3 — idempotent PR create (Δ P).
+ *
+ * The resume-after-kill window: a run can die AFTER `gh pr create` succeeded but
+ * BEFORE the driver recorded `pr_number` in state.json. On resume, blindly
+ * creating a PR would open a DUPLICATE. The fix: ALWAYS look up by head branch
+ * first (`gh pr list --head <branch>`); only create when no open PR exists.
+ *
+ * This module is PURE over GhClient — it never reads/writes StateManager (WS3 is
+ * a reporter; the driver persists `{number}` via StateManager.updateTask). It
+ * tests against the fake with zero network.
+ */
+import { createLogger } from "../shared/index.js";
+import { GitSchema } from "../config/schema.js";
+import type { GhClient } from "./gh-client.js";
+
+const log = createLogger("git");
+
+const GIT_DEFAULTS = GitSchema.parse({});
+
+/** Args to {@link createTaskPrIdempotent}. */
+export interface CreateTaskPrArgs {
+  ghClient: GhClient;
+  /** Head branch (the run-scoped task branch). */
+  branch: string;
+  title: string;
+  body: string;
+  /** Base branch to target. Defaults to the configured staging branch. */
+  base?: string;
+}
+
+/** Result of {@link createTaskPrIdempotent}. */
+export interface TaskPrResult {
+  number: number;
+  url: string;
+  /** True iff an existing open PR was found (no new PR opened). */
+  resumed: boolean;
+}
+
+/**
+ * Create the task PR, or RESUME the existing one. Looks up by head branch FIRST
+ * (Δ P) so a kill between create+record never opens a duplicate. Returns the PR
+ * number + url and whether it was resumed.
+ */
+export async function createTaskPrIdempotent(args: CreateTaskPrArgs): Promise<TaskPrResult> {
+  const base = args.base ?? GIT_DEFAULTS.stagingBranch;
+
+  // Δ P: look up by head FIRST. An OPEN PR for this head is the same logical PR.
+  const existing = await args.ghClient.prList({ head: args.branch, base, state: "open" });
+  const pr = existing[0];
+  if (pr !== undefined) {
+    log.info(`resuming existing PR #${pr.number} for head '${args.branch}' (no duplicate created)`);
+    return { number: pr.number, url: pr.url ?? "", resumed: true };
+  }
+
+  const created = await args.ghClient.prCreate({
+    base,
+    head: args.branch,
+    title: args.title,
+    body: args.body,
+  });
+  log.info(`created PR #${created.number} for head '${args.branch}'`);
+  return { number: created.number, url: created.url, resumed: false };
+}

@@ -14,6 +14,15 @@
 export { EXIT, isExitCode } from "../cli/exit-codes.js";
 export type { ExitCode } from "../cli/exit-codes.js";
 
+// WS9 — Trusted Computing Base (TCB) types. Owned by WS9 (the stated
+// src/types/index.ts exception). These name the shape the hardcoded TCB
+// write-deny (src/hooks/tcb.ts, Δ W) and the hook I/O layer share. They live
+// here — not in src/hooks — so any future workstream that needs to reason about
+// the trust boundary imports a STABLE seam, and so the closed `TcbCategory`
+// enum is one addressable union (a new protected category is a deliberate
+// compile-break, mirroring the WS1/WS2 closed-enum discipline).
+export type { TcbCategory, TcbRule, TcbMatch } from "../hooks/tcb.js";
+
 export type { ExecResult, ExecOptions } from "../shared/exec.js";
 
 export type { Config } from "../config/schema.js";

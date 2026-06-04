@@ -66,6 +66,21 @@ export const QuotaSchema = z
     hourlyThresholds: z.array(z.number()).length(5).default([20, 40, 60, 80, 90]),
     /** 7d-window utilization checkpoints by day 1..7 (% caps). */
     dailyThresholds: z.array(z.number()).length(7).default([14, 29, 43, 57, 71, 86, 95]),
+    /**
+     * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
+     * renamed model-router, narrowed) selects the producer model for a task from
+     * its risk tier; this is the ONLY dial it carries — the review panel is
+     * risk-INVARIANT (Decision 25/26), so there is NO review-depth/round cap here
+     * (the old `--tier` routine/feature/security review caps are DELETED).
+     * Defaults: low→fast model, medium→balanced, high→strong.
+     */
+    producerModels: z
+      .object({
+        low: z.string().default("claude-haiku-4-5"),
+        medium: z.string().default("claude-sonnet-4-5"),
+        high: z.string().default("claude-opus-4-6"),
+      })
+      .default({}),
   })
   .default({});
 
@@ -123,6 +138,46 @@ export const DependenciesSchema = z
   .default({});
 
 /**
+ * Git / PR I/O + serial-writer config (WS3 owns). Centralizes the base branch,
+ * the integration branch, the required-status-checks contract the run refuses to
+ * start without (#2 / Δ A), and whether protection provisioning is opted in.
+ *
+ * Per the seam contract ("all defaults live in this file; WS_ extend their
+ * slice"), WS3 adds this sub-schema rather than scattering branch/protection
+ * literals across src/git.
+ */
+export const GitSchema = z
+  .object({
+    /**
+     * The durable base branch staging forks from and rolls up into. NEVER
+     * `main` (Decision 12/16 — the factory never touches main; promotion to main
+     * is human-owned and out of scope).
+     */
+    baseBranch: z.string().min(1).default("develop"),
+    /** The integration branch task PRs serial-merge into (Δ L, §9.2). */
+    stagingBranch: z.string().min(1).default("staging"),
+    /**
+     * Required status-check contexts that branch protection MUST enforce on the
+     * staging branch before a run may start. Empty means "no specific checks
+     * required" — but protection itself (incl. strict-up-to-date) is still
+     * mandatory; see `requireProtectionOrRefuse`.
+     */
+    requiredStatusChecks: z.array(z.string()).default([]),
+    /**
+     * Opt-in protection provisioning. OFF by default — the run VERIFIES and
+     * REFUSES when protection is missing (#2 / Δ A); only `--provision` flips
+     * this to issue the `gh api` PUT.
+     */
+    provision: z.boolean().default(false),
+    /**
+     * Branch-name prefix for run-scoped task branches (Δ M). The full name is
+     * `<branchPrefix>/<run_id>/<task_id>`.
+     */
+    branchPrefix: z.string().min(1).default("factory"),
+  })
+  .default({});
+
+/**
  * The single root config schema. Every sub-block defaults, so an empty object
  * (or a missing config file) parses to a complete config.
  */
@@ -136,6 +191,7 @@ export const ConfigSchema = z
     codex: CodexSchema,
     observability: ObservabilitySchema,
     dependencies: DependenciesSchema,
+    git: GitSchema,
     /** Consecutive task failures before the run aborts. */
     maxConsecutiveFailures: z.number().int().positive().default(3),
     /** Hard wall-clock cap for a whole run, minutes. */

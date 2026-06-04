@@ -14,6 +14,11 @@
  */
 import { EXIT, type ExitCode } from "../cli/exit-codes.js";
 import { runBranchProtection } from "./branch-protection.js";
+import { runWriteProtection } from "./write-protection.js";
+import { runHoldoutGuard } from "./holdout-guard.js";
+import { runSecretGuard } from "./secret-guard.js";
+import { runPipelineGuards } from "./pipeline-guards.js";
+import { runSubagentStop } from "./subagent-stop.js";
 
 /** A single hook entry. `run` returns (or resolves to) an {@link ExitCode}. */
 export interface Hook {
@@ -23,11 +28,31 @@ export interface Hook {
   run: (argv: string[]) => Promise<ExitCode> | ExitCode;
 }
 
-/** The mutable hook registry. WS9 adds the real guards here. */
+/** The mutable hook registry. WS9 registers the real guards here. */
 export const hookRegistry: Record<string, Hook> = {
   "branch-protection": {
-    describe: "Verify required branch protection is present (WS0 stub: no-op)",
+    describe: "PreToolUse Bash: block destructive git ops on protected branches",
     run: (argv) => runBranchProtection(argv),
+  },
+  "write-protection": {
+    describe: "PreToolUse Edit|Write|MultiEdit: deny writes to hardcoded TCB paths (Δ W)",
+    run: (argv) => runWriteProtection(argv),
+  },
+  "holdout-guard": {
+    describe: "PreToolUse Read|Grep|Glob|Bash: deny reads of the holdout answer-key store (Δ Y)",
+    run: (argv) => runHoldoutGuard(argv),
+  },
+  "secret-guard": {
+    describe: "PreToolUse Bash: block git commit/push staging a known secret shape (Δ B)",
+    run: (argv) => runSecretGuard(argv),
+  },
+  "pipeline-guards": {
+    describe: "PreToolUse: test-writer scope + nested-shell + derive-don't-store ship gating (Δ V)",
+    run: (argv) => runPipelineGuards(argv),
+  },
+  "subagent-stop": {
+    describe: "SubagentStop: append reviewer ReviewerResult to task state via StateManager",
+    run: (argv) => runSubagentStop(argv),
   },
 };
 

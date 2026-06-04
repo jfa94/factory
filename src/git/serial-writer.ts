@@ -1,0 +1,175 @@
+/**
+ * WS3 — SERIAL WRITER #1 (Δ L, §9.2).
+ *
+ * Merges into `staging` are serialized in EVERY mode: task PRs land ONE at a
+ * time. The mechanism is an app-level merge LOCK (proper-lockfile, the SAME lock
+ * primitive WS1's StateManager uses) on a data-dir merge-lock file, plus
+ * required-branches-up-to-date enforcement (which works on ANY GitHub plan):
+ *
+ *   acquire lock
+ *     -> verify the PR is mergeable AND its head is up-to-date with staging
+ *     -> if BEHIND: refuse/yield (no force-push, no rebase-publish — global rule)
+ *     -> `gh pr merge --squash` (NOT N concurrent `--auto`)
+ *   release lock
+ *
+ * Probe-detected upgrade: if mergeQueueProbe() reports native GitHub merge-queue,
+ * enqueue via `--auto` and let GitHub serialize instead (still one logical
+ * serializer; never N concurrent app-level merges). merge-queue-as-default is v2.
+ *
+ * The app-level lock NEVER arms N concurrent `--auto`: two concurrent merge()
+ * calls observe strictly non-overlapping critical sections.
+ */
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { lock } from "proper-lockfile";
+import { createLogger } from "../shared/index.js";
+import { GitSchema } from "../config/schema.js";
+import { resolveDataDir, type DataDirOptions } from "../config/load.js";
+import type { GhClient } from "./gh-client.js";
+
+const log = createLogger("git");
+
+const GIT_DEFAULTS = GitSchema.parse({});
+
+/** Lock tuning mirrors the StateManager defaults (self-heal + wait-out). */
+export interface MergeLockTuning {
+  stale: number;
+  retries: number;
+  retryMinTimeout: number;
+  retryMaxTimeout: number;
+}
+
+const DEFAULT_MERGE_LOCK_TUNING: MergeLockTuning = {
+  stale: 30_000,
+  retries: 100,
+  retryMinTimeout: 25,
+  retryMaxTimeout: 1000,
+};
+
+/** Outcome of a {@link MergeSerializer.merge} attempt. */
+export type MergeOutcome =
+  | { merged: true; via: "app-level" | "merge-queue"; number: number }
+  | { merged: false; reason: "behind" | "not-mergeable"; number: number };
+
+/** Options for {@link MergeSerializer}. */
+export interface MergeSerializerOptions extends DataDirOptions {
+  ghClient: GhClient;
+  owner: string;
+  repo: string;
+  /** Integration branch. Defaults to the configured staging branch. */
+  stagingBranch?: string;
+  /** Override the merge-lock scope id (default: repo-scoped key). */
+  lockScope?: string;
+  lock?: Partial<MergeLockTuning>;
+}
+
+/**
+ * Serializes task-PR merges into staging behind an app-level lock. The lock is
+ * REPO-SCOPED by default (keyed on owner/repo + staging branch) so concurrent
+ * RUNS sharing the same staging branch still serialize (§9.2: staging is THE
+ * single serial writer).
+ */
+export class MergeSerializer {
+  private readonly ghClient: GhClient;
+  private readonly owner: string;
+  private readonly repo: string;
+  private readonly staging: string;
+  private readonly dataDir: string;
+  private readonly lockScope: string;
+  private readonly tuning: MergeLockTuning;
+
+  constructor(opts: MergeSerializerOptions) {
+    this.ghClient = opts.ghClient;
+    this.owner = opts.owner;
+    this.repo = opts.repo;
+    this.staging = opts.stagingBranch ?? GIT_DEFAULTS.stagingBranch;
+    this.dataDir = resolveDataDir(opts);
+    this.lockScope =
+      opts.lockScope ?? `${opts.owner}__${opts.repo}__${this.staging}`.replace(/[^\w.-]/g, "-");
+    this.tuning = { ...DEFAULT_MERGE_LOCK_TUNING, ...(opts.lock ?? {}) };
+  }
+
+  private lockfilePath(): string {
+    return join(this.dataDir, "locks", `merge-${this.lockScope}.lock`);
+  }
+
+  /** Run `fn` while holding the app-level merge lock (the serial section). */
+  private async withMergeLock<T>(fn: () => Promise<T>): Promise<T> {
+    const lockfile = this.lockfilePath();
+    await mkdir(join(this.dataDir, "locks"), { recursive: true });
+    const release = await lock(lockfile, {
+      realpath: false,
+      stale: this.tuning.stale,
+      retries: {
+        retries: this.tuning.retries,
+        minTimeout: this.tuning.retryMinTimeout,
+        maxTimeout: this.tuning.retryMaxTimeout,
+        factor: 1.5,
+      },
+      onCompromised: (err) => {
+        log.error(`merge lock '${this.lockScope}' compromised: ${err.message}`);
+        throw err;
+      },
+    });
+    try {
+      return await fn();
+    } finally {
+      await release();
+    }
+  }
+
+  /**
+   * Serial-merge one task PR into staging. Acquires the app-level lock, RE-VERIFIES
+   * mergeable + up-to-date against the CURRENT staging tip (so the 2nd of two
+   * queued merges re-checks against the post-first-merge state), then either
+   * enqueues via native merge-queue (probe upgrade) or squash-merges now. NEVER
+   * arms N concurrent `--auto`.
+   */
+  async merge(prNumber: number): Promise<MergeOutcome> {
+    return this.withMergeLock(async () => {
+      // Re-read the PR INSIDE the lock — its mergeable/up-to-date state may have
+      // changed since the caller queued (e.g. a prior merge advanced staging).
+      const pr = await this.ghClient.prView(prNumber, [
+        "number",
+        "headRefName",
+        "baseRefName",
+        "state",
+        "mergeable",
+        "mergeStateStatus",
+      ]);
+
+      if (pr.mergeable === "CONFLICTING") {
+        log.warn(`PR #${prNumber} is CONFLICTING — not merged`);
+        return { merged: false, reason: "not-mergeable", number: prNumber };
+      }
+
+      // Up-to-date enforcement (Δ L): GitHub reports BEHIND when the head is not
+      // on top of the latest staging. We REFUSE and surface for the producer
+      // fix-loop — no force-push, no rebase-publish (global rule). The producer
+      // re-syncs and we retry on a later turn.
+      if (pr.mergeStateStatus === "BEHIND") {
+        log.warn(
+          `PR #${prNumber} head is BEHIND ${this.staging} — refusing to merge (no force-push)`,
+        );
+        return { merged: false, reason: "behind", number: prNumber };
+      }
+
+      // Probe for native merge-queue (optional upgrade). When present, enqueue via
+      // --auto and let GitHub serialize. Otherwise app-level squash-merge now.
+      const hasMergeQueue = await this.ghClient.mergeQueueProbe(
+        this.owner,
+        this.repo,
+        this.staging,
+      );
+      if (hasMergeQueue) {
+        await this.ghClient.prMergeSquash(prNumber, { auto: true, deleteBranch: true });
+        log.info(`PR #${prNumber} enqueued via native merge-queue`);
+        return { merged: true, via: "merge-queue", number: prNumber };
+      }
+
+      await this.ghClient.prMergeSquash(prNumber, { deleteBranch: true });
+      log.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
+      return { merged: true, via: "app-level", number: prNumber };
+    });
+  }
+}

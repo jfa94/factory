@@ -4164,7 +4164,20 @@ var QuotaSchema = external_exports.object({
   /** 5h-window utilization checkpoints by hour 1..5 (% caps). */
   hourlyThresholds: external_exports.array(external_exports.number()).length(5).default([20, 40, 60, 80, 90]),
   /** 7d-window utilization checkpoints by day 1..7 (% caps). */
-  dailyThresholds: external_exports.array(external_exports.number()).length(7).default([14, 29, 43, 57, 71, 86, 95])
+  dailyThresholds: external_exports.array(external_exports.number()).length(7).default([14, 29, 43, 57, 71, 86, 95]),
+  /**
+   * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
+   * renamed model-router, narrowed) selects the producer model for a task from
+   * its risk tier; this is the ONLY dial it carries — the review panel is
+   * risk-INVARIANT (Decision 25/26), so there is NO review-depth/round cap here
+   * (the old `--tier` routine/feature/security review caps are DELETED).
+   * Defaults: low→fast model, medium→balanced, high→strong.
+   */
+  producerModels: external_exports.object({
+    low: external_exports.string().default("claude-haiku-4-5"),
+    medium: external_exports.string().default("claude-sonnet-4-5"),
+    high: external_exports.string().default("claude-opus-4-6")
+  }).default({})
 }).default({});
 var ReviewSchema = external_exports.object({
   /** Reviewer model id (panel runs on a fixed model per Decision 26). */
@@ -4195,6 +4208,34 @@ var DependenciesSchema = external_exports.object({
   /** Timeout waiting for a PR to merge, seconds. */
   prMergeTimeout: external_exports.number().int().positive().default(1800)
 }).default({});
+var GitSchema = external_exports.object({
+  /**
+   * The durable base branch staging forks from and rolls up into. NEVER
+   * `main` (Decision 12/16 — the factory never touches main; promotion to main
+   * is human-owned and out of scope).
+   */
+  baseBranch: external_exports.string().min(1).default("develop"),
+  /** The integration branch task PRs serial-merge into (Δ L, §9.2). */
+  stagingBranch: external_exports.string().min(1).default("staging"),
+  /**
+   * Required status-check contexts that branch protection MUST enforce on the
+   * staging branch before a run may start. Empty means "no specific checks
+   * required" — but protection itself (incl. strict-up-to-date) is still
+   * mandatory; see `requireProtectionOrRefuse`.
+   */
+  requiredStatusChecks: external_exports.array(external_exports.string()).default([]),
+  /**
+   * Opt-in protection provisioning. OFF by default — the run VERIFIES and
+   * REFUSES when protection is missing (#2 / Δ A); only `--provision` flips
+   * this to issue the `gh api` PUT.
+   */
+  provision: external_exports.boolean().default(false),
+  /**
+   * Branch-name prefix for run-scoped task branches (Δ M). The full name is
+   * `<branchPrefix>/<run_id>/<task_id>`.
+   */
+  branchPrefix: external_exports.string().min(1).default("factory")
+}).default({});
 var ConfigSchema = external_exports.object({
   quality: QualitySchema,
   quota: QuotaSchema,
@@ -4204,6 +4245,7 @@ var ConfigSchema = external_exports.object({
   codex: CodexSchema,
   observability: ObservabilitySchema,
   dependencies: DependenciesSchema,
+  git: GitSchema,
   /** Consecutive task failures before the run aborts. */
   maxConsecutiveFailures: external_exports.number().int().positive().default(3),
   /** Hard wall-clock cap for a whole run, minutes. */

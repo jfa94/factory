@@ -1,0 +1,80 @@
+/**
+ * WS7 — judgment-verifier barrel. The risk-invariant panel + deterministic
+ * citation-verify + verify-then-fix (Decision 26/27, Δ K/T/U).
+ *
+ * Re-exports WS7's own surface ONLY. It does NOT touch `src/types` (the frozen
+ * cross-domain barrel) — WS7 imports the seams FROM there but adds nothing to it.
+ */
+
+// config resolution
+export {
+  FALLBACK_REVIEW_MODEL,
+  resolveReviewModel,
+  resolveJudgmentConfig,
+  type JudgmentConfig,
+} from "./config.js";
+
+// risk-invariant panel
+export { PANEL_ROLES, buildPanelManifest } from "./panel.js";
+
+// cross-vendor slot (loud-when-absent)
+export {
+  resolveCrossVendor,
+  type VendorProbe,
+  type CrossVendorSlot,
+  type CrossVendorResolution,
+} from "./vendor.js";
+
+// judgment-domain finding types
+export {
+  FindingSeverityEnum,
+  FindingSchema,
+  RawReviewVerdictEnum,
+  RawReviewSchema,
+  parseRawReview,
+  parseFinding,
+  isCitable,
+  type Finding,
+  type FindingSeverity,
+  type RawReview,
+  type RawReviewVerdict,
+} from "./finding.js";
+
+// deterministic citation-verify
+export {
+  CITATION_WINDOW,
+  verifyCitations,
+  type SourceReader,
+  type DropReason,
+  type DroppedFinding,
+  type CitationVerifyResult,
+  type VerifyCitationsOptions,
+} from "./citation-verify.js";
+
+// verify-then-fix independent finding-verifier
+export {
+  confirmBlocker,
+  type FindingVerifierRunner,
+  type VerifierVerdict,
+  type VerifierOutcome,
+  type VerifierEvidence,
+} from "./finding-verifier.js";
+
+// producer rebuttal (one shot, independently adjudicated)
+export {
+  adjudicateRebuttal,
+  RebuttalLedger,
+  type ProducerRebuttal,
+  type AdjudicationVerdict,
+  type RebuttalAdjudicator,
+  type RebuttalOutcome,
+} from "./rebuttal.js";
+
+// end-to-end verify pass (derive-don't-store floor)
+export {
+  runPanel,
+  spawnPanel,
+  type RunPanelInput,
+  type PanelRunResult,
+  type AdjudicatedReviewer,
+} from "./panel-run.js";
