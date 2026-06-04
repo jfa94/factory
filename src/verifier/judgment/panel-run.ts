@@ -35,6 +35,7 @@ import {
 import { isCitable, type Finding, type RawReview } from "./finding.js";
 import { verifyCitations, type SourceReader } from "./citation-verify.js";
 import { confirmBlocker, type FindingVerifierRunner } from "./finding-verifier.js";
+import type { CrossVendorResolution } from "./vendor.js";
 
 /** A reviewer's findings after citation-verify + independent confirmation. */
 export interface AdjudicatedReviewer {
@@ -58,6 +59,16 @@ export interface PanelRunResult {
   readonly floor: GateVerdict;
   /** The StageResult the driver acts on. */
   readonly result: StageResult;
+  /**
+   * Δ U — the LOUD record of a SECOND-VENDOR ABSENCE. Present (with a reason)
+   * IFF the caller supplied a {@link RunPanelInput.crossVendor} resolution whose
+   * status is `absent`. Left `undefined` when a second vendor IS present or when
+   * no resolution was supplied — so a consumer that wants to surface "review ran
+   * without an independent vendor" has a non-silent, machine-checkable signal
+   * rather than having to re-probe. resolveCrossVendor (vendor.ts) is the source
+   * of this resolution; runPanel never papers the absence over.
+   */
+  readonly crossVendorAbsence?: { readonly reason: string };
 }
 
 /**
@@ -141,6 +152,15 @@ export interface RunPanelInput {
   /** Bounded re-review attempt accounting for the wait-retry on a blocked floor. */
   readonly attempt?: number;
   readonly maxAttempts?: number;
+  /**
+   * Δ U — the resolved cross-vendor slot ({@link resolveCrossVendor}). When its
+   * status is `absent`, runPanel records the absence LOUDLY on
+   * {@link PanelRunResult.crossVendorAbsence}; when `present` (or omitted) no
+   * absence is recorded. The caller resolves it (runPanel stays free of the
+   * probe) and hands the resolution in — minimal wiring, no change to floor /
+   * citation / confirm semantics.
+   */
+  readonly crossVendor?: CrossVendorResolution;
 }
 
 /**
@@ -180,7 +200,16 @@ export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
         input.maxAttempts ?? 1,
       );
 
-  return { adjudicated, reviewerResults, floor, result };
+  // Δ U: surface a second-vendor ABSENCE loudly on the panel result. We never
+  // substitute a same-vendor reviewer into the cross-vendor slot (vendor.ts
+  // refuses that); the absence simply becomes a non-silent field the consumer
+  // can read. `present` (or an omitted resolution) records nothing.
+  const crossVendorAbsence =
+    input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : undefined;
+
+  return crossVendorAbsence === undefined
+    ? { adjudicated, reviewerResults, floor, result }
+    : { adjudicated, reviewerResults, floor, result, crossVendorAbsence };
 }
 
 /**

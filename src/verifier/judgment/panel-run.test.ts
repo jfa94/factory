@@ -188,3 +188,43 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
     expect(res.floor.passed).toBe(false);
   });
 });
+
+describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", () => {
+  it("an `absent` cross-vendor resolution records PanelRunResult.crossVendorAbsence={reason} (LOUD, never silent)", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      stage: "verify",
+      crossVendor: { status: "absent", reason: "cross-vendor executor 'codex' is not available" },
+    });
+    expect(res.crossVendorAbsence).toBeDefined();
+    expect(res.crossVendorAbsence?.reason).toContain("codex");
+    // The absence must not silently change floor semantics.
+    expect(res.floor.passed).toBe(true);
+  });
+
+  it("a `present` cross-vendor resolution leaves crossVendorAbsence undefined", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      stage: "verify",
+      crossVendor: { status: "present", slot: { vendor: "codex", model: "gpt-x" } },
+    });
+    expect(res.crossVendorAbsence).toBeUndefined();
+  });
+
+  it("an OMITTED cross-vendor resolution leaves crossVendorAbsence undefined (back-compat, no behavior change)", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      stage: "verify",
+    });
+    expect(res.crossVendorAbsence).toBeUndefined();
+  });
+});
