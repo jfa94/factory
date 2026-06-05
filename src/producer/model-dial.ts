@@ -12,9 +12,10 @@
  *   - Rung 2 — an ESCALATED model: the next tier UP the producerModels ladder
  *              (low→medium→high), PLUS injected prior-failure context. When the
  *              dial is already at the ceiling (`high`), the model cannot climb
- *              further, so the changed variable is the injected context alone —
- *              and {@link dialForRung} flags `escalated: false` so the ladder can
- *              assert the rung still changed *something* (the context).
+ *              further, so the changed variable is the injected context alone. The
+ *              ladder's {@link import("./ladder.js").assertRungChange} derives
+ *              whether the model changed (cur.model !== prev.model) — it is NOT
+ *              stored on the result (derive-don't-store, Δ V).
  *
  * The escalated model is derived from the SAME config.quota.producerModels map
  * (no new literal, no new config knob): low's escalation is medium, medium's is
@@ -34,13 +35,6 @@ export interface DialResult {
   readonly model: string;
   /** The rung this was dialed for (0 = starting). */
   readonly rung: number;
-  /**
-   * True iff this rung's MODEL is strictly stronger than the previous rung's.
-   * False when the model is unchanged (rung 0/1, or rung 2 already at ceiling) —
-   * in which case the ladder MUST change the OTHER variable (context) to satisfy
-   * the "change a variable each rung" invariant.
-   */
-  readonly escalated: boolean;
   /**
    * True iff this rung injects prior-failure "don't do this" context (rung ≥ 2).
    * The second changeable variable. Together with `escalated`, the ladder asserts
@@ -83,7 +77,6 @@ export function dialForRung(riskTier: RiskTier, rung: number, config: Config): D
     return {
       model: baseModel,
       rung,
-      escalated: false,
       injectsPriorFailure: false,
     };
   }
@@ -96,10 +89,6 @@ export function dialForRung(riskTier: RiskTier, rung: number, config: Config): D
   return {
     model: escalatedModel,
     rung,
-    // `escalated` is true only if the model actually changed (it cannot when the
-    // base tier is already `high`); the ladder relies on this to know whether the
-    // model OR the context is the changed variable for this rung.
-    escalated: escalatedModel !== baseModel,
     injectsPriorFailure: true,
   };
 }

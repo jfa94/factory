@@ -85,15 +85,7 @@ export function isMutableSrc(file: string): boolean {
  * as a SKIP, never a pass-by-default.
  */
 export function mutationScope(changedFiles: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const scope: string[] = [];
-  for (const f of changedFiles) {
-    if (!isMutableSrc(f)) continue;
-    if (seen.has(f)) continue;
-    seen.add(f);
-    scope.push(f);
-  }
-  return scope;
+  return filterDedup(changedFiles, isMutableSrc);
 }
 
 /**
@@ -102,10 +94,15 @@ export function mutationScope(changedFiles: readonly string[]): string[] {
  * run to the changed tests.
  */
 export function diffScopedTestFiles(changedFiles: readonly string[]): string[] {
+  return filterDedup(changedFiles, isTestPath);
+}
+
+/** Keep the files matching `keep`, de-duplicated and order-preserving. */
+function filterDedup(files: readonly string[], keep: (file: string) => boolean): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const f of changedFiles) {
-    if (!isTestPath(f)) continue;
+  for (const f of files) {
+    if (!keep(f)) continue;
     if (seen.has(f)) continue;
     seen.add(f);
     out.push(f);

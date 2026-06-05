@@ -19,7 +19,6 @@ import {
   verifyEnvironmental,
   fakeFinding,
 } from "./fakes.js";
-import type { FixInstruction } from "./prompt-context.js";
 import type { ProducerOutcome } from "./agents.js";
 import type { VerifyPassResult } from "./ladder.js";
 
@@ -179,8 +178,8 @@ describe("ladder fix-forward INNER loop (D27) — patch the misses in-rung, do N
     expect(producer.spawns[1]?.model).toBe(cfg.quota.producerModels.low);
     // The fresh attempt carries NO fix instructions; the patch spawn carries the
     // specific confirmed blocker as a fix instruction (PATCH, not nuke).
-    const fresh = producer.spawns[0]?.context as { fixInstructions?: FixInstruction[] } | undefined;
-    const patch = producer.spawns[1]?.context as { fixInstructions?: FixInstruction[] } | undefined;
+    const fresh = producer.spawns[0]?.context;
+    const patch = producer.spawns[1]?.context;
     expect(fresh?.fixInstructions ?? []).toHaveLength(0);
     expect(patch?.fixInstructions).toHaveLength(1);
     expect(patch?.fixInstructions?.[0]?.file).toBe("src/a.ts");
@@ -212,10 +211,8 @@ describe("ladder fix-forward INNER loop (D27) — patch the misses in-rung, do N
     expect(producer.spawns).toHaveLength(3);
     // spawn[1] was the in-rung PATCH (has fix instructions); spawn[2] is the
     // fresh post-nuke rung-1 attempt (no fix instructions — a clean restart).
-    const patch = producer.spawns[1]?.context as { fixInstructions?: FixInstruction[] } | undefined;
-    const restart = producer.spawns[2]?.context as
-      | { fixInstructions?: FixInstruction[] }
-      | undefined;
+    const patch = producer.spawns[1]?.context;
+    const restart = producer.spawns[2]?.context;
     expect(patch?.fixInstructions).toHaveLength(1);
     expect(restart?.fixInstructions ?? []).toHaveLength(0);
   });

@@ -20,6 +20,7 @@
  * or drops immediately (Δ D).
  */
 import type { ProducerRole } from "../types/index.js";
+import type { ProducerContext } from "./prompt-context.js";
 
 /** The producer roles, re-exported as the WS8 vocabulary (TDD order: tests first). */
 export type { ProducerRole } from "../types/index.js";
@@ -40,7 +41,7 @@ export interface ProducerSpawn {
   /** Max agent turns (config.testWriter.maxTurns / a producer cap). */
   readonly maxTurns: number;
   /** Structured prompt context (prompt-context.ts assembles it). */
-  readonly context: Record<string, unknown>;
+  readonly context: ProducerContext;
 }
 
 /**

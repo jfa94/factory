@@ -91,7 +91,7 @@ export interface EslintTool {
   lint(opts: ToolRunOpts): Promise<ProcResult>;
 }
 
-/** Build gate (e.g. `pnpm build`). */
+/** Build gate (e.g. `npm run build`). */
 export interface BuildTool {
   build(opts: ToolRunOpts): Promise<ProcResult>;
 }
@@ -110,17 +110,27 @@ export interface SemgrepTool {
 // Report-reading tools (mutation / coverage): parse JSON, fail loud on truncation.
 // ---------------------------------------------------------------------------
 
-/** Outcome of a stryker run: the process result + the parsed report (if any). */
+/**
+ * The state of the stryker mutation report, as a discriminated union so illegal
+ * combinations (e.g. "absent but scored", "unparseable yet carries a score") are
+ * unrepresentable, and a PARSE error is distinguishable from a legitimately
+ * score-less report:
+ *   - `absent`      — no report file was produced.
+ *   - `unparseable` — a report file existed but its JSON did not parse (corrupt).
+ *   - `present`     — the report parsed; `mutationScore` is the extracted score, or
+ *                     null when it carries no `.metrics.mutationScore`.
+ * The strategy maps absent/unparseable/score-null to fail-closed answers when the
+ * mutation scope is non-empty.
+ */
+export type StrykerReport =
+  | { readonly report: "absent" }
+  | { readonly report: "unparseable" }
+  | { readonly report: "present"; readonly mutationScore: number | null };
+
+/** Outcome of a stryker run: the process result + the parsed report state. */
 export interface StrykerResult {
   readonly proc: ProcResult;
-  /**
-   * The parsed mutation score, or null when the report is absent or carries no
-   * `.metrics.mutationScore` (the strategy maps these to no-report / no-score —
-   * fail-closed when scope is non-empty).
-   */
-  readonly mutationScore: number | null;
-  /** True iff a report file existed (distinguishes no-report from no-score). */
-  readonly reportPresent: boolean;
+  readonly report: StrykerReport;
 }
 
 /** Stryker mutation runner. */
@@ -235,23 +245,24 @@ export class DefaultStrykerTool implements StrykerTool {
     try {
       raw = await readFile(reportPath, "utf8");
     } catch {
-      return { proc, mutationScore: null, reportPresent: false };
+      return { proc, report: { report: "absent" } };
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      // A present-but-unparseable report is treated as no-score (report present,
-      // score absent) — fail-closed at the strategy when scope is non-empty.
-      return { proc, mutationScore: null, reportPresent: true };
+      // A present-but-corrupt report is distinct from a legitimately score-less one
+      // — surfaced as `unparseable` so the strategy can fail-closed without
+      // conflating it with no-score.
+      return { proc, report: { report: "unparseable" } };
     }
     const score = extractMutationScore(parsed);
-    return { proc, mutationScore: score, reportPresent: true };
+    return { proc, report: { report: "present", mutationScore: score } };
   }
 }
 
 /** Pull `.metrics.mutationScore` (a finite number) out of a parsed report. */
-function extractMutationScore(report: unknown): number | null {
+export function extractMutationScore(report: unknown): number | null {
   if (typeof report !== "object" || report === null) return null;
   const metrics = (report as { metrics?: unknown }).metrics;
   if (typeof metrics !== "object" || metrics === null) return null;
@@ -354,6 +365,10 @@ export class DefaultGitProbe implements GitProbe {
         `git log ${base}..HEAD failed (code=${log.code ?? "null"}): ${log.stderr.trim()}`,
       );
     }
+    // A truncated commit list silently drops commits → the classifier sees a
+    // partial history → false TDD PASS on the authority-of-record path. Fail LOUD
+    // on every parse in this method (mirrors changedFiles).
+    assertNotTruncated(log, "git log (tdd classification)");
     // git log is newest-first; the TDD gate classifies OLDEST-first.
     const shas = splitLines(log.stdout).reverse();
     const out: CommitInfo[] = [];
@@ -362,6 +377,7 @@ export class DefaultGitProbe implements GitProbe {
       if (parents.code !== 0) {
         throw new Error(`git show parents of ${sha} failed: ${parents.stderr.trim()}`);
       }
+      assertNotTruncated(parents, `git show parents of ${sha}`);
       const parentShas = parents.stdout
         .trim()
         .split(/\s+/)
@@ -379,6 +395,7 @@ export class DefaultGitProbe implements GitProbe {
         if (dt.code !== 0) {
           throw new Error(`git diff-tree failed for ${sha}: ${dt.stderr.trim()}`);
         }
+        assertNotTruncated(dt, `git diff-tree (merge) for ${sha}`);
         files = splitLines(dt.stdout);
       } else {
         const dt = await this.git(
@@ -388,9 +405,14 @@ export class DefaultGitProbe implements GitProbe {
         if (dt.code !== 0) {
           throw new Error(`git diff-tree failed for ${sha}: ${dt.stderr.trim()}`);
         }
+        assertNotTruncated(dt, `git diff-tree for ${sha}`);
         files = splitLines(dt.stdout);
       }
       const subjBody = await this.git(["log", "-1", "--format=%s%n%b", sha], opts.cwd);
+      if (subjBody.code !== 0) {
+        throw new Error(`git log subject/body of ${sha} failed: ${subjBody.stderr.trim()}`);
+      }
+      assertNotTruncated(subjBody, `git log subject/body of ${sha}`);
       const tagged = subjBody.stdout.includes(`[${taskId}]`);
       out.push({ sha, files, parentCount, tagged });
     }

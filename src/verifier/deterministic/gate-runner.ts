@@ -122,7 +122,22 @@ export class GateRunner {
     const evidence: GateEvidence[] = [];
     const skipped: { gate: GateId; reason: string }[] = [];
 
+    // Tree-SHA evidence memo (Δ O): one tree object sha keys the per-gate evidence
+    // cache, so an identical-CONTENT re-run skips re-EXECUTING the tool. Resolved
+    // ONCE up front (it is worktree-level — same for every gate). A worktree whose
+    // tree is unresolvable is structurally broken; we fail LOUD rather than run
+    // gates we cannot key. The cache stores EVIDENCE only — the verdict is still
+    // re-derived by deriveAllGatesVerdict, so a hit never bypasses re-derivation.
+    const treeSha = await ctx.tools.git.treeSha({ cwd: ctx.worktree });
+
     for (const id of gates) {
+      const cached = memo.getEvidence(id, treeSha);
+      if (cached !== undefined) {
+        report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
+        evidence.push(cached);
+        log.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
+        continue;
+      }
       const strategy = strategyFor(id);
       const sctx: StrategyContext<GateTools> = {
         runId: ctx.runId,
@@ -137,11 +152,11 @@ export class GateRunner {
       const outcome = await strategy.run(sctx);
       report.push({ gate: id, outcome });
       if (outcome.kind === "ran") {
-        // Tree-SHA evidence memo (Δ O): cache the EVIDENCE (never a verdict) so an
-        // identical-content re-run is a no-op. Best-effort; a probe failure here is
-        // non-fatal to the gate result.
         evidence.push(outcome.evidence);
+        memo.putEvidence(id, treeSha, outcome.evidence);
       } else {
+        // Skips are not memoized: they carry no evidence, are excluded from the
+        // conjunction, and are cheap to re-evaluate (a not-applicable probe).
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
         log.debug(`gate ${id} skipped: ${outcome.reason}`);
       }

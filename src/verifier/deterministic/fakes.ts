@@ -17,6 +17,7 @@ import type {
   GitProbe,
   ProcResult,
   SemgrepTool,
+  StrykerReport,
   StrykerResult,
   StrykerTool,
   ToolRunOpts,
@@ -88,19 +89,33 @@ export class FakeStryker implements StrykerTool {
   }
 }
 
-/** Convenience: build a StrykerResult from a code + optional score. */
+/**
+ * Convenience: build a StrykerResult from a code + optional score. The legacy
+ * `score`/`reportPresent` inputs map onto the {@link StrykerReport} union:
+ *   - `unparseable: true`     → report unparseable (corrupt JSON).
+ *   - `reportPresent: false`  → report absent.
+ *   - `score` provided        → report present, with that score (may be null).
+ *   - otherwise               → report absent (only reached when code≠0, where the
+ *                               report state is irrelevant to the strategy).
+ */
 export function strykerResult(opts: {
   code: number | null;
   score?: number | null;
   reportPresent?: boolean;
+  unparseable?: boolean;
   truncated?: boolean;
 }): StrykerResult {
-  const reportPresent = opts.reportPresent ?? opts.score !== undefined;
-  return {
-    proc: proc(opts.code, "", "", opts.truncated ?? false),
-    mutationScore: opts.score ?? null,
-    reportPresent,
-  };
+  let report: StrykerReport;
+  if (opts.unparseable === true) {
+    report = { report: "unparseable" };
+  } else if (opts.reportPresent === false) {
+    report = { report: "absent" };
+  } else if (opts.score !== undefined) {
+    report = { report: "present", mutationScore: opts.score };
+  } else {
+    report = { report: "absent" };
+  }
+  return { proc: proc(opts.code, "", "", opts.truncated ?? false), report };
 }
 
 /** Scripted CoverageReader: returns the seeded before/after summaries. */

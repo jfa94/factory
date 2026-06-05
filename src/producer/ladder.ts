@@ -40,10 +40,10 @@ import {
   type ProducerContext,
   type PriorFailureNote,
 } from "./prompt-context.js";
-import { classifyFailure } from "./classify.js";
+import { classifyFailure, type FailureSignal } from "./classify.js";
 import { runFixForward, type FixForwardInput } from "./fix-forward.js";
 import type { ProducerAgentRunner, ProducerOutcome } from "./agents.js";
-import type { Finding } from "../verifier/judgment/finding.js";
+import type { Finding } from "../verifier/judgment/index.js";
 
 /** The maximum number of escalating retries past the starting rung (Δ cap = 2). */
 export const ESCALATION_CAP = 2;
@@ -77,28 +77,35 @@ export interface VerifyPass {
  * gate evidence (a structurally-unfixable gate) or an external-blocker probe.
  */
 export type VerifyStructuralFailure =
-  | {
-      readonly kind: "gate-failure";
-      readonly gate: string;
-      readonly structurallyUnfixable: true;
-      readonly reason: string;
-    }
-  | { readonly kind: "environmental"; readonly reason: string };
+  // A structurally-UNFIXABLE gate (derived from FailureSignal's gate-failure arm so
+  // a field rename there propagates here, then narrowed to the unfixable case — a
+  // FIXABLE gate is NOT structural; it flows through confirmedBlockers/fix-forward).
+  | (Extract<FailureSignal, { kind: "gate-failure" }> & { readonly structurallyUnfixable: true })
+  | Extract<FailureSignal, { kind: "environmental" }>;
 
-/** The subset of a verify pass the ladder consumes (mirrors PanelRunResult). */
-export interface VerifyPassResult {
-  /** Confirmed blockers (post citation-verify + independent confirmation). */
-  readonly confirmedBlockers: readonly Finding[];
-  /** LOUD unresolved verifier error — never auto-ship. */
-  readonly hadVerifierError: boolean;
-  /**
-   * A structural (non-capability) floor failure (Δ D). When present, the ladder
-   * classifies it and drops immediately WITHOUT burning a rung — re-executing a
-   * structurally-unfixable gate or an environmental blocker only wastes retries.
-   * Absent on a normal pass (the blockers/error fields carry the result).
-   */
-  readonly structuralFailure?: VerifyStructuralFailure;
-}
+/**
+ * The result of a verify pass the ladder consumes. A DISCRIMINATED UNION on `kind`
+ * so the structural channel is mutually exclusive with a normal pass at compile time
+ * (no "pass with a structural failure also set" illegal state):
+ *   - `pass`       — the floor ran; the confirmedBlockers/hadVerifierError fields
+ *                    carry the result (zero blockers + no error ⇒ the task passed).
+ *   - `structural` — a structural (non-capability) floor failure (Δ D): a
+ *                    structurally-unfixable gate or an environmental blocker. The
+ *                    ladder classifies it and drops immediately WITHOUT burning a
+ *                    rung — re-executing it only wastes retries.
+ */
+export type VerifyPassResult =
+  | {
+      readonly kind: "pass";
+      /** Confirmed blockers (post citation-verify + independent confirmation). */
+      readonly confirmedBlockers: readonly Finding[];
+      /** LOUD unresolved verifier error — never auto-ship. */
+      readonly hadVerifierError: boolean;
+    }
+  | {
+      readonly kind: "structural";
+      readonly failure: VerifyStructuralFailure;
+    };
 
 /** The task payload the ladder needs (holdout-stripped already). */
 export interface LadderTask {
@@ -255,10 +262,7 @@ export async function runLadder(task: LadderTask, deps: LadderDeps): Promise<Sta
       role: "executor",
       model: dial.model,
       maxTurns,
-      context: contextForRung(task, rung, dial, [], priorFailures) as unknown as Record<
-        string,
-        unknown
-      >,
+      context: contextForRung(task, rung, dial, [], priorFailures),
     });
     const freshAction = handleProducerOutcome(fresh);
     if (freshAction.kind === "drop") return freshAction.result;
@@ -276,14 +280,19 @@ export async function runLadder(task: LadderTask, deps: LadderDeps): Promise<Sta
 
       // (2a) CLASSIFY-BEFORE-RETRY (Δ D): a STRUCTURAL floor failure — a
       // structurally-unfixable gate or an environmental blocker — drops
-      // immediately and does NOT burn a rung.
-      if (verifyResult.structuralFailure !== undefined) {
-        const decision = classifyFailure(verifyResult.structuralFailure);
-        if (decision.action === "drop") {
-          return taskDropped(decision.failureClass, decision.reason);
+      // immediately and does NOT burn a rung. The structural channel is a
+      // GUARANTEED-DROP subset (VerifyStructuralFailure narrows gate-failure to
+      // `structurallyUnfixable: true`), so a non-drop classification here is a
+      // CLASSIFY BUG — fail LOUD (Δ D), never silently fall through to a retry.
+      if (verifyResult.kind === "structural") {
+        const decision = classifyFailure(verifyResult.failure);
+        if (decision.action !== "drop") {
+          throw new Error(
+            `ladder: structural floor failure classified as '${decision.action}', not 'drop' — ` +
+              `a structurally-unfixable/environmental signal must always drop (Δ D classify bug)`,
+          );
         }
-        // Structural signals always classify as a drop; a retry would be a
-        // classify bug. Fall through to fix-forward rather than silently loop.
+        return taskDropped(decision.failureClass, decision.reason);
       }
 
       const fix = await runFixForward({
@@ -295,8 +304,10 @@ export async function runLadder(task: LadderTask, deps: LadderDeps): Promise<Sta
         fix.status === "clear" ||
         (fix.status === "rebutted-overturned" && fix.remaining.length === 0)
       ) {
-        // Floor passed — SUCCESS. Advance to the next per-task stage.
-        return advance(nextOrSelf(deps.stage));
+        // Floor passed — SUCCESS. Advance to the next per-task stage. The ladder
+        // is EXECUTOR-ONLY (the verify→ship edge); it never advances preflight/
+        // tests/finalize, so the only real transition is verify→ship.
+        return advance(deps.stage === "verify" ? "ship" : deps.stage);
       }
 
       if (fix.status === "verifier-error") {
@@ -329,10 +340,7 @@ export async function runLadder(task: LadderTask, deps: LadderDeps): Promise<Sta
         role: "executor",
         model: dial.model,
         maxTurns,
-        context: contextForRung(task, rung, dial, remaining, priorFailures) as unknown as Record<
-          string,
-          unknown
-        >,
+        context: contextForRung(task, rung, dial, remaining, priorFailures),
       });
       const patchAction = handleProducerOutcome(patchOutcome);
       if (patchAction.kind === "drop") return patchAction.result;
@@ -354,9 +362,4 @@ export async function runLadder(task: LadderTask, deps: LadderDeps): Promise<Sta
     "capability-budget",
     `producer escalation ladder exhausted after ${ESCALATION_CAP} retries: ${lastReason}`,
   );
-}
-
-/** The stage to advance to on success (mirror the WS7 verify→ship edge). */
-function nextOrSelf(stage: TaskStage): TaskStage {
-  return stage === "verify" ? "ship" : stage;
 }

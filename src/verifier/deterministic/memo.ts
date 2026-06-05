@@ -19,7 +19,7 @@
  * stale-cache derive-don't-store smell across runs.
  */
 import type { GateEvidence } from "../../types/index.js";
-import type { GateId } from "./strategy.js";
+import type { GateId } from "./gate-id.js";
 import type { TddVerdict } from "./tdd-classify.js";
 
 /**

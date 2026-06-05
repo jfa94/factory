@@ -84,4 +84,19 @@ describe("prompt-context — fix-forward instructions (D27)", () => {
     expect(ctx.fixInstructions[0]?.line).toBeUndefined();
     expect(ctx.fixInstructions[0]?.description.length).toBeGreaterThan(0);
   });
+
+  it("a blocker with a file but NO line carries the file and omits the line", () => {
+    const f = fakeFinding();
+    const ctx = buildProducerContext({
+      taskId: "T1",
+      title: "t",
+      description: "d",
+      visibleCriteria: ["c"],
+      files: ["f"],
+      rung: 0,
+      confirmedBlockers: [{ ...f, file: "src/y.ts", line: undefined }],
+    });
+    expect(ctx.fixInstructions[0]?.file).toBe("src/y.ts");
+    expect(ctx.fixInstructions[0]?.line).toBeUndefined();
+  });
 });

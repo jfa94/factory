@@ -91,6 +91,7 @@ export {
   DefaultStrykerTool,
   DefaultCoverageReader,
   parseCoverageSummary,
+  extractMutationScore,
   type GateTools,
   type GitProbe,
   type CommitInfo,
@@ -103,6 +104,7 @@ export {
   type SemgrepTool,
   type StrykerTool,
   type StrykerResult,
+  type StrykerReport,
   type CoverageReader,
   type CoverageSummary,
 } from "./tools.js";

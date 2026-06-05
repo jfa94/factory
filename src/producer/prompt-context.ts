@@ -21,7 +21,7 @@
  * blockers (PanelRunResult.confirmedBlockers) are folded in as concrete fix
  * instructions, so the executor patches the specific verified misses.
  */
-import type { Finding } from "../verifier/judgment/finding.js";
+import type { Finding } from "../verifier/judgment/index.js";
 
 /** A single confirmed-blocker fix instruction for the executor's patch pass. */
 export interface FixInstruction {

@@ -15,9 +15,15 @@ import { runGatesInCleanCheckout } from "./clean-checkout.js";
 import { GateRunner, type GateContext } from "./gate-runner.js";
 import { FakeGitProbe, FakeVitest, makeFakeTools, proc } from "./fakes.js";
 
-/** FakeGitClient seeded so createTaskWorktree's staging-tip assertion passes. */
+/**
+ * FakeGitClient seeded so createTaskWorktree's staging-tip assertion passes AND the
+ * candidate ref resolves (the gate-of-record checks it out + asserts HEAD).
+ */
 function gitClient(): FakeGitClient {
-  return new FakeGitClient({ remoteHeads: { staging: "sha-staging-1" } });
+  return new FakeGitClient({
+    remoteHeads: { staging: "sha-staging-1" },
+    localBranches: { candidate: { sha: "sha-candidate-1" } },
+  });
 }
 
 function buildContext(tools: ReturnType<typeof makeFakeTools>) {
@@ -45,6 +51,7 @@ describe("runGatesInCleanCheckout (gate-of-record, Δ Z)", () => {
       runId: "r1",
       taskId: "t1",
       worktreePath: "/tmp/clean-wt",
+      candidateRef: "candidate",
       buildContext: buildContext(tools),
     });
 
@@ -67,6 +74,7 @@ describe("runGatesInCleanCheckout (gate-of-record, Δ Z)", () => {
         runId: "r1",
         taskId: "t1",
         worktreePath: "/tmp/clean-wt-throw",
+        candidateRef: "candidate",
         buildContext: buildContext(tools),
       }),
     ).rejects.toThrow(/truncated/i);
@@ -74,5 +82,44 @@ describe("runGatesInCleanCheckout (gate-of-record, Δ Z)", () => {
     // The throw must NOT leak the worktree.
     expect(git.calls.some((c) => c.startsWith("worktree remove"))).toBe(true);
     expect(git.worktrees.has("/tmp/clean-wt-throw")).toBe(false);
+  });
+
+  it("checks out the candidate before running the gates (validates task output, not pristine base)", async () => {
+    const git = gitClient();
+    const tools = makeFakeTools({ git: probe, vitest: new FakeVitest(proc(0)) });
+    await runGatesInCleanCheckout({
+      gitClient: git,
+      runner: new GateRunner(),
+      runId: "r1",
+      taskId: "t1",
+      worktreePath: "/tmp/clean-wt-candidate",
+      candidateRef: "candidate",
+      buildContext: buildContext(tools),
+    });
+    // The candidate is re-pointed into the clean worktree before gates run.
+    expect(git.calls.some((c) => c.startsWith("checkout -B") && c.includes("candidate"))).toBe(
+      true,
+    );
+  });
+
+  it("fails LOUD when the checked-out HEAD != expectedSha (candidate moved since review)", async () => {
+    const git = gitClient();
+    const tools = makeFakeTools({ git: probe, vitest: new FakeVitest(proc(0)) });
+    await expect(
+      runGatesInCleanCheckout({
+        gitClient: git,
+        runner: new GateRunner(),
+        runId: "r1",
+        taskId: "t1",
+        worktreePath: "/tmp/clean-wt-mismatch",
+        candidateRef: "candidate",
+        expectedSha: "sha-some-other-commit",
+        buildContext: buildContext(tools),
+      }),
+    ).rejects.toThrow(/expected candidate sha/i);
+
+    // Even on the mismatch throw, the worktree is torn down (no leak).
+    expect(git.calls.some((c) => c.startsWith("worktree remove"))).toBe(true);
+    expect(git.worktrees.has("/tmp/clean-wt-mismatch")).toBe(false);
   });
 });

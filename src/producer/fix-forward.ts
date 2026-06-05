@@ -17,13 +17,13 @@
  * and never silently passes; {@link runFixForward} returns `verifier-error` so the
  * ladder blocks (wait-retry / classified drop), never advances.
  */
-import type { Finding } from "../verifier/judgment/finding.js";
 import {
   adjudicateRebuttal,
   RebuttalLedger,
+  type Finding,
   type ProducerRebuttal,
   type RebuttalAdjudicator,
-} from "../verifier/judgment/rebuttal.js";
+} from "../verifier/judgment/index.js";
 
 /**
  * A single producer rebuttal request, paired with the finding it rebuts and the

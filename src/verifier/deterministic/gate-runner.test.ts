@@ -24,6 +24,7 @@ import {
   strykerResult,
 } from "./fakes.js";
 import { GateRunner, strategyFor, type GateContext } from "./gate-runner.js";
+import { GateMemo } from "./memo.js";
 import type { CoverageSummary, GateTools } from "./tools.js";
 
 const full: CoverageSummary = { lines: 100, branches: 100, functions: 100, statements: 100 };
@@ -99,6 +100,56 @@ describe("GateRunner — Δ V derive-don't-store conjunction", () => {
     expect(a.verdict.__derived).toBe(true);
     expect(b.verdict.__derived).toBe(true);
     expect(a.verdict.passed).toBe(b.verdict.passed);
+  });
+});
+
+describe("GateRunner — tree-SHA evidence memo (Δ O)", () => {
+  it("serves an identical-content re-run from the memo (tool NOT re-invoked)", async () => {
+    const memo = new GateMemo();
+    const vitest = new FakeVitest(proc(0));
+    const git = new FakeGitProbe({
+      refs: { "origin/staging": "sha-base", HEAD: "sha-head" },
+      changedFiles: [],
+      commits: [],
+      treeSha: "tree-A",
+    });
+    const tools = makeFakeTools({ git, vitest });
+    const ctx: GateContext = { ...baseCtx(tools, ["test"]), memo };
+
+    const a = await new GateRunner().run(ctx);
+    const b = await new GateRunner().run(ctx);
+
+    expect(a.verdict.passed).toBe(true);
+    expect(b.verdict.passed).toBe(true);
+    // Same tree SHA + shared memo ⇒ the vitest tool ran ONCE; the second sweep was
+    // served from the evidence memo (the Δ O acceptance criterion).
+    expect(vitest.calls).toHaveLength(1);
+  });
+
+  it("re-runs the tool when the tree SHA changes (different content ⇒ memo miss)", async () => {
+    const memo = new GateMemo();
+    const vitest = new FakeVitest(proc(0));
+    const ctxFor = (tree: string): GateContext => ({
+      ...baseCtx(
+        makeFakeTools({
+          git: new FakeGitProbe({
+            refs: { "origin/staging": "sha-base", HEAD: "sha-head" },
+            changedFiles: [],
+            commits: [],
+            treeSha: tree,
+          }),
+          vitest,
+        }),
+        ["test"],
+      ),
+      memo,
+    });
+
+    await new GateRunner().run(ctxFor("tree-1"));
+    await new GateRunner().run(ctxFor("tree-2"));
+
+    // Distinct tree SHAs ⇒ no memo hit ⇒ the tool is invoked each run.
+    expect(vitest.calls).toHaveLength(2);
   });
 });
 

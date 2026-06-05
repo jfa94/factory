@@ -90,4 +90,29 @@ describe("sastStrategy", () => {
       sastStrategy.run(ctx(tools, withSecurity("semgrep --config auto"))),
     ).rejects.toThrow(/truncated/i);
   });
+
+  // A secret echoed in the scanner's output must be scrubbed before it reaches the
+  // persisted detail (Δ K, M14). The detail now carries the command OUTPUT, so
+  // redaction is load-bearing rather than a no-op over `exit=N`.
+  const SECRET = "AKIA1234567890ABCDEF"; // matches the aws-access-key-id pattern
+
+  it("securityRedactFindings=true (default) → secret in scanner output is REDACTED in detail", async () => {
+    const finding = `rule-id: hardcoded-credential\n  ${SECRET}`;
+    const tools = makeFakeTools({ semgrep: new FakeSemgrep(proc(1, finding)) });
+    const out = await sastStrategy.run(ctx(tools, withSecurity("semgrep --config auto")));
+    const ev = (out as GateRan).evidence;
+    expect(ev.observed).toBe(false); // findings present (exit 1)
+    expect(ev.detail).not.toContain(SECRET);
+    expect(ev.detail).toContain("[REDACTED]");
+  });
+
+  it("securityRedactFindings=false → scanner output is surfaced VERBATIM (no scrub)", async () => {
+    const finding = `rule-id: hardcoded-credential\n  ${SECRET}`;
+    const tools = makeFakeTools({ semgrep: new FakeSemgrep(proc(1, finding)) });
+    const out = await sastStrategy.run(
+      ctx(tools, withSecurity("semgrep --config auto", { securityRedactFindings: false })),
+    );
+    const ev = (out as GateRan).evidence;
+    expect(ev.detail).toContain(SECRET);
+  });
 });

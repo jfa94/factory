@@ -94,9 +94,15 @@ export const sastStrategy: GateStrategy<GateTools> = {
     if (result.truncated) {
       throw new Error("sast gate: semgrep output truncated — refusing to parse a clipped payload");
     }
+    // Surface the scanner's OUTPUT in the detail (this is what gets persisted), so
+    // redaction is load-bearing: a finding that echoes a credential is scrubbed by
+    // redactSecrets before it reaches the audit trail (Δ K, M14). Redacting only
+    // `exit=N` (which never contains output) would be a no-op.
     const redact = ctx.config.quality.securityRedactFindings;
-    const rawDetail = `exit=${result.code ?? "null"}`;
-    const detail = redact ? redactSecrets(rawDetail) : rawDetail;
+    const rawOutput = `${result.stdout}\n${result.stderr}`.trim();
+    const output = redact ? redactSecrets(rawOutput) : rawOutput;
+    const exit = `exit=${result.code ?? "null"}`;
+    const detail = output.length > 0 ? `${exit} :: ${output}` : exit;
     const clean = result.code === 0;
     if (clean) {
       return ran("sast", true, `security ${detail}`);

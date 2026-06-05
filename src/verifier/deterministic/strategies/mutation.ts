@@ -54,15 +54,19 @@ export const mutationStrategy: GateStrategy<GateTools> = {
     if (result.proc.code !== 0) {
       return ran("mutation", false, `stryker-failed: exit=${result.proc.code ?? "null"}`);
     }
-    // Scope is non-empty here, so a missing report / missing score is an anomaly →
-    // fail-closed (bash A2 / T4d), never a silent waive.
-    if (!result.reportPresent) {
+    // Scope is non-empty here, so an absent / unparseable / score-less report is an
+    // anomaly → fail-closed (bash A2 / T4d), never a silent waive.
+    const report = result.report;
+    if (report.report === "absent") {
       return ran("mutation", false, "no-report: stryker produced no report despite mutable files");
     }
-    if (result.mutationScore === null) {
+    if (report.report === "unparseable") {
+      return ran("mutation", false, "unparseable-report: stryker report JSON did not parse");
+    }
+    if (report.mutationScore === null) {
       return ran("mutation", false, "no-score: report has no .metrics.mutationScore");
     }
-    const score = result.mutationScore;
+    const score = report.mutationScore;
     if (!scorePasses(score, target)) {
       return ran("mutation", false, `score-below-target: ${score} < ${target}`);
     }

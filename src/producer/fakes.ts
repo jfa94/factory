@@ -9,13 +9,13 @@
  */
 import type { ProducerAgentRunner, ProducerOutcome, ProducerSpawn } from "./agents.js";
 import type { VerifyPass, VerifyPassResult } from "./ladder.js";
-import type { Finding } from "../verifier/judgment/finding.js";
 import type {
   AdjudicationVerdict,
+  Finding,
   ProducerRebuttal,
   RebuttalAdjudicator,
-} from "../verifier/judgment/rebuttal.js";
-import type { VendorProbe } from "../verifier/judgment/vendor.js";
+  VendorProbe,
+} from "../verifier/judgment/index.js";
 
 /**
  * A scriptable producer-agent runner. Returns the next outcome from `script` on
@@ -67,17 +67,19 @@ export function makeFakeVerify(script: readonly VerifyPassResult[]): VerifyPass 
 
 /** A verify result with no blockers and no error — the "floor clear" case. */
 export const VERIFY_CLEAR: VerifyPassResult = {
+  kind: "pass",
   confirmedBlockers: [],
   hadVerifierError: false,
 };
 
 /** A verify result with confirmed blockers (floor blocked). */
 export function verifyBlocked(blockers: readonly Finding[]): VerifyPassResult {
-  return { confirmedBlockers: blockers, hadVerifierError: false };
+  return { kind: "pass", confirmedBlockers: blockers, hadVerifierError: false };
 }
 
 /** A verify result with a LOUD unresolved verifier error. */
 export const VERIFY_ERROR: VerifyPassResult = {
+  kind: "pass",
   confirmedBlockers: [],
   hadVerifierError: true,
 };
@@ -91,9 +93,8 @@ export function verifyStructuralGate(
   reason = `gate '${gate}' is structurally unfixable as specified`,
 ): VerifyPassResult {
   return {
-    confirmedBlockers: [],
-    hadVerifierError: false,
-    structuralFailure: { kind: "gate-failure", gate, structurallyUnfixable: true, reason },
+    kind: "structural",
+    failure: { kind: "gate-failure", gate, structurallyUnfixable: true, reason },
   };
 }
 
@@ -103,9 +104,8 @@ export function verifyStructuralGate(
  */
 export function verifyEnvironmental(reason = "CI infrastructure unavailable"): VerifyPassResult {
   return {
-    confirmedBlockers: [],
-    hadVerifierError: false,
-    structuralFailure: { kind: "environmental", reason },
+    kind: "structural",
+    failure: { kind: "environmental", reason },
   };
 }
 

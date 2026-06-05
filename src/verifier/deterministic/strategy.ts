@@ -13,25 +13,11 @@
  * confused with "the gate passed".
  */
 import type { GateEvidence } from "../../types/index.js";
+import { GATE_IDS, type GateId } from "./gate-id.js";
 
-/**
- * The closed set of deterministic gates. Adding a member is a deliberate
- * compile-break across the runner's exhaustive switch (the point of a closed
- * union): a new gate cannot be silently ignored.
- */
-export type GateId = "test" | "tdd" | "coverage" | "mutation" | "sast" | "type" | "lint" | "build";
-
-/** All gate ids, in canonical order (drives default enablement + iteration). */
-export const GATE_IDS: readonly GateId[] = [
-  "test",
-  "tdd",
-  "coverage",
-  "mutation",
-  "sast",
-  "type",
-  "lint",
-  "build",
-] as const;
+// Re-exported from the leaf gate-id.ts so existing importers of strategy.ts are
+// unaffected, while memo.ts depends on the leaf directly (breaks the type cycle).
+export { GATE_IDS, type GateId };
 
 /**
  * A strategy ran and produced ground-truth evidence. `observed` is the raw
