@@ -18,7 +18,7 @@
 import { nowIso } from "../shared/time.js";
 import { createLogger } from "../shared/logging.js";
 import type { SpecPointer } from "../types/index.js";
-import { SPEC_DEFAULTS } from "./config-defaults.js";
+import { SPEC_DEFAULTS } from "../config/index.js";
 import type { GhClient } from "./gh.js";
 import {
   buildGenerateSpawn,

@@ -84,6 +84,56 @@ export const QuotaSchema = z
   })
   .default({});
 
+/**
+ * Spec-pipeline config (WS5). Migrated here from the staged `src/spec/config-
+ * defaults.ts` per the seam contract ("ALL config defaults live in this file").
+ *
+ * `specModel`/`specEffort` are the Decision-21 apex pin: the spec generator AND
+ * reviewer run UNCONDITIONALLY at this model/effort. They are surfaced as defaults
+ * (so the value has ONE home) but the apex boundary (`src/spec/agents.ts`) reads
+ * the frozen {@link SPEC_DEFAULTS}, never a per-run override — the pin is invariant
+ * by construction. The remaining keys (`passReviewThreshold`, `dimensionFloor`,
+ * `maxRegenIterations`, `prdBodyMaxBytes`) ARE operator-tunable and the WS10 driver
+ * threads them off the resolved config into the spec pipeline.
+ */
+export const SpecSchema = z
+  .object({
+    /**
+     * The SINGLE spec-review pass threshold out of 60 (Δ I — resolves the legacy
+     * 54-vs-56 conflict in favor of 56). `total >= passReviewThreshold` is a
+     * candidate PASS, still subject to the per-dimension floor below.
+     */
+    passReviewThreshold: z.number().int().min(0).max(60).default(56),
+    /**
+     * Any-dimension auto-fail floor (Δ I): a single rubric dimension scoring
+     * `<= dimensionFloor` forces NEEDS_REVISION regardless of the total.
+     */
+    dimensionFloor: z.number().int().min(0).max(10).default(5),
+    /** Max spec generate→review revision iterations before a loud give-up. */
+    maxRegenIterations: z.number().int().positive().default(5),
+    /** Apex model the spec generator AND reviewer are pinned to (Decision 21). */
+    specModel: z.string().min(1).default("opus"),
+    /** Apex effort the spec generator AND reviewer are pinned to (Decision 21). */
+    specEffort: z.string().min(1).default("max"),
+    /** Max bytes of PRD body retained from `gh issue view` before truncation. */
+    prdBodyMaxBytes: z
+      .number()
+      .int()
+      .positive()
+      .default(64 * 1024),
+  })
+  .default({});
+
+/** Fully-resolved spec config (all defaults applied). */
+export type SpecConfig = z.infer<typeof SpecSchema>;
+
+/**
+ * The frozen spec defaults. The single source the apex boundary
+ * (`src/spec/agents.ts`) reads for the unconditional Decision-21 pin, and the
+ * fallback the WS5 pipeline functions use when the driver passes no override.
+ */
+export const SPEC_DEFAULTS: Readonly<SpecConfig> = Object.freeze(SpecSchema.parse({}));
+
 /** Judgment-panel reviewer config (WS7 extends). */
 export const ReviewSchema = z
   .object({
@@ -185,6 +235,7 @@ export const ConfigSchema = z
   .object({
     quality: QualitySchema,
     quota: QuotaSchema,
+    spec: SpecSchema,
     review: ReviewSchema,
     testWriter: TestWriterSchema,
     scribe: ScribeSchema,

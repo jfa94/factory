@@ -16,7 +16,7 @@
 import type { Prd } from "./gh.js";
 import type { SpecTask } from "./schema.js";
 import type { ReviewVerdict } from "./review.js";
-import { SPEC_DEFAULTS } from "./config-defaults.js";
+import { SPEC_DEFAULTS } from "../config/index.js";
 
 /** The two spec-agent roles. */
 export type SpecAgentRole = "spec-generator" | "spec-reviewer";

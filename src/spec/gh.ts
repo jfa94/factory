@@ -16,7 +16,7 @@ import { exec } from "../shared/exec.js";
 import type { ExecResult } from "../shared/exec.js";
 import { parseJson } from "../shared/json.js";
 import { createLogger } from "../shared/logging.js";
-import { SPEC_DEFAULTS } from "./config-defaults.js";
+import { SPEC_DEFAULTS } from "../config/index.js";
 
 const log = createLogger("spec:gh");
 

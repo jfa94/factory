@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildGenerateSpawn, buildReviewSpawn, type GenerateResult } from "./agents.js";
-import { SPEC_DEFAULTS } from "./config-defaults.js";
+import { SPEC_DEFAULTS } from "../config/index.js";
 import type { Prd } from "./gh.js";
 import type { SpecTask } from "./schema.js";
 

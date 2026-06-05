@@ -4179,6 +4179,28 @@ var QuotaSchema = external_exports.object({
     high: external_exports.string().default("claude-opus-4-6")
   }).default({})
 }).default({});
+var SpecSchema = external_exports.object({
+  /**
+   * The SINGLE spec-review pass threshold out of 60 (Δ I — resolves the legacy
+   * 54-vs-56 conflict in favor of 56). `total >= passReviewThreshold` is a
+   * candidate PASS, still subject to the per-dimension floor below.
+   */
+  passReviewThreshold: external_exports.number().int().min(0).max(60).default(56),
+  /**
+   * Any-dimension auto-fail floor (Δ I): a single rubric dimension scoring
+   * `<= dimensionFloor` forces NEEDS_REVISION regardless of the total.
+   */
+  dimensionFloor: external_exports.number().int().min(0).max(10).default(5),
+  /** Max spec generate→review revision iterations before a loud give-up. */
+  maxRegenIterations: external_exports.number().int().positive().default(5),
+  /** Apex model the spec generator AND reviewer are pinned to (Decision 21). */
+  specModel: external_exports.string().min(1).default("opus"),
+  /** Apex effort the spec generator AND reviewer are pinned to (Decision 21). */
+  specEffort: external_exports.string().min(1).default("max"),
+  /** Max bytes of PRD body retained from `gh issue view` before truncation. */
+  prdBodyMaxBytes: external_exports.number().int().positive().default(64 * 1024)
+}).default({});
+var SPEC_DEFAULTS = Object.freeze(SpecSchema.parse({}));
 var ReviewSchema = external_exports.object({
   /** Reviewer model id (panel runs on a fixed model per Decision 26). */
   model: external_exports.string().optional(),
@@ -4239,6 +4261,7 @@ var GitSchema = external_exports.object({
 var ConfigSchema = external_exports.object({
   quality: QualitySchema,
   quota: QuotaSchema,
+  spec: SpecSchema,
   review: ReviewSchema,
   testWriter: TestWriterSchema,
   scribe: ScribeSchema,

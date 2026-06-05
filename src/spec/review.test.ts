@@ -5,7 +5,8 @@ import {
   type PerDimension,
   type ReviewVerdict,
 } from "./review.js";
-import { REVIEW_MAX_TOTAL, SPEC_DEFAULTS } from "./config-defaults.js";
+import { REVIEW_MAX_TOTAL } from "./review.js";
+import { SPEC_DEFAULTS } from "../config/index.js";
 
 /** Build a verdict from a per-dimension map (claimed decision/score irrelevant — re-derived). */
 function verdict(dims: PerDimension, claimed: Partial<ReviewVerdict> = {}): ReviewVerdict {

@@ -55,12 +55,14 @@ export {
   type GateResult,
 } from "./gates.js";
 
-// Review adjudication (single 56/60 threshold + floor, Δ I).
+// Review adjudication (single 56/60 threshold + floor, Δ I) + rubric constants.
 export {
   parseReviewVerdict,
   decideSpecReview,
   ReviewVerdictSchema,
   PerDimensionSchema,
+  REVIEW_DIMENSION_COUNT,
+  REVIEW_MAX_TOTAL,
   type ReviewVerdict,
   type PerDimension,
   type SpecReviewResult,
@@ -71,10 +73,5 @@ export {
 // Top-level orchestration.
 export { runSpecPipeline, SpecDefectError, type RunSpecPipelineOpts } from "./pipeline.js";
 
-// Spec-pipeline constants (staged here; see config-defaults.ts header).
-export {
-  SPEC_DEFAULTS,
-  REVIEW_DIMENSION_COUNT,
-  REVIEW_MAX_TOTAL,
-  type SpecConfig,
-} from "./config-defaults.js";
+// Spec-pipeline defaults now live in the canonical config schema (src/config).
+export { SPEC_DEFAULTS, type SpecConfig } from "../config/index.js";

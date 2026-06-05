@@ -13,7 +13,13 @@
  * LOUD parse error, never a silent zero.
  */
 import { z } from "zod";
-import { SPEC_DEFAULTS, REVIEW_MAX_TOTAL } from "./config-defaults.js";
+import { SPEC_DEFAULTS } from "../config/index.js";
+
+/** The number of rubric dimensions; the review verdict must score exactly this many. */
+export const REVIEW_DIMENSION_COUNT = 6;
+
+/** Max total a review can score (each of {@link REVIEW_DIMENSION_COUNT} dimensions out of 10). */
+export const REVIEW_MAX_TOTAL = REVIEW_DIMENSION_COUNT * 10;
 
 /** The fixed six rubric dimensions, scored 1..10 each. */
 const dimScore = z.number().int().min(1).max(10);
