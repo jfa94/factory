@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createRequire as __factoryCreateRequire } from 'node:module';
+const require = __factoryCreateRequire(import.meta.url);
 var __defProp = Object.defineProperty;
 var __export = (target, all) => {
   for (var name in all)

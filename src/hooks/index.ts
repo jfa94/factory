@@ -13,6 +13,8 @@ export { runHoldoutGuard, decideHoldoutGuard } from "./holdout-guard.js";
 export { runSecretGuard, decideSecretGuard } from "./secret-guard.js";
 export { runPipelineGuards, decidePipelineGuards } from "./pipeline-guards.js";
 export { runSubagentStop, handleSubagentStop } from "./subagent-stop.js";
+export { runStopGate, decideStop } from "./stop-gate.js";
+export type { StopAction } from "./stop-gate.js";
 
 // TCB core (the hardcoded denylist) + hook I/O helpers.
 export { isTcbProtected, buildTcbRules, canonicalizePath, TCB_DENY } from "./tcb.js";

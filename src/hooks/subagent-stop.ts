@@ -20,6 +20,19 @@
  * The reviewer's verdict is parsed from the last assistant message's STATUS line
  * (DONE → approve; BLOCKED / anything else → blocked). A missing/unresolved
  * task_id is LOGGED LOUDLY and SKIPS the write (no silent state loss).
+ *
+ * CONSOLIDATION (A2 — supersedes `hooks/subagent-stop-gate.sh`): the bash gate's
+ * PRODUCER validation (STATUS-line enforcement, zero-commits block, persisted
+ * 2-attempt retry budget for test-writer/executor) is deliberately NOT ported as
+ * a hook. In the new design those properties are achieved STRUCTURALLY and more
+ * robustly downstream: a no-op producer (zero commits) leaves the task branch ==
+ * base, so the WS6 deterministic gates (tests + TDD gate) fail → the task never
+ * advances → the WS8 escalation ladder (bounded retries, cap 2) retries then emits
+ * a classified loud drop. The reviewer STATUS check survives here as
+ * {@link parseVerdict} (absent STATUS ⇒ blocked, never a silent approve). The
+ * warn-only artifact checks (missing spec.md/tasks.json/review files) move to the
+ * WS12 telemetry sink. Net: one SubagentStop hook (this file) with one durable
+ * job, instead of two bash hooks duplicating the stage machine.
  */
 import { EXIT, type ExitCode } from "../cli/exit-codes.js";
 import { createLogger } from "../shared/logging.js";

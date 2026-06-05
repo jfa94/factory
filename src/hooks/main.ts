@@ -19,6 +19,7 @@ import { runHoldoutGuard } from "./holdout-guard.js";
 import { runSecretGuard } from "./secret-guard.js";
 import { runPipelineGuards } from "./pipeline-guards.js";
 import { runSubagentStop } from "./subagent-stop.js";
+import { runStopGate } from "./stop-gate.js";
 
 /** A single hook entry. `run` returns (or resolves to) an {@link ExitCode}. */
 export interface Hook {
@@ -53,6 +54,10 @@ export const hookRegistry: Record<string, Hook> = {
   "subagent-stop": {
     describe: "SubagentStop: append reviewer ReviewerResult to task state via StateManager",
     run: (argv) => runSubagentStop(argv),
+  },
+  "stop-gate": {
+    describe: "Stop: block premature session end while a run is live; finalize-on-stop otherwise",
+    run: (argv) => runStopGate(argv),
   },
 };
 

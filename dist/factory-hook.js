@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createRequire as __factoryCreateRequire } from 'node:module';
+const require = __factoryCreateRequire(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -1943,6 +1945,14 @@ function emitPermissionDecision(decision, write = (s) => process.stdout.write(s)
       permissionDecisionReason: reason
     }
   });
+  write(payload + "\n");
+  return payload;
+}
+function emitBlockDecision(decision, write = (s) => process.stderr.write(s)) {
+  if (decision.action !== "deny") return "";
+  const payload = JSON.stringify(
+    decision.detail ? { decision: "block", reason: decision.reason, detail: decision.detail } : { decision: "block", reason: decision.reason }
+  );
   write(payload + "\n");
   return payload;
 }
@@ -6860,7 +6870,7 @@ async function decideSecretGuard(input, deps = {}) {
     scanPaths = names.stdout;
     scanDiff = diff.stdout;
   } else {
-    let log5;
+    let log6;
     let names;
     try {
       names = await execFn(
@@ -6868,28 +6878,28 @@ async function decideSecretGuard(input, deps = {}) {
         ["-C", commitDir, "log", "@{upstream}..HEAD", "--name-only", "--format="],
         {}
       );
-      log5 = await execFn("git", ["-C", commitDir, "log", "-p", "@{upstream}..HEAD", "-U0"], {});
+      log6 = await execFn("git", ["-C", commitDir, "log", "-p", "@{upstream}..HEAD", "-U0"], {});
     } catch {
       return deny(
         "git_log_failed",
         "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
       );
     }
-    if (names.code !== 0 || log5.code !== 0) {
+    if (names.code !== 0 || log6.code !== 0) {
       try {
         names = await execFn(
           "git",
           ["-C", commitDir, "log", "HEAD", "--name-only", "--format="],
           {}
         );
-        log5 = await execFn("git", ["-C", commitDir, "log", "-p", "HEAD", "-U0"], {});
+        log6 = await execFn("git", ["-C", commitDir, "log", "-p", "HEAD", "-U0"], {});
       } catch {
         return deny(
           "git_log_failed",
           "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
         );
       }
-      if (names.code !== 0 || log5.code !== 0) {
+      if (names.code !== 0 || log6.code !== 0) {
         return deny(
           "git_log_failed",
           "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
@@ -6897,7 +6907,7 @@ async function decideSecretGuard(input, deps = {}) {
       }
     }
     scanPaths = names.stdout;
-    scanDiff = log5.stdout;
+    scanDiff = log6.stdout;
   }
   const blocks = [];
   for (const raw of scanPaths.split("\n")) {
@@ -6968,6 +6978,10 @@ var TaskStatusEnum = external_exports.enum([
   "done",
   "dropped"
 ]);
+var TERMINAL_TASK_STATUSES = ["done", "dropped"];
+function isTerminalTaskStatus(s) {
+  return TERMINAL_TASK_STATUSES.includes(s);
+}
 var FailureClassEnum = external_exports.enum([
   "capability-budget",
   "spec-defect",
@@ -7436,6 +7450,31 @@ var SpawnManifestSchema = external_exports.object({
   agents: external_exports.array(SpawnAgentSchema).min(1)
 });
 
+// src/core/stage-machine/result.ts
+function finalizeTerminal(run_status) {
+  return { kind: "finalize-terminal", run_status };
+}
+
+// src/core/stage-machine/engine.ts
+function decideFinalize(run) {
+  const tasks = Object.values(run.tasks);
+  const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
+  if (nonTerminal.length > 0) {
+    const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
+    throw new Error(
+      `decideFinalize: ${nonTerminal.length} non-terminal task(s) remain [${ids}] \u2014 finalize is terminal and must not be called with in-flight work (would spin in bash)`
+    );
+  }
+  const doneCount = tasks.filter((t) => t.status === "done").length;
+  if (doneCount === 0) {
+    return finalizeTerminal("failed");
+  }
+  if (doneCount === tasks.length) {
+    return finalizeTerminal("completed");
+  }
+  return finalizeTerminal("partial");
+}
+
 // src/hooks/hook-context.ts
 import { existsSync as existsSync4 } from "node:fs";
 import { lstat, readlink } from "node:fs/promises";
@@ -7745,6 +7784,59 @@ async function readAllStdin6() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+// src/hooks/stop-gate.ts
+var log5 = createLogger("hook:stop-gate");
+var ALLOW = { kind: "allow" };
+function decideStop(run, allowStop) {
+  if (run === null) return ALLOW;
+  if (run.status !== "running") return ALLOW;
+  const tasks = Object.values(run.tasks);
+  const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
+  const pending = tasks.length === 0 || nonTerminal.length > 0;
+  if (pending) {
+    if (allowStop) return ALLOW;
+    const detail = tasks.length === 0 ? "spec/tasks not yet populated" : `${nonTerminal.length} non-terminal task(s): ` + nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
+    return {
+      kind: "block",
+      reason: `run ${run.run_id} is still live (${detail}). Advance the stage machine (\`factory run-task ${run.run_id} <task> --stage <stage>\`) or finalize the run. Set FACTORY_ALLOW_STOP=1 to stop anyway (leaves the run resumable).`
+    };
+  }
+  return { kind: "finalize", status: decideFinalize(run).run_status };
+}
+async function runStopGate(_argv = [], deps = {}) {
+  const emit2 = deps.emit ?? ((s) => process.stdout.write(s));
+  const allowStop = deps.allowStop ?? process.env.FACTORY_ALLOW_STOP === "1";
+  const manager = deps.manager ?? new StateManager(deps);
+  let run;
+  try {
+    run = await manager.readCurrent();
+  } catch (err) {
+    const reason = `pipeline state unreadable: ${err.message}. Repair runs/current \u2192 state.json (or clear runs/current) before stopping.`;
+    log5.error(reason);
+    emitBlockDecision(deny(reason), emit2);
+    return EXIT.OK;
+  }
+  const action = decideStop(run, allowStop);
+  switch (action.kind) {
+    case "allow":
+      return EXIT.OK;
+    case "block":
+      emitBlockDecision(deny(action.reason), emit2);
+      return EXIT.OK;
+    case "finalize": {
+      try {
+        await manager.finalize(run.run_id, action.status);
+        log5.info(`run ${run.run_id} finalized as '${action.status}' on stop`);
+      } catch (err) {
+        const reason = `finalize-on-stop failed for ${run.run_id}: ${err.message}. Run state may be inconsistent; rerun finalize or investigate before stopping.`;
+        log5.error(reason);
+        emitBlockDecision(deny(reason), emit2);
+      }
+      return EXIT.OK;
+    }
+  }
+}
+
 // src/hooks/main.ts
 var hookRegistry = {
   "branch-protection": {
@@ -7770,6 +7862,10 @@ var hookRegistry = {
   "subagent-stop": {
     describe: "SubagentStop: append reviewer ReviewerResult to task state via StateManager",
     run: (argv) => runSubagentStop(argv)
+  },
+  "stop-gate": {
+    describe: "Stop: block premature session end while a run is live; finalize-on-stop otherwise",
+    run: (argv) => runStopGate(argv)
   }
 };
 function printHelp() {

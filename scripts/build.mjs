@@ -17,7 +17,16 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = resolve(repoRoot, "dist");
 
-const SHEBANG = "#!/usr/bin/env node";
+// Banner: shebang + a `require` shim. `proper-lockfile` (and other CJS deps) call
+// `require` internally; an ESM bundle has none, so esbuild's `__require` stub
+// throws "Dynamic require of X". Defining a real `require` via createRequire makes
+// the stub (`typeof require !== "undefined"`) resolve those against node's module
+// system. Required the moment the bundle pulls in StateManager (→ proper-lockfile).
+const BANNER = [
+  "#!/usr/bin/env node",
+  "import { createRequire as __factoryCreateRequire } from 'node:module';",
+  "const require = __factoryCreateRequire(import.meta.url);",
+].join("\n");
 
 /** @type {import("esbuild").BuildOptions} */
 const common = {
@@ -25,7 +34,7 @@ const common = {
   platform: "node",
   format: "esm",
   target: "node22",
-  banner: { js: SHEBANG },
+  banner: { js: BANNER },
   logLevel: "warning",
   sourcemap: false,
   minify: false,
