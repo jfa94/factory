@@ -6413,13 +6413,13 @@ var RunStateSchema = external_exports.object({
   updated_at: external_exports.string(),
   ended_at: external_exports.string().nullable().default(null)
 });
-function refineRunCrossFields(run13, ctx) {
+function refineRunCrossFields(run14, ctx) {
   const quotaStatuses = ["paused", "suspended"];
-  if (run13.quota != null && !quotaStatuses.includes(run13.status)) {
+  if (run14.quota != null && !quotaStatuses.includes(run14.status)) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["quota"],
-      message: `run '${run13.run_id}' carries a quota checkpoint but status is '${run13.status}' (a quota checkpoint is valid only while paused|suspended)`
+      message: `run '${run14.run_id}' carries a quota checkpoint but status is '${run14.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
   }
 }
@@ -6774,13 +6774,13 @@ Usage:
   factory state --summary       Print a compact human summary instead
 
 Exit OK with {"current": null} when there is no current run.`;
-function summarize(run13) {
+function summarize(run14) {
   const lines = [
-    `run ${run13.run_id}  status=${run13.status}  driver=${run13.driver}`,
-    `spec ${run13.spec.repo}#${run13.spec.issue_number} (${run13.spec.spec_id})`,
-    `tasks (${Object.keys(run13.tasks).length}):`
+    `run ${run14.run_id}  status=${run14.status}  driver=${run14.driver}`,
+    `spec ${run14.spec.repo}#${run14.spec.issue_number} (${run14.spec.spec_id})`,
+    `tasks (${Object.keys(run14.tasks).length}):`
   ];
-  for (const t of Object.values(run13.tasks)) {
+  for (const t of Object.values(run14.tasks)) {
     const bits = [`  ${t.task_id}`, t.status];
     if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
     if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
@@ -7959,8 +7959,8 @@ function checkResult(stage, result) {
       return assertNever(result);
   }
 }
-function decideFinalize(run13) {
-  const tasks = Object.values(run13.tasks);
+function decideFinalize(run14) {
+  const tasks = Object.values(run14.tasks);
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
   if (nonTerminal.length > 0) {
     const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
@@ -9459,9 +9459,9 @@ async function loadCliDeps(opts) {
   const dirOpts = { ...opts, dataDir };
   const config = loadConfig(dirOpts);
   const state = new StateManager({ ...dirOpts });
-  const run13 = await state.read(opts.runId);
-  const spec = await new SpecStore(dirOpts).read(run13.spec.repo, run13.spec.spec_id);
-  const { owner, repo } = splitRepo(run13.spec.repo);
+  const run14 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run14.spec.repo, run14.spec.spec_id);
+  const { owner, repo } = splitRepo(run14.spec.repo);
   return {
     config,
     spec,
@@ -9475,22 +9475,22 @@ async function loadCliDeps(opts) {
     repo,
     shipMode: opts.shipMode ?? "no-merge",
     state,
-    run: run13
+    run: run14
   };
 }
 
 // src/scoring/partial-report.ts
-function buildPartialReport(run13, manifest, opts = {}) {
+function buildPartialReport(run14, manifest, opts = {}) {
   const specById = new Map(manifest.tasks.map((t) => [t.task_id, t]));
   const orderOf = new Map(manifest.tasks.map((t, i) => [t.task_id, i]));
   const shipped = [];
   const failures = [];
   const incomplete = [];
-  for (const task of Object.values(run13.tasks)) {
+  for (const task of Object.values(run14.tasks)) {
     const spec = specById.get(task.task_id);
     if (spec === void 0) {
       throw new Error(
-        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run13.run_id})`
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run14.run_id})`
       );
     }
     if (task.status === "done") {
@@ -9519,11 +9519,11 @@ function buildPartialReport(run13, manifest, opts = {}) {
   failures.sort(bySpecOrder);
   incomplete.sort(bySpecOrder);
   return {
-    run_id: run13.run_id,
-    run_status: run13.status,
-    spec_id: run13.spec.spec_id,
-    issue_number: run13.spec.issue_number,
-    repo: run13.spec.repo,
+    run_id: run14.run_id,
+    run_status: run14.status,
+    spec_id: run14.spec.spec_id,
+    issue_number: run14.spec.issue_number,
+    repo: run14.spec.repo,
     generated_at: opts.now ?? nowIso(),
     totals: {
       total: shipped.length + failures.length + incomplete.length,
@@ -9600,6 +9600,144 @@ function renderPartialReportMarkdown(report) {
     out.push("");
   }
   return out.join("\n");
+}
+
+// src/scoring/summary.ts
+function durationSeconds(startedAt, endedAt) {
+  if (endedAt === null) return null;
+  const start = Date.parse(startedAt);
+  const end = Date.parse(endedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const delta = Math.floor((end - start) / 1e3);
+  return delta >= 0 ? delta : null;
+}
+function buildRunSummary(run14, report, opts = {}) {
+  const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
+  for (const f of report.failures) {
+    failuresByClass[f.failure_class] += 1;
+  }
+  const tasks = Object.values(run14.tasks);
+  const effort = {
+    reviewer_results: tasks.reduce((n, t) => n + t.reviewers.length, 0),
+    max_escalation_rung: tasks.reduce((m, t) => Math.max(m, t.escalation_rung), 0)
+  };
+  const shipped_prs = report.shipped.map((s) => ({
+    task_id: s.task_id,
+    ...s.pr_number !== void 0 ? { pr_number: s.pr_number } : {},
+    ...s.branch !== void 0 ? { branch: s.branch } : {}
+  }));
+  return {
+    run_id: run14.run_id,
+    run_status: run14.status,
+    driver: run14.driver,
+    spec_id: run14.spec.spec_id,
+    issue_number: run14.spec.issue_number,
+    repo: run14.spec.repo,
+    generated_at: opts.now ?? nowIso(),
+    timing: {
+      started_at: run14.started_at,
+      ended_at: run14.ended_at,
+      duration_seconds: durationSeconds(run14.started_at, run14.ended_at)
+    },
+    totals: report.totals,
+    failures_by_class: failuresByClass,
+    effort,
+    shipped_prs
+  };
+}
+
+// src/scoring/dead-surface.ts
+function parseTsPruneOutput(stdout) {
+  const out = [];
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const m = /^(.+):(\d+) - (.+)$/.exec(line);
+    if (m === null) continue;
+    out.push({ file: m[1], line: Number(m[2]), name: m[3] });
+  }
+  return out;
+}
+function normalizePath(p) {
+  return p.startsWith("./") ? p.slice(2) : p;
+}
+function scopeToChangedFiles(findings, changedFiles) {
+  const changed = new Set(changedFiles.map(normalizePath));
+  return findings.filter((f) => changed.has(normalizePath(f.file)));
+}
+var UNAVAILABLE_MARKERS = [
+  "could not determine executable",
+  "command not found",
+  "not found",
+  "no such file"
+];
+var TsPruneRunner = class {
+  tool = "ts-prune";
+  /** Timeout for the detector, ms. Report-only — a slow tool must not wedge finalize. */
+  timeoutMs;
+  constructor(opts = {}) {
+    this.timeoutMs = opts.timeoutMs ?? 12e4;
+  }
+  async run({ cwd }) {
+    try {
+      const r = await exec("npx", ["--no-install", "ts-prune"], { cwd, timeoutMs: this.timeoutMs });
+      const stderrLc = r.stderr.toLowerCase();
+      const looksMissing = r.stdout.trim().length === 0 && UNAVAILABLE_MARKERS.some((m) => stderrLc.includes(m));
+      return {
+        available: !looksMissing,
+        code: r.code,
+        stdout: r.stdout,
+        stderr: r.stderr,
+        truncated: r.truncated
+      };
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        return { available: false, code: null, stdout: "", stderr: String(err), truncated: false };
+      }
+      throw err;
+    }
+  }
+};
+async function scanDeadSurface(runner, changedFiles, opts) {
+  const base = {
+    tool: runner.tool,
+    changed_file_count: changedFiles.length,
+    total_found: 0,
+    findings: []
+  };
+  let result;
+  try {
+    result = await runner.run({ cwd: opts.cwd });
+  } catch (err) {
+    return { ...base, status: "error", note: `${runner.tool} failed: ${err.message}` };
+  }
+  if (!result.available) {
+    return {
+      ...base,
+      status: "skipped",
+      note: `${runner.tool} not available \u2014 install it to enumerate dead surface`
+    };
+  }
+  if (result.truncated) {
+    return {
+      ...base,
+      status: "error",
+      note: `${runner.tool} output was truncated \u2014 findings unreliable, not reported`
+    };
+  }
+  if (result.code === null) {
+    return { ...base, status: "error", note: `${runner.tool} was killed before completing` };
+  }
+  const all = parseTsPruneOutput(result.stdout);
+  const scoped = scopeToChangedFiles(all, changedFiles);
+  return {
+    tool: runner.tool,
+    status: "ok",
+    changed_file_count: changedFiles.length,
+    total_found: all.length,
+    findings: scoped,
+    note: changedFiles.length === 0 ? "run diff is empty \u2014 no files to scope findings to" : `${scoped.length} unreferenced export(s) in the run diff (of ${all.length} project-wide)`
+  };
 }
 
 // src/scoring/telemetry.ts
@@ -9824,9 +9962,9 @@ function selectProducerModel(riskTier, config) {
 }
 
 // src/quota/resume.ts
-function planResume(run13, reading, config, nowEpoch2) {
-  if (run13.status !== "paused" && run13.status !== "suspended") {
-    return { kind: "not-resumable", status: run13.status };
+function planResume(run14, reading, config, nowEpoch2) {
+  if (run14.status !== "paused" && run14.status !== "suspended") {
+    return { kind: "not-resumable", status: run14.status };
   }
   const decision = evaluate(reading, config, nowEpoch2);
   if (decision.kind === "proceed") {
@@ -10199,8 +10337,8 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
   if (decision.action === "drop") {
     return dropStep(deps, runId, taskId, decision.failureClass, decision.reason);
   }
-  const run13 = await deps.state.read(runId);
-  const task = run13.tasks[taskId];
+  const run14 = await deps.state.read(runId);
+  const task = run14.tasks[taskId];
   if (task === void 0) {
     throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
   }
@@ -10535,9 +10673,9 @@ async function fileFailureIssues(deps, report) {
 }
 async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
-  const run13 = await deps.state.read(runId);
-  const terminal = decideFinalize(run13).run_status;
-  const report = buildPartialReport({ ...run13, status: terminal }, deps.spec, { now });
+  const run14 = await deps.state.read(runId);
+  const terminal = decideFinalize(run14).run_status;
+  const report = buildPartialReport({ ...run14, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
@@ -10682,8 +10820,8 @@ function parseStage2(raw) {
   throw new UsageError(`unknown --to '${raw}' (expected one of ${TASK_STAGE_ORDER.join(", ")})`);
 }
 async function applyAdvance(state, runId, taskId, to) {
-  const run13 = await state.read(runId);
-  if (run13.tasks[taskId] === void 0) {
+  const run14 = await state.read(runId);
+  if (run14.tasks[taskId] === void 0) {
     throw new Error(`advance: run '${runId}' has no task '${taskId}'`);
   }
   await markInFlight({ state }, runId, taskId, to);
@@ -10737,8 +10875,8 @@ function parseFailureClass(raw) {
   return parsed.data;
 }
 async function applyDrop(state, runId, taskId, failureClass, reason) {
-  const run13 = await state.read(runId);
-  if (run13.tasks[taskId] === void 0) {
+  const run14 = await state.read(runId);
+  if (run14.tasks[taskId] === void 0) {
     throw new Error(`drop: run '${runId}' has no task '${taskId}'`);
   }
   const step = await dropStep({ state }, runId, taskId, failureClass, reason);
@@ -10809,8 +10947,8 @@ async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
       `record-producer: stage order drift \u2014 nextStage('${info.stage}') !== '${info.after}'`
     );
   }
-  const run13 = await state.read(runId);
-  if (run13.tasks[taskId] === void 0) {
+  const run14 = await state.read(runId);
+  if (run14.tasks[taskId] === void 0) {
     throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
   }
   const outcome = parseProducerStatus(statusLine);
@@ -11208,14 +11346,14 @@ async function createRun(state, specStore, opts) {
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
 async function applyResume(state, runId, reading, config, nowEpochSec) {
-  const run13 = await state.read(runId);
-  if (isTerminalRunStatus(run13.status)) {
-    throw new Error(`run resume: run '${runId}' is terminal (${run13.status}); nothing to resume`);
+  const run14 = await state.read(runId);
+  if (isTerminalRunStatus(run14.status)) {
+    throw new Error(`run resume: run '${runId}' is terminal (${run14.status}); nothing to resume`);
   }
-  const plan = planResume(run13, reading, config, nowEpochSec);
+  const plan = planResume(run14, reading, config, nowEpochSec);
   switch (plan.kind) {
     case "not-resumable":
-      return { kind: "resumed", run: run13 };
+      return { kind: "resumed", run: run14 };
     case "resume": {
       const updated = await state.update(runId, (s) => ({
         ...s,
@@ -11227,12 +11365,12 @@ async function applyResume(state, runId, reading, config, nowEpochSec) {
     case "still-blocked": {
       const d = plan.decision;
       if (d.kind === "proceed") {
-        return { kind: "resumed", run: run13 };
+        return { kind: "resumed", run: run14 };
       }
       const base = {
         kind: "still-blocked",
         run_id: runId,
-        status: run13.status,
+        status: run14.status,
         reason: d.reason
       };
       return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
@@ -11282,14 +11420,14 @@ async function runCreate(argv) {
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const run13 = await createRun(state, specStore, {
+  const run14 = await createRun(state, specStore, {
     repo,
     driver,
     runId,
     ...issue !== void 0 ? { issue } : {},
     ...specId !== void 0 ? { specId } : {}
   });
-  emitJson(run13);
+  emitJson(run14);
   return EXIT.OK;
 }
 async function runResume(argv) {
@@ -11331,10 +11469,10 @@ async function runFinalize(argv) {
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
-  const { run: run13, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
+  const { run: run14, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
   emitJson({
     kind: "finalized",
-    run: run13,
+    run: run14,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     issues_filed: issuesFiled
@@ -11535,17 +11673,17 @@ function dispositionOf(status, failureClass) {
   }
   return "stuck";
 }
-function depsSatisfied(run13, depends) {
-  return depends.every((d) => run13.tasks[d]?.status === "done");
+function depsSatisfied(run14, depends) {
+  return depends.every((d) => run14.tasks[d]?.status === "done");
 }
-function hasUnsatisfiableDep(run13, depends) {
+function hasUnsatisfiableDep(run14, depends) {
   return depends.some((d) => {
-    const dep = run13.tasks[d];
+    const dep = run14.tasks[d];
     return dep === void 0 || dep.status === "dropped";
   });
 }
-function scanRun(run13) {
-  const all = Object.values(run13.tasks);
+function scanRun(run14) {
+  const all = Object.values(run14.tasks);
   const tasks = all.map((t) => ({
     task_id: t.task_id,
     status: t.status,
@@ -11563,13 +11701,13 @@ function scanRun(run13) {
   const dead_ends = deadEnd.map((t) => t.task_id);
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
   const actionablePending = all.some(
-    (t) => t.status === "pending" && (depsSatisfied(run13, t.depends_on) || hasUnsatisfiableDep(run13, t.depends_on))
+    (t) => t.status === "pending" && (depsSatisfied(run14, t.depends_on) || hasUnsatisfiableDep(run14, t.depends_on))
   );
   const would_deadlock = !allTerminal && !actionablePending;
   const needs_rescue = resettable.length > 0;
   return {
-    run_id: run13.run_id,
-    run_status: run13.status,
+    run_id: run14.run_id,
+    run_status: run14.status,
     counts: {
       total: all.length,
       shipped: by("shipped").length,
@@ -11582,7 +11720,7 @@ function scanRun(run13) {
     dead_ends,
     needs_rescue,
     would_deadlock,
-    summary: summarize2(run13.status, resettable.length, dead_ends.length, would_deadlock),
+    summary: summarize2(run14.status, resettable.length, dead_ends.length, would_deadlock),
     tasks
   };
 }
@@ -11613,15 +11751,15 @@ function resetTaskRow(task) {
     reviewers: []
   };
 }
-function selectTargets(run13, opts) {
+function selectTargets(run14, opts) {
   const explicit = opts.tasks ?? [];
   if (explicit.length > 0) {
     const targets2 = [];
     const skipped = [];
     for (const id of explicit) {
-      const task = run13.tasks[id];
+      const task = run14.tasks[id];
       if (task === void 0) {
-        throw new Error(`rescue: run '${run13.run_id}' has no task '${id}'`);
+        throw new Error(`rescue: run '${run14.run_id}' has no task '${id}'`);
       }
       if (task.status === "done") {
         throw new Error(
@@ -11636,32 +11774,32 @@ function selectTargets(run13, opts) {
     }
     return { targets: targets2, skipped };
   }
-  const scan = scanRun(run13);
+  const scan = scanRun(run14);
   const targets = opts.includeDeadEnds ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
   return { targets, skipped: [] };
 }
 async function applyRescue(state, runId, opts = {}) {
   let result = null;
-  const updated = await state.update(runId, (run13) => {
-    const { targets, skipped } = selectTargets(run13, opts);
-    const wasTerminal = isTerminalRunStatus(run13.status);
+  const updated = await state.update(runId, (run14) => {
+    const { targets, skipped } = selectTargets(run14, opts);
+    const wasTerminal = isTerminalRunStatus(run14.status);
     const reopen = wasTerminal && targets.length > 0;
     result = {
       run_id: runId,
-      run_status: reopen ? "running" : run13.status,
+      run_status: reopen ? "running" : run14.status,
       reset: targets,
       reopened: reopen,
       skipped
     };
     if (targets.length === 0 && !reopen) {
-      return run13;
+      return run14;
     }
-    const nextTasks = { ...run13.tasks };
+    const nextTasks = { ...run14.tasks };
     for (const id of targets) {
-      nextTasks[id] = resetTaskRow(run13.tasks[id]);
+      nextTasks[id] = resetTaskRow(run14.tasks[id]);
     }
     return {
-      ...run13,
+      ...run14,
       tasks: nextTasks,
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
@@ -11725,8 +11863,8 @@ async function runScan(argv) {
   }
   const state = new StateManager();
   const runId = await resolveRunId2(state, args, "scan");
-  const run13 = await state.read(runId);
-  emitJson(scanRun(run13));
+  const run14 = await state.read(runId);
+  emitJson(scanRun(run14));
   return EXIT.OK;
 }
 async function runApply(argv) {
@@ -11777,6 +11915,84 @@ var rescueCommand = {
   }
 };
 
+// src/cli/subcommands/score.ts
+var HELP10 = `factory score \u2014 report a run's outcome summary (read-only)
+
+Usage:
+  factory score [--run <id>] [--dead-surface] [--base <ref>] [--project-root <dir>]
+
+  --run            The run to score (defaults to runs/current).
+  --dead-surface   Also enumerate unreferenced exports in the run diff (report-only).
+  --base           Diff base for --dead-surface (default: origin/<git.baseBranch>).
+  --project-root   Repo checkout to scan for --dead-surface (default: cwd).
+
+Emits ONE JSON document:
+  { kind:"score", summary, dead_surface? }`;
+function optionalString2(raw) {
+  return typeof raw === "string" && raw.length > 0 ? raw : void 0;
+}
+async function run13(argv) {
+  const args = parseArgs(argv, { booleans: ["dead-surface"] });
+  if (args.flag("help") === true) {
+    emitLine(HELP10);
+    return EXIT.OK;
+  }
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const explicitRun = optionalString2(args.flag("run"));
+  const runState = explicitRun !== void 0 ? await state.read(explicitRun) : await state.readCurrent();
+  if (runState === null) {
+    throw new UsageError("score: no --run given and no current run");
+  }
+  const specStore = new SpecStore({ dataDir });
+  const manifest = await specStore.read(runState.spec.repo, runState.spec.spec_id);
+  const report = buildPartialReport(runState, manifest);
+  const summary = buildRunSummary(runState, report);
+  let deadSurface;
+  if (args.flag("dead-surface") === true) {
+    const config = loadConfig({ dataDir });
+    const base = optionalString2(args.flag("base")) ?? `origin/${config.git.baseBranch}`;
+    const cwd = optionalString2(args.flag("project-root")) ?? process.cwd();
+    deadSurface = await scoreDeadSurface(base, cwd);
+  }
+  emitJson({
+    kind: "score",
+    summary,
+    ...deadSurface !== void 0 ? { dead_surface: deadSurface } : {}
+  });
+  return EXIT.OK;
+}
+async function scoreDeadSurface(base, cwd) {
+  let changedFiles;
+  try {
+    changedFiles = await new DefaultGitProbe().changedFiles(base, { cwd });
+  } catch (err) {
+    return {
+      tool: "ts-prune",
+      status: "error",
+      changed_file_count: 0,
+      total_found: 0,
+      findings: [],
+      note: `could not resolve the run diff against '${base}': ${err.message}`
+    };
+  }
+  return scanDeadSurface(new TsPruneRunner(), changedFiles, { cwd });
+}
+var scoreCommand = {
+  describe: "Report a run's outcome summary (read-only; optional --dead-surface scan)",
+  run: async (argv) => {
+    try {
+      return await run13(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`score: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
 // src/cli/main.ts
 var cliRegistry = {
   "config-defaults": {
@@ -11791,6 +12007,7 @@ var cliRegistry = {
   run: runCommand,
   spec: specCommand,
   rescue: rescueCommand,
+  score: scoreCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,
   "run-task": runTaskCommand,
