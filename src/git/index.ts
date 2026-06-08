@@ -24,6 +24,8 @@ export type {
   CreatedPr,
   IssueCreateArgs,
   CreatedIssue,
+  IssueListArgs,
+  IssueRef,
   ChecksState,
   PrListArgs,
   PrCreateArgs,

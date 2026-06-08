@@ -105,6 +105,15 @@ describe("run arg/usage edges", () => {
   it("resume: --help prints help and exits OK", async () => {
     expect(await runCommand.run(["resume", "--help"])).toBe(EXIT.OK);
   });
+  it("finalize: --help prints help and exits OK", async () => {
+    expect(await runCommand.run(["finalize", "--help"])).toBe(EXIT.OK);
+  });
+  it("finalize: an unknown --ship-mode is a usage error", async () => {
+    // --run given so the parse short-circuits before any store IO.
+    expect(await runCommand.run(["finalize", "--run", "run-x", "--ship-mode", "auto"])).toBe(
+      EXIT.USAGE,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

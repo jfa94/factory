@@ -72,6 +72,7 @@ export {
   provisionProtection,
   runScopedBranch,
   ensureStaging,
+  rollup,
 } from "../git/index.js";
 export type {
   GitClient,
@@ -82,7 +83,18 @@ export type {
   TaskPrResult,
   MergeOutcome,
   ProtectionState,
+  RollupResult,
+  RollupArgs,
 } from "../git/index.js";
+
+// --- run scoring / report / telemetry (src/scoring) — WS12 ------------------
+export {
+  buildPartialReport,
+  renderPartialReportMarkdown,
+  renderFailureIssue,
+  recordRunFinalized,
+} from "../scoring/index.js";
+export type { PartialRunReport, FailureLine } from "../scoring/index.js";
 
 // --- quota pacing (src/quota) -----------------------------------------------
 export {

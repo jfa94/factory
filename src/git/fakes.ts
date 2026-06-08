@@ -15,6 +15,8 @@ import type {
   GhClient,
   GhOpts,
   IssueCreateArgs,
+  IssueListArgs,
+  IssueRef,
   PrCreateArgs,
   PrListArgs,
   PrMergeOptions,
@@ -296,6 +298,14 @@ export class FakeGhClient implements GhClient {
     const url = `https://github.com/${args.repo ?? "fake/repo"}/issues/${number}`;
     this.issues.push({ ...args, number, url });
     return { number, url };
+  }
+
+  async issueList(args: IssueListArgs, _opts?: GhOpts): Promise<IssueRef[]> {
+    this.calls.push(`issue list`);
+    const want = args.labels ?? [];
+    return this.issues
+      .filter((i) => want.every((l) => (i.labels ?? []).includes(l)))
+      .map((i) => ({ number: i.number, title: i.title }));
   }
 
   async prView(number: number, _fields: readonly string[], _opts?: GhOpts): Promise<PullRequest> {

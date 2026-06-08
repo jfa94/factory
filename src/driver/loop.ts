@@ -26,7 +26,6 @@
  */
 import {
   runStage,
-  decideFinalize,
   isTerminalRunStatus,
   isTerminalTaskStatus,
   classifyFailure,
@@ -64,6 +63,7 @@ import {
   type TaskStep,
 } from "./transitions.js";
 import { shipTask } from "./ship.js";
+import { finalizeRun } from "./finalize.js";
 import { makeStageHandlers } from "./handlers.js";
 import { spawnProducer, spawnReviewers, asProducerRole } from "./agent-runner.js";
 import { taskWorktreePath } from "./paths.js";
@@ -370,8 +370,11 @@ export async function driveRun(deps: DriveDeps, runId: string): Promise<RunState
     const tasks = Object.values(run.tasks);
 
     // All tasks terminal (vacuously true for an empty run → `failed`) → finalize.
+    // The coordinator builds+persists the report, emits telemetry, files per-drop
+    // issues, ships the staging→develop rollup, THEN flips the run terminal.
     if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
-      return deps.state.finalize(runId, decideFinalize(run).run_status);
+      const { run: finalized } = await finalizeRun(deps, runId);
+      return finalized;
     }
 
     // Run-level quota gate (epoch SECONDS via deps.now()).

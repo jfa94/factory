@@ -61,6 +61,22 @@ export interface CreatedIssue {
   url: string;
 }
 
+/** Args for {@link GhClient.issueList} (the finalize dedup lookup). */
+export interface IssueListArgs {
+  /** Repo "owner/name". Omit to use the cwd's repo. */
+  repo?: string;
+  /** Filter to issues carrying ALL these labels (matches `gh --label` AND-semantics). */
+  labels?: string[];
+  /** Issue state filter. Defaults to `open`. */
+  state?: "open" | "closed" | "all";
+}
+
+/** A minimal issue reference returned by {@link GhClient.issueList}. */
+export interface IssueRef {
+  number: number;
+  title: string;
+}
+
 /** Branch-protection facts as the probe reads them (raw GET shape, narrowed). */
 export interface ProtectionApiResult {
   /** Whether a protection record exists at all (404 → false). */
@@ -116,6 +132,8 @@ export interface GhClient {
   prCreate(args: PrCreateArgs, opts?: GhOpts): Promise<CreatedPr>;
   /** `gh issue create --title --body [--label ...] [--repo ...]` → {number, url} (Δ S). */
   issueCreate(args: IssueCreateArgs, opts?: GhOpts): Promise<CreatedIssue>;
+  /** `gh issue list --json number,title [--label ...] [--state] [--repo]` (finalize dedup). */
+  issueList(args: IssueListArgs, opts?: GhOpts): Promise<IssueRef[]>;
   /** `gh pr view <number> --json <fields>`. */
   prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest>;
   /** `gh pr checks <number> --json bucket` aggregated to a single CI state (§④ gate). */
@@ -264,6 +282,27 @@ export class DefaultGhClient implements GhClient {
       );
     }
     return { number: Number(m[1]), url };
+  }
+
+  async issueList(args: IssueListArgs, opts?: GhOpts): Promise<IssueRef[]> {
+    const argv = [
+      "issue",
+      "list",
+      "--json",
+      "number,title",
+      "--limit",
+      "200",
+      "--state",
+      args.state ?? "open",
+    ];
+    if (args.repo) argv.push("--repo", args.repo);
+    for (const label of args.labels ?? []) argv.push("--label", label);
+    const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+    return parseGhJson(
+      r,
+      z.array(z.object({ number: z.number().int(), title: z.string() })),
+      "gh issue list",
+    );
   }
 
   async prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest> {

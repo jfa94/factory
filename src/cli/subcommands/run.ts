@@ -30,6 +30,8 @@ import { nowEpoch } from "../../shared/time.js";
 import { planResume, StatuslineUsageSignal, type UsageReading } from "../../quota/index.js";
 import { isTerminalRunStatus } from "../../types/index.js";
 import type { Config, Driver, RunState, RunStatus, TaskState } from "../../types/index.js";
+import { finalizeRun, type ShipMode } from "../../driver/index.js";
+import { loadCliDeps } from "../wiring.js";
 import type { Subcommand } from "../main.js";
 
 const RUN_HELP = `factory run — create or resume a run
@@ -37,10 +39,12 @@ const RUN_HELP = `factory run — create or resume a run
 Usage:
   factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver <d>] [--run-id <id>]
   factory run resume [--run <id>]
+  factory run finalize [--run <id>] [--ship-mode <mode>]
 
 Actions:
-  create   Resolve a durable spec, create a run, seed its tasks, emit the RunState.
-  resume   Re-check the live quota window; clear the checkpoint if it has recovered.`;
+  create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
+  resume     Re-check the live quota window; clear the checkpoint if it has recovered.
+  finalize   Build the partial report, file per-drop issues, ship the rollup, flip terminal.`;
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
@@ -68,6 +72,22 @@ Emits ONE JSON envelope:
   { kind:"still-blocked", run_id, status, reason, … }  — window has not recovered (state untouched)
 
 A terminal run is a loud error (nothing to resume).`;
+
+const FINALIZE_HELP = `factory run finalize — turn an all-terminal run into its shipped outcome
+
+Usage:
+  factory run finalize [--run <id>] [--ship-mode <mode>]
+
+  --run         The run to finalize (defaults to runs/current).
+  --ship-mode   live | no-merge (default: no-merge — opens the rollup PR, never merges).
+
+Builds the deterministic partial-run report (report.md), emits run.finalized
+telemetry, files ONE GitHub issue per dropped task (deduped), opens + CI-gates +
+(in live mode) squash-merges the staging→develop rollup, then flips the run
+terminal — in that resume-safe order. LOUD if any task is still non-terminal.
+
+Emits ONE JSON envelope:
+  { kind:"finalized", run, report, rollup?, issues_filed }`;
 
 // ---------------------------------------------------------------------------
 // Seeding (pure)
@@ -274,6 +294,13 @@ function parseDriver(raw: string | boolean | undefined): Driver {
   throw new UsageError(`unknown --driver '${String(raw)}' (expected sequential | balanced)`);
 }
 
+/** Validate the `--ship-mode` flag (the caller supplies the default). */
+function parseShipMode(raw: string | boolean | undefined): ShipMode | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "live" || raw === "no-merge") return raw;
+  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
+}
+
 function parseIssue(raw: string | boolean | undefined): number | undefined {
   if (raw === undefined) return undefined;
   if (typeof raw !== "string") throw new UsageError("--issue requires a value");
@@ -333,19 +360,58 @@ async function runResume(argv: string[]): Promise<ExitCode> {
   const dataDir = resolveDataDir({});
   const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
-
-  let runId = optionalString(args.flag("run"));
-  if (runId === undefined) {
-    const current = await state.readCurrent();
-    if (current === null) {
-      throw new UsageError("run resume: no --run given and no current run");
-    }
-    runId = current.run_id;
-  }
+  const runId = await resolveRunId(state, args, "resume");
 
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
   const envelope = await applyResume(state, runId, reading, config, nowEpoch());
   emitJson(envelope);
+  return EXIT.OK;
+}
+
+/**
+ * Resolve `runId` from `--run`, falling back to `runs/current` (LOUD if neither is
+ * available — the shared head of `resume`/`finalize`, which both default to the
+ * active run).
+ */
+async function resolveRunId(
+  state: StateManager,
+  args: ReturnType<typeof parseArgs>,
+  action: string,
+): Promise<string> {
+  const explicit = optionalString(args.flag("run"));
+  if (explicit !== undefined) return explicit;
+  const current = await state.readCurrent();
+  if (current === null) {
+    throw new UsageError(`run ${action}: no --run given and no current run`);
+  }
+  return current.run_id;
+}
+
+async function runFinalize(argv: string[]): Promise<ExitCode> {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(FINALIZE_HELP);
+    return EXIT.OK;
+  }
+
+  const shipMode = parseShipMode(args.flag("ship-mode"));
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const runId = await resolveRunId(state, args, "finalize");
+
+  const deps = await loadCliDeps({
+    dataDir,
+    runId,
+    ...(shipMode !== undefined ? { shipMode } : {}),
+  });
+  const { run, report, rollup, issuesFiled } = await finalizeRun(deps, runId);
+  emitJson({
+    kind: "finalized",
+    run,
+    report,
+    ...(rollup !== undefined ? { rollup } : {}),
+    issues_filed: issuesFiled,
+  });
   return EXIT.OK;
 }
 
@@ -361,8 +427,10 @@ async function run(argv: string[]): Promise<ExitCode> {
       return runCreate(rest);
     case "resume":
       return runResume(rest);
+    case "finalize":
+      return runFinalize(rest);
     default:
-      throw new UsageError(`unknown run action '${action}' (expected create | resume)`);
+      throw new UsageError(`unknown run action '${action}' (expected create | resume | finalize)`);
   }
 }
 

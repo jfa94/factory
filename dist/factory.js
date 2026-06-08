@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile10;
-      function readFile10(path2, options, cb) {
+      fs2.readFile = readFile11;
+      function readFile11(path2, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path2, options, cb);
@@ -564,8 +564,8 @@ var require_graceful_fs = __commonJS({
       }
       var fs$appendFile = fs2.appendFile;
       if (fs$appendFile)
-        fs2.appendFile = appendFile;
-      function appendFile(path2, data, options, cb) {
+        fs2.appendFile = appendFile2;
+      function appendFile2(path2, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$appendFile(path2, data, options, cb);
@@ -6509,6 +6509,8 @@ var SPEC_BUILD_DIR = "spec-build";
 var RUNS_DIR = "runs";
 var CURRENT_LINK = "current";
 var STATE_FILE = "state.json";
+var METRICS_FILE = "metrics.jsonl";
+var REPORT_FILE = "report.md";
 function repoKey(repo) {
   const key = repo.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "");
   if (key.length === 0) {
@@ -6528,6 +6530,12 @@ function runDir(dataDir, runId) {
 }
 function runStatePath(dataDir, runId) {
   return join3(runDir(dataDir, runId), STATE_FILE);
+}
+function runMetricsPath(dataDir, runId) {
+  return join3(runDir(dataDir, runId), METRICS_FILE);
+}
+function runReportPath(dataDir, runId) {
+  return join3(runDir(dataDir, runId), REPORT_FILE);
 }
 function currentLinkPath(dataDir) {
   return join3(runsRoot(dataDir), CURRENT_LINK);
@@ -6821,9 +6829,9 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { copyFile, mkdir as mkdir5, readFile as readFile2, writeFile } from "node:fs/promises";
+import { copyFile, mkdir as mkdir6, readFile as readFile3, writeFile } from "node:fs/promises";
 import { existsSync as existsSync4 } from "node:fs";
-import { dirname as dirname4, join as join6, relative } from "node:path";
+import { dirname as dirname5, join as join6, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/shared/exec.ts
@@ -6915,6 +6923,14 @@ ${result.stderr.trim()}`
     this.result = result;
   }
 };
+
+// src/shared/jsonl.ts
+import { appendFile, mkdir as mkdir4, readFile as readFile2 } from "node:fs/promises";
+import { dirname as dirname4 } from "node:path";
+async function appendJsonl(path2, record) {
+  await mkdir4(dirname4(path2), { recursive: true });
+  await appendFile(path2, JSON.stringify(record) + "\n", "utf8");
+}
 
 // src/shared/secret-patterns.ts
 var SECRET_CONTENT_PATTERNS = [
@@ -7047,6 +7063,13 @@ var PullRequestSchema = external_exports.object({
   mergeStateStatus: external_exports.string().optional(),
   url: external_exports.string().optional()
 });
+function aggregateChecks(rows) {
+  if (rows.length === 0) return "none";
+  const buckets = rows.map((r) => (r.bucket ?? "").toLowerCase());
+  if (buckets.some((b) => b === "fail" || b === "cancel")) return "failing";
+  if (buckets.some((b) => b === "pending")) return "pending";
+  return "passing";
+}
 function parseGhJson(result, schema, where) {
   if (result.truncated) {
     throw new Error(
@@ -7107,6 +7130,43 @@ var DefaultGhClient = class {
     }
     return { number: Number(m[1]), url };
   }
+  async issueCreate(args, opts) {
+    const argv = ["issue", "create", "--title", args.title, "--body", args.body];
+    if (args.repo) argv.push("--repo", args.repo);
+    for (const label of args.labels ?? []) argv.push("--label", label);
+    const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+    if (r.truncated) {
+      throw new Error("gh issue create: output truncated \u2014 cannot trust the emitted issue URL");
+    }
+    const url = r.stdout.trim().split(/\s+/).pop() ?? "";
+    const m = url.match(/\/issues\/(\d+)\s*$/);
+    if (!m) {
+      throw new Error(
+        `gh issue create: could not parse issue number from output: ${r.stdout.trim()}`
+      );
+    }
+    return { number: Number(m[1]), url };
+  }
+  async issueList(args, opts) {
+    const argv = [
+      "issue",
+      "list",
+      "--json",
+      "number,title",
+      "--limit",
+      "200",
+      "--state",
+      args.state ?? "open"
+    ];
+    if (args.repo) argv.push("--repo", args.repo);
+    for (const label of args.labels ?? []) argv.push("--label", label);
+    const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+    return parseGhJson(
+      r,
+      external_exports.array(external_exports.object({ number: external_exports.number().int(), title: external_exports.string() })),
+      "gh issue list"
+    );
+  }
   async prView(number, fields, opts) {
     const r = await runOrThrow(
       "gh",
@@ -7116,10 +7176,32 @@ var DefaultGhClient = class {
     );
     return parseGhJson(r, PullRequestSchema, "gh pr view");
   }
+  async prChecks(number, opts) {
+    const r = await this.runner(
+      ["pr", "checks", String(number), "--json", "bucket"],
+      this.execOpts(opts)
+    );
+    if (r.truncated) {
+      throw new Error("gh pr checks: output truncated \u2014 refusing to parse clipped checks JSON");
+    }
+    const stdout = r.stdout.trim();
+    if (stdout === "" || stdout === "[]") {
+      if (r.code !== 0 && !/no checks reported/i.test(r.stderr)) {
+        throw new Error(
+          `gh pr checks #${number} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
+        );
+      }
+      return "none";
+    }
+    const rows = parseJson(stdout, "gh pr checks");
+    return aggregateChecks(rows);
+  }
   async prMergeSquash(number, opts) {
     const argv = ["pr", "merge", String(number), "--squash"];
     if (opts?.auto) argv.push("--auto");
     if (opts?.deleteBranch) argv.push("--delete-branch");
+    if (opts?.subject !== void 0) argv.push("--subject", opts.subject);
+    if (opts?.body !== void 0) argv.push("--body", opts.body);
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async repoProtection(owner, repo, branch, opts) {
@@ -7181,6 +7263,94 @@ var DefaultGhClient = class {
   }
 };
 
+// src/git/rollup.ts
+var log6 = createLogger("git");
+var GIT_DEFAULTS = GitSchema.parse({});
+var PARTIAL_SUBJECT_PREFIX = "PARTIAL: ";
+var DEFAULT_POLL_INTERVAL_MS = 15e3;
+var DEFAULT_MAX_POLLS = 80;
+var realSleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
+async function waitForCi(gh, number, args) {
+  const sleep = args.sleep ?? realSleep;
+  const interval = args.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const maxPolls = args.maxPolls ?? DEFAULT_MAX_POLLS;
+  let state = "pending";
+  for (let i = 0; i < maxPolls; i++) {
+    state = await gh.prChecks(number);
+    if (state !== "pending") return state;
+    if (i < maxPolls - 1) await sleep(interval);
+  }
+  return state;
+}
+async function rollup(args) {
+  const staging = args.stagingBranch ?? GIT_DEFAULTS.stagingBranch;
+  const base = args.baseBranch ?? GIT_DEFAULTS.baseBranch;
+  if (base === "main") {
+    throw new Error(
+      "rollup: baseBranch must not be 'main' (Decision 16 \u2014 the factory never touches main)"
+    );
+  }
+  const subject = args.partial ? `${PARTIAL_SUBJECT_PREFIX}${args.title}` : args.title;
+  const existing = await args.ghClient.prList({ head: staging, base, state: "all" });
+  const merged = existing.find((p) => p.state === "MERGED");
+  if (merged) {
+    log6.info(`rollup PR #${merged.number} already merged into ${base} \u2014 finalize resuming`);
+    return { number: merged.number, url: merged.url ?? "", resumed: true, merged: true, subject };
+  }
+  const open2 = existing.find((p) => p.state === "OPEN");
+  let number;
+  let url;
+  let resumed;
+  if (open2) {
+    log6.info(`resuming rollup PR #${open2.number} (${staging}\u2192${base})`);
+    number = open2.number;
+    url = open2.url ?? "";
+    resumed = true;
+  } else {
+    const created = await args.ghClient.prCreate({
+      base,
+      head: staging,
+      title: args.title,
+      body: args.body
+    });
+    log6.info(`opened rollup PR #${created.number} (${staging}\u2192${base})`);
+    number = created.number;
+    url = created.url;
+    resumed = false;
+  }
+  if (!args.merge) {
+    log6.info(`rollup PR #${number}: no-merge mode \u2014 opened, not merged`);
+    return { number, url, resumed, merged: false, reason: "no-merge" };
+  }
+  const ci = await waitForCi(args.ghClient, number, args);
+  if (ci === "failing") {
+    log6.warn(`rollup PR #${number}: CI failing \u2014 not merged`);
+    return { number, url, resumed, merged: false, reason: "ci-failing", ci };
+  }
+  if (ci === "pending") {
+    log6.warn(
+      `rollup PR #${number}: CI still pending after ${args.maxPolls ?? DEFAULT_MAX_POLLS} polls \u2014 not merged`
+    );
+    return { number, url, resumed, merged: false, reason: "ci-timeout", ci };
+  }
+  const view = await args.ghClient.prView(number, [
+    "number",
+    "state",
+    "mergeable",
+    "mergeStateStatus"
+  ]);
+  if (view.state === "MERGED") {
+    return { number, url, resumed, merged: true, subject, ci };
+  }
+  if (view.mergeable === "CONFLICTING") {
+    log6.warn(`rollup PR #${number} is CONFLICTING \u2014 not merged`);
+    return { number, url, resumed, merged: false, reason: "not-mergeable", ci };
+  }
+  await args.ghClient.prMergeSquash(number, { subject, body: args.body });
+  log6.info(`rollup PR #${number} squash-merged into ${base}${args.partial ? " (PARTIAL)" : ""}`);
+  return { number, url, resumed, merged: true, subject, ci };
+}
+
 // src/git/branch.ts
 var DEFAULT_PREFIX = GitSchema.parse({}).branchPrefix;
 function runScopedBranch(runId, taskId, prefix = DEFAULT_PREFIX) {
@@ -7193,11 +7363,11 @@ function runScopedBranch(runId, taskId, prefix = DEFAULT_PREFIX) {
 }
 
 // src/git/worktree.ts
-var log6 = createLogger("git");
-var GIT_DEFAULTS = GitSchema.parse({});
+var log7 = createLogger("git");
+var GIT_DEFAULTS2 = GitSchema.parse({});
 async function createTaskWorktree(args) {
   const remote = args.remote ?? "origin";
-  const base = args.base ?? GIT_DEFAULTS.stagingBranch;
+  const base = args.base ?? GIT_DEFAULTS2.stagingBranch;
   const branch = runScopedBranch(args.runId, args.taskId);
   const startPoint = `${remote}/${base}`;
   await args.gitClient.fetch(remote, base);
@@ -7212,7 +7382,7 @@ async function createTaskWorktree(args) {
 }
 async function assertBaseIsStagingTip(args) {
   const remote = args.remote ?? "origin";
-  const base = args.base ?? GIT_DEFAULTS.stagingBranch;
+  const base = args.base ?? GIT_DEFAULTS2.stagingBranch;
   const opts = { cwd: args.path };
   const stagingTip = await args.gitClient.revParse(`${remote}/${base}`, opts);
   const mergeBase = await args.gitClient.mergeBase("HEAD", `${remote}/${base}`, opts);
@@ -7224,14 +7394,14 @@ async function assertBaseIsStagingTip(args) {
 }
 
 // src/git/pr.ts
-var log7 = createLogger("git");
-var GIT_DEFAULTS2 = GitSchema.parse({});
+var log8 = createLogger("git");
+var GIT_DEFAULTS3 = GitSchema.parse({});
 async function createTaskPrIdempotent(args) {
-  const base = args.base ?? GIT_DEFAULTS2.stagingBranch;
+  const base = args.base ?? GIT_DEFAULTS3.stagingBranch;
   const existing = await args.ghClient.prList({ head: args.branch, base, state: "open" });
   const pr = existing[0];
   if (pr !== void 0) {
-    log7.info(`resuming existing PR #${pr.number} for head '${args.branch}' (no duplicate created)`);
+    log8.info(`resuming existing PR #${pr.number} for head '${args.branch}' (no duplicate created)`);
     return { number: pr.number, url: pr.url ?? "", resumed: true };
   }
   const created = await args.ghClient.prCreate({
@@ -7240,16 +7410,16 @@ async function createTaskPrIdempotent(args) {
     title: args.title,
     body: args.body
   });
-  log7.info(`created PR #${created.number} for head '${args.branch}'`);
+  log8.info(`created PR #${created.number} for head '${args.branch}'`);
   return { number: created.number, url: created.url, resumed: false };
 }
 
 // src/git/serial-writer.ts
 var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
-import { mkdir as mkdir4 } from "node:fs/promises";
+import { mkdir as mkdir5 } from "node:fs/promises";
 import { join as join5 } from "node:path";
-var log8 = createLogger("git");
-var GIT_DEFAULTS3 = GitSchema.parse({});
+var log9 = createLogger("git");
+var GIT_DEFAULTS4 = GitSchema.parse({});
 var DEFAULT_MERGE_LOCK_TUNING = {
   stale: 3e4,
   retries: 100,
@@ -7268,7 +7438,7 @@ var MergeSerializer = class {
     this.ghClient = opts.ghClient;
     this.owner = opts.owner;
     this.repo = opts.repo;
-    this.staging = opts.stagingBranch ?? GIT_DEFAULTS3.stagingBranch;
+    this.staging = opts.stagingBranch ?? GIT_DEFAULTS4.stagingBranch;
     this.dataDir = resolveDataDir(opts);
     this.lockScope = opts.lockScope ?? `${opts.owner}__${opts.repo}__${this.staging}`.replace(/[^\w.-]/g, "-");
     this.tuning = { ...DEFAULT_MERGE_LOCK_TUNING, ...opts.lock ?? {} };
@@ -7279,7 +7449,7 @@ var MergeSerializer = class {
   /** Run `fn` while holding the app-level merge lock (the serial section). */
   async withMergeLock(fn) {
     const lockfile = this.lockfilePath();
-    await mkdir4(join5(this.dataDir, "locks"), { recursive: true });
+    await mkdir5(join5(this.dataDir, "locks"), { recursive: true });
     const release = await (0, import_proper_lockfile2.lock)(lockfile, {
       realpath: false,
       stale: this.tuning.stale,
@@ -7290,7 +7460,7 @@ var MergeSerializer = class {
         factor: 1.5
       },
       onCompromised: (err) => {
-        log8.error(`merge lock '${this.lockScope}' compromised: ${err.message}`);
+        log9.error(`merge lock '${this.lockScope}' compromised: ${err.message}`);
         throw err;
       }
     });
@@ -7318,11 +7488,11 @@ var MergeSerializer = class {
         "mergeStateStatus"
       ]);
       if (pr.mergeable === "CONFLICTING") {
-        log8.warn(`PR #${prNumber} is CONFLICTING \u2014 not merged`);
+        log9.warn(`PR #${prNumber} is CONFLICTING \u2014 not merged`);
         return { merged: false, reason: "not-mergeable", number: prNumber };
       }
       if (pr.mergeStateStatus === "BEHIND") {
-        log8.warn(
+        log9.warn(
           `PR #${prNumber} head is BEHIND ${this.staging} \u2014 refusing to merge (no force-push)`
         );
         return { merged: false, reason: "behind", number: prNumber };
@@ -7334,19 +7504,19 @@ var MergeSerializer = class {
       );
       if (hasMergeQueue) {
         await this.ghClient.prMergeSquash(prNumber, { auto: true, deleteBranch: true });
-        log8.info(`PR #${prNumber} enqueued via native merge-queue`);
+        log9.info(`PR #${prNumber} enqueued via native merge-queue`);
         return { merged: true, via: "merge-queue", number: prNumber };
       }
       await this.ghClient.prMergeSquash(prNumber, { deleteBranch: true });
-      log8.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
+      log9.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
       return { merged: true, via: "app-level", number: prNumber };
     });
   }
 };
 
 // src/git/protection.ts
-var log9 = createLogger("git");
-var GIT_DEFAULTS4 = GitSchema.parse({});
+var log10 = createLogger("git");
+var GIT_DEFAULTS5 = GitSchema.parse({});
 var ProtectionMissingError = class extends Error {
   branch;
   reasons;
@@ -7364,7 +7534,7 @@ Re-run with --provision to provision protection, or configure it manually.`
   }
 };
 async function probeProtection(args) {
-  const branch = args.branch ?? GIT_DEFAULTS4.stagingBranch;
+  const branch = args.branch ?? GIT_DEFAULTS5.stagingBranch;
   const result = await args.ghClient.repoProtection(
     args.owner,
     args.repo,
@@ -7377,7 +7547,7 @@ async function probeProtection(args) {
     hasMergeQueue: result.hasMergeQueue
   };
 }
-function requireProtectionOrRefuse(state, requiredChecks, branch = GIT_DEFAULTS4.stagingBranch) {
+function requireProtectionOrRefuse(state, requiredChecks, branch = GIT_DEFAULTS5.stagingBranch) {
   const reasons = [];
   if (!state.enabled) {
     reasons.push("no branch protection is configured");
@@ -7396,13 +7566,13 @@ function requireProtectionOrRefuse(state, requiredChecks, branch = GIT_DEFAULTS4
   return state;
 }
 async function provisionProtection(args) {
-  const branch = args.branch ?? GIT_DEFAULTS4.stagingBranch;
+  const branch = args.branch ?? GIT_DEFAULTS5.stagingBranch;
   if (!args.provision) {
     throw new Error(
       "provisionProtection called without --provision opt-in \u2014 refusing to mutate branch protection"
     );
   }
-  log9.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
+  log10.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
   await args.ghClient.putProtection(args.owner, args.repo, branch, {
     requiredStatusChecks: [...args.requiredChecks],
     strict: true
@@ -7416,12 +7586,12 @@ async function provisionProtection(args) {
 }
 
 // src/git/staging.ts
-var log10 = createLogger("git");
-var GIT_DEFAULTS5 = GitSchema.parse({});
+var log11 = createLogger("git");
+var GIT_DEFAULTS6 = GitSchema.parse({});
 async function ensureStaging(args) {
   const remote = args.remote ?? "origin";
-  const staging = args.stagingBranch ?? GIT_DEFAULTS5.stagingBranch;
-  const base = args.baseBranch ?? GIT_DEFAULTS5.baseBranch;
+  const staging = args.stagingBranch ?? GIT_DEFAULTS6.stagingBranch;
+  const base = args.baseBranch ?? GIT_DEFAULTS6.baseBranch;
   if (base === "main") {
     throw new Error(
       "staging: baseBranch must not be 'main' (Decision 16 \u2014 the factory never touches main)"
@@ -7436,7 +7606,7 @@ async function ensureStaging(args) {
         `staging: base branch '${remote}/${base}' does not exist \u2014 cannot create staging`
       );
     }
-    log10.info(`creating ${staging} from ${remote}/${base}`);
+    log11.info(`creating ${staging} from ${remote}/${base}`);
     await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
     await args.gitClient.push(remote, staging, { setUpstream: true, cwd: args.cwd });
     return { created: true, stagingTip: baseHead };
@@ -7451,7 +7621,7 @@ async function ensureStaging(args) {
     cwd: args.cwd
   });
   if (mergeBase === stagingTip) {
-    log10.info(`fast-forwarding ${staging} to ${remote}/${base}`);
+    log11.info(`fast-forwarding ${staging} to ${remote}/${base}`);
     await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
     await args.gitClient.push(remote, staging, { cwd: args.cwd });
     return { created: false, stagingTip: baseTip };
@@ -7465,7 +7635,7 @@ async function ensureStaging(args) {
 }
 
 // src/cli/subcommands/scaffold.ts
-var log11 = createLogger("scaffold");
+var log12 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -7480,13 +7650,13 @@ Options:
   --provision           Write branch protection if missing (default: refuse)`;
 var GITIGNORE_ENTRIES = ["# factory plugin state", ".claude-plugin-data/", "*.worktree"];
 function resolveTemplatesDir() {
-  let dir = dirname4(fileURLToPath(import.meta.url));
+  let dir = dirname5(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     const candidate = join6(dir, "templates");
     if (existsSync4(join6(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
-    const parent = dirname4(dir);
+    const parent = dirname5(dir);
     if (parent === dir) break;
     dir = parent;
   }
@@ -7495,14 +7665,14 @@ function resolveTemplatesDir() {
 async function copyIfAbsent(src, dest, root, created, present) {
   const rel = relative(root, dest);
   if (!existsSync4(src)) {
-    log11.warn(`template missing, skipping: ${src}`);
+    log12.warn(`template missing, skipping: ${src}`);
     return;
   }
   if (existsSync4(dest)) {
     present.push(rel);
     return;
   }
-  await mkdir5(dirname4(dest), { recursive: true });
+  await mkdir6(dirname5(dest), { recursive: true });
   await copyFile(src, dest);
   created.push(rel);
 }
@@ -7514,7 +7684,7 @@ async function ensureGitignore(root, created, present) {
     created.push(rel);
     return;
   }
-  const current = await readFile2(path2, "utf8");
+  const current = await readFile3(path2, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     present.push(rel);
@@ -7857,7 +8027,7 @@ function parseSpecManifest(raw) {
 }
 
 // src/spec/gh.ts
-var log12 = createLogger("spec:gh");
+var log13 = createLogger("spec:gh");
 var GhAuthError = class extends Error {
   constructor(message) {
     super(message);
@@ -7918,7 +8088,7 @@ var RealGhClient = class {
     const rawBody = typeof parsed.body === "string" ? parsed.body : "";
     const { body, body_truncated } = this.capBody(rawBody);
     if (body_truncated) {
-      log12.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
+      log13.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
     }
     const labels = Array.isArray(parsed.labels) ? parsed.labels.map(
       (l) => l && typeof l === "object" && "name" in l && typeof l.name === "string" ? l.name : typeof l === "string" ? l : null
@@ -7943,9 +8113,9 @@ var RealGhClient = class {
 };
 
 // src/spec/store.ts
-import { readFile as readFile3, readdir } from "node:fs/promises";
+import { readFile as readFile4, readdir } from "node:fs/promises";
 import { join as join7 } from "node:path";
-var log13 = createLogger("spec:store");
+var log14 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
 function makeSpecId(issueNumber, slug) {
@@ -8008,7 +8178,7 @@ var SpecStore = class {
   /** Read + validate the manifest for a known `(repo, spec_id)`. */
   async read(repo, specId) {
     const dir = specDir(this.dataDir, repo, specId);
-    const tasksRaw = await readFile3(join7(dir, TASKS_FILE), "utf8");
+    const tasksRaw = await readFile4(join7(dir, TASKS_FILE), "utf8");
     const tasks = parseSpecTasks(parseJson(tasksRaw, join7(dir, TASKS_FILE)));
     const meta = await this.readMeta(dir);
     return parseSpecManifest({
@@ -8039,7 +8209,7 @@ var SpecStore = class {
         generated_at: parsed.generated_at
       })
     );
-    log13.info(`wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir}`);
+    log14.info(`wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir}`);
     return this.toPointer(parsed);
   }
   /** Build the run-facing {@link SpecPointer} from a manifest. */
@@ -8051,7 +8221,7 @@ var SpecStore = class {
     };
   }
   async readMeta(dir) {
-    const raw = await readFile3(join7(dir, META_FILE), "utf8");
+    const raw = await readFile4(join7(dir, META_FILE), "utf8");
     const meta = parseJson(
       raw,
       join7(dir, META_FILE)
@@ -8324,7 +8494,7 @@ function decideSpecReview(verdict, opts = {}) {
 }
 
 // src/spec/pipeline.ts
-var log14 = createLogger("spec:pipeline");
+var log15 = createLogger("spec:pipeline");
 function buildManifest(repo, issueNumber, generated) {
   const specId = makeSpecId(issueNumber, generated.slug);
   const slug = specId.replace(/^\d+-/, "");
@@ -8747,7 +8917,7 @@ var buildStrategy = procStrategy(
 );
 
 // src/verifier/deterministic/gate-runner.ts
-var log15 = createLogger("gate-runner");
+var log16 = createLogger("gate-runner");
 function strategyFor(id) {
   switch (id) {
     case "test":
@@ -8789,7 +8959,7 @@ var GateRunner = class {
       if (cached !== void 0) {
         report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
         evidence.push(cached);
-        log15.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
+        log16.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
         continue;
       }
       const strategy = strategyFor(id);
@@ -8810,7 +8980,7 @@ var GateRunner = class {
         memo.putEvidence(id, treeSha, outcome.evidence);
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
-        log15.debug(`gate ${id} skipped: ${outcome.reason}`);
+        log16.debug(`gate ${id} skipped: ${outcome.reason}`);
       }
     }
     const verdict = deriveAllGatesVerdict(evidence);
@@ -8819,7 +8989,7 @@ var GateRunner = class {
 };
 
 // src/verifier/deterministic/tools.ts
-import { readFile as readFile4 } from "node:fs/promises";
+import { readFile as readFile5 } from "node:fs/promises";
 import path from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
@@ -8870,7 +9040,7 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
     const reportPath = path.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
-      raw = await readFile4(reportPath, "utf8");
+      raw = await readFile5(reportPath, "utf8");
     } catch {
       return { proc: proc2, report: { report: "absent" } };
     }
@@ -8896,7 +9066,7 @@ var DefaultCoverageReader = class {
     const file = path.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
     let raw;
     try {
-      raw = await readFile4(file, "utf8");
+      raw = await readFile5(file, "utf8");
     } catch {
       return null;
     }
@@ -8962,14 +9132,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log21 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log21.code !== 0) {
+    const log24 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log24.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log21.code ?? "null"}): ${log21.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log24.code ?? "null"}): ${log24.stderr.trim()}`
       );
     }
-    assertNotTruncated(log21, "git log (tdd classification)");
-    const shas = splitLines(log21.stdout).reverse();
+    assertNotTruncated(log24, "git log (tdd classification)");
+    const shas = splitLines(log24.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -9030,8 +9200,8 @@ function defaultGateTools() {
 }
 
 // src/driver/artifacts.ts
-import { mkdir as mkdir6, readFile as readFile5 } from "node:fs/promises";
-import { dirname as dirname5, join as join8 } from "node:path";
+import { mkdir as mkdir7, readFile as readFile6 } from "node:fs/promises";
+import { dirname as dirname6, join as join8 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
 }
@@ -9045,13 +9215,13 @@ var FsArtifactStore = class {
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
     const path2 = this.absPath(runId, ref);
-    await mkdir6(dirname5(path2), { recursive: true });
+    await mkdir7(dirname6(path2), { recursive: true });
     await atomicWriteFile(path2, stringifyJson(context));
     return ref;
   }
   async getProducerContext(runId, promptRef) {
     const path2 = this.absPath(runId, promptRef);
-    const raw = await readFile5(path2, "utf8");
+    const raw = await readFile6(path2, "utf8");
     return parseJson(raw, path2);
   }
 };
@@ -9092,8 +9262,8 @@ function splitHoldout(criteria, percent, seed) {
 }
 
 // src/verifier/holdout/store.ts
-import { mkdir as mkdir7, readFile as readFile6 } from "node:fs/promises";
-import { dirname as dirname6, join as join9 } from "node:path";
+import { mkdir as mkdir8, readFile as readFile7 } from "node:fs/promises";
+import { dirname as dirname7, join as join9 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -9128,17 +9298,17 @@ var FsHoldoutStore = class {
   }
   async put(runId, record) {
     const path2 = this.path(runId, record.task_id);
-    await mkdir7(dirname6(path2), { recursive: true });
+    await mkdir8(dirname7(path2), { recursive: true });
     await atomicWriteFile(path2, stringifyJson(record));
   }
   async get(runId, taskId) {
     const path2 = this.path(runId, taskId);
-    const raw = await readFile6(path2, "utf8");
+    const raw = await readFile7(path2, "utf8");
     return parseHoldoutRecord(parseJson(raw, path2), path2);
   }
   async has(runId, taskId) {
     try {
-      await readFile6(this.path(runId, taskId), "utf8");
+      await readFile7(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -9240,8 +9410,8 @@ function holdoutEvidence(result) {
 }
 
 // src/verifier/holdout/verdict-store.ts
-import { mkdir as mkdir8, readFile as readFile7 } from "node:fs/promises";
-import { dirname as dirname7, join as join10 } from "node:path";
+import { mkdir as mkdir9, readFile as readFile8 } from "node:fs/promises";
+import { dirname as dirname8, join as join10 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -9258,17 +9428,17 @@ var FsHoldoutVerdictStore = class {
   }
   async put(runId, taskId, verdicts) {
     const path2 = this.path(runId, taskId);
-    await mkdir8(dirname7(path2), { recursive: true });
+    await mkdir9(dirname8(path2), { recursive: true });
     await atomicWriteFile(path2, stringifyJson([...verdicts]));
   }
   async get(runId, taskId) {
     const path2 = this.path(runId, taskId);
-    const raw = await readFile7(path2, "utf8");
+    const raw = await readFile8(path2, "utf8");
     return HoldoutVerdictsSchema.parse(parseJson(raw, path2));
   }
   async has(runId, taskId) {
     try {
-      await readFile7(this.path(runId, taskId), "utf8");
+      await readFile8(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -9309,10 +9479,174 @@ async function loadCliDeps(opts) {
   };
 }
 
+// src/scoring/partial-report.ts
+function buildPartialReport(run12, manifest, opts = {}) {
+  const specById = new Map(manifest.tasks.map((t) => [t.task_id, t]));
+  const orderOf = new Map(manifest.tasks.map((t, i) => [t.task_id, i]));
+  const shipped = [];
+  const failures = [];
+  const incomplete = [];
+  for (const task of Object.values(run12.tasks)) {
+    const spec = specById.get(task.task_id);
+    if (spec === void 0) {
+      throw new Error(
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run12.run_id})`
+      );
+    }
+    if (task.status === "done") {
+      shipped.push({
+        task_id: task.task_id,
+        title: spec.title,
+        branch: task.branch,
+        pr_number: task.pr_number
+      });
+    } else if (task.status === "dropped") {
+      failures.push({
+        task_id: task.task_id,
+        title: spec.title,
+        failure_class: task.failure_class,
+        failure_reason: task.failure_reason,
+        unmet_criteria: [...spec.acceptance_criteria],
+        branch: task.branch,
+        pr_number: task.pr_number
+      });
+    } else {
+      incomplete.push({ task_id: task.task_id, title: spec.title, status: task.status });
+    }
+  }
+  const bySpecOrder = (a, b) => (orderOf.get(a.task_id) ?? 0) - (orderOf.get(b.task_id) ?? 0);
+  shipped.sort(bySpecOrder);
+  failures.sort(bySpecOrder);
+  incomplete.sort(bySpecOrder);
+  return {
+    run_id: run12.run_id,
+    run_status: run12.status,
+    spec_id: run12.spec.spec_id,
+    issue_number: run12.spec.issue_number,
+    repo: run12.spec.repo,
+    generated_at: opts.now ?? nowIso(),
+    totals: {
+      total: shipped.length + failures.length + incomplete.length,
+      shipped: shipped.length,
+      failed: failures.length,
+      incomplete: incomplete.length
+    },
+    shipped,
+    failures,
+    incomplete
+  };
+}
+function renderFailureIssue(failure, report) {
+  const lines = [
+    `Task \`${failure.task_id}\` was dropped during factory run \`${report.run_id}\`.`,
+    "",
+    `- **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number})`,
+    `- **Failure class:** \`${failure.failure_class}\``,
+    `- **Reason:** ${failure.failure_reason}`
+  ];
+  if (failure.branch !== void 0) lines.push(`- **Branch:** \`${failure.branch}\``);
+  if (failure.pr_number !== void 0) lines.push(`- **PR:** #${failure.pr_number}`);
+  lines.push("", "**Unmet acceptance criteria:**", "");
+  for (const c of failure.unmet_criteria) lines.push(`- [ ] ${c}`);
+  return {
+    title: `[factory] ${failure.task_id} dropped (${failure.failure_class}): ${failure.title}`,
+    body: lines.join("\n")
+  };
+}
+function statusLabel(status) {
+  return status.toUpperCase();
+}
+function renderPartialReportMarkdown(report) {
+  const out = [];
+  out.push(`# Factory run report \u2014 \`${report.run_id}\``);
+  out.push("");
+  out.push(
+    `**Status:** ${statusLabel(report.run_status)} \xB7 **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number}) \xB7 **Repo:** ${report.repo}`
+  );
+  out.push(`**Generated:** ${report.generated_at}`);
+  out.push("");
+  out.push(
+    `**Tasks:** ${report.totals.total} total \xB7 ${report.totals.shipped} shipped \xB7 ${report.totals.failed} failed \xB7 ${report.totals.incomplete} incomplete`
+  );
+  out.push("");
+  out.push(`## Shipped (${report.shipped.length})`);
+  if (report.shipped.length === 0) {
+    out.push("_none_");
+  } else {
+    for (const s of report.shipped) {
+      const pr = s.pr_number !== void 0 ? ` \u2014 PR #${s.pr_number}` : "";
+      const br = s.branch !== void 0 ? ` (\`${s.branch}\`)` : "";
+      out.push(`- \`${s.task_id}\` \u2014 ${s.title}${pr}${br}`);
+    }
+  }
+  out.push("");
+  if (report.failures.length > 0) {
+    out.push(`## Failed (${report.failures.length})`);
+    for (const f of report.failures) {
+      out.push("");
+      out.push(`### \`${f.task_id}\` \u2014 ${f.title}`);
+      out.push(`- **Class:** \`${f.failure_class}\``);
+      out.push(`- **Reason:** ${f.failure_reason}`);
+      out.push("- **Unmet acceptance criteria:**");
+      for (const c of f.unmet_criteria) out.push(`  - ${c}`);
+    }
+    out.push("");
+  }
+  if (report.incomplete.length > 0) {
+    out.push(`## Incomplete (${report.incomplete.length})`);
+    for (const i of report.incomplete) {
+      out.push(`- \`${i.task_id}\` \u2014 ${i.title} (\`${i.status}\`)`);
+    }
+    out.push("");
+  }
+  return out.join("\n");
+}
+
+// src/scoring/telemetry.ts
+var log17 = createLogger("telemetry");
+async function emitMetric(dataDir, runId, event, data, opts = {}) {
+  const record = {
+    ts: opts.now ?? nowIso(),
+    run_id: runId,
+    event,
+    ...data !== void 0 ? { data } : {}
+  };
+  try {
+    await appendJsonl(runMetricsPath(dataDir, runId), record);
+  } catch (err) {
+    log17.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+  }
+  return record;
+}
+async function recordRunFinalized(dataDir, report, opts = {}) {
+  const now = opts.now ?? nowIso();
+  await emitMetric(
+    dataDir,
+    report.run_id,
+    "run.finalized",
+    {
+      status: report.run_status,
+      spec_id: report.spec_id,
+      issue_number: report.issue_number,
+      totals: report.totals
+    },
+    { now }
+  );
+  for (const f of report.failures) {
+    await emitMetric(
+      dataDir,
+      report.run_id,
+      "task.dropped",
+      { task_id: f.task_id, failure_class: f.failure_class },
+      { now }
+    );
+  }
+}
+
 // src/quota/usage-source.ts
 import { existsSync as existsSync5, readFileSync as readFileSync3 } from "node:fs";
 import { join as join11 } from "node:path";
-var log16 = createLogger("quota:usage");
+var log18 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
 var STALE_WARN_SECONDS = 120;
 var RawWindowSchema = external_exports.object({
@@ -9343,7 +9677,7 @@ function readingFromCache(raw, nowEpoch2) {
     return unavailable("usage-cache-too-stale");
   }
   if (age > STALE_WARN_SECONDS) {
-    log16.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+    log18.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
   }
   const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
   const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
@@ -9386,14 +9720,14 @@ var StatuslineUsageSignal = class {
     }
     const file = usageCachePath(dataDir);
     if (!existsSync5(file)) {
-      log16.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
+      log18.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
     let raw;
     try {
       raw = parseJson(readFileSync3(file, "utf8"), file);
     } catch {
-      log16.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
+      log18.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-malformed");
     }
     return readingFromCache(raw, now);
@@ -9830,7 +10164,7 @@ function floorBlockReason(results) {
 var ESCALATION_CAP = 2;
 
 // src/driver/transitions.ts
-var log17 = createLogger("transitions");
+var log19 = createLogger("transitions");
 async function markInFlight(deps, runId, taskId, stage) {
   const status = stageToInFlightStatus(stage);
   await deps.state.updateTask(runId, taskId, (t) => ({
@@ -9848,7 +10182,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function dropTask(deps, runId, taskId, failureClass, reason) {
-  log17.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
+  log19.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "dropped",
@@ -9885,7 +10219,7 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log17.info(
+  log19.info(
     `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`
   );
   return { done: false, stage: resumeStage };
@@ -10128,7 +10462,7 @@ function shipBody(runId, specTask) {
 }
 
 // src/driver/ship.ts
-var log18 = createLogger("ship");
+var log20 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
     throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
@@ -10164,14 +10498,72 @@ async function shipTask(deps, ctx) {
   });
   const outcome = await serializer.merge(pr.number);
   if (outcome.merged) {
-    log18.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    log20.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
     return taskDone();
   }
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
+// src/driver/finalize.ts
+var log21 = createLogger("finalize");
+var FACTORY_ISSUE_LABEL = "factory";
+function rollupTitle(report) {
+  return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
+}
+async function fileFailureIssues(deps, report) {
+  if (report.failures.length === 0) return 0;
+  const existing = new Set(
+    (await deps.gh.issueList({ repo: report.repo, labels: [FACTORY_ISSUE_LABEL], state: "all" })).map((i) => i.title)
+  );
+  let filed = 0;
+  for (const failure of report.failures) {
+    const issue = renderFailureIssue(failure, report);
+    if (existing.has(issue.title)) {
+      log21.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
+      continue;
+    }
+    await deps.gh.issueCreate({
+      title: issue.title,
+      body: issue.body,
+      repo: report.repo,
+      labels: [FACTORY_ISSUE_LABEL, `factory:${failure.failure_class}`]
+    });
+    existing.add(issue.title);
+    filed += 1;
+  }
+  return filed;
+}
+async function finalizeRun(deps, runId) {
+  const now = deps.nowIso ?? nowIso();
+  const run12 = await deps.state.read(runId);
+  const terminal = decideFinalize(run12).run_status;
+  const report = buildPartialReport({ ...run12, status: terminal }, deps.spec, { now });
+  const markdown = renderPartialReportMarkdown(report);
+  await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
+  await recordRunFinalized(deps.dataDir, report, { now });
+  const issuesFiled = await fileFailureIssues(deps, report);
+  let rollupResult;
+  if (report.totals.shipped > 0) {
+    rollupResult = await rollup({
+      ghClient: deps.gh,
+      title: rollupTitle(report),
+      body: markdown,
+      partial: terminal === "partial",
+      merge: deps.shipMode === "live",
+      ...deps.rollup ?? {}
+    });
+  } else {
+    log21.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
+  }
+  const finalized = await deps.state.finalize(runId, terminal);
+  log21.info(
+    `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
+  );
+  return { run: finalized, report, ...rollupResult ? { rollup: rollupResult } : {}, issuesFiled };
+}
+
 // src/driver/loop.ts
-var log19 = createLogger("driver");
+var log22 = createLogger("driver");
 
 // src/cli/subcommands/run-task.ts
 var HELP4 = `factory run-task \u2014 run one deterministic stage step and report (Model A)
@@ -10382,14 +10774,14 @@ var dropCommand = {
 };
 
 // src/cli/transition.ts
-import { readFile as readFile8 } from "node:fs/promises";
+import { readFile as readFile9 } from "node:fs/promises";
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.stage);
   }
 }
 async function readJsonInput(path2) {
-  const raw = await readFile8(path2, "utf8");
+  const raw = await readFile9(path2, "utf8");
   return parseJson(raw, path2);
 }
 
@@ -10462,7 +10854,7 @@ var recordProducerCommand = {
 };
 
 // src/cli/subcommands/record-holdout.ts
-var log20 = createLogger("record-holdout");
+var log23 = createLogger("record-holdout");
 var HELP8 = `factory record-holdout \u2014 fold the holdout-validator output into the floor
 
 Usage:
@@ -10478,7 +10870,7 @@ function parseVerdictsFailClosed(raw) {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log20.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log23.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
@@ -10527,7 +10919,7 @@ var recordHoldoutCommand = {
 };
 
 // src/cli/subcommands/record-reviews.ts
-import { readFile as readFile9 } from "node:fs/promises";
+import { readFile as readFile10 } from "node:fs/promises";
 import { join as join13 } from "node:path";
 var REPLAY_IDENTITY = "orchestrator-replay";
 var HELP9 = `factory record-reviews \u2014 fold the panel + verify-then-fix into the floor
@@ -10556,7 +10948,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile9(join13(worktree, file), "utf8");
+      const text = await readFile10(join13(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch {
       lines.set(file, null);
@@ -10694,10 +11086,12 @@ var RUN_HELP = `factory run \u2014 create or resume a run
 Usage:
   factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver <d>] [--run-id <id>]
   factory run resume [--run <id>]
+  factory run finalize [--run <id>] [--ship-mode <mode>]
 
 Actions:
-  create   Resolve a durable spec, create a run, seed its tasks, emit the RunState.
-  resume   Re-check the live quota window; clear the checkpoint if it has recovered.`;
+  create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
+  resume     Re-check the live quota window; clear the checkpoint if it has recovered.
+  finalize   Build the partial report, file per-drop issues, ship the rollup, flip terminal.`;
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
@@ -10723,6 +11117,21 @@ Emits ONE JSON envelope:
   { kind:"still-blocked", run_id, status, reason, \u2026 }  \u2014 window has not recovered (state untouched)
 
 A terminal run is a loud error (nothing to resume).`;
+var FINALIZE_HELP = `factory run finalize \u2014 turn an all-terminal run into its shipped outcome
+
+Usage:
+  factory run finalize [--run <id>] [--ship-mode <mode>]
+
+  --run         The run to finalize (defaults to runs/current).
+  --ship-mode   live | no-merge (default: no-merge \u2014 opens the rollup PR, never merges).
+
+Builds the deterministic partial-run report (report.md), emits run.finalized
+telemetry, files ONE GitHub issue per dropped task (deduped), opens + CI-gates +
+(in live mode) squash-merges the staging\u2192develop rollup, then flips the run
+terminal \u2014 in that resume-safe order. LOUD if any task is still non-terminal.
+
+Emits ONE JSON envelope:
+  { kind:"finalized", run, report, rollup?, issues_filed }`;
 function seedTasksFromSpec(manifest) {
   const ids = new Set(manifest.tasks.map((t) => t.task_id));
   const tasks = {};
@@ -10835,6 +11244,11 @@ function parseDriver(raw) {
   if (raw === "sequential" || raw === "balanced") return raw;
   throw new UsageError(`unknown --driver '${String(raw)}' (expected sequential | balanced)`);
 }
+function parseShipMode2(raw) {
+  if (raw === void 0) return void 0;
+  if (raw === "live" || raw === "no-merge") return raw;
+  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
+}
 function parseIssue(raw) {
   if (raw === void 0) return void 0;
   if (typeof raw !== "string") throw new UsageError("--issue requires a value");
@@ -10887,17 +11301,44 @@ async function runResume(argv) {
   const dataDir = resolveDataDir({});
   const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
-  let runId = optionalString(args.flag("run"));
-  if (runId === void 0) {
-    const current = await state.readCurrent();
-    if (current === null) {
-      throw new UsageError("run resume: no --run given and no current run");
-    }
-    runId = current.run_id;
-  }
+  const runId = await resolveRunId(state, args, "resume");
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
   const envelope = await applyResume(state, runId, reading, config, nowEpoch());
   emitJson(envelope);
+  return EXIT.OK;
+}
+async function resolveRunId(state, args, action) {
+  const explicit = optionalString(args.flag("run"));
+  if (explicit !== void 0) return explicit;
+  const current = await state.readCurrent();
+  if (current === null) {
+    throw new UsageError(`run ${action}: no --run given and no current run`);
+  }
+  return current.run_id;
+}
+async function runFinalize(argv) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(FINALIZE_HELP);
+    return EXIT.OK;
+  }
+  const shipMode = parseShipMode2(args.flag("ship-mode"));
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const runId = await resolveRunId(state, args, "finalize");
+  const deps = await loadCliDeps({
+    dataDir,
+    runId,
+    ...shipMode !== void 0 ? { shipMode } : {}
+  });
+  const { run: run12, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
+  emitJson({
+    kind: "finalized",
+    run: run12,
+    report,
+    ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
+    issues_filed: issuesFiled
+  });
   return EXIT.OK;
 }
 async function run10(argv) {
@@ -10912,8 +11353,10 @@ async function run10(argv) {
       return runCreate(rest);
     case "resume":
       return runResume(rest);
+    case "finalize":
+      return runFinalize(rest);
     default:
-      throw new UsageError(`unknown run action '${action}' (expected create | resume)`);
+      throw new UsageError(`unknown run action '${action}' (expected create | resume | finalize)`);
   }
 }
 var runCommand = {

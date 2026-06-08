@@ -12,6 +12,10 @@
 // -- the loop (actor) --------------------------------------------------------
 export { driveTask, driveRun, Driver } from "./loop.js";
 
+// -- the run FINALIZE coordinator (rollup + report + issues; WS12) ------------
+export { finalizeRun } from "./finalize.js";
+export type { FinalizeRunDeps, FinalizeRunResult } from "./finalize.js";
+
 // -- the shared deterministic transition logic (loop + CLI record-* subcmds) --
 export {
   markInFlight,
