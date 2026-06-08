@@ -1,79 +1,162 @@
 ---
 name: rescue-protocol
-description: (internal) Recover a factory pipeline run from complex issues (merge conflicts, unmerged PRs, orphan branches, failed tasks, review deadlocks, state drift) that /factory:run resume cannot handle. Produces a clean state that resume picks up naturally.
+description: (internal) Recover a factory pipeline run that `factory run resume` cannot untangle — a crashed/suspended session left tasks STUCK mid-stage, or a terminal partial run has recoverable drops to retry. Resets the resettable tasks via `factory rescue apply`, reopens a terminal run, then hands off to resume. v1 reconciles RUN STATE only.
 ---
 
 # rescue-protocol
 
-You are the rescue orchestrator. You repair a pipeline run that has complex issues, then hand off to `/factory:run resume`. You never edit state by hand. All writes go through `pipeline-state`. All detection goes through `pipeline-rescue-scan`. All actions go through `pipeline-rescue-apply`. Your job is to sequence these, solicit user approval for risky actions, and dispatch the read-only `rescue-diagnostic` agent for failed or flagged tasks.
+You are the rescue orchestrator. `factory run resume` only re-checks the quota gate — it
+**never touches task state**. When a crashed or suspended session left tasks stuck mid-stage
+(so a re-drive would deadlock), or a terminal `partial` run has `blocked-environmental` drops
+worth retrying, resume alone cannot recover it. Rescue is that missing seam: it resets the
+resettable tasks, reopens a terminal run, then hands back to resume + the run loop.
+
+You are **Model A** — the in-session orchestrator. The `factory` CLI is the deterministic
+brain: `factory rescue scan` is a read-only REPORTER, `factory rescue apply` is the only
+WRITER. The CLI never spawns agents; **you** spawn the read-only `rescue-diagnostic` agent for
+ambiguous dead-ends. Never edit `state.json` by hand.
 
 ## Iron Laws
 
-1. Never edit `state.json` directly.
-2. Never attempt fixes not covered by `pipeline-rescue-apply`.
-3. Always run `pipeline-ensure-autonomy` first.
-4. Tier-1 fixes auto-apply without prompting.
-5. Tier-2 and tier-3 fixes require `AskUserQuestion` batch approval.
-6. The `rescue-diagnostic` agent is read-only; its decisions drive deterministic apply actions.
-7. Final step is always a direct `Skill(pipeline-orchestrator, "mode=resume")` invocation, unless the user cancels.
+1. **All state writes go through `factory rescue apply`.** Never hand-edit `state.json`.
+2. **`scan` is read-only; `apply` is the only mutation.** Scan first, reason, then apply.
+3. **Default never repeats a dead end.** A default `apply` resets only stuck ∪ recoverable
+   (`blocked-environmental`) tasks. A `spec-defect`/`capability-budget` drop is reset ONLY on
+   an explicit assertion the root cause is fixed (`--include-dead-ends`, or `--task <id>`).
+4. **Never reset a `done` task.** It would un-ship merged work; `apply` makes it a LOUD error.
+5. **`rescue-diagnostic` is read-only and advisory.** Its decision drives whether you issue a
+   `--task` reset; it mutates nothing itself.
+6. **v1 reconciles RUN STATE only.** GitHub-side drift (merged-not-recorded PR, orphan
+   branch/worktree, merge conflict, duplicate/closed-unmerged PR) is **out of scope** — surface
+   it to the user, do not pretend it is fixed. See `reference/disposition-taxonomy.md`.
+7. **Final step is the handoff to resume**, unless the user cancels or nothing was reset.
+
+## Inputs
+
+`/factory:rescue` passes `run=<id-or-empty> tasks=<csv-or-empty> include-dead-ends=<bool>
+dry-run=<bool>`:
+
+- `run` → thread as `--run <id>` into every `scan`/`apply` (empty = default to `runs/current`).
+- `dry-run=true` → run steps 1–3 only: scan + report, then **stop**. No `apply`, no resume.
+- `tasks` (csv, non-empty) → skip the default/diagnostic path; reset exactly those ids with
+  `--task <id>` (repeated). A named dead-end is reset without `--include-dead-ends`.
+- `include-dead-ends=true` → in step 5, reset all dead-ends (`--include-dead-ends`) instead of
+  diagnosing per task (the human has asserted the upstream root cause is fixed).
 
 ## Protocol
 
-1. **Autonomy check.** Run `pipeline-ensure-autonomy --json`. If it exits 2 (stale or missing), parse `settings_path` from the JSON output and tell the user to relaunch with **exactly** `claude --settings $settings_path`. Surface that command verbatim — no extra flags.
+1. **Resolve the target run.** Use `--run <id>` if given; otherwise the active run
+   (`runs/current`). If neither resolves, stop with `no run to rescue`. (Both `scan` and
+   `apply` default to `runs/current` themselves — pass `--run` only to override.)
 
-   > ⚠️ Do **not** append `--dangerously-skip-permissions`. The whole purpose of `merged-settings.json` is to grant scoped autonomy via `permissions.allow` plus deny-list and PreToolUse guard hooks; bypassing permissions would actively defeat the deny list and guards.
+2. **Scan.**
 
-2. **Select target run.** Resolution order:
-   1. Read `$CLAUDE_PLUGIN_DATA/runs/current` symlink → run id.
-   2. Else `pipeline-state list | jq -r last`.
-   3. Else list real runs in `$CLAUDE_PLUGIN_DATA/runs/` whose names match `^run-[0-9]{8}-[0-9]{6}$` (skip fixtures like `run-wrapper-*` unless the user passes `--include-fixtures`); if any, prompt with `AskUserQuestion`.
-   4. Else list `$CLAUDE_PLUGIN_DATA/archive/*/state.json` newest-first, prompt with `AskUserQuestion`. On user pick, run `pipeline-rescue-apply --action=rehydrate-archived-run --run-id=<id>` (tier-1, auto-applied) before continuing — this restores `runs/<id>/` from the archive copy and re-creates `runs/current` if absent. Archive copy is preserved.
-   5. Exit with "No run to rescue." if all empty.
+   ```
+   factory rescue scan [--run <id>]
+   ```
 
-3. **Refuse if pipeline is live.** If `.status == "running"` and a fresh `pipeline-state` lock attempt succeeds (meaning no current holder), proceed. Otherwise exit with "Pipeline is running; wait for it to halt before rescuing."
+   Emits the read-only `RescueScan` (see `reference/disposition-taxonomy.md`):
 
-4. **Scan.** Run `pipeline-rescue-scan <run-id> > $rundir/rescue/report-<ts>.json 2> $rundir/rescue/scan-<ts>.log`. Read the report. On non-zero exit, quote the last 20 lines of `scan-<ts>.log` verbatim — never paraphrase stderr into prose.
+   ```jsonc
+   {
+     "run_id", "run_status",
+     "counts": { "total", "shipped", "runnable", "stuck", "recoverable", "dead_end" },
+     "resettable": ["<task-id>", ...],   // stuck ∪ recoverable — default apply resets these
+     "dead_ends":  ["<task-id>", ...],   // reset only on explicit assertion
+     "needs_rescue", "would_deadlock", "summary",
+     "tasks": [ { "task_id", "status", "disposition", "failure_class?", "failure_reason?", "branch?", "pr_number?" }, ... ]
+   }
+   ```
 
-5. **Short-circuit if clean.** If `mechanical_issues` and `investigation_flags` are both empty AND no task is `status=failed`, skip to step 12 (invoke resume).
+3. **Short-circuit if clean.** If `needs_rescue` is `false` AND `would_deadlock` is `false`,
+   there is nothing for rescue to reset. Skip to step 7 (resume) if the run is non-terminal;
+   otherwise report `summary` (it may note dead-ends that need a fix + `--include-dead-ends`)
+   and stop. **If `dry-run=true`, report the scan and stop here regardless** — never apply.
 
-6. **Auto-apply tier-1.** Run `pipeline-rescue-apply --tier=safe --plan=<report>`. Silent.
+   **If `tasks` was given (non-empty):** skip the default + diagnostic paths entirely — apply
+   exactly those ids and go to step 7:
 
-7. **Mechanical batch approval.** Collect all tier-2 and tier-3 mechanical issues. If any exist, call `AskUserQuestion` with one question listing them and three options: `approve-all`, `review-per-item`, `cancel`.
-   - On `approve-all`: write `approved-mechanical-<ts>.json` containing all of them.
-   - On `review-per-item`: loop, one `AskUserQuestion` per issue with `approve`/`skip`; aggregate approved into the file.
-   - On `cancel`: exit with "Rescue cancelled by user."
+   ```
+   factory rescue apply [--run <id>] --task <id> [--task <id> ...]
+   ```
 
-8. **Apply approved mechanical.** Run `pipeline-rescue-apply --tier=risky --plan=<approved-mechanical>.json`.
+4. **Apply the default (safe) set.** Resets stuck (crashed in-flight) + recoverable
+   (`blocked-environmental`) tasks, and reopens a terminal run that had work to reset:
 
-9. **Investigation.** Read the current state; for every task where `.tasks.<id>.status == "failed"` OR every `investigation_flags[]` entry, build an input JSON at `$rundir/rescue/diagnostic.<task-id>.input.json` (see `reference/diagnostic-agent-contract.md`). Dispatch `rescue-diagnostic` via `Agent()` in parallel, one per task. Wait for all to return; read each `diagnostic.<task-id>.output.json`.
+   ```
+   factory rescue apply [--run <id>]
+   ```
 
-10. **Investigation batch approval.** Collect all agent outputs into a plans list. Call `AskUserQuestion` with one question summarizing each plan (one line per task: `<task>: <decision> (<reason-short>)`) and options: `approve-all`, `review-per-item`, `cancel`.
-    - On `approve-all`: write `approved-plans-<ts>.json`.
-    - On `review-per-item`: loop per plan.
-    - On `cancel`: exit.
+   Emits `{ run_id, run_status, reset: [...], reopened, skipped: [...] }`. `run_status` is
+   `running` when a terminal run was reopened. This is safe to auto-apply — it never resets a
+   dead-end and never touches `done` work.
 
-11. **Apply plans.** Run `pipeline-rescue-apply --plans=<approved-plans>.json`.
+5. **Decide on dead-ends (only if any).** For each id in `scan.dead_ends`, decide whether the
+   root cause has cleared. Two paths:
+   - **Diagnostic-gated (autonomous).** Spawn the read-only `rescue-diagnostic` agent — one
+     `Agent()` per dead-end, in a single message — passing each task's scan line + the ground
+     truth you can gather (`worktree_path`, `review_files`, `ci_logs_path`, the durable
+     `spec_path`). See `reference/diagnostic-agent-contract.md`. Harvest each agent's final
+     message (its decision JSON). For every `decision: "reset"`, reset that one:
 
-12. **Invoke resume.** Hand off by invoking the `pipeline-orchestrator` skill **directly**:
+     ```
+     factory rescue apply [--run <id>] --task <task-id> [--task <task-id> ...]
+     ```
 
-    ```
-    Skill(pipeline-orchestrator, "mode=resume")
-    ```
+     (Naming a task IS the assertion the cause is fixed, so `--task` resets a dead-end without
+     `--include-dead-ends`.) `leave-dropped` / `no-action` → leave it; the run finalizes
+     partial, which is the correct loud outcome.
 
-    Do **not** instruct the user to run `/factory:run resume` themselves. The slash command is just a thin loader for the same skill (see `commands/run.md`); calling the skill directly is the autonomous path and avoids a needless human round-trip. The user-facing slash command should only be used as fallback if the rescue is being narrated to the user as a manual procedure.
+   - **Human-asserted.** If a human has confirmed the upstream root cause is fixed for the
+     whole set (e.g. the spec was amended, a stronger model is now available), reset them all:
+
+     ```
+     factory rescue apply [--run <id>] --include-dead-ends
+     ```
+
+     When run interactively and dead-ends exist, confirm with one `AskUserQuestion`
+     (`reset-all-dead-ends` / `diagnose-each` / `leave-dropped`) before resetting — resetting a
+     determined failure burns a full pipeline cycle.
+
+6. **Re-scan to confirm (optional).** A second `scan` should show the reset tasks now
+   `runnable` and `would_deadlock: false`. `apply` is idempotent, so a re-run is a safe no-op.
+
+7. **Hand off to resume.** Invoke the orchestrator skill directly (the autonomous path — no
+   human round-trip):
+
+   ```
+   Skill(pipeline-orchestrator)   # then run its resume entry: factory run resume [--run <id>]
+   ```
+
+   - `{ kind: "resumed", run }` → continue the Phase 3 run loop; the driver now picks up the
+     reset (and reopened) tasks.
+   - `{ kind: "still-blocked", run_id, status, reason, resets_at_epoch? }` → the quota window
+     has not recovered. Report `reason` (+ `resets_at_epoch` if present) and stop; the reset
+     state is durable and a later resume continues from it.
+
+   Do not tell the user to type `/factory:run resume` themselves — calling the skill directly
+   is the autonomous path. The slash command is only the manual-narration fallback.
+
+## When NOT to use rescue
+
+- The run is **running and healthy** — let it finish; don't reset live work.
+- The only problem is the **quota gate** — that is plain `factory run resume`, no rescue needed.
+- The drops are genuine **dead-ends** and nothing upstream changed — finalizing partial (a
+  report + one GH issue per drop) is the correct outcome, not a reset.
 
 ## References
 
-- `reference/issue-taxonomy.md` — full table of issue types, tiers, and fixes.
-- `reference/remediation-protocol.md` — exact commands and invariants per action.
-- `reference/diagnostic-agent-contract.md` — input/output schema for `rescue-diagnostic`.
-- Skill complements `skills/pipeline-orchestrator/reference/resume-protocol.md`.
+- `reference/disposition-taxonomy.md` — the five dispositions, apply semantics, and the
+  GitHub-side drift that v1 explicitly defers.
+- `reference/diagnostic-agent-contract.md` — the `rescue-diagnostic` input/output contract.
 
 ## Error handling
 
-See `docs/superpowers/specs/2026-04-24-rescue-design.md` section 9 for the full matrix. Summary:
-
-- Scan fails → exit non-zero with partial report, no state changes.
-- User cancels at any prompt → exit 0 cleanly; tier-1 fixes already applied remain.
-- Diagnostic times out or returns malformed JSON → treated as `no_action`.
-- Apply errors are recorded in `.rescue.applied_actions` with `result: "error"`; batch continues.
+- `scan`/`apply` exit non-zero → surface the stderr verbatim; no state changes on a `scan`
+  failure (it is read-only), and `apply` mutates under a lock so a failed apply leaves the run
+  consistent.
+- `apply --task <id>` on a `done` task → LOUD error (would un-ship); fix the id and retry.
+- A `rescue-diagnostic` agent that errors or returns unparseable JSON → treat as `no-action`
+  (leave the task dropped); never reset on a guess.
+- User cancels at the dead-end prompt → exit cleanly; any default `apply` already done stays
+  (it is idempotent and safe).

@@ -1,99 +1,114 @@
 # Diagnostic Agent Contract
 
-The `rescue-diagnostic` agent (`agents/rescue-diagnostic.md`) is a read-only Sonnet subagent that analyses a failed or flagged task and returns a structured decision.
+The `rescue-diagnostic` agent (`agents/rescue-diagnostic.md`) is a read-only Sonnet subagent
+the **orchestrator spawns** (Model A: the CLI never spawns agents) to investigate ONE
+ambiguous **dead-end** task — a `dropped` task whose `failure_class` is `spec-defect` or
+`capability-budget`, where it is unclear whether the root cause has since cleared.
 
-## Input
+A default `factory rescue apply` leaves dead-ends dropped. The diagnostic is the seam that
+decides whether a specific dead-end is worth re-attempting (→ `factory rescue apply --task
+<id>`) or is a genuine determined failure (→ leave it dropped, the run finalizes partial).
 
-Written by the skill to `$CLAUDE_PLUGIN_DATA/runs/<run-id>/rescue/diagnostic.<task-id>.input.json`:
+It is **read-only and advisory**: it has no Write/Edit/Bash tool, mutates nothing, and its
+**final message is the decision** — there is no output file.
+
+## Input — passed in the dispatch prompt
+
+The orchestrator builds the prompt from the task's `factory rescue scan` line plus whatever
+ground-truth pointers it can gather. Any field may be absent.
 
 ```jsonc
 {
   "run_id": "<run-id>",
-  "task_id": "<task-id>",
-  "issue_type": "I-13" | "I-14" | "I-16",
+  "task": {
+    "task_id": "<task-id>",
+    "status": "dropped",
+    "disposition": "dead-end",
+    "failure_class": "spec-defect | capability-budget",
+    "failure_reason": "<string>",
+    "branch": "<branch-or-absent>",
+    "pr_number": 42,
+  },
   "context": {
-    "state_snapshot": { /* per-task state object from state.json */ },
     "worktree_path": "<abs-path-or-null>",
-    "pr_url": "<url-or-null>",
-    "pr_state": "<OPEN|CLOSED|MERGED|null>",
-    "review_files": ["<path>", ...],
+    "review_files": ["<path>", "..."],
     "ci_logs_path": "<path-or-null>",
-    "branch": "<branch-or-null>",
-    "failure_reason": "<string-or-null>"
-  }
+    "spec_path": "<abs-path-or-null>",
+  },
 }
 ```
 
-## Output
+## Output — the agent's final message
 
-Written by the agent to `diagnostic.<task-id>.output.json` in the same directory:
+ONE JSON object, the entire final message (the Agent tool returns it to the orchestrator):
 
 ```jsonc
 {
-  "decision": "reset_pending" | "mark_failed" | "delete_branch" | "reset_postreview" | "no_action",
-  "reason": "<one-paragraph root-cause summary>",
-  "evidence": ["<file:line or log excerpt>", ...],
-  "state_updates": { ".tasks.<id>.failure_reason": "<text>" /* optional extras */ },
-  "confidence": "high" | "medium" | "low"
+  "decision": "reset | leave-dropped | no-action",
+  "reason": "<one paragraph: root cause + whether it has cleared>",
+  "evidence": ["<file:line or log excerpt>", "..."],
+  "confidence": "high | medium | low",
 }
 ```
 
 ## Decision semantics
 
-| decision         | when to choose                                                                    |
-| ---------------- | --------------------------------------------------------------------------------- |
-| reset_pending    | Task can be retried; code or context suggests a transient or environmental issue  |
-| mark_failed      | Task is unrecoverable without human intervention; preserve branch + PR for triage |
-| delete_branch    | Branch is an orphan with no task state and no useful content                      |
-| reset_postreview | Review files are stale/contradictory; fresh review fan-out will unblock the task  |
-| no_action        | Uncertain; no state change is safer than a wrong one                              |
+| decision        | when to choose                                                                                                                                  | orchestrator action                                |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `reset`         | The cause was environmental/transient and has plausibly cleared (dep since shipped, flaky tool, spec ambiguity since clarified). Worth a retry. | `factory rescue apply --run <id> --task <task-id>` |
+| `leave-dropped` | Confirmed determined failure (spec truly cannot satisfy a criterion; model hit a real capability ceiling). Retrying repeats it.                 | none — task stays dropped                          |
+| `no-action`     | Evidence missing/ambiguous/contradictory. Not touching is safer than a wrong reset.                                                             | none — task stays dropped (flagged uncertain)      |
+
+Only `reset` causes a state change, and only via the explicit `--task` the orchestrator then
+issues. `leave-dropped` and `no-action` both leave the task dropped — the difference is a
+_confirmed_ dead-end vs. _could-not-tell_.
 
 ## Guardrails
 
-- Unknown decisions, missing fields, or malformed JSON → apply treats as `no_action` with `result: "error"` in audit trail.
-- Agent timeout or missing output file → apply treats as `no_action` with reason `"diagnostic timeout"`.
-- Agent is parallelised: one `Agent()` call per task in the same message.
-- Agent declared tool set: Read, Grep, Glob, Write (output file only). No Edit, Bash, or git.
+- Unknown/missing `decision` or unparseable JSON → orchestrator treats it as `no-action`.
+- Agent error or empty final message → orchestrator treats it as `no-action`.
+- The agent is parallelisable: one `Agent()` call per ambiguous dead-end, in a single message.
+- Declared tool set: **Read, Grep, Glob** — no Write, Edit, Bash, git, or gh.
 
 ## Worked example
 
-**Scenario:** Task T3 stuck in `status=failed` after executor crash (I-16).
+**Scenario:** Task `T3` was dropped `blocked-environmental`? No — it was dropped
+`capability-budget` after the ladder exhausted, but `T3` depended on `T1`, which itself only
+shipped _after_ `T3`'s last attempt. The orchestrator is unsure and spawns the diagnostic.
 
-Input:
+Input (in the prompt):
 
 ```json
 {
-  "run_id": "run-2026-04-20",
-  "task_id": "T3",
-  "issue_type": "I-16",
+  "run_id": "run-20260608-101500",
+  "task": {
+    "task_id": "T3",
+    "status": "dropped",
+    "disposition": "dead-end",
+    "failure_class": "capability-budget",
+    "failure_reason": "executor could not satisfy criterion 2: integration with T1's exporter (module absent)",
+    "branch": "factory/run-20260608-101500/T3"
+  },
   "context": {
-    "state_snapshot": {
-      "status": "failed",
-      "stage": "postexec_done",
-      "failure_reason": "executor timed out"
-    },
-    "worktree_path": "/repo/.worktrees/factory/run-2026-04-20/T3",
-    "pr_url": null,
-    "pr_state": null,
-    "review_files": [],
+    "worktree_path": "/repo/.worktrees/factory/run-20260608-101500/T3",
+    "review_files": ["/data/runs/run-20260608-101500/reviews/T3-architecture.json"],
     "ci_logs_path": null,
-    "branch": "factory/112/t3",
-    "failure_reason": "executor timed out"
+    "spec_path": "/data/specs/acme__widgets/14-exporter/spec.md"
   }
 }
 ```
 
-Expected output:
+Final message:
 
 ```json
 {
-  "decision": "reset_pending",
-  "reason": "Task failed due to an executor timeout with no code changes committed. Worktree is clean. Resetting to pending allows a fresh executor dispatch.",
+  "decision": "reset",
+  "reason": "T3 exhausted the ladder because T1's exporter module did not exist at attempt time — every rung failed on the same missing import, not on a capability ceiling. T1 has since shipped (its module is now on staging), so the blocker has cleared and a fresh attempt can satisfy criterion 2. The drop was misclassified capability-budget; resetting is worth one cycle.",
   "evidence": [
-    "state.failure_reason: executor timed out",
-    "worktree: no uncommitted changes"
+    "failure_reason: 'integration with T1's exporter (module absent)'",
+    "reviews/T3-architecture.json:12 — 'cannot import ../exporter; T1 not yet merged'",
+    "spec.md:41 — criterion 2 requires T1's exporter, which is a separate shipped task"
   ],
-  "state_updates": {},
   "confidence": "high"
 }
 ```
