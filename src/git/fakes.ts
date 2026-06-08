@@ -9,9 +9,11 @@
  */
 import type { GitClient, GitOpts, PushOptions } from "./git-client.js";
 import type {
+  CreatedIssue,
   CreatedPr,
   GhClient,
   GhOpts,
+  IssueCreateArgs,
   PrCreateArgs,
   PrListArgs,
   PrMergeOptions,
@@ -211,8 +213,11 @@ export class FakeGhClient implements GhClient {
   /** Records each prCreate so tests assert it was/wasn't called. */
   readonly created: PrCreateArgs[] = [];
   /** Records each merge so tests assert ordering + which path (auto vs squash). */
-  readonly merges: Array<{ number: number; auto: boolean }> = [];
+  readonly merges: Array<{ number: number; auto: boolean; subject?: string }> = [];
+  /** Records each issueCreate so tests assert one issue per failed task (Δ S). */
+  readonly issues: Array<IssueCreateArgs & { number: number; url: string }> = [];
   private numberCounter = 100;
+  private issueCounter = 500;
   private readonly truncate: boolean;
   /**
    * Optional async barrier invoked at the START of prMergeSquash, BEFORE the
@@ -269,6 +274,14 @@ export class FakeGhClient implements GhClient {
     return { number, url };
   }
 
+  async issueCreate(args: IssueCreateArgs, _opts?: GhOpts): Promise<CreatedIssue> {
+    this.calls.push(`issue create --title ${args.title}`);
+    const number = this.issueCounter++;
+    const url = `https://github.com/${args.repo ?? "fake/repo"}/issues/${number}`;
+    this.issues.push({ ...args, number, url });
+    return { number, url };
+  }
+
   async prView(number: number, _fields: readonly string[], _opts?: GhOpts): Promise<PullRequest> {
     this.calls.push(`pr view ${number}`);
     if (this.truncate) {
@@ -285,7 +298,11 @@ export class FakeGhClient implements GhClient {
   async prMergeSquash(number: number, opts?: PrMergeOptions & GhOpts): Promise<void> {
     if (this.onMergeEnter) await this.onMergeEnter(number);
     this.calls.push(`pr merge ${number} --squash${opts?.auto ? " --auto" : ""}`);
-    this.merges.push({ number, auto: opts?.auto ?? false });
+    this.merges.push({
+      number,
+      auto: opts?.auto ?? false,
+      ...(opts?.subject !== undefined ? { subject: opts.subject } : {}),
+    });
     for (const [head, pr] of this.prs.entries()) {
       if (pr.number === number) {
         // --auto enqueues; GitHub serializes later. Without --auto we merge now.

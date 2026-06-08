@@ -56,6 +56,21 @@ describe("Fakes contract — structural conformance + zero-binary smoke", () => 
   });
 });
 
+describe("FakeGhClient.issueCreate (per-failed-task GH issue, Δ S)", () => {
+  it("records each issue, assigns monotonic numbers, and returns a matching url", async () => {
+    const gh = new FakeGhClient();
+    const a = await gh.issueCreate({ title: "t1 dropped", body: "why", repo: "acme/widgets" });
+    const b = await gh.issueCreate({ title: "t2 dropped", body: "why2", labels: ["factory"] });
+
+    expect(b.number).toBe(a.number + 1);
+    expect(a.url).toBe(`https://github.com/acme/widgets/issues/${a.number}`);
+    expect(b.url).toBe(`https://github.com/fake/repo/issues/${b.number}`);
+    expect(gh.issues).toHaveLength(2);
+    expect(gh.issues[0]).toMatchObject({ title: "t1 dropped", number: a.number });
+    expect(gh.issues[1]).toMatchObject({ labels: ["factory"], number: b.number });
+  });
+});
+
 describe("FakeGitClient behavior helpers", () => {
   let _tmp: string;
   beforeEach(async () => {

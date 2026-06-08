@@ -34,6 +34,26 @@ export interface CreatedPr {
   url: string;
 }
 
+/** Args for {@link GhClient.issueCreate} (one issue per failed task, Δ S). */
+export interface IssueCreateArgs {
+  title: string;
+  body: string;
+  /** Labels to attach (e.g. ["factory", "factory:dropped"]). */
+  labels?: string[];
+  /**
+   * Repo to create the issue in, "owner/name". Passed as `--repo` so the issue
+   * can be filed without being inside the repo's worktree (finalize runs from the
+   * staging worktree). Omit to use the cwd's repo.
+   */
+  repo?: string;
+}
+
+/** Result of {@link GhClient.issueCreate}. */
+export interface CreatedIssue {
+  number: number;
+  url: string;
+}
+
 /** Branch-protection facts as the probe reads them (raw GET shape, narrowed). */
 export interface ProtectionApiResult {
   /** Whether a protection record exists at all (404 → false). */
@@ -66,6 +86,14 @@ export interface PrMergeOptions {
   deleteBranch?: boolean;
   /** Enqueue via merge-queue/auto rather than merge now (probe-detected upgrade). */
   auto?: boolean;
+  /**
+   * Override the squash-merge commit subject. The rollup uses this for the
+   * `PARTIAL:` header on an incomplete run (Δ S) so the develop history records
+   * that the rollup shipped a subset.
+   */
+  subject?: string;
+  /** Override the squash-merge commit body. */
+  body?: string;
 }
 
 /** Per-call gh options. */
@@ -79,6 +107,8 @@ export interface GhClient {
   prList(args: PrListArgs, opts?: GhOpts): Promise<PullRequest[]>;
   /** `gh pr create ...` → {number, url}. */
   prCreate(args: PrCreateArgs, opts?: GhOpts): Promise<CreatedPr>;
+  /** `gh issue create --title --body [--label ...] [--repo ...]` → {number, url} (Δ S). */
+  issueCreate(args: IssueCreateArgs, opts?: GhOpts): Promise<CreatedIssue>;
   /** `gh pr view <number> --json <fields>`. */
   prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest>;
   /** `gh pr merge <number> --squash [--auto] [--delete-branch]` (Δ L action). */
@@ -196,6 +226,24 @@ export class DefaultGhClient implements GhClient {
     return { number: Number(m[1]), url };
   }
 
+  async issueCreate(args: IssueCreateArgs, opts?: GhOpts): Promise<CreatedIssue> {
+    const argv = ["issue", "create", "--title", args.title, "--body", args.body];
+    if (args.repo) argv.push("--repo", args.repo);
+    for (const label of args.labels ?? []) argv.push("--label", label);
+    const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+    if (r.truncated) {
+      throw new Error("gh issue create: output truncated — cannot trust the emitted issue URL");
+    }
+    const url = r.stdout.trim().split(/\s+/).pop() ?? "";
+    const m = url.match(/\/issues\/(\d+)\s*$/);
+    if (!m) {
+      throw new Error(
+        `gh issue create: could not parse issue number from output: ${r.stdout.trim()}`,
+      );
+    }
+    return { number: Number(m[1]), url };
+  }
+
   async prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest> {
     const r = await runOrThrow(
       "gh",
@@ -210,6 +258,8 @@ export class DefaultGhClient implements GhClient {
     const argv = ["pr", "merge", String(number), "--squash"];
     if (opts?.auto) argv.push("--auto");
     if (opts?.deleteBranch) argv.push("--delete-branch");
+    if (opts?.subject !== undefined) argv.push("--subject", opts.subject);
+    if (opts?.body !== undefined) argv.push("--body", opts.body);
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
 

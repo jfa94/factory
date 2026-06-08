@@ -22,6 +22,8 @@ export type {
   GhOpts,
   PullRequest,
   CreatedPr,
+  IssueCreateArgs,
+  CreatedIssue,
   PrListArgs,
   PrCreateArgs,
   PrMergeOptions,
