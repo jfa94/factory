@@ -72,24 +72,27 @@ the step.
 document to stdout (or `--summary` human text for `state`). `--help` on any subcommand
 prints its contract.
 
-| Subcommand                                                                               | Kind     | What it does                                                                               |
-| ---------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------ |
-| `factory scaffold --repo <o/n> [--provision]`                                            | action   | Prepare a repo (CI + gate configs + staging + branch protection). Refuses if unprotected.  |
-| `factory configure [--get k] [--set k=v] [--unset k]`                                    | read/wr  | Inspect or edit the persisted config overlay.                                              |
-| `factory spec resolve\|gate\|store --repo <o/n> --issue <n>`                             | reporter | The deterministic spec-build seam. Emits the next spawn or a revise/stored/reuse envelope. |
-| `factory run create --repo <o/n> (--issue n\|--spec-id id) [--driver d] [--run-id id]`   | action   | Resolve a durable spec, create a run, seed task rows, emit `RunState`.                     |
-| `factory run resume [--run id]`                                                          | action   | Re-check quota; resume a paused/suspended run if the window recovered.                     |
-| `factory state [<run-id>] [--summary]`                                                   | read     | Read run state (JSON or compact summary). Read-only.                                       |
-| `factory run-task --run <id> --task <id> --stage <s> [--ship-mode no-merge\|live]`       | reporter | Run ONE stage's deterministic work; emit `{stage_result, sidecar?}`.                       |
-| `factory advance --run <id> --task <id> --to <stage>`                                    | writer   | Persist the in-flight cursor (use after a `run-task` `advance` result).                    |
-| `factory record-producer --run <id> --task <id> --stage <tests\|exec> --status "<line>"` | writer   | Fold a producer's terminal STATUS line; emit the next step.                                |
-| `factory record-holdout --run <id> --task <id> --input <path>`                           | writer   | Fold the holdout-validator output `{ "raw": "<out>" }`; persist verdicts.                  |
-| `factory record-reviews --run <id> --task <id> --input <path>`                           | writer   | Fold the panel + verify-then-fix; derive the floor; emit the next step.                    |
-| `factory drop --run <id> --task <id> --class <fc> --reason <t>`                          | writer   | Apply a classified LOUD drop (`capability-budget\|spec-defect\|blocked-environmental`).    |
+| Subcommand                                                                               | Kind     | What it does                                                                                |
+| ---------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------- |
+| `factory scaffold --repo <o/n> [--provision]`                                            | action   | Prepare a repo (CI + gate configs + staging + branch protection). Refuses if unprotected.   |
+| `factory configure [--get k] [--set k=v] [--unset k]`                                    | read/wr  | Inspect or edit the persisted config overlay.                                               |
+| `factory spec resolve\|gate\|store --repo <o/n> --issue <n>`                             | reporter | The deterministic spec-build seam. Emits the next spawn or a revise/stored/reuse envelope.  |
+| `factory run create --repo <o/n> (--issue n\|--spec-id id) [--driver d] [--run-id id]`   | action   | Resolve a durable spec, create a run, seed task rows, emit `RunState`.                      |
+| `factory run resume [--run id]`                                                          | action   | Re-check quota; resume a paused/suspended run if the window recovered.                      |
+| `factory state [<run-id>] [--summary]`                                                   | read     | Read run state (JSON or compact summary). Read-only.                                        |
+| `factory run-task --run <id> --task <id> --stage <s> [--ship-mode no-merge\|live]`       | reporter | Run ONE stage's deterministic work; emit `{stage_result, sidecar?}`.                        |
+| `factory advance --run <id> --task <id> --to <stage>`                                    | writer   | Persist the in-flight cursor (use after a `run-task` `advance` result).                     |
+| `factory record-producer --run <id> --task <id> --stage <tests\|exec> --status "<line>"` | writer   | Fold a producer's terminal STATUS line; emit the next step.                                 |
+| `factory record-holdout --run <id> --task <id> --input <path>`                           | writer   | Fold the holdout-validator output `{ "raw": "<out>" }`; persist verdicts.                   |
+| `factory record-reviews --run <id> --task <id> --input <path>`                           | writer   | Fold the panel + verify-then-fix; derive the floor; emit the next step.                     |
+| `factory drop --run <id> --task <id> --class <fc> --reason <t>`                          | writer   | Apply a classified LOUD drop (`capability-budget\|spec-defect\|blocked-environmental`).     |
+| `factory run finalize [--run <id>] [--ship-mode no-merge\|live]`                         | action   | All tasks terminal → report + per-drop issues + staging→develop rollup, then flip terminal. |
+| `factory score [--run <id>] [--dead-surface]`                                            | reporter | Compact run summary (totals · drops by class · effort · PRs); optional dead-surface scan.   |
+| `factory rescue scan\|apply [--run <id>] [--task <id>]... [--include-dead-ends]`         | read/wr  | Recover a stalled run: classify tasks (`scan`) / reset resettable tasks + reopen (`apply`). |
 
 **Task stages (in order):** `preflight → tests → exec → verify → ship`. `nextStage(tests)=exec`,
-`nextStage(exec)=verify`. There is a run-level `finalize`, but **no `finalize` CLI subcommand
-exists yet** (WS12 — see Phase 4).
+`nextStage(exec)=verify`. The run-level finalize is `factory run finalize` (Phase 4) — it
+rolls every terminal task up into the shipped outcome and flips the run terminal.
 
 ## Paths you compute yourself
 
@@ -208,8 +211,8 @@ concurrency = (driver == "sequential") ? 1 : 3
 loop:
   run = factory state <run_id>            # JSON
   if run.status is terminal (completed|partial|failed): break → Phase 4
-  if every task is terminal:              # all done/dropped
-      break → Phase 4                     # (finalize has no CLI yet — Phase 4)
+  if every task is terminal:              # all done/dropped → finalize in Phase 4
+      break → Phase 4
   # Cascade-drop any pending task whose dependency dropped or is missing:
   for each pending task t with a depends_on entry that is dropped/absent:
       factory drop --run <run_id> --task <t> --class blocked-environmental \
@@ -340,16 +343,42 @@ silent-failure-hunter, type-design-reviewer`. The manifest `prompt_ref`
 
 ## Phase 4 — Completion
 
-When the run loop breaks (run terminal or all tasks terminal):
+When the run loop breaks:
 
-1. `factory state <run_id> --summary` — report per-task outcome (done / dropped + class +
-   PR number) and the run status (`completed | partial | failed`).
-2. **Not yet wired (WS12):** there is no `finalize` subcommand, so the staging→develop
-   rollup PR, the run-level finalize, and the per-failed-task GitHub issue are NOT created
-   automatically. State this plainly to the user; do not fake a rollup. `main` is never
-   touched. Scribe/docs generation is likewise deferred (WS12).
-3. If the run is `paused`/`suspended` (quota), tell the user to re-run `factory run resume`
-   once the window resets.
+1. **Quota stop first.** If the run is `paused`/`suspended` (a quota checkpoint — NOT a
+   quality outcome), do NOT finalize: there is unfinished work. Report the reason +
+   `resets_at_epoch` and tell the user to re-run `factory run resume` once the window resets.
+   Stop here.
+
+2. **Finalize once every task is terminal.** When all tasks are done/dropped, turn the run
+   into its shipped outcome:
+
+   ```bash
+   factory run finalize --run <run_id> [--ship-mode no-merge|live]
+   ```
+
+   `--ship-mode` MUST match the run's mode (default `no-merge`: opens the staging→develop
+   rollup PR but never merges; `live`: CI-gates then squash-merges it). In one **resume-safe**
+   pass this derives the terminal status, builds the deterministic partial-run report
+   (`report.md`), emits `run.finalized` telemetry, files ONE GitHub issue per dropped task
+   (deduped, so a re-entered finalize never double-files), opens + CI-gates + (live) merges
+   the rollup, then flips the run terminal LAST. It is **LOUD if any task is still
+   non-terminal** — only call it after the run loop drained every task. `main` is never
+   touched. Read the `{kind:"finalized", run, report, rollup?, issues_filed}` envelope.
+   Finalize is idempotent: if a prior pass already flipped the run terminal, re-running it
+   re-files nothing — safe after a crash, never a duplicate rollup.
+
+3. **Report the outcome.**
+   - `factory score --run <run_id>` — the compact run summary (totals · drops by class ·
+     reviewer/escalation effort · shipped PRs). Add `--dead-surface` to also enumerate
+     unreferenced exports left in the run diff (report-only — it never blocks the rollup).
+   - `factory state <run_id> --summary` — the per-task detail (done / dropped + class + PR).
+   - Surface the run status (`completed | partial | failed`), the rollup PR (if any), and the
+     filed issues. A `partial`/`failed` run is a LOUD classified outcome — report it plainly;
+     never paper over a drop.
+
+4. **Docs (optional).** If the shipped work changed the target repo's behavior and it keeps a
+   `/docs` tree, spawn `Scribe` to update it (a docs-only change needs no pipeline run).
 
 ---
 

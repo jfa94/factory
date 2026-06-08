@@ -78,9 +78,12 @@ Then execute, in order (all detail is in the skill — this is just the spine):
 4. **Phase 3 — Drive.** Run the run loop + per-task stage machine, threading `--ship-mode`
    into every `factory run-task … --stage ship`. Holdout before reviews; verify-then-fix
    each blocking + citable finding; follow the `step` each `record-*` returns.
-5. **Phase 4 — Completion.** `factory state <run_id> --summary`; report per-task outcomes
-   and the run status. State plainly that the staging→develop rollup PR, run finalize, and
-   per-failed-task issues are **not yet wired** (WS12). `main` is never touched.
+5. **Phase 4 — Completion.** Once every task is terminal, `factory run finalize --run
+<run_id> --ship-mode <mode>` (builds the report, files one issue per dropped task, ships
+   the staging→develop rollup, flips the run terminal — resume-safe + idempotent). Then
+   `factory score --run <run_id>` + `factory state <run_id> --summary` to report the run
+   status (`completed | partial | failed`), the rollup PR, and any drops. A
+   `paused`/`suspended` run is NOT finalized — resume it instead. `main` is never touched.
 
 **Resume mode:** `factory run resume [--run <id>]`. On `{kind:"still-blocked", …}` report
 the reason + `resets_at_epoch` and stop; on `{kind:"resumed", run}` continue the Phase 3
