@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { DefaultGhClient, parseGhJson } from "./gh-client.js";
+import { aggregateChecks, DefaultGhClient, parseGhJson } from "./gh-client.js";
 import type { ExecResult } from "../shared/index.js";
 import type { GhRunner } from "./exec-tools.js";
 
@@ -102,6 +102,49 @@ describe("issueCreate", () => {
       result({ stdout: "https://github.com/o/r/iss", truncated: true });
     const gh = new DefaultGhClient(runner);
     await expect(gh.issueCreate({ title: "t", body: "b" })).rejects.toThrow(/truncated/i);
+  });
+});
+
+describe("aggregateChecks (the ONE full-CI gate, §④)", () => {
+  it("empty → none, all-pass → passing, any-pending → pending, any-fail → failing", () => {
+    expect(aggregateChecks([])).toBe("none");
+    expect(aggregateChecks([{ bucket: "pass" }, { bucket: "skipping" }])).toBe("passing");
+    expect(aggregateChecks([{ bucket: "pass" }, { bucket: "pending" }])).toBe("pending");
+    // a failure dominates a pending
+    expect(aggregateChecks([{ bucket: "pending" }, { bucket: "fail" }])).toBe("failing");
+    expect(aggregateChecks([{ bucket: "cancel" }])).toBe("failing");
+  });
+});
+
+describe("prChecks", () => {
+  it("aggregates --json bucket rows to a single state", async () => {
+    const runner: GhRunner = async (args) => {
+      expect(args.slice(0, 3)).toEqual(["pr", "checks", "9"]);
+      expect(args).toContain("bucket");
+      return result({ stdout: JSON.stringify([{ bucket: "pass" }, { bucket: "pending" }]) });
+    };
+    const gh = new DefaultGhClient(runner);
+    expect(await gh.prChecks(9)).toBe("pending");
+  });
+
+  it("treats a 'no checks reported' non-zero exit as none (not an error)", async () => {
+    const runner: GhRunner = async () =>
+      result({ code: 1, stdout: "", stderr: "no checks reported on the staging branch" });
+    const gh = new DefaultGhClient(runner);
+    expect(await gh.prChecks(9)).toBe("none");
+  });
+
+  it("throws on a real (auth/network) failure with no parseable payload", async () => {
+    const runner: GhRunner = async () =>
+      result({ code: 1, stdout: "", stderr: "HTTP 401: Bad credentials" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.prChecks(9)).rejects.toThrow(/401|failed/i);
+  });
+
+  it("throws on a truncated payload rather than mis-reading the gate", async () => {
+    const runner: GhRunner = async () => result({ stdout: '[{"bucket":"pa', truncated: true });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.prChecks(9)).rejects.toThrow(/truncated/i);
   });
 });
 

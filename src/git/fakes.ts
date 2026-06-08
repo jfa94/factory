@@ -9,6 +9,7 @@
  */
 import type { GitClient, GitOpts, PushOptions } from "./git-client.js";
 import type {
+  ChecksState,
   CreatedIssue,
   CreatedPr,
   GhClient,
@@ -196,6 +197,8 @@ export interface FakeGhOptions {
   protection?: Record<string, ProtectionApiResult>;
   /** Force every prList/prView to report truncation (truncation-safety test). */
   truncate?: boolean;
+  /** Default CI state returned by prChecks when no per-PR sequence is set. */
+  checks?: ChecksState;
 }
 
 /**
@@ -216,6 +219,9 @@ export class FakeGhClient implements GhClient {
   readonly merges: Array<{ number: number; auto: boolean; subject?: string }> = [];
   /** Records each issueCreate so tests assert one issue per failed task (Δ S). */
   readonly issues: Array<IssueCreateArgs & { number: number; url: string }> = [];
+  /** Per-PR CI sequences; each prChecks call shifts one (the last value sticks). */
+  private readonly checksQueue = new Map<number, ChecksState[]>();
+  private readonly defaultChecks: ChecksState;
   private numberCounter = 100;
   private issueCounter = 500;
   private readonly truncate: boolean;
@@ -230,11 +236,21 @@ export class FakeGhClient implements GhClient {
     for (const pr of opts.prs ?? []) this.prs.set(pr.headRefName, pr);
     for (const [b, p] of Object.entries(opts.protection ?? {})) this.protection.set(b, p);
     this.truncate = opts.truncate ?? false;
+    this.defaultChecks = opts.checks ?? "passing";
   }
 
   /** Test helper: directly seed/replace a PR row. */
   setPr(pr: PullRequest): void {
     this.prs.set(pr.headRefName, pr);
+  }
+
+  /**
+   * Test helper: program the CI sequence prChecks returns for a PR. The last
+   * value sticks (so `setChecks(n, "pending", "passing")` yields pending once,
+   * then passing forever — modelling a poll loop that converges).
+   */
+  setChecks(number: number, ...states: ChecksState[]): void {
+    this.checksQueue.set(number, states);
   }
 
   async prList(args: PrListArgs, _opts?: GhOpts): Promise<PullRequest[]> {
@@ -293,6 +309,15 @@ export class FakeGhClient implements GhClient {
       if (pr.number === number) return pr;
     }
     throw new Error(`fake gh: no PR #${number}`);
+  }
+
+  async prChecks(number: number, _opts?: GhOpts): Promise<ChecksState> {
+    this.calls.push(`pr checks ${number}`);
+    const q = this.checksQueue.get(number);
+    if (q && q.length > 0) {
+      return q.length > 1 ? (q.shift() as ChecksState) : (q[0] as ChecksState);
+    }
+    return this.defaultChecks;
   }
 
   async prMergeSquash(number: number, opts?: PrMergeOptions & GhOpts): Promise<void> {

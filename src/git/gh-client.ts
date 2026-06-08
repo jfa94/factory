@@ -34,6 +34,13 @@ export interface CreatedPr {
   url: string;
 }
 
+/**
+ * Aggregate state of a PR's CI checks (the "ONE full-CI gate", §④). `none` means
+ * the PR has NO checks configured (a normal answer — the rollup proceeds, there is
+ * nothing to gate); `pending` means at least one check is still running.
+ */
+export type ChecksState = "passing" | "pending" | "failing" | "none";
+
 /** Args for {@link GhClient.issueCreate} (one issue per failed task, Δ S). */
 export interface IssueCreateArgs {
   title: string;
@@ -111,6 +118,8 @@ export interface GhClient {
   issueCreate(args: IssueCreateArgs, opts?: GhOpts): Promise<CreatedIssue>;
   /** `gh pr view <number> --json <fields>`. */
   prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest>;
+  /** `gh pr checks <number> --json bucket` aggregated to a single CI state (§④ gate). */
+  prChecks(number: number, opts?: GhOpts): Promise<ChecksState>;
   /** `gh pr merge <number> --squash [--auto] [--delete-branch]` (Δ L action). */
   prMergeSquash(number: number, opts?: PrMergeOptions & GhOpts): Promise<void>;
   /** GET branch-protection via `gh api` (probe; 404 → not enabled). */
@@ -151,6 +160,19 @@ const PullRequestSchema = z.object({
   mergeStateStatus: z.string().optional(),
   url: z.string().optional(),
 });
+
+/**
+ * Aggregate `gh pr checks --json bucket` rows into one {@link ChecksState}. A
+ * single failing/cancelled check fails the gate; any pending check holds it;
+ * otherwise (pass/skipping) it passes. An empty set is `none` (no checks).
+ */
+export function aggregateChecks(rows: ReadonlyArray<{ bucket?: string }>): ChecksState {
+  if (rows.length === 0) return "none";
+  const buckets = rows.map((r) => (r.bucket ?? "").toLowerCase());
+  if (buckets.some((b) => b === "fail" || b === "cancel")) return "failing";
+  if (buckets.some((b) => b === "pending")) return "pending";
+  return "passing";
+}
 
 /**
  * Parse a `gh --json` payload, FAILING LOUD on truncation. A clipped payload is
@@ -252,6 +274,30 @@ export class DefaultGhClient implements GhClient {
       this.execOpts(opts),
     );
     return parseGhJson(r, PullRequestSchema, "gh pr view");
+  }
+
+  async prChecks(number: number, opts?: GhOpts): Promise<ChecksState> {
+    const r = await this.runner(
+      ["pr", "checks", String(number), "--json", "bucket"],
+      this.execOpts(opts),
+    );
+    if (r.truncated) {
+      throw new Error("gh pr checks: output truncated — refusing to parse clipped checks JSON");
+    }
+    const stdout = r.stdout.trim();
+    if (stdout === "" || stdout === "[]") {
+      // No checks: gh either prints an empty array, or exits non-zero with
+      // "no checks reported". Both mean the gate has nothing to enforce. A
+      // different non-zero (auth/network) is a real failure → throw.
+      if (r.code !== 0 && !/no checks reported/i.test(r.stderr)) {
+        throw new Error(
+          `gh pr checks #${number} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`,
+        );
+      }
+      return "none";
+    }
+    const rows = parseJson<Array<{ bucket?: string }>>(stdout, "gh pr checks");
+    return aggregateChecks(rows);
   }
 
   async prMergeSquash(number: number, opts?: PrMergeOptions & GhOpts): Promise<void> {
