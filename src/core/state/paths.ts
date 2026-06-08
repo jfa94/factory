@@ -29,6 +29,12 @@ export const RUNS_DIR = "runs";
 export const CURRENT_LINK = "current";
 /** The per-run state file name. */
 export const STATE_FILE = "state.json";
+/** The per-run append-only metrics log (WS12 telemetry sink). */
+export const METRICS_FILE = "metrics.jsonl";
+/** The per-run append-only audit log (WS12). */
+export const AUDIT_FILE = "audit.jsonl";
+/** The per-run persisted partial/finalize report (WS12). */
+export const REPORT_FILE = "report.md";
 
 /**
  * Sanitize a repo id (e.g. "owner/name") into a single safe path segment.
@@ -70,6 +76,21 @@ export function runDir(dataDir: string, runId: string): string {
 /** `<dataDir>/runs/<run-id>/state.json`. */
 export function runStatePath(dataDir: string, runId: string): string {
   return join(runDir(dataDir, runId), STATE_FILE);
+}
+
+/** `<dataDir>/runs/<run-id>/metrics.jsonl` — the append-only telemetry sink (WS12). */
+export function runMetricsPath(dataDir: string, runId: string): string {
+  return join(runDir(dataDir, runId), METRICS_FILE);
+}
+
+/** `<dataDir>/runs/<run-id>/audit.jsonl` — the append-only audit log (WS12). */
+export function runAuditPath(dataDir: string, runId: string): string {
+  return join(runDir(dataDir, runId), AUDIT_FILE);
+}
+
+/** `<dataDir>/runs/<run-id>/report.md` — the persisted finalize/partial report (WS12). */
+export function runReportPath(dataDir: string, runId: string): string {
+  return join(runDir(dataDir, runId), REPORT_FILE);
 }
 
 /** `<dataDir>/runs/current` symlink path. */

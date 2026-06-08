@@ -1,0 +1,253 @@
+/**
+ * WS12 — the deterministic partial-run report (Decision 22, Δ S).
+ *
+ * "Never ship silently." When a run finalizes to `partial` (≥1 task shipped,
+ * ≥1 dropped) or `failed` (nothing shippable), this module turns the persisted
+ * {@link RunState} + the durable {@link SpecManifest} into a precise, deterministic
+ * account of WHAT shipped and WHAT failed and WHY — the source of truth for the
+ * rollup-commit `PARTIAL:` header (WS12 rollup unit) and the per-failure GitHub
+ * issues. It is also useful mid-flight (a `suspended`/`paused` run) to describe
+ * which tasks are still incomplete.
+ *
+ * PURE + DERIVE-DON'T-STORE: the report is computed afresh from ground truth
+ * (task status + the spec's acceptance criteria) every time. Nothing here is read
+ * back from a stored "report" blob. The builder takes an explicit `now` so a test
+ * pins `generated_at` deterministically.
+ *
+ * Honesty over guesswork: a `dropped` task never cleared the verifier floor, so it
+ * met NONE of its acceptance criteria. The report lists the task's FULL acceptance
+ * criteria as `unmet_criteria` rather than fabricating per-criterion satisfaction
+ * the runtime never recorded.
+ */
+import type { RunState, RunStatus, FailureClass } from "../types/index.js";
+import type { SpecManifest, SpecTask } from "../spec/schema.js";
+import { nowIso } from "../shared/index.js";
+
+/** A task that merged into staging (status `done`). */
+export interface ShippedLine {
+  task_id: string;
+  title: string;
+  branch?: string;
+  pr_number?: number;
+}
+
+/** A task that was a classified loud drop (status `dropped`). */
+export interface FailureLine {
+  task_id: string;
+  title: string;
+  /** Closed-enum cause (set IFF dropped — guaranteed present by the schema). */
+  failure_class: FailureClass;
+  /** Human-facing reason recorded at drop time. */
+  failure_reason: string;
+  /**
+   * The dropped task's FULL acceptance criteria — all unmet, because a drop never
+   * cleared the floor. Sourced from the durable spec, not fabricated.
+   */
+  unmet_criteria: string[];
+  branch?: string;
+  pr_number?: number;
+}
+
+/** A task that is neither shipped nor dropped (only on a non-terminal run). */
+export interface IncompleteLine {
+  task_id: string;
+  title: string;
+  /** The live, non-terminal status (`pending`/`executing`/`reviewing`/`shipping`). */
+  status: RunState["tasks"][string]["status"];
+}
+
+/** The structured partial-run report. Deterministic given (run, manifest, now). */
+export interface PartialRunReport {
+  run_id: string;
+  run_status: RunStatus;
+  spec_id: string;
+  issue_number: number;
+  repo: string;
+  /** ISO-8601 stamp the report was built at. */
+  generated_at: string;
+  totals: { total: number; shipped: number; failed: number; incomplete: number };
+  /** Shipped tasks, ordered by their position in the spec. */
+  shipped: ShippedLine[];
+  /** Failed (dropped) tasks, ordered by their position in the spec. */
+  failures: FailureLine[];
+  /** Incomplete tasks (non-terminal run only), ordered by their position in the spec. */
+  incomplete: IncompleteLine[];
+}
+
+/** Options for {@link buildPartialReport}. */
+export interface BuildPartialReportOptions {
+  /** Override the `generated_at` stamp (tests pin this). Defaults to `nowIso()`. */
+  now?: string;
+}
+
+/**
+ * Build the deterministic partial-run report from the run state + the spec it was
+ * seeded from.
+ *
+ * Every task in the run MUST exist in the manifest — they were seeded from it. A
+ * run task absent from the spec is a (repo, spec-id) mismatch (the wrong spec was
+ * paired with the run), which is a real integrity defect, so it throws LOUD rather
+ * than silently omitting the task or fabricating empty criteria.
+ *
+ * Output lists are ordered by the task's position in `manifest.tasks` (stable,
+ * human-meaningful), not by the unordered `run.tasks` record.
+ */
+export function buildPartialReport(
+  run: RunState,
+  manifest: SpecManifest,
+  opts: BuildPartialReportOptions = {},
+): PartialRunReport {
+  const specById = new Map<string, SpecTask>(manifest.tasks.map((t) => [t.task_id, t]));
+  const orderOf = new Map<string, number>(manifest.tasks.map((t, i) => [t.task_id, i]));
+
+  const shipped: ShippedLine[] = [];
+  const failures: FailureLine[] = [];
+  const incomplete: IncompleteLine[] = [];
+
+  for (const task of Object.values(run.tasks)) {
+    const spec = specById.get(task.task_id);
+    if (spec === undefined) {
+      throw new Error(
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' ` +
+          `— run/spec mismatch (wrong spec paired with run ${run.run_id})`,
+      );
+    }
+    if (task.status === "done") {
+      shipped.push({
+        task_id: task.task_id,
+        title: spec.title,
+        branch: task.branch,
+        pr_number: task.pr_number,
+      });
+    } else if (task.status === "dropped") {
+      // The schema guarantees a dropped task carries both (cross-field refinement).
+      failures.push({
+        task_id: task.task_id,
+        title: spec.title,
+        failure_class: task.failure_class!,
+        failure_reason: task.failure_reason!,
+        unmet_criteria: [...spec.acceptance_criteria],
+        branch: task.branch,
+        pr_number: task.pr_number,
+      });
+    } else {
+      incomplete.push({ task_id: task.task_id, title: spec.title, status: task.status });
+    }
+  }
+
+  const bySpecOrder = <T extends { task_id: string }>(a: T, b: T): number =>
+    (orderOf.get(a.task_id) ?? 0) - (orderOf.get(b.task_id) ?? 0);
+  shipped.sort(bySpecOrder);
+  failures.sort(bySpecOrder);
+  incomplete.sort(bySpecOrder);
+
+  return {
+    run_id: run.run_id,
+    run_status: run.status,
+    spec_id: run.spec.spec_id,
+    issue_number: run.spec.issue_number,
+    repo: run.spec.repo,
+    generated_at: opts.now ?? nowIso(),
+    totals: {
+      total: shipped.length + failures.length + incomplete.length,
+      shipped: shipped.length,
+      failed: failures.length,
+      incomplete: incomplete.length,
+    },
+    shipped,
+    failures,
+    incomplete,
+  };
+}
+
+/** A failed task formatted as a GitHub issue (title + markdown body). */
+export interface FailureIssue {
+  title: string;
+  body: string;
+}
+
+/**
+ * Render one failed task as a GitHub issue. One issue per failed task (Δ S) so the
+ * human has an actionable, classified handle on each drop. The body links back to
+ * the originating PRD issue and names the failure class + unmet criteria.
+ */
+export function renderFailureIssue(failure: FailureLine, report: PartialRunReport): FailureIssue {
+  const lines: string[] = [
+    `Task \`${failure.task_id}\` was dropped during factory run \`${report.run_id}\`.`,
+    "",
+    `- **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number})`,
+    `- **Failure class:** \`${failure.failure_class}\``,
+    `- **Reason:** ${failure.failure_reason}`,
+  ];
+  if (failure.branch !== undefined) lines.push(`- **Branch:** \`${failure.branch}\``);
+  if (failure.pr_number !== undefined) lines.push(`- **PR:** #${failure.pr_number}`);
+  lines.push("", "**Unmet acceptance criteria:**", "");
+  for (const c of failure.unmet_criteria) lines.push(`- [ ] ${c}`);
+  return {
+    title: `[factory] ${failure.task_id} dropped (${failure.failure_class}): ${failure.title}`,
+    body: lines.join("\n"),
+  };
+}
+
+/** A short uppercase label for a run status, for report headers. */
+function statusLabel(status: RunStatus): string {
+  return status.toUpperCase();
+}
+
+/**
+ * Render the report as a markdown document. Used as the rollup-PR body and the
+ * summary surface. Sections that are empty for the run's outcome are omitted
+ * (a `completed` run shows no Failed/Incomplete section).
+ */
+export function renderPartialReportMarkdown(report: PartialRunReport): string {
+  const out: string[] = [];
+  out.push(`# Factory run report — \`${report.run_id}\``);
+  out.push("");
+  out.push(
+    `**Status:** ${statusLabel(report.run_status)} · ` +
+      `**Spec:** \`${report.spec_id}\` (PRD #${report.issue_number}) · ` +
+      `**Repo:** ${report.repo}`,
+  );
+  out.push(`**Generated:** ${report.generated_at}`);
+  out.push("");
+  out.push(
+    `**Tasks:** ${report.totals.total} total · ${report.totals.shipped} shipped · ` +
+      `${report.totals.failed} failed · ${report.totals.incomplete} incomplete`,
+  );
+  out.push("");
+
+  out.push(`## Shipped (${report.shipped.length})`);
+  if (report.shipped.length === 0) {
+    out.push("_none_");
+  } else {
+    for (const s of report.shipped) {
+      const pr = s.pr_number !== undefined ? ` — PR #${s.pr_number}` : "";
+      const br = s.branch !== undefined ? ` (\`${s.branch}\`)` : "";
+      out.push(`- \`${s.task_id}\` — ${s.title}${pr}${br}`);
+    }
+  }
+  out.push("");
+
+  if (report.failures.length > 0) {
+    out.push(`## Failed (${report.failures.length})`);
+    for (const f of report.failures) {
+      out.push("");
+      out.push(`### \`${f.task_id}\` — ${f.title}`);
+      out.push(`- **Class:** \`${f.failure_class}\``);
+      out.push(`- **Reason:** ${f.failure_reason}`);
+      out.push("- **Unmet acceptance criteria:**");
+      for (const c of f.unmet_criteria) out.push(`  - ${c}`);
+    }
+    out.push("");
+  }
+
+  if (report.incomplete.length > 0) {
+    out.push(`## Incomplete (${report.incomplete.length})`);
+    for (const i of report.incomplete) {
+      out.push(`- \`${i.task_id}\` — ${i.title} (\`${i.status}\`)`);
+    }
+    out.push("");
+  }
+
+  return out.join("\n");
+}

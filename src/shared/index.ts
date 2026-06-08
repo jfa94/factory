@@ -21,6 +21,8 @@ export {
   JsonParseError,
 } from "./json.js";
 
+export { appendJsonl, readJsonl } from "./jsonl.js";
+
 export { nowIso, nowEpoch, parseIso8601ToEpoch, epochToIso } from "./time.js";
 
 export {
