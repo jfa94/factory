@@ -6413,13 +6413,13 @@ var RunStateSchema = external_exports.object({
   updated_at: external_exports.string(),
   ended_at: external_exports.string().nullable().default(null)
 });
-function refineRunCrossFields(run12, ctx) {
+function refineRunCrossFields(run13, ctx) {
   const quotaStatuses = ["paused", "suspended"];
-  if (run12.quota != null && !quotaStatuses.includes(run12.status)) {
+  if (run13.quota != null && !quotaStatuses.includes(run13.status)) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["quota"],
-      message: `run '${run12.run_id}' carries a quota checkpoint but status is '${run12.status}' (a quota checkpoint is valid only while paused|suspended)`
+      message: `run '${run13.run_id}' carries a quota checkpoint but status is '${run13.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
   }
 }
@@ -6774,13 +6774,13 @@ Usage:
   factory state --summary       Print a compact human summary instead
 
 Exit OK with {"current": null} when there is no current run.`;
-function summarize(run12) {
+function summarize(run13) {
   const lines = [
-    `run ${run12.run_id}  status=${run12.status}  driver=${run12.driver}`,
-    `spec ${run12.spec.repo}#${run12.spec.issue_number} (${run12.spec.spec_id})`,
-    `tasks (${Object.keys(run12.tasks).length}):`
+    `run ${run13.run_id}  status=${run13.status}  driver=${run13.driver}`,
+    `spec ${run13.spec.repo}#${run13.spec.issue_number} (${run13.spec.spec_id})`,
+    `tasks (${Object.keys(run13.tasks).length}):`
   ];
-  for (const t of Object.values(run12.tasks)) {
+  for (const t of Object.values(run13.tasks)) {
     const bits = [`  ${t.task_id}`, t.status];
     if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
     if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
@@ -7959,8 +7959,8 @@ function checkResult(stage, result) {
       return assertNever(result);
   }
 }
-function decideFinalize(run12) {
-  const tasks = Object.values(run12.tasks);
+function decideFinalize(run13) {
+  const tasks = Object.values(run13.tasks);
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
   if (nonTerminal.length > 0) {
     const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
@@ -9459,9 +9459,9 @@ async function loadCliDeps(opts) {
   const dirOpts = { ...opts, dataDir };
   const config = loadConfig(dirOpts);
   const state = new StateManager({ ...dirOpts });
-  const run12 = await state.read(opts.runId);
-  const spec = await new SpecStore(dirOpts).read(run12.spec.repo, run12.spec.spec_id);
-  const { owner, repo } = splitRepo(run12.spec.repo);
+  const run13 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run13.spec.repo, run13.spec.spec_id);
+  const { owner, repo } = splitRepo(run13.spec.repo);
   return {
     config,
     spec,
@@ -9475,22 +9475,22 @@ async function loadCliDeps(opts) {
     repo,
     shipMode: opts.shipMode ?? "no-merge",
     state,
-    run: run12
+    run: run13
   };
 }
 
 // src/scoring/partial-report.ts
-function buildPartialReport(run12, manifest, opts = {}) {
+function buildPartialReport(run13, manifest, opts = {}) {
   const specById = new Map(manifest.tasks.map((t) => [t.task_id, t]));
   const orderOf = new Map(manifest.tasks.map((t, i) => [t.task_id, i]));
   const shipped = [];
   const failures = [];
   const incomplete = [];
-  for (const task of Object.values(run12.tasks)) {
+  for (const task of Object.values(run13.tasks)) {
     const spec = specById.get(task.task_id);
     if (spec === void 0) {
       throw new Error(
-        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run12.run_id})`
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run13.run_id})`
       );
     }
     if (task.status === "done") {
@@ -9519,11 +9519,11 @@ function buildPartialReport(run12, manifest, opts = {}) {
   failures.sort(bySpecOrder);
   incomplete.sort(bySpecOrder);
   return {
-    run_id: run12.run_id,
-    run_status: run12.status,
-    spec_id: run12.spec.spec_id,
-    issue_number: run12.spec.issue_number,
-    repo: run12.spec.repo,
+    run_id: run13.run_id,
+    run_status: run13.status,
+    spec_id: run13.spec.spec_id,
+    issue_number: run13.spec.issue_number,
+    repo: run13.spec.repo,
     generated_at: opts.now ?? nowIso(),
     totals: {
       total: shipped.length + failures.length + incomplete.length,
@@ -9824,9 +9824,9 @@ function selectProducerModel(riskTier, config) {
 }
 
 // src/quota/resume.ts
-function planResume(run12, reading, config, nowEpoch2) {
-  if (run12.status !== "paused" && run12.status !== "suspended") {
-    return { kind: "not-resumable", status: run12.status };
+function planResume(run13, reading, config, nowEpoch2) {
+  if (run13.status !== "paused" && run13.status !== "suspended") {
+    return { kind: "not-resumable", status: run13.status };
   }
   const decision = evaluate(reading, config, nowEpoch2);
   if (decision.kind === "proceed") {
@@ -10199,8 +10199,8 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
   if (decision.action === "drop") {
     return dropStep(deps, runId, taskId, decision.failureClass, decision.reason);
   }
-  const run12 = await deps.state.read(runId);
-  const task = run12.tasks[taskId];
+  const run13 = await deps.state.read(runId);
+  const task = run13.tasks[taskId];
   if (task === void 0) {
     throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
   }
@@ -10535,9 +10535,9 @@ async function fileFailureIssues(deps, report) {
 }
 async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
-  const run12 = await deps.state.read(runId);
-  const terminal = decideFinalize(run12).run_status;
-  const report = buildPartialReport({ ...run12, status: terminal }, deps.spec, { now });
+  const run13 = await deps.state.read(runId);
+  const terminal = decideFinalize(run13).run_status;
+  const report = buildPartialReport({ ...run13, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
@@ -10682,8 +10682,8 @@ function parseStage2(raw) {
   throw new UsageError(`unknown --to '${raw}' (expected one of ${TASK_STAGE_ORDER.join(", ")})`);
 }
 async function applyAdvance(state, runId, taskId, to) {
-  const run12 = await state.read(runId);
-  if (run12.tasks[taskId] === void 0) {
+  const run13 = await state.read(runId);
+  if (run13.tasks[taskId] === void 0) {
     throw new Error(`advance: run '${runId}' has no task '${taskId}'`);
   }
   await markInFlight({ state }, runId, taskId, to);
@@ -10737,8 +10737,8 @@ function parseFailureClass(raw) {
   return parsed.data;
 }
 async function applyDrop(state, runId, taskId, failureClass, reason) {
-  const run12 = await state.read(runId);
-  if (run12.tasks[taskId] === void 0) {
+  const run13 = await state.read(runId);
+  if (run13.tasks[taskId] === void 0) {
     throw new Error(`drop: run '${runId}' has no task '${taskId}'`);
   }
   const step = await dropStep({ state }, runId, taskId, failureClass, reason);
@@ -10809,8 +10809,8 @@ async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
       `record-producer: stage order drift \u2014 nextStage('${info.stage}') !== '${info.after}'`
     );
   }
-  const run12 = await state.read(runId);
-  if (run12.tasks[taskId] === void 0) {
+  const run13 = await state.read(runId);
+  if (run13.tasks[taskId] === void 0) {
     throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
   }
   const outcome = parseProducerStatus(statusLine);
@@ -11208,14 +11208,14 @@ async function createRun(state, specStore, opts) {
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
 async function applyResume(state, runId, reading, config, nowEpochSec) {
-  const run12 = await state.read(runId);
-  if (isTerminalRunStatus(run12.status)) {
-    throw new Error(`run resume: run '${runId}' is terminal (${run12.status}); nothing to resume`);
+  const run13 = await state.read(runId);
+  if (isTerminalRunStatus(run13.status)) {
+    throw new Error(`run resume: run '${runId}' is terminal (${run13.status}); nothing to resume`);
   }
-  const plan = planResume(run12, reading, config, nowEpochSec);
+  const plan = planResume(run13, reading, config, nowEpochSec);
   switch (plan.kind) {
     case "not-resumable":
-      return { kind: "resumed", run: run12 };
+      return { kind: "resumed", run: run13 };
     case "resume": {
       const updated = await state.update(runId, (s) => ({
         ...s,
@@ -11227,12 +11227,12 @@ async function applyResume(state, runId, reading, config, nowEpochSec) {
     case "still-blocked": {
       const d = plan.decision;
       if (d.kind === "proceed") {
-        return { kind: "resumed", run: run12 };
+        return { kind: "resumed", run: run13 };
       }
       const base = {
         kind: "still-blocked",
         run_id: runId,
-        status: run12.status,
+        status: run13.status,
         reason: d.reason
       };
       return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
@@ -11282,14 +11282,14 @@ async function runCreate(argv) {
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const run12 = await createRun(state, specStore, {
+  const run13 = await createRun(state, specStore, {
     repo,
     driver,
     runId,
     ...issue !== void 0 ? { issue } : {},
     ...specId !== void 0 ? { specId } : {}
   });
-  emitJson(run12);
+  emitJson(run13);
   return EXIT.OK;
 }
 async function runResume(argv) {
@@ -11331,10 +11331,10 @@ async function runFinalize(argv) {
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
-  const { run: run12, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
+  const { run: run13, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
   emitJson({
     kind: "finalized",
-    run: run12,
+    run: run13,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     issues_filed: issuesFiled
@@ -11526,6 +11526,257 @@ var specCommand = {
   }
 };
 
+// src/rescue/scan.ts
+function dispositionOf(status, failureClass) {
+  if (status === "done") return "shipped";
+  if (status === "pending") return "runnable";
+  if (status === "dropped") {
+    return failureClass === "blocked-environmental" ? "recoverable" : "dead-end";
+  }
+  return "stuck";
+}
+function depsSatisfied(run13, depends) {
+  return depends.every((d) => run13.tasks[d]?.status === "done");
+}
+function hasUnsatisfiableDep(run13, depends) {
+  return depends.some((d) => {
+    const dep = run13.tasks[d];
+    return dep === void 0 || dep.status === "dropped";
+  });
+}
+function scanRun(run13) {
+  const all = Object.values(run13.tasks);
+  const tasks = all.map((t) => ({
+    task_id: t.task_id,
+    status: t.status,
+    disposition: dispositionOf(t.status, t.failure_class),
+    ...t.failure_class !== void 0 ? { failure_class: t.failure_class } : {},
+    ...t.failure_reason !== void 0 ? { failure_reason: t.failure_reason } : {},
+    ...t.branch !== void 0 ? { branch: t.branch } : {},
+    ...t.pr_number !== void 0 ? { pr_number: t.pr_number } : {}
+  }));
+  const by = (d) => tasks.filter((t) => t.disposition === d);
+  const stuck = by("stuck");
+  const recoverable = by("recoverable");
+  const deadEnd = by("dead-end");
+  const resettable = [...stuck, ...recoverable].map((t) => t.task_id);
+  const dead_ends = deadEnd.map((t) => t.task_id);
+  const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
+  const actionablePending = all.some(
+    (t) => t.status === "pending" && (depsSatisfied(run13, t.depends_on) || hasUnsatisfiableDep(run13, t.depends_on))
+  );
+  const would_deadlock = !allTerminal && !actionablePending;
+  const needs_rescue = resettable.length > 0;
+  return {
+    run_id: run13.run_id,
+    run_status: run13.status,
+    counts: {
+      total: all.length,
+      shipped: by("shipped").length,
+      runnable: by("runnable").length,
+      stuck: stuck.length,
+      recoverable: recoverable.length,
+      dead_end: deadEnd.length
+    },
+    resettable,
+    dead_ends,
+    needs_rescue,
+    would_deadlock,
+    summary: summarize2(run13.status, resettable.length, dead_ends.length, would_deadlock),
+    tasks
+  };
+}
+function summarize2(status, resettable, deadEnds, wouldDeadlock) {
+  if (resettable === 0) {
+    const tail = deadEnds > 0 ? ` (${deadEnds} dead-end drop(s) \u2014 need a fix + --include-dead-ends)` : "";
+    return `run '${status}': no rescue needed${tail}`;
+  }
+  const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
+  const deadlock = wouldDeadlock ? "; a re-drive would deadlock without rescue" : "";
+  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}`;
+}
+
+// src/rescue/apply.ts
+function resetTaskRow(task) {
+  const {
+    failure_class: _failureClass,
+    failure_reason: _failureReason,
+    producer_role: _producerRole,
+    started_at: _startedAt,
+    ended_at: _endedAt,
+    ...rest
+  } = task;
+  return {
+    ...rest,
+    status: "pending",
+    escalation_rung: 0,
+    reviewers: []
+  };
+}
+function selectTargets(run13, opts) {
+  const explicit = opts.tasks ?? [];
+  if (explicit.length > 0) {
+    const targets2 = [];
+    const skipped = [];
+    for (const id of explicit) {
+      const task = run13.tasks[id];
+      if (task === void 0) {
+        throw new Error(`rescue: run '${run13.run_id}' has no task '${id}'`);
+      }
+      if (task.status === "done") {
+        throw new Error(
+          `rescue: refusing to reset shipped task '${id}' (status 'done') \u2014 would un-ship merged work`
+        );
+      }
+      if (task.status === "pending") {
+        skipped.push(id);
+        continue;
+      }
+      targets2.push(id);
+    }
+    return { targets: targets2, skipped };
+  }
+  const scan = scanRun(run13);
+  const targets = opts.includeDeadEnds ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
+  return { targets, skipped: [] };
+}
+async function applyRescue(state, runId, opts = {}) {
+  let result = null;
+  const updated = await state.update(runId, (run13) => {
+    const { targets, skipped } = selectTargets(run13, opts);
+    const wasTerminal = isTerminalRunStatus(run13.status);
+    const reopen = wasTerminal && targets.length > 0;
+    result = {
+      run_id: runId,
+      run_status: reopen ? "running" : run13.status,
+      reset: targets,
+      reopened: reopen,
+      skipped
+    };
+    if (targets.length === 0 && !reopen) {
+      return run13;
+    }
+    const nextTasks = { ...run13.tasks };
+    for (const id of targets) {
+      nextTasks[id] = resetTaskRow(run13.tasks[id]);
+    }
+    return {
+      ...run13,
+      tasks: nextTasks,
+      // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
+      // so returning to `running` with `ended_at:null` satisfies every invariant.
+      ...reopen ? { status: "running", ended_at: null } : {}
+    };
+  });
+  return { ...result, run_status: updated.status };
+}
+
+// src/cli/subcommands/rescue.ts
+var RESCUE_HELP = `factory rescue \u2014 scan or recover a stalled run
+
+Usage:
+  factory rescue scan  [--run <id>]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends]
+
+Actions:
+  scan    Classify every task (read-only); report what a re-drive would do.
+  apply   Reset the resettable tasks to pending; reopen a terminal run.`;
+var SCAN_HELP = `factory rescue scan \u2014 classify a stalled run (read-only)
+
+Usage:
+  factory rescue scan [--run <id>]
+
+  --run   The run to scan (defaults to runs/current).
+
+Emits ONE JSON document: the RescueScan (counts, resettable, dead_ends,
+needs_rescue, would_deadlock, summary, per-task lines). Writes nothing.`;
+var APPLY_HELP = `factory rescue apply \u2014 reset resettable tasks and reopen a terminal run
+
+Usage:
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends]
+
+  --run                The run to recover (defaults to runs/current).
+  --task               Reset exactly this task (repeatable). Overrides the default
+                       resettable set; a 'done' task is a loud error, a 'pending'
+                       one is skipped. An explicitly-named dead-end IS reset.
+  --include-dead-ends  Also reset dead-end drops (spec-defect / capability-budget).
+                       Use only after the root cause is actually fixed.
+
+Default (no --task): resets stuck (crashed in-flight) + recoverable
+(blocked-environmental) tasks, leaving dead-ends dropped. Reopens a terminal run
+to 'running' when it reset work. Idempotent.
+
+Emits ONE JSON document:
+  { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
+async function resolveRunId2(state, args, action) {
+  const explicit = args.flag("run");
+  if (typeof explicit === "string" && explicit.length > 0) return explicit;
+  const current = await state.readCurrent();
+  if (current === null) {
+    throw new UsageError(`rescue ${action}: no --run given and no current run`);
+  }
+  return current.run_id;
+}
+async function runScan(argv) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(SCAN_HELP);
+    return EXIT.OK;
+  }
+  const state = new StateManager();
+  const runId = await resolveRunId2(state, args, "scan");
+  const run13 = await state.read(runId);
+  emitJson(scanRun(run13));
+  return EXIT.OK;
+}
+async function runApply(argv) {
+  const args = parseArgs(argv, { booleans: ["include-dead-ends"] });
+  if (args.flag("help") === true) {
+    emitLine(APPLY_HELP);
+    return EXIT.OK;
+  }
+  const state = new StateManager();
+  const runId = await resolveRunId2(state, args, "apply");
+  const tasks = args.all("task");
+  const includeDeadEnds = args.flag("include-dead-ends") === true;
+  const result = await applyRescue(state, runId, {
+    ...tasks.length > 0 ? { tasks } : {},
+    includeDeadEnds
+  });
+  emitJson(result);
+  return EXIT.OK;
+}
+async function run12(argv) {
+  const action = argv[0];
+  if (action === void 0 || action === "--help" || action === "-h") {
+    emitLine(RESCUE_HELP);
+    return EXIT.OK;
+  }
+  const rest = argv.slice(1);
+  switch (action) {
+    case "scan":
+      return runScan(rest);
+    case "apply":
+      return runApply(rest);
+    default:
+      throw new UsageError(`unknown rescue action '${action}' (expected scan | apply)`);
+  }
+}
+var rescueCommand = {
+  describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
+  run: async (argv) => {
+    try {
+      return await run12(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`rescue: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
 // src/cli/main.ts
 var cliRegistry = {
   "config-defaults": {
@@ -11539,6 +11790,7 @@ var cliRegistry = {
   configure: configureCommand,
   run: runCommand,
   spec: specCommand,
+  rescue: rescueCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,
   "run-task": runTaskCommand,

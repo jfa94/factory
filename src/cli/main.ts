@@ -27,6 +27,7 @@ import { recordHoldoutCommand } from "./subcommands/record-holdout.js";
 import { recordReviewsCommand } from "./subcommands/record-reviews.js";
 import { runCommand } from "./subcommands/run.js";
 import { specCommand } from "./subcommands/spec.js";
+import { rescueCommand } from "./subcommands/rescue.js";
 
 /** A single CLI subcommand. `run` returns (or resolves to) an {@link ExitCode}. */
 export interface Subcommand {
@@ -51,6 +52,7 @@ export const cliRegistry: Record<string, Subcommand> = {
   configure: configureCommand,
   run: runCommand,
   spec: specCommand,
+  rescue: rescueCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,
   "run-task": runTaskCommand,
