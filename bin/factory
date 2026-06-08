@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# bin/factory — thin shim onto the checked-in esbuild bundle.
+#
+# Claude Code auto-adds a plugin's bin/ to the Bash-tool PATH, so commands,
+# skills, and agents invoke the CLI as a bare `factory <subcommand>`. The plugin
+# is NOT `npm install`ed at the user's site, so package.json's "bin" field never
+# creates a PATH symlink — this shim is the entry point.
+#
+# CLAUDE_PLUGIN_ROOT is NOT exported into a Bash-tool subprocess (only hook
+# subprocesses get it), so the shim self-resolves its own directory rather than
+# relying on that env var.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$here/../dist/factory.js" "$@"

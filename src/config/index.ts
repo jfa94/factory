@@ -4,6 +4,16 @@
  */
 export { loadConfig, resolveDataDir, configPath, type DataDirOptions } from "./load.js";
 export {
+  saveRawConfig,
+  readRawConfig,
+  parseSetToken,
+  splitPath,
+  setAtPath,
+  unsetAtPath,
+  getAtPath,
+  type ConfigValue,
+} from "./save.js";
+export {
   ConfigSchema,
   defaultConfig,
   QualitySchema,

@@ -1,11 +1,1618 @@
 #!/usr/bin/env node
 import { createRequire as __factoryCreateRequire } from 'node:module';
 const require = __factoryCreateRequire(import.meta.url);
+var __create = Object.create;
 var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined") return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
+var __commonJS = (cb, mod) => function __require2() {
+  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
 };
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+
+// node_modules/.pnpm/graceful-fs@4.2.11/node_modules/graceful-fs/polyfills.js
+var require_polyfills = __commonJS({
+  "node_modules/.pnpm/graceful-fs@4.2.11/node_modules/graceful-fs/polyfills.js"(exports, module) {
+    var constants = __require("constants");
+    var origCwd = process.cwd;
+    var cwd = null;
+    var platform = process.env.GRACEFUL_FS_PLATFORM || process.platform;
+    process.cwd = function() {
+      if (!cwd)
+        cwd = origCwd.call(process);
+      return cwd;
+    };
+    try {
+      process.cwd();
+    } catch (er) {
+    }
+    if (typeof process.chdir === "function") {
+      chdir = process.chdir;
+      process.chdir = function(d) {
+        cwd = null;
+        chdir.call(process, d);
+      };
+      if (Object.setPrototypeOf) Object.setPrototypeOf(process.chdir, chdir);
+    }
+    var chdir;
+    module.exports = patch;
+    function patch(fs) {
+      if (constants.hasOwnProperty("O_SYMLINK") && process.version.match(/^v0\.6\.[0-2]|^v0\.5\./)) {
+        patchLchmod(fs);
+      }
+      if (!fs.lutimes) {
+        patchLutimes(fs);
+      }
+      fs.chown = chownFix(fs.chown);
+      fs.fchown = chownFix(fs.fchown);
+      fs.lchown = chownFix(fs.lchown);
+      fs.chmod = chmodFix(fs.chmod);
+      fs.fchmod = chmodFix(fs.fchmod);
+      fs.lchmod = chmodFix(fs.lchmod);
+      fs.chownSync = chownFixSync(fs.chownSync);
+      fs.fchownSync = chownFixSync(fs.fchownSync);
+      fs.lchownSync = chownFixSync(fs.lchownSync);
+      fs.chmodSync = chmodFixSync(fs.chmodSync);
+      fs.fchmodSync = chmodFixSync(fs.fchmodSync);
+      fs.lchmodSync = chmodFixSync(fs.lchmodSync);
+      fs.stat = statFix(fs.stat);
+      fs.fstat = statFix(fs.fstat);
+      fs.lstat = statFix(fs.lstat);
+      fs.statSync = statFixSync(fs.statSync);
+      fs.fstatSync = statFixSync(fs.fstatSync);
+      fs.lstatSync = statFixSync(fs.lstatSync);
+      if (fs.chmod && !fs.lchmod) {
+        fs.lchmod = function(path2, mode, cb) {
+          if (cb) process.nextTick(cb);
+        };
+        fs.lchmodSync = function() {
+        };
+      }
+      if (fs.chown && !fs.lchown) {
+        fs.lchown = function(path2, uid, gid, cb) {
+          if (cb) process.nextTick(cb);
+        };
+        fs.lchownSync = function() {
+        };
+      }
+      if (platform === "win32") {
+        fs.rename = typeof fs.rename !== "function" ? fs.rename : (function(fs$rename) {
+          function rename3(from, to, cb) {
+            var start = Date.now();
+            var backoff = 0;
+            fs$rename(from, to, function CB(er) {
+              if (er && (er.code === "EACCES" || er.code === "EPERM" || er.code === "EBUSY") && Date.now() - start < 6e4) {
+                setTimeout(function() {
+                  fs.stat(to, function(stater, st) {
+                    if (stater && stater.code === "ENOENT")
+                      fs$rename(from, to, CB);
+                    else
+                      cb(er);
+                  });
+                }, backoff);
+                if (backoff < 100)
+                  backoff += 10;
+                return;
+              }
+              if (cb) cb(er);
+            });
+          }
+          if (Object.setPrototypeOf) Object.setPrototypeOf(rename3, fs$rename);
+          return rename3;
+        })(fs.rename);
+      }
+      fs.read = typeof fs.read !== "function" ? fs.read : (function(fs$read) {
+        function read(fd, buffer, offset, length, position, callback_) {
+          var callback;
+          if (callback_ && typeof callback_ === "function") {
+            var eagCounter = 0;
+            callback = function(er, _, __) {
+              if (er && er.code === "EAGAIN" && eagCounter < 10) {
+                eagCounter++;
+                return fs$read.call(fs, fd, buffer, offset, length, position, callback);
+              }
+              callback_.apply(this, arguments);
+            };
+          }
+          return fs$read.call(fs, fd, buffer, offset, length, position, callback);
+        }
+        if (Object.setPrototypeOf) Object.setPrototypeOf(read, fs$read);
+        return read;
+      })(fs.read);
+      fs.readSync = typeof fs.readSync !== "function" ? fs.readSync : /* @__PURE__ */ (function(fs$readSync) {
+        return function(fd, buffer, offset, length, position) {
+          var eagCounter = 0;
+          while (true) {
+            try {
+              return fs$readSync.call(fs, fd, buffer, offset, length, position);
+            } catch (er) {
+              if (er.code === "EAGAIN" && eagCounter < 10) {
+                eagCounter++;
+                continue;
+              }
+              throw er;
+            }
+          }
+        };
+      })(fs.readSync);
+      function patchLchmod(fs2) {
+        fs2.lchmod = function(path2, mode, callback) {
+          fs2.open(
+            path2,
+            constants.O_WRONLY | constants.O_SYMLINK,
+            mode,
+            function(err, fd) {
+              if (err) {
+                if (callback) callback(err);
+                return;
+              }
+              fs2.fchmod(fd, mode, function(err2) {
+                fs2.close(fd, function(err22) {
+                  if (callback) callback(err2 || err22);
+                });
+              });
+            }
+          );
+        };
+        fs2.lchmodSync = function(path2, mode) {
+          var fd = fs2.openSync(path2, constants.O_WRONLY | constants.O_SYMLINK, mode);
+          var threw = true;
+          var ret;
+          try {
+            ret = fs2.fchmodSync(fd, mode);
+            threw = false;
+          } finally {
+            if (threw) {
+              try {
+                fs2.closeSync(fd);
+              } catch (er) {
+              }
+            } else {
+              fs2.closeSync(fd);
+            }
+          }
+          return ret;
+        };
+      }
+      function patchLutimes(fs2) {
+        if (constants.hasOwnProperty("O_SYMLINK") && fs2.futimes) {
+          fs2.lutimes = function(path2, at, mt, cb) {
+            fs2.open(path2, constants.O_SYMLINK, function(er, fd) {
+              if (er) {
+                if (cb) cb(er);
+                return;
+              }
+              fs2.futimes(fd, at, mt, function(er2) {
+                fs2.close(fd, function(er22) {
+                  if (cb) cb(er2 || er22);
+                });
+              });
+            });
+          };
+          fs2.lutimesSync = function(path2, at, mt) {
+            var fd = fs2.openSync(path2, constants.O_SYMLINK);
+            var ret;
+            var threw = true;
+            try {
+              ret = fs2.futimesSync(fd, at, mt);
+              threw = false;
+            } finally {
+              if (threw) {
+                try {
+                  fs2.closeSync(fd);
+                } catch (er) {
+                }
+              } else {
+                fs2.closeSync(fd);
+              }
+            }
+            return ret;
+          };
+        } else if (fs2.futimes) {
+          fs2.lutimes = function(_a, _b, _c, cb) {
+            if (cb) process.nextTick(cb);
+          };
+          fs2.lutimesSync = function() {
+          };
+        }
+      }
+      function chmodFix(orig) {
+        if (!orig) return orig;
+        return function(target, mode, cb) {
+          return orig.call(fs, target, mode, function(er) {
+            if (chownErOk(er)) er = null;
+            if (cb) cb.apply(this, arguments);
+          });
+        };
+      }
+      function chmodFixSync(orig) {
+        if (!orig) return orig;
+        return function(target, mode) {
+          try {
+            return orig.call(fs, target, mode);
+          } catch (er) {
+            if (!chownErOk(er)) throw er;
+          }
+        };
+      }
+      function chownFix(orig) {
+        if (!orig) return orig;
+        return function(target, uid, gid, cb) {
+          return orig.call(fs, target, uid, gid, function(er) {
+            if (chownErOk(er)) er = null;
+            if (cb) cb.apply(this, arguments);
+          });
+        };
+      }
+      function chownFixSync(orig) {
+        if (!orig) return orig;
+        return function(target, uid, gid) {
+          try {
+            return orig.call(fs, target, uid, gid);
+          } catch (er) {
+            if (!chownErOk(er)) throw er;
+          }
+        };
+      }
+      function statFix(orig) {
+        if (!orig) return orig;
+        return function(target, options, cb) {
+          if (typeof options === "function") {
+            cb = options;
+            options = null;
+          }
+          function callback(er, stats) {
+            if (stats) {
+              if (stats.uid < 0) stats.uid += 4294967296;
+              if (stats.gid < 0) stats.gid += 4294967296;
+            }
+            if (cb) cb.apply(this, arguments);
+          }
+          return options ? orig.call(fs, target, options, callback) : orig.call(fs, target, callback);
+        };
+      }
+      function statFixSync(orig) {
+        if (!orig) return orig;
+        return function(target, options) {
+          var stats = options ? orig.call(fs, target, options) : orig.call(fs, target);
+          if (stats) {
+            if (stats.uid < 0) stats.uid += 4294967296;
+            if (stats.gid < 0) stats.gid += 4294967296;
+          }
+          return stats;
+        };
+      }
+      function chownErOk(er) {
+        if (!er)
+          return true;
+        if (er.code === "ENOSYS")
+          return true;
+        var nonroot = !process.getuid || process.getuid() !== 0;
+        if (nonroot) {
+          if (er.code === "EINVAL" || er.code === "EPERM")
+            return true;
+        }
+        return false;
+      }
+    }
+  }
+});
+
+// node_modules/.pnpm/graceful-fs@4.2.11/node_modules/graceful-fs/legacy-streams.js
+var require_legacy_streams = __commonJS({
+  "node_modules/.pnpm/graceful-fs@4.2.11/node_modules/graceful-fs/legacy-streams.js"(exports, module) {
+    var Stream = __require("stream").Stream;
+    module.exports = legacy;
+    function legacy(fs) {
+      return {
+        ReadStream,
+        WriteStream
+      };
+      function ReadStream(path2, options) {
+        if (!(this instanceof ReadStream)) return new ReadStream(path2, options);
+        Stream.call(this);
+        var self = this;
+        this.path = path2;
+        this.fd = null;
+        this.readable = true;
+        this.paused = false;
+        this.flags = "r";
+        this.mode = 438;
+        this.bufferSize = 64 * 1024;
+        options = options || {};
+        var keys = Object.keys(options);
+        for (var index = 0, length = keys.length; index < length; index++) {
+          var key = keys[index];
+          this[key] = options[key];
+        }
+        if (this.encoding) this.setEncoding(this.encoding);
+        if (this.start !== void 0) {
+          if ("number" !== typeof this.start) {
+            throw TypeError("start must be a Number");
+          }
+          if (this.end === void 0) {
+            this.end = Infinity;
+          } else if ("number" !== typeof this.end) {
+            throw TypeError("end must be a Number");
+          }
+          if (this.start > this.end) {
+            throw new Error("start must be <= end");
+          }
+          this.pos = this.start;
+        }
+        if (this.fd !== null) {
+          process.nextTick(function() {
+            self._read();
+          });
+          return;
+        }
+        fs.open(this.path, this.flags, this.mode, function(err, fd) {
+          if (err) {
+            self.emit("error", err);
+            self.readable = false;
+            return;
+          }
+          self.fd = fd;
+          self.emit("open", fd);
+          self._read();
+        });
+      }
+      function WriteStream(path2, options) {
+        if (!(this instanceof WriteStream)) return new WriteStream(path2, options);
+        Stream.call(this);
+        this.path = path2;
+        this.fd = null;
+        this.writable = true;
+        this.flags = "w";
+        this.encoding = "binary";
+        this.mode = 438;
+        this.bytesWritten = 0;
+        options = options || {};
+        var keys = Object.keys(options);
+        for (var index = 0, length = keys.length; index < length; index++) {
+          var key = keys[index];
+          this[key] = options[key];
+        }
+        if (this.start !== void 0) {
+          if ("number" !== typeof this.start) {
+            throw TypeError("start must be a Number");
+          }
+          if (this.start < 0) {
+            throw new Error("start must be >= zero");
+          }
+          this.pos = this.start;
+        }
+        this.busy = false;
+        this._queue = [];
+        if (this.fd === null) {
+          this._open = fs.open;
+          this._queue.push([this._open, this.path, this.flags, this.mode, void 0]);
+          this.flush();
+        }
+      }
+    }
+  }
+});
+
+// node_modules/.pnpm/graceful-fs@4.2.11/node_modules/graceful-fs/clone.js
+var require_clone = __commonJS({
+  "node_modules/.pnpm/graceful-fs@4.2.11/node_modules/graceful-fs/clone.js"(exports, module) {
+    "use strict";
+    module.exports = clone;
+    var getPrototypeOf = Object.getPrototypeOf || function(obj) {
+      return obj.__proto__;
+    };
+    function clone(obj) {
+      if (obj === null || typeof obj !== "object")
+        return obj;
+      if (obj instanceof Object)
+        var copy = { __proto__: getPrototypeOf(obj) };
+      else
+        var copy = /* @__PURE__ */ Object.create(null);
+      Object.getOwnPropertyNames(obj).forEach(function(key) {
+        Object.defineProperty(copy, key, Object.getOwnPropertyDescriptor(obj, key));
+      });
+      return copy;
+    }
+  }
+});
+
+// node_modules/.pnpm/graceful-fs@4.2.11/node_modules/graceful-fs/graceful-fs.js
+var require_graceful_fs = __commonJS({
+  "node_modules/.pnpm/graceful-fs@4.2.11/node_modules/graceful-fs/graceful-fs.js"(exports, module) {
+    var fs = __require("fs");
+    var polyfills = require_polyfills();
+    var legacy = require_legacy_streams();
+    var clone = require_clone();
+    var util2 = __require("util");
+    var gracefulQueue;
+    var previousSymbol;
+    if (typeof Symbol === "function" && typeof Symbol.for === "function") {
+      gracefulQueue = Symbol.for("graceful-fs.queue");
+      previousSymbol = Symbol.for("graceful-fs.previous");
+    } else {
+      gracefulQueue = "___graceful-fs.queue";
+      previousSymbol = "___graceful-fs.previous";
+    }
+    function noop() {
+    }
+    function publishQueue(context, queue2) {
+      Object.defineProperty(context, gracefulQueue, {
+        get: function() {
+          return queue2;
+        }
+      });
+    }
+    var debug = noop;
+    if (util2.debuglog)
+      debug = util2.debuglog("gfs4");
+    else if (/\bgfs4\b/i.test(process.env.NODE_DEBUG || ""))
+      debug = function() {
+        var m = util2.format.apply(util2, arguments);
+        m = "GFS4: " + m.split(/\n/).join("\nGFS4: ");
+        console.error(m);
+      };
+    if (!fs[gracefulQueue]) {
+      queue = global[gracefulQueue] || [];
+      publishQueue(fs, queue);
+      fs.close = (function(fs$close) {
+        function close(fd, cb) {
+          return fs$close.call(fs, fd, function(err) {
+            if (!err) {
+              resetQueue();
+            }
+            if (typeof cb === "function")
+              cb.apply(this, arguments);
+          });
+        }
+        Object.defineProperty(close, previousSymbol, {
+          value: fs$close
+        });
+        return close;
+      })(fs.close);
+      fs.closeSync = (function(fs$closeSync) {
+        function closeSync(fd) {
+          fs$closeSync.apply(fs, arguments);
+          resetQueue();
+        }
+        Object.defineProperty(closeSync, previousSymbol, {
+          value: fs$closeSync
+        });
+        return closeSync;
+      })(fs.closeSync);
+      if (/\bgfs4\b/i.test(process.env.NODE_DEBUG || "")) {
+        process.on("exit", function() {
+          debug(fs[gracefulQueue]);
+          __require("assert").equal(fs[gracefulQueue].length, 0);
+        });
+      }
+    }
+    var queue;
+    if (!global[gracefulQueue]) {
+      publishQueue(global, fs[gracefulQueue]);
+    }
+    module.exports = patch(clone(fs));
+    if (process.env.TEST_GRACEFUL_FS_GLOBAL_PATCH && !fs.__patched) {
+      module.exports = patch(fs);
+      fs.__patched = true;
+    }
+    function patch(fs2) {
+      polyfills(fs2);
+      fs2.gracefulify = patch;
+      fs2.createReadStream = createReadStream;
+      fs2.createWriteStream = createWriteStream;
+      var fs$readFile = fs2.readFile;
+      fs2.readFile = readFile10;
+      function readFile10(path2, options, cb) {
+        if (typeof options === "function")
+          cb = options, options = null;
+        return go$readFile(path2, options, cb);
+        function go$readFile(path3, options2, cb2, startTime) {
+          return fs$readFile(path3, options2, function(err) {
+            if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
+              enqueue([go$readFile, [path3, options2, cb2], err, startTime || Date.now(), Date.now()]);
+            else {
+              if (typeof cb2 === "function")
+                cb2.apply(this, arguments);
+            }
+          });
+        }
+      }
+      var fs$writeFile = fs2.writeFile;
+      fs2.writeFile = writeFile2;
+      function writeFile2(path2, data, options, cb) {
+        if (typeof options === "function")
+          cb = options, options = null;
+        return go$writeFile(path2, data, options, cb);
+        function go$writeFile(path3, data2, options2, cb2, startTime) {
+          return fs$writeFile(path3, data2, options2, function(err) {
+            if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
+              enqueue([go$writeFile, [path3, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+            else {
+              if (typeof cb2 === "function")
+                cb2.apply(this, arguments);
+            }
+          });
+        }
+      }
+      var fs$appendFile = fs2.appendFile;
+      if (fs$appendFile)
+        fs2.appendFile = appendFile;
+      function appendFile(path2, data, options, cb) {
+        if (typeof options === "function")
+          cb = options, options = null;
+        return go$appendFile(path2, data, options, cb);
+        function go$appendFile(path3, data2, options2, cb2, startTime) {
+          return fs$appendFile(path3, data2, options2, function(err) {
+            if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
+              enqueue([go$appendFile, [path3, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+            else {
+              if (typeof cb2 === "function")
+                cb2.apply(this, arguments);
+            }
+          });
+        }
+      }
+      var fs$copyFile = fs2.copyFile;
+      if (fs$copyFile)
+        fs2.copyFile = copyFile2;
+      function copyFile2(src, dest, flags, cb) {
+        if (typeof flags === "function") {
+          cb = flags;
+          flags = 0;
+        }
+        return go$copyFile(src, dest, flags, cb);
+        function go$copyFile(src2, dest2, flags2, cb2, startTime) {
+          return fs$copyFile(src2, dest2, flags2, function(err) {
+            if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
+              enqueue([go$copyFile, [src2, dest2, flags2, cb2], err, startTime || Date.now(), Date.now()]);
+            else {
+              if (typeof cb2 === "function")
+                cb2.apply(this, arguments);
+            }
+          });
+        }
+      }
+      var fs$readdir = fs2.readdir;
+      fs2.readdir = readdir2;
+      var noReaddirOptionVersions = /^v[0-5]\./;
+      function readdir2(path2, options, cb) {
+        if (typeof options === "function")
+          cb = options, options = null;
+        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path3, options2, cb2, startTime) {
+          return fs$readdir(path3, fs$readdirCallback(
+            path3,
+            options2,
+            cb2,
+            startTime
+          ));
+        } : function go$readdir2(path3, options2, cb2, startTime) {
+          return fs$readdir(path3, options2, fs$readdirCallback(
+            path3,
+            options2,
+            cb2,
+            startTime
+          ));
+        };
+        return go$readdir(path2, options, cb);
+        function fs$readdirCallback(path3, options2, cb2, startTime) {
+          return function(err, files) {
+            if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
+              enqueue([
+                go$readdir,
+                [path3, options2, cb2],
+                err,
+                startTime || Date.now(),
+                Date.now()
+              ]);
+            else {
+              if (files && files.sort)
+                files.sort();
+              if (typeof cb2 === "function")
+                cb2.call(this, err, files);
+            }
+          };
+        }
+      }
+      if (process.version.substr(0, 4) === "v0.8") {
+        var legStreams = legacy(fs2);
+        ReadStream = legStreams.ReadStream;
+        WriteStream = legStreams.WriteStream;
+      }
+      var fs$ReadStream = fs2.ReadStream;
+      if (fs$ReadStream) {
+        ReadStream.prototype = Object.create(fs$ReadStream.prototype);
+        ReadStream.prototype.open = ReadStream$open;
+      }
+      var fs$WriteStream = fs2.WriteStream;
+      if (fs$WriteStream) {
+        WriteStream.prototype = Object.create(fs$WriteStream.prototype);
+        WriteStream.prototype.open = WriteStream$open;
+      }
+      Object.defineProperty(fs2, "ReadStream", {
+        get: function() {
+          return ReadStream;
+        },
+        set: function(val) {
+          ReadStream = val;
+        },
+        enumerable: true,
+        configurable: true
+      });
+      Object.defineProperty(fs2, "WriteStream", {
+        get: function() {
+          return WriteStream;
+        },
+        set: function(val) {
+          WriteStream = val;
+        },
+        enumerable: true,
+        configurable: true
+      });
+      var FileReadStream = ReadStream;
+      Object.defineProperty(fs2, "FileReadStream", {
+        get: function() {
+          return FileReadStream;
+        },
+        set: function(val) {
+          FileReadStream = val;
+        },
+        enumerable: true,
+        configurable: true
+      });
+      var FileWriteStream = WriteStream;
+      Object.defineProperty(fs2, "FileWriteStream", {
+        get: function() {
+          return FileWriteStream;
+        },
+        set: function(val) {
+          FileWriteStream = val;
+        },
+        enumerable: true,
+        configurable: true
+      });
+      function ReadStream(path2, options) {
+        if (this instanceof ReadStream)
+          return fs$ReadStream.apply(this, arguments), this;
+        else
+          return ReadStream.apply(Object.create(ReadStream.prototype), arguments);
+      }
+      function ReadStream$open() {
+        var that = this;
+        open2(that.path, that.flags, that.mode, function(err, fd) {
+          if (err) {
+            if (that.autoClose)
+              that.destroy();
+            that.emit("error", err);
+          } else {
+            that.fd = fd;
+            that.emit("open", fd);
+            that.read();
+          }
+        });
+      }
+      function WriteStream(path2, options) {
+        if (this instanceof WriteStream)
+          return fs$WriteStream.apply(this, arguments), this;
+        else
+          return WriteStream.apply(Object.create(WriteStream.prototype), arguments);
+      }
+      function WriteStream$open() {
+        var that = this;
+        open2(that.path, that.flags, that.mode, function(err, fd) {
+          if (err) {
+            that.destroy();
+            that.emit("error", err);
+          } else {
+            that.fd = fd;
+            that.emit("open", fd);
+          }
+        });
+      }
+      function createReadStream(path2, options) {
+        return new fs2.ReadStream(path2, options);
+      }
+      function createWriteStream(path2, options) {
+        return new fs2.WriteStream(path2, options);
+      }
+      var fs$open = fs2.open;
+      fs2.open = open2;
+      function open2(path2, flags, mode, cb) {
+        if (typeof mode === "function")
+          cb = mode, mode = null;
+        return go$open(path2, flags, mode, cb);
+        function go$open(path3, flags2, mode2, cb2, startTime) {
+          return fs$open(path3, flags2, mode2, function(err, fd) {
+            if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
+              enqueue([go$open, [path3, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
+            else {
+              if (typeof cb2 === "function")
+                cb2.apply(this, arguments);
+            }
+          });
+        }
+      }
+      return fs2;
+    }
+    function enqueue(elem) {
+      debug("ENQUEUE", elem[0].name, elem[1]);
+      fs[gracefulQueue].push(elem);
+      retry();
+    }
+    var retryTimer;
+    function resetQueue() {
+      var now = Date.now();
+      for (var i = 0; i < fs[gracefulQueue].length; ++i) {
+        if (fs[gracefulQueue][i].length > 2) {
+          fs[gracefulQueue][i][3] = now;
+          fs[gracefulQueue][i][4] = now;
+        }
+      }
+      retry();
+    }
+    function retry() {
+      clearTimeout(retryTimer);
+      retryTimer = void 0;
+      if (fs[gracefulQueue].length === 0)
+        return;
+      var elem = fs[gracefulQueue].shift();
+      var fn = elem[0];
+      var args = elem[1];
+      var err = elem[2];
+      var startTime = elem[3];
+      var lastTime = elem[4];
+      if (startTime === void 0) {
+        debug("RETRY", fn.name, args);
+        fn.apply(null, args);
+      } else if (Date.now() - startTime >= 6e4) {
+        debug("TIMEOUT", fn.name, args);
+        var cb = args.pop();
+        if (typeof cb === "function")
+          cb.call(null, err);
+      } else {
+        var sinceAttempt = Date.now() - lastTime;
+        var sinceStart = Math.max(lastTime - startTime, 1);
+        var desiredDelay = Math.min(sinceStart * 1.2, 100);
+        if (sinceAttempt >= desiredDelay) {
+          debug("RETRY", fn.name, args);
+          fn.apply(null, args.concat([startTime]));
+        } else {
+          fs[gracefulQueue].push(elem);
+        }
+      }
+      if (retryTimer === void 0) {
+        retryTimer = setTimeout(retry, 0);
+      }
+    }
+  }
+});
+
+// node_modules/.pnpm/retry@0.12.0/node_modules/retry/lib/retry_operation.js
+var require_retry_operation = __commonJS({
+  "node_modules/.pnpm/retry@0.12.0/node_modules/retry/lib/retry_operation.js"(exports, module) {
+    function RetryOperation(timeouts, options) {
+      if (typeof options === "boolean") {
+        options = { forever: options };
+      }
+      this._originalTimeouts = JSON.parse(JSON.stringify(timeouts));
+      this._timeouts = timeouts;
+      this._options = options || {};
+      this._maxRetryTime = options && options.maxRetryTime || Infinity;
+      this._fn = null;
+      this._errors = [];
+      this._attempts = 1;
+      this._operationTimeout = null;
+      this._operationTimeoutCb = null;
+      this._timeout = null;
+      this._operationStart = null;
+      if (this._options.forever) {
+        this._cachedTimeouts = this._timeouts.slice(0);
+      }
+    }
+    module.exports = RetryOperation;
+    RetryOperation.prototype.reset = function() {
+      this._attempts = 1;
+      this._timeouts = this._originalTimeouts;
+    };
+    RetryOperation.prototype.stop = function() {
+      if (this._timeout) {
+        clearTimeout(this._timeout);
+      }
+      this._timeouts = [];
+      this._cachedTimeouts = null;
+    };
+    RetryOperation.prototype.retry = function(err) {
+      if (this._timeout) {
+        clearTimeout(this._timeout);
+      }
+      if (!err) {
+        return false;
+      }
+      var currentTime = (/* @__PURE__ */ new Date()).getTime();
+      if (err && currentTime - this._operationStart >= this._maxRetryTime) {
+        this._errors.unshift(new Error("RetryOperation timeout occurred"));
+        return false;
+      }
+      this._errors.push(err);
+      var timeout = this._timeouts.shift();
+      if (timeout === void 0) {
+        if (this._cachedTimeouts) {
+          this._errors.splice(this._errors.length - 1, this._errors.length);
+          this._timeouts = this._cachedTimeouts.slice(0);
+          timeout = this._timeouts.shift();
+        } else {
+          return false;
+        }
+      }
+      var self = this;
+      var timer = setTimeout(function() {
+        self._attempts++;
+        if (self._operationTimeoutCb) {
+          self._timeout = setTimeout(function() {
+            self._operationTimeoutCb(self._attempts);
+          }, self._operationTimeout);
+          if (self._options.unref) {
+            self._timeout.unref();
+          }
+        }
+        self._fn(self._attempts);
+      }, timeout);
+      if (this._options.unref) {
+        timer.unref();
+      }
+      return true;
+    };
+    RetryOperation.prototype.attempt = function(fn, timeoutOps) {
+      this._fn = fn;
+      if (timeoutOps) {
+        if (timeoutOps.timeout) {
+          this._operationTimeout = timeoutOps.timeout;
+        }
+        if (timeoutOps.cb) {
+          this._operationTimeoutCb = timeoutOps.cb;
+        }
+      }
+      var self = this;
+      if (this._operationTimeoutCb) {
+        this._timeout = setTimeout(function() {
+          self._operationTimeoutCb();
+        }, self._operationTimeout);
+      }
+      this._operationStart = (/* @__PURE__ */ new Date()).getTime();
+      this._fn(this._attempts);
+    };
+    RetryOperation.prototype.try = function(fn) {
+      console.log("Using RetryOperation.try() is deprecated");
+      this.attempt(fn);
+    };
+    RetryOperation.prototype.start = function(fn) {
+      console.log("Using RetryOperation.start() is deprecated");
+      this.attempt(fn);
+    };
+    RetryOperation.prototype.start = RetryOperation.prototype.try;
+    RetryOperation.prototype.errors = function() {
+      return this._errors;
+    };
+    RetryOperation.prototype.attempts = function() {
+      return this._attempts;
+    };
+    RetryOperation.prototype.mainError = function() {
+      if (this._errors.length === 0) {
+        return null;
+      }
+      var counts = {};
+      var mainError = null;
+      var mainErrorCount = 0;
+      for (var i = 0; i < this._errors.length; i++) {
+        var error = this._errors[i];
+        var message = error.message;
+        var count = (counts[message] || 0) + 1;
+        counts[message] = count;
+        if (count >= mainErrorCount) {
+          mainError = error;
+          mainErrorCount = count;
+        }
+      }
+      return mainError;
+    };
+  }
+});
+
+// node_modules/.pnpm/retry@0.12.0/node_modules/retry/lib/retry.js
+var require_retry = __commonJS({
+  "node_modules/.pnpm/retry@0.12.0/node_modules/retry/lib/retry.js"(exports) {
+    var RetryOperation = require_retry_operation();
+    exports.operation = function(options) {
+      var timeouts = exports.timeouts(options);
+      return new RetryOperation(timeouts, {
+        forever: options && options.forever,
+        unref: options && options.unref,
+        maxRetryTime: options && options.maxRetryTime
+      });
+    };
+    exports.timeouts = function(options) {
+      if (options instanceof Array) {
+        return [].concat(options);
+      }
+      var opts = {
+        retries: 10,
+        factor: 2,
+        minTimeout: 1 * 1e3,
+        maxTimeout: Infinity,
+        randomize: false
+      };
+      for (var key in options) {
+        opts[key] = options[key];
+      }
+      if (opts.minTimeout > opts.maxTimeout) {
+        throw new Error("minTimeout is greater than maxTimeout");
+      }
+      var timeouts = [];
+      for (var i = 0; i < opts.retries; i++) {
+        timeouts.push(this.createTimeout(i, opts));
+      }
+      if (options && options.forever && !timeouts.length) {
+        timeouts.push(this.createTimeout(i, opts));
+      }
+      timeouts.sort(function(a, b) {
+        return a - b;
+      });
+      return timeouts;
+    };
+    exports.createTimeout = function(attempt, opts) {
+      var random = opts.randomize ? Math.random() + 1 : 1;
+      var timeout = Math.round(random * opts.minTimeout * Math.pow(opts.factor, attempt));
+      timeout = Math.min(timeout, opts.maxTimeout);
+      return timeout;
+    };
+    exports.wrap = function(obj, options, methods) {
+      if (options instanceof Array) {
+        methods = options;
+        options = null;
+      }
+      if (!methods) {
+        methods = [];
+        for (var key in obj) {
+          if (typeof obj[key] === "function") {
+            methods.push(key);
+          }
+        }
+      }
+      for (var i = 0; i < methods.length; i++) {
+        var method = methods[i];
+        var original = obj[method];
+        obj[method] = function retryWrapper(original2) {
+          var op = exports.operation(options);
+          var args = Array.prototype.slice.call(arguments, 1);
+          var callback = args.pop();
+          args.push(function(err) {
+            if (op.retry(err)) {
+              return;
+            }
+            if (err) {
+              arguments[0] = op.mainError();
+            }
+            callback.apply(this, arguments);
+          });
+          op.attempt(function() {
+            original2.apply(obj, args);
+          });
+        }.bind(obj, original);
+        obj[method].options = options;
+      }
+    };
+  }
+});
+
+// node_modules/.pnpm/retry@0.12.0/node_modules/retry/index.js
+var require_retry2 = __commonJS({
+  "node_modules/.pnpm/retry@0.12.0/node_modules/retry/index.js"(exports, module) {
+    module.exports = require_retry();
+  }
+});
+
+// node_modules/.pnpm/signal-exit@3.0.7/node_modules/signal-exit/signals.js
+var require_signals = __commonJS({
+  "node_modules/.pnpm/signal-exit@3.0.7/node_modules/signal-exit/signals.js"(exports, module) {
+    module.exports = [
+      "SIGABRT",
+      "SIGALRM",
+      "SIGHUP",
+      "SIGINT",
+      "SIGTERM"
+    ];
+    if (process.platform !== "win32") {
+      module.exports.push(
+        "SIGVTALRM",
+        "SIGXCPU",
+        "SIGXFSZ",
+        "SIGUSR2",
+        "SIGTRAP",
+        "SIGSYS",
+        "SIGQUIT",
+        "SIGIOT"
+        // should detect profiler and enable/disable accordingly.
+        // see #21
+        // 'SIGPROF'
+      );
+    }
+    if (process.platform === "linux") {
+      module.exports.push(
+        "SIGIO",
+        "SIGPOLL",
+        "SIGPWR",
+        "SIGSTKFLT",
+        "SIGUNUSED"
+      );
+    }
+  }
+});
+
+// node_modules/.pnpm/signal-exit@3.0.7/node_modules/signal-exit/index.js
+var require_signal_exit = __commonJS({
+  "node_modules/.pnpm/signal-exit@3.0.7/node_modules/signal-exit/index.js"(exports, module) {
+    var process2 = global.process;
+    var processOk = function(process3) {
+      return process3 && typeof process3 === "object" && typeof process3.removeListener === "function" && typeof process3.emit === "function" && typeof process3.reallyExit === "function" && typeof process3.listeners === "function" && typeof process3.kill === "function" && typeof process3.pid === "number" && typeof process3.on === "function";
+    };
+    if (!processOk(process2)) {
+      module.exports = function() {
+        return function() {
+        };
+      };
+    } else {
+      assert = __require("assert");
+      signals = require_signals();
+      isWin = /^win/i.test(process2.platform);
+      EE = __require("events");
+      if (typeof EE !== "function") {
+        EE = EE.EventEmitter;
+      }
+      if (process2.__signal_exit_emitter__) {
+        emitter = process2.__signal_exit_emitter__;
+      } else {
+        emitter = process2.__signal_exit_emitter__ = new EE();
+        emitter.count = 0;
+        emitter.emitted = {};
+      }
+      if (!emitter.infinite) {
+        emitter.setMaxListeners(Infinity);
+        emitter.infinite = true;
+      }
+      module.exports = function(cb, opts) {
+        if (!processOk(global.process)) {
+          return function() {
+          };
+        }
+        assert.equal(typeof cb, "function", "a callback must be provided for exit handler");
+        if (loaded === false) {
+          load();
+        }
+        var ev = "exit";
+        if (opts && opts.alwaysLast) {
+          ev = "afterexit";
+        }
+        var remove = function() {
+          emitter.removeListener(ev, cb);
+          if (emitter.listeners("exit").length === 0 && emitter.listeners("afterexit").length === 0) {
+            unload();
+          }
+        };
+        emitter.on(ev, cb);
+        return remove;
+      };
+      unload = function unload2() {
+        if (!loaded || !processOk(global.process)) {
+          return;
+        }
+        loaded = false;
+        signals.forEach(function(sig) {
+          try {
+            process2.removeListener(sig, sigListeners[sig]);
+          } catch (er) {
+          }
+        });
+        process2.emit = originalProcessEmit;
+        process2.reallyExit = originalProcessReallyExit;
+        emitter.count -= 1;
+      };
+      module.exports.unload = unload;
+      emit2 = function emit3(event, code, signal) {
+        if (emitter.emitted[event]) {
+          return;
+        }
+        emitter.emitted[event] = true;
+        emitter.emit(event, code, signal);
+      };
+      sigListeners = {};
+      signals.forEach(function(sig) {
+        sigListeners[sig] = function listener() {
+          if (!processOk(global.process)) {
+            return;
+          }
+          var listeners = process2.listeners(sig);
+          if (listeners.length === emitter.count) {
+            unload();
+            emit2("exit", null, sig);
+            emit2("afterexit", null, sig);
+            if (isWin && sig === "SIGHUP") {
+              sig = "SIGINT";
+            }
+            process2.kill(process2.pid, sig);
+          }
+        };
+      });
+      module.exports.signals = function() {
+        return signals;
+      };
+      loaded = false;
+      load = function load2() {
+        if (loaded || !processOk(global.process)) {
+          return;
+        }
+        loaded = true;
+        emitter.count += 1;
+        signals = signals.filter(function(sig) {
+          try {
+            process2.on(sig, sigListeners[sig]);
+            return true;
+          } catch (er) {
+            return false;
+          }
+        });
+        process2.emit = processEmit;
+        process2.reallyExit = processReallyExit;
+      };
+      module.exports.load = load;
+      originalProcessReallyExit = process2.reallyExit;
+      processReallyExit = function processReallyExit2(code) {
+        if (!processOk(global.process)) {
+          return;
+        }
+        process2.exitCode = code || /* istanbul ignore next */
+        0;
+        emit2("exit", process2.exitCode, null);
+        emit2("afterexit", process2.exitCode, null);
+        originalProcessReallyExit.call(process2, process2.exitCode);
+      };
+      originalProcessEmit = process2.emit;
+      processEmit = function processEmit2(ev, arg) {
+        if (ev === "exit" && processOk(global.process)) {
+          if (arg !== void 0) {
+            process2.exitCode = arg;
+          }
+          var ret = originalProcessEmit.apply(this, arguments);
+          emit2("exit", process2.exitCode, null);
+          emit2("afterexit", process2.exitCode, null);
+          return ret;
+        } else {
+          return originalProcessEmit.apply(this, arguments);
+        }
+      };
+    }
+    var assert;
+    var signals;
+    var isWin;
+    var EE;
+    var emitter;
+    var unload;
+    var emit2;
+    var sigListeners;
+    var loaded;
+    var load;
+    var originalProcessReallyExit;
+    var processReallyExit;
+    var originalProcessEmit;
+    var processEmit;
+  }
+});
+
+// node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/lib/mtime-precision.js
+var require_mtime_precision = __commonJS({
+  "node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/lib/mtime-precision.js"(exports, module) {
+    "use strict";
+    var cacheSymbol = Symbol();
+    function probe(file, fs, callback) {
+      const cachedPrecision = fs[cacheSymbol];
+      if (cachedPrecision) {
+        return fs.stat(file, (err, stat) => {
+          if (err) {
+            return callback(err);
+          }
+          callback(null, stat.mtime, cachedPrecision);
+        });
+      }
+      const mtime = new Date(Math.ceil(Date.now() / 1e3) * 1e3 + 5);
+      fs.utimes(file, mtime, mtime, (err) => {
+        if (err) {
+          return callback(err);
+        }
+        fs.stat(file, (err2, stat) => {
+          if (err2) {
+            return callback(err2);
+          }
+          const precision = stat.mtime.getTime() % 1e3 === 0 ? "s" : "ms";
+          Object.defineProperty(fs, cacheSymbol, { value: precision });
+          callback(null, stat.mtime, precision);
+        });
+      });
+    }
+    function getMtime(precision) {
+      let now = Date.now();
+      if (precision === "s") {
+        now = Math.ceil(now / 1e3) * 1e3;
+      }
+      return new Date(now);
+    }
+    module.exports.probe = probe;
+    module.exports.getMtime = getMtime;
+  }
+});
+
+// node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/lib/lockfile.js
+var require_lockfile = __commonJS({
+  "node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/lib/lockfile.js"(exports, module) {
+    "use strict";
+    var path2 = __require("path");
+    var fs = require_graceful_fs();
+    var retry = require_retry2();
+    var onExit = require_signal_exit();
+    var mtimePrecision = require_mtime_precision();
+    var locks = {};
+    function getLockFile(file, options) {
+      return options.lockfilePath || `${file}.lock`;
+    }
+    function resolveCanonicalPath(file, options, callback) {
+      if (!options.realpath) {
+        return callback(null, path2.resolve(file));
+      }
+      options.fs.realpath(file, callback);
+    }
+    function acquireLock(file, options, callback) {
+      const lockfilePath = getLockFile(file, options);
+      options.fs.mkdir(lockfilePath, (err) => {
+        if (!err) {
+          return mtimePrecision.probe(lockfilePath, options.fs, (err2, mtime, mtimePrecision2) => {
+            if (err2) {
+              options.fs.rmdir(lockfilePath, () => {
+              });
+              return callback(err2);
+            }
+            callback(null, mtime, mtimePrecision2);
+          });
+        }
+        if (err.code !== "EEXIST") {
+          return callback(err);
+        }
+        if (options.stale <= 0) {
+          return callback(Object.assign(new Error("Lock file is already being held"), { code: "ELOCKED", file }));
+        }
+        options.fs.stat(lockfilePath, (err2, stat) => {
+          if (err2) {
+            if (err2.code === "ENOENT") {
+              return acquireLock(file, { ...options, stale: 0 }, callback);
+            }
+            return callback(err2);
+          }
+          if (!isLockStale(stat, options)) {
+            return callback(Object.assign(new Error("Lock file is already being held"), { code: "ELOCKED", file }));
+          }
+          removeLock(file, options, (err3) => {
+            if (err3) {
+              return callback(err3);
+            }
+            acquireLock(file, { ...options, stale: 0 }, callback);
+          });
+        });
+      });
+    }
+    function isLockStale(stat, options) {
+      return stat.mtime.getTime() < Date.now() - options.stale;
+    }
+    function removeLock(file, options, callback) {
+      options.fs.rmdir(getLockFile(file, options), (err) => {
+        if (err && err.code !== "ENOENT") {
+          return callback(err);
+        }
+        callback();
+      });
+    }
+    function updateLock(file, options) {
+      const lock4 = locks[file];
+      if (lock4.updateTimeout) {
+        return;
+      }
+      lock4.updateDelay = lock4.updateDelay || options.update;
+      lock4.updateTimeout = setTimeout(() => {
+        lock4.updateTimeout = null;
+        options.fs.stat(lock4.lockfilePath, (err, stat) => {
+          const isOverThreshold = lock4.lastUpdate + options.stale < Date.now();
+          if (err) {
+            if (err.code === "ENOENT" || isOverThreshold) {
+              return setLockAsCompromised(file, lock4, Object.assign(err, { code: "ECOMPROMISED" }));
+            }
+            lock4.updateDelay = 1e3;
+            return updateLock(file, options);
+          }
+          const isMtimeOurs = lock4.mtime.getTime() === stat.mtime.getTime();
+          if (!isMtimeOurs) {
+            return setLockAsCompromised(
+              file,
+              lock4,
+              Object.assign(
+                new Error("Unable to update lock within the stale threshold"),
+                { code: "ECOMPROMISED" }
+              )
+            );
+          }
+          const mtime = mtimePrecision.getMtime(lock4.mtimePrecision);
+          options.fs.utimes(lock4.lockfilePath, mtime, mtime, (err2) => {
+            const isOverThreshold2 = lock4.lastUpdate + options.stale < Date.now();
+            if (lock4.released) {
+              return;
+            }
+            if (err2) {
+              if (err2.code === "ENOENT" || isOverThreshold2) {
+                return setLockAsCompromised(file, lock4, Object.assign(err2, { code: "ECOMPROMISED" }));
+              }
+              lock4.updateDelay = 1e3;
+              return updateLock(file, options);
+            }
+            lock4.mtime = mtime;
+            lock4.lastUpdate = Date.now();
+            lock4.updateDelay = null;
+            updateLock(file, options);
+          });
+        });
+      }, lock4.updateDelay);
+      if (lock4.updateTimeout.unref) {
+        lock4.updateTimeout.unref();
+      }
+    }
+    function setLockAsCompromised(file, lock4, err) {
+      lock4.released = true;
+      if (lock4.updateTimeout) {
+        clearTimeout(lock4.updateTimeout);
+      }
+      if (locks[file] === lock4) {
+        delete locks[file];
+      }
+      lock4.options.onCompromised(err);
+    }
+    function lock3(file, options, callback) {
+      options = {
+        stale: 1e4,
+        update: null,
+        realpath: true,
+        retries: 0,
+        fs,
+        onCompromised: (err) => {
+          throw err;
+        },
+        ...options
+      };
+      options.retries = options.retries || 0;
+      options.retries = typeof options.retries === "number" ? { retries: options.retries } : options.retries;
+      options.stale = Math.max(options.stale || 0, 2e3);
+      options.update = options.update == null ? options.stale / 2 : options.update || 0;
+      options.update = Math.max(Math.min(options.update, options.stale / 2), 1e3);
+      resolveCanonicalPath(file, options, (err, file2) => {
+        if (err) {
+          return callback(err);
+        }
+        const operation = retry.operation(options.retries);
+        operation.attempt(() => {
+          acquireLock(file2, options, (err2, mtime, mtimePrecision2) => {
+            if (operation.retry(err2)) {
+              return;
+            }
+            if (err2) {
+              return callback(operation.mainError());
+            }
+            const lock4 = locks[file2] = {
+              lockfilePath: getLockFile(file2, options),
+              mtime,
+              mtimePrecision: mtimePrecision2,
+              options,
+              lastUpdate: Date.now()
+            };
+            updateLock(file2, options);
+            callback(null, (releasedCallback) => {
+              if (lock4.released) {
+                return releasedCallback && releasedCallback(Object.assign(new Error("Lock is already released"), { code: "ERELEASED" }));
+              }
+              unlock(file2, { ...options, realpath: false }, releasedCallback);
+            });
+          });
+        });
+      });
+    }
+    function unlock(file, options, callback) {
+      options = {
+        fs,
+        realpath: true,
+        ...options
+      };
+      resolveCanonicalPath(file, options, (err, file2) => {
+        if (err) {
+          return callback(err);
+        }
+        const lock4 = locks[file2];
+        if (!lock4) {
+          return callback(Object.assign(new Error("Lock is not acquired/owned by you"), { code: "ENOTACQUIRED" }));
+        }
+        lock4.updateTimeout && clearTimeout(lock4.updateTimeout);
+        lock4.released = true;
+        delete locks[file2];
+        removeLock(file2, options, callback);
+      });
+    }
+    function check(file, options, callback) {
+      options = {
+        stale: 1e4,
+        realpath: true,
+        fs,
+        ...options
+      };
+      options.stale = Math.max(options.stale || 0, 2e3);
+      resolveCanonicalPath(file, options, (err, file2) => {
+        if (err) {
+          return callback(err);
+        }
+        options.fs.stat(getLockFile(file2, options), (err2, stat) => {
+          if (err2) {
+            return err2.code === "ENOENT" ? callback(null, false) : callback(err2);
+          }
+          return callback(null, !isLockStale(stat, options));
+        });
+      });
+    }
+    function getLocks() {
+      return locks;
+    }
+    onExit(() => {
+      for (const file in locks) {
+        const options = locks[file].options;
+        try {
+          options.fs.rmdirSync(getLockFile(file, options));
+        } catch (e) {
+        }
+      }
+    });
+    module.exports.lock = lock3;
+    module.exports.unlock = unlock;
+    module.exports.check = check;
+    module.exports.getLocks = getLocks;
+  }
+});
+
+// node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/lib/adapter.js
+var require_adapter = __commonJS({
+  "node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/lib/adapter.js"(exports, module) {
+    "use strict";
+    var fs = require_graceful_fs();
+    function createSyncFs(fs2) {
+      const methods = ["mkdir", "realpath", "stat", "rmdir", "utimes"];
+      const newFs = { ...fs2 };
+      methods.forEach((method) => {
+        newFs[method] = (...args) => {
+          const callback = args.pop();
+          let ret;
+          try {
+            ret = fs2[`${method}Sync`](...args);
+          } catch (err) {
+            return callback(err);
+          }
+          callback(null, ret);
+        };
+      });
+      return newFs;
+    }
+    function toPromise(method) {
+      return (...args) => new Promise((resolve2, reject) => {
+        args.push((err, result) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve2(result);
+          }
+        });
+        method(...args);
+      });
+    }
+    function toSync(method) {
+      return (...args) => {
+        let err;
+        let result;
+        args.push((_err, _result) => {
+          err = _err;
+          result = _result;
+        });
+        method(...args);
+        if (err) {
+          throw err;
+        }
+        return result;
+      };
+    }
+    function toSyncOptions(options) {
+      options = { ...options };
+      options.fs = createSyncFs(options.fs || fs);
+      if (typeof options.retries === "number" && options.retries > 0 || options.retries && typeof options.retries.retries === "number" && options.retries.retries > 0) {
+        throw Object.assign(new Error("Cannot use retries with the sync api"), { code: "ESYNC" });
+      }
+      return options;
+    }
+    module.exports = {
+      toPromise,
+      toSync,
+      toSyncOptions
+    };
+  }
+});
+
+// node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/index.js
+var require_proper_lockfile = __commonJS({
+  "node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/index.js"(exports, module) {
+    "use strict";
+    var lockfile = require_lockfile();
+    var { toPromise, toSync, toSyncOptions } = require_adapter();
+    async function lock3(file, options) {
+      const release = await toPromise(lockfile.lock)(file, options);
+      return toPromise(release);
+    }
+    function lockSync(file, options) {
+      const release = toSync(lockfile.lock)(file, toSyncOptions(options));
+      return toSync(release);
+    }
+    function unlock(file, options) {
+      return toPromise(lockfile.unlock)(file, options);
+    }
+    function unlockSync(file, options) {
+      return toSync(lockfile.unlock)(file, toSyncOptions(options));
+    }
+    function check(file, options) {
+      return toPromise(lockfile.check)(file, options);
+    }
+    function checkSync(file, options) {
+      return toSync(lockfile.check)(file, toSyncOptions(options));
+    }
+    module.exports = lock3;
+    module.exports.lock = lock3;
+    module.exports.unlock = unlock;
+    module.exports.lockSync = lockSync;
+    module.exports.unlockSync = unlockSync;
+    module.exports.check = check;
+    module.exports.checkSync = checkSync;
+  }
+});
 
 // src/cli/exit-codes.ts
 var EXIT = {
@@ -19,7 +1626,7 @@ var EXIT = {
 
 // src/config/load.ts
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename as basename2, dirname as dirname2, join as join2, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 
 // src/shared/logging.ts
@@ -64,14 +1671,61 @@ function createLogger(scope) {
 }
 var log = createLogger("factory");
 
+// src/shared/atomic-write.ts
+import { mkdir, open, rename, unlink } from "node:fs/promises";
+import { dirname, basename, join } from "node:path";
+import { randomBytes } from "node:crypto";
+function tempPathFor(target) {
+  const dir = dirname(target);
+  const name = basename(target);
+  const rand = randomBytes(6).toString("hex");
+  return join(dir, `.${name}.${process.pid}.${rand}.tmp`);
+}
+async function atomicWriteFile(target, data) {
+  const dir = dirname(target);
+  await mkdir(dir, { recursive: true });
+  const tmp = tempPathFor(target);
+  const handle = await open(tmp, "w", 384);
+  try {
+    await handle.writeFile(data);
+    await handle.sync();
+  } catch (err) {
+    await handle.close();
+    await bestEffortUnlink(tmp);
+    throw err;
+  }
+  await handle.close();
+  try {
+    await rename(tmp, target);
+  } catch (err) {
+    await bestEffortUnlink(tmp);
+    throw err;
+  }
+  try {
+    const dirHandle = await open(dir, "r");
+    try {
+      await dirHandle.sync();
+    } finally {
+      await dirHandle.close();
+    }
+  } catch {
+  }
+}
+async function bestEffortUnlink(p) {
+  try {
+    await unlink(p);
+  } catch {
+  }
+}
+
 // src/shared/json.ts
 var JsonParseError = class extends Error {
   path;
   cause;
-  constructor(message, path, cause) {
+  constructor(message, path2, cause) {
     super(message);
     this.name = "JsonParseError";
-    this.path = path;
+    this.path = path2;
     this.cause = cause;
   }
 };
@@ -211,10 +1865,10 @@ var util;
   function assertIs(_arg) {
   }
   util2.assertIs = assertIs;
-  function assertNever(_x) {
+  function assertNever2(_x) {
     throw new Error();
   }
-  util2.assertNever = assertNever;
+  util2.assertNever = assertNever2;
   util2.arrayToEnum = (items) => {
     const obj = {};
     for (const item of items) {
@@ -569,8 +2223,8 @@ function getErrorMap() {
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path, errorMaps, issueData } = params;
-  const fullPath = [...path, ...issueData.path || []];
+  const { data, path: path2, errorMaps, issueData } = params;
+  const fullPath = [...path2, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -686,11 +2340,11 @@ var errorUtil;
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path, key) {
+  constructor(parent, value, path2, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path;
+    this._path = path2;
     this._key = key;
   }
   get path() {
@@ -4283,20 +5937,20 @@ var PLUGIN_NAME = "factory";
 function expectedDataDir(opts) {
   const { current, home, pluginRoot } = opts;
   if (!current) return null;
-  const dataRoot = join(home, ".claude", "plugins", "data");
+  const dataRoot = join2(home, ".claude", "plugins", "data");
   if (!current.startsWith(dataRoot + sep)) return null;
-  const currentBase = basename(current);
+  const currentBase = basename2(current);
   if (currentBase === PLUGIN_NAME || currentBase.startsWith(`${PLUGIN_NAME}-`)) {
     return null;
   }
-  const pluginFromPath = basename(dirname(pluginRoot));
-  const marketplaceFromPath = basename(dirname(dirname(pluginRoot)));
+  const pluginFromPath = basename2(dirname2(pluginRoot));
+  const marketplaceFromPath = basename2(dirname2(dirname2(pluginRoot)));
   const cacheAnchor = resolve(pluginRoot, "..", "..", "..");
-  const expectedCacheRoot = join(home, ".claude", "plugins", "cache");
+  const expectedCacheRoot = join2(home, ".claude", "plugins", "cache");
   if (cacheAnchor === expectedCacheRoot && pluginFromPath.length > 0 && marketplaceFromPath.length > 0) {
-    return join(dataRoot, `${pluginFromPath}-${marketplaceFromPath}`);
+    return join2(dataRoot, `${pluginFromPath}-${marketplaceFromPath}`);
   }
-  const marketplaceJson = join(pluginRoot, ".claude-plugin", "marketplace.json");
+  const marketplaceJson = join2(pluginRoot, ".claude-plugin", "marketplace.json");
   if (existsSync(marketplaceJson)) {
     try {
       const parsed = parseJson(
@@ -4305,7 +5959,7 @@ function expectedDataDir(opts) {
       );
       const marketplaceName = typeof parsed.name === "string" ? parsed.name : "";
       if (marketplaceName.length > 0) {
-        return join(dataRoot, `${PLUGIN_NAME}-${marketplaceName}`);
+        return join2(dataRoot, `${PLUGIN_NAME}-${marketplaceName}`);
       }
     } catch {
     }
@@ -4317,8 +5971,8 @@ function inferPluginRoot() {
     const here = new URL(".", import.meta.url).pathname;
     let dir = here;
     for (let i = 0; i < 4; i++) {
-      if (existsSync(join(dir, ".claude-plugin"))) return dir;
-      dir = dirname(dir);
+      if (existsSync(join2(dir, ".claude-plugin"))) return dir;
+      dir = dirname2(dir);
     }
     return resolve(here, "..");
   } catch {
@@ -4346,7 +6000,7 @@ function resolveDataDir(opts = {}) {
   return resolve(current);
 }
 function configPath(dataDir) {
-  return join(dataDir, "config.json");
+  return join2(dataDir, "config.json");
 }
 function loadConfig(opts = {}) {
   let dataDir;
@@ -4363,6 +6017,5072 @@ function loadConfig(opts = {}) {
   return ConfigSchema.parse(raw);
 }
 
+// src/config/save.ts
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
+import { mkdir as mkdir2 } from "node:fs/promises";
+function readRawConfig(opts = {}) {
+  const file = configPath(resolveDataDir(opts));
+  if (!existsSync2(file)) return {};
+  const parsed = parseJson(readFileSync2(file, "utf8"), file);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`config: ${file} is not a JSON object`);
+  }
+  return parsed;
+}
+async function saveRawConfig(raw, opts = {}) {
+  const resolved = ConfigSchema.parse(raw);
+  const dataDir = resolveDataDir(opts);
+  await mkdir2(dataDir, { recursive: true });
+  await atomicWriteFile(configPath(dataDir), stringifyJson(raw));
+  return resolved;
+}
+function parseSetToken(token) {
+  const eq = token.indexOf("=");
+  if (eq <= 0) {
+    throw new Error(`configure: --set expects 'key.path=value', got '${token}'`);
+  }
+  const path2 = splitPath(token.slice(0, eq));
+  const rawValue = token.slice(eq + 1);
+  return { path: path2, value: coerceValue(rawValue) };
+}
+function coerceValue(raw) {
+  try {
+    return parseJson(raw);
+  } catch {
+    return raw;
+  }
+}
+function splitPath(dotted) {
+  const path2 = dotted.split(".");
+  if (path2.length === 0 || path2.some((s) => s.length === 0)) {
+    throw new Error(`configure: invalid key path '${dotted}'`);
+  }
+  return path2;
+}
+function setAtPath(obj, path2, value) {
+  const next = structuredClone(obj);
+  let cursor = next;
+  for (let i = 0; i < path2.length - 1; i++) {
+    const key = path2[i];
+    const existing = cursor[key];
+    if (existing === void 0 || existing === null || typeof existing !== "object" || Array.isArray(existing)) {
+      cursor[key] = {};
+    }
+    cursor = cursor[key];
+  }
+  cursor[path2[path2.length - 1]] = value;
+  return next;
+}
+function unsetAtPath(obj, path2) {
+  const next = structuredClone(obj);
+  const parents = [];
+  let cursor = next;
+  for (let i = 0; i < path2.length - 1; i++) {
+    const key = path2[i];
+    const child = cursor[key];
+    if (child === void 0 || child === null || typeof child !== "object" || Array.isArray(child)) {
+      return next;
+    }
+    parents.push({ container: cursor, key });
+    cursor = child;
+  }
+  delete cursor[path2[path2.length - 1]];
+  for (let i = parents.length - 1; i >= 0; i--) {
+    const { container, key } = parents[i];
+    const child = container[key];
+    if (Object.keys(child).length === 0) {
+      delete container[key];
+    } else {
+      break;
+    }
+  }
+  return next;
+}
+function getAtPath(config, path2) {
+  let cursor = config;
+  for (const key of path2) {
+    if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) {
+      throw new Error(`configure: '${path2.join(".")}' has no value (not an object at '${key}')`);
+    }
+    if (!(key in cursor)) {
+      throw new Error(`configure: unknown config key '${path2.join(".")}'`);
+    }
+    cursor = cursor[key];
+  }
+  return cursor;
+}
+
+// src/cli/args.ts
+function parseArgs(argv, opts = {}) {
+  const booleans = /* @__PURE__ */ new Set(["help", "h", ...opts.booleans ?? []]);
+  const positionals = [];
+  const values = /* @__PURE__ */ new Map();
+  const push = (name, value) => {
+    const list = values.get(name) ?? [];
+    list.push(value);
+    values.set(name, list);
+  };
+  let i = 0;
+  let optionsEnded = false;
+  while (i < argv.length) {
+    const tok = argv[i];
+    if (optionsEnded || !tok.startsWith("-")) {
+      positionals.push(tok);
+      i += 1;
+      continue;
+    }
+    if (tok === "--") {
+      optionsEnded = true;
+      i += 1;
+      continue;
+    }
+    const dashless = tok.replace(/^-+/, "");
+    const eq = dashless.indexOf("=");
+    if (eq >= 0) {
+      push(dashless.slice(0, eq), dashless.slice(eq + 1));
+      i += 1;
+      continue;
+    }
+    if (booleans.has(dashless)) {
+      push(dashless, true);
+      i += 1;
+      continue;
+    }
+    const next = argv[i + 1];
+    if (next === void 0 || next.startsWith("-") && next !== "-") {
+      push(dashless, true);
+      i += 1;
+    } else {
+      push(dashless, next);
+      i += 2;
+    }
+  }
+  const lastOf = (name) => {
+    const list = values.get(name);
+    return list === void 0 ? void 0 : list[list.length - 1];
+  };
+  return {
+    positionals,
+    flag: lastOf,
+    all: (name) => (values.get(name) ?? []).map(String),
+    has: (name) => values.has(name),
+    requireFlag(name) {
+      const v = lastOf(name);
+      if (typeof v !== "string" || v.length === 0) {
+        throw new UsageError(`missing required --${name}`);
+      }
+      return v;
+    }
+  };
+}
+var UsageError = class extends Error {
+  isUsageError = true;
+  constructor(message) {
+    super(message);
+    this.name = "UsageError";
+  }
+};
+function isUsageError(err) {
+  return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
+}
+
+// src/cli/io.ts
+function emitJson(value) {
+  process.stdout.write(stringifyJson(value) + "\n");
+}
+function emitLine(line) {
+  process.stdout.write(line + "\n");
+}
+function emitError(line) {
+  process.stderr.write(line + "\n");
+}
+
+// src/cli/subcommands/configure.ts
+var HELP = `factory configure \u2014 inspect or edit the config overlay
+
+Usage:
+  factory configure                         Print the resolved config as JSON
+  factory configure --get <key.path>        Print one resolved value as JSON
+  factory configure --set <key.path=value>  Set a value (repeatable), persist, print result
+  factory configure --unset <key.path>      Revert a key to its default (repeatable)
+
+Values parse as JSON when possible (numbers, booleans, arrays); otherwise as a
+bare string. Examples:
+  factory configure --set quality.holdoutPercent=25
+  factory configure --set git.stagingBranch=staging
+  factory configure --set git.autoProvision=true`;
+async function run(argv) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(HELP);
+    return EXIT.OK;
+  }
+  const sets = args.all("set");
+  const unsets = args.all("unset");
+  const getKey = args.flag("get");
+  if (typeof getKey === "string") {
+    if (sets.length > 0 || unsets.length > 0) {
+      throw new UsageError("--get cannot be combined with --set/--unset");
+    }
+    emitJson(getAtPath(loadConfig(), splitPath(getKey)));
+    return EXIT.OK;
+  }
+  if (sets.length === 0 && unsets.length === 0) {
+    emitJson(loadConfig());
+    return EXIT.OK;
+  }
+  let raw = readRawConfig();
+  for (const token of sets) {
+    const { path: path2, value } = parseSetToken(token);
+    raw = setAtPath(raw, path2, value);
+  }
+  for (const token of unsets) {
+    raw = unsetAtPath(raw, splitPath(token));
+  }
+  const resolved = await saveRawConfig(raw);
+  emitJson(resolved);
+  return EXIT.OK;
+}
+var configureCommand = {
+  describe: "Inspect or edit the persisted config (--get/--set/--unset)",
+  run: async (argv) => {
+    try {
+      return await run(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`configure: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/core/state/schema.ts
+var RunStatusEnum = external_exports.enum([
+  "running",
+  "completed",
+  "partial",
+  "paused",
+  "suspended",
+  "failed"
+]);
+var TERMINAL_RUN_STATUSES = ["completed", "partial", "failed"];
+function isTerminalRunStatus(s) {
+  return TERMINAL_RUN_STATUSES.includes(s);
+}
+var TaskStatusEnum = external_exports.enum([
+  "pending",
+  "executing",
+  "reviewing",
+  "shipping",
+  "done",
+  "dropped"
+]);
+var TERMINAL_TASK_STATUSES = ["done", "dropped"];
+function isTerminalTaskStatus(s) {
+  return TERMINAL_TASK_STATUSES.includes(s);
+}
+var FailureClassEnum = external_exports.enum([
+  "capability-budget",
+  "spec-defect",
+  "blocked-environmental"
+]);
+var RiskTierEnum = external_exports.enum(["low", "medium", "high"]);
+var EscalationRungSchema = external_exports.number().int().min(0);
+var PanelVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
+var ProducerRoleEnum = external_exports.enum(["test-writer", "executor"]);
+var SpecPointerSchema = external_exports.object({
+  /** Repo identity, e.g. "owner/name". The first key of (repo, spec-id). */
+  repo: external_exports.string().min(1),
+  /** `<issue>-<slug>`. The second key of (repo, spec-id). */
+  spec_id: external_exports.string().min(1),
+  /** The PRD issue number — the STABLE lookup key embedded in spec_id. */
+  issue_number: external_exports.number().int().positive()
+});
+var ReviewerResultSchema = external_exports.object({
+  /** Reviewer identity (e.g. "implementation", "security", "silent-failure"). */
+  reviewer: external_exports.string().min(1),
+  /** This reviewer's verdict after verify-then-fix adjudication. */
+  verdict: PanelVerdictEnum,
+  /** Pointer to the review artifact (relative to the run's reviews/ dir). */
+  artifact: external_exports.string().optional(),
+  /** Number of confirmed (verified) blocking findings this reviewer raised. */
+  confirmed_blockers: external_exports.number().int().min(0).default(0)
+});
+var TaskStateSchema = external_exports.object({
+  task_id: external_exports.string().min(1),
+  status: TaskStatusEnum.default("pending"),
+  /** Task ids this task depends on (the vertical-slice DAG, Decision 23). */
+  depends_on: external_exports.array(external_exports.string()).default([]),
+  // --- Producer dial + ladder (Decision 25) ---
+  /** The single producer dial, set at spec time and never re-assessed mid-run. */
+  risk_tier: RiskTierEnum,
+  /** Current rung on the producer escalation ladder (0 = starting rung). */
+  escalation_rung: EscalationRungSchema.default(0),
+  /** Which producer role is/last ran. */
+  producer_role: ProducerRoleEnum.optional(),
+  // --- Verifier floor (Decision 26/27) ---
+  /** Per-reviewer panel results (derive.ts computes the floor verdict from these). */
+  reviewers: external_exports.array(ReviewerResultSchema).default([]),
+  // --- Git / PR pointers (WS3 populates; schema reserves the shape) ---
+  /** Run-scoped branch `factory/<run_id>/<task_id>` (Δ M). */
+  branch: external_exports.string().optional(),
+  /** PR number once created (idempotent-create keyed off branch, Δ P). */
+  pr_number: external_exports.number().int().positive().optional(),
+  // --- Drop classification (Decision 22, Δ D) ---
+  /** Set IFF status === "dropped": the closed-enum cause. */
+  failure_class: FailureClassEnum.optional(),
+  /** Human-facing reason string accompanying a drop. */
+  failure_reason: external_exports.string().optional(),
+  // --- Lifecycle timestamps (ISO-8601) ---
+  started_at: external_exports.string().optional(),
+  ended_at: external_exports.string().optional()
+});
+function refineTaskCrossFields(task, ctx) {
+  const isDropped = task.status === "dropped";
+  if (isDropped && task.failure_class == null) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["failure_class"],
+      message: `task '${task.task_id}' is 'dropped' but has no failure_class (a drop must be classified)`
+    });
+  }
+  if (!isDropped && task.failure_class != null) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["failure_class"],
+      message: `task '${task.task_id}' has failure_class '${task.failure_class}' but status is '${task.status}' (failure_class is set IFF dropped)`
+    });
+  }
+  const hasReason = task.failure_reason != null && task.failure_reason.length > 0;
+  if (isDropped && !hasReason) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["failure_reason"],
+      message: `task '${task.task_id}' is 'dropped' but has no failure_reason (a drop must carry a human-facing reason)`
+    });
+  }
+  if (!isDropped && task.failure_reason != null) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["failure_reason"],
+      message: `task '${task.task_id}' has a failure_reason but status is '${task.status}' (failure_reason is set IFF dropped)`
+    });
+  }
+  task.reviewers.forEach((r, i) => {
+    if (r.verdict === "approve" && r.confirmed_blockers !== 0) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["reviewers", i, "confirmed_blockers"],
+        message: `reviewer '${r.reviewer}' approves but records ${r.confirmed_blockers} confirmed blocker(s) (approve \u21D2 0)`
+      });
+    }
+    if (r.verdict === "blocked" && r.confirmed_blockers === 0) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["reviewers", i, "confirmed_blockers"],
+        message: `reviewer '${r.reviewer}' is blocked but records 0 confirmed blockers (blocked \u21D2 \u22651)`
+      });
+    }
+  });
+}
+var TaskStateChecked = TaskStateSchema.superRefine(refineTaskCrossFields);
+var QuotaCheckpointSchema = external_exports.object({
+  /** Epoch (seconds) when the binding window resets — the resume horizon. */
+  resets_at_epoch: external_exports.number().int().nonnegative().optional(),
+  /** Which window forced the last pause/suspend, if any. */
+  binding_window: external_exports.enum(["5h", "7d"]).optional()
+});
+var DriverEnum = external_exports.enum(["sequential", "balanced"]);
+var RunStateSchema = external_exports.object({
+  /** State-schema version (independent of plugin version). */
+  schema_version: external_exports.literal(1).default(1),
+  /** `run-YYYYMMDD-HHMMSS`. */
+  run_id: external_exports.string().min(1),
+  status: RunStatusEnum.default("running"),
+  driver: DriverEnum.default("balanced"),
+  /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
+  spec: SpecPointerSchema,
+  /** Per-task state, keyed by task_id (cross-field checks applied per task). */
+  tasks: external_exports.record(external_exports.string(), TaskStateChecked).default({}),
+  /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
+  quota: QuotaCheckpointSchema.optional(),
+  /** Lifecycle timestamps (ISO-8601). */
+  started_at: external_exports.string(),
+  updated_at: external_exports.string(),
+  ended_at: external_exports.string().nullable().default(null)
+});
+function refineRunCrossFields(run12, ctx) {
+  const quotaStatuses = ["paused", "suspended"];
+  if (run12.quota != null && !quotaStatuses.includes(run12.status)) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["quota"],
+      message: `run '${run12.run_id}' carries a quota checkpoint but status is '${run12.status}' (a quota checkpoint is valid only while paused|suspended)`
+    });
+  }
+}
+var RunStateChecked = RunStateSchema.superRefine(refineRunCrossFields);
+function parseRunState(raw) {
+  return RunStateChecked.parse(raw);
+}
+
+// src/core/state/derive.ts
+function deriveAllGatesVerdict(evidence) {
+  const passed = evidence.length > 0 && evidence.every((e) => e.observed === true);
+  return {
+    passed,
+    gate: "all",
+    __derived: true,
+    from: [...evidence]
+  };
+}
+function derivePanelVerdict(reviewersOrTask) {
+  const reviewers = Array.isArray(reviewersOrTask) ? reviewersOrTask : reviewersOrTask.reviewers;
+  const passed = reviewers.length > 0 && reviewers.every((r) => r.verdict === "approve");
+  return {
+    passed,
+    gate: "panel",
+    __derived: true,
+    // The panel's "evidence" is each reviewer's verdict; expose it for audit.
+    from: reviewers.map((r) => ({
+      gate: `panel:${r.reviewer}`,
+      observed: r.verdict === "approve",
+      detail: `verdict=${r.verdict} confirmed_blockers=${r.confirmed_blockers}`
+    }))
+  };
+}
+function deriveFloorVerdict(task, gateEvidence) {
+  const det = deriveAllGatesVerdict(gateEvidence);
+  const panel = derivePanelVerdict(task);
+  return {
+    passed: det.passed && panel.passed,
+    gate: "floor",
+    __derived: true,
+    from: [...det.from, ...panel.from]
+  };
+}
+
+// src/core/state/manager.ts
+var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+import { mkdir as mkdir3, readFile, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { existsSync as existsSync3 } from "node:fs";
+import { dirname as dirname3, join as join4 } from "node:path";
+
+// src/shared/time.ts
+function nowIso() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+function nowEpoch() {
+  return Math.floor(Date.now() / 1e3);
+}
+
+// src/core/state/paths.ts
+import { join as join3 } from "node:path";
+
+// src/shared/ids.ts
+var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+var SLUG_MAX_LENGTH = 50;
+function validateId(id, label = "id") {
+  if (id.length === 0) {
+    throw new Error(`${label}: empty`);
+  }
+  if (!ID_PATTERN.test(id)) {
+    throw new Error(`${label}: invalid (must match ${ID_PATTERN.source}): ${id}`);
+  }
+  return id;
+}
+function makeRunId(now = /* @__PURE__ */ new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  const date = `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}`;
+  const time = `${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}`;
+  return `run-${date}-${time}`;
+}
+function slugify(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "").slice(0, SLUG_MAX_LENGTH);
+}
+
+// src/core/state/paths.ts
+var SPECS_DIR = "specs";
+var SPEC_BUILD_DIR = "spec-build";
+var RUNS_DIR = "runs";
+var CURRENT_LINK = "current";
+var STATE_FILE = "state.json";
+function repoKey(repo) {
+  const key = repo.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "");
+  if (key.length === 0) {
+    throw new Error(`repoKey: repo '${repo}' has no usable characters`);
+  }
+  if (/^\.+$/.test(key)) {
+    throw new Error(`repoKey: repo '${repo}' resolves to a path-traversal segment '${key}'`);
+  }
+  return key;
+}
+function runsRoot(dataDir) {
+  return join3(dataDir, RUNS_DIR);
+}
+function runDir(dataDir, runId) {
+  validateId(runId, "run-id");
+  return join3(runsRoot(dataDir), runId);
+}
+function runStatePath(dataDir, runId) {
+  return join3(runDir(dataDir, runId), STATE_FILE);
+}
+function currentLinkPath(dataDir) {
+  return join3(runsRoot(dataDir), CURRENT_LINK);
+}
+function specsRoot(dataDir) {
+  return join3(dataDir, SPECS_DIR);
+}
+function specDir(dataDir, repo, specId) {
+  validateId(specId, "spec-id");
+  return join3(specsRoot(dataDir), repoKey(repo), specId);
+}
+function specBuildRoot(dataDir) {
+  return join3(dataDir, SPEC_BUILD_DIR);
+}
+function specBuildDir(dataDir, repo, issueNumber) {
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+    throw new Error(`specBuildDir: issue number must be a positive integer, got ${issueNumber}`);
+  }
+  return join3(specBuildRoot(dataDir), repoKey(repo), String(issueNumber));
+}
+
+// src/core/state/manager.ts
+var log3 = createLogger("state");
+var DEFAULT_LOCK_TUNING = {
+  stale: 15e3,
+  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
+  retries: 50,
+  retryMinTimeout: 20,
+  retryMaxTimeout: 500
+};
+var StateManager = class {
+  dataDir;
+  lockTuning;
+  constructor(opts = {}) {
+    this.dataDir = resolveDataDir(opts);
+    this.lockTuning = { ...DEFAULT_LOCK_TUNING, ...opts.lock ?? {} };
+  }
+  // ---- paths -------------------------------------------------------------
+  statePath(runId) {
+    return runStatePath(this.dataDir, runId);
+  }
+  lockfilePath(runId) {
+    return join4(runDir(this.dataDir, runId), "state.lock");
+  }
+  // ---- lock --------------------------------------------------------------
+  /**
+   * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
+   * must already exist — `create` mkdirs it before first lock; mutators lock an
+   * existing run. `realpath:false` lets us lock a path whose target may be
+   * mid-rename.
+   */
+  async withLock(runId, fn) {
+    const dir = runDir(this.dataDir, runId);
+    if (!existsSync3(dir)) {
+      throw new Error(`state: cannot lock run '${runId}' \u2014 run dir does not exist`);
+    }
+    const release = await (0, import_proper_lockfile.lock)(this.lockfilePath(runId), {
+      realpath: false,
+      stale: this.lockTuning.stale,
+      retries: {
+        retries: this.lockTuning.retries,
+        minTimeout: this.lockTuning.retryMinTimeout,
+        maxTimeout: this.lockTuning.retryMaxTimeout,
+        factor: 1.5
+      },
+      onCompromised: (err) => {
+        log3.error(`state lock for run '${runId}' was compromised: ${err.message}`);
+        throw err;
+      }
+    });
+    try {
+      return await fn();
+    } finally {
+      await release();
+    }
+  }
+  // ---- create ------------------------------------------------------------
+  /**
+   * Create a brand-new run. Mkdirs the run store layout, writes the initial
+   * state.json atomically under the lock, and (best-effort) points `runs/current`
+   * at it. Refuses to clobber an existing run dir.
+   */
+  async create(args) {
+    const dir = runDir(this.dataDir, args.run_id);
+    if (existsSync3(this.statePath(args.run_id))) {
+      throw new Error(`state: run '${args.run_id}' already exists`);
+    }
+    await mkdir3(join4(dir, "holdouts"), { recursive: true });
+    await mkdir3(join4(dir, "reviews"), { recursive: true });
+    const now = nowIso();
+    const state = parseRunState({
+      run_id: args.run_id,
+      status: "running",
+      driver: args.driver ?? "balanced",
+      spec: args.spec,
+      tasks: {},
+      started_at: now,
+      updated_at: now,
+      ended_at: null
+    });
+    await this.withLock(args.run_id, async () => {
+      if (existsSync3(this.statePath(args.run_id))) {
+        throw new Error(`state: run '${args.run_id}' already exists`);
+      }
+      await atomicWriteFile(this.statePath(args.run_id), stringifyJson(state));
+    });
+    await atomicWriteFile(join4(dir, "audit.jsonl"), "");
+    await atomicWriteFile(join4(dir, "metrics.jsonl"), "");
+    await this.pointCurrentAt(args.run_id);
+    return state;
+  }
+  // ---- read (lock-free) --------------------------------------------------
+  /**
+   * Read + validate a run's state. LOCK-FREE: the atomic rename on the writer
+   * side guarantees a reader sees a whole file. LOUD on a missing run or a
+   * schema/JSON violation (never a silent partial).
+   */
+  async read(runId) {
+    const path2 = this.statePath(runId);
+    const raw = await readFile(path2, "utf8");
+    return parseRunState(parseJson(raw, path2));
+  }
+  /**
+   * Read the run currently pointed at by `runs/current`, or null if there is no
+   * current run. `current` is a directory symlink; we read `state.json` *through*
+   * it (the OS follows the symlink during the path walk), so no separate readlink
+   * is needed. LOUD on a corrupt/invalid current state.json — only genuine
+   * ABSENCE (missing/dangling symlink → ENOENT) maps to null, matching read()'s
+   * loud-on-corruption contract. Swallowing a ZodError/JSON error here would make
+   * a corrupt active run indistinguishable from "no current run".
+   */
+  async readCurrent() {
+    const link = currentLinkPath(this.dataDir);
+    if (!existsSync3(link)) return null;
+    const statePath = join4(link, "state.json");
+    let raw;
+    try {
+      raw = await readFile(statePath, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") return null;
+      throw err;
+    }
+    return parseRunState(parseJson(raw, statePath));
+  }
+  // ---- update (locked read-modify-write) ---------------------------------
+  /**
+   * Atomically mutate a run under the lock. `mutator` receives the current state
+   * and returns the next state; the result is re-validated through the schema
+   * (so a mutator cannot persist an out-of-enum value) and `updated_at` is
+   * stamped. This is the ONLY write path for an existing run.
+   */
+  async update(runId, mutator) {
+    return this.withLock(runId, async () => {
+      const current = await this.read(runId);
+      const next = await mutator(current);
+      if (next.run_id !== runId) {
+        throw new Error(
+          `state: update mutator changed run_id ('${runId}' \u2192 '${next.run_id}') \u2014 identity is immutable`
+        );
+      }
+      if (next.spec.repo !== current.spec.repo || next.spec.spec_id !== current.spec.spec_id || next.spec.issue_number !== current.spec.issue_number) {
+        throw new Error(
+          `state: update mutator changed the spec pointer for run '${runId}' \u2014 identity is immutable`
+        );
+      }
+      const validated = parseRunState({ ...next, updated_at: nowIso() });
+      await atomicWriteFile(this.statePath(runId), stringifyJson(validated));
+      return validated;
+    });
+  }
+  /**
+   * Convenience: mutate a single task in place. Throws if the task is absent
+   * (a typo'd task id is a loud error, not a silent create).
+   */
+  async updateTask(runId, taskId, mutator) {
+    return this.update(runId, (state) => {
+      const task = state.tasks[taskId];
+      if (!task) {
+        throw new Error(`state: run '${runId}' has no task '${taskId}'`);
+      }
+      return { ...state, tasks: { ...state.tasks, [taskId]: mutator(task) } };
+    });
+  }
+  // ---- finalize ----------------------------------------------------------
+  /**
+   * Finalize a run to a TERMINAL status (Decision 22/24 — finalize is terminal,
+   * never spins). Refuses a non-terminal status. Stamps `ended_at`. Idempotent
+   * for the same terminal status.
+   */
+  async finalize(runId, status) {
+    if (!isTerminalRunStatus(status)) {
+      throw new Error(
+        `state: finalize requires a terminal status (completed|partial|failed); got '${status}'`
+      );
+    }
+    return this.update(runId, (state) => {
+      if (isTerminalRunStatus(state.status) && state.status !== status) {
+        throw new Error(
+          `state: run '${runId}' already terminal as '${state.status}'; cannot re-finalize as '${status}'`
+        );
+      }
+      return { ...state, status, quota: void 0, ended_at: state.ended_at ?? nowIso() };
+    });
+  }
+  // ---- current symlink ---------------------------------------------------
+  /**
+   * Point `runs/current` at the given run (best-effort, atomic-ish: write a temp
+   * link then rename). A failure here is logged, not fatal — `current` is a
+   * convenience pointer, not load-bearing state.
+   */
+  async pointCurrentAt(runId) {
+    const link = currentLinkPath(this.dataDir);
+    const tmp = `${link}.tmp.${process.pid}`;
+    try {
+      await mkdir3(dirname3(link), { recursive: true });
+      await unlink2(tmp).catch(() => {
+      });
+      await symlink(join4(runId), tmp);
+      await rm(link, { force: true, recursive: false }).catch(() => {
+      });
+      await rename2(tmp, link);
+    } catch (err) {
+      log3.warn(`state: could not update runs/current to '${runId}': ${err.message}`);
+      await unlink2(tmp).catch(() => {
+      });
+    }
+  }
+};
+
+// src/cli/subcommands/state.ts
+var HELP2 = `factory state \u2014 read run state (read-only)
+
+Usage:
+  factory state                 Print the current run's state as JSON
+  factory state <run-id>        Print a specific run's state as JSON
+  factory state --summary       Print a compact human summary instead
+
+Exit OK with {"current": null} when there is no current run.`;
+function summarize(run12) {
+  const lines = [
+    `run ${run12.run_id}  status=${run12.status}  driver=${run12.driver}`,
+    `spec ${run12.spec.repo}#${run12.spec.issue_number} (${run12.spec.spec_id})`,
+    `tasks (${Object.keys(run12.tasks).length}):`
+  ];
+  for (const t of Object.values(run12.tasks)) {
+    const bits = [`  ${t.task_id}`, t.status];
+    if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
+    if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
+    if (t.failure_class !== void 0) bits.push(`class=${t.failure_class}`);
+    lines.push(bits.join("  "));
+  }
+  return lines.join("\n");
+}
+async function run2(argv) {
+  const args = parseArgs(argv, { booleans: ["summary"] });
+  if (args.flag("help") === true) {
+    emitLine(HELP2);
+    return EXIT.OK;
+  }
+  const state = new StateManager();
+  const runId = args.positionals[0];
+  const runState = runId !== void 0 ? await state.read(runId) : await state.readCurrent();
+  if (runState === null) {
+    if (args.flag("summary") === true) {
+      emitLine("no current run");
+    } else {
+      emitJson({ current: null });
+    }
+    return EXIT.OK;
+  }
+  if (args.flag("summary") === true) {
+    emitLine(summarize(runState));
+  } else {
+    emitJson(runState);
+  }
+  return EXIT.OK;
+}
+var stateCommand = {
+  describe: "Print run state (current or by run-id); read-only",
+  run: async (argv) => {
+    try {
+      return await run2(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`state: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/scaffold.ts
+import { copyFile, mkdir as mkdir5, readFile as readFile2, writeFile } from "node:fs/promises";
+import { existsSync as existsSync4 } from "node:fs";
+import { dirname as dirname4, join as join6, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// src/shared/exec.ts
+import { spawn } from "node:child_process";
+var DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
+function exec(command, args = [], opts = {}) {
+  const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
+  return new Promise((resolve2, reject) => {
+    const child = spawn(command, args, {
+      cwd: opts.cwd,
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      shell: opts.shell ?? false,
+      timeout: opts.timeoutMs,
+      killSignal: opts.killSignal ?? "SIGTERM"
+    });
+    const outChunks = [];
+    const errChunks = [];
+    let outLen = 0;
+    let errLen = 0;
+    let truncated = false;
+    let settled = false;
+    const settleReject = (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+    child.stdout?.on("data", (c) => {
+      const remaining = maxBuffer - outLen;
+      if (remaining <= 0) {
+        truncated = true;
+        return;
+      }
+      if (c.length > remaining) {
+        outChunks.push(c.subarray(0, remaining));
+        outLen = maxBuffer;
+        truncated = true;
+      } else {
+        outChunks.push(c);
+        outLen += c.length;
+      }
+    });
+    child.stderr?.on("data", (c) => {
+      const remaining = maxBuffer - errLen;
+      if (remaining <= 0) {
+        truncated = true;
+        return;
+      }
+      if (c.length > remaining) {
+        errChunks.push(c.subarray(0, remaining));
+        errLen = maxBuffer;
+        truncated = true;
+      } else {
+        errChunks.push(c);
+        errLen += c.length;
+      }
+    });
+    child.on("error", settleReject);
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      resolve2({
+        stdout: Buffer.concat(outChunks).toString("utf8"),
+        stderr: Buffer.concat(errChunks).toString("utf8"),
+        code,
+        signal: signal ?? null,
+        truncated
+      });
+    });
+    if (opts.input !== void 0 && child.stdin) {
+      child.stdin.on("error", () => {
+      });
+      child.stdin.end(opts.input);
+    }
+  });
+}
+var ExecError = class extends Error {
+  result;
+  command;
+  args;
+  constructor(command, args, result) {
+    const where = [command, ...args].join(" ");
+    super(
+      `command failed (code=${result.code ?? "null"}` + (result.signal ? `, signal=${result.signal}` : "") + `): ${where}
+${result.stderr.trim()}`
+    );
+    this.name = "ExecError";
+    this.command = command;
+    this.args = args;
+    this.result = result;
+  }
+};
+
+// src/shared/secret-patterns.ts
+var SECRET_CONTENT_PATTERNS = [
+  { name: "aws-access-key-id", source: "AKIA[0-9A-Z]{16}" },
+  { name: "github-pat-classic", source: "ghp_[A-Za-z0-9]{36}" },
+  { name: "github-server-token", source: "ghs_[A-Za-z0-9]{36}" },
+  { name: "github-oauth-token", source: "gho_[A-Za-z0-9]{36}" },
+  { name: "github-refresh-token", source: "ghr_[A-Za-z0-9]{36}" },
+  { name: "anthropic-api-key", source: "sk-ant-(api03-)?[A-Za-z0-9_-]{20,}" },
+  { name: "openai-style-key", source: "sk-[A-Za-z0-9]{20,}" },
+  { name: "slack-token", source: "xox[bpars]-[A-Za-z0-9-]{10,}" },
+  { name: "google-api-key", source: "AIza[A-Za-z0-9_-]{35}" },
+  { name: "stripe-live-secret", source: "sk_live_[A-Za-z0-9]{20,}" },
+  { name: "stripe-live-restricted", source: "rk_live_[A-Za-z0-9]{20,}" },
+  {
+    name: "jwt",
+    source: "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+"
+  },
+  {
+    name: "aws-secret-access-key",
+    source: "aws_secret_access_key\\s*=\\s*[A-Za-z0-9/+=]{40}"
+  },
+  // Quote-anchored detector — EXCLUDED from redaction (see header note).
+  { name: "json-private-key", source: '"private_key"\\s*:\\s*"-----BEGIN' },
+  { name: "pem-private-key", source: "-----BEGIN ([A-Z]+ )?PRIVATE KEY-----" },
+  { name: "github-pat-fine-grained", source: "github_pat_[A-Za-z0-9_]{60,}" },
+  { name: "openai-project-key", source: "sk-proj-[A-Za-z0-9_-]{40,}" },
+  { name: "nvidia-api-key", source: "nvapi-[A-Za-z0-9_-]{40,}" },
+  { name: "xai-api-key", source: "xai-[A-Za-z0-9]{40,}" }
+];
+function hasLiteralQuote(p) {
+  return p.source.includes('"');
+}
+var SECRET_REDACTION_PATTERNS = SECRET_CONTENT_PATTERNS.filter(
+  (p) => !hasLiteralQuote(p)
+);
+var REDACTION_TOKEN = "[REDACTED]";
+function redactSecrets(text) {
+  if (SECRET_REDACTION_PATTERNS.length === 0) return text;
+  const combined = SECRET_REDACTION_PATTERNS.map((p) => p.source).join("|");
+  const re = new RegExp(combined, "g");
+  return text.replace(re, REDACTION_TOKEN);
+}
+
+// src/git/exec-tools.ts
+function makeRunner(command) {
+  return (args, opts) => exec(command, args, opts);
+}
+var defaultGitRunner = makeRunner("git");
+var defaultGhRunner = makeRunner("gh");
+async function runOrThrow(command, runner, args, opts) {
+  const result = await runner(args, opts);
+  if (result.code !== 0) {
+    throw new ExecError(command, args, result);
+  }
+  return result;
+}
+
+// src/git/git-client.ts
+var log4 = createLogger("git");
+var DefaultGitClient = class {
+  runner;
+  constructor(runner = defaultGitRunner) {
+    this.runner = runner;
+  }
+  exec(args, opts) {
+    const execOpts = opts?.cwd ? { cwd: opts.cwd } : {};
+    return this.runner(args, execOpts);
+  }
+  execOrThrow(args, opts) {
+    const execOpts = opts?.cwd ? { cwd: opts.cwd } : {};
+    return runOrThrow("git", this.runner, args, execOpts);
+  }
+  async fetch(remote, ref, opts) {
+    await this.execOrThrow(["fetch", remote, ref], opts);
+  }
+  async revParse(ref, opts) {
+    const r = await this.execOrThrow(["rev-parse", ref], opts);
+    return r.stdout.trim();
+  }
+  async branchExists(ref, opts) {
+    const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
+    const r = await this.exec(["show-ref", "--verify", "--quiet", fullRef], opts);
+    if (r.code === 0) return true;
+    if (r.code === 1) return false;
+    throw new Error(`git show-ref failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
+  async checkoutB(branch, startPoint, opts) {
+    log4.debug(`checkout -B ${branch} ${startPoint}`);
+    await this.execOrThrow(["checkout", "-B", branch, startPoint], opts);
+  }
+  async currentBranch(opts) {
+    const r = await this.execOrThrow(["rev-parse", "--abbrev-ref", "HEAD"], opts);
+    return r.stdout.trim();
+  }
+  async lsRemoteHeads(remote, branch, opts) {
+    const r = await this.execOrThrow(["ls-remote", "--heads", remote, branch], opts);
+    const line = r.stdout.trim();
+    if (line.length === 0) return null;
+    const sha = line.split(/\s+/)[0];
+    return sha && sha.length > 0 ? sha : null;
+  }
+  async mergeBase(a, b, opts) {
+    const r = await this.execOrThrow(["merge-base", a, b], opts);
+    return r.stdout.trim();
+  }
+  async worktreeAdd(args, opts) {
+    await this.execOrThrow(["worktree", "add", ...args], opts);
+  }
+  async worktreeRemove(args, opts) {
+    const r = await this.exec(["worktree", "remove", ...args], opts);
+    return r.code;
+  }
+  async push(remote, branch, opts) {
+    const args = ["push"];
+    if (opts?.setUpstream) args.push("-u");
+    args.push(remote, branch);
+    await this.execOrThrow(args, opts);
+  }
+};
+
+// src/git/gh-client.ts
+var log5 = createLogger("gh");
+var PullRequestSchema = external_exports.object({
+  number: external_exports.number().int(),
+  headRefName: external_exports.string(),
+  baseRefName: external_exports.string(),
+  state: external_exports.enum(["OPEN", "CLOSED", "MERGED"]),
+  mergeable: external_exports.string().optional(),
+  mergeStateStatus: external_exports.string().optional(),
+  url: external_exports.string().optional()
+});
+function parseGhJson(result, schema, where) {
+  if (result.truncated) {
+    throw new Error(
+      `gh: output of '${where}' was TRUNCATED (hit maxBuffer) \u2014 refusing to parse a clipped JSON payload`
+    );
+  }
+  const raw = parseJson(result.stdout, where);
+  return schema.parse(raw);
+}
+var DefaultGhClient = class {
+  runner;
+  constructor(runner = defaultGhRunner) {
+    this.runner = runner;
+  }
+  execOpts(opts) {
+    return opts?.cwd ? { cwd: opts.cwd } : {};
+  }
+  async prList(args, opts) {
+    const argv = [
+      "pr",
+      "list",
+      "--head",
+      args.head,
+      "--state",
+      args.state ?? "open",
+      "--json",
+      "number,headRefName,baseRefName,state,mergeable,mergeStateStatus,url"
+    ];
+    if (args.base) argv.push("--base", args.base);
+    const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+    return parseGhJson(r, external_exports.array(PullRequestSchema), "gh pr list");
+  }
+  async prCreate(args, opts) {
+    const r = await runOrThrow(
+      "gh",
+      this.runner,
+      [
+        "pr",
+        "create",
+        "--base",
+        args.base,
+        "--head",
+        args.head,
+        "--title",
+        args.title,
+        "--body",
+        args.body
+      ],
+      this.execOpts(opts)
+    );
+    if (r.truncated) {
+      throw new Error("gh pr create: output truncated \u2014 cannot trust the emitted PR URL");
+    }
+    const url = r.stdout.trim().split(/\s+/).pop() ?? "";
+    const m = url.match(/\/pull\/(\d+)\s*$/);
+    if (!m) {
+      throw new Error(`gh pr create: could not parse PR number from output: ${r.stdout.trim()}`);
+    }
+    return { number: Number(m[1]), url };
+  }
+  async prView(number, fields, opts) {
+    const r = await runOrThrow(
+      "gh",
+      this.runner,
+      ["pr", "view", String(number), "--json", fields.join(",")],
+      this.execOpts(opts)
+    );
+    return parseGhJson(r, PullRequestSchema, "gh pr view");
+  }
+  async prMergeSquash(number, opts) {
+    const argv = ["pr", "merge", String(number), "--squash"];
+    if (opts?.auto) argv.push("--auto");
+    if (opts?.deleteBranch) argv.push("--delete-branch");
+    await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
+  async repoProtection(owner, repo, branch, opts) {
+    const path2 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const r = await this.runner(["api", path2], this.execOpts(opts));
+    if (r.code !== 0) {
+      if (/404|Not Found|Branch not protected/i.test(r.stderr)) {
+        return {
+          enabled: false,
+          requiredStatusChecks: [],
+          strictUpToDate: false,
+          hasMergeQueue: false
+        };
+      }
+      throw new Error(`gh api ${path2} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+    }
+    if (r.truncated) {
+      throw new Error(
+        `gh api ${path2}: output truncated \u2014 refusing to parse clipped protection JSON`
+      );
+    }
+    const raw = parseJson(r.stdout, path2);
+    const rsc = raw.required_status_checks ?? null;
+    const mq = await this.mergeQueueProbe(owner, repo, branch, opts);
+    return {
+      enabled: true,
+      requiredStatusChecks: rsc?.contexts ?? [],
+      strictUpToDate: rsc?.strict === true,
+      hasMergeQueue: mq
+    };
+  }
+  async putProtection(owner, repo, branch, body, opts) {
+    const path2 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const payload = JSON.stringify({
+      required_status_checks: {
+        strict: body.strict,
+        contexts: body.requiredStatusChecks
+      },
+      enforce_admins: true,
+      required_pull_request_reviews: null,
+      restrictions: null
+    });
+    log5.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
+    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path2, "--input", "-"], {
+      ...this.execOpts(opts),
+      input: payload
+    });
+  }
+  async mergeQueueProbe(owner, repo, branch, opts) {
+    const path2 = `repos/${owner}/${repo}/rules/branches/${branch}`;
+    const r = await this.runner(["api", path2], this.execOpts(opts));
+    if (r.code !== 0 || r.truncated) return false;
+    try {
+      const rules = parseJson(r.stdout, path2);
+      return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
+    } catch {
+      return false;
+    }
+  }
+};
+
+// src/git/branch.ts
+var DEFAULT_PREFIX = GitSchema.parse({}).branchPrefix;
+function runScopedBranch(runId, taskId, prefix = DEFAULT_PREFIX) {
+  validateId(runId, "run-id");
+  validateId(taskId, "task-id");
+  if (prefix.length === 0 || prefix.includes("/")) {
+    throw new Error(`branch: invalid prefix '${prefix}' (non-empty, no '/')`);
+  }
+  return `${prefix}/${runId}/${taskId}`;
+}
+
+// src/git/worktree.ts
+var log6 = createLogger("git");
+var GIT_DEFAULTS = GitSchema.parse({});
+async function createTaskWorktree(args) {
+  const remote = args.remote ?? "origin";
+  const base = args.base ?? GIT_DEFAULTS.stagingBranch;
+  const branch = runScopedBranch(args.runId, args.taskId);
+  const startPoint = `${remote}/${base}`;
+  await args.gitClient.fetch(remote, base);
+  await args.gitClient.worktreeAdd(["-b", branch, args.path, startPoint]);
+  await assertBaseIsStagingTip({
+    gitClient: args.gitClient,
+    path: args.path,
+    remote,
+    base
+  });
+  return { path: args.path, branch, startPoint };
+}
+async function assertBaseIsStagingTip(args) {
+  const remote = args.remote ?? "origin";
+  const base = args.base ?? GIT_DEFAULTS.stagingBranch;
+  const opts = { cwd: args.path };
+  const stagingTip = await args.gitClient.revParse(`${remote}/${base}`, opts);
+  const mergeBase = await args.gitClient.mergeBase("HEAD", `${remote}/${base}`, opts);
+  if (mergeBase !== stagingTip) {
+    throw new Error(
+      `worktree base drift: merge-base(HEAD, ${remote}/${base})=${mergeBase} != ${remote}/${base} tip=${stagingTip} \u2014 worktree did not birth on the staging tip (D12 invariant #4)`
+    );
+  }
+}
+
+// src/git/pr.ts
+var log7 = createLogger("git");
+var GIT_DEFAULTS2 = GitSchema.parse({});
+async function createTaskPrIdempotent(args) {
+  const base = args.base ?? GIT_DEFAULTS2.stagingBranch;
+  const existing = await args.ghClient.prList({ head: args.branch, base, state: "open" });
+  const pr = existing[0];
+  if (pr !== void 0) {
+    log7.info(`resuming existing PR #${pr.number} for head '${args.branch}' (no duplicate created)`);
+    return { number: pr.number, url: pr.url ?? "", resumed: true };
+  }
+  const created = await args.ghClient.prCreate({
+    base,
+    head: args.branch,
+    title: args.title,
+    body: args.body
+  });
+  log7.info(`created PR #${created.number} for head '${args.branch}'`);
+  return { number: created.number, url: created.url, resumed: false };
+}
+
+// src/git/serial-writer.ts
+var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
+import { mkdir as mkdir4 } from "node:fs/promises";
+import { join as join5 } from "node:path";
+var log8 = createLogger("git");
+var GIT_DEFAULTS3 = GitSchema.parse({});
+var DEFAULT_MERGE_LOCK_TUNING = {
+  stale: 3e4,
+  retries: 100,
+  retryMinTimeout: 25,
+  retryMaxTimeout: 1e3
+};
+var MergeSerializer = class {
+  ghClient;
+  owner;
+  repo;
+  staging;
+  dataDir;
+  lockScope;
+  tuning;
+  constructor(opts) {
+    this.ghClient = opts.ghClient;
+    this.owner = opts.owner;
+    this.repo = opts.repo;
+    this.staging = opts.stagingBranch ?? GIT_DEFAULTS3.stagingBranch;
+    this.dataDir = resolveDataDir(opts);
+    this.lockScope = opts.lockScope ?? `${opts.owner}__${opts.repo}__${this.staging}`.replace(/[^\w.-]/g, "-");
+    this.tuning = { ...DEFAULT_MERGE_LOCK_TUNING, ...opts.lock ?? {} };
+  }
+  lockfilePath() {
+    return join5(this.dataDir, "locks", `merge-${this.lockScope}.lock`);
+  }
+  /** Run `fn` while holding the app-level merge lock (the serial section). */
+  async withMergeLock(fn) {
+    const lockfile = this.lockfilePath();
+    await mkdir4(join5(this.dataDir, "locks"), { recursive: true });
+    const release = await (0, import_proper_lockfile2.lock)(lockfile, {
+      realpath: false,
+      stale: this.tuning.stale,
+      retries: {
+        retries: this.tuning.retries,
+        minTimeout: this.tuning.retryMinTimeout,
+        maxTimeout: this.tuning.retryMaxTimeout,
+        factor: 1.5
+      },
+      onCompromised: (err) => {
+        log8.error(`merge lock '${this.lockScope}' compromised: ${err.message}`);
+        throw err;
+      }
+    });
+    try {
+      return await fn();
+    } finally {
+      await release();
+    }
+  }
+  /**
+   * Serial-merge one task PR into staging. Acquires the app-level lock, RE-VERIFIES
+   * mergeable + up-to-date against the CURRENT staging tip (so the 2nd of two
+   * queued merges re-checks against the post-first-merge state), then either
+   * enqueues via native merge-queue (probe upgrade) or squash-merges now. NEVER
+   * arms N concurrent `--auto`.
+   */
+  async merge(prNumber) {
+    return this.withMergeLock(async () => {
+      const pr = await this.ghClient.prView(prNumber, [
+        "number",
+        "headRefName",
+        "baseRefName",
+        "state",
+        "mergeable",
+        "mergeStateStatus"
+      ]);
+      if (pr.mergeable === "CONFLICTING") {
+        log8.warn(`PR #${prNumber} is CONFLICTING \u2014 not merged`);
+        return { merged: false, reason: "not-mergeable", number: prNumber };
+      }
+      if (pr.mergeStateStatus === "BEHIND") {
+        log8.warn(
+          `PR #${prNumber} head is BEHIND ${this.staging} \u2014 refusing to merge (no force-push)`
+        );
+        return { merged: false, reason: "behind", number: prNumber };
+      }
+      const hasMergeQueue = await this.ghClient.mergeQueueProbe(
+        this.owner,
+        this.repo,
+        this.staging
+      );
+      if (hasMergeQueue) {
+        await this.ghClient.prMergeSquash(prNumber, { auto: true, deleteBranch: true });
+        log8.info(`PR #${prNumber} enqueued via native merge-queue`);
+        return { merged: true, via: "merge-queue", number: prNumber };
+      }
+      await this.ghClient.prMergeSquash(prNumber, { deleteBranch: true });
+      log8.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
+      return { merged: true, via: "app-level", number: prNumber };
+    });
+  }
+};
+
+// src/git/protection.ts
+var log9 = createLogger("git");
+var GIT_DEFAULTS4 = GitSchema.parse({});
+var ProtectionMissingError = class extends Error {
+  branch;
+  reasons;
+  constructor(branch, reasons) {
+    super(
+      `branch protection on '${branch}' is insufficient \u2014 run refuses to start:
+  - ${reasons.join(
+        "\n  - "
+      )}
+Re-run with --provision to provision protection, or configure it manually.`
+    );
+    this.name = "ProtectionMissingError";
+    this.branch = branch;
+    this.reasons = reasons;
+  }
+};
+async function probeProtection(args) {
+  const branch = args.branch ?? GIT_DEFAULTS4.stagingBranch;
+  const result = await args.ghClient.repoProtection(
+    args.owner,
+    args.repo,
+    branch
+  );
+  return {
+    enabled: result.enabled,
+    requiredStatusChecks: result.requiredStatusChecks,
+    strictUpToDate: result.strictUpToDate,
+    hasMergeQueue: result.hasMergeQueue
+  };
+}
+function requireProtectionOrRefuse(state, requiredChecks, branch = GIT_DEFAULTS4.stagingBranch) {
+  const reasons = [];
+  if (!state.enabled) {
+    reasons.push("no branch protection is configured");
+  }
+  if (!state.strictUpToDate) {
+    reasons.push("required_status_checks.strict (branches up-to-date) is OFF");
+  }
+  for (const check of requiredChecks) {
+    if (!state.requiredStatusChecks.includes(check)) {
+      reasons.push(`required status check '${check}' is not enforced`);
+    }
+  }
+  if (reasons.length > 0) {
+    throw new ProtectionMissingError(branch, reasons);
+  }
+  return state;
+}
+async function provisionProtection(args) {
+  const branch = args.branch ?? GIT_DEFAULTS4.stagingBranch;
+  if (!args.provision) {
+    throw new Error(
+      "provisionProtection called without --provision opt-in \u2014 refusing to mutate branch protection"
+    );
+  }
+  log9.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
+  await args.ghClient.putProtection(args.owner, args.repo, branch, {
+    requiredStatusChecks: [...args.requiredChecks],
+    strict: true
+  });
+  return probeProtection({
+    ghClient: args.ghClient,
+    owner: args.owner,
+    repo: args.repo,
+    branch
+  });
+}
+
+// src/git/staging.ts
+var log10 = createLogger("git");
+var GIT_DEFAULTS5 = GitSchema.parse({});
+async function ensureStaging(args) {
+  const remote = args.remote ?? "origin";
+  const staging = args.stagingBranch ?? GIT_DEFAULTS5.stagingBranch;
+  const base = args.baseBranch ?? GIT_DEFAULTS5.baseBranch;
+  if (base === "main") {
+    throw new Error(
+      "staging: baseBranch must not be 'main' (Decision 16 \u2014 the factory never touches main)"
+    );
+  }
+  await args.gitClient.fetch(remote, base);
+  const stagingHead = await args.gitClient.lsRemoteHeads(remote, staging);
+  if (stagingHead === null) {
+    const baseHead = await args.gitClient.lsRemoteHeads(remote, base);
+    if (baseHead === null) {
+      throw new Error(
+        `staging: base branch '${remote}/${base}' does not exist \u2014 cannot create staging`
+      );
+    }
+    log10.info(`creating ${staging} from ${remote}/${base}`);
+    await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
+    await args.gitClient.push(remote, staging, { setUpstream: true, cwd: args.cwd });
+    return { created: true, stagingTip: baseHead };
+  }
+  await args.gitClient.fetch(remote, staging);
+  const baseTip = await args.gitClient.revParse(`${remote}/${base}`, { cwd: args.cwd });
+  const stagingTip = await args.gitClient.revParse(`${remote}/${staging}`, { cwd: args.cwd });
+  if (baseTip === stagingTip) {
+    return { created: false, stagingTip };
+  }
+  const mergeBase = await args.gitClient.mergeBase(`${remote}/${base}`, `${remote}/${staging}`, {
+    cwd: args.cwd
+  });
+  if (mergeBase === stagingTip) {
+    log10.info(`fast-forwarding ${staging} to ${remote}/${base}`);
+    await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
+    await args.gitClient.push(remote, staging, { cwd: args.cwd });
+    return { created: false, stagingTip: baseTip };
+  }
+  if (mergeBase === baseTip) {
+    return { created: false, stagingTip };
+  }
+  throw new Error(
+    `staging: ${remote}/${staging} and ${remote}/${base} have DIVERGED (merge-base=${mergeBase}, staging=${stagingTip}, base=${baseTip}) \u2014 refusing to reconcile (no silent main fallback)`
+  );
+}
+
+// src/cli/subcommands/scaffold.ts
+var log11 = createLogger("scaffold");
+var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
+
+Usage:
+  factory scaffold --repo <owner/name> [--provision]
+
+Copies the committed CI + gate-config templates, ensures the staging branch, and
+probes branch protection. Without --provision a repo whose staging branch is not
+protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
+
+Options:
+  --repo <owner/name>   Target GitHub repo (required; used for the protection probe)
+  --provision           Write branch protection if missing (default: refuse)`;
+var GITIGNORE_ENTRIES = ["# factory plugin state", ".claude-plugin-data/", "*.worktree"];
+function resolveTemplatesDir() {
+  let dir = dirname4(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    const candidate = join6(dir, "templates");
+    if (existsSync4(join6(candidate, ".github", "workflows", "quality-gate.yml"))) {
+      return candidate;
+    }
+    const parent = dirname4(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error("scaffold: could not locate the plugin templates/ directory");
+}
+async function copyIfAbsent(src, dest, root, created, present) {
+  const rel = relative(root, dest);
+  if (!existsSync4(src)) {
+    log11.warn(`template missing, skipping: ${src}`);
+    return;
+  }
+  if (existsSync4(dest)) {
+    present.push(rel);
+    return;
+  }
+  await mkdir5(dirname4(dest), { recursive: true });
+  await copyFile(src, dest);
+  created.push(rel);
+}
+async function ensureGitignore(root, created, present) {
+  const path2 = join6(root, ".gitignore");
+  const rel = relative(root, path2);
+  if (!existsSync4(path2)) {
+    await writeFile(path2, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
+    created.push(rel);
+    return;
+  }
+  const current = await readFile2(path2, "utf8");
+  const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
+  if (missing.length === 0) {
+    present.push(rel);
+    return;
+  }
+  const sep2 = current.endsWith("\n") ? "" : "\n";
+  await writeFile(path2, current + sep2 + missing.join("\n") + "\n", "utf8");
+  present.push(rel);
+}
+async function runScaffold(opts) {
+  const created = [];
+  const present = [];
+  await copyIfAbsent(
+    join6(opts.templatesDir, ".github", "workflows", "quality-gate.yml"),
+    join6(opts.targetRoot, ".github", "workflows", "quality-gate.yml"),
+    opts.targetRoot,
+    created,
+    present
+  );
+  if (existsSync4(join6(opts.targetRoot, "package.json"))) {
+    await copyIfAbsent(
+      join6(opts.templatesDir, ".stryker.config.json"),
+      join6(opts.targetRoot, ".stryker.config.json"),
+      opts.targetRoot,
+      created,
+      present
+    );
+    await copyIfAbsent(
+      join6(opts.templatesDir, ".dependency-cruiser.cjs"),
+      join6(opts.targetRoot, ".dependency-cruiser.cjs"),
+      opts.targetRoot,
+      created,
+      present
+    );
+  }
+  await ensureGitignore(opts.targetRoot, created, present);
+  const staging = await ensureStaging({
+    gitClient: opts.gitClient,
+    stagingBranch: opts.config.git.stagingBranch,
+    baseBranch: opts.config.git.baseBranch,
+    cwd: opts.targetRoot
+  });
+  const branch = opts.config.git.stagingBranch;
+  const required = opts.config.git.requiredStatusChecks;
+  let state = await probeProtection({
+    ghClient: opts.ghClient,
+    owner: opts.owner,
+    repo: opts.repo,
+    branch
+  });
+  let provisioned = false;
+  if (opts.provision) {
+    state = await provisionProtection({
+      ghClient: opts.ghClient,
+      owner: opts.owner,
+      repo: opts.repo,
+      branch,
+      requiredChecks: required,
+      provision: true
+    });
+    provisioned = true;
+  }
+  requireProtectionOrRefuse(state, required, branch);
+  return {
+    repo: `${opts.owner}/${opts.repo}`,
+    files_created: created,
+    files_present: present,
+    staging: { created: staging.created, staging_tip: staging.stagingTip },
+    protection: {
+      enabled: state.enabled,
+      strict_up_to_date: state.strictUpToDate,
+      required_status_checks: state.requiredStatusChecks,
+      provisioned
+    }
+  };
+}
+function parseRepoSlug(slug) {
+  const parts = slug.split("/");
+  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
+    throw new UsageError(`--repo must be '<owner>/<name>', got '${slug}'`);
+  }
+  return { owner: parts[0], repo: parts[1] };
+}
+async function run3(argv) {
+  const args = parseArgs(argv, { booleans: ["provision"] });
+  if (args.flag("help") === true) {
+    emitLine(HELP3);
+    return EXIT.OK;
+  }
+  const { owner, repo } = parseRepoSlug(args.requireFlag("repo"));
+  const report = await runScaffold({
+    targetRoot: process.cwd(),
+    templatesDir: resolveTemplatesDir(),
+    owner,
+    repo,
+    config: loadConfig(),
+    gitClient: new DefaultGitClient(),
+    ghClient: new DefaultGhClient(),
+    provision: args.flag("provision") === true
+  });
+  emitJson(report);
+  return EXIT.OK;
+}
+var scaffoldCommand = {
+  describe: "Prepare a repo (templates + staging + branch protection) for the pipeline",
+  run: async (argv) => {
+    try {
+      return await run3(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`scaffold: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/core/stage-machine/stages.ts
+var TaskStageEnum = external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]);
+var RunStageEnum = external_exports.enum(["finalize"]);
+var TASK_STAGE_ORDER = [
+  "preflight",
+  "tests",
+  "exec",
+  "verify",
+  "ship"
+];
+function nextStage(s) {
+  const i = TASK_STAGE_ORDER.indexOf(s);
+  if (i < 0) {
+    throw new Error(`nextStage: '${s}' is not a known task stage`);
+  }
+  const next = TASK_STAGE_ORDER[i + 1];
+  return next ?? null;
+}
+function stageToInFlightStatus(s) {
+  switch (s) {
+    case "preflight":
+      return TaskStatusEnum.enum.pending;
+    case "tests":
+      return TaskStatusEnum.enum.executing;
+    case "exec":
+      return TaskStatusEnum.enum.executing;
+    case "verify":
+      return TaskStatusEnum.enum.reviewing;
+    case "ship":
+      return TaskStatusEnum.enum.shipping;
+  }
+}
+
+// src/core/stage-machine/manifest.ts
+var SpawnRoleEnum = external_exports.enum([
+  "test-writer",
+  "executor",
+  "implementation-reviewer",
+  "quality-reviewer",
+  "architecture-reviewer",
+  "security-reviewer",
+  "silent-failure-hunter",
+  "type-design-reviewer",
+  "scribe"
+]);
+var SpawnAgentSchema = external_exports.object({
+  /** The reviewer/producer role (closed set). */
+  role: SpawnRoleEnum,
+  /** Worktree isolation. Defaults to "worktree". */
+  isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
+  /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
+  model: external_exports.string().min(1),
+  /** Hard turn budget for the agent (positive integer). */
+  max_turns: external_exports.number().int().positive(),
+  /** Pointer to the prompt artifact, run-store relative (non-empty). */
+  prompt_ref: external_exports.string().min(1)
+});
+var SpawnManifestSchema = external_exports.object({
+  /** Engine resumes here after the agents return. A per-task stage. */
+  stage_after: TaskStageEnum,
+  /** Agents to spawn; at least one (an empty manifest is a programming error). */
+  agents: external_exports.array(SpawnAgentSchema).min(1)
+});
+function parseSpawnManifest(raw) {
+  return SpawnManifestSchema.parse(raw);
+}
+
+// src/core/stage-machine/result.ts
+function assertNever(x) {
+  throw new Error(
+    `assertNever: unhandled value ${JSON.stringify(x)} \u2014 a StageResult.kind was not handled`
+  );
+}
+function advance(to) {
+  return { kind: "advance", to };
+}
+function spawn2(manifest) {
+  return { kind: "spawn-agents", manifest };
+}
+function waitRetry(stage, reason, attempt, max_attempts) {
+  return { kind: "wait-retry", stage, reason, attempt, max_attempts };
+}
+function taskDone() {
+  return { kind: "task-terminal", outcome: { outcome: "done" } };
+}
+function finalizeTerminal(run_status) {
+  return { kind: "finalize-terminal", run_status };
+}
+
+// src/core/stage-machine/engine.ts
+async function runStage(stage, ctx, handlers) {
+  const result = await dispatch(stage, ctx, handlers);
+  return checkResult(stage, result);
+}
+async function dispatch(stage, ctx, handlers) {
+  const runParsed = RunStageEnum.safeParse(stage);
+  if (runParsed.success) {
+    const runStageName = runParsed.data;
+    switch (runStageName) {
+      case "finalize":
+        return handlers.finalize(ctx);
+      default:
+        return assertNever(runStageName);
+    }
+  }
+  const parsed = TaskStageEnum.safeParse(stage);
+  if (!parsed.success) {
+    throw new Error(`runStage: unknown stage '${String(stage)}'`);
+  }
+  const taskStage = parsed.data;
+  switch (taskStage) {
+    case "preflight":
+      return handlers.preflight(ctx);
+    case "tests":
+      return handlers.tests(ctx);
+    case "exec":
+      return handlers.exec(ctx);
+    case "verify":
+      return handlers.verify(ctx);
+    case "ship":
+      return handlers.ship(ctx);
+    default:
+      return assertNever(taskStage);
+  }
+}
+function checkResult(stage, result) {
+  if (RunStageEnum.safeParse(stage).success) {
+    if (result.kind !== "finalize-terminal") {
+      throw new Error(
+        `runStage: run-level stage '${String(stage)}' returned '${result.kind}' \u2014 finalize is terminal and must return only 'finalize-terminal' (it must never spin)`
+      );
+    }
+    return result;
+  }
+  switch (result.kind) {
+    case "advance":
+    case "spawn-agents":
+    case "graceful-stop":
+    case "task-terminal":
+      return result;
+    case "wait-retry": {
+      if (result.attempt > result.max_attempts) {
+        throw new Error(
+          `runStage: wait-retry for stage '${result.stage}' exceeded max_attempts (${result.attempt} > ${result.max_attempts}); caller must classify a drop (reason: ${result.reason})`
+        );
+      }
+      return result;
+    }
+    case "finalize-terminal":
+      throw new Error(
+        `runStage: per-task stage '${String(stage)}' returned 'finalize-terminal' \u2014 that result is reserved for the run-level finalize stage`
+      );
+    default:
+      return assertNever(result);
+  }
+}
+function decideFinalize(run12) {
+  const tasks = Object.values(run12.tasks);
+  const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
+  if (nonTerminal.length > 0) {
+    const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
+    throw new Error(
+      `decideFinalize: ${nonTerminal.length} non-terminal task(s) remain [${ids}] \u2014 finalize is terminal and must not be called with in-flight work (would spin in bash)`
+    );
+  }
+  const doneCount = tasks.filter((t) => t.status === "done").length;
+  if (doneCount === 0) {
+    return finalizeTerminal("failed");
+  }
+  if (doneCount === tasks.length) {
+    return finalizeTerminal("completed");
+  }
+  return finalizeTerminal("partial");
+}
+
+// src/spec/schema.ts
+var SpecTaskSchema = external_exports.object({
+  /** Stable task id within the spec (charset enforced by the consumer). */
+  task_id: external_exports.string().min(1),
+  /** Short human title. */
+  title: external_exports.string().min(1),
+  /** What the task delivers. */
+  description: external_exports.string().min(1),
+  /**
+   * The files this task touches — 1..3 (the ≤3-files granularity invariant the
+   * spec reviewer also enforces). Empty or >3 is a loud parse error.
+   */
+  files: external_exports.array(external_exports.string().min(1)).min(1).max(3),
+  /** ≥1 acceptance criterion; each must be testable (gate enforces non-vagueness). */
+  acceptance_criteria: external_exports.array(external_exports.string().min(1)).min(1),
+  /** Concrete test descriptions to write first (TDD). ≥1. */
+  tests_to_write: external_exports.array(external_exports.string().min(1)).min(1),
+  /** Task ids this task depends on (may be empty for a root task). */
+  depends_on: external_exports.array(external_exports.string().min(1)).default([]),
+  /**
+   * The SINGLE producer dial (Decision 25) — the generator's whole-PRD
+   * difficulty×stakes judgment. Imported from the frozen seam; the legacy
+   * routine/feature/security values parse-fail here.
+   */
+  risk_tier: RiskTierEnum,
+  /** Why this tier — required so the dial is a judgment, not a coin flip. */
+  risk_rationale: external_exports.string().min(1),
+  /** Per-task TDD opt-out (read from the spec, never from runtime state). */
+  tdd_exempt: external_exports.boolean().optional()
+}).strict();
+var SpecTasksSchema = external_exports.array(SpecTaskSchema).min(1);
+var SpecManifestSchema = external_exports.object({
+  spec_id: external_exports.string().min(1),
+  issue_number: external_exports.number().int().positive(),
+  slug: external_exports.string().min(1),
+  /** Repo identity, e.g. "owner/name" (sanitized to a path segment by the store). */
+  repo: external_exports.string().min(1),
+  /** ISO-8601 creation timestamp. */
+  generated_at: external_exports.string().min(1),
+  tasks: SpecTasksSchema
+}).strict();
+function parseSpecTasks(raw) {
+  return SpecTasksSchema.parse(raw);
+}
+function parseSpecManifest(raw) {
+  return SpecManifestSchema.parse(raw);
+}
+
+// src/spec/gh.ts
+var log12 = createLogger("spec:gh");
+var GhAuthError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "GhAuthError";
+  }
+};
+var IssueNotFoundError = class extends Error {
+  issueNumber;
+  constructor(issueNumber, message) {
+    super(message);
+    this.name = "IssueNotFoundError";
+    this.issueNumber = issueNumber;
+  }
+};
+var AUTH_HINT = /not logged|gh auth login|authentication|HTTP 401|requires authentication/i;
+var NOT_FOUND_HINT = /could not resolve to|not found|HTTP 404|no issue|GraphQL: Could not/i;
+var RealGhClient = class {
+  exec;
+  bodyMaxBytes;
+  constructor(opts = {}) {
+    this.exec = opts.exec ?? exec;
+    this.bodyMaxBytes = opts.bodyMaxBytes ?? SPEC_DEFAULTS.prdBodyMaxBytes;
+  }
+  async fetchPrd(issueNumber, opts = {}) {
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      throw new Error(`fetchPrd: issue number must be a positive integer, got ${issueNumber}`);
+    }
+    const args = ["issue", "view", String(issueNumber), "--json", "number,title,body,labels"];
+    if (opts.repo) {
+      args.push("--repo", opts.repo);
+    }
+    const result = await this.exec("gh", args, { timeoutMs: 3e4 });
+    if (result.code !== 0) {
+      const stderr = result.stderr.trim();
+      if (AUTH_HINT.test(stderr)) {
+        throw new GhAuthError(`gh is not authenticated (run \`gh auth login\`): ${stderr}`);
+      }
+      if (NOT_FOUND_HINT.test(stderr)) {
+        throw new IssueNotFoundError(
+          issueNumber,
+          `issue #${issueNumber} not found${opts.repo ? ` in ${opts.repo}` : ""}: ${stderr}`
+        );
+      }
+      throw new Error(
+        `gh issue view #${issueNumber} failed (code=${result.code ?? "null"}): ${stderr}`
+      );
+    }
+    if (result.truncated) {
+      throw new Error(
+        `gh issue view #${issueNumber} output was truncated; cannot parse a clipped payload`
+      );
+    }
+    const parsed = parseJson(result.stdout, `gh issue #${issueNumber}`);
+    const title = typeof parsed.title === "string" ? parsed.title : "";
+    if (title.length === 0) {
+      throw new Error(`gh issue view #${issueNumber}: missing or empty title in response`);
+    }
+    const rawBody = typeof parsed.body === "string" ? parsed.body : "";
+    const { body, body_truncated } = this.capBody(rawBody);
+    if (body_truncated) {
+      log12.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
+    }
+    const labels = Array.isArray(parsed.labels) ? parsed.labels.map(
+      (l) => l && typeof l === "object" && "name" in l && typeof l.name === "string" ? l.name : typeof l === "string" ? l : null
+    ).filter((l) => l !== null) : [];
+    return {
+      issue_number: issueNumber,
+      title,
+      body,
+      labels,
+      body_truncated
+    };
+  }
+  /** Cap the body to `bodyMaxBytes` on a UTF-8 byte boundary. */
+  capBody(body) {
+    const buf = Buffer.from(body, "utf8");
+    if (buf.length <= this.bodyMaxBytes) {
+      return { body, body_truncated: false };
+    }
+    const clipped = buf.subarray(0, this.bodyMaxBytes).toString("utf8");
+    return { body: clipped, body_truncated: true };
+  }
+};
+
+// src/spec/store.ts
+import { readFile as readFile3, readdir } from "node:fs/promises";
+import { join as join7 } from "node:path";
+var log13 = createLogger("spec:store");
+var SPEC_MD_FILE = "spec.md";
+var TASKS_FILE = "tasks.json";
+function makeSpecId(issueNumber, slug) {
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+    throw new Error(`makeSpecId: issue number must be a positive integer, got ${issueNumber}`);
+  }
+  const safeSlug = slugify(slug);
+  if (safeSlug.length === 0) {
+    throw new Error(`makeSpecId: slug '${slug}' has no usable characters`);
+  }
+  const specId = `${issueNumber}-${safeSlug}`;
+  validateId(specId, "spec-id");
+  return specId;
+}
+function issueOf(specId) {
+  const m = /^(\d+)-/.exec(specId);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+var SpecStore = class {
+  dataDir;
+  constructor(opts = {}) {
+    this.dataDir = resolveDataDir(opts);
+  }
+  /**
+   * Resolve an existing spec for `(repo, issueNumber)` — Δ X reuse. Scans the
+   * repo's spec dir for a `spec_id` starting with `<issue>-` and returns its
+   * parsed manifest, else null. The issue number (not the slug) is the lookup
+   * key, so a rerun reuses the spec even if the slug would differ on regen.
+   *
+   * @throws if a matching dir exists but its manifest/tasks are unreadable or
+   *         invalid (a corrupt durable spec is loud, never silently a miss).
+   */
+  async resolveByIssue(repo, issueNumber) {
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      throw new Error(
+        `resolveByIssue: issue number must be a positive integer, got ${issueNumber}`
+      );
+    }
+    const repoRoot = join7(specsRoot(this.dataDir), repoKey(repo));
+    let entries;
+    try {
+      entries = await readdir(repoRoot);
+    } catch (err) {
+      if (err.code === "ENOENT") return null;
+      throw err;
+    }
+    const prefix = `${issueNumber}-`;
+    const matches = entries.filter((e) => issueOf(e) === issueNumber && e.startsWith(prefix));
+    if (matches.length === 0) return null;
+    if (matches.length > 1) {
+      throw new Error(
+        `resolveByIssue: multiple specs for issue #${issueNumber} in ${repo}: ${matches.join(", ")}`
+      );
+    }
+    const specId = matches[0];
+    return this.read(repo, specId);
+  }
+  /** Read + validate the manifest for a known `(repo, spec_id)`. */
+  async read(repo, specId) {
+    const dir = specDir(this.dataDir, repo, specId);
+    const tasksRaw = await readFile3(join7(dir, TASKS_FILE), "utf8");
+    const tasks = parseSpecTasks(parseJson(tasksRaw, join7(dir, TASKS_FILE)));
+    const meta = await this.readMeta(dir);
+    return parseSpecManifest({
+      spec_id: specId,
+      issue_number: issueOf(specId) ?? meta.issue_number,
+      slug: specId.replace(/^\d+-/, ""),
+      repo,
+      generated_at: meta.generated_at,
+      tasks
+    });
+  }
+  /**
+   * Durably write a spec: `spec.md` + the bare `tasks.json` array. The manifest
+   * header is persisted as a sidecar so {@link read} can reconstruct
+   * `generated_at` without re-running the generator.
+   */
+  async write(manifest, specMd) {
+    const parsed = parseSpecManifest(manifest);
+    const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
+    await atomicWriteFile(join7(dir, SPEC_MD_FILE), specMd);
+    await atomicWriteFile(join7(dir, TASKS_FILE), stringifyJson(parsed.tasks));
+    await atomicWriteFile(
+      join7(dir, META_FILE),
+      stringifyJson({
+        issue_number: parsed.issue_number,
+        slug: parsed.slug,
+        repo: parsed.repo,
+        generated_at: parsed.generated_at
+      })
+    );
+    log13.info(`wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir}`);
+    return this.toPointer(parsed);
+  }
+  /** Build the run-facing {@link SpecPointer} from a manifest. */
+  toPointer(manifest) {
+    return {
+      repo: manifest.repo,
+      spec_id: manifest.spec_id,
+      issue_number: manifest.issue_number
+    };
+  }
+  async readMeta(dir) {
+    const raw = await readFile3(join7(dir, META_FILE), "utf8");
+    const meta = parseJson(
+      raw,
+      join7(dir, META_FILE)
+    );
+    const issueNumber = typeof meta.issue_number === "number" ? meta.issue_number : 0;
+    const generatedAt = typeof meta.generated_at === "string" ? meta.generated_at : "";
+    if (generatedAt.length === 0) {
+      throw new Error(`spec meta at ${dir} is missing generated_at`);
+    }
+    return { issue_number: issueNumber, generated_at: generatedAt };
+  }
+};
+var META_FILE = "spec.meta.json";
+
+// src/spec/agents.ts
+var GenerateResultSchema = external_exports.object({
+  specMd: external_exports.string().min(1),
+  slug: external_exports.string().min(1),
+  tasks: SpecTasksSchema
+}).strict();
+function parseGenerateResult(raw) {
+  return GenerateResultSchema.parse(raw);
+}
+function buildGenerateSpawn(prd) {
+  return {
+    role: "spec-generator",
+    model: SPEC_DEFAULTS.specModel,
+    effort: SPEC_DEFAULTS.specEffort,
+    context: {
+      issue_number: prd.issue_number,
+      title: prd.title,
+      body: prd.body,
+      labels: prd.labels
+    }
+  };
+}
+function buildReviewSpawn(prd, generated) {
+  return {
+    role: "spec-reviewer",
+    model: SPEC_DEFAULTS.specModel,
+    effort: SPEC_DEFAULTS.specEffort,
+    context: {
+      issue_number: prd.issue_number,
+      prd_body: prd.body,
+      spec_md: generated.specMd,
+      tasks: generated.tasks
+    }
+  };
+}
+
+// src/spec/gates.ts
+function combineGates(...results) {
+  const blockers = results.flatMap((r) => r.blockers);
+  return { passed: blockers.length === 0, blockers };
+}
+var HORIZONTAL_MARKERS = [
+  "schema",
+  "database",
+  "migration",
+  "model",
+  "models",
+  "backend",
+  "frontend",
+  "ui",
+  "api layer",
+  "data layer",
+  "service layer",
+  "controllers",
+  "routes",
+  "styling",
+  "css",
+  "types",
+  "interfaces",
+  "tests"
+];
+function looksHorizontal(title) {
+  const t = title.trim().toLowerCase();
+  if (t.split(/\s+/).length > 4) return false;
+  return HORIZONTAL_MARKERS.some((m) => t === m || t.startsWith(m + " ") || t.endsWith(" " + m));
+}
+function verticalSliceGate(tasks) {
+  if (tasks.length <= 1) return { passed: true, blockers: [] };
+  const horizontal = tasks.filter((t) => looksHorizontal(t.title));
+  if (horizontal.length === tasks.length) {
+    return {
+      passed: false,
+      blockers: [
+        `vertical-slice: decomposition is purely horizontal \u2014 every task is a layer (${horizontal.map((t) => t.task_id).join(", ")}); slice by end-to-end feature instead`
+      ]
+    };
+  }
+  return { passed: true, blockers: [] };
+}
+var VAGUE_MARKERS = [
+  "works well",
+  "works correctly",
+  "works properly",
+  "as expected",
+  "user-friendly",
+  "easy to use",
+  "intuitive",
+  "fast enough",
+  "performant",
+  "good performance",
+  "robust",
+  "reliable",
+  "handle errors gracefully",
+  "looks good",
+  "high quality",
+  "etc.",
+  "and so on"
+];
+function keywords(text) {
+  return new Set(
+    text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length >= 4)
+  );
+}
+function isVague(criterion) {
+  const c = criterion.trim().toLowerCase();
+  if (c.length < 8) return true;
+  return VAGUE_MARKERS.some((m) => c.includes(m));
+}
+function hasCoveringTest(criterion, tests) {
+  const ck = keywords(criterion);
+  if (ck.size === 0) return false;
+  return tests.some((t) => {
+    const tk = keywords(t);
+    for (const w of ck) if (tk.has(w)) return true;
+    return false;
+  });
+}
+function testabilityGate(tasks) {
+  const blockers = [];
+  for (const task of tasks) {
+    for (const criterion of task.acceptance_criteria) {
+      if (isVague(criterion)) {
+        blockers.push(
+          `testability: task ${task.task_id} has a vague/non-actionable criterion: "${criterion}"`
+        );
+        continue;
+      }
+      if (!hasCoveringTest(criterion, task.tests_to_write)) {
+        blockers.push(
+          `testability: task ${task.task_id} criterion "${criterion}" has no covering tests_to_write entry`
+        );
+      }
+    }
+  }
+  return { passed: blockers.length === 0, blockers };
+}
+function extractPrdRequirements(body) {
+  const lines = body.split(/\r?\n/);
+  const reqs = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const bullet = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    if (bullet && bullet[1] && bullet[1].trim().length > 0) {
+      reqs.push(bullet[1].trim());
+      continue;
+    }
+    if (/\b(must|shall|should|need to|required to)\b/i.test(line) && !line.startsWith("#")) {
+      reqs.push(line);
+    }
+  }
+  return reqs;
+}
+function requirementCovered(requirement, allCriteria) {
+  const rk = keywords(requirement);
+  if (rk.size === 0) return true;
+  return allCriteria.some((c) => {
+    const ck = keywords(c);
+    let shared = 0;
+    for (const w of rk) if (ck.has(w)) shared++;
+    return shared >= Math.min(2, rk.size);
+  });
+}
+function taskLaddersToPrd(task, requirements) {
+  const text = [task.title, task.description, ...task.acceptance_criteria].join(" ");
+  const tk = keywords(text);
+  if (requirements.length === 0) return false;
+  return requirements.some((r) => {
+    const rk = keywords(r);
+    for (const w of rk) if (tk.has(w)) return true;
+    return false;
+  });
+}
+function traceabilityGate(prd, tasks) {
+  const requirements = extractPrdRequirements(prd.body);
+  const allCriteria = tasks.flatMap((t) => t.acceptance_criteria);
+  const blockers = [];
+  if (requirements.length === 0) {
+    blockers.push(
+      `traceability: PRD #${prd.issue_number} yielded no extractable requirements \u2014 cannot verify the spec covers it (PRD is the axiom)`
+    );
+    return { passed: false, blockers };
+  }
+  for (const req of requirements) {
+    if (!requirementCovered(req, allCriteria)) {
+      blockers.push(`traceability: PRD requirement has no covering acceptance criterion: "${req}"`);
+    }
+  }
+  for (const task of tasks) {
+    if (!taskLaddersToPrd(task, requirements)) {
+      blockers.push(
+        `traceability: task ${task.task_id} ("${task.title}") does not ladder to any PRD requirement`
+      );
+    }
+  }
+  return { passed: blockers.length === 0, blockers };
+}
+function runSpecGates(prd, tasks) {
+  return combineGates(
+    verticalSliceGate(tasks),
+    testabilityGate(tasks),
+    traceabilityGate(prd, tasks)
+  );
+}
+
+// src/spec/review.ts
+var REVIEW_DIMENSION_COUNT = 6;
+var REVIEW_MAX_TOTAL = REVIEW_DIMENSION_COUNT * 10;
+var dimScore = external_exports.number().int().min(1).max(10);
+var PerDimensionSchema = external_exports.object({
+  granularity: dimScore,
+  dependencies: dimScore,
+  acceptance_criteria: dimScore,
+  tests: dimScore,
+  vertical_slices: dimScore,
+  alignment: dimScore
+}).strict();
+var ReviewVerdictSchema = external_exports.object({
+  decision: external_exports.enum(["PASS", "NEEDS_REVISION"]),
+  score: external_exports.number().int().min(0).max(REVIEW_MAX_TOTAL),
+  per_dimension: PerDimensionSchema,
+  blockers: external_exports.array(external_exports.string()).default([]),
+  concerns: external_exports.array(external_exports.string()).default([])
+}).strict();
+function parseReviewVerdict(raw) {
+  return ReviewVerdictSchema.parse(raw);
+}
+function decideSpecReview(verdict, opts = {}) {
+  const threshold = opts.passReviewThreshold ?? SPEC_DEFAULTS.passReviewThreshold;
+  const floor = opts.dimensionFloor ?? SPEC_DEFAULTS.dimensionFloor;
+  const dims = verdict.per_dimension;
+  const total = dims.granularity + dims.dependencies + dims.acceptance_criteria + dims.tests + dims.vertical_slices + dims.alignment;
+  const floorFailures = Object.entries(dims).filter(([, v]) => v <= floor).map(([k]) => k);
+  if (floorFailures.length > 0) {
+    return {
+      decision: "NEEDS_REVISION",
+      total,
+      floorFailures,
+      reason: `auto-fail floor tripped: dimension(s) ${floorFailures.join(", ")} scored <= ${floor} (total ${total}/${REVIEW_MAX_TOTAL})`
+    };
+  }
+  if (total >= threshold) {
+    return {
+      decision: "PASS",
+      total,
+      floorFailures: [],
+      reason: `total ${total}/${REVIEW_MAX_TOTAL} >= threshold ${threshold}`
+    };
+  }
+  return {
+    decision: "NEEDS_REVISION",
+    total,
+    floorFailures: [],
+    reason: `total ${total}/${REVIEW_MAX_TOTAL} < threshold ${threshold}`
+  };
+}
+
+// src/spec/pipeline.ts
+var log14 = createLogger("spec:pipeline");
+function buildManifest(repo, issueNumber, generated) {
+  const specId = makeSpecId(issueNumber, generated.slug);
+  const slug = specId.replace(/^\d+-/, "");
+  return parseSpecManifest({
+    spec_id: specId,
+    issue_number: issueNumber,
+    slug,
+    repo,
+    generated_at: nowIso(),
+    tasks: generated.tasks
+  });
+}
+
+// src/verifier/deterministic/gate-id.ts
+var GATE_IDS = [
+  "test",
+  "tdd",
+  "coverage",
+  "mutation",
+  "sast",
+  "type",
+  "lint",
+  "build"
+];
+
+// src/verifier/deterministic/strategy.ts
+function ran(gate, observed, detail) {
+  const evidence = detail === void 0 ? { gate, observed } : { gate, observed, detail };
+  return { kind: "ran", evidence };
+}
+function skip(gate, reason) {
+  return { kind: "skip", gate, reason };
+}
+
+// src/verifier/deterministic/memo.ts
+var GateMemo = class {
+  /** `${gate}@${treeSha}` → evidence (ground truth, never a verdict). */
+  evidence = /* @__PURE__ */ new Map();
+  /** `${taskId}@${tipSha}` → the TDD verdict struct (re-derived by the runner). */
+  tdd = /* @__PURE__ */ new Map();
+  evKey(gate, treeSha) {
+    return `${gate}@${treeSha}`;
+  }
+  tddKey(taskId, tipSha) {
+    return `${taskId}@${tipSha}`;
+  }
+  /** Look up cached evidence for a gate at a tree sha (undefined = miss). */
+  getEvidence(gate, treeSha) {
+    return this.evidence.get(this.evKey(gate, treeSha));
+  }
+  /** Cache a gate's evidence at a tree sha. */
+  putEvidence(gate, treeSha, ev) {
+    this.evidence.set(this.evKey(gate, treeSha), ev);
+  }
+  /** Look up the memoized TDD verdict for a task at a tip sha (undefined = miss). */
+  getTdd(taskId, tipSha) {
+    return this.tdd.get(this.tddKey(taskId, tipSha));
+  }
+  /** Memoize the TDD verdict for a task at a tip sha. */
+  putTdd(taskId, tipSha, verdict) {
+    this.tdd.set(this.tddKey(taskId, tipSha), verdict);
+  }
+};
+
+// src/verifier/deterministic/scope.ts
+function isTestPath(file) {
+  if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) return true;
+  if (/_test\.(go|py|rb|exs)$/.test(file)) return true;
+  if (/Test\.(java|kt|php)$/.test(file)) return true;
+  if (/Tests\.(swift|cs)$/.test(file)) return true;
+  if (/_spec\.rb$/.test(file)) return true;
+  if (/^(tests|test|spec|__tests__)\//.test(file)) return true;
+  if (/\/(tests|test|spec|__tests__)\//.test(file)) return true;
+  return false;
+}
+function isDocsPath(file) {
+  if (/^docs\//.test(file)) return true;
+  if (file.endsWith(".md")) return true;
+  return false;
+}
+function isMutableSrc(file) {
+  if (!/^src\/.*\.ts$/.test(file)) return false;
+  if (/\.(test|spec|d)\.ts$/.test(file)) return false;
+  if (file.includes("/types/")) return false;
+  if (file.includes("/data/")) return false;
+  if (/(^|\/)index\.ts$/.test(file)) return false;
+  return true;
+}
+function mutationScope(changedFiles) {
+  return filterDedup(changedFiles, isMutableSrc);
+}
+function diffScopedTestFiles(changedFiles) {
+  return filterDedup(changedFiles, isTestPath);
+}
+function filterDedup(files, keep) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const f of files) {
+    if (!keep(f)) continue;
+    if (seen.has(f)) continue;
+    seen.add(f);
+    out.push(f);
+  }
+  return out;
+}
+
+// src/verifier/deterministic/strategies/test.ts
+var testStrategy = {
+  id: "test",
+  async run(ctx) {
+    const base = `origin/${ctx.baseRef}`;
+    const changed = await ctx.tools.git.changedFiles(base, { cwd: ctx.worktree });
+    const scoped = diffScopedTestFiles(changed);
+    const result = await ctx.tools.vitest.run(scoped, { cwd: ctx.worktree });
+    if (result.truncated) {
+      throw new Error("test gate: vitest output truncated \u2014 refusing to judge a clipped run");
+    }
+    const observed = result.code === 0;
+    const detail = scoped.length > 0 ? `diff-scoped (${scoped.length} test file(s))` : "un-scoped";
+    return ran("test", observed, `vitest exit=${result.code ?? "null"} ${detail}`);
+  }
+};
+
+// src/verifier/deterministic/tdd-classify.ts
+function classifyCommit(files) {
+  const real = files.filter((f) => f.length > 0);
+  if (real.length === 0) return "empty";
+  let kind = "test-only";
+  for (const f of real) {
+    if (!isTestPath(f) && !isDocsPath(f)) {
+      kind = "impl";
+    }
+  }
+  return kind;
+}
+function deriveTddVerdict(commits, exempt) {
+  if (commits.length === 0) {
+    return {
+      ok: false,
+      exempt: false,
+      violations: [],
+      note: "no commits in base..HEAD \u2014 fail-closed (executor produced nothing)"
+    };
+  }
+  const classed = commits.map((c) => ({
+    sha: c.sha,
+    kind: classifyCommit(c.files),
+    tagged: c.tagged
+  }));
+  const hasImpl = classed.some((c) => c.kind === "impl");
+  if (!hasImpl) {
+    return { ok: true, exempt: false, violations: [], note: "no impl commit (tests/docs only)" };
+  }
+  if (exempt) {
+    return { ok: true, exempt: true, violations: [], note: "task tdd_exempt" };
+  }
+  let seenTestOnly = false;
+  const violations = [];
+  for (const c of classed) {
+    if (c.kind === "test-only" && c.tagged) {
+      seenTestOnly = true;
+    } else if (c.kind === "impl") {
+      if (!c.tagged) {
+        violations.push({ commit: c.sha, reason: "impl-commit-untagged" });
+      } else if (!seenTestOnly) {
+        violations.push({ commit: c.sha, reason: "impl-without-preceding-test" });
+      }
+    }
+  }
+  if (violations.length > 0) {
+    return { ok: false, exempt: false, violations, note: "tdd ordering violation(s)" };
+  }
+  return { ok: true, exempt: false, violations: [], note: "test-before-impl satisfied" };
+}
+
+// src/verifier/deterministic/strategies/tdd.ts
+function isSquashedHistory(commitFiles) {
+  if (commitFiles.length !== 1) return false;
+  const files = commitFiles[0];
+  const hasTest = files.some((f) => isTestPath(f));
+  const hasImpl = files.some((f) => !isTestPath(f) && !f.endsWith(".md") && !f.startsWith("docs/"));
+  return hasTest && hasImpl;
+}
+async function resolveBase(tools, baseRef, opts) {
+  const remote = `origin/${baseRef}`;
+  if (await tools.git.refExists(remote, opts)) return remote;
+  if (await tools.git.refExists(baseRef, opts)) return baseRef;
+  return null;
+}
+function verdictToOutcome(verdict) {
+  const detail = verdict.violations.length > 0 ? `${verdict.note}: ${verdict.violations.map((v) => `${v.reason}@${v.commit}`).join(", ")}` : `${verdict.note}${verdict.exempt ? " (exempt)" : ""}`;
+  return ran("tdd", verdict.ok, detail);
+}
+var tddStrategy = {
+  id: "tdd",
+  async run(ctx) {
+    const opts = { cwd: ctx.worktree };
+    const base = await resolveBase(ctx.tools, ctx.baseRef, opts);
+    if (base === null) {
+      return ran("tdd", false, `base_ref_not_found: origin/${ctx.baseRef} and ${ctx.baseRef}`);
+    }
+    const tipSha = await ctx.tools.git.revParse("HEAD", opts);
+    const memoized = ctx.memo?.getTdd(ctx.taskId, tipSha);
+    if (memoized !== void 0) {
+      return verdictToOutcome(memoized);
+    }
+    const commits = await ctx.tools.git.commits(base, ctx.taskId, opts);
+    if (isSquashedHistory(commits.map((c) => c.files))) {
+      const verdict2 = {
+        ok: true,
+        exempt: false,
+        violations: [],
+        note: "squashed history \u2014 TDD gate no-op"
+      };
+      ctx.memo?.putTdd(ctx.taskId, tipSha, verdict2);
+      return verdictToOutcome(verdict2);
+    }
+    const exempt = ctx.exemptReader ? await ctx.exemptReader.isExempt(ctx.taskId) : false;
+    const verdict = deriveTddVerdict(commits, exempt);
+    ctx.memo?.putTdd(ctx.taskId, tipSha, verdict);
+    return verdictToOutcome(verdict);
+  }
+};
+
+// src/verifier/deterministic/strategies/coverage.ts
+var METRICS = ["lines", "branches", "functions", "statements"];
+function round2(x) {
+  return Math.round(x * 100) / 100;
+}
+function coverageDelta(before, after) {
+  return {
+    lines: round2(after.lines - before.lines),
+    branches: round2(after.branches - before.branches),
+    functions: round2(after.functions - before.functions),
+    statements: round2(after.statements - before.statements)
+  };
+}
+function regressions(delta, tolerance) {
+  const threshold = -1 * tolerance;
+  return METRICS.filter((m) => delta[m] < threshold);
+}
+var coverageStrategy = {
+  id: "coverage",
+  async run(ctx) {
+    const tolerance = ctx.config.quality.coverageRegressionTolerancePct;
+    const opts = { cwd: ctx.worktree };
+    const before = await ctx.tools.coverage.read("before", opts);
+    const after = await ctx.tools.coverage.read("after", opts);
+    if (before === null || after === null) {
+      const which = before === null ? "before" : "after";
+      return ran("coverage", false, `coverage parse error: ${which} summary missing/invalid`);
+    }
+    const delta = coverageDelta(before, after);
+    const failed = regressions(delta, tolerance);
+    if (failed.length > 0) {
+      const named = failed.map((m) => `${m} (${delta[m]}%)`).join(", ");
+      return ran("coverage", false, `coverage decreased beyond ${tolerance}%: ${named}`);
+    }
+    return ran("coverage", true, `coverage within tolerance ${tolerance}%`);
+  }
+};
+
+// src/verifier/deterministic/strategies/mutation.ts
+function scorePasses(score, target) {
+  return score >= target;
+}
+var mutationStrategy = {
+  id: "mutation",
+  async run(ctx) {
+    const target = ctx.config.quality.mutationScoreTarget;
+    const opts = { cwd: ctx.worktree };
+    const base = `origin/${ctx.baseRef}`;
+    if (!await ctx.tools.git.refExists(base, opts)) {
+      return ran("mutation", false, `base-missing: ${base} not found`);
+    }
+    const changed = await ctx.tools.git.changedFiles(base, opts);
+    const scope = mutationScope(changed);
+    if (scope.length === 0) {
+      return skip("mutation", "no-mutable-changes");
+    }
+    const result = await ctx.tools.stryker.run(scope, opts);
+    if (result.proc.truncated) {
+      throw new Error(
+        "mutation gate: stryker report truncated \u2014 refusing to parse a clipped payload"
+      );
+    }
+    if (result.proc.code !== 0) {
+      return ran("mutation", false, `stryker-failed: exit=${result.proc.code ?? "null"}`);
+    }
+    const report = result.report;
+    if (report.report === "absent") {
+      return ran("mutation", false, "no-report: stryker produced no report despite mutable files");
+    }
+    if (report.report === "unparseable") {
+      return ran("mutation", false, "unparseable-report: stryker report JSON did not parse");
+    }
+    if (report.mutationScore === null) {
+      return ran("mutation", false, "no-score: report has no .metrics.mutationScore");
+    }
+    const score = report.mutationScore;
+    if (!scorePasses(score, target)) {
+      return ran("mutation", false, `score-below-target: ${score} < ${target}`);
+    }
+    return ran("mutation", true, `mutation score ${score} >= ${target} (scope ${scope.length})`);
+  }
+};
+
+// src/verifier/deterministic/strategies/sast.ts
+var SAFE_TOKEN = /^[A-Za-z0-9._/=:+-]+$/;
+function validateSecurityCommand(command) {
+  const tokens = command.split(/\s+/).filter((t) => t.length > 0);
+  for (const t of tokens) {
+    if (!SAFE_TOKEN.test(t)) {
+      return { ok: false, reason: "unsafe_command", detail: `unsafe token '${t}'` };
+    }
+  }
+  const bin = tokens[0];
+  if (bin === void 0) {
+    return { ok: false, reason: "unsafe_command", detail: "empty command" };
+  }
+  const runner = bin.includes("/") ? bin.slice(bin.lastIndexOf("/") + 1) : bin;
+  const a1 = tokens[1];
+  const a2 = tokens[2];
+  let allowed = false;
+  switch (runner) {
+    case "semgrep":
+    case "pytest":
+    case "vitest":
+    case "jest":
+    case "mocha":
+    case "phpunit":
+    case "rspec":
+      allowed = true;
+      break;
+    case "go":
+    case "cargo":
+    case "deno":
+      allowed = a1 === "test";
+      break;
+    case "bundle":
+      allowed = a1 === "exec" && a2 === "rspec";
+      break;
+    default:
+      allowed = false;
+  }
+  if (!allowed) {
+    return { ok: false, reason: "unallowed_runner", detail: `runner '${runner}' not allowlisted` };
+  }
+  return { ok: true, argv: tokens };
+}
+var sastStrategy = {
+  id: "sast",
+  async run(ctx) {
+    const command = ctx.config.quality.securityCommand;
+    if (command === void 0 || command.trim().length === 0) {
+      return skip("sast", "no-security-command");
+    }
+    const validation = validateSecurityCommand(command);
+    if (!validation.ok) {
+      return ran("sast", false, `${validation.reason}: ${validation.detail}`);
+    }
+    const result = await ctx.tools.semgrep.run(validation.argv, { cwd: ctx.worktree });
+    if (result.truncated) {
+      throw new Error("sast gate: semgrep output truncated \u2014 refusing to parse a clipped payload");
+    }
+    const redact = ctx.config.quality.securityRedactFindings;
+    const rawOutput = `${result.stdout}
+${result.stderr}`.trim();
+    const output = redact ? redactSecrets(rawOutput) : rawOutput;
+    const exit = `exit=${result.code ?? "null"}`;
+    const detail = output.length > 0 ? `${exit} :: ${output}` : exit;
+    const clean = result.code === 0;
+    if (clean) {
+      return ran("sast", true, `security ${detail}`);
+    }
+    if (ctx.config.quality.securityAllowFailures) {
+      return ran(
+        "sast",
+        true,
+        `security findings present but non-blocking (allowFailures) ${detail}`
+      );
+    }
+    return ran("sast", false, `security findings present ${detail}`);
+  }
+};
+
+// src/verifier/deterministic/strategies/proc-strategy.ts
+function procStrategy(id, label, invoke) {
+  return {
+    id,
+    async run(ctx) {
+      const result = await invoke(ctx.tools, { cwd: ctx.worktree });
+      if (result.truncated) {
+        throw new Error(`${id} gate: ${label} output truncated \u2014 refusing to judge a clipped run`);
+      }
+      return ran(id, result.code === 0, `${label} exit=${result.code ?? "null"}`);
+    }
+  };
+}
+
+// src/verifier/deterministic/strategies/type.ts
+var typeStrategy = procStrategy(
+  "type",
+  "tsc --noEmit",
+  (tools, opts) => tools.tsc.typecheck(opts)
+);
+
+// src/verifier/deterministic/strategies/lint.ts
+var lintStrategy = procStrategy(
+  "lint",
+  "eslint",
+  (tools, opts) => tools.eslint.lint(opts)
+);
+
+// src/verifier/deterministic/strategies/build.ts
+var buildStrategy = procStrategy(
+  "build",
+  "build",
+  (tools, opts) => tools.build.build(opts)
+);
+
+// src/verifier/deterministic/gate-runner.ts
+var log15 = createLogger("gate-runner");
+function strategyFor(id) {
+  switch (id) {
+    case "test":
+      return testStrategy;
+    case "tdd":
+      return tddStrategy;
+    case "coverage":
+      return coverageStrategy;
+    case "mutation":
+      return mutationStrategy;
+    case "sast":
+      return sastStrategy;
+    case "type":
+      return typeStrategy;
+    case "lint":
+      return lintStrategy;
+    case "build":
+      return buildStrategy;
+    default:
+      return assertNever(id);
+  }
+}
+var GateRunner = class {
+  /**
+   * Run the configured gates against `ctx.worktree`, collect evidence, and return
+   * the report + DERIVED verdict. A strategy that throws (a structural/loud error
+   * such as truncated tool output) propagates — the runner never swallows it into a
+   * silent pass.
+   */
+  async run(ctx) {
+    const gates = ctx.gates ?? GATE_IDS;
+    const memo = ctx.memo ?? new GateMemo();
+    const report = [];
+    const evidence = [];
+    const skipped = [];
+    const treeSha = await ctx.tools.git.treeSha({ cwd: ctx.worktree });
+    for (const id of gates) {
+      const cached = memo.getEvidence(id, treeSha);
+      if (cached !== void 0) {
+        report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
+        evidence.push(cached);
+        log15.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
+        continue;
+      }
+      const strategy = strategyFor(id);
+      const sctx = {
+        runId: ctx.runId,
+        taskId: ctx.taskId,
+        worktree: ctx.worktree,
+        baseRef: ctx.baseRef,
+        config: ctx.config,
+        tools: ctx.tools,
+        exemptReader: ctx.exemptReader,
+        memo
+      };
+      const outcome = await strategy.run(sctx);
+      report.push({ gate: id, outcome });
+      if (outcome.kind === "ran") {
+        evidence.push(outcome.evidence);
+        memo.putEvidence(id, treeSha, outcome.evidence);
+      } else {
+        skipped.push({ gate: outcome.gate, reason: outcome.reason });
+        log15.debug(`gate ${id} skipped: ${outcome.reason}`);
+      }
+    }
+    const verdict = deriveAllGatesVerdict(evidence);
+    return { report, evidence, skipped, verdict };
+  }
+};
+
+// src/verifier/deterministic/tools.ts
+import { readFile as readFile4 } from "node:fs/promises";
+import path from "node:path";
+function toProc(r) {
+  return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
+}
+function assertNotTruncated(r, what) {
+  if (r.truncated) {
+    throw new Error(
+      `WS6 tool output for ${what} was TRUNCATED (hit maxBuffer) \u2014 refusing to parse a clipped payload`
+    );
+  }
+}
+var DefaultVitestTool = class {
+  async run(files, opts) {
+    const args = ["vitest", "run", ...files];
+    return toProc(await exec("npx", args, { cwd: opts.cwd }));
+  }
+};
+var DefaultTscTool = class {
+  async typecheck(opts) {
+    return toProc(await exec("npx", ["tsc", "--noEmit"], { cwd: opts.cwd }));
+  }
+};
+var DefaultEslintTool = class {
+  async lint(opts) {
+    return toProc(await exec("npx", ["eslint", "."], { cwd: opts.cwd }));
+  }
+};
+var DefaultBuildTool = class {
+  async build(opts) {
+    return toProc(await exec("npm", ["run", "build"], { cwd: opts.cwd }));
+  }
+};
+var DefaultSemgrepTool = class {
+  async run(command, opts) {
+    const [bin, ...rest] = command;
+    if (bin === void 0) {
+      throw new Error("DefaultSemgrepTool: empty command");
+    }
+    return toProc(await exec(bin, rest, { cwd: opts.cwd }));
+  }
+};
+var DefaultStrykerTool = class _DefaultStrykerTool {
+  /** Report path relative to the worktree (stryker html/json reporter default). */
+  static REPORT_PATH = "reports/mutation/mutation.json";
+  async run(mutate, opts) {
+    const csv = mutate.join(",");
+    const proc2 = toProc(await exec("npx", ["stryker", "run", "--mutate", csv], { cwd: opts.cwd }));
+    const reportPath = path.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
+    let raw;
+    try {
+      raw = await readFile4(reportPath, "utf8");
+    } catch {
+      return { proc: proc2, report: { report: "absent" } };
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { proc: proc2, report: { report: "unparseable" } };
+    }
+    const score = extractMutationScore(parsed);
+    return { proc: proc2, report: { report: "present", mutationScore: score } };
+  }
+};
+function extractMutationScore(report) {
+  if (typeof report !== "object" || report === null) return null;
+  const metrics = report.metrics;
+  if (typeof metrics !== "object" || metrics === null) return null;
+  const score = metrics.mutationScore;
+  return typeof score === "number" && Number.isFinite(score) ? score : null;
+}
+var DefaultCoverageReader = class {
+  async read(label, opts) {
+    const file = path.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
+    let raw;
+    try {
+      raw = await readFile4(file, "utf8");
+    } catch {
+      return null;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    return parseCoverageSummary(parsed);
+  }
+};
+function readMetric(total, key) {
+  const v = total[key];
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "object" && v !== null) {
+    const pct = v.pct;
+    if (typeof pct === "number" && Number.isFinite(pct)) return pct;
+  }
+  return null;
+}
+function parseCoverageSummary(report) {
+  if (typeof report !== "object" || report === null) return null;
+  const total = report.total;
+  if (typeof total !== "object" || total === null) return null;
+  const t = total;
+  const lines = readMetric(t, "lines");
+  const branches = readMetric(t, "branches");
+  const functions = readMetric(t, "functions");
+  const statements = readMetric(t, "statements");
+  if (lines === null || branches === null || functions === null || statements === null) {
+    return null;
+  }
+  return { lines, branches, functions, statements };
+}
+var DefaultGitProbe = class {
+  async git(args, cwd) {
+    return exec("git", args, { cwd });
+  }
+  async refExists(ref, opts) {
+    const r = await this.git(["rev-parse", "--verify", "--quiet", ref], opts.cwd);
+    return r.code === 0;
+  }
+  async revParse(ref, opts) {
+    const r = await this.git(["rev-parse", ref], opts.cwd);
+    if (r.code !== 0) {
+      throw new Error(`git rev-parse ${ref} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+    }
+    return r.stdout.trim();
+  }
+  async treeSha(opts) {
+    return this.revParse("HEAD^{tree}", opts);
+  }
+  async changedFiles(base, opts) {
+    const r = await this.git(
+      ["diff", "--name-only", "--diff-filter=AM", `${base}...HEAD`],
+      opts.cwd
+    );
+    if (r.code !== 0) {
+      throw new Error(`git diff vs ${base} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+    }
+    assertNotTruncated(r, "git diff --name-only");
+    return splitLines(r.stdout);
+  }
+  async commits(base, taskId, opts) {
+    const log21 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log21.code !== 0) {
+      throw new Error(
+        `git log ${base}..HEAD failed (code=${log21.code ?? "null"}): ${log21.stderr.trim()}`
+      );
+    }
+    assertNotTruncated(log21, "git log (tdd classification)");
+    const shas = splitLines(log21.stdout).reverse();
+    const out = [];
+    for (const sha of shas) {
+      const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
+      if (parents.code !== 0) {
+        throw new Error(`git show parents of ${sha} failed: ${parents.stderr.trim()}`);
+      }
+      assertNotTruncated(parents, `git show parents of ${sha}`);
+      const parentShas = parents.stdout.trim().split(/\s+/).filter((s) => s.length > 0);
+      const parentCount = parentShas.length;
+      let files;
+      if (parentCount > 1) {
+        const firstParent = parentShas[0];
+        const dt = await this.git(
+          ["diff-tree", "--no-commit-id", "--name-only", "-r", firstParent, sha],
+          opts.cwd
+        );
+        if (dt.code !== 0) {
+          throw new Error(`git diff-tree failed for ${sha}: ${dt.stderr.trim()}`);
+        }
+        assertNotTruncated(dt, `git diff-tree (merge) for ${sha}`);
+        files = splitLines(dt.stdout);
+      } else {
+        const dt = await this.git(
+          ["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
+          opts.cwd
+        );
+        if (dt.code !== 0) {
+          throw new Error(`git diff-tree failed for ${sha}: ${dt.stderr.trim()}`);
+        }
+        assertNotTruncated(dt, `git diff-tree for ${sha}`);
+        files = splitLines(dt.stdout);
+      }
+      const subjBody = await this.git(["log", "-1", "--format=%s%n%b", sha], opts.cwd);
+      if (subjBody.code !== 0) {
+        throw new Error(`git log subject/body of ${sha} failed: ${subjBody.stderr.trim()}`);
+      }
+      assertNotTruncated(subjBody, `git log subject/body of ${sha}`);
+      const tagged = subjBody.stdout.includes(`[${taskId}]`);
+      out.push({ sha, files, parentCount, tagged });
+    }
+    return out;
+  }
+};
+function splitLines(s) {
+  return s.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+}
+function defaultGateTools() {
+  return {
+    git: new DefaultGitProbe(),
+    vitest: new DefaultVitestTool(),
+    tsc: new DefaultTscTool(),
+    eslint: new DefaultEslintTool(),
+    build: new DefaultBuildTool(),
+    semgrep: new DefaultSemgrepTool(),
+    stryker: new DefaultStrykerTool(),
+    coverage: new DefaultCoverageReader()
+  };
+}
+
+// src/driver/artifacts.ts
+import { mkdir as mkdir6, readFile as readFile5 } from "node:fs/promises";
+import { dirname as dirname5, join as join8 } from "node:path";
+function producerRef(taskId, label) {
+  return `prompts/${taskId}/${label}.json`;
+}
+var FsArtifactStore = class {
+  constructor(dataDir) {
+    this.dataDir = dataDir;
+  }
+  absPath(runId, ref) {
+    return join8(runDir(this.dataDir, runId), ref);
+  }
+  async putProducerContext(runId, taskId, label, context) {
+    const ref = producerRef(taskId, label);
+    const path2 = this.absPath(runId, ref);
+    await mkdir6(dirname5(path2), { recursive: true });
+    await atomicWriteFile(path2, stringifyJson(context));
+    return ref;
+  }
+  async getProducerContext(runId, promptRef) {
+    const path2 = this.absPath(runId, promptRef);
+    const raw = await readFile5(path2, "utf8");
+    return parseJson(raw, path2);
+  }
+};
+
+// src/verifier/holdout/split.ts
+import { createHash } from "node:crypto";
+function holdoutCount(total, percent) {
+  if (percent <= 0 || total <= 1) {
+    return 0;
+  }
+  let count = Math.floor(total * percent / 100);
+  if (count < 1) {
+    count = 1;
+  }
+  if (count >= total) {
+    count = total - 1;
+  }
+  return count;
+}
+function rankKey(seed, index) {
+  return createHash("sha256").update(`${seed}\0${index}`).digest("hex");
+}
+function splitHoldout(criteria, percent, seed) {
+  const total = criteria.length;
+  const count = holdoutCount(total, percent);
+  if (count === 0) {
+    return { visible: [...criteria], withheld: [] };
+  }
+  const withheldIdx = new Set(
+    criteria.map((_, i) => ({ i, key: rankKey(seed, i) })).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : a.i - b.i).slice(0, count).map((r) => r.i)
+  );
+  const visible = [];
+  const withheld = [];
+  criteria.forEach((c, i) => {
+    (withheldIdx.has(i) ? withheld : visible).push(c);
+  });
+  return { visible, withheld };
+}
+
+// src/verifier/holdout/store.ts
+import { mkdir as mkdir7, readFile as readFile6 } from "node:fs/promises";
+import { dirname as dirname6, join as join9 } from "node:path";
+var HoldoutRecordSchema = external_exports.object({
+  task_id: external_exports.string().min(1),
+  withheld_criteria: external_exports.array(external_exports.string()),
+  total_criteria: external_exports.number().int().nonnegative(),
+  withheld_count: external_exports.number().int().nonnegative()
+}).strict().refine((r) => r.withheld_count === r.withheld_criteria.length, {
+  message: "withheld_count must equal withheld_criteria.length"
+});
+function parseHoldoutRecord(raw, source) {
+  const result = HoldoutRecordSchema.safeParse(raw);
+  if (!result.success) {
+    const where = source ? ` (${source})` : "";
+    throw new Error(`invalid holdout record${where}: ${result.error.message}`);
+  }
+  return result.data;
+}
+function makeHoldoutRecord(taskId, withheld, totalCriteria) {
+  return {
+    task_id: taskId,
+    withheld_criteria: [...withheld],
+    total_criteria: totalCriteria,
+    withheld_count: withheld.length
+  };
+}
+var FsHoldoutStore = class {
+  constructor(dataDir) {
+    this.dataDir = dataDir;
+  }
+  path(runId, taskId) {
+    const safe = validateId(taskId, "task_id");
+    return join9(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
+  }
+  async put(runId, record) {
+    const path2 = this.path(runId, record.task_id);
+    await mkdir7(dirname6(path2), { recursive: true });
+    await atomicWriteFile(path2, stringifyJson(record));
+  }
+  async get(runId, taskId) {
+    const path2 = this.path(runId, taskId);
+    const raw = await readFile6(path2, "utf8");
+    return parseHoldoutRecord(parseJson(raw, path2), path2);
+  }
+  async has(runId, taskId) {
+    try {
+      await readFile6(this.path(runId, taskId), "utf8");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+
+// src/verifier/holdout/validate.ts
+function clampThreshold(raw) {
+  if (!Number.isFinite(raw)) {
+    return 80;
+  }
+  const t = Math.floor(raw);
+  return t < 1 ? 1 : t;
+}
+function buildHoldoutPrompt(record, worktree) {
+  const lines = [];
+  if (worktree !== void 0 && worktree.length > 0) {
+    lines.push(
+      `The implementation lives in the task worktree at: ${worktree}`,
+      `Inspect it with: git -C ${worktree} diff staging`,
+      `Do NOT rely on your own working directory \u2014 it is a fresh checkout with no diff.`,
+      ""
+    );
+  }
+  lines.push(
+    `Holdout validation for task ${record.task_id}.`,
+    "",
+    "The implementer was NOT shown the following acceptance criteria during execution.",
+    "Independently verify whether the current diff satisfies each one.",
+    "",
+    `Withheld criteria (${record.withheld_count} of ${record.total_criteria} total):`,
+    ...record.withheld_criteria.map((c, i) => `  ${i + 1}. ${c}`),
+    "",
+    "Respond with a single JSON object, no prose, exactly this shape:",
+    '{ "criteria": [ { "criterion": "<exact text from above>", "satisfied": true|false, "evidence": "<file:line or short rationale>" }, ... ] }',
+    "",
+    "One entry per withheld criterion, in the same order. A missing entry is treated as a failure."
+  );
+  return lines.join("\n");
+}
+function extractCriteria(raw) {
+  const candidates = [raw];
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    candidates.push(fenced[1]);
+  }
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first !== -1 && last > first) {
+    candidates.push(raw.slice(first, last + 1));
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.criteria)) {
+        return parsed.criteria;
+      }
+    } catch {
+    }
+  }
+  throw new Error("holdout validator output has no parseable JSON object with .criteria");
+}
+function parseHoldoutVerdicts(raw) {
+  return extractCriteria(raw).map((entry) => {
+    const e = entry ?? {};
+    return {
+      criterion: typeof e.criterion === "string" ? e.criterion : "",
+      satisfied: e.satisfied === true,
+      evidence: typeof e.evidence === "string" ? e.evidence : ""
+    };
+  });
+}
+function checkHoldout(record, verdicts, rawThreshold) {
+  const threshold = clampThreshold(rawThreshold);
+  const criteria = record.withheld_criteria.map((criterion, i) => {
+    const r = verdicts[i];
+    const satisfied2 = r !== void 0 && r.criterion === criterion && r.satisfied === true && r.evidence.trim().length > 0;
+    return { criterion, satisfied: satisfied2, evidence: r?.evidence ?? null };
+  });
+  const satisfied = criteria.filter((c) => c.satisfied).length;
+  const withheld = record.withheld_count;
+  const passPct = withheld > 0 ? Math.floor(satisfied * 100 / withheld) : 100;
+  return {
+    status: passPct >= threshold ? "pass" : "fail",
+    satisfied,
+    withheld,
+    passPct,
+    threshold,
+    criteria
+  };
+}
+function holdoutEvidence(result) {
+  return {
+    gate: "holdout",
+    observed: result.status === "pass",
+    detail: `holdout ${result.satisfied}/${result.withheld} (${result.passPct}% ${result.status === "pass" ? "\u2265" : "<"} ${result.threshold}%)`
+  };
+}
+
+// src/verifier/holdout/verdict-store.ts
+import { mkdir as mkdir8, readFile as readFile7 } from "node:fs/promises";
+import { dirname as dirname7, join as join10 } from "node:path";
+var HoldoutVerdictSchema = external_exports.object({
+  criterion: external_exports.string(),
+  satisfied: external_exports.boolean(),
+  evidence: external_exports.string()
+});
+var HoldoutVerdictsSchema = external_exports.array(HoldoutVerdictSchema);
+var FsHoldoutVerdictStore = class {
+  constructor(dataDir) {
+    this.dataDir = dataDir;
+  }
+  path(runId, taskId) {
+    const safe = validateId(taskId, "task_id");
+    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
+  }
+  async put(runId, taskId, verdicts) {
+    const path2 = this.path(runId, taskId);
+    await mkdir8(dirname7(path2), { recursive: true });
+    await atomicWriteFile(path2, stringifyJson([...verdicts]));
+  }
+  async get(runId, taskId) {
+    const path2 = this.path(runId, taskId);
+    const raw = await readFile7(path2, "utf8");
+    return HoldoutVerdictsSchema.parse(parseJson(raw, path2));
+  }
+  async has(runId, taskId) {
+    try {
+      await readFile7(this.path(runId, taskId), "utf8");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+
+// src/cli/wiring.ts
+function splitRepo(slug) {
+  const parts = slug.split("/");
+  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
+    throw new Error(`wiring: run spec repo must be '<owner>/<name>', got '${slug}'`);
+  }
+  return { owner: parts[0], repo: parts[1] };
+}
+async function loadCliDeps(opts) {
+  const dataDir = resolveDataDir(opts);
+  const dirOpts = { ...opts, dataDir };
+  const config = loadConfig(dirOpts);
+  const state = new StateManager({ ...dirOpts });
+  const run12 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run12.spec.repo, run12.spec.spec_id);
+  const { owner, repo } = splitRepo(run12.spec.repo);
+  return {
+    config,
+    spec,
+    git: new DefaultGitClient(),
+    gh: new DefaultGhClient(),
+    tools: defaultGateTools(),
+    artifacts: new FsArtifactStore(dataDir),
+    holdout: new FsHoldoutStore(dataDir),
+    dataDir,
+    owner,
+    repo,
+    shipMode: opts.shipMode ?? "no-merge",
+    state,
+    run: run12
+  };
+}
+
+// src/quota/usage-source.ts
+import { existsSync as existsSync5, readFileSync as readFileSync3 } from "node:fs";
+import { join as join11 } from "node:path";
+var log16 = createLogger("quota:usage");
+var STALE_CEILING_SECONDS = 3600;
+var STALE_WARN_SECONDS = 120;
+var RawWindowSchema = external_exports.object({
+  used_percentage: external_exports.unknown().optional(),
+  resets_at: external_exports.unknown().optional()
+}).passthrough();
+var RawCacheSchema = external_exports.object({
+  five_hour: RawWindowSchema.optional(),
+  seven_day: RawWindowSchema.optional(),
+  captured_at: external_exports.unknown().optional()
+}).passthrough();
+function asFiniteNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return null;
+}
+function unavailable(reason) {
+  return { kind: "unavailable", reason };
+}
+function readingFromCache(raw, nowEpoch2) {
+  const parsed = RawCacheSchema.safeParse(raw);
+  if (!parsed.success) {
+    return unavailable("usage-cache-malformed");
+  }
+  const cache = parsed.data;
+  const capturedAt = asFiniteNumber(cache.captured_at) ?? 0;
+  const age = nowEpoch2 - capturedAt;
+  if (age > STALE_CEILING_SECONDS) {
+    return unavailable("usage-cache-too-stale");
+  }
+  if (age > STALE_WARN_SECONDS) {
+    log16.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+  }
+  const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
+  const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
+  if (fivePct === null || sevenPct === null) {
+    return unavailable("usage-cache-fields-missing");
+  }
+  const fiveResets = asFiniteNumber(cache.five_hour?.resets_at);
+  const sevenResets = asFiniteNumber(cache.seven_day?.resets_at);
+  if (fiveResets === null || sevenResets === null) {
+    return unavailable("resets-at-missing");
+  }
+  if (fiveResets <= nowEpoch2) {
+    return unavailable("five-hour-window-reset");
+  }
+  if (sevenResets <= nowEpoch2) {
+    return unavailable("seven-day-window-reset");
+  }
+  return {
+    kind: "available",
+    fiveHour: { utilizationPct: fivePct, resetsAtEpoch: fiveResets },
+    sevenDay: { utilizationPct: sevenPct, resetsAtEpoch: sevenResets },
+    capturedAt
+  };
+}
+function usageCachePath(dataDir) {
+  return join11(dataDir, "usage-cache.json");
+}
+var StatuslineUsageSignal = class {
+  opts;
+  constructor(opts = {}) {
+    this.opts = opts;
+  }
+  async read() {
+    const now = (this.opts.now ?? nowEpoch)();
+    let dataDir;
+    try {
+      dataDir = resolveDataDir(this.opts);
+    } catch {
+      return unavailable("usage-cache-missing");
+    }
+    const file = usageCachePath(dataDir);
+    if (!existsSync5(file)) {
+      log16.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
+      return unavailable("usage-cache-missing");
+    }
+    let raw;
+    try {
+      raw = parseJson(readFileSync3(file, "utf8"), file);
+    } catch {
+      log16.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
+      return unavailable("usage-cache-malformed");
+    }
+    return readingFromCache(raw, now);
+  }
+};
+
+// src/quota/window.ts
+var FIVE_HOUR_WINDOW_SECONDS = 18e3;
+var SEVEN_DAY_WINDOW_SECONDS = 604800;
+var SECONDS_PER_HOUR = 3600;
+var SECONDS_PER_DAY = 86400;
+var MIN_HOUR = 1;
+var MAX_HOUR = 5;
+var MIN_DAY = 1;
+var MAX_DAY = 7;
+function clamp(value, lo, hi) {
+  if (value < lo) return lo;
+  if (value > hi) return hi;
+  return value;
+}
+function computeWindowHour(resetsAtEpoch, nowEpoch2) {
+  const windowStart = resetsAtEpoch - FIVE_HOUR_WINDOW_SECONDS;
+  const elapsed = nowEpoch2 - windowStart;
+  const hour = Math.floor(elapsed / SECONDS_PER_HOUR) + 1;
+  return clamp(hour, MIN_HOUR, MAX_HOUR);
+}
+function computeWindowDay(resetsAtEpoch, nowEpoch2) {
+  const windowStart = resetsAtEpoch - SEVEN_DAY_WINDOW_SECONDS;
+  const elapsed = nowEpoch2 - windowStart;
+  const day = Math.floor(elapsed / SECONDS_PER_DAY) + 1;
+  return clamp(day, MIN_DAY, MAX_DAY);
+}
+function hourlyThresholdFor(hour, hourlyThresholds) {
+  return curveValue(hour, hourlyThresholds);
+}
+function dailyThresholdFor(day, dailyThresholds) {
+  return curveValue(day, dailyThresholds);
+}
+function curveValue(position, curve) {
+  if (curve.length === 0) {
+    throw new RangeError("quota curve is empty \u2014 cannot resolve a threshold (config defect)");
+  }
+  const idx = clamp(position - 1, 0, curve.length - 1);
+  return curve[idx];
+}
+
+// src/quota/pacer.ts
+function evaluate(reading, config, nowEpoch2) {
+  if (reading.kind === "unavailable") {
+    return { kind: "unavailable-halt", reason: `usage unavailable: ${reading.reason}` };
+  }
+  const { hourlyThresholds, dailyThresholds } = config.quota;
+  const windowHour = computeWindowHour(reading.fiveHour.resetsAtEpoch, nowEpoch2);
+  const hourlyCap = hourlyThresholdFor(windowHour, hourlyThresholds);
+  const fiveOver = reading.fiveHour.utilizationPct > hourlyCap;
+  const windowDay = computeWindowDay(reading.sevenDay.resetsAtEpoch, nowEpoch2);
+  const dailyCap = dailyThresholdFor(windowDay, dailyThresholds);
+  const sevenOver = reading.sevenDay.utilizationPct > dailyCap;
+  if (sevenOver) {
+    return {
+      kind: "suspend-7d",
+      resetsAtEpoch: reading.sevenDay.resetsAtEpoch,
+      reason: `7d quota over curve: ${reading.sevenDay.utilizationPct}% used > ${dailyCap}% cap at window-day ${windowDay}`
+    };
+  }
+  if (fiveOver) {
+    return {
+      kind: "pause-5h",
+      resetsAtEpoch: reading.fiveHour.resetsAtEpoch,
+      reason: `5h quota over curve: ${reading.fiveHour.utilizationPct}% used > ${hourlyCap}% cap at window-hour ${windowHour}`
+    };
+  }
+  return { kind: "proceed" };
+}
+
+// src/quota/checkpoint.ts
+function clearCheckpoint() {
+  return { status: "running", quota: void 0 };
+}
+
+// src/quota/router.ts
+function selectProducerModel(riskTier, config) {
+  const models = config.quota.producerModels;
+  switch (riskTier) {
+    case "low":
+      return models.low;
+    case "medium":
+      return models.medium;
+    case "high":
+      return models.high;
+    default:
+      return assertNever(riskTier);
+  }
+}
+
+// src/quota/resume.ts
+function planResume(run12, reading, config, nowEpoch2) {
+  if (run12.status !== "paused" && run12.status !== "suspended") {
+    return { kind: "not-resumable", status: run12.status };
+  }
+  const decision = evaluate(reading, config, nowEpoch2);
+  if (decision.kind === "proceed") {
+    return { kind: "resume", clear: clearCheckpoint() };
+  }
+  return { kind: "still-blocked", decision };
+}
+
+// src/producer/agents.ts
+function parseProducerStatus(raw) {
+  const line = raw.trim();
+  const upper = line.toUpperCase();
+  if (upper.includes("BLOCKED") && upper.includes("ESCALATE")) {
+    return { status: "blocked-escalate", reason: line };
+  }
+  if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {
+    return { status: "needs-context", reason: line };
+  }
+  if (upper.includes("DONE")) {
+    return { status: "done" };
+  }
+  return {
+    status: "error",
+    reason: line.length > 0 ? `unparseable producer status: ${line}` : "empty producer status"
+  };
+}
+
+// src/producer/model-dial.ts
+var TIER_LADDER = ["low", "medium", "high"];
+function escalateTier(tier) {
+  const idx = TIER_LADDER.indexOf(tier);
+  const next = TIER_LADDER[Math.min(idx + 1, TIER_LADDER.length - 1)];
+  return next ?? tier;
+}
+function dialForRung(riskTier, rung, config) {
+  if (rung < 0 || !Number.isInteger(rung)) {
+    throw new Error(`dialForRung: rung must be a non-negative integer, got ${rung}`);
+  }
+  const baseModel = selectProducerModel(riskTier, config);
+  if (rung <= 1) {
+    return {
+      model: baseModel,
+      rung,
+      injectsPriorFailure: false
+    };
+  }
+  const escalatedTier = escalateTier(riskTier);
+  const escalatedModel = selectProducerModel(escalatedTier, config);
+  return {
+    model: escalatedModel,
+    rung,
+    injectsPriorFailure: true
+  };
+}
+
+// src/producer/prompt-context.ts
+function toFixInstruction(f) {
+  const base = { reviewer: f.reviewer, description: f.description };
+  if (f.file !== void 0 && f.line !== void 0) {
+    return { ...base, file: f.file, line: f.line };
+  }
+  if (f.file !== void 0) {
+    return { ...base, file: f.file };
+  }
+  return base;
+}
+function buildProducerContext(input) {
+  const fixInstructions = (input.confirmedBlockers ?? []).map(toFixInstruction);
+  const priorFailures = input.priorFailures ?? [];
+  return {
+    taskId: input.taskId,
+    title: input.title,
+    description: input.description,
+    acceptanceCriteria: input.visibleCriteria,
+    files: input.files,
+    rung: input.rung,
+    fixInstructions,
+    priorFailures,
+    injectedPriorFailure: priorFailures.length > 0
+  };
+}
+
+// src/producer/classify.ts
+function exhaustive(x) {
+  throw new Error(`classify: unhandled FailureSignal ${JSON.stringify(x)}`);
+}
+function classifyFailure(signal) {
+  switch (signal.kind) {
+    case "producer-status": {
+      if (signal.status === "blocked-escalate") {
+        return {
+          action: "drop",
+          failureClass: "spec-defect",
+          reason: `producer reported the task unworkable as specified: ${signal.reason}`
+        };
+      }
+      return { action: "retry", reason: signal.reason };
+    }
+    case "gate-failure": {
+      if (signal.structurallyUnfixable) {
+        return {
+          action: "drop",
+          failureClass: "spec-defect",
+          reason: `deterministic gate '${signal.gate}' is structurally unfixable by the producer: ${signal.reason}`
+        };
+      }
+      return { action: "retry", reason: `gate '${signal.gate}' failed: ${signal.reason}` };
+    }
+    case "environmental": {
+      return {
+        action: "drop",
+        failureClass: "blocked-environmental",
+        reason: `environmental blocker: ${signal.reason}`
+      };
+    }
+    case "verifier-error": {
+      return { action: "retry", reason: `verifier error (unresolved): ${signal.reason}` };
+    }
+    case "floor-blocked": {
+      return { action: "retry", reason: signal.reason };
+    }
+    default:
+      return exhaustive(signal);
+  }
+}
+
+// src/verifier/judgment/config.ts
+var FALLBACK_REVIEW_MODEL = "opus";
+function resolveReviewModel(config) {
+  const m = config.review.model;
+  if (m !== void 0 && m.trim().length === 0) {
+    throw new Error(
+      "review.model is configured but empty \u2014 set a non-empty fixed reviewer model or unset it"
+    );
+  }
+  return m ?? FALLBACK_REVIEW_MODEL;
+}
+
+// src/verifier/judgment/panel.ts
+var PANEL_ROLES = [
+  "implementation-reviewer",
+  "quality-reviewer",
+  "architecture-reviewer",
+  "security-reviewer",
+  "silent-failure-hunter",
+  "type-design-reviewer"
+];
+function promptRefFor(role) {
+  return `reviews/prompts/${role}.md`;
+}
+function buildPanelManifest(stageAfter, model, maxTurns) {
+  const agents = PANEL_ROLES.map((role) => ({
+    role,
+    isolation: "worktree",
+    model,
+    max_turns: maxTurns,
+    prompt_ref: promptRefFor(role)
+  }));
+  return parseSpawnManifest({ stage_after: stageAfter, agents });
+}
+
+// src/verifier/judgment/finding.ts
+var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
+var FindingSchema = external_exports.object({
+  /** Which panel reviewer raised this (free-form; the role string). */
+  reviewer: external_exports.string().min(1),
+  /** Closed severity. */
+  severity: FindingSeverityEnum,
+  /** True iff this finding, if upheld, BLOCKS the floor. */
+  blocking: external_exports.boolean(),
+  /** Cited file path (run-tree relative). Absent ⇒ uncitable. */
+  file: external_exports.string().min(1).optional(),
+  /** Cited 1-based line number. Absent ⇒ uncitable. Must be positive. */
+  line: external_exports.number().int().positive().optional(),
+  /**
+   * The VERBATIM code the reviewer claims to be quoting. Required and non-empty —
+   * a finding with no quote cannot be citation-verified, so we reject it loudly
+   * rather than admit an unverifiable claim. (An empty string is rejected by
+   * `.min(1)`.)
+   */
+  quote: external_exports.string().min(1),
+  /** Human-facing description of the concern. */
+  description: external_exports.string().min(1)
+});
+var RawReviewVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
+var RawReviewSchema = external_exports.object({
+  /** The reviewer identity (role string). */
+  reviewer: external_exports.string().min(1),
+  /** The reviewer's self-reported verdict. */
+  verdict: RawReviewVerdictEnum,
+  /** Findings raised. May be empty (an `approve` with no findings). */
+  findings: external_exports.array(FindingSchema)
+});
+function parseRawReview(raw) {
+  return RawReviewSchema.parse(raw);
+}
+function isCitable(f) {
+  return f.file !== void 0 && f.line !== void 0;
+}
+
+// src/verifier/judgment/citation-verify.ts
+var CITATION_WINDOW = 2;
+function redactFinding(f) {
+  return { ...f, quote: redactSecrets(f.quote), description: redactSecrets(f.description) };
+}
+function checkQuote(quote, line, lines) {
+  const lo = Math.max(1, line - CITATION_WINDOW);
+  const hi = Math.min(lines.length, line + CITATION_WINDOW);
+  if (lo > hi) {
+    return "line-out-of-range";
+  }
+  for (let n = lo; n <= hi; n++) {
+    const text = lines[n - 1];
+    if (text !== void 0 && text.includes(quote)) return null;
+  }
+  return "quote-not-in-window";
+}
+function verifyCitations(findings, source, options = {}) {
+  const redact = options.redact ?? true;
+  const kept = [];
+  const dropped = [];
+  const audit = [];
+  for (const f of findings) {
+    if (!isCitable(f)) {
+      dropped.push({ finding: f, reason: "uncitable" });
+      audit.push(`DROP uncitable: ${f.reviewer} \u2014 ${f.description}`);
+      continue;
+    }
+    const lines = source.readLines(f.file);
+    if (lines === null) {
+      dropped.push({ finding: f, reason: "file-not-found" });
+      audit.push(`DROP file-not-found ${f.file}:${f.line}: ${f.reviewer}`);
+      continue;
+    }
+    const reason = checkQuote(f.quote, f.line, lines);
+    if (reason !== null) {
+      dropped.push({ finding: f, reason });
+      audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
+      continue;
+    }
+    const retained = redact ? redactFinding(f) : f;
+    kept.push(retained);
+    audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`);
+  }
+  return { kept, dropped, audit };
+}
+
+// src/verifier/judgment/finding-verifier.ts
+async function confirmBlocker(finding, runner, finderIdentity) {
+  if (runner.identity === finderIdentity) {
+    throw new Error(
+      `finding-verifier identity '${runner.identity}' equals the finder's \u2014 the verifier must be INDEPENDENT (D27)`
+    );
+  }
+  let verdict;
+  try {
+    verdict = await runner.confirm(finding);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { status: "error", reason: `finding-verifier errored: ${detail}` };
+  }
+  return verdict.holds ? { status: "confirmed", evidence: { note: verdict.note } } : { status: "refuted", reason: verdict.note };
+}
+
+// src/verifier/judgment/panel-run.ts
+async function adjudicateReviewer(review, source, makeRunner2, redact) {
+  const blocking = review.findings.filter((f) => f.blocking);
+  const { kept } = verifyCitations(blocking, source, { redact });
+  const runner = makeRunner2(review);
+  const confirmed = [];
+  let hadVerifierError = false;
+  for (const finding of kept) {
+    if (!isCitable(finding)) continue;
+    const outcome = await confirmBlocker(finding, runner, review.reviewer);
+    if (outcome.status === "confirmed") {
+      confirmed.push(finding);
+    } else if (outcome.status === "error") {
+      hadVerifierError = true;
+    }
+  }
+  return {
+    reviewer: review.reviewer,
+    rawVerdict: review.verdict,
+    confirmedBlockers: confirmed,
+    hadVerifierError
+  };
+}
+function reviewerResultOf(a) {
+  if (a.hadVerifierError || a.rawVerdict === "error") {
+    return {
+      reviewer: a.reviewer,
+      verdict: "error",
+      confirmed_blockers: a.confirmedBlockers.length
+    };
+  }
+  if (a.confirmedBlockers.length > 0) {
+    return {
+      reviewer: a.reviewer,
+      verdict: "blocked",
+      confirmed_blockers: a.confirmedBlockers.length
+    };
+  }
+  return { reviewer: a.reviewer, verdict: "approve", confirmed_blockers: 0 };
+}
+async function runPanel(input) {
+  const redact = input.redact ?? true;
+  const adjudicated = [];
+  for (const review of input.reviews) {
+    adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
+  }
+  const reviewerResults = adjudicated.map(reviewerResultOf);
+  const floor = deriveFloorVerdict({ reviewers: reviewerResults }, input.gateEvidence);
+  const result = floor.passed ? advance(nextOrSelf(input.stage)) : waitRetry(
+    input.stage,
+    floorBlockReason(reviewerResults),
+    input.attempt ?? 1,
+    input.maxAttempts ?? 1
+  );
+  const crossVendorAbsence = input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : void 0;
+  return crossVendorAbsence === void 0 ? { adjudicated, reviewerResults, floor, result } : { adjudicated, reviewerResults, floor, result, crossVendorAbsence };
+}
+function nextOrSelf(stage) {
+  return stage === "verify" ? "ship" : stage;
+}
+function floorBlockReason(results) {
+  const errored = results.filter((r) => r.verdict === "error").map((r) => r.reviewer);
+  const blocked = results.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
+  const parts = [];
+  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
+  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
+  return parts.length > 0 ? parts.join("; ") : "floor not unanimous";
+}
+
+// src/producer/ladder.ts
+var ESCALATION_CAP = 2;
+
+// src/driver/transitions.ts
+var log17 = createLogger("transitions");
+async function markInFlight(deps, runId, taskId, stage) {
+  const status = stageToInFlightStatus(stage);
+  await deps.state.updateTask(runId, taskId, (t) => ({
+    ...t,
+    status,
+    started_at: t.started_at ?? nowIso()
+  }));
+}
+async function completeTask(deps, runId, taskId) {
+  await deps.state.updateTask(runId, taskId, (t) => ({
+    ...t,
+    status: "done",
+    ended_at: t.ended_at ?? nowIso()
+  }));
+  return { done: true, outcome: { outcome: "done" } };
+}
+async function dropTask(deps, runId, taskId, failureClass, reason) {
+  log17.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
+  await deps.state.updateTask(runId, taskId, (t) => ({
+    ...t,
+    status: "dropped",
+    failure_class: failureClass,
+    failure_reason: reason,
+    ended_at: t.ended_at ?? nowIso()
+  }));
+}
+async function dropStep(deps, runId, taskId, failureClass, reason) {
+  await dropTask(deps, runId, taskId, failureClass, reason);
+  return { done: true, outcome: { outcome: "dropped", failure_class: failureClass, reason } };
+}
+async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
+  if (decision.action === "drop") {
+    return dropStep(deps, runId, taskId, decision.failureClass, decision.reason);
+  }
+  const run12 = await deps.state.read(runId);
+  const task = run12.tasks[taskId];
+  if (task === void 0) {
+    throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
+  }
+  if (task.escalation_rung >= ESCALATION_CAP) {
+    return dropStep(
+      deps,
+      runId,
+      taskId,
+      "capability-budget",
+      `producer escalation cap (${ESCALATION_CAP}) reached without clearing the floor: ${decision.reason}`
+    );
+  }
+  const nextRung = task.escalation_rung + 1;
+  await deps.state.updateTask(runId, taskId, (t) => ({
+    ...t,
+    escalation_rung: nextRung,
+    reviewers: []
+  }));
+  log17.info(
+    `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`
+  );
+  return { done: false, stage: resumeStage };
+}
+function classifyProducerFailure(outcome) {
+  switch (outcome.status) {
+    case "blocked-escalate":
+      return classifyFailure({
+        kind: "producer-status",
+        status: "blocked-escalate",
+        reason: outcome.reason
+      });
+    case "needs-context":
+      return classifyFailure({
+        kind: "producer-status",
+        status: "needs-context",
+        reason: outcome.reason
+      });
+    case "error":
+      return classifyFailure({ kind: "producer-status", status: "error", reason: outcome.reason });
+    case "done":
+      throw new Error("transitions: classifyProducerFailure called on a 'done' outcome");
+    default:
+      return assertNever(outcome);
+  }
+}
+async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
+  if (outcome.status === "done") {
+    await deps.state.updateTask(runId, taskId, (t) => ({ ...t, producer_role: opts.role }));
+    return { done: false, stage: opts.stageAfter };
+  }
+  return escalateOrDrop(deps, runId, taskId, classifyProducerFailure(outcome), opts.stage);
+}
+
+// src/driver/paths.ts
+import { join as join12 } from "node:path";
+function taskWorktreePath(dataDir, runId, taskId) {
+  validateId(runId, "run-id");
+  validateId(taskId, "task-id");
+  return join12(dataDir, "worktrees", runId, taskId);
+}
+
+// src/driver/handlers.ts
+function makeStageHandlers(deps) {
+  function requireTask2(ctx, stage) {
+    if (ctx.task === void 0) {
+      throw new Error(`handlers: stage '${stage}' requires a task but ctx.task is absent`);
+    }
+    return ctx.task;
+  }
+  function splitFor(config, runId, specTask) {
+    return splitHoldout(
+      specTask.acceptance_criteria,
+      config.quality.holdoutPercent,
+      `${runId}:${specTask.task_id}`
+    );
+  }
+  function priorFailureNote(rung) {
+    const prior = Math.max(0, rung - 1);
+    return {
+      rung: prior,
+      summary: `prior attempt at rung ${prior} did not clear the verifier floor`
+    };
+  }
+  async function producerSpawn(role, specTask, runId, rung, stageAfter) {
+    const dial = dialForRung(specTask.risk_tier, rung, deps.config);
+    const split = splitFor(deps.config, runId, specTask);
+    const context = buildProducerContext({
+      taskId: specTask.task_id,
+      title: specTask.title,
+      description: specTask.description,
+      visibleCriteria: split.visible,
+      files: specTask.files,
+      rung,
+      priorFailures: dial.injectsPriorFailure ? [priorFailureNote(rung)] : []
+    });
+    const promptRef = await deps.artifacts.putProducerContext(
+      runId,
+      specTask.task_id,
+      `${role}-r${rung}`,
+      context
+    );
+    const manifest = parseSpawnManifest({
+      stage_after: stageAfter,
+      agents: [
+        {
+          role,
+          model: dial.model,
+          // No executor-specific turn budget exists; both producer roles share the
+          // test-writer cap (documented WS10 decision).
+          max_turns: deps.config.testWriter.maxTurns,
+          prompt_ref: promptRef
+        }
+      ]
+    });
+    return spawn2(manifest);
+  }
+  return {
+    /**
+     * preflight: create the per-task worktree forked off the staging tip (D12
+     * base-is-staging-tip assertion lives inside createTaskWorktree), then advance
+     * to the tests stage. The run-scoped branch is deterministic from (run, task),
+     * so it is not threaded through state here — ship recomputes it.
+     */
+    async preflight(ctx) {
+      const task = requireTask2(ctx, "preflight");
+      await createTaskWorktree({
+        gitClient: deps.git,
+        runId: ctx.run.run_id,
+        taskId: task.task_id,
+        path: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
+        base: deps.config.git.stagingBranch
+      });
+      return advance("tests");
+    },
+    /**
+     * tests: PERSIST the holdout answer-key (the only stage that does — exec merely
+     * recomputes the split), then either skip the test-writer (tdd_exempt → advance
+     * to exec) or spawn the test-writer for the current rung (resume at exec).
+     */
+    async tests(ctx) {
+      const task = requireTask2(ctx, "tests");
+      const specTask = specTaskOf(deps.spec, task.task_id);
+      const split = splitFor(deps.config, ctx.run.run_id, specTask);
+      if (split.withheld.length > 0) {
+        await deps.holdout.put(
+          ctx.run.run_id,
+          makeHoldoutRecord(task.task_id, split.withheld, specTask.acceptance_criteria.length)
+        );
+      }
+      if (specTask.tdd_exempt === true) {
+        return advance("exec");
+      }
+      return producerSpawn("test-writer", specTask, ctx.run.run_id, task.escalation_rung, "exec");
+    },
+    /**
+     * exec: spawn the executor for the current rung against the holdout-stripped
+     * visible criteria (recomputed from the same seed — never re-persisted), resume
+     * at verify.
+     */
+    async exec(ctx) {
+      const task = requireTask2(ctx, "exec");
+      const specTask = specTaskOf(deps.spec, task.task_id);
+      return producerSpawn("executor", specTask, ctx.run.run_id, task.escalation_rung, "verify");
+    },
+    /**
+     * verify (CLI single-step reporter — NO holdout): run the deterministic gates,
+     * then either spawn the risk-invariant panel (no reviewers yet) or DERIVE the
+     * floor from the already-recorded reviewers + gate evidence. The in-process loop
+     * uses `runVerify` instead (which additionally folds holdout evidence).
+     */
+    async verify(ctx) {
+      const task = requireTask2(ctx, "verify");
+      const gateCtx = {
+        runId: ctx.run.run_id,
+        taskId: task.task_id,
+        worktree: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
+        baseRef: deps.config.git.stagingBranch,
+        config: deps.config,
+        tools: deps.tools
+      };
+      const gate = await new GateRunner().run(gateCtx);
+      if (task.reviewers.length === 0) {
+        return spawn2(
+          buildPanelManifest(
+            "verify",
+            resolveReviewModel(deps.config),
+            deps.config.review.maxTurnsDeep
+          )
+        );
+      }
+      const floor = deriveFloorVerdict({ reviewers: task.reviewers }, gate.evidence);
+      if (floor.passed) {
+        return advance("ship");
+      }
+      return waitRetry(
+        "verify",
+        floorBlockReason2(task.reviewers, gate.evidence),
+        ctx.attempt ?? 1,
+        ESCALATION_CAP + 1
+      );
+    },
+    /**
+     * ship (CLI single-step reporter): open the task PR into staging IDEMPOTENTLY
+     * (look up by head first — Δ P), then mark the task done. Merge is loop-owned
+     * (MergeSerializer) and not performed here; `pr_number` recording is the
+     * driver's job (the reporter cannot write state).
+     */
+    async ship(ctx) {
+      const task = requireTask2(ctx, "ship");
+      const specTask = specTaskOf(deps.spec, task.task_id);
+      const branch = runScopedBranch(ctx.run.run_id, task.task_id);
+      await createTaskPrIdempotent({
+        ghClient: deps.gh,
+        branch,
+        title: specTask.title,
+        body: shipBody(ctx.run.run_id, specTask),
+        base: deps.config.git.stagingBranch
+      });
+      return taskDone();
+    },
+    /**
+     * finalize (run-level, terminal-by-construction): the pure {@link decideFinalize}
+     * over the run's task-status map. Throws if any task is non-terminal (it must
+     * never be called with in-flight work) — never spins.
+     */
+    finalize(ctx) {
+      return Promise.resolve(decideFinalize(ctx.run));
+    }
+  };
+}
+function floorBlockReason2(reviewers, gateEvidence) {
+  const parts = [];
+  const blocked = reviewers.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
+  const errored = reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
+  const failedGates = gateEvidence.filter((e) => !e.observed).map((e) => e.gate);
+  if (failedGates.length > 0) parts.push(`gates failed: ${failedGates.join(", ")}`);
+  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
+  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
+  return parts.length > 0 ? parts.join("; ") : "verifier floor not unanimous";
+}
+function specTaskOf(spec, taskId) {
+  const found = spec.tasks.find((t) => t.task_id === taskId);
+  if (found === void 0) {
+    throw new Error(
+      `handlers: task '${taskId}' is not present in spec '${spec.spec_id}' \u2014 run/spec drift`
+    );
+  }
+  return found;
+}
+function shipBody(runId, specTask) {
+  return [
+    `Factory task \`${specTask.task_id}\` \u2014 ${specTask.title}`,
+    "",
+    specTask.description,
+    "",
+    `Run: \`${runId}\``,
+    `Risk tier: ${specTask.risk_tier}`
+  ].join("\n");
+}
+
+// src/driver/ship.ts
+var log18 = createLogger("ship");
+function requireTask(ctx) {
+  if (ctx.task === void 0) {
+    throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
+  }
+  return ctx.task;
+}
+async function shipTask(deps, ctx) {
+  const task = requireTask(ctx);
+  const runId = ctx.run.run_id;
+  const specTask = specTaskOf(deps.spec, task.task_id);
+  const branch = runScopedBranch(runId, task.task_id);
+  const pr = await createTaskPrIdempotent({
+    ghClient: deps.gh,
+    branch,
+    title: specTask.title,
+    body: shipBody(runId, specTask),
+    base: deps.config.git.stagingBranch
+  });
+  await deps.state.updateTask(runId, task.task_id, (t) => ({
+    ...t,
+    branch,
+    pr_number: pr.number
+  }));
+  if (deps.shipMode !== "live") {
+    return taskDone();
+  }
+  const serializer = new MergeSerializer({
+    ghClient: deps.gh,
+    owner: deps.owner,
+    repo: deps.repo,
+    stagingBranch: deps.config.git.stagingBranch,
+    dataDir: deps.dataDir
+  });
+  const outcome = await serializer.merge(pr.number);
+  if (outcome.merged) {
+    log18.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    return taskDone();
+  }
+  return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
+}
+
+// src/driver/loop.ts
+var log19 = createLogger("driver");
+
+// src/cli/subcommands/run-task.ts
+var HELP4 = `factory run-task \u2014 run one deterministic stage step and report (Model A)
+
+Usage:
+  factory run-task --run <id> --task <id> --stage <stage> [--ship-mode <mode>]
+
+Stages: ${TASK_STAGE_ORDER.join(" | ")}
+Ship modes: no-merge (default) | live
+
+Emits ONE JSON envelope to stdout:
+  { run_id, task_id, stage, stage_result, sidecar? }
+
+preflight|tests|exec|verify report only (no run-state writes); the orchestrator
+performs any spawn and folds outcomes via the record-* subcommands. ship is the
+one stage that writes state (branch/pr_number and, on a clean done, status).`;
+function parseStage(raw) {
+  if (TASK_STAGE_ORDER.includes(raw)) {
+    return raw;
+  }
+  throw new UsageError(`unknown --stage '${raw}' (expected one of ${TASK_STAGE_ORDER.join(", ")})`);
+}
+function parseShipMode(raw) {
+  if (raw === void 0) return void 0;
+  if (raw === "live" || raw === "no-merge") return raw;
+  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
+}
+function taskOf(deps, taskId) {
+  const task = deps.run.tasks[taskId];
+  if (task === void 0) {
+    throw new Error(`run-task: run '${deps.run.run_id}' has no task '${taskId}'`);
+  }
+  return task;
+}
+async function holdoutSidecar(deps, taskId) {
+  if (!await deps.holdout.has(deps.run.run_id, taskId)) {
+    return void 0;
+  }
+  const record = await deps.holdout.get(deps.run.run_id, taskId);
+  const worktree = taskWorktreePath(deps.dataDir, deps.run.run_id, taskId);
+  return {
+    kind: "holdout-validate",
+    task_id: taskId,
+    worktree,
+    model: resolveReviewModel(deps.config),
+    max_turns: deps.config.review.maxTurnsDeep,
+    prompt: buildHoldoutPrompt(record, worktree)
+  };
+}
+async function run4(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(HELP4);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const taskId = args.requireFlag("task");
+  const stage = parseStage(args.requireFlag("stage"));
+  const shipMode = parseShipMode(args.flag("ship-mode"));
+  const deps = await loadCliDeps({ runId, ...shipMode !== void 0 ? { shipMode } : {} });
+  const task = taskOf(deps, taskId);
+  const ctx = { run: deps.run, task, attempt: task.escalation_rung + 1 };
+  const envelope = await reportStage(deps, ctx, stage, taskId);
+  emitJson(envelope);
+  return EXIT.OK;
+}
+async function reportStage(deps, ctx, stage, taskId) {
+  const base = { run_id: deps.run.run_id, task_id: taskId, stage };
+  if (stage === "ship") {
+    const stage_result2 = await shipTask(deps, ctx);
+    if (stage_result2.kind === "task-terminal" && stage_result2.outcome.outcome === "done") {
+      await completeTask(deps, deps.run.run_id, taskId);
+    }
+    return { ...base, stage_result: stage_result2 };
+  }
+  const handlers = makeStageHandlers(deps);
+  const stage_result = await runStage(stage, ctx, handlers);
+  if (stage === "verify" && stage_result.kind === "spawn-agents") {
+    const sidecar = await holdoutSidecar(deps, taskId);
+    if (sidecar !== void 0) {
+      return { ...base, stage_result, sidecar };
+    }
+  }
+  return { ...base, stage_result };
+}
+var runTaskCommand = {
+  describe: "Run one deterministic stage step (Model A reporter) and emit a JSON envelope",
+  run: async (argv) => {
+    try {
+      return await run4(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`run-task: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/advance.ts
+var HELP5 = `factory advance \u2014 persist the in-flight cursor for the next stage
+
+Usage:
+  factory advance --run <id> --task <id> --to <stage>
+
+Stages: ${TASK_STAGE_ORDER.join(" | ")}
+
+Emits ONE JSON envelope: { run_id, task_id, step: { done:false, stage } }.
+Use after a run-task report stage returns { kind:"advance", to }. This writes
+only the cursor (status + started_at); producer/review folds use record-*.`;
+function parseStage2(raw) {
+  if (TASK_STAGE_ORDER.includes(raw)) {
+    return raw;
+  }
+  throw new UsageError(`unknown --to '${raw}' (expected one of ${TASK_STAGE_ORDER.join(", ")})`);
+}
+async function applyAdvance(state, runId, taskId, to) {
+  const run12 = await state.read(runId);
+  if (run12.tasks[taskId] === void 0) {
+    throw new Error(`advance: run '${runId}' has no task '${taskId}'`);
+  }
+  await markInFlight({ state }, runId, taskId, to);
+  return { run_id: runId, task_id: taskId, step: { done: false, stage: to } };
+}
+async function run5(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(HELP5);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const taskId = args.requireFlag("task");
+  const to = parseStage2(args.requireFlag("to"));
+  const envelope = await applyAdvance(new StateManager(), runId, taskId, to);
+  emitJson(envelope);
+  return EXIT.OK;
+}
+var advanceCommand = {
+  describe: "Persist the in-flight cursor for the next stage and emit the step",
+  run: async (argv) => {
+    try {
+      return await run5(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`advance: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/drop.ts
+var HELP6 = `factory drop \u2014 apply a classified LOUD drop to a task
+
+Usage:
+  factory drop --run <id> --task <id> --class <failure-class> --reason <text>
+
+Failure classes: ${FailureClassEnum.options.join(" | ")}
+
+Emits ONE JSON envelope:
+  { run_id, task_id, step: { done:true, outcome:{ outcome:"dropped", failure_class, reason } } }`;
+function parseFailureClass(raw) {
+  const parsed = FailureClassEnum.safeParse(raw);
+  if (!parsed.success) {
+    throw new UsageError(
+      `unknown --class '${raw}' (expected one of ${FailureClassEnum.options.join(", ")})`
+    );
+  }
+  return parsed.data;
+}
+async function applyDrop(state, runId, taskId, failureClass, reason) {
+  const run12 = await state.read(runId);
+  if (run12.tasks[taskId] === void 0) {
+    throw new Error(`drop: run '${runId}' has no task '${taskId}'`);
+  }
+  const step = await dropStep({ state }, runId, taskId, failureClass, reason);
+  return { run_id: runId, task_id: taskId, step };
+}
+async function run6(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(HELP6);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const taskId = args.requireFlag("task");
+  const failureClass = parseFailureClass(args.requireFlag("class"));
+  const reason = args.requireFlag("reason");
+  const envelope = await applyDrop(new StateManager(), runId, taskId, failureClass, reason);
+  emitJson(envelope);
+  return EXIT.OK;
+}
+var dropCommand = {
+  describe: "Apply a classified LOUD drop to a task and emit the terminal step",
+  run: async (argv) => {
+    try {
+      return await run6(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`drop: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/transition.ts
+import { readFile as readFile8 } from "node:fs/promises";
+async function persistStepCursor(deps, runId, taskId, step) {
+  if (!step.done) {
+    await markInFlight(deps, runId, taskId, step.stage);
+  }
+}
+async function readJsonInput(path2) {
+  const raw = await readFile8(path2, "utf8");
+  return parseJson(raw, path2);
+}
+
+// src/cli/subcommands/record-producer.ts
+var HELP7 = `factory record-producer \u2014 fold a producer spawn outcome into state
+
+Usage:
+  factory record-producer --run <id> --task <id> --stage <tests|exec> --status <line>
+
+--status is the producer agent's terminal STATUS line (e.g. "STATUS: DONE",
+"STATUS: BLOCKED \u2014 escalate", "STATUS: NEEDS_CONTEXT").
+
+Emits ONE JSON envelope: { run_id, task_id, step }. On done the step advances to the
+next stage; a classified failure escalates the rung (resume at the same stage) or
+drops (loud, classified) when the ladder is exhausted.`;
+function producerStageInfo(stage) {
+  if (stage === "tests") return { role: "test-writer", stage: "tests", after: "exec" };
+  if (stage === "exec") return { role: "executor", stage: "exec", after: "verify" };
+  throw new UsageError(`--stage must be a producer stage (tests | exec), got '${stage}'`);
+}
+async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
+  const info = producerStageInfo(stage);
+  if (nextStage(info.stage) !== info.after) {
+    throw new Error(
+      `record-producer: stage order drift \u2014 nextStage('${info.stage}') !== '${info.after}'`
+    );
+  }
+  const run12 = await state.read(runId);
+  if (run12.tasks[taskId] === void 0) {
+    throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
+  }
+  const outcome = parseProducerStatus(statusLine);
+  const step = await applyProducerOutcome(
+    { state },
+    runId,
+    taskId,
+    { role: info.role, stage: info.stage, stageAfter: info.after },
+    outcome
+  );
+  await persistStepCursor({ state }, runId, taskId, step);
+  return { run_id: runId, task_id: taskId, step };
+}
+async function run7(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(HELP7);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const taskId = args.requireFlag("task");
+  const stage = args.requireFlag("stage");
+  const statusLine = args.requireFlag("status");
+  const envelope = await applyRecordProducer(new StateManager(), runId, taskId, stage, statusLine);
+  emitJson(envelope);
+  return EXIT.OK;
+}
+var recordProducerCommand = {
+  describe: "Fold a producer spawn outcome into state (ladder + classify) and emit the step",
+  run: async (argv) => {
+    try {
+      return await run7(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`record-producer: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/record-holdout.ts
+var log20 = createLogger("record-holdout");
+var HELP8 = `factory record-holdout \u2014 fold the holdout-validator output into the floor
+
+Usage:
+  factory record-holdout --run <id> --task <id> --input <path>
+
+--input is a JSON file: { "raw": "<holdout-validator agent output>" }.
+
+Persists the parsed verdicts (read back by record-reviews) and emits ONE JSON
+envelope: { run_id, task_id, evidence, check }. Unparseable validator output fails
+CLOSED (every withheld criterion scores as a failure).`;
+function parseVerdictsFailClosed(raw) {
+  try {
+    return parseHoldoutVerdicts(raw);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    log20.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    return [];
+  }
+}
+async function applyRecordHoldout(deps, verdictStore, taskId, raw) {
+  const runId = deps.run.run_id;
+  if (!await deps.holdout.has(runId, taskId)) {
+    throw new Error(
+      `record-holdout: task '${taskId}' has no withheld answer key \u2014 nothing to validate (record-holdout must only be called when run-task surfaced a holdout sidecar)`
+    );
+  }
+  const record = await deps.holdout.get(runId, taskId);
+  const verdicts = parseVerdictsFailClosed(raw);
+  await verdictStore.put(runId, taskId, verdicts);
+  const check = checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate);
+  return { run_id: runId, task_id: taskId, evidence: holdoutEvidence(check), check };
+}
+async function run8(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(HELP8);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const taskId = args.requireFlag("task");
+  const inputPath = args.requireFlag("input");
+  const deps = await loadCliDeps({ runId });
+  const input = await readJsonInput(inputPath);
+  const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
+  const envelope = await applyRecordHoldout(deps, verdictStore, taskId, input.raw);
+  emitJson(envelope);
+  return EXIT.OK;
+}
+var recordHoldoutCommand = {
+  describe: "Fold the holdout-validator output (persist verdicts, emit derived evidence)",
+  run: async (argv) => {
+    try {
+      return await run8(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`record-holdout: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/record-reviews.ts
+import { readFile as readFile9 } from "node:fs/promises";
+import { join as join13 } from "node:path";
+var REPLAY_IDENTITY = "orchestrator-replay";
+var HELP9 = `factory record-reviews \u2014 fold the panel + verify-then-fix into the floor
+
+Usage:
+  factory record-reviews --run <id> --task <id> --input <path>
+
+--input is a JSON file:
+  {
+    "reviews": [ <raw reviewer payload>, ... ],
+    "verifications": [ { "reviewer": "<role>",
+                         "verdicts": [ { "file","line","holds","note" }, ... ] }, ... ],
+    "crossVendorAbsent": { "reason": "..." }   // optional (\u0394 U)
+  }
+
+Re-runs the gates, re-derives the persisted holdout evidence, citation-verifies +
+confirms each blocker via the recorded verdicts, derives the floor, persists the
+reviewers, and emits ONE JSON envelope: { run_id, task_id, step, reviewers, floor }.`;
+async function buildWorktreeSource(worktree, reviews) {
+  const files = /* @__PURE__ */ new Set();
+  for (const review of reviews) {
+    for (const finding of review.findings) {
+      if (finding.file !== void 0) files.add(finding.file);
+    }
+  }
+  const lines = /* @__PURE__ */ new Map();
+  for (const file of files) {
+    try {
+      const text = await readFile9(join13(worktree, file), "utf8");
+      lines.set(file, text.split("\n"));
+    } catch {
+      lines.set(file, null);
+    }
+  }
+  return { readLines: (file) => lines.get(file) ?? null };
+}
+function makeReplayRunnerFactory(input) {
+  const byReviewer = /* @__PURE__ */ new Map();
+  for (const v of input.verifications) byReviewer.set(v.reviewer, v.verdicts);
+  return (review) => {
+    const queues = /* @__PURE__ */ new Map();
+    for (const v of byReviewer.get(review.reviewer) ?? []) {
+      const key = `${v.file}:${v.line}`;
+      const arr = queues.get(key) ?? [];
+      arr.push(v);
+      queues.set(key, arr);
+    }
+    return {
+      identity: REPLAY_IDENTITY,
+      confirm(finding) {
+        const key = `${finding.file}:${finding.line}`;
+        const next = queues.get(key)?.shift();
+        if (next === void 0) {
+          return Promise.reject(
+            new Error(
+              `record-reviews: no pre-recorded finding-verifier verdict for reviewer '${review.reviewer}' finding at ${key} \u2014 every citation-verified blocking finding must carry an orchestrator-collected verdict`
+            )
+          );
+        }
+        return Promise.resolve({ holds: next.holds, note: next.note });
+      }
+    };
+  };
+}
+async function applyRecordReviews(deps, verdictStore, taskId, input) {
+  const runId = deps.run.run_id;
+  const task = deps.run.tasks[taskId];
+  if (task === void 0) {
+    throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
+  }
+  const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+  const gateCtx = {
+    runId,
+    taskId,
+    worktree,
+    baseRef: deps.config.git.stagingBranch,
+    config: deps.config,
+    tools: deps.tools
+  };
+  const gate = await new GateRunner().run(gateCtx);
+  const gateEvidence = [...gate.evidence];
+  if (await deps.holdout.has(runId, taskId)) {
+    const record = await deps.holdout.get(runId, taskId);
+    const verdicts = await verdictStore.get(runId, taskId);
+    gateEvidence.push(
+      holdoutEvidence(checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate))
+    );
+  }
+  const reviews = input.reviews.map(parseRawReview);
+  const source = await buildWorktreeSource(worktree, reviews);
+  const makeRunner2 = makeReplayRunnerFactory(input);
+  const panel = await runPanel({
+    reviews,
+    source,
+    makeRunner: makeRunner2,
+    gateEvidence,
+    stage: "verify",
+    attempt: task.escalation_rung + 1,
+    maxAttempts: ESCALATION_CAP + 1,
+    ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
+  });
+  await deps.state.updateTask(runId, taskId, (t) => ({
+    ...t,
+    reviewers: [...panel.reviewerResults]
+  }));
+  let step;
+  if (panel.result.kind === "advance") {
+    step = { done: false, stage: panel.result.to };
+    await markInFlight(deps, runId, taskId, panel.result.to);
+  } else if (panel.result.kind === "wait-retry") {
+    step = await escalateOrDrop(
+      deps,
+      runId,
+      taskId,
+      classifyFailure({ kind: "floor-blocked", reason: panel.result.reason }),
+      "exec"
+    );
+    await persistStepCursor(deps, runId, taskId, step);
+  } else {
+    throw new Error(`record-reviews: unexpected panel result kind '${panel.result.kind}'`);
+  }
+  return {
+    run_id: runId,
+    task_id: taskId,
+    step,
+    reviewers: panel.reviewerResults,
+    floor: panel.floor
+  };
+}
+async function run9(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(HELP9);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const taskId = args.requireFlag("task");
+  const inputPath = args.requireFlag("input");
+  const deps = await loadCliDeps({ runId });
+  const input = await readJsonInput(inputPath);
+  const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
+  const envelope = await applyRecordReviews(deps, verdictStore, taskId, input);
+  emitJson(envelope);
+  return EXIT.OK;
+}
+var recordReviewsCommand = {
+  describe: "Fold the panel + verify-then-fix verdicts into the floor and emit the step",
+  run: async (argv) => {
+    try {
+      return await run9(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`record-reviews: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/run.ts
+var RUN_HELP = `factory run \u2014 create or resume a run
+
+Usage:
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver <d>] [--run-id <id>]
+  factory run resume [--run <id>]
+
+Actions:
+  create   Resolve a durable spec, create a run, seed its tasks, emit the RunState.
+  resume   Re-check the live quota window; clear the checkpoint if it has recovered.`;
+var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
+
+Usage:
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver <d>] [--run-id <id>]
+
+  --repo      Repo identity 'owner/name' (the first key of the spec store).
+  --issue     PRD issue number \u2014 the STABLE lookup key (reruns reuse the spec).
+  --spec-id   Explicit '<issue>-<slug>' spec id (alternative to --issue).
+  --driver    sequential | balanced (default: balanced).
+  --run-id    Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
+
+Resolves the spec via the durable store (LOUD if none exists \u2014 generate one first),
+creates the run, seeds one pending task per spec task, and emits the RunState JSON.`;
+var RESUME_HELP = `factory run resume \u2014 re-check quota and resume a paused/suspended run
+
+Usage:
+  factory run resume [--run <id>]
+
+  --run   The run to resume (defaults to runs/current).
+
+Emits ONE JSON envelope:
+  { kind:"resumed", run }                              \u2014 window recovered (or already running)
+  { kind:"still-blocked", run_id, status, reason, \u2026 }  \u2014 window has not recovered (state untouched)
+
+A terminal run is a loud error (nothing to resume).`;
+function seedTasksFromSpec(manifest) {
+  const ids = new Set(manifest.tasks.map((t) => t.task_id));
+  const tasks = {};
+  for (const t of manifest.tasks) {
+    validateId(t.task_id, "task-id");
+    if (tasks[t.task_id] !== void 0) {
+      throw new Error(`run create: duplicate task id '${t.task_id}' in spec ${manifest.spec_id}`);
+    }
+    for (const dep of t.depends_on) {
+      if (dep === t.task_id) {
+        throw new Error(
+          `run create: task '${t.task_id}' depends on itself in spec ${manifest.spec_id}`
+        );
+      }
+      if (!ids.has(dep)) {
+        throw new Error(
+          `run create: task '${t.task_id}' depends on unknown task '${dep}' in spec ${manifest.spec_id}`
+        );
+      }
+    }
+    tasks[t.task_id] = {
+      task_id: t.task_id,
+      status: "pending",
+      depends_on: [...t.depends_on],
+      risk_tier: t.risk_tier,
+      escalation_rung: 0,
+      reviewers: []
+    };
+  }
+  assertAcyclic(tasks, manifest.spec_id);
+  return tasks;
+}
+function assertAcyclic(tasks, specId) {
+  const VISITING = 1;
+  const DONE = 2;
+  const state = /* @__PURE__ */ new Map();
+  const visit = (id, trail) => {
+    const mark = state.get(id);
+    if (mark === DONE) return;
+    if (mark === VISITING) {
+      throw new Error(
+        `run create: dependency cycle in spec ${specId}: ${[...trail, id].join(" \u2192 ")}`
+      );
+    }
+    state.set(id, VISITING);
+    for (const dep of tasks[id]?.depends_on ?? []) {
+      visit(dep, [...trail, id]);
+    }
+    state.set(id, DONE);
+  };
+  for (const id of Object.keys(tasks)) visit(id, []);
+}
+async function createRun(state, specStore, opts) {
+  let manifest;
+  if (opts.specId !== void 0) {
+    manifest = await specStore.read(opts.repo, opts.specId);
+  } else if (opts.issue !== void 0) {
+    const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
+    if (resolved === null) {
+      throw new Error(
+        `run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`
+      );
+    }
+    manifest = resolved;
+  } else {
+    throw new UsageError("run create requires --issue or --spec-id");
+  }
+  const seeded = seedTasksFromSpec(manifest);
+  await state.create({
+    run_id: opts.runId,
+    spec: specStore.toPointer(manifest),
+    driver: opts.driver
+  });
+  return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+}
+async function applyResume(state, runId, reading, config, nowEpochSec) {
+  const run12 = await state.read(runId);
+  if (isTerminalRunStatus(run12.status)) {
+    throw new Error(`run resume: run '${runId}' is terminal (${run12.status}); nothing to resume`);
+  }
+  const plan = planResume(run12, reading, config, nowEpochSec);
+  switch (plan.kind) {
+    case "not-resumable":
+      return { kind: "resumed", run: run12 };
+    case "resume": {
+      const updated = await state.update(runId, (s) => ({
+        ...s,
+        status: plan.clear.status,
+        quota: plan.clear.quota
+      }));
+      return { kind: "resumed", run: updated };
+    }
+    case "still-blocked": {
+      const d = plan.decision;
+      if (d.kind === "proceed") {
+        return { kind: "resumed", run: run12 };
+      }
+      const base = {
+        kind: "still-blocked",
+        run_id: runId,
+        status: run12.status,
+        reason: d.reason
+      };
+      return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
+    }
+  }
+}
+function parseDriver(raw) {
+  if (raw === void 0) return "balanced";
+  if (raw === "sequential" || raw === "balanced") return raw;
+  throw new UsageError(`unknown --driver '${String(raw)}' (expected sequential | balanced)`);
+}
+function parseIssue(raw) {
+  if (raw === void 0) return void 0;
+  if (typeof raw !== "string") throw new UsageError("--issue requires a value");
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new UsageError(`--issue must be a positive integer, got '${raw}'`);
+  }
+  return n;
+}
+function optionalString(raw) {
+  return typeof raw === "string" && raw.length > 0 ? raw : void 0;
+}
+async function runCreate(argv) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(CREATE_HELP);
+    return EXIT.OK;
+  }
+  const repo = args.requireFlag("repo");
+  const driver = parseDriver(args.flag("driver"));
+  const issue = parseIssue(args.flag("issue"));
+  const specId = optionalString(args.flag("spec-id"));
+  if (issue === void 0 && specId === void 0) {
+    throw new UsageError("run create requires --issue <n> or --spec-id <id>");
+  }
+  if (issue !== void 0 && specId !== void 0) {
+    throw new UsageError("run create: pass exactly one of --issue or --spec-id");
+  }
+  const runId = optionalString(args.flag("run-id")) ?? makeRunId();
+  validateId(runId, "run-id");
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const specStore = new SpecStore({ dataDir });
+  const run12 = await createRun(state, specStore, {
+    repo,
+    driver,
+    runId,
+    ...issue !== void 0 ? { issue } : {},
+    ...specId !== void 0 ? { specId } : {}
+  });
+  emitJson(run12);
+  return EXIT.OK;
+}
+async function runResume(argv) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(RESUME_HELP);
+    return EXIT.OK;
+  }
+  const dataDir = resolveDataDir({});
+  const config = loadConfig({ dataDir });
+  const state = new StateManager({ dataDir });
+  let runId = optionalString(args.flag("run"));
+  if (runId === void 0) {
+    const current = await state.readCurrent();
+    if (current === null) {
+      throw new UsageError("run resume: no --run given and no current run");
+    }
+    runId = current.run_id;
+  }
+  const reading = await new StatuslineUsageSignal({ dataDir }).read();
+  const envelope = await applyResume(state, runId, reading, config, nowEpoch());
+  emitJson(envelope);
+  return EXIT.OK;
+}
+async function run10(argv) {
+  const action = argv[0];
+  if (action === void 0 || action === "--help" || action === "-h") {
+    emitLine(RUN_HELP);
+    return EXIT.OK;
+  }
+  const rest = argv.slice(1);
+  switch (action) {
+    case "create":
+      return runCreate(rest);
+    case "resume":
+      return runResume(rest);
+    default:
+      throw new UsageError(`unknown run action '${action}' (expected create | resume)`);
+  }
+}
+var runCommand = {
+  describe: "Create or resume a run (create resolves+seeds a spec; resume re-checks quota)",
+  run: async (argv) => {
+    try {
+      return await run10(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`run: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/spec.ts
+import { join as join14 } from "node:path";
+var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
+
+Usage:
+  factory spec resolve --repo <owner/name> --issue <n>
+  factory spec gate    --repo <owner/name> --issue <n>
+  factory spec store   --repo <owner/name> --issue <n>
+
+The in-session orchestrator drives the agent spawns + the bounded regen loop; each
+action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
+through <dataDir>/spec-build/<repo>/<issue>/{prd,generated,verdict}.json.
+
+Actions:
+  resolve  Reuse an existing spec by issue, else fetch the PRD + emit the generate spawn.
+  gate     Run the deterministic spec gates; emit revise (blockers) or the review spawn.
+  store    Adjudicate the review (56/60 + floor); emit revise or persist + emit the pointer.`;
+var PRD_FILE = "prd.json";
+var GENERATED_FILE = "generated.json";
+var VERDICT_FILE = "verdict.json";
+function scratchPaths(dataDir, repo, issue) {
+  const dir = specBuildDir(dataDir, repo, issue);
+  return {
+    prdPath: join14(dir, PRD_FILE),
+    generatedPath: join14(dir, GENERATED_FILE),
+    verdictPath: join14(dir, VERDICT_FILE)
+  };
+}
+async function resolveSpec(deps, repo, issue) {
+  const existing = await deps.store.resolveByIssue(repo, issue);
+  if (existing) {
+    return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
+  }
+  const prd = await deps.gh.fetchPrd(issue, { repo });
+  const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
+  await atomicWriteFile(prdPath, stringifyJson(prd));
+  return {
+    kind: "generate",
+    repo,
+    issue,
+    spawn: buildGenerateSpawn(prd),
+    prd_path: prdPath,
+    generated_path: generatedPath,
+    max_iterations: deps.config.spec.maxRegenIterations
+  };
+}
+async function gateSpec(deps, repo, issue) {
+  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
+  const prd = await readJsonInput(prdPath);
+  const generated = parseGenerateResult(await readJsonInput(generatedPath));
+  const gates = runSpecGates(prd, generated.tasks);
+  if (!gates.passed) {
+    return {
+      kind: "revise",
+      repo,
+      issue,
+      source: "gate",
+      reason: "deterministic spec gates blocked the spec",
+      blockers: gates.blockers,
+      generated_path: generatedPath
+    };
+  }
+  return {
+    kind: "review",
+    repo,
+    issue,
+    spawn: buildReviewSpawn(prd, generated),
+    generated_path: generatedPath,
+    verdict_path: verdictPath
+  };
+}
+async function storeSpec(deps, repo, issue) {
+  const { generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
+  const generated = parseGenerateResult(await readJsonInput(generatedPath));
+  const verdict = parseReviewVerdict(await readJsonInput(verdictPath));
+  const decision = decideSpecReview(verdict, {
+    passReviewThreshold: deps.config.spec.passReviewThreshold,
+    dimensionFloor: deps.config.spec.dimensionFloor
+  });
+  if (decision.decision === "NEEDS_REVISION") {
+    return {
+      kind: "revise",
+      repo,
+      issue,
+      source: "review",
+      reason: decision.reason,
+      blockers: verdict.blockers.length > 0 ? verdict.blockers : [decision.reason],
+      generated_path: generatedPath
+    };
+  }
+  const manifest = buildManifest(repo, issue, generated);
+  const pointer = await deps.store.write(manifest, generated.specMd);
+  return { kind: "stored", repo, issue, pointer };
+}
+function parseIssue2(raw) {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new UsageError(`--issue must be a positive integer, got '${raw}'`);
+  }
+  return n;
+}
+function wireDeps() {
+  const dataDir = resolveDataDir({});
+  const config = loadConfig({ dataDir });
+  return {
+    store: new SpecStore({ dataDir }),
+    gh: new RealGhClient({ bodyMaxBytes: config.spec.prdBodyMaxBytes }),
+    config,
+    dataDir
+  };
+}
+var ACTIONS = {
+  resolve: resolveSpec,
+  gate: gateSpec,
+  store: storeSpec
+};
+async function run11(argv) {
+  const action = argv[0];
+  if (action === void 0 || action === "--help" || action === "-h") {
+    emitLine(SPEC_HELP);
+    return EXIT.OK;
+  }
+  const handler = ACTIONS[action];
+  if (handler === void 0) {
+    throw new UsageError(`unknown spec action '${action}' (expected resolve | gate | store)`);
+  }
+  const args = parseArgs(argv.slice(1));
+  if (args.flag("help") === true) {
+    emitLine(SPEC_HELP);
+    return EXIT.OK;
+  }
+  const repo = args.requireFlag("repo");
+  const issue = parseIssue2(args.requireFlag("issue"));
+  const envelope = await handler(wireDeps(), repo, issue);
+  emitJson(envelope);
+  return EXIT.OK;
+}
+var specCommand = {
+  describe: "Build a durable spec (resolve \u2192 gate \u2192 store; orchestrator drives the agent spawns)",
+  run: async (argv) => {
+    try {
+      return await run11(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`spec: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
 // src/cli/main.ts
 var cliRegistry = {
   "config-defaults": {
@@ -4372,7 +11092,18 @@ var cliRegistry = {
       process.stdout.write(stringifyJson(cfg));
       return EXIT.OK;
     }
-  }
+  },
+  configure: configureCommand,
+  run: runCommand,
+  spec: specCommand,
+  state: stateCommand,
+  scaffold: scaffoldCommand,
+  "run-task": runTaskCommand,
+  advance: advanceCommand,
+  drop: dropCommand,
+  "record-producer": recordProducerCommand,
+  "record-holdout": recordHoldoutCommand,
+  "record-reviews": recordReviewsCommand
 };
 function printHelp() {
   const names = Object.keys(cliRegistry).sort();
@@ -4389,7 +11120,7 @@ function printHelp() {
   ];
   process.stdout.write(lines.join("\n") + "\n");
 }
-async function dispatch(argv) {
+async function dispatch2(argv) {
   const [name, ...rest] = argv;
   if (name === void 0 || name === "--help" || name === "-h") {
     printHelp();
@@ -4407,7 +11138,7 @@ async function dispatch(argv) {
 }
 
 // src/bin/factory.ts
-dispatch(process.argv.slice(2)).then((code) => process.exit(code)).catch((err) => {
+dispatch2(process.argv.slice(2)).then((code) => process.exit(code)).catch((err) => {
   const detail = err instanceof Error ? err.stack ?? err.message : String(err);
   process.stderr.write(detail + "\n");
   process.exit(EXIT.ERROR);

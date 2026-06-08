@@ -1,409 +1,374 @@
 ---
 name: pipeline-orchestrator
-description: (internal) Drive the factory autonomous coding pipeline end-to-end. Orchestrator walks every task through preflight → postexec → postreview → ship via the `pipeline-run-task` wrapper; forgetting a gate is structurally impossible because the wrapper owns quota, quality, coverage, holdout, review fan-out, PR creation, CI wait, and finalize.
+description: (internal) Drive the factory autonomous coding pipeline end-to-end. The in-session orchestrator (Model A) sequences the deterministic `factory` CLI (run / spec / run-task / advance / drop / record-*) and performs every Agent() spawn the CLI reports. The CLI owns all state writes, gates, classification, ladder, and floor; you own the agent spawns and the loop.
 auto-invoke: false
 ---
 
-# Run-Pipeline Skill
+# Pipeline Orchestrator (Model A)
 
-You are the **orchestrator** for the factory autonomous coding pipeline. Your only job is to call `pipeline-run-task` for every task in the run and to emit the `Agent()` spawn calls it asks for. The wrapper owns every protocol step — you do not name them, reason about them, or skip them.
+You are the **in-session orchestrator**. You drive the factory pipeline by calling the
+deterministic `factory` CLI and performing the agent spawns it asks for. This is the
+**Model-A split**:
+
+- **The CLI is the brain.** `factory <subcommand>` owns ALL run-state writes, the spec
+  gates, the deterministic verifier gates, failure classification, the producer escalation
+  ladder, the risk-invariant review floor, and PR creation. It is deterministic and
+  testable. It **never spawns an agent**.
+- **You are the hands.** You spawn every `Agent()` the CLI reports, collect the agents'
+  raw output, write it to a file, and fold it back via a `record-*` subcommand. You
+  **never** decide a transition, re-run a gate, classify a failure, or write run state by
+  prose — the CLI does all of that and tells you the next stage.
+
+The CLI is a **reporter + writer**, not a runner. Reporter subcommands (`run-task`,
+`spec`) emit ONE JSON envelope naming what to spawn next. Writer subcommands (`advance`,
+`drop`, `record-producer`, `record-holdout`, `record-reviews`) fold an agent outcome into
+state and return the next step. Your job is the glue: spawn → write file → record → follow
+the step.
 
 ## Iron Laws
 
-1. **Every step is a script call.** Validation, classification, state writes, quota gates, quality gates, coverage gates, holdout, review dispatch, PR creation, CI wait, cleanup — all live in `bin/pipeline-*`. You never perform them by prose.
-2. **The wrapper owns the stage machine.** `pipeline-run-task <run-id> <task-id> --stage <stage>` returns an exit code and (on exit 10) a JSON spawn manifest. You react to codes; you do not invent stages.
-3. **Reviewers judge code quality, not you.** Your job is to spawn them, parse verdicts via `pipeline-parse-review`, and feed the wrapper the `--review-file` paths. You never form an opinion on whether the code is correct.
-4. **Quota gate C fires before every task.** The wrapper runs it inside `preflight`. If you skip `pipeline-run-task --stage preflight`, you have skipped the quota gate.
-5. **Status transitions belong to the wrapper.** `pending → executing → reviewing → done/failed/needs_human_review`. You do not write `task-status done` by hand.
+1. **Every transition is a CLI call.** Stage moves, classification, gates, the ladder, the
+   floor, drops, PR creation — all live in `factory`. You react to its JSON; you never
+   perform a transition by prose, and you never edit `state.json`.
+2. **Follow the step the CLI returns — never invent the next stage.** Each `record-*`
+   envelope carries `step`: `{done:false, stage}` → run `factory run-task --stage <stage>`
+   next; `{done:true, outcome}` → the task is terminal, stop. Only a `run-task` result of
+   `{kind:"advance", to}` requires you to call `factory advance --to <to>` yourself.
+3. **Reviewers and verifiers judge the code; you do not.** You spawn the panel + holdout +
+   finding-verifiers, collect their RAW output verbatim, and hand it to `record-reviews` /
+   `record-holdout`. You never form an opinion on whether the code is correct, and never
+   edit a finding.
+4. **Spawn agents exactly as the manifest says.** Use the reported `role` as the
+   `subagent_type`, the reported `model` (mapped to a tool alias), and the reported
+   `max_turns`. Honor the worktree-isolation matrix below — producers run IN the task
+   worktree (no isolation); reviewers/validators run in their own worktree.
+5. **The seam fails loud.** An unknown `stage_result.kind`, a non-zero CLI exit you did
+   not expect, a missing envelope field, or a deadlock → **STOP and surface it.** Never
+   fall through to "advance" — a silent fall-through skips every gate.
+6. **Holdout before reviews.** When a verify round surfaces a `sidecar`, run the
+   holdout-validator and `factory record-holdout` BEFORE `factory record-reviews`.
+   `record-reviews` fails closed if a withheld key has no persisted verdicts.
 
-## Red Flags
+## Red Flags — STOP, you are rationalizing
 
-Thoughts that mean STOP — you are rationalizing:
+| Thought                                                     | Reality                                                                                            |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| "The executor returned green; I'll mark the task done."     | You don't write `done`. `factory run-task --stage ship` does, on a clean floor + PR.               |
+| "I'll skip `record-reviews` and advance to ship myself."    | The floor is derived in `record-reviews`. Skipping it ships unreviewed code. Iron Law 1.           |
+| "The panel approved; no need to verify findings."           | Every blocking + citable finding needs an independent finding-verifier. D27. No shortcut.          |
+| "I'll re-run `run-task --stage verify` after recording."    | No. `record-reviews` already acted and returned the step. Follow it; never re-call verify.         |
+| "I'll let the producer pick its own worktree."              | Producers run IN the task worktree (no isolation). A fresh worktree drops their commits.           |
+| "The spec looks fine; I'll skip the reviewer."              | The spec apex gate is generate ⇄ review, bounded. `factory spec` drives it. No bypass.             |
+| "No ready tasks and none blocked — I'll wait."              | That is a dependency cycle/deadlock. STOP LOUD; do not spin.                                       |
+| "I'll merge the task PR myself."                            | Merge is `--ship-mode live` inside `run-task --stage ship`. Default is no-merge. Never `gh merge`. |
+| "A record-\* call exited non-zero; I'll retry it verbatim." | A LOUD CLI error is a real defect (e.g. holdout-before-reviews). Read the message; fix the order.  |
+| "I'll write the producer prompt from memory."               | Read the persisted ProducerContext JSON at the reported `prompt_ref`. Build the prompt from it.    |
 
-| Thought                                                          | Reality                                                                                                                                                       |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "21 tasks; I'll skip the quota gate once to save time"           | Quota gate is the only thing between this run and a frozen Stop hook at 15h. The wrapper runs it in preflight — the only way to skip it is to skip preflight. |
-| "The executor returned green; I can mark the task done"          | The wrapper marks done. You call `pipeline-run-task --stage ship --ci-status green`.                                                                          |
-| "Reviewer output looks fine; `parse-review` is overkill"         | Skipping `parse-review` is how `NEEDS_DISCUSSION` becomes APPROVE. The wrapper uses it — pass the raw file path, nothing else.                                |
-| "I'll pass `--worktree` from the executor's last message"        | `SubagentStop` hook writes it to state. Do not pass unless the hook did not fire.                                                                             |
-| "I can combine two stages to save a turn"                        | Each stage is a separate script call. Short-circuits are in the wrapper (`_already_past`) — trust them.                                                       |
-| "This task is small; full protocol is overkill"                  | The protocol is what makes small tasks safe at 21× scale. There is no "fast path".                                                                            |
-| "The spawn manifest is noisy; let me simplify"                   | Pass it verbatim to `Agent()`. The manifest's `prompt_file` is already written; do not rewrite the prompt.                                                    |
-| "I remember the exit codes"                                      | Re-read `reference/stage-taxonomy.md` if in doubt. Misreading exit 10 as exit 0 silently drops every reviewer.                                                |
-| "Finalize-run seems optional"                                    | Without it, R7–R10 fail on the post-run scorer. It is mandatory.                                                                                              |
-| "The codex review path is synchronous; I'll call codex directly" | The wrapper calls codex inline. Do not.                                                                                                                       |
-| "I'll skip `pipeline-human-gate` when `humanReviewLevel == 0`"   | The wrapper checks the level. Call the gate wrapper and react to exit 20.                                                                                     |
-| "CI is still pending; I'll just wait here"                       | The asyncRewake hook wakes you when CI terminalizes. If it is unavailable, the wrapper falls back to `FACTORY_ASYNC_CI=off`. Do not poll manually.            |
+---
 
-## Decision Flow
+## The `factory` CLI surface
 
-```dot
-digraph orchestrator_loop {
-  rankdir=TB;
-  "Message received" [shape=doublecircle];
-  "Active run?" [shape=diamond];
-  "Pending task?" [shape=diamond];
-  "Preflight ok? (exit 0)" [shape=diamond];
-  "Spawn phase\n(read out.agents, emit Agent())" [shape=box];
-  "Start new run\n(pipeline-init)" [shape=box];
-  "All tasks done?" [shape=diamond];
-  "Finalize run" [shape=box];
-  "STOP (all complete)" [shape=doublecircle];
+`factory` is on `PATH` (the plugin's `bin/factory` shim). Every subcommand prints ONE JSON
+document to stdout (or `--summary` human text for `state`). `--help` on any subcommand
+prints its contract.
 
-  "Message received" -> "Active run?" ;
-  "Active run?" -> "Pending task?" [label="yes"];
-  "Active run?" -> "Start new run\n(pipeline-init)" [label="no"];
-  "Start new run\n(pipeline-init)" -> "Pending task?";
-  "Pending task?" -> "Preflight ok? (exit 0)" [label="yes"];
-  "Pending task?" -> "All tasks done?" [label="no"];
-  "Preflight ok? (exit 0)" -> "Spawn phase\n(read out.agents, emit Agent())" [label="yes → exit 10"];
-  "Preflight ok? (exit 0)" -> "Pending task?" [label="no → exit 2 (quota/stop) or exit 3 (retry)"];
-  "Spawn phase\n(read out.agents, emit Agent())" -> "Pending task?" [label="loop"];
-  "All tasks done?" -> "Finalize run" [label="yes"];
-  "All tasks done?" -> "Pending task?" [label="no (waiting)"];
-  "Finalize run" -> "STOP (all complete)";
-}
-```
+| Subcommand                                                                               | Kind     | What it does                                                                               |
+| ---------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `factory scaffold --repo <o/n> [--provision]`                                            | action   | Prepare a repo (CI + gate configs + staging + branch protection). Refuses if unprotected.  |
+| `factory configure [--get k] [--set k=v] [--unset k]`                                    | read/wr  | Inspect or edit the persisted config overlay.                                              |
+| `factory spec resolve\|gate\|store --repo <o/n> --issue <n>`                             | reporter | The deterministic spec-build seam. Emits the next spawn or a revise/stored/reuse envelope. |
+| `factory run create --repo <o/n> (--issue n\|--spec-id id) [--driver d] [--run-id id]`   | action   | Resolve a durable spec, create a run, seed task rows, emit `RunState`.                     |
+| `factory run resume [--run id]`                                                          | action   | Re-check quota; resume a paused/suspended run if the window recovered.                     |
+| `factory state [<run-id>] [--summary]`                                                   | read     | Read run state (JSON or compact summary). Read-only.                                       |
+| `factory run-task --run <id> --task <id> --stage <s> [--ship-mode no-merge\|live]`       | reporter | Run ONE stage's deterministic work; emit `{stage_result, sidecar?}`.                       |
+| `factory advance --run <id> --task <id> --to <stage>`                                    | writer   | Persist the in-flight cursor (use after a `run-task` `advance` result).                    |
+| `factory record-producer --run <id> --task <id> --stage <tests\|exec> --status "<line>"` | writer   | Fold a producer's terminal STATUS line; emit the next step.                                |
+| `factory record-holdout --run <id> --task <id> --input <path>`                           | writer   | Fold the holdout-validator output `{ "raw": "<out>" }`; persist verdicts.                  |
+| `factory record-reviews --run <id> --task <id> --input <path>`                           | writer   | Fold the panel + verify-then-fix; derive the floor; emit the next step.                    |
+| `factory drop --run <id> --task <id> --class <fc> --reason <t>`                          | writer   | Apply a classified LOUD drop (`capability-budget\|spec-defect\|blocked-environmental`).    |
 
-## Commitment Protocol
+**Task stages (in order):** `preflight → tests → exec → verify → ship`. `nextStage(tests)=exec`,
+`nextStage(exec)=verify`. There is a run-level `finalize`, but **no `finalize` CLI subcommand
+exists yet** (WS12 — see Phase 4).
 
-Before spawning any phase, the orchestrator MUST:
+## Paths you compute yourself
 
-1. **Announce:** Output "Spawning `<stage>` for task `<task_id>`" as plain text before the Agent() call.
-2. **TodoWrite:** Write one TodoWrite item per task × phase being spawned. Mark it `in_progress` immediately, `completed` when the subagent returns.
+The data dir is `$CLAUDE_PLUGIN_DATA` (the CLI requires it; it is set in your Bash env).
 
-These are not optional. They create an audit trail and prevent silent skips.
+- **run dir:** `$CLAUDE_PLUGIN_DATA/runs/<run_id>/`
+- **producer prompt-context (read with the Read tool):**
+  `$CLAUDE_PLUGIN_DATA/runs/<run_id>/<prompt_ref>` where `<prompt_ref>` is the manifest
+  agent's `prompt_ref` (e.g. `prompts/<task_id>/executor-r0.json`).
+- **task worktree (producers work here; reviewers inspect it):**
+  `$CLAUDE_PLUGIN_DATA/worktrees/<run_id>/<task_id>`. The verify `sidecar.worktree` echoes
+  this absolute path; producer prompts also carry it.
+- **your record-\* input files:** write them under
+  `$CLAUDE_PLUGIN_DATA/runs/<run_id>/reviews/` (create the dir; `--input` takes the path).
 
-## Per-Task Loop (the entire orchestrator body)
+## Model-alias mapping
 
-For each task `$t` in the current parallel group, repeat this block until the wrapper returns 0, 2, 20, or 30:
+CLI manifests carry a full model id (e.g. `"opus"`, `"claude-haiku-4-5"`). The `Agent` tool
+`model` param accepts only `haiku | sonnet | opus`. **Map by family substring:** id contains
+`haiku` → `haiku`; contains `sonnet` → `sonnet`; otherwise (`opus`/anything) → `opus`.
+Spec generator/reviewer and the whole review panel resolve to `opus` (apex / risk-invariant).
+The `effort: "max"` the spec spawn carries is the apex intent — run those agents on `opus`
+with no turn shortcuts; the tool exposes no separate effort dial.
 
-```
-out=$(pipeline-run-task "$run_id" "$t" --stage "$stage" ${review_files[@]/#/--review-file }); rc=$?
-case $rc in
-  0)  stage=$(_next_stage "$stage") ;;                              # advance
-  10) # spawn the Agent() calls listed in $out.agents, then:
-      stage=$(printf '%s' "$out" | jq -r '.stage_after')            # re-invoke with manifest's stage
-      ;;
-  2)  exit 0 ;;                                                     # graceful stop (quota / circuit breaker)
-  20) exit 0 ;;                                                     # human gate paused — `/factory:run resume` restarts
-  30) break ;;                                                      # task terminal (failed / needs_human_review)
-  3)  sleep 0 ;;                                                    # wait_retry — re-invoke same stage
-  *)  log error; break ;;
-esac
-```
+## Agent spawn matrix
 
-`_next_stage` is a local helper: `preflight → preexec_tests → postexec → postreview → ship → done`.
+| Agent                         | `subagent_type`              | isolation       | Works in / inspects                                                 |
+| ----------------------------- | ---------------------------- | --------------- | ------------------------------------------------------------------- |
+| test-writer, executor         | the reported `role`          | **none** (omit) | `cd` into the task worktree; commit there on `factory/<run>/<task>` |
+| 6 review-panel members        | the reported `role`          | `"worktree"`    | inspect via `git -C <taskWorktree> diff staging`                    |
+| holdout-validator             | `general-purpose`            | `"worktree"`    | inspect via `git -C <taskWorktree> diff staging`                    |
+| finding-verifier              | `general-purpose`            | `"worktree"`    | inspect via `git -C <taskWorktree> diff staging`                    |
+| spec-generator, spec-reviewer | `spec-generator`/`-reviewer` | `"worktree"`    | reason over the PRD + spec context embedded in the prompt           |
 
-On exit 10, read `out.agents`, and emit one assistant message with one `Agent()` call per manifest entry, preserving `subagent_type`, `isolation`, `model`, `maxTurns`, and loading the prompt from `prompt_file`. The `SubagentStop` hook writes worktree + STATUS back to state; you do not forward anything.
+Producers MUST be spawned with isolation OMITTED (the tool's only isolation value is
+`"worktree"`, which would give them a fresh tree and orphan their commits). Tell them
+explicitly: _"Your working tree is `<taskWorktree>`. `cd` there; make all commits there."_
 
-After the fan-out returns, re-invoke `pipeline-run-task` with `--stage $(jq -r '.stage_after' <<<"$out")`. For `postreview`, collect the review files the hook wrote (`.state/<run-id>/<task-id>.review.<agent>.md`) and pass each via `--review-file`.
+---
 
-The two-phase TDD flow is fully handled by the wrapper:
+## Phase 0 — Preconditions
 
-1. `preflight` spawns the **test-writer** (`stage_after=preexec_tests`).
-2. `preexec_tests` checks that the test-writer wrote failing tests (`RED_READY`), then spawns the **task-executor** (`stage_after=postexec`).
-3. `postexec` runs `pipeline-tdd-gate` (among other gates) to verify test-before-impl commit ordering before spawning reviewers.
-
-## Startup
-
-### 1. Autonomy check
-
-```bash
-result=$(pipeline-ensure-autonomy --json)
-status=$(printf '%s' "$result" | jq -r '.status')
-settings_path=$(printf '%s' "$result" | jq -r '.settings_path')
-```
-
-If `status != ok && status != bypass`, stop and ask the user to relaunch with **exactly** `claude --settings $settings_path` (or `export FACTORY_AUTONOMOUS_MODE=1` for CI). Do not proceed without it.
-
-> ⚠️ Do **not** append `--dangerously-skip-permissions` to the relaunch command. The whole purpose of `merged-settings.json` is to grant scoped autonomy via `permissions.allow` plus deny-list and PreToolUse guard hooks; bypassing permissions would actively defeat the deny list and guards. Surface the relaunch command verbatim — no extra flags.
-
-If the autonomy check halts with `reason: usage-cache-too-stale` (status=`stale-cache`), the merged settings are wired but the statusline hasn't ticked recently. Tell the user to re-run `/factory:run`; the next invocation is itself an agent turn that will cause the statusline to fire and refresh `usage-cache.json` before quota gates run. If it still halts on a second attempt, the session was not launched with `--settings` — instruct a fresh relaunch.
-
-### 2. Preconditions
-
-```bash
-pipeline-validate --no-clean-check
-```
-
-Stop on failure.
-
-### 3. Mode dispatch
-
-| Mode       | Required args              |
-| ---------- | -------------------------- |
-| `discover` | —                          |
-| `prd`      | `--issue N`                |
-| `task`     | `--task-id T --spec-dir D` |
-| `resume`   | —                          |
-
-Validate args; stop on miss.
-
-Parse `allow-7d-over` arg (default: `false`).
-If `allow-7d-over=true` and `mode != resume`: stop with error "Error: --allow-7d-over is only valid with resume mode."
-
-### 4. Run init
-
-For new runs: `pipeline-init "run-$(date +%Y%m%d-%H%M%S)" --issue <N> --mode <mode>`.
-
-For `resume`: `pipeline-state resume-point "$(pipeline-state list | jq -r 'last')"`.
-
-After `$run_id` is resolved in `resume` mode, if `allow_7d_over=true`:
-
-```bash
-if [[ "$allow_7d_over" == "true" ]]; then
-  pipeline-state write "$run_id" '.flags.allow_7d_over' 'true'
-  log_warn "resume: 7d usage bypass active for run $run_id — operator accepted the risk"
-fi
-```
-
-### 5. Dry run
-
-If `--dry-run`: print plan + validation and exit. Do not create the orchestrator worktree.
-
-### 6. Orchestrator worktree
-
-```bash
-PROJECT_ROOT=$(git rev-parse --show-toplevel)
-orchestrator_wt="$PROJECT_ROOT/.claude/worktrees/orchestrator-$run_id"
-mkdir -p "$(dirname "$orchestrator_wt")"
-
-if [[ -d "$orchestrator_wt/.git" ]] || git -C "$PROJECT_ROOT" worktree list --porcelain | grep -q "^worktree $orchestrator_wt$"; then
-  # Resume path: the orchestrator worktree exists from a previous launch and
-  # may be many commits behind origin/staging. Refresh it before any subagent
-  # spawns. This FF is LOAD-BEARING under `worktree.baseRef: "head"` (set in
-  # .claude/settings.json): every Agent({isolation: "worktree"}) subagent
-  # worktree branches from THIS orchestrator worktree's local HEAD, so a stale
-  # HEAD here means every subagent worktree sees an out-of-date
-  # package.json / lockfile / etc. (Under the harness default `fresh`, subagents
-  # would instead birth from origin/<default-branch> = origin/main, missing
-  # staging entirely — the 2026-05-28 root cause this setting fixes.)
-  # Fail-closed on divergence — an operator who hits this must reconcile
-  # manually before resuming; silently running on a stale tree is the bug.
-  if ! git -C "$orchestrator_wt" fetch origin staging --quiet; then
-    echo "[ERROR] orchestrator worktree fetch failed at $orchestrator_wt — origin unreachable" >&2
-    exit 1
-  fi
-  _orch_ff_err=$(mktemp)
-  if ! git -C "$orchestrator_wt" merge --ff-only origin/staging --quiet 2>"$_orch_ff_err"; then
-    echo "[ERROR] orchestrator worktree at $orchestrator_wt diverged from origin/staging; manual recovery needed" >&2
-    cat "$_orch_ff_err" >&2
-    rm -f "$_orch_ff_err"
-    exit 1
-  fi
-  rm -f "$_orch_ff_err"
-else
-  pipeline-branch worktree-create "orchestrator-$run_id" "$orchestrator_wt" staging
-fi
-
-pipeline-state write "$run_id" .orchestrator.worktree "\"$orchestrator_wt\""
-pipeline-state write "$run_id" .orchestrator.project_root "\"$PROJECT_ROOT\""
-cd "$orchestrator_wt"
-```
-
-Every subsequent Bash call runs with this cwd.
-
-Both paths above land the orchestrator worktree HEAD on `origin/staging` before
-this `cd` (resume = FF; fresh-create = `worktree-create … staging`, which
-fetches and forks from `origin/staging`). With `worktree.baseRef: "head"` in
-`.claude/settings.json`, every later `Agent({isolation: "worktree"})` spawn
-branches its worktree from this HEAD — so all subagents (test-writer, executor,
-reviewers, rescue) start on the current staging tip, not stale `origin/main`.
-The test-writer/executor `checkout -B origin/staging` step in
-`bin/pipeline-run-task` remains as an idempotent fallback (a no-op once the
-worktree already births on staging) so correctness degrades gracefully if the
-setting is ever absent or overridden.
-
-### 7. Scaffold + circuit breaker
-
-```bash
-pipeline-scaffold "$PROJECT_ROOT" --check || { echo "run /factory:scaffold first"; exit 1; }
-pipeline-circuit-breaker "$run_id" >/dev/null || { /* mark partial, cleanup, exit */ }
-```
-
-### 8. Run-start budget gate (Gate 0)
-
-Script-enforced before any agent spawns. Same loop shape as Gate A/B/C — react to exit codes 0/2/3.
-
-```bash
-while :; do
-  pipeline-quota-gate-cli --run-id "$run_id" --tier feature --boundary run-start; rc=$?
-  case $rc in
-    0) break ;;          # proceed
-    2) mark_partial; exit 0 ;;
-    3) continue ;;       # wait_retry — re-invoke (next agent turn refreshes statusline)
-  esac
-done
-```
-
-## Spec Generation (prd / discover modes only)
-
-Runs once, before task execution.
-
-1. **Quota gate A.**
+1. Confirm you are in a git checkout (`git rev-parse --show-toplevel`). If not, stop.
+2. **Scaffold the target repo** (idempotent; refuses if branch protection is missing):
 
    ```bash
-   while :; do
-     pipeline-quota-gate-cli --run-id "$run_id" --tier feature --boundary spec; rc=$?
-     case $rc in 0) break;; 2) mark_partial; exit 0;; 3) continue;; esac
-   done
+   factory scaffold --repo <owner/name>
    ```
 
-2. **Fetch PRD.** `pipeline-fetch-prd <issue>`.
+   If it refuses on missing protection, tell the user to re-run with `--provision` (writes
+   protection) or to protect the staging branch manually — do not proceed unprotected.
 
-3. **Spawn spec-generator.** `Agent({subagent_type: "spec-generator", isolation: "worktree", prompt_file: skills/pipeline-orchestrator/prompts/spec-generator.md})`. The agent commits spec.md + tasks.json on `spec-handoff/$run_id` and writes `.spec.handoff_branch`, `.spec.handoff_ref`, `.spec.path` to state. It MUST NOT spawn `spec-reviewer` itself — review is your responsibility (next step).
+3. Note the run mode the user asked for: which `--repo` + `--issue` (or `--spec-id`), which
+   `--driver` (sequential | balanced; default balanced), and whether to merge
+   (`--ship-mode live`) or stay cutover-safe (`no-merge`, the default).
 
-4. **Spawn spec-reviewer (Iron Law: review independence).** After spec-generator returns `STATUS: DONE`, build a prompt that contains the verbatim contents of the spec files from the handoff (use `git show "$handoff_ref:$spec_path/spec.md"` and `git show "$handoff_ref:$spec_path/tasks.json"` to extract them — read from `handoff_ref`/`spec_path` already captured in state). Then:
+## Phase 1 — Spec (durable, apex-gated)
 
-   ```
-   Agent({
-     subagent_type: "spec-reviewer",
-     isolation: "worktree",
-     prompt_file: <path to per-run prompt with embedded spec/tasks>
-   })
-   ```
-
-   Parse the reviewer STATUS line and review-file output via `pipeline-parse-review`. If score < 54/60:
-   - If iteration budget (max 5) not exhausted: re-spawn spec-generator with the reviewer's findings embedded as `REVIEW_FEEDBACK` in the prompt, then re-spawn spec-reviewer. Loop.
-   - If budget exhausted: `pipeline-gh-comment <issue> spec-failure --data '{"reason":"spec-reviewer below threshold","score":<score>}'`, `pipeline-state write "$run_id" .status '"failed"'`, exit 1.
-
-5. **Persist review score.**
-
-   ```bash
-   if [[ -f "$spec_reviewer_output" ]]; then
-     score=$(jq -r '.score // empty' "$spec_reviewer_output")
-     [[ -n "$score" ]] && pipeline-state write "$run_id" '.spec.review_score' "$score"
-   fi
-   ```
-
-6. **Resolve handoff onto staging.**
-
-   ```bash
-   handoff_branch=$(pipeline-state read "$run_id" .spec.handoff_branch)
-   handoff_ref=$(pipeline-state read "$run_id" .spec.handoff_ref)
-   spec_path=$(pipeline-state read "$run_id" .spec.path)
-   [[ -z "$handoff_branch" ]] && { pipeline-gh-comment <issue> ci-escalation --data '{"reason":"spec handoff missing"}'; pipeline-state write "$run_id" .status '"failed"'; exit 1; }
-
-   # Resolve the worktree that owns `staging` so all staging mutations run in it
-   # — works whether the orchestrator runs in main or a separate worktree.
-   staging_wt=$(git worktree list --porcelain 2>/dev/null \
-     | awk '/^worktree / { wt = substr($0, 10); next } /^branch refs\/heads\/staging$/ { print wt; exit }')
-   [[ -z "$staging_wt" ]] && staging_wt="$(pwd)"  # fallback: assume current cwd is staging-owning
-
-   git -C "$staging_wt" push origin "$handoff_branch" 2>/dev/null || true
-   git -C "$staging_wt" fetch origin "$handoff_branch" 2>/dev/null || git -C "$staging_wt" rev-parse --verify "$handoff_ref" >/dev/null
-   mkdir -p "$staging_wt/.state/$run_id"
-   git -C "$staging_wt" show "$handoff_ref:$spec_path/spec.md"    > "$staging_wt/.state/$run_id/spec.md"
-   git -C "$staging_wt" show "$handoff_ref:$spec_path/tasks.json" > "$staging_wt/.state/$run_id/tasks.json"
-   git -C "$staging_wt" checkout staging 2>/dev/null || true   # no-op if already on staging
-   git -C "$staging_wt" merge --ff-only "$handoff_ref" || git -C "$staging_wt" merge --no-ff "$handoff_ref" -m "chore: merge spec handoff for $run_id"
-   git -C "$staging_wt" push origin --delete "$handoff_branch" 2>/dev/null || true
-   git -C "$staging_wt" branch -D "$handoff_branch" 2>/dev/null || true
-   pipeline-state write "$run_id" .spec.path "\"$staging_wt/.state/$run_id\""
-   pipeline-state write "$run_id" .spec.committed true
-   pipeline-branch commit-spec "$staging_wt/.state/$run_id"
-   git -C "$staging_wt" ls-remote --exit-code --heads origin staging >/dev/null \
-     || { log_error "origin/staging missing after commit-spec — aborting before task fan-out"; exit 1; }
-   ```
-
-7. **Human gate.** `pipeline-human-gate "$run_id" spec`. Exit 42 pauses (status `awaiting_human`, GH comment posted). Resume via `/factory:run resume`.
-
-8. **Validate tasks + seed state.**
-
-   ```bash
-   pipeline-validate-tasks ".state/$run_id/tasks.json" > ".state/$run_id/validated.json"
-   for t in $(jq -r '.execution_order[].task_id' ".state/$run_id/validated.json"); do
-     row=$(jq -c --arg t "$t" '(if type == "array" then .[] else (.tasks // [])[] end) | select(.task_id == $t)' ".state/$run_id/tasks.json")
-     pipeline-state task-init "$run_id" "$t" "$row"
-   done
-   pipeline-state write "$run_id" .execution_order "$(jq -c .execution_order ".state/$run_id/validated.json")"
-   ```
-
-For `task` mode: skip 1–7, read spec from `--spec-dir`, write `.spec.path` to state, then run 8.
-
-## Execution
+The spec build is a bounded generate ⇄ review loop. `factory spec` owns the gates,
+adjudication (56/60 + any-dimension≤5 floor), and the durable store; **you** own the two
+agent spawns and the loop. Run it until you reach `reuse` or `stored`.
 
 ```
-execution_order = pipeline-state read $run_id .execution_order
-groups          = distinct(.parallel_group) sorted ascending
-maxConcurrent   = read_config .maxParallelTasks 3
-
-for G in groups:
-  tasks_G = [entry.task_id where parallel_group == G]
-  for batch in chunks(tasks_G, maxConcurrent):
-    # Quota gate B
-    while :; do
-      pipeline-quota-gate-cli --run-id "$run_id" --tier "<max tier in batch>" --boundary "batch-G$G"; rc=$?
-      case $rc in 0) break;; 2) drain; mark_partial; exit 0;; 3) continue;; esac
-    done
-
-    # Walk each task through the stage machine (see "Per-Task Loop" above).
-    # Tasks in a batch may spawn in parallel on exit-10 manifest emission.
-    for t in batch (parallel via one Agent-message fan-out per stage):
-      stage=preflight
-      loop-until-terminal $t
+env = factory spec resolve --repo <o/n> --issue <n>
+iters = 0
+loop:
+  case env.kind:
+    "reuse":    → spec ready (env.pointer). Go to Phase 2 (create by --issue).
+    "stored":   → spec ready (env.pointer). Go to Phase 2.
+    "generate":
+        iters++; if iters > env.max_iterations → STOP LOUD (spec-defect: regen budget exhausted)
+        spawn spec-generator (worktree, opus) with env.spawn.context embedded
+            → agent returns a GenerateResult JSON: { specMd, slug, tasks:[…] }
+        write that JSON verbatim to env.generated_path
+        env = factory spec gate --repo <o/n> --issue <n>
+    "revise":   # gate blockers (source=gate) or sub-threshold review (source=review)
+        iters++; if iters > env.max_iterations → STOP LOUD (spec-defect)
+        re-spawn spec-generator, embedding env.reason + env.blockers as REVIEW_FEEDBACK
+            → returns a fresh GenerateResult JSON
+        write it to env.generated_path
+        env = factory spec gate --repo <o/n> --issue <n>
+    "review":
+        spawn spec-reviewer (worktree, opus) with env.spawn.context embedded
+            → returns a ReviewVerdict JSON
+              { decision, score, per_dimension{granularity,dependencies,acceptance_criteria,
+                tests,vertical_slices,alignment}, blockers, concerns }
+        write it to env.verdict_path
+        env = factory spec store --repo <o/n> --issue <n>
 ```
 
-All tasks in group G must reach a terminal status (`done`, `failed`, `needs_human_review`) before group G+1 starts.
+Generator and reviewer follow `agents/spec-generator.md` / `agents/spec-reviewer.md`; the
+output JSON shapes are validated LOUDLY by the CLI (a malformed payload is a hard error — do
+not coerce it). Use the absolute `prd_path` / `generated_path` / `verdict_path` the
+envelopes echo; write each agent's output there with the Write tool before the next `spec`
+call.
 
-## Finalize-run
-
-After every task is terminal:
-
-```
-stage=finalize-run
-loop-until-terminal RUN   # same per-task loop shape, task_id="RUN"
-```
-
-The wrapper (exit 3 wait_retry on any gap, in order):
-
-- Blocks while any task is not `status=done`. `failed` / `needs_human_review` block by default; opt in with `FACTORY_ALLOW_PARTIAL_ROLLUP=1`.
-- Blocks if any `status=done` task has `stage != ship_done` (state drift from rescue/legacy).
-- Fails-closed if `git fetch origin staging` errors.
-- Verifies every `status=done` task has a `pr_number`, the PR is `MERGED` on GitHub, and its merge SHA is an ancestor of `origin/staging`.
-- Emits a `scribe` spawn manifest once, waits for `.scribe.status == "done"`.
-- Opens the final PR `staging → develop`, records `.final_pr.pr_url` / `.final_pr.pr_number`, emits `run.final_pr_created`.
-- Runs `pipeline-cleanup`, sets `.status = "done"`, `.ended_at`.
-
-After finalize-run returns 0:
+## Phase 2 — Create the run
 
 ```bash
-pipeline-summary "$run_id" --post-to-issue
-pipeline-branch worktree-remove "$orchestrator_wt"
+factory run create --repo <owner/name> --issue <n> [--driver sequential|balanced] [--run-id <id>]
 ```
 
-## Resume
+Read `run_id` from the emitted `RunState`. (Use `--spec-id <id>` instead of `--issue` to
+pin an explicit spec.) Seeding fails LOUD on a duplicate/self/dangling/cyclic dependency —
+that is a spec defect; surface it.
 
-1. `pipeline-state resume-point "$run_id"` → first non-terminal task. Resume requires a **canonical run-id** of the shape `run-YYYYMMDD-HHMMSS` (e.g. `run-20260428-130201`); legacy or ad-hoc IDs (`run-test-001`, `run-x`, traversal-shaped tokens) are rejected with exit 1 so resume cannot target arbitrary state directories.
-2. `SessionStart` hook (if available) injects the current per-task stage map via `additionalContext` and exports `FACTORY_CURRENT_RUN`.
-3. Per-task loop is idempotent: the wrapper's `_already_past` check short-circuits any stage whose terminal marker (`.tasks.$t.stage`) is already at or past the requested stage.
-4. Step 6 (orchestrator worktree) reuses `.orchestrator.worktree` from state.
+## Phase 3 — Drive the run
 
-Before entering the per-task loop, run a preflight scan (see `reference/resume-protocol.md` "Preflight scan" section). Halt if any tier-2/3 issue or investigation flag is present and instruct the user to run `/factory:rescue`.
+Mirror the deterministic driver. Outer loop = run-level (dependency order, cascade-drop,
+deadlock); inner loop = per-task stage machine.
 
-See `reference/resume-protocol.md` for full details.
+### Run loop
 
-## Human review levels
+```
+concurrency = (driver == "sequential") ? 1 : 3
+loop:
+  run = factory state <run_id>            # JSON
+  if run.status is terminal (completed|partial|failed): break → Phase 4
+  if every task is terminal:              # all done/dropped
+      break → Phase 4                     # (finalize has no CLI yet — Phase 4)
+  # Cascade-drop any pending task whose dependency dropped or is missing:
+  for each pending task t with a depends_on entry that is dropped/absent:
+      factory drop --run <run_id> --task <t> --class blocked-environmental \
+        --reason "dependency '<dep>' did not complete (dropped or missing)"
+  if you dropped any: continue            # re-read state
+  ready = pending tasks whose every dependency is done
+  if ready is empty:
+      STOP LOUD — dependency cycle or deadlock (non-terminal tasks but none ready)
+  batch = first <concurrency> of ready
+  drive each task in batch (see driveTask). In balanced mode you MAY spawn the
+    batch's same-stage agents in one Agent() message; keep each task's `factory`
+    CLI calls serialized for that task. Then loop (re-read state).
+```
 
-See `reference/human-gate-levels.md` for the full table. Quick rule: the wrapper itself consults `.humanReviewLevel` and emits exit 20 when a gate pauses. React to exit 20 by stopping — the user resumes via `/factory:run resume`.
+A run that was paused/suspended on quota is resumed with `factory run resume [--run <id>]`
+(human-relaunch only in v1). On `{kind:"still-blocked", …}` report the reason +
+`resets_at_epoch` and stop; on `{kind:"resumed", run}` continue the run loop.
+
+### driveTask — one task to terminal
+
+```
+factory advance --run <run_id> --task <t> --to preflight     # mark in-flight at start
+stage = "preflight"
+loop:
+  env = factory run-task --run <run_id> --task <t> --stage <stage> [--ship-mode <mode>]
+  r = env.stage_result
+  case r.kind:
+    "advance":
+        factory advance --run <run_id> --task <t> --to <r.to>
+        stage = r.to
+    "spawn-agents":
+        if stage in {tests, exec}:  step = runProducer(env, stage)        # see below
+        elif stage == "verify":     step = runVerify(env)                 # see below
+        else: STOP LOUD (unexpected spawn at stage <stage>)
+        if step.done: report step.outcome; break
+        stage = step.stage
+    "task-terminal":                 # ship wrote the terminal status already
+        report r.outcome; break
+    "wait-retry":                    # only from ship live-merge refusal
+        merge_resyncs++ (cap 8)
+        if over cap: factory drop … --class blocked-environmental --reason "<r.reason>"; break
+        factory advance --run <run_id> --task <t> --to exec       # re-sync the branch
+        stage = "exec"
+    "graceful-stop" | "finalize-terminal": STOP LOUD (run-scope result at task scope)
+    default: STOP LOUD (unknown stage_result.kind)
+```
+
+`--ship-mode` defaults to `no-merge` (cutover-safe: opens the task PR, never merges). Pass
+`live` only when the user opted into auto-merge.
+
+### runProducer (stages tests, exec)
+
+The manifest carries ONE producer agent. Its prompt-context is already persisted.
+
+1. `prompt_ref = env.stage_result.manifest.agents[0].prompt_ref` →
+   Read `$CLAUDE_PLUGIN_DATA/runs/<run_id>/<prompt_ref>` (a ProducerContext JSON:
+   `{taskId, title, description, acceptanceCriteria, files, rung, fixInstructions,
+priorFailures, injectedPriorFailure}`).
+2. Spawn the producer: `subagent_type = role` (`test-writer` at tests, `executor` at exec),
+   model = map(`agents[0].model`), `maxTurns = agents[0].max_turns`, **isolation omitted**.
+   Build the prompt from the ProducerContext + the task-worktree instruction
+   (`cd $CLAUDE_PLUGIN_DATA/worktrees/<run_id>/<task_id>`; commit there). The test-writer
+   commits failing tests first (TDD); the executor commits the minimal implementation.
+   Follow `agents/test-writer.md` / `agents/task-executor.md`.
+3. Capture the agent's terminal **STATUS** line (`STATUS: DONE` |
+   `STATUS: BLOCKED — escalate` | `STATUS: NEEDS_CONTEXT`).
+4. Fold it: `factory record-producer --run <run_id> --task <t> --stage <stage> --status "<line>"`.
+   Return its `step`. (`done` advances tests→exec / exec→verify; a classified failure
+   bumps the rung and resumes at the same producer stage, or drops when the ladder is
+   exhausted — all inside the CLI.)
+
+### runVerify (stage verify)
+
+A verify round always reports `spawn-agents` (the panel) and, when an answer key was
+withheld, a `sidecar`. Do the holdout FIRST, then the panel + verify-then-fix.
+
+1. **Holdout (only if `env.sidecar` present).** Spawn `general-purpose`, isolation
+   `"worktree"`, model = map(`sidecar.model`), `maxTurns = sidecar.max_turns`, with
+   `sidecar.prompt` **verbatim** (it already embeds the worktree, the
+   `git -C <wt> diff staging` instruction, the withheld criteria, and the strict
+   `{criteria:[…]}` JSON shape). Write the agent's raw output to a file as
+   `{ "raw": "<output>" }`, then:
+   `factory record-holdout --run <run_id> --task <t> --input <file>`.
+2. **Panel.** Spawn all six reviewers (`manifest.agents`, each isolation `"worktree"`,
+   model = map(model)=opus, `max_turns` from the manifest) — roles:
+   `implementation-reviewer, quality-reviewer, architecture-reviewer, security-reviewer,
+silent-failure-hunter, type-design-reviewer`. The manifest `prompt_ref`
+   (`reviews/prompts/<role>.md`) is a placeholder — **you** construct each reviewer prompt
+   per `skills/review-protocol/SKILL.md`: tell it to inspect via
+   `git -C <taskWorktree> diff staging` and to emit a single RawReview JSON object:
+
+   ```json
+   { "reviewer": "<role>", "verdict": "approve|blocked|error",
+     "findings": [ { "reviewer":"<role>", "severity":"info|warning|error|critical",
+       "blocking": true|false, "file":"<path>", "line": <n>,
+       "quote":"<verbatim code>", "description":"<concern>" } ] }
+   ```
+
+   `file`/`line` are optional but a finding without both is uncitable (dropped by the CLI);
+   `quote` is REQUIRED. `findings` may be empty for an `approve`.
+
+3. **Verify-then-fix (D27).** For EACH finding that is `blocking:true` AND citable (has both
+   `file` and `line`), spawn an INDEPENDENT finding-verifier (`general-purpose`, isolation
+   `"worktree"`, model `opus`, adversarial framing — _"try to refute this finding against
+   the actual code"_). It returns `{ holds: true|false, note: "<why>" }` (`holds:true` =
+   the finding is confirmed real). Inspect via `git -C <taskWorktree> diff staging`.
+4. **Fold.** Write the record-reviews input file:
+
+   ```json
+   { "reviews": [ <each raw reviewer JSON>, … ],
+     "verifications": [ { "reviewer":"<role>",
+       "verdicts": [ { "file":"<f>", "line":<n>, "holds":true|false, "note":"<n>" }, … ] }, … ],
+     "crossVendorAbsent": { "reason": "no second-vendor reviewer configured" } }
+   ```
+
+   Include one `verifications` verdict for every blocking + citable finding you verified
+   (a kept citable blocker with no recorded verdict makes the CLI fail closed). Add
+   `crossVendorAbsent` only when no cross-vendor reviewer ran (Δ U — recorded loudly).
+   Then: `factory record-reviews --run <run_id> --task <t> --input <file>`.
+
+5. Return its `step`. On `{done:false, stage:"ship"}` the floor passed → next iteration
+   ships. On `{done:false, stage:"exec"}` the floor blocked → the CLI bumped the rung and
+   cleared reviewers; the next verify round re-spawns a fresh panel. On `{done:true,…}` the
+   ladder dropped the task — report it.
+
+   Never re-call `factory run-task --stage verify` to "check the floor" — `record-reviews`
+   already derived and acted on it.
+
+## Phase 4 — Completion
+
+When the run loop breaks (run terminal or all tasks terminal):
+
+1. `factory state <run_id> --summary` — report per-task outcome (done / dropped + class +
+   PR number) and the run status (`completed | partial | failed`).
+2. **Not yet wired (WS12):** there is no `finalize` subcommand, so the staging→develop
+   rollup PR, the run-level finalize, and the per-failed-task GitHub issue are NOT created
+   automatically. State this plainly to the user; do not fake a rollup. `main` is never
+   touched. Scribe/docs generation is likewise deferred (WS12).
+3. If the run is `paused`/`suspended` (quota), tell the user to re-run `factory run resume`
+   once the window resets.
+
+---
 
 ## Failure handling
 
-`pipeline-run-task` returns exit 30 on task-terminal failures (`failed` or `needs_human_review`). Move on to the next task; do not retry manually — the wrapper's internal attempt counters (`review_attempts`, `ci_fix_attempts`, quality / holdout) handle bounded retries inside each stage.
-
-After exhausting retries, the wrapper has already posted the escalation via `pipeline-gh-comment`; you do nothing more.
+- A **dropped** task is terminal and classified (`capability-budget` | `spec-defect` |
+  `blocked-environmental`). Move on to the next ready task; do not retry by hand — the
+  CLI's ladder already exhausted its bounded retries.
+- A **LOUD CLI error** (non-zero exit + stderr) is a real defect, not a transient. Read the
+  message. Common causes: calling `record-reviews` before `record-holdout`; a malformed
+  agent JSON; run/spec drift. Fix the cause; do not blind-retry.
+- A **deadlock** (non-terminal tasks, none ready, none cascade-droppable) is a dependency
+  cycle — STOP LOUD (the seeder catches most cycles at `run create`, but surface any that
+  reach here).
 
 ## When NOT to use this skill
 
-- User asks about pipeline internals, debugging a specific script, or editing the wrapper → regular tools.
-- User wants a one-off single task without a spec → `/factory:run task --task-id T --spec-dir D` still works, but it is rare; re-read `reference/stage-taxonomy.md` first to confirm the per-task loop fits.
-- Documentation-only updates → spawn `scribe` directly, not the full pipeline.
-
-## References
-
-- `reference/stage-taxonomy.md` — full exit-code / manifest contract, per-stage transitions.
-- `reference/human-gate-levels.md` — `humanReviewLevel` 0–4 semantics.
-- `reference/resume-protocol.md` — SessionStart hook + wrapper cooperation on `source=resume`.
-- `reference/legacy-per-task-protocol.md` — archive of the prose protocol the wrapper replaced. Human-readable; preserved for audit / incident review. Do not paste into a live orchestrator session — the wrapper owns every step.
-- `prompts/spec-generator.md`, `spec-reviewer.md`, `task-executor.md`, `implementation-reviewer.md`, `scribe.md` — externalized agent prompts. The wrapper writes per-task prompts into `.state/<run-id>/` from these templates; you do not edit them at runtime.
+- Questions about CLI internals, a single subcommand, or debugging the TypeScript → regular
+  tools, not a pipeline run.
+- A docs-only change → spawn `scribe` directly.
+- Re-running a finished run → inspect with `factory state`; only `factory run resume`
+  re-enters a paused/suspended run.

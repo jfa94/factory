@@ -1,50 +1,90 @@
 ---
-description: "Run the factory autonomous coding pipeline"
-argument-hint: "[discover|prd|task|resume] [--issue <N>] [--task-id <T>] [--spec-dir <D>] [--strict] [--dry-run] [--allow-7d-over]"
+description: "Run the factory autonomous coding pipeline (PRD issue → task PRs → staging)"
+argument-hint: "[resume] --repo <owner/name> (--issue <N> | --spec-id <id>) [--driver sequential|balanced] [--ship-mode no-merge|live] [--run <id>]"
 arguments:
   - name: mode
-    description: "Operating mode: discover, prd, task, or resume"
+    description: "Omit to start a run; pass `resume` to re-enter a paused/suspended run"
     required: false
-    default: "discover"
+  - name: "--repo"
+    description: "Target GitHub repo as <owner>/<name> (required to start a run)"
+    required: false
   - name: "--issue"
-    description: "GitHub issue number (required for prd mode)"
+    description: "PRD issue number — the stable spec lookup key (start mode)"
     required: false
-  - name: "--task-id"
-    description: "Task ID to execute (required for task mode)"
+  - name: "--spec-id"
+    description: "Explicit <issue>-<slug> spec id, instead of --issue (start mode)"
     required: false
-  - name: "--spec-dir"
-    description: "Path to spec directory (required for task mode)"
+  - name: "--driver"
+    description: "sequential (c=1) | balanced (c=3). Default balanced"
     required: false
-  - name: "--strict"
-    description: "Require [PRD] marker on issues; fail instead of warn when missing"
+  - name: "--ship-mode"
+    description: "no-merge (open task PRs, never merge — cutover-safe) | live (auto-merge into staging). Default no-merge"
     required: false
-  - name: "--dry-run"
-    description: "Validate inputs and show plan without executing"
-    required: false
-  - name: "--allow-7d-over"
-    description: "Bypass the 7-day usage circuit breaker for this resume (resume mode only)"
+  - name: "--run"
+    description: "Run id to resume (resume mode; defaults to the current run)"
     required: false
 ---
 
 # /factory:run
 
-Invoke the `pipeline-orchestrator` skill with these arguments. The skill contains the full orchestrator protocol (startup, mode dispatch, spec generation, per-task stage-machine loop, finalize-run). Every per-task step is driven by `bin/pipeline-run-task`; the skill's Iron Laws and red-flag table prevent drift across long runs.
+Drive a full pipeline run **in this session**. You are **Model A** — the in-session
+orchestrator. The `factory` CLI is the deterministic brain (state, gates, classification,
+ladder, floor, PR creation); you are the hands that perform every `Agent()` spawn it asks
+for. The complete control loop, Iron Laws, the CLI surface, the spawn matrix, and the
+model-alias mapping all live in `skills/pipeline-orchestrator/SKILL.md` — **invoke that
+skill and follow it exactly**. Do not improvise transitions or write run state by prose.
 
-Parse `mode` from the user's input. Validate required args for the chosen mode:
+## Parse the invocation
 
-| Mode       | Required args              |
-| ---------- | -------------------------- |
-| `discover` | —                          |
-| `prd`      | `--issue N`                |
-| `task`     | `--task-id T --spec-dir D` |
-| `resume`   | —                          |
+**Start mode** (no leading `resume`):
 
-`--allow-7d-over` is only valid in `resume` mode. The skill must stop with a clear error if it is supplied with any other mode.
+| Flag          | Required | Notes                                                |
+| ------------- | -------- | ---------------------------------------------------- |
+| `--repo`      | yes      | `<owner>/<name>`                                     |
+| `--issue`     | one of   | PRD issue number (stable spec key)                   |
+| `--spec-id`   | one of   | `<issue>-<slug>` (mutually exclusive with `--issue`) |
+| `--driver`    | no       | `sequential` \| `balanced` (default `balanced`)      |
+| `--ship-mode` | no       | `no-merge` (default) \| `live`                       |
 
-Then load the skill:
+Reject the call (stop with a clear message) if: `--repo` is missing; neither or both of
+`--issue`/`--spec-id` are given; `--driver` is not `sequential`/`balanced`; `--ship-mode`
+is not `no-merge`/`live`.
+
+**`--ship-mode` is the cutover-safety knob.** Default `no-merge` opens each task PR but
+never merges (the dry-run / no-merge mode). Pass `live` only when the user explicitly
+opted into auto-merge into `staging`.
+
+**Resume mode** (`/factory:run resume [--run <id>]`): skip spec + create; go straight to
+`factory run resume` per the skill's Phase 3 resume note.
+
+## Drive it
+
+Load the orchestrator skill and run its protocol end-to-end:
 
 ```
-Skill(pipeline-orchestrator, "mode=<mode> issue=<N> task-id=<T> spec-dir=<D> strict=<bool> dry-run=<bool> allow-7d-over=<bool>")
+Skill(pipeline-orchestrator)
 ```
 
-All orchestration logic lives in `skills/pipeline-orchestrator/SKILL.md` and its `reference/` + `prompts/` directories. Do not duplicate it here.
+Then execute, in order (all detail is in the skill — this is just the spine):
+
+1. **Phase 0 — Preconditions.** Confirm a git checkout; `factory scaffold --repo <o/n>`
+   (idempotent; refuses if staging branch protection is missing — tell the user to re-run
+   `/factory:scaffold --provision` or protect staging manually, then stop).
+2. **Phase 1 — Spec.** Run the bounded `factory spec resolve|gate|store` generate ⇄ review
+   loop, spawning `spec-generator` / `spec-reviewer` as the envelopes ask, until `reuse`
+   or `stored`.
+3. **Phase 2 — Create.** `factory run create --repo <o/n> (--issue <n> | --spec-id <id>)
+[--driver <d>]`; read `run_id` from the emitted `RunState`.
+4. **Phase 3 — Drive.** Run the run loop + per-task stage machine, threading `--ship-mode`
+   into every `factory run-task … --stage ship`. Holdout before reviews; verify-then-fix
+   each blocking + citable finding; follow the `step` each `record-*` returns.
+5. **Phase 4 — Completion.** `factory state <run_id> --summary`; report per-task outcomes
+   and the run status. State plainly that the staging→develop rollup PR, run finalize, and
+   per-failed-task issues are **not yet wired** (WS12). `main` is never touched.
+
+**Resume mode:** `factory run resume [--run <id>]`. On `{kind:"still-blocked", …}` report
+the reason + `resets_at_epoch` and stop; on `{kind:"resumed", run}` continue the Phase 3
+run loop.
+
+Everything else — the spawn isolation matrix, the path computations, the failure handling
+— is in `skills/pipeline-orchestrator/SKILL.md`. Do not duplicate or contradict it here.

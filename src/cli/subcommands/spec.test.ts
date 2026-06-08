@@ -1,0 +1,237 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { resolveSpec, gateSpec, storeSpec, specCommand, type SpecBuildDeps } from "./spec.js";
+import { EXIT } from "../exit-codes.js";
+import { loadConfig } from "../../config/index.js";
+import { stringifyJson } from "../../shared/json.js";
+import { specBuildDir } from "../../core/state/paths.js";
+import {
+  SpecStore,
+  buildManifest,
+  SPEC_DEFAULTS,
+  type GhClient,
+  type Prd,
+} from "../../spec/index.js";
+
+const REPO = "owner/app";
+const ISSUE = 123;
+
+/** A PRD whose single bullet is fully covered by the passing task's criterion. */
+const PRD_BODY =
+  "- Users must be able to log in with email and password and receive a session token";
+
+const PASS_TASK = {
+  task_id: "T1",
+  title: "Email/password login",
+  description: "Implement email and password login issuing a session token",
+  files: ["src/auth/login.ts"],
+  acceptance_criteria: ["User logs in with valid email and password and receives a session token"],
+  tests_to_write: ["Test login with valid email and password returns a session token"],
+  depends_on: [] as string[],
+  risk_tier: "medium" as const,
+  risk_rationale: "auth is security-sensitive",
+};
+
+const PASS_GENERATED = {
+  specMd: "# Login spec\n\nEmail/password login.",
+  slug: "email-login",
+  tasks: [PASS_TASK],
+};
+
+/** A vague criterion trips the deterministic testability gate. */
+const FAIL_GENERATED = {
+  ...PASS_GENERATED,
+  tasks: [{ ...PASS_TASK, acceptance_criteria: ["works well"], tests_to_write: ["smoke test"] }],
+};
+
+const PASS_VERDICT = {
+  decision: "PASS",
+  score: 60,
+  per_dimension: {
+    granularity: 10,
+    dependencies: 10,
+    acceptance_criteria: 10,
+    tests: 10,
+    vertical_slices: 10,
+    alignment: 10,
+  },
+  blockers: [] as string[],
+  concerns: [] as string[],
+};
+
+/** granularity 5 ≤ floor (5) → NEEDS_REVISION regardless of total. */
+const FAIL_VERDICT = {
+  decision: "NEEDS_REVISION",
+  score: 45,
+  per_dimension: {
+    granularity: 5,
+    dependencies: 8,
+    acceptance_criteria: 8,
+    tests: 8,
+    vertical_slices: 8,
+    alignment: 8,
+  },
+  blockers: ["granularity too coarse"],
+  concerns: [] as string[],
+};
+
+let dataDir: string;
+
+/** A fake gh that returns the fixed PRD without spawning the real binary. */
+const fakeGh: GhClient = {
+  async fetchPrd(issueNumber: number): Promise<Prd> {
+    return {
+      issue_number: issueNumber,
+      title: "Login",
+      body: PRD_BODY,
+      labels: [],
+      body_truncated: false,
+    };
+  },
+};
+
+function deps(): SpecBuildDeps {
+  return {
+    store: new SpecStore({ dataDir }),
+    gh: fakeGh,
+    config: loadConfig({ dataDir }),
+    dataDir,
+  };
+}
+
+/** Write a scratch file into the (repo, issue) build dir. */
+async function writeScratch(name: string, value: unknown): Promise<void> {
+  const dir = specBuildDir(dataDir, REPO, ISSUE);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, name), stringifyJson(value), "utf8");
+}
+
+beforeEach(async () => {
+  dataDir = await mkdtemp(join(tmpdir(), "spec-seam-"));
+});
+afterEach(async () => {
+  await rm(dataDir, { recursive: true, force: true });
+});
+
+describe("resolveSpec", () => {
+  it("reuses an existing spec by issue number (Δ X — no generation)", async () => {
+    const store = new SpecStore({ dataDir });
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+
+    const env = await resolveSpec(deps(), REPO, ISSUE);
+    expect(env.kind).toBe("reuse");
+    if (env.kind !== "reuse") throw new Error("unreachable");
+    expect(env.pointer.issue_number).toBe(ISSUE);
+    expect(env.pointer.spec_id).toBe(`${ISSUE}-email-login`);
+  });
+
+  it("emits the apex-pinned generate spawn + writes prd.json when no spec exists", async () => {
+    const env = await resolveSpec(deps(), REPO, ISSUE);
+    expect(env.kind).toBe("generate");
+    if (env.kind !== "generate") throw new Error("unreachable");
+
+    expect(env.spawn.role).toBe("spec-generator");
+    expect(env.spawn.model).toBe(SPEC_DEFAULTS.specModel);
+    expect(env.spawn.effort).toBe(SPEC_DEFAULTS.specEffort);
+    expect(env.max_iterations).toBe(SPEC_DEFAULTS.maxRegenIterations);
+    expect(env.generated_path.endsWith("generated.json")).toBe(true);
+
+    // prd.json was persisted for the gate step to read.
+    const { readFile } = await import("node:fs/promises");
+    const prd = JSON.parse(await readFile(env.prd_path, "utf8")) as Prd;
+    expect(prd.issue_number).toBe(ISSUE);
+    expect(prd.body).toBe(PRD_BODY);
+  });
+});
+
+describe("gateSpec", () => {
+  it("emits revise(source=gate) when a deterministic gate blocks", async () => {
+    await resolveSpec(deps(), REPO, ISSUE); // writes prd.json
+    await writeScratch("generated.json", FAIL_GENERATED);
+
+    const env = await gateSpec(deps(), REPO, ISSUE);
+    expect(env.kind).toBe("revise");
+    if (env.kind !== "revise") throw new Error("unreachable");
+    expect(env.source).toBe("gate");
+    expect(env.blockers.length).toBeGreaterThan(0);
+  });
+
+  it("emits the apex-pinned review spawn when gates pass", async () => {
+    await resolveSpec(deps(), REPO, ISSUE); // writes prd.json
+    await writeScratch("generated.json", PASS_GENERATED);
+
+    const env = await gateSpec(deps(), REPO, ISSUE);
+    expect(env.kind).toBe("review");
+    if (env.kind !== "review") throw new Error("unreachable");
+    expect(env.spawn.role).toBe("spec-reviewer");
+    expect(env.spawn.model).toBe(SPEC_DEFAULTS.specModel);
+    expect(env.verdict_path.endsWith("verdict.json")).toBe(true);
+  });
+
+  it("fails LOUD on a legacy/invalid generated.json (untrusted agent boundary)", async () => {
+    await resolveSpec(deps(), REPO, ISSUE);
+    // A resurrected legacy classifier value must parse-fail, never silently coerce.
+    await writeScratch("generated.json", {
+      ...PASS_GENERATED,
+      tasks: [{ ...PASS_TASK, risk_tier: "routine" }],
+    });
+    await expect(gateSpec(deps(), REPO, ISSUE)).rejects.toThrow();
+  });
+});
+
+describe("storeSpec", () => {
+  it("emits revise(source=review) when the verdict trips the dimension floor", async () => {
+    await writeScratch("generated.json", PASS_GENERATED);
+    await writeScratch("verdict.json", FAIL_VERDICT);
+
+    const env = await storeSpec(deps(), REPO, ISSUE);
+    expect(env.kind).toBe("revise");
+    if (env.kind !== "revise") throw new Error("unreachable");
+    expect(env.source).toBe("review");
+    expect(env.reason).toMatch(/floor/);
+    expect(env.blockers).toContain("granularity too coarse");
+  });
+
+  it("persists the spec on PASS and returns a reusable pointer", async () => {
+    await writeScratch("generated.json", PASS_GENERATED);
+    await writeScratch("verdict.json", PASS_VERDICT);
+
+    const env = await storeSpec(deps(), REPO, ISSUE);
+    expect(env.kind).toBe("stored");
+    if (env.kind !== "stored") throw new Error("unreachable");
+    expect(env.pointer.spec_id).toBe(`${ISSUE}-email-login`);
+
+    // The durable spec is now readable + a subsequent resolve reuses it.
+    const manifest = await new SpecStore({ dataDir }).read(REPO, env.pointer.spec_id);
+    expect(manifest.tasks).toHaveLength(1);
+    expect(manifest.tasks[0]!.task_id).toBe("T1");
+
+    const reResolve = await resolveSpec(deps(), REPO, ISSUE);
+    expect(reResolve.kind).toBe("reuse");
+  });
+
+  it("fails LOUD on a verdict missing a rubric dimension", async () => {
+    await writeScratch("generated.json", PASS_GENERATED);
+    const { alignment, ...missingDim } = PASS_VERDICT.per_dimension;
+    void alignment;
+    await writeScratch("verdict.json", { ...PASS_VERDICT, per_dimension: missingDim });
+    await expect(storeSpec(deps(), REPO, ISSUE)).rejects.toThrow();
+  });
+});
+
+describe("specCommand (dispatch)", () => {
+  it("prints help and returns OK for --help", async () => {
+    expect(await specCommand.run(["--help"])).toBe(EXIT.OK);
+  });
+  it("returns USAGE for an unknown action", async () => {
+    expect(await specCommand.run(["bogus"])).toBe(EXIT.USAGE);
+  });
+  it("returns USAGE when --repo/--issue are missing", async () => {
+    expect(await specCommand.run(["resolve"])).toBe(EXIT.USAGE);
+  });
+  it("returns USAGE for a non-positive --issue", async () => {
+    expect(await specCommand.run(["gate", "--repo", REPO, "--issue", "0"])).toBe(EXIT.USAGE);
+  });
+});

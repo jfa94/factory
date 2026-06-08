@@ -13,8 +13,9 @@
  * The {@link SpecAgentRunner} interface lets the pipeline unit test with fakes —
  * no real LLM spawn.
  */
+import { z } from "zod";
 import type { Prd } from "./gh.js";
-import type { SpecTask } from "./schema.js";
+import { SpecTasksSchema, type SpecTask } from "./schema.js";
 import type { ReviewVerdict } from "./review.js";
 import { SPEC_DEFAULTS } from "../config/index.js";
 
@@ -41,6 +42,27 @@ export interface GenerateResult {
   /** Proposed slug for the spec (named by the generator at creation). */
   slug: string;
   tasks: SpecTask[];
+}
+
+/**
+ * Strict schema for a generator's {@link GenerateResult}. The generator is the
+ * UNTRUSTED agent boundary, so its output is parsed LOUDLY here (the same
+ * discipline as {@link import("./review.js").parseReviewVerdict} for the reviewer):
+ * `tasks` flows through the `.strict()` {@link SpecTasksSchema}, so a missing
+ * field, a bad/legacy risk tier, or a resurrected second-axis property is a parse
+ * error — never a silently-coerced spec.
+ */
+export const GenerateResultSchema = z
+  .object({
+    specMd: z.string().min(1),
+    slug: z.string().min(1),
+    tasks: SpecTasksSchema,
+  })
+  .strict();
+
+/** Parse raw generator output into a validated {@link GenerateResult}. LOUD on any violation. */
+export function parseGenerateResult(raw: unknown): GenerateResult {
+  return GenerateResultSchema.parse(raw);
 }
 
 /**

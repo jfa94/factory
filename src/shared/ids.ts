@@ -33,6 +33,22 @@ export function validateId(id: string, label = "id"): string {
 }
 
 /**
+ * Build a run id `run-YYYYMMDD-HHMMSS` (UTC) from a clock instant. The shape
+ * matches the bash `run-$(date +%Y%m%d-%H%M%S)`, but anchored to UTC so a run id
+ * is timezone-stable. The result is always a valid {@link isValidId}.
+ *
+ * NOTE: two runs created within the same second collide; {@link StateManager.create}
+ * refuses to clobber, so the loser fails LOUDLY rather than overwriting. The CLI
+ * accepts an explicit `--run-id` to override (tests + determinism).
+ */
+export function makeRunId(now: Date = new Date()): string {
+  const p = (n: number): string => String(n).padStart(2, "0");
+  const date = `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}`;
+  const time = `${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}`;
+  return `run-${date}-${time}`;
+}
+
+/**
  * Convert an arbitrary string to a branch-safe slug:
  * lowercase → non-alphanumerics to '-' → collapse runs of '-' → trim leading/
  * trailing '-' → truncate to {@link SLUG_MAX_LENGTH}. May return "" for input

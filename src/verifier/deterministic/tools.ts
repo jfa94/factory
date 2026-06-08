@@ -427,3 +427,22 @@ function splitLines(s: string): string[] {
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 }
+
+/**
+ * Assemble the production {@link GateTools} bag over the real binaries (each
+ * Default* impl shells out via shared/exec.ts). This is the seam the CLI wiring
+ * (and any non-test driver) constructs once and threads into the GateRunner; unit
+ * tests use {@link import("./fakes.js").makeFakeTools} instead.
+ */
+export function defaultGateTools(): GateTools {
+  return {
+    git: new DefaultGitProbe(),
+    vitest: new DefaultVitestTool(),
+    tsc: new DefaultTscTool(),
+    eslint: new DefaultEslintTool(),
+    build: new DefaultBuildTool(),
+    semgrep: new DefaultSemgrepTool(),
+    stryker: new DefaultStrykerTool(),
+    coverage: new DefaultCoverageReader(),
+  };
+}

@@ -16,6 +16,17 @@
 import { EXIT, type ExitCode } from "./exit-codes.js";
 import { loadConfig } from "../config/index.js";
 import { stringifyJson } from "../shared/json.js";
+import { configureCommand } from "./subcommands/configure.js";
+import { stateCommand } from "./subcommands/state.js";
+import { scaffoldCommand } from "./subcommands/scaffold.js";
+import { runTaskCommand } from "./subcommands/run-task.js";
+import { advanceCommand } from "./subcommands/advance.js";
+import { dropCommand } from "./subcommands/drop.js";
+import { recordProducerCommand } from "./subcommands/record-producer.js";
+import { recordHoldoutCommand } from "./subcommands/record-holdout.js";
+import { recordReviewsCommand } from "./subcommands/record-reviews.js";
+import { runCommand } from "./subcommands/run.js";
+import { specCommand } from "./subcommands/spec.js";
 
 /** A single CLI subcommand. `run` returns (or resolves to) an {@link ExitCode}. */
 export interface Subcommand {
@@ -37,6 +48,17 @@ export const cliRegistry: Record<string, Subcommand> = {
       return EXIT.OK;
     },
   },
+  configure: configureCommand,
+  run: runCommand,
+  spec: specCommand,
+  state: stateCommand,
+  scaffold: scaffoldCommand,
+  "run-task": runTaskCommand,
+  advance: advanceCommand,
+  drop: dropCommand,
+  "record-producer": recordProducerCommand,
+  "record-holdout": recordHoldoutCommand,
+  "record-reviews": recordReviewsCommand,
 };
 
 function printHelp(): void {

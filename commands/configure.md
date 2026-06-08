@@ -1,155 +1,118 @@
 ---
-description: "Configure factory pipeline settings"
-argument-hint: "[setting]"
+description: "Inspect or edit factory pipeline settings"
+argument-hint: "[--get <key>] [--set <key=value>] [--unset <key>]"
 arguments:
-  - name: setting
-    description: "Setting to configure (e.g., humanReviewLevel, review.routineRounds)"
+  - name: "--get"
+    description: "Print one resolved value (dotted key path)"
+    required: false
+  - name: "--set"
+    description: "Set a value (key=value, repeatable), validate, persist"
+    required: false
+  - name: "--unset"
+    description: "Revert a key to its default (repeatable)"
     required: false
 ---
 
 # /factory:configure
 
-You are a conversational settings editor for the factory pipeline. Help the user view and modify plugin configuration.
+View and edit the factory config. Every operation goes through one deterministic CLI —
+`factory configure` — which validates the whole config against the canonical Zod schema
+**before** it touches disk and persists only a sparse overlay (so future default changes
+stay visible). You never hand-edit `config.json`.
 
-## Step 0: Apply pending workflow migrations
-
-Before touching settings, apply any surgical workflow migrations shipped since
-the project was last scaffolded. This keeps `.github/workflows/quality-gate.yml`
-current (e.g. ensures `--delete-branch` on staging-target auto-merge) without
-overwriting other scaffolded files. The call is idempotent — repeated
-invocations are no-ops once the project is up to date.
+## Inspect
 
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null) && \
-  pipeline-scaffold "$project_root" --migrate-workflows
+factory configure                 # print the full resolved config (defaults + overlay) as JSON
+factory configure --get <key>     # print one resolved value, e.g. --get quality.holdoutPercent
 ```
 
-If the JSON output reports any `migrations`, surface them to the user so they
-know to review and commit the patched workflow file.
-
-## Step 1: Load Current Config
-
-Read the current configuration:
+## Change
 
 ```bash
-cat "${CLAUDE_PLUGIN_DATA}/config.json" 2>/dev/null || echo '{}'
+factory configure --set <key>=<value>   # repeatable; validates + persists; prints the resolved config
+factory configure --unset <key>         # repeatable; reverts the key to its default
 ```
 
-Config defaults are compiled as `read_config '<key>' '<default>'` fallbacks in the bin scripts (e.g. `pipeline-lib.sh`, `pipeline-run-task`); there is no separate defaults file. The canonical reference for all keys, types, and defaults is `docs/reference/configuration.md`.
+`<value>` parses as JSON when it can (numbers, booleans, arrays — `25`, `true`,
+`'["a","b"]'`); otherwise as a bare string. A value that fails schema validation is a loud
+error and **nothing is written**. Examples:
 
-Merge: user config takes precedence; `read_config` fallbacks supply missing values at runtime.
+```bash
+factory configure --set quality.holdoutPercent=25
+factory configure --set git.stagingBranch=staging
+factory configure --set git.provision=true
+factory configure --unset quality.securityCommand
+```
 
-## Step 2: Present Settings
+## The settings (canonical keys + defaults)
 
-If no specific setting was requested, show all settings grouped by category:
+These are the keys the schema actually reads. Run `factory configure` to see live values.
 
-### Pipeline Control
+### Quality gates (`quality.*`)
 
-| Setting            | Current | Default | Description                                                                          |
-| ------------------ | ------- | ------- | ------------------------------------------------------------------------------------ |
-| `humanReviewLevel` | -       | 0       | 0=full auto, 1=PR approval, 2=review checkpoint, 3=spec approval, 4=full supervision |
+| Key                              | Default | Meaning                                                |
+| -------------------------------- | ------- | ------------------------------------------------------ |
+| `holdoutPercent`                 | 20      | % of acceptance criteria held out as an answer-key     |
+| `holdoutPassRate`                | 80      | Min % of withheld criteria that must pass              |
+| `mutationScoreTarget`            | 80      | Min mutation score (%)                                 |
+| `coverageRegressionTolerancePct` | 0.5     | Max coverage drop (pp) before the gate fails           |
+| `securityCommand`                | —       | Custom SAST command (else built-in semgrep)            |
+| `securityAllowFailures`          | false   | Treat security findings as non-blocking                |
+| `securityRedactFindings`         | true    | Redact secrets from the persisted findings artifact    |
+| `redTestCommand`                 | —       | Custom red-test command for exotic runners (Go/Ruby/…) |
 
-### Circuit Breaker
+### Spec apex gate (`spec.*`)
 
-| Setting                  | Current | Default | Description                              |
-| ------------------------ | ------- | ------- | ---------------------------------------- |
-| `maxRuntimeMinutes`      | -       | 0       | Max runtime in minutes (0 = unlimited)   |
-| `maxConsecutiveFailures` | -       | 5       | Max consecutive failures before stopping |
+| Key                   | Default | Meaning                                                  |
+| --------------------- | ------- | -------------------------------------------------------- |
+| `passReviewThreshold` | 56      | Spec-review pass threshold out of 60                     |
+| `dimensionFloor`      | 5       | Any rubric dimension ≤ this auto-fails the spec          |
+| `maxRegenIterations`  | 5       | Max generate→review revisions before a loud give-up      |
+| `specModel`           | opus    | Apex model the generator + reviewer are pinned to (D21)  |
+| `specEffort`          | max     | Apex effort the generator + reviewer are pinned to (D21) |
+| `prdBodyMaxBytes`     | 65536   | Max PRD body bytes retained before truncation            |
 
-### Review
+> `specModel`/`specEffort` are the Decision-21 apex pin. The spec boundary reads the frozen
+> defaults, not a per-run override — changing them here is for unusual setups only.
 
-| Setting                 | Current | Default | Description                         |
-| ----------------------- | ------- | ------- | ----------------------------------- |
-| `review.preferCodex`    | -       | true    | Prefer Codex for adversarial review |
-| `review.routineRounds`  | -       | 2       | Review rounds for routine tasks     |
-| `review.featureRounds`  | -       | 4       | Review rounds for feature tasks     |
-| `review.securityRounds` | -       | 6       | Review rounds for security tasks    |
+### Review panel (`review.*`)
 
-### Quality Gates
+| Key             | Default | Meaning                                           |
+| --------------- | ------- | ------------------------------------------------- |
+| `model`         | —       | Reviewer model override (panel is risk-invariant) |
+| `maxTurnsDeep`  | 40      | Max turns for a deep review pass                  |
+| `maxTurnsQuick` | 20      | Max turns for a quick review pass                 |
 
-| Setting                                  | Current | Default                  | Description                                                        |
-| ---------------------------------------- | ------- | ------------------------ | ------------------------------------------------------------------ |
-| `quality.holdoutPercent`                 | -       | 20                       | Percentage of criteria to withhold (set 0 to disable holdout)      |
-| `quality.holdoutPassRate`                | -       | 80                       | Minimum % of withheld criteria that must be satisfied              |
-| `quality.mutationScoreTarget`            | -       | 80                       | Minimum mutation score percentage                                  |
-| `quality.mutationTestingTiers`           | -       | `["feature","security"]` | Risk tiers requiring mutation testing (empty array disables)       |
-| `quality.coverageMustNotDecrease`        | -       | true                     | Block tasks that decrease test coverage                            |
-| `quality.coverageRegressionTolerancePct` | -       | 0.5                      | Max coverage drop (percentage points) before regression gate fails |
+### Quota pacer (`quota.*`)
 
-### Parallel Execution
+`sleepCapSec` (540), `maxWaitCycles` (60), `maxStaleCycles` (6), `wallBudgetMin` (75),
+`hourlyThresholds` ([20,40,60,80,90]), `dailyThresholds` ([14,29,43,57,71,86,95]), and the
+producer dial `quota.producerModels.{low,medium,high}` (haiku/sonnet/opus by risk tier).
 
-| Setting            | Current | Default | Description                   |
-| ------------------ | ------- | ------- | ----------------------------- |
-| `maxParallelTasks` | -       | 3       | Max concurrent task executors |
+### Git / serial-writer (`git.*`)
 
-Fill in the "Current" column with actual values from the loaded config.
+| Key                    | Default | Meaning                                                   |
+| ---------------------- | ------- | --------------------------------------------------------- |
+| `baseBranch`           | develop | Branch staging forks from / rolls up into (never main)    |
+| `stagingBranch`        | staging | Integration branch task PRs serial-merge into             |
+| `requiredStatusChecks` | []      | Status checks protection must enforce before a run starts |
+| `provision`            | false   | Write branch protection when missing (else refuse)        |
+| `branchPrefix`         | factory | Prefix for run-scoped task branches                       |
 
-## Step 3: Handle Changes
+### Other roots
 
-If the user specifies a setting to change:
+`testWriter.maxTurns` (30), `scribe.maxTurns` (20), `codex.model` (—),
+`observability.auditLog` (true) / `observability.metricsRetentionDays` (30),
+`dependencies.pollInterval` (30) / `dependencies.prMergeTimeout` (1800),
+`maxConsecutiveFailures` (3), `maxRuntimeMinutes` (480).
 
-1. **Validate the value** — check type and range using the inline constraints
-   below (defaults live as `read_config '<key>' '<default>'` fallbacks in the
-   bin scripts; there is no schema file in `plugin.json`). Canonical key names —
-   these are the ones the rest of the plugin reads:
-   - `humanReviewLevel`: integer 0-4
-   - `maxRuntimeMinutes`: integer 0-1440 (0 = unlimited)
-   - `maxConsecutiveFailures`: integer 1-10
-   - `maxParallelTasks`: integer 1-10
-   - `review.routineRounds` / `review.featureRounds` / `review.securityRounds`: positive integers
-   - `review.preferCodex`: boolean
-   - `quality.holdoutPercent`: integer 0-50
-   - `quality.holdoutPassRate`: integer 50-100
-   - `quality.mutationScoreTarget`: integer 50-100
-   - `quality.coverageMustNotDecrease`: boolean
-   - `execution.defaultModel`: one of `haiku`, `sonnet`, `opus`
+> Retired (locked decision 5 — human gates removed): `humanReviewLevel`,
+> `review.routineRounds/featureRounds/securityRounds`, `review.preferCodex`,
+> `maxParallelTasks`, the `safety.*` block, `execution.*`. These keys no longer exist; do
+> not write them.
 
-2. **Write the updated config** (always to config.json, never to run state).
-   The key is a dotted path like `review.routineRounds` or `execution.defaultModel`.
-   Split it into a path array and use `setpath` so the assignment creates a
-   nested object instead of a flat key with a literal dot in its name. `setpath`
-   also auto-creates any missing intermediate objects.
+## Interactive
 
-   **CRITICAL: pick the right jq flag for the value type.**
-   - `--argjson` parses the value as JSON. Use it for **numbers and booleans**
-     (e.g. `20`, `0.9`, `true`). Passing a string here will fail because raw
-     strings aren't valid JSON.
-   - `--arg` passes the value as a string. Use it for **string-typed settings**
-     (e.g. `execution.defaultModel`).
-
-   Number / boolean (use `--argjson`):
-
-   ```bash
-   tmpfile=$(mktemp "${CLAUDE_PLUGIN_DATA}/config.XXXXXX")
-   jq --arg k "review.routineRounds" --argjson v 3 \
-     'setpath(($k | split(".")); $v)' \
-     "${CLAUDE_PLUGIN_DATA}/config.json" > "$tmpfile"
-   mv -f "$tmpfile" "${CLAUDE_PLUGIN_DATA}/config.json"
-   ```
-
-   String (use `--arg`):
-
-   ```bash
-   tmpfile=$(mktemp "${CLAUDE_PLUGIN_DATA}/config.XXXXXX")
-   jq --arg k "execution.defaultModel" --arg v "opus" \
-     'setpath(($k | split(".")); $v)' \
-     "${CLAUDE_PLUGIN_DATA}/config.json" > "$tmpfile"
-   mv -f "$tmpfile" "${CLAUDE_PLUGIN_DATA}/config.json"
-   ```
-
-   Example: `k=review.routineRounds`, `v=3` produces
-   `{"review":{"routineRounds":3}}` — NOT `{"review.routineRounds":3}`.
-
-   For arrays (e.g. `quality.mutationTestingTiers`), pass the JSON literal via
-   `--argjson v '["feature","security"]'`.
-
-3. **Confirm the change** — show the updated value.
-
-## Step 4: Interactive Mode
-
-If no arguments provided, enter a conversational loop:
-
-- Show current settings
-- Ask what the user wants to change
-- Apply and confirm each change
-- Offer to show the updated settings after each change
+With no flags, print the full config, ask the user what to change, and apply each change
+with a `--set`/`--unset` call, confirming the resolved value after each.

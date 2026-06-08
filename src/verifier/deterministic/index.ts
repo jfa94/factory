@@ -82,6 +82,7 @@ export { runGatesInCleanCheckout, type CleanCheckoutArgs } from "./clean-checkou
 
 // injectable tool interfaces + default impls
 export {
+  defaultGateTools,
   DefaultGitProbe,
   DefaultVitestTool,
   DefaultTscTool,

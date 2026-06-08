@@ -121,8 +121,16 @@ export async function runSpecPipeline(opts: RunSpecPipelineOpts): Promise<SpecPo
   throw new SpecDefectError(issueNumber, maxIterations, lastBlockers);
 }
 
-/** Build the durable manifest from a passing generate result. */
-function buildManifest(repo: string, issueNumber: number, generated: GenerateResult): SpecManifest {
+/**
+ * Build the durable manifest from a passing generate result. Exported so the
+ * `factory spec store` CLI seam produces a manifest IDENTICALLY to the in-process
+ * pipeline (one source of truth for slug re-derivation + spec-id construction).
+ */
+export function buildManifest(
+  repo: string,
+  issueNumber: number,
+  generated: GenerateResult,
+): SpecManifest {
   const specId = makeSpecId(issueNumber, generated.slug);
   // Re-derive the canonical slug from the spec_id so the manifest slug always
   // matches the path segment (the generator's raw slug is sanitized by makeSpecId).

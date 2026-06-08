@@ -21,6 +21,8 @@ import { validateId } from "../../shared/ids.js";
 
 /** Subdir name for the durable spec store. */
 export const SPECS_DIR = "specs";
+/** Subdir name for the TRANSIENT spec-build scratch area. */
+export const SPEC_BUILD_DIR = "spec-build";
 /** Subdir name for the ephemeral run store. */
 export const RUNS_DIR = "runs";
 /** Symlink name pointing at the active run. */
@@ -87,4 +89,24 @@ export function specsRoot(dataDir: string): string {
 export function specDir(dataDir: string, repo: string, specId: string): string {
   validateId(specId, "spec-id");
   return join(specsRoot(dataDir), repoKey(repo), specId);
+}
+
+/** `<dataDir>/spec-build`. */
+export function specBuildRoot(dataDir: string): string {
+  return join(dataDir, SPEC_BUILD_DIR);
+}
+
+/**
+ * `<dataDir>/spec-build/<repo-key>/<issue>` — the TRANSIENT scratch dir for an
+ * in-progress spec build. Holds the prd/generated/verdict JSON threaded between
+ * the orchestrator-driven `factory spec resolve|gate|store` actions. Keyed by the
+ * stable PRD issue number (not a spec-id — no spec exists yet), and DISCARDABLE:
+ * unlike {@link specDir} this is never reused across runs, just a handoff buffer
+ * for one generate/review loop.
+ */
+export function specBuildDir(dataDir: string, repo: string, issueNumber: number): string {
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+    throw new Error(`specBuildDir: issue number must be a positive integer, got ${issueNumber}`);
+  }
+  return join(specBuildRoot(dataDir), repoKey(repo), String(issueNumber));
 }

@@ -38,6 +38,8 @@ export { SpecStore, makeSpecId } from "./store.js";
 export {
   buildGenerateSpawn,
   buildReviewSpawn,
+  GenerateResultSchema,
+  parseGenerateResult,
   type SpecAgentRunner,
   type SpecAgentRole,
   type SpecSpawnSpec,
@@ -71,7 +73,12 @@ export {
 } from "./review.js";
 
 // Top-level orchestration.
-export { runSpecPipeline, SpecDefectError, type RunSpecPipelineOpts } from "./pipeline.js";
+export {
+  runSpecPipeline,
+  buildManifest,
+  SpecDefectError,
+  type RunSpecPipelineOpts,
+} from "./pipeline.js";
 
 // Spec-pipeline defaults now live in the canonical config schema (src/config).
 export { SPEC_DEFAULTS, type SpecConfig } from "../config/index.js";
