@@ -27,7 +27,7 @@ import { taskWorktreePath } from "./paths.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
 import { ESCALATION_CAP } from "../producer/index.js";
 
-import { makePumpDeps, mkdir, NOW, PAUSE_5H } from "./pump-fixtures.js";
+import { makePumpDeps, mkdir, PAUSE_5H } from "./pump-fixtures.js";
 import type { PumpDeps } from "./pump.js";
 import { FakeGhClient } from "../git/fakes.js";
 

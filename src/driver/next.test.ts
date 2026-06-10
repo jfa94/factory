@@ -1,7 +1,7 @@
 /**
  * Unit tests for pumpRun — the run-level pump.
  *
- * Each test uses makePumpDeps from pump.test.ts. MakePumpDepsOpts supports:
+ * Each test uses makePumpDeps from pump-fixtures.ts. MakePumpDepsOpts supports:
  *   - tasks: multi-task DAGs with depends_on
  *   - taskStateOverrides: per-task status overrides
  *   - usage: quota reading
@@ -12,9 +12,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { pumpRun, type NextEnvelope } from "./next.js";
-import { makePumpDeps } from "./pump-fixtures.js";
-import { PAUSE_5H } from "./pump-fixtures.js";
+import { pumpRun } from "./next.js";
+import { makePumpDeps, PAUSE_5H } from "./pump-fixtures.js";
 
 describe("pumpRun", () => {
   it("terminal run → run-terminal", async () => {
@@ -43,10 +42,16 @@ describe("pumpRun", () => {
 
   it("recovered paused run is returned to running before reporting ready tasks", async () => {
     const { deps, runId, cleanup } = await makePumpDeps({
-      runStatusOverride: "paused",
       tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
     });
     try {
+      // Seed a realistic paused state with a real quota checkpoint so the
+      // quota-cleared assertion discriminates (rather than being vacuously true).
+      await deps.state.update(runId, (s) => ({
+        ...s,
+        status: "paused" as const,
+        quota: { binding_window: "5h" as const, resets_at_epoch: 1_700_018_000 },
+      }));
       const env = await pumpRun(deps, runId);
       expect(env.kind).toBe("tasks-ready");
       const run = await deps.state.read(runId);
