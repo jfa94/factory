@@ -234,4 +234,22 @@ describe("applyRescue", () => {
       expect(result.reset).toEqual(["s"]);
     });
   });
+
+  it("reset clears the stage cursor and merge_resyncs", async () => {
+    await seed([
+      {
+        task_id: "c",
+        status: "executing",
+        stage: "verify",
+        merge_resyncs: 3,
+        escalation_rung: 1,
+      },
+    ]);
+
+    await applyRescue(state, RUN_ID);
+
+    const run = await state.read(RUN_ID);
+    expect(run.tasks["c"]?.stage).toBeUndefined();
+    expect(run.tasks["c"]?.merge_resyncs).toBe(0);
+  });
 });

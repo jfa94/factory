@@ -265,28 +265,21 @@ describe("RunStateSchema default()", () => {
 
 describe("TaskState.stage cursor", () => {
   it("accepts the five task stages and defaults to absent", () => {
-    const base = TaskStateSchema.parse({
-      task_id: "T1",
-      depends_on: [],
-      risk_tier: "low",
-    });
+    const base = parseTaskState(minimalTask());
     expect(base.stage).toBeUndefined();
     for (const s of ["preflight", "tests", "exec", "verify", "ship"]) {
-      expect(TaskStateSchema.parse({ ...base, stage: s }).stage).toBe(s);
+      expect(parseTaskState(minimalTask({ stage: s })).stage).toBe(s);
     }
   });
 
   it("rejects an unknown stage", () => {
-    expect(() =>
-      TaskStateSchema.parse({ task_id: "T1", depends_on: [], risk_tier: "low", stage: "deploy" }),
-    ).toThrow();
+    expect(() => parseTaskState(minimalTask({ stage: "deploy" }))).toThrow();
   });
 
-  it("merge_resyncs defaults to 0 and rejects negatives", () => {
-    const t = TaskStateSchema.parse({ task_id: "T1", depends_on: [], risk_tier: "low" });
+  it("merge_resyncs defaults to 0 and rejects negatives and non-integers", () => {
+    const t = parseTaskState(minimalTask());
     expect(t.merge_resyncs).toBe(0);
-    expect(() =>
-      TaskStateSchema.parse({ task_id: "T1", depends_on: [], risk_tier: "low", merge_resyncs: -1 }),
-    ).toThrow();
+    expect(() => parseTaskState(minimalTask({ merge_resyncs: -1 }))).toThrow();
+    expect(() => parseTaskState(minimalTask({ merge_resyncs: 1.5 }))).toThrow();
   });
 });

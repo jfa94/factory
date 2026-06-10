@@ -76,6 +76,7 @@ function resetTaskRow(task: TaskState): TaskState {
     producer_role: _producerRole,
     started_at: _startedAt,
     ended_at: _endedAt,
+    stage: _stage,
     ...rest
   } = task;
   return {
@@ -83,6 +84,7 @@ function resetTaskRow(task: TaskState): TaskState {
     status: "pending",
     escalation_rung: 0,
     reviewers: [],
+    merge_resyncs: 0,
   };
 }
 
