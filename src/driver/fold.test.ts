@@ -121,7 +121,7 @@ describe("applyRecordHoldout fold", () => {
       ["e", true, "src/y.ts:3"],
     ]);
 
-    const env = await applyRecordHoldout(deps, RUN_ID, verdictStore, "t1", raw);
+    const env = await applyRecordHoldout(deps, RUN_ID, "t1", verdictStore, raw);
 
     expect(env.evidence.gate).toBe("holdout");
     expect(env.evidence.observed).toBe(true);
@@ -142,7 +142,7 @@ describe("applyRecordHoldout fold", () => {
       ["e", false, ""],
     ]);
 
-    const env = await applyRecordHoldout(deps, RUN_ID, verdictStore, "t1", raw);
+    const env = await applyRecordHoldout(deps, RUN_ID, "t1", verdictStore, raw);
 
     expect(env.check.status).toBe("fail"); // 1/2 = 50% < 80%
     expect(env.evidence.observed).toBe(false);
@@ -151,7 +151,7 @@ describe("applyRecordHoldout fold", () => {
   it("fails CLOSED on unparseable validator output (verdicts → [], every criterion fails)", async () => {
     await holdout.put(RUN_ID, makeHoldoutRecord("t1", ["d", "e"], 5));
 
-    const env = await applyRecordHoldout(deps, RUN_ID, verdictStore, "t1", "not json at all");
+    const env = await applyRecordHoldout(deps, RUN_ID, "t1", verdictStore, "not json at all");
 
     expect(env.check.status).toBe("fail");
     expect(env.check.satisfied).toBe(0);
@@ -163,7 +163,7 @@ describe("applyRecordHoldout fold", () => {
 
   it("is a LOUD error when the task has no withheld answer key", async () => {
     await expect(
-      applyRecordHoldout(deps, RUN_ID, verdictStore, "t1", validatorJson([])),
+      applyRecordHoldout(deps, RUN_ID, "t1", verdictStore, validatorJson([])),
     ).rejects.toThrow(/no withheld answer key/);
   });
 });
@@ -409,6 +409,49 @@ describe("applyRecordReviews fold", () => {
       applyRecordReviews(deps, RUN_ID, "ghost", verdictStore, { reviews: [], verifications: [] }),
     ).rejects.toThrow(/no task 'ghost'/);
   });
+
+  it("rejects LOUD on a malformed review[0] before any gate re-run executes", async () => {
+    // Wrap the git probe so we can detect if GateRunner.run() was entered
+    // (it calls tools.git.treeSha as its very first operation).
+    let gateRan = false;
+    const baseProbe = greenProbe();
+    const spyProbe: FakeGitProbe = Object.assign(Object.create(Object.getPrototypeOf(baseProbe)), {
+      ...baseProbe,
+      treeSha: async (...args: Parameters<typeof baseProbe.treeSha>) => {
+        gateRan = true;
+        return baseProbe.treeSha(...args);
+      },
+      refExists: baseProbe.refExists.bind(baseProbe),
+      revParse: baseProbe.revParse.bind(baseProbe),
+      changedFiles: baseProbe.changedFiles.bind(baseProbe),
+      commits: baseProbe.commits.bind(baseProbe),
+    });
+
+    const deps: FoldDeps = {
+      config: defaultConfig(),
+      spec: reviewsSpec(),
+      git: new FakeGitClient({ remoteHeads: { staging: "sha-staging" } }),
+      gh: new FakeGhClient(),
+      tools: makeFakeTools({ git: spyProbe }),
+      artifacts: new InMemoryArtifactStore(),
+      holdout,
+      dataDir,
+      owner: "acme",
+      repo: "widgets",
+      shipMode: "no-merge",
+      state,
+    };
+
+    // A malformed review: missing required `reviewer` field so parseRawReview throws.
+    const malformedReview = { verdict: "approve", findings: [] };
+    const input: RecordReviewsInput = {
+      reviews: [malformedReview],
+      verifications: [],
+    };
+
+    await expect(applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input)).rejects.toThrow();
+    expect(gateRan).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -447,10 +490,16 @@ async function seededProducerState(
 describe("applyRecordProducer — DONE advances", () => {
   let dataDir: string;
   let state: StateManager;
-  afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
+
+  beforeEach(async () => {
+    ({ dataDir, state } = await seededProducerState());
+  });
+
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
 
   it("tests/DONE records test-writer and advances to exec", async () => {
-    ({ dataDir, state } = await seededProducerState());
     const env = await applyRecordProducer(state, RUN_ID, "t1", "tests", "STATUS: DONE");
 
     expect(env.step).toEqual({ done: false, stage: "exec" });
@@ -460,7 +509,6 @@ describe("applyRecordProducer — DONE advances", () => {
   });
 
   it("exec/DONE records executor and advances to verify", async () => {
-    ({ dataDir, state } = await seededProducerState());
     const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "STATUS: DONE");
 
     expect(env.step).toEqual({ done: false, stage: "verify" });
@@ -473,10 +521,16 @@ describe("applyRecordProducer — DONE advances", () => {
 describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
   let dataDir: string;
   let state: StateManager;
-  afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
+
+  beforeEach(async () => {
+    ({ dataDir, state } = await seededProducerState());
+  });
+
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
 
   it("BLOCKED—escalate drops spec-defect immediately (no rung burned)", async () => {
-    ({ dataDir, state } = await seededProducerState({ escalation_rung: 0 }));
     const env = await applyRecordProducer(
       state,
       RUN_ID,
@@ -496,9 +550,16 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
   });
 
   it("NEEDS_CONTEXT escalates a rung, clears reviewers, resumes at the same stage", async () => {
-    ({ dataDir, state } = await seededProducerState({
-      escalation_rung: 0,
-      reviewers: [{ reviewer: "quality", verdict: "approve", confirmed_blockers: 0 }],
+    // Seed a stale reviewer the escalation should clear.
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      tasks: {
+        ...s.tasks,
+        t1: {
+          ...s.tasks["t1"]!,
+          reviewers: [{ reviewer: "quality", verdict: "approve", confirmed_blockers: 0 }],
+        },
+      },
     }));
     const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "STATUS: NEEDS_CONTEXT");
 
@@ -510,7 +571,6 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
   });
 
   it("an unparseable status is a capability retry (error → rung bump)", async () => {
-    ({ dataDir, state } = await seededProducerState({ escalation_rung: 0 }));
     const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "garbled nonsense");
 
     expect(env.step).toEqual({ done: false, stage: "exec" });
@@ -518,7 +578,14 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
   });
 
   it("an exhausted ladder drops capability-budget", async () => {
-    ({ dataDir, state } = await seededProducerState({ escalation_rung: ESCALATION_CAP }));
+    // Advance the escalation rung to the cap so the next failure drops.
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      tasks: {
+        ...s.tasks,
+        t1: { ...s.tasks["t1"]!, escalation_rung: ESCALATION_CAP },
+      },
+    }));
     const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "STATUS: NEEDS_CONTEXT");
 
     expect(env.step.done).toBe(true);
@@ -530,7 +597,6 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
   });
 
   it("is LOUD on a missing task", async () => {
-    ({ dataDir, state } = await seededProducerState());
     await expect(
       applyRecordProducer(state, RUN_ID, "ghost", "exec", "STATUS: DONE"),
     ).rejects.toThrow(/no task 'ghost'/);

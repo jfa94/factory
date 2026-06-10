@@ -21,7 +21,9 @@ import { applyRecordProducer } from "../../driver/fold.js";
 import type { TransitionEnvelope } from "../../driver/fold.js";
 import type { Subcommand } from "../main.js";
 
+/** @deprecated Implementation in `../../driver/fold.js`; shell deleted in Phase 2. */
 export { applyRecordProducer } from "../../driver/fold.js";
+/** @deprecated Implementation in `../../driver/fold.js`; shell deleted in Phase 2. */
 export type { TransitionEnvelope } from "../../driver/fold.js";
 
 const HELP = `factory record-producer — fold a producer spawn outcome into state

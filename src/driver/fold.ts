@@ -19,7 +19,7 @@
  *     now (deps: FoldDeps, runId, taskId, verdictStore, input).  The body reads the
  *     task via deps.state.read(runId) instead of deps.run.
  *   - applyRecordHoldout: was (deps: CliDeps, verdictStore, taskId, raw);
- *     now (deps: FoldDeps, runId, verdictStore, taskId, raw).  The body reads runId
+ *     now (deps: FoldDeps, runId, taskId, verdictStore, raw).  The body reads runId
  *     from the explicit parameter instead of deps.run.run_id.
  */
 import { readFile } from "node:fs/promises";
@@ -195,8 +195,8 @@ function parseVerdictsFailClosed(raw: string): readonly HoldoutVerdict[] {
 export async function applyRecordHoldout(
   deps: FoldDeps,
   runId: string,
-  verdictStore: HoldoutVerdictStore,
   taskId: string,
+  verdictStore: HoldoutVerdictStore,
   raw: string,
 ): Promise<RecordHoldoutEnvelope> {
   if (!(await deps.holdout.has(runId, taskId))) {

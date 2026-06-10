@@ -245,8 +245,8 @@ describe("orchestrator-as-driver CLI envelope-chain (golden transcript)", () => 
               await applyRecordHoldout(
                 await freshDeps(shipMode),
                 RUN_ID,
-                verdictStore,
                 taskId,
+                verdictStore,
                 raw,
               );
               trace.ranHoldoutValidate = true;

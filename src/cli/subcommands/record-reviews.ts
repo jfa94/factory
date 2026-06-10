@@ -31,7 +31,9 @@ import { FsHoldoutVerdictStore } from "../../verifier/holdout/index.js";
 import type { Subcommand } from "../main.js";
 
 // Re-exports so existing consumers don't break until Phase 2.
+/** @deprecated Implementation in `../../driver/fold.js`; shell deleted in Phase 2. */
 export { applyRecordReviews } from "../../driver/fold.js";
+/** @deprecated Implementation in `../../driver/fold.js`; shell deleted in Phase 2. */
 export type {
   VerifierVerdictInput,
   ReviewerVerifications,

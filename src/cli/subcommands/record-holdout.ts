@@ -27,8 +27,11 @@ import { FsHoldoutVerdictStore } from "../../verifier/holdout/index.js";
 import type { Subcommand } from "../main.js";
 
 // Re-exports so existing consumers don't break until Phase 2.
+/** @deprecated Implementation in `../../driver/fold.js`; shell deleted in Phase 2. */
 export { applyRecordHoldout } from "../../driver/fold.js";
+/** @deprecated Implementation in `../../driver/fold.js`; shell deleted in Phase 2. */
 export type { RecordHoldoutInput, RecordHoldoutEnvelope } from "../../driver/fold.js";
+/** @deprecated Implementation in `../../verifier/holdout/index.js`; shell deleted in Phase 2. */
 export type { HoldoutVerdictStore } from "../../verifier/holdout/index.js";
 
 const HELP = `factory record-holdout — fold the holdout-validator output into the floor
@@ -57,7 +60,7 @@ async function run(argv: string[]): Promise<ExitCode> {
   const input = await readJsonInput<RecordHoldoutInput>(inputPath);
   const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
 
-  const envelope = await applyRecordHoldout(deps, runId, verdictStore, taskId, input.raw);
+  const envelope = await applyRecordHoldout(deps, runId, taskId, verdictStore, input.raw);
   emitJson(envelope);
   return EXIT.OK;
 }

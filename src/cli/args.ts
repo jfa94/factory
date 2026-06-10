@@ -14,6 +14,8 @@
  * A flag NOT declared boolean consumes the next token as its value; a declared
  * boolean never does. `--help`/`-h` is always recognised as a boolean.
  */
+import { UsageError } from "../shared/usage-error.js";
+
 export interface ParsedArgs {
   positionals: string[];
   /** Last value seen for a flag (or `true` for a boolean flag). */
@@ -29,8 +31,6 @@ export interface ParseOptions {
   /** Flags that take NO value (presence ⇒ `true`). `help` is always included. */
   booleans?: readonly string[];
 }
-
-import { UsageError } from "../shared/usage-error.js";
 
 export function parseArgs(argv: readonly string[], opts: ParseOptions = {}): ParsedArgs {
   const booleans = new Set<string>(["help", "h", ...(opts.booleans ?? [])]);
