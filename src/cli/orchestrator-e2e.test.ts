@@ -370,6 +370,7 @@ describe("orchestrator pump seam — golden contract E2E", () => {
     // finalizeRun also opens a rollup PR (staging→develop), so total created = 2.
     const taskPrs = gh.created.filter((p) => p.head === `factory/${RUN_ID}/${TASK_ID}`);
     expect(taskPrs).toHaveLength(1);
+    expect(gh.created).toHaveLength(2); // task PR + finalize rollup PR
     expect(gh.merges).toHaveLength(0);
 
     // The holdout path: 5-criteria spec withholds ≥1 → verify emits a sidecar.
@@ -403,10 +404,13 @@ describe("orchestrator pump seam — golden contract E2E", () => {
     expect(finalRun.tasks[TASK_ID]!.status).toBe("done");
 
     // Live: the task PR was opened AND serial-merged into staging.
-    // finalizeRun also opens+merges a rollup PR, so merges total = 2.
+    // finalizeRun also opens+merges a rollup PR, so total created = 2 and merges = 2.
     const taskPrs = gh.created.filter((p) => p.head === `factory/${RUN_ID}/${TASK_ID}`);
     expect(taskPrs).toHaveLength(1);
-    expect(gh.merges.length).toBeGreaterThanOrEqual(1); // task PR merge + rollup merge
+    expect(gh.created).toHaveLength(2); // task PR + finalize rollup PR
+    const prNum = finalRun.tasks[TASK_ID]!.pr_number;
+    expect(gh.merges.filter((m) => m.number === prNum)).toHaveLength(1);
+    expect(gh.merges).toHaveLength(2); // task PR + finalize rollup
   });
 
   // -------------------------------------------------------------------------
@@ -429,7 +433,8 @@ describe("orchestrator pump seam — golden contract E2E", () => {
 
     const deps = makeDeps(manifest, "no-merge");
 
-    // t1: DONE normally. t2: BLOCKED at tests (at cap → capability-budget drop).
+    // t1: DONE normally. t2: deliberately unparseable producer status (no ESCALATE keyword)
+    // exercises the unparseable-producer-status path; at cap → capability-budget drop.
     const answer = new AnswerBook({
       holdoutStore: holdout,
       runId: RUN_ID,
