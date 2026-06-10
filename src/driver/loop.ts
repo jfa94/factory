@@ -36,9 +36,6 @@ import {
   GateRunner,
   checkHoldout,
   holdoutEvidence,
-  evaluateQuota,
-  decisionToStageResult,
-  buildCheckpoint,
   clearCheckpoint,
   assertNever,
   type GateContext,
@@ -62,6 +59,7 @@ import {
   type TaskOutcome,
   type TaskStep,
 } from "./transitions.js";
+import { applyQuotaGate } from "./quota-gate.js";
 import { shipTask } from "./ship.js";
 import { finalizeRun } from "./finalize.js";
 import { makeStageHandlers } from "./handlers.js";
@@ -380,7 +378,7 @@ export async function driveRun(deps: DriveDeps, runId: string): Promise<RunState
     // Run-level quota gate (epoch SECONDS via deps.now()).
     const stopped = await applyQuotaGate(deps, runId);
     if (stopped !== null) {
-      return stopped;
+      return stopped.run;
     }
     // Quota proceeds: if we are resuming a paused/suspended run, return it to
     // `running` (drop the checkpoint) before driving any task.
@@ -441,35 +439,6 @@ function firstUnsatisfiableDep(run: RunState, task: TaskState): string {
 function isUnsatisfiableDep(run: RunState, depId: string): boolean {
   const dep = run.tasks[depId];
   return dep === undefined || dep.status === "dropped";
-}
-
-/**
- * The run-level quota gate. Reads the usage signal, evaluates the two-window pacer
- * (epoch SECONDS), and on a breach persists the matching checkpoint patch + status
- * and returns the stopped run; on `proceed` returns null (the caller continues).
- * An unobservable reading fails closed → a clean `suspended` (no reset horizon).
- */
-async function applyQuotaGate(deps: DriveDeps, runId: string): Promise<RunState | null> {
-  const reading = await deps.usage.read();
-  const decision = evaluateQuota(reading, deps.config, deps.now());
-  if (decisionToStageResult(decision) === null) {
-    return null; // proceed
-  }
-  switch (decision.kind) {
-    case "pause-5h":
-    case "suspend-7d": {
-      const patch = buildCheckpoint(decision);
-      log.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
-      return deps.state.update(runId, (s) => ({ ...s, status: patch.status, quota: patch.quota }));
-    }
-    case "unavailable-halt":
-      log.warn(`run '${runId}' quota unavailable — suspending: ${decision.reason}`);
-      return deps.state.update(runId, (s) => ({ ...s, status: "suspended", quota: undefined }));
-    case "proceed":
-      return null; // unreachable (decisionToStageResult==null already handled it)
-    default:
-      return assertNever(decision);
-  }
 }
 
 // ---------------------------------------------------------------------------
