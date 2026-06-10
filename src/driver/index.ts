@@ -57,7 +57,7 @@ export type { ArtifactStore } from "./artifacts.js";
 // -- per-task worktree path derivation ---------------------------------------
 export { taskWorktreePath } from "./paths.js";
 
-// -- fold cores (CLI record-* subcommand kernels + forthcoming pump) ----------
+// -- fold cores (CLI record-* subcommand kernels + pump) ----------------------
 export {
   persistStepCursor,
   readJsonInput,
@@ -73,3 +73,20 @@ export {
   type RecordReviewsInput,
   type RecordReviewsEnvelope,
 } from "./fold.js";
+
+// -- drive results schema (factory drive --results input) --------------------
+export { DriveResultsSchema, parseDriveResults, type DriveResults } from "./results.js";
+
+// -- quota gate (shared by pumps + driveRun) ----------------------------------
+export { applyQuotaGate, type QuotaGateDeps, type QuotaStop } from "./quota-gate.js";
+
+// -- per-task coroutine pump (factory drive seam) ----------------------------
+export {
+  pumpTask,
+  holdoutSidecar,
+  MERGE_RESYNC_CAP,
+  type PumpDeps,
+  type DriveEnvelope,
+  type HoldoutSidecar,
+  type DriveExpects,
+} from "./pump.js";

@@ -243,6 +243,8 @@ export const TaskStateSchema = z.object({
    * The precise resume cursor for the drive pump — which TaskStage the task is
    * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
    * summary; `stage` is the machine cursor. Absent = not started (preflight).
+   * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
+   * not a resume point — terminal writers do not clear it.
    * NOTE: literals duplicate stage-machine's TASK_STAGE_ORDER because core/state
    * must not import stage-machine (dependency direction) — a cross-check test in
    * src/driver/pump.test.ts pins them equal.

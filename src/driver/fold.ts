@@ -122,7 +122,7 @@ function producerStageInfo(stage: string): {
 } {
   if (stage === "tests") return { role: "test-writer", stage: "tests", after: "exec" };
   if (stage === "exec") return { role: "executor", stage: "exec", after: "verify" };
-  throw new UsageError(`--stage must be a producer stage (tests | exec), got '${stage}'`);
+  throw new UsageError(`stage must be a producer stage (tests | exec), got '${stage}'`);
 }
 
 /** Fold the producer status into state and return the next-step envelope. */
