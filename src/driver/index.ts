@@ -90,3 +90,6 @@ export {
   type HoldoutSidecar,
   type DriveExpects,
 } from "./pump.js";
+
+// -- run-level pump (factory next seam) --------------------------------------
+export { pumpRun, type NextEnvelope } from "./next.js";

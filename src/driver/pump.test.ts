@@ -14,208 +14,22 @@
  * spawn envelope and copies fold_key verbatim — the natural driver behavior.
  */
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { pumpTask, MERGE_RESYNC_CAP, type DriveEnvelope } from "./pump.js";
 import { TASK_STAGE_ORDER } from "../types/index.js";
 import { TaskStateSchema } from "../core/state/index.js";
 import type { DriveResults, FoldKey } from "./results.js";
-import type { PumpDeps } from "./pump.js";
 
-import { defaultConfig } from "../config/schema.js";
-import { parseSpecManifest } from "../spec/schema.js";
-import type { SpecManifest } from "../spec/index.js";
-import { StateManager } from "../core/state/manager.js";
-import { FakeGitClient, FakeGhClient } from "../git/fakes.js";
-import { makeFakeTools, FakeGitProbe, commit } from "../verifier/deterministic/fakes.js";
-import {
-  InMemoryHoldoutStore,
-  makeHoldoutRecord,
-  FsHoldoutVerdictStore,
-} from "../verifier/holdout/index.js";
-import { InMemoryArtifactStore } from "./artifacts.js";
+import { makeHoldoutRecord, FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
 import { taskWorktreePath } from "./paths.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
-import { fakeUsageSignal, type UsageReading } from "../quota/usage-source.js";
-import type { TaskState } from "../types/index.js";
 import { ESCALATION_CAP } from "../producer/index.js";
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
-const NOW = 1_700_000_000;
-
-function reading(opts: {
-  five: number;
-  seven: number;
-  fiveResets?: number;
-  sevenResets?: number;
-}): UsageReading {
-  return {
-    kind: "available",
-    fiveHour: { utilizationPct: opts.five, resetsAtEpoch: opts.fiveResets ?? NOW + 18_000 },
-    sevenDay: { utilizationPct: opts.seven, resetsAtEpoch: opts.sevenResets ?? NOW + 604_800 },
-    capturedAt: NOW,
-  };
-}
-
-const PROCEED = reading({ five: 0, seven: 0 });
-const PAUSE_5H = reading({ five: 21, seven: 0 }); // 5h breach
-
-function greenProbe(): FakeGitProbe {
-  return new FakeGitProbe({
-    refs: { "origin/staging": "sha-base", HEAD: "sha-head" },
-    changedFiles: [],
-    commits: [
-      commit({ sha: "c1", files: ["src/x.test.ts"], tagged: true }),
-      commit({ sha: "c2", files: ["src/x.ts"], tagged: true }),
-    ],
-  });
-}
-
-function makeSpec(
-  tasks: ReadonlyArray<{
-    task_id: string;
-    acceptance_criteria?: readonly string[];
-    tdd_exempt?: boolean;
-    depends_on?: readonly string[];
-    risk_tier?: "low" | "medium" | "high";
-  }>,
-): SpecManifest {
-  return parseSpecManifest({
-    spec_id: "42-checkout",
-    issue_number: 42,
-    slug: "checkout",
-    repo: "acme/widgets",
-    generated_at: "2026-06-01T00:00:00.000Z",
-    tasks: tasks.map((t) => ({
-      task_id: t.task_id,
-      title: `task ${t.task_id}`,
-      description: `does ${t.task_id}`,
-      files: [`src/${t.task_id}.ts`],
-      acceptance_criteria: t.acceptance_criteria ?? ["a", "b", "c"],
-      tests_to_write: ["covers it"],
-      depends_on: t.depends_on ?? [],
-      risk_tier: t.risk_tier ?? "medium",
-      risk_rationale: "moderate",
-      ...(t.tdd_exempt === true ? { tdd_exempt: true } : {}),
-    })),
-  });
-}
-
-// ---------------------------------------------------------------------------
-// makePumpDeps variants
-// ---------------------------------------------------------------------------
-
-interface MakePumpDepsOpts {
-  /** Spec task overrides (default: one pending T1 with 3 acceptance criteria). */
-  tasks?: ReadonlyArray<{
-    task_id: string;
-    acceptance_criteria?: readonly string[];
-    tdd_exempt?: boolean;
-    depends_on?: readonly string[];
-    risk_tier?: "low" | "medium" | "high";
-  }>;
-  /** Seed task STATE overrides (over and above defaults). */
-  taskStateOverrides?: Partial<TaskState> & { task_id?: string };
-  /** Usage reading (default: PROCEED). */
-  usage?: UsageReading;
-  /** Whether to pre-seed a holdout record for T1 (default: true if ≥2 criteria). */
-  withHoldout?: boolean;
-  /** Ship mode (default: no-merge for test safety). */
-  shipMode?: "live" | "no-merge";
-  /** FakeGhClient factory (optional override for live-merge tests). */
-  ghClient?: FakeGhClient;
-}
-
-interface PumpDepsResult {
-  deps: PumpDeps;
-  runId: string;
-  dataDir: string;
-  state: StateManager;
-  holdout: InMemoryHoldoutStore;
-  cleanup: () => Promise<void>;
-}
-
-async function makePumpDeps(opts: MakePumpDepsOpts = {}): Promise<PumpDepsResult> {
-  const dataDir = await mkdtemp(join(tmpdir(), "factory-pump-"));
-  const state = new StateManager({
-    dataDir,
-    lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
-  });
-  const holdout = new InMemoryHoldoutStore();
-  const runId = "run-1";
-
-  // Default to single criterion so holdout is not seeded (avoids verdict-store
-  // read errors in tests that don't provide holdout results).
-  const taskDefs = opts.tasks ?? [{ task_id: "T1", acceptance_criteria: ["only one"] }];
-
-  const spec = makeSpec(taskDefs);
-
-  await state.create({
-    run_id: runId,
-    spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
-  });
-
-  // Seed tasks — overrides apply only when task_id matches (or T1 by default)
-  await state.update(runId, (s) => {
-    const next = { ...s.tasks };
-    for (const tDef of taskDefs) {
-      const override =
-        opts.taskStateOverrides !== undefined &&
-        (opts.taskStateOverrides.task_id ?? "T1") === tDef.task_id
-          ? opts.taskStateOverrides
-          : {};
-      next[tDef.task_id] = {
-        task_id: tDef.task_id,
-        status: override.status ?? "pending",
-        depends_on: [...(tDef.depends_on ?? [])],
-        risk_tier: tDef.risk_tier ?? "medium",
-        escalation_rung: override.escalation_rung ?? 0,
-        reviewers: override.reviewers ?? [],
-        merge_resyncs: override.merge_resyncs ?? 0,
-        ...(override.failure_class ? { failure_class: override.failure_class } : {}),
-        ...(override.failure_reason ? { failure_reason: override.failure_reason } : {}),
-        ...(override.stage ? { stage: override.stage } : {}),
-        ...(override.pr_number ? { pr_number: override.pr_number } : {}),
-        ...(override.branch ? { branch: override.branch } : {}),
-      };
-    }
-    return { ...s, tasks: next };
-  });
-
-  const gh = opts.ghClient ?? new FakeGhClient();
-  const git = new FakeGitClient({ remoteHeads: { staging: "sha-staging" } });
-
-  const deps: PumpDeps = {
-    config: defaultConfig(),
-    spec,
-    git,
-    gh,
-    tools: makeFakeTools({ git: greenProbe() }),
-    artifacts: new InMemoryArtifactStore(),
-    holdout,
-    dataDir,
-    owner: "acme",
-    repo: "widgets",
-    shipMode: opts.shipMode ?? "no-merge",
-    state,
-    usage: fakeUsageSignal(opts.usage ?? PROCEED),
-    now: () => NOW,
-  };
-
-  return {
-    deps,
-    runId,
-    dataDir,
-    state,
-    holdout,
-    cleanup: () => rm(dataDir, { recursive: true, force: true }),
-  };
-}
+import { makePumpDeps, mkdir, NOW, PAUSE_5H } from "./pump-fixtures.js";
+import type { PumpDeps } from "./pump.js";
+import { FakeGhClient } from "../git/fakes.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
