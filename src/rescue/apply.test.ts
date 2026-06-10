@@ -249,7 +249,8 @@ describe("applyRescue", () => {
     await applyRescue(state, RUN_ID);
 
     const run = await state.read(RUN_ID);
-    expect(run.tasks["c"]?.stage).toBeUndefined();
-    expect(run.tasks["c"]?.merge_resyncs).toBe(0);
+    const c = run.tasks.c!;
+    expect(c.stage).toBeUndefined();
+    expect(c.merge_resyncs).toBe(0);
   });
 });
