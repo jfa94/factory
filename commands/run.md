@@ -1,6 +1,6 @@
 ---
 description: "Run the factory autonomous coding pipeline (PRD issue → task PRs → staging)"
-argument-hint: "[resume] --repo <owner/name> (--issue <N> | --spec-id <id>) [--driver sequential|balanced] [--ship-mode no-merge|live] [--run <id>]"
+argument-hint: "[resume] --repo <owner/name> (--issue <N> | --spec-id <id>) [--mode session|workflow] [--ship-mode no-merge|live] [--run <id>]"
 arguments:
   - name: mode
     description: "Omit to start a run; pass `resume` to re-enter a paused/suspended run"
@@ -14,8 +14,8 @@ arguments:
   - name: "--spec-id"
     description: "Explicit <issue>-<slug> spec id, instead of --issue (start mode)"
     required: false
-  - name: "--driver"
-    description: "sequential (c=1) | balanced (c=3). Default balanced"
+  - name: "--mode"
+    description: "session (sequential, in-session agents — default) | workflow (parallel background Workflow)"
     required: false
   - name: "--ship-mode"
     description: "no-merge (open task PRs, never merge — cutover-safe) | live (auto-merge into staging). Default no-merge"
@@ -27,67 +27,49 @@ arguments:
 
 # /factory:run
 
-Drive a full pipeline run **in this session**. You are **Model A** — the in-session
-orchestrator. The `factory` CLI is the deterministic brain (state, gates, classification,
-ladder, floor, PR creation); you are the hands that perform every `Agent()` spawn it asks
-for. The complete control loop, Iron Laws, the CLI surface, the spawn matrix, and the
-model-alias mapping all live in `skills/pipeline-orchestrator/SKILL.md` — **invoke that
-skill and follow it exactly**. Do not improvise transitions or write run state by prose.
+Drive a full pipeline run. The `factory` CLI is the engine (ALL control flow); the
+driver is a dumb loop. Reject the call with a clear message if: `--repo` missing;
+neither or both of `--issue`/`--spec-id`; `--mode` not `session`/`workflow`;
+`--ship-mode` not `no-merge`/`live`. Defaults: `--mode session`, `--ship-mode no-merge`
+(`live` only on explicit opt-in — it auto-merges into staging).
 
-## Parse the invocation
+## Both modes start the same
 
-**Start mode** (no leading `resume`):
-
-| Flag          | Required | Notes                                                |
-| ------------- | -------- | ---------------------------------------------------- |
-| `--repo`      | yes      | `<owner>/<name>`                                     |
-| `--issue`     | one of   | PRD issue number (stable spec key)                   |
-| `--spec-id`   | one of   | `<issue>-<slug>` (mutually exclusive with `--issue`) |
-| `--driver`    | no       | `sequential` \| `balanced` (default `balanced`)      |
-| `--ship-mode` | no       | `no-merge` (default) \| `live`                       |
-
-Reject the call (stop with a clear message) if: `--repo` is missing; neither or both of
-`--issue`/`--spec-id` are given; `--driver` is not `sequential`/`balanced`; `--ship-mode`
-is not `no-merge`/`live`.
-
-**`--ship-mode` is the cutover-safety knob.** Default `no-merge` opens each task PR but
-never merges (the dry-run / no-merge mode). Pass `live` only when the user explicitly
-opted into auto-merge into `staging`.
-
-**Resume mode** (`/factory:run resume [--run <id>]`): skip spec + create; go straight to
-`factory run resume` per the skill's Phase 3 resume note.
-
-## Drive it
-
-Load the orchestrator skill and run its protocol end-to-end:
+Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run
+create`; read `run_id`):
 
 ```
 Skill(pipeline-orchestrator)
 ```
 
-Then execute, in order (all detail is in the skill — this is just the spine):
+## `--mode session` (default)
 
-1. **Phase 0 — Preconditions.** Confirm a git checkout; `factory scaffold --repo <o/n>`
-   (idempotent; refuses if staging branch protection is missing — tell the user to re-run
-   `/factory:scaffold --provision` or protect staging manually, then stop).
-2. **Phase 1 — Spec.** Run the bounded `factory spec resolve|gate|store` generate ⇄ review
-   loop, spawning `spec-generator` / `spec-reviewer` as the envelopes ask, until `reuse`
-   or `stored`.
-3. **Phase 2 — Create.** `factory run create --repo <o/n> (--issue <n> | --spec-id <id>)
-[--driver <d>]`; read `run_id` from the emitted `RunState`.
-4. **Phase 3 — Drive.** Run the run loop + per-task stage machine, threading `--ship-mode`
-   into every `factory run-task … --stage ship`. Holdout before reviews; verify-then-fix
-   each blocking + citable finding; follow the `step` each `record-*` returns.
-5. **Phase 4 — Completion.** Once every task is terminal, `factory run finalize --run
-<run_id> --ship-mode <mode>` (builds the report, files one issue per dropped task, ships
-   the staging→develop rollup, flips the run terminal — resume-safe + idempotent). Then
-   `factory score --run <run_id>` + `factory state <run_id> --summary` to report the run
-   status (`completed | partial | failed`), the rollup PR, and any drops. A
-   `paused`/`suspended` run is NOT finalized — resume it instead. `main` is never touched.
+Continue with the skill's Phase 3 THE LOOP and Phase 4 verbatim. Sequential: one
+task at a time, every agent spawned in this session.
 
-**Resume mode:** `factory run resume [--run <id>]`. On `{kind:"still-blocked", …}` report
-the reason + `resets_at_epoch` and stop; on `{kind:"resumed", run}` continue the Phase 3
-run loop.
+## `--mode workflow`
 
-Everything else — the spawn isolation matrix, the path computations, the failure handling
-— is in `skills/pipeline-orchestrator/SKILL.md`. Do not duplicate or contradict it here.
+After Phase 2, launch the plugin's workflow driver and relay its result:
+
+```
+Workflow({
+  scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/factory-run.workflow.js",
+  args: { runId: "<run_id>", shipMode: "<no-merge|live>", dataDir: "$CLAUDE_PLUGIN_DATA" }
+})
+```
+
+(`$CLAUDE_PLUGIN_DATA` = the resolved data dir from your Bash env — pass its VALUE.)
+It drives ready tasks in parallel (engine-enforced gates are identical; merges are
+file-lock serialized). When it returns:
+
+- `{ suspended: true, scope, resets_at_epoch }` → quota stop: report it; the user
+  re-runs `/factory:run resume` after the window resets. Do NOT finalize.
+- otherwise → run the skill's Phase 4: `factory run finalize --run <run_id>
+--ship-mode <mode>`, then `factory score` + `factory state --summary`, and report.
+
+## Resume mode (`/factory:run resume [--run <id>]`)
+
+`factory run resume [--run <id>]`. On `{kind:"still-blocked"}` report reason +
+`resets_at_epoch` and stop. On `{kind:"resumed"}` re-enter the run loop (Phase 3 of
+the skill in session mode, or re-launch the workflow in workflow mode — ask the user
+which mode if it is ambiguous; the engine is indifferent).
