@@ -68,6 +68,7 @@ export async function markInFlight(
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status,
+    stage,
     started_at: t.started_at ?? nowIso(),
   }));
 }

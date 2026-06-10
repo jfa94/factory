@@ -239,6 +239,18 @@ export const TaskStateSchema = z.object({
   /** Human-facing reason string accompanying a drop. */
   failure_reason: z.string().optional(),
 
+  /**
+   * The precise resume cursor for the drive pump — which TaskStage the task is
+   * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
+   * summary; `stage` is the machine cursor. Absent = not started (preflight).
+   * NOTE: literals duplicate stage-machine's TASK_STAGE_ORDER because core/state
+   * must not import stage-machine (dependency direction) — a cross-check test in
+   * src/driver/pump.test.ts pins them equal.
+   */
+  stage: z.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
+  /** Ship live-merge re-sync count (cap enforced by the pump; persisted so the cap survives process boundaries). */
+  merge_resyncs: z.number().int().min(0).default(0),
+
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: z.string().optional(),
   ended_at: z.string().optional(),

@@ -269,4 +269,14 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     expect(step.outcome.failure_class).toBe("spec-defect");
     expect((await readTask("t1")).escalation_rung).toBe(0);
   });
+
+  // -- markInFlight stage cursor persistence --------------------------------
+
+  it("markInFlight persists the precise stage cursor", async () => {
+    await seedTask({ task_id: "t1" });
+    await markInFlight({ state }, RUN_ID, "t1", "exec");
+    const run = await state.read(RUN_ID);
+    expect(run.tasks["t1"]?.status).toBe("executing");
+    expect(run.tasks["t1"]?.stage).toBe("exec");
+  });
 });
