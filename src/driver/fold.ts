@@ -25,10 +25,14 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseJson } from "../shared/json.js";
-import { markInFlight, escalateOrDrop, type TaskStep } from "./transitions.js";
+import {
+  markInFlight,
+  escalateOrDrop,
+  applyProducerOutcome,
+  type TaskStep,
+} from "./transitions.js";
 import { taskWorktreePath } from "./paths.js";
 import { classifyFailure, ESCALATION_CAP, parseProducerStatus } from "../producer/index.js";
-import { applyProducerOutcome } from "./transitions.js";
 import { nextStage } from "../types/index.js";
 import { GateRunner, type GateContext } from "../verifier/deterministic/index.js";
 import {
@@ -46,8 +50,7 @@ import {
   type HoldoutVerdictStore,
   type HoldoutCheckResult,
 } from "../verifier/holdout/index.js";
-import { createLogger } from "../shared/index.js";
-import { UsageError } from "../cli/args.js";
+import { createLogger, UsageError } from "../shared/index.js";
 import type {
   GateEvidence,
   GateVerdict,

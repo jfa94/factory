@@ -2,6 +2,7 @@
  * Fold-core semantics — moved verbatim from:
  *   - src/cli/subcommands/record-holdout.test.ts  (applyRecordHoldout describe block)
  *   - src/cli/subcommands/record-reviews.test.ts  (applyRecordReviews describe block)
+ *   - src/cli/subcommands/record-producer.test.ts (applyRecordProducer describe blocks)
  *
  * Imports now point to ./fold.js; fixtures + assertions are IDENTICAL — only the
  * call sites carry the new runId argument (FoldDeps signature adjustment).
@@ -14,6 +15,7 @@ import { dirname, join } from "node:path";
 import {
   applyRecordHoldout,
   applyRecordReviews,
+  applyRecordProducer,
   type RecordReviewsInput,
   type FoldDeps,
 } from "./fold.js";
@@ -29,6 +31,8 @@ import {
   makeHoldoutRecord,
 } from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
+import { ESCALATION_CAP } from "../producer/index.js";
+import type { TaskState } from "../types/index.js";
 
 const RUN_ID = "run-1";
 const TASK_ID = "t1";
@@ -403,6 +407,132 @@ describe("applyRecordReviews fold", () => {
     const deps = makeDeps();
     await expect(
       applyRecordReviews(deps, RUN_ID, "ghost", verdictStore, { reviews: [], verifications: [] }),
+    ).rejects.toThrow(/no task 'ghost'/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyRecordProducer fold  (moved from src/cli/subcommands/record-producer.test.ts)
+// ---------------------------------------------------------------------------
+
+async function seededProducerState(
+  task: Partial<TaskState> = {},
+): Promise<{ dataDir: string; state: StateManager }> {
+  const dataDir = await mkdtemp(join(tmpdir(), "factory-fold-producer-"));
+  const state = new StateManager({
+    dataDir,
+    lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
+  });
+  await state.create({
+    run_id: RUN_ID,
+    spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
+  });
+  await state.update(RUN_ID, (s) => ({
+    ...s,
+    tasks: {
+      t1: {
+        task_id: "t1",
+        status: task.status ?? "executing",
+        depends_on: [],
+        risk_tier: "medium",
+        escalation_rung: task.escalation_rung ?? 0,
+        reviewers: task.reviewers ?? [],
+        merge_resyncs: 0,
+      },
+    },
+  }));
+  return { dataDir, state };
+}
+
+describe("applyRecordProducer — DONE advances", () => {
+  let dataDir: string;
+  let state: StateManager;
+  afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
+
+  it("tests/DONE records test-writer and advances to exec", async () => {
+    ({ dataDir, state } = await seededProducerState());
+    const env = await applyRecordProducer(state, RUN_ID, "t1", "tests", "STATUS: DONE");
+
+    expect(env.step).toEqual({ done: false, stage: "exec" });
+    const task = (await state.read(RUN_ID)).tasks.t1!;
+    expect(task.producer_role).toBe("test-writer");
+    expect(task.status).toBe("executing"); // markInFlight(exec)
+  });
+
+  it("exec/DONE records executor and advances to verify", async () => {
+    ({ dataDir, state } = await seededProducerState());
+    const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "STATUS: DONE");
+
+    expect(env.step).toEqual({ done: false, stage: "verify" });
+    const task = (await state.read(RUN_ID)).tasks.t1!;
+    expect(task.producer_role).toBe("executor");
+    expect(task.status).toBe("reviewing"); // markInFlight(verify)
+  });
+});
+
+describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
+  let dataDir: string;
+  let state: StateManager;
+  afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
+
+  it("BLOCKED—escalate drops spec-defect immediately (no rung burned)", async () => {
+    ({ dataDir, state } = await seededProducerState({ escalation_rung: 0 }));
+    const env = await applyRecordProducer(
+      state,
+      RUN_ID,
+      "t1",
+      "exec",
+      "STATUS: BLOCKED — escalate",
+    );
+
+    expect(env.step.done).toBe(true);
+    if (!env.step.done) throw new Error("unreachable");
+    expect(env.step.outcome).toEqual(
+      expect.objectContaining({ outcome: "dropped", failure_class: "spec-defect" }),
+    );
+    const task = (await state.read(RUN_ID)).tasks.t1!;
+    expect(task.status).toBe("dropped");
+    expect(task.escalation_rung).toBe(0); // a drop never burns a rung
+  });
+
+  it("NEEDS_CONTEXT escalates a rung, clears reviewers, resumes at the same stage", async () => {
+    ({ dataDir, state } = await seededProducerState({
+      escalation_rung: 0,
+      reviewers: [{ reviewer: "quality", verdict: "approve", confirmed_blockers: 0 }],
+    }));
+    const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "STATUS: NEEDS_CONTEXT");
+
+    expect(env.step).toEqual({ done: false, stage: "exec" });
+    const task = (await state.read(RUN_ID)).tasks.t1!;
+    expect(task.escalation_rung).toBe(1);
+    expect(task.reviewers).toEqual([]); // stale reviewers cleared on escalation
+    expect(task.status).toBe("executing"); // cursor re-stamped at exec
+  });
+
+  it("an unparseable status is a capability retry (error → rung bump)", async () => {
+    ({ dataDir, state } = await seededProducerState({ escalation_rung: 0 }));
+    const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "garbled nonsense");
+
+    expect(env.step).toEqual({ done: false, stage: "exec" });
+    expect((await state.read(RUN_ID)).tasks.t1!.escalation_rung).toBe(1);
+  });
+
+  it("an exhausted ladder drops capability-budget", async () => {
+    ({ dataDir, state } = await seededProducerState({ escalation_rung: ESCALATION_CAP }));
+    const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "STATUS: NEEDS_CONTEXT");
+
+    expect(env.step.done).toBe(true);
+    if (!env.step.done) throw new Error("unreachable");
+    expect(env.step.outcome).toEqual(
+      expect.objectContaining({ outcome: "dropped", failure_class: "capability-budget" }),
+    );
+    expect((await state.read(RUN_ID)).tasks.t1!.status).toBe("dropped");
+  });
+
+  it("is LOUD on a missing task", async () => {
+    ({ dataDir, state } = await seededProducerState());
+    await expect(
+      applyRecordProducer(state, RUN_ID, "ghost", "exec", "STATUS: DONE"),
     ).rejects.toThrow(/no task 'ghost'/);
   });
 });

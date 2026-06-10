@@ -35,3 +35,5 @@ export {
 export type { SecretPattern } from "./secret-patterns.js";
 
 export { isValidId, validateId, slugify, ID_PATTERN, SLUG_MAX_LENGTH } from "./ids.js";
+
+export { UsageError, isUsageError } from "./usage-error.js";

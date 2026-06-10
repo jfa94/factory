@@ -30,6 +30,8 @@ export interface ParseOptions {
   booleans?: readonly string[];
 }
 
+import { UsageError } from "../shared/usage-error.js";
+
 export function parseArgs(argv: readonly string[], opts: ParseOptions = {}): ParsedArgs {
   const booleans = new Set<string>(["help", "h", ...(opts.booleans ?? [])]);
   const positionals: string[] = [];
@@ -100,18 +102,5 @@ export function parseArgs(argv: readonly string[], opts: ParseOptions = {}): Par
   };
 }
 
-/** A flag/argument usage error — the CLI entry maps it to EXIT.USAGE (2). */
-export class UsageError extends Error {
-  readonly isUsageError = true;
-  constructor(message: string) {
-    super(message);
-    this.name = "UsageError";
-  }
-}
-
-/** Type guard for {@link UsageError} (survives bundling — no instanceof reliance). */
-export function isUsageError(err: unknown): err is UsageError {
-  return (
-    err instanceof UsageError || (typeof err === "object" && err !== null && "isUsageError" in err)
-  );
-}
+// Re-export from shared so every existing `from "./args.js"` import site keeps working.
+export { UsageError, isUsageError } from "../shared/usage-error.js";
