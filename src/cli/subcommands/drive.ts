@@ -7,11 +7,10 @@
  * `quota-blocked`. Re-invoking without --results is idempotent.
  */
 import { EXIT, type ExitCode } from "../exit-codes.js";
-import { parseArgs, isUsageError, UsageError } from "../args.js";
+import { parseArgs, isUsageError, UsageError, parseShipMode } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadPumpDeps } from "../wiring.js";
 import { pumpTask, parseDriveResults, readJsonInput } from "../../driver/index.js";
-import type { ShipMode } from "../../driver/index.js";
 import type { Subcommand } from "../main.js";
 
 const HELP = `factory drive — pump one task until it needs agents or is terminal
@@ -34,12 +33,6 @@ envelope's fold_key verbatim; a stale/duplicate key rejects LOUD (re-invoke with
                               "reviews": { reviews, verifications, crossVendorAbsent? } }
 Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
 
-function parseShipMode(raw: string | boolean | undefined): ShipMode | undefined {
-  if (raw === undefined) return undefined;
-  if (raw === "live" || raw === "no-merge") return raw;
-  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
-}
-
 async function run(argv: string[]): Promise<ExitCode> {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
@@ -52,7 +45,7 @@ async function run(argv: string[]): Promise<ExitCode> {
   const resultsPath = args.flag("results");
 
   let results;
-  if (typeof resultsPath === "string") {
+  if (typeof resultsPath === "string" && resultsPath.length > 0) {
     try {
       results = parseDriveResults(await readJsonInput<unknown>(resultsPath));
     } catch (err) {

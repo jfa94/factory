@@ -60,20 +60,10 @@ function splitRepo(slug: string): { owner: string; repo: string } {
 }
 
 /**
- * The pump bundle: everything {@link CliDeps} provides plus the live quota signal
- * and a clock — the full {@link PumpDeps} contract, with the run snapshot attached
- * for convenience (saves a re-read in the common case).
+ * Assemble a {@link PumpDeps} bundle — {@link loadCliDeps} plus the quota signal
+ * and clock. The result satisfies the pump engine contract.
  */
-export interface CliPumpDeps extends PumpDeps {
-  /** The run snapshot read while wiring (convenience for shells). */
-  readonly run: RunState;
-}
-
-/**
- * Assemble {@link CliPumpDeps} — {@link loadCliDeps} plus the quota signal and
- * clock. The result satisfies {@link PumpDeps} (the pump engine contract).
- */
-export async function loadPumpDeps(opts: LoadCliDepsOptions): Promise<CliPumpDeps> {
+export async function loadPumpDeps(opts: LoadCliDepsOptions): Promise<PumpDeps> {
   const deps = await loadCliDeps(opts);
   return {
     ...deps,

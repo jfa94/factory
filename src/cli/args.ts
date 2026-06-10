@@ -104,3 +104,13 @@ export function parseArgs(argv: readonly string[], opts: ParseOptions = {}): Par
 
 // Re-export from shared so every existing `from "./args.js"` import site keeps working.
 export { UsageError, isUsageError } from "../shared/usage-error.js";
+
+import type { ShipMode } from "../driver/types.js";
+export type { ShipMode };
+
+/** Validate the `--ship-mode` flag; returns `undefined` when absent. */
+export function parseShipMode(raw: string | boolean | undefined): ShipMode | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "live" || raw === "no-merge") return raw;
+  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
+}

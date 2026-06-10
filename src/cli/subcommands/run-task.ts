@@ -22,7 +22,7 @@
  *       `done` is written.
  */
 import { EXIT, type ExitCode } from "../exit-codes.js";
-import { parseArgs, isUsageError, UsageError } from "../args.js";
+import { parseArgs, isUsageError, UsageError, parseShipMode } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadCliDeps, type CliDeps } from "../wiring.js";
 import { makeStageHandlers, shipTask, completeTask, taskWorktreePath } from "../../driver/index.js";
@@ -30,7 +30,6 @@ import { resolveReviewModel } from "../../verifier/judgment/index.js";
 import { buildHoldoutPrompt } from "../../verifier/holdout/index.js";
 import { runStage, TASK_STAGE_ORDER } from "../../types/index.js";
 import type { StageContext, StageResult, TaskStage, TaskState } from "../../types/index.js";
-import type { ShipMode } from "../../driver/index.js";
 import type { Subcommand } from "../main.js";
 
 const HELP = `factory run-task — run one deterministic stage step and report (Model A)
@@ -77,13 +76,6 @@ function parseStage(raw: string): TaskStage {
     return raw as TaskStage;
   }
   throw new UsageError(`unknown --stage '${raw}' (expected one of ${TASK_STAGE_ORDER.join(", ")})`);
-}
-
-/** Validate the `--ship-mode` flag (defaults handled by the caller). */
-function parseShipMode(raw: string | boolean | undefined): ShipMode | undefined {
-  if (raw === undefined) return undefined;
-  if (raw === "live" || raw === "no-merge") return raw;
-  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
 }
 
 /** Resolve the live task row from the freshly-read run snapshot (LOUD if absent). */

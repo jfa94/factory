@@ -20,7 +20,7 @@
  * than surfacing later as a driver deadlock.
  */
 import { EXIT, type ExitCode } from "../exit-codes.js";
-import { parseArgs, isUsageError, UsageError } from "../args.js";
+import { parseArgs, isUsageError, UsageError, parseShipMode } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { StateManager } from "../../core/state/index.js";
@@ -30,7 +30,7 @@ import { nowEpoch } from "../../shared/time.js";
 import { planResume, StatuslineUsageSignal, type UsageReading } from "../../quota/index.js";
 import { isTerminalRunStatus } from "../../types/index.js";
 import type { Config, Driver, RunState, RunStatus, TaskState } from "../../types/index.js";
-import { finalizeRun, type ShipMode } from "../../driver/index.js";
+import { finalizeRun } from "../../driver/index.js";
 import { loadCliDeps } from "../wiring.js";
 import type { Subcommand } from "../main.js";
 
@@ -293,13 +293,6 @@ function parseDriver(raw: string | boolean | undefined): Driver {
   if (raw === undefined) return "balanced";
   if (raw === "sequential" || raw === "balanced") return raw;
   throw new UsageError(`unknown --driver '${String(raw)}' (expected sequential | balanced)`);
-}
-
-/** Validate the `--ship-mode` flag (the caller supplies the default). */
-function parseShipMode(raw: string | boolean | undefined): ShipMode | undefined {
-  if (raw === undefined) return undefined;
-  if (raw === "live" || raw === "no-merge") return raw;
-  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
 }
 
 function parseIssue(raw: string | boolean | undefined): number | undefined {

@@ -15,6 +15,7 @@ import { writeFile } from "node:fs/promises";
 
 import { nextCommand } from "./next.js";
 import { EXIT } from "../exit-codes.js";
+import { captureStream } from "../test-helpers.js";
 import { makePumpDeps, makeSpec } from "../../driver/pump-fixtures.js";
 import { StateManager } from "../../core/state/manager.js";
 import { SpecStore } from "../../spec/index.js";
@@ -22,21 +23,16 @@ import { usageCachePath } from "../../quota/index.js";
 
 describe("next arg/usage edges", () => {
   it("--help prints help and exits OK", async () => {
-    const chunks: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stdout = captureStream(process.stdout);
     try {
       const code = await nextCommand.run(["--help"]);
       expect(code).toBe(EXIT.OK);
-      const help = chunks.join("");
+      const help = stdout.read();
       // Both the tasks-ready and all-terminal lines must mention cascade_dropped.
       expect(help).toMatch(/tasks-ready.*cascade_dropped/);
       expect(help).toMatch(/all-terminal.*cascade_dropped/);
     } finally {
-      process.stdout.write = originalWrite;
+      stdout.restore();
     }
   });
 
@@ -45,20 +41,16 @@ describe("next arg/usage edges", () => {
     const dir = await mkdtemp(join(tmpdir(), "factory-next-empty-"));
     const saved = process.env["CLAUDE_PLUGIN_DATA"];
     process.env["CLAUDE_PLUGIN_DATA"] = dir;
-    const stderrChunks: string[] = [];
-    const originalStderrWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = (chunk: string | Uint8Array) => {
-      stderrChunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stderr = captureStream(process.stderr);
     try {
       const code = await nextCommand.run([]);
       expect(code).toBe(EXIT.USAGE);
       // wrapper prefixes "next: "; inner throw has no duplicate prefix
-      expect(stderrChunks.join("")).toMatch(/^next: no --run given/);
+      expect(stderr.read()).toMatch(/^next: no --run given/);
     } finally {
-      process.stderr.write = originalStderrWrite;
-      process.env["CLAUDE_PLUGIN_DATA"] = saved;
+      stderr.restore();
+      if (saved === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];
+      else process.env["CLAUDE_PLUGIN_DATA"] = saved;
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -80,7 +72,8 @@ describe("next --run resolution falls back to runs/current", () => {
   });
 
   afterEach(async () => {
-    process.env["CLAUDE_PLUGIN_DATA"] = savedEnv;
+    if (savedEnv === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];
+    else process.env["CLAUDE_PLUGIN_DATA"] = savedEnv;
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -120,19 +113,14 @@ describe("next --run resolution falls back to runs/current", () => {
       }),
     );
 
-    const chunks: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stdout = captureStream(process.stdout);
     try {
       const code = await nextCommand.run([]); // no --run
       expect(code).toBe(EXIT.OK);
-      const envelope = JSON.parse(chunks.join(""));
+      const envelope = JSON.parse(stdout.read());
       expect(envelope).toMatchObject({ kind: "tasks-ready", run_id: "run-current" });
     } finally {
-      process.stdout.write = originalWrite;
+      stdout.restore();
     }
   });
 });
@@ -164,25 +152,22 @@ describe("next happy path", () => {
       }),
     );
 
-    const chunks: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stdout = captureStream(process.stdout);
 
     const saved = process.env["CLAUDE_PLUGIN_DATA"];
     process.env["CLAUDE_PLUGIN_DATA"] = deps.dataDir;
     try {
       const code = await nextCommand.run(["--run", runId]);
       expect(code).toBe(EXIT.OK);
-      expect(chunks.length).toBeGreaterThan(0);
-      const envelope = JSON.parse(chunks.join(""));
+      const out = stdout.read();
+      expect(out.length).toBeGreaterThan(0);
+      const envelope = JSON.parse(out);
       expect(envelope).toMatchObject({ kind: "tasks-ready", run_id: runId });
       expect(envelope.ready).toContain("T1");
     } finally {
-      process.stdout.write = originalWrite;
-      process.env["CLAUDE_PLUGIN_DATA"] = saved;
+      stdout.restore();
+      if (saved === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];
+      else process.env["CLAUDE_PLUGIN_DATA"] = saved;
     }
   });
 
@@ -200,23 +185,19 @@ describe("next happy path", () => {
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir }).write(spec, "# spec");
 
-    const chunks: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stdout = captureStream(process.stdout);
 
     const saved = process.env["CLAUDE_PLUGIN_DATA"];
     process.env["CLAUDE_PLUGIN_DATA"] = deps.dataDir;
     try {
       const code = await nextCommand.run(["--run", runId]);
       expect(code).toBe(EXIT.OK);
-      const envelope = JSON.parse(chunks.join(""));
+      const envelope = JSON.parse(stdout.read());
       expect(envelope).toMatchObject({ kind: "run-terminal", run_id: runId });
     } finally {
-      process.stdout.write = originalWrite;
-      process.env["CLAUDE_PLUGIN_DATA"] = saved;
+      stdout.restore();
+      if (saved === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];
+      else process.env["CLAUDE_PLUGIN_DATA"] = saved;
     }
   });
 });

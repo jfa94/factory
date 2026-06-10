@@ -13,24 +13,20 @@ import { join } from "node:path";
 
 import { driveCommand } from "./drive.js";
 import { EXIT } from "../exit-codes.js";
+import { captureStream } from "../test-helpers.js";
 import { makePumpDeps, makeSpec } from "../../driver/pump-fixtures.js";
 import { SpecStore } from "../../spec/index.js";
 import { usageCachePath } from "../../quota/index.js";
 
 describe("drive arg/usage edges", () => {
   it("--help prints help and exits OK", async () => {
-    const chunks: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stdout = captureStream(process.stdout);
     try {
       const code = await driveCommand.run(["--help"]);
       expect(code).toBe(EXIT.OK);
-      expect(chunks.join("")).toMatch(/fold_key/);
+      expect(stdout.read()).toMatch(/fold_key/);
     } finally {
-      process.stdout.write = originalWrite;
+      stdout.restore();
     }
   });
 
@@ -60,18 +56,25 @@ describe("drive --results parse errors", () => {
   });
 
   afterEach(async () => {
-    process.env["CLAUDE_PLUGIN_DATA"] = savedEnv;
+    if (savedEnv === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];
+    else process.env["CLAUDE_PLUGIN_DATA"] = savedEnv;
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it("--results= (empty string) is a usage error (requires a file path)", async () => {
+    const stderr = captureStream(process.stderr);
+    try {
+      const code = await driveCommand.run(["--run", "run-1", "--task", "T1", "--results="]);
+      expect(code).toBe(EXIT.USAGE);
+      expect(stderr.read()).toContain("requires a file path");
+    } finally {
+      stderr.restore();
+    }
   });
 
   it("unreadable --results file is a usage error (named in message)", async () => {
     const missingPath = join(dir, "no-such-file.json");
-    const stderrChunks: string[] = [];
-    const originalStderrWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = (chunk: string | Uint8Array) => {
-      stderrChunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stderr = captureStream(process.stderr);
     try {
       const code = await driveCommand.run([
         "--run",
@@ -82,30 +85,23 @@ describe("drive --results parse errors", () => {
         missingPath,
       ]);
       expect(code).toBe(EXIT.USAGE);
-      const stderr = stderrChunks.join("");
-      expect(stderr).toContain(missingPath);
+      expect(stderr.read()).toContain(missingPath);
     } finally {
-      process.stderr.write = originalStderrWrite;
+      stderr.restore();
     }
   });
 
   it("invalid --results JSON is a usage error (named in message)", async () => {
     const bad = join(dir, "bad.json");
     await writeFile(bad, JSON.stringify({ not_a_fold_key: true }), "utf8");
-    const stderrChunks: string[] = [];
-    const originalStderrWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = (chunk: string | Uint8Array) => {
-      stderrChunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stderr = captureStream(process.stderr);
     try {
       const code = await driveCommand.run(["--run", "run-1", "--task", "T1", "--results", bad]);
       expect(code).toBe(EXIT.USAGE);
-      const stderr = stderrChunks.join("");
-      expect(stderr).toContain(bad);
-      expect(stderr).toContain("fold_key");
+      expect(stderr.read()).toContain(bad);
+      expect(stderr.read()).toContain("fold_key");
     } finally {
-      process.stderr.write = originalStderrWrite;
+      stderr.restore();
     }
   });
 });
@@ -134,25 +130,22 @@ describe("drive happy path", () => {
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir }).write(spec, "# spec");
 
-    const chunks: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stdout = captureStream(process.stdout);
 
     const saved = process.env["CLAUDE_PLUGIN_DATA"];
     process.env["CLAUDE_PLUGIN_DATA"] = deps.dataDir;
     try {
       const code = await driveCommand.run(["--run", runId, "--task", "T1"]);
       expect(code).toBe(EXIT.OK);
-      expect(chunks.length).toBeGreaterThan(0);
-      const envelope = JSON.parse(chunks.join(""));
+      const out = stdout.read();
+      expect(out.length).toBeGreaterThan(0);
+      const envelope = JSON.parse(out);
       expect(envelope).toMatchObject({ kind: "terminal", run_id: runId, task_id: "T1" });
       expect(envelope.outcome).toMatchObject({ outcome: "done" });
     } finally {
-      process.stdout.write = originalWrite;
-      process.env["CLAUDE_PLUGIN_DATA"] = saved;
+      stdout.restore();
+      if (saved === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];
+      else process.env["CLAUDE_PLUGIN_DATA"] = saved;
     }
   });
 
@@ -184,20 +177,16 @@ describe("drive happy path", () => {
       }),
     );
 
-    const chunks: string[] = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk: string | Uint8Array) => {
-      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-      return true;
-    };
+    const stdout = captureStream(process.stdout);
 
     const saved = process.env["CLAUDE_PLUGIN_DATA"];
     process.env["CLAUDE_PLUGIN_DATA"] = deps.dataDir;
     try {
       const code = await driveCommand.run(["--run", runId, "--task", "T1"]);
       expect(code).toBe(EXIT.OK);
-      expect(chunks.length).toBeGreaterThan(0);
-      const envelope = JSON.parse(chunks.join(""));
+      const out = stdout.read();
+      expect(out.length).toBeGreaterThan(0);
+      const envelope = JSON.parse(out);
       expect(envelope).toMatchObject({
         kind: "spawn",
         run_id: runId,
@@ -207,8 +196,9 @@ describe("drive happy path", () => {
       });
       expect(envelope.manifest).toBeDefined();
     } finally {
-      process.stdout.write = originalWrite;
-      process.env["CLAUDE_PLUGIN_DATA"] = saved;
+      stdout.restore();
+      if (saved === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];
+      else process.env["CLAUDE_PLUGIN_DATA"] = saved;
     }
   });
 });
