@@ -26,7 +26,11 @@ import type { SpecManifest } from "../spec/index.js";
 import { StateManager } from "../core/state/manager.js";
 import { FakeGitClient, FakeGhClient } from "../git/fakes.js";
 import { makeFakeTools, FakeGitProbe, commit } from "../verifier/deterministic/fakes.js";
-import { InMemoryHoldoutStore, makeHoldoutRecord } from "../verifier/holdout/index.js";
+import {
+  InMemoryHoldoutStore,
+  makeHoldoutRecord,
+  FsHoldoutVerdictStore,
+} from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
 import { taskWorktreePath } from "./paths.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
@@ -397,16 +401,30 @@ describe("pumpTask", () => {
     }
   });
 
-  it("folding approving reviews pumps through ship to terminal done (no-merge)", async () => {
-    const { deps, runId, cleanup } = await makePumpDeps();
+  it("folding approving reviews (+holdout pass) pumps through ship to terminal done (no-merge)", async () => {
+    // Use ≥2 criteria so the tests stage persists a holdout record (holdoutCount(2,20)=1).
+    const { deps, runId, dataDir, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["criterion-a", "criterion-b"] }],
+    });
     try {
       await driveToVerify(deps, runId, "T1");
-      await pumpTask(deps, runId, "T1"); // emit panel
-      const env = await pumpTask(deps, runId, "T1", approvingReviewsResults());
+      // Read the withheld record that the tests stage persisted.
+      const holdoutRecord = await deps.holdout.get(runId, "T1");
+      const withheld = holdoutRecord.withheld_criteria;
+      expect(withheld.length).toBeGreaterThan(0); // sanity: split actually withheld something
+
+      await pumpTask(deps, runId, "T1"); // emit panel + holdout sidecar
+      // Fold approving reviews AND holdout pass (withheld criteria → all satisfied).
+      const env = await pumpTask(deps, runId, "T1", approvingReviewsResults(withheld));
       expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.status).toBe("done");
       expect(run.tasks["T1"]?.pr_number).toBeTypeOf("number");
+
+      // Assert the holdout fold path actually fired: verdict store has entries for T1.
+      const verdictStore = new FsHoldoutVerdictStore(dataDir);
+      const verdicts = await verdictStore.get(runId, "T1");
+      expect(verdicts.length).toBeGreaterThan(0);
     } finally {
       await cleanup();
     }
@@ -531,6 +549,9 @@ describe("pumpTask", () => {
     try {
       const env = await pumpTask(deps, runId, "T1");
       expect(env).toMatchObject({ kind: "quota-blocked", scope: "5h" });
+      // No stage cursor was written — the pump bailed before any stage work.
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T1"]?.stage).toBeUndefined();
     } finally {
       await cleanup();
     }

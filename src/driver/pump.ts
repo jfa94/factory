@@ -26,7 +26,6 @@ import {
   type TaskStage,
   type TaskState,
   type RunState,
-  type FailureClass,
 } from "./deps.js";
 import type { UsageSignal } from "./deps.js";
 import {
@@ -116,7 +115,7 @@ function terminalOutcome(task: TaskState): TaskOutcome {
   if (task.status === "done") return { outcome: "done" };
   return {
     outcome: "dropped",
-    failure_class: (task.failure_class ?? "blocked-environmental") as FailureClass,
+    failure_class: task.failure_class ?? "blocked-environmental",
     reason: task.failure_reason ?? "dropped (no recorded reason)",
   };
 }
