@@ -1,8 +1,14 @@
 /**
- * WS9 — SubagentStop transcript→state seam tests. A reviewer's STATUS verdict is
- * appended to the task's reviewers[] through StateManager.updateTask (atomic,
- * never raw fs). Non-reviewer roles write nothing; an unresolved task_id is
- * logged and SKIPPED (no silent state loss); a state write failure → ERROR.
+ * WS9 — SubagentStop transcript→state seam tests.
+ *
+ * The hook is now LOG-ONLY (observational). It parses reviewer verdicts, resolves
+ * the task_id, and logs loudly — but never writes to task.reviewers[] (the driver
+ * fold is the single writer). Tests assert:
+ *   - reviewerNameOf / parseVerdict / taskIdFromHeader pure helpers behave correctly
+ *   - handleSubagentStop resolves reviewer+task and returns null (no state write)
+ *   - The injected manager's updateTask is NEVER called for any input
+ *   - Non-reviewer roles are skipped immediately (no manager call)
+ *   - All exit paths return OK (fully observational — never blocks a subagent stop)
  *
  * The StateManager + transcript reader are injected — no real run store needed.
  */
@@ -47,23 +53,13 @@ function run(tasks: Record<string, TaskState>): RunState {
 }
 
 /**
- * A fake StateManager: readCurrent returns the supplied run; updateTask applies
- * the mutator to the named task and records the call so the test can assert.
+ * A fake manager: readCurrent returns the supplied run; updateTask is a spy so
+ * tests can assert it is NEVER called (the hook is observational).
  */
 function fakeManager(initial: RunState) {
-  const calls: Array<{ runId: string; taskId: string; next: TaskState }> = [];
-  let state = initial;
   return {
-    calls,
-    manager: {
-      readCurrent: async () => state,
-      updateTask: async (runId: string, taskId: string, mutator: (t: TaskState) => TaskState) => {
-        const next = mutator(state.tasks[taskId]!);
-        calls.push({ runId, taskId, next });
-        state = { ...state, tasks: { ...state.tasks, [taskId]: next } };
-        return state;
-      },
-    },
+    readCurrent: async () => initial,
+    updateTask: vi.fn(async () => initial),
   };
 }
 
@@ -126,37 +122,34 @@ describe("taskIdFromHeader", () => {
   });
 });
 
-describe("handleSubagentStop — append ReviewerResult via StateManager", () => {
-  it("appends an approve result for a reviewer (explicit task_id)", async () => {
-    const { manager, calls } = fakeManager(run({ t1: task() }));
-    await handleSubagentStop(
+describe("handleSubagentStop — observational (NO state write)", () => {
+  it("reviewer input resolves verdict + returns null — updateTask NOT called", async () => {
+    const manager = fakeManager(run({ t1: task() }));
+    const result = await handleSubagentStop(
       input({
         agent_type: "quality-reviewer",
         last_assistant_message: "STATUS: DONE",
       }),
       { manager, explicitTaskId: "t1" },
     );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.next.reviewers).toEqual([
-      { reviewer: "quality", verdict: "approve", confirmed_blockers: 0 },
-    ]);
+    expect(result).toBeNull();
+    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
-  it("records a blocked result with ≥1 confirmed blocker (schema coherence)", async () => {
-    const { manager, calls } = fakeManager(run({ t1: task() }));
-    await handleSubagentStop(
+  it("blocked reviewer input → null, no state write", async () => {
+    const manager = fakeManager(run({ t1: task() }));
+    const result = await handleSubagentStop(
       input({ agent_type: "security-reviewer", last_assistant_message: "STATUS: BLOCKED" }),
       { manager, explicitTaskId: "t1" },
     );
-    expect(calls[0]!.next.reviewers).toEqual([
-      { reviewer: "security", verdict: "blocked", confirmed_blockers: 1 },
-    ]);
+    expect(result).toBeNull();
+    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
-  it("resolves task_id from the transcript [task:] header", async () => {
-    const { manager, calls } = fakeManager(run({ t1: task({ task_id: "t1" }) }));
+  it("resolves task_id from the transcript [task:] header — no write", async () => {
+    const manager = fakeManager(run({ t1: task({ task_id: "t1" }) }));
     const readTranscript = vi.fn(async () => "[task:t1] reviewer transcript\nSTATUS: DONE");
-    await handleSubagentStop(
+    const result = await handleSubagentStop(
       input({
         agent_type: "implementation-reviewer",
         agent_transcript_path: "/tmp/transcript.jsonl",
@@ -165,92 +158,74 @@ describe("handleSubagentStop — append ReviewerResult via StateManager", () => 
       { manager, readTranscript },
     );
     expect(readTranscript).toHaveBeenCalledWith("/tmp/transcript.jsonl");
-    expect(calls[0]!.taskId).toBe("t1");
-    expect(calls[0]!.next.reviewers[0]!.reviewer).toBe("implementation");
+    expect(result).toBeNull();
+    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
-  it("falls back to the single reviewing task when no id is given", async () => {
-    const { manager, calls } = fakeManager(
+  it("falls back to the single reviewing task — no write", async () => {
+    const manager = fakeManager(
       run({
         t1: task({ task_id: "t1", status: "reviewing" }),
         t2: task({ task_id: "t2", status: "done" }),
       }),
     );
-    await handleSubagentStop(
+    const result = await handleSubagentStop(
       input({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
       { manager },
     );
-    expect(calls[0]!.taskId).toBe("t1");
+    expect(result).toBeNull();
+    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
-  it("last-writer-wins per reviewer (re-run replaces the prior result)", async () => {
-    const { manager, calls } = fakeManager(
-      run({
-        t1: task({
-          reviewers: [{ reviewer: "quality", verdict: "blocked", confirmed_blockers: 2 }],
-        }),
-      }),
-    );
-    await handleSubagentStop(
-      input({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
-      { manager, explicitTaskId: "t1" },
-    );
-    expect(calls[0]!.next.reviewers).toEqual([
-      { reviewer: "quality", verdict: "approve", confirmed_blockers: 0 },
-    ]);
-  });
-
-  it("non-reviewer role → no write", async () => {
-    const { manager, calls } = fakeManager(run({ t1: task() }));
-    const res = await handleSubagentStop(
+  it("non-reviewer role → null, no manager call at all", async () => {
+    const manager = fakeManager(run({ t1: task() }));
+    const result = await handleSubagentStop(
       input({ agent_type: "task-executor", last_assistant_message: "STATUS: DONE" }),
       { manager, explicitTaskId: "t1" },
     );
-    expect(res).toBeNull();
-    expect(calls).toHaveLength(0);
+    expect(result).toBeNull();
+    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
-  it("unresolved task_id (ambiguous, no header) → skip write, no state loss", async () => {
-    const { manager, calls } = fakeManager(
-      run({ t1: task({ task_id: "t1" }), t2: task({ task_id: "t2" }) }),
-    );
-    const res = await handleSubagentStop(
+  it("unresolved task_id (ambiguous, no header) → null, no write", async () => {
+    const manager = fakeManager(run({ t1: task({ task_id: "t1" }), t2: task({ task_id: "t2" }) }));
+    const result = await handleSubagentStop(
       input({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
       { manager },
     );
-    expect(res).toBeNull();
-    expect(calls).toHaveLength(0);
+    expect(result).toBeNull();
+    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
-  it("resolved task_id absent from run → skip write", async () => {
-    const { manager, calls } = fakeManager(run({ t1: task() }));
-    const res = await handleSubagentStop(
+  it("resolved task_id absent from run → null, no write", async () => {
+    const manager = fakeManager(run({ t1: task() }));
+    const result = await handleSubagentStop(
       input({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
       { manager, explicitTaskId: "ghost" },
     );
-    expect(res).toBeNull();
-    expect(calls).toHaveLength(0);
+    expect(result).toBeNull();
+    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
-  it("no active run → skip write", async () => {
+  it("no active run → null, no write", async () => {
     const manager = { readCurrent: async () => null, updateTask: vi.fn() };
-    const res = await handleSubagentStop(
+    const result = await handleSubagentStop(
       input({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
       { manager, explicitTaskId: "t1" },
     );
-    expect(res).toBeNull();
+    expect(result).toBeNull();
     expect(manager.updateTask).not.toHaveBeenCalled();
   });
 });
 
-describe("runSubagentStop — exit codes (observational)", () => {
+describe("runSubagentStop — exit codes (fully observational)", () => {
   it("malformed input → OK (must not block the subagent stop)", async () => {
     const code = await runSubagentStop([], { readRaw: async () => "{bad" });
     expect(code).toBe(EXIT.OK);
   });
 
-  it("a successful append → OK", async () => {
-    const { manager } = fakeManager(run({ t1: task() }));
+  it("reviewer input → OK (log-only, no state write to fail)", async () => {
+    const manager = fakeManager(run({ t1: task() }));
     const code = await runSubagentStop([], {
       manager,
       explicitTaskId: "t1",
@@ -260,8 +235,8 @@ describe("runSubagentStop — exit codes (observational)", () => {
     expect(code).toBe(EXIT.OK);
   });
 
-  it("a skipped write (non-reviewer) → OK", async () => {
-    const { manager } = fakeManager(run({ t1: task() }));
+  it("non-reviewer role → OK", async () => {
+    const manager = fakeManager(run({ t1: task() }));
     const code = await runSubagentStop([], {
       manager,
       readRaw: async () =>
@@ -270,12 +245,12 @@ describe("runSubagentStop — exit codes (observational)", () => {
     expect(code).toBe(EXIT.OK);
   });
 
-  it("a state write failure → ERROR (orchestrator must notice lost state)", async () => {
+  it("readCurrent failure → OK (observational; log is the signal, never blocks stop)", async () => {
     const manager = {
-      readCurrent: async () => run({ t1: task() }),
-      updateTask: async () => {
+      readCurrent: async () => {
         throw new Error("disk full");
       },
+      updateTask: vi.fn(),
     };
     const code = await runSubagentStop([], {
       manager,
@@ -283,6 +258,7 @@ describe("runSubagentStop — exit codes (observational)", () => {
       readRaw: async () =>
         JSON.stringify({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
     });
-    expect(code).toBe(EXIT.ERROR);
+    expect(code).toBe(EXIT.OK);
+    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 });

@@ -81,3 +81,11 @@ export type DriveResults = z.infer<typeof DriveResultsSchema>;
 export function parseDriveResults(raw: unknown): DriveResults {
   return DriveResultsSchema.parse(raw);
 }
+
+/**
+ * Type guard: true iff `stage` is one of the three spawn-capable stages.
+ * Co-located with SPAWN_STAGES so the constant and the guard cannot drift.
+ */
+export function isSpawnStage(stage: string): stage is SpawnStage {
+  return (SPAWN_STAGES as readonly string[]).includes(stage);
+}

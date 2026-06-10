@@ -5,12 +5,17 @@
  * The new schema dropped the ~12 ad-hoc per-task fields the bash hook wrote
  * (worktree, executor_status, reviewer_status, prior_branch, …). On the new
  * design the subagent→driver hand-off is the structured StageResult/SpawnManifest
- * (group0-seams §3), so this hook's job SHRINKS to its one durable
- * responsibility: when a REVIEWER subagent stops, append its
- * {@link ReviewerResult} to the task's `reviewers[]` via
- * {@link StateManager.updateTask} (atomic + locked — never a raw fs write). The
- * derive-don't-store floor (derivePanelVerdict) is then computed from those
- * results; we never store a floor boolean.
+ * (group0-seams §3).
+ *
+ * This hook is now LOG-ONLY (observational). When a REVIEWER subagent stops it
+ * parses the verdict and logs it loudly, but does NOT write to task.reviewers[].
+ * The driver delivers panel results through the `factory drive` fold
+ * ({@link applyRecordReviews} in src/driver/fold.ts) — that is the single
+ * sanctioned writer of task.reviewers[]. A hook-side write would create a second
+ * writer that can poison crash-resume replay: if the hook writes reviewers[] after
+ * the panel but before record-reviews folds, a subsequent resume hits the verify
+ * handler's derive branch ({@link src/driver/handlers.ts} verify) with no holdout
+ * evidence and no verify-then-fix → false advance to ship.
  *
  * Reviewer subagent role → ReviewerResult.reviewer name:
  *   implementation-reviewer → "implementation"; quality-reviewer → "quality";
@@ -19,7 +24,7 @@
  *
  * The reviewer's verdict is parsed from the last assistant message's STATUS line
  * (DONE → approve; BLOCKED / anything else → blocked). A missing/unresolved
- * task_id is LOGGED LOUDLY and SKIPS the write (no silent state loss).
+ * task_id is LOGGED LOUDLY (no silent state loss).
  *
  * CONSOLIDATION (A2 — supersedes `hooks/subagent-stop-gate.sh`): the bash gate's
  * PRODUCER validation (STATUS-line enforcement, zero-commits block, persisted
@@ -31,15 +36,14 @@
  * a classified loud drop. The reviewer STATUS check survives here as
  * {@link parseVerdict} (absent STATUS ⇒ blocked, never a silent approve). The
  * warn-only artifact checks (missing spec.md/tasks.json/review files) move to the
- * WS12 telemetry sink. Net: one SubagentStop hook (this file) with one durable
+ * WS12 telemetry sink. Net: one SubagentStop hook (this file) with one observational
  * job, instead of two bash hooks duplicating the stage machine.
  */
 import { EXIT, type ExitCode } from "../cli/exit-codes.js";
 import { createLogger } from "../shared/logging.js";
-import { StateManager } from "../core/state/index.js";
-import { PanelVerdictEnum } from "../core/state/index.js";
+import { StateManager, PanelVerdictEnum } from "../core/state/index.js";
 import type { DataDirOptions } from "../config/load.js";
-import type { PanelVerdict, ReviewerResult, RunState, TaskState } from "../types/index.js";
+import type { PanelVerdict } from "../types/index.js";
 import { parseHookInput, type HookInput } from "./hook-io.js";
 
 const log = createLogger("hook:subagent-stop");
@@ -86,8 +90,8 @@ export function taskIdFromHeader(transcriptText: string | undefined): string | n
 
 /** Options for {@link runSubagentStop} (injectable). */
 export interface SubagentStopDeps extends DataDirOptions {
-  /** Override the StateManager (tests). */
-  manager?: Pick<StateManager, "readCurrent" | "updateTask">;
+  /** Override the StateManager (tests — read-only path only). */
+  manager?: Pick<StateManager, "readCurrent">;
   /** Read the transcript file at a path (tests inject; prod reads fs). */
   readTranscript?: (path: string) => Promise<string>;
   /** Explicit task id (e.g. from FACTORY_TASK_ID); else parsed from header. */
@@ -95,33 +99,26 @@ export interface SubagentStopDeps extends DataDirOptions {
 }
 
 /**
- * Append a reviewer's result to the task's reviewers[] (replacing any prior
- * result from the same reviewer — last-writer-wins per reviewer, idempotent
- * under re-runs). The verdict/blocker coherence required by the schema
- * (approve ⇒ 0 blockers; blocked ⇒ ≥1) is satisfied here.
- */
-function appendReviewer(task: TaskState, result: ReviewerResult): TaskState {
-  const others = task.reviewers.filter((r) => r.reviewer !== result.reviewer);
-  return { ...task, reviewers: [...others, result] };
-}
-
-/**
- * Core handler: given parsed input, resolve the reviewer + task and write the
- * ReviewerResult through StateManager. Returns the updated RunState, or null when
- * the subagent is not a reviewer / no active run / task_id unresolved (logged).
+ * Core handler: given parsed input, resolve the reviewer + task and LOG the parsed
+ * verdict loudly. Returns null (observational — no state write).
+ *
+ * The driver delivers panel results through the `factory drive` fold
+ * (applyRecordReviews) — that is the single sanctioned writer of task.reviewers[].
+ * A hook-side write here would poison crash-resume replay via the verify handler's
+ * derive branch.
  */
 export async function handleSubagentStop(
   input: HookInput | null,
   deps: SubagentStopDeps = {},
-): Promise<RunState | null> {
+): Promise<null> {
   if (!input) return null;
   const agentType =
     (input.agent_type as string | undefined) ?? (input.subagent_type as string | undefined) ?? "";
   if (agentType.length === 0) return null;
 
   const reviewer = reviewerNameOf(agentType);
-  // Only reviewer roles produce a persisted artifact in the new design. Other
-  // roles' hand-off is the structured StageResult — nothing to write here.
+  // Only reviewer roles carry a verdict to log; other roles' hand-off is the
+  // structured StageResult — nothing observable here.
   if (reviewer === null) return null;
 
   const manager = deps.manager ?? new StateManager(deps);
@@ -156,10 +153,9 @@ export async function handleSubagentStop(
   }
 
   if (taskId.length === 0) {
-    // FAIL-LOUD: no silent state loss. Log and skip the write.
     log.error(
       `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); ` +
-        `reviewer result NOT persisted — no silent state loss`,
+        `verdict NOT persisted — driver fold is the single writer`,
     );
     return null;
   }
@@ -172,24 +168,19 @@ export async function handleSubagentStop(
   }
 
   const verdict = parseVerdict(input.last_assistant_message);
-  const result: ReviewerResult = {
-    reviewer,
-    verdict,
-    // Schema coherence: approve ⇒ 0; blocked ⇒ ≥1. We do not have a verified
-    // count from the transcript here, so a blocked verdict records the minimum 1.
-    confirmed_blockers: verdict === PanelVerdictEnum.enum.blocked ? 1 : 0,
-  };
-
-  // ALL writes route through StateManager (atomic + locked), never raw fs.
-  return manager.updateTask(run.run_id, taskId, (task) => appendReviewer(task, result));
+  // Observational log only — no state write. The driver fold (record-reviews) is
+  // the single writer of task.reviewers[].
+  log.info(
+    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational — driver folds reviews via record-reviews)`,
+  );
+  return null;
 }
 
 /**
- * Run the SubagentStop hook end-to-end. Reads stdin, handles, returns OK. A
- * SubagentStop hook is observational — it returns OK even on a skipped write
- * (the loud log is the signal), and OK on malformed input AFTER logging (it must
- * not block the subagent from stopping). The one hard failure is a state write
- * error, which propagates as ERROR so the orchestrator notices lost state.
+ * Run the SubagentStop hook end-to-end. Reads stdin, handles, returns OK. The
+ * hook is fully observational — it never writes state, so it always returns OK
+ * (even on a skipped log or malformed input, which is already logged). It must
+ * never block the subagent from stopping.
  */
 export async function runSubagentStop(
   _argv: string[] = [],
@@ -201,15 +192,16 @@ export async function runSubagentStop(
     input = parseHookInput(raw);
   } catch (err) {
     log.error(`malformed SubagentStop input: ${(err as Error).message}`);
-    return EXIT.OK; // observational hook: do not block the stop.
+    return EXIT.OK;
   }
   try {
     await handleSubagentStop(input, deps);
-    return EXIT.OK;
   } catch (err) {
-    log.error(`SubagentStop state write failed: ${(err as Error).message}`);
-    return EXIT.ERROR;
+    // Any error from the observational handler (e.g. state-read failure) is logged
+    // and swallowed — the hook must never block the subagent from stopping.
+    log.error(`SubagentStop handler error: ${(err as Error).message}`);
   }
+  return EXIT.OK;
 }
 
 /** Read all of process.stdin as utf-8. */

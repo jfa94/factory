@@ -13,7 +13,11 @@
  *   - WITH results: at-least-once delivery, exactly-once application. The
  *     fold_key echoed from the spawn envelope is validated against the current
  *     cursor stage and escalation_rung before any mutation; stale or duplicate
- *     result delivery is rejected LOUD (never double-folded).
+ *     result delivery is rejected LOUD (never double-folded). Caveat: the
+ *     fold_key is (stage, rung) not a nonce — a rescue cycle can reissue an
+ *     identical key, so exactly-once holds under the realistic crash model (the
+ *     driver replays only the last unacknowledged delivery), not against
+ *     arbitrarily delayed redelivery.
  *
  * This is loop.ts's driveTask with the spawn boundary inverted: where the loop
  * awaited injected DriverRunners, the pump returns the manifest to the caller.
@@ -54,6 +58,7 @@ import { taskWorktreePath } from "./paths.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
 import { resolveReviewModel } from "../verifier/judgment/index.js";
 import { buildHoldoutPrompt, FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
+import { isSpawnStage } from "./results.js";
 import type { DriveResults, FoldKey, SpawnStage } from "./results.js";
 import type { HandlerDeps } from "./types.js";
 
@@ -145,7 +150,7 @@ function terminalOutcome(task: TaskState): TaskOutcome {
  * documents the invariant explicitly.
  */
 function asSpawnStage(stage: TaskStage): SpawnStage {
-  if (stage === "tests" || stage === "exec" || stage === "verify") {
+  if (isSpawnStage(stage)) {
     return stage;
   }
   throw new Error(
@@ -185,10 +190,10 @@ async function foldResults(
 ): Promise<TaskStep> {
   // Validate fold_key BEFORE any mutation: stale or duplicate results reject LOUD.
   const { fold_key } = results;
-  const spawnStage = stage === "tests" || stage === "exec" || stage === "verify" ? stage : null;
-  if (spawnStage === null) {
+  if (!isSpawnStage(stage)) {
     throw new Error(`drive: results given but stage '${stage}' spawns no agents`);
   }
+  const spawnStage = stage;
   if (fold_key.stage !== spawnStage || fold_key.rung !== task.escalation_rung) {
     throw new Error(
       `drive: stale or duplicate results (fold_key ${fold_key.stage}/${fold_key.rung} vs cursor ${spawnStage}/${task.escalation_rung}) — re-invoke without results to get the current envelope`,
@@ -209,9 +214,18 @@ async function foldResults(
     );
     return env.step;
   }
-  // stage === "verify" (checked above via spawnStage)
+  // stage === "verify" (checked above via isSpawnStage)
   if (results.reviews === undefined) {
     throw new Error("drive: stage 'verify' expects reviews results");
+  }
+  // Holdout-required guard: if a withheld answer key exists but no holdout results
+  // were delivered, reject LOUD. Silently reusing the previous rung's verdict would
+  // bypass the holdout floor for the current escalation cycle.
+  if ((await deps.holdout.has(runId, taskId)) && results.holdout === undefined) {
+    throw new Error(
+      `drive: task '${taskId}' has a withheld holdout answer key — verify results must ` +
+        `include the holdout-validate raw output (results.holdout is missing)`,
+    );
   }
   const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
   // Holdout BEFORE reviews — the fold ordering the old skill enforced by prose.
@@ -232,7 +246,17 @@ export async function pumpTask(
   taskId: string,
   results?: DriveResults,
 ): Promise<DriveEnvelope> {
-  // 1. Quota gate first — a breach persists the checkpoint and stops cleanly.
+  // 1. Read state + terminal check BEFORE the quota gate — a terminal task needs no
+  //    agent spend and must not write a pause checkpoint (quota gate is a state write).
+  let run = await deps.state.read(runId);
+  let task = requireTask(run, taskId);
+
+  if (isTerminalTaskStatus(task.status)) {
+    return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
+  }
+
+  // 2. Quota gate — a breach persists the checkpoint and stops cleanly. Only reached
+  //    for non-terminal tasks so the checkpoint is always meaningful.
   const stop = await applyQuotaGate(deps, runId);
   if (stop !== null) {
     return {
@@ -245,18 +269,9 @@ export async function pumpTask(
     };
   }
 
-  // 2. Resume at the persisted cursor.
-  let run = await deps.state.read(runId);
-  let task = requireTask(run, taskId);
-
-  // 3. Terminal check BEFORE any further work — a terminal answer needs no agent spend.
-  if (isTerminalTaskStatus(task.status)) {
-    return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
-  }
-
   let stage: TaskStage = task.stage ?? "preflight";
 
-  // 4. Fold the previous spawn's results (validated against the cursor's stage + rung).
+  // 3. Fold the previous spawn's results (validated against the cursor's stage + rung).
   if (results !== undefined) {
     const step = await foldResults(deps, runId, taskId, stage, task, results);
     if (step.done) {
@@ -265,7 +280,7 @@ export async function pumpTask(
     stage = step.stage;
   }
 
-  // 5. The deterministic pump loop (loop.ts act() semantics, spawn inverted).
+  // 4. The deterministic pump loop (loop.ts act() semantics, spawn inverted).
   const handlers = makeStageHandlers(deps);
   for (;;) {
     await markInFlight(deps, runId, taskId, stage);

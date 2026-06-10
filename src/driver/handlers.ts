@@ -61,6 +61,7 @@ import {
 } from "./deps.js";
 import type { HandlerDeps } from "./types.js";
 import { taskWorktreePath } from "./paths.js";
+import { FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
 
 /**
  * A producer role the tests/exec reporters spawn. Mirrors the WS8
@@ -243,6 +244,28 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
             deps.config.review.maxTurnsDeep,
           ),
         );
+      }
+
+      // Fail-closed crash-resume guard: deriving from persisted reviewers without
+      // holdout evidence would skip the holdout floor for the current escalation
+      // cycle. If a holdout is expected but no verdict is recorded for this rung,
+      // re-spawn the panel instead of advancing. This branch is structurally
+      // unreachable via sanctioned writes (applyRecordReviews clears reviewers on
+      // retry), but a rogue hook write can reach it — fail-closed re-spawn prevents
+      // a false advance to ship.
+      const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id);
+      if (holdoutExpected) {
+        const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
+        const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id);
+        if (!hasVerdicts) {
+          return spawn(
+            buildPanelManifest(
+              "verify",
+              resolveReviewModel(deps.config),
+              deps.config.review.maxTurnsDeep,
+            ),
+          );
+        }
       }
 
       const floor = deriveFloorVerdict({ reviewers: task.reviewers }, gate.evidence);

@@ -699,6 +699,99 @@ describe("pumpTask", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Fix 2: terminal check precedes quota gate
+// ---------------------------------------------------------------------------
+
+describe("terminal-before-quota ordering", () => {
+  it("terminal task + quota-breach → returns terminal envelope (no pause checkpoint)", async () => {
+    // PAUSE_5H would normally trigger quota-blocked; terminal status must short-circuit first.
+    const { deps, runId, state, cleanup } = await makePumpDeps({ usage: PAUSE_5H });
+    try {
+      // Seed the task as done (terminal).
+      await state.update(runId, (s) => ({
+        ...s,
+        tasks: { T1: { ...s.tasks["T1"]!, status: "done" } },
+      }));
+      const env = await pumpTask(deps, runId, "T1");
+      // Must be terminal, NOT quota-blocked.
+      expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
+      // No pause checkpoint was written (quota gate never ran).
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T1"]?.stage).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 1b: handlers.verify fail-closed re-spawn when holdout expected but no verdict
+// ---------------------------------------------------------------------------
+
+describe("handlers.verify fail-closed re-spawn (crash-resume guard)", () => {
+  it("task at verify with pre-persisted reviewers + holdout expected + no verdict → re-spawns panel", async () => {
+    // Simulate a rogue hook write: task arrives at pump with reviewers[] already populated
+    // and stage=verify, but no holdout verdict has been recorded yet.
+    // Expected: the verify handler detects missing holdout evidence and re-spawns the panel
+    // (fail-closed), NOT derives from the persisted reviewers and advances to ship.
+    const { deps, runId, state, holdout, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c"] }],
+      taskStateOverrides: {
+        task_id: "T1",
+        stage: "verify" as const,
+        status: "reviewing",
+        // Pre-populate reviewers as if a rogue hook wrote them.
+        reviewers: PANEL_ROLES.map((role) => ({
+          reviewer: role,
+          verdict: "approve" as const,
+          confirmed_blockers: 0,
+        })),
+      },
+    });
+    try {
+      // Seed a holdout answer key (so holdout.has returns true) but do NOT write verdicts.
+      await holdout.put(runId, makeHoldoutRecord("T1", ["c"], 3));
+      // No verdict store entry — simulates the crash-between-hook-write-and-fold scenario.
+
+      const env = await pumpTask(deps, runId, "T1");
+      // Must re-spawn the verify panel, NOT advance to ship.
+      expect(env.kind).toBe("spawn");
+      if (env.kind !== "spawn") throw new Error("expected spawn envelope for fail-closed re-spawn");
+      expect(env.stage).toBe("verify");
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 3: foldResults requires holdout results when answer key is withheld
+// ---------------------------------------------------------------------------
+
+describe("foldResults holdout-required guard", () => {
+  it("holdout-bearing task at verify with reviews but no holdout → rejects with /holdout/", async () => {
+    // 5 criteria at holdoutPercent=20% → holdoutCount(5,20)=1 — guarantees a withheld key.
+    const { deps, runId, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
+    });
+    try {
+      await driveToVerify(deps, runId, "T1");
+      const panelEnv = await pumpTask(deps, runId, "T1");
+      expect(panelEnv.kind).toBe("spawn");
+      if (panelEnv.kind !== "spawn") throw new Error("expected panel spawn");
+      expect(panelEnv.sidecar?.kind).toBe("holdout-validate"); // sanity: holdout was withheld
+
+      // Deliver reviews WITHOUT the holdout field (no withheld arg → no holdout in results).
+      const resultsWithoutHoldout = approvingReviewsResults(panelEnv);
+      // The holdout store has an entry (tests stage persisted it) but results.holdout is absent.
+      await expect(pumpTask(deps, runId, "T1", resultsWithoutHoldout)).rejects.toThrow(/holdout/);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // fold_key schema rejection (schema-level, not pump-level)
 // ---------------------------------------------------------------------------
 
