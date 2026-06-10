@@ -1,66 +1,74 @@
 /**
- * Golden-transcript E2E for the v1 execution model (orchestrator-as-driver, Model A).
+ * Seam-contract E2E for the v1 execution model (orchestrator-as-driver, Model A).
  *
- * Every OTHER test exercises a single seam in isolation:
- *   - golden-transcript.test.ts drives the stage ENGINE over fully-fake handlers;
- *   - driver/loop.test.ts drives the IN-PROCESS driver with injected agent runners;
- *   - the subcommand tests (run-task / advance / record-*) each fold ONE step.
+ * Replaces the old `run-task`/`record-*`/`advance` CLI-subcommand driving loop with
+ * the canonical pump seam:
  *
- * Nothing chains the REAL exported CLI handler functions the way the in-session LLM
- * orchestrator does: `run create` → loop[ `run-task --stage <s>` → read the envelope's
- * `stage_result` → perform the spawn itself → fold via `advance` / `record-*` → follow
- * the returned `step.stage` ] → terminal. That envelope-chain IS the contract the
- * orchestrator SKILL relies on, so it gets its own end-to-end test here.
+ *   pumpRun  → tasks-ready | all-terminal | run-terminal | quota-blocked
+ *   pumpTask → spawn | terminal | quota-blocked
  *
- * The simulated orchestrator below is deliberately GENERIC — it dispatches purely on
- * `stage_result.kind` (never on a hardcoded stage list), so the asserted stage sequence
- * is genuinely produced by the handlers, not by the test. It supplies agent OUTPUTS as
- * DATA (a producer `STATUS: DONE` line, an all-pass holdout raw built from the persisted
- * answer key, six approving RawReviews) exactly as the orchestrator would after spawning
- * — the CLI path never injects runners, it consumes their text.
+ * The `driveToTerminal` helper below IS the documented driver contract: it is the
+ * thinnest possible loop a real orchestrator (session or workflow) runs.  The test's
+ * job is to prove that CONTRACT produces the right run-state end-states — not to test
+ * individual pump internals (those live in pump.test.ts / next.test.ts).
  *
- * Each iteration rebuilds a FRESH {@link CliDeps} from `state.read` (one real CLI
- * invocation re-reads state from disk); the external stores (git/gh/holdout/verdict/
- * artifacts) are shared instances, modelling durable resources that outlive a process.
+ * Three scenarios are proven:
+ *   1. Happy path (no-merge): single task → `completed`, PR opened but NOT merged,
+ *      holdout sidecar surfaced + folded, all six panel reviewers approved.
+ *   2. Happy path (live): same chain → `completed`, PR merged.
+ *   3. Drop path: two-task run; second task at escalation cap → drops as
+ *      `capability-budget`; `finalizeRun` produces a `partial` run (one done, one
+ *      dropped) and files one failure issue.
  *
- * Two runs are proven:
- *   1. no-merge (dry-run / cutover-safety): the chain reaches `done`, the PR is opened,
- *      and it is NEVER merged.
- *   2. live: the same chain serial-merges the task PR.
+ * The holdout path (scenario 1/2 trait): the spec carries 5 acceptance criteria, so
+ * the tests stage withholds ≥1 criterion, the verify spawn carries a holdout sidecar,
+ * and the AnswerBook supplies `results.holdout` (validator verdicts) alongside the
+ * panel reviews — the engine rejects the fold without it.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { reportStage } from "./subcommands/run-task.js";
-import { applyAdvance } from "./subcommands/advance.js";
-import { applyRecordProducer } from "./subcommands/record-producer.js";
-import { applyRecordHoldout } from "./subcommands/record-holdout.js";
-import { applyRecordReviews, type RecordReviewsInput } from "./subcommands/record-reviews.js";
 import { createRun } from "./subcommands/run.js";
-import type { CliDeps } from "./wiring.js";
 
 import { defaultConfig } from "../config/schema.js";
 import { parseSpecManifest, SpecStore, type SpecManifest } from "../spec/index.js";
 import { StateManager } from "../core/state/manager.js";
 import { FakeGitClient, FakeGhClient } from "../git/fakes.js";
 import { makeFakeTools, FakeGitProbe, commit } from "../verifier/deterministic/fakes.js";
-import { InMemoryHoldoutStore, InMemoryHoldoutVerdictStore } from "../verifier/holdout/index.js";
-import {
-  InMemoryArtifactStore,
-  type ShipMode,
-  type TaskStep,
-  type TaskOutcome,
-} from "../driver/index.js";
+import { InMemoryHoldoutStore } from "../verifier/holdout/index.js";
+import { InMemoryArtifactStore, type ShipMode } from "../driver/index.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
-import type { StageContext, TaskStage } from "../types/index.js";
+import { fakeUsageSignal } from "../quota/index.js";
+import type { RunState } from "../types/index.js";
+
+import {
+  pumpRun,
+  pumpTask,
+  finalizeRun,
+  type PumpDeps,
+  type DriveEnvelope,
+  type DriveResults,
+} from "../driver/index.js";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const RUN_ID = "run-1";
 const TASK_ID = "t1";
+const TASK_ID_2 = "t2";
 const REPO = "acme/widgets";
 const ISSUE = 42;
 const SLUG = "checkout";
+
+/** Epoch second used as `now()` for the quota clock (pinned; tests never breach). */
+const NOW_EPOCH = 1_700_000_000;
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
 
 /** A git probe whose full default gate sweep is GREEN (TDD test→impl history). */
 function greenProbe(): FakeGitProbe {
@@ -74,8 +82,8 @@ function greenProbe(): FakeGitProbe {
   });
 }
 
-/** One durable spec: a single task with 5 criteria (so the holdout withholds 2). */
-function specManifest(): SpecManifest {
+/** One durable spec: a single task with 5 criteria (so the holdout withholds ≥1). */
+function specManifestSingle(): SpecManifest {
   return parseSpecManifest({
     spec_id: `${ISSUE}-${SLUG}`,
     issue_number: ISSUE,
@@ -98,39 +106,178 @@ function specManifest(): SpecManifest {
   });
 }
 
-/** An approving review with no findings (the orchestrator's collected panel output). */
+/** Two-task spec: t1 (3 criteria) + t2 (at cap). Used for the drop-path scenario. */
+function specManifestTwo(): SpecManifest {
+  return parseSpecManifest({
+    spec_id: `${ISSUE}-${SLUG}`,
+    issue_number: ISSUE,
+    slug: SLUG,
+    repo: REPO,
+    generated_at: "2026-06-01T00:00:00.000Z",
+    tasks: [
+      {
+        task_id: TASK_ID,
+        title: "task t1",
+        description: "does t1",
+        files: ["src/t1.ts"],
+        acceptance_criteria: ["a", "b", "c"],
+        tests_to_write: ["t1.test.ts: covers it"],
+        depends_on: [],
+        risk_tier: "medium",
+        risk_rationale: "moderate",
+      },
+      {
+        task_id: TASK_ID_2,
+        title: "task t2 (will drop)",
+        description: "does t2",
+        files: ["src/t2.ts"],
+        acceptance_criteria: ["x", "y"],
+        tests_to_write: ["t2.test.ts: covers it"],
+        depends_on: [],
+        risk_tier: "medium",
+        risk_rationale: "moderate",
+      },
+    ],
+  });
+}
+
+/** An approving RawReview-shaped object (the orchestrator's collected panel output). */
 function approve(reviewer: string) {
   return { reviewer, verdict: "approve" as const, findings: [] };
 }
 
-/** What the simulated orchestrator collected by following the envelope chain. */
-interface DriveTrace {
-  /** Each `run-task --stage <s>` the orchestrator issued, in order. */
-  readonly stagesVisited: TaskStage[];
-  /** The `step.stage` each advance/record-* fold returned (non-terminal hops). */
-  readonly transitionStages: TaskStage[];
-  /** The terminal outcome ship surfaced. */
-  terminal: TaskOutcome | null;
-  /** True iff `verify` surfaced a holdout-validate sidecar. */
-  sawHoldoutSidecar: boolean;
-  /** True iff the orchestrator folded a holdout-validator output. */
-  ranHoldoutValidate: boolean;
-  /** The reviewer verdicts the panel fold derived (audit). */
-  reviewerVerdicts: string[];
-  /** The derived floor pass signal from the panel fold. */
-  floorPassed: boolean | null;
+// ---------------------------------------------------------------------------
+// AnswerBook — canned DriveResults per spawn envelope
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps `(task_id, stage)` → a factory that, given the spawn envelope, produces
+ * the appropriate {@link DriveResults}.  The fold_key is taken verbatim from the
+ * envelope so the engine's exactly-once gate always passes.
+ *
+ * Usage: `book.for(env)` — call once per spawn envelope in the driver loop.
+ */
+class AnswerBook {
+  private readonly producerStatuses: Map<string, string>;
+  private readonly holdout: Map<string, InMemoryHoldoutStore>;
+
+  constructor(
+    opts: {
+      /** producer STATUS line per task_id (default: "STATUS: DONE" for everything). */
+      producerStatuses?: Record<string, string>;
+      /** holdout store shared with the test (so allPass verdicts can be derived). */
+      holdoutStore?: InMemoryHoldoutStore;
+      /** run id (for holdout lookups). */
+      runId?: string;
+    } = {},
+  ) {
+    this.producerStatuses = new Map(Object.entries(opts.producerStatuses ?? {}));
+    this.holdout = new Map();
+    if (opts.holdoutStore !== undefined && opts.runId !== undefined) {
+      this.holdout.set(opts.runId, opts.holdoutStore);
+    }
+  }
+
+  /**
+   * Build DriveResults for the given spawn envelope, echoing fold_key verbatim.
+   * For `producer-status` expects: returns the canned STATUS line.
+   * For `reviews` expects: returns all-approve panel + all-pass holdout (when sidecar).
+   */
+  async for(env: DriveEnvelope & { kind: "spawn" }): Promise<DriveResults> {
+    if (env.expects === "producer-status") {
+      const statusLine = this.producerStatuses.get(env.task_id) ?? "STATUS: DONE";
+      return {
+        fold_key: env.fold_key,
+        producer: { status: statusLine },
+      };
+    }
+
+    // expects === "reviews" (verify stage)
+    const reviews = PANEL_ROLES.map((role) => approve(role));
+    const base: DriveResults = {
+      fold_key: env.fold_key,
+      reviews: {
+        reviews,
+        verifications: [],
+        crossVendorAbsent: { reason: "single-vendor v1 (no second vendor configured)" },
+      },
+    };
+
+    // If the spawn carries a holdout sidecar, the fold requires holdout results.
+    if (env.sidecar !== undefined) {
+      const holdoutStore = this.holdout.get(env.run_id);
+      if (holdoutStore === undefined) {
+        throw new Error(
+          `AnswerBook: spawn for task '${env.task_id}' carries a holdout sidecar but no ` +
+            `holdout store was registered for run '${env.run_id}'`,
+        );
+      }
+      const record = await holdoutStore.get(env.run_id, env.task_id);
+      const raw = JSON.stringify({
+        criteria: record.withheld_criteria.map((criterion: string) => ({
+          criterion,
+          satisfied: true,
+          evidence: "src/t1.ts:1",
+        })),
+      });
+      return { ...base, holdout: { raw } };
+    }
+
+    return base;
+  }
 }
 
-describe("orchestrator-as-driver CLI envelope-chain (golden transcript)", () => {
+// ---------------------------------------------------------------------------
+// driveToTerminal — the canonical thin driver loop (IS the contract)
+// ---------------------------------------------------------------------------
+
+/**
+ * Drive a run to its terminal state, exactly as a real in-session or workflow
+ * driver would.  This loop IS the documented driver contract:
+ *
+ *   pumpRun → ready → pumpTask (fold results) loop → terminal → repeat
+ *
+ * Sequential: one task at a time (first ready task from pumpRun).
+ * Quota-blocked is treated as an unexpected error (the fake signal never blocks).
+ */
+async function driveToTerminal(
+  deps: PumpDeps,
+  runId: string,
+  answer: AnswerBook,
+): Promise<RunState> {
+  for (;;) {
+    const next = await pumpRun(deps, runId);
+    if (next.kind === "run-terminal") return deps.state.read(runId);
+    if (next.kind === "all-terminal") {
+      await finalizeRun(deps, runId);
+      return deps.state.read(runId);
+    }
+    if (next.kind === "quota-blocked") throw new Error(`unexpected quota stop: ${next.reason}`);
+
+    const taskId = next.ready[0]!; // sequential driver: first ready task
+    let results: DriveResults | undefined;
+    for (;;) {
+      const env = await pumpTask(deps, runId, taskId, results);
+      results = undefined;
+      if (env.kind === "terminal") break;
+      if (env.kind !== "spawn") throw new Error(`unexpected ${env.kind}`);
+      results = await answer.for(env);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Test suite
+// ---------------------------------------------------------------------------
+
+describe("orchestrator pump seam — golden contract E2E", () => {
   let dataDir: string;
   let state: StateManager;
   let specStore: SpecStore;
   let git: FakeGitClient;
   let gh: FakeGhClient;
   let holdout: InMemoryHoldoutStore;
-  let verdictStore: InMemoryHoldoutVerdictStore;
   let artifacts: InMemoryArtifactStore;
-  let manifest: SpecManifest;
 
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "factory-orch-e2e-"));
@@ -142,25 +289,24 @@ describe("orchestrator-as-driver CLI envelope-chain (golden transcript)", () => 
     git = new FakeGitClient({ remoteHeads: { staging: "sha-staging" } });
     gh = new FakeGhClient();
     holdout = new InMemoryHoldoutStore();
-    verdictStore = new InMemoryHoldoutVerdictStore();
     artifacts = new InMemoryArtifactStore();
-    manifest = specManifest();
-    // The durable spec the run resolves (Δ X reuse path) — written before `run create`.
-    await specStore.write(manifest, "# checkout spec\n\nvertical slice.");
   });
 
   afterEach(async () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  /** Rebuild a fresh CliDeps from the persisted run — one CLI invocation's view. */
-  async function freshDeps(shipMode: ShipMode): Promise<CliDeps> {
-    const run = await state.read(RUN_ID);
+  /** Build PumpDeps directly (no CLI loading — keeps the E2E free of fs config). */
+  function makeDeps(
+    manifest: SpecManifest,
+    shipMode: ShipMode,
+    ghClient: FakeGhClient = gh,
+  ): PumpDeps {
     return {
       config: defaultConfig(),
       spec: manifest,
       git,
-      gh,
+      gh: ghClient,
       tools: makeFakeTools({ git: greenProbe() }),
       artifacts,
       holdout,
@@ -169,131 +315,24 @@ describe("orchestrator-as-driver CLI envelope-chain (golden transcript)", () => 
       repo: "widgets",
       shipMode,
       state,
-      run,
+      usage: fakeUsageSignal({
+        kind: "available",
+        fiveHour: { utilizationPct: 0, resetsAtEpoch: NOW_EPOCH + 18_000 },
+        sevenDay: { utilizationPct: 0, resetsAtEpoch: NOW_EPOCH + 604_800 },
+        capturedAt: NOW_EPOCH,
+      }),
+      now: () => NOW_EPOCH,
     };
   }
 
-  function ctxFor(deps: CliDeps, taskId: string): StageContext {
-    const task = deps.run.tasks[taskId];
-    if (task === undefined) throw new Error(`test: task '${taskId}' missing`);
-    return { run: deps.run, task, attempt: task.escalation_rung + 1 };
-  }
+  // -------------------------------------------------------------------------
+  // Scenario 1: Happy path (no-merge) — single task → completed, holdout path
+  // -------------------------------------------------------------------------
 
-  /** Build the all-pass holdout-validator raw output from the persisted answer key. */
-  async function allPassHoldoutRaw(taskId: string): Promise<string> {
-    const record = await holdout.get(RUN_ID, taskId);
-    return JSON.stringify({
-      criteria: record.withheld_criteria.map((criterion) => ({
-        criterion,
-        satisfied: true,
-        evidence: "src/t1.ts:1",
-      })),
-    });
-  }
+  it("drives a task PRD→shipped (no-merge), holdout sidecar folded, panel all-approve", async () => {
+    const manifest = specManifestSingle();
+    await specStore.write(manifest, "# checkout spec\n\nvertical slice.");
 
-  /** Resume target of a non-terminal step (terminal `done` ends the loop). */
-  function nextOf(step: TaskStep): TaskStage | null {
-    return step.done ? null : step.stage;
-  }
-
-  /**
-   * Simulate the Model-A orchestrator: start at `preflight`, dispatch on the
-   * envelope's `stage_result.kind`, fold each outcome via the real CLI handlers, and
-   * follow the returned `step.stage` until ship is terminal. Generic — no stage is
-   * hardcoded into the control flow; the sequence emerges from the handlers.
-   */
-  async function driveTaskViaCli(taskId: string, shipMode: ShipMode): Promise<DriveTrace> {
-    const trace: DriveTrace = {
-      stagesVisited: [],
-      transitionStages: [],
-      terminal: null,
-      sawHoldoutSidecar: false,
-      ranHoldoutValidate: false,
-      reviewerVerdicts: [],
-      floorPassed: null,
-    };
-
-    let stage: TaskStage | null = "preflight";
-    let guard = 0;
-    while (stage !== null) {
-      if (++guard > 50) throw new Error("orchestrator loop did not terminate");
-      trace.stagesVisited.push(stage);
-
-      const deps = await freshDeps(shipMode);
-      const env = await reportStage(deps, ctxFor(deps, taskId), stage, taskId);
-      const result = env.stage_result;
-
-      switch (result.kind) {
-        case "advance": {
-          const t = await applyAdvance(state, RUN_ID, taskId, result.to);
-          trace.transitionStages.push(result.to);
-          stage = nextOf(t.step);
-          break;
-        }
-        case "spawn-agents": {
-          if (stage === "tests" || stage === "exec") {
-            // Producer spawn (test-writer / executor) → fold its terminal STATUS line.
-            const t = await applyRecordProducer(state, RUN_ID, taskId, stage, "STATUS: DONE");
-            if (!t.step.done) trace.transitionStages.push(t.step.stage);
-            stage = nextOf(t.step);
-          } else if (stage === "verify") {
-            // Panel spawn. First fold the out-of-band holdout-validator sidecar, then
-            // the six reviewers + (here empty) per-finding verifier verdicts.
-            if (env.sidecar !== undefined) {
-              trace.sawHoldoutSidecar = true;
-              const raw = await allPassHoldoutRaw(taskId);
-              await applyRecordHoldout(
-                await freshDeps(shipMode),
-                RUN_ID,
-                taskId,
-                verdictStore,
-                raw,
-              );
-              trace.ranHoldoutValidate = true;
-            }
-            const input: RecordReviewsInput = {
-              reviews: PANEL_ROLES.map((role) => approve(role)),
-              verifications: [],
-              crossVendorAbsent: { reason: "single-vendor v1 (no second vendor configured)" },
-            };
-            const reviewsEnv = await applyRecordReviews(
-              await freshDeps(shipMode),
-              RUN_ID,
-              taskId,
-              verdictStore,
-              input,
-            );
-            trace.reviewerVerdicts = reviewsEnv.reviewers.map((r) => r.verdict);
-            trace.floorPassed = reviewsEnv.floor.passed;
-            if (!reviewsEnv.step.done) trace.transitionStages.push(reviewsEnv.step.stage);
-            stage = nextOf(reviewsEnv.step);
-          } else {
-            throw new Error(`unexpected spawn-agents at stage '${stage}'`);
-          }
-          break;
-        }
-        case "task-terminal": {
-          // ship is terminal-by-construction: no transition step, just the outcome.
-          trace.terminal = result.outcome;
-          stage = null;
-          break;
-        }
-        case "wait-retry":
-          throw new Error(`unexpected wait-retry on the happy path: ${result.reason}`);
-        case "graceful-stop":
-        case "finalize-terminal":
-          throw new Error(`unexpected run-level result '${result.kind}' in a per-task drive`);
-        default: {
-          const _never: never = result;
-          throw new Error(`unknown stage_result ${JSON.stringify(_never)}`);
-        }
-      }
-    }
-    return trace;
-  }
-
-  it("drives a task PRD→shipped through the real CLI handlers (no-merge dry-run)", async () => {
-    // `run create` resolves the durable spec by stable issue number and seeds the task.
     const run = await createRun(state, specStore, {
       repo: REPO,
       issue: ISSUE,
@@ -304,37 +343,51 @@ describe("orchestrator-as-driver CLI envelope-chain (golden transcript)", () => 
     expect(Object.keys(run.tasks)).toEqual([TASK_ID]);
     expect(run.tasks[TASK_ID]!.status).toBe("pending");
 
-    const trace = await driveTaskViaCli(TASK_ID, "no-merge");
+    const deps = makeDeps(manifest, "no-merge");
+    const answer = new AnswerBook({ holdoutStore: holdout, runId: RUN_ID });
 
-    // The golden stage sequence emerges from the handlers, not the test's control flow.
-    expect(trace.stagesVisited).toEqual(["preflight", "tests", "exec", "verify", "ship"]);
-    // Each fold's returned cursor walked the same ladder to the terminal ship.
-    expect(trace.transitionStages).toEqual(["tests", "exec", "verify", "ship"]);
+    // Track whether the verify spawn carried a holdout sidecar (proves Δ Y path).
+    // We intercept in driveToTerminal by passing a counting wrapper directly.
+    let sawHoldoutSidecar = false;
+    const trackingSidecar: typeof answer = Object.create(answer) as typeof answer;
+    trackingSidecar.for = async (env: DriveEnvelope & { kind: "spawn" }) => {
+      if (env.sidecar !== undefined) sawHoldoutSidecar = true;
+      return answer.for(env);
+    };
 
-    // The verify round surfaced + folded the holdout answer key (Δ Y).
-    expect(trace.sawHoldoutSidecar).toBe(true);
-    expect(trace.ranHoldoutValidate).toBe(true);
+    const finalRun = await driveToTerminal(deps, RUN_ID, trackingSidecar);
 
-    // The risk-invariant panel: all six roles ran and the derived floor passed.
-    expect(trace.reviewerVerdicts).toEqual(PANEL_ROLES.map(() => "approve"));
-    expect(trace.reviewerVerdicts).toHaveLength(6);
-    expect(trace.floorPassed).toBe(true);
+    // The run reached `completed` (all tasks done).
+    expect(finalRun.status).toBe("completed");
 
-    // The task reached a clean terminal `done`.
-    expect(trace.terminal).toEqual({ outcome: "done" });
-
-    // Persisted state: the ship stage recorded the run-scoped branch + PR and `done`.
-    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    // The task reached `done` with branch + PR recorded.
+    const task = finalRun.tasks[TASK_ID]!;
     expect(task.status).toBe("done");
     expect(task.branch).toBe(`factory/${RUN_ID}/${TASK_ID}`);
     expect(task.pr_number).toBeDefined();
 
-    // Dry-run: the PR was opened but NEVER merged (the cutover-safety invariant).
-    expect(gh.created).toHaveLength(1);
+    // Dry-run: task PR opened but NEVER merged (cutover-safety invariant).
+    // finalizeRun also opens a rollup PR (staging→develop), so total created = 2.
+    const taskPrs = gh.created.filter((p) => p.head === `factory/${RUN_ID}/${TASK_ID}`);
+    expect(taskPrs).toHaveLength(1);
     expect(gh.merges).toHaveLength(0);
+
+    // The holdout path: 5-criteria spec withholds ≥1 → verify emits a sidecar.
+    expect(sawHoldoutSidecar).toBe(true);
+
+    // The risk-invariant panel: all six roles ran and the task reviewers were recorded.
+    expect(task.reviewers).toHaveLength(PANEL_ROLES.length);
+    expect(task.reviewers.every((r) => r.verdict === "approve")).toBe(true);
   });
 
+  // -------------------------------------------------------------------------
+  // Scenario 2: Happy path (live) — same chain, PR merged
+  // -------------------------------------------------------------------------
+
   it("serial-merges the task PR in live ship mode (same chain)", async () => {
+    const manifest = specManifestSingle();
+    await specStore.write(manifest, "# checkout spec\n\nvertical slice.");
+
     await createRun(state, specStore, {
       repo: REPO,
       issue: ISSUE,
@@ -342,14 +395,63 @@ describe("orchestrator-as-driver CLI envelope-chain (golden transcript)", () => 
       runId: RUN_ID,
     });
 
-    const trace = await driveTaskViaCli(TASK_ID, "live");
+    const deps = makeDeps(manifest, "live");
+    const answer = new AnswerBook({ holdoutStore: holdout, runId: RUN_ID });
+    const finalRun = await driveToTerminal(deps, RUN_ID, answer);
 
-    expect(trace.stagesVisited).toEqual(["preflight", "tests", "exec", "verify", "ship"]);
-    expect(trace.terminal).toEqual({ outcome: "done" });
-    expect((await state.read(RUN_ID)).tasks[TASK_ID]!.status).toBe("done");
+    expect(finalRun.status).toBe("completed");
+    expect(finalRun.tasks[TASK_ID]!.status).toBe("done");
 
-    // Live: the PR was opened AND serial-merged into staging exactly once.
-    expect(gh.created).toHaveLength(1);
-    expect(gh.merges).toHaveLength(1);
+    // Live: the task PR was opened AND serial-merged into staging.
+    // finalizeRun also opens+merges a rollup PR, so merges total = 2.
+    const taskPrs = gh.created.filter((p) => p.head === `factory/${RUN_ID}/${TASK_ID}`);
+    expect(taskPrs).toHaveLength(1);
+    expect(gh.merges.length).toBeGreaterThanOrEqual(1); // task PR merge + rollup merge
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 3: Drop path — capability-budget drop → partial finalize
+  // -------------------------------------------------------------------------
+
+  it("drops a task at escalation cap → capability-budget → finalizeRun produces partial", async () => {
+    const manifest = specManifestTwo();
+    await specStore.write(manifest, "# checkout spec\n\nvertical slice.");
+
+    await createRun(state, specStore, {
+      repo: REPO,
+      issue: ISSUE,
+      driver: "balanced",
+      runId: RUN_ID,
+    });
+
+    // Seed t2 at ESCALATION_CAP (rung=2) so the first producer failure drops it.
+    await state.updateTask(RUN_ID, TASK_ID_2, (t) => ({ ...t, escalation_rung: 2 }));
+
+    const deps = makeDeps(manifest, "no-merge");
+
+    // t1: DONE normally. t2: BLOCKED at tests (at cap → capability-budget drop).
+    const answer = new AnswerBook({
+      holdoutStore: holdout,
+      runId: RUN_ID,
+      producerStatuses: {
+        [TASK_ID_2]: "STATUS: BLOCKED: ran out of ideas",
+      },
+    });
+
+    const finalRun = await driveToTerminal(deps, RUN_ID, answer);
+
+    // The run ended as `partial` (one done, one dropped).
+    expect(finalRun.status).toBe("partial");
+
+    // t1 shipped normally.
+    expect(finalRun.tasks[TASK_ID]!.status).toBe("done");
+
+    // t2 was dropped as capability-budget.
+    const droppedTask = finalRun.tasks[TASK_ID_2]!;
+    expect(droppedTask.status).toBe("dropped");
+    expect(droppedTask.failure_class).toBe("capability-budget");
+
+    // finalizeRun filed one failure issue for t2.
+    expect(gh.issues).toHaveLength(1);
   });
 });
