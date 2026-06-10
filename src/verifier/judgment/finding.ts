@@ -17,6 +17,9 @@
  * intent.
  */
 import { z } from "zod";
+import { createLogger } from "../../shared/index.js";
+
+const log = createLogger("finding");
 
 /**
  * Closed severity vocabulary. A value outside the set is a LOUD parse error.
@@ -56,16 +59,23 @@ export const FindingSchema = z.object({
 });
 export type Finding = z.infer<typeof FindingSchema>;
 
+export const RawReviewVerdictEnum = z.enum(["approve", "blocked", "error"]);
+export type RawReviewVerdict = z.infer<typeof RawReviewVerdictEnum>;
+
 /**
  * A raw reviewer output: the reviewer's own verdict plus its findings. `verdict`
  * reuses the frozen {@link import("../../types/index.js").PanelVerdict} vocabulary
  * — but as a closed local enum so this schema has no runtime dependency on a WS1
  * value (the strings are identical and asserted in tests). `findings` MUST be an
  * array (a non-array is a LOUD parse error, never coerced).
+ *
+ * Non-strictness is DELIBERATE: LLM reviewers routinely add cosmetic keys (e.g.
+ * `confidence`, `rationale`) and hard-failing on format drift would burn escalation
+ * rungs on noise. All load-bearing fields are required+validated — absence fails
+ * LOUD (ZodError). Unknown keys are stripped by Zod and logged via `log.warn` so
+ * stripping is observable (e.g. a typo'd optional `file` key silently demoting a
+ * finding to uncitable is surfaced, not buried).
  */
-export const RawReviewVerdictEnum = z.enum(["approve", "blocked", "error"]);
-export type RawReviewVerdict = z.infer<typeof RawReviewVerdictEnum>;
-
 export const RawReviewSchema = z.object({
   /** The reviewer identity (role string). */
   reviewer: z.string().min(1),
@@ -76,19 +86,78 @@ export const RawReviewSchema = z.object({
 });
 export type RawReview = z.infer<typeof RawReviewSchema>;
 
+// Known top-level keys — derived from schema shape, not hand-maintained.
+const KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape));
+// Known per-finding keys — derived from schema shape, not hand-maintained.
+const KNOWN_FINDING_KEYS = new Set(Object.keys(FindingSchema.shape));
+
+/** Detect and warn on unknown keys stripped by Zod in a plain-object value. */
+function warnStrippedKeys(
+  context: string,
+  topObj: unknown,
+  topKnown: Set<string>,
+  findingsArr: unknown,
+  findingKnown: Set<string>,
+): void {
+  const topUnknown: string[] = [];
+  const findingUnknown: string[] = [];
+
+  if (topObj !== null && typeof topObj === "object" && !Array.isArray(topObj)) {
+    for (const k of Object.keys(topObj as Record<string, unknown>)) {
+      if (!topKnown.has(k)) topUnknown.push(k);
+    }
+  }
+
+  if (Array.isArray(findingsArr)) {
+    for (const f of findingsArr) {
+      if (f !== null && typeof f === "object" && !Array.isArray(f)) {
+        for (const k of Object.keys(f as Record<string, unknown>)) {
+          if (!findingKnown.has(k) && !findingUnknown.includes(k)) findingUnknown.push(k);
+        }
+      }
+    }
+  }
+
+  if (topUnknown.length > 0 || findingUnknown.length > 0) {
+    log.warn(
+      `review parse: stripped unknown keys from reviewer '${context}' payload: ` +
+        `top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`,
+    );
+  }
+}
+
 /**
  * Parse + validate an unknown reviewer payload as a {@link RawReview}. LOUD
  * (ZodError) on a bad severity, a missing/empty quote, a non-array `findings`, a
  * non-positive line, or any unknown verdict. The sanctioned validating entry
  * (mirrors WS1 `parseRunState`).
+ *
+ * Unknown keys are stripped (deliberate LLM tolerance — see {@link RawReviewSchema}
+ * JSDoc) and logged via `log.warn` for observability.
  */
 export function parseRawReview(raw: unknown): RawReview {
-  return RawReviewSchema.parse(raw);
+  const result = RawReviewSchema.parse(raw);
+  // Derive reviewer label for the warn context (raw may have it before or after parse).
+  const reviewerLabel =
+    raw !== null && typeof raw === "object" && !Array.isArray(raw)
+      ? String((raw as Record<string, unknown>).reviewer ?? result.reviewer)
+      : result.reviewer;
+  const rawFindings =
+    raw !== null && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>).findings
+      : undefined;
+  warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS);
+  return result;
 }
 
-/** Parse + validate a single {@link Finding}. LOUD on malformed input. */
+/** Parse + validate a single {@link Finding}. LOUD on malformed input.
+ *
+ * Unknown keys are stripped (deliberate LLM tolerance) and logged via `log.warn`.
+ */
 export function parseFinding(raw: unknown): Finding {
-  return FindingSchema.parse(raw);
+  const result = FindingSchema.parse(raw);
+  warnStrippedKeys(result.reviewer, raw, KNOWN_FINDING_KEYS, undefined, KNOWN_FINDING_KEYS);
+  return result;
 }
 
 /**

@@ -61,6 +61,9 @@ import { buildHoldoutPrompt, FsHoldoutVerdictStore } from "../verifier/holdout/i
 import { isSpawnStage } from "./results.js";
 import type { DriveResults, FoldKey, SpawnStage } from "./results.js";
 import type { HandlerDeps } from "./types.js";
+import { createLogger } from "../shared/index.js";
+
+const log = createLogger("pump");
 
 export type { SpawnStage };
 
@@ -352,6 +355,10 @@ export async function pumpTask(
             if (!step.done) throw new Error("pump: dropStep returned non-terminal step");
             return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
           }
+          log.info(
+            `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync ` +
+              `(attempt ${newResyncs}/${MERGE_RESYNC_CAP})`,
+          );
           stage = "exec";
           continue;
         }

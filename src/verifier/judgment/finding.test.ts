@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { parseFinding, parseRawReview, isCitable, type Finding } from "./finding.js";
 
 const citable: unknown = {
@@ -81,5 +81,75 @@ describe("WS7 Finding schema (Δ K)", () => {
     } else {
       throw new Error("expected citable");
     }
+  });
+});
+
+describe("unknown-key stripping observability", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("parseRawReview: unknown top-level key parses successfully and logs a warn naming it", () => {
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const r = parseRawReview({
+      reviewer: "quality-reviewer",
+      verdict: "approve",
+      findings: [],
+      confidence: "high", // unknown key — should be stripped + warned
+    });
+    expect(r.findings).toEqual([]);
+    expect(r).not.toHaveProperty("confidence");
+    const output = stderrWrite.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toMatch(/WARN/);
+    expect(output).toMatch(/stripped unknown keys/);
+    expect(output).toMatch(/confidence/);
+  });
+
+  it("parseRawReview: unknown key inside a finding parses successfully and logs a warn naming it", () => {
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const r = parseRawReview({
+      reviewer: "security-reviewer",
+      verdict: "blocked",
+      findings: [
+        {
+          reviewer: "security-reviewer",
+          severity: "critical",
+          blocking: true,
+          file: "src/app.ts",
+          line: 10,
+          quote: "eval(x)",
+          description: "unsafe eval",
+          rationale: "extra LLM key", // unknown — should be stripped + warned
+        },
+      ],
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0]).not.toHaveProperty("rationale");
+    const output = stderrWrite.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toMatch(/WARN/);
+    expect(output).toMatch(/stripped unknown keys/);
+    expect(output).toMatch(/rationale/);
+  });
+
+  it("parseRawReview: clean payload logs no warn", () => {
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    parseRawReview({
+      reviewer: "implementation-reviewer",
+      verdict: "approve",
+      findings: [],
+    });
+    const output = stderrWrite.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).not.toMatch(/stripped unknown keys/);
+  });
+
+  it("parseFinding: unknown key parses successfully and logs a warn naming it", () => {
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const f = parseFinding({
+      ...(citable as object),
+      extra_llm_field: "noise", // unknown — should be stripped + warned
+    });
+    expect(f).not.toHaveProperty("extra_llm_field");
+    const output = stderrWrite.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toMatch(/WARN/);
+    expect(output).toMatch(/stripped unknown keys/);
+    expect(output).toMatch(/extra_llm_field/);
   });
 });

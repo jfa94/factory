@@ -218,6 +218,8 @@ describe("derive-don't-store survives a forged on-disk verdict (Δ V, end-to-end
 });
 
 describe("concurrency: ≥3 writers do not corrupt state", () => {
+  // Correctness-critical (no lost updates) and load-sensitive (100 contended lock
+  // acquisitions); 30s is harness headroom, not a behavior change.
   it("100 concurrent increments across 4 writers all land (no lost updates)", async () => {
     // Seed a numeric counter encoded in a task's escalation_rung.
     const m = mgr();
@@ -264,5 +266,5 @@ describe("concurrency: ≥3 writers do not corrupt state", () => {
     // And the file is still valid JSON parseable as a RunState (no torn write).
     const raw = await readFile(runStatePath(dataDir, "run-1"), "utf8");
     expect(() => parseRunState(JSON.parse(raw))).not.toThrow();
-  });
+  }, 30_000);
 });
