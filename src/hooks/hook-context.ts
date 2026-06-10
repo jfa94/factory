@@ -93,23 +93,29 @@ export async function loadActiveRun(opts: DataDirOptions = {}): Promise<ActiveRu
  * The currently-relevant task + its in-flight stage, if it can be resolved.
  *
  * `taskId` resolution order mirrors the bash guard: explicit env
- * (`FACTORY_TASK_ID`), else the single in-flight task. Stage is inferred from
- * the task's status (the engine never stores the stage; the driver keeps status
- * in lockstep via `stageToInFlightStatus`), so the active stage is DERIVED from
- * status — never read from a stored stage field.
+ * (`FACTORY_TASK_ID`), else the single in-flight task. Stage comes from the
+ * persisted `TaskState.stage` cursor (written by the pump in lockstep with
+ * status on every fold); status derivation (`statusToStage`) is kept only as
+ * the legacy fallback for states that predate the cursor.
  */
 export interface ActiveTask {
   readonly task: TaskState;
-  /** The in-flight stage derived from the task status, or null if terminal/idle. */
+  /** The active in-flight stage (persisted cursor, status-derived fallback), or null if terminal/idle. */
   readonly stage: TaskStage | null;
 }
 
-/** Map an in-flight task status back to the stage it implies (best-effort). */
+/**
+ * LEGACY FALLBACK: map an in-flight task status back to the stage it implies
+ * (best-effort). Only consulted when the task has no persisted stage cursor;
+ * status alone cannot tell `tests` from `exec` (both map to `executing` —
+ * `producer_role` cannot disambiguate either, it lags the exec spawn), so the
+ * cursor is the authoritative source.
+ */
 function statusToStage(status: TaskState["status"]): TaskStage | null {
   switch (status) {
     case "executing":
-      // `tests` and `exec` both map to `executing`; the test-writer phase is the
-      // FIRST executing sub-stage. The producer_role disambiguates.
+      // `tests` and `exec` both map to `executing`; without a cursor we assume
+      // the FIRST executing sub-stage (the stricter, test-writer-scoped one).
       return TaskStageEnum.enum.tests;
     case "reviewing":
       return TaskStageEnum.enum.verify;
@@ -123,6 +129,17 @@ function statusToStage(status: TaskState["status"]): TaskStage | null {
 }
 
 /**
+ * The active stage for guard scoping: null when the task is not in-flight;
+ * else the persisted stage cursor (written by the pump in lockstep with
+ * status on every fold), falling back to status derivation for legacy
+ * states that predate the cursor.
+ */
+function activeStageOf(task: TaskState): TaskStage | null {
+  if (statusToStage(task.status) === null) return null; // terminal/pending — cursor is history, not an active stage
+  return task.stage ?? statusToStage(task.status);
+}
+
+/**
  * Resolve the active task for guard scoping. Prefers an explicit task id (env or
  * arg), else the single non-terminal task. Returns null when ambiguous (≥2
  * in-flight tasks with no explicit id) or none in-flight — the caller treats
@@ -133,21 +150,21 @@ export function resolveActiveTask(run: RunState, explicitTaskId?: string): Activ
   if (taskId.length > 0) {
     const task = run.tasks[taskId];
     if (!task) return null;
-    return { task, stage: statusToStage(task.status) };
+    return { task, stage: activeStageOf(task) };
   }
   const inFlight = Object.values(run.tasks).filter(
     (t) => t.status === "executing" || t.status === "reviewing" || t.status === "shipping",
   );
   if (inFlight.length !== 1) return null;
   const task = inFlight[0]!;
-  return { task, stage: statusToStage(task.status) };
+  return { task, stage: activeStageOf(task) };
 }
 
 /**
  * Whether the active task is in the TEST-WRITER phase (active stage `tests` AND
  * producer_role test-writer). The path-scope guard (pipeline-guards) uses this:
- * the test-writer may write only test paths. Derived from status + role, never
- * from a stored phase flag.
+ * the test-writer may write only test paths. The stage comes from the resolved
+ * ActiveTask (persisted cursor, status-derived fallback).
  */
 export function isTestWriterPhase(active: ActiveTask | null): boolean {
   if (!active) return false;
