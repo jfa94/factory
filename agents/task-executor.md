@@ -1,5 +1,5 @@
 ---
-name: executor
+name: task-executor
 model: sonnet
 maxTurns: 60
 description: "Implements a single task: writes the minimal code that turns the test-writer's failing tests green, or patches forward over independently-confirmed review blockers. The factory's `exec` producer stage."

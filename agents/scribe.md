@@ -1,5 +1,5 @@
 ---
-name: Scribe
+name: scribe
 description: Documents a codebase in /docs using the Diátaxis framework. Runs a full sweep when /docs is missing or empty; otherwise incrementally updates based on git diff. Invoked when the pipeline has completed all tasks and /docs needs to reflect the shipped code changes, or whenever a repository needs documentation or re-documentation.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: opus

@@ -37,8 +37,13 @@ Run the bounded generate ⇄ review loop until `reuse` or `stored`:
 env = factory spec resolve --repo <o/n> --issue <n>
 loop on env.kind:
   reuse | stored → done (env.pointer); go to Phase 2
-  generate | revise → (count iterations; > env.max_iterations → STOP LOUD, spec-defect)
+  generate → remember env.spawn.context + env.max_iterations (the loop bound)
       spawn spec-generator (worktree, opus) with env.spawn.context embedded
+      write its GenerateResult JSON verbatim to env.generated_path
+      env = factory spec gate --repo <o/n> --issue <n>
+  revise → (count iterations; > the remembered max_iterations → STOP LOUD, spec-defect)
+      re-spawn spec-generator (worktree, opus) with the remembered spawn.context
+      PLUS env.reason and env.blockers appended ("fix these blockers first")
       write its GenerateResult JSON verbatim to env.generated_path
       env = factory spec gate --repo <o/n> --issue <n>
   review → spawn spec-reviewer (worktree, opus) with env.spawn.context embedded
@@ -60,6 +65,8 @@ deps) are spec defects — surface them.
 
 ## Phase 3 — THE LOOP
 
+`<mode>` is the ship mode the invoking command passed through (`no-merge` default | `live`) — pass it verbatim; never choose it yourself.
+
 ```
 loop:
   env = factory next --run <run_id>
@@ -80,10 +87,11 @@ pump(task):
       "spawn"         → collect (below) into a fresh results file; loop with --results
 ```
 
+If `drive` rejects `--results` as stale/duplicate (fold_key mismatch), re-invoke WITHOUT `--results` to get the current envelope and continue — the ONE sanctioned retry (Iron Law 3 applies to everything else).
+
 ### Collecting a spawn envelope
 
-Write results files under `$CLAUDE_PLUGIN_DATA/runs/<run_id>/reviews/` (create the
-dir). Every spawn envelope names `expects`:
+Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the dir). NEVER write under `runs/**` or `specs/**` — the plugin's own TCB hooks deny those writes; `drive --results` reads from any path. Every spawn envelope names `expects`:
 
 **`expects: "producer-status"`** (stages tests/exec — ONE producer agent):
 
@@ -91,7 +99,7 @@ dir). Every spawn envelope names `expects`:
    (a ProducerContext JSON).
 2. Spawn the producer — `subagent_type` per the matrix, model mapped, `maxTurns` from
    the manifest, **isolation OMITTED**. Build the prompt from the ProducerContext +
-   _"Your working tree is `<tenv.worktree>`. `cd` there; make ALL commits there."_
+   _"Your working tree is `<tenv.worktree>` (already checked out on the task branch). `cd` there; make ALL commits there."_
    The test-writer commits failing tests first (TDD); the executor commits the
    minimal implementation. They follow `agents/test-writer.md` / `agents/task-executor.md`.
 3. Capture its terminal STATUS line (`STATUS: DONE` | `STATUS: BLOCKED — escalate` |
@@ -103,8 +111,7 @@ dir). Every spawn envelope names `expects`:
 1. **Sidecar first (if `tenv.sidecar` present):** spawn `general-purpose`, isolation
    `"worktree"`, model mapped from `sidecar.model`, `maxTurns = sidecar.max_turns`,
    prompt = `sidecar.prompt` VERBATIM. Keep its raw output.
-2. **Panel:** spawn all six `manifest.agents` (each isolation `"worktree"`, model
-   mapped = opus, `max_turns` from the manifest). Construct each prompt per
+2. **Panel:** spawn all six `manifest.agents` (each isolation `"worktree"`, model mapped from each agent's `model`, `max_turns` from the manifest). Construct each prompt per
    `skills/review-protocol/SKILL.md`: inspect via `git -C <tenv.worktree> diff staging`,
    emit ONE RawReview JSON:
    `{ "reviewer":"<role>", "verdict":"approve|blocked|error", "findings":[ { "reviewer","severity","blocking","file","line","quote","description" } ] }`
