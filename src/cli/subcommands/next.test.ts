@@ -22,7 +22,22 @@ import { usageCachePath } from "../../quota/index.js";
 
 describe("next arg/usage edges", () => {
   it("--help prints help and exits OK", async () => {
-    expect(await nextCommand.run(["--help"])).toBe(EXIT.OK);
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk: string | Uint8Array) => {
+      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+      return true;
+    };
+    try {
+      const code = await nextCommand.run(["--help"]);
+      expect(code).toBe(EXIT.OK);
+      const help = chunks.join("");
+      // Both the tasks-ready and all-terminal lines must mention cascade_dropped.
+      expect(help).toMatch(/tasks-ready.*cascade_dropped/);
+      expect(help).toMatch(/all-terminal.*cascade_dropped/);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
   });
 
   it("no --run with no current run is a usage error", async () => {
@@ -30,10 +45,19 @@ describe("next arg/usage edges", () => {
     const dir = await mkdtemp(join(tmpdir(), "factory-next-empty-"));
     const saved = process.env["CLAUDE_PLUGIN_DATA"];
     process.env["CLAUDE_PLUGIN_DATA"] = dir;
+    const stderrChunks: string[] = [];
+    const originalStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: string | Uint8Array) => {
+      stderrChunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+      return true;
+    };
     try {
       const code = await nextCommand.run([]);
       expect(code).toBe(EXIT.USAGE);
+      // wrapper prefixes "next: "; inner throw has no duplicate prefix
+      expect(stderrChunks.join("")).toMatch(/^next: no --run given/);
     } finally {
+      process.stderr.write = originalStderrWrite;
       process.env["CLAUDE_PLUGIN_DATA"] = saved;
       await rm(dir, { recursive: true, force: true });
     }
@@ -66,7 +90,7 @@ describe("next --run resolution falls back to runs/current", () => {
       run_id: "run-current",
       spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
     });
-    // Seed one task so pumpRun has something to schedule.
+    // Seed one pending task so pumpRun schedules it.
     await state.update("run-current", (s) => ({
       ...s,
       tasks: {
@@ -85,6 +109,17 @@ describe("next --run resolution falls back to runs/current", () => {
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: dir }).write(spec, "# spec");
 
+    // Write a zero-usage cache so StatuslineUsageSignal proceeds (not quota-blocked).
+    const nowSec = Math.floor(Date.now() / 1000);
+    await writeFile(
+      usageCachePath(dir),
+      JSON.stringify({
+        captured_at: nowSec,
+        five_hour: { used_percentage: 0, resets_at: nowSec + 18_000 },
+        seven_day: { used_percentage: 0, resets_at: nowSec + 604_800 },
+      }),
+    );
+
     const chunks: string[] = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = (chunk: string | Uint8Array) => {
@@ -95,7 +130,7 @@ describe("next --run resolution falls back to runs/current", () => {
       const code = await nextCommand.run([]); // no --run
       expect(code).toBe(EXIT.OK);
       const envelope = JSON.parse(chunks.join(""));
-      expect(envelope.run_id).toBe("run-current");
+      expect(envelope).toMatchObject({ kind: "tasks-ready", run_id: "run-current" });
     } finally {
       process.stdout.write = originalWrite;
     }

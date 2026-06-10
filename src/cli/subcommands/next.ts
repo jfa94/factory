@@ -38,7 +38,7 @@ async function run(argv: string[]): Promise<ExitCode> {
   } else {
     const dataDir = resolveDataDir({});
     const current = await new StateManager({ dataDir }).readCurrent();
-    if (current === null) throw new UsageError("next: no --run given and no current run");
+    if (current === null) throw new UsageError("no --run given and no current run");
     runId = current.run_id;
   }
 
