@@ -1,272 +1,176 @@
-# System Overview
+# Architecture Overview
 
-The factory plugin implements an 8-stage autonomous coding pipeline that converts GitHub PRD issues into merged pull requests. This document describes the pipeline stages, component relationships, and data flow.
+This document describes the system context and the container-level structure of
+the Dark Factory plugin. For the building blocks inside each container, see
+[components.md](./components.md).
 
-## Pipeline Stages
+## System context
 
-```
-Stage A: Input & Discovery
-    │
-    ▼
-Stage B: Spec Generation
-    │
-    ▼
-Stage C: Task Decomposition
-    │
-    ▼
-Stage D: Task Execution ◄──────┐
-    │                          │
-    ▼                          │
-Stage E: Quality Gates ────────┤ (retry on failure)
-    │                          │
-    ▼                          │
-Stage F: Adversarial Review ───┘
-    │
-    ▼
-Stage G: PR Creation & Dependency Resolution
-    │
-    ▼
-Stage H: Completion
+The factory sits between a person's PRD issue and a target GitHub repository. The
+person writes requirements; the factory delivers merged pull requests on an
+integration branch. It never touches `main` — promotion to `main` is human-owned
+and out of scope.
+
+```mermaid
+graph LR
+  Author([Author]) -->|writes PRD issue| GH[(GitHub repo)]
+  Author -->|/factory:run| CC[Claude Code session]
+  CC -->|reads PRD, opens PRs/issues| GH
+  CC -->|persists run/spec state| Data[("$CLAUDE_PLUGIN_DATA")]
+  GH -->|staging → develop rollup| GH
 ```
 
-### Stage A: Input & Discovery
+The three external dependencies are: the **GitHub repo** (the PRD source and the
+PR/issue target, reached via `gh`), the **Claude Code session** (which hosts the
+orchestrator and the `Agent` tool), and the **plugin data directory**
+(`$CLAUDE_PLUGIN_DATA`), where all run and spec state lives — deliberately
+outside the target repo so the holdout answer-key is unreadable from an executor
+worktree.
 
-- Parse operating mode from `/factory:run` arguments
-- Validate preconditions (git remote, required agents, skills)
-- Fetch PRD body from GitHub issue via `pipeline-fetch-prd`
+## The Model-A split (container view)
 
-### Stage B: Spec Generation
+The plugin is two cooperating halves separated by a hard seam. This is the single
+most important structural fact about the system.
 
-- Spawn `spec-generator` agent in isolated worktree
-- Generate `spec.md` and `tasks.json` using `prd-to-spec` skill
-- Validate output via `pipeline-validate-spec`
-- Spec-generator hands off (no self-review); orchestrator spawns `spec-reviewer` independently (score >= 54/60). Below-threshold scores re-spawn spec-generator with the reviewer's findings as `REVIEW_FEEDBACK`, up to 5 iterations. Exhaustion posts a `spec-failure` GH comment and marks the run `failed`.
-- Handoff spec to staging branch via commit
+```mermaid
+graph TD
+  subgraph Surface["Orchestrator surface (markdown)"]
+    Cmd[commands/*.md]
+    Skill[skills/pipeline-orchestrator/SKILL.md]
+    Agents[agents/*.md]
+  end
 
-### Stage C: Task Decomposition
+  subgraph Engine["Deterministic engine (TypeScript)"]
+    CLI[factory CLI<br/>dist/factory.js]
+    Hook[factory-hook<br/>dist/factory-hook.js]
+  end
 
-- Validate task schema via `pipeline-validate-tasks`
-- Detect dependency cycles (DFS)
-- Topological sort via Kahn's algorithm
-- Assign parallel groups for concurrent execution
-
-### Stage D: Task Execution
-
-For each task in execution order:
-
-1. Check circuit breaker thresholds
-2. Verify dependencies are satisfied
-3. Check API rate limits via `pipeline-quota-check`
-4. Classify complexity via `pipeline-classify-task`
-5. Classify risk tier via `pipeline-classify-risk`
-6. Route to appropriate model via `pipeline-model-router`
-7. Build prompt via `pipeline-build-prompt` (with holdout criteria)
-8. Spawn `task-executor` agent in isolated worktree
-
-### Stage E: Quality Gates
-
-7-layer stack, sequential (layers 1–6 run in `_stage_postexec`; layer 7 runs at ship time):
-
-1. **Static Analysis**: Pre-commit hooks (lint, format, type-check)
-2. **Security Gate** (opt-in): `pipeline-security-gate` runs configured SAST command
-3. **TDD Gate**: `pipeline-tdd-gate` enforces test-before-impl commit ordering
-4. **Test Suite**: Run via existing Stop hook
-5. **Coverage Regression**: `pipeline-coverage-gate` blocks decreases
-6. **Holdout Validation**: Verify withheld criteria are satisfied
-7. **Mutation Testing**: Target 80% mutation score (ship-time pregate)
-
-### Stage F: Adversarial Review
-
-- Detect reviewer via `pipeline-detect-reviewer` (Codex preferred, Claude Code fallback)
-- Spawn `implementation-reviewer` agent with `review-protocol` skill
-- Multi-round loop: REQUEST_CHANGES triggers fix and re-review
-- Security tier adds `security-reviewer` and `architecture-reviewer`
-- Security-tier tasks: `security-reviewer` triages `pipeline-security-gate` findings before manual review
-- Parse verdicts via `pipeline-parse-review`
-
-### Stage G: PR Creation & Dependency Resolution
-
-- Create PR targeting `staging` branch
-- Poll for merge via `pipeline-wait-pr`
-- Handle CI failures with automated fix attempts
-- Handle merge conflicts with rebase attempt
-
-### Stage H: Completion
-
-- Generate summary via `pipeline-summary`
-- Spawn `scribe` (bundled) as enforced final step to update `/docs`
-- Clean up branches, worktrees, spec directory via `pipeline-cleanup`
-- Close GitHub issue (if all tasks merged)
-
----
-
-## Component Relationships
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        /factory:run                             │
-│              (Command body = main-session orchestrator)         │
-│                                                                 │
-│  Runs in the invoking Claude Code session. Control loop,        │
-│  DAG iteration, retry logic, human escalation all happen here.  │
-│  Step 6a creates .claude/worktrees/orchestrator-<run_id>/       │
-│  and cd's in, so the user's primary checkout stays untouched.   │
-│                                                                 │
-│  Delegates to bin/ scripts ────────┬──── Spawns subagents       │
-└────────────────────────────────────┼────────────────────────────┘
-                                     │
-         ┌───────────────────────────┼───────────────────────────┐
-         │                           │                           │
-         ▼                           ▼                           ▼
-┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
-│   Bin Scripts   │      │     Agents      │      │     Hooks       │
-│ (Deterministic) │      │(Non-deterministic)     │ (Un-bypassable) │
-├─────────────────┤      ├─────────────────┤      ├─────────────────┤
-│ pipeline-*      │      │ spec-generator  │      │ branch-protection│
-│ (41 scripts)    │      │ task-executor   │      │ run-tracker     │
-│                 │      │ implementation-reviewer   │      │ stop-gate       │
-│ Validation      │      │ quality-reviewer   │      │ subagent-stop   │
-│ State mgmt      │      │ security-       │      │                 │
-│ Classification  │      │   reviewer      │      │                 │
-│ Parsing         │      │ architecture-   │      │                 │
-│ Prompt building │      │   reviewer      │      │                 │
-└─────────────────┘      │ test-writer     │      └─────────────────┘
-                         │ scribe          │
-                         │ spec-reviewer   │
-                         └─────────────────┘
+  Session[In-session LLM orchestrator] -->|loads| Skill
+  Session -->|calls subcommands| CLI
+  CLI -->|JSON envelope: what to spawn next| Session
+  Session -->|Agent spawns| Producers[test-writer / executor]
+  Session -->|Agent spawns| Panel[6-reviewer panel + holdout + verifiers]
+  Session -->|folds outcomes| CLI
+  CLI -->|reads/writes| State[(run/spec state)]
+  Hook -->|deny/allow at tool-use| Session
 ```
 
-### Three-Tier Reliability Model
+**The CLI is the brain.** `factory <subcommand>` owns _all_ run-state writes, the
+spec gates, the deterministic verifier gates, failure classification, the
+producer escalation ladder, the risk-invariant review floor, and PR creation. It
+is deterministic and tested. It **never spawns an agent**.
 
-| Tier            | Components       | Reliability                | Responsibility                                 |
-| --------------- | ---------------- | -------------------------- | ---------------------------------------------- |
-| **Hooks**       | `hooks.json`     | 100% enforcement           | Safety constraints that must never be violated |
-| **Bin Scripts** | `bin/pipeline-*` | 100% given valid input     | Logic with a single correct answer             |
-| **Agents**      | `agents/*.md`    | ~70% instruction following | Tasks requiring judgment, creativity, NLU      |
+**The orchestrator is the hands.** It performs every `Agent()` spawn the CLI
+reports, collects the agents' raw output, writes it to a file, and folds it back
+via a writer subcommand. It never decides a transition, re-runs a gate,
+classifies a failure, or writes state by prose.
 
----
+The CLI is a **reporter + writer**, not a runner:
 
-## Data Flow
+- **Reporter** subcommands (`run-task`, `spec`, `score`, `rescue scan`,
+  `state`) emit one JSON envelope and write nothing (except `run-task --stage
+ship`, which is terminal-by-construction and writes the ship outcome).
+- **Writer** subcommands (`advance`, `drop`, `record-producer`,
+  `record-holdout`, `record-reviews`, `rescue apply`, `configure`) fold an agent
+  outcome (or an operator decision) into state in a single step and return the
+  next step.
 
-### Run Initialization
+Why this split exists, and what it buys, is the subject of
+[explanation/model-a.md](../explanation/model-a.md).
 
-```
-/factory:run prd --issue 42
-        │
-        ▼
-pipeline-validate
-        │ (checks git, gh, agents, skills)
-        ▼
-pipeline-init run-20260413-140000 --issue 42 --mode prd
-        │
-        ▼
-Creates: ${CLAUDE_PLUGIN_DATA}/runs/run-20260413-140000/
-         ├── state.json
-         ├── audit.jsonl
-         └── holdouts/
-```
+## The run lifecycle
 
-### Spec Handoff (Cross-Worktree)
+A run proceeds through four orchestrator phases. The CLI provides the
+deterministic glue at each phase; the orchestrator owns the agent spawns and the
+loop.
 
-```
-spec-generator (isolated worktree)
-        │
-        ├── Writes: spec.md, tasks.json
-        ├── Commits to: spec-handoff/<run-id> branch
-        └── Records via pipeline-state:
-            .spec.handoff_branch
-            .spec.handoff_ref
-            .spec.path
-        │
-        ▼
-orchestrator (in .claude/worktrees/orchestrator-<run_id>/)
-        │
-        ├── Reads handoff metadata from state.json
-        ├── Fetches spec-handoff/<run-id> branch
-        ├── Materializes spec at .state/<run-id>/
-        └── Merges onto staging branch
-```
+```mermaid
+sequenceDiagram
+  participant O as Orchestrator
+  participant CLI as factory CLI
+  participant A as Agents
 
-### Task Execution Loop
+  Note over O,CLI: Phase 0 — Preconditions
+  O->>CLI: factory scaffold --repo o/n
+  CLI-->>O: CI net + staging + protection (or REFUSE)
 
-```
-For each parallel_group:
-  For each task in group (up to maxConcurrent):
-    │
-    ├── pipeline-circuit-breaker
-    ├── pipeline-state deps-satisfied
-    ├── pipeline-quota-check
-    ├── pipeline-classify-task
-    ├── pipeline-classify-risk
-    ├── pipeline-model-router
-    ├── pipeline-build-prompt --holdout 20%
-    │
-    └── Spawn task-executor (worktree, concurrent)
-            │
-            ├── Implement code
-            ├── Write tests
-            ├── Commit changes
-            │
-            └── Return to orchestrator
-                    │
-                    ├── Quality gates
-                    ├── Adversarial review
-                    └── PR creation
+  Note over O,CLI: Phase 1 — Spec (bounded generate ⇄ review)
+  O->>CLI: factory spec resolve/gate/store
+  CLI-->>O: envelope: generate | revise | review | stored | reuse
+  O->>A: spawn spec-generator / spec-reviewer
+  A-->>O: GenerateResult / ReviewVerdict JSON
+
+  Note over O,CLI: Phase 2 — Create
+  O->>CLI: factory run create --repo o/n --issue n
+  CLI-->>O: RunState (tasks seeded, status running)
+
+  Note over O,CLI: Phase 3 — Drive (run loop × per-task stage machine)
+  loop each ready task: preflight→tests→exec→verify→ship
+    O->>CLI: factory run-task --stage <s>
+    CLI-->>O: stage_result (advance | spawn-agents | task-terminal | wait-retry)
+    O->>A: spawn producers / panel / holdout / verifiers
+    A-->>O: STATUS line / raw reviews
+    O->>CLI: factory record-* / advance
+    CLI-->>O: next step
+  end
+
+  Note over O,CLI: Phase 4 — Completion
+  O->>CLI: factory run finalize
+  CLI-->>O: report + per-drop issues + staging→develop rollup, then terminal
+  O->>CLI: factory score / state --summary
 ```
 
-### State Persistence
+### Per-task stage machine
 
-All state transitions flow through `pipeline-state` using atomic writes:
-
-```
-pipeline-state write <run-id> <key> <value>
-        │
-        ├── Write to temp file
-        ├── fsync
-        └── mv to target (atomic)
-```
-
-State is JSON, human-readable, and queryable with `jq`.
-
----
-
-## Isolation Model
-
-### Git Worktrees
-
-Each `task-executor` agent runs in an isolated git worktree:
-
-- Created from `staging` branch HEAD
-- No conflicts between concurrent tasks
-- Changes merge via PR, not local git merge
-- Worktrees cleaned up after PR merge
-
-### Plugin Data Directory
-
-Pipeline state lives outside the git repository:
+Each task moves through a closed, ordered set of stages:
 
 ```
-${CLAUDE_PLUGIN_DATA}/
-├── config.json           # User configuration
-├── usage-cache.json      # Rate limit data from statusline wrapper
-├── metrics.jsonl         # JSONL metrics log (MCP server)
-└── runs/
-    ├── current -> run-.../ # Symlink to active run
-    └── run-YYYYMMDD-HHMMSS/
-        ├── state.json
-        ├── audit.jsonl
-        ├── holdouts/
-        └── reviews/
+preflight → tests → exec → verify → ship
 ```
 
-**Atomic symlink update:**
+- **preflight** — set up the task worktree/branch; report-only.
+- **tests** — producer stage: the `test-writer` commits failing tests first (TDD).
+- **exec** — producer stage: the `task-executor` commits the minimal implementation.
+- **verify** — the verifier floor: deterministic gates + holdout validation + the
+  six-reviewer panel + verify-then-fix. Derives the floor verdict.
+- **ship** — opens the task PR idempotently; in `live` mode serial-merges into
+  `staging`. The one stage that writes the terminal task status.
 
-The `runs/current` symlink is updated atomically via `ln -sfn` to a temp link followed by `mv -fh` (BSD) or `mv -fT` (GNU). Observers never see the symlink missing during the swap. This ensures resume sessions and hooks always see a consistent view of the active run.
+The run-level **finalize** step is a _separate_ stage that runs once, after every
+task is terminal: it builds the report, files one issue per drop, and ships the
+`staging → develop` rollup before flipping the run terminal.
 
-**Broken symlink handling:**
+## Data flow and state
 
-If `runs/current` exists as a symlink but its target is missing (dangling symlink), `pretooluse-pipeline-guards.sh` fails closed rather than allowing operations to proceed. This prevents silent corruption when a run directory was deleted but the symlink was not updated.
+All state lives under `$CLAUDE_PLUGIN_DATA` in two stores:
 
-### Holdout Criteria Isolation
+- **Durable spec store** — `specs/<repo>/<spec-id>/`, keyed by `(repo,
+spec-id)` where `spec-id = "<issue>-<slug>"`. Reused across runs: re-running a
+  PRD issue resolves the same spec.
+- **Ephemeral run store** — `runs/<run-id>/`, holding `state.json`,
+  `audit.jsonl`, `metrics.jsonl`, `report.md`, and the `holdouts/` and
+  `reviews/` subdirs. A `runs/current` symlink points at the active run.
 
-Acceptance criteria withheld from task-executor are stored in `${CLAUDE_PLUGIN_DATA}/runs/<run-id>/holdouts/<task-id>.json`. Since task-executor runs in a worktree and holdouts live in plugin data, the executor cannot access criteria it was not meant to see.
+State writes are atomic (write-temp-then-rename) and lock-protected
+(`proper-lockfile`). Crucially, **no gate verdict is ever stored** — every
+pass/fail is re-derived from ground truth when needed
+([explanation/derive-dont-store.md](../explanation/derive-dont-store.md)). The
+state schema is in [reference/state-model.md](../reference/state-model.md).
+
+## Build and deployment
+
+The engine is shipped as two checked-in esbuild bundles
+(`dist/factory.js`, `dist/factory-hook.js`), fully inlined so they run at a
+user's site with no `node_modules`. `npm run verify` (typecheck → lint → test →
+build) is the release gate. There is no separate deploy: the plugin _is_ the
+checked-in markdown surface plus the two bundles. See
+[guides/build-and-verify.md](../guides/build-and-verify.md).
+
+## Where the engine enforces invariants outside the CLI
+
+Some invariants must hold at tool-use time, before any CLI call. These are the
+`factory-hook` guards, wired into `hooks/hooks.json`: TCB write-denial, the
+holdout-answer-key read guard, the secret-commit guard, branch protection, the
+test-writer scope + ship gating guard, and the stop/subagent-stop gates. See
+[reference/hooks.md](../reference/hooks.md).
+</content>

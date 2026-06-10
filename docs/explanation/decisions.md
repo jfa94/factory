@@ -2,6 +2,20 @@
 
 This document explains key architectural choices and their rationale.
 
+> **Cutover annotation (2026-06-10, Scribe).** This ledger (D1–D27) is preserved
+> verbatim as the historical design record. The project has since completed a
+> big-bang rewrite from the original bash implementation to a Node + TypeScript
+> engine, and a cutover commit deleted the bash sources. Decisions framed in
+> bash-era terms — e.g. Decision 1's "41 pipeline-\* bin scripts / 13 hooks" — now
+> map onto the **Model A** TypeScript surface: the deterministic engine is the
+> single `factory` CLI (`src/` → `dist/factory.js`) plus the `factory-hook`
+> dispatcher (`dist/factory-hook.js`, 7 guards in `hooks/hooks.json`); agents are
+> the markdown surface (`commands/`, `agents/`, `skills/`). The _principle_ each
+> decision records is unchanged; only the implementation substrate moved. For the
+> current architecture see [model-a.md](./model-a.md) and
+> [../architecture/overview.md](../architecture/overview.md). No decision below has
+> been edited or removed.
+
 ## Decision 1: Deterministic-First Architecture
 
 **Choice:** Approximately 5.4:1 ratio of deterministic components (bin scripts, hooks) to non-deterministic (agents). If a step CAN be a script, it MUST be a script.

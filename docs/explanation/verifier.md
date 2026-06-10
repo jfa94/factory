@@ -1,0 +1,105 @@
+# The Verifier and the Risk-Invariant Floor
+
+The verifier is the gate between a producer's output and a shipped PR. It is a
+**two-layer floor**: a deterministic machine-checkable layer and a judgment layer.
+A task ships only when the conjunction of both clears. This document explains the
+shape of the floor and the two design choices that distinguish it — the
+risk-invariant panel and verify-then-fix.
+
+## Two layers
+
+```mermaid
+graph TD
+  W[Task worktree] --> Gates[Deterministic gates<br/>test·tdd·coverage·mutation·sast·type·lint·build]
+  W --> Holdout[Holdout validation<br/>withheld answer-key]
+  W --> Panel[Judgment panel<br/>6 reviewers]
+  Gates --> Floor{Floor verdict<br/>conjunctive}
+  Holdout --> Floor
+  Panel --> VtF[Verify-then-fix<br/>confirm each blocker]
+  VtF --> Floor
+  Floor -->|clear| Ship[advance → ship]
+  Floor -->|blocked| Ladder[wait-retry → escalate the producer]
+```
+
+- **Deterministic layer** (`src/verifier/deterministic`) — the `GateRunner` runs
+  each enabled strategy, collects evidence, and derives a conjunctive verdict. See
+  [../reference/quality-gates.md](../reference/quality-gates.md). It is folded into
+  the floor as gate evidence.
+- **Holdout** (`src/verifier/holdout`) — a subset of the acceptance criteria is
+  withheld from the producer and validated independently after the fact, guarding
+  against work tailored to the visible target. Folded into the floor as a
+  `holdout` gate evidence entry.
+- **Judgment layer** (`src/verifier/judgment`) — a panel of reviewers, each
+  applying a current best-practice lens, whose confirmed blockers contribute to the
+  floor.
+
+The floor is **conjunctive**: every gate that ran must pass, the holdout must
+clear, and the panel must be unanimous. An empty-evidence (all-skipped) sweep
+fails — "nothing ran" is never "passed".
+
+## The risk-invariant panel (Decision 26)
+
+A natural-seeming design would size the review panel to the work's risk — a light
+panel for a copy tweak, a heavy one for an auth change. The factory deliberately
+does **not** do this for the floor. Every reviewer runs on every task:
+
+- `implementation-reviewer` — spec alignment: does the code address the spec, not
+  just pass the tests?
+- `quality-reviewer` — adversarial code quality (Codex is the preferred executor
+  when available).
+- `architecture-reviewer`, `security-reviewer`, `silent-failure-hunter`,
+  `type-design-reviewer`.
+
+Risk does not change _who_ reviews; it changes _the producer's starting model and
+escalation budget_ (see [producer-ladder.md](./producer-ladder.md)). The single
+`risk_tier` dial sizes the producer, not the verifier.
+
+Why invariant? Because under-scrutiny is the expensive failure mode for an
+unattended pipeline. A misclassified high-risk change reviewed by a narrow panel
+ships a real defect silently. Making the floor risk-invariant removes
+classification error from the verifier's blast radius: the panel is the panel,
+regardless of how the task was tiered. The reviewer model is fixed (not
+quota-routed) for the same reason — review quality must not degrade under quota
+pressure.
+
+## Verify-then-fix (Decision 27)
+
+A reviewer's raw "this is a blocker" cannot be trusted to act on directly: LLM
+reviewers hallucinate findings. So every blocking, citable finding (one carrying
+both a `file` and a `line`) is independently confirmed before it can block the
+task:
+
+1. **Citation-verify** — the finding's quoted code is checked against the actual
+   worktree source. An uncitable finding (missing `file`/`line`, or a quote that
+   does not match) is dropped.
+2. **Independent confirmation** — a separate finding-verifier, whose identity
+   differs from every reviewer, adversarially tries to refute the finding against
+   the code (`{ holds, note }`). A finding that does not hold is discarded.
+
+Only confirmed blockers reach the producer. This is why the orchestrator must run
+a finding-verifier for each blocking + citable finding and record its verdict: a
+kept citable blocker with no recorded verdict makes the floor **fail closed**
+(`record-reviews` rejects it) — independence is preserved by construction, never
+by trust.
+
+A reviewer that fails to produce a usable verdict is an `error`, not a silent
+`approve` — an unresolved verifier error never auto-ships.
+
+## How a blocked floor feeds back
+
+When the floor blocks, the verify stage returns a bounded `wait-retry`. The driver
+classifies it as `floor-blocked` and escalates the producer ladder: the rung is
+bumped, the reviewers are cleared, and a fresh panel runs after the producer
+re-attempts. A structurally-unfixable gate or an environmental blocker is
+classified-before-retry and drops immediately without burning a rung. See
+[producer-ladder.md](./producer-ladder.md).
+
+## Derive, don't store
+
+No floor verdict, panel verdict (as a floor), or gate verdict is persisted. The
+floor is re-derived from evidence every time it is needed — including inside the
+`pipeline-guards` hook that gates `gh pr create`/`merge`. The one stored judgment
+is each individual reviewer's panel verdict (that opinion is itself ground truth);
+the floor (unanimity) is computed from those. See
+[derive-dont-store.md](./derive-dont-store.md).
+</content>

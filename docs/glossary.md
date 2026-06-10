@@ -42,7 +42,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Counter-example: a Spec whose Tasks reference one another in a cycle — it is invalid and no Task runs.
 - **relationships**: derived from one PRD; enumerates the Run's Tasks; produced by Spec Generation; checked as part of Review.
 - **synonyms**: —
-- **code anchor**: `bin/pipeline-validate-spec`
+- **code anchor**: `src/spec/gates.ts`
 
 ### Spec Generation
 
@@ -75,7 +75,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Counter-example: four of five Tasks merge but the fifth repeatedly fails — the Run is _failed/halted_, not complete.
 - **relationships**: owns many Tasks; serves one PRD; governed by the Circuit Breaker.
 - **synonyms**: —
-- **code anchor**: `bin/pipeline-state`
+- **code anchor**: `src/core/state/manager.ts`
 
 ### Task
 
@@ -92,7 +92,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Counter-example: two Tasks that each claim to merge the same pull request — a Task owns one and only one.
 - **relationships**: belongs to a Run; depends on other Tasks; carries a Risk Tier; subject to Quality Gates, Holdout Validation, and Review.
 - **synonyms**: —
-- **code anchor**: `bin/pipeline-run-task`
+- **code anchor**: `src/cli/subcommands/run-task.ts`
 
 ## Quality & verification
 
@@ -100,17 +100,17 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 
 - **type**: Domain Service
 - **status**: accepted
-- **definition**: The independent judgment of a Task's delivered work before it may ship, carried out by a panel of reviewers sized to the work's Risk Tier, each applying a current industry-standard quality practice. Review is what makes shipping without a human watching trustworthy. The specific practices and reviewers are deliberately not fixed — they are expected to change as industry standards do.
+- **definition**: The independent judgment of a Task's delivered work before it may ship, carried out by a fixed panel of reviewers, each applying a current industry-standard quality practice. The panel is risk-invariant: every reviewer judges every Task at the same depth, whatever its Risk Tier. Review is what makes shipping without a human watching trustworthy. The specific practices and reviewers are deliberately not fixed — they are expected to change as industry standards do.
 - **invariants**:
   - A reviewer never judges work it authored.
   - A Task ships only with unanimous approval; if any reviewer asks for changes, the work returns to the Implementer, who must account for every raised blocker before re-review.
-  - The reviewer panel is determined by the Task's Risk Tier — higher risk widens scrutiny.
+  - The panel is risk-invariant — the same reviewers judge every Task at the same depth; scrutiny is never narrowed for work deemed low-risk.
 - **examples**:
-  - A security-tier Task draws adversarial security scrutiny on top of the routine panel; a docs change draws a lighter panel.
-  - Counter-example: shipping a Task while one reviewer still requests changes — Review is not satisfied.
-- **relationships**: gates a Task's ship; panel sized by Risk Tier; complements Quality Gates and Holdout Validation.
+  - A copy tweak and an authentication change face the same full panel — the floor never narrows.
+  - Counter-example: skipping the security reviewer on a "routine" Task — the panel does not shrink with perceived risk.
+- **relationships**: gates a Task's ship; panel is risk-invariant (Risk Tier dials the producer, not Review); complements Quality Gates and Holdout Validation.
 - **synonyms**: —
-- **code anchor**: `bin/pipeline-run-task`
+- **code anchor**: `src/verifier/judgment/panel-run.ts`
 
 ### Quality Gate
 
@@ -125,7 +125,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Counter-example: a gate reporting success because it failed to run — that contradicts what a gate is for.
 - **relationships**: applies to a Task; objective counterpart to Review; the TDD Gate is one specific Quality Gate.
 - **synonyms**: —
-- **code anchor**: `bin/pipeline-quality-gate`
+- **code anchor**: `src/verifier/deterministic/gate-runner.ts`
 
 ### TDD Gate
 
@@ -140,7 +140,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Counter-example: a task explicitly marked exempt in the Spec legitimately skips the gate.
 - **relationships**: a specific Quality Gate; enforces the Test Writer → Implementer ordering.
 - **synonyms**: —
-- **code anchor**: `bin/pipeline-tdd-gate`
+- **code anchor**: `src/verifier/deterministic/strategies/tdd.ts`
 
 ### Holdout Validation
 
@@ -155,7 +155,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Counter-example: "validating" against criteria the Implementer was shown — it proves nothing about overfitting.
 - **relationships**: applies to a Task; draws criteria from the Spec; complements Review.
 - **synonyms**: —
-- **code anchor**: `bin/pipeline-holdout-validate`
+- **code anchor**: `src/verifier/holdout/validate.ts`
 
 ## Risk & safety
 
@@ -163,16 +163,16 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 
 - **type**: Value Object
 - **status**: accepted
-- **definition**: A classification of how much scrutiny a piece of work warrants — routine, feature, or security — derived from the nature of its changes. It is how the domain spends review effort in proportion to risk rather than uniformly.
+- **definition**: A classification of how demanding a piece of work is — judged from its difficulty and stakes at Spec time — that dials how much production capability is spent on it. It is how the domain spends production effort in proportion to risk; verification scrutiny stays uniform regardless of tier.
 - **invariants**:
   - Every Task carries exactly one Risk Tier.
-  - The tier sets the minimum reviewer panel; higher tiers cannot be reviewed by a narrower panel than a lower tier.
+  - The tier dials the producer (the capability attempting the work), never the verification floor — Review and Quality Gates are identical across tiers.
 - **examples**:
-  - A change to authentication is classified security and draws the broadest panel; a copy tweak is routine.
-  - Counter-example: a security-sensitive change classified routine — a misclassification that under-scrutinizes risk.
-- **relationships**: carried by a Task; sizes the Review panel.
+  - A change to authentication is classified high-risk and is attempted with the strongest producer; a copy tweak is routine.
+  - Counter-example: a demanding change classified routine — a misclassification that under-resources its production.
+- **relationships**: carried by a Task; dials the producer; never alters Review or Quality Gates.
 - **synonyms**: known in the codebase as "risk_tier".
-- **code anchor**: `bin/pipeline-classify-risk`
+- **code anchor**: `src/spec/schema.ts`
 
 ### Circuit Breaker
 
@@ -187,7 +187,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Counter-example: one flaky failure that the next attempt recovers from does not trip it.
 - **relationships**: governs a Run; safeguard for unattended operation.
 - **synonyms**: —
-- **code anchor**: `bin/pipeline-circuit-breaker`
+- **code anchor**: `src/quota/circuit-breaker.ts`
 
 ## Roles
 

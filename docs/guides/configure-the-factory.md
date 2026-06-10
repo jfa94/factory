@@ -1,0 +1,75 @@
+# How to Configure the Factory
+
+All settings live in one schema with defaults; you override them in a sparse
+overlay. Edits round-trip through the schema before they touch disk, so an invalid
+value is rejected loudly and never persisted. For every key, type, and default see
+the [configuration reference](../reference/configuration.md).
+
+## Inspect the current config
+
+Print the fully resolved config (defaults + your overlay):
+
+```bash
+factory configure
+```
+
+Read a single value by its dotted key path:
+
+```bash
+factory configure --get quality.holdoutPercent
+factory configure --get git.stagingBranch
+```
+
+## Change a setting
+
+`--set` takes `key.path=value`, is repeatable, and persists once after validating
+all edits. Values parse as JSON when possible (numbers, booleans, arrays),
+otherwise as a bare string.
+
+```bash
+factory configure --set quality.holdoutPercent=25
+factory configure --set git.stagingBranch=integration
+factory configure --set git.provision=true
+factory configure --set 'git.requiredStatusChecks=["quality-gate","lint"]'
+```
+
+Set several at once:
+
+```bash
+factory configure \
+  --set quality.mutationScoreTarget=85 \
+  --set quality.coverageRegressionTolerancePct=0.25
+```
+
+## Revert a setting to its default
+
+`--unset` removes a key from the overlay so it tracks the default again
+(repeatable):
+
+```bash
+factory configure --unset quality.holdoutPercent
+```
+
+Because the overlay is sparse, an unset key automatically picks up any future
+change to its default.
+
+## Common adjustments
+
+| Goal                                                | Command                                                             |
+| --------------------------------------------------- | ------------------------------------------------------------------- |
+| Hold back more acceptance criteria                  | `factory configure --set quality.holdoutPercent=30`                 |
+| Raise the mutation bar                              | `factory configure --set quality.mutationScoreTarget=90`            |
+| Use a custom security scanner                       | `factory configure --set quality.securityCommand="my-sast --json"`  |
+| Support an exotic test runner without bypassing TDD | `factory configure --set quality.redTestCommand="go test ./..."`    |
+| Auto-provision branch protection                    | `factory configure --set git.provision=true`                        |
+| Re-tier producer models                             | `factory configure --set quota.producerModels.high=claude-opus-4-6` |
+
+## Notes
+
+- `--get` cannot be combined with `--set`/`--unset`.
+- The spec apex pin (`spec.specModel` / `spec.specEffort`) is surfaced as a
+  default but the apex boundary reads the frozen value, not a per-run override — see
+  the [configuration reference](../reference/configuration.md).
+- The trusted-compute-base write-deny is **hardcoded** in the hooks, not
+  config-sourced; there is no config key to widen it.
+  </content>

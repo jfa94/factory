@@ -1,233 +1,113 @@
 # Getting Started
 
-This guide walks through installing the factory plugin, configuring it for your project, and running your first autonomous coding pipeline.
+This tutorial gets you from a fresh clone to a working build of the Dark Factory
+engine, and walks the deterministic CLI through a run so you can see the Model-A
+split first-hand. By the end you will have the test suite green, both bundles
+built, and a feel for how the `factory` CLI reports and writes state.
+
+This is a **contributor** tutorial — it teaches the engine. To _operate_ the
+factory against a repository, follow [Run the pipeline](./guides/run-the-pipeline.md)
+afterward.
 
 ## Prerequisites
 
-Before installing the plugin, ensure you have:
+- Node.js **22 or newer** (`node --version`).
+- `git`.
+- A clone of this repository.
 
-1. **Claude Code** installed and authenticated
-2. **Git** with a configured remote repository
-3. **GitHub CLI** (`gh`) installed and authenticated (`gh auth login`)
-
-All required agents and skills ship with the plugin. Bundled agents: `architecture-reviewer`, `implementation-reviewer`, `quality-reviewer`, `rescue-diagnostic`, `scribe`, `security-reviewer`, `spec-generator`, `spec-reviewer`, `task-executor`, `test-writer`.
-
-Verify prerequisites with:
+## 1. Install dependencies
 
 ```bash
-claude --version
-gh auth status
-git remote get-url origin
+cd factory-plugin
+npm install
 ```
 
-## Step 1: Install the Plugin
+## 2. Run the full verification
 
-### Marketplace install (recommended)
-
-Inside Claude Code, run:
-
-```
-/plugin marketplace add jfa94/factory
-/plugin install factory@jfa94
-```
-
-Claude Code handles cloning, discovery, and future updates automatically. Verify with `/help` — you should see `/factory:run`, `/factory:configure`, and other `/factory:*` commands listed.
-
-### Manual install (air-gapped or offline)
-
-If you cannot reach GitHub from your Claude Code session:
+The single command that typechecks, lints, tests, and builds is:
 
 ```bash
-git clone https://github.com/jfa94/factory.git ~/code/factory-plugin
+npm run verify
 ```
 
-Inside Claude Code, register the cloned directory as a local marketplace and install:
+You should see the test suite pass (108 test files, 1140 tests at the time of
+writing) and two bundles written to `dist/`. This command is the contract the CI
+gate enforces; if it is green, your checkout is healthy.
 
-```
-/plugin marketplace add ~/code/factory-plugin
-/plugin install factory@jfa94
-```
+> Note: `npx tsc` is shadowed in this repo. Always use `npm run typecheck` for a
+> standalone type check.
 
-Claude Code reads `.claude-plugin/marketplace.json` from the directory and installs the plugin into its local cache. `/help` should then list the `/factory:*` commands.
-
-## Step 2: Rate Limit Detection (automatic)
-
-The pipeline requires real-time rate limit data to make pause/continue decisions. This is captured via a statusline wrapper script that is **automatically configured** for all pipeline sessions — no setup required.
-
-When you first run `/factory:run`, `pipeline-ensure-autonomy` generates `merged-settings.json` with `statusLine.command` pointing at the wrapper. Every pipeline session launched with `--settings merged-settings.json` writes rate limit data to `usage-cache.json` automatically.
-
-**If you have a custom statusline,** it is preserved: the plugin reads your existing `statusLine.command` from `~/.claude/settings.json` and chains to it via `FACTORY_ORIGINAL_STATUSLINE` — your non-pipeline sessions are unaffected.
-
-If auto-detection misses a complex chained statusline, set `FACTORY_ORIGINAL_STATUSLINE` manually in `~/.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "FACTORY_ORIGINAL_STATUSLINE": "~/.claude/your-statusline.sh"
-  }
-}
-```
-
-## Step 3: Configure Your Project
-
-Run the configuration command to review and adjust settings:
-
-```
-/factory:configure
-```
-
-This opens an interactive settings editor. It reads your current config from `${CLAUDE_PLUGIN_DATA}/config.json` (created on first write) and falls back to plugin defaults for any unset value. `CLAUDE_PLUGIN_DATA` is set by Claude Code's plugin runtime to `~/.claude/plugins/data/<plugin-id>/` (e.g. `~/.claude/plugins/data/factory-<owner>/`).
-
-Key settings to review on first setup:
-
-| Setting                  | Default | Description                                 |
-| ------------------------ | ------- | ------------------------------------------- |
-| `humanReviewLevel`       | 0       | Human oversight level (0–4)                 |
-| `maxConsecutiveFailures` | 5       | Consecutive failures before pipeline aborts |
-| `maxParallelTasks`       | 3       | Concurrent task executors                   |
-
-**`humanReviewLevel` values:**
-
-| Level | Name              | What happens                                                               |
-| ----- | ----------------- | -------------------------------------------------------------------------- |
-| 0     | Full Autonomy     | Pipeline creates PR and enables auto-merge; no human touchpoints (default) |
-| 1     | PR Approval       | Pipeline creates PR; you review and merge manually                         |
-| 2     | Review Checkpoint | You sign off on completed work before the PR is created                    |
-| 3     | Spec Approval     | You approve the generated spec before task execution begins                |
-| 4     | Full Supervision  | You approve at every stage: spec, each task, review, and PR                |
-
-> **Level 0 (default) assumes:**
->
-> - Branch protection on your default branch requires a passing CI check before merge.
-> - GitHub auto-merge is enabled on the repo (Settings → General → Pull Requests → "Allow auto-merge").
-> - Your CI covers the tests, linters, and type checks the plugin generates (`npm test`, `npm run lint`, etc.).
->
-> If any of these are missing, set `humanReviewLevel` to 1 so you approve each PR manually. CI acts as the merge gate; the plugin will not bypass a failing check.
-
-On your first run, you may want to temporarily set `humanReviewLevel=3` to review the generated specification before any code is written. Resume after approval with `/factory:run resume`.
-
-See [Configuration](./guides/configuration.md) for the full settings reference.
-
-## Step 4: Launch with Autonomous Settings
-
-The pipeline requires a specific Claude Code session with safety hooks, permission allowlists, and deny-lists loaded. This is a **one-time bootstrap** — once the settings file is materialized you reuse it for every subsequent run.
-
-### Session A — generate the settings file
-
-Start Claude Code normally and run the pipeline command:
-
-```
-/factory:run prd --issue 42
-```
-
-Because autonomous mode is not yet active, the command will:
-
-1. Materialize `$CLAUDE_PLUGIN_DATA/merged-settings.json` (resolving all `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` placeholders inside the template)
-2. Print the relaunch command
-3. Stop — it will not proceed
-
-> **Note:** Do not pass `templates/settings.autonomous.json` directly to `claude --settings`. That file contains unresolved `${CLAUDE_PLUGIN_ROOT}` tokens and will not work until the pipeline materializes `merged-settings.json`.
-
-### Session B — relaunch with autonomous settings
-
-#### Recommended — use the settings file
-
-Use the path the command printed:
+## 3. Look at what was built
 
 ```bash
-claude --settings $CLAUDE_PLUGIN_DATA/merged-settings.json
+ls dist/
 ```
 
-This loads:
+You will see two checked-in, self-contained bundles:
 
-- **PreToolUse hooks**: branch protection, protected-file guards, SQL safety checks, dangerous-bash pattern detection
-- **PostToolUse hooks**: prettier auto-format, related-test runner, audit log to `.claude/tool-audit.jsonl`
-- **Stop hook**: vitest gate before Claude exits
-- **Permission allowlist/denylist**: scoped to safe pipeline operations
+- `dist/factory.js` — the CLI engine.
+- `dist/factory-hook.js` — the hook-guard dispatcher.
 
-#### Advanced / CI — bypass the acknowledgment check only
+Both are produced by `node scripts/build.mjs` (esbuild, fully inlined so they run
+with no `node_modules`). `bin/factory` is a thin shim that execs `dist/factory.js`.
 
-Setting `FACTORY_AUTONOMOUS_MODE=1` in your environment lets `/factory:run` proceed but does **not** load the hooks or permission lists. Use this only in CI environments where equivalent guardrails are already enforced at the host level (sandboxed runner, GitHub branch protection, no production credentials on disk). For interactive runs on your own machine, always use the settings file.
+## 4. List the CLI surface
 
-> **Plugin upgrades:** `merged-settings.json` is regenerated automatically when you run `/factory:run` after a plugin upgrade — no manual action required. The new file is written to `$CLAUDE_PLUGIN_DATA/merged-settings.json`; relaunch Claude with `--settings` pointing at it to pick up the updated hooks and permissions.
-
-## Step 5: Create a PRD Issue
-
-Create a GitHub issue with the `prd` label describing the work you want done. The issue body should contain:
-
-- Clear problem statement
-- Acceptance criteria
-- Technical constraints (if any)
-- Non-goals (what not to build)
-
-Example issue body:
-
-```markdown
-## Problem
-
-Users cannot reset their password from the login page.
-
-## Acceptance Criteria
-
-- [ ] "Forgot password?" link on login page
-- [ ] Email input form with validation
-- [ ] Password reset email sent via SendGrid
-- [ ] Reset token expires after 1 hour
-- [ ] Rate limit: 3 requests per email per hour
-
-## Non-Goals
-
-- Do not change the existing authentication flow
-- Do not add SMS-based reset
-```
-
-> The `prd` label is used by `/factory:run discover` to find issues automatically. When using `prd` mode with `--issue`, the label is not required unless you pass `--strict`.
-
-## Step 6: Run the Pipeline
-
-Execute the pipeline targeting your PRD issue (from Session B):
-
-```
-/factory:run prd --issue 42
-```
-
-The pipeline will:
-
-1. Fetch the PRD from GitHub
-2. Generate a spec with task decomposition
-3. (If `humanReviewLevel >= 3`) Pause for your spec approval
-4. Execute each task in dependency order
-5. Run adversarial code review
-6. Create pull requests targeting the `staging` branch
-
-## Step 7: Monitor Progress
-
-The pipeline logs progress to stderr. Key checkpoints:
-
-- **Spec generated**: Review at `.state/<run-id>/spec.md`
-- **Task executing**: Each task runs in an isolated git worktree
-- **Review round N**: Adversarial reviewer findings
-- **PR created**: Link to the pull request
-
-To check the state of a run (macOS example path):
+Run the CLI's help to see every subcommand:
 
 ```bash
-# $CLAUDE_PLUGIN_DATA is set by Claude Code, e.g. ~/.claude/plugins/data/factory-<owner>/
-cat "${CLAUDE_PLUGIN_DATA}/runs/current/state.json" | jq '.tasks | to_entries | map({task: .key, status: .value.status})'
+node dist/factory.js --help
 ```
 
-## Step 8: Resume an Interrupted Run
+The subcommands are the engine's entire public surface. Each is either a
+**reporter** (read-only; prints a JSON envelope) or a **writer** (one state
+mutation). For the complete contract, see [reference/cli.md](./reference/cli.md).
 
-If the pipeline stops mid-run (network issue, rate limit, manual stop):
+## 5. See the resolved config
 
+The config schema centralizes every default in one place. Print the fully
+resolved config:
+
+```bash
+node dist/factory.js config-defaults
 ```
-/factory:run resume
+
+This is the all-defaults config (`ConfigSchema.parse({})` under the hood). Every
+gate threshold, the producer-model dial, the quota curves, and the git branch
+contract are here. See [reference/configuration.md](./reference/configuration.md).
+
+## 6. Understand the run loop without running it
+
+You now have the engine. The orchestration that drives a real run lives in
+markdown, not in the CLI — that is the Model-A split. Read these two files in
+order:
+
+1. `commands/run.md` — the `/factory:run` entry point (the spine).
+2. `skills/pipeline-orchestrator/SKILL.md` — the full control loop: the Iron
+   Laws, the CLI surface table, the agent-spawn matrix, and the four phases
+   (preconditions → spec → create → drive → completion).
+
+As you read, map each prose step to a CLI call. For example, the orchestrator's
+inner per-task loop runs `factory run-task --stage <stage>`, reads the JSON
+envelope, performs any agent spawn the envelope reports, and folds the outcome
+back with `factory record-producer` / `factory record-reviews`. The CLI tells the
+orchestrator the next stage; the orchestrator never invents it.
+
+## 7. Run the unit tests for one module
+
+To iterate on a single module, run vitest in watch mode scoped to a path:
+
+```bash
+npx vitest src/verifier/deterministic
 ```
 
-The orchestrator reads the persisted state in `runs/current/` and continues from the first incomplete task.
+Tests are colocated next to their source as `*.test.ts`. The whole suite is the
+source of truth for behavior — read a module's test file alongside the module.
 
-## Next Steps
+## Where to go next
 
-- Read [Running the Pipeline](./guides/running-pipeline.md) for all operating modes
-- Review [Configuration](./guides/configuration.md) to tune quality gates
-- See [Rate Limiting](./explanation/rate-limiting.md) for pause/resume behavior when approaching limits
+- To operate the factory: [Run the pipeline](./guides/run-the-pipeline.md).
+- To work on the engine: [Build and verify](./guides/build-and-verify.md).
+- To understand the design: [Model A](./explanation/model-a.md) and the
+  [System Overview](./architecture/overview.md).
+  </content>

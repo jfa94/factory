@@ -1,541 +1,131 @@
 # Configuration Schema
 
-Complete reference for every runtime config option read by the pipeline scripts from `${CLAUDE_PLUGIN_DATA}/config.json`. Write values with `/factory:configure`.
+All configuration lives in one Zod schema, `src/config/schema.ts`, where every
+field carries a default. `ConfigSchema.parse({})` yields a complete, typed config,
+so a missing config file is equivalent to all-defaults. Inspect and edit the
+overlay with `factory configure` (see [cli.md](./cli.md)); print the resolved
+config with `factory config-defaults`.
 
-## Pipeline Behavior
+Edits are persisted as a **sparse overlay** — only the keys you set are written,
+so unset keys continue to track future default changes.
 
-### maxRuntimeMinutes
+Key paths are dotted (e.g. `quality.holdoutPercent`, `git.stagingBranch`).
 
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 0      |
-| Min      | 0      |
-| Max      | 1440   |
+## `quality`
 
-Maximum pipeline runtime in minutes before circuit breaker trips. `0` = unlimited (default). Set to a positive value to enable a wall-clock emergency brake.
+Quality-gate thresholds.
 
-### maxConsecutiveFailures
+| Key                              | Type              | Default | Meaning                                                                                                             |
+| -------------------------------- | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `holdoutPercent`                 | number 0–100      | `20`    | Percent of acceptance criteria withheld as an unreadable answer-key.                                                |
+| `holdoutPassRate`                | number 0–100      | `80`    | Min pass-rate (%) on the holdout set to clear the gate.                                                             |
+| `mutationScoreTarget`            | number 0–100      | `80`    | Target mutation score (%) for the mutation gate.                                                                    |
+| `coverageRegressionTolerancePct` | number ≥0         | `0.5`   | Allowed coverage regression (percentage points) before the gate fails.                                              |
+| `securityCommand`                | string (optional) | —       | Custom SAST/security command; else the built-in semgrep run.                                                        |
+| `securityAllowFailures`          | boolean           | `false` | Treat security findings as non-blocking.                                                                            |
+| `securityRedactFindings`         | boolean           | `true`  | Redact secrets from the persisted findings artifact.                                                                |
+| `redTestCommand`                 | string (optional) | —       | Custom red-test verification command for exotic runners (Go, Ruby, Deno…), so TDD enforcement need not be bypassed. |
 
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 5      |
-| Min      | 1      |
-| Max      | 10     |
+## `quota`
 
-Consecutive task failures before pipeline aborts.
+The two-window quota pacer.
 
-### humanReviewLevel
+| Key                     | Type      | Default                  | Meaning                                                     |
+| ----------------------- | --------- | ------------------------ | ----------------------------------------------------------- |
+| `sleepCapSec`           | int >0    | `540`                    | Max single sleep chunk per gate call (seconds).             |
+| `maxWaitCycles`         | int >0    | `60`                     | Max wait cycles before the gate ends a wait.                |
+| `maxStaleCycles`        | int >0    | `6`                      | Max consecutive stale-cache cycles before graceful end.     |
+| `wallBudgetMin`         | int >0    | `75`                     | Accumulated wall-clock wait budget across cycles (minutes). |
+| `hourlyThresholds`      | number[5] | `[20,40,60,80,90]`       | 5h-window utilization caps by hour 1..5 (%).                |
+| `dailyThresholds`       | number[7] | `[14,29,43,57,71,86,95]` | 7d-window utilization caps by day 1..7 (%).                 |
+| `producerModels.low`    | string    | `claude-haiku-4-5`       | Producer model for low risk tier.                           |
+| `producerModels.medium` | string    | `claude-sonnet-4-5`      | Producer model for medium risk tier.                        |
+| `producerModels.high`   | string    | `claude-opus-4-6`        | Producer model for high risk tier.                          |
 
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 0      |
-| Min      | 0      |
-| Max      | 4      |
+The review panel is risk-_invariant_ (Decision 26), so there is no review-depth
+dial here. `producerModels` is the only dial the quota router carries.
 
-Human oversight level. Default (0) assumes CI branch protection and GitHub auto-merge are enabled. Note: the default was changed from 2 to 0 in version 0.9.1 to match the documented config example.
+## `spec`
 
-| Value | Name              | Behavior                                             |
-| ----- | ----------------- | ---------------------------------------------------- |
-| 0     | Full Autonomy     | Pipeline creates PR and enables auto-merge (default) |
-| 1     | PR Approval       | Pipeline creates PR, human merges                    |
-| 2     | Review Checkpoint | Human signs off before PR creation                   |
-| 3     | Spec Approval     | Human approves spec before execution                 |
-| 4     | Full Supervision  | Human approves at every stage                        |
+The spec-build pipeline.
 
-### maxParallelTasks
+| Key                   | Type     | Default | Meaning                                                                          |
+| --------------------- | -------- | ------- | -------------------------------------------------------------------------------- |
+| `passReviewThreshold` | int 0–60 | `56`    | The single spec-review pass threshold out of 60.                                 |
+| `dimensionFloor`      | int 0–10 | `5`     | Any rubric dimension scoring `≤` this forces NEEDS_REVISION regardless of total. |
+| `maxRegenIterations`  | int >0   | `5`     | Max generate ⇄ review revision iterations before a loud give-up.                 |
+| `specModel`           | string   | `opus`  | Apex model the spec generator AND reviewer are pinned to (Decision 21).          |
+| `specEffort`          | string   | `max`   | Apex effort for the spec generator AND reviewer.                                 |
+| `prdBodyMaxBytes`     | int >0   | `65536` | Max bytes of PRD body retained before truncation.                                |
 
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 3      |
-| Min      | 1      |
-| Max      | 10     |
+`specModel`/`specEffort` are an _unconditional_ apex pin: the apex boundary reads
+the frozen defaults, not a per-run override.
 
-Maximum concurrent task-executor agents.
+## `review`
 
----
+The judgment panel.
 
-## Code Review
+| Key             | Type              | Default | Meaning                                                       |
+| --------------- | ----------------- | ------- | ------------------------------------------------------------- |
+| `model`         | string (optional) | —       | Reviewer model id (panel runs on a fixed model, Decision 26). |
+| `maxTurnsDeep`  | int >0            | `40`    | Max turns for a deep review pass.                             |
+| `maxTurnsQuick` | int >0            | `20`    | Max turns for a quick review pass.                            |
 
-### review.routineRounds
+## `testWriter`
 
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 2      |
-| Min      | 1      |
-| Max      | 5      |
+| Key        | Type   | Default | Meaning                         |
+| ---------- | ------ | ------- | ------------------------------- |
+| `maxTurns` | int >0 | `30`    | Max turns for a producer agent. |
 
-Review rounds for routine-tier tasks.
+## `scribe`
 
-### review.featureRounds
+| Key        | Type   | Default | Meaning                                |
+| ---------- | ------ | ------- | -------------------------------------- |
+| `maxTurns` | int >0 | `20`    | Max turns for the docs (Scribe) agent. |
 
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 4      |
-| Min      | 1      |
-| Max      | 10     |
+## `codex`
 
-Maximum adversarial review rounds for feature-tier tasks.
+| Key     | Type              | Default | Meaning                            |
+| ------- | ----------------- | ------- | ---------------------------------- |
+| `model` | string (optional) | —       | Codex cross-vendor executor model. |
 
-### review.securityRounds
+## `observability`
 
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 6      |
-| Min      | 1      |
-| Max      | 10     |
+| Key                    | Type    | Default | Meaning                                |
+| ---------------------- | ------- | ------- | -------------------------------------- |
+| `auditLog`             | boolean | `true`  | Emit the jsonl audit log.              |
+| `metricsRetentionDays` | int >0  | `30`    | Days to retain metrics before pruning. |
 
-Maximum adversarial review rounds for security-tier tasks.
+## `dependencies`
 
-### review.preferCodex
-
-| Property | Value   |
-| -------- | ------- |
-| Type     | boolean |
-| Default  | true    |
-
-Use Codex adversarial review when available, fall back to Claude Code.
-
-### review.model
-
-| Property | Value    |
-| -------- | -------- |
-| Type     | string   |
-| Default  | `sonnet` |
-
-Claude model passed to every reviewer spawn manifest in `bin/pipeline-run-task` (`implementation-reviewer`, `quality-reviewer`, `security-reviewer`, `architecture-reviewer`, holdout-reviewer). Also threaded into `task-executor` re-spawns (review-fix loop, CI fix) and `scribe` so the entire post-execution surface runs on the same model. Read from `.review.model` in `config.json` (via `read_config`). See `docs/guides/configuration.md` for the operator-facing description.
-
-### review.maxTurnsQuick
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 25     |
-
-`maxTurns` for quick reviewer passes. Currently unused; reserved for future per-pass differentiation.
-
-### review.maxTurnsDeep
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 30     |
-
-`maxTurns` applied to every deep reviewer pass (all reviewer subagents plus holdout-reviewer and parallel architecture/security reviewers).
-
-### testWriter.maxTurns
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 40     |
-
-`maxTurns` for the `test-writer` subagent spawned in `preexec_tests`.
-
-### scribe.maxTurns
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 60     |
-
-`maxTurns` for the `scribe` subagent spawned in `finalize-run`, and for `task-executor` re-spawns during the review-fix loop and CI fix paths.
-
-### codex.model
-
-| Property | Value   |
-| -------- | ------- |
-| Type     | string  |
-| Default  | (empty) |
-
-Model passed to `codex exec` as `-c model="..."`. Read from `.codex.model` in `config.json` (via `read_config`); overridden by the `FACTORY_CODEX_MODEL` env var when set. Empty/unset leaves codex to resolve its default from `~/.codex/config.toml`. Charset-validated against `^[a-zA-Z0-9._-]+$`; invalid values exit `pipeline-codex-review` with rc=1. See `docs/guides/configuration.md#codexmodel--factory_codex_model` for ChatGPT-account installation guidance.
-
----
-
-## Quality Gates
-
-### quality.holdoutPercent
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 20     |
-| Min      | 0      |
-| Max      | 50     |
-
-Percentage of acceptance criteria to withhold for holdout validation. Set to 0 to disable holdout validation.
-
-### quality.holdoutPassRate
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 80     |
-| Min      | 50     |
-| Max      | 100    |
-
-Minimum percentage of withheld criteria that must be satisfied.
-
-### quality.mutationScoreTarget
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 80     |
-| Min      | 50     |
-| Max      | 100    |
-
-Minimum mutation score percentage.
-
-### quality.mutationTestingTiers
-
-| Property | Value                     |
-| -------- | ------------------------- |
-| Type     | array                     |
-| Default  | `["feature", "security"]` |
-
-**Deprecated, no-op.** Mutation testing now runs unconditionally for every staging-bound task PR (matching CI). The risk-tier filter has been removed. This setting is read but ignored. To disable mutation locally, drop the `test:mutation` script from `package.json` (the gate then skips with reason `no-script`).
-
-### quality.coverageMustNotDecrease
-
-| Property | Value   |
-| -------- | ------- |
-| Type     | boolean |
-| Default  | true    |
-
-Block tasks that decrease test coverage.
-
-### quality.coverageRegressionTolerancePct
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 0.5    |
-| Min      | 0      |
-| Max      | 10     |
-
-Maximum allowed drop in coverage (percentage points) before the regression gate fails. Default `0.5` absorbs measurement noise from branch/line count shifts. This is a regression tolerance, NOT a minimum-coverage floor — projects that want to enforce a floor should add a dedicated CI step.
-
-### quality.redTestCommand
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | string |
-| Default  | (none) |
-
-Custom command for red-test verification in repos with exotic test runners (Go, Ruby, Deno, etc.). When set, the TDD gate uses this command instead of the default vitest/jest detection.
-
-**Security constraints:**
-
-- Every token must match `[A-Za-z0-9._/=:+-]+` (no shell metacharacters, globs, tildes, or unicode)
-- Command prefix must match an allowed runner sequence:
-  - Single-token: `pytest`, `vitest`, `jest`, `mocha`, `phpunit`, `rspec`
-  - Two-token: `go test`, `cargo test`, `deno test`
-  - Three-token: `bundle exec rspec`
-
-Commands that fail validation are rejected and the task is marked failed with `reason: "unsafe_command"` or `reason: "unallowed_runner"`.
-
-### quality.securityCommand
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | string |
-| Default  | (none) |
-
-Command to run as a static security analysis gate during `pipeline-run-task` postexec. When unset, the gate is skipped entirely (opt-in). When set, the command is executed in the task worktree; stdout is saved as the findings artifact; non-zero exit fails the task (unless `quality.securityAllowFailures` is `true`).
-
-**Security constraints** (same as `redTestCommand`):
-
-- Every token must match `[A-Za-z0-9._/=:+-]+` (no shell metacharacters or spaces)
-- Command prefix must match an allowed runner:
-  - Single-token: `semgrep`, `pytest`, `vitest`, `jest`, `mocha`, `phpunit`, `rspec`
-  - Two-token: `go test`, `cargo test`, `deno test`
-  - Three-token: `bundle exec rspec`
-
-**Example:** `"semgrep --config auto --error"`
-
-### quality.securityAllowFailures
-
-| Property | Value   |
-| -------- | ------- |
-| Type     | boolean |
-| Default  | false   |
-
-When `true`, `pipeline-security-gate` records findings but does not block the task. Useful during initial rollout to observe findings without breaking the pipeline.
-
-### quality.securityRedactFindings
-
-| Property | Value   |
-| -------- | ------- |
-| Type     | boolean |
-| Default  | true    |
-
-When `true` (default), `pipeline-security-gate` redacts **both** of the security
-command's captured streams in place — after the scan runs, before anything reads
-them — replacing any matched secret token (the same pattern set as
-`hooks/secret-commit-guard.sh`) with `[REDACTED]`: the findings artifact
-(stdout) and the companion `<task-id>.security-gate.log` (stderr, since
-verbose/error-mode scanners can echo offending source lines there). This keeps
-secret-bearing source snippets — which scanners like Semgrep embed in their
-findings — out of `$CLAUDE_PLUGIN_DATA` at rest. Each artifact fails closed on a
-redaction error (findings → JSON error envelope; log → plain-text withheld
-marker), so a failed pass never leaves raw output on disk.
-
-Set to `false` to persist the raw scanner output verbatim. This keeps full
-fidelity for local debugging but means both the findings file and the stderr log
-may contain secrets; do not export either (PR comment, gist, telemetry, artifact
-upload) without re-running it through redaction.
-
----
-
-## Task Execution
-
-### execution.defaultModel
-
-| Property | Value               |
-| -------- | ------------------- |
-| Type     | string              |
-| Default  | sonnet              |
-| Enum     | haiku, sonnet, opus |
-
-Default model for task execution. Overridden by per-tier overrides below:
-
-| Tier (from `pipeline-classify-task`) | Default model | Override key                    |
-| ------------------------------------ | ------------- | ------------------------------- |
-| Simple                               | haiku         | `execution.modelByTier.simple`  |
-| Medium                               | sonnet        | `execution.modelByTier.medium`  |
-| Complex                              | opus          | `execution.modelByTier.complex` |
-
-### execution.modelByTier.simple
-
-| Property | Value               |
-| -------- | ------------------- |
-| Type     | string              |
-| Default  | haiku               |
-| Enum     | haiku, sonnet, opus |
-
-Model used for tasks classified as simple tier (low file count, no dependencies).
-
-### execution.modelByTier.medium
-
-| Property | Value               |
-| -------- | ------------------- |
-| Type     | string              |
-| Default  | sonnet              |
-| Enum     | haiku, sonnet, opus |
-
-Model used for tasks classified as medium tier.
-
-### execution.modelByTier.complex
-
-| Property | Value               |
-| -------- | ------------------- |
-| Type     | string              |
-| Default  | opus                |
-| Enum     | haiku, sonnet, opus |
-
-Model used for tasks classified as complex tier (many files or deep dependency chains).
-
-### execution.maxTurnsSimple
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 40     |
-| Min      | 10     |
-| Max      | 200    |
-
-Max turns for simple/haiku-tier tasks.
-
-### execution.maxTurnsMedium
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 60     |
-| Min      | 20     |
-| Max      | 200    |
-
-Max turns for medium/sonnet-tier tasks.
-
-### execution.maxTurnsComplex
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 80     |
-| Min      | 20     |
-| Max      | 200    |
-
-Max turns for complex/opus-tier tasks.
-
----
-
-## Dependencies
-
-### dependencies.prMergeTimeout
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 45     |
-| Min      | 5      |
-| Max      | 180    |
-
-Minutes to wait for dependency PR to merge.
-
-### dependencies.pollInterval
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 60     |
-| Min      | 10     |
-| Max      | 300    |
-
-Seconds between merge status polls.
-
----
-
-## Observability
-
-### observability.auditLog
-
-| Property | Value   |
-| -------- | ------- |
-| Type     | boolean |
-| Default  | true    |
-
-Enable tamper-evident audit logging of all tool uses.
-
-### observability.metricsExport
-
-| Property | Value        |
-| -------- | ------------ |
-| Type     | string       |
-| Default  | json         |
-| Enum     | json, sqlite |
-
-Metrics storage format.
-
-### observability.metricsRetentionDays
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 90     |
-| Min      | 7      |
-| Max      | 365    |
-
-Days to retain metrics data.
-
----
-
-## Quota Management
-
-### quota.wallBudgetMin
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 75     |
-| Min      | 5      |
-| Max      | 120    |
-
-Maximum accumulated consecutive pause time (in minutes) before the quota gate surfaces a human gate. When rate limits force the pipeline to sleep, pause time accumulates in `.circuit_breaker.pause_minutes_consecutive`. This counter resets to zero whenever the router returns `action: proceed`. Once this budget is exhausted, further waits trigger `end_gracefully` rather than sleeping indefinitely.
-
-A separate counter `.circuit_breaker.pause_minutes_total` tracks cumulative pause time for audit purposes and is never reset.
-
-### quota.sleepCapSec
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 540    |
-| Min      | 60     |
-| Max      | 1800   |
-
-Maximum sleep duration per quota wait cycle (in seconds). The gate uses exponential back-off (120s base, doubling each cycle) capped at this value.
-
-### quota.maxWaitCycles
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 60     |
-| Min      | 1      |
-| Max      | 200    |
-
-Maximum consecutive wait cycles (utilization still over threshold) before `end_gracefully`. At default sleep cap of 540s, 60 cycles is approximately 9 hours.
-
-### quota.maxStaleCycles
-
-| Property | Value  |
-| -------- | ------ |
-| Type     | number |
-| Default  | 6      |
-| Min      | 1      |
-| Max      | 20     |
-
-Maximum consecutive stale-cache yields (statusline silent) before `end_gracefully`. At default intervals, 6 cycles is approximately 1 hour.
-
----
-
-## Safety
-
-Used by the `write-protection` and `secret-commit-guard` PreToolUse hooks. All three keys default to permissive values so the hooks no-op until a project opts in.
-
-### safety.writeBlockedPaths
-
-| Property | Value |
-| -------- | ----- |
-| Type     | array |
-| Default  | `[]`  |
-
-Glob patterns (bash globstar + extglob) of file paths that the write-protection hook must block. Evaluated on PreToolUse for `Edit`, `Write`, and `MultiEdit` tool calls. Empty by default; add entries like `"**/migrations/**"` or `".env*"` to opt into blocking.
-
-### safety.useTruffleHog
-
-| Property | Value   |
-| -------- | ------- |
-| Type     | boolean |
-| Default  | false   |
-
-When `true`, the secret-commit-guard hook runs `trufflehog filesystem --directory <cwd> --only-verified` before every `git commit` in addition to the built-in path and regex scans. Findings are filtered against `safety.allowedSecretPatterns`. If `trufflehog` is not installed the hook logs a warning and continues with regex-only scanning (does not block).
-
-### safety.allowedSecretPatterns
-
-| Property | Value |
-| -------- | ----- |
-| Type     | array |
-| Default  | `[]`  |
-
-Regex patterns (extended regex, evaluated by `grep -E`) for known-safe secret-like strings (e.g. Supabase anon keys, Stripe publishable keys). Any path-scan hit or TruffleHog finding whose raw value matches one of these patterns is filtered out before the hook decides whether to block a commit.
-
-### safety.testWriterFixtureDirs
-
-| Property | Value |
-| -------- | ----- |
-| Type     | array |
-| Default  | `[]`  |
-
-Additional directories the test-writer phase is allowed to write to. By default, only `tests/`, `__tests__/`, `fixtures/`, and files matching `*.test.*` / `*.spec.*` patterns are permitted during the `preexec_tests` stage. Add entries like `"test-fixtures"` or `"e2e/fixtures"` to extend the allowlist. Entries must be at least 2 characters, not start with `/` or `./`, and not contain `..`.
-
----
-
-## Configuration Reading Semantics
-
-### read_config vs read_config_strict
-
-Two config reading functions exist in `pipeline-lib.sh`:
-
-- **`read_config <key> [default]`** — Returns the value at `<key>`, or `default` if the key is missing or `null`.
-- **`read_config_strict <key>`** — Returns the value at `<key>`, or empty string if the key is `null` or missing. Use when an explicit `null` in `config.json` should mean "unset" rather than "fall back to default".
-
-This distinction matters for optional overrides where "not configured" and "explicitly disabled" are different states.
+| Key              | Type   | Default | Meaning                                                   |
+| ---------------- | ------ | ------- | --------------------------------------------------------- |
+| `pollInterval`   | int >0 | `30`    | Poll interval while waiting on a dependency PR (seconds). |
+| `prMergeTimeout` | int >0 | `1800`  | Timeout waiting for a PR to merge (seconds).              |
+
+## `git`
+
+Branch and protection contract.
+
+| Key                    | Type     | Default   | Meaning                                                                                                                                               |
+| ---------------------- | -------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseBranch`           | string   | `develop` | The durable base branch staging forks from and rolls up into. Never `main`.                                                                           |
+| `stagingBranch`        | string   | `staging` | The integration branch task PRs serial-merge into.                                                                                                    |
+| `requiredStatusChecks` | string[] | `[]`      | Status checks branch protection must enforce on staging before a run may start. Empty = no specific checks, but protection itself is still mandatory. |
+| `provision`            | boolean  | `false`   | Opt-in protection provisioning. Off by default — the run verifies and refuses when protection is missing.                                             |
+| `branchPrefix`         | string   | `factory` | Prefix for run-scoped task branches: `<branchPrefix>/<run_id>/<task_id>`.                                                                             |
+
+## Root keys
+
+| Key                      | Type   | Default | Meaning                                          |
+| ------------------------ | ------ | ------- | ------------------------------------------------ |
+| `maxConsecutiveFailures` | int >0 | `3`     | Consecutive task failures before the run aborts. |
+| `maxRuntimeMinutes`      | int >0 | `480`   | Hard wall-clock cap for a whole run (minutes).   |
+
+## Retired keys
+
+The following bash-era keys are deliberately **absent** and must not be carried
+forward (human-review gates are retired — Decision 5/19; the review-depth axis was
+removed — Decision 25): `humanReviewLevel`, `NEEDS_DISCUSSION`, the exit-42 code,
+and the per-tier review caps.
+</content>

@@ -1,53 +1,123 @@
-<!-- last-documented: 401fb13180594ddf1dc95aac2076550b2533c7d6 -->
+<!-- last-documented: c5169bb75d19f0f14d33c3e8b13cf0e3316fab47 -->
 
 # Dark Factory Plugin
 
-A Claude Code plugin that converts GitHub PRD (Product Requirements Document) issues into merged pull requests with minimal human intervention. The plugin implements an 8-stage autonomous coding pipeline with quality-first review gates and adversarial code review.
+The Dark Factory is a Claude Code plugin that converts a GitHub PRD (Product
+Requirements Document) issue into merged pull requests, autonomously, through a
+quality-first, TDD-enforced stage machine. A person writes the requirements and
+walks away; the factory generates a spec, decomposes it into a dependency graph
+of tasks, drives each task test-first through implementation and an adversarial
+review floor, and ships the result up a `staging → develop` integration branch —
+never touching `main`.
 
-## What Problem It Solves
+## What problem it solves
 
-The plugin automates the end-to-end software development workflow: reading a requirements document, generating a specification, decomposing work into tasks, implementing code, writing tests, reviewing changes adversarially, and creating pull requests. Human touchpoints are explicit and configurable rather than required at every step.
+Autonomous coding agents are unreliable narrators: an agent that says "done"
+followed its instructions roughly 70% of the time. The Dark Factory's answer is
+to push every decision that _can_ be deterministic out of the agent and into
+code, leaving the agents to do only what requires judgment (generate a spec,
+write code, review code). The result is a pipeline where stage transitions,
+failure classification, the retry ladder, quality gates, and the review floor are
+all enforced by a tested TypeScript engine — not by prose an agent may ignore.
 
-## Design Philosophy
+## Design philosophy
 
-**Deterministic-first architecture.** The plugin maintains a ≈5.4:1 ratio of deterministic components to non-deterministic agents (54 deterministic: 41 pipeline-\* bin scripts + 13 hooks; 10 agents). Agent instructions are followed approximately 70% of the time; hooks and scripts enforce at 100%. This hybrid approach uses agents for judgment tasks (code generation, review) while delegating all validation, state management, classification, and parsing to shell scripts.
+**Model A — split brain.** The plugin is two halves with a hard seam between
+them:
 
-**Quality over speed.** Every task output passes through a 7-layer quality gate stack (static analysis, security gate, TDD gate, tests, coverage regression, holdout validation, mutation testing) and multi-round adversarial code review before reaching a pull request.
+- A **deterministic engine**: one Node + TypeScript CLI, `factory <subcommand>`,
+  that owns _all_ run-state writes, the spec gates, the deterministic verifier
+  gates, failure classification, the producer escalation ladder, the
+  risk-invariant review floor, and PR creation. It is pure, tested, and **never
+  spawns an agent**.
+- An **in-session LLM orchestrator**: a markdown skill
+  (`skills/pipeline-orchestrator/SKILL.md`) the invoking Claude Code session
+  loads. It performs every `Agent()` spawn the CLI asks for, collects the agents'
+  raw output, and folds it back through the CLI's writer subcommands. It never
+  decides a transition by prose.
 
-**Resumable execution.** All state is persisted to JSON files. Interrupted runs recover from the last checkpoint via `/factory:run resume`.
+The CLI subcommands are either **reporters** (read-only; emit one JSON envelope
+naming what to do next) or **writers** (single-step state mutations). The
+orchestrator is the loop; the CLI is the brain.
+
+**Quality over speed.** Every task is produced test-first (a `test-writer`
+commits failing tests, then a `task-executor` commits the minimal
+implementation — enforced by the TDD gate), passes a stack of deterministic
+quality gates (tests, coverage, mutation, SAST, type, lint, build, and the TDD
+gate itself), and clears a unanimous six-reviewer adversarial panel before it can
+ship. Reviewer findings are independently confirmed before they act
+(verify-then-fix).
+
+**Derive, don't store.** The run state file holds no gate pass/fail booleans.
+Every verdict is re-derived from ground truth at the moment it is needed, so
+there is structurally nothing in state for an agent to forge.
+
+**Loud, classified failure.** Nothing fails silently. When a task cannot be made
+to meet the bar, it is _dropped_ with a closed-enum failure class and a
+human-facing reason; the run ships the dependency-closed done-set and files one
+GitHub issue per drop. A partial run is a legible, classified outcome — never a
+quiet success.
+
+## Architecture at a glance
+
+| Layer                | Lives in                                                            | Role                                 |
+| -------------------- | ------------------------------------------------------------------- | ------------------------------------ |
+| Orchestrator surface | `commands/`, `agents/`, `skills/` (markdown)                        | LLM instructions + agent definitions |
+| Deterministic CLI    | `src/` → `dist/factory.js` (via `bin/factory`)                      | The engine: reporters + writers      |
+| Hook guards          | `src/hooks/` → `dist/factory-hook.js` (wired in `hooks/hooks.json`) | Enforce invariants at tool-use time  |
+| Run / spec state     | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Lives **outside** the target repo    |
+
+See [architecture/overview.md](./architecture/overview.md) for the full picture.
+
+## Who it is for
+
+Engineers operating the factory against their own repositories, and contributors
+working on the plugin's TypeScript engine. The [getting-started](./getting-started.md)
+tutorial onboards a contributor end-to-end; the [guides](./guides/) solve
+operator tasks; the [reference](./reference/) is the precise CLI / config / state
+contract.
 
 ---
 
-## Table of Contents
+## Table of contents
 
-### Getting Started
+### Getting started
 
-- [Getting Started](./getting-started.md) - Installation, configuration, and first run
+- [Getting Started](./getting-started.md) — clone, verify, and trace a run through the engine end-to-end (contributor onboarding).
 
 ### Architecture
 
-- [System Overview](./architecture/overview.md) - Pipeline stages, component relationships, data flow
-- [Components](./architecture/components.md) - Agents, hooks, bin scripts, MCP servers
+- [System Overview](./architecture/overview.md) — system context + container view: the Model-A split, the run lifecycle, data flow.
+- [Components](./architecture/components.md) — the major building blocks: CLI registry, state store, stage machine, verifier, producer, quota, git, scoring, hooks.
 
-### How-To Guides
+### How-to guides
 
-- [Running the Pipeline](./guides/running-pipeline.md) - Operating modes and invocation patterns
-- [Debugging Code](./guides/debug-command.md) - Using `/factory:debug` for reviewer-driven fix loops
-- [Configuring Settings](./guides/configuration.md) - Adjusting quality gates, review rounds, and autonomy levels
+- [Run the pipeline](./guides/run-the-pipeline.md) — drive a PRD issue to shipped PRs.
+- [Scaffold a target repo](./guides/scaffold-a-repo.md) — prepare a repo (CI net, gate configs, staging branch, branch protection).
+- [Configure the factory](./guides/configure-the-factory.md) — inspect and edit the config overlay.
+- [Rescue a stalled run](./guides/rescue-a-stalled-run.md) — recover a crashed/suspended run that resume cannot untangle.
+- [Build and verify the engine](./guides/build-and-verify.md) — the contributor build/test/bundle workflow.
 
 ### Reference
 
-- [Commands](./reference/commands.md) - `/factory:run`, `/factory:debug`, `/factory:scaffold`, `/factory:rescue`, `/factory:configure` specifications
-- [Configuration Schema](./reference/configuration.md) - All runtime config options with types and defaults
-- [Bin Scripts](./reference/bin-scripts.md) - Deterministic pipeline utilities
-- [State Schema](./reference/state-schema.md) - Run state structure and task lifecycle
-- [Locking Model](./reference/locking.md) - Lock scopes and acquisition order
-- [Exit Codes](./reference/exit-codes.md) - Script exit codes and their meanings
+- [CLI](./reference/cli.md) — every `factory` subcommand, its flags, and its JSON envelope.
+- [Hooks](./reference/hooks.md) — the `factory-hook` guards and their `hooks.json` wiring.
+- [Configuration schema](./reference/configuration.md) — every config key, type, and default.
+- [State model](./reference/state-model.md) — the run/spec store layout and the `RunState`/`TaskState` schema.
+- [Quality gates](./reference/quality-gates.md) — the closed gate set and what each checks.
+- [Exit codes](./reference/exit-codes.md) — the CLI/hook exit-code contract.
 
 ### Explanation
 
-- [Quality Gates](./explanation/quality-gates.md) - The 7-layer quality stack and why each layer exists
-- [Adversarial Review](./explanation/adversarial-review.md) - Actor-Critic pattern and review protocol
-- [Rate Limiting](./explanation/rate-limiting.md) - 5h and 7d budget management with pause/end_gracefully behavior
-- [Hook Env-Var Canonicalization](./explanation/hook-env-canonicalization.md) - Why hooks source `pipeline-lib.sh` early to defeat foreign-plugin `CLAUDE_PLUGIN_DATA` leaks
-- [Design Decisions](./explanation/decisions.md) - Key architectural choices and their rationale
+- [Model A: the deterministic/LLM split](./explanation/model-a.md) — why the brain/hands seam, and what it buys.
+- [The verifier and the risk-invariant floor](./explanation/verifier.md) — the two-layer verifier, the panel, verify-then-fix.
+- [The producer escalation ladder](./explanation/producer-ladder.md) — nuke-and-retry, change-a-variable, classify-before-retry.
+- [Quota pacing and resumption](./explanation/quota-pacing.md) — the two-window pacer; pause vs suspend vs partial.
+- [Derive, don't store](./explanation/derive-dont-store.md) — why no gate verdict is ever persisted.
+- [Design Decisions (D1–D27)](./explanation/decisions.md) — the design ledger (preserved; see the cutover annotation).
+
+### Domain
+
+- [Glossary](./glossary.md) — the ubiquitous-language terms of the Dark Factory domain.
+  </content>
+  </invoke>
