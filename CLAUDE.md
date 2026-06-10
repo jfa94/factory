@@ -29,8 +29,8 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 ## Key entry points
 
 - `commands/run.md` — main entry (orchestrator runs in the invoking Claude Code session; see `skills/pipeline-orchestrator/SKILL.md` for the full protocol + CLI surface table)
-- `src/cli/main.ts` — the `factory` subcommand registry (run, spec, next, drive, rescue, score, state, scaffold, configure)
-- `src/driver/loop.ts` — the per-task transition logic the single-step CLI writers share
+- `src/cli/main.ts` — the `factory` subcommand registry (run, spec, next, drive, rescue, score, state, scaffold, configure, config-defaults)
+- `src/driver/pump.ts` + `src/driver/next.ts` — the task-level and run-level pumps behind `factory drive`/`factory next` (fold logic in `src/driver/fold.ts`)
 - `src/hooks/main.ts` — the `factory-hook` guard dispatch (TCB write-deny, holdout guard, secret guard, branch protection, stop gates)
 
 ## Worktree base invariant

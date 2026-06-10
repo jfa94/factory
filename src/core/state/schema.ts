@@ -373,7 +373,7 @@ export const RunStateSchema = z.object({
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: z.string().min(1),
   status: RunStatusEnum.default("running"),
-  driver: DriverEnum.default("balanced"),
+  driver: DriverEnum.default("sequential"),
 
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,

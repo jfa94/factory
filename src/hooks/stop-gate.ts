@@ -69,8 +69,8 @@ export function decideStop(run: RunState | null, allowStop: boolean): StopAction
     return {
       kind: "block",
       reason:
-        `run ${run.run_id} is still live (${detail}). Advance the stage machine ` +
-        `(\`factory run-task ${run.run_id} <task> --stage <stage>\`) or finalize the run. ` +
+        `run ${run.run_id} is still live (${detail}). Advance the run ` +
+        `(\`factory next --run ${run.run_id}\`, then \`factory drive --run ${run.run_id} --task <task>\`) or finalize it. ` +
         `Set FACTORY_ALLOW_STOP=1 to stop anyway (leaves the run resumable).`,
     };
   }

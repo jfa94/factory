@@ -155,7 +155,7 @@ export class StateManager {
     const state = parseRunState({
       run_id: args.run_id,
       status: "running",
-      driver: args.driver ?? "balanced",
+      driver: args.driver ?? "sequential",
       spec: args.spec,
       tasks: {},
       started_at: now,

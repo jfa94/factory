@@ -88,12 +88,11 @@ export interface TransitionEnvelope {
 }
 
 /**
- * After a transition, persist the in-flight CURSOR for a non-terminal step so the
- * persisted task status tracks the resume point (the loop does this implicitly at the
- * top of each iteration; the pump must do it explicitly). A terminal step
- * (`done`/`dropped`) already wrote its own status — nothing to mark.
+ * Persist the in-flight stage cursor for a non-terminal step so the persisted task
+ * status tracks the resume point. A terminal step (`done`/`dropped`) already wrote
+ * its own status — nothing to mark. Used by the fold paths in this module.
  */
-export async function persistStepCursor(
+async function persistStepCursor(
   deps: { readonly state: StateManager },
   runId: string,
   taskId: string,
@@ -166,7 +165,7 @@ export interface RecordHoldoutInput {
   readonly raw: string;
 }
 
-/** The JSON document `record-holdout` emits. */
+/** The holdout-validation evidence document `applyRecordHoldout` folds. */
 export interface RecordHoldoutEnvelope {
   readonly run_id: string;
   readonly task_id: string;
@@ -202,7 +201,7 @@ export async function applyRecordHoldout(
   if (!(await deps.holdout.has(runId, taskId))) {
     throw new Error(
       `record-holdout: task '${taskId}' has no withheld answer key — nothing to validate ` +
-        `(record-holdout must only be called when run-task surfaced a holdout sidecar)`,
+        `(applyRecordHoldout must only fold when the pump surfaced a holdout sidecar)`,
     );
   }
   const record = await deps.holdout.get(runId, taskId);
@@ -245,7 +244,7 @@ export interface RecordReviewsInput {
   readonly crossVendorAbsent?: { readonly reason: string };
 }
 
-/** The JSON document `record-reviews` emits. */
+/** The verify-fold envelope `applyRecordReviews` produces. */
 export interface RecordReviewsEnvelope extends TransitionEnvelope {
   /** The per-reviewer results this round derived (audit; state may clear them on retry). */
   readonly reviewers: readonly ReviewerResult[];
@@ -324,7 +323,7 @@ export function makeReplayRunnerFactory(
 
 /**
  * Fold the panel + verify-then-fix verdicts into the floor and return the next-step
- * envelope. `verdictStore` is the holdout-verdict source `record-holdout` persisted.
+ * envelope. `verdictStore` is the holdout-verdict source `applyRecordHoldout` persisted.
  */
 export async function applyRecordReviews(
   deps: FoldDeps,
@@ -359,9 +358,9 @@ export async function applyRecordReviews(
   const gate = await new GateRunner().run(gateCtx);
   const gateEvidence: GateEvidence[] = [...gate.evidence];
 
-  // 3. holdout gate evidence — RE-DERIVED from the verdicts record-holdout persisted
+  // 3. holdout gate evidence — RE-DERIVED from the verdicts applyRecordHoldout persisted
   //    (derive-don't-store exception). A withheld key with no persisted verdicts is an
-  //    orchestration error (record-holdout must run first) — LOUD, never a silent pass.
+  //    orchestration error (applyRecordHoldout must fold first) — LOUD, never a silent pass.
   if (await deps.holdout.has(runId, taskId)) {
     const record = await deps.holdout.get(runId, taskId);
     const verdicts = await verdictStore.get(runId, taskId);

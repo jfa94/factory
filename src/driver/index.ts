@@ -59,7 +59,6 @@ export { taskWorktreePath } from "./paths.js";
 
 // -- fold cores (the pump's deterministic result-fold kernels) ----------------
 export {
-  persistStepCursor,
   readJsonInput,
   applyRecordProducer,
   applyRecordHoldout,
