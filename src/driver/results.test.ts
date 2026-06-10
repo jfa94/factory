@@ -43,4 +43,34 @@ describe("parseDriveResults", () => {
       }),
     ).toThrow(/exactly one/);
   });
+
+  it("rejects holdout without reviews", () => {
+    expect(() =>
+      parseDriveResults({ producer: { status: "STATUS: DONE" }, holdout: { raw: "x" } }),
+    ).toThrow(/accompany/);
+  });
+
+  it("rejects unknown key inside verifications[0].verdicts[0]", () => {
+    expect(() =>
+      parseDriveResults({
+        reviews: {
+          reviews: [{ reviewer: "quality-reviewer", verdict: "approve", findings: [] }],
+          verifications: [
+            {
+              reviewer: "quality-reviewer",
+              verdicts: [{ file: "a.ts", line: 1, holds: true, note: "n", sneaky: 1 }],
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects reviews.reviews: [] (min 1)", () => {
+    expect(() =>
+      parseDriveResults({
+        reviews: { reviews: [], verifications: [] },
+      }),
+    ).toThrow();
+  });
 });
