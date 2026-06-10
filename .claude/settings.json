@@ -3,12 +3,6 @@
     "baseRef": "head"
   },
   "permissions": {
-    "allow": [
-      "Bash(factory:*)",
-      "Bash(factory *)",
-      "Bash(bin/test *)",
-      "Bash(npm test *)",
-      "Bash(npm test)"
-    ]
+    "allow": ["Bash(factory:*)", "Bash(factory *)", "Bash(npm test *)", "Bash(npm test)"]
   }
 }
