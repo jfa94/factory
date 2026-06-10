@@ -33,6 +33,7 @@ function task(seed: TaskSeed): TaskState {
     risk_tier: "medium" as const,
     escalation_rung: 0,
     reviewers: [],
+    merge_resyncs: 0,
     ...seed,
   };
   if (seed.status === "dropped") {

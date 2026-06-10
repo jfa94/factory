@@ -75,6 +75,7 @@ function taskRow(t: TaskSeed): TaskState {
     risk_tier: "medium",
     escalation_rung: 0,
     reviewers: [],
+    merge_resyncs: 0,
     ...(t.branch !== undefined ? { branch: t.branch } : {}),
     ...(t.pr_number !== undefined ? { pr_number: t.pr_number } : {}),
   };
@@ -267,6 +268,7 @@ describe("finalizeRun", () => {
           risk_tier: "medium",
           escalation_rung: 0,
           reviewers: [],
+          merge_resyncs: 0,
         },
       },
     }));

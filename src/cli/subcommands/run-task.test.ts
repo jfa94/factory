@@ -147,6 +147,7 @@ describe("run-task reportStage dispatch", () => {
           risk_tier: "medium",
           escalation_rung: t.escalation_rung ?? 0,
           reviewers: t.reviewers ?? [],
+          merge_resyncs: t.merge_resyncs ?? 0,
         },
       },
     }));

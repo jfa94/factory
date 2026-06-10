@@ -129,6 +129,7 @@ export function seedTasksFromSpec(manifest: SpecManifest): Record<string, TaskSt
       risk_tier: t.risk_tier,
       escalation_rung: 0,
       reviewers: [],
+      merge_resyncs: 0,
     };
   }
 

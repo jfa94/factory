@@ -37,6 +37,7 @@ async function seededState(): Promise<{ dataDir: string; state: StateManager }> 
         risk_tier: "medium",
         escalation_rung: 0,
         reviewers: [],
+        merge_resyncs: 0,
       },
     },
   }));

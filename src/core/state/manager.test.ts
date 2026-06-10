@@ -94,6 +94,7 @@ describe("lifecycle: create / read / update / finalize", () => {
           escalation_rung: 0,
           depends_on: [],
           reviewers: [],
+          merge_resyncs: 0,
         },
       },
     }));
@@ -179,6 +180,7 @@ describe("derive-don't-store survives a forged on-disk verdict (Δ V, end-to-end
           risk_tier: "high",
           escalation_rung: 0,
           depends_on: [],
+          merge_resyncs: 0,
           // Panel did NOT unanimously approve — security blocked.
           reviewers: [
             { reviewer: "impl", verdict: "approve", confirmed_blockers: 0 },
@@ -230,6 +232,7 @@ describe("concurrency: ≥3 writers do not corrupt state", () => {
           escalation_rung: 0,
           depends_on: [],
           reviewers: [],
+          merge_resyncs: 0,
         },
       },
     }));

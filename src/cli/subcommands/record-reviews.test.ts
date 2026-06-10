@@ -128,6 +128,7 @@ describe("applyRecordReviews fold", () => {
           risk_tier: "medium",
           escalation_rung: 0,
           reviewers: [],
+          merge_resyncs: 0,
         },
       },
     }));

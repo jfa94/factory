@@ -26,6 +26,7 @@ function task(seed: TaskSeed): TaskState {
     risk_tier: "medium" as const,
     escalation_rung: 0,
     reviewers: [],
+    merge_resyncs: 0,
     ...seed,
   };
   // A dropped row must carry the classification (cross-field invariant).

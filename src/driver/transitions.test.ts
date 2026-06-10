@@ -64,6 +64,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
           risk_tier: t.risk_tier ?? "medium",
           escalation_rung: t.escalation_rung ?? 0,
           reviewers: t.reviewers ?? [],
+          merge_resyncs: t.merge_resyncs ?? 0,
           ...(t.started_at ? { started_at: t.started_at } : {}),
           ...(t.ended_at ? { ended_at: t.ended_at } : {}),
           ...(t.producer_role ? { producer_role: t.producer_role } : {}),

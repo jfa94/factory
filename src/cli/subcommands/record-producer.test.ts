@@ -46,6 +46,7 @@ async function seededState(
         risk_tier: "medium",
         escalation_rung: task.escalation_rung ?? 0,
         reviewers: task.reviewers ?? [],
+        merge_resyncs: 0,
       },
     },
   }));

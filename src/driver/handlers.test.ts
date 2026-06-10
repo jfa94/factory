@@ -136,6 +136,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
       risk_tier: task.risk_tier ?? "medium",
       escalation_rung: task.escalation_rung ?? 0,
       reviewers: task.reviewers ?? [],
+      merge_resyncs: task.merge_resyncs ?? 0,
     };
     await state.update(RUN_ID, (s) => ({ ...s, tasks: { ...s.tasks, [full.task_id]: full } }));
     const run = await state.read(RUN_ID);
@@ -323,6 +324,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
           risk_tier: "low",
           escalation_rung: 0,
           reviewers: [],
+          merge_resyncs: 0,
         },
       },
     }));

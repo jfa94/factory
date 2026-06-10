@@ -191,6 +191,7 @@ describe("driver loop (driveTask / driveRun)", () => {
           risk_tier: t.risk_tier ?? "medium",
           escalation_rung: t.escalation_rung ?? 0,
           reviewers: t.reviewers ?? [],
+          merge_resyncs: t.merge_resyncs ?? 0,
           ...(t.failure_class ? { failure_class: t.failure_class } : {}),
           ...(t.failure_reason ? { failure_reason: t.failure_reason } : {}),
         };
