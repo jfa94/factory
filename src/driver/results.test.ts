@@ -4,13 +4,18 @@ import { parseDriveResults } from "./results.js";
 
 describe("parseDriveResults", () => {
   it("parses a producer result", () => {
-    const r = parseDriveResults({ producer: { status: "STATUS: DONE" } });
+    const r = parseDriveResults({
+      fold_key: { stage: "tests", rung: 0 },
+      producer: { status: "STATUS: DONE" },
+    });
     expect(r.producer?.status).toBe("STATUS: DONE");
     expect(r.reviews).toBeUndefined();
+    expect(r.fold_key).toEqual({ stage: "tests", rung: 0 });
   });
 
   it("parses a verify result with holdout + reviews + crossVendorAbsent", () => {
     const r = parseDriveResults({
+      fold_key: { stage: "verify", rung: 1 },
       holdout: { raw: '{"criteria":[]}' },
       reviews: {
         reviews: [{ reviewer: "quality-reviewer", verdict: "approve", findings: [] }],
@@ -25,19 +30,33 @@ describe("parseDriveResults", () => {
     });
     expect(r.reviews?.reviews).toHaveLength(1);
     expect(r.holdout?.raw).toContain("criteria");
+    expect(r.fold_key).toEqual({ stage: "verify", rung: 1 });
   });
 
-  it("rejects an empty object (must carry producer or reviews)", () => {
-    expect(() => parseDriveResults({})).toThrow(/producer|reviews/);
+  it("rejects missing fold_key on an empty object", () => {
+    expect(() => parseDriveResults({})).toThrow();
+  });
+
+  it("rejects an object with fold_key but neither producer nor reviews", () => {
+    expect(() => parseDriveResults({ fold_key: { stage: "tests", rung: 0 } })).toThrow(
+      /producer|reviews/,
+    );
   });
 
   it("rejects unknown keys loudly", () => {
-    expect(() => parseDriveResults({ producer: { status: "STATUS: DONE" }, extra: 1 })).toThrow();
+    expect(() =>
+      parseDriveResults({
+        fold_key: { stage: "tests", rung: 0 },
+        producer: { status: "STATUS: DONE" },
+        extra: 1,
+      }),
+    ).toThrow();
   });
 
   it("rejects producer and reviews together", () => {
     expect(() =>
       parseDriveResults({
+        fold_key: { stage: "tests", rung: 0 },
         producer: { status: "STATUS: DONE" },
         reviews: { reviews: [{}], verifications: [] },
       }),
@@ -46,13 +65,18 @@ describe("parseDriveResults", () => {
 
   it("rejects holdout without reviews", () => {
     expect(() =>
-      parseDriveResults({ producer: { status: "STATUS: DONE" }, holdout: { raw: "x" } }),
+      parseDriveResults({
+        fold_key: { stage: "tests", rung: 0 },
+        producer: { status: "STATUS: DONE" },
+        holdout: { raw: "x" },
+      }),
     ).toThrow(/accompany/);
   });
 
   it("rejects unknown key inside verifications[0].verdicts[0]", () => {
     expect(() =>
       parseDriveResults({
+        fold_key: { stage: "verify", rung: 0 },
         reviews: {
           reviews: [{ reviewer: "quality-reviewer", verdict: "approve", findings: [] }],
           verifications: [
@@ -69,7 +93,48 @@ describe("parseDriveResults", () => {
   it("rejects reviews.reviews: [] (min 1)", () => {
     expect(() =>
       parseDriveResults({
+        fold_key: { stage: "verify", rung: 0 },
         reviews: { reviews: [], verifications: [] },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects missing fold_key", () => {
+    expect(() => parseDriveResults({ producer: { status: "STATUS: DONE" } })).toThrow();
+  });
+
+  it("rejects fold_key with stage 'preflight'", () => {
+    expect(() =>
+      parseDriveResults({
+        fold_key: { stage: "preflight", rung: 0 },
+        producer: { status: "STATUS: DONE" },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects fold_key with stage 'ship'", () => {
+    expect(() =>
+      parseDriveResults({
+        fold_key: { stage: "ship", rung: 0 },
+        producer: { status: "STATUS: DONE" },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects fold_key with negative rung", () => {
+    expect(() =>
+      parseDriveResults({
+        fold_key: { stage: "tests", rung: -1 },
+        producer: { status: "STATUS: DONE" },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects fold_key with non-integer rung", () => {
+    expect(() =>
+      parseDriveResults({
+        fold_key: { stage: "tests", rung: 1.5 },
+        producer: { status: "STATUS: DONE" },
       }),
     ).toThrow();
   });

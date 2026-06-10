@@ -5,19 +5,23 @@
  * seeds the run and task state and returns deps + run-id.
  *
  * Helpers:
- *   - driveToVerify: pump twice (fold DONE twice) to reach the verify spawn
+ *   - driveToVerify: pump twice (fold DONE twice) to reach the verify spawn;
+ *     returns the verify spawn envelope (LOUD if not reached)
  *   - approvingReviewsResults: a DriveResults with 6 approving reviews + holdout pass
  *   - blockingReviewsResults: a DriveResults with one confirmed blocker
+ *
+ * fold_key discipline: every helper that builds a DriveResults accepts the prior
+ * spawn envelope and copies fold_key verbatim — the natural driver behavior.
  */
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { pumpTask, MERGE_RESYNC_CAP } from "./pump.js";
+import { pumpTask, MERGE_RESYNC_CAP, type DriveEnvelope } from "./pump.js";
 import { TASK_STAGE_ORDER } from "../types/index.js";
 import { TaskStateSchema } from "../core/state/index.js";
-import type { DriveResults } from "./results.js";
+import type { DriveResults, FoldKey } from "./results.js";
 import type { PumpDeps } from "./pump.js";
 
 import { defaultConfig } from "../config/schema.js";
@@ -156,16 +160,15 @@ async function makePumpDeps(opts: MakePumpDepsOpts = {}): Promise<PumpDepsResult
     spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
   });
 
-  // Seed tasks
+  // Seed tasks — overrides apply only when task_id matches (or T1 by default)
   await state.update(runId, (s) => {
     const next = { ...s.tasks };
     for (const tDef of taskDefs) {
       const override =
-        opts.taskStateOverrides?.task_id === tDef.task_id
+        opts.taskStateOverrides !== undefined &&
+        (opts.taskStateOverrides.task_id ?? "T1") === tDef.task_id
           ? opts.taskStateOverrides
-          : opts.taskStateOverrides && tDef.task_id === "T1"
-            ? opts.taskStateOverrides
-            : {};
+          : {};
       next[tDef.task_id] = {
         task_id: tDef.task_id,
         status: override.status ?? "pending",
@@ -218,40 +221,58 @@ async function makePumpDeps(opts: MakePumpDepsOpts = {}): Promise<PumpDepsResult
 // Test helpers
 // ---------------------------------------------------------------------------
 
-/** Drive T1 through tests+exec (fold DONE twice) to land at the verify spawn. */
-async function driveToVerify(deps: PumpDeps, runId: string, taskId: string): Promise<void> {
+/**
+ * Drive T1 through tests+exec (fold DONE twice) to land at the verify spawn.
+ * Returns the verify spawn envelope (LOUD assertion — never returns non-spawn).
+ * fold_key is echoed from each prior envelope, matching natural driver behavior.
+ */
+async function driveToVerify(
+  deps: PumpDeps,
+  runId: string,
+  taskId: string,
+): Promise<DriveEnvelope & { kind: "spawn" }> {
   // 1. First pump → tests spawn
   const env1 = await pumpTask(deps, runId, taskId);
   expect(env1.kind).toBe("spawn");
-  if (env1.kind !== "spawn") throw new Error("expected spawn");
+  if (env1.kind !== "spawn") throw new Error("expected spawn at tests");
   expect(env1.stage).toBe("tests");
 
-  // 2. Fold DONE for tests → exec spawn
+  // 2. Fold DONE for tests → exec spawn (echo fold_key from env1)
   const env2 = await pumpTask(deps, runId, taskId, {
+    fold_key: env1.fold_key,
     producer: { status: "STATUS: DONE" },
   });
   expect(env2.kind).toBe("spawn");
   if (env2.kind !== "spawn") throw new Error("expected spawn at exec");
   expect(env2.stage).toBe("exec");
 
-  // 3. Fold DONE for exec → verify spawn (or terminal if no holdout + green gates)
+  // 3. Fold DONE for exec → verify spawn (echo fold_key from env2)
   const env3 = await pumpTask(deps, runId, taskId, {
+    fold_key: env2.fold_key,
     producer: { status: "STATUS: DONE" },
   });
-  // Either a verify spawn OR terminal (for tasks that auto-advance through verify).
-  // For tasks with green gates + holdout it stops at verify.
-  if (env3.kind !== "spawn") return; // already terminal
+  // Must be a verify spawn — LOUD assertion, never silently skip.
+  expect(env3.kind).toBe("spawn");
+  if (env3.kind !== "spawn") throw new Error("expected verify spawn after exec DONE");
   expect(env3.stage).toBe("verify");
+  return env3;
 }
 
-/** Build a DriveResults with 6 approving reviews (all PANEL_ROLES) + holdout pass. */
-function approvingReviewsResults(withheldCriteria?: readonly string[]): DriveResults {
+/**
+ * Build a DriveResults with 6 approving reviews (all PANEL_ROLES) + holdout pass.
+ * fold_key is echoed from the prior spawn envelope.
+ */
+function approvingReviewsResults(
+  priorEnvelope: DriveEnvelope & { kind: "spawn" },
+  withheldCriteria?: readonly string[],
+): DriveResults {
   const reviews = PANEL_ROLES.map((role) => ({
     reviewer: role,
     verdict: "approve" as const,
     findings: [],
   }));
   const result: DriveResults = {
+    fold_key: priorEnvelope.fold_key,
     reviews: {
       reviews,
       verifications: [],
@@ -267,8 +288,11 @@ function approvingReviewsResults(withheldCriteria?: readonly string[]): DriveRes
   return result;
 }
 
-/** Build a DriveResults with one confirmed blocker from the first panel reviewer. */
-function blockingReviewsResults(): DriveResults {
+/**
+ * Build a DriveResults with one confirmed blocker from the first panel reviewer.
+ * fold_key is echoed from the prior spawn envelope.
+ */
+function blockingReviewsResults(priorEnvelope: DriveEnvelope & { kind: "spawn" }): DriveResults {
   // Use the first PANEL_ROLES entry as the blocking reviewer (e.g. "implementation-reviewer")
   const blockerRole = PANEL_ROLES[0]!;
   const reviews = PANEL_ROLES.map((role) => ({
@@ -290,6 +314,7 @@ function blockingReviewsResults(): DriveResults {
         : [],
   }));
   return {
+    fold_key: priorEnvelope.fold_key,
     reviews: {
       reviews,
       verifications: [
@@ -330,6 +355,7 @@ describe("pumpTask", () => {
       expect(env.stage).toBe("tests");
       expect(env.expects).toBe("producer-status");
       expect(env.manifest.agents[0]?.role).toBe("test-writer");
+      expect(env.fold_key).toEqual({ stage: "tests", rung: 0 });
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.stage).toBe("tests"); // cursor persisted
     } finally {
@@ -341,8 +367,26 @@ describe("pumpTask", () => {
     const { deps, runId, cleanup } = await makePumpDeps();
     try {
       const a = await pumpTask(deps, runId, "T1");
+      expect(a.kind).toBe("spawn");
       const b = await pumpTask(deps, runId, "T1");
       expect(b).toEqual(a);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("re-invoking at verify without results re-emits the same verify spawn (idempotent)", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
+    });
+    try {
+      const verifyEnv = await driveToVerify(deps, runId, "T1");
+      // Two consecutive no-results pumps at verify must deep-equal the prior envelope.
+      const a = await pumpTask(deps, runId, "T1");
+      expect(a.kind).toBe("spawn");
+      const b = await pumpTask(deps, runId, "T1");
+      expect(b).toEqual(a);
+      expect(a).toEqual(verifyEnv);
     } finally {
       await cleanup();
     }
@@ -351,8 +395,13 @@ describe("pumpTask", () => {
   it("folds a producer DONE and advances to the exec spawn", async () => {
     const { deps, runId, cleanup } = await makePumpDeps();
     try {
-      await pumpTask(deps, runId, "T1"); // → tests spawn
-      const env = await pumpTask(deps, runId, "T1", { producer: { status: "STATUS: DONE" } });
+      const env1 = await pumpTask(deps, runId, "T1"); // → tests spawn
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") return;
+      const env = await pumpTask(deps, runId, "T1", {
+        fold_key: env1.fold_key,
+        producer: { status: "STATUS: DONE" },
+      });
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
       expect(env.stage).toBe("exec");
@@ -365,9 +414,12 @@ describe("pumpTask", () => {
   it("a blocked producer escalates the rung and re-spawns the same stage", async () => {
     const { deps, runId, cleanup } = await makePumpDeps();
     try {
-      await pumpTask(deps, runId, "T1");
+      const env1 = await pumpTask(deps, runId, "T1");
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") return;
       // NEEDS_CONTEXT → capability retry → rung bump (not a spec-defect drop)
       const env = await pumpTask(deps, runId, "T1", {
+        fold_key: env1.fold_key,
         producer: { status: "STATUS: NEEDS_CONTEXT" },
       });
       expect(env.kind).toBe("spawn");
@@ -413,9 +465,11 @@ describe("pumpTask", () => {
       const withheld = holdoutRecord.withheld_criteria;
       expect(withheld.length).toBeGreaterThan(0); // sanity: split actually withheld something
 
-      await pumpTask(deps, runId, "T1"); // emit panel + holdout sidecar
+      const panelEnv = await pumpTask(deps, runId, "T1"); // emit panel + holdout sidecar
+      expect(panelEnv.kind).toBe("spawn");
+      if (panelEnv.kind !== "spawn") return;
       // Fold approving reviews AND holdout pass (withheld criteria → all satisfied).
-      const env = await pumpTask(deps, runId, "T1", approvingReviewsResults(withheld));
+      const env = await pumpTask(deps, runId, "T1", approvingReviewsResults(panelEnv, withheld));
       expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.status).toBe("done");
@@ -439,8 +493,10 @@ describe("pumpTask", () => {
       const citedFile = join(worktree, "src", "x.ts");
       await mkdir(dirname(citedFile), { recursive: true });
       await writeFile(citedFile, "bad code\n");
-      await pumpTask(deps, runId, "T1");
-      const env = await pumpTask(deps, runId, "T1", blockingReviewsResults());
+      const panelEnv = await pumpTask(deps, runId, "T1");
+      expect(panelEnv.kind).toBe("spawn");
+      if (panelEnv.kind !== "spawn") return;
+      const env = await pumpTask(deps, runId, "T1", blockingReviewsResults(panelEnv));
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
       expect(env.stage).toBe("exec");
@@ -454,9 +510,12 @@ describe("pumpTask", () => {
       taskStateOverrides: { task_id: "T1", escalation_rung: ESCALATION_CAP },
     });
     try {
-      await pumpTask(deps, runId, "T1");
+      const env1 = await pumpTask(deps, runId, "T1");
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") return;
       // NEEDS_CONTEXT → capability retry → rung already at cap → drops capability-budget
       const env = await pumpTask(deps, runId, "T1", {
+        fold_key: env1.fold_key,
         producer: { status: "STATUS: NEEDS_CONTEXT" },
       });
       expect(env).toMatchObject({
@@ -481,7 +540,7 @@ describe("pumpTask", () => {
       mergeStateStatus: "BEHIND",
       url: "https://github.com/fake/repo/pull/500",
     });
-    const { deps, runId, state, cleanup } = await makePumpDeps({
+    const { deps, runId, cleanup } = await makePumpDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c"] }],
       shipMode: "live",
       ghClient: gh,
@@ -495,20 +554,6 @@ describe("pumpTask", () => {
       },
     });
     try {
-      // Also need the task to be in "shipping" status with branch set — update state
-      await state.update(runId, (s) => ({
-        ...s,
-        tasks: {
-          T1: {
-            ...s.tasks["T1"]!,
-            status: "shipping",
-            stage: "ship" as const,
-            merge_resyncs: MERGE_RESYNC_CAP,
-            branch,
-            pr_number: 500,
-          },
-        },
-      }));
       const env = await pumpTask(deps, runId, "T1");
       expect(env).toMatchObject({
         kind: "terminal",
@@ -524,7 +569,10 @@ describe("pumpTask", () => {
     try {
       // T1 is pending → stage is implicitly preflight (no cursor yet)
       await expect(
-        pumpTask(deps, runId, "T1", { producer: { status: "STATUS: DONE" } }),
+        pumpTask(deps, runId, "T1", {
+          fold_key: { stage: "tests", rung: 0 },
+          producer: { status: "STATUS: DONE" },
+        }),
       ).rejects.toThrow(/spawns no agents|preflight/i);
     } finally {
       await cleanup();
@@ -535,9 +583,14 @@ describe("pumpTask", () => {
     const { deps, runId, cleanup } = await makePumpDeps();
     try {
       await driveToVerify(deps, runId, "T1");
-      await pumpTask(deps, runId, "T1"); // emit panel → stage cursor = "verify"
+      const panelEnv = await pumpTask(deps, runId, "T1"); // emit panel → stage cursor = "verify"
+      expect(panelEnv.kind).toBe("spawn");
+      if (panelEnv.kind !== "spawn") return;
       await expect(
-        pumpTask(deps, runId, "T1", { producer: { status: "STATUS: DONE" } }),
+        pumpTask(deps, runId, "T1", {
+          fold_key: panelEnv.fold_key,
+          producer: { status: "STATUS: DONE" },
+        }),
       ).rejects.toThrow(/expects reviews/i);
     } finally {
       await cleanup();
@@ -572,6 +625,111 @@ describe("pumpTask", () => {
       }));
       const env = await pumpTask(deps, runId, "T1");
       expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("stale results (fold_key tests/0) reject LOUD after DONE advances tests→exec", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps();
+    try {
+      const env1 = await pumpTask(deps, runId, "T1"); // tests spawn, fold_key tests/0
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") throw new Error("expected spawn");
+      const testsResults: DriveResults = {
+        fold_key: env1.fold_key, // { stage: "tests", rung: 0 }
+        producer: { status: "STATUS: DONE" },
+      };
+      // Fold DONE: advances cursor to exec.
+      const env2 = await pumpTask(deps, runId, "T1", testsResults);
+      expect(env2.kind).toBe("spawn");
+      if (env2.kind !== "spawn") throw new Error("expected exec spawn");
+      expect(env2.stage).toBe("exec");
+
+      // Re-deliver the SAME results (fold_key tests/0) after cursor moved to exec/0.
+      await expect(pumpTask(deps, runId, "T1", testsResults)).rejects.toThrow(/stale or duplicate/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("duplicate NEEDS_CONTEXT results (fold_key tests/0) reject LOUD and do not double-bump escalation_rung", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps();
+    try {
+      const env1 = await pumpTask(deps, runId, "T1"); // tests spawn, fold_key tests/0
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") throw new Error("expected spawn");
+      const needsContextResults: DriveResults = {
+        fold_key: env1.fold_key, // { stage: "tests", rung: 0 }
+        producer: { status: "STATUS: NEEDS_CONTEXT" },
+      };
+      // First fold: bumps escalation_rung to 1.
+      const env2 = await pumpTask(deps, runId, "T1", needsContextResults);
+      expect(env2.kind).toBe("spawn");
+      if (env2.kind !== "spawn") throw new Error("expected spawn after escalation");
+      expect(env2.stage).toBe("tests");
+      const runAfter = await deps.state.read(runId);
+      expect(runAfter.tasks["T1"]?.escalation_rung).toBe(1);
+
+      // Re-deliver the SAME results (fold_key tests/0) — rung is now 1, mismatch.
+      await expect(pumpTask(deps, runId, "T1", needsContextResults)).rejects.toThrow(
+        /stale or duplicate/,
+      );
+      // Rung must still be 1 — no double-bump.
+      const runFinal = await deps.state.read(runId);
+      expect(runFinal.tasks["T1"]?.escalation_rung).toBe(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("spawn envelope carries fold_key that matches cursor stage and rung", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps({
+      taskStateOverrides: { task_id: "T1", escalation_rung: 2 },
+    });
+    try {
+      const env = await pumpTask(deps, runId, "T1");
+      expect(env.kind).toBe("spawn");
+      if (env.kind !== "spawn") return;
+      expect(env.fold_key).toEqual({ stage: env.stage, rung: 2 });
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fold_key schema rejection (schema-level, not pump-level)
+// ---------------------------------------------------------------------------
+
+describe("fold_key validation (Important 1 — schema gate)", () => {
+  it("fold_key mismatch on stage rejects with /stale or duplicate/", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps();
+    try {
+      const env1 = await pumpTask(deps, runId, "T1");
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") return;
+      // Lie: claim fold_key.stage is "exec" but cursor is "tests"
+      const wrongKey: FoldKey = { stage: "exec", rung: 0 };
+      await expect(
+        pumpTask(deps, runId, "T1", { fold_key: wrongKey, producer: { status: "STATUS: DONE" } }),
+      ).rejects.toThrow(/stale or duplicate/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("fold_key mismatch on rung rejects with /stale or duplicate/", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps();
+    try {
+      const env1 = await pumpTask(deps, runId, "T1");
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") return;
+      // Lie: claim rung 99 but actual is 0
+      const wrongKey: FoldKey = { stage: "tests", rung: 99 };
+      await expect(
+        pumpTask(deps, runId, "T1", { fold_key: wrongKey, producer: { status: "STATUS: DONE" } }),
+      ).rejects.toThrow(/stale or duplicate/);
     } finally {
       await cleanup();
     }

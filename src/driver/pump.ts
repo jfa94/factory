@@ -5,9 +5,15 @@
  * resumes at the persisted stage cursor, optionally FOLDS the previous spawn's
  * agent results (producer status / holdout raw / panel reviews — the internalized
  * record-* writers), then loops the stage machine until it either needs agents
- * (emit ONE spawn envelope and return) or the task is terminal. The process is
- * stateless: every fact it needs lives in the run store, so a crashed driver
- * just re-invokes and the same envelope re-derives (handlers are idempotent).
+ * (emit ONE spawn envelope and return) or the task is terminal.
+ *
+ * Re-invocation contract:
+ *   - WITHOUT results: idempotent — the same spawn envelope re-derives from
+ *     persisted state. Safe to retry after any crash.
+ *   - WITH results: at-least-once delivery, exactly-once application. The
+ *     fold_key echoed from the spawn envelope is validated against the current
+ *     cursor stage and escalation_rung before any mutation; stale or duplicate
+ *     result delivery is rejected LOUD (never double-folded).
  *
  * This is loop.ts's driveTask with the spawn boundary inverted: where the loop
  * awaited injected DriverRunners, the pump returns the manifest to the caller.
@@ -48,8 +54,10 @@ import { taskWorktreePath } from "./paths.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
 import { resolveReviewModel } from "../verifier/judgment/index.js";
 import { buildHoldoutPrompt, FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
-import type { DriveResults } from "./results.js";
+import type { DriveResults, FoldKey, SpawnStage } from "./results.js";
 import type { HandlerDeps } from "./types.js";
+
+export type { SpawnStage };
 
 /** Ship live-merge re-sync budget per task (persisted in TaskState.merge_resyncs). */
 export const MERGE_RESYNC_CAP = 8;
@@ -72,7 +80,8 @@ export type DriveEnvelope =
       readonly kind: "spawn";
       readonly run_id: string;
       readonly task_id: string;
-      readonly stage: TaskStage;
+      readonly stage: SpawnStage;
+      readonly fold_key: FoldKey;
       readonly manifest: SpawnManifest;
       readonly sidecar?: HoldoutSidecar;
       readonly expects: DriveExpects;
@@ -113,11 +122,35 @@ function requireTask(run: RunState, taskId: string): TaskState {
 /** The terminal outcome of an already-terminal task row (idempotent re-entry). */
 function terminalOutcome(task: TaskState): TaskOutcome {
   if (task.status === "done") return { outcome: "done" };
+  if (task.failure_class === undefined) {
+    throw new Error(
+      `pump: terminal task '${task.task_id}' has no failure_class — schema invariant violated`,
+    );
+  }
+  if (task.failure_reason === undefined) {
+    throw new Error(
+      `pump: terminal task '${task.task_id}' has no failure_reason — schema invariant violated`,
+    );
+  }
   return {
     outcome: "dropped",
-    failure_class: task.failure_class ?? "blocked-environmental",
-    reason: task.failure_reason ?? "dropped (no recorded reason)",
+    failure_class: task.failure_class,
+    reason: task.failure_reason,
   };
+}
+
+/**
+ * Assert that a TaskStage is a SpawnStage (tests|exec|verify). Preflight and
+ * ship never emit spawn envelopes — this throw is structurally unreachable but
+ * documents the invariant explicitly.
+ */
+function asSpawnStage(stage: TaskStage): SpawnStage {
+  if (stage === "tests" || stage === "exec" || stage === "verify") {
+    return stage;
+  }
+  throw new Error(
+    `pump: stage '${stage}' cannot spawn agents (only tests|exec|verify can) — unreachable`,
+  );
 }
 
 /** Build the holdout-validate sidecar IFF an answer key was withheld for this task. */
@@ -147,8 +180,21 @@ async function foldResults(
   runId: string,
   taskId: string,
   stage: TaskStage,
+  task: TaskState,
   results: DriveResults,
 ): Promise<TaskStep> {
+  // Validate fold_key BEFORE any mutation: stale or duplicate results reject LOUD.
+  const { fold_key } = results;
+  const spawnStage = stage === "tests" || stage === "exec" || stage === "verify" ? stage : null;
+  if (spawnStage === null) {
+    throw new Error(`drive: results given but stage '${stage}' spawns no agents`);
+  }
+  if (fold_key.stage !== spawnStage || fold_key.rung !== task.escalation_rung) {
+    throw new Error(
+      `drive: stale or duplicate results (fold_key ${fold_key.stage}/${fold_key.rung} vs cursor ${spawnStage}/${task.escalation_rung}) — re-invoke without results to get the current envelope`,
+    );
+  }
+
   const fold: FoldDeps = deps;
   if (stage === "tests" || stage === "exec") {
     if (results.producer === undefined) {
@@ -163,19 +209,17 @@ async function foldResults(
     );
     return env.step;
   }
-  if (stage === "verify") {
-    if (results.reviews === undefined) {
-      throw new Error("drive: stage 'verify' expects reviews results");
-    }
-    const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
-    // Holdout BEFORE reviews — the fold ordering the old skill enforced by prose.
-    if (results.holdout !== undefined) {
-      await applyRecordHoldout(fold, runId, taskId, verdictStore, results.holdout.raw);
-    }
-    const env = await applyRecordReviews(fold, runId, taskId, verdictStore, results.reviews);
-    return env.step;
+  // stage === "verify" (checked above via spawnStage)
+  if (results.reviews === undefined) {
+    throw new Error("drive: stage 'verify' expects reviews results");
   }
-  throw new Error(`drive: --results given but stage '${stage}' spawns no agents`);
+  const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
+  // Holdout BEFORE reviews — the fold ordering the old skill enforced by prose.
+  if (results.holdout !== undefined) {
+    await applyRecordHoldout(fold, runId, taskId, verdictStore, results.holdout.raw);
+  }
+  const env = await applyRecordReviews(fold, runId, taskId, verdictStore, results.reviews);
+  return env.step;
 }
 
 /**
@@ -204,21 +248,24 @@ export async function pumpTask(
   // 2. Resume at the persisted cursor.
   let run = await deps.state.read(runId);
   let task = requireTask(run, taskId);
+
+  // 3. Terminal check BEFORE any further work — a terminal answer needs no agent spend.
   if (isTerminalTaskStatus(task.status)) {
     return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
+
   let stage: TaskStage = task.stage ?? "preflight";
 
-  // 3. Fold the previous spawn's results (validated against the cursor's stage).
+  // 4. Fold the previous spawn's results (validated against the cursor's stage + rung).
   if (results !== undefined) {
-    const step = await foldResults(deps, runId, taskId, stage, results);
+    const step = await foldResults(deps, runId, taskId, stage, task, results);
     if (step.done) {
       return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
     }
     stage = step.stage;
   }
 
-  // 4. The deterministic pump loop (loop.ts act() semantics, spawn inverted).
+  // 5. The deterministic pump loop (loop.ts act() semantics, spawn inverted).
   const handlers = makeStageHandlers(deps);
   for (;;) {
     await markInFlight(deps, runId, taskId, stage);
@@ -235,14 +282,18 @@ export async function pumpTask(
         continue;
       }
       case "spawn-agents": {
-        const expects: DriveExpects = stage === "verify" ? "reviews" : "producer-status";
+        const spawnStage = asSpawnStage(stage);
+        const expects: DriveExpects = spawnStage === "verify" ? "reviews" : "producer-status";
         const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-        const sidecar = stage === "verify" ? await holdoutSidecar(deps, runId, taskId) : undefined;
+        const sidecar =
+          spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId) : undefined;
+        const fold_key: FoldKey = { stage: spawnStage, rung: task.escalation_rung };
         return {
           kind: "spawn",
           run_id: runId,
           task_id: taskId,
-          stage,
+          stage: spawnStage,
+          fold_key,
           manifest: result.manifest,
           ...(sidecar !== undefined ? { sidecar } : {}),
           expects,
@@ -268,10 +319,14 @@ export async function pumpTask(
       case "wait-retry": {
         if (result.stage === "ship") {
           // Live-merge refusal → bounded re-sync through exec (persisted budget).
-          run = await deps.state.read(runId);
-          task = requireTask(run, taskId);
-          const resyncs = task.merge_resyncs + 1;
-          if (resyncs > MERGE_RESYNC_CAP) {
+          // Increment merge_resyncs inside the mutator so the capped check uses
+          // the committed value, not a stale pre-read.
+          let newResyncs = 0;
+          await deps.state.updateTask(runId, taskId, (t) => {
+            newResyncs = t.merge_resyncs + 1;
+            return { ...t, merge_resyncs: newResyncs };
+          });
+          if (newResyncs > MERGE_RESYNC_CAP) {
             const step = await dropStep(
               deps,
               runId,
@@ -282,7 +337,6 @@ export async function pumpTask(
             if (!step.done) throw new Error("pump: dropStep returned non-terminal step");
             return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
           }
-          await deps.state.updateTask(runId, taskId, (t) => ({ ...t, merge_resyncs: resyncs }));
           stage = "exec";
           continue;
         }

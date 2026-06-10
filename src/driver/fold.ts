@@ -33,7 +33,7 @@ import {
 } from "./transitions.js";
 import { taskWorktreePath } from "./paths.js";
 import { classifyFailure, ESCALATION_CAP, parseProducerStatus } from "../producer/index.js";
-import { nextStage } from "../types/index.js";
+import { nextStage, stageToInFlightStatus } from "../types/index.js";
 import { GateRunner, type GateContext } from "../verifier/deterministic/index.js";
 import {
   runPanel,
@@ -384,19 +384,30 @@ export async function applyRecordReviews(
       : {}),
   });
 
-  // 5. persist the per-reviewer results (coherent counts; never a stored verdict).
-  await deps.state.updateTask(runId, taskId, (t) => ({
-    ...t,
-    reviewers: [...panel.reviewerResults],
-  }));
-
-  // 6. act on the derived result through the SHARED ladder.
+  // 5+6. Act on the derived result through the SHARED ladder.
+  //
+  // Crash-safety invariant (fail-closed): reviewers are persisted ONLY on the
+  // advance branch, in the SAME updateTask call that stamps the cursor. On the
+  // escalate/drop branch we do NOT persist reviewers — escalateOrDrop owns its
+  // own state write. A crash before the single advance-write means a no-results
+  // re-invoke at verify finds no reviewers → fresh panel spawn (fail-closed);
+  // holdout evidence cannot be bypassed by replaying without holdout results.
 
   let step: TaskStep;
   if (panel.result.kind === "advance") {
-    step = { done: false, stage: panel.result.to };
-    await markInFlight(deps, runId, taskId, panel.result.to);
+    // Persist reviewers + stamp the cursor in ONE locked write (advance branch only).
+    // stageToInFlightStatus is the same mapping markInFlight would apply.
+    const nextStageVal = panel.result.to;
+    const nextStatus = stageToInFlightStatus(nextStageVal);
+    await deps.state.updateTask(runId, taskId, (t) => ({
+      ...t,
+      reviewers: [...panel.reviewerResults],
+      stage: nextStageVal,
+      status: nextStatus,
+    }));
+    step = { done: false, stage: nextStageVal };
   } else if (panel.result.kind === "wait-retry") {
+    // escalateOrDrop does its own state write; do NOT persist reviewers here.
     step = await escalateOrDrop(
       deps,
       runId,

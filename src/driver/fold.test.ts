@@ -410,6 +410,86 @@ describe("applyRecordReviews fold", () => {
     ).rejects.toThrow(/no task 'ghost'/);
   });
 
+  it("fail-closed: escalate path does NOT persist reviewers; approve path persists reviewers+stage atomically", async () => {
+    // ESCALATE branch: confirmed blocker → floor fails → escalateOrDrop path.
+    // Simulating the crash window: if reviewers were written before the panel result
+    // was acted on, a no-results re-invoke at verify could derive a floor pass without
+    // holdout evidence.  With the fix, reviewers must be EMPTY after the escalate fold.
+    await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
+    const depsEscalate = makeDeps();
+    const escalateInput: RecordReviewsInput = {
+      reviews: [
+        approve("security"),
+        {
+          reviewer: "quality",
+          verdict: "blocked",
+          findings: [
+            {
+              reviewer: "quality",
+              severity: "critical",
+              blocking: true,
+              file: "src/x.ts",
+              line: 2,
+              quote: "const x = 1",
+              description: "magic number",
+            },
+          ],
+        },
+      ],
+      verifications: [
+        {
+          reviewer: "quality",
+          verdicts: [{ file: "src/x.ts", line: 2, holds: true, note: "confirmed" }],
+        },
+      ],
+    };
+    const escalateEnv = await applyRecordReviews(
+      depsEscalate,
+      RUN_ID,
+      TASK_ID,
+      verdictStore,
+      escalateInput,
+    );
+    expect(escalateEnv.floor.passed).toBe(false);
+    // After escalate fold: task.reviewers must be empty (fail-closed — no phantom persist).
+    const taskAfterEscalate = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(taskAfterEscalate.reviewers).toEqual([]);
+
+    // ADVANCE branch: unanimous approve → reviewers + stage cursor land in one write.
+    // Reset rung so we can run the approve case on the same seeded run.
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      tasks: {
+        [TASK_ID]: {
+          ...s.tasks[TASK_ID]!,
+          status: "reviewing" as const,
+          stage: "verify" as const,
+          escalation_rung: 0,
+          reviewers: [],
+        },
+      },
+    }));
+    const depsApprove = makeDeps();
+    const approveInput: RecordReviewsInput = {
+      reviews: [approve("quality"), approve("security")],
+      verifications: [],
+    };
+    const approveEnv = await applyRecordReviews(
+      depsApprove,
+      RUN_ID,
+      TASK_ID,
+      verdictStore,
+      approveInput,
+    );
+    expect(approveEnv.floor.passed).toBe(true);
+    expect(approveEnv.step).toEqual({ done: false, stage: "ship" });
+    // After advance fold: reviewers persisted + stage advanced atomically.
+    const taskAfterApprove = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(taskAfterApprove.reviewers.map((r) => r.verdict)).toEqual(["approve", "approve"]);
+    expect(taskAfterApprove.stage).toBe("ship");
+    expect(taskAfterApprove.status).toBe("shipping");
+  });
+
   it("rejects LOUD on a malformed review[0] before any gate re-run executes", async () => {
     // Wrap the git probe so we can detect if GateRunner.run() was entered
     // (it calls tools.git.treeSha as its very first operation).

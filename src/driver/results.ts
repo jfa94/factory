@@ -7,6 +7,30 @@
  */
 import { z } from "zod";
 
+// ---------------------------------------------------------------------------
+// SpawnStage + FoldKey
+// ---------------------------------------------------------------------------
+
+/**
+ * The only stages that can appear in a spawn envelope (preflight only advances;
+ * ship never spawns). Defined here so results.ts does not import pump.ts.
+ */
+export const SPAWN_STAGES = ["tests", "exec", "verify"] as const;
+export type SpawnStage = (typeof SPAWN_STAGES)[number];
+
+/**
+ * Echo token emitted by the spawn envelope and mirrored verbatim in DriveResults.
+ * The fold gate validates stage === cursor stage AND rung === task.escalation_rung
+ * before applying any mutation, making at-least-once delivery exactly-once at
+ * the fold site (stale or duplicate results are rejected LOUD instead of
+ * double-folding).
+ */
+export const FoldKeySchema = z
+  .object({ stage: z.enum(SPAWN_STAGES), rung: z.number().int().min(0) })
+  .strict();
+
+export type FoldKey = z.infer<typeof FoldKeySchema>;
+
 const ProducerResultSchema = z.object({ status: z.string().min(1) }).strict();
 const HoldoutResultSchema = z.object({ raw: z.string().min(1) }).strict();
 const ReviewsResultSchema = z
@@ -38,6 +62,7 @@ const ReviewsResultSchema = z
 
 export const DriveResultsSchema = z
   .object({
+    fold_key: FoldKeySchema,
     producer: ProducerResultSchema.optional(),
     holdout: HoldoutResultSchema.optional(),
     reviews: ReviewsResultSchema.optional(),
