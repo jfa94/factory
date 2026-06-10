@@ -52,7 +52,8 @@ export const hookRegistry: Record<string, Hook> = {
     run: (argv) => runPipelineGuards(argv),
   },
   "subagent-stop": {
-    describe: "SubagentStop: append reviewer ReviewerResult to task state via StateManager",
+    describe:
+      "SubagentStop: log a stopping reviewer's parsed verdict (observational — the driver fold is the single writer of task.reviewers[])",
     run: (argv) => runSubagentStop(argv),
   },
   "stop-gate": {

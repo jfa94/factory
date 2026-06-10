@@ -715,9 +715,11 @@ describe("terminal-before-quota ordering", () => {
       const env = await pumpTask(deps, runId, "T1");
       // Must be terminal, NOT quota-blocked.
       expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
-      // No pause checkpoint was written (quota gate never ran).
+      // No quota checkpoint was written (applyQuotaGate never ran).
+      // The gate writes run.status (→ "paused") and run.quota; both must be untouched.
       const run = await deps.state.read(runId);
-      expect(run.tasks["T1"]?.stage).toBeUndefined();
+      expect(run.status).toBe("running"); // gate would have changed this to "paused"
+      expect(run.quota).toBeUndefined(); // gate would have written the 5h checkpoint
     } finally {
       await cleanup();
     }
@@ -734,7 +736,7 @@ describe("handlers.verify fail-closed re-spawn (crash-resume guard)", () => {
     // and stage=verify, but no holdout verdict has been recorded yet.
     // Expected: the verify handler detects missing holdout evidence and re-spawns the panel
     // (fail-closed), NOT derives from the persisted reviewers and advances to ship.
-    const { deps, runId, state, holdout, cleanup } = await makePumpDeps({
+    const { deps, runId, holdout, cleanup } = await makePumpDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c"] }],
       taskStateOverrides: {
         task_id: "T1",
@@ -769,9 +771,9 @@ describe("handlers.verify fail-closed re-spawn (crash-resume guard)", () => {
 // ---------------------------------------------------------------------------
 
 describe("foldResults holdout-required guard", () => {
-  it("holdout-bearing task at verify with reviews but no holdout → rejects with /holdout/", async () => {
+  it("holdout-bearing task at verify with reviews but no holdout → rejects with /withheld holdout answer key/", async () => {
     // 5 criteria at holdoutPercent=20% → holdoutCount(5,20)=1 — guarantees a withheld key.
-    const { deps, runId, cleanup } = await makePumpDeps({
+    const { deps, runId, dataDir, cleanup } = await makePumpDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
     });
     try {
@@ -781,10 +783,19 @@ describe("foldResults holdout-required guard", () => {
       if (panelEnv.kind !== "spawn") throw new Error("expected panel spawn");
       expect(panelEnv.sidecar?.kind).toBe("holdout-validate"); // sanity: holdout was withheld
 
+      // Seed prior-rung verdicts on disk: without the guard, applyRecordReviews would read
+      // these successfully (no ENOENT) and NOT throw — so the test only fails without the guard.
+      const verdictStore = new FsHoldoutVerdictStore(dataDir);
+      await verdictStore.put(runId, "T1", [
+        { criterion: "e", satisfied: true, evidence: "prior rung evidence" },
+      ]);
+
       // Deliver reviews WITHOUT the holdout field (no withheld arg → no holdout in results).
       const resultsWithoutHoldout = approvingReviewsResults(panelEnv);
-      // The holdout store has an entry (tests stage persisted it) but results.holdout is absent.
-      await expect(pumpTask(deps, runId, "T1", resultsWithoutHoldout)).rejects.toThrow(/holdout/);
+      // Guard must throw its specific message, not an ENOENT path that happens to mention "holdout".
+      await expect(pumpTask(deps, runId, "T1", resultsWithoutHoldout)).rejects.toThrow(
+        /withheld holdout answer key/,
+      );
     } finally {
       await cleanup();
     }

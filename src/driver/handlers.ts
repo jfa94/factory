@@ -246,13 +246,14 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
         );
       }
 
-      // Fail-closed crash-resume guard: deriving from persisted reviewers without
-      // holdout evidence would skip the holdout floor for the current escalation
-      // cycle. If a holdout is expected but no verdict is recorded for this rung,
-      // re-spawn the panel instead of advancing. This branch is structurally
-      // unreachable via sanctioned writes (applyRecordReviews clears reviewers on
-      // retry), but a rogue hook write can reach it — fail-closed re-spawn prevents
-      // a false advance to ship.
+      // Fail-closed crash-resume guard: reviewers>0 here is the LEGITIMATE merge-resync
+      // fast-path (reviewers persisted by the advance fold; ship wait-retry re-enters via
+      // exec→verify without clearing them). On every sanctioned route, holdout verdicts
+      // already exist on disk before reviewers are persisted (the advance fold reads them
+      // LOUDLY). So for holdout tasks, missing verdicts imply an UNSANCTIONED write
+      // (crash-window or rogue hook) — re-spawn the panel instead of deriving without
+      // holdout evidence (fail-closed). Caveat: the store is task-keyed, not rung-keyed,
+      // so a stale prior-rung verdict still satisfies the check (residual gap, tracked).
       const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id);
       if (holdoutExpected) {
         const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
