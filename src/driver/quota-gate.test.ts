@@ -120,4 +120,24 @@ describe("applyQuotaGate", () => {
     expect(run.status).toBe("suspended");
     expect(run.quota).toBeUndefined();
   });
+
+  it("proceed leaves a stale paused checkpoint intact (caller owns recovery)", async () => {
+    // Seed the run as paused with a quota checkpoint (a prior pause that was not yet
+    // cleared by the caller — driveRun / a pump clears it, the gate does not).
+    const checkpoint = { binding_window: "5h" as const, resets_at_epoch: NOW + 3600 };
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      status: "paused",
+      quota: checkpoint,
+    }));
+
+    const stop = await applyQuotaGate(makeDeps(PROCEED), RUN_ID);
+
+    // The gate proceeds (healthy reading → null).
+    expect(stop).toBeNull();
+    // The gate MUST NOT touch state on a proceed — paused status + checkpoint intact.
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("paused");
+    expect(run.quota).toEqual(checkpoint);
+  });
 });

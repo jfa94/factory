@@ -7,10 +7,13 @@
  *
  * Extracted verbatim from loop.ts (same behavior; the return type is enriched
  * so envelope-emitting callers can surface scope/reason/horizon).
+ *
+ * On a proceed (null return) the gate never writes state; clearing a stale
+ * paused/suspended checkpoint on recovery is the CALLER's job (see driveRun in
+ * loop.ts; the pumps later).
  */
 import { evaluateQuota, decisionToStageResult, buildCheckpoint, assertNever } from "./deps.js";
-import type { Config, RunState, UsageSignal } from "./deps.js";
-import type { StateManager } from "./deps.js";
+import type { Config, RunState, StateManager, UsageSignal } from "./deps.js";
 import { createLogger } from "../shared/index.js";
 
 const log = createLogger("quota-gate");

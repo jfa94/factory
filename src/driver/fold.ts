@@ -337,7 +337,14 @@ export async function applyRecordReviews(
   }
   const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
 
-  // 1. deterministic gates (re-run, never read back — Δ V).
+  // 1. parse reviews + build the worktree source and the replay verifier factory
+  //    (BEFORE the expensive GateRunner re-run — a malformed review item must fail
+  //    fast rather than burning a full deterministic gate sweep first).
+  const reviews = input.reviews.map(parseRawReview);
+  const source = await buildWorktreeSource(worktree, reviews);
+  const makeRunner = makeReplayRunnerFactory(input);
+
+  // 2. deterministic gates (re-run, never read back — Δ V).
   const gateCtx: GateContext = {
     runId,
     taskId,
@@ -349,7 +356,7 @@ export async function applyRecordReviews(
   const gate = await new GateRunner().run(gateCtx);
   const gateEvidence: GateEvidence[] = [...gate.evidence];
 
-  // 2. holdout gate evidence — RE-DERIVED from the verdicts record-holdout persisted
+  // 3. holdout gate evidence — RE-DERIVED from the verdicts record-holdout persisted
   //    (derive-don't-store exception). A withheld key with no persisted verdicts is an
   //    orchestration error (record-holdout must run first) — LOUD, never a silent pass.
   if (await deps.holdout.has(runId, taskId)) {
@@ -359,11 +366,6 @@ export async function applyRecordReviews(
       holdoutEvidence(checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate)),
     );
   }
-
-  // 3. parse reviews + build the worktree source and the replay verifier factory.
-  const reviews = input.reviews.map(parseRawReview);
-  const source = await buildWorktreeSource(worktree, reviews);
-  const makeRunner = makeReplayRunnerFactory(input);
 
   // 4. derive the floor (citation-verify + replay-confirm + conjunctive floor).
   const panel = await runPanel({
@@ -386,6 +388,7 @@ export async function applyRecordReviews(
   }));
 
   // 6. act on the derived result through the SHARED ladder.
+
   let step: TaskStep;
   if (panel.result.kind === "advance") {
     step = { done: false, stage: panel.result.to };
