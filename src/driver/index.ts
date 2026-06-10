@@ -16,7 +16,7 @@ export { driveTask, driveRun, Driver } from "./loop.js";
 export { finalizeRun } from "./finalize.js";
 export type { FinalizeRunDeps, FinalizeRunResult } from "./finalize.js";
 
-// -- the shared deterministic transition logic (loop + CLI record-* subcmds) --
+// -- the shared deterministic transition logic (loop + pumps) -----------------
 export {
   markInFlight,
   completeTask,
@@ -33,7 +33,7 @@ export {
 // -- the handlers (reporters) + shared reporter helpers ----------------------
 export { makeStageHandlers, specTaskOf, shipBody } from "./handlers.js";
 
-// -- the shared stateful ship pass (loop + CLI run-task ship) -----------------
+// -- the shared stateful ship pass (loop + pump ship) -------------------------
 export { shipTask, type ShipDeps } from "./ship.js";
 
 // -- spawn mechanics (the manifest→runner translation) -----------------------
@@ -57,7 +57,7 @@ export type { ArtifactStore } from "./artifacts.js";
 // -- per-task worktree path derivation ---------------------------------------
 export { taskWorktreePath } from "./paths.js";
 
-// -- fold cores (CLI record-* subcommand kernels + pump) ----------------------
+// -- fold cores (the pump's deterministic result-fold kernels) ----------------
 export {
   persistStepCursor,
   readJsonInput,

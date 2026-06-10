@@ -3,7 +3,7 @@
  *
  * The registry is a FROZEN seam: downstream workstreams register their
  * subcommands by importing {@link cliRegistry} and adding entries (e.g.
- * `factory run-task`, `factory state`, `factory quota-gate`). `dispatch()`
+ * `factory next`, `factory state`, `factory drive`). `dispatch()`
  * returns a numeric {@link ExitCode}; the thin entry `src/bin/factory.ts` is the
  * ONLY place that calls `process.exit` with it.
  *
@@ -19,12 +19,6 @@ import { stringifyJson } from "../shared/json.js";
 import { configureCommand } from "./subcommands/configure.js";
 import { stateCommand } from "./subcommands/state.js";
 import { scaffoldCommand } from "./subcommands/scaffold.js";
-import { runTaskCommand } from "./subcommands/run-task.js";
-import { advanceCommand } from "./subcommands/advance.js";
-import { dropCommand } from "./subcommands/drop.js";
-import { recordProducerCommand } from "./subcommands/record-producer.js";
-import { recordHoldoutCommand } from "./subcommands/record-holdout.js";
-import { recordReviewsCommand } from "./subcommands/record-reviews.js";
 import { runCommand } from "./subcommands/run.js";
 import { specCommand } from "./subcommands/spec.js";
 import { rescueCommand } from "./subcommands/rescue.js";
@@ -59,12 +53,6 @@ export const cliRegistry: Record<string, Subcommand> = {
   score: scoreCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,
-  "run-task": runTaskCommand,
-  advance: advanceCommand,
-  drop: dropCommand,
-  "record-producer": recordProducerCommand,
-  "record-holdout": recordHoldoutCommand,
-  "record-reviews": recordReviewsCommand,
   drive: driveCommand,
   next: nextCommand,
 };

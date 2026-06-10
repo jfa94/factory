@@ -681,4 +681,12 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
       applyRecordProducer(state, RUN_ID, "ghost", "exec", "STATUS: DONE"),
     ).rejects.toThrow(/no task 'ghost'/);
   });
+
+  // Relocated from src/cli/subcommands/record-producer.test.ts (CLI shell deleted):
+  // a non-producer stage must be rejected LOUD before any state read.
+  it("rejects a non-producer stage (verify) LOUD", async () => {
+    await expect(
+      applyRecordProducer(state, RUN_ID, "t1", "verify", "STATUS: DONE"),
+    ).rejects.toThrow(/producer stage \(tests \| exec\)/);
+  });
 });

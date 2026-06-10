@@ -4,7 +4,8 @@
  * Model A: the CLI never spawns an agent. `run create` resolves a DURABLE spec (by
  * stable issue number or explicit spec-id), creates a fresh run, SEEDS its task
  * rows from the spec, and emits the {@link RunState}; the in-session orchestrator
- * reads `run_id` and drives task-by-task via `run-task` + the `record-*` writers.
+ * reads `run_id` and drives the run through the pump seam (`factory next` +
+ * `factory drive`).
  *
  * `run resume` is the human-invoked resumable entrypoint (Decision 24, Δ F — v1 is
  * HUMAN relaunch only; the v2 scheduler would fire this same path). It re-reads the
@@ -29,7 +30,7 @@ import { makeRunId, validateId } from "../../shared/ids.js";
 import { nowEpoch } from "../../shared/time.js";
 import { planResume, StatuslineUsageSignal, type UsageReading } from "../../quota/index.js";
 import { isTerminalRunStatus } from "../../types/index.js";
-import type { Config, Driver, RunState, RunStatus, TaskState } from "../../types/index.js";
+import type { Config, RunState, RunStatus, TaskState } from "../../types/index.js";
 import { finalizeRun } from "../../driver/index.js";
 import { loadCliDeps } from "../wiring.js";
 import type { Subcommand } from "../main.js";
@@ -37,7 +38,7 @@ import type { Subcommand } from "../main.js";
 const RUN_HELP = `factory run — create or resume a run
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver <d>] [--run-id <id>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--ship-mode <mode>]
 
@@ -49,12 +50,11 @@ Actions:
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver <d>] [--run-id <id>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
 
   --repo      Repo identity 'owner/name' (the first key of the spec store).
   --issue     PRD issue number — the STABLE lookup key (reruns reuse the spec).
   --spec-id   Explicit '<issue>-<slug>' spec id (alternative to --issue).
-  --driver    sequential | balanced (default: balanced).
   --run-id    Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
 
 Resolves the spec via the durable store (LOUD if none exists — generate one first),
@@ -174,7 +174,6 @@ export interface CreateRunOptions {
   readonly repo: string;
   readonly issue?: number;
   readonly specId?: string;
-  readonly driver: Driver;
   readonly runId: string;
 }
 
@@ -210,7 +209,8 @@ export async function createRun(
   await state.create({
     run_id: opts.runId,
     spec: specStore.toPointer(manifest),
-    driver: opts.driver,
+    // v1 pump seam drives tasks strictly one at a time — the driver dial is fixed.
+    driver: "sequential",
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
@@ -289,12 +289,6 @@ export async function applyResume(
 // Flag parsing + command wiring
 // ---------------------------------------------------------------------------
 
-function parseDriver(raw: string | boolean | undefined): Driver {
-  if (raw === undefined) return "balanced";
-  if (raw === "sequential" || raw === "balanced") return raw;
-  throw new UsageError(`unknown --driver '${String(raw)}' (expected sequential | balanced)`);
-}
-
 function parseIssue(raw: string | boolean | undefined): number | undefined {
   if (raw === undefined) return undefined;
   if (typeof raw !== "string") throw new UsageError("--issue requires a value");
@@ -318,7 +312,6 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
   }
 
   const repo = args.requireFlag("repo");
-  const driver = parseDriver(args.flag("driver"));
   const issue = parseIssue(args.flag("issue"));
   const specId = optionalString(args.flag("spec-id"));
   if (issue === undefined && specId === undefined) {
@@ -335,7 +328,6 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
   const specStore = new SpecStore({ dataDir });
   const run = await createRun(state, specStore, {
     repo,
-    driver,
     runId,
     ...(issue !== undefined ? { issue } : {}),
     ...(specId !== undefined ? { specId } : {}),

@@ -278,7 +278,6 @@ describe("orchestrator pump seam — golden contract E2E", () => {
     const run = await createRun(state, specStore, {
       repo: REPO,
       issue: ISSUE,
-      driver: "balanced",
       runId: RUN_ID,
     });
     expect(run.run_id).toBe(RUN_ID);
@@ -336,7 +335,6 @@ describe("orchestrator pump seam — golden contract E2E", () => {
     await createRun(state, specStore, {
       repo: REPO,
       issue: ISSUE,
-      driver: "balanced",
       runId: RUN_ID,
     });
 
@@ -368,7 +366,6 @@ describe("orchestrator pump seam — golden contract E2E", () => {
     await createRun(state, specStore, {
       repo: REPO,
       issue: ISSUE,
-      driver: "balanced",
       runId: RUN_ID,
     });
 

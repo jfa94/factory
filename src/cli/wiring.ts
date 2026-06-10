@@ -1,12 +1,12 @@
 /**
  * CLI deps-wiring (C2) — construct the production reporter bundle from a run id.
  *
- * The `factory run-task` reporter and the `record-*`/`advance`/`drop` state-write
- * subcommands all need the SAME bundle: the typed config, the durable spec for the
- * run, real git/gh clients, the deterministic gate tools, and the fs-backed
- * artifact + holdout stores — plus the {@link StateManager} (the only sanctioned
- * write path). This module assembles that bundle ONCE so each subcommand stays a
- * thin parse → wire → act shell.
+ * The pump subcommands (`factory next` / `factory drive`) and `run finalize` all
+ * need the SAME bundle: the typed config, the durable spec for the run, real
+ * git/gh clients, the deterministic gate tools, and the fs-backed artifact +
+ * holdout stores — plus the {@link StateManager} (the only sanctioned write
+ * path). This module assembles that bundle ONCE so each subcommand stays a thin
+ * parse → wire → act shell.
  *
  * It deliberately produces NO agent runners ({@link import("../driver/types.js").DriverRunners}):
  * a `factory` CLI subprocess has no access to the Agent tool, so every step that

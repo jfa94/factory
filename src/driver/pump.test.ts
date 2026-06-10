@@ -267,6 +267,23 @@ describe("pumpTask", () => {
     }
   });
 
+  // Relocated from src/cli/subcommands/run-task.test.ts (CLI shell deleted):
+  // verify must surface the holdout sidecar ONLY when an answer key was withheld.
+  it("verify emits NO holdout sidecar when nothing was withheld", async () => {
+    // Default fixture: single criterion → degenerate split, no key persisted.
+    const { deps, runId, cleanup } = await makePumpDeps();
+    try {
+      await driveToVerify(deps, runId, "T1");
+      const env = await pumpTask(deps, runId, "T1");
+      expect(env.kind).toBe("spawn");
+      if (env.kind !== "spawn") return;
+      expect(env.stage).toBe("verify");
+      expect(env.sidecar).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("folding approving reviews (+holdout pass) pumps through ship to terminal done (no-merge)", async () => {
     // Use ≥2 criteria so the tests stage persists a holdout record (holdoutCount(2,20)=1).
     const { deps, runId, dataDir, cleanup } = await makePumpDeps({

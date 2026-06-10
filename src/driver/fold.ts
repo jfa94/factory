@@ -1,10 +1,10 @@
 /**
- * Fold cores — shared between the CLI single-step subcommands and the forthcoming
- * per-task pump.  These are the DETERMINISTIC, state-mutating functions that fold
- * out-of-band agent results into run state; they live here (driver/) so the pump can
- * import them directly without creating a cli→driver dependency inversion.
+ * Fold cores — the per-task pump's deterministic kernels.  These are the
+ * DETERMINISTIC, state-mutating functions that fold out-of-band agent results into
+ * run state; they live here (driver/) so the pump imports them directly without a
+ * cli→driver dependency inversion.
  *
- * Moved verbatim from:
+ * Moved verbatim from the (since-deleted) CLI single-step subcommands:
  *   - src/cli/transition.ts      → TransitionEnvelope, persistStepCursor, readJsonInput
  *   - src/cli/subcommands/record-producer.ts → producerStageInfo, applyRecordProducer
  *   - src/cli/subcommands/record-holdout.ts  → RecordHoldoutInput, RecordHoldoutEnvelope,
@@ -79,7 +79,7 @@ export interface FoldDeps extends HandlerDeps {
 // TransitionEnvelope + persistStepCursor + readJsonInput  (from transition.ts)
 // ---------------------------------------------------------------------------
 
-/** The single JSON document the state-write subcommands emit — the next loop step. */
+/** The envelope a fold core emits — the next loop step for run/task. */
 export interface TransitionEnvelope {
   readonly run_id: string;
   readonly task_id: string;
@@ -90,7 +90,7 @@ export interface TransitionEnvelope {
 /**
  * After a transition, persist the in-flight CURSOR for a non-terminal step so the
  * persisted task status tracks the resume point (the loop does this implicitly at the
- * top of each iteration; the single-step CLI must do it explicitly). A terminal step
+ * top of each iteration; the pump must do it explicitly). A terminal step
  * (`done`/`dropped`) already wrote its own status — nothing to mark.
  */
 export async function persistStepCursor(

@@ -31,7 +31,7 @@ import { join } from "node:path";
 import { EXIT, type ExitCode } from "../exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
-import { readJsonInput } from "../transition.js";
+import { readJsonInput } from "../../driver/index.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";

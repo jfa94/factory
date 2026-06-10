@@ -94,11 +94,6 @@ describe("run arg/usage edges", () => {
   it("create: a non-numeric --issue is a usage error", async () => {
     expect(await runCommand.run(["create", "--repo", REPO, "--issue", "abc"])).toBe(EXIT.USAGE);
   });
-  it("create: an unknown --driver is a usage error", async () => {
-    expect(
-      await runCommand.run(["create", "--repo", REPO, "--issue", "1", "--driver", "turbo"]),
-    ).toBe(EXIT.USAGE);
-  });
   it("create: --help prints help and exits OK", async () => {
     expect(await runCommand.run(["create", "--help"])).toBe(EXIT.OK);
   });
@@ -197,13 +192,13 @@ describe("createRun", () => {
     const run = await createRun(state, store, {
       repo: REPO,
       issue: 42,
-      driver: "balanced",
       runId: "run-a",
     });
 
     expect(run.run_id).toBe("run-a");
     expect(run.status).toBe("running");
-    expect(run.driver).toBe("balanced");
+    // No --driver flag exists: v1 hardcodes the sequential pump driver.
+    expect(run.driver).toBe("sequential");
     expect(run.spec).toEqual({ repo: REPO, spec_id: "42-checkout", issue_number: 42 });
     expect(Object.keys(run.tasks).sort()).toEqual(["t1", "t2"]);
     expect(run.tasks.t1!.status).toBe("pending");
@@ -214,11 +209,10 @@ describe("createRun", () => {
     expect((await state.readCurrent())!.run_id).toBe("run-a");
   });
 
-  it("resolves the spec by explicit spec-id and honors the driver", async () => {
+  it("resolves the spec by explicit spec-id and hardcodes the sequential driver", async () => {
     const run = await createRun(state, store, {
       repo: REPO,
       specId: "42-checkout",
-      driver: "sequential",
       runId: "run-b",
     });
     expect(run.driver).toBe("sequential");
@@ -227,7 +221,7 @@ describe("createRun", () => {
 
   it("is LOUD when no spec exists for the issue", async () => {
     await expect(
-      createRun(state, store, { repo: REPO, issue: 999, driver: "balanced", runId: "run-c" }),
+      createRun(state, store, { repo: REPO, issue: 999, runId: "run-c" }),
     ).rejects.toThrow(/no spec for issue #999/);
   });
 });
