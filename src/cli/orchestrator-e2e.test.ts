@@ -33,14 +33,15 @@ import { join } from "node:path";
 import { createRun } from "./subcommands/run.js";
 
 import { defaultConfig } from "../config/schema.js";
-import { parseSpecManifest, SpecStore, type SpecManifest } from "../spec/index.js";
+import { SpecStore, type SpecManifest } from "../spec/index.js";
 import { StateManager } from "../core/state/manager.js";
 import { FakeGitClient, FakeGhClient } from "../git/fakes.js";
-import { makeFakeTools, FakeGitProbe, commit } from "../verifier/deterministic/fakes.js";
-import { InMemoryHoldoutStore } from "../verifier/holdout/index.js";
+import { makeFakeTools } from "../verifier/deterministic/fakes.js";
+import { type HoldoutStore, InMemoryHoldoutStore } from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore, type ShipMode } from "../driver/index.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
 import { fakeUsageSignal } from "../quota/index.js";
+import { ESCALATION_CAP } from "../producer/index.js";
 import type { RunState } from "../types/index.js";
 
 import {
@@ -52,6 +53,8 @@ import {
   type DriveResults,
 } from "../driver/index.js";
 
+import { greenProbe, makeSpec, NOW } from "../driver/pump-fixtures.js";
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -61,84 +64,22 @@ const TASK_ID = "t1";
 const TASK_ID_2 = "t2";
 const REPO = "acme/widgets";
 const ISSUE = 42;
-const SLUG = "checkout";
-
-/** Epoch second used as `now()` for the quota clock (pinned; tests never breach). */
-const NOW_EPOCH = 1_700_000_000;
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-/** A git probe whose full default gate sweep is GREEN (TDD test→impl history). */
-function greenProbe(): FakeGitProbe {
-  return new FakeGitProbe({
-    refs: { "origin/staging": "sha-base", HEAD: "sha-head" },
-    changedFiles: [],
-    commits: [
-      commit({ sha: "c1", files: ["src/x.test.ts"], tagged: true }),
-      commit({ sha: "c2", files: ["src/x.ts"], tagged: true }),
-    ],
-  });
-}
-
 /** One durable spec: a single task with 5 criteria (so the holdout withholds ≥1). */
 function specManifestSingle(): SpecManifest {
-  return parseSpecManifest({
-    spec_id: `${ISSUE}-${SLUG}`,
-    issue_number: ISSUE,
-    slug: SLUG,
-    repo: REPO,
-    generated_at: "2026-06-01T00:00:00.000Z",
-    tasks: [
-      {
-        task_id: TASK_ID,
-        title: "task t1",
-        description: "does t1",
-        files: ["src/t1.ts"],
-        acceptance_criteria: ["a", "b", "c", "d", "e"],
-        tests_to_write: ["t1.test.ts: covers it"],
-        depends_on: [],
-        risk_tier: "medium",
-        risk_rationale: "moderate",
-      },
-    ],
-  });
+  return makeSpec([{ task_id: TASK_ID, acceptance_criteria: ["a", "b", "c", "d", "e"] }]);
 }
 
-/** Two-task spec: t1 (3 criteria) + t2 (at cap). Used for the drop-path scenario. */
+/** Two-task spec: t1 (3 criteria) + t2 (2 criteria, seeded at escalation cap in the test body). */
 function specManifestTwo(): SpecManifest {
-  return parseSpecManifest({
-    spec_id: `${ISSUE}-${SLUG}`,
-    issue_number: ISSUE,
-    slug: SLUG,
-    repo: REPO,
-    generated_at: "2026-06-01T00:00:00.000Z",
-    tasks: [
-      {
-        task_id: TASK_ID,
-        title: "task t1",
-        description: "does t1",
-        files: ["src/t1.ts"],
-        acceptance_criteria: ["a", "b", "c"],
-        tests_to_write: ["t1.test.ts: covers it"],
-        depends_on: [],
-        risk_tier: "medium",
-        risk_rationale: "moderate",
-      },
-      {
-        task_id: TASK_ID_2,
-        title: "task t2 (will drop)",
-        description: "does t2",
-        files: ["src/t2.ts"],
-        acceptance_criteria: ["x", "y"],
-        tests_to_write: ["t2.test.ts: covers it"],
-        depends_on: [],
-        risk_tier: "medium",
-        risk_rationale: "moderate",
-      },
-    ],
-  });
+  return makeSpec([
+    { task_id: TASK_ID, acceptance_criteria: ["a", "b", "c"] },
+    { task_id: TASK_ID_2, acceptance_criteria: ["x", "y"] },
+  ]);
 }
 
 /** An approving RawReview-shaped object (the orchestrator's collected panel output). */
@@ -151,31 +92,30 @@ function approve(reviewer: string) {
 // ---------------------------------------------------------------------------
 
 /**
- * Maps `(task_id, stage)` → a factory that, given the spawn envelope, produces
- * the appropriate {@link DriveResults}.  The fold_key is taken verbatim from the
- * envelope so the engine's exactly-once gate always passes.
+ * Canned answer store for spawn envelopes.  Dispatches on `env.expects`:
+ *   - `"producer-status"` → returns the STATUS line keyed by `env.task_id` from
+ *     the pre-seeded producerStatuses map (default: "STATUS: DONE").
+ *   - `"reviews"` → returns an all-approve panel; if `env.sidecar` is present,
+ *     fetches the holdout record from the registered store and folds in all-pass
+ *     validator verdicts.  `env.fold_key` is echoed verbatim so the engine's
+ *     exactly-once gate always passes.
  *
  * Usage: `book.for(env)` — call once per spawn envelope in the driver loop.
  */
 class AnswerBook {
   private readonly producerStatuses: Map<string, string>;
-  private readonly holdout: Map<string, InMemoryHoldoutStore>;
+  private readonly holdout: { runId: string; store: HoldoutStore } | undefined;
 
   constructor(
     opts: {
       /** producer STATUS line per task_id (default: "STATUS: DONE" for everything). */
       producerStatuses?: Record<string, string>;
-      /** holdout store shared with the test (so allPass verdicts can be derived). */
-      holdoutStore?: InMemoryHoldoutStore;
-      /** run id (for holdout lookups). */
-      runId?: string;
+      /** holdout store + run id (both required together; meaningful only as a pair). */
+      holdout?: { runId: string; store: HoldoutStore };
     } = {},
   ) {
     this.producerStatuses = new Map(Object.entries(opts.producerStatuses ?? {}));
-    this.holdout = new Map();
-    if (opts.holdoutStore !== undefined && opts.runId !== undefined) {
-      this.holdout.set(opts.runId, opts.holdoutStore);
-    }
+    this.holdout = opts.holdout;
   }
 
   /**
@@ -205,16 +145,15 @@ class AnswerBook {
 
     // If the spawn carries a holdout sidecar, the fold requires holdout results.
     if (env.sidecar !== undefined) {
-      const holdoutStore = this.holdout.get(env.run_id);
-      if (holdoutStore === undefined) {
+      if (this.holdout === undefined) {
         throw new Error(
           `AnswerBook: spawn for task '${env.task_id}' carries a holdout sidecar but no ` +
             `holdout store was registered for run '${env.run_id}'`,
         );
       }
-      const record = await holdoutStore.get(env.run_id, env.task_id);
+      const record = await this.holdout.store.get(env.run_id, env.task_id);
       const raw = JSON.stringify({
-        criteria: record.withheld_criteria.map((criterion: string) => ({
+        criteria: record.withheld_criteria.map((criterion) => ({
           criterion,
           satisfied: true,
           evidence: "src/t1.ts:1",
@@ -231,6 +170,11 @@ class AnswerBook {
 // driveToTerminal — the canonical thin driver loop (IS the contract)
 // ---------------------------------------------------------------------------
 
+/** Minimal interface driveToTerminal needs — satisfied by AnswerBook and plain spy objects. */
+interface Answerer {
+  for(env: DriveEnvelope & { kind: "spawn" }): Promise<DriveResults>;
+}
+
 /**
  * Drive a run to its terminal state, exactly as a real in-session or workflow
  * driver would.  This loop IS the documented driver contract:
@@ -240,11 +184,8 @@ class AnswerBook {
  * Sequential: one task at a time (first ready task from pumpRun).
  * Quota-blocked is treated as an unexpected error (the fake signal never blocks).
  */
-async function driveToTerminal(
-  deps: PumpDeps,
-  runId: string,
-  answer: AnswerBook,
-): Promise<RunState> {
+
+async function driveToTerminal(deps: PumpDeps, runId: string, answer: Answerer): Promise<RunState> {
   for (;;) {
     const next = await pumpRun(deps, runId);
     if (next.kind === "run-terminal") return deps.state.read(runId);
@@ -258,9 +199,14 @@ async function driveToTerminal(
     let results: DriveResults | undefined;
     for (;;) {
       const env = await pumpTask(deps, runId, taskId, results);
+      // Clear after delivery: the fold_key gate rejects duplicate folds LOUD on the
+      // next pumpTask call, so passing results again would be a protocol violation.
       results = undefined;
       if (env.kind === "terminal") break;
-      if (env.kind !== "spawn") throw new Error(`unexpected ${env.kind}`);
+      if (env.kind === "quota-blocked") {
+        throw new Error(`unexpected quota stop for task ${taskId}: ${env.reason}`);
+      }
+      // env.kind === "spawn" — the only remaining case in the discriminated union.
       results = await answer.for(env);
     }
   }
@@ -297,16 +243,12 @@ describe("orchestrator pump seam — golden contract E2E", () => {
   });
 
   /** Build PumpDeps directly (no CLI loading — keeps the E2E free of fs config). */
-  function makeDeps(
-    manifest: SpecManifest,
-    shipMode: ShipMode,
-    ghClient: FakeGhClient = gh,
-  ): PumpDeps {
+  function makeDeps(manifest: SpecManifest, shipMode: ShipMode): PumpDeps {
     return {
       config: defaultConfig(),
       spec: manifest,
       git,
-      gh: ghClient,
+      gh,
       tools: makeFakeTools({ git: greenProbe() }),
       artifacts,
       holdout,
@@ -317,11 +259,11 @@ describe("orchestrator pump seam — golden contract E2E", () => {
       state,
       usage: fakeUsageSignal({
         kind: "available",
-        fiveHour: { utilizationPct: 0, resetsAtEpoch: NOW_EPOCH + 18_000 },
-        sevenDay: { utilizationPct: 0, resetsAtEpoch: NOW_EPOCH + 604_800 },
-        capturedAt: NOW_EPOCH,
+        fiveHour: { utilizationPct: 0, resetsAtEpoch: NOW + 18_000 },
+        sevenDay: { utilizationPct: 0, resetsAtEpoch: NOW + 604_800 },
+        capturedAt: NOW,
       }),
-      now: () => NOW_EPOCH,
+      now: () => NOW,
     };
   }
 
@@ -344,18 +286,20 @@ describe("orchestrator pump seam — golden contract E2E", () => {
     expect(run.tasks[TASK_ID]!.status).toBe("pending");
 
     const deps = makeDeps(manifest, "no-merge");
-    const answer = new AnswerBook({ holdoutStore: holdout, runId: RUN_ID });
+    const answer = new AnswerBook({ holdout: { runId: RUN_ID, store: holdout } });
 
     // Track whether the verify spawn carried a holdout sidecar (proves Δ Y path).
-    // We intercept in driveToTerminal by passing a counting wrapper directly.
+    // The spy wraps answer.for and is passed directly to driveToTerminal.
     let sawHoldoutSidecar = false;
-    const trackingSidecar: typeof answer = Object.create(answer) as typeof answer;
-    trackingSidecar.for = async (env: DriveEnvelope & { kind: "spawn" }) => {
-      if (env.sidecar !== undefined) sawHoldoutSidecar = true;
-      return answer.for(env);
+    // spyAnswer: plain object delegating to answer.for, recording sidecar presence.
+    const spyAnswer = {
+      for: async (env: DriveEnvelope & { kind: "spawn" }) => {
+        if (env.sidecar !== undefined) sawHoldoutSidecar = true;
+        return answer.for(env);
+      },
     };
 
-    const finalRun = await driveToTerminal(deps, RUN_ID, trackingSidecar);
+    const finalRun = await driveToTerminal(deps, RUN_ID, spyAnswer);
 
     // The run reached `completed` (all tasks done).
     expect(finalRun.status).toBe("completed");
@@ -397,7 +341,7 @@ describe("orchestrator pump seam — golden contract E2E", () => {
     });
 
     const deps = makeDeps(manifest, "live");
-    const answer = new AnswerBook({ holdoutStore: holdout, runId: RUN_ID });
+    const answer = new AnswerBook({ holdout: { runId: RUN_ID, store: holdout } });
     const finalRun = await driveToTerminal(deps, RUN_ID, answer);
 
     expect(finalRun.status).toBe("completed");
@@ -428,16 +372,15 @@ describe("orchestrator pump seam — golden contract E2E", () => {
       runId: RUN_ID,
     });
 
-    // Seed t2 at ESCALATION_CAP (rung=2) so the first producer failure drops it.
-    await state.updateTask(RUN_ID, TASK_ID_2, (t) => ({ ...t, escalation_rung: 2 }));
+    // Seed t2 at ESCALATION_CAP so the first producer failure drops it.
+    await state.updateTask(RUN_ID, TASK_ID_2, (t) => ({ ...t, escalation_rung: ESCALATION_CAP }));
 
     const deps = makeDeps(manifest, "no-merge");
 
     // t1: DONE normally. t2: deliberately unparseable producer status (no ESCALATE keyword)
     // exercises the unparseable-producer-status path; at cap → capability-budget drop.
     const answer = new AnswerBook({
-      holdoutStore: holdout,
-      runId: RUN_ID,
+      holdout: { runId: RUN_ID, store: holdout },
       producerStatuses: {
         [TASK_ID_2]: "STATUS: BLOCKED: ran out of ideas",
       },
