@@ -20,8 +20,11 @@ import { DefaultGitClient, DefaultGhClient } from "../git/index.js";
 import { defaultGateTools } from "../verifier/deterministic/index.js";
 import { FsArtifactStore } from "../driver/artifacts.js";
 import { FsHoldoutStore } from "../verifier/holdout/index.js";
+import { StatuslineUsageSignal } from "../quota/index.js";
+import { nowEpoch } from "../shared/time.js";
 import type { HandlerDeps, ShipMode } from "../driver/types.js";
 import type { RunState } from "../core/state/index.js";
+import type { PumpDeps } from "../driver/pump.js";
 
 /**
  * The full CLI reporter bundle: everything a reporter needs ({@link HandlerDeps})
@@ -54,6 +57,29 @@ function splitRepo(slug: string): { owner: string; repo: string } {
     throw new Error(`wiring: run spec repo must be '<owner>/<name>', got '${slug}'`);
   }
   return { owner: parts[0]!, repo: parts[1]! };
+}
+
+/**
+ * The pump bundle: everything {@link CliDeps} provides plus the live quota signal
+ * and a clock — the full {@link PumpDeps} contract, with the run snapshot attached
+ * for convenience (saves a re-read in the common case).
+ */
+export interface CliPumpDeps extends PumpDeps {
+  /** The run snapshot read while wiring (convenience for shells). */
+  readonly run: RunState;
+}
+
+/**
+ * Assemble {@link CliPumpDeps} — {@link loadCliDeps} plus the quota signal and
+ * clock. The result satisfies {@link PumpDeps} (the pump engine contract).
+ */
+export async function loadPumpDeps(opts: LoadCliDepsOptions): Promise<CliPumpDeps> {
+  const deps = await loadCliDeps(opts);
+  return {
+    ...deps,
+    usage: new StatuslineUsageSignal({ dataDir: deps.dataDir }),
+    now: nowEpoch,
+  };
 }
 
 /**

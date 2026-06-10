@@ -29,6 +29,8 @@ import { runCommand } from "./subcommands/run.js";
 import { specCommand } from "./subcommands/spec.js";
 import { rescueCommand } from "./subcommands/rescue.js";
 import { scoreCommand } from "./subcommands/score.js";
+import { driveCommand } from "./subcommands/drive.js";
+import { nextCommand } from "./subcommands/next.js";
 
 /** A single CLI subcommand. `run` returns (or resolves to) an {@link ExitCode}. */
 export interface Subcommand {
@@ -63,6 +65,8 @@ export const cliRegistry: Record<string, Subcommand> = {
   "record-producer": recordProducerCommand,
   "record-holdout": recordHoldoutCommand,
   "record-reviews": recordReviewsCommand,
+  drive: driveCommand,
+  next: nextCommand,
 };
 
 function printHelp(): void {
