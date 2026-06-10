@@ -138,6 +138,7 @@ describe("seedTasksFromSpec", () => {
       risk_tier: "low",
       escalation_rung: 0,
       reviewers: [],
+      merge_resyncs: 0,
     });
     expect(seeded.t2!.depends_on).toEqual(["t1"]);
     expect(seeded.t2!.risk_tier).toBe("medium");
