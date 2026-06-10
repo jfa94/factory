@@ -159,30 +159,28 @@ async function runVerifyCollection(taskId, env) {
     const citable = review.findings.filter(
       (f) => f.blocking === true && f.file !== undefined && f.line !== undefined,
     );
-    const verdicts = (
-      await parallel(
-        citable.map(
-          (f) => () =>
-            agent(
-              `Adversarially verify this code-review finding — try to REFUTE it against the actual code.\n` +
-                `Inspect via: git -C ${env.worktree} diff staging and Read ${env.worktree}/${f.file} around line ${f.line}.\n` +
-                `Finding by ${review.reviewer}: ${f.file}:${f.line} — ${f.description}\nQuoted code: ${f.quote}\n` +
-                `Return {"holds": true|false, "note": "<why>"} (holds=true iff the finding is real).`,
-              {
-                label: `verify:${taskId}:${f.file}:${f.line}`,
-                phase: "Drive",
-                isolation: "worktree",
-                model: "opus",
-                schema: VERDICT_OUT,
-              },
-            ).then((v) => {
-              if (v === null)
-                throw new Error(`finding-verifier for ${taskId} ${f.file}:${f.line} died`);
-              return { file: f.file, line: f.line, holds: v.holds, note: v.note };
-            }),
-        ),
-      )
-    ).filter(Boolean);
+    const verdicts = await parallel(
+      citable.map(
+        (f) => () =>
+          agent(
+            `Adversarially verify this code-review finding — try to REFUTE it against the actual code.\n` +
+              `Inspect via: git -C ${env.worktree} diff staging and Read ${env.worktree}/${f.file} around line ${f.line}.\n` +
+              `Finding by ${review.reviewer}: ${f.file}:${f.line} — ${f.description}\nQuoted code: ${f.quote}\n` +
+              `Return {"holds": true|false, "note": "<why>"} (holds=true iff the finding is real).`,
+            {
+              label: `verify:${taskId}:${f.file}:${f.line}`,
+              phase: "Drive",
+              isolation: "worktree",
+              model: "opus",
+              schema: VERDICT_OUT,
+            },
+          ).then((v) => {
+            if (v === null)
+              throw new Error(`finding-verifier for ${taskId} ${f.file}:${f.line} died`);
+            return { file: f.file, line: f.line, holds: v.holds, note: v.note };
+          }),
+      ),
+    );
     verifications.push({ reviewer: review.reviewer, verdicts });
   }
 
