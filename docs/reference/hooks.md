@@ -18,7 +18,7 @@ exits `2`.
 | `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating via a derived floor verdict. |
 | `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                 |
 | `write-protection`  | PreToolUse `Edit\|Write\|MultiEdit`         | Deny writes to hardcoded TCB (trusted-computing-base) paths.                                                                                |
-| `subagent-stop`     | SubagentStop                                | Append a reviewer `ReviewerResult` to task state via `StateManager`.                                                                        |
+| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the driver fold is the single writer of `task.reviewers[]`).                      |
 | `stop-gate`         | Stop                                        | Block a premature session end while a run is live; finalize-on-stop otherwise.                                                              |
 
 ## `hooks.json` wiring
