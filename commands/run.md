@@ -28,7 +28,7 @@ arguments:
 # /factory:run
 
 Drive a full pipeline run. The `factory` CLI is the engine (ALL control flow); the
-driver is a dumb loop. Reject the call with a clear message if: `--repo` missing;
+driver is a dumb loop. Reject a START call (no `resume`) with a clear message if: `--repo` missing;
 neither or both of `--issue`/`--spec-id`; `--mode` not `session`/`workflow`;
 `--ship-mode` not `no-merge`/`live`. Defaults: `--mode session`, `--ship-mode no-merge`
 (`live` only on explicit opt-in — it auto-merges into staging).
@@ -36,7 +36,7 @@ neither or both of `--issue`/`--spec-id`; `--mode` not `session`/`workflow`;
 ## Both modes start the same
 
 Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run
-create`; read `run_id`):
+create`; read `run_id`) (with `--spec-id`, skip Phase 1 — the spec must already exist; `run create` fails LOUD otherwise):
 
 ```
 Skill(pipeline-orchestrator)
@@ -65,7 +65,7 @@ file-lock serialized). When it returns:
 - `{ suspended: true, scope, resets_at_epoch }` → quota stop: report it; the user
   re-runs `/factory:run resume` after the window resets. Do NOT finalize.
 - otherwise → run the skill's Phase 4: `factory run finalize --run <run_id>
---ship-mode <mode>`, then `factory score` + `factory state --summary`, and report.
+--ship-mode <no-merge|live>`, then `factory score` + `factory state --summary`, and report.
 
 ## Resume mode (`/factory:run resume [--run <id>]`)
 
@@ -73,3 +73,5 @@ file-lock serialized). When it returns:
 `resets_at_epoch` and stop. On `{kind:"resumed"}` re-enter the run loop (Phase 3 of
 the skill in session mode, or re-launch the workflow in workflow mode — ask the user
 which mode if it is ambiguous; the engine is indifferent).
+
+Ship mode is not persisted — re-pass the run's original `--ship-mode` on resume; if it was `live` and the flag is omitted, ASK the user rather than defaulting (a silent default flips a live run to no-merge mid-run).
