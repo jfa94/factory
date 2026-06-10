@@ -7034,6 +7034,19 @@ var TaskStateSchema = external_exports.object({
   failure_class: FailureClassEnum.optional(),
   /** Human-facing reason string accompanying a drop. */
   failure_reason: external_exports.string().optional(),
+  /**
+   * The precise resume cursor for the drive pump — which TaskStage the task is
+   * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
+   * summary; `stage` is the machine cursor. Absent = not started (preflight).
+   * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
+   * not a resume point — terminal writers do not clear it.
+   * NOTE: literals duplicate stage-machine's TASK_STAGE_ORDER because core/state
+   * must not import stage-machine (dependency direction) — a cross-check test in
+   * src/driver/pump.test.ts pins them equal.
+   */
+  stage: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
+  /** Ship live-merge re-sync count (cap enforced by the pump; persisted so the cap survives process boundaries). */
+  merge_resyncs: external_exports.number().int().min(0).default(0),
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: external_exports.string().optional(),
   ended_at: external_exports.string().optional()
@@ -7100,7 +7113,7 @@ var RunStateSchema = external_exports.object({
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
-  driver: DriverEnum.default("balanced"),
+  driver: DriverEnum.default("sequential"),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -7279,7 +7292,7 @@ var StateManager = class {
     const state = parseRunState({
       run_id: args.run_id,
       status: "running",
-      driver: args.driver ?? "balanced",
+      driver: args.driver ?? "sequential",
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -7528,19 +7541,23 @@ function statusToStage(status) {
       return null;
   }
 }
+function activeStageOf(task) {
+  if (statusToStage(task.status) === null) return null;
+  return task.stage ?? statusToStage(task.status);
+}
 function resolveActiveTask(run, explicitTaskId) {
   const taskId = explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
   if (taskId.length > 0) {
     const task2 = run.tasks[taskId];
     if (!task2) return null;
-    return { task: task2, stage: statusToStage(task2.status) };
+    return { task: task2, stage: activeStageOf(task2) };
   }
   const inFlight = Object.values(run.tasks).filter(
     (t) => t.status === "executing" || t.status === "reviewing" || t.status === "shipping"
   );
   if (inFlight.length !== 1) return null;
   const task = inFlight[0];
-  return { task, stage: statusToStage(task.status) };
+  return { task, stage: activeStageOf(task) };
 }
 function isTestWriterPhase(active) {
   if (!active) return false;
@@ -7703,10 +7720,6 @@ function taskIdFromHeader(transcriptText) {
   const m = transcriptText.match(/\[task:([a-zA-Z0-9_-]+)\]/);
   return m ? m[1] : null;
 }
-function appendReviewer(task, result) {
-  const others = task.reviewers.filter((r) => r.reviewer !== result.reviewer);
-  return { ...task, reviewers: [...others, result] };
-}
 async function handleSubagentStop(input, deps = {}) {
   if (!input) return null;
   const agentType = input.agent_type ?? input.subagent_type ?? "";
@@ -7739,7 +7752,7 @@ async function handleSubagentStop(input, deps = {}) {
   }
   if (taskId.length === 0) {
     log4.error(
-      `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); reviewer result NOT persisted \u2014 no silent state loss`
+      `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 driver fold is the single writer`
     );
     return null;
   }
@@ -7750,14 +7763,10 @@ async function handleSubagentStop(input, deps = {}) {
     return null;
   }
   const verdict = parseVerdict(input.last_assistant_message);
-  const result = {
-    reviewer,
-    verdict,
-    // Schema coherence: approve ⇒ 0; blocked ⇒ ≥1. We do not have a verified
-    // count from the transcript here, so a blocked verdict records the minimum 1.
-    confirmed_blockers: verdict === PanelVerdictEnum.enum.blocked ? 1 : 0
-  };
-  return manager.updateTask(run.run_id, taskId, (task) => appendReviewer(task, result));
+  log4.info(
+    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 driver folds reviews via record-reviews)`
+  );
+  return null;
 }
 async function runSubagentStop(_argv = [], deps = {}) {
   let input;
@@ -7770,11 +7779,10 @@ async function runSubagentStop(_argv = [], deps = {}) {
   }
   try {
     await handleSubagentStop(input, deps);
-    return EXIT.OK;
   } catch (err) {
-    log4.error(`SubagentStop state write failed: ${err.message}`);
-    return EXIT.ERROR;
+    log4.error(`SubagentStop handler error: ${err.message}`);
   }
+  return EXIT.OK;
 }
 async function readAllStdin6() {
   const chunks = [];
@@ -7798,7 +7806,7 @@ function decideStop(run, allowStop) {
     const detail = tasks.length === 0 ? "spec/tasks not yet populated" : `${nonTerminal.length} non-terminal task(s): ` + nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
     return {
       kind: "block",
-      reason: `run ${run.run_id} is still live (${detail}). Advance the stage machine (\`factory run-task ${run.run_id} <task> --stage <stage>\`) or finalize the run. Set FACTORY_ALLOW_STOP=1 to stop anyway (leaves the run resumable).`
+      reason: `run ${run.run_id} is still live (${detail}). Advance the run (\`factory next --run ${run.run_id}\`, then \`factory drive --run ${run.run_id} --task <task>\`) or finalize it. Set FACTORY_ALLOW_STOP=1 to stop anyway (leaves the run resumable).`
     };
   }
   return { kind: "finalize", status: decideFinalize(run).run_status };
@@ -7860,7 +7868,7 @@ var hookRegistry = {
     run: (argv) => runPipelineGuards(argv)
   },
   "subagent-stop": {
-    describe: "SubagentStop: append reviewer ReviewerResult to task state via StateManager",
+    describe: "SubagentStop: log a stopping reviewer's parsed verdict (observational \u2014 the driver fold is the single writer of task.reviewers[])",
     run: (argv) => runSubagentStop(argv)
   },
   "stop-gate": {

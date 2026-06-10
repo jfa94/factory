@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile11;
-      function readFile11(path2, options, cb) {
+      fs2.readFile = readFile10;
+      function readFile10(path2, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path2, options, cb);
@@ -6112,6 +6112,18 @@ function getAtPath(config, path2) {
   return cursor;
 }
 
+// src/shared/usage-error.ts
+var UsageError = class extends Error {
+  isUsageError = true;
+  constructor(message) {
+    super(message);
+    this.name = "UsageError";
+  }
+};
+function isUsageError(err) {
+  return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
+}
+
 // src/cli/args.ts
 function parseArgs(argv, opts = {}) {
   const booleans = /* @__PURE__ */ new Set(["help", "h", ...opts.booleans ?? []]);
@@ -6175,15 +6187,10 @@ function parseArgs(argv, opts = {}) {
     }
   };
 }
-var UsageError = class extends Error {
-  isUsageError = true;
-  constructor(message) {
-    super(message);
-    this.name = "UsageError";
-  }
-};
-function isUsageError(err) {
-  return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
+function parseShipMode(raw) {
+  if (raw === void 0) return void 0;
+  if (raw === "live" || raw === "no-merge") return raw;
+  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
 }
 
 // src/cli/io.ts
@@ -6335,6 +6342,19 @@ var TaskStateSchema = external_exports.object({
   failure_class: FailureClassEnum.optional(),
   /** Human-facing reason string accompanying a drop. */
   failure_reason: external_exports.string().optional(),
+  /**
+   * The precise resume cursor for the drive pump — which TaskStage the task is
+   * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
+   * summary; `stage` is the machine cursor. Absent = not started (preflight).
+   * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
+   * not a resume point — terminal writers do not clear it.
+   * NOTE: literals duplicate stage-machine's TASK_STAGE_ORDER because core/state
+   * must not import stage-machine (dependency direction) — a cross-check test in
+   * src/driver/pump.test.ts pins them equal.
+   */
+  stage: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
+  /** Ship live-merge re-sync count (cap enforced by the pump; persisted so the cap survives process boundaries). */
+  merge_resyncs: external_exports.number().int().min(0).default(0),
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: external_exports.string().optional(),
   ended_at: external_exports.string().optional()
@@ -6401,7 +6421,7 @@ var RunStateSchema = external_exports.object({
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
-  driver: DriverEnum.default("balanced"),
+  driver: DriverEnum.default("sequential"),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -6413,13 +6433,13 @@ var RunStateSchema = external_exports.object({
   updated_at: external_exports.string(),
   ended_at: external_exports.string().nullable().default(null)
 });
-function refineRunCrossFields(run14, ctx) {
+function refineRunCrossFields(run10, ctx) {
   const quotaStatuses = ["paused", "suspended"];
-  if (run14.quota != null && !quotaStatuses.includes(run14.status)) {
+  if (run10.quota != null && !quotaStatuses.includes(run10.status)) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["quota"],
-      message: `run '${run14.run_id}' carries a quota checkpoint but status is '${run14.status}' (a quota checkpoint is valid only while paused|suspended)`
+      message: `run '${run10.run_id}' carries a quota checkpoint but status is '${run10.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
   }
 }
@@ -6629,7 +6649,7 @@ var StateManager = class {
     const state = parseRunState({
       run_id: args.run_id,
       status: "running",
-      driver: args.driver ?? "balanced",
+      driver: args.driver ?? "sequential",
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -6774,13 +6794,13 @@ Usage:
   factory state --summary       Print a compact human summary instead
 
 Exit OK with {"current": null} when there is no current run.`;
-function summarize(run14) {
+function summarize(run10) {
   const lines = [
-    `run ${run14.run_id}  status=${run14.status}  driver=${run14.driver}`,
-    `spec ${run14.spec.repo}#${run14.spec.issue_number} (${run14.spec.spec_id})`,
-    `tasks (${Object.keys(run14.tasks).length}):`
+    `run ${run10.run_id}  status=${run10.status}  driver=${run10.driver}`,
+    `spec ${run10.spec.repo}#${run10.spec.issue_number} (${run10.spec.spec_id})`,
+    `tasks (${Object.keys(run10.tasks).length}):`
   ];
-  for (const t of Object.values(run14.tasks)) {
+  for (const t of Object.values(run10.tasks)) {
     const bits = [`  ${t.task_id}`, t.status];
     if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
     if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
@@ -7882,6 +7902,9 @@ function advance(to) {
 function spawn2(manifest) {
   return { kind: "spawn-agents", manifest };
 }
+function gracefulStop(scope, reason, resets_at_epoch) {
+  return resets_at_epoch === void 0 ? { kind: "graceful-stop", scope, reason } : { kind: "graceful-stop", scope, reason, resets_at_epoch };
+}
 function waitRetry(stage, reason, attempt, max_attempts) {
   return { kind: "wait-retry", stage, reason, attempt, max_attempts };
 }
@@ -7959,8 +7982,8 @@ function checkResult(stage, result) {
       return assertNever(result);
   }
 }
-function decideFinalize(run14) {
-  const tasks = Object.values(run14.tasks);
+function decideFinalize(run10) {
+  const tasks = Object.values(run10.tasks);
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
   if (nonTerminal.length > 0) {
     const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
@@ -8508,6 +8531,894 @@ function buildManifest(repo, issueNumber, generated) {
   });
 }
 
+// src/quota/usage-source.ts
+import { existsSync as existsSync5, readFileSync as readFileSync3 } from "node:fs";
+import { join as join8 } from "node:path";
+var log16 = createLogger("quota:usage");
+var STALE_CEILING_SECONDS = 3600;
+var STALE_WARN_SECONDS = 120;
+var RawWindowSchema = external_exports.object({
+  used_percentage: external_exports.unknown().optional(),
+  resets_at: external_exports.unknown().optional()
+}).passthrough();
+var RawCacheSchema = external_exports.object({
+  five_hour: RawWindowSchema.optional(),
+  seven_day: RawWindowSchema.optional(),
+  captured_at: external_exports.unknown().optional()
+}).passthrough();
+function asFiniteNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return null;
+}
+function unavailable(reason) {
+  return { kind: "unavailable", reason };
+}
+function readingFromCache(raw, nowEpoch2) {
+  const parsed = RawCacheSchema.safeParse(raw);
+  if (!parsed.success) {
+    return unavailable("usage-cache-malformed");
+  }
+  const cache = parsed.data;
+  const capturedAt = asFiniteNumber(cache.captured_at) ?? 0;
+  const age = nowEpoch2 - capturedAt;
+  if (age > STALE_CEILING_SECONDS) {
+    return unavailable("usage-cache-too-stale");
+  }
+  if (age > STALE_WARN_SECONDS) {
+    log16.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+  }
+  const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
+  const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
+  if (fivePct === null || sevenPct === null) {
+    return unavailable("usage-cache-fields-missing");
+  }
+  const fiveResets = asFiniteNumber(cache.five_hour?.resets_at);
+  const sevenResets = asFiniteNumber(cache.seven_day?.resets_at);
+  if (fiveResets === null || sevenResets === null) {
+    return unavailable("resets-at-missing");
+  }
+  if (fiveResets <= nowEpoch2) {
+    return unavailable("five-hour-window-reset");
+  }
+  if (sevenResets <= nowEpoch2) {
+    return unavailable("seven-day-window-reset");
+  }
+  return {
+    kind: "available",
+    fiveHour: { utilizationPct: fivePct, resetsAtEpoch: fiveResets },
+    sevenDay: { utilizationPct: sevenPct, resetsAtEpoch: sevenResets },
+    capturedAt
+  };
+}
+function usageCachePath(dataDir) {
+  return join8(dataDir, "usage-cache.json");
+}
+var StatuslineUsageSignal = class {
+  opts;
+  constructor(opts = {}) {
+    this.opts = opts;
+  }
+  async read() {
+    const now = (this.opts.now ?? nowEpoch)();
+    let dataDir;
+    try {
+      dataDir = resolveDataDir(this.opts);
+    } catch {
+      return unavailable("usage-cache-missing");
+    }
+    const file = usageCachePath(dataDir);
+    if (!existsSync5(file)) {
+      log16.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
+      return unavailable("usage-cache-missing");
+    }
+    let raw;
+    try {
+      raw = parseJson(readFileSync3(file, "utf8"), file);
+    } catch {
+      log16.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
+      return unavailable("usage-cache-malformed");
+    }
+    return readingFromCache(raw, now);
+  }
+};
+
+// src/quota/window.ts
+var FIVE_HOUR_WINDOW_SECONDS = 18e3;
+var SEVEN_DAY_WINDOW_SECONDS = 604800;
+var SECONDS_PER_HOUR = 3600;
+var SECONDS_PER_DAY = 86400;
+var MIN_HOUR = 1;
+var MAX_HOUR = 5;
+var MIN_DAY = 1;
+var MAX_DAY = 7;
+function clamp(value, lo, hi) {
+  if (value < lo) return lo;
+  if (value > hi) return hi;
+  return value;
+}
+function computeWindowHour(resetsAtEpoch, nowEpoch2) {
+  const windowStart = resetsAtEpoch - FIVE_HOUR_WINDOW_SECONDS;
+  const elapsed = nowEpoch2 - windowStart;
+  const hour = Math.floor(elapsed / SECONDS_PER_HOUR) + 1;
+  return clamp(hour, MIN_HOUR, MAX_HOUR);
+}
+function computeWindowDay(resetsAtEpoch, nowEpoch2) {
+  const windowStart = resetsAtEpoch - SEVEN_DAY_WINDOW_SECONDS;
+  const elapsed = nowEpoch2 - windowStart;
+  const day = Math.floor(elapsed / SECONDS_PER_DAY) + 1;
+  return clamp(day, MIN_DAY, MAX_DAY);
+}
+function hourlyThresholdFor(hour, hourlyThresholds) {
+  return curveValue(hour, hourlyThresholds);
+}
+function dailyThresholdFor(day, dailyThresholds) {
+  return curveValue(day, dailyThresholds);
+}
+function curveValue(position, curve) {
+  if (curve.length === 0) {
+    throw new RangeError("quota curve is empty \u2014 cannot resolve a threshold (config defect)");
+  }
+  const idx = clamp(position - 1, 0, curve.length - 1);
+  return curve[idx];
+}
+
+// src/quota/pacer.ts
+function evaluate(reading, config, nowEpoch2) {
+  if (reading.kind === "unavailable") {
+    return { kind: "unavailable-halt", reason: `usage unavailable: ${reading.reason}` };
+  }
+  const { hourlyThresholds, dailyThresholds } = config.quota;
+  const windowHour = computeWindowHour(reading.fiveHour.resetsAtEpoch, nowEpoch2);
+  const hourlyCap = hourlyThresholdFor(windowHour, hourlyThresholds);
+  const fiveOver = reading.fiveHour.utilizationPct > hourlyCap;
+  const windowDay = computeWindowDay(reading.sevenDay.resetsAtEpoch, nowEpoch2);
+  const dailyCap = dailyThresholdFor(windowDay, dailyThresholds);
+  const sevenOver = reading.sevenDay.utilizationPct > dailyCap;
+  if (sevenOver) {
+    return {
+      kind: "suspend-7d",
+      resetsAtEpoch: reading.sevenDay.resetsAtEpoch,
+      reason: `7d quota over curve: ${reading.sevenDay.utilizationPct}% used > ${dailyCap}% cap at window-day ${windowDay}`
+    };
+  }
+  if (fiveOver) {
+    return {
+      kind: "pause-5h",
+      resetsAtEpoch: reading.fiveHour.resetsAtEpoch,
+      reason: `5h quota over curve: ${reading.fiveHour.utilizationPct}% used > ${hourlyCap}% cap at window-hour ${windowHour}`
+    };
+  }
+  return { kind: "proceed" };
+}
+
+// src/quota/to-stage-result.ts
+function decisionToStageResult(decision) {
+  switch (decision.kind) {
+    case "proceed":
+      return null;
+    case "pause-5h":
+      return gracefulStop("5h", decision.reason, decision.resetsAtEpoch);
+    case "suspend-7d":
+      return gracefulStop("7d", decision.reason, decision.resetsAtEpoch);
+    case "unavailable-halt":
+      return gracefulStop("7d", decision.reason);
+    default:
+      return assertNever(decision);
+  }
+}
+
+// src/quota/checkpoint.ts
+function buildCheckpoint(decision) {
+  switch (decision.kind) {
+    case "pause-5h":
+      return {
+        status: "paused",
+        quota: QuotaCheckpointSchema.parse({
+          binding_window: "5h",
+          resets_at_epoch: decision.resetsAtEpoch
+        })
+      };
+    case "suspend-7d":
+      return {
+        status: "suspended",
+        quota: QuotaCheckpointSchema.parse({
+          binding_window: "7d",
+          resets_at_epoch: decision.resetsAtEpoch
+        })
+      };
+  }
+}
+function clearCheckpoint() {
+  return { status: "running", quota: void 0 };
+}
+
+// src/quota/router.ts
+function selectProducerModel(riskTier, config) {
+  const models = config.quota.producerModels;
+  switch (riskTier) {
+    case "low":
+      return models.low;
+    case "medium":
+      return models.medium;
+    case "high":
+      return models.high;
+    default:
+      return assertNever(riskTier);
+  }
+}
+
+// src/quota/resume.ts
+function planResume(run10, reading, config, nowEpoch2) {
+  if (run10.status !== "paused" && run10.status !== "suspended") {
+    return { kind: "not-resumable", status: run10.status };
+  }
+  const decision = evaluate(reading, config, nowEpoch2);
+  if (decision.kind === "proceed") {
+    return { kind: "resume", clear: clearCheckpoint() };
+  }
+  return { kind: "still-blocked", decision };
+}
+
+// src/scoring/partial-report.ts
+function buildPartialReport(run10, manifest, opts = {}) {
+  const specById = new Map(manifest.tasks.map((t) => [t.task_id, t]));
+  const orderOf = new Map(manifest.tasks.map((t, i) => [t.task_id, i]));
+  const shipped = [];
+  const failures = [];
+  const incomplete = [];
+  for (const task of Object.values(run10.tasks)) {
+    const spec = specById.get(task.task_id);
+    if (spec === void 0) {
+      throw new Error(
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run10.run_id})`
+      );
+    }
+    if (task.status === "done") {
+      shipped.push({
+        task_id: task.task_id,
+        title: spec.title,
+        branch: task.branch,
+        pr_number: task.pr_number
+      });
+    } else if (task.status === "dropped") {
+      failures.push({
+        task_id: task.task_id,
+        title: spec.title,
+        failure_class: task.failure_class,
+        failure_reason: task.failure_reason,
+        unmet_criteria: [...spec.acceptance_criteria],
+        branch: task.branch,
+        pr_number: task.pr_number
+      });
+    } else {
+      incomplete.push({ task_id: task.task_id, title: spec.title, status: task.status });
+    }
+  }
+  const bySpecOrder = (a, b) => (orderOf.get(a.task_id) ?? 0) - (orderOf.get(b.task_id) ?? 0);
+  shipped.sort(bySpecOrder);
+  failures.sort(bySpecOrder);
+  incomplete.sort(bySpecOrder);
+  return {
+    run_id: run10.run_id,
+    run_status: run10.status,
+    spec_id: run10.spec.spec_id,
+    issue_number: run10.spec.issue_number,
+    repo: run10.spec.repo,
+    generated_at: opts.now ?? nowIso(),
+    totals: {
+      total: shipped.length + failures.length + incomplete.length,
+      shipped: shipped.length,
+      failed: failures.length,
+      incomplete: incomplete.length
+    },
+    shipped,
+    failures,
+    incomplete
+  };
+}
+function renderFailureIssue(failure, report) {
+  const lines = [
+    `Task \`${failure.task_id}\` was dropped during factory run \`${report.run_id}\`.`,
+    "",
+    `- **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number})`,
+    `- **Failure class:** \`${failure.failure_class}\``,
+    `- **Reason:** ${failure.failure_reason}`
+  ];
+  if (failure.branch !== void 0) lines.push(`- **Branch:** \`${failure.branch}\``);
+  if (failure.pr_number !== void 0) lines.push(`- **PR:** #${failure.pr_number}`);
+  lines.push("", "**Unmet acceptance criteria:**", "");
+  for (const c of failure.unmet_criteria) lines.push(`- [ ] ${c}`);
+  return {
+    title: `[factory] ${failure.task_id} dropped (${failure.failure_class}): ${failure.title}`,
+    body: lines.join("\n")
+  };
+}
+function statusLabel(status) {
+  return status.toUpperCase();
+}
+function renderPartialReportMarkdown(report) {
+  const out = [];
+  out.push(`# Factory run report \u2014 \`${report.run_id}\``);
+  out.push("");
+  out.push(
+    `**Status:** ${statusLabel(report.run_status)} \xB7 **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number}) \xB7 **Repo:** ${report.repo}`
+  );
+  out.push(`**Generated:** ${report.generated_at}`);
+  out.push("");
+  out.push(
+    `**Tasks:** ${report.totals.total} total \xB7 ${report.totals.shipped} shipped \xB7 ${report.totals.failed} failed \xB7 ${report.totals.incomplete} incomplete`
+  );
+  out.push("");
+  out.push(`## Shipped (${report.shipped.length})`);
+  if (report.shipped.length === 0) {
+    out.push("_none_");
+  } else {
+    for (const s of report.shipped) {
+      const pr = s.pr_number !== void 0 ? ` \u2014 PR #${s.pr_number}` : "";
+      const br = s.branch !== void 0 ? ` (\`${s.branch}\`)` : "";
+      out.push(`- \`${s.task_id}\` \u2014 ${s.title}${pr}${br}`);
+    }
+  }
+  out.push("");
+  if (report.failures.length > 0) {
+    out.push(`## Failed (${report.failures.length})`);
+    for (const f of report.failures) {
+      out.push("");
+      out.push(`### \`${f.task_id}\` \u2014 ${f.title}`);
+      out.push(`- **Class:** \`${f.failure_class}\``);
+      out.push(`- **Reason:** ${f.failure_reason}`);
+      out.push("- **Unmet acceptance criteria:**");
+      for (const c of f.unmet_criteria) out.push(`  - ${c}`);
+    }
+    out.push("");
+  }
+  if (report.incomplete.length > 0) {
+    out.push(`## Incomplete (${report.incomplete.length})`);
+    for (const i of report.incomplete) {
+      out.push(`- \`${i.task_id}\` \u2014 ${i.title} (\`${i.status}\`)`);
+    }
+    out.push("");
+  }
+  return out.join("\n");
+}
+
+// src/scoring/summary.ts
+function durationSeconds(startedAt, endedAt) {
+  if (endedAt === null) return null;
+  const start = Date.parse(startedAt);
+  const end = Date.parse(endedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const delta = Math.floor((end - start) / 1e3);
+  return delta >= 0 ? delta : null;
+}
+function buildRunSummary(run10, report, opts = {}) {
+  const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
+  for (const f of report.failures) {
+    failuresByClass[f.failure_class] += 1;
+  }
+  const tasks = Object.values(run10.tasks);
+  const effort = {
+    reviewer_results: tasks.reduce((n, t) => n + t.reviewers.length, 0),
+    max_escalation_rung: tasks.reduce((m, t) => Math.max(m, t.escalation_rung), 0)
+  };
+  const shipped_prs = report.shipped.map((s) => ({
+    task_id: s.task_id,
+    ...s.pr_number !== void 0 ? { pr_number: s.pr_number } : {},
+    ...s.branch !== void 0 ? { branch: s.branch } : {}
+  }));
+  return {
+    run_id: run10.run_id,
+    run_status: run10.status,
+    driver: run10.driver,
+    spec_id: run10.spec.spec_id,
+    issue_number: run10.spec.issue_number,
+    repo: run10.spec.repo,
+    generated_at: opts.now ?? nowIso(),
+    timing: {
+      started_at: run10.started_at,
+      ended_at: run10.ended_at,
+      duration_seconds: durationSeconds(run10.started_at, run10.ended_at)
+    },
+    totals: report.totals,
+    failures_by_class: failuresByClass,
+    effort,
+    shipped_prs
+  };
+}
+
+// src/scoring/dead-surface.ts
+function parseTsPruneOutput(stdout) {
+  const out = [];
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const m = /^(.+):(\d+) - (.+)$/.exec(line);
+    if (m === null) continue;
+    out.push({ file: m[1], line: Number(m[2]), name: m[3] });
+  }
+  return out;
+}
+function normalizePath(p) {
+  return p.startsWith("./") ? p.slice(2) : p;
+}
+function scopeToChangedFiles(findings, changedFiles) {
+  const changed = new Set(changedFiles.map(normalizePath));
+  return findings.filter((f) => changed.has(normalizePath(f.file)));
+}
+var UNAVAILABLE_MARKERS = [
+  "could not determine executable",
+  "command not found",
+  "not found",
+  "no such file"
+];
+var TsPruneRunner = class {
+  tool = "ts-prune";
+  /** Timeout for the detector, ms. Report-only — a slow tool must not wedge finalize. */
+  timeoutMs;
+  constructor(opts = {}) {
+    this.timeoutMs = opts.timeoutMs ?? 12e4;
+  }
+  async run({ cwd }) {
+    try {
+      const r = await exec("npx", ["--no-install", "ts-prune"], { cwd, timeoutMs: this.timeoutMs });
+      const stderrLc = r.stderr.toLowerCase();
+      const looksMissing = r.stdout.trim().length === 0 && UNAVAILABLE_MARKERS.some((m) => stderrLc.includes(m));
+      return {
+        available: !looksMissing,
+        code: r.code,
+        stdout: r.stdout,
+        stderr: r.stderr,
+        truncated: r.truncated
+      };
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        return { available: false, code: null, stdout: "", stderr: String(err), truncated: false };
+      }
+      throw err;
+    }
+  }
+};
+async function scanDeadSurface(runner, changedFiles, opts) {
+  const base = {
+    tool: runner.tool,
+    changed_file_count: changedFiles.length,
+    total_found: 0,
+    findings: []
+  };
+  let result;
+  try {
+    result = await runner.run({ cwd: opts.cwd });
+  } catch (err) {
+    return { ...base, status: "error", note: `${runner.tool} failed: ${err.message}` };
+  }
+  if (!result.available) {
+    return {
+      ...base,
+      status: "skipped",
+      note: `${runner.tool} not available \u2014 install it to enumerate dead surface`
+    };
+  }
+  if (result.truncated) {
+    return {
+      ...base,
+      status: "error",
+      note: `${runner.tool} output was truncated \u2014 findings unreliable, not reported`
+    };
+  }
+  if (result.code === null) {
+    return { ...base, status: "error", note: `${runner.tool} was killed before completing` };
+  }
+  const all = parseTsPruneOutput(result.stdout);
+  const scoped = scopeToChangedFiles(all, changedFiles);
+  return {
+    tool: runner.tool,
+    status: "ok",
+    changed_file_count: changedFiles.length,
+    total_found: all.length,
+    findings: scoped,
+    note: changedFiles.length === 0 ? "run diff is empty \u2014 no files to scope findings to" : `${scoped.length} unreferenced export(s) in the run diff (of ${all.length} project-wide)`
+  };
+}
+
+// src/scoring/telemetry.ts
+var log17 = createLogger("telemetry");
+async function emitMetric(dataDir, runId, event, data, opts = {}) {
+  const record = {
+    ts: opts.now ?? nowIso(),
+    run_id: runId,
+    event,
+    ...data !== void 0 ? { data } : {}
+  };
+  try {
+    await appendJsonl(runMetricsPath(dataDir, runId), record);
+  } catch (err) {
+    log17.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+  }
+  return record;
+}
+async function recordRunFinalized(dataDir, report, opts = {}) {
+  const now = opts.now ?? nowIso();
+  await emitMetric(
+    dataDir,
+    report.run_id,
+    "run.finalized",
+    {
+      status: report.run_status,
+      spec_id: report.spec_id,
+      issue_number: report.issue_number,
+      totals: report.totals
+    },
+    { now }
+  );
+  for (const f of report.failures) {
+    await emitMetric(
+      dataDir,
+      report.run_id,
+      "task.dropped",
+      { task_id: f.task_id, failure_class: f.failure_class },
+      { now }
+    );
+  }
+}
+
+// src/producer/agents.ts
+function parseProducerStatus(raw) {
+  const line = raw.trim();
+  const upper = line.toUpperCase();
+  if (upper.includes("BLOCKED") && upper.includes("ESCALATE")) {
+    return { status: "blocked-escalate", reason: line };
+  }
+  if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {
+    return { status: "needs-context", reason: line };
+  }
+  if (upper.includes("DONE")) {
+    return { status: "done" };
+  }
+  return {
+    status: "error",
+    reason: line.length > 0 ? `unparseable producer status: ${line}` : "empty producer status"
+  };
+}
+
+// src/producer/model-dial.ts
+var TIER_LADDER = ["low", "medium", "high"];
+function escalateTier(tier) {
+  const idx = TIER_LADDER.indexOf(tier);
+  const next = TIER_LADDER[Math.min(idx + 1, TIER_LADDER.length - 1)];
+  return next ?? tier;
+}
+function dialForRung(riskTier, rung, config) {
+  if (rung < 0 || !Number.isInteger(rung)) {
+    throw new Error(`dialForRung: rung must be a non-negative integer, got ${rung}`);
+  }
+  const baseModel = selectProducerModel(riskTier, config);
+  if (rung <= 1) {
+    return {
+      model: baseModel,
+      rung,
+      injectsPriorFailure: false
+    };
+  }
+  const escalatedTier = escalateTier(riskTier);
+  const escalatedModel = selectProducerModel(escalatedTier, config);
+  return {
+    model: escalatedModel,
+    rung,
+    injectsPriorFailure: true
+  };
+}
+
+// src/producer/prompt-context.ts
+function toFixInstruction(f) {
+  const base = { reviewer: f.reviewer, description: f.description };
+  if (f.file !== void 0 && f.line !== void 0) {
+    return { ...base, file: f.file, line: f.line };
+  }
+  if (f.file !== void 0) {
+    return { ...base, file: f.file };
+  }
+  return base;
+}
+function buildProducerContext(input) {
+  const fixInstructions = (input.confirmedBlockers ?? []).map(toFixInstruction);
+  const priorFailures = input.priorFailures ?? [];
+  return {
+    taskId: input.taskId,
+    title: input.title,
+    description: input.description,
+    acceptanceCriteria: input.visibleCriteria,
+    files: input.files,
+    rung: input.rung,
+    fixInstructions,
+    priorFailures,
+    injectedPriorFailure: priorFailures.length > 0
+  };
+}
+
+// src/producer/classify.ts
+function exhaustive(x) {
+  throw new Error(`classify: unhandled FailureSignal ${JSON.stringify(x)}`);
+}
+function classifyFailure(signal) {
+  switch (signal.kind) {
+    case "producer-status": {
+      if (signal.status === "blocked-escalate") {
+        return {
+          action: "drop",
+          failureClass: "spec-defect",
+          reason: `producer reported the task unworkable as specified: ${signal.reason}`
+        };
+      }
+      return { action: "retry", reason: signal.reason };
+    }
+    case "gate-failure": {
+      if (signal.structurallyUnfixable) {
+        return {
+          action: "drop",
+          failureClass: "spec-defect",
+          reason: `deterministic gate '${signal.gate}' is structurally unfixable by the producer: ${signal.reason}`
+        };
+      }
+      return { action: "retry", reason: `gate '${signal.gate}' failed: ${signal.reason}` };
+    }
+    case "environmental": {
+      return {
+        action: "drop",
+        failureClass: "blocked-environmental",
+        reason: `environmental blocker: ${signal.reason}`
+      };
+    }
+    case "verifier-error": {
+      return { action: "retry", reason: `verifier error (unresolved): ${signal.reason}` };
+    }
+    case "floor-blocked": {
+      return { action: "retry", reason: signal.reason };
+    }
+    default:
+      return exhaustive(signal);
+  }
+}
+
+// src/verifier/judgment/config.ts
+var FALLBACK_REVIEW_MODEL = "opus";
+function resolveReviewModel(config) {
+  const m = config.review.model;
+  if (m !== void 0 && m.trim().length === 0) {
+    throw new Error(
+      "review.model is configured but empty \u2014 set a non-empty fixed reviewer model or unset it"
+    );
+  }
+  return m ?? FALLBACK_REVIEW_MODEL;
+}
+
+// src/verifier/judgment/panel.ts
+var PANEL_ROLES = [
+  "implementation-reviewer",
+  "quality-reviewer",
+  "architecture-reviewer",
+  "security-reviewer",
+  "silent-failure-hunter",
+  "type-design-reviewer"
+];
+function promptRefFor(role) {
+  return `reviews/prompts/${role}.md`;
+}
+function buildPanelManifest(stageAfter, model, maxTurns) {
+  const agents = PANEL_ROLES.map((role) => ({
+    role,
+    isolation: "worktree",
+    model,
+    max_turns: maxTurns,
+    prompt_ref: promptRefFor(role)
+  }));
+  return parseSpawnManifest({ stage_after: stageAfter, agents });
+}
+
+// src/verifier/judgment/finding.ts
+var log18 = createLogger("finding");
+var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
+var FindingSchema = external_exports.object({
+  /** Which panel reviewer raised this (free-form; the role string). */
+  reviewer: external_exports.string().min(1),
+  /** Closed severity. */
+  severity: FindingSeverityEnum,
+  /** True iff this finding, if upheld, BLOCKS the floor. */
+  blocking: external_exports.boolean(),
+  /** Cited file path (run-tree relative). Absent ⇒ uncitable. */
+  file: external_exports.string().min(1).optional(),
+  /** Cited 1-based line number. Absent ⇒ uncitable. Must be positive. */
+  line: external_exports.number().int().positive().optional(),
+  /**
+   * The VERBATIM code the reviewer claims to be quoting. Required and non-empty —
+   * a finding with no quote cannot be citation-verified, so we reject it loudly
+   * rather than admit an unverifiable claim. (An empty string is rejected by
+   * `.min(1)`.)
+   */
+  quote: external_exports.string().min(1),
+  /** Human-facing description of the concern. */
+  description: external_exports.string().min(1)
+});
+var RawReviewVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
+var RawReviewSchema = external_exports.object({
+  /** The reviewer identity (role string). */
+  reviewer: external_exports.string().min(1),
+  /** The reviewer's self-reported verdict. */
+  verdict: RawReviewVerdictEnum,
+  /** Findings raised. May be empty (an `approve` with no findings). */
+  findings: external_exports.array(FindingSchema)
+});
+var KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape));
+var KNOWN_FINDING_KEYS = new Set(Object.keys(FindingSchema.shape));
+function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) {
+  const topUnknown = [];
+  const findingUnknown = [];
+  if (topObj !== null && typeof topObj === "object" && !Array.isArray(topObj)) {
+    for (const k of Object.keys(topObj)) {
+      if (!topKnown.has(k)) topUnknown.push(k);
+    }
+  }
+  if (Array.isArray(findingsArr)) {
+    for (const f of findingsArr) {
+      if (f !== null && typeof f === "object" && !Array.isArray(f)) {
+        for (const k of Object.keys(f)) {
+          if (!findingKnown.has(k) && !findingUnknown.includes(k)) findingUnknown.push(k);
+        }
+      }
+    }
+  }
+  if (topUnknown.length > 0 || findingUnknown.length > 0) {
+    log18.warn(
+      `review parse: stripped unknown keys from reviewer '${context}' payload: top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`
+    );
+  }
+}
+function parseRawReview(raw) {
+  const result = RawReviewSchema.parse(raw);
+  const reviewerLabel = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? String(raw.reviewer ?? result.reviewer) : result.reviewer;
+  const rawFindings = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw.findings : void 0;
+  warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS);
+  return result;
+}
+function isCitable(f) {
+  return f.file !== void 0 && f.line !== void 0;
+}
+
+// src/verifier/judgment/citation-verify.ts
+var CITATION_WINDOW = 2;
+function redactFinding(f) {
+  return { ...f, quote: redactSecrets(f.quote), description: redactSecrets(f.description) };
+}
+function checkQuote(quote, line, lines) {
+  const lo = Math.max(1, line - CITATION_WINDOW);
+  const hi = Math.min(lines.length, line + CITATION_WINDOW);
+  if (lo > hi) {
+    return "line-out-of-range";
+  }
+  for (let n = lo; n <= hi; n++) {
+    const text = lines[n - 1];
+    if (text !== void 0 && text.includes(quote)) return null;
+  }
+  return "quote-not-in-window";
+}
+function verifyCitations(findings, source, options = {}) {
+  const redact = options.redact ?? true;
+  const kept = [];
+  const dropped = [];
+  const audit = [];
+  for (const f of findings) {
+    if (!isCitable(f)) {
+      dropped.push({ finding: f, reason: "uncitable" });
+      audit.push(`DROP uncitable: ${f.reviewer} \u2014 ${f.description}`);
+      continue;
+    }
+    const lines = source.readLines(f.file);
+    if (lines === null) {
+      dropped.push({ finding: f, reason: "file-not-found" });
+      audit.push(`DROP file-not-found ${f.file}:${f.line}: ${f.reviewer}`);
+      continue;
+    }
+    const reason = checkQuote(f.quote, f.line, lines);
+    if (reason !== null) {
+      dropped.push({ finding: f, reason });
+      audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
+      continue;
+    }
+    const retained = redact ? redactFinding(f) : f;
+    kept.push(retained);
+    audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`);
+  }
+  return { kept, dropped, audit };
+}
+
+// src/verifier/judgment/finding-verifier.ts
+async function confirmBlocker(finding, runner, finderIdentity) {
+  if (runner.identity === finderIdentity) {
+    throw new Error(
+      `finding-verifier identity '${runner.identity}' equals the finder's \u2014 the verifier must be INDEPENDENT (D27)`
+    );
+  }
+  let verdict;
+  try {
+    verdict = await runner.confirm(finding);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { status: "error", reason: `finding-verifier errored: ${detail}` };
+  }
+  return verdict.holds ? { status: "confirmed", evidence: { note: verdict.note } } : { status: "refuted", reason: verdict.note };
+}
+
+// src/verifier/judgment/panel-run.ts
+async function adjudicateReviewer(review, source, makeRunner2, redact) {
+  const blocking = review.findings.filter((f) => f.blocking);
+  const { kept } = verifyCitations(blocking, source, { redact });
+  const runner = makeRunner2(review);
+  const confirmed = [];
+  let hadVerifierError = false;
+  for (const finding of kept) {
+    if (!isCitable(finding)) continue;
+    const outcome = await confirmBlocker(finding, runner, review.reviewer);
+    if (outcome.status === "confirmed") {
+      confirmed.push(finding);
+    } else if (outcome.status === "error") {
+      hadVerifierError = true;
+    }
+  }
+  return {
+    reviewer: review.reviewer,
+    rawVerdict: review.verdict,
+    confirmedBlockers: confirmed,
+    hadVerifierError
+  };
+}
+function reviewerResultOf(a) {
+  if (a.hadVerifierError || a.rawVerdict === "error") {
+    return {
+      reviewer: a.reviewer,
+      verdict: "error",
+      confirmed_blockers: a.confirmedBlockers.length
+    };
+  }
+  if (a.confirmedBlockers.length > 0) {
+    return {
+      reviewer: a.reviewer,
+      verdict: "blocked",
+      confirmed_blockers: a.confirmedBlockers.length
+    };
+  }
+  return { reviewer: a.reviewer, verdict: "approve", confirmed_blockers: 0 };
+}
+async function runPanel(input) {
+  const redact = input.redact ?? true;
+  const adjudicated = [];
+  for (const review of input.reviews) {
+    adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
+  }
+  const reviewerResults = adjudicated.map(reviewerResultOf);
+  const floor = deriveFloorVerdict({ reviewers: reviewerResults }, input.gateEvidence);
+  const result = floor.passed ? advance(nextOrSelf(input.stage)) : waitRetry(
+    input.stage,
+    floorBlockReason(reviewerResults),
+    input.attempt ?? 1,
+    input.maxAttempts ?? 1
+  );
+  const crossVendorAbsence = input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : void 0;
+  return crossVendorAbsence === void 0 ? { adjudicated, reviewerResults, floor, result } : { adjudicated, reviewerResults, floor, result, crossVendorAbsence };
+}
+function nextOrSelf(stage) {
+  return stage === "verify" ? "ship" : stage;
+}
+function floorBlockReason(results) {
+  const errored = results.filter((r) => r.verdict === "error").map((r) => r.reviewer);
+  const blocked = results.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
+  const parts = [];
+  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
+  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
+  return parts.length > 0 ? parts.join("; ") : "floor not unanimous";
+}
+
+// src/producer/ladder.ts
+var ESCALATION_CAP = 2;
+
 // src/verifier/deterministic/gate-id.ts
 var GATE_IDS = [
   "test",
@@ -8917,7 +9828,7 @@ var buildStrategy = procStrategy(
 );
 
 // src/verifier/deterministic/gate-runner.ts
-var log16 = createLogger("gate-runner");
+var log19 = createLogger("gate-runner");
 function strategyFor(id) {
   switch (id) {
     case "test":
@@ -8959,7 +9870,7 @@ var GateRunner = class {
       if (cached !== void 0) {
         report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
         evidence.push(cached);
-        log16.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
+        log19.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
         continue;
       }
       const strategy = strategyFor(id);
@@ -8980,7 +9891,7 @@ var GateRunner = class {
         memo.putEvidence(id, treeSha, outcome.evidence);
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
-        log16.debug(`gate ${id} skipped: ${outcome.reason}`);
+        log19.debug(`gate ${id} skipped: ${outcome.reason}`);
       }
     }
     const verdict = deriveAllGatesVerdict(evidence);
@@ -9132,14 +10043,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log24 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log24.code !== 0) {
+    const log27 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log27.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log24.code ?? "null"}): ${log24.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log27.code ?? "null"}): ${log27.stderr.trim()}`
       );
     }
-    assertNotTruncated(log24, "git log (tdd classification)");
-    const shas = splitLines(log24.stdout).reverse();
+    assertNotTruncated(log27, "git log (tdd classification)");
+    const shas = splitLines(log27.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -9199,33 +10110,6 @@ function defaultGateTools() {
   };
 }
 
-// src/driver/artifacts.ts
-import { mkdir as mkdir7, readFile as readFile6 } from "node:fs/promises";
-import { dirname as dirname6, join as join8 } from "node:path";
-function producerRef(taskId, label) {
-  return `prompts/${taskId}/${label}.json`;
-}
-var FsArtifactStore = class {
-  constructor(dataDir) {
-    this.dataDir = dataDir;
-  }
-  absPath(runId, ref) {
-    return join8(runDir(this.dataDir, runId), ref);
-  }
-  async putProducerContext(runId, taskId, label, context) {
-    const ref = producerRef(taskId, label);
-    const path2 = this.absPath(runId, ref);
-    await mkdir7(dirname6(path2), { recursive: true });
-    await atomicWriteFile(path2, stringifyJson(context));
-    return ref;
-  }
-  async getProducerContext(runId, promptRef) {
-    const path2 = this.absPath(runId, promptRef);
-    const raw = await readFile6(path2, "utf8");
-    return parseJson(raw, path2);
-  }
-};
-
 // src/verifier/holdout/split.ts
 import { createHash } from "node:crypto";
 function holdoutCount(total, percent) {
@@ -9262,8 +10146,8 @@ function splitHoldout(criteria, percent, seed) {
 }
 
 // src/verifier/holdout/store.ts
-import { mkdir as mkdir8, readFile as readFile7 } from "node:fs/promises";
-import { dirname as dirname7, join as join9 } from "node:path";
+import { mkdir as mkdir7, readFile as readFile6 } from "node:fs/promises";
+import { dirname as dirname6, join as join9 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -9298,17 +10182,17 @@ var FsHoldoutStore = class {
   }
   async put(runId, record) {
     const path2 = this.path(runId, record.task_id);
-    await mkdir8(dirname7(path2), { recursive: true });
+    await mkdir7(dirname6(path2), { recursive: true });
     await atomicWriteFile(path2, stringifyJson(record));
   }
   async get(runId, taskId) {
     const path2 = this.path(runId, taskId);
-    const raw = await readFile7(path2, "utf8");
+    const raw = await readFile6(path2, "utf8");
     return parseHoldoutRecord(parseJson(raw, path2), path2);
   }
   async has(runId, taskId) {
     try {
-      await readFile7(this.path(runId, taskId), "utf8");
+      await readFile6(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -9410,8 +10294,8 @@ function holdoutEvidence(result) {
 }
 
 // src/verifier/holdout/verdict-store.ts
-import { mkdir as mkdir9, readFile as readFile8 } from "node:fs/promises";
-import { dirname as dirname8, join as join10 } from "node:path";
+import { mkdir as mkdir8, readFile as readFile7 } from "node:fs/promises";
+import { dirname as dirname7, join as join10 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -9428,17 +10312,17 @@ var FsHoldoutVerdictStore = class {
   }
   async put(runId, taskId, verdicts) {
     const path2 = this.path(runId, taskId);
-    await mkdir9(dirname8(path2), { recursive: true });
+    await mkdir8(dirname7(path2), { recursive: true });
     await atomicWriteFile(path2, stringifyJson([...verdicts]));
   }
   async get(runId, taskId) {
     const path2 = this.path(runId, taskId);
-    const raw = await readFile8(path2, "utf8");
+    const raw = await readFile7(path2, "utf8");
     return HoldoutVerdictsSchema.parse(parseJson(raw, path2));
   }
   async has(runId, taskId) {
     try {
-      await readFile8(this.path(runId, taskId), "utf8");
+      await readFile7(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -9446,868 +10330,14 @@ var FsHoldoutVerdictStore = class {
   }
 };
 
-// src/cli/wiring.ts
-function splitRepo(slug) {
-  const parts = slug.split("/");
-  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
-    throw new Error(`wiring: run spec repo must be '<owner>/<name>', got '${slug}'`);
-  }
-  return { owner: parts[0], repo: parts[1] };
-}
-async function loadCliDeps(opts) {
-  const dataDir = resolveDataDir(opts);
-  const dirOpts = { ...opts, dataDir };
-  const config = loadConfig(dirOpts);
-  const state = new StateManager({ ...dirOpts });
-  const run14 = await state.read(opts.runId);
-  const spec = await new SpecStore(dirOpts).read(run14.spec.repo, run14.spec.spec_id);
-  const { owner, repo } = splitRepo(run14.spec.repo);
-  return {
-    config,
-    spec,
-    git: new DefaultGitClient(),
-    gh: new DefaultGhClient(),
-    tools: defaultGateTools(),
-    artifacts: new FsArtifactStore(dataDir),
-    holdout: new FsHoldoutStore(dataDir),
-    dataDir,
-    owner,
-    repo,
-    shipMode: opts.shipMode ?? "no-merge",
-    state,
-    run: run14
-  };
-}
-
-// src/scoring/partial-report.ts
-function buildPartialReport(run14, manifest, opts = {}) {
-  const specById = new Map(manifest.tasks.map((t) => [t.task_id, t]));
-  const orderOf = new Map(manifest.tasks.map((t, i) => [t.task_id, i]));
-  const shipped = [];
-  const failures = [];
-  const incomplete = [];
-  for (const task of Object.values(run14.tasks)) {
-    const spec = specById.get(task.task_id);
-    if (spec === void 0) {
-      throw new Error(
-        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run14.run_id})`
-      );
-    }
-    if (task.status === "done") {
-      shipped.push({
-        task_id: task.task_id,
-        title: spec.title,
-        branch: task.branch,
-        pr_number: task.pr_number
-      });
-    } else if (task.status === "dropped") {
-      failures.push({
-        task_id: task.task_id,
-        title: spec.title,
-        failure_class: task.failure_class,
-        failure_reason: task.failure_reason,
-        unmet_criteria: [...spec.acceptance_criteria],
-        branch: task.branch,
-        pr_number: task.pr_number
-      });
-    } else {
-      incomplete.push({ task_id: task.task_id, title: spec.title, status: task.status });
-    }
-  }
-  const bySpecOrder = (a, b) => (orderOf.get(a.task_id) ?? 0) - (orderOf.get(b.task_id) ?? 0);
-  shipped.sort(bySpecOrder);
-  failures.sort(bySpecOrder);
-  incomplete.sort(bySpecOrder);
-  return {
-    run_id: run14.run_id,
-    run_status: run14.status,
-    spec_id: run14.spec.spec_id,
-    issue_number: run14.spec.issue_number,
-    repo: run14.spec.repo,
-    generated_at: opts.now ?? nowIso(),
-    totals: {
-      total: shipped.length + failures.length + incomplete.length,
-      shipped: shipped.length,
-      failed: failures.length,
-      incomplete: incomplete.length
-    },
-    shipped,
-    failures,
-    incomplete
-  };
-}
-function renderFailureIssue(failure, report) {
-  const lines = [
-    `Task \`${failure.task_id}\` was dropped during factory run \`${report.run_id}\`.`,
-    "",
-    `- **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number})`,
-    `- **Failure class:** \`${failure.failure_class}\``,
-    `- **Reason:** ${failure.failure_reason}`
-  ];
-  if (failure.branch !== void 0) lines.push(`- **Branch:** \`${failure.branch}\``);
-  if (failure.pr_number !== void 0) lines.push(`- **PR:** #${failure.pr_number}`);
-  lines.push("", "**Unmet acceptance criteria:**", "");
-  for (const c of failure.unmet_criteria) lines.push(`- [ ] ${c}`);
-  return {
-    title: `[factory] ${failure.task_id} dropped (${failure.failure_class}): ${failure.title}`,
-    body: lines.join("\n")
-  };
-}
-function statusLabel(status) {
-  return status.toUpperCase();
-}
-function renderPartialReportMarkdown(report) {
-  const out = [];
-  out.push(`# Factory run report \u2014 \`${report.run_id}\``);
-  out.push("");
-  out.push(
-    `**Status:** ${statusLabel(report.run_status)} \xB7 **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number}) \xB7 **Repo:** ${report.repo}`
-  );
-  out.push(`**Generated:** ${report.generated_at}`);
-  out.push("");
-  out.push(
-    `**Tasks:** ${report.totals.total} total \xB7 ${report.totals.shipped} shipped \xB7 ${report.totals.failed} failed \xB7 ${report.totals.incomplete} incomplete`
-  );
-  out.push("");
-  out.push(`## Shipped (${report.shipped.length})`);
-  if (report.shipped.length === 0) {
-    out.push("_none_");
-  } else {
-    for (const s of report.shipped) {
-      const pr = s.pr_number !== void 0 ? ` \u2014 PR #${s.pr_number}` : "";
-      const br = s.branch !== void 0 ? ` (\`${s.branch}\`)` : "";
-      out.push(`- \`${s.task_id}\` \u2014 ${s.title}${pr}${br}`);
-    }
-  }
-  out.push("");
-  if (report.failures.length > 0) {
-    out.push(`## Failed (${report.failures.length})`);
-    for (const f of report.failures) {
-      out.push("");
-      out.push(`### \`${f.task_id}\` \u2014 ${f.title}`);
-      out.push(`- **Class:** \`${f.failure_class}\``);
-      out.push(`- **Reason:** ${f.failure_reason}`);
-      out.push("- **Unmet acceptance criteria:**");
-      for (const c of f.unmet_criteria) out.push(`  - ${c}`);
-    }
-    out.push("");
-  }
-  if (report.incomplete.length > 0) {
-    out.push(`## Incomplete (${report.incomplete.length})`);
-    for (const i of report.incomplete) {
-      out.push(`- \`${i.task_id}\` \u2014 ${i.title} (\`${i.status}\`)`);
-    }
-    out.push("");
-  }
-  return out.join("\n");
-}
-
-// src/scoring/summary.ts
-function durationSeconds(startedAt, endedAt) {
-  if (endedAt === null) return null;
-  const start = Date.parse(startedAt);
-  const end = Date.parse(endedAt);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  const delta = Math.floor((end - start) / 1e3);
-  return delta >= 0 ? delta : null;
-}
-function buildRunSummary(run14, report, opts = {}) {
-  const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
-  for (const f of report.failures) {
-    failuresByClass[f.failure_class] += 1;
-  }
-  const tasks = Object.values(run14.tasks);
-  const effort = {
-    reviewer_results: tasks.reduce((n, t) => n + t.reviewers.length, 0),
-    max_escalation_rung: tasks.reduce((m, t) => Math.max(m, t.escalation_rung), 0)
-  };
-  const shipped_prs = report.shipped.map((s) => ({
-    task_id: s.task_id,
-    ...s.pr_number !== void 0 ? { pr_number: s.pr_number } : {},
-    ...s.branch !== void 0 ? { branch: s.branch } : {}
-  }));
-  return {
-    run_id: run14.run_id,
-    run_status: run14.status,
-    driver: run14.driver,
-    spec_id: run14.spec.spec_id,
-    issue_number: run14.spec.issue_number,
-    repo: run14.spec.repo,
-    generated_at: opts.now ?? nowIso(),
-    timing: {
-      started_at: run14.started_at,
-      ended_at: run14.ended_at,
-      duration_seconds: durationSeconds(run14.started_at, run14.ended_at)
-    },
-    totals: report.totals,
-    failures_by_class: failuresByClass,
-    effort,
-    shipped_prs
-  };
-}
-
-// src/scoring/dead-surface.ts
-function parseTsPruneOutput(stdout) {
-  const out = [];
-  for (const raw of stdout.split("\n")) {
-    const line = raw.trim();
-    if (line.length === 0) continue;
-    const m = /^(.+):(\d+) - (.+)$/.exec(line);
-    if (m === null) continue;
-    out.push({ file: m[1], line: Number(m[2]), name: m[3] });
-  }
-  return out;
-}
-function normalizePath(p) {
-  return p.startsWith("./") ? p.slice(2) : p;
-}
-function scopeToChangedFiles(findings, changedFiles) {
-  const changed = new Set(changedFiles.map(normalizePath));
-  return findings.filter((f) => changed.has(normalizePath(f.file)));
-}
-var UNAVAILABLE_MARKERS = [
-  "could not determine executable",
-  "command not found",
-  "not found",
-  "no such file"
-];
-var TsPruneRunner = class {
-  tool = "ts-prune";
-  /** Timeout for the detector, ms. Report-only — a slow tool must not wedge finalize. */
-  timeoutMs;
-  constructor(opts = {}) {
-    this.timeoutMs = opts.timeoutMs ?? 12e4;
-  }
-  async run({ cwd }) {
-    try {
-      const r = await exec("npx", ["--no-install", "ts-prune"], { cwd, timeoutMs: this.timeoutMs });
-      const stderrLc = r.stderr.toLowerCase();
-      const looksMissing = r.stdout.trim().length === 0 && UNAVAILABLE_MARKERS.some((m) => stderrLc.includes(m));
-      return {
-        available: !looksMissing,
-        code: r.code,
-        stdout: r.stdout,
-        stderr: r.stderr,
-        truncated: r.truncated
-      };
-    } catch (err) {
-      if (err.code === "ENOENT") {
-        return { available: false, code: null, stdout: "", stderr: String(err), truncated: false };
-      }
-      throw err;
-    }
-  }
-};
-async function scanDeadSurface(runner, changedFiles, opts) {
-  const base = {
-    tool: runner.tool,
-    changed_file_count: changedFiles.length,
-    total_found: 0,
-    findings: []
-  };
-  let result;
-  try {
-    result = await runner.run({ cwd: opts.cwd });
-  } catch (err) {
-    return { ...base, status: "error", note: `${runner.tool} failed: ${err.message}` };
-  }
-  if (!result.available) {
-    return {
-      ...base,
-      status: "skipped",
-      note: `${runner.tool} not available \u2014 install it to enumerate dead surface`
-    };
-  }
-  if (result.truncated) {
-    return {
-      ...base,
-      status: "error",
-      note: `${runner.tool} output was truncated \u2014 findings unreliable, not reported`
-    };
-  }
-  if (result.code === null) {
-    return { ...base, status: "error", note: `${runner.tool} was killed before completing` };
-  }
-  const all = parseTsPruneOutput(result.stdout);
-  const scoped = scopeToChangedFiles(all, changedFiles);
-  return {
-    tool: runner.tool,
-    status: "ok",
-    changed_file_count: changedFiles.length,
-    total_found: all.length,
-    findings: scoped,
-    note: changedFiles.length === 0 ? "run diff is empty \u2014 no files to scope findings to" : `${scoped.length} unreferenced export(s) in the run diff (of ${all.length} project-wide)`
-  };
-}
-
-// src/scoring/telemetry.ts
-var log17 = createLogger("telemetry");
-async function emitMetric(dataDir, runId, event, data, opts = {}) {
-  const record = {
-    ts: opts.now ?? nowIso(),
-    run_id: runId,
-    event,
-    ...data !== void 0 ? { data } : {}
-  };
-  try {
-    await appendJsonl(runMetricsPath(dataDir, runId), record);
-  } catch (err) {
-    log17.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
-  }
-  return record;
-}
-async function recordRunFinalized(dataDir, report, opts = {}) {
-  const now = opts.now ?? nowIso();
-  await emitMetric(
-    dataDir,
-    report.run_id,
-    "run.finalized",
-    {
-      status: report.run_status,
-      spec_id: report.spec_id,
-      issue_number: report.issue_number,
-      totals: report.totals
-    },
-    { now }
-  );
-  for (const f of report.failures) {
-    await emitMetric(
-      dataDir,
-      report.run_id,
-      "task.dropped",
-      { task_id: f.task_id, failure_class: f.failure_class },
-      { now }
-    );
-  }
-}
-
-// src/quota/usage-source.ts
-import { existsSync as existsSync5, readFileSync as readFileSync3 } from "node:fs";
-import { join as join11 } from "node:path";
-var log18 = createLogger("quota:usage");
-var STALE_CEILING_SECONDS = 3600;
-var STALE_WARN_SECONDS = 120;
-var RawWindowSchema = external_exports.object({
-  used_percentage: external_exports.unknown().optional(),
-  resets_at: external_exports.unknown().optional()
-}).passthrough();
-var RawCacheSchema = external_exports.object({
-  five_hour: RawWindowSchema.optional(),
-  seven_day: RawWindowSchema.optional(),
-  captured_at: external_exports.unknown().optional()
-}).passthrough();
-function asFiniteNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  return null;
-}
-function unavailable(reason) {
-  return { kind: "unavailable", reason };
-}
-function readingFromCache(raw, nowEpoch2) {
-  const parsed = RawCacheSchema.safeParse(raw);
-  if (!parsed.success) {
-    return unavailable("usage-cache-malformed");
-  }
-  const cache = parsed.data;
-  const capturedAt = asFiniteNumber(cache.captured_at) ?? 0;
-  const age = nowEpoch2 - capturedAt;
-  if (age > STALE_CEILING_SECONDS) {
-    return unavailable("usage-cache-too-stale");
-  }
-  if (age > STALE_WARN_SECONDS) {
-    log18.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
-  }
-  const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
-  const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
-  if (fivePct === null || sevenPct === null) {
-    return unavailable("usage-cache-fields-missing");
-  }
-  const fiveResets = asFiniteNumber(cache.five_hour?.resets_at);
-  const sevenResets = asFiniteNumber(cache.seven_day?.resets_at);
-  if (fiveResets === null || sevenResets === null) {
-    return unavailable("resets-at-missing");
-  }
-  if (fiveResets <= nowEpoch2) {
-    return unavailable("five-hour-window-reset");
-  }
-  if (sevenResets <= nowEpoch2) {
-    return unavailable("seven-day-window-reset");
-  }
-  return {
-    kind: "available",
-    fiveHour: { utilizationPct: fivePct, resetsAtEpoch: fiveResets },
-    sevenDay: { utilizationPct: sevenPct, resetsAtEpoch: sevenResets },
-    capturedAt
-  };
-}
-function usageCachePath(dataDir) {
-  return join11(dataDir, "usage-cache.json");
-}
-var StatuslineUsageSignal = class {
-  opts;
-  constructor(opts = {}) {
-    this.opts = opts;
-  }
-  async read() {
-    const now = (this.opts.now ?? nowEpoch)();
-    let dataDir;
-    try {
-      dataDir = resolveDataDir(this.opts);
-    } catch {
-      return unavailable("usage-cache-missing");
-    }
-    const file = usageCachePath(dataDir);
-    if (!existsSync5(file)) {
-      log18.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
-      return unavailable("usage-cache-missing");
-    }
-    let raw;
-    try {
-      raw = parseJson(readFileSync3(file, "utf8"), file);
-    } catch {
-      log18.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
-      return unavailable("usage-cache-malformed");
-    }
-    return readingFromCache(raw, now);
-  }
-};
-
-// src/quota/window.ts
-var FIVE_HOUR_WINDOW_SECONDS = 18e3;
-var SEVEN_DAY_WINDOW_SECONDS = 604800;
-var SECONDS_PER_HOUR = 3600;
-var SECONDS_PER_DAY = 86400;
-var MIN_HOUR = 1;
-var MAX_HOUR = 5;
-var MIN_DAY = 1;
-var MAX_DAY = 7;
-function clamp(value, lo, hi) {
-  if (value < lo) return lo;
-  if (value > hi) return hi;
-  return value;
-}
-function computeWindowHour(resetsAtEpoch, nowEpoch2) {
-  const windowStart = resetsAtEpoch - FIVE_HOUR_WINDOW_SECONDS;
-  const elapsed = nowEpoch2 - windowStart;
-  const hour = Math.floor(elapsed / SECONDS_PER_HOUR) + 1;
-  return clamp(hour, MIN_HOUR, MAX_HOUR);
-}
-function computeWindowDay(resetsAtEpoch, nowEpoch2) {
-  const windowStart = resetsAtEpoch - SEVEN_DAY_WINDOW_SECONDS;
-  const elapsed = nowEpoch2 - windowStart;
-  const day = Math.floor(elapsed / SECONDS_PER_DAY) + 1;
-  return clamp(day, MIN_DAY, MAX_DAY);
-}
-function hourlyThresholdFor(hour, hourlyThresholds) {
-  return curveValue(hour, hourlyThresholds);
-}
-function dailyThresholdFor(day, dailyThresholds) {
-  return curveValue(day, dailyThresholds);
-}
-function curveValue(position, curve) {
-  if (curve.length === 0) {
-    throw new RangeError("quota curve is empty \u2014 cannot resolve a threshold (config defect)");
-  }
-  const idx = clamp(position - 1, 0, curve.length - 1);
-  return curve[idx];
-}
-
-// src/quota/pacer.ts
-function evaluate(reading, config, nowEpoch2) {
-  if (reading.kind === "unavailable") {
-    return { kind: "unavailable-halt", reason: `usage unavailable: ${reading.reason}` };
-  }
-  const { hourlyThresholds, dailyThresholds } = config.quota;
-  const windowHour = computeWindowHour(reading.fiveHour.resetsAtEpoch, nowEpoch2);
-  const hourlyCap = hourlyThresholdFor(windowHour, hourlyThresholds);
-  const fiveOver = reading.fiveHour.utilizationPct > hourlyCap;
-  const windowDay = computeWindowDay(reading.sevenDay.resetsAtEpoch, nowEpoch2);
-  const dailyCap = dailyThresholdFor(windowDay, dailyThresholds);
-  const sevenOver = reading.sevenDay.utilizationPct > dailyCap;
-  if (sevenOver) {
-    return {
-      kind: "suspend-7d",
-      resetsAtEpoch: reading.sevenDay.resetsAtEpoch,
-      reason: `7d quota over curve: ${reading.sevenDay.utilizationPct}% used > ${dailyCap}% cap at window-day ${windowDay}`
-    };
-  }
-  if (fiveOver) {
-    return {
-      kind: "pause-5h",
-      resetsAtEpoch: reading.fiveHour.resetsAtEpoch,
-      reason: `5h quota over curve: ${reading.fiveHour.utilizationPct}% used > ${hourlyCap}% cap at window-hour ${windowHour}`
-    };
-  }
-  return { kind: "proceed" };
-}
-
-// src/quota/checkpoint.ts
-function clearCheckpoint() {
-  return { status: "running", quota: void 0 };
-}
-
-// src/quota/router.ts
-function selectProducerModel(riskTier, config) {
-  const models = config.quota.producerModels;
-  switch (riskTier) {
-    case "low":
-      return models.low;
-    case "medium":
-      return models.medium;
-    case "high":
-      return models.high;
-    default:
-      return assertNever(riskTier);
-  }
-}
-
-// src/quota/resume.ts
-function planResume(run14, reading, config, nowEpoch2) {
-  if (run14.status !== "paused" && run14.status !== "suspended") {
-    return { kind: "not-resumable", status: run14.status };
-  }
-  const decision = evaluate(reading, config, nowEpoch2);
-  if (decision.kind === "proceed") {
-    return { kind: "resume", clear: clearCheckpoint() };
-  }
-  return { kind: "still-blocked", decision };
-}
-
-// src/producer/agents.ts
-function parseProducerStatus(raw) {
-  const line = raw.trim();
-  const upper = line.toUpperCase();
-  if (upper.includes("BLOCKED") && upper.includes("ESCALATE")) {
-    return { status: "blocked-escalate", reason: line };
-  }
-  if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {
-    return { status: "needs-context", reason: line };
-  }
-  if (upper.includes("DONE")) {
-    return { status: "done" };
-  }
-  return {
-    status: "error",
-    reason: line.length > 0 ? `unparseable producer status: ${line}` : "empty producer status"
-  };
-}
-
-// src/producer/model-dial.ts
-var TIER_LADDER = ["low", "medium", "high"];
-function escalateTier(tier) {
-  const idx = TIER_LADDER.indexOf(tier);
-  const next = TIER_LADDER[Math.min(idx + 1, TIER_LADDER.length - 1)];
-  return next ?? tier;
-}
-function dialForRung(riskTier, rung, config) {
-  if (rung < 0 || !Number.isInteger(rung)) {
-    throw new Error(`dialForRung: rung must be a non-negative integer, got ${rung}`);
-  }
-  const baseModel = selectProducerModel(riskTier, config);
-  if (rung <= 1) {
-    return {
-      model: baseModel,
-      rung,
-      injectsPriorFailure: false
-    };
-  }
-  const escalatedTier = escalateTier(riskTier);
-  const escalatedModel = selectProducerModel(escalatedTier, config);
-  return {
-    model: escalatedModel,
-    rung,
-    injectsPriorFailure: true
-  };
-}
-
-// src/producer/prompt-context.ts
-function toFixInstruction(f) {
-  const base = { reviewer: f.reviewer, description: f.description };
-  if (f.file !== void 0 && f.line !== void 0) {
-    return { ...base, file: f.file, line: f.line };
-  }
-  if (f.file !== void 0) {
-    return { ...base, file: f.file };
-  }
-  return base;
-}
-function buildProducerContext(input) {
-  const fixInstructions = (input.confirmedBlockers ?? []).map(toFixInstruction);
-  const priorFailures = input.priorFailures ?? [];
-  return {
-    taskId: input.taskId,
-    title: input.title,
-    description: input.description,
-    acceptanceCriteria: input.visibleCriteria,
-    files: input.files,
-    rung: input.rung,
-    fixInstructions,
-    priorFailures,
-    injectedPriorFailure: priorFailures.length > 0
-  };
-}
-
-// src/producer/classify.ts
-function exhaustive(x) {
-  throw new Error(`classify: unhandled FailureSignal ${JSON.stringify(x)}`);
-}
-function classifyFailure(signal) {
-  switch (signal.kind) {
-    case "producer-status": {
-      if (signal.status === "blocked-escalate") {
-        return {
-          action: "drop",
-          failureClass: "spec-defect",
-          reason: `producer reported the task unworkable as specified: ${signal.reason}`
-        };
-      }
-      return { action: "retry", reason: signal.reason };
-    }
-    case "gate-failure": {
-      if (signal.structurallyUnfixable) {
-        return {
-          action: "drop",
-          failureClass: "spec-defect",
-          reason: `deterministic gate '${signal.gate}' is structurally unfixable by the producer: ${signal.reason}`
-        };
-      }
-      return { action: "retry", reason: `gate '${signal.gate}' failed: ${signal.reason}` };
-    }
-    case "environmental": {
-      return {
-        action: "drop",
-        failureClass: "blocked-environmental",
-        reason: `environmental blocker: ${signal.reason}`
-      };
-    }
-    case "verifier-error": {
-      return { action: "retry", reason: `verifier error (unresolved): ${signal.reason}` };
-    }
-    case "floor-blocked": {
-      return { action: "retry", reason: signal.reason };
-    }
-    default:
-      return exhaustive(signal);
-  }
-}
-
-// src/verifier/judgment/config.ts
-var FALLBACK_REVIEW_MODEL = "opus";
-function resolveReviewModel(config) {
-  const m = config.review.model;
-  if (m !== void 0 && m.trim().length === 0) {
-    throw new Error(
-      "review.model is configured but empty \u2014 set a non-empty fixed reviewer model or unset it"
-    );
-  }
-  return m ?? FALLBACK_REVIEW_MODEL;
-}
-
-// src/verifier/judgment/panel.ts
-var PANEL_ROLES = [
-  "implementation-reviewer",
-  "quality-reviewer",
-  "architecture-reviewer",
-  "security-reviewer",
-  "silent-failure-hunter",
-  "type-design-reviewer"
-];
-function promptRefFor(role) {
-  return `reviews/prompts/${role}.md`;
-}
-function buildPanelManifest(stageAfter, model, maxTurns) {
-  const agents = PANEL_ROLES.map((role) => ({
-    role,
-    isolation: "worktree",
-    model,
-    max_turns: maxTurns,
-    prompt_ref: promptRefFor(role)
-  }));
-  return parseSpawnManifest({ stage_after: stageAfter, agents });
-}
-
-// src/verifier/judgment/finding.ts
-var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
-var FindingSchema = external_exports.object({
-  /** Which panel reviewer raised this (free-form; the role string). */
-  reviewer: external_exports.string().min(1),
-  /** Closed severity. */
-  severity: FindingSeverityEnum,
-  /** True iff this finding, if upheld, BLOCKS the floor. */
-  blocking: external_exports.boolean(),
-  /** Cited file path (run-tree relative). Absent ⇒ uncitable. */
-  file: external_exports.string().min(1).optional(),
-  /** Cited 1-based line number. Absent ⇒ uncitable. Must be positive. */
-  line: external_exports.number().int().positive().optional(),
-  /**
-   * The VERBATIM code the reviewer claims to be quoting. Required and non-empty —
-   * a finding with no quote cannot be citation-verified, so we reject it loudly
-   * rather than admit an unverifiable claim. (An empty string is rejected by
-   * `.min(1)`.)
-   */
-  quote: external_exports.string().min(1),
-  /** Human-facing description of the concern. */
-  description: external_exports.string().min(1)
-});
-var RawReviewVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
-var RawReviewSchema = external_exports.object({
-  /** The reviewer identity (role string). */
-  reviewer: external_exports.string().min(1),
-  /** The reviewer's self-reported verdict. */
-  verdict: RawReviewVerdictEnum,
-  /** Findings raised. May be empty (an `approve` with no findings). */
-  findings: external_exports.array(FindingSchema)
-});
-function parseRawReview(raw) {
-  return RawReviewSchema.parse(raw);
-}
-function isCitable(f) {
-  return f.file !== void 0 && f.line !== void 0;
-}
-
-// src/verifier/judgment/citation-verify.ts
-var CITATION_WINDOW = 2;
-function redactFinding(f) {
-  return { ...f, quote: redactSecrets(f.quote), description: redactSecrets(f.description) };
-}
-function checkQuote(quote, line, lines) {
-  const lo = Math.max(1, line - CITATION_WINDOW);
-  const hi = Math.min(lines.length, line + CITATION_WINDOW);
-  if (lo > hi) {
-    return "line-out-of-range";
-  }
-  for (let n = lo; n <= hi; n++) {
-    const text = lines[n - 1];
-    if (text !== void 0 && text.includes(quote)) return null;
-  }
-  return "quote-not-in-window";
-}
-function verifyCitations(findings, source, options = {}) {
-  const redact = options.redact ?? true;
-  const kept = [];
-  const dropped = [];
-  const audit = [];
-  for (const f of findings) {
-    if (!isCitable(f)) {
-      dropped.push({ finding: f, reason: "uncitable" });
-      audit.push(`DROP uncitable: ${f.reviewer} \u2014 ${f.description}`);
-      continue;
-    }
-    const lines = source.readLines(f.file);
-    if (lines === null) {
-      dropped.push({ finding: f, reason: "file-not-found" });
-      audit.push(`DROP file-not-found ${f.file}:${f.line}: ${f.reviewer}`);
-      continue;
-    }
-    const reason = checkQuote(f.quote, f.line, lines);
-    if (reason !== null) {
-      dropped.push({ finding: f, reason });
-      audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
-      continue;
-    }
-    const retained = redact ? redactFinding(f) : f;
-    kept.push(retained);
-    audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`);
-  }
-  return { kept, dropped, audit };
-}
-
-// src/verifier/judgment/finding-verifier.ts
-async function confirmBlocker(finding, runner, finderIdentity) {
-  if (runner.identity === finderIdentity) {
-    throw new Error(
-      `finding-verifier identity '${runner.identity}' equals the finder's \u2014 the verifier must be INDEPENDENT (D27)`
-    );
-  }
-  let verdict;
-  try {
-    verdict = await runner.confirm(finding);
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return { status: "error", reason: `finding-verifier errored: ${detail}` };
-  }
-  return verdict.holds ? { status: "confirmed", evidence: { note: verdict.note } } : { status: "refuted", reason: verdict.note };
-}
-
-// src/verifier/judgment/panel-run.ts
-async function adjudicateReviewer(review, source, makeRunner2, redact) {
-  const blocking = review.findings.filter((f) => f.blocking);
-  const { kept } = verifyCitations(blocking, source, { redact });
-  const runner = makeRunner2(review);
-  const confirmed = [];
-  let hadVerifierError = false;
-  for (const finding of kept) {
-    if (!isCitable(finding)) continue;
-    const outcome = await confirmBlocker(finding, runner, review.reviewer);
-    if (outcome.status === "confirmed") {
-      confirmed.push(finding);
-    } else if (outcome.status === "error") {
-      hadVerifierError = true;
-    }
-  }
-  return {
-    reviewer: review.reviewer,
-    rawVerdict: review.verdict,
-    confirmedBlockers: confirmed,
-    hadVerifierError
-  };
-}
-function reviewerResultOf(a) {
-  if (a.hadVerifierError || a.rawVerdict === "error") {
-    return {
-      reviewer: a.reviewer,
-      verdict: "error",
-      confirmed_blockers: a.confirmedBlockers.length
-    };
-  }
-  if (a.confirmedBlockers.length > 0) {
-    return {
-      reviewer: a.reviewer,
-      verdict: "blocked",
-      confirmed_blockers: a.confirmedBlockers.length
-    };
-  }
-  return { reviewer: a.reviewer, verdict: "approve", confirmed_blockers: 0 };
-}
-async function runPanel(input) {
-  const redact = input.redact ?? true;
-  const adjudicated = [];
-  for (const review of input.reviews) {
-    adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
-  }
-  const reviewerResults = adjudicated.map(reviewerResultOf);
-  const floor = deriveFloorVerdict({ reviewers: reviewerResults }, input.gateEvidence);
-  const result = floor.passed ? advance(nextOrSelf(input.stage)) : waitRetry(
-    input.stage,
-    floorBlockReason(reviewerResults),
-    input.attempt ?? 1,
-    input.maxAttempts ?? 1
-  );
-  const crossVendorAbsence = input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : void 0;
-  return crossVendorAbsence === void 0 ? { adjudicated, reviewerResults, floor, result } : { adjudicated, reviewerResults, floor, result, crossVendorAbsence };
-}
-function nextOrSelf(stage) {
-  return stage === "verify" ? "ship" : stage;
-}
-function floorBlockReason(results) {
-  const errored = results.filter((r) => r.verdict === "error").map((r) => r.reviewer);
-  const blocked = results.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
-  const parts = [];
-  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
-  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
-  return parts.length > 0 ? parts.join("; ") : "floor not unanimous";
-}
-
-// src/producer/ladder.ts
-var ESCALATION_CAP = 2;
-
 // src/driver/transitions.ts
-var log19 = createLogger("transitions");
+var log20 = createLogger("transitions");
 async function markInFlight(deps, runId, taskId, stage) {
   const status = stageToInFlightStatus(stage);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status,
+    stage,
     started_at: t.started_at ?? nowIso()
   }));
 }
@@ -10320,7 +10350,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function dropTask(deps, runId, taskId, failureClass, reason) {
-  log19.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
+  log20.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "dropped",
@@ -10337,8 +10367,8 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
   if (decision.action === "drop") {
     return dropStep(deps, runId, taskId, decision.failureClass, decision.reason);
   }
-  const run14 = await deps.state.read(runId);
-  const task = run14.tasks[taskId];
+  const run10 = await deps.state.read(runId);
+  const task = run10.tasks[taskId];
   if (task === void 0) {
     throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
   }
@@ -10357,7 +10387,7 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log19.info(
+  log20.info(
     `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`
   );
   return { done: false, stage: resumeStage };
@@ -10392,17 +10422,59 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
   return escalateOrDrop(deps, runId, taskId, classifyProducerFailure(outcome), opts.stage);
 }
 
+// src/driver/quota-gate.ts
+var log21 = createLogger("quota-gate");
+async function applyQuotaGate(deps, runId) {
+  const reading = await deps.usage.read();
+  const decision = evaluate(reading, deps.config, deps.now());
+  if (decisionToStageResult(decision) === null) {
+    return null;
+  }
+  switch (decision.kind) {
+    case "pause-5h":
+    case "suspend-7d": {
+      const patch = buildCheckpoint(decision);
+      log21.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
+      const run10 = await deps.state.update(runId, (s) => ({
+        ...s,
+        status: patch.status,
+        quota: patch.quota
+      }));
+      return {
+        scope: decision.kind === "pause-5h" ? "5h" : "7d",
+        reason: decision.reason,
+        resets_at_epoch: decision.resetsAtEpoch,
+        run: run10
+      };
+    }
+    case "unavailable-halt": {
+      log21.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
+      const run10 = await deps.state.update(runId, (s) => ({
+        ...s,
+        status: "suspended",
+        quota: void 0
+      }));
+      return { scope: "unavailable", reason: decision.reason, run: run10 };
+    }
+    case "proceed":
+      return null;
+    // unreachable (decisionToStageResult==null already handled it)
+    default:
+      return assertNever(decision);
+  }
+}
+
 // src/driver/paths.ts
-import { join as join12 } from "node:path";
+import { join as join11 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join12(dataDir, "worktrees", runId, taskId);
+  return join11(dataDir, "worktrees", runId, taskId);
 }
 
 // src/driver/handlers.ts
 function makeStageHandlers(deps) {
-  function requireTask2(ctx, stage) {
+  function requireTask3(ctx, stage) {
     if (ctx.task === void 0) {
       throw new Error(`handlers: stage '${stage}' requires a task but ctx.task is absent`);
     }
@@ -10463,7 +10535,7 @@ function makeStageHandlers(deps) {
      * so it is not threaded through state here — ship recomputes it.
      */
     async preflight(ctx) {
-      const task = requireTask2(ctx, "preflight");
+      const task = requireTask3(ctx, "preflight");
       await createTaskWorktree({
         gitClient: deps.git,
         runId: ctx.run.run_id,
@@ -10479,7 +10551,7 @@ function makeStageHandlers(deps) {
      * to exec) or spawn the test-writer for the current rung (resume at exec).
      */
     async tests(ctx) {
-      const task = requireTask2(ctx, "tests");
+      const task = requireTask3(ctx, "tests");
       const specTask = specTaskOf(deps.spec, task.task_id);
       const split = splitFor(deps.config, ctx.run.run_id, specTask);
       if (split.withheld.length > 0) {
@@ -10499,7 +10571,7 @@ function makeStageHandlers(deps) {
      * at verify.
      */
     async exec(ctx) {
-      const task = requireTask2(ctx, "exec");
+      const task = requireTask3(ctx, "exec");
       const specTask = specTaskOf(deps.spec, task.task_id);
       return producerSpawn("executor", specTask, ctx.run.run_id, task.escalation_rung, "verify");
     },
@@ -10510,7 +10582,7 @@ function makeStageHandlers(deps) {
      * uses `runVerify` instead (which additionally folds holdout evidence).
      */
     async verify(ctx) {
-      const task = requireTask2(ctx, "verify");
+      const task = requireTask3(ctx, "verify");
       const gateCtx = {
         runId: ctx.run.run_id,
         taskId: task.task_id,
@@ -10528,6 +10600,20 @@ function makeStageHandlers(deps) {
             deps.config.review.maxTurnsDeep
           )
         );
+      }
+      const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id);
+      if (holdoutExpected) {
+        const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
+        const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id);
+        if (!hasVerdicts) {
+          return spawn2(
+            buildPanelManifest(
+              "verify",
+              resolveReviewModel(deps.config),
+              deps.config.review.maxTurnsDeep
+            )
+          );
+        }
       }
       const floor = deriveFloorVerdict({ reviewers: task.reviewers }, gate.evidence);
       if (floor.passed) {
@@ -10547,7 +10633,7 @@ function makeStageHandlers(deps) {
      * driver's job (the reporter cannot write state).
      */
     async ship(ctx) {
-      const task = requireTask2(ctx, "ship");
+      const task = requireTask3(ctx, "ship");
       const specTask = specTaskOf(deps.spec, task.task_id);
       const branch = runScopedBranch(ctx.run.run_id, task.task_id);
       await createTaskPrIdempotent({
@@ -10600,7 +10686,7 @@ function shipBody(runId, specTask) {
 }
 
 // src/driver/ship.ts
-var log20 = createLogger("ship");
+var log22 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
     throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
@@ -10636,14 +10722,14 @@ async function shipTask(deps, ctx) {
   });
   const outcome = await serializer.merge(pr.number);
   if (outcome.merged) {
-    log20.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    log22.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
     return taskDone();
   }
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
 // src/driver/finalize.ts
-var log21 = createLogger("finalize");
+var log23 = createLogger("finalize");
 var FACTORY_ISSUE_LABEL = "factory";
 function rollupTitle(report) {
   return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
@@ -10657,7 +10743,7 @@ async function fileFailureIssues(deps, report) {
   for (const failure of report.failures) {
     const issue = renderFailureIssue(failure, report);
     if (existing.has(issue.title)) {
-      log21.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
+      log23.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
       continue;
     }
     await deps.gh.issueCreate({
@@ -10673,9 +10759,9 @@ async function fileFailureIssues(deps, report) {
 }
 async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
-  const run14 = await deps.state.read(runId);
-  const terminal = decideFinalize(run14).run_status;
-  const report = buildPartialReport({ ...run14, status: terminal }, deps.spec, { now });
+  const run10 = await deps.state.read(runId);
+  const terminal = decideFinalize(run10).run_status;
+  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
@@ -10691,228 +10777,49 @@ async function finalizeRun(deps, runId) {
       ...deps.rollup ?? {}
     });
   } else {
-    log21.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
+    log23.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
-  log21.info(
+  log23.info(
     `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
   );
   return { run: finalized, report, ...rollupResult ? { rollup: rollupResult } : {}, issuesFiled };
 }
 
 // src/driver/loop.ts
-var log22 = createLogger("driver");
+var log24 = createLogger("driver");
 
-// src/cli/subcommands/run-task.ts
-var HELP4 = `factory run-task \u2014 run one deterministic stage step and report (Model A)
-
-Usage:
-  factory run-task --run <id> --task <id> --stage <stage> [--ship-mode <mode>]
-
-Stages: ${TASK_STAGE_ORDER.join(" | ")}
-Ship modes: no-merge (default) | live
-
-Emits ONE JSON envelope to stdout:
-  { run_id, task_id, stage, stage_result, sidecar? }
-
-preflight|tests|exec|verify report only (no run-state writes); the orchestrator
-performs any spawn and folds outcomes via the record-* subcommands. ship is the
-one stage that writes state (branch/pr_number and, on a clean done, status).`;
-function parseStage(raw) {
-  if (TASK_STAGE_ORDER.includes(raw)) {
-    return raw;
-  }
-  throw new UsageError(`unknown --stage '${raw}' (expected one of ${TASK_STAGE_ORDER.join(", ")})`);
+// src/driver/artifacts.ts
+import { mkdir as mkdir9, readFile as readFile8 } from "node:fs/promises";
+import { dirname as dirname8, join as join12 } from "node:path";
+function producerRef(taskId, label) {
+  return `prompts/${taskId}/${label}.json`;
 }
-function parseShipMode(raw) {
-  if (raw === void 0) return void 0;
-  if (raw === "live" || raw === "no-merge") return raw;
-  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
-}
-function taskOf(deps, taskId) {
-  const task = deps.run.tasks[taskId];
-  if (task === void 0) {
-    throw new Error(`run-task: run '${deps.run.run_id}' has no task '${taskId}'`);
+var FsArtifactStore = class {
+  constructor(dataDir) {
+    this.dataDir = dataDir;
   }
-  return task;
-}
-async function holdoutSidecar(deps, taskId) {
-  if (!await deps.holdout.has(deps.run.run_id, taskId)) {
-    return void 0;
+  absPath(runId, ref) {
+    return join12(runDir(this.dataDir, runId), ref);
   }
-  const record = await deps.holdout.get(deps.run.run_id, taskId);
-  const worktree = taskWorktreePath(deps.dataDir, deps.run.run_id, taskId);
-  return {
-    kind: "holdout-validate",
-    task_id: taskId,
-    worktree,
-    model: resolveReviewModel(deps.config),
-    max_turns: deps.config.review.maxTurnsDeep,
-    prompt: buildHoldoutPrompt(record, worktree)
-  };
-}
-async function run4(argv) {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(HELP4);
-    return EXIT.OK;
+  async putProducerContext(runId, taskId, label, context) {
+    const ref = producerRef(taskId, label);
+    const path2 = this.absPath(runId, ref);
+    await mkdir9(dirname8(path2), { recursive: true });
+    await atomicWriteFile(path2, stringifyJson(context));
+    return ref;
   }
-  const runId = args.requireFlag("run");
-  const taskId = args.requireFlag("task");
-  const stage = parseStage(args.requireFlag("stage"));
-  const shipMode = parseShipMode(args.flag("ship-mode"));
-  const deps = await loadCliDeps({ runId, ...shipMode !== void 0 ? { shipMode } : {} });
-  const task = taskOf(deps, taskId);
-  const ctx = { run: deps.run, task, attempt: task.escalation_rung + 1 };
-  const envelope = await reportStage(deps, ctx, stage, taskId);
-  emitJson(envelope);
-  return EXIT.OK;
-}
-async function reportStage(deps, ctx, stage, taskId) {
-  const base = { run_id: deps.run.run_id, task_id: taskId, stage };
-  if (stage === "ship") {
-    const stage_result2 = await shipTask(deps, ctx);
-    if (stage_result2.kind === "task-terminal" && stage_result2.outcome.outcome === "done") {
-      await completeTask(deps, deps.run.run_id, taskId);
-    }
-    return { ...base, stage_result: stage_result2 };
-  }
-  const handlers = makeStageHandlers(deps);
-  const stage_result = await runStage(stage, ctx, handlers);
-  if (stage === "verify" && stage_result.kind === "spawn-agents") {
-    const sidecar = await holdoutSidecar(deps, taskId);
-    if (sidecar !== void 0) {
-      return { ...base, stage_result, sidecar };
-    }
-  }
-  return { ...base, stage_result };
-}
-var runTaskCommand = {
-  describe: "Run one deterministic stage step (Model A reporter) and emit a JSON envelope",
-  run: async (argv) => {
-    try {
-      return await run4(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`run-task: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
+  async getProducerContext(runId, promptRef) {
+    const path2 = this.absPath(runId, promptRef);
+    const raw = await readFile8(path2, "utf8");
+    return parseJson(raw, path2);
   }
 };
 
-// src/cli/subcommands/advance.ts
-var HELP5 = `factory advance \u2014 persist the in-flight cursor for the next stage
-
-Usage:
-  factory advance --run <id> --task <id> --to <stage>
-
-Stages: ${TASK_STAGE_ORDER.join(" | ")}
-
-Emits ONE JSON envelope: { run_id, task_id, step: { done:false, stage } }.
-Use after a run-task report stage returns { kind:"advance", to }. This writes
-only the cursor (status + started_at); producer/review folds use record-*.`;
-function parseStage2(raw) {
-  if (TASK_STAGE_ORDER.includes(raw)) {
-    return raw;
-  }
-  throw new UsageError(`unknown --to '${raw}' (expected one of ${TASK_STAGE_ORDER.join(", ")})`);
-}
-async function applyAdvance(state, runId, taskId, to) {
-  const run14 = await state.read(runId);
-  if (run14.tasks[taskId] === void 0) {
-    throw new Error(`advance: run '${runId}' has no task '${taskId}'`);
-  }
-  await markInFlight({ state }, runId, taskId, to);
-  return { run_id: runId, task_id: taskId, step: { done: false, stage: to } };
-}
-async function run5(argv) {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(HELP5);
-    return EXIT.OK;
-  }
-  const runId = args.requireFlag("run");
-  const taskId = args.requireFlag("task");
-  const to = parseStage2(args.requireFlag("to"));
-  const envelope = await applyAdvance(new StateManager(), runId, taskId, to);
-  emitJson(envelope);
-  return EXIT.OK;
-}
-var advanceCommand = {
-  describe: "Persist the in-flight cursor for the next stage and emit the step",
-  run: async (argv) => {
-    try {
-      return await run5(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`advance: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
-};
-
-// src/cli/subcommands/drop.ts
-var HELP6 = `factory drop \u2014 apply a classified LOUD drop to a task
-
-Usage:
-  factory drop --run <id> --task <id> --class <failure-class> --reason <text>
-
-Failure classes: ${FailureClassEnum.options.join(" | ")}
-
-Emits ONE JSON envelope:
-  { run_id, task_id, step: { done:true, outcome:{ outcome:"dropped", failure_class, reason } } }`;
-function parseFailureClass(raw) {
-  const parsed = FailureClassEnum.safeParse(raw);
-  if (!parsed.success) {
-    throw new UsageError(
-      `unknown --class '${raw}' (expected one of ${FailureClassEnum.options.join(", ")})`
-    );
-  }
-  return parsed.data;
-}
-async function applyDrop(state, runId, taskId, failureClass, reason) {
-  const run14 = await state.read(runId);
-  if (run14.tasks[taskId] === void 0) {
-    throw new Error(`drop: run '${runId}' has no task '${taskId}'`);
-  }
-  const step = await dropStep({ state }, runId, taskId, failureClass, reason);
-  return { run_id: runId, task_id: taskId, step };
-}
-async function run6(argv) {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(HELP6);
-    return EXIT.OK;
-  }
-  const runId = args.requireFlag("run");
-  const taskId = args.requireFlag("task");
-  const failureClass = parseFailureClass(args.requireFlag("class"));
-  const reason = args.requireFlag("reason");
-  const envelope = await applyDrop(new StateManager(), runId, taskId, failureClass, reason);
-  emitJson(envelope);
-  return EXIT.OK;
-}
-var dropCommand = {
-  describe: "Apply a classified LOUD drop to a task and emit the terminal step",
-  run: async (argv) => {
-    try {
-      return await run6(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`drop: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
-};
-
-// src/cli/transition.ts
+// src/driver/fold.ts
 import { readFile as readFile9 } from "node:fs/promises";
+import { join as join13 } from "node:path";
+var log25 = createLogger("fold");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.stage);
@@ -10922,23 +10829,10 @@ async function readJsonInput(path2) {
   const raw = await readFile9(path2, "utf8");
   return parseJson(raw, path2);
 }
-
-// src/cli/subcommands/record-producer.ts
-var HELP7 = `factory record-producer \u2014 fold a producer spawn outcome into state
-
-Usage:
-  factory record-producer --run <id> --task <id> --stage <tests|exec> --status <line>
-
---status is the producer agent's terminal STATUS line (e.g. "STATUS: DONE",
-"STATUS: BLOCKED \u2014 escalate", "STATUS: NEEDS_CONTEXT").
-
-Emits ONE JSON envelope: { run_id, task_id, step }. On done the step advances to the
-next stage; a classified failure escalates the rung (resume at the same stage) or
-drops (loud, classified) when the ladder is exhausted.`;
 function producerStageInfo(stage) {
   if (stage === "tests") return { role: "test-writer", stage: "tests", after: "exec" };
   if (stage === "exec") return { role: "executor", stage: "exec", after: "verify" };
-  throw new UsageError(`--stage must be a producer stage (tests | exec), got '${stage}'`);
+  throw new UsageError(`stage must be a producer stage (tests | exec), got '${stage}'`);
 }
 async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
   const info = producerStageInfo(stage);
@@ -10947,8 +10841,8 @@ async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
       `record-producer: stage order drift \u2014 nextStage('${info.stage}') !== '${info.after}'`
     );
   }
-  const run14 = await state.read(runId);
-  if (run14.tasks[taskId] === void 0) {
+  const run10 = await state.read(runId);
+  if (run10.tasks[taskId] === void 0) {
     throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
   }
   const outcome = parseProducerStatus(statusLine);
@@ -10962,61 +10856,19 @@ async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
   await persistStepCursor({ state }, runId, taskId, step);
   return { run_id: runId, task_id: taskId, step };
 }
-async function run7(argv) {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(HELP7);
-    return EXIT.OK;
-  }
-  const runId = args.requireFlag("run");
-  const taskId = args.requireFlag("task");
-  const stage = args.requireFlag("stage");
-  const statusLine = args.requireFlag("status");
-  const envelope = await applyRecordProducer(new StateManager(), runId, taskId, stage, statusLine);
-  emitJson(envelope);
-  return EXIT.OK;
-}
-var recordProducerCommand = {
-  describe: "Fold a producer spawn outcome into state (ladder + classify) and emit the step",
-  run: async (argv) => {
-    try {
-      return await run7(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`record-producer: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
-};
-
-// src/cli/subcommands/record-holdout.ts
-var log23 = createLogger("record-holdout");
-var HELP8 = `factory record-holdout \u2014 fold the holdout-validator output into the floor
-
-Usage:
-  factory record-holdout --run <id> --task <id> --input <path>
-
---input is a JSON file: { "raw": "<holdout-validator agent output>" }.
-
-Persists the parsed verdicts (read back by record-reviews) and emits ONE JSON
-envelope: { run_id, task_id, evidence, check }. Unparseable validator output fails
-CLOSED (every withheld criterion scores as a failure).`;
 function parseVerdictsFailClosed(raw) {
   try {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log23.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log25.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
-async function applyRecordHoldout(deps, verdictStore, taskId, raw) {
-  const runId = deps.run.run_id;
+async function applyRecordHoldout(deps, runId, taskId, verdictStore, raw) {
   if (!await deps.holdout.has(runId, taskId)) {
     throw new Error(
-      `record-holdout: task '${taskId}' has no withheld answer key \u2014 nothing to validate (record-holdout must only be called when run-task surfaced a holdout sidecar)`
+      `record-holdout: task '${taskId}' has no withheld answer key \u2014 nothing to validate (applyRecordHoldout must only fold when the pump surfaced a holdout sidecar)`
     );
   }
   const record = await deps.holdout.get(runId, taskId);
@@ -11025,57 +10877,7 @@ async function applyRecordHoldout(deps, verdictStore, taskId, raw) {
   const check = checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate);
   return { run_id: runId, task_id: taskId, evidence: holdoutEvidence(check), check };
 }
-async function run8(argv) {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(HELP8);
-    return EXIT.OK;
-  }
-  const runId = args.requireFlag("run");
-  const taskId = args.requireFlag("task");
-  const inputPath = args.requireFlag("input");
-  const deps = await loadCliDeps({ runId });
-  const input = await readJsonInput(inputPath);
-  const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
-  const envelope = await applyRecordHoldout(deps, verdictStore, taskId, input.raw);
-  emitJson(envelope);
-  return EXIT.OK;
-}
-var recordHoldoutCommand = {
-  describe: "Fold the holdout-validator output (persist verdicts, emit derived evidence)",
-  run: async (argv) => {
-    try {
-      return await run8(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`record-holdout: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
-};
-
-// src/cli/subcommands/record-reviews.ts
-import { readFile as readFile10 } from "node:fs/promises";
-import { join as join13 } from "node:path";
 var REPLAY_IDENTITY = "orchestrator-replay";
-var HELP9 = `factory record-reviews \u2014 fold the panel + verify-then-fix into the floor
-
-Usage:
-  factory record-reviews --run <id> --task <id> --input <path>
-
---input is a JSON file:
-  {
-    "reviews": [ <raw reviewer payload>, ... ],
-    "verifications": [ { "reviewer": "<role>",
-                         "verdicts": [ { "file","line","holds","note" }, ... ] }, ... ],
-    "crossVendorAbsent": { "reason": "..." }   // optional (\u0394 U)
-  }
-
-Re-runs the gates, re-derives the persisted holdout evidence, citation-verifies +
-confirms each blocker via the recorded verdicts, derives the floor, persists the
-reviewers, and emits ONE JSON envelope: { run_id, task_id, step, reviewers, floor }.`;
 async function buildWorktreeSource(worktree, reviews) {
   const files = /* @__PURE__ */ new Set();
   for (const review of reviews) {
@@ -11086,7 +10888,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile10(join13(worktree, file), "utf8");
+      const text = await readFile9(join13(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch {
       lines.set(file, null);
@@ -11122,13 +10924,16 @@ function makeReplayRunnerFactory(input) {
     };
   };
 }
-async function applyRecordReviews(deps, verdictStore, taskId, input) {
-  const runId = deps.run.run_id;
-  const task = deps.run.tasks[taskId];
+async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
+  const run10 = await deps.state.read(runId);
+  const task = run10.tasks[taskId];
   if (task === void 0) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
   const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+  const reviews = input.reviews.map(parseRawReview);
+  const source = await buildWorktreeSource(worktree, reviews);
+  const makeRunner2 = makeReplayRunnerFactory(input);
   const gateCtx = {
     runId,
     taskId,
@@ -11146,9 +10951,6 @@ async function applyRecordReviews(deps, verdictStore, taskId, input) {
       holdoutEvidence(checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate))
     );
   }
-  const reviews = input.reviews.map(parseRawReview);
-  const source = await buildWorktreeSource(worktree, reviews);
-  const makeRunner2 = makeReplayRunnerFactory(input);
   const panel = await runPanel({
     reviews,
     source,
@@ -11159,14 +10961,17 @@ async function applyRecordReviews(deps, verdictStore, taskId, input) {
     maxAttempts: ESCALATION_CAP + 1,
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
-  await deps.state.updateTask(runId, taskId, (t) => ({
-    ...t,
-    reviewers: [...panel.reviewerResults]
-  }));
   let step;
   if (panel.result.kind === "advance") {
-    step = { done: false, stage: panel.result.to };
-    await markInFlight(deps, runId, taskId, panel.result.to);
+    const nextStageVal = panel.result.to;
+    const nextStatus = stageToInFlightStatus(nextStageVal);
+    await deps.state.updateTask(runId, taskId, (t) => ({
+      ...t,
+      reviewers: [...panel.reviewerResults],
+      stage: nextStageVal,
+      status: nextStatus
+    }));
+    step = { done: false, stage: nextStageVal };
   } else if (panel.result.kind === "wait-retry") {
     step = await escalateOrDrop(
       deps,
@@ -11187,42 +10992,375 @@ async function applyRecordReviews(deps, verdictStore, taskId, input) {
     floor: panel.floor
   };
 }
-async function run9(argv) {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(HELP9);
-    return EXIT.OK;
-  }
-  const runId = args.requireFlag("run");
-  const taskId = args.requireFlag("task");
-  const inputPath = args.requireFlag("input");
-  const deps = await loadCliDeps({ runId });
-  const input = await readJsonInput(inputPath);
-  const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
-  const envelope = await applyRecordReviews(deps, verdictStore, taskId, input);
-  emitJson(envelope);
-  return EXIT.OK;
+
+// src/driver/results.ts
+var SPAWN_STAGES = ["tests", "exec", "verify"];
+var FoldKeySchema = external_exports.object({ stage: external_exports.enum(SPAWN_STAGES), rung: external_exports.number().int().min(0) }).strict();
+var ProducerResultSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
+var HoldoutResultSchema = external_exports.object({ raw: external_exports.string().min(1) }).strict();
+var ReviewsResultSchema = external_exports.object({
+  reviews: external_exports.array(external_exports.unknown()).min(1),
+  verifications: external_exports.array(
+    external_exports.object({
+      reviewer: external_exports.string().min(1),
+      verdicts: external_exports.array(
+        external_exports.object({
+          file: external_exports.string().min(1),
+          line: external_exports.number().int().positive(),
+          holds: external_exports.boolean(),
+          note: external_exports.string()
+        }).strict()
+      )
+    }).strict()
+  ),
+  crossVendorAbsent: external_exports.object({ reason: external_exports.string().min(1) }).strict().optional()
+}).strict();
+var DriveResultsSchema = external_exports.object({
+  fold_key: FoldKeySchema,
+  producer: ProducerResultSchema.optional(),
+  holdout: HoldoutResultSchema.optional(),
+  reviews: ReviewsResultSchema.optional()
+}).strict().refine((r) => r.producer !== void 0 !== (r.reviews !== void 0), {
+  message: "drive results must carry exactly one of 'producer' or 'reviews'"
+}).refine((r) => r.holdout === void 0 || r.reviews !== void 0, {
+  message: "'holdout' results only accompany 'reviews'"
+});
+function parseDriveResults(raw) {
+  return DriveResultsSchema.parse(raw);
 }
-var recordReviewsCommand = {
-  describe: "Fold the panel + verify-then-fix verdicts into the floor and emit the step",
-  run: async (argv) => {
-    try {
-      return await run9(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`record-reviews: ${err.message}`);
-        return EXIT.USAGE;
+function isSpawnStage(stage) {
+  return SPAWN_STAGES.includes(stage);
+}
+
+// src/driver/pump.ts
+var log26 = createLogger("pump");
+var MERGE_RESYNC_CAP = 8;
+function requireTask2(run10, taskId) {
+  const task = run10.tasks[taskId];
+  if (task === void 0) {
+    throw new Error(`pump: run '${run10.run_id}' has no task '${taskId}'`);
+  }
+  return task;
+}
+function terminalOutcome(task) {
+  if (task.status === "done") return { outcome: "done" };
+  if (task.failure_class === void 0) {
+    throw new Error(
+      `pump: terminal task '${task.task_id}' has no failure_class \u2014 schema invariant violated`
+    );
+  }
+  if (task.failure_reason === void 0) {
+    throw new Error(
+      `pump: terminal task '${task.task_id}' has no failure_reason \u2014 schema invariant violated`
+    );
+  }
+  return {
+    outcome: "dropped",
+    failure_class: task.failure_class,
+    reason: task.failure_reason
+  };
+}
+function asSpawnStage(stage) {
+  if (isSpawnStage(stage)) {
+    return stage;
+  }
+  throw new Error(
+    `pump: stage '${stage}' cannot spawn agents (only tests|exec|verify can) \u2014 unreachable`
+  );
+}
+async function holdoutSidecar(deps, runId, taskId) {
+  if (!await deps.holdout.has(runId, taskId)) {
+    return void 0;
+  }
+  const record = await deps.holdout.get(runId, taskId);
+  const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+  return {
+    kind: "holdout-validate",
+    task_id: taskId,
+    worktree,
+    model: resolveReviewModel(deps.config),
+    max_turns: deps.config.review.maxTurnsDeep,
+    prompt: buildHoldoutPrompt(record, worktree)
+  };
+}
+async function foldResults(deps, runId, taskId, stage, task, results) {
+  const { fold_key } = results;
+  if (!isSpawnStage(stage)) {
+    throw new Error(`drive: results given but stage '${stage}' spawns no agents`);
+  }
+  const spawnStage = stage;
+  if (fold_key.stage !== spawnStage || fold_key.rung !== task.escalation_rung) {
+    throw new Error(
+      `drive: stale or duplicate results (fold_key ${fold_key.stage}/${fold_key.rung} vs cursor ${spawnStage}/${task.escalation_rung}) \u2014 re-invoke without results to get the current envelope`
+    );
+  }
+  const fold = deps;
+  if (stage === "tests" || stage === "exec") {
+    if (results.producer === void 0) {
+      throw new Error(`drive: stage '${stage}' expects producer-status results`);
+    }
+    const env2 = await applyRecordProducer(
+      deps.state,
+      runId,
+      taskId,
+      stage,
+      results.producer.status
+    );
+    return env2.step;
+  }
+  if (results.reviews === void 0) {
+    throw new Error("drive: stage 'verify' expects reviews results");
+  }
+  if (await deps.holdout.has(runId, taskId) && results.holdout === void 0) {
+    throw new Error(
+      `drive: task '${taskId}' has a withheld holdout answer key \u2014 verify results must include the holdout-validate raw output (results.holdout is missing)`
+    );
+  }
+  const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
+  if (results.holdout !== void 0) {
+    await applyRecordHoldout(fold, runId, taskId, verdictStore, results.holdout.raw);
+  }
+  const env = await applyRecordReviews(fold, runId, taskId, verdictStore, results.reviews);
+  return env.step;
+}
+async function pumpTask(deps, runId, taskId, results) {
+  let run10 = await deps.state.read(runId);
+  let task = requireTask2(run10, taskId);
+  if (isTerminalTaskStatus(task.status)) {
+    return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
+  }
+  const stop = await applyQuotaGate(deps, runId);
+  if (stop !== null) {
+    return {
+      kind: "quota-blocked",
+      run_id: runId,
+      task_id: taskId,
+      scope: stop.scope,
+      reason: stop.reason,
+      ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
+    };
+  }
+  let stage = task.stage ?? "preflight";
+  if (results !== void 0) {
+    const step = await foldResults(deps, runId, taskId, stage, task, results);
+    if (step.done) {
+      return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+    }
+    stage = step.stage;
+  }
+  const handlers = makeStageHandlers(deps);
+  for (; ; ) {
+    await markInFlight(deps, runId, taskId, stage);
+    run10 = await deps.state.read(runId);
+    task = requireTask2(run10, taskId);
+    const ctx = { run: run10, task, attempt: task.escalation_rung + 1 };
+    const result = stage === "ship" ? await shipTask(deps, ctx) : await runStage(stage, ctx, handlers);
+    switch (result.kind) {
+      case "advance": {
+        stage = result.to;
+        continue;
       }
-      throw err;
+      case "spawn-agents": {
+        const spawnStage = asSpawnStage(stage);
+        const expects = spawnStage === "verify" ? "reviews" : "producer-status";
+        const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+        const sidecar = spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId) : void 0;
+        const fold_key = { stage: spawnStage, rung: task.escalation_rung };
+        return {
+          kind: "spawn",
+          run_id: runId,
+          task_id: taskId,
+          stage: spawnStage,
+          fold_key,
+          manifest: result.manifest,
+          ...sidecar !== void 0 ? { sidecar } : {},
+          expects,
+          worktree
+        };
+      }
+      case "task-terminal": {
+        if (result.outcome.outcome === "done") {
+          const step2 = await completeTask(deps, runId, taskId);
+          if (!step2.done) throw new Error("pump: completeTask returned non-terminal step");
+          return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
+        }
+        const step = await dropStep(
+          deps,
+          runId,
+          taskId,
+          result.outcome.failure_class,
+          result.outcome.reason
+        );
+        if (!step.done) throw new Error("pump: dropStep returned non-terminal step");
+        return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+      }
+      case "wait-retry": {
+        if (result.stage === "ship") {
+          let newResyncs = 0;
+          await deps.state.updateTask(runId, taskId, (t) => {
+            newResyncs = t.merge_resyncs + 1;
+            return { ...t, merge_resyncs: newResyncs };
+          });
+          if (newResyncs > MERGE_RESYNC_CAP) {
+            const step2 = await dropStep(
+              deps,
+              runId,
+              taskId,
+              "blocked-environmental",
+              `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`
+            );
+            if (!step2.done) throw new Error("pump: dropStep returned non-terminal step");
+            return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
+          }
+          log26.info(
+            `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
+          );
+          stage = "exec";
+          continue;
+        }
+        const step = await escalateOrDrop(
+          deps,
+          runId,
+          taskId,
+          classifyFailure({ kind: "floor-blocked", reason: result.reason }),
+          "exec"
+        );
+        if (step.done) {
+          return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+        }
+        stage = step.stage;
+        continue;
+      }
+      case "graceful-stop":
+      case "finalize-terminal":
+        throw new Error(`pump: run-scope result '${result.kind}' surfaced at task scope`);
+      default:
+        return assertNever(result);
     }
   }
-};
+}
+
+// src/driver/next.ts
+function depsSatisfied(run10, task) {
+  return task.depends_on.every((d) => run10.tasks[d]?.status === "done");
+}
+function isUnsatisfiableDep(run10, depId) {
+  const dep = run10.tasks[depId];
+  return dep === void 0 || dep.status === "dropped";
+}
+async function pumpRun(deps, runId) {
+  let run10 = await deps.state.read(runId);
+  if (isTerminalRunStatus(run10.status)) {
+    return { kind: "run-terminal", run_id: runId, run_status: run10.status };
+  }
+  if (Object.values(run10.tasks).every((t) => isTerminalTaskStatus(t.status))) {
+    return { kind: "all-terminal", run_id: runId, cascade_dropped: [] };
+  }
+  const stop = await applyQuotaGate(deps, runId);
+  if (stop !== null) {
+    return {
+      kind: "quota-blocked",
+      run_id: runId,
+      scope: stop.scope,
+      reason: stop.reason,
+      ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
+    };
+  }
+  if (run10.status === "paused" || run10.status === "suspended") {
+    const patch = clearCheckpoint();
+    run10 = await deps.state.update(runId, (s) => ({
+      ...s,
+      status: patch.status,
+      quota: patch.quota
+    }));
+  }
+  const cascadeDropped = [];
+  for (; ; ) {
+    run10 = await deps.state.read(runId);
+    const blocked = Object.values(run10.tasks).filter(
+      (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run10, d))
+    );
+    if (blocked.length === 0) break;
+    for (const t of blocked) {
+      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run10, d));
+      if (unsatisfied === void 0) {
+        throw new Error(
+          `next: task '${t.task_id}' classified blocked but no unsatisfiable dep found \u2014 unreachable`
+        );
+      }
+      await dropTask(
+        deps,
+        runId,
+        t.task_id,
+        "blocked-environmental",
+        `dependency '${unsatisfied}' did not complete (dropped or missing)`
+      );
+      cascadeDropped.push(t.task_id);
+    }
+  }
+  const tasks = Object.values(run10.tasks);
+  if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
+    return { kind: "all-terminal", run_id: runId, cascade_dropped: cascadeDropped };
+  }
+  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run10, t));
+  const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
+  const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
+  const ordered = [...inFlight, ...pending];
+  if (ordered.length === 0) {
+    const remaining = tasks.filter((t) => !isTerminalTaskStatus(t.status)).map((t) => `${t.task_id}=${t.status}`);
+    throw new Error(
+      `next: no ready tasks but ${remaining.length} remain [${remaining.join(", ")}] \u2014 dependency cycle or deadlock`
+    );
+  }
+  return { kind: "tasks-ready", run_id: runId, ready: ordered, cascade_dropped: cascadeDropped };
+}
+
+// src/cli/wiring.ts
+function splitRepo(slug) {
+  const parts = slug.split("/");
+  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
+    throw new Error(`wiring: run spec repo must be '<owner>/<name>', got '${slug}'`);
+  }
+  return { owner: parts[0], repo: parts[1] };
+}
+async function loadPumpDeps(opts) {
+  const deps = await loadCliDeps(opts);
+  return {
+    ...deps,
+    usage: new StatuslineUsageSignal({ dataDir: deps.dataDir }),
+    now: nowEpoch
+  };
+}
+async function loadCliDeps(opts) {
+  const dataDir = resolveDataDir(opts);
+  const dirOpts = { ...opts, dataDir };
+  const config = loadConfig(dirOpts);
+  const state = new StateManager({ ...dirOpts });
+  const run10 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run10.spec.repo, run10.spec.spec_id);
+  const { owner, repo } = splitRepo(run10.spec.repo);
+  return {
+    config,
+    spec,
+    git: new DefaultGitClient(),
+    gh: new DefaultGhClient(),
+    tools: defaultGateTools(),
+    artifacts: new FsArtifactStore(dataDir),
+    holdout: new FsHoldoutStore(dataDir),
+    dataDir,
+    owner,
+    repo,
+    shipMode: opts.shipMode ?? "no-merge",
+    state,
+    run: run10
+  };
+}
 
 // src/cli/subcommands/run.ts
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver <d>] [--run-id <id>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--ship-mode <mode>]
 
@@ -11233,12 +11371,11 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver <d>] [--run-id <id>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
 
   --repo      Repo identity 'owner/name' (the first key of the spec store).
   --issue     PRD issue number \u2014 the STABLE lookup key (reruns reuse the spec).
   --spec-id   Explicit '<issue>-<slug>' spec id (alternative to --issue).
-  --driver    sequential | balanced (default: balanced).
   --run-id    Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
 
 Resolves the spec via the durable store (LOUD if none exists \u2014 generate one first),
@@ -11296,7 +11433,8 @@ function seedTasksFromSpec(manifest) {
       depends_on: [...t.depends_on],
       risk_tier: t.risk_tier,
       escalation_rung: 0,
-      reviewers: []
+      reviewers: [],
+      merge_resyncs: 0
     };
   }
   assertAcyclic(tasks, manifest.spec_id);
@@ -11341,19 +11479,20 @@ async function createRun(state, specStore, opts) {
   await state.create({
     run_id: opts.runId,
     spec: specStore.toPointer(manifest),
-    driver: opts.driver
+    // v1 pump seam drives tasks strictly one at a time — the driver dial is fixed.
+    driver: "sequential"
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
 async function applyResume(state, runId, reading, config, nowEpochSec) {
-  const run14 = await state.read(runId);
-  if (isTerminalRunStatus(run14.status)) {
-    throw new Error(`run resume: run '${runId}' is terminal (${run14.status}); nothing to resume`);
+  const run10 = await state.read(runId);
+  if (isTerminalRunStatus(run10.status)) {
+    throw new Error(`run resume: run '${runId}' is terminal (${run10.status}); nothing to resume`);
   }
-  const plan = planResume(run14, reading, config, nowEpochSec);
+  const plan = planResume(run10, reading, config, nowEpochSec);
   switch (plan.kind) {
     case "not-resumable":
-      return { kind: "resumed", run: run14 };
+      return { kind: "resumed", run: run10 };
     case "resume": {
       const updated = await state.update(runId, (s) => ({
         ...s,
@@ -11365,27 +11504,17 @@ async function applyResume(state, runId, reading, config, nowEpochSec) {
     case "still-blocked": {
       const d = plan.decision;
       if (d.kind === "proceed") {
-        return { kind: "resumed", run: run14 };
+        return { kind: "resumed", run: run10 };
       }
       const base = {
         kind: "still-blocked",
         run_id: runId,
-        status: run14.status,
+        status: run10.status,
         reason: d.reason
       };
       return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
     }
   }
-}
-function parseDriver(raw) {
-  if (raw === void 0) return "balanced";
-  if (raw === "sequential" || raw === "balanced") return raw;
-  throw new UsageError(`unknown --driver '${String(raw)}' (expected sequential | balanced)`);
-}
-function parseShipMode2(raw) {
-  if (raw === void 0) return void 0;
-  if (raw === "live" || raw === "no-merge") return raw;
-  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
 }
 function parseIssue(raw) {
   if (raw === void 0) return void 0;
@@ -11406,7 +11535,6 @@ async function runCreate(argv) {
     return EXIT.OK;
   }
   const repo = args.requireFlag("repo");
-  const driver = parseDriver(args.flag("driver"));
   const issue = parseIssue(args.flag("issue"));
   const specId = optionalString(args.flag("spec-id"));
   if (issue === void 0 && specId === void 0) {
@@ -11420,14 +11548,13 @@ async function runCreate(argv) {
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const run14 = await createRun(state, specStore, {
+  const run10 = await createRun(state, specStore, {
     repo,
-    driver,
     runId,
     ...issue !== void 0 ? { issue } : {},
     ...specId !== void 0 ? { specId } : {}
   });
-  emitJson(run14);
+  emitJson(run10);
   return EXIT.OK;
 }
 async function runResume(argv) {
@@ -11460,7 +11587,7 @@ async function runFinalize(argv) {
     emitLine(FINALIZE_HELP);
     return EXIT.OK;
   }
-  const shipMode = parseShipMode2(args.flag("ship-mode"));
+  const shipMode = parseShipMode(args.flag("ship-mode"));
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "finalize");
@@ -11469,17 +11596,17 @@ async function runFinalize(argv) {
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
-  const { run: run14, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
+  const { run: run10, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
   emitJson({
     kind: "finalized",
-    run: run14,
+    run: run10,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     issues_filed: issuesFiled
   });
   return EXIT.OK;
 }
-async function run10(argv) {
+async function run4(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(RUN_HELP);
@@ -11501,7 +11628,7 @@ var runCommand = {
   describe: "Create or resume a run (create resolves+seeds a spec; resume re-checks quota)",
   run: async (argv) => {
     try {
-      return await run10(argv);
+      return await run4(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`run: ${err.message}`);
@@ -11628,7 +11755,7 @@ var ACTIONS = {
   gate: gateSpec,
   store: storeSpec
 };
-async function run11(argv) {
+async function run5(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(SPEC_HELP);
@@ -11653,7 +11780,7 @@ var specCommand = {
   describe: "Build a durable spec (resolve \u2192 gate \u2192 store; orchestrator drives the agent spawns)",
   run: async (argv) => {
     try {
-      return await run11(argv);
+      return await run5(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`spec: ${err.message}`);
@@ -11673,17 +11800,17 @@ function dispositionOf(status, failureClass) {
   }
   return "stuck";
 }
-function depsSatisfied(run14, depends) {
-  return depends.every((d) => run14.tasks[d]?.status === "done");
+function depsSatisfied2(run10, depends) {
+  return depends.every((d) => run10.tasks[d]?.status === "done");
 }
-function hasUnsatisfiableDep(run14, depends) {
+function hasUnsatisfiableDep(run10, depends) {
   return depends.some((d) => {
-    const dep = run14.tasks[d];
+    const dep = run10.tasks[d];
     return dep === void 0 || dep.status === "dropped";
   });
 }
-function scanRun(run14) {
-  const all = Object.values(run14.tasks);
+function scanRun(run10) {
+  const all = Object.values(run10.tasks);
   const tasks = all.map((t) => ({
     task_id: t.task_id,
     status: t.status,
@@ -11701,13 +11828,13 @@ function scanRun(run14) {
   const dead_ends = deadEnd.map((t) => t.task_id);
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
   const actionablePending = all.some(
-    (t) => t.status === "pending" && (depsSatisfied(run14, t.depends_on) || hasUnsatisfiableDep(run14, t.depends_on))
+    (t) => t.status === "pending" && (depsSatisfied2(run10, t.depends_on) || hasUnsatisfiableDep(run10, t.depends_on))
   );
   const would_deadlock = !allTerminal && !actionablePending;
   const needs_rescue = resettable.length > 0;
   return {
-    run_id: run14.run_id,
-    run_status: run14.status,
+    run_id: run10.run_id,
+    run_status: run10.status,
     counts: {
       total: all.length,
       shipped: by("shipped").length,
@@ -11720,7 +11847,7 @@ function scanRun(run14) {
     dead_ends,
     needs_rescue,
     would_deadlock,
-    summary: summarize2(run14.status, resettable.length, dead_ends.length, would_deadlock),
+    summary: summarize2(run10.status, resettable.length, dead_ends.length, would_deadlock),
     tasks
   };
 }
@@ -11742,24 +11869,26 @@ function resetTaskRow(task) {
     producer_role: _producerRole,
     started_at: _startedAt,
     ended_at: _endedAt,
+    stage: _stage,
     ...rest
   } = task;
   return {
     ...rest,
     status: "pending",
     escalation_rung: 0,
-    reviewers: []
+    reviewers: [],
+    merge_resyncs: 0
   };
 }
-function selectTargets(run14, opts) {
+function selectTargets(run10, opts) {
   const explicit = opts.tasks ?? [];
   if (explicit.length > 0) {
     const targets2 = [];
     const skipped = [];
     for (const id of explicit) {
-      const task = run14.tasks[id];
+      const task = run10.tasks[id];
       if (task === void 0) {
-        throw new Error(`rescue: run '${run14.run_id}' has no task '${id}'`);
+        throw new Error(`rescue: run '${run10.run_id}' has no task '${id}'`);
       }
       if (task.status === "done") {
         throw new Error(
@@ -11774,32 +11903,32 @@ function selectTargets(run14, opts) {
     }
     return { targets: targets2, skipped };
   }
-  const scan = scanRun(run14);
+  const scan = scanRun(run10);
   const targets = opts.includeDeadEnds ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
   return { targets, skipped: [] };
 }
 async function applyRescue(state, runId, opts = {}) {
   let result = null;
-  const updated = await state.update(runId, (run14) => {
-    const { targets, skipped } = selectTargets(run14, opts);
-    const wasTerminal = isTerminalRunStatus(run14.status);
+  const updated = await state.update(runId, (run10) => {
+    const { targets, skipped } = selectTargets(run10, opts);
+    const wasTerminal = isTerminalRunStatus(run10.status);
     const reopen = wasTerminal && targets.length > 0;
     result = {
       run_id: runId,
-      run_status: reopen ? "running" : run14.status,
+      run_status: reopen ? "running" : run10.status,
       reset: targets,
       reopened: reopen,
       skipped
     };
     if (targets.length === 0 && !reopen) {
-      return run14;
+      return run10;
     }
-    const nextTasks = { ...run14.tasks };
+    const nextTasks = { ...run10.tasks };
     for (const id of targets) {
-      nextTasks[id] = resetTaskRow(run14.tasks[id]);
+      nextTasks[id] = resetTaskRow(run10.tasks[id]);
     }
     return {
-      ...run14,
+      ...run10,
       tasks: nextTasks,
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
@@ -11863,8 +11992,8 @@ async function runScan(argv) {
   }
   const state = new StateManager();
   const runId = await resolveRunId2(state, args, "scan");
-  const run14 = await state.read(runId);
-  emitJson(scanRun(run14));
+  const run10 = await state.read(runId);
+  emitJson(scanRun(run10));
   return EXIT.OK;
 }
 async function runApply(argv) {
@@ -11884,7 +12013,7 @@ async function runApply(argv) {
   emitJson(result);
   return EXIT.OK;
 }
-async function run12(argv) {
+async function run6(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(RESCUE_HELP);
@@ -11904,7 +12033,7 @@ var rescueCommand = {
   describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
   run: async (argv) => {
     try {
-      return await run12(argv);
+      return await run6(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`rescue: ${err.message}`);
@@ -11916,7 +12045,7 @@ var rescueCommand = {
 };
 
 // src/cli/subcommands/score.ts
-var HELP10 = `factory score \u2014 report a run's outcome summary (read-only)
+var HELP4 = `factory score \u2014 report a run's outcome summary (read-only)
 
 Usage:
   factory score [--run <id>] [--dead-surface] [--base <ref>] [--project-root <dir>]
@@ -11931,10 +12060,10 @@ Emits ONE JSON document:
 function optionalString2(raw) {
   return typeof raw === "string" && raw.length > 0 ? raw : void 0;
 }
-async function run13(argv) {
+async function run7(argv) {
   const args = parseArgs(argv, { booleans: ["dead-surface"] });
   if (args.flag("help") === true) {
-    emitLine(HELP10);
+    emitLine(HELP4);
     return EXIT.OK;
   }
   const dataDir = resolveDataDir({});
@@ -11982,10 +12111,121 @@ var scoreCommand = {
   describe: "Report a run's outcome summary (read-only; optional --dead-surface scan)",
   run: async (argv) => {
     try {
-      return await run13(argv);
+      return await run7(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`score: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/drive.ts
+var HELP5 = `factory drive \u2014 pump one task until it needs agents or is terminal
+
+Usage:
+  factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
+
+Ship modes: no-merge (default) | live
+
+Emits ONE JSON envelope to stdout:
+  { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, fold_key, worktree }
+  { kind:"terminal", run_id, task_id, outcome }
+  { kind:"quota-blocked", run_id, task_id, scope, reason, resets_at_epoch? }
+
+--results feeds back what the previous spawn envelope asked for. It MUST echo the
+envelope's fold_key verbatim; a stale/duplicate key rejects LOUD (re-invoke without
+--results to get the current envelope):
+  expects=producer-status \u2192 { "fold_key": {\u2026}, "producer": { "status": "<STATUS line>" } }
+  expects=reviews         \u2192 { "fold_key": {\u2026}, "holdout"?: {"raw": "<validator output>"},
+                              "reviews": { reviews, verifications, crossVendorAbsent? } }
+Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
+async function run8(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(HELP5);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const taskId = args.requireFlag("task");
+  const shipMode = parseShipMode(args.flag("ship-mode"));
+  const resultsPath = args.flag("results");
+  let results;
+  if (typeof resultsPath === "string" && resultsPath.length > 0) {
+    try {
+      results = parseDriveResults(await readJsonInput(resultsPath));
+    } catch (err) {
+      throw new UsageError(
+        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  } else if (resultsPath !== void 0) {
+    throw new UsageError("--results requires a file path");
+  }
+  const deps = await loadPumpDeps({ runId, ...shipMode !== void 0 ? { shipMode } : {} });
+  const envelope = await pumpTask(deps, runId, taskId, results);
+  emitJson(envelope);
+  return EXIT.OK;
+}
+var driveCommand = {
+  describe: "Pump one task: run deterministic steps, emit spawn/terminal/quota envelope",
+  run: async (argv) => {
+    try {
+      return await run8(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`drive: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/next.ts
+var HELP6 = `factory next \u2014 one run-loop step: quota gate, cascade-drop, ready set
+
+Usage:
+  factory next [--run <id>]      (defaults to runs/current)
+
+Emits ONE JSON envelope to stdout:
+  { kind:"tasks-ready", run_id, ready:[...], cascade_dropped:[...] }
+  { kind:"all-terminal", run_id, cascade_dropped:[...] }  \u2192 call \`factory run finalize\`
+  { kind:"run-terminal", run_id, run_status }
+  { kind:"quota-blocked", run_id, scope, reason, resets_at_epoch? }
+
+Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
+Throws LOUD on a dependency deadlock.`;
+async function run9(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(HELP6);
+    return EXIT.OK;
+  }
+  const explicit = args.flag("run");
+  let runId;
+  if (typeof explicit === "string" && explicit.length > 0) {
+    runId = explicit;
+  } else {
+    const dataDir = resolveDataDir({});
+    const current = await new StateManager({ dataDir }).readCurrent();
+    if (current === null) throw new UsageError("no --run given and no current run");
+    runId = current.run_id;
+  }
+  const deps = await loadPumpDeps({ runId });
+  emitJson(await pumpRun(deps, runId));
+  return EXIT.OK;
+}
+var nextCommand = {
+  describe: "One run-loop step: quota gate, cascade-drop, emit the ready set",
+  run: async (argv) => {
+    try {
+      return await run9(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`next: ${err.message}`);
         return EXIT.USAGE;
       }
       throw err;
@@ -12010,12 +12250,8 @@ var cliRegistry = {
   score: scoreCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,
-  "run-task": runTaskCommand,
-  advance: advanceCommand,
-  drop: dropCommand,
-  "record-producer": recordProducerCommand,
-  "record-holdout": recordHoldoutCommand,
-  "record-reviews": recordReviewsCommand
+  drive: driveCommand,
+  next: nextCommand
 };
 function printHelp() {
   const names = Object.keys(cliRegistry).sort();
