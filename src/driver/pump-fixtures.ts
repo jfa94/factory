@@ -7,7 +7,7 @@
  * Zero behavior change to the original fixture — all existing options behave
  * identically. New option is additive-only.
  */
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -104,8 +104,6 @@ export interface MakePumpDepsOpts {
   taskStateOverrides?: Partial<TaskState> & { task_id?: string };
   /** Usage reading (default: PROCEED). */
   usage?: UsageReading;
-  /** Whether to pre-seed a holdout record for T1 (default: true if ≥2 criteria). */
-  withHoldout?: boolean;
   /** Ship mode (default: no-merge for test safety). */
   shipMode?: "live" | "no-merge";
   /** FakeGhClient factory (optional override for live-merge tests). */
@@ -205,6 +203,3 @@ export async function makePumpDeps(opts: MakePumpDepsOpts = {}): Promise<PumpDep
     cleanup: () => rm(dataDir, { recursive: true, force: true }),
   };
 }
-
-// Keep mkdir in scope for tests that need it (e.g., writing files into worktrees).
-export { mkdir };

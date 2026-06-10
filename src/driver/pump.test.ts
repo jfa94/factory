@@ -14,7 +14,7 @@
  * spawn envelope and copies fold_key verbatim — the natural driver behavior.
  */
 import { describe, expect, it } from "vitest";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { pumpTask, MERGE_RESYNC_CAP, type DriveEnvelope } from "./pump.js";
@@ -27,7 +27,7 @@ import { taskWorktreePath } from "./paths.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
 import { ESCALATION_CAP } from "../producer/index.js";
 
-import { makePumpDeps, mkdir, PAUSE_5H } from "./pump-fixtures.js";
+import { makePumpDeps, PAUSE_5H } from "./pump-fixtures.js";
 import type { PumpDeps } from "./pump.js";
 import { FakeGhClient } from "../git/fakes.js";
 

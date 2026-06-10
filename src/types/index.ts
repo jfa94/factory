@@ -45,6 +45,7 @@ export {
   QuotaCheckpointSchema,
   parseRunState,
   parseTaskState,
+  TERMINAL_RUN_STATUSES,
   isTerminalRunStatus,
   isTerminalTaskStatus,
   StateManager,

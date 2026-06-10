@@ -14,13 +14,21 @@
  * Clearing a stale paused/suspended checkpoint on recovery is THIS CALLER's job
  * (the quota gate doc is explicit: "on proceed the gate never writes state;
  * clearing a stale checkpoint on recovery is the CALLER's job").
+ *
+ * Single-writer assumption: lock-free snapshot reads are sound because v1 has
+ * exactly one driver process writing state; subagents never write run state.
+ *
+ * `cascade_dropped` on the `all-terminal` variant is THIS-INVOCATION-ONLY — it
+ * lists tasks dropped by the cascade loop in this call. Authoritative drop
+ * visibility lives in run state (task.status === "dropped") and the finalize
+ * rollup.
  */
 import {
+  TERMINAL_RUN_STATUSES,
   isTerminalRunStatus,
   isTerminalTaskStatus,
   clearCheckpoint,
   type RunState,
-  type RunStatus,
   type TaskState,
 } from "./deps.js";
 import { dropTask } from "./transitions.js";
@@ -34,8 +42,17 @@ export type NextEnvelope =
       readonly ready: readonly string[];
       readonly cascade_dropped: readonly string[];
     }
-  | { readonly kind: "all-terminal"; readonly run_id: string }
-  | { readonly kind: "run-terminal"; readonly run_id: string; readonly run_status: RunStatus }
+  | {
+      readonly kind: "all-terminal";
+      readonly run_id: string;
+      /** Tasks dropped by the cascade loop in THIS invocation (not cumulative). */
+      readonly cascade_dropped: readonly string[];
+    }
+  | {
+      readonly kind: "run-terminal";
+      readonly run_id: string;
+      readonly run_status: (typeof TERMINAL_RUN_STATUSES)[number];
+    }
   | {
       readonly kind: "quota-blocked";
       readonly run_id: string;
@@ -58,13 +75,23 @@ function isUnsatisfiableDep(run: RunState, depId: string): boolean {
 export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelope> {
   let run = await deps.state.read(runId);
 
-  // 1. Terminal check BEFORE the quota gate — terminal runs must never write a
-  //    pause checkpoint.
+  // 1. Terminal run check BEFORE the quota gate — a finished run must never
+  //    write a pause checkpoint (mirrors pumpTask in pump.ts).
   if (isTerminalRunStatus(run.status)) {
     return { kind: "run-terminal", run_id: runId, run_status: run.status };
   }
 
-  // 2. Quota gate — a breach persists the checkpoint and stops cleanly.
+  // 2. All-tasks-terminal check BEFORE the quota gate — if every task is
+  //    already done/dropped there is nothing left to schedule and we must not
+  //    write a pause checkpoint on a run that is effectively finished. An empty
+  //    run (tasks: {}) is vacuously all-terminal — same semantics as the
+  //    post-cascade check in step 6. (Mirrors pumpTask's terminal-before-gate
+  //    ordering; see the analogous task-level guard in pump.ts.)
+  if (Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status))) {
+    return { kind: "all-terminal", run_id: runId, cascade_dropped: [] };
+  }
+
+  // 3. Quota gate — a breach persists the checkpoint and stops cleanly.
   const stop = await applyQuotaGate(deps, runId);
   if (stop !== null) {
     return {
@@ -76,7 +103,7 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
     };
   }
 
-  // 3. Clear stale checkpoint on recovery (paused/suspended → running). The gate
+  // 4. Clear stale checkpoint on recovery (paused/suspended → running). The gate
   //    returns null (proceed) for a paused run whose window has expired, but the
   //    run.status is still "paused" — we must reset it and drop the quota field.
   if (run.status === "paused" || run.status === "suspended") {
@@ -88,7 +115,7 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
     }));
   }
 
-  // 4. Cascade-drop until stable. Pending tasks with an unsatisfiable dep are
+  // 5. Cascade-drop until stable. Pending tasks with an unsatisfiable dep are
   //    dropped as blocked-environmental; a drop can expose further blocked tasks.
   const cascadeDropped: string[] = [];
   for (;;) {
@@ -98,27 +125,32 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
     );
     if (blocked.length === 0) break;
     for (const t of blocked) {
-      const dep = t.depends_on.find((d) => isUnsatisfiableDep(run, d)) ?? "?";
+      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run, d));
+      if (unsatisfied === undefined) {
+        throw new Error(
+          `next: task '${t.task_id}' classified blocked but no unsatisfiable dep found — unreachable`,
+        );
+      }
       await dropTask(
         deps,
         runId,
         t.task_id,
         "blocked-environmental",
-        `dependency '${dep}' did not complete (dropped or missing)`,
+        `dependency '${unsatisfied}' did not complete (dropped or missing)`,
       );
       cascadeDropped.push(t.task_id);
     }
   }
+  // `run` is fresh from the loop's last read (no writes since the loop exited).
 
-  // 5. Re-read after drops, then check all-terminal.
-  run = await deps.state.read(runId);
+  // 6. All-tasks-terminal after cascade — the cascade may have resolved the run.
   const tasks = Object.values(run.tasks);
 
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
-    return { kind: "all-terminal", run_id: runId };
+    return { kind: "all-terminal", run_id: runId, cascade_dropped: cascadeDropped };
   }
 
-  // 6. Build the ready set: non-terminal tasks whose deps are all done.
+  // 7. Build the ready set: non-terminal tasks whose deps are all done.
   //    In-flight tasks (status !== "pending") come first — crash-resume finishes
   //    what was started before opening new work.
   const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run, t));

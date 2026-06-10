@@ -196,4 +196,121 @@ describe("pumpRun", () => {
       await cleanup();
     }
   });
+
+  // C1 pin: all tasks already terminal + 5h-breaching usage → all-terminal, no
+  // checkpoint written (the pre-gate all-terminal check fires before applyQuotaGate).
+  it("all-tasks-terminal + quota-breach → all-terminal with no checkpoint written", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
+      usage: PAUSE_5H,
+    });
+    try {
+      // Seed T1 as done so the run is effectively finished
+      await deps.state.updateTask(runId, "T1", (t) => ({ ...t, status: "done" }));
+
+      const env = await pumpRun(deps, runId);
+      expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: [] });
+      // The quota gate must NOT have run — run stays running with no checkpoint
+      const run = await deps.state.read(runId);
+      expect(run.status).toBe("running");
+      expect(run.quota).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // I1 pin: cascade that resolves the run to all-terminal carries the dropped ids.
+  it("cascade resolving run to all-terminal → all-terminal with cascade_dropped", async () => {
+    // T1 dropped; T2 pending depends_on [T1] — cascade drops T2, run is all-terminal.
+    const { deps, runId, cleanup } = await makePumpDeps({
+      tasks: [
+        { task_id: "T1", acceptance_criteria: ["only one"] },
+        { task_id: "T2", acceptance_criteria: ["only one"], depends_on: ["T1"] },
+      ],
+    });
+    try {
+      await deps.state.updateTask(runId, "T1", (t) => ({
+        ...t,
+        status: "dropped",
+        failure_class: "capability-budget",
+        failure_reason: "test seed",
+      }));
+
+      const env = await pumpRun(deps, runId);
+      expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: ["T2"] });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Suspended recovery: a suspended run with a 7d checkpoint resumes cleanly.
+  it("suspended run (7d checkpoint) is returned to running before reporting ready tasks", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
+    });
+    try {
+      await deps.state.update(runId, (s) => ({
+        ...s,
+        status: "suspended" as const,
+        quota: { binding_window: "7d" as const, resets_at_epoch: 1_700_018_000 },
+      }));
+      const env = await pumpRun(deps, runId);
+      expect(env.kind).toBe("tasks-ready");
+      const run = await deps.state.read(runId);
+      expect(run.status).toBe("running");
+      expect(run.quota).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Empty run (tasks: {}) → all-terminal with empty cascade_dropped.
+  it("empty run (no tasks) → all-terminal with cascade_dropped []", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps();
+    try {
+      // Clear the default T1 so the run has zero tasks
+      await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
+
+      const env = await pumpRun(deps, runId);
+      expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: [] });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Empty run + quota breach → all-terminal pre-gate (vacuously finished; e.g. a
+  // crash between state.create and task seeding). The gate must NOT run — the
+  // step-2 and step-6 all-terminal semantics agree on tasks: {}.
+  it("empty run + quota-breach → all-terminal with no checkpoint written", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps({ usage: PAUSE_5H });
+    try {
+      await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
+
+      const env = await pumpRun(deps, runId);
+      expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: [] });
+      const run = await deps.state.read(runId);
+      expect(run.status).toBe("running");
+      expect(run.quota).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Self-dependency deadlock: T1 depends_on ["T1"] — must throw /deadlock|cycle/.
+  it("self-dependency (T1 depends_on T1) → throws deadlock", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
+    });
+    try {
+      // Inject the self-dep directly, bypassing normal seeding
+      await deps.state.updateTask(runId, "T1", (t) => ({
+        ...t,
+        depends_on: ["T1"],
+      }));
+
+      await expect(pumpRun(deps, runId)).rejects.toThrow(/deadlock|cycle/);
+    } finally {
+      await cleanup();
+    }
+  });
 });

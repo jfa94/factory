@@ -28,6 +28,7 @@ export {
   stageToInFlightStatus,
   TASK_STAGE_ORDER,
   parseSpawnManifest,
+  TERMINAL_RUN_STATUSES,
   isTerminalTaskStatus,
   isTerminalRunStatus,
   PanelVerdictEnum,

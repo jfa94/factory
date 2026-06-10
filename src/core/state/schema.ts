@@ -70,7 +70,7 @@ export const TERMINAL_RUN_STATUSES = ["completed", "partial", "failed"] as const
 export const NONTERMINAL_RUN_STATUSES = ["running", "paused", "suspended"] as const;
 
 /** True iff the run status is terminal. The one authority for the split. */
-export function isTerminalRunStatus(s: RunStatus): boolean {
+export function isTerminalRunStatus(s: RunStatus): s is (typeof TERMINAL_RUN_STATUSES)[number] {
   return (TERMINAL_RUN_STATUSES as readonly string[]).includes(s);
 }
 

@@ -9,8 +9,8 @@
  * so envelope-emitting callers can surface scope/reason/horizon).
  *
  * On a proceed (null return) the gate never writes state; clearing a stale
- * paused/suspended checkpoint on recovery is the CALLER's job (see driveRun in
- * loop.ts; the pumps later).
+ * paused/suspended checkpoint on recovery is the CALLER's job (see pumpTask in
+ * pump.ts and pumpRun in next.ts).
  */
 import { evaluateQuota, decisionToStageResult, buildCheckpoint, assertNever } from "./deps.js";
 import type { Config, RunState, StateManager, UsageSignal } from "./deps.js";
