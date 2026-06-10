@@ -242,7 +242,13 @@ describe("orchestrator-as-driver CLI envelope-chain (golden transcript)", () => 
             if (env.sidecar !== undefined) {
               trace.sawHoldoutSidecar = true;
               const raw = await allPassHoldoutRaw(taskId);
-              await applyRecordHoldout(await freshDeps(shipMode), verdictStore, taskId, raw);
+              await applyRecordHoldout(
+                await freshDeps(shipMode),
+                RUN_ID,
+                verdictStore,
+                taskId,
+                raw,
+              );
               trace.ranHoldoutValidate = true;
             }
             const input: RecordReviewsInput = {
@@ -252,8 +258,9 @@ describe("orchestrator-as-driver CLI envelope-chain (golden transcript)", () => 
             };
             const reviewsEnv = await applyRecordReviews(
               await freshDeps(shipMode),
-              verdictStore,
+              RUN_ID,
               taskId,
+              verdictStore,
               input,
             );
             trace.reviewerVerdicts = reviewsEnv.reviewers.map((r) => r.verdict);

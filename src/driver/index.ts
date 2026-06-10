@@ -56,3 +56,23 @@ export type { ArtifactStore } from "./artifacts.js";
 
 // -- per-task worktree path derivation ---------------------------------------
 export { taskWorktreePath } from "./paths.js";
+
+// -- fold cores (CLI record-* subcommand kernels + forthcoming pump) ----------
+export {
+  persistStepCursor,
+  readJsonInput,
+  applyRecordProducer,
+  applyRecordHoldout,
+  applyRecordReviews,
+  buildWorktreeSource,
+  makeReplayRunnerFactory,
+  REPLAY_IDENTITY,
+  type FoldDeps,
+  type TransitionEnvelope,
+  type RecordHoldoutInput,
+  type RecordHoldoutEnvelope,
+  type VerifierVerdictInput,
+  type ReviewerVerifications,
+  type RecordReviewsInput,
+  type RecordReviewsEnvelope,
+} from "./fold.js";
