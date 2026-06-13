@@ -15,6 +15,13 @@
  *      "score-below-target"; score >= target ⇒ pass (T4b2/T4b3/T4b4 boundaries).
  *
  * Target comes from `quality.mutationScoreTarget` (the ONE config).
+ *
+ * Applicability (Δ skip): a project that never opted into stryker must NOT
+ * fail-close every task. The gate is applicable ONLY when BOTH the stryker binary
+ * resolves in the worktree AND a stryker config is present; otherwise it SKIPS
+ * (mirroring the sast "no-security-command" precedent). Checked BEFORE base/scope
+ * so a repo without mutation tooling skips cleanly rather than driving `npx stryker`
+ * into a not-installed failure.
  */
 import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js";
 import { ran, skip } from "../strategy.js";
@@ -26,11 +33,35 @@ export function scorePasses(score: number, target: number): boolean {
   return score >= target;
 }
 
+/** Stryker config filenames that mark mutation testing as opted-in. */
+export const STRYKER_CONFIGS = [
+  "stryker.config.json",
+  "stryker.config.js",
+  "stryker.config.mjs",
+  "stryker.config.cjs",
+  "stryker.conf.json",
+  "stryker.conf.js",
+  ".stryker.config.json",
+  ".stryker.conf.json",
+] as const;
+
+/** Worktree-relative path the stryker binary resolves to after `npm install`. */
+export const STRYKER_BIN = "node_modules/.bin/stryker";
+
 export const mutationStrategy: GateStrategy<GateTools> = {
   id: "mutation",
   async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
     const target = ctx.config.quality.mutationScoreTarget;
     const opts = { cwd: ctx.worktree };
+
+    // Applicability first: no stryker tooling/config ⇒ NOT APPLICABLE (skip).
+    if (!(await ctx.tools.fs.exists(STRYKER_BIN, opts))) {
+      return skip("mutation", "no-mutation-binary");
+    }
+    if (!(await ctx.tools.fs.existsAny(STRYKER_CONFIGS, opts))) {
+      return skip("mutation", "no-mutation-config");
+    }
+
     const base = `origin/${ctx.baseRef}`;
 
     // Fail-closed if the base ref is absent — without it we cannot reproduce CI's

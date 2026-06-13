@@ -82,6 +82,7 @@ describe("runScaffold", () => {
       provision: false,
     });
     expect(noPkg.files_created).not.toContain(".stryker.config.json");
+    expect(noPkg.files_created).not.toContain("eslint.config.mjs");
     expect(existsSync(join(root, ".stryker.config.json"))).toBe(false);
 
     // With package.json → both gate configs copied.
@@ -98,6 +99,7 @@ describe("runScaffold", () => {
     });
     expect(withPkg.files_created).toContain(".stryker.config.json");
     expect(withPkg.files_created).toContain(".dependency-cruiser.cjs");
+    expect(withPkg.files_created).toContain("eslint.config.mjs");
   });
 
   it("is idempotent: a second run reports the files as present, not created", async () => {

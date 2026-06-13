@@ -10,7 +10,7 @@
  * reader) MUST throw when ExecResult.truncated is set, rather than mis-parse a
  * clipped payload (exec.ts ExecResult.truncated contract).
  */
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { exec, type ExecResult } from "../../shared/index.js";
 
@@ -152,13 +152,39 @@ export interface CoverageSummary {
 }
 
 /**
- * Reads a coverage-v8 JSON summary. Returns the four `total.*` percentages, or
- * `null` when the file is missing / invalid / lacks a required metric (the
- * strategy maps null to a fail-closed parse error — bin/pipeline-coverage-gate
- * exit 2). Throws only on a truncated read.
+ * The outcome of reading ONE coverage summary, as a discriminated union so the
+ * strategy can tell ABSENT (file never produced — the project did not capture
+ * coverage) apart from INVALID (file present but corrupt / missing a metric). The
+ * distinction is load-bearing: BOTH summaries absent ⇒ the coverage gate is not
+ * applicable (skip); a present-but-invalid (or asymmetric one-absent) summary is a
+ * real anomaly ⇒ fail-closed. The old conflated `null` forced a fail on a clean
+ * repo that never opted into coverage.
+ */
+export type CoverageRead =
+  | { readonly state: "absent" }
+  | { readonly state: "invalid" }
+  | { readonly state: "ok"; readonly summary: CoverageSummary };
+
+/**
+ * Reads a coverage-v8 JSON summary, distinguishing absent from invalid (see
+ * {@link CoverageRead}). Throws only on a truncated read.
  */
 export interface CoverageReader {
-  read(label: "before" | "after", opts: ToolRunOpts): Promise<CoverageSummary | null>;
+  read(label: "before" | "after", opts: ToolRunOpts): Promise<CoverageRead>;
+}
+
+/**
+ * A read-only filesystem probe for GATE APPLICABILITY: a gate whose config or tool
+ * binary is absent from the worktree is NOT APPLICABLE (a skip), never a fail.
+ * Extends the sast "no-security-command" precedent to lint/mutation — a project
+ * that never opted into eslint/stryker (no config, or the binary not installed)
+ * must not fail-close every task. Injectable so units test without touching disk.
+ */
+export interface FsProbe {
+  /** True iff `relPath` (resolved under `opts.cwd`) exists. */
+  exists(relPath: string, opts: ToolRunOpts): Promise<boolean>;
+  /** True iff ANY of `relPaths` (resolved under `opts.cwd`) exists. */
+  existsAny(relPaths: readonly string[], opts: ToolRunOpts): Promise<boolean>;
 }
 
 /** The full injected tool-bag a {@link import("./gate-runner.js").GateRunner} carries. */
@@ -171,6 +197,7 @@ export interface GateTools {
   readonly semgrep: SemgrepTool;
   readonly stryker: StrykerTool;
   readonly coverage: CoverageReader;
+  readonly fs: FsProbe;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,21 +303,47 @@ export function extractMutationScore(report: unknown): number | null {
  * and `{lines: N}` shapes (bin/pipeline-coverage-gate:59-67).
  */
 export class DefaultCoverageReader implements CoverageReader {
-  async read(label: "before" | "after", opts: ToolRunOpts): Promise<CoverageSummary | null> {
+  async read(label: "before" | "after", opts: ToolRunOpts): Promise<CoverageRead> {
     const file = path.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
     let raw: string;
     try {
       raw = await readFile(file, "utf8");
     } catch {
-      return null;
+      // File not produced → ABSENT (the project did not capture this coverage).
+      return { state: "absent" };
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return null;
+      // Present but corrupt JSON → INVALID (a real anomaly, not absence).
+      return { state: "invalid" };
     }
-    return parseCoverageSummary(parsed);
+    const summary = parseCoverageSummary(parsed);
+    return summary === null ? { state: "invalid" } : { state: "ok", summary };
+  }
+}
+
+/**
+ * Default {@link FsProbe} over node:fs — an existence check resolved under cwd.
+ * Used by the lint/mutation strategies to decide applicability (config + tool
+ * binary present in the worktree) before running the gate.
+ */
+export class DefaultFsProbe implements FsProbe {
+  async exists(relPath: string, opts: ToolRunOpts): Promise<boolean> {
+    try {
+      await access(path.join(opts.cwd, relPath));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async existsAny(relPaths: readonly string[], opts: ToolRunOpts): Promise<boolean> {
+    for (const rel of relPaths) {
+      if (await this.exists(rel, opts)) return true;
+    }
+    return false;
   }
 }
 
@@ -444,5 +497,6 @@ export function defaultGateTools(): GateTools {
     semgrep: new DefaultSemgrepTool(),
     stryker: new DefaultStrykerTool(),
     coverage: new DefaultCoverageReader(),
+    fs: new DefaultFsProbe(),
   };
 }

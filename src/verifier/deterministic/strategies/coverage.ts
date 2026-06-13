@@ -6,11 +6,15 @@
  * of {lines, branches, functions, statements} decreased by MORE than the
  * configured tolerance (`quality.coverageRegressionTolerancePct`, default 0.5).
  *
- * Fail-closed (bash rc=2 → observed:false here) when either summary is missing or
- * invalid (CoverageReader returns null) — "nothing to compare" is never a pass.
+ * Applicability (Δ skip): when BOTH summaries are ABSENT the project never captured
+ * coverage, so the gate is NOT APPLICABLE (skip "no-coverage-data", excluded from
+ * the conjunction) — it must not fail-close a clean repo that never opted in. A
+ * present-but-INVALID summary, or an asymmetric one-absent reading, is a real
+ * anomaly ⇒ fail-closed (bash rc=2 → observed:false). "Nothing to compare" is never
+ * a pass; "nothing was ever measured" is a skip, not a fail.
  */
 import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js";
-import { ran } from "../strategy.js";
+import { ran, skip } from "../strategy.js";
 import type { CoverageSummary, GateTools } from "../tools.js";
 
 const METRICS = ["lines", "branches", "functions", "statements"] as const;
@@ -50,12 +54,23 @@ export const coverageStrategy: GateStrategy<GateTools> = {
     const opts = { cwd: ctx.worktree };
     const before = await ctx.tools.coverage.read("before", opts);
     const after = await ctx.tools.coverage.read("after", opts);
-    if (before === null || after === null) {
-      // Fail-closed parse error (bash exit 2). Never default-open.
-      const which = before === null ? "before" : "after";
-      return ran("coverage", false, `coverage parse error: ${which} summary missing/invalid`);
+    // BOTH absent ⇒ the project never captured coverage ⇒ NOT APPLICABLE (skip,
+    // excluded from the conjunction). Never fail-close a repo that never opted in.
+    if (before.state === "absent" && after.state === "absent") {
+      return skip("coverage", "no-coverage-data");
     }
-    const delta = coverageDelta(before, after);
+    // A present-but-corrupt summary is a real anomaly ⇒ fail-closed (bash exit 2).
+    if (before.state === "invalid" || after.state === "invalid") {
+      const which = before.state === "invalid" ? "before" : "after";
+      return ran("coverage", false, `coverage parse error: ${which} summary invalid`);
+    }
+    // Exactly one absent (the other valid) ⇒ a capture failed ⇒ fail-closed; we
+    // cannot compute a delta, and "half a measurement" is never a pass.
+    if (before.state === "absent" || after.state === "absent") {
+      const which = before.state === "absent" ? "before" : "after";
+      return ran("coverage", false, `coverage parse error: ${which} summary missing`);
+    }
+    const delta = coverageDelta(before.summary, after.summary);
     const failed = regressions(delta, tolerance);
     if (failed.length > 0) {
       const named = failed.map((m) => `${m} (${delta[m]}%)`).join(", ");

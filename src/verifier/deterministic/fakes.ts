@@ -9,10 +9,12 @@
  */
 import type {
   CommitInfo,
+  CoverageRead,
   CoverageReader,
   CoverageSummary,
   EslintTool,
   BuildTool,
+  FsProbe,
   GateTools,
   GitProbe,
   ProcResult,
@@ -118,16 +120,47 @@ export function strykerResult(opts: {
   return { proc: proc(opts.code, "", "", opts.truncated ?? false), report };
 }
 
-/** Scripted CoverageReader: returns the seeded before/after summaries. */
+/** A coverage read in the OK state (file present + valid). */
+export function covOk(summary: CoverageSummary): CoverageRead {
+  return { state: "ok", summary };
+}
+
+/** A coverage read in the ABSENT state (summary file never produced). */
+export const COV_ABSENT: CoverageRead = { state: "absent" };
+
+/** A coverage read in the INVALID state (summary present but corrupt). */
+export const COV_INVALID: CoverageRead = { state: "invalid" };
+
+/** Scripted CoverageReader: returns the seeded before/after reads. */
 export class FakeCoverageReader implements CoverageReader {
   constructor(
-    private readonly summaries: {
-      before: CoverageSummary | null;
-      after: CoverageSummary | null;
+    private readonly reads: {
+      before: CoverageRead;
+      after: CoverageRead;
     },
   ) {}
-  async read(label: "before" | "after", _opts: ToolRunOpts): Promise<CoverageSummary | null> {
-    return this.summaries[label];
+  async read(label: "before" | "after", _opts: ToolRunOpts): Promise<CoverageRead> {
+    return this.reads[label];
+  }
+}
+
+/**
+ * In-memory {@link FsProbe}. `new FakeFs()` reports EVERYTHING present (the
+ * all-applicable default makeFakeTools wires, so existing lint/mutation tests
+ * still hit the run path); `new FakeFs([...])` reports only the listed relative
+ * paths present (so applicability-skip tests assert config/binary absence).
+ */
+export class FakeFs implements FsProbe {
+  private readonly present: ReadonlySet<string> | null;
+  constructor(present?: readonly string[]) {
+    this.present = present === undefined ? null : new Set(present);
+  }
+  async exists(relPath: string, _opts: ToolRunOpts): Promise<boolean> {
+    return this.present === null ? true : this.present.has(relPath);
+  }
+  async existsAny(relPaths: readonly string[], _opts: ToolRunOpts): Promise<boolean> {
+    if (this.present === null) return true;
+    return relPaths.some((p) => this.present!.has(p));
   }
 }
 
@@ -217,6 +250,7 @@ export interface FakeToolsOptions {
   semgrep?: SemgrepTool;
   stryker?: StrykerTool;
   coverage?: CoverageReader;
+  fs?: FsProbe;
 }
 
 /** Assemble a full GateTools bag from overrides, all-green by default. */
@@ -232,8 +266,9 @@ export function makeFakeTools(opts: FakeToolsOptions = {}): GateTools {
     coverage:
       opts.coverage ??
       new FakeCoverageReader({
-        before: { lines: 100, branches: 100, functions: 100, statements: 100 },
-        after: { lines: 100, branches: 100, functions: 100, statements: 100 },
+        before: covOk({ lines: 100, branches: 100, functions: 100, statements: 100 }),
+        after: covOk({ lines: 100, branches: 100, functions: 100, statements: 100 }),
       }),
+    fs: opts.fs ?? new FakeFs(),
   };
 }

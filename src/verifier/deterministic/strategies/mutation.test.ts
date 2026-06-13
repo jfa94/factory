@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { defaultConfig, type Config } from "../../../config/schema.js";
-import { FakeGitProbe, FakeStryker, makeFakeTools, strykerResult } from "../fakes.js";
+import { FakeFs, FakeGitProbe, FakeStryker, makeFakeTools, strykerResult } from "../fakes.js";
 import type { GateRan, GateSkip, StrategyContext } from "../strategy.js";
 import type { GateTools } from "../tools.js";
 import { mutationStrategy, scorePasses } from "./mutation.js";
@@ -34,6 +34,23 @@ describe("mutationStrategy (Δ O)", () => {
     const out = await mutationStrategy.run(ctx(tools));
     expect(out.kind).toBe("skip");
     expect((out as GateSkip).reason).toBe("no-mutable-changes");
+  });
+
+  it("no stryker binary in the worktree → SKIP no-mutation-binary (not applicable)", async () => {
+    const tools = makeFakeTools({ git: probe(["src/foo.ts"]), fs: new FakeFs([]) });
+    const out = await mutationStrategy.run(ctx(tools));
+    expect(out.kind).toBe("skip");
+    expect((out as GateSkip).reason).toBe("no-mutation-binary");
+  });
+
+  it("stryker binary present but NO config → SKIP no-mutation-config", async () => {
+    const tools = makeFakeTools({
+      git: probe(["src/foo.ts"]),
+      fs: new FakeFs(["node_modules/.bin/stryker"]),
+    });
+    const out = await mutationStrategy.run(ctx(tools));
+    expect(out.kind).toBe("skip");
+    expect((out as GateSkip).reason).toBe("no-mutation-config");
   });
 
   it("base-missing → fail-closed", async () => {

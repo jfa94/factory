@@ -13,6 +13,19 @@ import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js"
 import { ran } from "../strategy.js";
 import type { GateTools, ProcResult, ToolRunOpts } from "../tools.js";
 
+/**
+ * Map a finished process result to a {@link GateOutcome}: fail LOUD on truncation
+ * (never judge a clipped run), else observed = `exit 0` with a `<label> exit=<code>`
+ * detail. Exported so a gate with a pre-run applicability check (e.g. lint) reuses
+ * the exact same mapping for its run path.
+ */
+export function procOutcome(id: GateId, label: string, result: ProcResult): GateOutcome {
+  if (result.truncated) {
+    throw new Error(`${id} gate: ${label} output truncated — refusing to judge a clipped run`);
+  }
+  return ran(id, result.code === 0, `${label} exit=${result.code ?? "null"}`);
+}
+
 /** Build a process-gate strategy from its id, label, and tool invocation. */
 export function procStrategy(
   id: GateId,
@@ -22,11 +35,7 @@ export function procStrategy(
   return {
     id,
     async run(ctx: StrategyContext<GateTools>): Promise<GateOutcome> {
-      const result = await invoke(ctx.tools, { cwd: ctx.worktree });
-      if (result.truncated) {
-        throw new Error(`${id} gate: ${label} output truncated — refusing to judge a clipped run`);
-      }
-      return ran(id, result.code === 0, `${label} exit=${result.code ?? "null"}`);
+      return procOutcome(id, label, await invoke(ctx.tools, { cwd: ctx.worktree }));
     },
   };
 }

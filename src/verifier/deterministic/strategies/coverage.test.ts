@@ -5,8 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { defaultConfig, type Config } from "../../../config/schema.js";
-import { FakeCoverageReader, makeFakeTools } from "../fakes.js";
-import type { GateRan, StrategyContext } from "../strategy.js";
+import { COV_ABSENT, COV_INVALID, covOk, FakeCoverageReader, makeFakeTools } from "../fakes.js";
+import type { GateRan, GateSkip, StrategyContext } from "../strategy.js";
 import type { CoverageSummary, GateTools } from "../tools.js";
 import { coverageDelta, coverageStrategy, regressions, round2 } from "./coverage.js";
 
@@ -42,8 +42,8 @@ describe("coverageStrategy", () => {
   it("any metric decreased beyond tolerance → FAIL naming the metric", async () => {
     const tools = makeFakeTools({
       coverage: new FakeCoverageReader({
-        before: full,
-        after: { lines: 90, branches: 88, functions: 90, statements: 90 },
+        before: covOk(full),
+        after: covOk({ lines: 90, branches: 88, functions: 90, statements: 90 }),
       }),
     });
     const out = await coverageStrategy.run(ctx(tools));
@@ -55,22 +55,41 @@ describe("coverageStrategy", () => {
   it("within tolerance → PASS (boundary -0.5 at tolerance 0.5 passes)", async () => {
     const tools = makeFakeTools({
       coverage: new FakeCoverageReader({
-        before: full,
-        after: { lines: 89.5, branches: 90, functions: 90, statements: 90 },
+        before: covOk(full),
+        after: covOk({ lines: 89.5, branches: 90, functions: 90, statements: 90 }),
       }),
     });
     const out = await coverageStrategy.run(ctx(tools));
     expect((out as GateRan).evidence.observed).toBe(true);
   });
 
-  it("missing/invalid summary → fail-closed parse error", async () => {
+  it("BOTH summaries absent → SKIP no-coverage-data (not applicable, never a fail)", async () => {
     const tools = makeFakeTools({
-      coverage: new FakeCoverageReader({ before: full, after: null }),
+      coverage: new FakeCoverageReader({ before: COV_ABSENT, after: COV_ABSENT }),
+    });
+    const out = await coverageStrategy.run(ctx(tools));
+    expect(out.kind).toBe("skip");
+    expect((out as GateSkip).reason).toBe("no-coverage-data");
+  });
+
+  it("a present-but-invalid summary → fail-closed (corrupt ≠ absent)", async () => {
+    const tools = makeFakeTools({
+      coverage: new FakeCoverageReader({ before: covOk(full), after: COV_INVALID }),
     });
     const out = await coverageStrategy.run(ctx(tools));
     const ev = (out as GateRan).evidence;
     expect(ev.observed).toBe(false);
-    expect(ev.detail).toContain("parse error");
+    expect(ev.detail).toContain("invalid");
+  });
+
+  it("exactly one summary absent (the other valid) → fail-closed (half a measurement)", async () => {
+    const tools = makeFakeTools({
+      coverage: new FakeCoverageReader({ before: covOk(full), after: COV_ABSENT }),
+    });
+    const out = await coverageStrategy.run(ctx(tools));
+    const ev = (out as GateRan).evidence;
+    expect(ev.observed).toBe(false);
+    expect(ev.detail).toContain("missing");
   });
 
   it("config tolerance drives the threshold (no scattered literal)", async () => {
@@ -78,8 +97,8 @@ describe("coverageStrategy", () => {
     config.quality.coverageRegressionTolerancePct = 5;
     const tools = makeFakeTools({
       coverage: new FakeCoverageReader({
-        before: full,
-        after: { lines: 86, branches: 90, functions: 90, statements: 90 }, // -4, within 5
+        before: covOk(full),
+        after: covOk({ lines: 86, branches: 90, functions: 90, statements: 90 }), // -4, within 5
       }),
     });
     const out = await coverageStrategy.run(ctx(tools, config));

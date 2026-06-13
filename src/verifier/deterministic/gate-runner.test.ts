@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { defaultConfig } from "../../config/schema.js";
 import { GATE_IDS } from "./strategy.js";
 import {
+  covOk,
   FakeCoverageReader,
   FakeEslint,
   FakeGitProbe,
@@ -207,8 +208,8 @@ describe("GateRunner — ONE config drives every gate (Δ V)", () => {
       makeFakeTools({
         git: greenGit(),
         coverage: new FakeCoverageReader({
-          before: full,
-          after: { lines: 97, branches: 100, functions: 100, statements: 100 }, // -3
+          before: covOk(full),
+          after: covOk({ lines: 97, branches: 100, functions: 100, statements: 100 }), // -3
         }),
       });
     const strict = defaultConfig();

@@ -5,8 +5,9 @@
  *
  * Idempotently copies the per-repo COMMITTED artifacts the new design consumes —
  * the CI net (`.github/workflows/quality-gate.yml`, Δ Z) and the gate configs
- * (`.stryker.config.json` mutation, `.dependency-cruiser.cjs` arch) the GateRunner
- * runs in the target worktree — plus a `.gitignore` guard, then ensures the
+ * (`.stryker.config.json` mutation, `.dependency-cruiser.cjs` arch, `eslint.config.mjs`
+ * lint baseline) the GateRunner runs in the target worktree — plus a `.gitignore`
+ * guard, then ensures the
  * `staging` integration branch exists/reconciles (never `main`), and PROBES branch
  * protection: refuse-to-run when it is missing (#2 / Δ A), unless `--provision` is
  * opted in to write it.
@@ -177,6 +178,15 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     await copyIfAbsent(
       join(opts.templatesDir, ".dependency-cruiser.cjs"),
       join(opts.targetRoot, ".dependency-cruiser.cjs"),
+      opts.targetRoot,
+      created,
+      present,
+    );
+    // Default eslint flat config — a baseline so the lint gate becomes meaningful
+    // the moment a project installs eslint (the gate skips until both are present).
+    await copyIfAbsent(
+      join(opts.templatesDir, "eslint.config.mjs"),
+      join(opts.targetRoot, "eslint.config.mjs"),
       opts.targetRoot,
       created,
       present,
