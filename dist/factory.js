@@ -10855,6 +10855,11 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     maxAttempts: ESCALATION_CAP + 1,
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
+  if (panel.crossVendorAbsence !== void 0) {
+    log22.warn(
+      `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` + panel.crossVendorAbsence.reason
+    );
+  }
   let step;
   if (panel.result.kind === "advance") {
     const nextStageVal = panel.result.to;
@@ -10883,7 +10888,8 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     task_id: taskId,
     step,
     reviewers: panel.reviewerResults,
-    floor: panel.floor
+    floor: panel.floor,
+    ...panel.crossVendorAbsence !== void 0 ? { crossVendorAbsence: panel.crossVendorAbsence } : {}
   };
 }
 
@@ -11176,11 +11182,19 @@ async function pumpTask(deps, runId, taskId, results) {
       case "wait-retry": {
         if (result.stage === "ship") {
           let newResyncs = 0;
+          let overCap = false;
           await deps.state.updateTask(runId, taskId, (t) => {
             newResyncs = t.merge_resyncs + 1;
-            return { ...t, merge_resyncs: newResyncs };
+            overCap = newResyncs > MERGE_RESYNC_CAP;
+            if (overCap) return { ...t, merge_resyncs: newResyncs };
+            return {
+              ...t,
+              merge_resyncs: newResyncs,
+              stage: "exec",
+              status: stageToInFlightStatus("exec")
+            };
           });
-          if (newResyncs > MERGE_RESYNC_CAP) {
+          if (overCap) {
             const step2 = await dropStep(
               deps,
               runId,
@@ -11195,7 +11209,7 @@ async function pumpTask(deps, runId, taskId, results) {
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
           );
           stage = "exec";
-          cursorPersisted = false;
+          cursorPersisted = true;
           continue;
         }
         const step = await escalateOrDrop(
