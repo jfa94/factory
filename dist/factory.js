@@ -7902,9 +7902,6 @@ function advance(to) {
 function spawn2(manifest) {
   return { kind: "spawn-agents", manifest };
 }
-function gracefulStop(scope, reason, resets_at_epoch) {
-  return resets_at_epoch === void 0 ? { kind: "graceful-stop", scope, reason } : { kind: "graceful-stop", scope, reason, resets_at_epoch };
-}
 function waitRetry(stage, reason, attempt, max_attempts) {
   return { kind: "wait-retry", stage, reason, attempt, max_attempts };
 }
@@ -8689,22 +8686,6 @@ function evaluate(reading, config, nowEpoch2) {
     };
   }
   return { kind: "proceed" };
-}
-
-// src/quota/to-stage-result.ts
-function decisionToStageResult(decision) {
-  switch (decision.kind) {
-    case "proceed":
-      return null;
-    case "pause-5h":
-      return gracefulStop("5h", decision.reason, decision.resetsAtEpoch);
-    case "suspend-7d":
-      return gracefulStop("7d", decision.reason, decision.resetsAtEpoch);
-    case "unavailable-halt":
-      return gracefulStop("7d", decision.reason);
-    default:
-      return assertNever(decision);
-  }
 }
 
 // src/quota/checkpoint.ts
@@ -10043,14 +10024,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log27 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log27.code !== 0) {
+    const log26 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log26.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log27.code ?? "null"}): ${log27.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log26.code ?? "null"}): ${log26.stderr.trim()}`
       );
     }
-    assertNotTruncated(log27, "git log (tdd classification)");
-    const shas = splitLines(log27.stdout).reverse();
+    assertNotTruncated(log26, "git log (tdd classification)");
+    const shas = splitLines(log26.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -10330,11 +10311,69 @@ var FsHoldoutVerdictStore = class {
   }
 };
 
+// src/driver/finalize.ts
+var log20 = createLogger("finalize");
+var FACTORY_ISSUE_LABEL = "factory";
+function rollupTitle(report) {
+  return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
+}
+async function fileFailureIssues(deps, report) {
+  if (report.failures.length === 0) return 0;
+  const existing = new Set(
+    (await deps.gh.issueList({ repo: report.repo, labels: [FACTORY_ISSUE_LABEL], state: "all" })).map((i) => i.title)
+  );
+  let filed = 0;
+  for (const failure of report.failures) {
+    const issue = renderFailureIssue(failure, report);
+    if (existing.has(issue.title)) {
+      log20.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
+      continue;
+    }
+    await deps.gh.issueCreate({
+      title: issue.title,
+      body: issue.body,
+      repo: report.repo,
+      labels: [FACTORY_ISSUE_LABEL, `factory:${failure.failure_class}`]
+    });
+    existing.add(issue.title);
+    filed += 1;
+  }
+  return filed;
+}
+async function finalizeRun(deps, runId) {
+  const now = deps.nowIso ?? nowIso();
+  const run10 = await deps.state.read(runId);
+  const terminal = decideFinalize(run10).run_status;
+  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
+  const markdown = renderPartialReportMarkdown(report);
+  await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
+  await recordRunFinalized(deps.dataDir, report, { now });
+  const issuesFiled = await fileFailureIssues(deps, report);
+  let rollupResult;
+  if (report.totals.shipped > 0) {
+    rollupResult = await rollup({
+      ghClient: deps.gh,
+      title: rollupTitle(report),
+      body: markdown,
+      partial: terminal === "partial",
+      merge: deps.shipMode === "live",
+      ...deps.rollup ?? {}
+    });
+  } else {
+    log20.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
+  }
+  const finalized = await deps.state.finalize(runId, terminal);
+  log20.info(
+    `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
+  );
+  return { run: finalized, report, ...rollupResult ? { rollup: rollupResult } : {}, issuesFiled };
+}
+
 // src/driver/transitions.ts
-var log20 = createLogger("transitions");
-async function markInFlight(deps, runId, taskId, stage) {
+var log21 = createLogger("transitions");
+function markInFlight(deps, runId, taskId, stage) {
   const status = stageToInFlightStatus(stage);
-  await deps.state.updateTask(runId, taskId, (t) => ({
+  return deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status,
     stage,
@@ -10350,7 +10389,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function dropTask(deps, runId, taskId, failureClass, reason) {
-  log20.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
+  log21.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "dropped",
@@ -10387,7 +10426,7 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log20.info(
+  log21.info(
     `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`
   );
   return { done: false, stage: resumeStage };
@@ -10420,48 +10459,6 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
     return { done: false, stage: opts.stageAfter };
   }
   return escalateOrDrop(deps, runId, taskId, classifyProducerFailure(outcome), opts.stage);
-}
-
-// src/driver/quota-gate.ts
-var log21 = createLogger("quota-gate");
-async function applyQuotaGate(deps, runId) {
-  const reading = await deps.usage.read();
-  const decision = evaluate(reading, deps.config, deps.now());
-  if (decisionToStageResult(decision) === null) {
-    return null;
-  }
-  switch (decision.kind) {
-    case "pause-5h":
-    case "suspend-7d": {
-      const patch = buildCheckpoint(decision);
-      log21.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
-      const run10 = await deps.state.update(runId, (s) => ({
-        ...s,
-        status: patch.status,
-        quota: patch.quota
-      }));
-      return {
-        scope: decision.kind === "pause-5h" ? "5h" : "7d",
-        reason: decision.reason,
-        resets_at_epoch: decision.resetsAtEpoch,
-        run: run10
-      };
-    }
-    case "unavailable-halt": {
-      log21.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
-      const run10 = await deps.state.update(runId, (s) => ({
-        ...s,
-        status: "suspended",
-        quota: void 0
-      }));
-      return { scope: "unavailable", reason: decision.reason, run: run10 };
-    }
-    case "proceed":
-      return null;
-    // unreachable (decisionToStageResult==null already handled it)
-    default:
-      return assertNever(decision);
-  }
 }
 
 // src/driver/paths.ts
@@ -10576,10 +10573,11 @@ function makeStageHandlers(deps) {
       return producerSpawn("executor", specTask, ctx.run.run_id, task.escalation_rung, "verify");
     },
     /**
-     * verify (CLI single-step reporter — NO holdout): run the deterministic gates,
-     * then either spawn the risk-invariant panel (no reviewers yet) or DERIVE the
-     * floor from the already-recorded reviewers + gate evidence. The in-process loop
-     * uses `runVerify` instead (which additionally folds holdout evidence).
+     * verify reporter: run the deterministic gates, then either spawn the
+     * risk-invariant panel (no reviewers yet) or DERIVE the floor from the
+     * already-recorded reviewers + gate evidence. Holdout evidence is folded
+     * separately by the pump (the holdout-validator runs as an out-of-band sidecar);
+     * this reporter never spawns.
      */
     async verify(ctx) {
       const task = requireTask3(ctx, "verify");
@@ -10685,110 +10683,6 @@ function shipBody(runId, specTask) {
   ].join("\n");
 }
 
-// src/driver/ship.ts
-var log22 = createLogger("ship");
-function requireTask(ctx) {
-  if (ctx.task === void 0) {
-    throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
-  }
-  return ctx.task;
-}
-async function shipTask(deps, ctx) {
-  const task = requireTask(ctx);
-  const runId = ctx.run.run_id;
-  const specTask = specTaskOf(deps.spec, task.task_id);
-  const branch = runScopedBranch(runId, task.task_id);
-  const pr = await createTaskPrIdempotent({
-    ghClient: deps.gh,
-    branch,
-    title: specTask.title,
-    body: shipBody(runId, specTask),
-    base: deps.config.git.stagingBranch
-  });
-  await deps.state.updateTask(runId, task.task_id, (t) => ({
-    ...t,
-    branch,
-    pr_number: pr.number
-  }));
-  if (deps.shipMode !== "live") {
-    return taskDone();
-  }
-  const serializer = new MergeSerializer({
-    ghClient: deps.gh,
-    owner: deps.owner,
-    repo: deps.repo,
-    stagingBranch: deps.config.git.stagingBranch,
-    dataDir: deps.dataDir
-  });
-  const outcome = await serializer.merge(pr.number);
-  if (outcome.merged) {
-    log22.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
-    return taskDone();
-  }
-  return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
-}
-
-// src/driver/finalize.ts
-var log23 = createLogger("finalize");
-var FACTORY_ISSUE_LABEL = "factory";
-function rollupTitle(report) {
-  return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
-}
-async function fileFailureIssues(deps, report) {
-  if (report.failures.length === 0) return 0;
-  const existing = new Set(
-    (await deps.gh.issueList({ repo: report.repo, labels: [FACTORY_ISSUE_LABEL], state: "all" })).map((i) => i.title)
-  );
-  let filed = 0;
-  for (const failure of report.failures) {
-    const issue = renderFailureIssue(failure, report);
-    if (existing.has(issue.title)) {
-      log23.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
-      continue;
-    }
-    await deps.gh.issueCreate({
-      title: issue.title,
-      body: issue.body,
-      repo: report.repo,
-      labels: [FACTORY_ISSUE_LABEL, `factory:${failure.failure_class}`]
-    });
-    existing.add(issue.title);
-    filed += 1;
-  }
-  return filed;
-}
-async function finalizeRun(deps, runId) {
-  const now = deps.nowIso ?? nowIso();
-  const run10 = await deps.state.read(runId);
-  const terminal = decideFinalize(run10).run_status;
-  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
-  const markdown = renderPartialReportMarkdown(report);
-  await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
-  await recordRunFinalized(deps.dataDir, report, { now });
-  const issuesFiled = await fileFailureIssues(deps, report);
-  let rollupResult;
-  if (report.totals.shipped > 0) {
-    rollupResult = await rollup({
-      ghClient: deps.gh,
-      title: rollupTitle(report),
-      body: markdown,
-      partial: terminal === "partial",
-      merge: deps.shipMode === "live",
-      ...deps.rollup ?? {}
-    });
-  } else {
-    log23.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
-  }
-  const finalized = await deps.state.finalize(runId, terminal);
-  log23.info(
-    `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
-  );
-  return { run: finalized, report, ...rollupResult ? { rollup: rollupResult } : {}, issuesFiled };
-}
-
-// src/driver/loop.ts
-var log24 = createLogger("driver");
-
 // src/driver/artifacts.ts
 import { mkdir as mkdir9, readFile as readFile8 } from "node:fs/promises";
 import { dirname as dirname8, join as join12 } from "node:path";
@@ -10819,7 +10713,7 @@ var FsArtifactStore = class {
 // src/driver/fold.ts
 import { readFile as readFile9 } from "node:fs/promises";
 import { join as join13 } from "node:path";
-var log25 = createLogger("fold");
+var log22 = createLogger("fold");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.stage);
@@ -10861,7 +10755,7 @@ function parseVerdictsFailClosed(raw) {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log25.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log22.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
@@ -11032,8 +10926,90 @@ function isSpawnStage(stage) {
   return SPAWN_STAGES.includes(stage);
 }
 
+// src/driver/quota-gate.ts
+var log23 = createLogger("quota-gate");
+async function applyQuotaGate(deps, runId) {
+  const reading = await deps.usage.read();
+  const decision = evaluate(reading, deps.config, deps.now());
+  if (decision.kind === "proceed") {
+    return null;
+  }
+  switch (decision.kind) {
+    case "pause-5h":
+    case "suspend-7d": {
+      const patch = buildCheckpoint(decision);
+      log23.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
+      const run10 = await deps.state.update(runId, (s) => ({
+        ...s,
+        status: patch.status,
+        quota: patch.quota
+      }));
+      return {
+        scope: decision.kind === "pause-5h" ? "5h" : "7d",
+        reason: decision.reason,
+        resets_at_epoch: decision.resetsAtEpoch,
+        run: run10
+      };
+    }
+    case "unavailable-halt": {
+      log23.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
+      const run10 = await deps.state.update(runId, (s) => ({
+        ...s,
+        status: "suspended",
+        quota: void 0
+      }));
+      return { scope: "unavailable", reason: decision.reason, run: run10 };
+    }
+    default:
+      return assertNever(decision);
+  }
+}
+
+// src/driver/ship.ts
+var log24 = createLogger("ship");
+function requireTask(ctx) {
+  if (ctx.task === void 0) {
+    throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
+  }
+  return ctx.task;
+}
+async function shipTask(deps, ctx) {
+  const task = requireTask(ctx);
+  const runId = ctx.run.run_id;
+  const specTask = specTaskOf(deps.spec, task.task_id);
+  const branch = runScopedBranch(runId, task.task_id);
+  const pr = await createTaskPrIdempotent({
+    ghClient: deps.gh,
+    branch,
+    title: specTask.title,
+    body: shipBody(runId, specTask),
+    base: deps.config.git.stagingBranch
+  });
+  await deps.state.updateTask(runId, task.task_id, (t) => ({
+    ...t,
+    branch,
+    pr_number: pr.number
+  }));
+  if (deps.shipMode !== "live") {
+    return taskDone();
+  }
+  const serializer = new MergeSerializer({
+    ghClient: deps.gh,
+    owner: deps.owner,
+    repo: deps.repo,
+    stagingBranch: deps.config.git.stagingBranch,
+    dataDir: deps.dataDir
+  });
+  const outcome = await serializer.merge(pr.number);
+  if (outcome.merged) {
+    log24.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    return taskDone();
+  }
+  return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
+}
+
 // src/driver/pump.ts
-var log26 = createLogger("pump");
+var log25 = createLogger("pump");
 var MERGE_RESYNC_CAP = 8;
 function requireTask2(run10, taskId) {
   const task = run10.tasks[taskId];
@@ -11141,23 +11117,26 @@ async function pumpTask(deps, runId, taskId, results) {
     };
   }
   let stage = task.stage ?? "preflight";
+  let cursorPersisted = false;
   if (results !== void 0) {
     const step = await foldResults(deps, runId, taskId, stage, task, results);
     if (step.done) {
       return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
     }
     stage = step.stage;
+    cursorPersisted = true;
   }
   const handlers = makeStageHandlers(deps);
   for (; ; ) {
-    await markInFlight(deps, runId, taskId, stage);
-    run10 = await deps.state.read(runId);
+    run10 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, stage);
+    cursorPersisted = true;
     task = requireTask2(run10, taskId);
     const ctx = { run: run10, task, attempt: task.escalation_rung + 1 };
     const result = stage === "ship" ? await shipTask(deps, ctx) : await runStage(stage, ctx, handlers);
     switch (result.kind) {
       case "advance": {
         stage = result.to;
+        cursorPersisted = false;
         continue;
       }
       case "spawn-agents": {
@@ -11212,10 +11191,11 @@ async function pumpTask(deps, runId, taskId, results) {
             if (!step2.done) throw new Error("pump: dropStep returned non-terminal step");
             return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
-          log26.info(
+          log25.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
           );
           stage = "exec";
+          cursorPersisted = false;
           continue;
         }
         const step = await escalateOrDrop(
@@ -11229,6 +11209,7 @@ async function pumpTask(deps, runId, taskId, results) {
           return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
         stage = step.stage;
+        cursorPersisted = false;
         continue;
       }
       case "graceful-stop":
