@@ -32,6 +32,7 @@ import {
 } from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
 import { ESCALATION_CAP } from "../producer/index.js";
+import { captureStream } from "../cli/test-helpers.js";
 import type { TaskState } from "../types/index.js";
 
 const RUN_ID = "run-1";
@@ -273,6 +274,29 @@ describe("applyRecordReviews fold", () => {
     const abs = join(taskWorktreePath(dataDir, RUN_ID, TASK_ID), relPath);
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, contents);
+  }
+
+  /**
+   * Run `fn` while capturing stderr with warn-level logging forced ON, so the
+   * "is it LOUD?" assertions are independent of any ambient FACTORY_QUIET /
+   * FACTORY_LOG_LEVEL in the caller's shell. Restores both on exit.
+   */
+  async function captureWarnings<T>(fn: () => Promise<T>): Promise<{ result: T; stderr: string }> {
+    const savedLevel = process.env["FACTORY_LOG_LEVEL"];
+    const savedQuiet = process.env["FACTORY_QUIET"];
+    process.env["FACTORY_LOG_LEVEL"] = "info";
+    delete process.env["FACTORY_QUIET"];
+    const cap = captureStream(process.stderr);
+    try {
+      const result = await fn();
+      return { result, stderr: cap.read() };
+    } finally {
+      cap.restore();
+      if (savedLevel === undefined) delete process.env["FACTORY_LOG_LEVEL"];
+      else process.env["FACTORY_LOG_LEVEL"] = savedLevel;
+      if (savedQuiet === undefined) delete process.env["FACTORY_QUIET"];
+      else process.env["FACTORY_QUIET"] = savedQuiet;
+    }
   }
 
   it("a unanimous-approve panel + green gates advances to ship", async () => {
@@ -531,6 +555,45 @@ describe("applyRecordReviews fold", () => {
 
     await expect(applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input)).rejects.toThrow();
     expect(gateRan).toBe(false);
+  });
+
+  it("surfaces a cross-vendor ABSENCE on the envelope and LOUDLY warns (Δ U — never silently dropped)", async () => {
+    const deps = makeDeps();
+    const input: RecordReviewsInput = {
+      reviews: [approve("quality"), approve("security")],
+      verifications: [],
+      crossVendorAbsent: { reason: "single-vendor v1 (no second vendor configured)" },
+    };
+
+    const { result: env, stderr } = await captureWarnings(() =>
+      applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input),
+    );
+
+    // Machine-checkable: the absence rides the envelope (audit), surfaced from runPanel.
+    expect(env.crossVendorAbsence).toEqual({
+      reason: "single-vendor v1 (no second vendor configured)",
+    });
+    // The floor is unaffected — a second vendor is a STRENGTH signal, never a gate.
+    expect(env.floor.passed).toBe(true);
+    expect(env.step).toEqual({ done: false, stage: "ship" });
+    // LOUD: a warn line names the absence so it can never be silently swallowed.
+    expect(stderr).toMatch(/cross-vendor/i);
+    expect(stderr).toContain("single-vendor v1 (no second vendor configured)");
+  });
+
+  it("records NO cross-vendor absence (and emits no warn) when a second vendor was present", async () => {
+    const deps = makeDeps();
+    const input: RecordReviewsInput = {
+      reviews: [approve("quality"), approve("security")],
+      verifications: [],
+    };
+
+    const { result: env, stderr } = await captureWarnings(() =>
+      applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input),
+    );
+
+    expect(env.crossVendorAbsence).toBeUndefined();
+    expect(stderr).not.toMatch(/cross-vendor/i);
   });
 });
 

@@ -250,6 +250,15 @@ export interface RecordReviewsEnvelope extends TransitionEnvelope {
   readonly reviewers: readonly ReviewerResult[];
   /** The DERIVED floor verdict (never stored; recomputed here). */
   readonly floor: GateVerdict;
+  /**
+   * Δ U — a SECOND-VENDOR ABSENCE surfaced from {@link runPanel}. Present (with a
+   * reason) IFF this verify pass ran WITHOUT an independent cross-vendor reviewer;
+   * the fold also emits a LOUD `log.warn` so the absence is never silently swallowed
+   * (runPanel records it on the panel result, but the fold is the last hop that can
+   * drop it). An audit/strength signal only — it NEVER gates the floor. Left absent
+   * when a second vendor was present.
+   */
+  readonly crossVendorAbsence?: { readonly reason: string };
 }
 
 /**
@@ -383,6 +392,17 @@ export async function applyRecordReviews(
       : {}),
   });
 
+  // Δ U: a second-vendor absence must be LOUD, never silently dropped. runPanel
+  // records it on the result; this fold (the last hop) surfaces it as a warn line
+  // AND threads it onto the envelope below. It is a strength signal — it does NOT
+  // gate the floor.
+  if (panel.crossVendorAbsence !== undefined) {
+    log.warn(
+      `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` +
+        panel.crossVendorAbsence.reason,
+    );
+  }
+
   // 5+6. Act on the derived result through the SHARED ladder.
   //
   // Crash-safety invariant (fail-closed): reviewers are persisted ONLY on the
@@ -425,5 +445,8 @@ export async function applyRecordReviews(
     step,
     reviewers: panel.reviewerResults,
     floor: panel.floor,
+    ...(panel.crossVendorAbsence !== undefined
+      ? { crossVendorAbsence: panel.crossVendorAbsence }
+      : {}),
   };
 }
