@@ -530,6 +530,64 @@ describe("pumpTask", () => {
     }
   });
 
+  // Crash-safety pin (final-review finding 1): the ship→exec re-sync must bump
+  // merge_resyncs AND move the resume cursor to exec in ONE atomic write. The old
+  // two-write sequence (bump, then a separate markInFlight at the loop top) left a
+  // crash window where merge_resyncs was committed while the cursor stayed "ship" —
+  // a no-results resume would re-run ship, re-refuse, and DOUBLE-SPEND the budget.
+  it("ship re-sync bumps merge_resyncs and moves the cursor to exec in ONE atomic write (no crash double-spend)", async () => {
+    // gh ALWAYS reports BEHIND → ship always refuses → the re-sync path runs.
+    class AlwaysBehindGh extends FakeGhClient {
+      override async prView(n: number, fields: readonly string[]) {
+        const pr = await super.prView(n, fields);
+        return { ...pr, mergeStateStatus: "BEHIND" as const };
+      }
+    }
+    const gh = new AlwaysBehindGh();
+    const { deps, runId, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c"] }],
+      shipMode: "live",
+      ghClient: gh,
+    });
+    try {
+      const panelEnv = await driveToVerify(deps, runId, "T1");
+      const withheld = (await deps.holdout.get(runId, "T1")).withheld_criteria;
+
+      // Record every committed (merge_resyncs, stage) snapshot for T1.
+      const realUpdateTask = deps.state.updateTask.bind(deps.state);
+      const snapshots: Array<{ merge_resyncs: number; stage: string | undefined }> = [];
+      deps.state.updateTask = (rid, tid, mutator) =>
+        realUpdateTask(rid, tid, (t) => {
+          const next = mutator(t);
+          if (tid === "T1") {
+            snapshots.push({ merge_resyncs: next.merge_resyncs, stage: next.stage });
+          }
+          return next;
+        });
+
+      // Fold approving reviews (+holdout pass) → ship runs, refuses (BEHIND) → re-sync.
+      const env = await pumpTask(deps, runId, "T1", approvingReviewsResults(panelEnv, withheld));
+      expect(env.kind).toBe("spawn");
+      if (env.kind !== "spawn") throw new Error("expected an exec re-sync spawn");
+      expect(env.stage).toBe("exec");
+
+      // The write that first sets merge_resyncs=1 must ALSO carry stage="exec" — no
+      // committed snapshot may pair merge_resyncs=1 with the stale "ship" cursor.
+      const bumpWrite = snapshots.find((s) => s.merge_resyncs === 1);
+      expect(bumpWrite).toBeDefined();
+      expect(bumpWrite?.stage).toBe("exec");
+      expect(snapshots.some((s) => s.merge_resyncs === 1 && s.stage === "ship")).toBe(false);
+
+      // Persisted resume cursor is exec (not ship) → a crash-resume re-runs exec,
+      // never re-refuses ship to re-bump the budget.
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T1"]?.stage).toBe("exec");
+      expect(run.tasks["T1"]?.merge_resyncs).toBe(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("results at a non-spawn stage (preflight) fail loud", async () => {
     const { deps, runId, cleanup } = await makePumpDeps();
     try {

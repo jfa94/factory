@@ -29,6 +29,7 @@ import {
   classifyFailure,
   isTerminalTaskStatus,
   runStage,
+  stageToInFlightStatus,
   assertNever,
   type StageContext,
   type StageResult,
@@ -353,14 +354,29 @@ export async function pumpTask(
       case "wait-retry": {
         if (result.stage === "ship") {
           // Live-merge refusal → bounded re-sync through exec (persisted budget).
-          // Increment merge_resyncs inside the mutator so the capped check uses
-          // the committed value, not a stale pre-read.
+          // Bump merge_resyncs AND move the cursor to exec in ONE atomic write, so a
+          // crash between the bump and the next markInFlight cannot double-spend the
+          // budget (old code committed the bump under stage "ship", then markInFlight
+          // separately wrote the exec cursor — a crash in that window replayed ship
+          // and re-bumped). The capped check runs inside the mutator against the
+          // committed value, never a stale pre-read. Over-cap is a terminal drop and
+          // deliberately leaves the cursor at "ship" (the drop is the next write,
+          // idempotent on resume) so a crash-during-drop doesn't re-run exec+verify
+          // and re-spend agent budget.
           let newResyncs = 0;
+          let overCap = false;
           await deps.state.updateTask(runId, taskId, (t) => {
             newResyncs = t.merge_resyncs + 1;
-            return { ...t, merge_resyncs: newResyncs };
+            overCap = newResyncs > MERGE_RESYNC_CAP;
+            if (overCap) return { ...t, merge_resyncs: newResyncs };
+            return {
+              ...t,
+              merge_resyncs: newResyncs,
+              stage: "exec",
+              status: stageToInFlightStatus("exec"),
+            };
           });
-          if (newResyncs > MERGE_RESYNC_CAP) {
+          if (overCap) {
             const step = await dropStep(
               deps,
               runId,
@@ -376,7 +392,7 @@ export async function pumpTask(
               `(attempt ${newResyncs}/${MERGE_RESYNC_CAP})`,
           );
           stage = "exec";
-          cursorPersisted = false; // exec cursor not written by the resync bump
+          cursorPersisted = true; // exec cursor written ATOMICALLY with the bump above
           continue;
         }
         // verify floor blocked on a crash-resume replay → same classify path as the fold.
