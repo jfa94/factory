@@ -7764,7 +7764,7 @@ async function handleSubagentStop(input, deps = {}) {
   }
   const verdict = parseVerdict(input.last_assistant_message);
   log4.info(
-    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 driver folds reviews via record-reviews)`
+    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 driver folds reviews via the drive --results fold)`
   );
   return null;
 }
