@@ -7739,6 +7739,13 @@ async function runScaffold(opts) {
       created,
       present
     );
+    await copyIfAbsent(
+      join6(opts.templatesDir, "eslint.config.mjs"),
+      join6(opts.targetRoot, "eslint.config.mjs"),
+      opts.targetRoot,
+      created,
+      present
+    );
   }
   await ensureGitignore(opts.targetRoot, created, present);
   const staging = await ensureStaging({
@@ -9635,11 +9642,18 @@ var coverageStrategy = {
     const opts = { cwd: ctx.worktree };
     const before = await ctx.tools.coverage.read("before", opts);
     const after = await ctx.tools.coverage.read("after", opts);
-    if (before === null || after === null) {
-      const which = before === null ? "before" : "after";
-      return ran("coverage", false, `coverage parse error: ${which} summary missing/invalid`);
+    if (before.state === "absent" && after.state === "absent") {
+      return skip("coverage", "no-coverage-data");
     }
-    const delta = coverageDelta(before, after);
+    if (before.state === "invalid" || after.state === "invalid") {
+      const which = before.state === "invalid" ? "before" : "after";
+      return ran("coverage", false, `coverage parse error: ${which} summary invalid`);
+    }
+    if (before.state === "absent" || after.state === "absent") {
+      const which = before.state === "absent" ? "before" : "after";
+      return ran("coverage", false, `coverage parse error: ${which} summary missing`);
+    }
+    const delta = coverageDelta(before.summary, after.summary);
     const failed = regressions(delta, tolerance);
     if (failed.length > 0) {
       const named = failed.map((m) => `${m} (${delta[m]}%)`).join(", ");
@@ -9653,11 +9667,28 @@ var coverageStrategy = {
 function scorePasses(score, target) {
   return score >= target;
 }
+var STRYKER_CONFIGS = [
+  "stryker.config.json",
+  "stryker.config.js",
+  "stryker.config.mjs",
+  "stryker.config.cjs",
+  "stryker.conf.json",
+  "stryker.conf.js",
+  ".stryker.config.json",
+  ".stryker.conf.json"
+];
+var STRYKER_BIN = "node_modules/.bin/stryker";
 var mutationStrategy = {
   id: "mutation",
   async run(ctx) {
     const target = ctx.config.quality.mutationScoreTarget;
     const opts = { cwd: ctx.worktree };
+    if (!await ctx.tools.fs.exists(STRYKER_BIN, opts)) {
+      return skip("mutation", "no-mutation-binary");
+    }
+    if (!await ctx.tools.fs.existsAny(STRYKER_CONFIGS, opts)) {
+      return skip("mutation", "no-mutation-config");
+    }
     const base = `origin/${ctx.baseRef}`;
     if (!await ctx.tools.git.refExists(base, opts)) {
       return ran("mutation", false, `base-missing: ${base} not found`);
@@ -9774,15 +9805,17 @@ ${result.stderr}`.trim();
 };
 
 // src/verifier/deterministic/strategies/proc-strategy.ts
+function procOutcome(id, label, result) {
+  if (result.truncated) {
+    throw new Error(`${id} gate: ${label} output truncated \u2014 refusing to judge a clipped run`);
+  }
+  return ran(id, result.code === 0, `${label} exit=${result.code ?? "null"}`);
+}
 function procStrategy(id, label, invoke) {
   return {
     id,
     async run(ctx) {
-      const result = await invoke(ctx.tools, { cwd: ctx.worktree });
-      if (result.truncated) {
-        throw new Error(`${id} gate: ${label} output truncated \u2014 refusing to judge a clipped run`);
-      }
-      return ran(id, result.code === 0, `${label} exit=${result.code ?? "null"}`);
+      return procOutcome(id, label, await invoke(ctx.tools, { cwd: ctx.worktree }));
     }
   };
 }
@@ -9795,11 +9828,36 @@ var typeStrategy = procStrategy(
 );
 
 // src/verifier/deterministic/strategies/lint.ts
-var lintStrategy = procStrategy(
-  "lint",
-  "eslint",
-  (tools, opts) => tools.eslint.lint(opts)
-);
+var ESLINT_CONFIGS = [
+  "eslint.config.js",
+  "eslint.config.mjs",
+  "eslint.config.cjs",
+  "eslint.config.ts",
+  "eslint.config.mts",
+  "eslint.config.cts",
+  ".eslintrc.js",
+  ".eslintrc.cjs",
+  ".eslintrc.yaml",
+  ".eslintrc.yml",
+  ".eslintrc.json",
+  ".eslintrc"
+];
+var ESLINT_BIN = "node_modules/.bin/eslint";
+var lintStrategy = {
+  id: "lint",
+  async run(ctx) {
+    const opts = { cwd: ctx.worktree };
+    const hasBin = await ctx.tools.fs.exists(ESLINT_BIN, opts);
+    if (!hasBin) {
+      return skip("lint", "no-eslint-binary");
+    }
+    const hasConfig = await ctx.tools.fs.existsAny(ESLINT_CONFIGS, opts);
+    if (!hasConfig) {
+      return skip("lint", "no-eslint-config");
+    }
+    return procOutcome("lint", "eslint", await ctx.tools.eslint.lint(opts));
+  }
+};
 
 // src/verifier/deterministic/strategies/build.ts
 var buildStrategy = procStrategy(
@@ -9881,7 +9939,7 @@ var GateRunner = class {
 };
 
 // src/verifier/deterministic/tools.ts
-import { readFile as readFile5 } from "node:fs/promises";
+import { access, readFile as readFile5 } from "node:fs/promises";
 import path from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
@@ -9960,15 +10018,32 @@ var DefaultCoverageReader = class {
     try {
       raw = await readFile5(file, "utf8");
     } catch {
-      return null;
+      return { state: "absent" };
     }
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return null;
+      return { state: "invalid" };
     }
-    return parseCoverageSummary(parsed);
+    const summary = parseCoverageSummary(parsed);
+    return summary === null ? { state: "invalid" } : { state: "ok", summary };
+  }
+};
+var DefaultFsProbe = class {
+  async exists(relPath, opts) {
+    try {
+      await access(path.join(opts.cwd, relPath));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  async existsAny(relPaths, opts) {
+    for (const rel of relPaths) {
+      if (await this.exists(rel, opts)) return true;
+    }
+    return false;
   }
 };
 function readMetric(total, key) {
@@ -10087,7 +10162,8 @@ function defaultGateTools() {
     build: new DefaultBuildTool(),
     semgrep: new DefaultSemgrepTool(),
     stryker: new DefaultStrykerTool(),
-    coverage: new DefaultCoverageReader()
+    coverage: new DefaultCoverageReader(),
+    fs: new DefaultFsProbe()
   };
 }
 
