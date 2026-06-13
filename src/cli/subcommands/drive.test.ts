@@ -4,7 +4,7 @@
  * Surfaces:
  *   1. arg/usage edges (short-circuit before wiring) via driveCommand;
  *   2. --results parse errors surfaced as EXIT.USAGE;
- *   3. happy-path JSON envelope passthrough via a seeded tmp run (like run-task.test.ts).
+ *   3. happy-path JSON envelope passthrough via a seeded tmp run.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";

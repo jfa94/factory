@@ -7,10 +7,10 @@
  * write-denies (Δ Y). Persisting here is what gives those guards something real to
  * protect — without it the confinement guards an empty directory.
  *
- * Two impls mirror artifacts.ts: {@link InMemoryHoldoutStore} (the in-process loop
- * + units) and {@link FsHoldoutStore} (the v1 CLI single-step path, so a later
- * `factory run-task --stage verify` process reads the same answer key the split
- * wrote at the exec stage).
+ * Two impls mirror artifacts.ts: {@link InMemoryHoldoutStore} (units) and
+ * {@link FsHoldoutStore} (the persisted path, so a later `factory drive` process
+ * resuming at the verify stage reads the same answer key the split wrote at the
+ * exec stage).
  */
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";

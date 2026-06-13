@@ -1,9 +1,9 @@
 /**
  * WS10 / Task C — unit tests for the SHARED deterministic transition logic
  * ({@link transitions.ts}). These are the per-task ladder + drop/complete writes
- * that BOTH the in-process loop and the `record-*` CLI subcommands fold through, so
- * they are tested here ONCE, against a real {@link StateManager} (temp dir). The
- * loop suite (`loop.test.ts`) is the end-to-end regression guard; this suite pins
+ * that the pump folds through (`fold.ts` / `pump.ts`), so they are tested here ONCE,
+ * against a real {@link StateManager} (temp dir). The pump suite (`pump.test.ts`) is
+ * the end-to-end regression guard; this suite pins
  * the units in isolation (every branch of escalateOrDrop / applyProducerOutcome /
  * classifyProducerFailure / markInFlight / completeTask / dropTask / dropStep).
  */

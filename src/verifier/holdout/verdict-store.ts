@@ -1,15 +1,14 @@
 /**
- * WS10 / Task C — the HOLDOUT-VERDICT store (the record-holdout → record-reviews seam).
+ * WS10 / Task C — the HOLDOUT-VERDICT store (the holdout → review fold hand-off).
  *
- * The CLI folds verify in TWO single-step subcommands: `factory record-holdout`
- * parses the out-of-band holdout-validator's raw output into {@link HoldoutVerdict}s
- * and PERSISTS them here; `factory record-reviews` reads them back and RE-DERIVES the
- * holdout gate evidence (`checkHoldout` → `holdoutEvidence`) at fold time. This is the
- * sanctioned derive-don't-store EXCEPTION (Δ V): the holdout verdicts come from an
- * AGENT, so — exactly like a raw review — the agent's RAW assessment is stored and the
- * verdict is recomputed on read, never a stored boolean. The in-process loop has no
- * need for this seam (it folds holdout inline in `runVerify`); it exists only because
- * the CLI single-step path splits the agent spawn (orchestrator) from the fold (CLI).
+ * The pump (`factory drive --results`) folds verify in two steps that hand off
+ * through this store: `applyRecordHoldout` parses the out-of-band holdout-validator's
+ * raw output into {@link HoldoutVerdict}s and PERSISTS them here; `applyRecordReviews`
+ * reads them back and RE-DERIVES the holdout gate evidence (`checkHoldout` →
+ * `holdoutEvidence`) at fold time. This is the sanctioned derive-don't-store EXCEPTION
+ * (Δ V): the holdout verdicts come from an AGENT, so — exactly like a raw review — the
+ * agent's RAW assessment is stored and the verdict is recomputed on read, never a
+ * stored boolean.
  *
  * The verdicts live in the SAME Δ Y confined subtree as the answer key
  * (`runs/<run_id>/holdouts/<task_id>.verdicts.json`): they reveal the withheld
@@ -17,8 +16,8 @@
  *
  * Two impls mirror {@link import("./store.js").HoldoutStore}:
  * {@link InMemoryHoldoutVerdictStore} (units) and {@link FsHoldoutVerdictStore} (the
- * v1 CLI single-step path, so a later `factory record-reviews` process reads the same
- * verdicts the `factory record-holdout` process wrote).
+ * persisted path — the verdicts survive to the review fold even across a `drive`
+ * crash-resume, and stay inside the Δ Y confined subtree).
  */
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";

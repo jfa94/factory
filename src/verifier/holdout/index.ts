@@ -34,7 +34,7 @@ export {
   type HoldoutValidatorRunner,
 } from "./validate.js";
 
-// The holdout-VERDICT store (the record-holdout → record-reviews CLI fold seam).
+// The holdout-VERDICT store (the pump's holdout → review fold hand-off).
 export {
   InMemoryHoldoutVerdictStore,
   FsHoldoutVerdictStore,

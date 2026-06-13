@@ -1,6 +1,6 @@
 /**
  * CLI output helpers. The contract the in-session orchestrator relies on:
- *   - A machine subcommand (run-task, state, record-*) emits EXACTLY ONE JSON
+ *   - A machine subcommand (drive, next, state, spec, …) emits EXACTLY ONE JSON
  *     document to stdout (via {@link emitJson}) — the orchestrator parses it.
  *   - Human output (`--help`, `state --summary`) goes to stdout as plain lines
  *     (via {@link emitLine}); the orchestrator never invokes those forms.

@@ -13,7 +13,7 @@
  * ({@link applyRecordReviews} in src/driver/fold.ts) — that is the single
  * sanctioned writer of task.reviewers[]. A hook-side write would create a second
  * writer that can poison crash-resume replay: if the hook writes reviewers[] after
- * the panel but before record-reviews folds, a subsequent resume hits the verify
+ * the panel but before the `drive --results` fold runs, a subsequent resume hits the verify
  * handler's derive branch ({@link src/driver/handlers.ts} verify) with no holdout
  * evidence and no verify-then-fix → false advance to ship.
  *
@@ -168,10 +168,10 @@ export async function handleSubagentStop(
   }
 
   const verdict = parseVerdict(input.last_assistant_message);
-  // Observational log only — no state write. The driver fold (record-reviews) is
+  // Observational log only — no state write. The driver fold (`drive --results`) is
   // the single writer of task.reviewers[].
   log.info(
-    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational — driver folds reviews via record-reviews)`,
+    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational — driver folds reviews via the drive --results fold)`,
   );
   return null;
 }

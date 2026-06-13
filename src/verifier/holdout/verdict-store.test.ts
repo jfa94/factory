@@ -1,5 +1,5 @@
 /**
- * WS10 / Task C — the holdout-VERDICT store (record-holdout → record-reviews seam).
+ * WS10 / Task C — the holdout-VERDICT store (the pump's holdout → review fold seam).
  *
  * Both impls must satisfy the same contract: `put` is idempotent, `get` is LOUD on
  * an absent key, and `has` is a non-throwing presence probe. The Fs impl ADDITIONALLY
@@ -102,8 +102,8 @@ describe("FsHoldoutVerdictStore", () => {
 
   it("a second process (fresh store, same dataDir) reads the first's verdicts", async () => {
     await new FsHoldoutVerdictStore(dataDir).put(RUN_ID, TASK_ID, VERDICTS);
-    // The single-step CLI splits put (record-holdout) and get (record-reviews) across
-    // processes; a fresh instance over the same dataDir must observe the write.
+    // A `drive` crash-resume can persist the holdout verdicts in one process and read
+    // them back in another; a fresh instance over the same dataDir must observe the write.
     expect(await new FsHoldoutVerdictStore(dataDir).has(RUN_ID, TASK_ID)).toBe(true);
     expect(await new FsHoldoutVerdictStore(dataDir).get(RUN_ID, TASK_ID)).toEqual(VERDICTS);
   });
