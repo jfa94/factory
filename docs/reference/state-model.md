@@ -102,6 +102,8 @@ one.
 | `pr_number`               | int >0?                    | PR number once created.                                        |
 | `failure_class`           | FailureClass?              | Set _iff_ `status === "dropped"`.                              |
 | `failure_reason`          | string?                    | Human-facing drop reason; set _iff_ dropped.                   |
+| `stage`                   | TaskStage?                 | The drive pump's resume cursor (see below).                    |
+| `merge_resyncs`           | int ≥0 (default 0)         | Ship live-merge re-sync count (see below).                     |
 | `started_at` / `ended_at` | string?                    | ISO-8601.                                                      |
 
 ### `TaskStatus`
@@ -130,6 +132,29 @@ A closed set (adding one is a design change):
 `{ reviewer, verdict (approve|blocked|error), artifact?, confirmed_blockers }`.
 Cross-field coherence is enforced: `approve ⇒ 0` confirmed blockers; `blocked ⇒
 ≥1`; `error` is unconstrained.
+
+### `stage` — the drive pump's resume cursor
+
+`"preflight" | "tests" | "exec" | "verify" | "ship"` (optional). The precise
+machine cursor for `factory drive`: which stage the task is at, or resuming at.
+The drive pump reads it to resume after a crash; it is written by `markInFlight`.
+
+- The lossy `status` (executing / reviewing / shipping …) stays the **human-facing**
+  summary; `stage` is the **machine cursor**.
+- **Absent** = not started — the pump resumes at `preflight`.
+- On a **terminal** row (`done` / `dropped`), `stage` holds the _last in-flight
+  stage_, not a resume point — terminal writers do not clear it.
+
+(The literals duplicate the stage machine's `TASK_STAGE_ORDER` deliberately, so
+`src/core/state` need not import the stage machine; a cross-check test keeps them
+equal.)
+
+### `merge_resyncs` — ship live-merge re-sync budget
+
+`int ≥0` (default `0`). The number of times the task's `ship` stage refused a live
+merge and re-routed back through `exec` to re-sync. The drive pump enforces the cap
+(`MERGE_RESYNC_CAP`) and persists the count so the budget survives process
+boundaries; exhausting it drops the task as `blocked-environmental`.
 
 ## `QuotaCheckpoint`
 

@@ -31,10 +31,11 @@ The public surface. `src/cli/main.ts` holds the frozen subcommand **registry** a
 the `dispatch()` function; `src/bin/factory.ts` is the only place `process.exit`
 is called. Each subcommand lives in `src/cli/subcommands/` and is a thin wrapper:
 parse args, wire production dependencies, call a testable core function, emit one
-JSON envelope, return an `ExitCode`. Shared helpers: `args.ts` (flag parsing),
-`io.ts` (envelope emission), `wiring.ts` (`loadCliDeps`), `transition.ts`
-(step-cursor persistence). The complete surface is in
-[reference/cli.md](../reference/cli.md).
+JSON envelope, return an `ExitCode`. The `next` and `drive` subcommands are thin
+shells over the pump (`src/driver`); the fold logic of the retired `record-*`
+writers now lives there too. Shared helpers: `args.ts` (flag parsing), `io.ts`
+(envelope emission), `wiring.ts` (`loadCliDeps` / `loadPumpDeps`). The complete
+surface is in [reference/cli.md](../reference/cli.md).
 
 ## State (`src/core/state`)
 
@@ -57,14 +58,27 @@ reports; the driver acts.
 
 ## Driver (`src/driver`)
 
-The Model-A _actor_: the transition logic that turns a `StageResult` into state
-effects. `loop.ts` holds `driveTask` / `driveRun` (the in-process driver used in
-tests and as the reference the orchestrator mirrors); `transitions.ts` holds the
-shared step primitives (`markInFlight`, `completeTask`, `dropStep`,
-`escalateOrDrop`, `applyProducerOutcome`) that the single-step CLI writers _also_
-call, so the CLI path and the in-process loop apply identical logic. `ship.ts`
-opens the PR + serial-merges; `finalize.ts` is the run-completion coordinator
-(report → per-drop issues → rollup → flip terminal, in resume-safe order).
+The Model-A engine half of the **pump** seam — the loop, plus the transition logic
+that turns a `StageResult` into state effects. This is the unit-test target for
+control flow and is shared verbatim by both drivers (the session loop and the
+Workflow script).
+
+- `next.ts` (`pumpRun`) — the **run-level** pump: terminal/quota checks,
+  cascade-drop, and the ready set, emitted as a `NextEnvelope`.
+- `pump.ts` (`pumpTask`) — the **task-level** pump: resume at the persisted stage
+  cursor, optionally fold the previous spawn's results, then run the stage machine
+  until a spawn is needed (emit a `DriveEnvelope` manifest) or the task is
+  terminal.
+- `fold.ts` — the fold cores `pumpTask --results` calls: `applyRecordProducer`,
+  `applyRecordHoldout`, `applyRecordReviews` (folded in from the retired
+  `record-*` CLI writers, so the spawn-path fold and a crash-resume fold run
+  identical code).
+- `transitions.ts` — the shared step primitives (`markInFlight`, `completeTask`,
+  `dropStep`, `escalateOrDrop`, `applyProducerOutcome`) the pump and the fold cores
+  both call, so a live step and a crash-resume fold can never diverge.
+- `ship.ts` opens the PR + serial-merges; `finalize.ts` is the run-completion
+  coordinator (report → per-drop issues → rollup → flip terminal, in resume-safe
+  order).
 
 ## Producer (`src/producer`)
 

@@ -76,22 +76,22 @@ task:
    differs from every reviewer, adversarially tries to refute the finding against
    the code (`{ holds, note }`). A finding that does not hold is discarded.
 
-Only confirmed blockers reach the producer. This is why the orchestrator must run
-a finding-verifier for each blocking + citable finding and record its verdict: a
-kept citable blocker with no recorded verdict makes the floor **fail closed**
-(`record-reviews` rejects it) — independence is preserved by construction, never
-by trust.
+Only confirmed blockers reach the producer. This is why the driver must run a
+finding-verifier for each blocking + citable finding and feed its verdict back: a
+kept citable blocker with no recorded verdict makes the floor **fail closed** (the
+verify fold inside `factory drive --results` rejects it) — independence is
+preserved by construction, never by trust.
 
 A reviewer that fails to produce a usable verdict is an `error`, not a silent
 `approve` — an unresolved verifier error never auto-ships.
 
 ## How a blocked floor feeds back
 
-When the floor blocks, the verify stage returns a bounded `wait-retry`. The driver
-classifies it as `floor-blocked` and escalates the producer ladder: the rung is
-bumped, the reviewers are cleared, and a fresh panel runs after the producer
-re-attempts. A structurally-unfixable gate or an environmental blocker is
-classified-before-retry and drops immediately without burning a rung. See
+When the floor blocks, the verify fold returns a bounded `wait-retry`. The pump
+(not the driver) classifies it as `floor-blocked` and escalates the producer
+ladder: the rung is bumped, the reviewers are cleared, and a fresh panel runs after
+the producer re-attempts. A structurally-unfixable gate or an environmental blocker
+is classified-before-retry and drops immediately without burning a rung. See
 [producer-ladder.md](./producer-ladder.md).
 
 ## Derive, don't store

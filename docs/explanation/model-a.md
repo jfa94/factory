@@ -22,23 +22,42 @@ is unacceptable for an unattended pipeline whose whole value proposition is trus
 
 ## The Model-A answer
 
-Split the system in two and put a hard seam between them:
+Split the system in two and put a hard seam between them — **one engine, one
+seam, two thin drivers**:
 
-- **The CLI is the brain.** `factory <subcommand>` is a deterministic, tested
-  TypeScript engine. It owns every piece of bookkeeping: all run-state writes, the
-  spec gates, the deterministic verifier gates, failure classification, the
-  producer escalation ladder, the risk-invariant review floor, and PR creation. It
-  is the _only_ thing that writes state. **It never spawns an agent** — it has no
+- **The CLI is the brain, and it owns ALL control flow.** `factory <subcommand>`
+  is a deterministic, tested TypeScript engine. It owns every piece of
+  bookkeeping: all run-state writes, the spec gates, the deterministic verifier
+  gates, failure classification, the producer escalation ladder, the
+  risk-invariant review floor, PR creation — _and the pipeline loop itself_. It is
+  the _only_ thing that writes state. **It never spawns an agent** — it has no
   `Agent` tool.
-- **The orchestrator is the hands.** A markdown skill loaded into the invoking
-  Claude Code session performs every `Agent()` spawn the CLI asks for, collects the
-  agents' raw output, and folds it back through a CLI writer. It never decides a
-  transition, re-runs a gate, classifies a failure, or writes state by prose.
+- **The CLI exposes exactly ONE seam — the pump.** `factory next` is the
+  run-level pump (which task is ready); `factory drive` is the task-level pump (run
+  one task's deterministic steps until it needs agents, emitting a spawn manifest).
+  Invoked again as `factory drive --results`, the pump folds the agents' raw output
+  back into exactly ONE state step. Every transition decision lives behind this
+  seam, in code.
+- **A driver is the hands — and nothing more.** A driver pumps the seam: call
+  `next`, spawn exactly the `Agent()`s the resulting `drive` manifest names, feed
+  their raw output back via `drive --results`, repeat. A driver carries **no
+  pipeline logic of its own** — it never decides a transition, re-runs a gate,
+  classifies a failure, or writes state by prose. It is a dumb loop around the
+  pump.
 
-The CLI is therefore a **reporter + writer**, not a runner. A reporter subcommand
-emits one JSON envelope naming what to spawn next; a writer folds an agent outcome
-into state and returns the next step. The orchestrator's entire job is the glue:
-spawn → write the output to a file → record it → follow the step the CLI returned.
+Two interchangeable drivers pump the same seam, selected by `--mode` on
+`/factory:run`:
+
+- **`--mode session`** (default) — the in-session LLM orchestrator loop
+  (`skills/pipeline-orchestrator/SKILL.md`), running in the invoking Claude Code
+  session. This is the driver that can spawn `Agent()`s directly.
+- **`--mode workflow`** — the plugin-shipped Workflow script
+  (`workflows/factory-run.workflow.js`). Because Workflow JS cannot shell out, it
+  wraps every `factory` CLI call in a small exec agent (haiku).
+
+Both are **subscription-only** — there is no headless `claude -p` / API-token path
+anywhere. The driver's entire job is the glue: pump → spawn what the manifest names
+→ feed the raw results back → follow the step the pump returned.
 
 ## Why this particular boundary
 
@@ -47,15 +66,19 @@ A few alternatives were rejected:
 - **Orchestrator-as-sub-agent.** Claude Code exposes the `Agent` tool only to the
   top-level session; a sub-agent cannot spawn further sub-agents. An
   orchestrator-as-agent would deadlock the first time it needed to dispatch a
-  producer or reviewer. So the orchestrator must run in the main session.
+  producer or reviewer. So the session driver must run in the main session.
 - **Pure-script orchestrator.** A shell/Node process cannot invoke the `Agent`
-  tool at all. So the engine cannot also be the thing that spawns agents.
+  tool at all. So the engine cannot also be the thing that spawns agents — the
+  workflow driver exists precisely because it can launch `Agent()`s while the
+  engine (the pump) cannot.
 - **Pure-agent orchestration.** This is exactly the unreliability problem above —
-  100%-reliable bookkeeping cannot be left to ~70%-reliable prose-following.
+  100%-reliable bookkeeping cannot be left to ~70%-reliable prose-following. A
+  driver that "decides" anything would re-introduce it; the driver only pumps.
 
 Model A is the only split that respects both constraints: the agent-spawning must
-live in the session, and the bookkeeping must live in code. The seam is the
-`factory` CLI's JSON contract.
+live in a driver (the session or the Workflow runtime), and the bookkeeping —
+every decision — must live behind the pump in code. The seam is the `factory`
+CLI's JSON contract.
 
 ## What the seam buys
 
@@ -69,18 +92,22 @@ live in the session, and the bookkeeping must live in code. The seam is the
 - **Forgery resistance.** Because the CLI derives verdicts from ground truth and
   stores none (see [derive-dont-store.md](./derive-dont-store.md)), an agent cannot
   fake a passing gate by writing to state — there is no field to write.
-- **A clean v2 path.** The same transition logic (`src/driver`) backs both the
-  in-process driver (used in tests) and the CLI single-step writers. A future
-  out-of-session scheduler can drive the same seam.
+- **One loop, many drivers.** Because the pump (`src/driver/pump.ts` +
+  `next.ts` + `fold.ts`) is the _single_ implementation of the loop, every driver
+  inherits identical control flow for free. The session loop and the Workflow
+  script are thin and interchangeable; a future out-of-session scheduler would be a
+  third driver over the same unchanged seam.
 
 ## The cost
 
-The orchestrator and the in-process driver are two expressions of the same loop,
-so they must be kept in agreement by discipline (the skill mirrors the driver).
-The CLI single-step path and the loop also diverge slightly where an agent spawn
-is unavoidable (e.g. `verify` folds the holdout differently in the CLI reporter
-than in the loop). This divergence is structural and accepted — documented at the
-relevant seams in the source.
+The two drivers must each faithfully obey the pump's envelopes — spawn exactly
+what a manifest names and feed results back verbatim — but they share no pipeline
+logic, so they cannot _diverge_ on a transition: there is one loop, in code, and
+the drivers only pump it. The discipline that remains is at the spawn boundary
+(the orchestrator skill's Iron Laws), not in a duplicated loop. This is the
+payoff of collapsing the earlier in-process driver and the single-step CLI writers
+into the pump: the spawn-path fold and a crash-resume fold now run the identical
+code (`src/driver/fold.ts`), so they cannot drift.
 
 ## See also
 

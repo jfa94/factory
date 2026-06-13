@@ -1,13 +1,17 @@
 # CLI Reference
 
-The `factory` CLI is the deterministic engine. Every subcommand prints exactly
-one JSON document to stdout (or `--summary` human text for `state`); `--help` on
-any subcommand prints its contract. The binary is `dist/factory.js`, reached on
-`PATH` as `factory` via the `bin/factory` shim.
+The `factory` CLI is the deterministic engine — it owns ALL pipeline control
+flow and exposes exactly ONE seam, the **pump** (`next` + `drive`). Every
+subcommand prints exactly one JSON document to stdout (or `--summary` human text
+for `state`); `--help` on any subcommand prints its contract. The binary is
+`dist/factory.js`, reached on `PATH` as `factory` via the `bin/factory` shim.
 
-Subcommands are **reporters** (read-only; emit an envelope) or **writers** (one
-state mutation). `run create`, `run finalize`, `scaffold`, and
-`run-task --stage ship` perform actions (state and/or GitHub side effects).
+Subcommands are **reporters** (read-only; emit an envelope), **the pump** (`next`
+folds nothing; `drive --results` folds an agent spawn's output into ONE state
+step), or **writers** (one state mutation). `run create`, `run finalize`,
+`scaffold`, and the pump's `drive` ship step perform actions (state and/or GitHub
+side effects). The pump is the only seam that spawns nothing itself — it emits a
+manifest the driver spawns from (see [Model A](../explanation/model-a.md)).
 
 Run/spec state is read from and written to `$CLAUDE_PLUGIN_DATA`.
 
@@ -107,7 +111,7 @@ runtime). Duplicate, self, dangling, or cyclic dependency edges fail loudly at
 seed time.
 
 ```
-factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver <d>] [--run-id <id>]
+factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
 ```
 
 | Flag                  | Notes                                                                   |
@@ -115,10 +119,12 @@ factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--driver 
 | `--repo <owner/name>` | Repo identity (the first key of the spec store). Required.              |
 | `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`. |
 | `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.   |
-| `--driver <d>`        | `sequential` \| `balanced` (default `balanced`).                        |
 | `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests).    |
 
-Loud error if no spec exists for the issue — generate one first.
+Loud error if no spec exists for the issue — generate one first. The seeded run's
+`driver` is fixed to `sequential`: the v1 pump seam drives tasks one at a time.
+(The `--mode session|workflow` knob on `/factory:run` selects which _driver_
+pumps the seam — not a CLI flag here; see [Run the pipeline](../guides/run-the-pipeline.md).)
 
 ### `run resume`
 
@@ -164,103 +170,90 @@ factory state --summary       # compact human summary
 No current run is not an error: prints `{"current": null}` (or `no current run`
 with `--summary`) and exits `0`. State corruption is loud.
 
-## `run-task`
+## The pump (`next` + `drive`)
 
-Reporter (single-step). Runs exactly one stage's deterministic work and emits one
-envelope. The orchestrator performs any agent spawn and folds the outcome via the
-`record-*` writers.
+The pump is the engine's single control-flow seam. `next` is the **run-level**
+pump (which task is ready); `drive` is the **task-level** pump (run one task's
+deterministic steps until it needs agents). A driver — the in-session orchestrator
+loop or the Workflow script (see [Run the pipeline](../guides/run-the-pipeline.md))
+— alternates them: `next` to pick a task, `drive` to advance it, spawn the agents
+the manifest names, then `drive --results` to fold their output back. Neither pump
+spawns anything itself.
 
-```
-factory run-task --run <id> --task <id> --stage <stage> [--ship-mode <mode>]
-```
+The six retired single-step writers — `run-task`, `advance`, `drop`,
+`record-producer`, `record-holdout`, `record-reviews` — collapsed into the pump.
+Their fold logic now runs inside `drive --results` (`src/driver/fold.ts`); the
+producer / holdout / reviews folds are no longer separate CLI calls.
 
-Stages: `preflight | tests | exec | verify | ship`. `--ship-mode`:
-`no-merge` (default) | `live`.
+## `next`
 
-Envelope: `{ run_id, task_id, stage, stage_result, sidecar? }`.
-
-- `preflight | tests | exec | verify` — pure report (no run-state write). `verify`
-  additionally surfaces a holdout-validate `sidecar` when an answer key was
-  withheld and the panel is being spawned this round.
-- `ship` — the one stage that writes state: opens the PR idempotently, records
-  branch/pr_number, optionally serial-merges (`live`), and on a clean `done`
-  writes the terminal task status. A refused live merge emits a `wait-retry`.
-
-The `stage_result.kind` is one of `advance | spawn-agents | task-terminal |
-wait-retry`.
-
-## `advance`
-
-Writer. Persists the in-flight cursor for the next stage (status + `started_at`).
-Use after a `run-task` result of `{kind:"advance", to}`. Writes only the cursor —
-no domain transition.
+Reporter (run-level pump). One run-loop step: terminal check, quota gate
+(persisting a pause/suspend checkpoint on breach), stale-checkpoint clear on
+recovery, transitive cascade-drop of tasks blocked on an unsatisfiable dependency,
+then the ready set. Writes only on a quota breach or a cascade-drop; otherwise
+read-only. Throws LOUD on a dependency deadlock.
 
 ```
-factory advance --run <id> --task <id> --to <stage>
+factory next [--run <id>]      # defaults to runs/current
 ```
 
-Emits `{ run_id, task_id, step: { done:false, stage } }`.
+Emits one of:
 
-## `record-producer`
+- `{ kind:"tasks-ready", run_id, ready:[...], cascade_dropped:[...] }` — ready
+  tasks, **in-flight first** (crash-resume finishes started work before opening
+  new), then pending in spec order.
+- `{ kind:"all-terminal", run_id, cascade_dropped:[...] }` — nothing left to
+  schedule; the driver calls `factory run finalize` next. `cascade_dropped` is
+  this-invocation-only.
+- `{ kind:"run-terminal", run_id, run_status }` — the run is already terminal.
+- `{ kind:"quota-blocked", run_id, scope, reason, resets_at_epoch? }` — a quota
+  window blocked; the checkpoint is persisted.
 
-Writer. Folds a producer spawn's terminal STATUS line into state via the shared
-ladder logic: on `done` advances to the next stage; a classified failure bumps the
-rung (resume at the same producer stage) or drops (`capability-budget`) when the
-ladder is exhausted.
+## `drive`
 
-```
-factory record-producer --run <id> --task <id> --stage <tests|exec> --status "<line>"
-```
-
-`--status` is the agent's terminal STATUS line (e.g. `STATUS: DONE`,
-`STATUS: BLOCKED — escalate`, `STATUS: NEEDS_CONTEXT`). Emits `{ run_id, task_id,
-step }`.
-
-## `record-holdout`
-
-Writer. Folds the out-of-band holdout-validator output: parses the verdicts
-(fail-closed on unparseable output — every withheld criterion scores as a fail),
-persists them (read back by `record-reviews`), and emits the derived holdout gate
-evidence.
+The per-task pump (the engine seam both drivers share). Resumes at the task's
+persisted `stage` cursor, optionally folds the previous spawn's agent results
+(`--results`), then runs every deterministic stage it can until it needs agents or
+the task is terminal. Emits ONE JSON `DriveEnvelope`.
 
 ```
-factory record-holdout --run <id> --task <id> --input <path>
+factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
 ```
 
-`--input` is `{ "raw": "<validator output>" }`. Loud error if the task has no
-withheld answer key. Emits `{ run_id, task_id, evidence, check }`. Must run
-**before** `record-reviews`.
+`--ship-mode`: `no-merge` (default) | `live`. Emits one of:
 
-## `record-reviews`
+- `{ kind:"spawn", run_id, task_id, stage, fold_key, manifest, sidecar?, expects, worktree }`
+  — the agents to run (`manifest.agents`) and what to feed back. `stage` is one of
+  `tests | exec | verify` (preflight only advances; ship never spawns). `expects`
+  is `producer-status` (tests/exec — one producer agent) or `reviews` (verify —
+  the six-reviewer panel); a `sidecar` accompanies `verify` when a holdout answer
+  key was withheld. `worktree` is the task working tree the agents commit in.
+- `{ kind:"terminal", run_id, task_id, outcome }` — the task is `done` or a
+  classified `dropped`.
+- `{ kind:"quota-blocked", run_id, task_id, scope, reason, resets_at_epoch? }`.
 
-Writer. Folds the panel + verify-then-fix verdicts into the floor, fully
-deterministically (no spawn): re-runs the deterministic gates, re-derives the
+**The `--results` fold.** `--results <file>` feeds back exactly what the previous
+spawn envelope's `expects` named, and folds it into ONE state step (advance, bump
+the producer rung, or terminal). The file MUST echo the envelope's `fold_key`
+verbatim:
+
+```
+expects=producer-status → { "fold_key": {…}, "producer": { "status": "<STATUS line>" } }
+expects=reviews         → { "fold_key": {…}, "holdout"?: { "raw": "<validator output>" },
+                            "reviews": { reviews, verifications, crossVendorAbsent? } }
+```
+
+The fold is **at-least-once delivery, exactly-once application**: the `fold_key`
+(`{stage, rung}`) is validated against the live cursor before any mutation, so a
+stale or duplicate delivery is rejected LOUD rather than double-folded. On a
+rejection, re-invoke **without** `--results` to re-derive the current spawn
+envelope (re-invoking without results is idempotent). The `reviews` fold runs the
+full verify floor internally — re-runs the deterministic gates, re-derives the
 persisted holdout evidence, citation-verifies the reviews against the worktree,
-confirms each surviving blocker via the orchestrator's pre-recorded verdicts (a
-kept citable blocker with no recorded verdict fails closed), derives the floor,
-persists the per-reviewer results, and acts via the shared ladder.
-
-```
-factory record-reviews --run <id> --task <id> --input <path>
-```
-
-`--input` is `{ "reviews": [...], "verifications": [{reviewer, verdicts:[...]}],
-"crossVendorAbsent"?: {reason} }`. Emits `{ run_id, task_id, step, reviewers,
-floor }`.
-
-## `drop`
-
-Writer. Applies an explicit, classified loud drop through the same shared
-`dropStep` as the derived drops — so a drop is always classified and reasoned,
-never silent. The orchestrator's manual drop path.
-
-```
-factory drop --run <id> --task <id> --class <failure-class> --reason "<text>"
-```
-
-Failure classes: `capability-budget | spec-defect | blocked-environmental`. Emits
-`{ run_id, task_id, step: { done:true, outcome:{ outcome:"dropped",
-failure_class, reason } } }`.
+and confirms each surviving blocker via the supplied `verifications` (a kept
+citable blocker with no recorded verdict fails closed). Holdout is folded **before**
+reviews. A refused live merge re-routes the task through `exec` to re-sync, bounded
+by a persisted per-task budget (`merge_resyncs`).
 
 ## `score`
 

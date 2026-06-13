@@ -1,4 +1,4 @@
-<!-- last-documented: c5169bb75d19f0f14d33c3e8b13cf0e3316fab47 -->
+<!-- last-documented: 1ea2ef035fe2cfa5af06d056d76321d16febb776 -->
 
 # Dark Factory Plugin
 
@@ -22,23 +22,26 @@ all enforced by a tested TypeScript engine — not by prose an agent may ignore.
 
 ## Design philosophy
 
-**Model A — split brain.** The plugin is two halves with a hard seam between
-them:
+**Model A — one engine, one seam, two thin drivers.** The plugin is two halves
+with a hard seam between them:
 
 - A **deterministic engine**: one Node + TypeScript CLI, `factory <subcommand>`,
   that owns _all_ run-state writes, the spec gates, the deterministic verifier
   gates, failure classification, the producer escalation ladder, the
-  risk-invariant review floor, and PR creation. It is pure, tested, and **never
-  spawns an agent**.
-- An **in-session LLM orchestrator**: a markdown skill
-  (`skills/pipeline-orchestrator/SKILL.md`) the invoking Claude Code session
-  loads. It performs every `Agent()` spawn the CLI asks for, collects the agents'
-  raw output, and folds it back through the CLI's writer subcommands. It never
-  decides a transition by prose.
+  risk-invariant review floor, PR creation — and the pipeline loop itself, exposed
+  through ONE seam, the **pump** (`factory next` + `factory drive`). It is pure,
+  tested, and **never spawns an agent**.
+- A thin **driver**: it pumps the seam — spawning exactly the `Agent()`s the
+  pump's manifest names and feeding their raw output back via `factory drive
+--results`. It carries no pipeline logic and never decides a transition by prose.
+  Two interchangeable drivers (chosen by `--mode` on `/factory:run`): the in-session
+  orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`, default) and the
+  plugin-shipped Workflow script (`workflows/factory-run.workflow.js`).
 
-The CLI subcommands are either **reporters** (read-only; emit one JSON envelope
-naming what to do next) or **writers** (single-step state mutations). The
-orchestrator is the loop; the CLI is the brain.
+The CLI subcommands are **reporters** (read-only; emit one JSON envelope), the
+**pump** (`next` / `drive` — the control-flow seam), or **writers** (single-step
+state mutations). The CLI is the brain and owns the loop; a driver is just the
+hands.
 
 **Quality over speed.** Every task is produced test-first (a `test-writer`
 commits failing tests, then a `task-executor` commits the minimal
@@ -60,12 +63,12 @@ quiet success.
 
 ## Architecture at a glance
 
-| Layer                | Lives in                                                            | Role                                 |
-| -------------------- | ------------------------------------------------------------------- | ------------------------------------ |
-| Orchestrator surface | `commands/`, `agents/`, `skills/` (markdown)                        | LLM instructions + agent definitions |
-| Deterministic CLI    | `src/` → `dist/factory.js` (via `bin/factory`)                      | The engine: reporters + writers      |
-| Hook guards          | `src/hooks/` → `dist/factory-hook.js` (wired in `hooks/hooks.json`) | Enforce invariants at tool-use time  |
-| Run / spec state     | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Lives **outside** the target repo    |
+| Layer                | Lives in                                                            | Role                                   |
+| -------------------- | ------------------------------------------------------------------- | -------------------------------------- |
+| Orchestrator surface | `commands/`, `agents/`, `skills/` (markdown)                        | LLM instructions + agent definitions   |
+| Deterministic CLI    | `src/` → `dist/factory.js` (via `bin/factory`)                      | The engine: pump + reporters + writers |
+| Hook guards          | `src/hooks/` → `dist/factory-hook.js` (wired in `hooks/hooks.json`) | Enforce invariants at tool-use time    |
+| Run / spec state     | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Lives **outside** the target repo      |
 
 See [architecture/overview.md](./architecture/overview.md) for the full picture.
 

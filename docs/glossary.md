@@ -92,7 +92,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Counter-example: two Tasks that each claim to merge the same pull request — a Task owns one and only one.
 - **relationships**: belongs to a Run; depends on other Tasks; carries a Risk Tier; subject to Quality Gates, Holdout Validation, and Review.
 - **synonyms**: —
-- **code anchor**: `src/cli/subcommands/run-task.ts`
+- **code anchor**: `src/core/state/schema.ts:TaskState`
 
 ## Quality & verification
 

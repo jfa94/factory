@@ -543,6 +543,34 @@ Every narrowing has been tried and produces the same failure mode: the pipeline 
 
 ---
 
+## Decision 28: One Engine, One Seam (the Pump), Two Thin Drivers
+
+**Choice:** The deterministic `factory` CLI owns **all** pipeline control flow — including the loop itself — and exposes exactly **one** seam, the **pump**, in two halves:
+
+- `factory next` — the **run-level** pump (`src/driver/next.ts`, `pumpRun`): emits a `NextEnvelope` of ready tasks (or terminal / quota-blocked).
+- `factory drive` — the **task-level** pump (`src/driver/pump.ts`, `pumpTask`): emits a `DriveEnvelope` spawn manifest; re-invoked with `--results` it folds the spawned agents' raw output into exactly **one** state step (fold cores in `src/driver/fold.ts`).
+
+A **driver** carries no pipeline logic of its own — it only calls the pump, spawns the `Agent()`s the `DriveEnvelope` manifest names, and feeds their output back via `drive --results`. Two interchangeable drivers pump the same seam, selected by `--mode` on `/factory:run`:
+
+- `--mode session` (default) — the in-session LLM orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`), which can spawn `Agent()`s directly.
+- `--mode workflow` — the plugin-shipped Workflow script (`workflows/factory-run.workflow.js`), which wraps every CLI call in a small exec agent (Workflow JS cannot shell out).
+
+Both are subscription-only; there is no headless `claude -p` / API-token path.
+
+**Why:**
+
+- **One implementation of the loop, by construction.** The earlier design had the loop expressed twice — an in-process driver (`src/driver/loop.ts`, `driveTask` / `driveRun`) used in tests, and the orchestrator skill mirroring it by prose — kept in agreement only by discipline. Collapsing both onto the pump makes the loop a single tested kernel both drivers inherit verbatim; two drivers cannot diverge on a transition because neither owns one.
+- **Idempotent, exactly-once folds.** `drive` without `--results` re-derives the same spawn envelope from persisted state (safe to retry after any crash); `drive --results` validates the echoed `fold_key` (`{stage, rung}`) against the live cursor before any mutation, so a stale or duplicate delivery is rejected loud instead of double-folded. The resume cursor is the new `TaskState.stage` field.
+- **The seam is driver-agnostic.** Because the pump emits a manifest and the driver merely spawns it, adding a driver (e.g. a future out-of-session scheduler) is a new thin loop over the unchanged seam — not a re-implementation of pipeline logic.
+
+**What this retired:** the six single-step CLI writers — `run-task`, `advance`, `drop`, `record-producer`, `record-holdout`, `record-reviews` — collapsed into the pump; their fold logic now runs inside `drive --results` (`src/driver/fold.ts`). `src/driver/loop.ts` and `src/driver/agent-runner.ts` (the in-process `driveTask` / `driveRun` loop) were deleted. The surviving non-pump writers are `spec`, `rescue`, `scaffold`, `configure`, `state`; the current `factory` subcommand registry is `config-defaults, configure, run, spec, rescue, score, state, scaffold, drive, next`.
+
+**Trade-off:** A driver re-invokes the CLI per step (one process spawn per pump call) rather than running the loop in-process, and must persist/relay the per-spawn results file between `drive` calls. Accepted: the spawn boundary is where an `Agent()` call is unavoidable anyway, and per-call idempotency is what makes crash-resume and the two-driver story sound.
+
+**Relationship:** Realises the Model-A split (Decision 2) as a single seam rather than a reporter+writer fan-out; preserves derive-don't-store (Decision 1) and verify-then-fix (Decision 27) — both now fold through `drive --results`; the workflow driver is the unpaced mode of Decision 24.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

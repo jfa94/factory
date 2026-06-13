@@ -6,8 +6,11 @@ and competence with `gh`. For the deterministic detail of each step, see the
 [CLI reference](../reference/cli.md); for the full control loop, see
 `skills/pipeline-orchestrator/SKILL.md`.
 
-The pipeline runs **in your Claude Code session** — you (the session) are the
-Model-A orchestrator; the `factory` CLI is the deterministic brain.
+The `factory` CLI is the deterministic engine: it owns all control flow and
+exposes one seam, the **pump** (`factory next` + `factory drive`). A thin
+**driver** pumps that seam and spawns the agents each envelope names. You pick the
+driver with `--mode` (below); the default runs the loop **in your Claude Code
+session**.
 
 ## 1. Scaffold the target repo (once per repo)
 
@@ -31,16 +34,30 @@ branch manually first. See [Scaffold a target repo](./scaffold-a-repo.md).
 | `--repo <owner/name>` | yes      | Target repo.                                                                            |
 | `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                 |
 | `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                    |
-| `--driver`            | no       | `sequential` (concurrency 1) \| `balanced` (concurrency 3). Default `balanced`.         |
+| `--mode`              | no       | `session` (default) \| `workflow`. Which driver pumps the seam — see below.             |
 | `--ship-mode`         | no       | `no-merge` (default; opens task PRs, never merges) \| `live` (auto-merge into staging). |
+
+`--mode` selects the driver. Both pump the same `factory next` / `factory drive`
+seam and enforce the identical engine gates; they differ only in where the loop
+runs:
+
+- **`--mode session`** (default) — the in-session LLM orchestrator loop
+  (`skills/pipeline-orchestrator/SKILL.md`). It runs in your Claude Code session
+  and drives tasks one at a time.
+- **`--mode workflow`** — the plugin-shipped Workflow script
+  (`workflows/factory-run.workflow.js`). It drives ready tasks in the background;
+  because Workflow JS cannot shell out, it wraps every `factory` CLI call in a
+  small exec agent. Note: workflow mode has no quota pacing (it cannot observe the
+  usage signal) — it hard-stops when the allowance runs out.
 
 `--ship-mode` is the cutover-safety knob. The default `no-merge` opens each task
 PR but never merges; pass `live` only when you have explicitly opted into
-auto-merge.
+auto-merge. Ship mode is not persisted — re-pass it on resume.
 
 ## 3. What happens (the four phases)
 
-The orchestrator follows `skills/pipeline-orchestrator/SKILL.md`:
+The driver follows `skills/pipeline-orchestrator/SKILL.md` (session mode) or runs
+the equivalent Workflow script (workflow mode):
 
 1. **Preconditions** — `factory scaffold` (idempotent re-check).
 2. **Spec** — the bounded generate ⇄ review loop (`factory spec
@@ -48,11 +65,12 @@ resolve|gate|store`), spawning `spec-generator` / `spec-reviewer`, until the
    spec is `reuse`d or `stored`.
 3. **Create** — `factory run create`; the `RunState` is emitted with the tasks
    seeded.
-4. **Drive** — the run loop (dependency order, cascade-drop, deadlock guard)
-   wrapping the per-task stage machine (`preflight → tests → exec → verify →
-ship`). For each task the orchestrator spawns the producers and the review
-   panel the CLI's envelopes ask for, and folds each outcome back with the
-   `record-*` writers.
+4. **Drive** — the driver pumps the seam. `factory next` returns the ready task;
+   `factory drive` advances it through the per-task stage machine (`preflight →
+tests → exec → verify → ship`), emitting a spawn manifest whenever it needs
+   agents. The driver spawns the producers and the review panel the manifest
+   names, then folds their raw output back with `factory drive --results` (one
+   state step). The engine — not the driver — decides every transition.
 5. **Completion** — `factory run finalize` builds the report, files one issue per
    drop, and ships the `staging → develop` rollup; then `factory score` +
    `factory state --summary` report the outcome.

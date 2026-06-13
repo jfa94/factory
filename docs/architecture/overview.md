@@ -34,60 +34,70 @@ most important structural fact about the system.
 
 ```mermaid
 graph TD
-  subgraph Surface["Orchestrator surface (markdown)"]
+  subgraph Surface["Driver surface (markdown + workflow)"]
     Cmd[commands/*.md]
     Skill[skills/pipeline-orchestrator/SKILL.md]
     Agents[agents/*.md]
+    WF[workflows/factory-run.workflow.js]
   end
 
   subgraph Engine["Deterministic engine (TypeScript)"]
-    CLI[factory CLI<br/>dist/factory.js]
+    CLI[factory CLI<br/>dist/factory.js<br/>pump: next + drive]
     Hook[factory-hook<br/>dist/factory-hook.js]
   end
 
-  Session[In-session LLM orchestrator] -->|loads| Skill
-  Session -->|calls subcommands| CLI
-  CLI -->|JSON envelope: what to spawn next| Session
-  Session -->|Agent spawns| Producers[test-writer / executor]
-  Session -->|Agent spawns| Panel[6-reviewer panel + holdout + verifiers]
-  Session -->|folds outcomes| CLI
+  Driver["Driver (--mode session loop | workflow script)"] -->|loads| Skill
+  Driver -->|pumps: next / drive| CLI
+  CLI -->|envelope: spawn manifest / next step| Driver
+  Driver -->|Agent spawns| Producers[test-writer / executor]
+  Driver -->|Agent spawns| Panel[6-reviewer panel + holdout + verifiers]
+  Driver -->|drive --results: folds outcomes| CLI
   CLI -->|reads/writes| State[(run/spec state)]
-  Hook -->|deny/allow at tool-use| Session
+  Hook -->|deny/allow at tool-use| Driver
 ```
 
-**The CLI is the brain.** `factory <subcommand>` owns _all_ run-state writes, the
-spec gates, the deterministic verifier gates, failure classification, the
-producer escalation ladder, the risk-invariant review floor, and PR creation. It
-is deterministic and tested. It **never spawns an agent**.
+**The CLI is the brain, and it owns ALL control flow.** `factory <subcommand>`
+owns _all_ run-state writes, the spec gates, the deterministic verifier gates,
+failure classification, the producer escalation ladder, the risk-invariant review
+floor, PR creation — and the pipeline loop itself, exposed through ONE seam, the
+**pump** (`factory next` + `factory drive`). It is deterministic and tested. It
+**never spawns an agent**.
 
-**The orchestrator is the hands.** It performs every `Agent()` spawn the CLI
-reports, collects the agents' raw output, writes it to a file, and folds it back
-via a writer subcommand. It never decides a transition, re-runs a gate,
-classifies a failure, or writes state by prose.
+**A driver is the hands.** A thin driver pumps the seam: it performs every
+`Agent()` spawn the pump's manifest names, collects the agents' raw output, and
+feeds it back via `factory drive --results`. It never decides a transition,
+re-runs a gate, classifies a failure, or writes state by prose. Two interchangeable
+drivers exist (selected by `--mode` on `/factory:run`): the in-session orchestrator
+loop (`--mode session`, default) and the plugin-shipped Workflow script (`--mode
+workflow`).
 
-The CLI is a **reporter + writer**, not a runner:
+The CLI is a **reporter + pump + writer**, not a runner:
 
-- **Reporter** subcommands (`run-task`, `spec`, `score`, `rescue scan`,
-  `state`) emit one JSON envelope and write nothing (except `run-task --stage
-ship`, which is terminal-by-construction and writes the ship outcome).
-- **Writer** subcommands (`advance`, `drop`, `record-producer`,
-  `record-holdout`, `record-reviews`, `rescue apply`, `configure`) fold an agent
-  outcome (or an operator decision) into state in a single step and return the
-  next step.
+- **The pump** — `next` (run-level: the ready set) and `drive` (task-level: run a
+  task's deterministic stages, emit a spawn manifest, and via `--results` fold the
+  agents' output into ONE state step). This is the only control-flow seam.
+- **Reporter** subcommands (`spec`, `score`, `rescue scan`, `state`) emit one JSON
+  envelope and write nothing.
+- **Writer** subcommands (`spec` store, `rescue apply`, `scaffold`, `configure`,
+  `run create`/`finalize`) fold a result or an operator decision into state.
+
+The six retired single-step writers (`run-task`, `advance`, `drop`,
+`record-producer`, `record-holdout`, `record-reviews`) collapsed into the pump.
 
 Why this split exists, and what it buys, is the subject of
 [explanation/model-a.md](../explanation/model-a.md).
 
 ## The run lifecycle
 
-A run proceeds through four orchestrator phases. The CLI provides the
-deterministic glue at each phase; the orchestrator owns the agent spawns and the
-loop.
+A run proceeds through four phases. The CLI provides the deterministic glue — and
+the loop itself, behind the pump — at each phase; the driver owns only the agent
+spawns. The participant below is the driver (the in-session orchestrator loop by
+default, or the Workflow script).
 
 ```mermaid
 sequenceDiagram
-  participant O as Orchestrator
-  participant CLI as factory CLI
+  participant O as Driver
+  participant CLI as factory CLI (engine + pump)
   participant A as Agents
 
   Note over O,CLI: Phase 0 — Preconditions
@@ -104,14 +114,16 @@ sequenceDiagram
   O->>CLI: factory run create --repo o/n --issue n
   CLI-->>O: RunState (tasks seeded, status running)
 
-  Note over O,CLI: Phase 3 — Drive (run loop × per-task stage machine)
-  loop each ready task: preflight→tests→exec→verify→ship
-    O->>CLI: factory run-task --stage <s>
-    CLI-->>O: stage_result (advance | spawn-agents | task-terminal | wait-retry)
-    O->>A: spawn producers / panel / holdout / verifiers
-    A-->>O: STATUS line / raw reviews
-    O->>CLI: factory record-* / advance
-    CLI-->>O: next step
+  Note over O,CLI: Phase 3 — Drive (run-pump picks a task, task-pump advances it)
+  loop until all-terminal
+    O->>CLI: factory next
+    CLI-->>O: NextEnvelope (tasks-ready | all-terminal | quota-blocked)
+    loop drive the ready task: preflight→tests→exec→verify→ship
+      O->>CLI: factory drive --task <t> [--results <prev>]
+      CLI-->>O: DriveEnvelope (spawn manifest | terminal | quota-blocked)
+      O->>A: spawn the agents the manifest names
+      A-->>O: STATUS line / raw reviews
+    end
   end
 
   Note over O,CLI: Phase 4 — Completion
