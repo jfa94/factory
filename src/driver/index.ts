@@ -16,8 +16,6 @@ export type { FinalizeRunDeps, FinalizeRunResult } from "./finalize.js";
 // -- the shared deterministic transition logic (the pumps build on these) ------
 export {
   dropTask,
-  escalateOrDrop,
-  classifyProducerFailure,
   applyProducerOutcome,
   type TransitionDeps,
   type TaskOutcome,
