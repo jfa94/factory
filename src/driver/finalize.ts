@@ -49,7 +49,7 @@ const log = createLogger("finalize");
 /** The label every factory-filed issue carries (the finalize dedup key). */
 const FACTORY_ISSUE_LABEL = "factory";
 
-/** The deps the finalize coordinator needs — a subset of {@link DriveDeps} + CLI deps. */
+/** The deps the finalize coordinator needs — a subset of {@link import("./pump.js").PumpDeps} + CLI deps. */
 export interface FinalizeRunDeps {
   /** The only sanctioned state read/write path. */
   readonly state: StateManager;
@@ -67,8 +67,9 @@ export interface FinalizeRunDeps {
   readonly shipMode: ShipMode;
   /**
    * ISO stamp for the report + telemetry (tests pin this). Defaults to nowIso().
-   * Named `nowIso` (not `now`) so {@link DriveDeps} — whose `now: () => number` is
-   * the quota epoch-seconds clock — assigns structurally to this deps subset.
+   * Named `nowIso` (not `now`) so {@link import("./pump.js").PumpDeps} — whose
+   * `now: () => number` is the quota epoch-seconds clock — assigns structurally to
+   * this deps subset.
    */
   readonly nowIso?: string;
   /** Rollup CI-poll tuning (tests inject a no-op sleep + a tiny budget). */

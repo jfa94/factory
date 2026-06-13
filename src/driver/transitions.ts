@@ -1,25 +1,22 @@
 /**
- * WS10 / Task C — the SHARED deterministic task-transition logic.
+ * WS10 — the SHARED deterministic task-transition logic.
  *
- * This is the one home for the per-task ladder + drop/complete logic that BOTH
- * drivers need:
- *   - the in-process {@link import("./loop.js").driveTask} loop (the v1 session
- *     "Balanced"/"Sequential" presets + the v2 Workflow driver), and
- *   - the `factory record-producer` / `record-reviews` / `drop` CLI subcommands
- *     (the orchestrator-sequenced single-step path — Task C).
+ * This is the one home for the per-task escalation ladder + drop/complete logic
+ * the engine builds on: the per-task pump ({@link import("./pump.js").pumpTask})
+ * acts on a live stage result through these, and the fold cores
+ * ({@link import("./fold.js")}) fold an out-of-band agent result through the same
+ * functions. Keeping the ladder here (not duplicated across the spawn path and the
+ * fold path) guarantees a crash-resume fold and a live pump step can never diverge.
  *
  * Both must apply the IDENTICAL escalation ladder (Δ D / Decision 25): a classified
  * retry bumps `escalation_rung` and clears the stale reviewers (so the next verify
  * re-derives fresh), capped at {@link ESCALATION_CAP}; an unrecoverable failure is a
- * classified LOUD drop. Keeping it here (not duplicated in the CLI) guarantees the
- * session-CLI path and the in-process loop can never diverge — the existing loop
- * test-suite is the regression guard for this extraction.
+ * classified LOUD drop.
  *
  * SCOPE: these functions own ONLY run-state mutations + the resulting next-step
  * intent ({@link TaskStep}). They never spawn agents, never run gates, and never do
- * git I/O — that is the reporter's / loop's / subcommand's job. Each takes the
- * narrow {@link TransitionDeps} (just the {@link StateManager}), so the CLI (which
- * has no agent runners) reuses them verbatim.
+ * git I/O — that is the reporter's / pump's job. Each takes the narrow
+ * {@link TransitionDeps} (just the {@link StateManager}).
  */
 import {
   classifyFailure,
@@ -30,6 +27,7 @@ import {
   type FailureClass,
   type ProducerOutcome,
   type ProducerRole,
+  type RunState,
   type StateManager,
   type TaskStage,
 } from "./deps.js";
@@ -54,18 +52,23 @@ export type TaskStep =
 
 /**
  * Persist the in-flight {@link import("./deps.js").TaskStatus} for `stage`,
- * stamping `started_at` on first entry. The in-process loop calls this at the top
- * of each iteration; the CLI record subcommands call it after a transition that
- * resumes at a stage, so the persisted status tracks the resume point.
+ * stamping `started_at` on first entry. The pump calls this when it needs the
+ * cursor written for a stage it is about to run; the fold paths call it (via
+ * persistStepCursor) after a transition that resumes at a stage, so the persisted
+ * status tracks the resume point.
+ *
+ * RETURNS the updated {@link RunState} (from the single locked `updateTask` write)
+ * so the pump can consume it directly instead of issuing a redundant `state.read`
+ * — discarding callers (persistStepCursor) ignore it safely.
  */
-export async function markInFlight(
+export function markInFlight(
   deps: TransitionDeps,
   runId: string,
   taskId: string,
   stage: TaskStage,
-): Promise<void> {
+): Promise<RunState> {
   const status = stageToInFlightStatus(stage);
-  await deps.state.updateTask(runId, taskId, (t) => ({
+  return deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status,
     stage,
@@ -129,8 +132,9 @@ export async function dropStep(
  * (the ladder, not the classifier, owns the cap).
  *
  * Note: this persists only the DOMAIN state (rung + reviewers); the in-flight
- * status for `resumeStage` is the caller's concern (the loop re-marks it next
- * iteration; the CLI calls {@link markInFlight} after).
+ * status for `resumeStage` is the caller's concern (the pump re-marks it via
+ * {@link markInFlight} next iteration; the fold path stamps it via
+ * persistStepCursor).
  */
 export async function escalateOrDrop(
   deps: TransitionDeps,
@@ -193,14 +197,14 @@ export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecis
 }
 
 /**
- * Act on a completed producer spawn (the actSpawn-post logic shared by the loop +
- * `factory record-producer`). On `done`: record `producer_role` and advance to
- * `stageAfter`. On any failure status: classify (Δ D) → {@link escalateOrDrop},
- * resuming at the SAME producer `stage`.
+ * Fold a completed producer spawn into state (the producer-result logic the pump's
+ * `applyRecordProducer` fold core calls). On `done`: record `producer_role` and
+ * advance to `stageAfter`. On any failure status: classify (Δ D) →
+ * {@link escalateOrDrop}, resuming at the SAME producer `stage`.
  *
- * The caller is responsible for the actual spawn (the loop via the injected
- * runner; the CLI via the orchestrator's Agent spawn) — this only folds the
- * resulting {@link ProducerOutcome} into state + the next step.
+ * The caller is responsible for the actual spawn (the orchestrator's Agent spawn,
+ * collected out-of-band) — this only folds the resulting {@link ProducerOutcome}
+ * into state + the next step.
  */
 export async function applyProducerOutcome(
   deps: TransitionDeps,

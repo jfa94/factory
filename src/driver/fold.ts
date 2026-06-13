@@ -69,7 +69,7 @@ const log = createLogger("fold");
 
 /**
  * What a fold needs: the reporter bundle ({@link HandlerDeps}) + the sanctioned
- * state write path.  A strict subset of {@link import("./types.js").DriveDeps}.
+ * state write path.  A strict subset of {@link import("./pump.js").PumpDeps}.
  */
 export interface FoldDeps extends HandlerDeps {
   readonly state: StateManager;

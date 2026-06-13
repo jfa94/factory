@@ -1,27 +1,21 @@
 /**
  * WS10 — the driver's PUBLIC barrel.
  *
- * The Model-A driver: REPORTER handlers ({@link makeStageHandlers}) + the ACTOR
- * loop ({@link driveTask}/{@link driveRun}/{@link Driver}) + the spawn mechanics
- * and the dependency-bundle types the CLI (Task C) and the v2 Workflow driver wire
- * against. `deps.ts` stays INTERNAL (it is the driver's own deep-import barrel);
- * consumers import the frozen seams from `src/types` and each domain barrel, and
- * the driver-specific shapes from here.
+ * The Model-A driver engine: the deterministic SEAM the CLI/orchestrator drives —
+ * the per-task pump ({@link pumpTask}), the run-level pump ({@link pumpRun}), the
+ * fold cores, the quota gate, and the finalize coordinator — plus the reporter
+ * dependency-bundle types those callers wire against. `deps.ts` stays INTERNAL (it
+ * is the driver's own deep-import barrel); consumers import the frozen seams from
+ * `src/types` and each domain barrel, and the driver-specific shapes from here.
  */
-
-// -- the loop (actor) --------------------------------------------------------
-export { driveTask, driveRun, Driver } from "./loop.js";
 
 // -- the run FINALIZE coordinator (rollup + report + issues; WS12) ------------
 export { finalizeRun } from "./finalize.js";
 export type { FinalizeRunDeps, FinalizeRunResult } from "./finalize.js";
 
-// -- the shared deterministic transition logic (loop + pumps) -----------------
+// -- the shared deterministic transition logic (the pumps build on these) ------
 export {
-  markInFlight,
-  completeTask,
   dropTask,
-  dropStep,
   escalateOrDrop,
   classifyProducerFailure,
   applyProducerOutcome,
@@ -30,32 +24,15 @@ export {
   type TaskStep,
 } from "./transitions.js";
 
-// -- the handlers (reporters) + shared reporter helpers ----------------------
-export { makeStageHandlers, specTaskOf, shipBody } from "./handlers.js";
+// -- shared reporter helpers --------------------------------------------------
+export { specTaskOf, shipBody } from "./handlers.js";
 
-// -- the shared stateful ship pass (loop + pump ship) -------------------------
-export { shipTask, type ShipDeps } from "./ship.js";
-
-// -- spawn mechanics (the manifest→runner translation) -----------------------
-export { spawnProducer, spawnReviewers, spawnScribe, asProducerRole } from "./agent-runner.js";
-
-// -- dependency-bundle types (reporter deps + loop runners) -------------------
-export type {
-  ShipMode,
-  HandlerDeps,
-  DriverRunners,
-  DriveDeps,
-  ReviewerRunner,
-  ReviewerSpawnInput,
-  ScribeRunner,
-} from "./types.js";
+// -- dependency-bundle types (the reporter deps the pumps + CLI wire) ----------
+export type { ShipMode, HandlerDeps } from "./types.js";
 
 // -- prompt-artifact store (the prompt_ref round-trip) -----------------------
 export { InMemoryArtifactStore, FsArtifactStore } from "./artifacts.js";
 export type { ArtifactStore } from "./artifacts.js";
-
-// -- per-task worktree path derivation ---------------------------------------
-export { taskWorktreePath } from "./paths.js";
 
 // -- fold cores (the pump's deterministic result-fold kernels) ----------------
 export {
@@ -76,7 +53,7 @@ export {
 // -- drive results schema (factory drive --results input) --------------------
 export { DriveResultsSchema, parseDriveResults, type DriveResults } from "./results.js";
 
-// -- quota gate (shared by pumps + driveRun) ----------------------------------
+// -- quota gate (shared by both pumps) ----------------------------------------
 export { applyQuotaGate, type QuotaGateDeps, type QuotaStop } from "./quota-gate.js";
 
 // -- per-task coroutine pump (factory drive seam) ----------------------------

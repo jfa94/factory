@@ -1,11 +1,9 @@
 /**
- * WS10 / Task C — the SHARED stateful ship pass.
+ * WS10 — the SHARED stateful ship pass.
  *
  * Ship is the one task stage with NO agent→record cycle: it is fully deterministic
- * git/PR I/O, so BOTH drivers run the identical logic here rather than routing it
- * through a reporter + a separate record subcommand:
- *   - the in-process {@link import("./loop.js").driveTask} loop (via `stageResultFor`),
- *   - the `factory run-task --stage ship` single-step CLI path (Task C).
+ * git/PR I/O, so the per-task pump ({@link import("./pump.js").pumpTask}) runs this
+ * logic directly rather than routing it through a reporter + a separate fold.
  *
  * Unlike the pure {@link import("./handlers.js").makeStageHandlers} `ship` reporter
  * (which opens the PR but cannot write state or merge), {@link shipTask} DOES write
@@ -13,8 +11,8 @@
  * MergeSerializer — it needs the {@link StateManager}, so it lives here next to the
  * other shared state-writers ({@link import("./transitions.js")}) rather than in a
  * reporter. It still does NOT write the terminal `done` status: it returns a
- * `task-terminal` {@link StageResult} the caller folds via `completeTask` (the loop's
- * `act`; the CLI ship path explicitly), keeping "write done" in one place.
+ * `task-terminal` {@link StageResult} the pump folds via completeTask, keeping
+ * "write done" in one place.
  */
 import {
   taskDone,

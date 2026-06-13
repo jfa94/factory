@@ -19,8 +19,9 @@
  *     driver replays only the last unacknowledged delivery), not against
  *     arbitrarily delayed redelivery.
  *
- * This is loop.ts's driveTask with the spawn boundary inverted: where the loop
- * awaited injected DriverRunners, the pump returns the manifest to the caller.
+ * Spawn-boundary inversion: instead of awaiting an injected agent runner in
+ * process, the pump RETURNS the spawn manifest to the caller (the orchestrator)
+ * and resumes on the next invocation by folding the collected results.
  * Holdout-before-reviews — an Iron Law the old skill enforced by prose — is here
  * mere code ordering inside foldResults.
  */
@@ -274,6 +275,12 @@ export async function pumpTask(
 
   let stage: TaskStage = task.stage ?? "preflight";
 
+  // Tracks whether the cursor for `stage` is ALREADY persisted, so the loop's
+  // markInFlight is skipped when a fold (below) just wrote the identical cursor —
+  // avoiding a duplicate locked RMW + fsync per fold. An advance/re-route inside
+  // the loop sets it back to false (the new stage's cursor is not yet written).
+  let cursorPersisted = false;
+
   // 3. Fold the previous spawn's results (validated against the cursor's stage + rung).
   if (results !== undefined) {
     const step = await foldResults(deps, runId, taskId, stage, task, results);
@@ -281,13 +288,21 @@ export async function pumpTask(
       return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
     }
     stage = step.stage;
+    // foldResults persists the resume cursor for a non-terminal step (via
+    // persistStepCursor or applyRecordReviews' advance-write), so it is current.
+    cursorPersisted = true;
   }
 
-  // 4. The deterministic pump loop (loop.ts act() semantics, spawn inverted).
+  // 4. The deterministic stage loop — run a handler, fold its result, advance the
+  //    cursor; the only break is a spawn (boundary inverted: return the manifest).
   const handlers = makeStageHandlers(deps);
   for (;;) {
-    await markInFlight(deps, runId, taskId, stage);
-    run = await deps.state.read(runId);
+    // Write the cursor only when it is not already current; either way obtain the
+    // fresh RunState (markInFlight returns it; otherwise a lock-free read).
+    run = cursorPersisted
+      ? await deps.state.read(runId)
+      : await markInFlight(deps, runId, taskId, stage);
+    cursorPersisted = true;
     task = requireTask(run, taskId);
     const ctx: StageContext = { run, task, attempt: task.escalation_rung + 1 };
 
@@ -297,6 +312,7 @@ export async function pumpTask(
     switch (result.kind) {
       case "advance": {
         stage = result.to;
+        cursorPersisted = false; // new stage's cursor not yet written
         continue;
       }
       case "spawn-agents": {
@@ -360,6 +376,7 @@ export async function pumpTask(
               `(attempt ${newResyncs}/${MERGE_RESYNC_CAP})`,
           );
           stage = "exec";
+          cursorPersisted = false; // exec cursor not written by the resync bump
           continue;
         }
         // verify floor blocked on a crash-resume replay → same classify path as the fold.
@@ -374,6 +391,7 @@ export async function pumpTask(
           return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
         stage = step.stage;
+        cursorPersisted = false; // escalateOrDrop wrote rung+reviewers, not the cursor
         continue;
       }
       case "graceful-stop":

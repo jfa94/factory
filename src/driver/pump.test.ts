@@ -225,6 +225,44 @@ describe("pumpTask", () => {
     }
   });
 
+  // De-duplication pin (Task 4.1 Step 2b): one fold cycle that resumes at a stage
+  // must write that stage's cursor EXACTLY ONCE. Before the fix the fold's
+  // persistStepCursor wrote the cursor and the pump loop's first markInFlight wrote
+  // the IDENTICAL cursor again (2 locked RMW + fsync per fold). A counting wrapper
+  // over updateTask tallies writes that set the resumed cursor (stage "exec").
+  it("folding a producer DONE writes the resumed exec cursor exactly once (no duplicate RMW)", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps();
+    try {
+      const env1 = await pumpTask(deps, runId, "T1"); // → tests spawn
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") return;
+
+      // Wrap updateTask to count writes whose produced task lands on the exec cursor.
+      const realUpdateTask = deps.state.updateTask.bind(deps.state);
+      let execCursorWrites = 0;
+      deps.state.updateTask = (rid, tid, mutator) =>
+        realUpdateTask(rid, tid, (t) => {
+          const next = mutator(t);
+          if (tid === "T1" && next.stage === "exec" && next.status === "executing") {
+            execCursorWrites += 1;
+          }
+          return next;
+        });
+
+      const env = await pumpTask(deps, runId, "T1", {
+        fold_key: env1.fold_key,
+        producer: { status: "STATUS: DONE" },
+      });
+      expect(env.kind).toBe("spawn");
+      if (env.kind !== "spawn") return;
+      expect(env.stage).toBe("exec");
+      // Exactly one cursor write for the resumed exec stage — not two.
+      expect(execCursorWrites).toBe(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("a blocked producer escalates the rung and re-spawns the same stage", async () => {
     const { deps, runId, cleanup } = await makePumpDeps();
     try {
@@ -241,6 +279,49 @@ describe("pumpTask", () => {
       expect(env.stage).toBe("tests");
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.escalation_rung).toBe(1);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Relocated from loop.test.ts ("a producer blocked-escalate outcome drops
+  // immediately as spec-defect (no retry burn)"): a BLOCKED-escalate status is a
+  // spec-defect signal the producer itself raises — it drops on the FIRST spawn
+  // without bumping the rung (classify-before-retry, Δ D), distinct from the
+  // NEEDS_CONTEXT capability retry above.
+  it("a producer blocked-escalate folds to an immediate spec-defect drop (no rung burn)", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps();
+    try {
+      const env1 = await pumpTask(deps, runId, "T1"); // tests spawn, rung 0
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") return;
+      const env = await pumpTask(deps, runId, "T1", {
+        fold_key: env1.fold_key,
+        producer: { status: "STATUS: BLOCKED — escalate" },
+      });
+      expect(env).toMatchObject({
+        kind: "terminal",
+        outcome: { outcome: "dropped", failure_class: "spec-defect" },
+      });
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T1"]?.escalation_rung).toBe(0); // never escalated
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Relocated from loop.test.ts ("tdd_exempt task skips the test-writer"): a
+  // tdd_exempt task has no tests stage — the FIRST producer spawn is the executor.
+  it("tdd_exempt task skips the tests spawn (executor is the first producer spawn)", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", tdd_exempt: true }],
+    });
+    try {
+      const env = await pumpTask(deps, runId, "T1");
+      expect(env.kind).toBe("spawn");
+      if (env.kind !== "spawn") return;
+      expect(env.stage).toBe("exec");
+      expect(env.manifest.agents[0]?.role).toBe("executor");
     } finally {
       await cleanup();
     }
@@ -390,6 +471,60 @@ describe("pumpTask", () => {
         kind: "terminal",
         outcome: { outcome: "dropped", failure_class: "blocked-environmental" },
       });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Relocated from loop.test.ts ("a BEHIND merge re-routes through exec to re-sync,
+  // then lands on the next attempt"): the live serial-writer refusal is NOT a
+  // capability failure — it re-routes to an exec re-sync (bumping merge_resyncs),
+  // and once the branch is up to date the merge lands. In the pump model the
+  // re-sync surfaces as a fresh exec spawn the caller folds DONE.
+  it("live-merge BEHIND-once re-routes to an exec re-sync, then lands on the next attempt", async () => {
+    // A gh client that reports BEHIND on the FIRST prView, CLEAN thereafter.
+    class BehindOnceGh extends FakeGhClient {
+      private views = 0;
+      override async prView(n: number, fields: readonly string[]) {
+        const pr = await super.prView(n, fields);
+        this.views += 1;
+        return this.views === 1 ? { ...pr, mergeStateStatus: "BEHIND" as const } : pr;
+      }
+    }
+    const gh = new BehindOnceGh();
+    const { deps, runId, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c"] }],
+      shipMode: "live",
+      ghClient: gh,
+    });
+    try {
+      const panelEnv = await driveToVerify(deps, runId, "T1");
+      const withheld = (await deps.holdout.get(runId, "T1")).withheld_criteria;
+      // Fold approving reviews (+holdout pass) → the pump runs ship; the first
+      // prView is BEHIND, so it re-routes to an exec re-sync (a fresh exec spawn),
+      // bumping merge_resyncs.
+      const resyncEnv = await pumpTask(
+        deps,
+        runId,
+        "T1",
+        approvingReviewsResults(panelEnv, withheld),
+      );
+      expect(resyncEnv.kind).toBe("spawn");
+      if (resyncEnv.kind !== "spawn") throw new Error("expected an exec re-sync spawn");
+      expect(resyncEnv.stage).toBe("exec");
+      const midRun = await deps.state.read(runId);
+      expect(midRun.tasks["T1"]?.merge_resyncs).toBe(1);
+
+      // Fold DONE for the re-sync exec → ship runs again; prView is now CLEAN → merge lands.
+      const env = await pumpTask(deps, runId, "T1", {
+        fold_key: resyncEnv.fold_key,
+        producer: { status: "STATUS: DONE" },
+      });
+      expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
+      expect(gh.created).toHaveLength(1); // PR created once (idempotent on re-ship)
+      expect(gh.merges).toHaveLength(1); // merged once (the 2nd attempt)
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T1"]?.status).toBe("done");
     } finally {
       await cleanup();
     }

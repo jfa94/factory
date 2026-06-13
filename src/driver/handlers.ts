@@ -16,14 +16,14 @@
  * and the DRIVER bumps the rung on a classified retry. There is no `runLadder`
  * call here — v1 re-expresses only the OUTER ladder via the persisted rung.
  *
- * VERIFY + SHIP duality. The `verify`/`ship` methods here are the CLI single-step
- * REPORTERS (`factory run-task --stage verify|ship`) and deliberately do LESS than
- * the in-process loop: `verify` folds NO holdout evidence (a holdout-validate spawn
- * is loop-owned — a handler cannot spawn), and `ship` opens the PR idempotently but
- * does not merge (the MergeSerializer is loop-owned). The in-process driver
- * (loop.ts) special-cases both stages with `runVerify`/`runShip` instead of calling
- * these. That divergence is structural and accepted; full CLI holdout/merge wiring
- * lands in Task C.
+ * VERIFY + SHIP. The `verify` reporter here derives the floor from the
+ * already-recorded reviewers + gate evidence; it does NOT itself spawn the panel or
+ * the holdout-validator (a handler cannot spawn). The pump emits those agents out of
+ * band — the panel as the verify spawn manifest, the holdout-validator as a sidecar —
+ * and folds their results via the fold cores. `ship` is NOT served from this reporter
+ * at all: the pump runs the stateful {@link import("./ship.js").shipTask} (PR pointer
+ * writes + the live MergeSerializer) directly, since a reporter cannot write state or
+ * merge.
  */
 import {
   advance,
@@ -219,10 +219,11 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
     },
 
     /**
-     * verify (CLI single-step reporter — NO holdout): run the deterministic gates,
-     * then either spawn the risk-invariant panel (no reviewers yet) or DERIVE the
-     * floor from the already-recorded reviewers + gate evidence. The in-process loop
-     * uses `runVerify` instead (which additionally folds holdout evidence).
+     * verify reporter: run the deterministic gates, then either spawn the
+     * risk-invariant panel (no reviewers yet) or DERIVE the floor from the
+     * already-recorded reviewers + gate evidence. Holdout evidence is folded
+     * separately by the pump (the holdout-validator runs as an out-of-band sidecar);
+     * this reporter never spawns.
      */
     async verify(ctx: StageContext): Promise<StageResult> {
       const task = requireTask(ctx, "verify");
@@ -329,8 +330,9 @@ function floorBlockReason(
 
 /**
  * Resolve the DURABLE spec task for a run task id. LOUD when the spec drifts.
- * Module-scope + exported so the loop-owned `runShip` resolves the same way the
- * reporters do (one source of truth for run/spec drift detection).
+ * Module-scope + exported so the stateful {@link import("./ship.js").shipTask}
+ * resolves the same way the reporters do (one source of truth for run/spec drift
+ * detection).
  */
 export function specTaskOf(spec: SpecManifest, taskId: string): SpecTask {
   const found = spec.tasks.find((t) => t.task_id === taskId);

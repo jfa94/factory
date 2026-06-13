@@ -3,7 +3,7 @@
  *
  * The driver is the integration capstone: it wires SEVEN domains (state, stage-
  * machine, git, quota, spec, deterministic + judgment verifiers, producer). Rather
- * than scatter deep imports across handlers.ts / loop.ts / agent-runner.ts, this
+ * than scatter deep imports across handlers.ts / pump.ts / fold.ts, this
  * one module re-exports exactly the symbols the driver consumes, each FROM its
  * sanctioned public barrel (src/types for the frozen seams; the per-domain
  * index.ts otherwise) — never a deep `src/<domain>/<file>` import. Mirrors the

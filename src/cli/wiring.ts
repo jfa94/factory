@@ -8,10 +8,10 @@
  * path). This module assembles that bundle ONCE so each subcommand stays a thin
  * parse → wire → act shell.
  *
- * It deliberately produces NO agent runners ({@link import("../driver/types.js").DriverRunners}):
- * a `factory` CLI subprocess has no access to the Agent tool, so every step that
- * needs a spawn is the in-session orchestrator's job. The CLI carries only the
- * deterministic before/after seam — exactly {@link HandlerDeps} + state.
+ * It deliberately produces NO agent runners: a `factory` CLI subprocess has no
+ * access to the Agent tool, so every step that needs a spawn is the in-session
+ * orchestrator's job. The CLI carries only the deterministic before/after seam —
+ * exactly {@link HandlerDeps} + state.
  */
 import { loadConfig, resolveDataDir, type DataDirOptions } from "../config/index.js";
 import { StateManager } from "../core/state/index.js";
