@@ -60,8 +60,12 @@ describe("loadActiveRun — runs/current resolution", () => {
   it("unresolvable data dir → null (bare dev shell, no active run)", async () => {
     // resolveDataDir throws when nothing identifies a data dir; loadActiveRun
     // swallows THAT (path resolution) into null — distinct from a dangling link.
-    const active = await loadActiveRun({ dataDir: "" as unknown as string });
-    // An empty-string dataDir resolves to a path with no runs/current → null.
+    // HERMETIC: pass `env: {}` so resolution does NOT read the ambient
+    // CLAUDE_PLUGIN_DATA. Without this, a foreign CLAUDE_PLUGIN_DATA in the dev
+    // shell is canonicalized to the real factory data dir, and if THAT has an
+    // active `runs/current` (e.g. a live run on this machine) the call resolves
+    // to it instead of throwing — the test would then read shared external state.
+    const active = await loadActiveRun({ dataDir: "", env: {} });
     expect(active).toBeNull();
   });
 });

@@ -72,4 +72,30 @@ describe("Δ P — idempotent PR create", () => {
     expect(result.resumed).toBe(false);
     expect(gh.created).toHaveLength(1);
   });
+
+  it("post-merge-crash resume: a MERGED PR for the head re-binds the SAME number (no duplicate)", async () => {
+    // Regression (CP2 #12): ship merged the PR but crashed before recording
+    // `done` (the --delete-branch worktree failure). On resume, lookup-by-head
+    // must find the MERGED PR (state:"all") and re-bind it — NOT open a duplicate
+    // (the squashed branch has diverged from staging, so a fresh create would
+    // mis-open). The serial-writer merge step then idempotently no-ops.
+    const gh = new FakeGhClient({
+      prs: [
+        {
+          number: 99,
+          headRefName: "factory/run-1/t1",
+          baseRefName: "staging",
+          state: "MERGED",
+          url: "https://github.com/fake/repo/pull/99",
+        },
+      ],
+    });
+    const result = await createTaskPrIdempotent({ ghClient: gh, ...baseArgs });
+    expect(result).toEqual({
+      number: 99,
+      url: "https://github.com/fake/repo/pull/99",
+      resumed: true,
+    });
+    expect(gh.created).toHaveLength(0); // no duplicate opened
+  });
 });

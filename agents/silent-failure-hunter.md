@@ -20,7 +20,7 @@ quietly substitute a wrong-but-plausible value so the happy path "succeeds" whil
 actually broken. Well-formatted code hides these because nothing throws. Your single job is to
 find every place a failure is silenced.
 
-Inspect the change with `git -C <taskWorktree> diff staging`, then `Read` each changed file in
+Inspect the change with `git -C <taskWorktree> diff origin/staging`, then `Read` each changed file in
 full — a swallowed error is only a bug in light of what the caller assumed, so you need the
 call sites, not just the catch.
 
@@ -81,7 +81,7 @@ members) — note at most one adjacent issue as `blocking: false`.
 
 ## Process
 
-1. `git -C <taskWorktree> diff staging` for scope; `Read` each changed file.
+1. `git -C <taskWorktree> diff origin/staging` for scope; `Read` each changed file.
 2. Enumerate every `catch`, every call whose return type carries failure, every promise, every
    `??`/`||`/`finally` in the changed lines.
 3. For each, ask: if this fails, is the failure surfaced or recovered — or silently dropped? If

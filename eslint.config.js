@@ -28,7 +28,12 @@ const workflowParser = {
 
 export default [
   {
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "src/**/*.ts"],
+    // `.claude/**` holds ephemeral agent worktrees (full repo copies), project
+    // settings, and plans — none of it is lintable source. Without this, ESLint
+    // walks into `.claude/worktrees/*/` and lints stale copies of the build +
+    // workflow scripts (the latter parse-error on their top-level `return`,
+    // since the worktree path doesn't match the `workflows/**` parser override).
+    ignores: ["dist/**", "node_modules/**", "coverage/**", "src/**/*.ts", ".claude/**"],
   },
   js.configs.recommended,
   {

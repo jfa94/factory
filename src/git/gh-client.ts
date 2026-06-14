@@ -157,6 +157,13 @@ export interface GhClient {
   ): Promise<void>;
   /** Detect whether native GitHub merge-queue is available for this branch. */
   mergeQueueProbe(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<boolean>;
+  /**
+   * Delete ONLY the remote head ref via the API (`DELETE /git/refs/heads/<branch>`).
+   * Never touches the local branch — a per-task worktree holds it checked-out, so
+   * `git branch -D` would fail (that is exactly why `gh pr merge --delete-branch`
+   * cannot be used). Idempotent: a missing ref is success, not an error.
+   */
+  deleteRemoteBranch(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>;
 }
 
 /** Body for a branch-protection PUT (the subset WS3 sets). */
@@ -178,6 +185,19 @@ const PullRequestSchema = z.object({
   mergeStateStatus: z.string().optional(),
   url: z.string().optional(),
 });
+
+/**
+ * The fields `prView` MUST always request: every NON-optional key of
+ * {@link PullRequestSchema}. `gh pr view --json <subset>` returns ONLY the
+ * requested fields, so a caller asking for just a subset (e.g. the rollup wants
+ * `state,mergeable`) would otherwise leave `headRefName`/`baseRefName`/`state`
+ * absent and make the strict {@link parseGhJson} throw. prView unions these into
+ * every query so its guarantee always matches the schema. Derived FROM the schema
+ * so the two can never drift (add a required field → it's auto-requested).
+ */
+const REQUIRED_VIEW_FIELDS: readonly string[] = Object.entries(PullRequestSchema.shape)
+  .filter(([, schema]) => !schema.isOptional())
+  .map(([key]) => key);
 
 /**
  * Aggregate `gh pr checks --json bucket` rows into one {@link ChecksState}. A
@@ -306,10 +326,14 @@ export class DefaultGhClient implements GhClient {
   }
 
   async prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest> {
+    // Always request the schema's required fields (REQUIRED_VIEW_FIELDS): a caller
+    // may pass only a subset (e.g. the rollup wants state+mergeable), but the strict
+    // parse needs number+headRefName+baseRefName+state present or it throws.
+    const requested = Array.from(new Set([...REQUIRED_VIEW_FIELDS, ...fields]));
     const r = await runOrThrow(
       "gh",
       this.runner,
-      ["pr", "view", String(number), "--json", fields.join(",")],
+      ["pr", "view", String(number), "--json", requested.join(",")],
       this.execOpts(opts),
     );
     return parseGhJson(r, PullRequestSchema, "gh pr view");
@@ -346,6 +370,24 @@ export class DefaultGhClient implements GhClient {
     if (opts?.subject !== undefined) argv.push("--subject", opts.subject);
     if (opts?.body !== undefined) argv.push("--body", opts.body);
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
+
+  async deleteRemoteBranch(
+    owner: string,
+    repo: string,
+    branch: string,
+    opts?: GhOpts,
+  ): Promise<void> {
+    // Remote-ref delete via the API — never `git branch -D` (a worktree holds the
+    // local branch). Idempotent: a 422 "Reference does not exist" / 404 means the
+    // ref is already gone (success). Any other non-zero is a real error → throw.
+    const path = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
+    const r = await this.runner(["api", "--method", "DELETE", path], this.execOpts(opts));
+    if (r.code !== 0 && !/Reference does not exist|404|Not Found|422/i.test(r.stderr)) {
+      throw new Error(
+        `gh api DELETE ${path} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`,
+      );
+    }
   }
 
   async repoProtection(

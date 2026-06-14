@@ -244,6 +244,8 @@ By default Claude Code's `worktree.baseRef` is `"fresh"` — every `Agent({isola
 - **Blast radius:** `worktree.baseRef` is project-wide. It also changes interactive human `--worktree` / `Agent({isolation:"worktree"})` use in this repo — worktrees carry local unpushed HEAD instead of a clean `origin/main`. For the pipeline this is strictly more correct; for ad-hoc human use it is a behavior change to be aware of. No per-spawn override exists.
 - **Activation:** the `worktree` settings block is read at **session start**, not mid-session — it takes effect on the next session/run after the setting lands (supported since Claude Code v2.1.133).
 
+**Update (2026-06-13):** Same root cause, downstream of this decision — the review panel and holdout-validator inspect a task with `git -C <taskWorktree> diff origin/staging`, **not** `diff staging`. The task worktree forks from the remote-tracking ref `origin/staging` (`createTaskWorktree`, `src/git/worktree.ts`) and never maintains a local `staging` branch, so a bare `diff staging` is stale-or-absent: it degraded silently in session mode and hard-errors in workflow mode. `origin/staging` is the fork point and the deterministic inspect base. See [verifier.md](./verifier.md#how-the-panel-and-holdout-inspect-a-task).
+
 ---
 
 ## Decision 13: Bundled Autonomous Settings

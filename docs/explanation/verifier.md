@@ -62,6 +62,36 @@ regardless of how the task was tiered. The reviewer model is fixed (not
 quota-routed) for the same reason — review quality must not degrade under quota
 pressure.
 
+## How the panel and holdout inspect a task
+
+Both the review panel and the holdout-validator are spawned against the **task
+worktree** and inspect the change with:
+
+```bash
+git -C <taskWorktree> diff origin/staging
+```
+
+The diff base is `origin/staging` — the **remote-tracking ref**, not a local
+`staging` branch. This is load-bearing: `createTaskWorktree`
+(`src/git/worktree.ts`) creates the worktree with
+`git worktree add -b <branch> <path> origin/staging`, so it forks from
+`origin/staging` (fetched fresh at creation) and **never creates or maintains a
+local `staging` branch**. A bare `git diff staging` therefore resolves to a stale
+or absent local ref — it degraded silently in session mode (a local `staging`
+sometimes happened to be current, and reviewers Read files directly) and would
+hard-error in workflow mode (the background Workflow never checks out `staging`).
+`origin/staging` is exactly the fork point, so it is the deterministic base for
+every "inspect the diff" instruction. (Same root cause as the worktree-base
+invariant — see [decisions.md Decision 12](./decisions.md#decision-12-staging-branch-as-integration-point).)
+
+A reviewer's lens is **not** delivered as a per-run prompt file. The spawn
+manifest carries a `prompt_ref` of `reviews/prompts/<role>.md` for each reviewer
+purely to satisfy the manifest schema's non-empty constraint — no driver reads it
+and nothing writes it. Both drivers build the reviewer prompt **inline** from the
+reviewer's `agents/<role>.md` definition plus the shared
+`skills/review-protocol/SKILL.md` contract. Only a **producer's** `prompt_ref`
+points at a real per-run artifact a driver Reads (the `ProducerContext`).
+
 ## Verify-then-fix (Decision 27)
 
 A reviewer's raw "this is a blocker" cannot be trusted to act on directly: LLM

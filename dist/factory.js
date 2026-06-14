@@ -7083,6 +7083,7 @@ var PullRequestSchema = external_exports.object({
   mergeStateStatus: external_exports.string().optional(),
   url: external_exports.string().optional()
 });
+var REQUIRED_VIEW_FIELDS = Object.entries(PullRequestSchema.shape).filter(([, schema]) => !schema.isOptional()).map(([key]) => key);
 function aggregateChecks(rows) {
   if (rows.length === 0) return "none";
   const buckets = rows.map((r) => (r.bucket ?? "").toLowerCase());
@@ -7188,10 +7189,11 @@ var DefaultGhClient = class {
     );
   }
   async prView(number, fields, opts) {
+    const requested = Array.from(/* @__PURE__ */ new Set([...REQUIRED_VIEW_FIELDS, ...fields]));
     const r = await runOrThrow(
       "gh",
       this.runner,
-      ["pr", "view", String(number), "--json", fields.join(",")],
+      ["pr", "view", String(number), "--json", requested.join(",")],
       this.execOpts(opts)
     );
     return parseGhJson(r, PullRequestSchema, "gh pr view");
@@ -7223,6 +7225,15 @@ var DefaultGhClient = class {
     if (opts?.subject !== void 0) argv.push("--subject", opts.subject);
     if (opts?.body !== void 0) argv.push("--body", opts.body);
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
+  async deleteRemoteBranch(owner, repo, branch, opts) {
+    const path2 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
+    const r = await this.runner(["api", "--method", "DELETE", path2], this.execOpts(opts));
+    if (r.code !== 0 && !/Reference does not exist|404|Not Found|422/i.test(r.stderr)) {
+      throw new Error(
+        `gh api DELETE ${path2} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
+      );
+    }
   }
   async repoProtection(owner, repo, branch, opts) {
     const path2 = `repos/${owner}/${repo}/branches/${branch}/protection`;
@@ -7418,10 +7429,12 @@ var log8 = createLogger("git");
 var GIT_DEFAULTS3 = GitSchema.parse({});
 async function createTaskPrIdempotent(args) {
   const base = args.base ?? GIT_DEFAULTS3.stagingBranch;
-  const existing = await args.ghClient.prList({ head: args.branch, base, state: "open" });
-  const pr = existing[0];
+  const existing = await args.ghClient.prList({ head: args.branch, base, state: "all" });
+  const pr = existing.find((p) => p.state === "OPEN") ?? existing.find((p) => p.state === "MERGED");
   if (pr !== void 0) {
-    log8.info(`resuming existing PR #${pr.number} for head '${args.branch}' (no duplicate created)`);
+    log8.info(
+      `resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`
+    );
     return { number: pr.number, url: pr.url ?? "", resumed: true };
   }
   const created = await args.ghClient.prCreate({
@@ -7507,6 +7520,11 @@ var MergeSerializer = class {
         "mergeable",
         "mergeStateStatus"
       ]);
+      if (pr.state === "MERGED") {
+        log9.info(`PR #${prNumber} already MERGED into ${this.staging} \u2014 ship resuming`);
+        await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
+        return { merged: true, via: "app-level", number: prNumber };
+      }
       if (pr.mergeable === "CONFLICTING") {
         log9.warn(`PR #${prNumber} is CONFLICTING \u2014 not merged`);
         return { merged: false, reason: "not-mergeable", number: prNumber };
@@ -7527,8 +7545,9 @@ var MergeSerializer = class {
         log9.info(`PR #${prNumber} enqueued via native merge-queue`);
         return { merged: true, via: "merge-queue", number: prNumber };
       }
-      await this.ghClient.prMergeSquash(prNumber, { deleteBranch: true });
+      await this.ghClient.prMergeSquash(prNumber, {});
       log9.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
+      await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
       return { merged: true, via: "app-level", number: prNumber };
     });
   }
@@ -10270,7 +10289,7 @@ function buildHoldoutPrompt(record, worktree) {
   if (worktree !== void 0 && worktree.length > 0) {
     lines.push(
       `The implementation lives in the task worktree at: ${worktree}`,
-      `Inspect it with: git -C ${worktree} diff staging`,
+      `Inspect it with: git -C ${worktree} diff origin/staging`,
       `Do NOT rely on your own working directory \u2014 it is a fresh checkout with no diff.`,
       ""
     );
@@ -11060,6 +11079,10 @@ async function shipTask(deps, ctx) {
   const runId = ctx.run.run_id;
   const specTask = specTaskOf(deps.spec, task.task_id);
   const branch = runScopedBranch(runId, task.task_id);
+  await deps.git.push("origin", branch, {
+    setUpstream: true,
+    cwd: taskWorktreePath(deps.dataDir, runId, task.task_id)
+  });
   const pr = await createTaskPrIdempotent({
     ghClient: deps.gh,
     branch,

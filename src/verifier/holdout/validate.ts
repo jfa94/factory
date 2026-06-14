@@ -97,7 +97,7 @@ export function buildHoldoutPrompt(record: HoldoutRecord, worktree?: string): st
   if (worktree !== undefined && worktree.length > 0) {
     lines.push(
       `The implementation lives in the task worktree at: ${worktree}`,
-      `Inspect it with: git -C ${worktree} diff staging`,
+      `Inspect it with: git -C ${worktree} diff origin/staging`,
       `Do NOT rely on your own working directory — it is a fresh checkout with no diff.`,
       "",
     );

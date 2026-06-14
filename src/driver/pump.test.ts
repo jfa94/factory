@@ -29,7 +29,8 @@ import { ESCALATION_CAP } from "../producer/index.js";
 
 import { makePumpDeps, PAUSE_5H } from "./pump-fixtures.js";
 import type { PumpDeps } from "./pump.js";
-import { FakeGhClient } from "../git/fakes.js";
+import { FakeGhClient, FakeGitClient } from "../git/fakes.js";
+import { runScopedBranch } from "../git/index.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -391,6 +392,36 @@ describe("pumpTask", () => {
       const verdictStore = new FsHoldoutVerdictStore(dataDir);
       const verdicts = await verdictStore.get(runId, "T1");
       expect(verdicts.length).toBeGreaterThan(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("ship pushes the task branch to origin before opening the PR", async () => {
+    // Regression (CP2): preflight creates the task branch locally (checkout -B)
+    // and the producers commit locally — nothing pushed it to origin, so the real
+    // `gh pr create --head <branch>` failed with "Head ref must be a branch / No
+    // commits between". Ship MUST push the head branch to origin first.
+    const { deps, runId, dataDir, cleanup } = await makePumpDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["criterion-a", "criterion-b"] }],
+    });
+    const git = deps.git as FakeGitClient;
+    try {
+      await driveToVerify(deps, runId, "T1");
+      const withheld = (await deps.holdout.get(runId, "T1")).withheld_criteria;
+      const panelEnv = await pumpTask(deps, runId, "T1");
+      expect(panelEnv.kind).toBe("spawn");
+      if (panelEnv.kind !== "spawn") return;
+      const env = await pumpTask(deps, runId, "T1", approvingReviewsResults(panelEnv, withheld));
+      expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
+
+      const branch = runScopedBranch(runId, "T1");
+      // The run-scoped head branch was pushed to origin during ship.
+      const pushed = git.calls.some((c) => c.startsWith("push") && c.includes(`origin ${branch}`));
+      expect(pushed).toBe(true);
+      // And origin now resolves that head, so a real `gh pr create --head` would succeed.
+      expect(await git.lsRemoteHeads("origin", branch)).not.toBeNull();
+      void dataDir;
     } finally {
       await cleanup();
     }

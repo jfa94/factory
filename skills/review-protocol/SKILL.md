@@ -21,7 +21,7 @@ contract every panel member obeys.
 Your prompt gives you a **task worktree path**. Inspect the change with:
 
 ```bash
-git -C <taskWorktree> diff staging
+git -C <taskWorktree> diff origin/staging
 ```
 
 Read the actual files in that worktree to confirm anything you flag. You have read-only

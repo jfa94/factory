@@ -175,3 +175,78 @@ describe("prMergeSquash subject/body (rollup PARTIAL header, Δ S)", () => {
     expect(captured).not.toContain("--body");
   });
 });
+
+describe("deleteRemoteBranch (worktree-safe remote-ref delete, CP2 #11)", () => {
+  it("DELETEs the remote head ref via the API (never `git branch -D`)", async () => {
+    let captured: readonly string[] = [];
+    const runner: GhRunner = async (args) => {
+      captured = args;
+      return result({});
+    };
+    const gh = new DefaultGhClient(runner);
+    await gh.deleteRemoteBranch("o", "r", "factory/run-1/t1");
+    expect(captured).toEqual([
+      "api",
+      "--method",
+      "DELETE",
+      "repos/o/r/git/refs/heads/factory/run-1/t1",
+    ]);
+  });
+
+  it("is idempotent — a missing ref (422 'Reference does not exist') is success, not an error", async () => {
+    const runner: GhRunner = async () =>
+      result({ code: 1, stderr: "HTTP 422: Reference does not exist" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.deleteRemoteBranch("o", "r", "gone")).resolves.toBeUndefined();
+  });
+
+  it("throws on a real failure (auth/network is NOT silently swallowed)", async () => {
+    const runner: GhRunner = async () => result({ code: 1, stderr: "HTTP 401: Bad credentials" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.deleteRemoteBranch("o", "r", "b")).rejects.toThrow(/401|failed/i);
+  });
+});
+
+describe("prView always requests the schema's required fields (CP2 #15 — rollup subset crash)", () => {
+  const fullPr = {
+    number: 4,
+    headRefName: "staging",
+    baseRefName: "develop",
+    state: "OPEN",
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+  };
+
+  it("unions number/headRefName/baseRefName/state into a subset request so the strict parse never starves", async () => {
+    let captured: readonly string[] = [];
+    const runner: GhRunner = async (args) => {
+      captured = args;
+      return result({ stdout: JSON.stringify(fullPr) });
+    };
+    const gh = new DefaultGhClient(runner);
+    // Caller asks for only state+mergeable (the rollup's real call shape, which
+    // crashed parseGhJson before this fix because head/baseRefName were absent).
+    const view = await gh.prView(4, ["state", "mergeable"]);
+    expect(view.state).toBe("OPEN");
+    const jsonIdx = captured.indexOf("--json");
+    expect(jsonIdx).toBeGreaterThanOrEqual(0);
+    const requested = captured[jsonIdx + 1]?.split(",") ?? [];
+    expect(requested).toEqual(
+      expect.arrayContaining(["number", "headRefName", "baseRefName", "state", "mergeable"]),
+    );
+  });
+
+  it("does not duplicate a field the caller already requested", async () => {
+    let captured: readonly string[] = [];
+    const runner: GhRunner = async (args) => {
+      captured = args;
+      return result({ stdout: JSON.stringify(fullPr) });
+    };
+    const gh = new DefaultGhClient(runner);
+    await gh.prView(4, ["state", "headRefName"]);
+    const jsonIdx = captured.indexOf("--json");
+    const requested = captured[jsonIdx + 1]?.split(",") ?? [];
+    expect(requested.filter((f) => f === "state")).toHaveLength(1);
+    expect(requested.filter((f) => f === "headRefName")).toHaveLength(1);
+  });
+});

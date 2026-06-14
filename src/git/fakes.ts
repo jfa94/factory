@@ -218,7 +218,14 @@ export class FakeGhClient implements GhClient {
   /** Records each prCreate so tests assert it was/wasn't called. */
   readonly created: PrCreateArgs[] = [];
   /** Records each merge so tests assert ordering + which path (auto vs squash). */
-  readonly merges: Array<{ number: number; auto: boolean; subject?: string }> = [];
+  readonly merges: Array<{
+    number: number;
+    auto: boolean;
+    deleteBranch: boolean;
+    subject?: string;
+  }> = [];
+  /** Remote head refs deleted via deleteRemoteBranch (worktree-safe cleanup). */
+  readonly deletedBranches: string[] = [];
   /** Records each issueCreate so tests assert one issue per failed task (Δ S). */
   readonly issues: Array<IssueCreateArgs & { number: number; url: string }> = [];
   /** Per-PR CI sequences; each prChecks call shifts one (the last value sticks). */
@@ -336,6 +343,7 @@ export class FakeGhClient implements GhClient {
     this.merges.push({
       number,
       auto: opts?.auto ?? false,
+      deleteBranch: opts?.deleteBranch ?? false,
       ...(opts?.subject !== undefined ? { subject: opts.subject } : {}),
     });
     for (const [head, pr] of this.prs.entries()) {
@@ -388,5 +396,15 @@ export class FakeGhClient implements GhClient {
     _opts?: GhOpts,
   ): Promise<boolean> {
     return this.protection.get(branch)?.hasMergeQueue ?? false;
+  }
+
+  async deleteRemoteBranch(
+    _owner: string,
+    _repo: string,
+    branch: string,
+    _opts?: GhOpts,
+  ): Promise<void> {
+    this.calls.push(`api DELETE refs/heads/${branch}`);
+    this.deletedBranches.push(branch);
   }
 }

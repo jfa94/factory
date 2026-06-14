@@ -123,10 +123,14 @@ describe("buildHoldoutPrompt", () => {
     expect(prompt).toContain("missing entry is treated as a failure");
   });
 
-  it("prepends worktree inspection guidance when given a worktree", () => {
+  it("prepends worktree inspection guidance keyed to origin/staging (CP2 #14)", () => {
     const prompt = buildHoldoutPrompt(record, "/wt/task-1");
     expect(prompt).toContain("/wt/task-1");
-    expect(prompt).toContain("git -C /wt/task-1 diff staging");
+    // The task worktree forks from origin/staging and never maintains a local
+    // `staging` branch, so the inspect command MUST diff against origin/staging —
+    // a bare `staging` resolves to a stale/absent local ref.
+    expect(prompt).toContain("git -C /wt/task-1 diff origin/staging");
+    expect(prompt).not.toContain("diff staging");
   });
 });
 

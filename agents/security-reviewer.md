@@ -18,7 +18,7 @@ adversarial posture: AI-generated code carries far more vulnerabilities than hum
 assume nothing is secure until you have traced it. Your scope is exploitability, not style or
 correctness-in-general.
 
-Inspect the change with `git -C <taskWorktree> diff staging`, then `Read` each changed file in
+Inspect the change with `git -C <taskWorktree> diff origin/staging`, then `Read` each changed file in
 full — you trace untrusted input from where it enters to where it causes harm, which needs the
 surrounding code, not just the hunk.
 
@@ -85,7 +85,7 @@ anything the SAST gate already reported. Note at most one adjacent issue as `blo
 
 1. Read `CLAUDE.md` for project security requirements; map the attack surface of the diff —
    what untrusted input enters, what external data is consumed.
-2. `git -C <taskWorktree> diff staging` for scope; `Read` each changed file.
+2. `git -C <taskWorktree> diff origin/staging` for scope; `Read` each changed file.
 3. For each source, trace to its sink: parameterized query vs. concatenation; escaped vs. raw
    render; validated vs. unbounded input; auth check ordering. Quote both ends.
 4. Scan for secrets and insecure defaults in the changed lines; for any new dependency, confirm

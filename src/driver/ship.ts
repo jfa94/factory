@@ -27,6 +27,7 @@ import {
   type TaskState,
 } from "./deps.js";
 import { specTaskOf, shipBody } from "./handlers.js";
+import { taskWorktreePath } from "./paths.js";
 import type { HandlerDeps } from "./types.js";
 import { createLogger } from "../shared/index.js";
 
@@ -58,6 +59,15 @@ export async function shipTask(deps: ShipDeps, ctx: StageContext): Promise<Stage
   const runId = ctx.run.run_id;
   const specTask = specTaskOf(deps.spec, task.task_id);
   const branch = runScopedBranch(runId, task.task_id);
+
+  // The task branch exists only in the per-task worktree until now: preflight created it
+  // locally (`checkout -B`) and the producers committed to it locally — nothing pushed it
+  // to origin. `gh pr create --head <branch>` needs the head to exist on the remote, so
+  // push it FIRST. Force-free + idempotent: a re-ship fast-forwards or no-ops.
+  await deps.git.push("origin", branch, {
+    setUpstream: true,
+    cwd: taskWorktreePath(deps.dataDir, runId, task.task_id),
+  });
 
   const pr = await createTaskPrIdempotent({
     ghClient: deps.gh,

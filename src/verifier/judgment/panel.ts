@@ -35,10 +35,18 @@ export const PANEL_ROLES: readonly SpawnRole[] = [
 ] as const;
 
 /**
- * Where each panel reviewer's prompt artifact lives, run-store relative. Derived
- * deterministically from the role so the manifest carries a concrete `prompt_ref`
- * (the WS2 schema requires a non-empty pointer). NOT a filesystem path — a
- * run-store-relative pointer, per the WS2 manifest contract.
+ * The `prompt_ref` placeholder for a panel reviewer. The WS2 SpawnAgentSchema
+ * requires a non-empty `prompt_ref` on EVERY agent, but — UNLIKE producers, whose
+ * `prompt_ref` points at a real per-run ProducerContext artifact the driver Reads
+ * (handlers.ts `producerSpawn` → `putProducerContext`) — NO driver reads this value
+ * for a reviewer. Both drivers (the session `pipeline-orchestrator` SKILL.md panel
+ * step and `workflows/factory-run.workflow.js`) build the reviewer prompt INLINE
+ * from the reviewer's `agents/<role>.md` definition plus the shared
+ * `skills/review-protocol/SKILL.md` contract; the reviewer's lens lives in its agent
+ * definition + the static protocol, so there is no per-run reviewer prompt file to
+ * point at. This returns a stable, role-derived value purely to satisfy the schema's
+ * non-empty constraint — it is NOT a readable artifact (CP2 #7: nothing writes a
+ * `reviews/prompts/<role>.md` file, and no driver should try to Read one).
  */
 function promptRefFor(role: SpawnRole): string {
   return `reviews/prompts/${role}.md`;

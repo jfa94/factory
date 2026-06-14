@@ -138,6 +138,17 @@ export class MergeSerializer {
         "mergeStateStatus",
       ]);
 
+      // Idempotent resume (Δ P): ship can crash AFTER the merge lands but BEFORE
+      // the run records `done` (e.g. a post-merge cleanup error). Re-running drive
+      // — the sanctioned retry — re-enters here; re-merging a MERGED PR errors, so
+      // treat it as success and (best-effort) finish the remote-ref cleanup that
+      // the interrupted attempt may have skipped.
+      if (pr.state === "MERGED") {
+        log.info(`PR #${prNumber} already MERGED into ${this.staging} — ship resuming`);
+        await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
+        return { merged: true, via: "app-level", number: prNumber };
+      }
+
       if (pr.mergeable === "CONFLICTING") {
         log.warn(`PR #${prNumber} is CONFLICTING — not merged`);
         return { merged: false, reason: "not-mergeable", number: prNumber };
@@ -167,8 +178,15 @@ export class MergeSerializer {
         return { merged: true, via: "merge-queue", number: prNumber };
       }
 
-      await this.ghClient.prMergeSquash(prNumber, { deleteBranch: true });
+      // Squash-merge NOW, then delete ONLY the remote head ref. We deliberately do
+      // NOT pass --delete-branch: gh would also `git branch -D` the local branch,
+      // which the per-task worktree holds checked-out (preflight `checkout -B`), so
+      // that delete fails and takes the already-succeeded merge down with it
+      // (exit 1). Splitting the remote-ref delete out keeps the merge worktree-safe;
+      // the local branch/worktree are ephemeral data-dir state torn down with the run.
+      await this.ghClient.prMergeSquash(prNumber, {});
       log.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
+      await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
       return { merged: true, via: "app-level", number: prNumber };
     });
   }

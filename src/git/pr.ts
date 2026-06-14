@@ -45,11 +45,20 @@ export interface TaskPrResult {
 export async function createTaskPrIdempotent(args: CreateTaskPrArgs): Promise<TaskPrResult> {
   const base = args.base ?? GIT_DEFAULTS.stagingBranch;
 
-  // Δ P: look up by head FIRST. An OPEN PR for this head is the same logical PR.
-  const existing = await args.ghClient.prList({ head: args.branch, base, state: "open" });
-  const pr = existing[0];
+  // Δ P: look up by head FIRST (state "all"). A kill can land after the PR was
+  // opened OR even after it MERGED but before the run recorded `done` — BOTH are
+  // the same logical PR, and re-creating either would open a duplicate (or hit
+  // "no commits between" once the squashed branch diverged from staging). Prefer
+  // an OPEN PR (the normal resume); fall back to a MERGED one (post-merge-crash
+  // resume) so ship re-enters and the serial-writer merge step idempotently
+  // no-ops. A CLOSED-unmerged PR is NOT a resume target (manual intervention) —
+  // fall through and open a fresh PR.
+  const existing = await args.ghClient.prList({ head: args.branch, base, state: "all" });
+  const pr = existing.find((p) => p.state === "OPEN") ?? existing.find((p) => p.state === "MERGED");
   if (pr !== undefined) {
-    log.info(`resuming existing PR #${pr.number} for head '${args.branch}' (no duplicate created)`);
+    log.info(
+      `resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`,
+    );
     return { number: pr.number, url: pr.url ?? "", resumed: true };
   }
 

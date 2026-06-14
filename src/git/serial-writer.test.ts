@@ -93,7 +93,8 @@ describe("Δ L — serial writer (#1)", () => {
     const ghApp = new FakeGhClient({ prs: [openPr(300, "factory/run-1/t1")] });
     const appOut = await serializer(ghApp).merge(300);
     expect(appOut).toEqual({ merged: true, via: "app-level", number: 300 });
-    expect(ghApp.merges).toEqual([{ number: 300, auto: false }]);
+    // App-level squash NEVER arms --delete-branch (worktree-safety, see below).
+    expect(ghApp.merges).toEqual([{ number: 300, auto: false, deleteBranch: false }]);
 
     // native merge-queue present → --auto (GitHub serializes)
     const ghMq = new FakeGhClient({
@@ -109,7 +110,9 @@ describe("Δ L — serial writer (#1)", () => {
     });
     const mqOut = await serializer(ghMq).merge(301);
     expect(mqOut).toEqual({ merged: true, via: "merge-queue", number: 301 });
-    expect(ghMq.merges).toEqual([{ number: 301, auto: true }]);
+    // merge-queue defers the merge server-side, so --delete-branch is safe there
+    // (GitHub deletes the head post-merge; no local `git branch -D` at enqueue).
+    expect(ghMq.merges).toEqual([{ number: 301, auto: true, deleteBranch: true }]);
   });
 
   it("second merge re-verifies up-to-date against the post-first-merge staging tip (re-read inside lock)", async () => {
@@ -127,5 +130,31 @@ describe("Δ L — serial writer (#1)", () => {
     const second = a.number === 401 ? a : b;
     expect(first.merged).toBe(true);
     expect(second).toEqual({ merged: false, reason: "behind", number: 401 });
+  });
+
+  it("worktree-safe: app-level merge deletes the REMOTE head ref, never --delete-branch", async () => {
+    // Regression (CP2 #11): `gh pr merge --delete-branch` also runs `git branch -D`
+    // on the local branch, which the per-task worktree holds checked-out, so the
+    // delete — and the whole already-succeeded merge — failed (exit 1). The
+    // serializer must squash WITHOUT --delete-branch, then delete only the remote ref.
+    const gh = new FakeGhClient({ prs: [openPr(310, "factory/run-1/t1")] });
+    const out = await serializer(gh).merge(310);
+    expect(out).toEqual({ merged: true, via: "app-level", number: 310 });
+    expect(gh.merges).toEqual([{ number: 310, auto: false, deleteBranch: false }]);
+    expect(gh.deletedBranches).toEqual(["factory/run-1/t1"]);
+  });
+
+  it("idempotent resume: an already-MERGED PR returns success without re-merging", async () => {
+    // Regression (CP2 #11): ship can crash after the merge lands but before the run
+    // records `done`. Re-running drive (the sanctioned retry) re-enters merge(); a
+    // MERGED PR must be treated as success — re-merging errors — and the remote-ref
+    // cleanup the interrupted attempt skipped must still run (best-effort).
+    const gh = new FakeGhClient({
+      prs: [openPr(320, "factory/run-1/t1", { state: "MERGED" })],
+    });
+    const out = await serializer(gh).merge(320);
+    expect(out).toEqual({ merged: true, via: "app-level", number: 320 });
+    expect(gh.merges).toHaveLength(0); // never re-merged
+    expect(gh.deletedBranches).toEqual(["factory/run-1/t1"]);
   });
 });
