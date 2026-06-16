@@ -15,6 +15,10 @@ export type { CommandRunner, GitRunner, GhRunner } from "./exec-tools.js";
 export { DefaultGitClient } from "./git-client.js";
 export type { GitClient, GitOpts, PushOptions } from "./git-client.js";
 
+// repo identity resolution (Prompt G / F-repo): auto-derive --repo from origin
+export { parseRemoteUrl, validateRepoSlug, splitRepoSlug, resolveRepo } from "./repo.js";
+export type { ResolveRepoArgs } from "./repo.js";
+
 // gh client
 export { DefaultGhClient, parseGhJson, aggregateChecks } from "./gh-client.js";
 export type {

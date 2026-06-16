@@ -1,7 +1,10 @@
 /**
  * `factory scaffold` — prepare a target repo to be run by the factory (WS3 / Δ A).
  *
- *   factory scaffold --repo <owner/name> [--provision]
+ *   factory scaffold [--repo <owner/name>] [--provision]
+ *
+ * `--repo` is OPTIONAL (Prompt G / F-repo): auto-derived from the `origin` remote
+ * when omitted (the CLI is always cwd-rooted in the target repo).
  *
  * Idempotently copies the per-repo COMMITTED artifacts the new design consumes —
  * the CI net (`.github/workflows/quality-gate.yml`, Δ Z) and the gate configs
@@ -22,7 +25,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXIT, type ExitCode } from "../exit-codes.js";
-import { parseArgs, isUsageError, UsageError } from "../args.js";
+import { parseArgs, isUsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { createLogger } from "../../shared/index.js";
 import {
@@ -32,6 +35,8 @@ import {
   probeProtection,
   requireProtectionOrRefuse,
   provisionProtection,
+  resolveRepo,
+  splitRepoSlug,
   type GitClient,
   type GhClient,
 } from "../../git/index.js";
@@ -44,14 +49,16 @@ const log = createLogger("scaffold");
 const HELP = `factory scaffold — prepare a repo for the factory pipeline
 
 Usage:
-  factory scaffold --repo <owner/name> [--provision]
+  factory scaffold [--repo <owner/name>] [--provision]
 
 Copies the committed CI + gate-config templates, ensures the staging branch, and
 probes branch protection. Without --provision a repo whose staging branch is not
 protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
 
 Options:
-  --repo <owner/name>   Target GitHub repo (required; used for the protection probe)
+  --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
+                        Auto-derived from the 'origin' remote when omitted; an
+                        explicit value disagreeing with the remote fails loud.
   --provision           Write branch protection if missing (default: refuse)`;
 
 /** The `.gitignore` lines scaffold guarantees (factory state must stay un-committed). */
@@ -260,13 +267,36 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
   };
 }
 
-/** Parse `<owner>/<name>` into its parts (loud on a malformed value). */
-function parseRepoSlug(slug: string): { owner: string; repo: string } {
-  const parts = slug.split("/");
-  if (parts.length !== 2 || parts[0]!.length === 0 || parts[1]!.length === 0) {
-    throw new UsageError(`--repo must be '<owner>/<name>', got '${slug}'`);
-  }
-  return { owner: parts[0]!, repo: parts[1]! };
+/**
+ * Test seam for {@link run}'s repo resolution: inject the git seam + cwd so the
+ * auto-derive path (Prompt G) is exercised with a fake remote. Production passes
+ * the real {@link DefaultGitClient} + `process.cwd()`.
+ */
+export interface ScaffoldRepoOverrides {
+  readonly gitClient?: GitClient;
+  readonly cwd?: string;
+}
+
+/**
+ * Resolve the scaffold target's `<owner>/<name>` — `--repo` is OPTIONAL (Prompt G),
+ * auto-derived from the origin remote when omitted; an explicit value that
+ * disagrees with the remote fails loud.
+ */
+export async function resolveScaffoldRepo(
+  args: ReturnType<typeof parseArgs>,
+  overrides: ScaffoldRepoOverrides = {},
+): Promise<{ owner: string; repo: string }> {
+  const slug = await resolveRepo({
+    explicit: optionalString(args.flag("repo")),
+    cwd: overrides.cwd ?? process.cwd(),
+    gitClient: overrides.gitClient ?? new DefaultGitClient(),
+  });
+  return splitRepoSlug(slug);
+}
+
+/** Coerce a flag to a non-empty string, treating a bare boolean flag as absent. */
+function optionalString(raw: string | boolean | undefined): string | undefined {
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
 async function run(argv: string[]): Promise<ExitCode> {
@@ -276,7 +306,7 @@ async function run(argv: string[]): Promise<ExitCode> {
     return EXIT.OK;
   }
 
-  const { owner, repo } = parseRepoSlug(args.requireFlag("repo"));
+  const { owner, repo } = await resolveScaffoldRepo(args);
   const report = await runScaffold({
     targetRoot: process.cwd(),
     templatesDir: resolveTemplatesDir(),

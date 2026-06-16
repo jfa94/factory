@@ -33,6 +33,7 @@ import { isTerminalRunStatus } from "../../types/index.js";
 import type { Config, RunState, RunStatus, TaskState } from "../../types/index.js";
 import { finalizeRun } from "../../driver/index.js";
 import { loadCliDeps } from "../wiring.js";
+import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
 import { createLogger } from "../../shared/index.js";
 import type { Subcommand } from "../main.js";
 
@@ -41,7 +42,7 @@ const log = createLogger("run");
 const RUN_HELP = `factory run — create or resume a run
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--ship-mode <mode>]
 
@@ -53,9 +54,11 @@ Actions:
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
 
-  --repo        Repo identity 'owner/name' (the first key of the spec store).
+  --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
+                Auto-derived from the 'origin' remote when omitted; an explicit value
+                that disagrees with the remote fails loud.
   --issue       PRD issue number — the STABLE lookup key (reruns reuse the spec).
   --spec-id     Explicit '<issue>-<slug>' spec id (alternative to --issue).
   --run-id      Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
@@ -417,14 +420,33 @@ function resolveOwnerSession(
   return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
 }
 
-async function runCreate(argv: string[]): Promise<ExitCode> {
+/**
+ * Test seam for {@link runCreate}: inject the git seam + cwd + data dir so the
+ * `--repo` auto-derive path (Prompt G) is exercised with a fake remote and a temp
+ * data dir. Production passes none of these (real {@link DefaultGitClient}, real
+ * `process.cwd()`, env-resolved data dir).
+ */
+export interface RunCreateOverrides {
+  readonly gitClient?: GitClient;
+  readonly cwd?: string;
+  readonly dataDir?: string;
+}
+
+export async function runCreate(
+  argv: string[],
+  overrides: RunCreateOverrides = {},
+): Promise<ExitCode> {
   const args = parseArgs(argv, { booleans: ["new"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
   }
 
-  const repo = args.requireFlag("repo");
+  // --repo is OPTIONAL (Prompt G): auto-derive from the origin remote when omitted,
+  // and fail LOUD if an explicit value disagrees with the remote.
+  const cwd = overrides.cwd ?? process.cwd();
+  const gitClient = overrides.gitClient ?? new DefaultGitClient();
+  const repo = await resolveRepo({ explicit: optionalString(args.flag("repo")), cwd, gitClient });
   const issue = parseIssue(args.flag("issue"));
   const specId = optionalString(args.flag("spec-id"));
   if (issue === undefined && specId === undefined) {
@@ -445,7 +467,9 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
   // not a reuse request, so it never silently resolves to a different run.
   const force = args.flag("new") === true || explicitRunId !== undefined;
 
-  const dataDir = resolveDataDir({});
+  const dataDir = resolveDataDir(
+    overrides.dataDir !== undefined ? { dataDir: overrides.dataDir } : {},
+  );
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
   const { run } = await resolveOrCreateRun(state, specStore, {

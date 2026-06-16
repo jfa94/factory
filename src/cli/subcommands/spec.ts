@@ -50,15 +50,19 @@ import {
   type Prd,
   type SpecSpawnSpec,
 } from "../../spec/index.js";
+import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
 import type { Config, SpecPointer } from "../../types/index.js";
 import type { Subcommand } from "../main.js";
 
 const SPEC_HELP = `factory spec — deterministic spec-build seam (resolve → gate → store)
 
 Usage:
-  factory spec resolve --repo <owner/name> --issue <n>
-  factory spec gate    --repo <owner/name> --issue <n>
-  factory spec store   --repo <owner/name> --issue <n>
+  factory spec resolve [--repo <owner/name>] --issue <n>
+  factory spec gate    [--repo <owner/name>] --issue <n>
+  factory spec store   [--repo <owner/name>] --issue <n>
+
+--repo is OPTIONAL: auto-derived from the 'origin' remote when omitted; an explicit
+value that disagrees with the remote fails loud.
 
 The in-session orchestrator drives the agent spawns + the bounded regen loop; each
 action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
@@ -274,6 +278,11 @@ function parseIssue(raw: string): number {
   return n;
 }
 
+/** Coerce a flag to a non-empty string, treating a bare boolean flag as absent. */
+function optionalString(raw: string | boolean | undefined): string | undefined {
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+}
+
 /** Wire production deps once (own wiring — no run exists at spec time, so NOT loadCliDeps). */
 function wireDeps(): SpecBuildDeps {
   const dataDir = resolveDataDir({});
@@ -294,6 +303,31 @@ const ACTIONS: Record<string, Action> = {
   store: storeSpec,
 };
 
+/**
+ * Test seam for {@link run}'s repo resolution: inject the git seam + cwd so the
+ * `--repo` auto-derive path (Prompt G) is exercised with a fake remote.
+ */
+export interface SpecRepoOverrides {
+  readonly gitClient?: GitClient;
+  readonly cwd?: string;
+}
+
+/**
+ * Resolve the spec target's `owner/name` — `--repo` is OPTIONAL (Prompt G),
+ * auto-derived from the origin remote when omitted; an explicit value that
+ * disagrees with the remote fails loud.
+ */
+export async function resolveSpecRepo(
+  args: ReturnType<typeof parseArgs>,
+  overrides: SpecRepoOverrides = {},
+): Promise<string> {
+  return resolveRepo({
+    explicit: optionalString(args.flag("repo")),
+    cwd: overrides.cwd ?? process.cwd(),
+    gitClient: overrides.gitClient ?? new DefaultGitClient(),
+  });
+}
+
 async function run(argv: string[]): Promise<ExitCode> {
   const action = argv[0];
   if (action === undefined || action === "--help" || action === "-h") {
@@ -312,8 +346,10 @@ async function run(argv: string[]): Promise<ExitCode> {
     return EXIT.OK;
   }
 
-  const repo = args.requireFlag("repo");
+  // Validate the required --issue FIRST (synchronous usage edge), then resolve the
+  // optional --repo (may probe git) — so a missing/invalid issue stays a fast USAGE.
   const issue = parseIssue(args.requireFlag("issue"));
+  const repo = await resolveSpecRepo(args);
 
   const envelope = await handler(wireDeps(), repo, issue);
   emitJson(envelope);

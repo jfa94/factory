@@ -10,7 +10,13 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runScaffold, resolveTemplatesDir, scaffoldCommand } from "./scaffold.js";
+import {
+  runScaffold,
+  resolveTemplatesDir,
+  scaffoldCommand,
+  resolveScaffoldRepo,
+} from "./scaffold.js";
+import { parseArgs } from "../args.js";
 import { EXIT } from "../exit-codes.js";
 import { defaultConfig } from "../../config/index.js";
 import { FakeGitClient, FakeGhClient } from "../../git/index.js";
@@ -217,5 +223,37 @@ describe("scaffoldCommand.run", () => {
       process.stderr.write = orig;
     }
     expect(err.join("")).toMatch(/owner.*name/i);
+  });
+});
+
+describe("resolveScaffoldRepo (auto-derive --repo from origin)", () => {
+  function gitWithOrigin(slug: string | null): FakeGitClient {
+    const git = new FakeGitClient();
+    if (slug !== null) git.setRemoteUrl("origin", `git@github.com:${slug}.git`);
+    return git;
+  }
+
+  it("no --repo flag → derives owner/name from the origin remote", async () => {
+    const { owner, repo } = await resolveScaffoldRepo(
+      parseArgs(["--provision"], { booleans: ["provision"] }),
+      { gitClient: gitWithOrigin("acme/widgets"), cwd: "/wherever" },
+    );
+    expect(owner).toBe("acme");
+    expect(repo).toBe("widgets");
+  });
+
+  it("an explicit --repo that MISMATCHES the origin fails LOUD naming both", async () => {
+    await expect(
+      resolveScaffoldRepo(parseArgs(["--repo", "acme/other"]), {
+        gitClient: gitWithOrigin("acme/widgets"),
+        cwd: "/wherever",
+      }),
+    ).rejects.toThrow(/acme\/other.*acme\/widgets|acme\/widgets.*acme\/other/s);
+  });
+
+  it("no --repo and NO origin → fails LOUD telling the user to pass --repo", async () => {
+    await expect(
+      resolveScaffoldRepo(parseArgs([]), { gitClient: gitWithOrigin(null), cwd: "/wherever" }),
+    ).rejects.toThrow(/--repo/);
   });
 });

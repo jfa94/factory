@@ -1,12 +1,12 @@
 ---
 description: "Run the factory autonomous coding pipeline (PRD issue → task PRs → staging)"
-argument-hint: "[resume] --repo <owner/name> (--issue <N> | --spec-id <id>) [--mode session|workflow] [--ship-mode no-merge|live] [--run <id>]"
+argument-hint: "[resume] (--issue <N> | --spec-id <id>) [--repo <owner/name>] [--mode session|workflow] [--ship-mode no-merge|live] [--run <id>]"
 arguments:
   - name: mode
     description: "Omit to start a run; pass `resume` to re-enter a paused/suspended run"
     required: false
   - name: "--repo"
-    description: "Target GitHub repo as <owner>/<name> (required to start a run)"
+    description: "Target GitHub repo as <owner>/<name> (OPTIONAL — auto-derived from the origin remote; pass to override)"
     required: false
   - name: "--issue"
     description: "PRD issue number — the stable spec lookup key (start mode)"
@@ -28,9 +28,11 @@ arguments:
 # /factory:run
 
 Drive a full pipeline run. The `factory` CLI is the engine (ALL control flow); the
-driver is a dumb loop. Reject a START call (no `resume`) with a clear message if: `--repo` missing;
+driver is a dumb loop. Reject a START call (no `resume`) with a clear message if:
 neither or both of `--issue`/`--spec-id`; `--mode` not `session`/`workflow`;
-`--ship-mode` not `no-merge`/`live`. Defaults: `--mode session`, `--ship-mode no-merge`
+`--ship-mode` not `no-merge`/`live`. `--repo` is OPTIONAL — the CLI auto-derives it from the
+`origin` remote of the current checkout (pass `--repo <owner/name>` only to override; an explicit
+value that disagrees with the remote fails loud). Defaults: `--mode session`, `--ship-mode no-merge`
 (`live` only on explicit opt-in — it auto-merges into staging).
 
 ## Both modes start the same

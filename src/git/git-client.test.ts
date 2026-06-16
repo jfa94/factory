@@ -55,4 +55,15 @@ describe("DefaultGitClient over an injectable runner (no real git)", () => {
     expect((git as unknown as Record<string, unknown>).forcePush).toBeUndefined();
     expect((git as unknown as Record<string, unknown>).pushForce).toBeUndefined();
   });
+
+  it("remoteUrl returns the trimmed url on success and null on a probe miss", async () => {
+    const present = new DefaultGitClient(async (args) => {
+      expect(args).toEqual(["remote", "get-url", "origin"]);
+      return result({ stdout: "git@github.com:acme/widgets.git\n" });
+    });
+    await expect(present.remoteUrl("origin")).resolves.toBe("git@github.com:acme/widgets.git");
+    // A non-zero exit (no such remote / not a git repo) is a normal NO, not a throw.
+    const absent = new DefaultGitClient(async () => result({ code: 1, stderr: "no such remote" }));
+    await expect(absent.remoteUrl("origin")).resolves.toBeNull();
+  });
 });

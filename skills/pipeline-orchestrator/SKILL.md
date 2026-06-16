@@ -25,30 +25,33 @@ envelope names, feed the raw results back.**
 ## Phase 0 — Preconditions
 
 1. Confirm a git checkout: `git rev-parse --show-toplevel`. If not, stop.
-2. `factory scaffold --repo <owner/name>` (idempotent; refuses if staging branch
-   protection is missing → tell the user to re-run with `--provision` or protect
-   staging manually, then stop).
+2. `factory scaffold` (idempotent; `--repo` is OPTIONAL — auto-derived from the
+   `origin` remote, pass `--repo <owner/name>` only to override. Refuses if staging
+   branch protection is missing → tell the user to re-run with `--provision` or
+   protect staging manually, then stop).
 
 ## Phase 1 — Spec (unchanged, durable, apex-gated)
 
-Run the bounded generate ⇄ review loop until `reuse` or `stored`:
+`--repo` below is OPTIONAL on every `factory spec` action — the CLI auto-derives it
+from the `origin` remote of the current checkout; pass `--repo <o/n>` only to
+override. Run the bounded generate ⇄ review loop until `reuse` or `stored`:
 
 ```
-env = factory spec resolve --repo <o/n> --issue <n>
+env = factory spec resolve [--repo <o/n>] --issue <n>
 loop on env.kind:
   reuse | stored → done (env.pointer); go to Phase 2
   generate → remember env.spawn.context + env.max_iterations (the loop bound)
       spawn spec-generator (worktree, opus) with env.spawn.context embedded
       write its GenerateResult JSON verbatim to env.generated_path
-      env = factory spec gate --repo <o/n> --issue <n>
+      env = factory spec gate [--repo <o/n>] --issue <n>
   revise → (count iterations; > the remembered max_iterations → STOP LOUD, spec-defect)
       re-spawn spec-generator (worktree, opus) with the remembered spawn.context
       PLUS env.reason and env.blockers appended ("fix these blockers first")
       write its GenerateResult JSON verbatim to env.generated_path
-      env = factory spec gate --repo <o/n> --issue <n>
+      env = factory spec gate [--repo <o/n>] --issue <n>
   review → spawn spec-reviewer (worktree, opus) with env.spawn.context embedded
       write its ReviewVerdict JSON to env.verdict_path
-      env = factory spec store --repo <o/n> --issue <n>
+      env = factory spec store [--repo <o/n>] --issue <n>
 ```
 
 Generator/reviewer follow `agents/spec-generator.md` / `agents/spec-reviewer.md`; the
@@ -57,10 +60,12 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode session|workflow] [--ship-mode no-merge|live] --session-id "$CLAUDE_CODE_SESSION_ID"
+factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode session|workflow] [--ship-mode no-merge|live] --session-id "$CLAUDE_CODE_SESSION_ID"
 ```
 
-Pass `--mode` AND `--ship-mode` through from the invoking command (defaults `session` / `no-merge`);
+`--repo` is OPTIONAL — auto-derived from the `origin` remote of the current checkout (pass it only
+to override; an explicit value that disagrees with the remote fails loud). Pass `--mode` AND
+`--ship-mode` through from the invoking command (defaults `session` / `no-merge`);
 both persist on the run. `mode` tells the quota gate whether to pace (Decision 24: `workflow`
 disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow driver + resume,
 so it is never re-marshaled. Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` — this stamps THIS

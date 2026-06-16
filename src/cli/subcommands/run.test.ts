@@ -16,6 +16,7 @@ import { join } from "node:path";
 
 import {
   runCommand,
+  runCreate,
   seedTasksFromSpec,
   createRun,
   resolveOrCreateRun,
@@ -25,6 +26,7 @@ import {
 import { EXIT } from "../exit-codes.js";
 import { StateManager } from "../../core/state/manager.js";
 import { SpecStore, parseSpecManifest, type SpecManifest } from "../../spec/index.js";
+import { FakeGitClient } from "../../git/index.js";
 import { defaultConfig } from "../../config/schema.js";
 import {
   FIVE_HOUR_WINDOW_SECONDS,
@@ -81,9 +83,6 @@ describe("run arg/usage edges", () => {
     expect(await runCommand.run(["frobnicate"])).toBe(EXIT.USAGE);
   });
 
-  it("create: missing --repo is a usage error", async () => {
-    expect(await runCommand.run(["create", "--issue", "1"])).toBe(EXIT.USAGE);
-  });
   it("create: neither --issue nor --spec-id is a usage error", async () => {
     expect(await runCommand.run(["create", "--repo", REPO])).toBe(EXIT.USAGE);
   });
@@ -367,6 +366,74 @@ describe("resolveOrCreateRun (idempotent create)", () => {
     await expect(
       resolveOrCreateRun(state, store, { repo: REPO, issue: 999, runId: "run-x" }),
     ).rejects.toThrow(/no spec for issue #999/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runCreate — auto-derive --repo from the origin remote (Prompt G / F-repo)
+// ---------------------------------------------------------------------------
+
+describe("runCreate auto-derives --repo from the origin remote", () => {
+  let dataDir: string;
+
+  /** A FakeGitClient whose origin remote-url resolves to REPO ("acme/widgets"). */
+  function gitWithOrigin(slug: string): FakeGitClient {
+    const git = new FakeGitClient();
+    git.setRemoteUrl("origin", `git@github.com:${slug}.git`);
+    return git;
+  }
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "factory-run-derive-"));
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    await store.write(manifest([task("t1", [])]), "# spec\n");
+  });
+  afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
+
+  it("no --repo flag → derives the repo from origin and creates the run", async () => {
+    const code = await runCreate(["--issue", "42", "--run-id", "run-derive"], {
+      gitClient: gitWithOrigin(REPO),
+      cwd: "/wherever",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    const state = new StateManager({ dataDir });
+    expect((await state.read("run-derive")).spec.repo).toBe(REPO);
+  });
+
+  it("an explicit --repo that MATCHES the origin (case-insensitively) creates the run", async () => {
+    // REPO is "acme/widgets"; the origin canonical casing wins, so the spec stored
+    // under REPO is found and the run is keyed to the canonical repo id.
+    const code = await runCreate(["--repo", "Acme/Widgets", "--issue", "42", "--run-id", "run-m"], {
+      gitClient: gitWithOrigin(REPO),
+      cwd: "/wherever",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    const state = new StateManager({ dataDir });
+    expect((await state.read("run-m")).spec.repo).toBe(REPO);
+  });
+
+  it("an explicit --repo that MISMATCHES the origin remote throws LOUD naming both", async () => {
+    await expect(
+      runCreate(["--repo", "acme/other", "--issue", "42", "--run-id", "run-x"], {
+        gitClient: gitWithOrigin(REPO),
+        cwd: "/wherever",
+        dataDir,
+      }),
+    ).rejects.toThrow(/acme\/other.*acme\/widgets|acme\/widgets.*acme\/other/s);
+  });
+
+  it("the mismatch is surfaced as EXIT.USAGE through the command wrapper", async () => {
+    // runCommand.run maps the UsageError to EXIT.USAGE; we assert the exit-code path
+    // here while driving the resolution via the injected fake (no real git).
+    await expect(
+      runCreate(["--repo", "acme/other", "--issue", "42"], {
+        gitClient: gitWithOrigin(REPO),
+        cwd: "/wherever",
+        dataDir,
+      }),
+    ).rejects.toMatchObject({ isUsageError: true });
   });
 });
 

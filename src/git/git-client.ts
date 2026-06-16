@@ -46,6 +46,12 @@ export interface GitClient {
   /** `git rev-parse --abbrev-ref HEAD` → current branch name. */
   currentBranch(opts?: GitOpts): Promise<string>;
   /**
+   * `git remote get-url <remote>` → the remote URL, or `null` when the remote is
+   * absent / the dir is not a git repo (a non-zero exit is a normal NO — used to
+   * auto-derive `--repo`, where "no origin" is a legitimate answer, not an error).
+   */
+  remoteUrl(remote: string, opts?: GitOpts): Promise<string | null>;
+  /**
    * `git ls-remote --heads <remote> <branch>` → sha if the remote branch exists,
    * else null (a missing remote branch is a normal answer, not an error).
    */
@@ -105,6 +111,15 @@ export class DefaultGitClient implements GitClient {
   async currentBranch(opts?: GitOpts): Promise<string> {
     const r = await this.execOrThrow(["rev-parse", "--abbrev-ref", "HEAD"], opts);
     return r.stdout.trim();
+  }
+
+  async remoteUrl(remote: string, opts?: GitOpts): Promise<string | null> {
+    // A non-zero exit (no such remote / not a git repo) is the ANSWER, not an
+    // error — auto-derive treats "no origin" as not-derivable, never a throw.
+    const r = await this.exec(["remote", "get-url", remote], opts);
+    if (r.code !== 0) return null;
+    const url = r.stdout.trim();
+    return url.length > 0 ? url : null;
   }
 
   async lsRemoteHeads(remote: string, branch: string, opts?: GitOpts): Promise<string | null> {

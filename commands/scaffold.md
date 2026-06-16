@@ -18,19 +18,18 @@ repo. All the work is done by one deterministic CLI call — `factory scaffold` 
 the committed CI + gate-config templates, ensures the `staging` integration branch, and
 probes branch protection.
 
-## Step 1 — Resolve the repo
+## Step 1 — Confirm the checkout
 
-Confirm you are inside a git checkout and resolve the `<owner>/<name>` slug:
+Confirm you are inside a git checkout:
 
 ```bash
 git rev-parse --show-toplevel        # must succeed; else tell the user to run from a checkout and stop
 ```
 
-Use `--repo` if the user passed it; otherwise derive it from the origin remote:
-
-```bash
-gh repo view --json nameWithOwner -q .nameWithOwner    # → owner/name
-```
+`--repo` is **optional**: `factory scaffold` auto-derives `<owner>/<name>` from the `origin`
+remote of the current checkout. Pass `--repo <owner/name>` only to override (an explicit value
+that disagrees with the origin remote fails loud). If there is no `origin` remote and the user did
+not pass `--repo`, the CLI fails loud telling them to pass it.
 
 `gh` is a **hard dependency** — the CLI shells out to it for the protection probe and (with
 `--provision`) the protection write. If `gh` is missing, stop with the install hint
@@ -39,7 +38,7 @@ gh repo view --json nameWithOwner -q .nameWithOwner    # → owner/name
 ## Step 2 — Scaffold
 
 ```bash
-factory scaffold --repo <owner/name>
+factory scaffold        # --repo is auto-derived from origin; pass --repo <owner/name> to override
 ```
 
 This is idempotent. It:
@@ -69,11 +68,11 @@ two options:
 - **Provision it** (writes branch protection on `staging`): re-run with `--provision`.
 
   ```bash
-  factory scaffold --repo <owner/name> --provision
+  factory scaffold --provision        # --repo auto-derived from origin
   ```
 
 - **Protect it manually** in the repo settings (strict "require branches to be up to date"
-  - the required status checks), then re-run `factory scaffold --repo <owner/name>`.
+  - the required status checks), then re-run `factory scaffold`.
 
 Do not proceed against an unprotected repo.
 
@@ -88,7 +87,7 @@ Report:
 Then remind the user:
 
 - Run `/factory:configure` to inspect or change any setting.
-- Run `/factory:run --repo <owner/name> --issue <N>` to kick off a pipeline.
+- Run `/factory:run --issue <N>` to kick off a pipeline (`--repo` auto-derived from origin).
 
 > The bash-era extras (progress files, `init.sh`, TruffleHog prompt, the `safety.*`
 > write-blocklist) are gone: run/spec state lives outside the repo under the data dir, and

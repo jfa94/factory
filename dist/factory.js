@@ -7122,6 +7122,12 @@ var DefaultGitClient = class {
     const r = await this.execOrThrow(["rev-parse", "--abbrev-ref", "HEAD"], opts);
     return r.stdout.trim();
   }
+  async remoteUrl(remote, opts) {
+    const r = await this.exec(["remote", "get-url", remote], opts);
+    if (r.code !== 0) return null;
+    const url = r.stdout.trim();
+    return url.length > 0 ? url : null;
+  }
   async lsRemoteHeads(remote, branch, opts) {
     const r = await this.execOrThrow(["ls-remote", "--heads", remote, branch], opts);
     const line = r.stdout.trim();
@@ -7147,6 +7153,67 @@ var DefaultGitClient = class {
     await this.execOrThrow(args, opts);
   }
 };
+
+// src/git/repo.ts
+function parseRemoteUrl(url) {
+  const trimmed = url.trim();
+  if (trimmed.length === 0) return null;
+  let path2;
+  const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
+  if (scp && !trimmed.includes("://")) {
+    path2 = scp[1];
+  } else {
+    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
+    if (withScheme) {
+      const afterScheme = withScheme[1];
+      const firstSlash = afterScheme.indexOf("/");
+      if (firstSlash >= 0) path2 = afterScheme.slice(firstSlash + 1);
+    }
+  }
+  if (path2 === void 0) return null;
+  let p = path2.replace(/\/+$/, "");
+  p = p.replace(/\.git$/i, "");
+  const segments = p.split("/").filter((s) => s.length > 0);
+  if (segments.length < 2) return null;
+  const name = segments[segments.length - 1];
+  const owner = segments[segments.length - 2];
+  if (owner.length === 0 || name.length === 0) return null;
+  return `${owner}/${name}`;
+}
+function validateRepoSlug(slug) {
+  const parts = slug.split("/");
+  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
+    throw new UsageError(`--repo must be '<owner>/<name>', got '${slug}'`);
+  }
+  return slug;
+}
+function splitRepoSlug(slug) {
+  const parts = validateRepoSlug(slug).split("/");
+  return { owner: parts[0], repo: parts[1] };
+}
+async function resolveRepo(args) {
+  const remote = args.remote ?? "origin";
+  const explicit = typeof args.explicit === "string" && args.explicit.length > 0 ? validateRepoSlug(args.explicit) : void 0;
+  const derived = await deriveRepo(args.gitClient, remote, args.cwd);
+  if (explicit !== void 0) {
+    if (derived === null) return explicit;
+    if (explicit.toLowerCase() === derived.toLowerCase()) return derived;
+    throw new UsageError(
+      `--repo '${explicit}' disagrees with the '${remote}' remote ('${derived}'); omit --repo to use the remote, or fix the value`
+    );
+  }
+  if (derived === null) {
+    throw new UsageError(
+      `--repo is required: could not derive it from the '${remote}' remote (run from a repo checkout with an '${remote}' remote, or pass --repo <owner/name>)`
+    );
+  }
+  return derived;
+}
+async function deriveRepo(gitClient, remote, cwd) {
+  const url = await gitClient.remoteUrl(remote, { cwd });
+  if (url === null) return null;
+  return parseRemoteUrl(url);
+}
 
 // src/git/gh-client.ts
 var log5 = createLogger("gh");
@@ -7820,14 +7887,16 @@ var log12 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
-  factory scaffold --repo <owner/name> [--provision]
+  factory scaffold [--repo <owner/name>] [--provision]
 
 Copies the committed CI + gate-config templates, ensures the staging branch, and
 probes branch protection. Without --provision a repo whose staging branch is not
 protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
 
 Options:
-  --repo <owner/name>   Target GitHub repo (required; used for the protection probe)
+  --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
+                        Auto-derived from the 'origin' remote when omitted; an
+                        explicit value disagreeing with the remote fails loud.
   --provision           Write branch protection if missing (default: refuse)`;
 var GITIGNORE_ENTRIES = ["# factory plugin state", ".claude-plugin-data/", "*.worktree"];
 function resolveTemplatesDir() {
@@ -7954,12 +8023,16 @@ async function runScaffold(opts) {
     settings: { created: settings.created, changed: settings.changed }
   };
 }
-function parseRepoSlug(slug) {
-  const parts = slug.split("/");
-  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
-    throw new UsageError(`--repo must be '<owner>/<name>', got '${slug}'`);
-  }
-  return { owner: parts[0], repo: parts[1] };
+async function resolveScaffoldRepo(args, overrides = {}) {
+  const slug = await resolveRepo({
+    explicit: optionalString(args.flag("repo")),
+    cwd: overrides.cwd ?? process.cwd(),
+    gitClient: overrides.gitClient ?? new DefaultGitClient()
+  });
+  return splitRepoSlug(slug);
+}
+function optionalString(raw) {
+  return typeof raw === "string" && raw.length > 0 ? raw : void 0;
 }
 async function run3(argv) {
   const args = parseArgs(argv, { booleans: ["provision"] });
@@ -7967,7 +8040,7 @@ async function run3(argv) {
     emitLine(HELP3);
     return EXIT.OK;
   }
-  const { owner, repo } = parseRepoSlug(args.requireFlag("repo"));
+  const { owner, repo } = await resolveScaffoldRepo(args);
   const report = await runScaffold({
     targetRoot: process.cwd(),
     templatesDir: resolveTemplatesDir(),
@@ -11626,7 +11699,7 @@ var log26 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--ship-mode <mode>]
 
@@ -11637,9 +11710,11 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
 
-  --repo        Repo identity 'owner/name' (the first key of the spec store).
+  --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
+                Auto-derived from the 'origin' remote when omitted; an explicit value
+                that disagrees with the remote fails loud.
   --issue       PRD issue number \u2014 the STABLE lookup key (reruns reuse the spec).
   --spec-id     Explicit '<issue>-<slug>' spec id (alternative to --issue).
   --run-id      Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
@@ -11824,7 +11899,7 @@ function parseIssue(raw) {
   }
   return n;
 }
-function optionalString(raw) {
+function optionalString2(raw) {
   return typeof raw === "string" && raw.length > 0 ? raw : void 0;
 }
 function parseMode(raw) {
@@ -11833,31 +11908,35 @@ function parseMode(raw) {
   throw new UsageError(`--mode must be 'session' or 'workflow', got '${String(raw)}'`);
 }
 function resolveOwnerSession(flag, env = process.env) {
-  return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
+  return optionalString2(flag) ?? optionalString2(env.CLAUDE_CODE_SESSION_ID);
 }
-async function runCreate(argv) {
+async function runCreate(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["new"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
   }
-  const repo = args.requireFlag("repo");
+  const cwd = overrides.cwd ?? process.cwd();
+  const gitClient = overrides.gitClient ?? new DefaultGitClient();
+  const repo = await resolveRepo({ explicit: optionalString2(args.flag("repo")), cwd, gitClient });
   const issue = parseIssue(args.flag("issue"));
-  const specId = optionalString(args.flag("spec-id"));
+  const specId = optionalString2(args.flag("spec-id"));
   if (issue === void 0 && specId === void 0) {
     throw new UsageError("run create requires --issue <n> or --spec-id <id>");
   }
   if (issue !== void 0 && specId !== void 0) {
     throw new UsageError("run create: pass exactly one of --issue or --spec-id");
   }
-  const explicitRunId = optionalString(args.flag("run-id"));
+  const explicitRunId = optionalString2(args.flag("run-id"));
   const runId = explicitRunId ?? makeRunId();
   validateId(runId, "run-id");
   const mode = parseMode(args.flag("mode"));
   const shipMode = parseShipMode(args.flag("ship-mode"));
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
   const force = args.flag("new") === true || explicitRunId !== void 0;
-  const dataDir = resolveDataDir({});
+  const dataDir = resolveDataDir(
+    overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {}
+  );
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
   const { run: run11 } = await resolveOrCreateRun(state, specStore, {
@@ -11889,7 +11968,7 @@ async function runResume(argv) {
   return EXIT.OK;
 }
 async function resolveRunId(state, args, action) {
-  const explicit = optionalString(args.flag("run"));
+  const explicit = optionalString2(args.flag("run"));
   if (explicit !== void 0) return explicit;
   const current = await state.readCurrent();
   if (current === null) {
@@ -11960,9 +12039,12 @@ import { join as join15 } from "node:path";
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
-  factory spec resolve --repo <owner/name> --issue <n>
-  factory spec gate    --repo <owner/name> --issue <n>
-  factory spec store   --repo <owner/name> --issue <n>
+  factory spec resolve [--repo <owner/name>] --issue <n>
+  factory spec gate    [--repo <owner/name>] --issue <n>
+  factory spec store   [--repo <owner/name>] --issue <n>
+
+--repo is OPTIONAL: auto-derived from the 'origin' remote when omitted; an explicit
+value that disagrees with the remote fails loud.
 
 The in-session orchestrator drives the agent spawns + the bounded regen loop; each
 action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
@@ -12056,6 +12138,9 @@ function parseIssue2(raw) {
   }
   return n;
 }
+function optionalString3(raw) {
+  return typeof raw === "string" && raw.length > 0 ? raw : void 0;
+}
 function wireDeps() {
   const dataDir = resolveDataDir({});
   const config = loadConfig({ dataDir });
@@ -12071,6 +12156,13 @@ var ACTIONS = {
   gate: gateSpec,
   store: storeSpec
 };
+async function resolveSpecRepo(args, overrides = {}) {
+  return resolveRepo({
+    explicit: optionalString3(args.flag("repo")),
+    cwd: overrides.cwd ?? process.cwd(),
+    gitClient: overrides.gitClient ?? new DefaultGitClient()
+  });
+}
 async function run5(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
@@ -12086,8 +12178,8 @@ async function run5(argv) {
     emitLine(SPEC_HELP);
     return EXIT.OK;
   }
-  const repo = args.requireFlag("repo");
   const issue = parseIssue2(args.requireFlag("issue"));
+  const repo = await resolveSpecRepo(args);
   const envelope = await handler(wireDeps(), repo, issue);
   emitJson(envelope);
   return EXIT.OK;
@@ -12373,7 +12465,7 @@ Usage:
 
 Emits ONE JSON document:
   { kind:"score", summary, dead_surface? }`;
-function optionalString2(raw) {
+function optionalString4(raw) {
   return typeof raw === "string" && raw.length > 0 ? raw : void 0;
 }
 async function run7(argv) {
@@ -12384,7 +12476,7 @@ async function run7(argv) {
   }
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
-  const explicitRun = optionalString2(args.flag("run"));
+  const explicitRun = optionalString4(args.flag("run"));
   const runState = explicitRun !== void 0 ? await state.read(explicitRun) : await state.readCurrent();
   if (runState === null) {
     throw new UsageError("score: no --run given and no current run");
@@ -12396,8 +12488,8 @@ async function run7(argv) {
   let deadSurface;
   if (args.flag("dead-surface") === true) {
     const config = loadConfig({ dataDir });
-    const base = optionalString2(args.flag("base")) ?? `origin/${config.git.baseBranch}`;
-    const cwd = optionalString2(args.flag("project-root")) ?? process.cwd();
+    const base = optionalString4(args.flag("base")) ?? `origin/${config.git.baseBranch}`;
+    const cwd = optionalString4(args.flag("project-root")) ?? process.cwd();
     deadSurface = await scoreDeadSurface(base, cwd);
   }
   emitJson({

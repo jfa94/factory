@@ -56,6 +56,10 @@ export class FakeGitClient implements GitClient {
   readonly localBranches = new Map<string, string>();
   /** worktree path → branch checked out there. */
   readonly worktrees = new Map<string, string>();
+  /** remote name → configured remote URL (for `remoteUrl` / `--repo` auto-derive). */
+  readonly remoteUrls = new Map<string, string>();
+  /** When true, `remoteUrl` reports a miss (simulate a non-git dir / no remote). */
+  failRemoteUrl = false;
   /** Ordered log of git ops, for assertions. */
   readonly calls: string[] = [];
   private head: string;
@@ -139,6 +143,17 @@ export class FakeGitClient implements GitClient {
 
   async currentBranch(_opts?: GitOpts): Promise<string> {
     return this.head;
+  }
+
+  /** Test helper: configure the URL `remoteUrl` returns for a remote. */
+  setRemoteUrl(remote: string, url: string): void {
+    this.remoteUrls.set(remote, url);
+  }
+
+  async remoteUrl(remote: string, _opts?: GitOpts): Promise<string | null> {
+    this.calls.push(`remote get-url ${remote}`);
+    if (this.failRemoteUrl) return null;
+    return this.remoteUrls.get(remote) ?? null;
   }
 
   async lsRemoteHeads(remote: string, branch: string, _opts?: GitOpts): Promise<string | null> {
