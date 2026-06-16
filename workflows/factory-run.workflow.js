@@ -1,9 +1,9 @@
 export const meta = {
   name: "factory-run",
   description:
-    "Factory workflow driver: pump ready tasks in parallel through the factory CLI engine",
+    "Factory workflow driver: step ready tasks in parallel through the factory CLI engine",
   whenToUse: "Launched by /factory:run --mode workflow after the spec phase + run create",
-  phases: [{ title: "Drive", detail: "next/drive pump loop; producers + reviewers per manifest" }],
+  phases: [{ title: "Drive", detail: "next/drive coroutine loop; producers + reviewers per manifest" }],
 };
 
 // NO Workflow `args`. The run context — runId, dataDir, shipMode — is self-resolved
@@ -245,7 +245,7 @@ async function runVerifyCollection(taskId, env) {
   };
 }
 
-// Pump one task to terminal (or a quota stop).
+// Step one task to terminal (or a quota stop).
 async function driveTask(taskId) {
   let env = await cli(
     `factory drive --run ${runId} --task ${taskId} --ship-mode ${shipMode}`,
@@ -306,7 +306,7 @@ for (;;) {
   log(`${next.ready.length} task(s) ready: ${next.ready.join(", ")}`);
   const batch = await parallel(next.ready.map((t) => () => driveTask(t)));
   // parallel() maps a thrown driveTask to null. Filtering nulls here would
-  // silently re-pump the task forever (next re-lists it in-flight-first) and
+  // silently re-step the task forever (next re-lists it in-flight-first) and
   // swallow every loud throw above — fail the whole run loud instead.
   const failed = next.ready.filter((_, i) => batch[i] === null);
   if (failed.length > 0) {

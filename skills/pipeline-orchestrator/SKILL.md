@@ -1,6 +1,6 @@
 ---
 name: pipeline-orchestrator
-description: (internal) Drive the factory pipeline. The engine is the `factory` CLI (`next` + `drive` pumps own ALL control flow); you are a dumb loop that spawns the agents each envelope names and feeds their raw output back.
+description: (internal) Drive the factory pipeline. The engine is the `factory` CLI (`next` + `drive` coroutines own ALL control flow); you are a dumb loop that spawns the agents each envelope names and feeds their raw output back.
 auto-invoke: false
 ---
 
@@ -14,7 +14,7 @@ envelope names, feed the raw results back.**
 ## Iron Laws
 
 1. **Never decide a transition.** The only next action is what the last envelope said.
-   You never edit `state.json`, never re-order steps, never re-run a pump to "check".
+   You never edit `state.json`, never re-order steps, never re-run a step to "check".
 2. **Spawn exactly what the manifest says; collect output verbatim.** Role, model
    (mapped per the alias table), max_turns, isolation per the matrix. Never edit a
    finding, never form your own verdict on the code.
@@ -88,9 +88,9 @@ loop:
     "all-terminal"  → factory run finalize --run <run_id> --ship-mode <mode>; go to Phase 4
     "quota-blocked" → report scope/reason/resets_at_epoch; tell the user to re-run
                       `/factory:run resume` after the window resets; STOP.
-    "tasks-ready"   → pump env.ready[0] (sequential driver: ONE task at a time), then loop
+    "tasks-ready"   → step env.ready[0] (sequential driver: ONE task at a time), then loop
 
-pump(task):
+step(task):
   results_file = (none)
   loop:
     tenv = factory drive --run <run_id> --task <task> --ship-mode <mode> [--results <results_file>]

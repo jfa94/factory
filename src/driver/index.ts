@@ -2,7 +2,7 @@
  * WS10 — the driver's PUBLIC barrel.
  *
  * The Model-A driver engine: the deterministic SEAM the CLI/orchestrator drives —
- * the per-task pump ({@link pumpTask}), the run-level pump ({@link pumpRun}), the
+ * the per-task coroutine ({@link stepTask}), the run-level coroutine ({@link stepRun}), the
  * fold cores, the quota gate, and the finalize coordinator — plus the reporter
  * dependency-bundle types those callers wire against. `deps.ts` stays INTERNAL (it
  * is the driver's own deep-import barrel); consumers import the frozen seams from
@@ -13,7 +13,7 @@
 export { finalizeRun } from "./finalize.js";
 export type { FinalizeRunDeps, FinalizeRunResult } from "./finalize.js";
 
-// -- the shared deterministic transition logic (the pumps build on these) ------
+// -- the shared deterministic transition logic (the coroutines build on these) ------
 export {
   dropTask,
   applyProducerOutcome,
@@ -25,14 +25,14 @@ export {
 // -- shared reporter helpers --------------------------------------------------
 export { specTaskOf, shipBody } from "./handlers.js";
 
-// -- dependency-bundle types (the reporter deps the pumps + CLI wire) ----------
+// -- dependency-bundle types (the reporter deps the coroutines + CLI wire) ----------
 export type { ShipMode, HandlerDeps } from "./types.js";
 
 // -- prompt-artifact store (the prompt_ref round-trip) -----------------------
 export { InMemoryArtifactStore, FsArtifactStore } from "./artifacts.js";
 export type { ArtifactStore } from "./artifacts.js";
 
-// -- fold cores (the pump's deterministic result-fold kernels) ----------------
+// -- fold cores (the coroutine's deterministic result-fold kernels) ----------------
 export {
   readJsonInput,
   applyRecordProducer,
@@ -51,19 +51,19 @@ export {
 // -- drive results schema (factory drive --results input) --------------------
 export { DriveResultsSchema, parseDriveResults, type DriveResults } from "./results.js";
 
-// -- quota gate (shared by both pumps) ----------------------------------------
+// -- quota gate (shared by both coroutines) ----------------------------------------
 export { applyQuotaGate, type QuotaGateDeps, type QuotaStop } from "./quota-gate.js";
 
-// -- per-task coroutine pump (factory drive seam) ----------------------------
+// -- per-task coroutine (factory drive seam) ----------------------------
 export {
-  pumpTask,
+  stepTask,
   holdoutSidecar,
   MERGE_RESYNC_CAP,
-  type PumpDeps,
+  type CoroutineDeps,
   type DriveEnvelope,
   type HoldoutSidecar,
   type DriveExpects,
-} from "./pump.js";
+} from "./coroutine.js";
 
-// -- run-level pump (factory next seam) --------------------------------------
-export { pumpRun, type NextEnvelope } from "./next.js";
+// -- run-level coroutine (factory next seam) --------------------------------------
+export { stepRun, type NextEnvelope } from "./next.js";

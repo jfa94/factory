@@ -4,7 +4,7 @@
  * A run can stop in a shape `factory run resume` cannot untangle: a crashed or
  * suspended session left tasks STUCK mid-stage (status `executing`/`reviewing`/
  * `shipping`) with no determination ever reached. The driver has no handler for a
- * stuck in-flight task — the run-level pump (`pumpRun`) THROWS "dependency cycle or deadlock" the moment
+ * stuck in-flight task — the run-level coroutine (`stepRun`) THROWS "dependency cycle or deadlock" the moment
  * no task is actionable (no ready/cascade-droppable `pending` task) yet non-terminal
  * work remains. Resume never touches task state (it only clears the quota gate), so
  * resume alone cannot recover such a run.
@@ -101,7 +101,7 @@ function dispositionOf(
 }
 
 // The engine's readiness predicates, mirrored here so scan stays decoupled from the
-// run-level pump. These are DEFINITIONAL (the meaning of "ready" / "blocked") and stable;
+// run-level coroutine. These are DEFINITIONAL (the meaning of "ready" / "blocked") and stable;
 // the source of truth is src/driver/next.ts (depsSatisfied / isUnsatisfiableDep).
 function depsSatisfied(run: RunState, depends: readonly string[]): boolean {
   return depends.every((d) => run.tasks[d]?.status === "done");

@@ -2,11 +2,11 @@
  * WS10 — the SHARED deterministic task-transition logic.
  *
  * This is the one home for the per-task escalation ladder + drop/complete logic
- * the engine builds on: the per-task pump ({@link import("./pump.js").pumpTask})
+ * the engine builds on: the per-task coroutine ({@link import("./coroutine.js").stepTask})
  * acts on a live stage result through these, and the fold cores
  * ({@link import("./fold.js")}) fold an out-of-band agent result through the same
  * functions. Keeping the ladder here (not duplicated across the spawn path and the
- * fold path) guarantees a crash-resume fold and a live pump step can never diverge.
+ * fold path) guarantees a crash-resume fold and a live step can never diverge.
  *
  * Both must apply the IDENTICAL escalation ladder (Δ D / Decision 25): a classified
  * retry bumps `escalation_rung` and clears the stale reviewers (so the next verify
@@ -15,7 +15,7 @@
  *
  * SCOPE: these functions own ONLY run-state mutations + the resulting next-step
  * intent ({@link TaskStep}). They never spawn agents, never run gates, and never do
- * git I/O — that is the reporter's / pump's job. Each takes the narrow
+ * git I/O — that is the reporter's / coroutine's job. Each takes the narrow
  * {@link TransitionDeps} (just the {@link StateManager}).
  */
 import {
@@ -52,13 +52,13 @@ export type TaskStep =
 
 /**
  * Persist the in-flight {@link import("./deps.js").TaskStatus} for `stage`,
- * stamping `started_at` on first entry. The pump calls this when it needs the
+ * stamping `started_at` on first entry. The coroutine calls this when it needs the
  * cursor written for a stage it is about to run; the fold paths call it (via
  * persistStepCursor) after a transition that resumes at a stage, so the persisted
  * status tracks the resume point.
  *
  * RETURNS the updated {@link RunState} (from the single locked `updateTask` write)
- * so the pump can consume it directly instead of issuing a redundant `state.read`
+ * so the coroutine can consume it directly instead of issuing a redundant `state.read`
  * — discarding callers (persistStepCursor) ignore it safely.
  */
 export function markInFlight(
@@ -132,7 +132,7 @@ export async function dropStep(
  * (the ladder, not the classifier, owns the cap).
  *
  * Note: this persists only the DOMAIN state (rung + reviewers); the in-flight
- * status for `resumeStage` is the caller's concern (the pump re-marks it via
+ * status for `resumeStage` is the caller's concern (the coroutine re-marks it via
  * {@link markInFlight} next iteration; the fold path stamps it via
  * persistStepCursor).
  */
@@ -197,7 +197,7 @@ export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecis
 }
 
 /**
- * Fold a completed producer spawn into state (the producer-result logic the pump's
+ * Fold a completed producer spawn into state (the producer-result logic the coroutine's
  * `applyRecordProducer` fold core calls). On `done`: record `producer_role` and
  * advance to `stageAfter`. On any failure status: classify (Δ D) →
  * {@link escalateOrDrop}, resuming at the SAME producer `stage`.

@@ -1,6 +1,6 @@
 /**
  * `factory drive --run <id> --task <id> [--results <file>] [--ship-mode <m>]` —
- * the per-task coroutine pump (the engine seam both drivers share).
+ * the per-task coroutine (the engine seam both drivers share).
  *
  * Runs every deterministic step it can and emits ONE JSON DriveEnvelope:
  * `spawn` (the agents to run + what to feed back), `terminal`, or
@@ -9,11 +9,11 @@
 import { EXIT, type ExitCode } from "../exit-codes.js";
 import { parseArgs, isUsageError, UsageError, parseShipMode } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
-import { loadPumpDeps } from "../wiring.js";
-import { pumpTask, parseDriveResults, readJsonInput } from "../../driver/index.js";
+import { loadCoroutineDeps } from "../wiring.js";
+import { stepTask, parseDriveResults, readJsonInput } from "../../driver/index.js";
 import type { Subcommand } from "../main.js";
 
-const HELP = `factory drive — pump one task until it needs agents or is terminal
+const HELP = `factory drive — step one task until it needs agents or is terminal
 
 Usage:
   factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
@@ -57,14 +57,14 @@ async function run(argv: string[]): Promise<ExitCode> {
     throw new UsageError("--results requires a file path");
   }
 
-  const deps = await loadPumpDeps({ runId, ...(shipMode !== undefined ? { shipMode } : {}) });
-  const envelope = await pumpTask(deps, runId, taskId, results);
+  const deps = await loadCoroutineDeps({ runId, ...(shipMode !== undefined ? { shipMode } : {}) });
+  const envelope = await stepTask(deps, runId, taskId, results);
   emitJson(envelope);
   return EXIT.OK;
 }
 
 export const driveCommand: Subcommand = {
-  describe: "Pump one task: run deterministic steps, emit spawn/terminal/quota envelope",
+  describe: "Step one task: run deterministic steps, emit spawn/terminal/quota envelope",
   run: async (argv) => {
     try {
       return await run(argv);

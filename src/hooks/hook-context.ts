@@ -94,7 +94,7 @@ export async function loadActiveRun(opts: DataDirOptions = {}): Promise<ActiveRu
  *
  * `taskId` resolution order mirrors the bash guard: explicit env
  * (`FACTORY_TASK_ID`), else the single in-flight task. Stage comes from the
- * persisted `TaskState.stage` cursor (written by the pump in lockstep with
+ * persisted `TaskState.stage` cursor (written by the coroutine in lockstep with
  * status on every fold); status derivation (`statusToStage`) is kept only as
  * the legacy fallback for states that predate the cursor.
  */
@@ -130,7 +130,7 @@ function statusToStage(status: TaskState["status"]): TaskStage | null {
 
 /**
  * The active stage for guard scoping: null when the task is not in-flight;
- * else the persisted stage cursor (written by the pump in lockstep with
+ * else the persisted stage cursor (written by the coroutine in lockstep with
  * status on every fold), falling back to status derivation for legacy
  * states that predate the cursor.
  */

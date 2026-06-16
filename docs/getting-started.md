@@ -60,7 +60,7 @@ node dist/factory.js --help
 ```
 
 The subcommands are the engine's entire public surface. Each is a **reporter**
-(read-only; prints a JSON envelope), part of **the pump** (`next` / `drive` — the
+(read-only; prints a JSON envelope), part of **the coroutine** (`next` / `drive` — the
 single control-flow seam), or a **writer** (one state mutation). For the complete
 contract, see [reference/cli.md](./reference/cli.md).
 
@@ -80,21 +80,21 @@ contract are here. See [reference/configuration.md](./reference/configuration.md
 ## 6. Understand the run loop without running it
 
 You now have the engine. The control loop lives in the CLI behind one seam (the
-pump); what lives in markdown is the **driver** — the thin loop that spawns the
+coroutine); what lives in markdown is the **driver** — the thin loop that spawns the
 agents each envelope names — because only a session can call the `Agent` tool.
 That is the Model-A split. Read these two files in order:
 
 1. `commands/run.md` — the `/factory:run` entry point (the spine; picks the driver
    via `--mode session|workflow`).
 2. `skills/pipeline-orchestrator/SKILL.md` — the session driver's full loop: the
-   Iron Laws, the pump surface (`next` / `drive`), the agent-spawn matrix, and the
+   Iron Laws, the coroutine surface (`next` / `drive`), the agent-spawn matrix, and the
    four phases (preconditions → spec → create → drive → completion).
 
 As you read, map each prose step to a CLI call. The CLI owns the loop behind ONE
-seam — the pump. The driver's inner per-task loop runs `factory drive --run <id>
+seam — the coroutine. The driver's inner per-task loop runs `factory drive --run <id>
 --task <id>`, reads the JSON `DriveEnvelope`, spawns exactly the agents its
 `manifest` names, then folds their raw output back with `factory drive --results`
-(the run-level `factory next` picks which task to drive). The pump tells the driver
+(the run-level `factory next` picks which task to drive). The coroutine tells the driver
 the next step; the driver never invents it.
 
 ## 7. Run the unit tests for one module

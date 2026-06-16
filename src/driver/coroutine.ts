@@ -1,7 +1,7 @@
 /**
- * The per-task COROUTINE PUMP — the engine half of the `factory drive` seam.
+ * The per-task COROUTINE — the engine half of the `factory drive` seam.
  *
- * One invocation = "run every deterministic step you can, then stop": the pump
+ * One invocation = "run every deterministic step you can, then stop": the coroutine
  * resumes at the persisted stage cursor, optionally FOLDS the previous spawn's
  * agent results (producer status / holdout raw / panel reviews — the internalized
  * record-* writers), then loops the stage machine until it either needs agents
@@ -20,7 +20,7 @@
  *     arbitrarily delayed redelivery.
  *
  * Spawn-boundary inversion: instead of awaiting an injected agent runner in
- * process, the pump RETURNS the spawn manifest to the caller (the orchestrator)
+ * process, the coroutine RETURNS the spawn manifest to the caller (the orchestrator)
  * and resumes on the next invocation by folding the collected results.
  * Holdout-before-reviews — an Iron Law the old skill enforced by prose — is here
  * mere code ordering inside foldResults.
@@ -65,7 +65,7 @@ import type { DriveResults, FoldKey, SpawnStage } from "./results.js";
 import type { HandlerDeps } from "./types.js";
 import { createLogger } from "../shared/index.js";
 
-const log = createLogger("pump");
+const log = createLogger("coroutine");
 
 export type { SpawnStage };
 
@@ -112,8 +112,8 @@ export type DriveEnvelope =
       readonly resets_at_epoch?: number;
     };
 
-/** Everything the pumps need: the reporter bundle + state + the quota signal. */
-export interface PumpDeps extends HandlerDeps {
+/** Everything the coroutines need: the reporter bundle + state + the quota signal. */
+export interface CoroutineDeps extends HandlerDeps {
   readonly state: StateManager;
   readonly usage: UsageSignal;
   /** Epoch SECONDS. */
@@ -124,7 +124,7 @@ export interface PumpDeps extends HandlerDeps {
 function requireTask(run: RunState, taskId: string): TaskState {
   const task = run.tasks[taskId];
   if (task === undefined) {
-    throw new Error(`pump: run '${run.run_id}' has no task '${taskId}'`);
+    throw new Error(`coroutine: run '${run.run_id}' has no task '${taskId}'`);
   }
   return task;
 }
@@ -134,12 +134,12 @@ function terminalOutcome(task: TaskState): TaskOutcome {
   if (task.status === "done") return { outcome: "done" };
   if (task.failure_class === undefined) {
     throw new Error(
-      `pump: terminal task '${task.task_id}' has no failure_class — schema invariant violated`,
+      `coroutine: terminal task '${task.task_id}' has no failure_class — schema invariant violated`,
     );
   }
   if (task.failure_reason === undefined) {
     throw new Error(
-      `pump: terminal task '${task.task_id}' has no failure_reason — schema invariant violated`,
+      `coroutine: terminal task '${task.task_id}' has no failure_reason — schema invariant violated`,
     );
   }
   return {
@@ -159,13 +159,13 @@ function asSpawnStage(stage: TaskStage): SpawnStage {
     return stage;
   }
   throw new Error(
-    `pump: stage '${stage}' cannot spawn agents (only tests|exec|verify can) — unreachable`,
+    `coroutine: stage '${stage}' cannot spawn agents (only tests|exec|verify can) — unreachable`,
   );
 }
 
 /** Build the holdout-validate sidecar IFF an answer key was withheld for this task. */
 export async function holdoutSidecar(
-  deps: PumpDeps,
+  deps: CoroutineDeps,
   runId: string,
   taskId: string,
 ): Promise<HoldoutSidecar | undefined> {
@@ -186,7 +186,7 @@ export async function holdoutSidecar(
 
 /** Fold the previous spawn's results into state via the shared writers. */
 async function foldResults(
-  deps: PumpDeps,
+  deps: CoroutineDeps,
   runId: string,
   taskId: string,
   stage: TaskStage,
@@ -242,11 +242,11 @@ async function foldResults(
 }
 
 /**
- * Pump one task: fold results (if given), then run deterministic stages until a
+ * Step one task: fold results (if given), then run deterministic stages until a
  * spawn is needed or the task is terminal. See the module doc for the contract.
  */
-export async function pumpTask(
-  deps: PumpDeps,
+export async function stepTask(
+  deps: CoroutineDeps,
   runId: string,
   taskId: string,
   results?: DriveResults,
@@ -339,7 +339,7 @@ export async function pumpTask(
       case "task-terminal": {
         if (result.outcome.outcome === "done") {
           const step = await completeTask(deps, runId, taskId);
-          if (!step.done) throw new Error("pump: completeTask returned non-terminal step");
+          if (!step.done) throw new Error("coroutine: completeTask returned non-terminal step");
           return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
         const step = await dropStep(
@@ -349,7 +349,7 @@ export async function pumpTask(
           result.outcome.failure_class,
           result.outcome.reason,
         );
-        if (!step.done) throw new Error("pump: dropStep returned non-terminal step");
+        if (!step.done) throw new Error("coroutine: dropStep returned non-terminal step");
         return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
       }
       case "wait-retry": {
@@ -385,7 +385,7 @@ export async function pumpTask(
               "blocked-environmental",
               `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`,
             );
-            if (!step.done) throw new Error("pump: dropStep returned non-terminal step");
+            if (!step.done) throw new Error("coroutine: dropStep returned non-terminal step");
             return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
           }
           log.info(
@@ -413,7 +413,7 @@ export async function pumpTask(
       }
       case "graceful-stop":
       case "finalize-terminal":
-        throw new Error(`pump: run-scope result '${result.kind}' surfaced at task scope`);
+        throw new Error(`coroutine: run-scope result '${result.kind}' surfaced at task scope`);
       default:
         return assertNever(result);
     }

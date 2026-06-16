@@ -34,7 +34,7 @@ export {
   type HoldoutValidatorRunner,
 } from "./validate.js";
 
-// The holdout-VERDICT store (the pump's holdout → review fold hand-off).
+// The holdout-VERDICT store (the coroutine's holdout → review fold hand-off).
 export {
   InMemoryHoldoutVerdictStore,
   FsHoldoutVerdictStore,

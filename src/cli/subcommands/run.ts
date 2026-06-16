@@ -4,7 +4,7 @@
  * Model A: the CLI never spawns an agent. `run create` resolves a DURABLE spec (by
  * stable issue number or explicit spec-id), creates a fresh run, SEEDS its task
  * rows from the spec, and emits the {@link RunState}; the in-session orchestrator
- * reads `run_id` and drives the run through the pump seam (`factory next` +
+ * reads `run_id` and drives the run through the coroutine seam (`factory next` +
  * `factory drive`).
  *
  * `run resume` is the human-invoked resumable entrypoint (Decision 24, Δ F — v1 is
@@ -231,7 +231,7 @@ async function createRunFromManifest(
   opts: CreateRunOptions,
 ): Promise<RunState> {
   // Decision 24: workflow mode disables quota pacing. Warn ONCE here — at opt-in
-  // (run creation) — not on every pump tick; the gate then proceeds silently.
+  // (run creation) — not on every step; the gate then proceeds silently.
   if (opts.mode === "workflow") {
     log.warn(
       "workflow mode: quota pacing disabled — relying on hard rate-limit errors; long runs may exhaust limits",
@@ -241,7 +241,7 @@ async function createRunFromManifest(
   await state.create({
     run_id: opts.runId,
     spec: specStore.toPointer(manifest),
-    // v1 pump seam drives tasks strictly one at a time — the driver dial is fixed.
+    // v1 coroutine seam drives tasks strictly one at a time — the driver dial is fixed.
     driver: "sequential",
     ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),

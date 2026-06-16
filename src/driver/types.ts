@@ -12,8 +12,8 @@
  *     needs agent work they return a `spawn-agents` manifest. They NEVER write
  *     state and NEVER decide transitions (nextStageFor does).
  *
- *   - The ENGINE acts on results. The per-task pump
- *     ({@link import("./pump.js").pumpTask}) resumes at the persisted stage cursor,
+ *   - The ENGINE acts on results. The per-task coroutine
+ *     ({@link import("./coroutine.js").stepTask}) resumes at the persisted stage cursor,
  *     folds the previous spawn's agent results into state, and runs the
  *     deterministic stage machine until it needs agents (it RETURNS the spawn
  *     manifest to the caller) or the task is terminal. The in-session orchestrator
@@ -22,7 +22,7 @@
  *
  * {@link HandlerDeps} carries ONLY what a reporter needs — it has no agent runner,
  * because a reporter (and the CLI subprocess that hosts it) cannot spawn. The
- * pump's {@link import("./pump.js").PumpDeps} extends it with the state manager +
+ * coroutine's {@link import("./coroutine.js").CoroutineDeps} extends it with the state manager +
  * the quota signal.
  */
 import type { Config, GhClient, GitClient, HoldoutStore, SpecManifest } from "./deps.js";

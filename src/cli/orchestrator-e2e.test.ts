@@ -2,15 +2,15 @@
  * Seam-contract E2E for the v1 execution model (orchestrator-as-driver, Model A).
  *
  * Replaces the old `run-task`/`record-*`/`advance` CLI-subcommand driving loop with
- * the canonical pump seam:
+ * the canonical coroutine seam:
  *
- *   pumpRun  → tasks-ready | all-terminal | run-terminal | quota-blocked
- *   pumpTask → spawn | terminal | quota-blocked
+ *   stepRun  → tasks-ready | all-terminal | run-terminal | quota-blocked
+ *   stepTask → spawn | terminal | quota-blocked
  *
  * The `driveToTerminal` helper below IS the documented driver contract: it is the
  * thinnest possible loop a real orchestrator (session or workflow) runs.  The test's
  * job is to prove that CONTRACT produces the right run-state end-states — not to test
- * individual pump internals (those live in pump.test.ts / next.test.ts).
+ * individual coroutine internals (those live in coroutine.test.ts / next.test.ts).
  *
  * Three scenarios are proven:
  *   1. Happy path (no-merge): single task → `completed`, PR opened but NOT merged,
@@ -45,15 +45,15 @@ import { ESCALATION_CAP } from "../producer/index.js";
 import type { RunState } from "../types/index.js";
 
 import {
-  pumpRun,
-  pumpTask,
+  stepRun,
+  stepTask,
   finalizeRun,
-  type PumpDeps,
+  type CoroutineDeps,
   type DriveEnvelope,
   type DriveResults,
 } from "../driver/index.js";
 
-import { greenProbe, makeSpec, NOW } from "../driver/pump-fixtures.js";
+import { greenProbe, makeSpec, NOW } from "../driver/coroutine-fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -179,15 +179,15 @@ interface Answerer {
  * Drive a run to its terminal state, exactly as a real in-session or workflow
  * driver would.  This loop IS the documented driver contract:
  *
- *   pumpRun → ready → pumpTask (fold results) loop → terminal → repeat
+ *   stepRun → ready → stepTask (fold results) loop → terminal → repeat
  *
- * Sequential: one task at a time (first ready task from pumpRun).
+ * Sequential: one task at a time (first ready task from stepRun).
  * Quota-blocked is treated as an unexpected error (the fake signal never blocks).
  */
 
-async function driveToTerminal(deps: PumpDeps, runId: string, answer: Answerer): Promise<RunState> {
+async function driveToTerminal(deps: CoroutineDeps, runId: string, answer: Answerer): Promise<RunState> {
   for (;;) {
-    const next = await pumpRun(deps, runId);
+    const next = await stepRun(deps, runId);
     if (next.kind === "run-terminal") return deps.state.read(runId);
     if (next.kind === "all-terminal") {
       await finalizeRun(deps, runId);
@@ -198,9 +198,9 @@ async function driveToTerminal(deps: PumpDeps, runId: string, answer: Answerer):
     const taskId = next.ready[0]!; // sequential driver: first ready task
     let results: DriveResults | undefined;
     for (;;) {
-      const env = await pumpTask(deps, runId, taskId, results);
+      const env = await stepTask(deps, runId, taskId, results);
       // Clear after delivery: the fold_key gate rejects duplicate folds LOUD on the
-      // next pumpTask call, so passing results again would be a protocol violation.
+      // next stepTask call, so passing results again would be a protocol violation.
       results = undefined;
       if (env.kind === "terminal") break;
       if (env.kind === "quota-blocked") {
@@ -216,7 +216,7 @@ async function driveToTerminal(deps: PumpDeps, runId: string, answer: Answerer):
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe("orchestrator pump seam — golden contract E2E", () => {
+describe("orchestrator coroutine seam — golden contract E2E", () => {
   let dataDir: string;
   let state: StateManager;
   let specStore: SpecStore;
@@ -242,8 +242,8 @@ describe("orchestrator pump seam — golden contract E2E", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  /** Build PumpDeps directly (no CLI loading — keeps the E2E free of fs config). */
-  function makeDeps(manifest: SpecManifest, shipMode: ShipMode): PumpDeps {
+  /** Build CoroutineDeps directly (no CLI loading — keeps the E2E free of fs config). */
+  function makeDeps(manifest: SpecManifest, shipMode: ShipMode): CoroutineDeps {
     return {
       config: defaultConfig(),
       spec: manifest,

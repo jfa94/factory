@@ -29,17 +29,17 @@ with a hard seam between them:
   that owns _all_ run-state writes, the spec gates, the deterministic verifier
   gates, failure classification, the producer escalation ladder, the
   risk-invariant review floor, PR creation — and the pipeline loop itself, exposed
-  through ONE seam, the **pump** (`factory next` + `factory drive`). It is pure,
+  through ONE seam, the **coroutine** (`factory next` + `factory drive`). It is pure,
   tested, and **never spawns an agent**.
-- A thin **driver**: it pumps the seam — spawning exactly the `Agent()`s the
-  pump's manifest names and feeding their raw output back via `factory drive
+- A thin **driver**: it steps the seam — spawning exactly the `Agent()`s the
+  coroutine's manifest names and feeding their raw output back via `factory drive
 --results`. It carries no pipeline logic and never decides a transition by prose.
   Two interchangeable drivers (chosen by `--mode` on `/factory:run`): the in-session
   orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`, default) and the
   plugin-shipped Workflow script (`workflows/factory-run.workflow.js`).
 
 The CLI subcommands are **reporters** (read-only; emit one JSON envelope), the
-**pump** (`next` / `drive` — the control-flow seam), or **writers** (single-step
+**coroutine** (`next` / `drive` — the control-flow seam), or **writers** (single-step
 state mutations). The CLI is the brain and owns the loop; a driver is just the
 hands.
 
@@ -66,7 +66,7 @@ quiet success.
 | Layer                | Lives in                                                            | Role                                   |
 | -------------------- | ------------------------------------------------------------------- | -------------------------------------- |
 | Orchestrator surface | `commands/`, `agents/`, `skills/` (markdown)                        | LLM instructions + agent definitions   |
-| Deterministic CLI    | `src/` → `dist/factory.js` (via `bin/factory`)                      | The engine: pump + reporters + writers |
+| Deterministic CLI    | `src/` → `dist/factory.js` (via `bin/factory`)                      | The engine: coroutine + reporters + writers |
 | Hook guards          | `src/hooks/` → `dist/factory-hook.js` (wired in `hooks/hooks.json`) | Enforce invariants at tool-use time    |
 | Run / spec state     | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Lives **outside** the target repo      |
 

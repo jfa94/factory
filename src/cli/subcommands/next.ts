@@ -1,12 +1,12 @@
 /**
- * `factory next [--run <id>]` — the run-level pump: quota gate, checkpoint
+ * `factory next [--run <id>]` — the run-level coroutine: quota gate, checkpoint
  * recovery, cascade-drop, and the ready set. Emits ONE JSON NextEnvelope.
  */
 import { EXIT, type ExitCode } from "../exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
-import { loadPumpDeps } from "../wiring.js";
-import { pumpRun } from "../../driver/index.js";
+import { loadCoroutineDeps } from "../wiring.js";
+import { stepRun } from "../../driver/index.js";
 import { StateManager } from "../../core/state/index.js";
 import { resolveDataDir } from "../../config/index.js";
 import type { Subcommand } from "../main.js";
@@ -44,8 +44,8 @@ async function run(argv: string[]): Promise<ExitCode> {
     runId = current.run_id;
   }
 
-  const deps = await loadPumpDeps({ runId });
-  emitJson(await pumpRun(deps, runId));
+  const deps = await loadCoroutineDeps({ runId });
+  emitJson(await stepRun(deps, runId));
   return EXIT.OK;
 }
 

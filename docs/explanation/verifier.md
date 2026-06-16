@@ -117,7 +117,7 @@ A reviewer that fails to produce a usable verdict is an `error`, not a silent
 
 ## How a blocked floor feeds back
 
-When the floor blocks, the verify fold returns a bounded `wait-retry`. The pump
+When the floor blocks, the verify fold returns a bounded `wait-retry`. The coroutine
 (not the driver) classifies it as `floor-blocked` and escalates the producer
 ladder: the rung is bumped, the reviewers are cleared, and a fresh panel runs after
 the producer re-attempts. A structurally-unfixable gate or an environmental blocker

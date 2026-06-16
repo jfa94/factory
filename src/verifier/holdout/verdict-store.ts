@@ -1,7 +1,7 @@
 /**
  * WS10 / Task C — the HOLDOUT-VERDICT store (the holdout → review fold hand-off).
  *
- * The pump (`factory drive --results`) folds verify in two steps that hand off
+ * The coroutine (`factory drive --results`) folds verify in two steps that hand off
  * through this store: `applyRecordHoldout` parses the out-of-band holdout-validator's
  * raw output into {@link HoldoutVerdict}s and PERSISTS them here; `applyRecordReviews`
  * reads them back and RE-DERIVES the holdout gate evidence (`checkHoldout` →

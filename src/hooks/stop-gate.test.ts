@@ -62,7 +62,7 @@ describe("decideStop — live run with pending work → block", () => {
     expect((action as Extract<StopAction, { kind: "block" }>).reason).toContain(
       "FACTORY_ALLOW_STOP",
     );
-    // guidance must name the pump seam, not deleted run-task
+    // guidance must name the coroutine seam, not deleted run-task
     expect((action as Extract<StopAction, { kind: "block" }>).reason).toMatch(/factory next --run/);
   });
 

@@ -18,10 +18,10 @@
  *
  * VERIFY + SHIP. The `verify` reporter here derives the floor from the
  * already-recorded reviewers + gate evidence; it does NOT itself spawn the panel or
- * the holdout-validator (a handler cannot spawn). The pump emits those agents out of
+ * the holdout-validator (a handler cannot spawn). The coroutine emits those agents out of
  * band — the panel as the verify spawn manifest, the holdout-validator as a sidecar —
  * and folds their results via the fold cores. `ship` is NOT served from this reporter
- * at all: the pump runs the stateful {@link import("./ship.js").shipTask} (PR pointer
+ * at all: the coroutine runs the stateful {@link import("./ship.js").shipTask} (PR pointer
  * writes + the live MergeSerializer) directly, since a reporter cannot write state or
  * merge.
  */
@@ -222,7 +222,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
      * verify reporter: run the deterministic gates, then either spawn the
      * risk-invariant panel (no reviewers yet) or DERIVE the floor from the
      * already-recorded reviewers + gate evidence. Holdout evidence is folded
-     * separately by the pump (the holdout-validator runs as an out-of-band sidecar);
+     * separately by the coroutine (the holdout-validator runs as an out-of-band sidecar);
      * this reporter never spawns.
      */
     async verify(ctx: StageContext): Promise<StageResult> {

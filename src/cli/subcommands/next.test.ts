@@ -1,5 +1,5 @@
 /**
- * `factory next` — unit tests for the run-level pump CLI shell.
+ * `factory next` — unit tests for the run-level coroutine CLI shell.
  *
  * Surfaces:
  *   1. arg/usage edges (short-circuit before wiring) via nextCommand;
@@ -16,7 +16,7 @@ import { writeFile } from "node:fs/promises";
 import { nextCommand } from "./next.js";
 import { EXIT } from "../exit-codes.js";
 import { captureStream } from "../test-helpers.js";
-import { makePumpDeps, makeSpec } from "../../driver/pump-fixtures.js";
+import { makeCoroutineDeps, makeSpec } from "../../driver/coroutine-fixtures.js";
 import { StateManager } from "../../core/state/manager.js";
 import { SpecStore } from "../../spec/index.js";
 import { usageCachePath } from "../../quota/index.js";
@@ -83,7 +83,7 @@ describe("next --run resolution falls back to runs/current", () => {
       run_id: "run-current",
       spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
     });
-    // Seed one pending task so pumpRun schedules it.
+    // Seed one pending task so stepRun schedules it.
     await state.update("run-current", (s) => ({
       ...s,
       tasks: {
@@ -98,7 +98,7 @@ describe("next --run resolution falls back to runs/current", () => {
         },
       },
     }));
-    // Write the spec to disk — loadPumpDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: dir }).write(spec, "# spec");
 
@@ -142,10 +142,10 @@ describe("next happy path", () => {
   });
 
   it("emits a tasks-ready envelope as JSON for a fresh pending task", async () => {
-    const { deps, runId, cleanup: c } = await makePumpDeps();
+    const { deps, runId, cleanup: c } = await makeCoroutineDeps();
     cleanup = c;
 
-    // Write the spec to disk — loadPumpDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir }).write(spec, "# spec");
 
@@ -184,12 +184,12 @@ describe("next happy path", () => {
       deps,
       runId,
       cleanup: c,
-    } = await makePumpDeps({
+    } = await makeCoroutineDeps({
       runStatusOverride: "completed",
     });
     cleanup = c;
 
-    // Write the spec to disk — loadPumpDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir }).write(spec, "# spec");
 

@@ -123,7 +123,7 @@ describe("applyQuotaGate", () => {
 
   it("proceed leaves a stale paused checkpoint intact (caller owns recovery)", async () => {
     // Seed the run as paused with a quota checkpoint (a prior pause that was not yet
-    // cleared by the caller — the run-level pump clears it, the gate does not).
+    // cleared by the caller — the run-level coroutine clears it, the gate does not).
     const checkpoint = { binding_window: "5h" as const, resets_at_epoch: NOW + 3600 };
     await state.update(RUN_ID, (s) => ({
       ...s,

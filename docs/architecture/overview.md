@@ -42,12 +42,12 @@ graph TD
   end
 
   subgraph Engine["Deterministic engine (TypeScript)"]
-    CLI[factory CLI<br/>dist/factory.js<br/>pump: next + drive]
+    CLI[factory CLI<br/>dist/factory.js<br/>coroutine: next + drive]
     Hook[factory-hook<br/>dist/factory-hook.js]
   end
 
   Driver["Driver (--mode session loop | workflow script)"] -->|loads| Skill
-  Driver -->|pumps: next / drive| CLI
+  Driver -->|steps: next / drive| CLI
   CLI -->|envelope: spawn manifest / next step| Driver
   Driver -->|Agent spawns| Producers[test-writer / executor]
   Driver -->|Agent spawns| Panel[6-reviewer panel + holdout + verifiers]
@@ -60,20 +60,20 @@ graph TD
 owns _all_ run-state writes, the spec gates, the deterministic verifier gates,
 failure classification, the producer escalation ladder, the risk-invariant review
 floor, PR creation — and the pipeline loop itself, exposed through ONE seam, the
-**pump** (`factory next` + `factory drive`). It is deterministic and tested. It
+**coroutine** (`factory next` + `factory drive`). It is deterministic and tested. It
 **never spawns an agent**.
 
-**A driver is the hands.** A thin driver pumps the seam: it performs every
-`Agent()` spawn the pump's manifest names, collects the agents' raw output, and
+**A driver is the hands.** A thin driver steps the seam: it performs every
+`Agent()` spawn the coroutine's manifest names, collects the agents' raw output, and
 feeds it back via `factory drive --results`. It never decides a transition,
 re-runs a gate, classifies a failure, or writes state by prose. Two interchangeable
 drivers exist (selected by `--mode` on `/factory:run`): the in-session orchestrator
 loop (`--mode session`, default) and the plugin-shipped Workflow script (`--mode
 workflow`).
 
-The CLI is a **reporter + pump + writer**, not a runner:
+The CLI is a **reporter + coroutine + writer**, not a runner:
 
-- **The pump** — `next` (run-level: the ready set) and `drive` (task-level: run a
+- **The coroutine** — `next` (run-level: the ready set) and `drive` (task-level: run a
   task's deterministic stages, emit a spawn manifest, and via `--results` fold the
   agents' output into ONE state step). This is the only control-flow seam.
 - **Reporter** subcommands (`spec`, `score`, `rescue scan`, `state`) emit one JSON
@@ -82,7 +82,7 @@ The CLI is a **reporter + pump + writer**, not a runner:
   `run create`/`finalize`) fold a result or an operator decision into state.
 
 The six retired single-step writers (`run-task`, `advance`, `drop`,
-`record-producer`, `record-holdout`, `record-reviews`) collapsed into the pump.
+`record-producer`, `record-holdout`, `record-reviews`) collapsed into the coroutine.
 
 Why this split exists, and what it buys, is the subject of
 [explanation/model-a.md](../explanation/model-a.md).
@@ -90,14 +90,14 @@ Why this split exists, and what it buys, is the subject of
 ## The run lifecycle
 
 A run proceeds through four phases. The CLI provides the deterministic glue — and
-the loop itself, behind the pump — at each phase; the driver owns only the agent
+the loop itself, behind the coroutine — at each phase; the driver owns only the agent
 spawns. The participant below is the driver (the in-session orchestrator loop by
 default, or the Workflow script).
 
 ```mermaid
 sequenceDiagram
   participant O as Driver
-  participant CLI as factory CLI (engine + pump)
+  participant CLI as factory CLI (engine + coroutine)
   participant A as Agents
 
   Note over O,CLI: Phase 0 — Preconditions
@@ -114,7 +114,7 @@ sequenceDiagram
   O->>CLI: factory run create --repo o/n --issue n
   CLI-->>O: RunState (tasks seeded, status running)
 
-  Note over O,CLI: Phase 3 — Drive (run-pump picks a task, task-pump advances it)
+  Note over O,CLI: Phase 3 — Drive (run coroutine picks a task, task coroutine advances it)
   loop until all-terminal
     O->>CLI: factory next
     CLI-->>O: NextEnvelope (tasks-ready | all-terminal | quota-blocked)

@@ -32,20 +32,20 @@ seam, two thin drivers**:
   risk-invariant review floor, PR creation — _and the pipeline loop itself_. It is
   the _only_ thing that writes state. **It never spawns an agent** — it has no
   `Agent` tool.
-- **The CLI exposes exactly ONE seam — the pump.** `factory next` is the
-  run-level pump (which task is ready); `factory drive` is the task-level pump (run
+- **The CLI exposes exactly ONE seam — the coroutine.** `factory next` is the
+  run-level coroutine (which task is ready); `factory drive` is the task-level coroutine (run
   one task's deterministic steps until it needs agents, emitting a spawn manifest).
-  Invoked again as `factory drive --results`, the pump folds the agents' raw output
+  Invoked again as `factory drive --results`, the coroutine folds the agents' raw output
   back into exactly ONE state step. Every transition decision lives behind this
   seam, in code.
-- **A driver is the hands — and nothing more.** A driver pumps the seam: call
+- **A driver is the hands — and nothing more.** A driver steps the seam: call
   `next`, spawn exactly the `Agent()`s the resulting `drive` manifest names, feed
   their raw output back via `drive --results`, repeat. A driver carries **no
   pipeline logic of its own** — it never decides a transition, re-runs a gate,
   classifies a failure, or writes state by prose. It is a dumb loop around the
-  pump.
+  coroutine.
 
-Two interchangeable drivers pump the same seam, selected by `--mode` on
+Two interchangeable drivers step the same seam, selected by `--mode` on
 `/factory:run`:
 
 - **`--mode session`** (default) — the in-session LLM orchestrator loop
@@ -56,8 +56,8 @@ Two interchangeable drivers pump the same seam, selected by `--mode` on
   wraps every `factory` CLI call in a small exec agent (haiku).
 
 Both are **subscription-only** — there is no headless `claude -p` / API-token path
-anywhere. The driver's entire job is the glue: pump → spawn what the manifest names
-→ feed the raw results back → follow the step the pump returned.
+anywhere. The driver's entire job is the glue: step → spawn what the manifest names
+→ feed the raw results back → follow the step the coroutine returned.
 
 ## Why this particular boundary
 
@@ -70,14 +70,14 @@ A few alternatives were rejected:
 - **Pure-script orchestrator.** A shell/Node process cannot invoke the `Agent`
   tool at all. So the engine cannot also be the thing that spawns agents — the
   workflow driver exists precisely because it can launch `Agent()`s while the
-  engine (the pump) cannot.
+  engine (the coroutine) cannot.
 - **Pure-agent orchestration.** This is exactly the unreliability problem above —
   100%-reliable bookkeeping cannot be left to ~70%-reliable prose-following. A
-  driver that "decides" anything would re-introduce it; the driver only pumps.
+  driver that "decides" anything would re-introduce it; the driver only steps.
 
 Model A is the only split that respects both constraints: the agent-spawning must
 live in a driver (the session or the Workflow runtime), and the bookkeeping —
-every decision — must live behind the pump in code. The seam is the `factory`
+every decision — must live behind the coroutine in code. The seam is the `factory`
 CLI's JSON contract.
 
 ## What the seam buys
@@ -92,7 +92,7 @@ CLI's JSON contract.
 - **Forgery resistance.** Because the CLI derives verdicts from ground truth and
   stores none (see [derive-dont-store.md](./derive-dont-store.md)), an agent cannot
   fake a passing gate by writing to state — there is no field to write.
-- **One loop, many drivers.** Because the pump (`src/driver/pump.ts` +
+- **One loop, many drivers.** Because the coroutine (`src/driver/coroutine.ts` +
   `next.ts` + `fold.ts`) is the _single_ implementation of the loop, every driver
   inherits identical control flow for free. The session loop and the Workflow
   script are thin and interchangeable; a future out-of-session scheduler would be a
@@ -100,13 +100,13 @@ CLI's JSON contract.
 
 ## The cost
 
-The two drivers must each faithfully obey the pump's envelopes — spawn exactly
+The two drivers must each faithfully obey the coroutine's envelopes — spawn exactly
 what a manifest names and feed results back verbatim — but they share no pipeline
 logic, so they cannot _diverge_ on a transition: there is one loop, in code, and
-the drivers only pump it. The discipline that remains is at the spawn boundary
+the drivers only step it. The discipline that remains is at the spawn boundary
 (the orchestrator skill's Iron Laws), not in a duplicated loop. This is the
 payoff of collapsing the earlier in-process driver and the single-step CLI writers
-into the pump: the spawn-path fold and a crash-resume fold now run the identical
+into the coroutine: the spawn-path fold and a crash-resume fold now run the identical
 code (`src/driver/fold.ts`), so they cannot drift.
 
 ## See also

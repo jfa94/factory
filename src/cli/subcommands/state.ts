@@ -7,7 +7,7 @@
  *
  * Absence of a current run is NOT an error: it prints `{"current": null}` (JSON)
  * or "no current run" (summary) and returns OK. Corruption IS loud (StateManager
- * throws). All run-state MUTATION lives in the pump (`factory drive`/`next`);
+ * throws). All run-state MUTATION lives in the coroutine (`factory drive`/`next`);
  * this one only reads.
  */
 import { EXIT, type ExitCode } from "../exit-codes.js";

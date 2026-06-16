@@ -1,7 +1,7 @@
 /**
- * Fold cores — the per-task pump's deterministic kernels.  These are the
+ * Fold cores — the per-task coroutine's deterministic kernels.  These are the
  * DETERMINISTIC, state-mutating functions that fold out-of-band agent results into
- * run state; they live here (driver/) so the pump imports them directly without a
+ * run state; they live here (driver/) so the coroutine imports them directly without a
  * cli→driver dependency inversion.
  *
  * Moved verbatim from the (since-deleted) CLI single-step subcommands:
@@ -69,7 +69,7 @@ const log = createLogger("fold");
 
 /**
  * What a fold needs: the reporter bundle ({@link HandlerDeps}) + the sanctioned
- * state write path.  A strict subset of {@link import("./pump.js").PumpDeps}.
+ * state write path.  A strict subset of {@link import("./coroutine.js").CoroutineDeps}.
  */
 export interface FoldDeps extends HandlerDeps {
   readonly state: StateManager;
@@ -201,7 +201,7 @@ export async function applyRecordHoldout(
   if (!(await deps.holdout.has(runId, taskId))) {
     throw new Error(
       `record-holdout: task '${taskId}' has no withheld answer key — nothing to validate ` +
-        `(applyRecordHoldout must only fold when the pump surfaced a holdout sidecar)`,
+        `(applyRecordHoldout must only fold when the coroutine surfaced a holdout sidecar)`,
     );
   }
   const record = await deps.holdout.get(runId, taskId);

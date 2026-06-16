@@ -1,5 +1,5 @@
 /**
- * The RUN-LEVEL PUMP — the engine half of the `factory next` seam.
+ * The RUN-LEVEL COROUTINE — the engine half of the `factory next` seam.
  *
  * One invocation = one run-loop iteration: terminal check → quota gate (persisting
  * pause/suspend) → checkpoint clear on recovery → cascade-drop (transitive,
@@ -9,7 +9,7 @@
  * ready, none droppable) throws LOUD.
  *
  * Ordering invariant: terminal-run check BEFORE the quota gate — a terminal probe
- * must not write a pause checkpoint (same discipline as pumpTask in pump.ts).
+ * must not write a pause checkpoint (same discipline as stepTask in coroutine.ts).
  *
  * Clearing a stale paused/suspended checkpoint on recovery is THIS CALLER's job
  * (the quota gate doc is explicit: "on proceed the gate never writes state;
@@ -33,7 +33,7 @@ import {
 } from "./deps.js";
 import { dropTask } from "./transitions.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
-import type { PumpDeps } from "./pump.js";
+import type { CoroutineDeps } from "./coroutine.js";
 
 /**
  * Every variant carries the run's self-resolved context — `run_id`, the canonical
@@ -81,7 +81,7 @@ function isUnsatisfiableDep(run: RunState, depId: string): boolean {
   return dep === undefined || dep.status === "dropped";
 }
 
-export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelope> {
+export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextEnvelope> {
   let run = await deps.state.read(runId);
 
   // Self-resolved run context stamped onto EVERY envelope variant (so the workflow
@@ -91,7 +91,7 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
   const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run.ship_mode });
 
   // 1. Terminal run check BEFORE the quota gate — a finished run must never
-  //    write a pause checkpoint (mirrors pumpTask in pump.ts).
+  //    write a pause checkpoint (mirrors stepTask in coroutine.ts).
   if (isTerminalRunStatus(run.status)) {
     return { ...ctx(), kind: "run-terminal", run_status: run.status };
   }
@@ -100,8 +100,8 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
   //    already done/dropped there is nothing left to schedule and we must not
   //    write a pause checkpoint on a run that is effectively finished. An empty
   //    run (tasks: {}) is vacuously all-terminal — same semantics as the
-  //    post-cascade check in step 6. (Mirrors pumpTask's terminal-before-gate
-  //    ordering; see the analogous task-level guard in pump.ts.)
+  //    post-cascade check in step 6. (Mirrors stepTask's terminal-before-gate
+  //    ordering; see the analogous task-level guard in coroutine.ts.)
   if (Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status))) {
     return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
   }

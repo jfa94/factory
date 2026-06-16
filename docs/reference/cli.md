@@ -1,16 +1,16 @@
 # CLI Reference
 
 The `factory` CLI is the deterministic engine — it owns ALL pipeline control
-flow and exposes exactly ONE seam, the **pump** (`next` + `drive`). Every
+flow and exposes exactly ONE seam, the **coroutine** (`next` + `drive`). Every
 subcommand prints exactly one JSON document to stdout (or `--summary` human text
 for `state`); `--help` on any subcommand prints its contract. The binary is
 `dist/factory.js`, reached on `PATH` as `factory` via the `bin/factory` shim.
 
-Subcommands are **reporters** (read-only; emit an envelope), **the pump** (`next`
+Subcommands are **reporters** (read-only; emit an envelope), **the coroutine** (`next`
 folds nothing; `drive --results` folds an agent spawn's output into ONE state
 step), or **writers** (one state mutation). `run create`, `run finalize`,
-`scaffold`, and the pump's `drive` ship step perform actions (state and/or GitHub
-side effects). The pump is the only seam that spawns nothing itself — it emits a
+`scaffold`, and the coroutine's `drive` ship step perform actions (state and/or GitHub
+side effects). The coroutine is the only seam that spawns nothing itself — it emits a
 manifest the driver spawns from (see [Model A](../explanation/model-a.md)).
 
 Run/spec state is read from and written to `$CLAUDE_PLUGIN_DATA`.
@@ -122,9 +122,9 @@ factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id 
 | `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests).    |
 
 Loud error if no spec exists for the issue — generate one first. The seeded run's
-`driver` is fixed to `sequential`: the v1 pump seam drives tasks one at a time.
+`driver` is fixed to `sequential`: the v1 coroutine seam drives tasks one at a time.
 (The `--mode session|workflow` knob on `/factory:run` selects which _driver_
-pumps the seam — not a CLI flag here; see [Run the pipeline](../guides/run-the-pipeline.md).)
+steps the seam — not a CLI flag here; see [Run the pipeline](../guides/run-the-pipeline.md).)
 
 ### `run resume`
 
@@ -170,24 +170,24 @@ factory state --summary       # compact human summary
 No current run is not an error: prints `{"current": null}` (or `no current run`
 with `--summary`) and exits `0`. State corruption is loud.
 
-## The pump (`next` + `drive`)
+## The coroutine (`next` + `drive`)
 
-The pump is the engine's single control-flow seam. `next` is the **run-level**
-pump (which task is ready); `drive` is the **task-level** pump (run one task's
+The coroutine is the engine's single control-flow seam. `next` is the **run-level**
+coroutine (which task is ready); `drive` is the **task-level** coroutine (run one task's
 deterministic steps until it needs agents). A driver — the in-session orchestrator
 loop or the Workflow script (see [Run the pipeline](../guides/run-the-pipeline.md))
 — alternates them: `next` to pick a task, `drive` to advance it, spawn the agents
-the manifest names, then `drive --results` to fold their output back. Neither pump
+the manifest names, then `drive --results` to fold their output back. Neither coroutine
 spawns anything itself.
 
 The six retired single-step writers — `run-task`, `advance`, `drop`,
-`record-producer`, `record-holdout`, `record-reviews` — collapsed into the pump.
+`record-producer`, `record-holdout`, `record-reviews` — collapsed into the coroutine.
 Their fold logic now runs inside `drive --results` (`src/driver/fold.ts`); the
 producer / holdout / reviews folds are no longer separate CLI calls.
 
 ## `next`
 
-Reporter (run-level pump). One run-loop step: terminal check, quota gate
+Reporter (run-level coroutine). One run-loop step: terminal check, quota gate
 (persisting a pause/suspend checkpoint on breach), stale-checkpoint clear on
 recovery, transitive cascade-drop of tasks blocked on an unsatisfiable dependency,
 then the ready set. Writes only on a quota breach or a cascade-drop; otherwise
@@ -211,7 +211,7 @@ Emits one of:
 
 ## `drive`
 
-The per-task pump (the engine seam both drivers share). Resumes at the task's
+The per-task coroutine (the engine seam both drivers share). Resumes at the task's
 persisted `stage` cursor, optionally folds the previous spawn's agent results
 (`--results`), then runs every deterministic stage it can until it needs agents or
 the task is terminal. Emits ONE JSON `DriveEnvelope`.

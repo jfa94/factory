@@ -13,7 +13,7 @@ import { z } from "zod";
 
 /**
  * The only stages that can appear in a spawn envelope (preflight only advances;
- * ship never spawns). Defined here so results.ts does not import pump.ts.
+ * ship never spawns). Defined here so results.ts does not import coroutine.ts.
  */
 export const SPAWN_STAGES = ["tests", "exec", "verify"] as const;
 export type SpawnStage = (typeof SPAWN_STAGES)[number];

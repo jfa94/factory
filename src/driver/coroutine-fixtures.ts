@@ -1,8 +1,8 @@
 /**
- * Shared test fixtures for the per-task pump (pump.test.ts) and the run-level
- * pump (next.test.ts). Extracted verbatim from pump.test.ts with one additive
+ * Shared test fixtures for the per-task coroutine (coroutine.test.ts) and the run-level
+ * coroutine (next.test.ts). Extracted verbatim from coroutine.test.ts with one additive
  * extension: `runStatusOverride` seeds the run with a non-"running" status after
- * creation (needed for pumpRun paused/terminal scenarios).
+ * creation (needed for stepRun paused/terminal scenarios).
  *
  * Zero behavior change to the original fixture — all existing options behave
  * identically. New option is additive-only.
@@ -21,7 +21,7 @@ import { InMemoryHoldoutStore } from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
 import { fakeUsageSignal, type UsageReading } from "../quota/usage-source.js";
 import type { TaskState, RunStatus, RunState } from "../types/index.js";
-import type { PumpDeps } from "./pump.js";
+import type { CoroutineDeps } from "./coroutine.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -88,10 +88,10 @@ export function makeSpec(
 }
 
 // ---------------------------------------------------------------------------
-// makePumpDeps
+// makeCoroutineDeps
 // ---------------------------------------------------------------------------
 
-export interface MakePumpDepsOpts {
+export interface MakeCoroutineDepsOpts {
   /** Spec task overrides (default: one pending T1 with 3 acceptance criteria). */
   tasks?: ReadonlyArray<{
     task_id: string;
@@ -110,18 +110,18 @@ export interface MakePumpDepsOpts {
   ghClient?: FakeGhClient;
   /**
    * Override the run status after creation (additive — not present in original).
-   * Useful for pumpRun tests that need a paused/completed run at seed time.
+   * Useful for stepRun tests that need a paused/completed run at seed time.
    */
   runStatusOverride?: RunStatus;
   /**
    * Override the run mode at creation (additive). Workflow mode makes the quota
-   * gate skip pacing, so pumpRun/pumpTask proceed regardless of the usage signal.
+   * gate skip pacing, so stepRun/stepTask proceed regardless of the usage signal.
    */
   modeOverride?: RunState["mode"];
 }
 
-export interface PumpDepsResult {
-  deps: PumpDeps;
+export interface CoroutineDepsResult {
+  deps: CoroutineDeps;
   runId: string;
   dataDir: string;
   state: StateManager;
@@ -129,8 +129,8 @@ export interface PumpDepsResult {
   cleanup: () => Promise<void>;
 }
 
-export async function makePumpDeps(opts: MakePumpDepsOpts = {}): Promise<PumpDepsResult> {
-  const dataDir = await mkdtemp(join(tmpdir(), "factory-pump-"));
+export async function makeCoroutineDeps(opts: MakeCoroutineDepsOpts = {}): Promise<CoroutineDepsResult> {
+  const dataDir = await mkdtemp(join(tmpdir(), "factory-coroutine-"));
   const state = new StateManager({
     dataDir,
     lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
@@ -183,7 +183,7 @@ export async function makePumpDeps(opts: MakePumpDepsOpts = {}): Promise<PumpDep
   const gh = opts.ghClient ?? new FakeGhClient();
   const git = new FakeGitClient({ remoteHeads: { staging: "sha-staging" } });
 
-  const deps: PumpDeps = {
+  const deps: CoroutineDeps = {
     config: defaultConfig(),
     spec,
     git,

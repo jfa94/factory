@@ -1,5 +1,5 @@
 /**
- * `factory drive` — unit tests for the per-task pump CLI shell.
+ * `factory drive` — unit tests for the per-task coroutine CLI shell.
  *
  * Surfaces:
  *   1. arg/usage edges (short-circuit before wiring) via driveCommand;
@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { driveCommand } from "./drive.js";
 import { EXIT } from "../exit-codes.js";
 import { captureStream } from "../test-helpers.js";
-import { makePumpDeps, makeSpec } from "../../driver/pump-fixtures.js";
+import { makeCoroutineDeps, makeSpec } from "../../driver/coroutine-fixtures.js";
 import { SpecStore } from "../../spec/index.js";
 import { usageCachePath } from "../../quota/index.js";
 
@@ -115,18 +115,18 @@ describe("drive happy path", () => {
   });
 
   it("emits a terminal envelope as JSON for a task already done", async () => {
-    // Seed T1 as "done" so pumpTask returns terminal immediately — before preflight
+    // Seed T1 as "done" so stepTask returns terminal immediately — before preflight
     // touches git. This validates JSON passthrough without requiring a real git remote.
     const {
       deps,
       runId,
       cleanup: c,
-    } = await makePumpDeps({
+    } = await makeCoroutineDeps({
       taskStateOverrides: { task_id: "T1", status: "done" },
     });
     cleanup = c;
 
-    // Write the spec to disk — loadPumpDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir }).write(spec, "# spec");
 
@@ -151,18 +151,18 @@ describe("drive happy path", () => {
 
   it("emits a spawn envelope for a task with stage cursor at 'tests'", async () => {
     // Seed T1 with stage cursor "tests" (non-terminal) + zero-usage cache so the quota
-    // gate passes. pumpTask skips preflight (stage cursor starts at "tests"), the tests
+    // gate passes. stepTask skips preflight (stage cursor starts at "tests"), the tests
     // handler calls producerSpawn → spawn-agents → spawn envelope emitted. No git needed.
     const {
       deps,
       runId,
       cleanup: c,
-    } = await makePumpDeps({
+    } = await makeCoroutineDeps({
       taskStateOverrides: { task_id: "T1", stage: "tests" },
     });
     cleanup = c;
 
-    // Write the spec to disk — loadPumpDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir }).write(spec, "# spec");
 

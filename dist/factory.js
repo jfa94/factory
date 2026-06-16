@@ -6343,17 +6343,17 @@ var TaskStateSchema = external_exports.object({
   /** Human-facing reason string accompanying a drop. */
   failure_reason: external_exports.string().optional(),
   /**
-   * The precise resume cursor for the drive pump — which TaskStage the task is
+   * The precise resume cursor for the drive coroutine — which TaskStage the task is
    * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
    * summary; `stage` is the machine cursor. Absent = not started (preflight).
    * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
    * not a resume point — terminal writers do not clear it.
    * NOTE: literals duplicate stage-machine's TASK_STAGE_ORDER because core/state
    * must not import stage-machine (dependency direction) — a cross-check test in
-   * src/driver/pump.test.ts pins them equal.
+   * src/driver/coroutine.test.ts pins them equal.
    */
   stage: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
-  /** Ship live-merge re-sync count (cap enforced by the pump; persisted so the cap survives process boundaries). */
+  /** Ship live-merge re-sync count (cap enforced by the coroutine; persisted so the cap survives process boundaries). */
   merge_resyncs: external_exports.number().int().min(0).default(0),
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: external_exports.string().optional(),
@@ -10724,7 +10724,7 @@ function makeStageHandlers(deps) {
      * verify reporter: run the deterministic gates, then either spawn the
      * risk-invariant panel (no reviewers yet) or DERIVE the floor from the
      * already-recorded reviewers + gate evidence. Holdout evidence is folded
-     * separately by the pump (the holdout-validator runs as an out-of-band sidecar);
+     * separately by the coroutine (the holdout-validator runs as an out-of-band sidecar);
      * this reporter never spawns.
      */
     async verify(ctx) {
@@ -10910,7 +10910,7 @@ function parseVerdictsFailClosed(raw) {
 async function applyRecordHoldout(deps, runId, taskId, verdictStore, raw) {
   if (!await deps.holdout.has(runId, taskId)) {
     throw new Error(
-      `record-holdout: task '${taskId}' has no withheld answer key \u2014 nothing to validate (applyRecordHoldout must only fold when the pump surfaced a holdout sidecar)`
+      `record-holdout: task '${taskId}' has no withheld answer key \u2014 nothing to validate (applyRecordHoldout must only fold when the coroutine surfaced a holdout sidecar)`
     );
   }
   const record = await deps.holdout.get(runId, taskId);
@@ -11167,13 +11167,13 @@ async function shipTask(deps, ctx) {
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
-// src/driver/pump.ts
-var log25 = createLogger("pump");
+// src/driver/coroutine.ts
+var log25 = createLogger("coroutine");
 var MERGE_RESYNC_CAP = 8;
 function requireTask2(run10, taskId) {
   const task = run10.tasks[taskId];
   if (task === void 0) {
-    throw new Error(`pump: run '${run10.run_id}' has no task '${taskId}'`);
+    throw new Error(`coroutine: run '${run10.run_id}' has no task '${taskId}'`);
   }
   return task;
 }
@@ -11181,12 +11181,12 @@ function terminalOutcome(task) {
   if (task.status === "done") return { outcome: "done" };
   if (task.failure_class === void 0) {
     throw new Error(
-      `pump: terminal task '${task.task_id}' has no failure_class \u2014 schema invariant violated`
+      `coroutine: terminal task '${task.task_id}' has no failure_class \u2014 schema invariant violated`
     );
   }
   if (task.failure_reason === void 0) {
     throw new Error(
-      `pump: terminal task '${task.task_id}' has no failure_reason \u2014 schema invariant violated`
+      `coroutine: terminal task '${task.task_id}' has no failure_reason \u2014 schema invariant violated`
     );
   }
   return {
@@ -11200,7 +11200,7 @@ function asSpawnStage(stage) {
     return stage;
   }
   throw new Error(
-    `pump: stage '${stage}' cannot spawn agents (only tests|exec|verify can) \u2014 unreachable`
+    `coroutine: stage '${stage}' cannot spawn agents (only tests|exec|verify can) \u2014 unreachable`
   );
 }
 async function holdoutSidecar(deps, runId, taskId) {
@@ -11258,7 +11258,7 @@ async function foldResults(deps, runId, taskId, stage, task, results) {
   const env = await applyRecordReviews(fold, runId, taskId, verdictStore, results.reviews);
   return env.step;
 }
-async function pumpTask(deps, runId, taskId, results) {
+async function stepTask(deps, runId, taskId, results) {
   let run10 = await deps.state.read(runId);
   let task = requireTask2(run10, taskId);
   if (isTerminalTaskStatus(task.status)) {
@@ -11319,7 +11319,7 @@ async function pumpTask(deps, runId, taskId, results) {
       case "task-terminal": {
         if (result.outcome.outcome === "done") {
           const step2 = await completeTask(deps, runId, taskId);
-          if (!step2.done) throw new Error("pump: completeTask returned non-terminal step");
+          if (!step2.done) throw new Error("coroutine: completeTask returned non-terminal step");
           return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
         }
         const step = await dropStep(
@@ -11329,7 +11329,7 @@ async function pumpTask(deps, runId, taskId, results) {
           result.outcome.failure_class,
           result.outcome.reason
         );
-        if (!step.done) throw new Error("pump: dropStep returned non-terminal step");
+        if (!step.done) throw new Error("coroutine: dropStep returned non-terminal step");
         return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
       }
       case "wait-retry": {
@@ -11355,7 +11355,7 @@ async function pumpTask(deps, runId, taskId, results) {
               "blocked-environmental",
               `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`
             );
-            if (!step2.done) throw new Error("pump: dropStep returned non-terminal step");
+            if (!step2.done) throw new Error("coroutine: dropStep returned non-terminal step");
             return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
           log25.info(
@@ -11381,7 +11381,7 @@ async function pumpTask(deps, runId, taskId, results) {
       }
       case "graceful-stop":
       case "finalize-terminal":
-        throw new Error(`pump: run-scope result '${result.kind}' surfaced at task scope`);
+        throw new Error(`coroutine: run-scope result '${result.kind}' surfaced at task scope`);
       default:
         return assertNever(result);
     }
@@ -11396,7 +11396,7 @@ function isUnsatisfiableDep(run10, depId) {
   const dep = run10.tasks[depId];
   return dep === void 0 || dep.status === "dropped";
 }
-async function pumpRun(deps, runId) {
+async function stepRun(deps, runId) {
   let run10 = await deps.state.read(runId);
   const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run10.ship_mode });
   if (isTerminalRunStatus(run10.status)) {
@@ -11472,7 +11472,7 @@ function splitRepo(slug) {
   }
   return { owner: parts[0], repo: parts[1] };
 }
-async function loadPumpDeps(opts) {
+async function loadCoroutineDeps(opts) {
   const deps = await loadCliDeps(opts);
   return {
     ...deps,
@@ -11643,7 +11643,7 @@ async function createRunFromManifest(state, specStore, manifest, opts) {
   await state.create({
     run_id: opts.runId,
     spec: specStore.toPointer(manifest),
-    // v1 pump seam drives tasks strictly one at a time — the driver dial is fixed.
+    // v1 coroutine seam drives tasks strictly one at a time — the driver dial is fixed.
     driver: "sequential",
     ...opts.mode !== void 0 ? { mode: opts.mode } : {},
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {}
@@ -12315,7 +12315,7 @@ var scoreCommand = {
 };
 
 // src/cli/subcommands/drive.ts
-var HELP5 = `factory drive \u2014 pump one task until it needs agents or is terminal
+var HELP5 = `factory drive \u2014 step one task until it needs agents or is terminal
 
 Usage:
   factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
@@ -12356,13 +12356,13 @@ async function run8(argv) {
   } else if (resultsPath !== void 0) {
     throw new UsageError("--results requires a file path");
   }
-  const deps = await loadPumpDeps({ runId, ...shipMode !== void 0 ? { shipMode } : {} });
-  const envelope = await pumpTask(deps, runId, taskId, results);
+  const deps = await loadCoroutineDeps({ runId, ...shipMode !== void 0 ? { shipMode } : {} });
+  const envelope = await stepTask(deps, runId, taskId, results);
   emitJson(envelope);
   return EXIT.OK;
 }
 var driveCommand = {
-  describe: "Pump one task: run deterministic steps, emit spawn/terminal/quota envelope",
+  describe: "Step one task: run deterministic steps, emit spawn/terminal/quota envelope",
   run: async (argv) => {
     try {
       return await run8(argv);
@@ -12408,8 +12408,8 @@ async function run9(argv) {
     if (current === null) throw new UsageError("no --run given and no current run");
     runId = current.run_id;
   }
-  const deps = await loadPumpDeps({ runId });
-  emitJson(await pumpRun(deps, runId));
+  const deps = await loadCoroutineDeps({ runId });
+  emitJson(await stepRun(deps, runId));
   return EXIT.OK;
 }
 var nextCommand = {

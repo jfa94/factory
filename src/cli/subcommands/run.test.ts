@@ -198,7 +198,7 @@ describe("createRun", () => {
 
     expect(run.run_id).toBe("run-a");
     expect(run.status).toBe("running");
-    // No --driver flag exists: v1 hardcodes the sequential pump driver.
+    // No --driver flag exists: v1 hardcodes the sequential driver.
     expect(run.driver).toBe("sequential");
     expect(run.spec).toEqual({ repo: REPO, spec_id: "42-checkout", issue_number: 42 });
     expect(Object.keys(run.tasks).sort()).toEqual(["t1", "t2"]);
@@ -238,7 +238,7 @@ describe("createRun", () => {
       expect(run.mode).toBe("workflow");
       // Persisted (resume-safe): the mode round-trips through a fresh read.
       expect((await state.read("run-wf")).mode).toBe("workflow");
-      // Decision 24: warned ONCE at opt-in (run create), not on every pump tick.
+      // Decision 24: warned ONCE at opt-in (run create), not on every step.
       const warned = spy.mock.calls.filter((c) => /pacing disabled/.test(String(c[0])));
       expect(warned).toHaveLength(1);
     } finally {

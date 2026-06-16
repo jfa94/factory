@@ -201,7 +201,7 @@ describe("resolveActiveTask stage source", () => {
     expect(isTestWriterPhase(active)).toBe(true);
   });
 
-  it("pending row with a preflight cursor resolves null (pump writes pending+preflight at entry)", () => {
+  it("pending row with a preflight cursor resolves null (the coroutine writes pending+preflight at entry)", () => {
     delete process.env.FACTORY_TASK_ID;
     const r = run({ t1: task({ status: "pending", stage: "preflight" }) });
     expect(resolveActiveTask(r)).toBeNull();

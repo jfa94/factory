@@ -7,8 +7,8 @@ and competence with `gh`. For the deterministic detail of each step, see the
 `skills/pipeline-orchestrator/SKILL.md`.
 
 The `factory` CLI is the deterministic engine: it owns all control flow and
-exposes one seam, the **pump** (`factory next` + `factory drive`). A thin
-**driver** pumps that seam and spawns the agents each envelope names. You pick the
+exposes one seam, the **coroutine** (`factory next` + `factory drive`). A thin
+**driver** steps that seam and spawns the agents each envelope names. You pick the
 driver with `--mode` (below); the default runs the loop **in your Claude Code
 session**.
 
@@ -34,10 +34,10 @@ branch manually first. See [Scaffold a target repo](./scaffold-a-repo.md).
 | `--repo <owner/name>` | yes      | Target repo.                                                                            |
 | `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                 |
 | `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                    |
-| `--mode`              | no       | `session` (default) \| `workflow`. Which driver pumps the seam — see below.             |
+| `--mode`              | no       | `session` (default) \| `workflow`. Which driver steps the seam — see below.             |
 | `--ship-mode`         | no       | `no-merge` (default; opens task PRs, never merges) \| `live` (auto-merge into staging). |
 
-`--mode` selects the driver. Both pump the same `factory next` / `factory drive`
+`--mode` selects the driver. Both step the same `factory next` / `factory drive`
 seam and enforce the identical engine gates; they differ only in where the loop
 runs:
 
@@ -65,7 +65,7 @@ resolve|gate|store`), spawning `spec-generator` / `spec-reviewer`, until the
    spec is `reuse`d or `stored`.
 3. **Create** — `factory run create`; the `RunState` is emitted with the tasks
    seeded.
-4. **Drive** — the driver pumps the seam. `factory next` returns the ready task;
+4. **Drive** — the driver steps the seam. `factory next` returns the ready task;
    `factory drive` advances it through the per-task stage machine (`preflight →
 tests → exec → verify → ship`), emitting a spawn manifest whenever it needs
    agents. The driver spawns the producers and the review panel the manifest

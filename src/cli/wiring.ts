@@ -1,7 +1,7 @@
 /**
  * CLI deps-wiring (C2) — construct the production reporter bundle from a run id.
  *
- * The pump subcommands (`factory next` / `factory drive`) and `run finalize` all
+ * The coroutine subcommands (`factory next` / `factory drive`) and `run finalize` all
  * need the SAME bundle: the typed config, the durable spec for the run, real
  * git/gh clients, the deterministic gate tools, and the fs-backed artifact +
  * holdout stores — plus the {@link StateManager} (the only sanctioned write
@@ -24,7 +24,7 @@ import { StatuslineUsageSignal } from "../quota/index.js";
 import { nowEpoch } from "../shared/time.js";
 import type { HandlerDeps, ShipMode } from "../driver/types.js";
 import type { RunState } from "../core/state/index.js";
-import type { PumpDeps } from "../driver/pump.js";
+import type { CoroutineDeps } from "../driver/coroutine.js";
 
 /**
  * The full CLI reporter bundle: everything a reporter needs ({@link HandlerDeps})
@@ -60,10 +60,10 @@ function splitRepo(slug: string): { owner: string; repo: string } {
 }
 
 /**
- * Assemble a {@link PumpDeps} bundle — {@link loadCliDeps} plus the quota signal
- * and clock. The result satisfies the pump engine contract.
+ * Assemble a {@link CoroutineDeps} bundle — {@link loadCliDeps} plus the quota signal
+ * and clock. The result satisfies the coroutine engine contract.
  */
-export async function loadPumpDeps(opts: LoadCliDepsOptions): Promise<PumpDeps> {
+export async function loadCoroutineDeps(opts: LoadCliDepsOptions): Promise<CoroutineDeps> {
   const deps = await loadCliDeps(opts);
   return {
     ...deps,
