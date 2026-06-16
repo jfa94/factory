@@ -36,11 +36,14 @@ neither or both of `--issue`/`--spec-id`; `--mode` not `session`/`workflow`;
 ## Both modes start the same
 
 Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run
-create --mode <session|workflow> --ship-mode <no-merge|live>`; read `run_id`). Pass THIS command's
-`--mode` AND `--ship-mode` values through to Phase 2's `run create` so both persist on the run — the
-quota gate paces in `session` and hard-stops without pacing in `workflow` (Decision 24), and
-`ship_mode` is read back by the workflow driver + resume (never re-passed). With `--spec-id`, skip
-Phase 1 — the spec must already exist; `run create` fails LOUD otherwise:
+create --mode <session|workflow> --ship-mode <no-merge|live> --session-id "$CLAUDE_CODE_SESSION_ID"`;
+read `run_id`). Pass THIS command's `--mode` AND `--ship-mode` values through to Phase 2's `run
+create` so both persist on the run — the quota gate paces in `session` and hard-stops without pacing
+in `workflow` (Decision 24), and `ship_mode` is read back by the workflow driver + resume (never
+re-passed). Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` so the run records THIS session as
+its `owner_session` — the Stop gate then keeps the autonomous loop alive only here and lets other
+sessions stop freely (Prompt J). With `--spec-id`, skip Phase 1 — the spec must already exist; `run
+create` fails LOUD otherwise:
 
 ```
 Skill(pipeline-orchestrator)

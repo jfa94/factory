@@ -57,13 +57,17 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode session|workflow] [--ship-mode no-merge|live]
+factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode session|workflow] [--ship-mode no-merge|live] --session-id "$CLAUDE_CODE_SESSION_ID"
 ```
 
 Pass `--mode` AND `--ship-mode` through from the invoking command (defaults `session` / `no-merge`);
 both persist on the run. `mode` tells the quota gate whether to pace (Decision 24: `workflow`
 disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow driver + resume,
-so it is never re-marshaled. Read `run_id` from the emitted RunState. Seed failures
+so it is never re-marshaled. Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` — this stamps THIS
+orchestrator session as the run's `owner_session`, so the Stop gate keeps the autonomous loop alive
+only in the owning session and lets a _different_ session stop freely (Prompt J). The shell expands
+the env var; if it is unset it expands to empty and the CLI degrades to owner-unknown (unscoped Stop
+gate) — never a bogus empty owner. Read `run_id` from the emitted RunState. Seed failures
 (duplicate/dangling/cyclic deps) are spec defects — surface them.
 
 **Idempotent** (auto-id form): re-running `run create` for the same `(repo, spec_id)` returns the

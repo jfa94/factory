@@ -6431,6 +6431,16 @@ var RunStateSchema = external_exports.object({
   driver: DriverEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
   ship_mode: ShipModeEnum.default("no-merge"),
+  /**
+   * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
+   * gate). Stamped ONCE at `run create` from the launching session's
+   * `CLAUDE_CODE_SESSION_ID` (the orchestrator/Bash env), so the Stop hook can
+   * session-scope its block: only the OWNING session is gated; an unrelated session
+   * stopping while this run is live passes through. Optional — best-effort: when the
+   * env var is absent (owner unknown), the Stop gate falls back to the unscoped
+   * behavior (degraded but safe). An immutable property, never a derived verdict.
+   */
+  owner_session: external_exports.string().min(1).optional(),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -6661,6 +6671,9 @@ var StateManager = class {
       driver: args.driver ?? "sequential",
       mode: args.mode ?? "session",
       ship_mode: args.ship_mode ?? "no-merge",
+      // Stamp the owning session only when known (best-effort) — an absent owner
+      // leaves the field undefined and the Stop gate falls back to unscoped behavior.
+      ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -11608,6 +11621,8 @@ Usage:
   --mode        Execution mode: session (quota-paced, default) | workflow (no pacing \u2014 hard-stop).
   --ship-mode   no-merge (default \u2014 open the rollup PR, never merge) | live (serial-merge into staging).
                 Persisted on the run so the workflow driver + resume read it without re-passing.
+  --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
+                Defaults to $CLAUDE_CODE_SESSION_ID; absent \u21D2 owner-unknown (Stop gate unscoped).
 
 Resolves the spec via the durable store (LOUD if none exists \u2014 generate one first).
 IDEMPOTENT: with the auto-generated id, a repeated create returns the existing
@@ -11722,7 +11737,8 @@ async function createRunFromManifest(state, specStore, manifest, opts) {
     // v1 coroutine seam drives tasks strictly one at a time — the driver dial is fixed.
     driver: "sequential",
     ...opts.mode !== void 0 ? { mode: opts.mode } : {},
-    ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {}
+    ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
+    ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {}
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
@@ -11789,6 +11805,9 @@ function parseMode(raw) {
   if (raw === "session" || raw === "workflow") return raw;
   throw new UsageError(`--mode must be 'session' or 'workflow', got '${String(raw)}'`);
 }
+function resolveOwnerSession(flag, env = process.env) {
+  return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
+}
 async function runCreate(argv) {
   const args = parseArgs(argv, { booleans: ["new"] });
   if (args.flag("help") === true) {
@@ -11809,6 +11828,7 @@ async function runCreate(argv) {
   validateId(runId, "run-id");
   const mode = parseMode(args.flag("mode"));
   const shipMode = parseShipMode(args.flag("ship-mode"));
+  const ownerSession = resolveOwnerSession(args.flag("session-id"));
   const force = args.flag("new") === true || explicitRunId !== void 0;
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
@@ -11820,6 +11840,7 @@ async function runCreate(argv) {
     ...specId !== void 0 ? { specId } : {},
     ...mode !== void 0 ? { mode } : {},
     ...shipMode !== void 0 ? { shipMode } : {},
+    ...ownerSession !== void 0 ? { ownerSession } : {},
     ...force ? { force } : {}
   });
   emitJson(run11);

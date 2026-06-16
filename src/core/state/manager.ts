@@ -76,6 +76,8 @@ export interface CreateRunArgs {
   driver?: RunState["driver"];
   mode?: RunState["mode"];
   ship_mode?: RunState["ship_mode"];
+  /** The owning Claude Code session id (Prompt J — session-scoped Stop gate). */
+  owner_session?: RunState["owner_session"];
 }
 
 export class StateManager {
@@ -160,6 +162,9 @@ export class StateManager {
       driver: args.driver ?? "sequential",
       mode: args.mode ?? "session",
       ship_mode: args.ship_mode ?? "no-merge",
+      // Stamp the owning session only when known (best-effort) — an absent owner
+      // leaves the field undefined and the Stop gate falls back to unscoped behavior.
+      ...(args.owner_session !== undefined ? { owner_session: args.owner_session } : {}),
       spec: args.spec,
       tasks: {},
       started_at: now,

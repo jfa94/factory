@@ -64,6 +64,8 @@ Usage:
   --mode        Execution mode: session (quota-paced, default) | workflow (no pacing — hard-stop).
   --ship-mode   no-merge (default — open the rollup PR, never merge) | live (serial-merge into staging).
                 Persisted on the run so the workflow driver + resume read it without re-passing.
+  --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
+                Defaults to $CLAUDE_CODE_SESSION_ID; absent ⇒ owner-unknown (Stop gate unscoped).
 
 Resolves the spec via the durable store (LOUD if none exists — generate one first).
 IDEMPOTENT: with the auto-generated id, a repeated create returns the existing
@@ -189,6 +191,12 @@ export interface CreateRunOptions {
   readonly mode?: RunState["mode"];
   readonly shipMode?: RunState["ship_mode"];
   /**
+   * The owning Claude Code session id (Prompt J — session-scoped Stop gate),
+   * stamped once onto the run so the Stop hook can session-scope its block. Absent
+   * when the launching session id could not be resolved (best-effort).
+   */
+  readonly ownerSession?: RunState["owner_session"];
+  /**
    * Skip the resolve-or-reuse scan in {@link resolveOrCreateRun} and always create
    * a fresh run, even when a live run already exists for this spec (the `--new`
    * escape hatch). Ignored by {@link createRun}, which is unconditionally imperative.
@@ -245,6 +253,7 @@ async function createRunFromManifest(
     driver: "sequential",
     ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
+    ...(opts.ownerSession !== undefined ? { owner_session: opts.ownerSession } : {}),
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
@@ -393,6 +402,21 @@ function parseMode(raw: string | boolean | undefined): RunState["mode"] | undefi
   throw new UsageError(`--mode must be 'session' or 'workflow', got '${String(raw)}'`);
 }
 
+/**
+ * Resolve the owning Claude Code session id to stamp onto the run (Prompt J —
+ * session-scoped Stop gate). Precedence: an explicit `--session-id` flag (the
+ * orchestrator/command can pass it deterministically) over the `CLAUDE_CODE_SESSION_ID`
+ * env var that Claude Code sets for Bash-tool invocations. Returns `undefined` when
+ * neither is available — owner-unknown is a supported (degraded-but-safe) state in
+ * which the Stop gate falls back to its unscoped behavior.
+ */
+function resolveOwnerSession(
+  flag: string | boolean | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
+}
+
 async function runCreate(argv: string[]): Promise<ExitCode> {
   const args = parseArgs(argv, { booleans: ["new"] });
   if (args.flag("help") === true) {
@@ -414,6 +438,7 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
   validateId(runId, "run-id");
   const mode = parseMode(args.flag("mode"));
   const shipMode = parseShipMode(args.flag("ship-mode"));
+  const ownerSession = resolveOwnerSession(args.flag("session-id"));
   // Resolve-or-reuse is the default for the natural (auto-id) invocation — a repeat
   // returns the live run, never an orphan. `--new` OR an explicit `--run-id` opts
   // into an imperative fresh create: a named id is an address (determinism/tests),
@@ -430,6 +455,7 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
     ...(specId !== undefined ? { specId } : {}),
     ...(mode !== undefined ? { mode } : {}),
     ...(shipMode !== undefined ? { shipMode } : {}),
+    ...(ownerSession !== undefined ? { ownerSession } : {}),
     ...(force ? { force } : {}),
   });
   emitJson(run);

@@ -1917,6 +1917,13 @@ function parseHookInput(raw) {
   }
   return parsed;
 }
+async function readStdin(stream = process.stdin) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 function commandOf(input) {
   return input?.tool_input?.command ?? "";
 }
@@ -7118,6 +7125,16 @@ var RunStateSchema = external_exports.object({
   driver: DriverEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
   ship_mode: ShipModeEnum.default("no-merge"),
+  /**
+   * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
+   * gate). Stamped ONCE at `run create` from the launching session's
+   * `CLAUDE_CODE_SESSION_ID` (the orchestrator/Bash env), so the Stop hook can
+   * session-scope its block: only the OWNING session is gated; an unrelated session
+   * stopping while this run is live passes through. Optional — best-effort: when the
+   * env var is absent (owner unknown), the Stop gate falls back to the unscoped
+   * behavior (degraded but safe). An immutable property, never a derived verdict.
+   */
+  owner_session: external_exports.string().min(1).optional(),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -7299,6 +7316,9 @@ var StateManager = class {
       driver: args.driver ?? "sequential",
       mode: args.mode ?? "session",
       ship_mode: args.ship_mode ?? "no-merge",
+      // Stamp the owning session only when known (best-effort) — an absent owner
+      // leaves the field undefined and the Stop gate falls back to unscoped behavior.
+      ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -7848,9 +7868,13 @@ async function readAllStdin6() {
 // src/hooks/stop-gate.ts
 var log5 = createLogger("hook:stop-gate");
 var ALLOW = { kind: "allow" };
-function decideStop(run, allowStop) {
+function decideStop(run, allowStop, stoppingSession) {
   if (run === null) return ALLOW;
   if (run.status !== "running") return ALLOW;
+  if (run.mode === "workflow") return ALLOW;
+  if (run.owner_session !== void 0 && stoppingSession !== void 0 && stoppingSession !== run.owner_session) {
+    return ALLOW;
+  }
   const tasks = Object.values(run.tasks);
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
   const pending = tasks.length === 0 || nonTerminal.length > 0;
@@ -7868,6 +7892,15 @@ async function runStopGate(_argv = [], deps = {}) {
   const emit2 = deps.emit ?? ((s) => process.stdout.write(s));
   const allowStop = deps.allowStop ?? process.env.FACTORY_ALLOW_STOP === "1";
   const manager = deps.manager ?? new StateManager(deps);
+  let stoppingSession;
+  try {
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
+    const input = parseHookInput(raw);
+    stoppingSession = typeof input?.session_id === "string" && input.session_id.length > 0 ? input.session_id : void 0;
+  } catch (err) {
+    log5.warn(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
+    stoppingSession = void 0;
+  }
   let run;
   try {
     run = await manager.readCurrent();
@@ -7877,7 +7910,7 @@ async function runStopGate(_argv = [], deps = {}) {
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;
   }
-  const action = decideStop(run, allowStop);
+  const action = decideStop(run, allowStop, stoppingSession);
   switch (action.kind) {
     case "allow":
       return EXIT.OK;

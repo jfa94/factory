@@ -399,6 +399,17 @@ export const RunStateSchema = z.object({
   mode: RunModeEnum.default("session"),
   ship_mode: ShipModeEnum.default("no-merge"),
 
+  /**
+   * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
+   * gate). Stamped ONCE at `run create` from the launching session's
+   * `CLAUDE_CODE_SESSION_ID` (the orchestrator/Bash env), so the Stop hook can
+   * session-scope its block: only the OWNING session is gated; an unrelated session
+   * stopping while this run is live passes through. Optional — best-effort: when the
+   * env var is absent (owner unknown), the Stop gate falls back to the unscoped
+   * behavior (degraded but safe). An immutable property, never a derived verdict.
+   */
+  owner_session: z.string().min(1).optional(),
+
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
 

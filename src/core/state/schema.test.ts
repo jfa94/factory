@@ -53,6 +53,13 @@ describe("schema round-trip", () => {
     expect(() => parseRunState(minimalRun({ ship_mode: "auto" }))).toThrow();
   });
 
+  it("owner_session is optional (undefined when absent) and round-trips a stamped value", () => {
+    // Session-ownership (Prompt J): the owning Claude Code session id stamped at
+    // `run create` so the Stop hook can session-scope its block.
+    expect(parseRunState(minimalRun()).owner_session).toBeUndefined();
+    expect(parseRunState(minimalRun({ owner_session: "sess-123" })).owner_session).toBe("sess-123");
+  });
+
   it("round-trips through JSON without loss", () => {
     const run = parseRunState(
       minimalRun({

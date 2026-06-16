@@ -54,6 +54,96 @@ describe("decideStop — pass-through statuses", () => {
   );
 });
 
+describe("decideStop — workflow mode (prong a) → allow", () => {
+  it("workflow-mode run with pending work → allow (the Workflow drives, not the session)", () => {
+    // This is the headline false-block fix: a live workflow-mode run must NOT block
+    // the interactive session's stop, because the background Workflow owns
+    // continuation + finalize-on-stop. Without this, the session is told to
+    // hand-run `factory next`/`drive`, which is actively wrong in workflow mode.
+    const action = decideStop(
+      run({ mode: "workflow" }, { t1: task({ status: "executing" }) }),
+      false,
+    );
+    expect(action).toEqual({ kind: "allow" });
+  });
+
+  it("workflow-mode run with zero tasks (setup unfinished) → allow", () => {
+    expect(decideStop(run({ mode: "workflow" }, {}), false)).toEqual({ kind: "allow" });
+  });
+
+  it("workflow-mode all-terminal run → allow (the Workflow finalizes, not the Stop hook)", () => {
+    // In workflow mode the session must not finalize-on-stop either; the Workflow
+    // returns all-terminal and the launching command runs `factory run finalize`.
+    const action = decideStop(
+      run({ mode: "workflow" }, { a: task({ task_id: "a", status: "done" }) }),
+      false,
+    );
+    expect(action).toEqual({ kind: "allow" });
+  });
+
+  it("session-mode run is unaffected by the workflow prong (still blocks)", () => {
+    const action = decideStop(
+      run({ mode: "session" }, { t1: task({ status: "executing" }) }),
+      false,
+    );
+    expect(action.kind).toBe("block");
+  });
+});
+
+describe("decideStop — session-ownership (prong b)", () => {
+  const OWNER = "session-owner-abc";
+
+  it("owner known + stopping session != owner → allow (unrelated session, session-scoped)", () => {
+    const action = decideStop(
+      run({ mode: "session", owner_session: OWNER }, { t1: task({ status: "executing" }) }),
+      false,
+      "some-other-session",
+    );
+    expect(action).toEqual({ kind: "allow" });
+  });
+
+  it("owner known + stopping session == owner + pending work → block (the real owner)", () => {
+    const action = decideStop(
+      run({ mode: "session", owner_session: OWNER }, { t1: task({ status: "executing" }) }),
+      false,
+      OWNER,
+    );
+    expect(action.kind).toBe("block");
+  });
+
+  it("owner known + stopping session == owner + all-terminal → finalize (the real owner)", () => {
+    const action = decideStop(
+      run({ mode: "session", owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
+      false,
+      OWNER,
+    );
+    expect(action).toEqual({ kind: "finalize", status: "completed" });
+  });
+
+  it("owner UNKNOWN (not stamped) → fall back to blocking the stopping session (degraded but safe)", () => {
+    // When the owner could not be stamped at create, we cannot session-scope; the
+    // safe default is to preserve the current behavior (block the stopping session
+    // with pending work) so a real owner is never let go silently.
+    const action = decideStop(
+      run({ mode: "session" }, { t1: task({ status: "executing" }) }),
+      false,
+      "any-session",
+    );
+    expect(action.kind).toBe("block");
+  });
+
+  it("owner known but stopping session UNKNOWN (no stdin) → block (cannot prove non-owner)", () => {
+    // If we can't read the stopping session id we cannot prove it is NOT the owner;
+    // fail safe by keeping the existing block behavior for a pending run.
+    const action = decideStop(
+      run({ mode: "session", owner_session: OWNER }, { t1: task({ status: "executing" }) }),
+      false,
+      undefined,
+    );
+    expect(action.kind).toBe("block");
+  });
+});
+
 describe("decideStop — live run with pending work → block", () => {
   it("blocks when a task is in-flight (reason names the task)", () => {
     const action = decideStop(run({}, { t1: task({ task_id: "t1", status: "executing" }) }), false);
@@ -129,10 +219,15 @@ describe("runStopGate — I/O wiring", () => {
     return { out, emit: (s: string) => out.push(s) };
   }
 
+  // The Stop hook reads its stdin to extract the stopping session_id. Tests that
+  // exercise NON-session-scoping behavior inject an empty payload (unknown stopping
+  // session) so they neither hang on real process.stdin nor accidentally session-scope.
+  const emptyStdin = async () => "";
+
   it("no active run → OK, emits nothing", async () => {
     const { out, emit } = emitter();
     const manager = { readCurrent: async () => null, finalize: vi.fn() };
-    const code = await runStopGate([], { manager, emit, allowStop: false });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw: emptyStdin });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]);
     expect(manager.finalize).not.toHaveBeenCalled();
@@ -144,7 +239,7 @@ describe("runStopGate — I/O wiring", () => {
       readCurrent: async () => run({}, { t1: task({ status: "executing" }) }),
       finalize: vi.fn(),
     };
-    const code = await runStopGate([], { manager, emit, allowStop: false });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw: emptyStdin });
     expect(code).toBe(EXIT.OK);
     expect(out).toHaveLength(1);
     expect(JSON.parse(out[0]!)).toMatchObject({ decision: "block" });
@@ -158,7 +253,7 @@ describe("runStopGate — I/O wiring", () => {
       readCurrent: async () => run({}, { a: task({ task_id: "a", status: "done" }) }),
       finalize,
     };
-    const code = await runStopGate([], { manager, emit, allowStop: false });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw: emptyStdin });
     expect(code).toBe(EXIT.OK);
     expect(finalize).toHaveBeenCalledWith("run-x", "completed");
     expect(out).toEqual([]);
@@ -172,7 +267,7 @@ describe("runStopGate — I/O wiring", () => {
         throw new Error("disk full");
       }),
     };
-    const code = await runStopGate([], { manager, emit, allowStop: false });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw: emptyStdin });
     expect(code).toBe(EXIT.OK);
     expect(JSON.parse(out[0]!)).toMatchObject({ decision: "block" });
     expect(out[0]!).toContain("finalize-on-stop failed");
@@ -186,10 +281,66 @@ describe("runStopGate — I/O wiring", () => {
       },
       finalize: vi.fn(),
     };
-    const code = await runStopGate([], { manager, emit, allowStop: false });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw: emptyStdin });
     expect(code).toBe(EXIT.OK);
     expect(JSON.parse(out[0]!)).toMatchObject({ decision: "block" });
     expect(out[0]!).toContain("pipeline state unreadable");
     expect(manager.finalize).not.toHaveBeenCalled();
+  });
+
+  it("workflow-mode run → allow, emits nothing, no finalize (session is not the driver)", async () => {
+    const { out, emit } = emitter();
+    const finalize = vi.fn();
+    const manager = {
+      readCurrent: async () => run({ mode: "workflow" }, { t1: task({ status: "executing" }) }),
+      finalize,
+    };
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw: emptyStdin });
+    expect(code).toBe(EXIT.OK);
+    expect(out).toEqual([]);
+    expect(finalize).not.toHaveBeenCalled();
+  });
+
+  it("reads the stopping session_id from stdin → unrelated session passes through", async () => {
+    const { out, emit } = emitter();
+    const finalize = vi.fn();
+    const manager = {
+      readCurrent: async () =>
+        run({ mode: "session", owner_session: "owner-1" }, { t1: task({ status: "executing" }) }),
+      finalize,
+    };
+    const readRaw = async () =>
+      JSON.stringify({ session_id: "intruder-9", hook_event_name: "Stop" });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw });
+    expect(code).toBe(EXIT.OK);
+    expect(out).toEqual([]); // allow: a different session must not be blocked
+    expect(finalize).not.toHaveBeenCalled();
+  });
+
+  it("stdin session_id == owner → still blocks the owning session with pending work", async () => {
+    const { out, emit } = emitter();
+    const manager = {
+      readCurrent: async () =>
+        run({ mode: "session", owner_session: "owner-1" }, { t1: task({ status: "executing" }) }),
+      finalize: vi.fn(),
+    };
+    const readRaw = async () => JSON.stringify({ session_id: "owner-1", hook_event_name: "Stop" });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw });
+    expect(code).toBe(EXIT.OK);
+    expect(JSON.parse(out[0]!)).toMatchObject({ decision: "block" });
+  });
+
+  it("malformed stdin → treats stopping session as unknown (degraded-safe, still blocks owner-or-unknown)", async () => {
+    const { out, emit } = emitter();
+    const manager = {
+      readCurrent: async () =>
+        run({ mode: "session", owner_session: "owner-1" }, { t1: task({ status: "executing" }) }),
+      finalize: vi.fn(),
+    };
+    const readRaw = async () => "}{ not json";
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw });
+    expect(code).toBe(EXIT.OK);
+    // unknown stopping session vs known owner → cannot prove non-owner → block.
+    expect(JSON.parse(out[0]!)).toMatchObject({ decision: "block" });
   });
 });

@@ -246,6 +246,22 @@ describe("createRun", () => {
     }
   });
 
+  it("stamps owner_session when given (session-ownership) and leaves it undefined otherwise", async () => {
+    const owned = await createRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-own",
+      ownerSession: "sess-owner-1",
+    });
+    expect(owned.owner_session).toBe("sess-owner-1");
+    // Persisted (resume-safe): round-trips through a fresh read.
+    expect((await state.read("run-own")).owner_session).toBe("sess-owner-1");
+
+    const anon = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-anon" });
+    expect(anon.owner_session).toBeUndefined();
+    expect((await state.read("run-anon")).owner_session).toBeUndefined();
+  });
+
   it("session mode is the default and never warns about pacing", async () => {
     const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
