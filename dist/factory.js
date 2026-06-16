@@ -10171,14 +10171,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log27 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log27.code !== 0) {
+    const log28 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log28.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log27.code ?? "null"}): ${log27.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log28.code ?? "null"}): ${log28.stderr.trim()}`
       );
     }
-    assertNotTruncated(log27, "git log (tdd classification)");
-    const shas = splitLines(log27.stdout).reverse();
+    assertNotTruncated(log28, "git log (tdd classification)");
+    const shas = splitLines(log28.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -12427,6 +12427,96 @@ var nextCommand = {
   }
 };
 
+// src/hooks/hook-io.ts
+async function readStdin(stream = process.stdin) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// src/cli/subcommands/statusline.ts
+var log27 = createLogger("cli:statusline");
+var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
+
+Wire this as the Claude Code statusLine.command. On every statusline update it
+reads the piped JSON payload, writes \`rate_limits + {captured_at}\` to
+\${CLAUDE_PLUGIN_DATA}/usage-cache.json (the session-mode quota pacer's input),
+and \u2014 if FACTORY_ORIGINAL_STATUSLINE is set \u2014 pipes the same payload to that
+command and forwards its stdout as the displayed statusline.
+
+Usage:
+  factory statusline        (reads the CC payload from stdin)
+
+This is a side-effecting passthrough, not a machine subcommand: stdout is the
+displayed statusline text, NOT a JSON envelope.`;
+function rateLimitsOf(payload) {
+  if (typeof payload !== "object" || payload === null) return null;
+  const rl = payload.rate_limits;
+  if (typeof rl !== "object" || rl === null) return null;
+  return rl;
+}
+async function writeCache(rateLimits, deps) {
+  let dataDir;
+  try {
+    dataDir = resolveDataDir(deps.dataDirOptions ?? {});
+  } catch {
+    log27.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    return;
+  }
+  const now = (deps.now ?? nowEpoch)();
+  const cache = { ...rateLimits, captured_at: now };
+  try {
+    await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
+  } catch (err) {
+    log27.warn(`failed to write usage-cache.json: ${err.message}`);
+  }
+}
+async function passthrough(payload, deps) {
+  const original = deps.originalStatusline ?? process.env.FACTORY_ORIGINAL_STATUSLINE ?? "";
+  if (original.trim().length === 0) return "";
+  try {
+    const result = await exec(original, [], { shell: true, input: payload });
+    if (result.code !== 0) {
+      log27.warn(
+        `FACTORY_ORIGINAL_STATUSLINE exited ${result.code ?? "null"}; statusline left empty`
+      );
+      return "";
+    }
+    return result.stdout;
+  } catch (err) {
+    log27.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    return "";
+  }
+}
+async function runStatusline(argv = [], deps = {}) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(HELP7);
+    return EXIT.OK;
+  }
+  const payload = deps.readStdin ? await deps.readStdin() : await readStdin(deps.stdin);
+  let parsed;
+  try {
+    parsed = payload.trim().length > 0 ? JSON.parse(payload) : void 0;
+  } catch {
+    parsed = void 0;
+  }
+  const rateLimits = rateLimitsOf(parsed);
+  if (rateLimits !== null) {
+    await writeCache(rateLimits, deps);
+  }
+  const displayed = await passthrough(payload, deps);
+  const write = deps.writeStdout ?? ((text) => process.stdout.write(text));
+  write(displayed);
+  return EXIT.OK;
+}
+var statuslineCommand = {
+  describe: "Capture Claude Code rate limits to usage-cache.json + chain the statusline",
+  run: (argv) => runStatusline(argv)
+};
+
 // src/cli/main.ts
 var cliRegistry = {
   "config-defaults": {
@@ -12445,7 +12535,8 @@ var cliRegistry = {
   state: stateCommand,
   scaffold: scaffoldCommand,
   drive: driveCommand,
-  next: nextCommand
+  next: nextCommand,
+  statusline: statuslineCommand
 };
 function printHelp() {
   const names = Object.keys(cliRegistry).sort();

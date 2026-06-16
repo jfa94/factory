@@ -67,7 +67,8 @@ export interface UsageSignal {
 }
 
 /**
- * Zod shape of `usage-cache.json` as written by `statusline-wrapper.sh`. Every
+ * Zod shape of `usage-cache.json` as written by the `factory statusline`
+ * subcommand (`src/cli/subcommands/statusline.ts`). Every
  * numeric is epoch SECONDS or a percentage. We accept the raw shape loosely
  * (numbers may be null/absent on a degraded cache) and map degradation to the
  * unavailable sentinel ourselves, rather than letting Zod throw — the bash
