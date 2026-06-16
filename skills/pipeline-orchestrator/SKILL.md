@@ -57,7 +57,7 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode session|workflow] [--ship-mode no-merge|live]
+factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode session|workflow] [--ship-mode no-merge|live]
 ```
 
 Pass `--mode` AND `--ship-mode` through from the invoking command (defaults `session` / `no-merge`);
@@ -65,6 +65,10 @@ both persist on the run. `mode` tells the quota gate whether to pace (Decision 2
 disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow driver + resume,
 so it is never re-marshaled. Read `run_id` from the emitted RunState. Seed failures
 (duplicate/dangling/cyclic deps) are spec defects — surface them.
+
+**Idempotent** (auto-id form): re-running `run create` for the same `(repo, spec_id)` returns the
+existing non-terminal run instead of spawning an orphan — so a lost `run_id` is safe to re-grab by
+re-running create. Pass `--new` (or an explicit `--run-id`) to force a fresh run.
 
 **In `--mode workflow`, STOP after this phase** — return control to `/factory:run`, which owns the
 Workflow launch (`commands/run.md`). Do NOT enter Phase 3.

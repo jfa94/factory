@@ -18,6 +18,7 @@ import {
   runCommand,
   seedTasksFromSpec,
   createRun,
+  resolveOrCreateRun,
   applyResume,
   type RunResumeEnvelope,
 } from "./run.js";
@@ -277,6 +278,79 @@ describe("createRun", () => {
     expect(live.ship_mode).toBe("live");
     // Resume-safe: the persisted value survives a fresh read (the workflow's source of truth).
     expect((await state.read("run-sm1")).ship_mode).toBe("live");
+  });
+});
+
+describe("resolveOrCreateRun (idempotent create)", () => {
+  let dataDir: string;
+  let state: StateManager;
+  let store: SpecStore;
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "factory-run-reuse-"));
+    state = new StateManager({
+      dataDir,
+      lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
+    });
+    store = new SpecStore({ dataDir });
+    await store.write(manifest([task("t1", []), task("t2", ["t1"])]), "# spec\n");
+  });
+  afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
+
+  it("reuses the active run for the same spec and spawns no orphan", async () => {
+    const first = await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
+    expect(first.reused).toBe(false);
+    expect(first.run.run_id).toBe("run-a");
+
+    // A second create (different generated id) returns the SAME live run.
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-b",
+    });
+    expect(second.reused).toBe(true);
+    expect(second.run.run_id).toBe("run-a");
+
+    // No orphan: only the original run exists in the store.
+    expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
+  });
+
+  it("reuse resolves by explicit spec-id too", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, specId: "42-checkout", runId: "run-a" });
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      specId: "42-checkout",
+      runId: "run-b",
+    });
+    expect(second.reused).toBe(true);
+    expect(second.run.run_id).toBe("run-a");
+  });
+
+  it("force creates a fresh run even when one is active", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
+    const forced = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-b",
+      force: true,
+    });
+    expect(forced.reused).toBe(false);
+    expect(forced.run.run_id).toBe("run-b");
+    expect((await state.listRuns()).map((r) => r.run_id).sort()).toEqual(["run-a", "run-b"]);
+  });
+
+  it("creates a new run when the only matching run is terminal", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
+    await state.finalize("run-a", "completed");
+    const next = await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-b" });
+    expect(next.reused).toBe(false);
+    expect(next.run.run_id).toBe("run-b");
+  });
+
+  it("is LOUD when no spec exists for the issue (the reuse path resolves the spec first)", async () => {
+    await expect(
+      resolveOrCreateRun(state, store, { repo: REPO, issue: 999, runId: "run-x" }),
+    ).rejects.toThrow(/no spec for issue #999/);
   });
 });
 

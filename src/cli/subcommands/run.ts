@@ -53,18 +53,23 @@ Actions:
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
 
   --repo        Repo identity 'owner/name' (the first key of the spec store).
   --issue       PRD issue number — the STABLE lookup key (reruns reuse the spec).
   --spec-id     Explicit '<issue>-<slug>' spec id (alternative to --issue).
   --run-id      Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
+                A named id is an address: it forces a fresh imperative create.
+  --new         Force a fresh run even if a live one already exists for this spec.
   --mode        Execution mode: session (quota-paced, default) | workflow (no pacing — hard-stop).
   --ship-mode   no-merge (default — open the rollup PR, never merge) | live (serial-merge into staging).
                 Persisted on the run so the workflow driver + resume read it without re-passing.
 
-Resolves the spec via the durable store (LOUD if none exists — generate one first),
-creates the run, seeds one pending task per spec task, and emits the RunState JSON.`;
+Resolves the spec via the durable store (LOUD if none exists — generate one first).
+IDEMPOTENT: with the auto-generated id, a repeated create returns the existing
+non-terminal run for this (repo, spec_id) instead of spawning an orphan; pass --new
+(or a --run-id) to force a fresh run. Seeds one pending task per spec task and emits
+the RunState JSON (run_id is the top-level field).`;
 
 const RESUME_HELP = `factory run resume — re-check quota and resume a paused/suspended run
 
@@ -183,36 +188,48 @@ export interface CreateRunOptions {
   readonly runId: string;
   readonly mode?: RunState["mode"];
   readonly shipMode?: RunState["ship_mode"];
+  /**
+   * Skip the resolve-or-reuse scan in {@link resolveOrCreateRun} and always create
+   * a fresh run, even when a live run already exists for this spec (the `--new`
+   * escape hatch). Ignored by {@link createRun}, which is unconditionally imperative.
+   */
+  readonly force?: boolean;
 }
 
 /**
- * Resolve the durable spec, create the run, and seed its tasks — the testable core
- * of `run create`. Resolves by explicit spec-id when given, else by the stable
- * issue number (LOUD if no spec exists yet — a run cannot be created without one).
- * Creates the run (status `running`), then folds in the seeded task rows via the
- * one sanctioned write path; returns the seeded {@link RunState}.
+ * Resolve the durable spec named by `opts` — by explicit spec-id when given, else
+ * by the stable issue number. LOUD if no spec exists yet (a run cannot be created
+ * without one). Shared by {@link createRun} (imperative) and {@link resolveOrCreateRun}
+ * (resolve-or-reuse) so the spec is resolved exactly once on each path.
  */
-export async function createRun(
-  state: StateManager,
-  specStore: SpecStore,
-  opts: CreateRunOptions,
-): Promise<RunState> {
-  let manifest: SpecManifest;
+async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promise<SpecManifest> {
   if (opts.specId !== undefined) {
-    manifest = await specStore.read(opts.repo, opts.specId);
-  } else if (opts.issue !== undefined) {
+    return specStore.read(opts.repo, opts.specId);
+  }
+  if (opts.issue !== undefined) {
     const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
     if (resolved === null) {
       throw new Error(
         `run create: no spec for issue #${opts.issue} in ${opts.repo} — generate one first`,
       );
     }
-    manifest = resolved;
-  } else {
-    // Guarded by the command layer; defensive for direct callers.
-    throw new UsageError("run create requires --issue or --spec-id");
+    return resolved;
   }
+  // Guarded by the command layer; defensive for direct callers.
+  throw new UsageError("run create requires --issue or --spec-id");
+}
 
+/**
+ * Create the run from an already-resolved manifest and seed its tasks — the
+ * imperative core. Creates the run (status `running`), then folds in the seeded
+ * task rows via the one sanctioned write path; returns the seeded {@link RunState}.
+ */
+async function createRunFromManifest(
+  state: StateManager,
+  specStore: SpecStore,
+  manifest: SpecManifest,
+  opts: CreateRunOptions,
+): Promise<RunState> {
   // Decision 24: workflow mode disables quota pacing. Warn ONCE here — at opt-in
   // (run creation) — not on every pump tick; the gate then proceeds silently.
   if (opts.mode === "workflow") {
@@ -230,6 +247,54 @@ export async function createRun(
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+}
+
+/**
+ * Resolve the durable spec, create the run, and seed its tasks — the testable
+ * IMPERATIVE core of `run create` (always creates; clobbers loudly via
+ * {@link StateManager.create} if `runId` already exists). Reuse semantics live in
+ * {@link resolveOrCreateRun}; this stays unconditional so callers that name a run
+ * id (determinism/tests) get a predictable create.
+ */
+export async function createRun(
+  state: StateManager,
+  specStore: SpecStore,
+  opts: CreateRunOptions,
+): Promise<RunState> {
+  return createRunFromManifest(state, specStore, await resolveSpec(specStore, opts), opts);
+}
+
+/** Outcome of {@link resolveOrCreateRun}: whether a live run was reused or freshly created. */
+export interface ResolveOrCreateResult {
+  readonly reused: boolean;
+  readonly run: RunState;
+}
+
+/**
+ * Idempotent `run create`: resolve the spec, then (unless `opts.force`) reuse the
+ * newest NON-terminal run for this `(repo, spec_id)` instead of spawning a second
+ * (orphan) run — the CP3 fix for a re-run that merely wanted to re-grab `run_id`.
+ * A terminal run is never reused (the scan ignores it → a fresh run is created).
+ * `force` (the `--new` escape hatch) skips the scan and always creates.
+ */
+export async function resolveOrCreateRun(
+  state: StateManager,
+  specStore: SpecStore,
+  opts: CreateRunOptions,
+): Promise<ResolveOrCreateResult> {
+  // Resolve first (LOUD if no spec) — also yields the (repo, spec_id) scan key.
+  const manifest = await resolveSpec(specStore, opts);
+  if (opts.force !== true) {
+    const pointer = specStore.toPointer(manifest);
+    const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
+    if (existing !== null) {
+      log.info(
+        `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`,
+      );
+      return { reused: true, run: existing };
+    }
+  }
+  return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +394,7 @@ function parseMode(raw: string | boolean | undefined): RunState["mode"] | undefi
 }
 
 async function runCreate(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["new"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -344,21 +409,28 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
   if (issue !== undefined && specId !== undefined) {
     throw new UsageError("run create: pass exactly one of --issue or --spec-id");
   }
-  const runId = optionalString(args.flag("run-id")) ?? makeRunId();
+  const explicitRunId = optionalString(args.flag("run-id"));
+  const runId = explicitRunId ?? makeRunId();
   validateId(runId, "run-id");
   const mode = parseMode(args.flag("mode"));
   const shipMode = parseShipMode(args.flag("ship-mode"));
+  // Resolve-or-reuse is the default for the natural (auto-id) invocation — a repeat
+  // returns the live run, never an orphan. `--new` OR an explicit `--run-id` opts
+  // into an imperative fresh create: a named id is an address (determinism/tests),
+  // not a reuse request, so it never silently resolves to a different run.
+  const force = args.flag("new") === true || explicitRunId !== undefined;
 
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const run = await createRun(state, specStore, {
+  const { run } = await resolveOrCreateRun(state, specStore, {
     repo,
     runId,
     ...(issue !== undefined ? { issue } : {}),
     ...(specId !== undefined ? { specId } : {}),
     ...(mode !== undefined ? { mode } : {}),
     ...(shipMode !== undefined ? { shipMode } : {}),
+    ...(force ? { force } : {}),
   });
   emitJson(run);
   return EXIT.OK;

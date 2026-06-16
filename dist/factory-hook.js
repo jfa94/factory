@@ -601,9 +601,9 @@ var require_graceful_fs = __commonJS({
         }
       }
       var fs$readdir = fs2.readdir;
-      fs2.readdir = readdir;
+      fs2.readdir = readdir2;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir(path, options, cb) {
+      function readdir2(path, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path2, options2, cb2, startTime) {
@@ -7182,7 +7182,7 @@ function deriveFloorVerdict(task, gateEvidence) {
 
 // src/core/state/manager.ts
 var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
-import { mkdir as mkdir2, readFile, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { mkdir as mkdir2, readFile, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
 import { existsSync as existsSync3 } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
 
@@ -7348,6 +7348,53 @@ var StateManager = class {
       throw err;
     }
     return parseRunState(parseJson(raw, statePath));
+  }
+  // ---- enumerate (lock-free) ---------------------------------------------
+  /**
+   * Enumerate every run in the store, newest-first (run-id descending — the id is
+   * lexicographically chronological). Each run dir's state.json is read + validated
+   * through {@link read}. Non-directory entries (the `runs/current` symlink and any
+   * `*.tmp.<pid>` link create() leaves behind) are excluded. A run dir without a
+   * state.json (mid-creation, or cleaned) is skipped silently; one whose state.json
+   * is unreadable/corrupt/invalid is skipped with a LOUD warning — a single corrupt
+   * historical run must not brick `run create`'s resolve-or-reuse scan. (Targeted
+   * {@link read} keeps its loud-on-corruption contract; only this bulk scan tolerates
+   * a bad entry, and never silently.)
+   */
+  async listRuns() {
+    let entries;
+    try {
+      entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
+    } catch (err) {
+      if (err.code === "ENOENT") return [];
+      throw err;
+    }
+    const runs = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        runs.push(await this.read(entry.name));
+      } catch (err) {
+        if (err.code === "ENOENT") continue;
+        log3.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
+      }
+    }
+    return runs.sort((a, b) => a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0);
+  }
+  /**
+   * Find the newest NON-terminal run for `(repo, specId)`, or null. Powers the
+   * resolve-or-reuse path of `run create`: a repeated create returns the live run
+   * instead of spawning an orphan. Matches on BOTH repo and spec_id (a spec id is
+   * `<issue>-<slug>` — unique within a repo, but not necessarily across repos).
+   */
+  async findActiveBySpec(repo, specId) {
+    const runs = await this.listRuns();
+    for (const r of runs) {
+      if (r.spec.repo === repo && r.spec.spec_id === specId && !isTerminalRunStatus(r.status)) {
+        return r;
+      }
+    }
+    return null;
   }
   // ---- update (locked read-modify-write) ---------------------------------
   /**

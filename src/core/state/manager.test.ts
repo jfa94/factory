@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, rm, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateManager } from "./manager.js";
-import { runStatePath } from "./paths.js";
+import { runStatePath, runsRoot } from "./paths.js";
 import { parseRunState, type SpecPointer } from "./schema.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { deriveFloorVerdict } from "./derive.js";
@@ -267,4 +267,81 @@ describe("concurrency: ≥3 writers do not corrupt state", () => {
     const raw = await readFile(runStatePath(dataDir, "run-1"), "utf8");
     expect(() => parseRunState(JSON.parse(raw))).not.toThrow();
   }, 30_000);
+});
+
+describe("enumeration: listRuns / findActiveBySpec (resolve-or-reuse)", () => {
+  const specA: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
+  const specB: SpecPointer = { repo: "acme/widgets", spec_id: "7-search", issue_number: 7 };
+
+  it("returns [] when the run store does not exist yet", async () => {
+    expect(await mgr().listRuns()).toEqual([]);
+  });
+
+  it("lists every run newest-first (run-id descending) and excludes the current symlink", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA });
+    await m.create({ run_id: "run-2", spec: specB });
+    // create() points runs/current at run-2 (a symlink, not a run dir).
+    const runs = await m.listRuns();
+    expect(runs.map((r) => r.run_id)).toEqual(["run-2", "run-1"]);
+  });
+
+  it("skips a run dir that has no state.json yet (mid-creation / cleaned)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA });
+    await mkdir(join(runsRoot(dataDir), "run-empty"), { recursive: true });
+    const runs = await m.listRuns();
+    expect(runs.map((r) => r.run_id)).toEqual(["run-1"]);
+  });
+
+  it("warn-skips a corrupt state.json but still returns the healthy runs", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-good", spec: specA });
+    await m.create({ run_id: "run-bad", spec: specB });
+    await atomicWriteFile(runStatePath(dataDir, "run-bad"), "not json {");
+
+    const warns: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      warns.push(String(chunk));
+      return true;
+    });
+    try {
+      const runs = await m.listRuns();
+      expect(runs.map((r) => r.run_id)).toEqual(["run-good"]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warns.some((w) => /skipping unreadable run 'run-bad'/.test(w))).toBe(true);
+    // The targeted read() keeps its LOUD contract (only listRuns warn-skips).
+    await expect(m.read("run-bad")).rejects.toThrow();
+  });
+
+  it("findActiveBySpec returns the non-terminal run matching (repo, spec_id)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA });
+    const found = await m.findActiveBySpec(specA.repo, specA.spec_id);
+    expect(found?.run_id).toBe("run-1");
+  });
+
+  it("findActiveBySpec matches on BOTH repo and spec_id", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA });
+    expect(await m.findActiveBySpec("other/repo", specA.spec_id)).toBeNull();
+    expect(await m.findActiveBySpec(specA.repo, "999-nope")).toBeNull();
+  });
+
+  it("findActiveBySpec ignores terminal runs (a finalized run is not reusable)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA });
+    await m.finalize("run-1", "completed");
+    expect(await m.findActiveBySpec(specA.repo, specA.spec_id)).toBeNull();
+  });
+
+  it("findActiveBySpec returns the newest when several non-terminal runs match", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA });
+    await m.create({ run_id: "run-2", spec: specA });
+    const found = await m.findActiveBySpec(specA.repo, specA.spec_id);
+    expect(found?.run_id).toBe("run-2");
+  });
 });

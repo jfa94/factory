@@ -601,9 +601,9 @@ var require_graceful_fs = __commonJS({
         }
       }
       var fs$readdir = fs2.readdir;
-      fs2.readdir = readdir2;
+      fs2.readdir = readdir3;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir2(path2, options, cb) {
+      function readdir3(path2, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path3, options2, cb2, startTime) {
@@ -6490,7 +6490,7 @@ function deriveFloorVerdict(task, gateEvidence) {
 
 // src/core/state/manager.ts
 var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
-import { mkdir as mkdir3, readFile, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { mkdir as mkdir3, readFile, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
 import { existsSync as existsSync3 } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
 
@@ -6705,6 +6705,53 @@ var StateManager = class {
       throw err;
     }
     return parseRunState(parseJson(raw, statePath));
+  }
+  // ---- enumerate (lock-free) ---------------------------------------------
+  /**
+   * Enumerate every run in the store, newest-first (run-id descending — the id is
+   * lexicographically chronological). Each run dir's state.json is read + validated
+   * through {@link read}. Non-directory entries (the `runs/current` symlink and any
+   * `*.tmp.<pid>` link create() leaves behind) are excluded. A run dir without a
+   * state.json (mid-creation, or cleaned) is skipped silently; one whose state.json
+   * is unreadable/corrupt/invalid is skipped with a LOUD warning — a single corrupt
+   * historical run must not brick `run create`'s resolve-or-reuse scan. (Targeted
+   * {@link read} keeps its loud-on-corruption contract; only this bulk scan tolerates
+   * a bad entry, and never silently.)
+   */
+  async listRuns() {
+    let entries;
+    try {
+      entries = await readdir(runsRoot(this.dataDir), { withFileTypes: true });
+    } catch (err) {
+      if (err.code === "ENOENT") return [];
+      throw err;
+    }
+    const runs = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        runs.push(await this.read(entry.name));
+      } catch (err) {
+        if (err.code === "ENOENT") continue;
+        log3.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
+      }
+    }
+    return runs.sort((a, b) => a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0);
+  }
+  /**
+   * Find the newest NON-terminal run for `(repo, specId)`, or null. Powers the
+   * resolve-or-reuse path of `run create`: a repeated create returns the live run
+   * instead of spawning an orphan. Matches on BOTH repo and spec_id (a spec id is
+   * `<issue>-<slug>` — unique within a repo, but not necessarily across repos).
+   */
+  async findActiveBySpec(repo, specId) {
+    const runs = await this.listRuns();
+    for (const r of runs) {
+      if (r.spec.repo === repo && r.spec.spec_id === specId && !isTerminalRunStatus(r.status)) {
+        return r;
+      }
+    }
+    return null;
   }
   // ---- update (locked read-modify-write) ---------------------------------
   /**
@@ -8165,7 +8212,7 @@ var RealGhClient = class {
 };
 
 // src/spec/store.ts
-import { readFile as readFile4, readdir } from "node:fs/promises";
+import { readFile as readFile4, readdir as readdir2 } from "node:fs/promises";
 import { join as join7 } from "node:path";
 var log14 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
@@ -8211,7 +8258,7 @@ var SpecStore = class {
     const repoRoot = join7(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
-      entries = await readdir(repoRoot);
+      entries = await readdir2(repoRoot);
     } catch (err) {
       if (err.code === "ENOENT") return null;
       throw err;
@@ -11474,18 +11521,23 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
 
   --repo        Repo identity 'owner/name' (the first key of the spec store).
   --issue       PRD issue number \u2014 the STABLE lookup key (reruns reuse the spec).
   --spec-id     Explicit '<issue>-<slug>' spec id (alternative to --issue).
   --run-id      Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
+                A named id is an address: it forces a fresh imperative create.
+  --new         Force a fresh run even if a live one already exists for this spec.
   --mode        Execution mode: session (quota-paced, default) | workflow (no pacing \u2014 hard-stop).
   --ship-mode   no-merge (default \u2014 open the rollup PR, never merge) | live (serial-merge into staging).
                 Persisted on the run so the workflow driver + resume read it without re-passing.
 
-Resolves the spec via the durable store (LOUD if none exists \u2014 generate one first),
-creates the run, seeds one pending task per spec task, and emits the RunState JSON.`;
+Resolves the spec via the durable store (LOUD if none exists \u2014 generate one first).
+IDEMPOTENT: with the auto-generated id, a repeated create returns the existing
+non-terminal run for this (repo, spec_id) instead of spawning an orphan; pass --new
+(or a --run-id) to force a fresh run. Seeds one pending task per spec task and emits
+the RunState JSON (run_id is the top-level field).`;
 var RESUME_HELP = `factory run resume \u2014 re-check quota and resume a paused/suspended run
 
 Usage:
@@ -11566,21 +11618,22 @@ function assertAcyclic(tasks, specId) {
   };
   for (const id of Object.keys(tasks)) visit(id, []);
 }
-async function createRun(state, specStore, opts) {
-  let manifest;
+async function resolveSpec(specStore, opts) {
   if (opts.specId !== void 0) {
-    manifest = await specStore.read(opts.repo, opts.specId);
-  } else if (opts.issue !== void 0) {
+    return specStore.read(opts.repo, opts.specId);
+  }
+  if (opts.issue !== void 0) {
     const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
     if (resolved === null) {
       throw new Error(
         `run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`
       );
     }
-    manifest = resolved;
-  } else {
-    throw new UsageError("run create requires --issue or --spec-id");
+    return resolved;
   }
+  throw new UsageError("run create requires --issue or --spec-id");
+}
+async function createRunFromManifest(state, specStore, manifest, opts) {
   if (opts.mode === "workflow") {
     log26.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
@@ -11596,6 +11649,20 @@ async function createRun(state, specStore, opts) {
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {}
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+}
+async function resolveOrCreateRun(state, specStore, opts) {
+  const manifest = await resolveSpec(specStore, opts);
+  if (opts.force !== true) {
+    const pointer = specStore.toPointer(manifest);
+    const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
+    if (existing !== null) {
+      log26.info(
+        `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`
+      );
+      return { reused: true, run: existing };
+    }
+  }
+  return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
 }
 async function applyResume(state, runId, reading, config, nowEpochSec) {
   const run10 = await state.read(runId);
@@ -11647,7 +11714,7 @@ function parseMode(raw) {
   throw new UsageError(`--mode must be 'session' or 'workflow', got '${String(raw)}'`);
 }
 async function runCreate(argv) {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["new"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -11661,20 +11728,23 @@ async function runCreate(argv) {
   if (issue !== void 0 && specId !== void 0) {
     throw new UsageError("run create: pass exactly one of --issue or --spec-id");
   }
-  const runId = optionalString(args.flag("run-id")) ?? makeRunId();
+  const explicitRunId = optionalString(args.flag("run-id"));
+  const runId = explicitRunId ?? makeRunId();
   validateId(runId, "run-id");
   const mode = parseMode(args.flag("mode"));
   const shipMode = parseShipMode(args.flag("ship-mode"));
+  const force = args.flag("new") === true || explicitRunId !== void 0;
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const run10 = await createRun(state, specStore, {
+  const { run: run10 } = await resolveOrCreateRun(state, specStore, {
     repo,
     runId,
     ...issue !== void 0 ? { issue } : {},
     ...specId !== void 0 ? { specId } : {},
     ...mode !== void 0 ? { mode } : {},
-    ...shipMode !== void 0 ? { shipMode } : {}
+    ...shipMode !== void 0 ? { shipMode } : {},
+    ...force ? { force } : {}
   });
   emitJson(run10);
   return EXIT.OK;
@@ -11789,7 +11859,7 @@ function scratchPaths(dataDir, repo, issue) {
     verdictPath: join14(dir, VERDICT_FILE)
   };
 }
-async function resolveSpec(deps, repo, issue) {
+async function resolveSpec2(deps, repo, issue) {
   const existing = await deps.store.resolveByIssue(repo, issue);
   if (existing) {
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
@@ -11873,7 +11943,7 @@ function wireDeps() {
   };
 }
 var ACTIONS = {
-  resolve: resolveSpec,
+  resolve: resolveSpec2,
   gate: gateSpec,
   store: storeSpec
 };
