@@ -1,15 +1,26 @@
 /**
  * WS5 — durable spec store (Δ X / #6).
  *
- * A spec lives at `<dataDir>/specs/<repo-key>/<spec-id>/{spec.md,tasks.json}` and
- * is REUSED across runs: a rerun resolves an existing spec by the STABLE PRD
- * issue number (the first segment of `spec_id = "<issue>-<slug>"`) and picks it
- * up rather than regenerating. A run records only a {@link SpecPointer}, never the
- * spec body.
+ * The CANONICAL spec lives at `<dataDir>/specs/<repo-key>/<spec-id>/{spec.md,
+ * tasks.json}` (out-of-repo, Decision 5) and is REUSED across runs: a rerun
+ * resolves an existing spec by the STABLE PRD issue number (the first segment of
+ * `spec_id = "<issue>-<slug>"`) and picks it up rather than regenerating. A run
+ * records only a {@link SpecPointer}, never the spec body. ALL reads
+ * ({@link SpecStore.read} / {@link SpecStore.resolveByIssue}) resolve from the
+ * dataDir store — the canonical read-path never touches the in-repo copy.
+ *
+ * F-specloc — the in-repo reviewable copy. On {@link SpecStore.write}, the store
+ * ALSO mirrors `spec.md` + `tasks.json` into the TARGET REPO's
+ * `<docsRoot>/factory/<spec-id>/` (versioned, PR-reviewable). The sidecar
+ * (`spec.meta.json`, a dataDir reconstruction detail) is deliberately NOT copied.
+ * The mirror is executor-immutable: the TCB write-deny covers `docs/factory/**`
+ * (`src/hooks/tcb.ts`) so an executor cannot weaken its own acceptance criteria
+ * via the in-repo copy. `docsRoot` defaults to `<cwd>/docs` — the factory CLI is
+ * cwd-rooted in the target repo — but is injectable for tests.
  *
  * All paths go through the frozen `paths.ts` (traversal-safe `specDir` /
- * `specsRoot` / `repoKey`); this module never hand-joins a path segment. Writes
- * go through the atomic-write seam.
+ * `specsRoot` / `repoKey` / `docsFactoryDir`); this module never hand-joins a
+ * path segment. Writes go through the atomic-write seam.
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -18,7 +29,7 @@ import { parseJson, stringifyJson } from "../shared/json.js";
 import { slugify, validateId } from "../shared/ids.js";
 import { createLogger } from "../shared/logging.js";
 import { resolveDataDir, type DataDirOptions } from "../config/index.js";
-import { specDir, specsRoot, repoKey } from "../core/state/paths.js";
+import { specDir, specsRoot, repoKey, docsFactoryDir } from "../core/state/paths.js";
 import type { SpecPointer } from "../types/index.js";
 import { parseSpecManifest, parseSpecTasks, type SpecManifest } from "./schema.js";
 
@@ -56,12 +67,25 @@ function issueOf(specId: string): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+/** Options for {@link SpecStore}: the dataDir seam plus the in-repo docs root. */
+export interface SpecStoreOptions extends DataDirOptions {
+  /**
+   * The TARGET REPO's `docs/` dir for the in-repo reviewable spec copy
+   * (F-specloc). Defaults to `<cwd>/docs` — the factory CLI runs cwd-rooted in
+   * the target repo, so this lands the mirror in the repo under review. Injected
+   * in tests so they never depend on the real cwd.
+   */
+  readonly docsRoot?: string;
+}
+
 /** The durable spec store. */
 export class SpecStore {
   private readonly dataDir: string;
+  private readonly docsRoot: string;
 
-  constructor(opts: DataDirOptions = {}) {
+  constructor(opts: SpecStoreOptions = {}) {
     this.dataDir = resolveDataDir(opts);
+    this.docsRoot = opts.docsRoot ?? join(process.cwd(), "docs");
   }
 
   /**
@@ -129,14 +153,21 @@ export class SpecStore {
    * Durably write a spec: `spec.md` + the bare `tasks.json` array. The manifest
    * header is persisted as a sidecar so {@link read} can reconstruct
    * `generated_at` without re-running the generator.
+   *
+   * F-specloc — also mirrors `spec.md` + the bare `tasks.json` into the in-repo
+   * reviewable copy (`<docsRoot>/factory/<spec-id>/`). The mirror is a strict
+   * subset (no `spec.meta.json` sidecar): the sidecar is a dataDir reconstruction
+   * detail, and the canonical read-path never consults the mirror. Reruns still
+   * resolve by issue number against the dataDir store (unchanged).
    */
   async write(manifest: SpecManifest, specMd: string): Promise<SpecPointer> {
     const parsed = parseSpecManifest(manifest);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
+    const tasksJson = stringifyJson(parsed.tasks);
 
     await atomicWriteFile(join(dir, SPEC_MD_FILE), specMd);
     // tasks.json is the BARE array — the canonical consumer contract.
-    await atomicWriteFile(join(dir, TASKS_FILE), stringifyJson(parsed.tasks));
+    await atomicWriteFile(join(dir, TASKS_FILE), tasksJson);
     await atomicWriteFile(
       join(dir, META_FILE),
       stringifyJson({
@@ -147,7 +178,40 @@ export class SpecStore {
       }),
     );
 
-    log.info(`wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir}`);
+    // In-repo reviewable copy (F-specloc): spec.md + bare tasks.json only. This
+    // is a PR-reviewable MIRROR, not the canonical source; reads never use it.
+    //
+    // Written to the WORKING TREE but intentionally NOT auto-committed: the
+    // engine cannot safely commit it onto `staging`, because `ensureStaging`
+    // (src/git/staging.ts) reconciles staging via `git checkout -B staging
+    // origin/<base>` — a destructive reset that would silently discard any
+    // engine-side staging commit ("looks committed but isn't"). Genuine
+    // PR-inclusion needs a dedicated spec-ship path (spec branch → PR into
+    // staging); that is net-new run-level orchestration and is DEFERRED.
+    //
+    // Best-effort-but-loud: the mirror is a reviewability convenience, NOT the
+    // source of truth. The canonical spec above is already durably persisted, so
+    // a mirror-write failure (read-only docs/, non-writable cwd, bad perms) must
+    // NOT abort the store. We warn (degraded reviewability surfaced on stderr)
+    // and continue; we never rethrow.
+    const reviewDir = docsFactoryDir(this.docsRoot, parsed.spec_id);
+    let mirrored = true;
+    try {
+      await atomicWriteFile(join(reviewDir, SPEC_MD_FILE), specMd);
+      await atomicWriteFile(join(reviewDir, TASKS_FILE), tasksJson);
+    } catch (err) {
+      mirrored = false;
+      log.warn(
+        `could not write reviewable copy to ${reviewDir} ` +
+          `(${err instanceof Error ? err.message : String(err)}) — the canonical ` +
+          `spec at ${dir} is unaffected; run continues`,
+      );
+    }
+
+    log.info(
+      `wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir} ` +
+        (mirrored ? `(reviewable copy: ${reviewDir})` : `(reviewable copy SKIPPED — see warning)`),
+    );
     return this.toPointer(parsed);
   }
 

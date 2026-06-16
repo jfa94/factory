@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { repoKey, specDir, runDir, runStatePath, currentLinkPath } from "./paths.js";
+import {
+  repoKey,
+  specDir,
+  runDir,
+  runStatePath,
+  currentLinkPath,
+  docsFactoryDir,
+} from "./paths.js";
 
 describe("repoKey — repo id to one safe path segment", () => {
   it("folds the owner/name slash to a dash", () => {
@@ -44,5 +51,23 @@ describe("two-store layout", () => {
   it("rejects an unsafe run id / spec id", () => {
     expect(() => runDir(data, "../escape")).toThrow();
     expect(() => specDir(data, "acme/x", "../escape")).toThrow();
+  });
+});
+
+describe("docsFactoryDir — the in-repo reviewable spec copy (F-specloc)", () => {
+  it("is keyed by spec-id under <docsRoot>/factory (target-repo, NOT dataDir)", () => {
+    // docsRoot is the target repo's docs/ dir (at process.cwd()), distinct from
+    // the out-of-repo dataDir spec store.
+    expect(docsFactoryDir("/repo/docs", "42-checkout")).toBe(
+      join("/repo/docs", "factory", "42-checkout"),
+    );
+  });
+  it("is NOT keyed by repo (the repo IS the checkout that owns docs/)", () => {
+    // Unlike specDir(dataDir, repo, specId), the in-repo copy lives in the target
+    // repo itself, so there is no repo-key segment.
+    expect(docsFactoryDir("/repo/docs", "1-x")).toBe(join("/repo/docs", "factory", "1-x"));
+  });
+  it("validates the spec-id charset (no traversal into / out of docs/)", () => {
+    expect(() => docsFactoryDir("/repo/docs", "../escape")).toThrow();
   });
 });

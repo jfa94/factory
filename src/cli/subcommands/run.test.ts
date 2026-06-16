@@ -184,7 +184,7 @@ describe("createRun", () => {
       dataDir,
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
-    store = new SpecStore({ dataDir });
+    store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
     await store.write(manifest([task("t1", []), task("t2", ["t1"])]), "# spec\n");
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
@@ -308,7 +308,7 @@ describe("resolveOrCreateRun (idempotent create)", () => {
       dataDir,
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
-    store = new SpecStore({ dataDir });
+    store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
     await store.write(manifest([task("t1", []), task("t2", ["t1"])]), "# spec\n");
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));

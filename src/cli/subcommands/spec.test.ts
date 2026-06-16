@@ -94,7 +94,7 @@ const fakeGh: GhClient = {
 
 function deps(): SpecBuildDeps {
   return {
-    store: new SpecStore({ dataDir }),
+    store: new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }),
     gh: fakeGh,
     config: loadConfig({ dataDir }),
     dataDir,
@@ -117,7 +117,7 @@ afterEach(async () => {
 
 describe("resolveSpec", () => {
   it("reuses an existing spec by issue number (Δ X — no generation)", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
     await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
 
     const env = await resolveSpec(deps(), REPO, ISSUE);
@@ -204,7 +204,7 @@ describe("storeSpec", () => {
     expect(env.pointer.spec_id).toBe(`${ISSUE}-email-login`);
 
     // The durable spec is now readable + a subsequent resolve reuses it.
-    const manifest = await new SpecStore({ dataDir }).read(REPO, env.pointer.spec_id);
+    const manifest = await new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }).read(REPO, env.pointer.spec_id);
     expect(manifest.tasks).toHaveLength(1);
     expect(manifest.tasks[0]!.task_id).toBe("T1");
 

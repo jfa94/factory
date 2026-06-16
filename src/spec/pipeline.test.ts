@@ -94,7 +94,7 @@ describe("runSpecPipeline — generate→gate→review→store happy path", () =
   it("Δ X pointer-not-spec: yields a SpecPointer that round-trips and addresses specDir()", async () => {
     const gh = fakeGh();
     const runner = fakeRunner();
-    const store = new SpecStore({ dataDir });
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
 
     const pointer = await runSpecPipeline({
       repo: "owner/name",
@@ -118,7 +118,7 @@ describe("runSpecPipeline — generate→gate→review→store happy path", () =
 
 describe("Δ X reuse-by-issue — no regen when a spec already exists", () => {
   it("Δ X: returns the existing pointer WITHOUT invoking generate/review", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
     // Seed a stored spec for issue 123.
     const seedRunner = fakeRunner();
     await runSpecPipeline({
@@ -150,7 +150,7 @@ describe("Δ X reuse-by-issue — no regen when a spec already exists", () => {
 
 describe("bounded revision loop (never spins)", () => {
   it("NEEDS_REVISION loop stops after the cap and throws a loud SpecDefectError", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
     const runner = fakeRunner({
       verdict: {
         decision: "NEEDS_REVISION",
@@ -177,7 +177,7 @@ describe("bounded revision loop (never spins)", () => {
   });
 
   it("a gate-blocking spec also stops at the cap (gates run before review)", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
     // Vague criterion → testability gate blocks before the reviewer is consulted.
     const badTasks: SpecTask[] = [
       { ...goodTasks[0]!, acceptance_criteria: ["works well"], tests_to_write: ["x"] },
@@ -199,7 +199,7 @@ describe("bounded revision loop (never spins)", () => {
   });
 
   it("rejects a non-positive iteration cap", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
     await expect(
       runSpecPipeline({
         repo: "owner/name",
@@ -215,7 +215,7 @@ describe("bounded revision loop (never spins)", () => {
 
 describe("review adjudication is wired in (56/60 + floor)", () => {
   it("a 55/60 verdict blocks the pipeline despite a claimed PASS", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
     // Claim PASS but score below threshold → pipeline must NOT store it.
     const runner = fakeRunner({
       verdict: {

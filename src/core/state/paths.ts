@@ -23,6 +23,14 @@ import { validateId } from "../../shared/ids.js";
 export const SPECS_DIR = "specs";
 /** Subdir name for the TRANSIENT spec-build scratch area. */
 export const SPEC_BUILD_DIR = "spec-build";
+/**
+ * Subdir under a target repo's `docs/` for the IN-REPO reviewable spec copy
+ * (F-specloc). The durable spec's canonical home stays the out-of-repo dataDir
+ * store ({@link specDir}); this is the versioned, PR-reviewable MIRROR written
+ * alongside it. It is executor-immutable — the TCB write-deny protects
+ * `docs/factory/**` exactly as it does `.github/workflows/**`.
+ */
+export const DOCS_FACTORY_DIR = "factory";
 /** Subdir name for the ephemeral run store. */
 export const RUNS_DIR = "runs";
 /** Symlink name pointing at the active run. */
@@ -110,6 +118,24 @@ export function specsRoot(dataDir: string): string {
 export function specDir(dataDir: string, repo: string, specId: string): string {
   validateId(specId, "spec-id");
   return join(specsRoot(dataDir), repoKey(repo), specId);
+}
+
+/**
+ * `<docsRoot>/factory/<spec-id>` — the IN-REPO reviewable spec copy (F-specloc).
+ *
+ * `docsRoot` is the TARGET REPO's `docs/` dir (at `process.cwd()`), NOT the
+ * out-of-repo dataDir — so this is keyed by `spec-id` alone (the repo IS the
+ * checkout that owns `docs/`; there is no repo-key segment). The `spec-id`
+ * charset is validated the same way {@link specDir} validates it, so a `../`
+ * spec-id cannot traverse out of `docs/factory`.
+ *
+ * This is a MIRROR for human/PR review; the canonical read-path is {@link specDir}
+ * in the dataDir. The TCB write-deny protects this subtree (`docs/factory/**`) so
+ * an executor cannot weaken its own acceptance criteria via the in-repo copy.
+ */
+export function docsFactoryDir(docsRoot: string, specId: string): string {
+  validateId(specId, "spec-id");
+  return join(docsRoot, DOCS_FACTORY_DIR, specId);
 }
 
 /** `<dataDir>/spec-build`. */

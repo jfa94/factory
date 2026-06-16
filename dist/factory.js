@@ -6545,6 +6545,7 @@ function slugify(input) {
 // src/core/state/paths.ts
 var SPECS_DIR = "specs";
 var SPEC_BUILD_DIR = "spec-build";
+var DOCS_FACTORY_DIR = "factory";
 var RUNS_DIR = "runs";
 var CURRENT_LINK = "current";
 var STATE_FILE = "state.json";
@@ -6585,6 +6586,10 @@ function specsRoot(dataDir) {
 function specDir(dataDir, repo, specId) {
   validateId(specId, "spec-id");
   return join3(specsRoot(dataDir), repoKey(repo), specId);
+}
+function docsFactoryDir(docsRoot, specId) {
+  validateId(specId, "spec-id");
+  return join3(docsRoot, DOCS_FACTORY_DIR, specId);
 }
 function specBuildRoot(dataDir) {
   return join3(dataDir, SPEC_BUILD_DIR);
@@ -8326,8 +8331,10 @@ function issueOf(specId) {
 }
 var SpecStore = class {
   dataDir;
+  docsRoot;
   constructor(opts = {}) {
     this.dataDir = resolveDataDir(opts);
+    this.docsRoot = opts.docsRoot ?? join8(process.cwd(), "docs");
   }
   /**
    * Resolve an existing spec for `(repo, issueNumber)` — Δ X reuse. Scans the
@@ -8382,12 +8389,19 @@ var SpecStore = class {
    * Durably write a spec: `spec.md` + the bare `tasks.json` array. The manifest
    * header is persisted as a sidecar so {@link read} can reconstruct
    * `generated_at` without re-running the generator.
+   *
+   * F-specloc — also mirrors `spec.md` + the bare `tasks.json` into the in-repo
+   * reviewable copy (`<docsRoot>/factory/<spec-id>/`). The mirror is a strict
+   * subset (no `spec.meta.json` sidecar): the sidecar is a dataDir reconstruction
+   * detail, and the canonical read-path never consults the mirror. Reruns still
+   * resolve by issue number against the dataDir store (unchanged).
    */
   async write(manifest, specMd) {
     const parsed = parseSpecManifest(manifest);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
+    const tasksJson = stringifyJson(parsed.tasks);
     await atomicWriteFile(join8(dir, SPEC_MD_FILE), specMd);
-    await atomicWriteFile(join8(dir, TASKS_FILE), stringifyJson(parsed.tasks));
+    await atomicWriteFile(join8(dir, TASKS_FILE), tasksJson);
     await atomicWriteFile(
       join8(dir, META_FILE),
       stringifyJson({
@@ -8397,7 +8411,20 @@ var SpecStore = class {
         generated_at: parsed.generated_at
       })
     );
-    log14.info(`wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir}`);
+    const reviewDir = docsFactoryDir(this.docsRoot, parsed.spec_id);
+    let mirrored = true;
+    try {
+      await atomicWriteFile(join8(reviewDir, SPEC_MD_FILE), specMd);
+      await atomicWriteFile(join8(reviewDir, TASKS_FILE), tasksJson);
+    } catch (err) {
+      mirrored = false;
+      log14.warn(
+        `could not write reviewable copy to ${reviewDir} (${err instanceof Error ? err.message : String(err)}) \u2014 the canonical spec at ${dir} is unaffected; run continues`
+      );
+    }
+    log14.info(
+      `wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir} ` + (mirrored ? `(reviewable copy: ${reviewDir})` : `(reviewable copy SKIPPED \u2014 see warning)`)
+    );
     return this.toPointer(parsed);
   }
   /** Build the run-facing {@link SpecPointer} from a manifest. */

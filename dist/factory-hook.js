@@ -6532,6 +6532,11 @@ function buildTcbRules(ctx = {}) {
     test: (p) => hasAdjacentComponents(p, ".github", "workflows")
   });
   rules.push({
+    category: "docs-factory",
+    describe: "docs/factory/** (in-repo reviewable spec copy \u2014 F-specloc)",
+    test: (p) => hasAdjacentComponents(p, "docs", "factory")
+  });
+  rules.push({
     category: "gate-config",
     describe: "gate/CI config (.stryker.config.json, .dependency-cruiser.cjs)",
     test: (p) => GATE_CONFIG_BASENAMES.has(baseName(p))

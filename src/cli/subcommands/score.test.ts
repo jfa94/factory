@@ -90,7 +90,7 @@ describe("score happy paths", () => {
       return true;
     });
 
-    await new SpecStore({ dataDir }).write(MANIFEST, "# spec");
+    await new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }).write(MANIFEST, "# spec");
     const state = new StateManager({ dataDir });
     await state.create({ run_id: "run-s", spec: SPEC });
     await state.update("run-s", (s) => ({

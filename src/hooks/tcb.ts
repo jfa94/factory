@@ -24,6 +24,12 @@
  *                                     `runs/<run>/holdouts/**` (Δ Y) and must be
  *                                     neither writable nor (via holdout-guard)
  *                                     readable from an executor worktree.
+ *   - `docs/factory/**`              — the IN-REPO reviewable spec copy
+ *                                     (F-specloc). `tasks.json` carries the
+ *                                     acceptance criteria; an executor that could
+ *                                     edit the in-repo mirror could weaken its own
+ *                                     gate, exactly as it could via the dataDir
+ *                                     spec store — so this subtree is denied too.
  *
  * Matching defeats evasion: a candidate path is normalized AND, when it exists
  * on disk, realpath-resolved before matching, so `./`, `..`, and symlink
@@ -37,7 +43,13 @@ import { isAbsolute, normalize, resolve, sep } from "node:path";
  * (a deliberate compile-break across the adversarial suite), not a config tweak
  * — mirrors the WS1/WS2 closed-enum discipline.
  */
-export type TcbCategory = "ci-workflows" | "gate-config" | "hooks" | "data-runs" | "data-specs";
+export type TcbCategory =
+  | "ci-workflows"
+  | "gate-config"
+  | "hooks"
+  | "data-runs"
+  | "data-specs"
+  | "docs-factory";
 
 /** One compiled denylist rule. `test(absPath)` decides membership. */
 export interface TcbRule {
@@ -158,6 +170,18 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
     category: "ci-workflows",
     describe: ".github/workflows/** (CI / quality-gate machinery)",
     test: (p) => hasAdjacentComponents(p, ".github", "workflows"),
+  });
+
+  // 1b. In-repo reviewable spec copy: any `docs/factory/**` path (F-specloc).
+  //     Anchored to the component pair so a benign `mydocs/factory` is not caught
+  //     by accident and so it fires for both in-repo and absolute forms — exactly
+  //     like the .github/workflows rule. Context-free: the in-repo mirror's
+  //     acceptance criteria are executor-immutable regardless of where the data
+  //     dir resolves.
+  rules.push({
+    category: "docs-factory",
+    describe: "docs/factory/** (in-repo reviewable spec copy — F-specloc)",
+    test: (p) => hasAdjacentComponents(p, "docs", "factory"),
   });
 
   // 2. Gate/CI config files at the repo root (matched by basename so the rule is

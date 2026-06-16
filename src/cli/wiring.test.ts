@@ -51,7 +51,7 @@ describe("loadCliDeps", () => {
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "factory-wiring-"));
     state = new StateManager({ dataDir });
-    specs = new SpecStore({ dataDir });
+    specs = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
   });
 
   afterEach(async () => {

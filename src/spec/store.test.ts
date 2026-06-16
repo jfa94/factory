@@ -8,13 +8,23 @@ import { parseSpecManifest, type SpecManifest } from "./schema.js";
 import { SpecPointerSchema } from "../types/index.js";
 
 let dataDir: string;
+// A throwaway docs root so the F-specloc in-repo reviewable copy never lands in
+// the real repo's docs/ during tests (test isolation — no shared mutable state).
+let docsRoot: string;
 
 beforeEach(async () => {
   dataDir = await mkdtemp(join(tmpdir(), "ws5-store-"));
+  docsRoot = await mkdtemp(join(tmpdir(), "ws5-store-docs-"));
 });
 afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
+  await rm(docsRoot, { recursive: true, force: true });
 });
+
+/** Construct a store with both the dataDir and a throwaway docs root injected. */
+function newStore(): SpecStore {
+  return new SpecStore({ dataDir, docsRoot });
+}
 
 function manifest(over: Partial<SpecManifest> = {}): SpecManifest {
   return parseSpecManifest({
@@ -54,7 +64,7 @@ describe("makeSpecId — issue is the stable key, slug via shared slugify", () =
 
 describe("SpecStore.write — durable bare-array tasks.json + pointer", () => {
   it("writes spec.md + a BARE tasks.json array and returns a SpecPointer", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     const m = manifest();
     const pointer = await store.write(m, "# Checkout spec");
 
@@ -73,9 +83,104 @@ describe("SpecStore.write — durable bare-array tasks.json + pointer", () => {
   });
 });
 
+describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/factory/<spec-id>/", () => {
+  it("ALSO writes spec.md + tasks.json to <docsRoot>/factory/<spec-id>/ (PR-reviewable)", async () => {
+    const docsRoot = await mkdtemp(join(tmpdir(), "ws5-docs-"));
+    try {
+      const store = new SpecStore({ dataDir, docsRoot });
+      const m = manifest();
+      await store.write(m, "# Checkout spec");
+
+      const reviewDir = join(docsRoot, "factory", m.spec_id);
+      expect(await readFile(join(reviewDir, "spec.md"), "utf8")).toBe("# Checkout spec");
+      const reviewTasks = JSON.parse(await readFile(join(reviewDir, "tasks.json"), "utf8"));
+      expect(Array.isArray(reviewTasks)).toBe(true);
+      expect(reviewTasks[0].task_id).toBe("task_1");
+    } finally {
+      await rm(docsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the CANONICAL read-path in the dataDir — read() never touches docsRoot", async () => {
+    const docsRoot = await mkdtemp(join(tmpdir(), "ws5-docs-"));
+    try {
+      const store = new SpecStore({ dataDir, docsRoot });
+      const m = manifest();
+      await store.write(m, "# spec");
+      // Blow away the in-repo copy: the canonical read still resolves from dataDir.
+      await rm(join(docsRoot, "factory"), { recursive: true, force: true });
+      const read = await store.read(m.repo, m.spec_id);
+      expect(read.tasks[0]!.task_id).toBe("task_1");
+      // And rerun-by-issue still resolves from the dataDir scan (not docsRoot).
+      const found = await store.resolveByIssue(m.repo, m.issue_number);
+      expect(found!.spec_id).toBe(m.spec_id);
+    } finally {
+      await rm(docsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("mirror-write failure does NOT abort the canonical store (best-effort-but-loud)", async () => {
+    // Force the in-repo mirror write to fail deterministically: point docsRoot at
+    // an existing FILE. docsFactoryDir() resolves to <docsRoot>/factory/<spec-id>,
+    // so atomicWriteFile's `mkdir(..., {recursive:true})` hits an existing file as
+    // an ancestor and throws ENOTDIR — cross-platform-safe, no perms juggling.
+    const docsFile = join(await mkdtemp(join(tmpdir(), "ws5-docsfile-")), "docs");
+    await writeFile(docsFile, "i am a file, not a dir");
+
+    const store = new SpecStore({ dataDir, docsRoot: docsFile });
+    const m = manifest();
+
+    // write() must RESOLVE — the mirror failure is swallowed-but-warned, not fatal.
+    const pointer = await store.write(m, "# Checkout spec");
+    expect(SpecPointerSchema.parse(pointer)).toEqual({
+      repo: "owner/name",
+      spec_id: "123-checkout",
+      issue_number: 123,
+    });
+
+    // The CANONICAL spec is fully + correctly persisted in the dataDir.
+    const dir = specDir(dataDir, m.repo, m.spec_id);
+    expect(await readFile(join(dir, "spec.md"), "utf8")).toBe("# Checkout spec");
+    const tasksRaw = JSON.parse(await readFile(join(dir, "tasks.json"), "utf8"));
+    expect(Array.isArray(tasksRaw)).toBe(true);
+    expect(tasksRaw[0].task_id).toBe("task_1");
+    expect(await readFile(join(dir, "spec.meta.json"), "utf8")).toContain("generated_at");
+
+    // read / resolveByIssue still resolve from the canonical dataDir store.
+    const read = await store.read(m.repo, m.spec_id);
+    expect(read.tasks[0]!.task_id).toBe("task_1");
+    const found = await store.resolveByIssue(m.repo, m.issue_number);
+    expect(found!.spec_id).toBe(m.spec_id);
+
+    // And the in-repo copy is ABSENT (the mirror never landed).
+    await expect(
+      readFile(join(docsFile, "factory", m.spec_id, "spec.md"), "utf8"),
+    ).rejects.toThrow();
+  });
+
+  it("does NOT leak run/spec internals into docs/: no spec.meta.json sidecar in the copy", async () => {
+    const docsRoot = await mkdtemp(join(tmpdir(), "ws5-docs-"));
+    try {
+      const store = new SpecStore({ dataDir, docsRoot });
+      const m = manifest();
+      await store.write(m, "# spec");
+      const reviewDir = join(docsRoot, "factory", m.spec_id);
+      // Sidecar is a dataDir reconstruction detail — keep it out of the repo copy.
+      await expect(readFile(join(reviewDir, "spec.meta.json"), "utf8")).rejects.toThrow();
+      // The dataDir copy DOES carry the sidecar (canonical reconstruction).
+      const canonicalDir = specDir(dataDir, m.repo, m.spec_id);
+      expect(await readFile(join(canonicalDir, "spec.meta.json"), "utf8")).toContain(
+        "generated_at",
+      );
+    } finally {
+      await rm(docsRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
   it("Δ X: returns an existing manifest for a known issue number", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     await store.write(manifest(), "# spec");
 
     const found = await store.resolveByIssue("owner/name", 123);
@@ -85,7 +190,7 @@ describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
   });
 
   it("Δ X: looks up by ISSUE NUMBER even when the slug would differ", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     // Stored slug is "checkout"; a rerun would never re-derive it — issue is the key.
     await store.write(manifest({ spec_id: "123-checkout", slug: "checkout" }), "# spec");
     const found = await store.resolveByIssue("owner/name", 123);
@@ -93,37 +198,37 @@ describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
   });
 
   it("returns null when no spec exists for the issue", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     expect(await store.resolveByIssue("owner/name", 999)).toBeNull();
   });
 
   it("returns null when the repo dir does not exist", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     expect(await store.resolveByIssue("nobody/nothing", 1)).toBeNull();
   });
 
   it("does not confuse issue 12 with issue 123 (exact issue match)", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     await store.write(manifest({ spec_id: "123-checkout", issue_number: 123 }), "# spec");
     expect(await store.resolveByIssue("owner/name", 12)).toBeNull();
   });
 
   it("throws loudly on two dirs for the same issue (store-integrity defect)", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     await store.write(manifest({ spec_id: "123-checkout" }), "# spec");
     await store.write(manifest({ spec_id: "123-checkout-v2", slug: "checkout-v2" }), "# spec");
     await expect(store.resolveByIssue("owner/name", 123)).rejects.toThrow(/multiple specs/);
   });
 
   it("rejects a non-positive issue number", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     await expect(store.resolveByIssue("owner/name", 0)).rejects.toThrow();
   });
 });
 
 describe("SpecStore.read — round-trips through the durable store", () => {
   it("reconstructs the manifest from the on-disk bare array + sidecar", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     const m = manifest();
     await store.write(m, "# spec");
     const read = await store.read("owner/name", "123-checkout");
@@ -134,7 +239,7 @@ describe("SpecStore.read — round-trips through the durable store", () => {
   });
 
   it("fails loud on a corrupt durable spec rather than treating it as a miss", async () => {
-    const store = new SpecStore({ dataDir });
+    const store = newStore();
     const dir = specDir(dataDir, "owner/name", "123-broken");
     await mkdir(dir, { recursive: true });
     // Write an invalid tasks.json (legacy risk value) + a sidecar.

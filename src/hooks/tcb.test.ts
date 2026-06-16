@@ -17,6 +17,7 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     dataDir = mkdtempSync(join(tmpdir(), "tcb-data-"));
     mkdirSync(join(repoRoot, ".github", "workflows"), { recursive: true });
     mkdirSync(join(repoRoot, "hooks"), { recursive: true });
+    mkdirSync(join(repoRoot, "docs", "factory", "1-x"), { recursive: true });
     mkdirSync(join(dataDir, "runs", "run-1", "holdouts"), { recursive: true });
     mkdirSync(join(dataDir, "specs", "owner-name", "1-x"), { recursive: true });
   });
@@ -58,6 +59,32 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     const p = join(dataDir, "specs", "owner-name", "1-x", "tasks.json");
     writeFileSync(p, "x");
     expect(isTcbProtected(p, ctx())?.rule.category).toBe("data-specs");
+  });
+
+  it("F-specloc: ADVERSARIAL — an executor write to docs/factory/<spec-id>/tasks.json is DENIED", () => {
+    // The in-repo reviewable spec copy is executor-immutable, exactly like
+    // .github/workflows/** — an executor that could edit it would weaken its own
+    // acceptance criteria. Mirrors the ci-workflows deny.
+    const p = join(repoRoot, "docs", "factory", "1-x", "tasks.json");
+    writeFileSync(p, "x");
+    expect(isTcbProtected(p, ctx())?.rule.category).toBe("docs-factory");
+  });
+
+  it("F-specloc: the docs/factory deny is context-free (fires even without a wired repo/data dir)", () => {
+    // Like .github/workflows/**, the rule is component-anchored and unconditional:
+    // it does not need ctx to fire, so a Bash absolute-path write is still denied.
+    const p = join(repoRoot, "docs", "factory", "1-x", "spec.md");
+    writeFileSync(p, "x");
+    expect(isTcbProtected(p)?.rule.category).toBe("docs-factory");
+  });
+
+  it("F-specloc: a non-factory docs path (e.g. docs/guide.md) is NOT protected", () => {
+    // Scoped, not 'all of docs/'. Only docs/factory/** is the executor-immutable
+    // spec artifact; ordinary in-repo docs stay writable.
+    const p = join(repoRoot, "docs", "guide.md");
+    mkdirSync(join(repoRoot, "docs"), { recursive: true });
+    writeFileSync(p, "x");
+    expect(isTcbProtected(p, ctx())).toBeNull();
   });
 
   it("Δ W: a non-TCB repo path is NOT protected", () => {
@@ -107,6 +134,7 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     expect(categories).toContain("hooks");
     expect(categories).toContain("data-runs");
     expect(categories).toContain("data-specs");
+    expect(categories).toContain("docs-factory");
   });
 
   it("canonicalizePath collapses ./ and .. for a non-existent leaf (create case)", () => {

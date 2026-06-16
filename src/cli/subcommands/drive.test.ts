@@ -128,7 +128,7 @@ describe("drive happy path", () => {
 
     // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
-    await new SpecStore({ dataDir: deps.dataDir }).write(spec, "# spec");
+    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec");
 
     const stdout = captureStream(process.stdout);
 
@@ -164,7 +164,7 @@ describe("drive happy path", () => {
 
     // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
-    await new SpecStore({ dataDir: deps.dataDir }).write(spec, "# spec");
+    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec");
 
     // Write a zero-usage cache so StatuslineUsageSignal proceeds (not quota-blocked).
     const nowSec = Math.floor(Date.now() / 1000);
