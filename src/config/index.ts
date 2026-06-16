@@ -2,7 +2,14 @@
  * `src/config` — public config seam. Downstream imports `loadConfig`,
  * `resolveDataDir`, `ConfigSchema`, and the `Config` type from here.
  */
-export { loadConfig, resolveDataDir, configPath, type DataDirOptions } from "./load.js";
+export {
+  loadConfig,
+  resolveDataDir,
+  configPath,
+  inferPluginRoot,
+  resolvePluginRoot,
+  type DataDirOptions,
+} from "./load.js";
 export {
   saveRawConfig,
   readRawConfig,

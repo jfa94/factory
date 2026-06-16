@@ -128,7 +128,7 @@ function expectedDataDir(opts: {
  * canonicalization heuristic, which itself only fires for paths under
  * `~/.claude/plugins/data/`, so an imperfect guess here is harmless in dev.
  */
-function inferPluginRoot(): string {
+export function inferPluginRoot(): string {
   try {
     const here = new URL(".", import.meta.url).pathname;
     // dist/ -> repo root is one up; src/config/ -> two up. Walk up to the dir
@@ -142,6 +142,22 @@ function inferPluginRoot(): string {
   } catch {
     return process.cwd();
   }
+}
+
+/**
+ * Resolve the plugin ROOT dir (the dir containing `.claude-plugin/`, `bin/`,
+ * `hooks/`, `templates/`). Prefers the real `$CLAUDE_PLUGIN_ROOT` Claude Code
+ * injects when the plugin is loaded, falling back to the runtime-location
+ * inference. This is the value baked into `merged-settings.json` for the
+ * `${CLAUDE_PLUGIN_ROOT}` placeholder (E2 autonomy port), so it must point at a
+ * stable on-disk plugin install, not at `dist/`.
+ *
+ * @param env Override the environment (defaults to `process.env`). For tests.
+ */
+export function resolvePluginRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = env.CLAUDE_PLUGIN_ROOT;
+  if (typeof fromEnv === "string" && fromEnv.length > 0) return resolve(fromEnv);
+  return inferPluginRoot();
 }
 
 /**

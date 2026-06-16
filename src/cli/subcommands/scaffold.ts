@@ -36,6 +36,7 @@ import {
   type GhClient,
 } from "../../git/index.js";
 import { loadConfig, type Config } from "../../config/index.js";
+import { ensureTargetSettings } from "./target-settings.js";
 import type { Subcommand } from "../main.js";
 
 const log = createLogger("scaffold");
@@ -83,6 +84,12 @@ export interface ScaffoldReport {
     readonly required_status_checks: string[];
     readonly provisioned: boolean;
   };
+  /**
+   * E1 (F-perm): the target `.claude/settings.json` emit/merge — whether the
+   * file was freshly created and whether the merge altered it. Stops the
+   * per-call permission prompts for interactive `/factory:run` in this repo.
+   */
+  readonly settings: { readonly created: boolean; readonly changed: boolean };
 }
 
 /**
@@ -196,6 +203,16 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
   // 3. .gitignore guard (factory state must never be committed).
   await ensureGitignore(opts.targetRoot, created, present);
 
+  // 3b. E1 (F-perm): emit / idempotently merge the target-repo
+  //     `.claude/settings.json` (factory allow-list + worktree.baseRef:"head";
+  //     NO statusLine — that belongs to E2's merged-settings). Non-destructive:
+  //     a user's existing settings keys (incl. their own statusLine) are kept.
+  const settings = await ensureTargetSettings({ targetRoot: opts.targetRoot });
+  // Surface the .claude/settings.json path in the file lists for transparency.
+  const settingsRel = relative(opts.targetRoot, settings.path);
+  if (settings.created) created.push(settingsRel);
+  else present.push(settingsRel);
+
   // 4. staging branch (created from base — develop, never main — or FF-reconciled).
   const staging = await ensureStaging({
     gitClient: opts.gitClient,
@@ -239,6 +256,7 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
       required_status_checks: state.requiredStatusChecks,
       provisioned,
     },
+    settings: { created: settings.created, changed: settings.changed },
   };
 }
 

@@ -1,15 +1,13 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "_comment": "Pipeline-specific autonomous-mode settings merged with user's existing settings at runtime. User settings take precedence.",
-  "_security_model": "Bash(*) in permissions.allow is intentional in autonomous mode: no human-in-loop to approve granular Bash(...) prompts and the LLM cannot enumerate every command up front. Real security boundary lives in hooks (secret-commit-guard.sh, pretooluse-pipeline-guards.sh, _security-common.sh, write-protection.sh) plus the dense permissions.deny block below. See docs/explanation/decisions.md Decision 17.",
+  "_comment": "Pipeline-specific autonomous-mode settings merged with user's existing settings at runtime by `factory autonomy ensure`. User settings are the merge base; this template overlays permissions/env/statusLine/hooks.",
+  "_security_model": "Bash(*) in permissions.allow is intentional in autonomous mode: no human-in-loop to approve granular Bash(...) prompts and the LLM cannot enumerate every command up front. The real security boundary lives in the plugin's checked-in hook dispatcher (dist/factory-hook.js, wired in hooks/hooks.json: branch-protection, secret-guard, pipeline-guards, holdout-guard, write-protection, stop-gate, subagent-stop) plus the inline guards + dense permissions.deny block below. See docs/explanation/decisions.md Decision 17.",
   "env": {
     "FACTORY_AUTONOMOUS_MODE": "1"
   },
   "permissions": {
     "allow": [
       "Bash(*)",
-      "Bash(pipeline-ensure-autonomy:*)",
-      "Bash(pipeline-ensure-autonomy 2>&1; echo \"EXIT=$?\")",
       "Read",
       "Write",
       "Edit",
@@ -190,16 +188,6 @@
             "statusMessage": "Checking for dangerous patterns"
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/native-tool-nudge.sh",
-            "statusMessage": "Checking for native tool alternatives"
-          }
-        ]
       }
     ],
     "PostToolUse": [
@@ -231,56 +219,6 @@
           {
             "type": "command",
             "command": "AUDIT=.claude/tool-audit.jsonl; if [ -f \"$AUDIT\" ] && [ $(stat -f%z \"$AUDIT\" 2>/dev/null || stat -c%s \"$AUDIT\" 2>/dev/null || echo 0) -gt 10485760 ]; then mv \"$AUDIT\" \"$AUDIT.old\"; fi; jq -c --arg ts \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" --arg task \"${FACTORY_TASK_ID:-interactive}\" '{ts: $ts, task: $task, tool: .tool_name, target: (.tool_input.file_path // .tool_input.command // null)}' >> \"$AUDIT\" 2>/dev/null || true"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/asyncrewake-ci.sh",
-            "async": true,
-            "asyncRewake": true,
-            "timeout": 3900,
-            "statusMessage": "Watching PR CI"
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "matcher": "^(factory:)?(test-writer|task-executor|implementation-reviewer|quality-reviewer|security-reviewer|architecture-reviewer|scribe|spec-generator|spec-reviewer)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop-transcript.sh",
-            "timeout": 15,
-            "statusMessage": "Parsing subagent transcript"
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "startup|clear|compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start",
-            "timeout": 10,
-            "statusMessage": "Injecting Iron Laws reminder"
-          }
-        ]
-      },
-      {
-        "matcher": "resume",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-resume.sh",
-            "timeout": 5,
-            "statusMessage": "Injecting resume context"
           }
         ]
       }

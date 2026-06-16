@@ -5,7 +5,7 @@
  * exercised without touching the host repo or the network.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,6 +67,46 @@ describe("runScaffold", () => {
 
     const gitignore = await readFile(join(root, ".gitignore"), "utf8");
     expect(gitignore).toMatch(/\.claude-plugin-data\//);
+
+    // E1: a target-repo .claude/settings.json is emitted with the factory
+    // allow-list + worktree.baseRef:"head", and NO statusLine.
+    expect(report.settings.created).toBe(true);
+    const settings = JSON.parse(
+      await readFile(join(root, ".claude", "settings.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect((settings.worktree as { baseRef: string }).baseRef).toBe("head");
+    expect((settings.permissions as { allow: string[] }).allow).toContain("Bash(factory:*)");
+    expect(settings).not.toHaveProperty("statusLine");
+    expect(report.files_created).toContain(".claude/settings.json");
+  });
+
+  it("E1: merges non-destructively into an existing target .claude/settings.json", async () => {
+    await mkdir(join(root, ".claude"), { recursive: true });
+    await writeFile(
+      join(root, ".claude", "settings.json"),
+      JSON.stringify({ statusLine: { command: "mine" }, permissions: { allow: ["Bash(make:*)"] } }),
+      "utf8",
+    );
+    const report = await runScaffold({
+      targetRoot: root,
+      templatesDir,
+      owner: "acme",
+      repo: "widgets",
+      config: cfg,
+      gitClient: gitWithBase(),
+      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      provision: false,
+    });
+    expect(report.settings.created).toBe(false);
+    expect(report.settings.changed).toBe(true);
+    const settings = JSON.parse(
+      await readFile(join(root, ".claude", "settings.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(settings.statusLine).toEqual({ command: "mine" }); // user's own kept
+    const allow = (settings.permissions as { allow: string[] }).allow;
+    expect(allow).toContain("Bash(make:*)");
+    expect(allow).toContain("Bash(factory:*)");
+    expect(report.files_present).toContain(".claude/settings.json");
   });
 
   it("copies the Node gate configs ONLY when package.json exists", async () => {

@@ -71,6 +71,24 @@ file-lock serialized). When it returns:
 - otherwise → run the skill's Phase 4: `factory run finalize --run <run_id>
 --ship-mode <no-merge|live>`, then `factory score` + `factory state --summary`, and report.
 
+## Autonomous mode (optional — unattended, paced relaunch)
+
+A normal interactive `/factory:run` works without prompts once the repo is scaffolded
+(`factory scaffold` emits a target-repo `.claude/settings.json` allow-list +
+`worktree.baseRef:"head"`). For a fully unattended run with session-mode quota pacing,
+relaunch under the merged autonomous settings:
+
+```bash
+factory autonomy ensure        # writes ${CLAUDE_PLUGIN_DATA}/merged-settings.json + prints the command
+```
+
+It merges `templates/settings.autonomous.json` with the user's `~/.claude/settings.json`
+(placeholders substituted, `CLAUDE_PLUGIN_DATA` baked into `env`, `statusLine` wired to
+`factory statusline`, the user's own statusline chained via `FACTORY_ORIGINAL_STATUSLINE`),
+then prints `claude --settings <merged-settings.json>`. Relaunching with that command sets
+`FACTORY_AUTONOMOUS_MODE=1` and produces a fresh `usage-cache.json` on the first turn, which
+the session-mode quota pacer reads. (Interactive runs do NOT need this.)
+
 ## Resume mode (`/factory:run resume [--run <id>]`)
 
 `factory run resume [--run <id>]`. On `{kind:"still-blocked"}` report reason +

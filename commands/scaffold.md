@@ -47,6 +47,13 @@ This is idempotent. It:
 - copies `.github/workflows/quality-gate.yml` (the CI net), and — when the target is a Node
   package — `.stryker.config.json` + `.dependency-cruiser.cjs` (gate configs);
 - guarantees the `.gitignore` entries that keep factory state un-committed;
+- emits (or non-destructively MERGES into) the target repo's `.claude/settings.json` — the
+  factory permission allow-list (the `factory` CLI, git/gh, the agent tools, the data dir) plus
+  `worktree.baseRef:"head"` — so an interactive `/factory:run` in this repo runs without a
+  permission prompt per call. It does **not** write a `statusLine` (that would clobber yours);
+  the factory statusline belongs only to the autonomous relaunch (`factory autonomy ensure`).
+  Re-running is safe: existing keys (including your own statusLine) are preserved and entries
+  are never duplicated;
 - creates/FF-reconciles the `staging` branch off `develop` (never `main`);
 - probes branch protection on `staging` and **refuses loudly if it is missing**.
 

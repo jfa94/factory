@@ -26,6 +26,7 @@ import { scoreCommand } from "./subcommands/score.js";
 import { driveCommand } from "./subcommands/drive.js";
 import { nextCommand } from "./subcommands/next.js";
 import { statuslineCommand } from "./subcommands/statusline.js";
+import { autonomyCommand } from "./subcommands/autonomy.js";
 
 /** A single CLI subcommand. `run` returns (or resolves to) an {@link ExitCode}. */
 export interface Subcommand {
@@ -57,6 +58,7 @@ export const cliRegistry: Record<string, Subcommand> = {
   drive: driveCommand,
   next: nextCommand,
   statusline: statuslineCommand,
+  autonomy: autonomyCommand,
 };
 
 function printHelp(): void {

@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile10;
-      function readFile10(path2, options, cb) {
+      fs2.readFile = readFile12;
+      function readFile12(path2, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path2, options, cb);
@@ -5979,6 +5979,11 @@ function inferPluginRoot() {
     return process.cwd();
   }
 }
+function resolvePluginRoot(env = process.env) {
+  const fromEnv = env.CLAUDE_PLUGIN_ROOT;
+  if (typeof fromEnv === "string" && fromEnv.length > 0) return resolve(fromEnv);
+  return inferPluginRoot();
+}
 function resolveDataDir(opts = {}) {
   if (opts.dataDir) return resolve(opts.dataDir);
   const env = opts.env ?? process.env;
@@ -6437,13 +6442,13 @@ var RunStateSchema = external_exports.object({
   updated_at: external_exports.string(),
   ended_at: external_exports.string().nullable().default(null)
 });
-function refineRunCrossFields(run10, ctx) {
+function refineRunCrossFields(run11, ctx) {
   const quotaStatuses = ["paused", "suspended"];
-  if (run10.quota != null && !quotaStatuses.includes(run10.status)) {
+  if (run11.quota != null && !quotaStatuses.includes(run11.status)) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["quota"],
-      message: `run '${run10.run_id}' carries a quota checkpoint but status is '${run10.status}' (a quota checkpoint is valid only while paused|suspended)`
+      message: `run '${run11.run_id}' carries a quota checkpoint but status is '${run11.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
   }
 }
@@ -6847,13 +6852,13 @@ Usage:
   factory state --summary       Print a compact human summary instead
 
 Exit OK with {"current": null} when there is no current run.`;
-function summarize(run10) {
+function summarize(run11) {
   const lines = [
-    `run ${run10.run_id}  status=${run10.status}  driver=${run10.driver}`,
-    `spec ${run10.spec.repo}#${run10.spec.issue_number} (${run10.spec.spec_id})`,
-    `tasks (${Object.keys(run10.tasks).length}):`
+    `run ${run11.run_id}  status=${run11.status}  driver=${run11.driver}`,
+    `spec ${run11.spec.repo}#${run11.spec.issue_number} (${run11.spec.spec_id})`,
+    `tasks (${Object.keys(run11.tasks).length}):`
   ];
-  for (const t of Object.values(run10.tasks)) {
+  for (const t of Object.values(run11.tasks)) {
     const bits = [`  ${t.task_id}`, t.status];
     if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
     if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
@@ -6902,9 +6907,9 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { copyFile, mkdir as mkdir6, readFile as readFile3, writeFile } from "node:fs/promises";
-import { existsSync as existsSync4 } from "node:fs";
-import { dirname as dirname5, join as join6, relative } from "node:path";
+import { copyFile, mkdir as mkdir7, readFile as readFile4, writeFile } from "node:fs/promises";
+import { existsSync as existsSync5 } from "node:fs";
+import { dirname as dirname5, join as join7, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/shared/exec.ts
@@ -7726,6 +7731,72 @@ async function ensureStaging(args) {
   );
 }
 
+// src/cli/subcommands/target-settings.ts
+import { mkdir as mkdir6, readFile as readFile3 } from "node:fs/promises";
+import { existsSync as existsSync4 } from "node:fs";
+import { join as join6 } from "node:path";
+var FACTORY_TARGET_ALLOWLIST = [
+  "Bash(factory:*)",
+  "Bash(git:*)",
+  "Bash(gh:*)",
+  "Bash(npm:*)",
+  "Bash(npx:*)",
+  "Read",
+  "Write",
+  "Edit",
+  "Grep",
+  "Glob",
+  "Agent",
+  "Read(${CLAUDE_PLUGIN_DATA}/**)",
+  "Write(${CLAUDE_PLUGIN_DATA}/**)",
+  "Edit(${CLAUDE_PLUGIN_DATA}/**)"
+];
+function isObject(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function mergeTargetSettings(existing) {
+  const settings = structuredClone(existing);
+  let changed = false;
+  const permissions = isObject(settings.permissions) ? settings.permissions : {};
+  const currentAllow = Array.isArray(permissions.allow) ? permissions.allow.filter((e) => typeof e === "string") : [];
+  const have = new Set(currentAllow);
+  const additions = FACTORY_TARGET_ALLOWLIST.filter((e) => !have.has(e));
+  if (additions.length > 0) {
+    permissions.allow = [...currentAllow, ...additions];
+    settings.permissions = permissions;
+    changed = true;
+  } else if (!Array.isArray(permissions.allow)) {
+    permissions.allow = currentAllow;
+    settings.permissions = permissions;
+  }
+  const worktree = isObject(settings.worktree) ? settings.worktree : {};
+  if (worktree.baseRef !== "head") {
+    worktree.baseRef = "head";
+    settings.worktree = worktree;
+    changed = true;
+  } else {
+    settings.worktree = worktree;
+  }
+  return { settings, changed };
+}
+async function ensureTargetSettings(opts) {
+  const dir = join6(opts.targetRoot, ".claude");
+  const path2 = join6(dir, "settings.json");
+  const created = !existsSync4(path2);
+  let existing = {};
+  if (!created) {
+    const raw = await readFile3(path2, "utf8");
+    const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
+    existing = isObject(parsed) ? parsed : {};
+  }
+  const { settings, changed } = mergeTargetSettings(existing);
+  if (created || changed) {
+    await mkdir6(dir, { recursive: true });
+    await atomicWriteFile(path2, stringifyJson(settings));
+  }
+  return { settings, changed, created, path: path2 };
+}
+
 // src/cli/subcommands/scaffold.ts
 var log12 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
@@ -7744,8 +7815,8 @@ var GITIGNORE_ENTRIES = ["# factory plugin state", ".claude-plugin-data/", "*.wo
 function resolveTemplatesDir() {
   let dir = dirname5(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join6(dir, "templates");
-    if (existsSync4(join6(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join7(dir, "templates");
+    if (existsSync5(join7(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname5(dir);
@@ -7756,27 +7827,27 @@ function resolveTemplatesDir() {
 }
 async function copyIfAbsent(src, dest, root, created, present) {
   const rel = relative(root, dest);
-  if (!existsSync4(src)) {
+  if (!existsSync5(src)) {
     log12.warn(`template missing, skipping: ${src}`);
     return;
   }
-  if (existsSync4(dest)) {
+  if (existsSync5(dest)) {
     present.push(rel);
     return;
   }
-  await mkdir6(dirname5(dest), { recursive: true });
+  await mkdir7(dirname5(dest), { recursive: true });
   await copyFile(src, dest);
   created.push(rel);
 }
 async function ensureGitignore(root, created, present) {
-  const path2 = join6(root, ".gitignore");
+  const path2 = join7(root, ".gitignore");
   const rel = relative(root, path2);
-  if (!existsSync4(path2)) {
+  if (!existsSync5(path2)) {
     await writeFile(path2, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     created.push(rel);
     return;
   }
-  const current = await readFile3(path2, "utf8");
+  const current = await readFile4(path2, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     present.push(rel);
@@ -7790,36 +7861,40 @@ async function runScaffold(opts) {
   const created = [];
   const present = [];
   await copyIfAbsent(
-    join6(opts.templatesDir, ".github", "workflows", "quality-gate.yml"),
-    join6(opts.targetRoot, ".github", "workflows", "quality-gate.yml"),
+    join7(opts.templatesDir, ".github", "workflows", "quality-gate.yml"),
+    join7(opts.targetRoot, ".github", "workflows", "quality-gate.yml"),
     opts.targetRoot,
     created,
     present
   );
-  if (existsSync4(join6(opts.targetRoot, "package.json"))) {
+  if (existsSync5(join7(opts.targetRoot, "package.json"))) {
     await copyIfAbsent(
-      join6(opts.templatesDir, ".stryker.config.json"),
-      join6(opts.targetRoot, ".stryker.config.json"),
+      join7(opts.templatesDir, ".stryker.config.json"),
+      join7(opts.targetRoot, ".stryker.config.json"),
       opts.targetRoot,
       created,
       present
     );
     await copyIfAbsent(
-      join6(opts.templatesDir, ".dependency-cruiser.cjs"),
-      join6(opts.targetRoot, ".dependency-cruiser.cjs"),
+      join7(opts.templatesDir, ".dependency-cruiser.cjs"),
+      join7(opts.targetRoot, ".dependency-cruiser.cjs"),
       opts.targetRoot,
       created,
       present
     );
     await copyIfAbsent(
-      join6(opts.templatesDir, "eslint.config.mjs"),
-      join6(opts.targetRoot, "eslint.config.mjs"),
+      join7(opts.templatesDir, "eslint.config.mjs"),
+      join7(opts.targetRoot, "eslint.config.mjs"),
       opts.targetRoot,
       created,
       present
     );
   }
   await ensureGitignore(opts.targetRoot, created, present);
+  const settings = await ensureTargetSettings({ targetRoot: opts.targetRoot });
+  const settingsRel = relative(opts.targetRoot, settings.path);
+  if (settings.created) created.push(settingsRel);
+  else present.push(settingsRel);
   const staging = await ensureStaging({
     gitClient: opts.gitClient,
     stagingBranch: opts.config.git.stagingBranch,
@@ -7857,7 +7932,8 @@ async function runScaffold(opts) {
       strict_up_to_date: state.strictUpToDate,
       required_status_checks: state.requiredStatusChecks,
       provisioned
-    }
+    },
+    settings: { created: settings.created, changed: settings.changed }
   };
 }
 function parseRepoSlug(slug) {
@@ -8058,8 +8134,8 @@ function checkResult(stage, result) {
       return assertNever(result);
   }
 }
-function decideFinalize(run10) {
-  const tasks = Object.values(run10.tasks);
+function decideFinalize(run11) {
+  const tasks = Object.values(run11.tasks);
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
   if (nonTerminal.length > 0) {
     const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
@@ -8212,8 +8288,8 @@ var RealGhClient = class {
 };
 
 // src/spec/store.ts
-import { readFile as readFile4, readdir as readdir2 } from "node:fs/promises";
-import { join as join7 } from "node:path";
+import { readFile as readFile5, readdir as readdir2 } from "node:fs/promises";
+import { join as join8 } from "node:path";
 var log14 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
@@ -8255,7 +8331,7 @@ var SpecStore = class {
         `resolveByIssue: issue number must be a positive integer, got ${issueNumber}`
       );
     }
-    const repoRoot = join7(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
@@ -8277,8 +8353,8 @@ var SpecStore = class {
   /** Read + validate the manifest for a known `(repo, spec_id)`. */
   async read(repo, specId) {
     const dir = specDir(this.dataDir, repo, specId);
-    const tasksRaw = await readFile4(join7(dir, TASKS_FILE), "utf8");
-    const tasks = parseSpecTasks(parseJson(tasksRaw, join7(dir, TASKS_FILE)));
+    const tasksRaw = await readFile5(join8(dir, TASKS_FILE), "utf8");
+    const tasks = parseSpecTasks(parseJson(tasksRaw, join8(dir, TASKS_FILE)));
     const meta = await this.readMeta(dir);
     return parseSpecManifest({
       spec_id: specId,
@@ -8297,10 +8373,10 @@ var SpecStore = class {
   async write(manifest, specMd) {
     const parsed = parseSpecManifest(manifest);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
-    await atomicWriteFile(join7(dir, SPEC_MD_FILE), specMd);
-    await atomicWriteFile(join7(dir, TASKS_FILE), stringifyJson(parsed.tasks));
+    await atomicWriteFile(join8(dir, SPEC_MD_FILE), specMd);
+    await atomicWriteFile(join8(dir, TASKS_FILE), stringifyJson(parsed.tasks));
     await atomicWriteFile(
-      join7(dir, META_FILE),
+      join8(dir, META_FILE),
       stringifyJson({
         issue_number: parsed.issue_number,
         slug: parsed.slug,
@@ -8320,10 +8396,10 @@ var SpecStore = class {
     };
   }
   async readMeta(dir) {
-    const raw = await readFile4(join7(dir, META_FILE), "utf8");
+    const raw = await readFile5(join8(dir, META_FILE), "utf8");
     const meta = parseJson(
       raw,
-      join7(dir, META_FILE)
+      join8(dir, META_FILE)
     );
     const issueNumber = typeof meta.issue_number === "number" ? meta.issue_number : 0;
     const generatedAt = typeof meta.generated_at === "string" ? meta.generated_at : "";
@@ -8608,8 +8684,8 @@ function buildManifest(repo, issueNumber, generated) {
 }
 
 // src/quota/usage-source.ts
-import { existsSync as existsSync5, readFileSync as readFileSync3 } from "node:fs";
-import { join as join8 } from "node:path";
+import { existsSync as existsSync6, readFileSync as readFileSync3 } from "node:fs";
+import { join as join9 } from "node:path";
 var log16 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
 var STALE_WARN_SECONDS = 120;
@@ -8667,7 +8743,7 @@ function readingFromCache(raw, nowEpoch2) {
   };
 }
 function usageCachePath(dataDir) {
-  return join8(dataDir, "usage-cache.json");
+  return join9(dataDir, "usage-cache.json");
 }
 var StatuslineUsageSignal = class {
   opts;
@@ -8683,7 +8759,7 @@ var StatuslineUsageSignal = class {
       return unavailable("usage-cache-missing");
     }
     const file = usageCachePath(dataDir);
-    if (!existsSync5(file)) {
+    if (!existsSync6(file)) {
       log16.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
@@ -8808,9 +8884,9 @@ function selectProducerModel(riskTier, config) {
 }
 
 // src/quota/resume.ts
-function planResume(run10, reading, config, nowEpoch2) {
-  if (run10.status !== "paused" && run10.status !== "suspended") {
-    return { kind: "not-resumable", status: run10.status };
+function planResume(run11, reading, config, nowEpoch2) {
+  if (run11.status !== "paused" && run11.status !== "suspended") {
+    return { kind: "not-resumable", status: run11.status };
   }
   const decision = evaluate(reading, config, nowEpoch2);
   if (decision.kind === "proceed") {
@@ -8820,17 +8896,17 @@ function planResume(run10, reading, config, nowEpoch2) {
 }
 
 // src/scoring/partial-report.ts
-function buildPartialReport(run10, manifest, opts = {}) {
+function buildPartialReport(run11, manifest, opts = {}) {
   const specById = new Map(manifest.tasks.map((t) => [t.task_id, t]));
   const orderOf = new Map(manifest.tasks.map((t, i) => [t.task_id, i]));
   const shipped = [];
   const failures = [];
   const incomplete = [];
-  for (const task of Object.values(run10.tasks)) {
+  for (const task of Object.values(run11.tasks)) {
     const spec = specById.get(task.task_id);
     if (spec === void 0) {
       throw new Error(
-        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run10.run_id})`
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run11.run_id})`
       );
     }
     if (task.status === "done") {
@@ -8859,11 +8935,11 @@ function buildPartialReport(run10, manifest, opts = {}) {
   failures.sort(bySpecOrder);
   incomplete.sort(bySpecOrder);
   return {
-    run_id: run10.run_id,
-    run_status: run10.status,
-    spec_id: run10.spec.spec_id,
-    issue_number: run10.spec.issue_number,
-    repo: run10.spec.repo,
+    run_id: run11.run_id,
+    run_status: run11.status,
+    spec_id: run11.spec.spec_id,
+    issue_number: run11.spec.issue_number,
+    repo: run11.spec.repo,
     generated_at: opts.now ?? nowIso(),
     totals: {
       total: shipped.length + failures.length + incomplete.length,
@@ -8951,12 +9027,12 @@ function durationSeconds(startedAt, endedAt) {
   const delta = Math.floor((end - start) / 1e3);
   return delta >= 0 ? delta : null;
 }
-function buildRunSummary(run10, report, opts = {}) {
+function buildRunSummary(run11, report, opts = {}) {
   const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
   for (const f of report.failures) {
     failuresByClass[f.failure_class] += 1;
   }
-  const tasks = Object.values(run10.tasks);
+  const tasks = Object.values(run11.tasks);
   const effort = {
     reviewer_results: tasks.reduce((n, t) => n + t.reviewers.length, 0),
     max_escalation_rung: tasks.reduce((m, t) => Math.max(m, t.escalation_rung), 0)
@@ -8967,17 +9043,17 @@ function buildRunSummary(run10, report, opts = {}) {
     ...s.branch !== void 0 ? { branch: s.branch } : {}
   }));
   return {
-    run_id: run10.run_id,
-    run_status: run10.status,
-    driver: run10.driver,
-    spec_id: run10.spec.spec_id,
-    issue_number: run10.spec.issue_number,
-    repo: run10.spec.repo,
+    run_id: run11.run_id,
+    run_status: run11.status,
+    driver: run11.driver,
+    spec_id: run11.spec.spec_id,
+    issue_number: run11.spec.issue_number,
+    repo: run11.spec.repo,
     generated_at: opts.now ?? nowIso(),
     timing: {
-      started_at: run10.started_at,
-      ended_at: run10.ended_at,
-      duration_seconds: durationSeconds(run10.started_at, run10.ended_at)
+      started_at: run11.started_at,
+      ended_at: run11.ended_at,
+      duration_seconds: durationSeconds(run11.started_at, run11.ended_at)
     },
     totals: report.totals,
     failures_by_class: failuresByClass,
@@ -10011,7 +10087,7 @@ var GateRunner = class {
 };
 
 // src/verifier/deterministic/tools.ts
-import { access, readFile as readFile5 } from "node:fs/promises";
+import { access, readFile as readFile6 } from "node:fs/promises";
 import path from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
@@ -10062,7 +10138,7 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
     const reportPath = path.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
-      raw = await readFile5(reportPath, "utf8");
+      raw = await readFile6(reportPath, "utf8");
     } catch {
       return { proc: proc2, report: { report: "absent" } };
     }
@@ -10088,7 +10164,7 @@ var DefaultCoverageReader = class {
     const file = path.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
     let raw;
     try {
-      raw = await readFile5(file, "utf8");
+      raw = await readFile6(file, "utf8");
     } catch {
       return { state: "absent" };
     }
@@ -10171,14 +10247,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log28 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log28.code !== 0) {
+    const log29 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log29.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log28.code ?? "null"}): ${log28.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log29.code ?? "null"}): ${log29.stderr.trim()}`
       );
     }
-    assertNotTruncated(log28, "git log (tdd classification)");
-    const shas = splitLines(log28.stdout).reverse();
+    assertNotTruncated(log29, "git log (tdd classification)");
+    const shas = splitLines(log29.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -10275,8 +10351,8 @@ function splitHoldout(criteria, percent, seed) {
 }
 
 // src/verifier/holdout/store.ts
-import { mkdir as mkdir7, readFile as readFile6 } from "node:fs/promises";
-import { dirname as dirname6, join as join9 } from "node:path";
+import { mkdir as mkdir8, readFile as readFile7 } from "node:fs/promises";
+import { dirname as dirname6, join as join10 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -10307,21 +10383,21 @@ var FsHoldoutStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join9(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
+    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
     const path2 = this.path(runId, record.task_id);
-    await mkdir7(dirname6(path2), { recursive: true });
+    await mkdir8(dirname6(path2), { recursive: true });
     await atomicWriteFile(path2, stringifyJson(record));
   }
   async get(runId, taskId) {
     const path2 = this.path(runId, taskId);
-    const raw = await readFile6(path2, "utf8");
+    const raw = await readFile7(path2, "utf8");
     return parseHoldoutRecord(parseJson(raw, path2), path2);
   }
   async has(runId, taskId) {
     try {
-      await readFile6(this.path(runId, taskId), "utf8");
+      await readFile7(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -10423,8 +10499,8 @@ function holdoutEvidence(result) {
 }
 
 // src/verifier/holdout/verdict-store.ts
-import { mkdir as mkdir8, readFile as readFile7 } from "node:fs/promises";
-import { dirname as dirname7, join as join10 } from "node:path";
+import { mkdir as mkdir9, readFile as readFile8 } from "node:fs/promises";
+import { dirname as dirname7, join as join11 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -10437,21 +10513,21 @@ var FsHoldoutVerdictStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
+    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
     const path2 = this.path(runId, taskId);
-    await mkdir8(dirname7(path2), { recursive: true });
+    await mkdir9(dirname7(path2), { recursive: true });
     await atomicWriteFile(path2, stringifyJson([...verdicts]));
   }
   async get(runId, taskId) {
     const path2 = this.path(runId, taskId);
-    const raw = await readFile7(path2, "utf8");
+    const raw = await readFile8(path2, "utf8");
     return HoldoutVerdictsSchema.parse(parseJson(raw, path2));
   }
   async has(runId, taskId) {
     try {
-      await readFile7(this.path(runId, taskId), "utf8");
+      await readFile8(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -10490,9 +10566,9 @@ async function fileFailureIssues(deps, report) {
 }
 async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
-  const run10 = await deps.state.read(runId);
-  const terminal = decideFinalize(run10).run_status;
-  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
+  const run11 = await deps.state.read(runId);
+  const terminal = decideFinalize(run11).run_status;
+  const report = buildPartialReport({ ...run11, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
@@ -10554,8 +10630,8 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
   if (decision.action === "drop") {
     return dropStep(deps, runId, taskId, decision.failureClass, decision.reason);
   }
-  const run10 = await deps.state.read(runId);
-  const task = run10.tasks[taskId];
+  const run11 = await deps.state.read(runId);
+  const task = run11.tasks[taskId];
   if (task === void 0) {
     throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
   }
@@ -10610,11 +10686,11 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
 }
 
 // src/driver/paths.ts
-import { join as join11 } from "node:path";
+import { join as join12 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join11(dataDir, "worktrees", runId, taskId);
+  return join12(dataDir, "worktrees", runId, taskId);
 }
 
 // src/driver/handlers.ts
@@ -10832,8 +10908,8 @@ function shipBody(runId, specTask) {
 }
 
 // src/driver/artifacts.ts
-import { mkdir as mkdir9, readFile as readFile8 } from "node:fs/promises";
-import { dirname as dirname8, join as join12 } from "node:path";
+import { mkdir as mkdir10, readFile as readFile9 } from "node:fs/promises";
+import { dirname as dirname8, join as join13 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
 }
@@ -10842,25 +10918,25 @@ var FsArtifactStore = class {
     this.dataDir = dataDir;
   }
   absPath(runId, ref) {
-    return join12(runDir(this.dataDir, runId), ref);
+    return join13(runDir(this.dataDir, runId), ref);
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
     const path2 = this.absPath(runId, ref);
-    await mkdir9(dirname8(path2), { recursive: true });
+    await mkdir10(dirname8(path2), { recursive: true });
     await atomicWriteFile(path2, stringifyJson(context));
     return ref;
   }
   async getProducerContext(runId, promptRef) {
     const path2 = this.absPath(runId, promptRef);
-    const raw = await readFile8(path2, "utf8");
+    const raw = await readFile9(path2, "utf8");
     return parseJson(raw, path2);
   }
 };
 
 // src/driver/fold.ts
-import { readFile as readFile9 } from "node:fs/promises";
-import { join as join13 } from "node:path";
+import { readFile as readFile10 } from "node:fs/promises";
+import { join as join14 } from "node:path";
 var log22 = createLogger("fold");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
@@ -10868,7 +10944,7 @@ async function persistStepCursor(deps, runId, taskId, step) {
   }
 }
 async function readJsonInput(path2) {
-  const raw = await readFile9(path2, "utf8");
+  const raw = await readFile10(path2, "utf8");
   return parseJson(raw, path2);
 }
 function producerStageInfo(stage) {
@@ -10883,8 +10959,8 @@ async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
       `record-producer: stage order drift \u2014 nextStage('${info.stage}') !== '${info.after}'`
     );
   }
-  const run10 = await state.read(runId);
-  if (run10.tasks[taskId] === void 0) {
+  const run11 = await state.read(runId);
+  if (run11.tasks[taskId] === void 0) {
     throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
   }
   const outcome = parseProducerStatus(statusLine);
@@ -10930,7 +11006,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile9(join13(worktree, file), "utf8");
+      const text = await readFile10(join14(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch {
       lines.set(file, null);
@@ -10967,8 +11043,8 @@ function makeReplayRunnerFactory(input) {
   };
 }
 async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
-  const run10 = await deps.state.read(runId);
-  const task = run10.tasks[taskId];
+  const run11 = await deps.state.read(runId);
+  const task = run11.tasks[taskId];
   if (task === void 0) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
@@ -11094,7 +11170,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
       log23.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
-      const run10 = await deps.state.update(runId, (s) => ({
+      const run11 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
         quota: patch.quota
@@ -11103,17 +11179,17 @@ async function applyQuotaGate(deps, runId, mode = "session") {
         scope: decision.kind === "pause-5h" ? "5h" : "7d",
         reason: decision.reason,
         resets_at_epoch: decision.resetsAtEpoch,
-        run: run10
+        run: run11
       };
     }
     case "unavailable-halt": {
       log23.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
-      const run10 = await deps.state.update(runId, (s) => ({
+      const run11 = await deps.state.update(runId, (s) => ({
         ...s,
         status: "suspended",
         quota: void 0
       }));
-      return { scope: "unavailable", reason: decision.reason, run: run10 };
+      return { scope: "unavailable", reason: decision.reason, run: run11 };
     }
     default:
       return assertNever(decision);
@@ -11170,10 +11246,10 @@ async function shipTask(deps, ctx) {
 // src/driver/coroutine.ts
 var log25 = createLogger("coroutine");
 var MERGE_RESYNC_CAP = 8;
-function requireTask2(run10, taskId) {
-  const task = run10.tasks[taskId];
+function requireTask2(run11, taskId) {
+  const task = run11.tasks[taskId];
   if (task === void 0) {
-    throw new Error(`coroutine: run '${run10.run_id}' has no task '${taskId}'`);
+    throw new Error(`coroutine: run '${run11.run_id}' has no task '${taskId}'`);
   }
   return task;
 }
@@ -11259,12 +11335,12 @@ async function foldResults(deps, runId, taskId, stage, task, results) {
   return env.step;
 }
 async function stepTask(deps, runId, taskId, results) {
-  let run10 = await deps.state.read(runId);
-  let task = requireTask2(run10, taskId);
+  let run11 = await deps.state.read(runId);
+  let task = requireTask2(run11, taskId);
   if (isTerminalTaskStatus(task.status)) {
     return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
-  const stop = await applyQuotaGate(deps, runId, run10.mode);
+  const stop = await applyQuotaGate(deps, runId, run11.mode);
   if (stop !== null) {
     return {
       kind: "quota-blocked",
@@ -11287,10 +11363,10 @@ async function stepTask(deps, runId, taskId, results) {
   }
   const handlers = makeStageHandlers(deps);
   for (; ; ) {
-    run10 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, stage);
+    run11 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, stage);
     cursorPersisted = true;
-    task = requireTask2(run10, taskId);
-    const ctx = { run: run10, task, attempt: task.escalation_rung + 1 };
+    task = requireTask2(run11, taskId);
+    const ctx = { run: run11, task, attempt: task.escalation_rung + 1 };
     const result = stage === "ship" ? await shipTask(deps, ctx) : await runStage(stage, ctx, handlers);
     switch (result.kind) {
       case "advance": {
@@ -11389,23 +11465,23 @@ async function stepTask(deps, runId, taskId, results) {
 }
 
 // src/driver/next.ts
-function depsSatisfied(run10, task) {
-  return task.depends_on.every((d) => run10.tasks[d]?.status === "done");
+function depsSatisfied(run11, task) {
+  return task.depends_on.every((d) => run11.tasks[d]?.status === "done");
 }
-function isUnsatisfiableDep(run10, depId) {
-  const dep = run10.tasks[depId];
+function isUnsatisfiableDep(run11, depId) {
+  const dep = run11.tasks[depId];
   return dep === void 0 || dep.status === "dropped";
 }
 async function stepRun(deps, runId) {
-  let run10 = await deps.state.read(runId);
-  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run10.ship_mode });
-  if (isTerminalRunStatus(run10.status)) {
-    return { ...ctx(), kind: "run-terminal", run_status: run10.status };
+  let run11 = await deps.state.read(runId);
+  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run11.ship_mode });
+  if (isTerminalRunStatus(run11.status)) {
+    return { ...ctx(), kind: "run-terminal", run_status: run11.status };
   }
-  if (Object.values(run10.tasks).every((t) => isTerminalTaskStatus(t.status))) {
+  if (Object.values(run11.tasks).every((t) => isTerminalTaskStatus(t.status))) {
     return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
   }
-  const stop = await applyQuotaGate(deps, runId, run10.mode);
+  const stop = await applyQuotaGate(deps, runId, run11.mode);
   if (stop !== null) {
     return {
       ...ctx(),
@@ -11415,9 +11491,9 @@ async function stepRun(deps, runId) {
       ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
     };
   }
-  if (run10.status === "paused" || run10.status === "suspended") {
+  if (run11.status === "paused" || run11.status === "suspended") {
     const patch = clearCheckpoint();
-    run10 = await deps.state.update(runId, (s) => ({
+    run11 = await deps.state.update(runId, (s) => ({
       ...s,
       status: patch.status,
       quota: patch.quota
@@ -11425,13 +11501,13 @@ async function stepRun(deps, runId) {
   }
   const cascadeDropped = [];
   for (; ; ) {
-    run10 = await deps.state.read(runId);
-    const blocked = Object.values(run10.tasks).filter(
-      (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run10, d))
+    run11 = await deps.state.read(runId);
+    const blocked = Object.values(run11.tasks).filter(
+      (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run11, d))
     );
     if (blocked.length === 0) break;
     for (const t of blocked) {
-      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run10, d));
+      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run11, d));
       if (unsatisfied === void 0) {
         throw new Error(
           `next: task '${t.task_id}' classified blocked but no unsatisfiable dep found \u2014 unreachable`
@@ -11447,11 +11523,11 @@ async function stepRun(deps, runId) {
       cascadeDropped.push(t.task_id);
     }
   }
-  const tasks = Object.values(run10.tasks);
+  const tasks = Object.values(run11.tasks);
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
     return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
   }
-  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run10, t));
+  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run11, t));
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
@@ -11485,9 +11561,9 @@ async function loadCliDeps(opts) {
   const dirOpts = { ...opts, dataDir };
   const config = loadConfig(dirOpts);
   const state = new StateManager({ ...dirOpts });
-  const run10 = await state.read(opts.runId);
-  const spec = await new SpecStore(dirOpts).read(run10.spec.repo, run10.spec.spec_id);
-  const { owner, repo } = splitRepo(run10.spec.repo);
+  const run11 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run11.spec.repo, run11.spec.spec_id);
+  const { owner, repo } = splitRepo(run11.spec.repo);
   return {
     config,
     spec,
@@ -11501,7 +11577,7 @@ async function loadCliDeps(opts) {
     repo,
     shipMode: opts.shipMode ?? "no-merge",
     state,
-    run: run10
+    run: run11
   };
 }
 
@@ -11665,14 +11741,14 @@ async function resolveOrCreateRun(state, specStore, opts) {
   return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
 }
 async function applyResume(state, runId, reading, config, nowEpochSec) {
-  const run10 = await state.read(runId);
-  if (isTerminalRunStatus(run10.status)) {
-    throw new Error(`run resume: run '${runId}' is terminal (${run10.status}); nothing to resume`);
+  const run11 = await state.read(runId);
+  if (isTerminalRunStatus(run11.status)) {
+    throw new Error(`run resume: run '${runId}' is terminal (${run11.status}); nothing to resume`);
   }
-  const plan = planResume(run10, reading, config, nowEpochSec);
+  const plan = planResume(run11, reading, config, nowEpochSec);
   switch (plan.kind) {
     case "not-resumable":
-      return { kind: "resumed", run: run10 };
+      return { kind: "resumed", run: run11 };
     case "resume": {
       const updated = await state.update(runId, (s) => ({
         ...s,
@@ -11684,12 +11760,12 @@ async function applyResume(state, runId, reading, config, nowEpochSec) {
     case "still-blocked": {
       const d = plan.decision;
       if (d.kind === "proceed") {
-        return { kind: "resumed", run: run10 };
+        return { kind: "resumed", run: run11 };
       }
       const base = {
         kind: "still-blocked",
         run_id: runId,
-        status: run10.status,
+        status: run11.status,
         reason: d.reason
       };
       return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
@@ -11737,7 +11813,7 @@ async function runCreate(argv) {
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const { run: run10 } = await resolveOrCreateRun(state, specStore, {
+  const { run: run11 } = await resolveOrCreateRun(state, specStore, {
     repo,
     runId,
     ...issue !== void 0 ? { issue } : {},
@@ -11746,7 +11822,7 @@ async function runCreate(argv) {
     ...shipMode !== void 0 ? { shipMode } : {},
     ...force ? { force } : {}
   });
-  emitJson(run10);
+  emitJson(run11);
   return EXIT.OK;
 }
 async function runResume(argv) {
@@ -11788,10 +11864,10 @@ async function runFinalize(argv) {
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
-  const { run: run10, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
+  const { run: run11, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
   emitJson({
     kind: "finalized",
-    run: run10,
+    run: run11,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     issues_filed: issuesFiled
@@ -11832,7 +11908,7 @@ var runCommand = {
 };
 
 // src/cli/subcommands/spec.ts
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
@@ -11854,9 +11930,9 @@ var VERDICT_FILE = "verdict.json";
 function scratchPaths(dataDir, repo, issue) {
   const dir = specBuildDir(dataDir, repo, issue);
   return {
-    prdPath: join14(dir, PRD_FILE),
-    generatedPath: join14(dir, GENERATED_FILE),
-    verdictPath: join14(dir, VERDICT_FILE)
+    prdPath: join15(dir, PRD_FILE),
+    generatedPath: join15(dir, GENERATED_FILE),
+    verdictPath: join15(dir, VERDICT_FILE)
   };
 }
 async function resolveSpec2(deps, repo, issue) {
@@ -11992,17 +12068,17 @@ function dispositionOf(status, failureClass) {
   }
   return "stuck";
 }
-function depsSatisfied2(run10, depends) {
-  return depends.every((d) => run10.tasks[d]?.status === "done");
+function depsSatisfied2(run11, depends) {
+  return depends.every((d) => run11.tasks[d]?.status === "done");
 }
-function hasUnsatisfiableDep(run10, depends) {
+function hasUnsatisfiableDep(run11, depends) {
   return depends.some((d) => {
-    const dep = run10.tasks[d];
+    const dep = run11.tasks[d];
     return dep === void 0 || dep.status === "dropped";
   });
 }
-function scanRun(run10) {
-  const all = Object.values(run10.tasks);
+function scanRun(run11) {
+  const all = Object.values(run11.tasks);
   const tasks = all.map((t) => ({
     task_id: t.task_id,
     status: t.status,
@@ -12020,13 +12096,13 @@ function scanRun(run10) {
   const dead_ends = deadEnd.map((t) => t.task_id);
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
   const actionablePending = all.some(
-    (t) => t.status === "pending" && (depsSatisfied2(run10, t.depends_on) || hasUnsatisfiableDep(run10, t.depends_on))
+    (t) => t.status === "pending" && (depsSatisfied2(run11, t.depends_on) || hasUnsatisfiableDep(run11, t.depends_on))
   );
   const would_deadlock = !allTerminal && !actionablePending;
   const needs_rescue = resettable.length > 0;
   return {
-    run_id: run10.run_id,
-    run_status: run10.status,
+    run_id: run11.run_id,
+    run_status: run11.status,
     counts: {
       total: all.length,
       shipped: by("shipped").length,
@@ -12039,7 +12115,7 @@ function scanRun(run10) {
     dead_ends,
     needs_rescue,
     would_deadlock,
-    summary: summarize2(run10.status, resettable.length, dead_ends.length, would_deadlock),
+    summary: summarize2(run11.status, resettable.length, dead_ends.length, would_deadlock),
     tasks
   };
 }
@@ -12072,15 +12148,15 @@ function resetTaskRow(task) {
     merge_resyncs: 0
   };
 }
-function selectTargets(run10, opts) {
+function selectTargets(run11, opts) {
   const explicit = opts.tasks ?? [];
   if (explicit.length > 0) {
     const targets2 = [];
     const skipped = [];
     for (const id of explicit) {
-      const task = run10.tasks[id];
+      const task = run11.tasks[id];
       if (task === void 0) {
-        throw new Error(`rescue: run '${run10.run_id}' has no task '${id}'`);
+        throw new Error(`rescue: run '${run11.run_id}' has no task '${id}'`);
       }
       if (task.status === "done") {
         throw new Error(
@@ -12095,32 +12171,32 @@ function selectTargets(run10, opts) {
     }
     return { targets: targets2, skipped };
   }
-  const scan = scanRun(run10);
+  const scan = scanRun(run11);
   const targets = opts.includeDeadEnds ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
   return { targets, skipped: [] };
 }
 async function applyRescue(state, runId, opts = {}) {
   let result = null;
-  const updated = await state.update(runId, (run10) => {
-    const { targets, skipped } = selectTargets(run10, opts);
-    const wasTerminal = isTerminalRunStatus(run10.status);
+  const updated = await state.update(runId, (run11) => {
+    const { targets, skipped } = selectTargets(run11, opts);
+    const wasTerminal = isTerminalRunStatus(run11.status);
     const reopen = wasTerminal && targets.length > 0;
     result = {
       run_id: runId,
-      run_status: reopen ? "running" : run10.status,
+      run_status: reopen ? "running" : run11.status,
       reset: targets,
       reopened: reopen,
       skipped
     };
     if (targets.length === 0 && !reopen) {
-      return run10;
+      return run11;
     }
-    const nextTasks = { ...run10.tasks };
+    const nextTasks = { ...run11.tasks };
     for (const id of targets) {
-      nextTasks[id] = resetTaskRow(run10.tasks[id]);
+      nextTasks[id] = resetTaskRow(run11.tasks[id]);
     }
     return {
-      ...run10,
+      ...run11,
       tasks: nextTasks,
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
@@ -12184,8 +12260,8 @@ async function runScan(argv) {
   }
   const state = new StateManager();
   const runId = await resolveRunId2(state, args, "scan");
-  const run10 = await state.read(runId);
-  emitJson(scanRun(run10));
+  const run11 = await state.read(runId);
+  emitJson(scanRun(run11));
   return EXIT.OK;
 }
 async function runApply(argv) {
@@ -12517,6 +12593,188 @@ var statuslineCommand = {
   run: (argv) => runStatusline(argv)
 };
 
+// src/cli/subcommands/autonomy.ts
+import { existsSync as existsSync7 } from "node:fs";
+import { readFile as readFile11 } from "node:fs/promises";
+import { join as join16 } from "node:path";
+import { homedir as homedir2 } from "node:os";
+var log28 = createLogger("autonomy");
+var HELP8 = `factory autonomy ensure \u2014 materialize merged-settings.json for an autonomous relaunch
+
+Merges templates/settings.autonomous.json with your existing settings into
+\${CLAUDE_PLUGIN_DATA}/merged-settings.json (placeholders substituted, env baked,
+statusLine wired to \`factory statusline\`) and prints the relaunch command:
+
+  claude --settings <merged-settings.json>
+
+Usage:
+  factory autonomy ensure
+
+Options:
+  --user-settings <path>   Override the user-settings source (default: ~/.claude/settings.json)`;
+function factoryStatuslineCommand(pluginRoot) {
+  return `${pluginRoot}/bin/factory statusline`;
+}
+function mergedSettingsPath(dataDir) {
+  return join16(dataDir, "merged-settings.json");
+}
+function tildeShorten(absPath, home) {
+  if (home.length > 0 && absPath.startsWith(home)) {
+    return "~" + absPath.slice(home.length);
+  }
+  return absPath;
+}
+function tildeExpand(value, home) {
+  if (value.startsWith("~")) return home + value.slice(1);
+  return value;
+}
+function substitutePlaceholders(value, vars) {
+  if (typeof value === "string") {
+    return value.split("${CLAUDE_PLUGIN_ROOT}").join(vars.pluginRoot).split("${CLAUDE_PLUGIN_DATA_TILDE}").join(vars.dataDirTilde).split("${CLAUDE_PLUGIN_DATA}").join(vars.dataDir);
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => substitutePlaceholders(v, vars));
+  }
+  if (typeof value === "object" && value !== null) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = substitutePlaceholders(v, vars);
+    }
+    return out;
+  }
+  return value;
+}
+function isObject2(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function statusLineCommandOf(settings) {
+  const sl = settings.statusLine;
+  if (!isObject2(sl)) return void 0;
+  const cmd = sl.command;
+  return typeof cmd === "string" && cmd.length > 0 ? cmd : void 0;
+}
+function materializeMergedSettings(input) {
+  const { dataDir, pluginRoot, home } = input;
+  const parsedTemplate = JSON.parse(input.template);
+  if (!isObject2(parsedTemplate)) {
+    throw new Error("autonomy: settings.autonomous.json is not a JSON object");
+  }
+  const template = substitutePlaceholders(parsedTemplate, {
+    pluginRoot,
+    dataDir,
+    dataDirTilde: tildeShorten(dataDir, home)
+  });
+  const merged = { ...input.userSettings, ...template };
+  const userEnv = isObject2(input.userSettings.env) ? input.userSettings.env : {};
+  const templateEnv = isObject2(template.env) ? template.env : {};
+  const env = { ...userEnv, ...templateEnv };
+  env.CLAUDE_PLUGIN_DATA = dataDir;
+  const userPerms = isObject2(input.userSettings.permissions) ? input.userSettings.permissions : {};
+  const templatePerms = isObject2(template.permissions) ? template.permissions : {};
+  const userAllow = Array.isArray(userPerms.allow) ? userPerms.allow.filter((e) => typeof e === "string") : [];
+  const templateAllow = Array.isArray(templatePerms.allow) ? templatePerms.allow.filter((e) => typeof e === "string") : [];
+  const unionedAllow = [...userAllow, ...templateAllow.filter((e) => !userAllow.includes(e))];
+  merged.permissions = { ...userPerms, ...templatePerms, allow: unionedAllow };
+  const ourCommand = factoryStatuslineCommand(pluginRoot);
+  const ourPath = ourCommand.split(" ")[0] ?? ourCommand;
+  const userStatusLine = statusLineCommandOf(input.userSettings);
+  if (userStatusLine !== void 0) {
+    const expanded = tildeExpand(userStatusLine, home);
+    const expandedPath = expanded.split(" ")[0] ?? expanded;
+    const isOurs = expanded === ourCommand || expandedPath === ourPath;
+    if (!isOurs) {
+      env.FACTORY_ORIGINAL_STATUSLINE = expanded;
+    }
+  }
+  merged.env = env;
+  if (input.version !== void 0 && input.version.length > 0) {
+    merged._factoryVersion = input.version;
+  }
+  return merged;
+}
+async function readPluginVersion(pluginRoot) {
+  const path2 = join16(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync7(path2)) return void 0;
+  try {
+    const parsed = JSON.parse(await readFile11(path2, "utf8"));
+    if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
+  } catch {
+  }
+  return void 0;
+}
+async function runAutonomyEnsure(opts = {}) {
+  const home = opts.home ?? homedir2();
+  const dataDir = opts.dataDir ?? resolveDataDir();
+  const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
+  const userSettingsPath = opts.userSettingsPath ?? join16(home, ".claude", "settings.json");
+  const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
+  let userSettings = {};
+  if (existsSync7(userSettingsPath)) {
+    try {
+      const parsed = JSON.parse(await readFile11(userSettingsPath, "utf8"));
+      if (isObject2(parsed)) userSettings = parsed;
+      else log28.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+    } catch (err) {
+      log28.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+    }
+  }
+  const templatePath = join16(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile11(templatePath, "utf8");
+  const version = await readPluginVersion(pluginRoot);
+  const merged = materializeMergedSettings({
+    template,
+    userSettings,
+    dataDir,
+    pluginRoot,
+    home,
+    version
+  });
+  const path2 = mergedSettingsPath(dataDir);
+  await atomicWriteFile(path2, stringifyJson(merged));
+  const relaunchCommand = `claude --settings ${path2}`;
+  write(
+    `Wrote ${path2}
+Relaunch the session in autonomous mode with:
+
+  ${relaunchCommand}
+
+The first agent turn fires the statusline \u2192 a fresh usage-cache.json \u2192 session-mode quota pacing.
+`
+  );
+  return { path: path2, relaunchCommand };
+}
+async function run10(argv) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(HELP8);
+    return EXIT.OK;
+  }
+  const verb = args.positionals[0];
+  if (verb !== void 0 && verb !== "ensure") {
+    emitError(`autonomy: unknown verb '${verb}' (expected: ensure)`);
+    return EXIT.USAGE;
+  }
+  const userSettings = args.flag("user-settings");
+  await runAutonomyEnsure({
+    userSettingsPath: typeof userSettings === "string" ? userSettings : void 0
+  });
+  return EXIT.OK;
+}
+var autonomyCommand = {
+  describe: "Materialize merged-settings.json for an autonomous relaunch + print the command",
+  run: async (argv) => {
+    try {
+      return await run10(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`autonomy: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
 // src/cli/main.ts
 var cliRegistry = {
   "config-defaults": {
@@ -12536,7 +12794,8 @@ var cliRegistry = {
   scaffold: scaffoldCommand,
   drive: driveCommand,
   next: nextCommand,
-  statusline: statuslineCommand
+  statusline: statuslineCommand,
+  autonomy: autonomyCommand
 };
 function printHelp() {
   const names = Object.keys(cliRegistry).sort();
