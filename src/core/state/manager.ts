@@ -74,6 +74,7 @@ export interface CreateRunArgs {
   run_id: string;
   spec: SpecPointer;
   driver?: RunState["driver"];
+  mode?: RunState["mode"];
 }
 
 export class StateManager {
@@ -156,6 +157,7 @@ export class StateManager {
       run_id: args.run_id,
       status: "running",
       driver: args.driver ?? "sequential",
+      mode: args.mode ?? "session",
       spec: args.spec,
       tasks: {},
       started_at: now,

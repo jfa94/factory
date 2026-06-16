@@ -35,7 +35,12 @@ export interface QuotaStop {
 export async function applyQuotaGate(
   deps: QuotaGateDeps,
   runId: string,
+  mode: RunState["mode"] = "session",
 ): Promise<QuotaStop | null> {
+  // Workflow mode (Decision 24) cannot observe usage: skip pacing entirely and
+  // proceed. The opt-in warning is emitted ONCE at `run create`, so this hot
+  // path stays silent. Never reads the usage signal, never writes state.
+  if (mode === "workflow") return null;
   const reading = await deps.usage.read();
   const decision = evaluateQuota(reading, deps.config, deps.now());
   if (decision.kind === "proceed") {

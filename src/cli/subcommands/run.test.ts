@@ -9,7 +9,7 @@
  *      {@link applyResume} (re-check quota → clear checkpoint or stay blocked)
  *      against a real StateManager + SpecStore temp dir, with an injected reading.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -223,6 +223,44 @@ describe("createRun", () => {
     await expect(
       createRun(state, store, { repo: REPO, issue: 999, runId: "run-c" }),
     ).rejects.toThrow(/no spec for issue #999/);
+  });
+
+  it("workflow mode persists mode and warns once at opt-in", async () => {
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const run = await createRun(state, store, {
+        repo: REPO,
+        issue: 42,
+        runId: "run-wf",
+        mode: "workflow",
+      });
+      expect(run.mode).toBe("workflow");
+      // Persisted (resume-safe): the mode round-trips through a fresh read.
+      expect((await state.read("run-wf")).mode).toBe("workflow");
+      // Decision 24: warned ONCE at opt-in (run create), not on every pump tick.
+      const warned = spy.mock.calls.filter((c) => /pacing disabled/.test(String(c[0])));
+      expect(warned).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("session mode is the default and never warns about pacing", async () => {
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const run = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-se" });
+      expect(run.mode).toBe("session");
+      expect(spy.mock.calls.filter((c) => /pacing disabled/.test(String(c[0])))).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("persisted mode survives a state.update round-trip (resume-safe)", async () => {
+    await createRun(state, store, { repo: REPO, issue: 42, runId: "run-rt", mode: "workflow" });
+    // A resume clears the quota checkpoint by spreading the prior state — mode rides along.
+    await state.update("run-rt", (s) => ({ ...s, status: "running" as const }));
+    expect((await state.read("run-rt")).mode).toBe("workflow");
   });
 });
 

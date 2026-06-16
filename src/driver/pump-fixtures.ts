@@ -20,7 +20,7 @@ import { makeFakeTools, FakeGitProbe, commit } from "../verifier/deterministic/f
 import { InMemoryHoldoutStore } from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
 import { fakeUsageSignal, type UsageReading } from "../quota/usage-source.js";
-import type { TaskState, RunStatus } from "../types/index.js";
+import type { TaskState, RunStatus, RunState } from "../types/index.js";
 import type { PumpDeps } from "./pump.js";
 
 // ---------------------------------------------------------------------------
@@ -113,6 +113,11 @@ export interface MakePumpDepsOpts {
    * Useful for pumpRun tests that need a paused/completed run at seed time.
    */
   runStatusOverride?: RunStatus;
+  /**
+   * Override the run mode at creation (additive). Workflow mode makes the quota
+   * gate skip pacing, so pumpRun/pumpTask proceed regardless of the usage signal.
+   */
+  modeOverride?: RunState["mode"];
 }
 
 export interface PumpDepsResult {
@@ -142,6 +147,7 @@ export async function makePumpDeps(opts: MakePumpDepsOpts = {}): Promise<PumpDep
   await state.create({
     run_id: runId,
     spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
+    ...(opts.modeOverride !== undefined ? { mode: opts.modeOverride } : {}),
   });
 
   // Seed tasks — overrides apply only when task_id matches (or T1 by default)

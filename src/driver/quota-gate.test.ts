@@ -3,7 +3,7 @@
  * the quota-gate cases in loop.test.ts (same reading objects, same StateManager-
  * on-tmpdir harness) so behaviour is verifiable in isolation.
  */
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -139,5 +139,28 @@ describe("applyQuotaGate", () => {
     const run = await state.read(RUN_ID);
     expect(run.status).toBe("paused");
     expect(run.quota).toEqual(checkpoint);
+  });
+
+  it("workflow mode → proceeds (null) without reading usage or touching state", async () => {
+    const read = vi.fn(async (): Promise<UsageReading> => UNAVAILABLE);
+    const deps: QuotaGateDeps = {
+      state,
+      usage: { read },
+      config: defaultConfig(),
+      now: () => NOW,
+    };
+    const stop = await applyQuotaGate(deps, RUN_ID, "workflow");
+    expect(stop).toBeNull();
+    // The pacer is fully skipped — the usage signal is never consulted.
+    expect(read).not.toHaveBeenCalled();
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("running");
+    expect(run.quota).toBeUndefined();
+  });
+
+  it("explicit session mode still fail-closes on an unobservable reading", async () => {
+    const stop = await applyQuotaGate(makeDeps(UNAVAILABLE), RUN_ID, "session");
+    expect(stop?.scope).toBe("unavailable");
+    expect(stop?.run.status).toBe("suspended");
   });
 });

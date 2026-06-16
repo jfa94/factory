@@ -261,8 +261,9 @@ export async function pumpTask(
   }
 
   // 2. Quota gate — a breach persists the checkpoint and stops cleanly. Only reached
-  //    for non-terminal tasks so the checkpoint is always meaningful.
-  const stop = await applyQuotaGate(deps, runId);
+  //    for non-terminal tasks so the checkpoint is always meaningful. Workflow mode
+  //    skips pacing (Decision 24); the gate reads run.mode to decide.
+  const stop = await applyQuotaGate(deps, runId, run.mode);
   if (stop !== null) {
     return {
       kind: "quota-blocked",

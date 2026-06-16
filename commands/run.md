@@ -36,7 +36,10 @@ neither or both of `--issue`/`--spec-id`; `--mode` not `session`/`workflow`;
 ## Both modes start the same
 
 Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run
-create`; read `run_id`) (with `--spec-id`, skip Phase 1 — the spec must already exist; `run create` fails LOUD otherwise):
+create --mode <session|workflow>`; read `run_id`). Pass THIS command's `--mode` value through to
+Phase 2's `run create` so it persists on the run — the quota gate paces in `session` and hard-stops
+without pacing in `workflow` (Decision 24). With `--spec-id`, skip Phase 1 — the spec must already
+exist; `run create` fails LOUD otherwise:
 
 ```
 Skill(pipeline-orchestrator)

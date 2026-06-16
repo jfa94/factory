@@ -24,6 +24,7 @@ export {
   PanelVerdictEnum,
   ProducerRoleEnum,
   DriverEnum,
+  RunModeEnum,
   EscalationRungSchema,
   // object schemas
   SpecPointerSchema,
@@ -44,6 +45,7 @@ export type {
   PanelVerdict,
   ProducerRole,
   Driver,
+  RunMode,
   SpecPointer,
   ReviewerResult,
   TaskState,

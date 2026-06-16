@@ -33,7 +33,10 @@ import { isTerminalRunStatus } from "../../types/index.js";
 import type { Config, RunState, RunStatus, TaskState } from "../../types/index.js";
 import { finalizeRun } from "../../driver/index.js";
 import { loadCliDeps } from "../wiring.js";
+import { createLogger } from "../../shared/index.js";
 import type { Subcommand } from "../main.js";
+
+const log = createLogger("run");
 
 const RUN_HELP = `factory run — create or resume a run
 
@@ -50,12 +53,13 @@ Actions:
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode <session|workflow>]
 
   --repo      Repo identity 'owner/name' (the first key of the spec store).
   --issue     PRD issue number — the STABLE lookup key (reruns reuse the spec).
   --spec-id   Explicit '<issue>-<slug>' spec id (alternative to --issue).
   --run-id    Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
+  --mode      Execution mode: session (quota-paced, default) | workflow (no pacing — hard-stop).
 
 Resolves the spec via the durable store (LOUD if none exists — generate one first),
 creates the run, seeds one pending task per spec task, and emits the RunState JSON.`;
@@ -175,6 +179,7 @@ export interface CreateRunOptions {
   readonly issue?: number;
   readonly specId?: string;
   readonly runId: string;
+  readonly mode?: RunState["mode"];
 }
 
 /**
@@ -205,12 +210,20 @@ export async function createRun(
     throw new UsageError("run create requires --issue or --spec-id");
   }
 
+  // Decision 24: workflow mode disables quota pacing. Warn ONCE here — at opt-in
+  // (run creation) — not on every pump tick; the gate then proceeds silently.
+  if (opts.mode === "workflow") {
+    log.warn(
+      "workflow mode: quota pacing disabled — relying on hard rate-limit errors; long runs may exhaust limits",
+    );
+  }
   const seeded = seedTasksFromSpec(manifest);
   await state.create({
     run_id: opts.runId,
     spec: specStore.toPointer(manifest),
     // v1 pump seam drives tasks strictly one at a time — the driver dial is fixed.
     driver: "sequential",
+    ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
@@ -304,6 +317,13 @@ function optionalString(raw: string | boolean | undefined): string | undefined {
   return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
+/** Validate the optional `--mode` flag; LOUD on anything but session/workflow. */
+function parseMode(raw: string | boolean | undefined): RunState["mode"] | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "session" || raw === "workflow") return raw;
+  throw new UsageError(`--mode must be 'session' or 'workflow', got '${String(raw)}'`);
+}
+
 async function runCreate(argv: string[]): Promise<ExitCode> {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
@@ -322,6 +342,7 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
   }
   const runId = optionalString(args.flag("run-id")) ?? makeRunId();
   validateId(runId, "run-id");
+  const mode = parseMode(args.flag("mode"));
 
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
@@ -331,6 +352,7 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
     runId,
     ...(issue !== undefined ? { issue } : {}),
     ...(specId !== undefined ? { specId } : {}),
+    ...(mode !== undefined ? { mode } : {}),
   });
   emitJson(run);
   return EXIT.OK;

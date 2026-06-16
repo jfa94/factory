@@ -57,11 +57,13 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
+factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode session|workflow]
 ```
 
-Read `run_id` from the emitted RunState. Seed failures (duplicate/dangling/cyclic
-deps) are spec defects — surface them.
+Pass `--mode` through from the invoking command (default `session`); it persists on the run so the
+quota gate knows whether to pace (Decision 24: `workflow` disables pacing — hard-stop, no pacing).
+Read `run_id` from the emitted RunState. Seed failures (duplicate/dangling/cyclic deps) are spec
+defects — surface them.
 
 ## Phase 3 — THE LOOP
 

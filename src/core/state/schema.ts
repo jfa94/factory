@@ -355,6 +355,17 @@ export const DriverEnum = z.enum(["sequential", "balanced"]);
 export type Driver = z.infer<typeof DriverEnum>;
 
 /**
+ * Execution mode (Decision 24). `session` runs in the orchestrator's live
+ * session and can observe the usage cache → fully paced. `workflow` runs as a
+ * background Workflow script that cannot observe usage → quota pacing is
+ * disabled (the run hard-stops on rate-limit errors; the user is warned at
+ * opt-in). An immutable run property set once at `run create`, never a derived
+ * verdict; the quota gate skips pacing when it is `workflow`.
+ */
+export const RunModeEnum = z.enum(["session", "workflow"]);
+export type RunMode = z.infer<typeof RunModeEnum>;
+
+/**
  * The whole run. Owns the per-task state map + the spec POINTER (not the spec).
  * `version` is a state-schema version for forward migration; bump only on a
  * breaking schema change.
@@ -374,6 +385,7 @@ export const RunStateSchema = z.object({
   run_id: z.string().min(1),
   status: RunStatusEnum.default("running"),
   driver: DriverEnum.default("sequential"),
+  mode: RunModeEnum.default("session"),
 
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,

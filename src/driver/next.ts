@@ -91,8 +91,9 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
     return { kind: "all-terminal", run_id: runId, cascade_dropped: [] };
   }
 
-  // 3. Quota gate — a breach persists the checkpoint and stops cleanly.
-  const stop = await applyQuotaGate(deps, runId);
+  // 3. Quota gate — a breach persists the checkpoint and stops cleanly. Workflow
+  //    mode skips pacing (Decision 24); the gate reads run.mode to decide.
+  const stop = await applyQuotaGate(deps, runId, run.mode);
   if (stop !== null) {
     return {
       kind: "quota-blocked",

@@ -30,9 +30,18 @@ describe("schema round-trip", () => {
     const run = parseRunState(minimalRun());
     expect(run.status).toBe("running");
     expect(run.driver).toBe("sequential");
+    expect(run.mode).toBe("session");
     expect(run.schema_version).toBe(1);
     expect(run.tasks).toEqual({});
     expect(run.ended_at).toBeNull();
+  });
+
+  it("round-trips an explicit workflow mode", () => {
+    expect(parseRunState(minimalRun({ mode: "workflow" })).mode).toBe("workflow");
+  });
+
+  it("rejects an unknown mode", () => {
+    expect(() => parseRunState(minimalRun({ mode: "background" }))).toThrow();
   });
 
   it("round-trips through JSON without loss", () => {

@@ -6415,6 +6415,7 @@ var QuotaCheckpointSchema = external_exports.object({
   binding_window: external_exports.enum(["5h", "7d"]).optional()
 });
 var DriverEnum = external_exports.enum(["sequential", "balanced"]);
+var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
   schema_version: external_exports.literal(1).default(1),
@@ -6422,6 +6423,7 @@ var RunStateSchema = external_exports.object({
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
   driver: DriverEnum.default("sequential"),
+  mode: RunModeEnum.default("session"),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -6650,6 +6652,7 @@ var StateManager = class {
       run_id: args.run_id,
       status: "running",
       driver: args.driver ?? "sequential",
+      mode: args.mode ?? "session",
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -10118,14 +10121,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log26 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log26.code !== 0) {
+    const log27 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log27.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log26.code ?? "null"}): ${log26.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log27.code ?? "null"}): ${log27.stderr.trim()}`
       );
     }
-    assertNotTruncated(log26, "git log (tdd classification)");
-    const shas = splitLines(log26.stdout).reverse();
+    assertNotTruncated(log27, "git log (tdd classification)");
+    const shas = splitLines(log27.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -11029,7 +11032,8 @@ function isSpawnStage(stage) {
 
 // src/driver/quota-gate.ts
 var log23 = createLogger("quota-gate");
-async function applyQuotaGate(deps, runId) {
+async function applyQuotaGate(deps, runId, mode = "session") {
+  if (mode === "workflow") return null;
   const reading = await deps.usage.read();
   const decision = evaluate(reading, deps.config, deps.now());
   if (decision.kind === "proceed") {
@@ -11210,7 +11214,7 @@ async function pumpTask(deps, runId, taskId, results) {
   if (isTerminalTaskStatus(task.status)) {
     return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
-  const stop = await applyQuotaGate(deps, runId);
+  const stop = await applyQuotaGate(deps, runId, run10.mode);
   if (stop !== null) {
     return {
       kind: "quota-blocked",
@@ -11350,7 +11354,7 @@ async function pumpRun(deps, runId) {
   if (Object.values(run10.tasks).every((t) => isTerminalTaskStatus(t.status))) {
     return { kind: "all-terminal", run_id: runId, cascade_dropped: [] };
   }
-  const stop = await applyQuotaGate(deps, runId);
+  const stop = await applyQuotaGate(deps, runId, run10.mode);
   if (stop !== null) {
     return {
       kind: "quota-blocked",
@@ -11451,6 +11455,7 @@ async function loadCliDeps(opts) {
 }
 
 // src/cli/subcommands/run.ts
+var log26 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -11465,12 +11470,13 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode <session|workflow>]
 
   --repo      Repo identity 'owner/name' (the first key of the spec store).
   --issue     PRD issue number \u2014 the STABLE lookup key (reruns reuse the spec).
   --spec-id   Explicit '<issue>-<slug>' spec id (alternative to --issue).
   --run-id    Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
+  --mode      Execution mode: session (quota-paced, default) | workflow (no pacing \u2014 hard-stop).
 
 Resolves the spec via the durable store (LOUD if none exists \u2014 generate one first),
 creates the run, seeds one pending task per spec task, and emits the RunState JSON.`;
@@ -11569,12 +11575,18 @@ async function createRun(state, specStore, opts) {
   } else {
     throw new UsageError("run create requires --issue or --spec-id");
   }
+  if (opts.mode === "workflow") {
+    log26.warn(
+      "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
+    );
+  }
   const seeded = seedTasksFromSpec(manifest);
   await state.create({
     run_id: opts.runId,
     spec: specStore.toPointer(manifest),
     // v1 pump seam drives tasks strictly one at a time — the driver dial is fixed.
-    driver: "sequential"
+    driver: "sequential",
+    ...opts.mode !== void 0 ? { mode: opts.mode } : {}
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
@@ -11622,6 +11634,11 @@ function parseIssue(raw) {
 function optionalString(raw) {
   return typeof raw === "string" && raw.length > 0 ? raw : void 0;
 }
+function parseMode(raw) {
+  if (raw === void 0) return void 0;
+  if (raw === "session" || raw === "workflow") return raw;
+  throw new UsageError(`--mode must be 'session' or 'workflow', got '${String(raw)}'`);
+}
 async function runCreate(argv) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
@@ -11639,6 +11656,7 @@ async function runCreate(argv) {
   }
   const runId = optionalString(args.flag("run-id")) ?? makeRunId();
   validateId(runId, "run-id");
+  const mode = parseMode(args.flag("mode"));
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
@@ -11646,7 +11664,8 @@ async function runCreate(argv) {
     repo,
     runId,
     ...issue !== void 0 ? { issue } : {},
-    ...specId !== void 0 ? { specId } : {}
+    ...specId !== void 0 ? { specId } : {},
+    ...mode !== void 0 ? { mode } : {}
   });
   emitJson(run10);
   return EXIT.OK;

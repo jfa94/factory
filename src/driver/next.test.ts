@@ -14,6 +14,9 @@ import { describe, expect, it } from "vitest";
 
 import { pumpRun } from "./next.js";
 import { makePumpDeps, PAUSE_5H } from "./pump-fixtures.js";
+import type { UsageReading } from "../quota/usage-source.js";
+
+const UNAVAILABLE: UsageReading = { kind: "unavailable", reason: "usage-cache-missing" };
 
 describe("pumpRun", () => {
   it("terminal run → run-terminal", async () => {
@@ -35,6 +38,31 @@ describe("pumpRun", () => {
       expect(env).toMatchObject({ kind: "quota-blocked", scope: "5h" });
       const run = await deps.state.read(runId);
       expect(run.status).toBe("paused");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("workflow mode proceeds past the gate even with an unobservable usage signal", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps({
+      modeOverride: "workflow",
+      usage: UNAVAILABLE,
+    });
+    try {
+      const env = await pumpRun(deps, runId);
+      expect(env.kind).toBe("tasks-ready");
+      expect((await deps.state.read(runId)).status).toBe("running");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("session mode (default) fail-closes on the same unobservable signal", async () => {
+    const { deps, runId, cleanup } = await makePumpDeps({ usage: UNAVAILABLE });
+    try {
+      const env = await pumpRun(deps, runId);
+      expect(env).toMatchObject({ kind: "quota-blocked", scope: "unavailable" });
+      expect((await deps.state.read(runId)).status).toBe("suspended");
     } finally {
       await cleanup();
     }
