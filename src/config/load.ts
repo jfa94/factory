@@ -46,6 +46,27 @@ export interface DataDirOptions {
    * repo root inferred from this module's location at runtime. For tests.
    */
   pluginRoot?: string;
+  /**
+   * Sink for the foreign-plugin redirect warning. Defaults to {@link log.warn}.
+   * Injectable so tests can assert the once-per-process guard (and the message
+   * text) without scraping stderr — mirrors how `env`/`home`/`pluginRoot` are
+   * injected. Production callers pass nothing.
+   */
+  warn?: (message: string) => void;
+}
+
+/**
+ * Module-level set of already-warned `<current → corrected>` redirect pairs, so
+ * the foreign-plugin warning fires ONCE per distinct leak per process instead of
+ * on every one of the ~20 `resolveDataDir` calls a single command makes. Keyed
+ * on the pair (not a blanket one-shot) so a genuinely different redirect still
+ * warns. Reset between tests via {@link __resetDataDirWarnings}.
+ */
+const warnedRedirects = new Set<string>();
+
+/** Test-only: clear the once-per-process redirect-warn guard. */
+export function __resetDataDirWarnings(): void {
+  warnedRedirects.clear();
 }
 
 /**
@@ -176,10 +197,23 @@ export function resolveDataDir(opts: DataDirOptions = {}): string {
 
   const corrected = expectedDataDir({ current, home, pluginRoot });
   if (corrected && corrected !== current) {
-    log.warn(
-      `CLAUDE_PLUGIN_DATA points at foreign plugin dir '${current ?? ""}'; ` +
-        `redirecting to '${corrected}'`,
-    );
+    const warn = opts.warn ?? ((m: string) => log.warn(m));
+    // Fire the warning ONCE per distinct redirect per process (resolveDataDir is
+    // called ~20×/command). Keyed on the (current, corrected) pair so a different
+    // leak still warns; JSON-encoded so the two paths can't ambiguously collide
+    // (a path may contain spaces, so a raw separator would be unsound).
+    const key = JSON.stringify([current ?? "", corrected]);
+    if (!warnedRedirects.has(key)) {
+      warnedRedirects.add(key);
+      warn(
+        `CLAUDE_PLUGIN_DATA is set to '${current ?? ""}', which belongs to ` +
+          `another plugin — factory auto-redirected to its canonical data dir ` +
+          `'${corrected}'. This is benign and self-corrected: no action is ` +
+          `required for correctness. To silence this warning permanently, set ` +
+          `CLAUDE_PLUGIN_DATA to factory's own dir ` +
+          `(e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>").`,
+      );
+    }
     return resolve(corrected);
   }
 

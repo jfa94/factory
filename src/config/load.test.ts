@@ -1,12 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, resolveDataDir, configPath } from "./load.js";
+import { loadConfig, resolveDataDir, configPath, __resetDataDirWarnings } from "./load.js";
 
 let home: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "factory-home-"));
+  // Reset the once-per-process redirect-warn guard so each test starts clean
+  // (vitest runs the whole file in ONE process — without this the Set leaks).
+  __resetDataDirWarnings();
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
@@ -52,6 +55,68 @@ describe("resolveDataDir", () => {
     mkdirSync(pluginRoot, { recursive: true });
     const ours = join(home, ".claude", "plugins", "data", "factory-jfa94");
     expect(resolveDataDir({ env: { CLAUDE_PLUGIN_DATA: ours }, home, pluginRoot })).toBe(ours);
+  });
+
+  describe("foreign-plugin redirect warn (once-per-process)", () => {
+    function cacheRoot() {
+      const pluginRoot = join(home, ".claude", "plugins", "cache", "jfa94", "factory", "0.10.5");
+      mkdirSync(pluginRoot, { recursive: true });
+      return pluginRoot;
+    }
+    const foreign = (h: string) => join(h, ".claude", "plugins", "data", "codex-openai-codex");
+    const corrected = (h: string) => join(h, ".claude", "plugins", "data", "factory-jfa94");
+
+    it("warns EXACTLY ONCE across repeated calls with the same foreign env", () => {
+      const pluginRoot = cacheRoot();
+      const warn = vi.fn();
+      const env = { CLAUDE_PLUGIN_DATA: foreign(home) };
+      for (let i = 0; i < 5; i++) {
+        const out = resolveDataDir({ env, home, pluginRoot, warn });
+        // Behavior preserved: corrected path returned on EVERY call.
+        expect(out).toBe(corrected(home));
+      }
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it("warns again for a genuinely DIFFERENT foreign→corrected pair (keyed, not blanket one-shot)", () => {
+      const pluginRoot = cacheRoot();
+      const warn = vi.fn();
+      // First leak (codex).
+      resolveDataDir({ env: { CLAUDE_PLUGIN_DATA: foreign(home) }, home, pluginRoot, warn });
+      // A DIFFERENT foreign source dir → distinct (current → corrected) key.
+      const otherForeign = join(home, ".claude", "plugins", "data", "supabase-supabase");
+      resolveDataDir({ env: { CLAUDE_PLUGIN_DATA: otherForeign }, home, pluginRoot, warn });
+      expect(warn).toHaveBeenCalledTimes(2);
+    });
+
+    it("emits an ACTIONABLE message naming the corrected dir + the permanent fix", () => {
+      const pluginRoot = cacheRoot();
+      const warn = vi.fn();
+      resolveDataDir({ env: { CLAUDE_PLUGIN_DATA: foreign(home) }, home, pluginRoot, warn });
+      const msg = warn.mock.calls[0]?.[0] as string;
+      expect(msg).toContain(foreign(home)); // the offending dir
+      expect(msg).toContain(corrected(home)); // the canonical dir it redirected to
+      expect(msg).toContain("CLAUDE_PLUGIN_DATA");
+      expect(msg).toMatch(/another plugin/i); // explains the cause
+      expect(msg).toMatch(/no action/i); // reassures it's benign
+      expect(msg).toMatch(/factory-<your-marketplace-id>|factory-jfa94/); // permanent-fix pointer
+    });
+
+    it("never warns when the dir is already canonical (no redirect)", () => {
+      const pluginRoot = cacheRoot();
+      const warn = vi.fn();
+      const ours = corrected(home);
+      resolveDataDir({ env: { CLAUDE_PLUGIN_DATA: ours }, home, pluginRoot, warn });
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("never warns (and throws) when CLAUDE_PLUGIN_DATA is unset", () => {
+      const warn = vi.fn();
+      expect(() => resolveDataDir({ env: {}, home, warn })).toThrow(
+        /CLAUDE_PLUGIN_DATA must be set/,
+      );
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 });
 

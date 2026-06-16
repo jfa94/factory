@@ -11,6 +11,37 @@ so unset keys continue to track future default changes.
 
 Key paths are dotted (e.g. `quality.holdoutPercent`, `git.stagingBranch`).
 
+## Data dir (`CLAUDE_PLUGIN_DATA`)
+
+Run/spec state lives OUTSIDE the target repo, under the data dir resolved by
+`resolveDataDir()` (`src/config/load.ts`). The canonical dir for this install is:
+
+```
+~/.claude/plugins/data/factory-jfa94
+```
+
+`factory-<marketplace-id>`, where `jfa94` is this marketplace's id
+(`.claude-plugin/marketplace.json` `name`). Production callers set it via the
+`CLAUDE_PLUGIN_DATA` env var; if it is unset, state-using commands loud-fail with
+a message pointing at the `factory-<your-marketplace-id>` form.
+
+### The foreign-plugin leak (benign, self-corrected)
+
+Another plugin (e.g. `codex`) can set `CLAUDE_PLUGIN_DATA` to **its own** data dir
+(under `~/.claude/plugins/data/`). The source of the leak is outside factory's
+control. Factory self-corrects: when `CLAUDE_PLUGIN_DATA` points at a foreign
+plugin's dir, `resolveDataDir()` derives the canonical `factory-jfa94` dir (from
+the cache-install layout, falling back to `marketplace.json`) and uses that
+instead — so state is never written into another plugin's dir.
+
+The redirect emits a **single WARN per distinct redirect per process** (keyed on
+the `current → corrected` pair; `resolveDataDir()` is called ~20×/command, so the
+warn is deduplicated rather than spammed). The message states that another plugin
+set the var, that factory auto-redirected to its canonical dir, that no action is
+required for correctness, and — if you want to silence it permanently — to set
+`CLAUDE_PLUGIN_DATA` to factory's own `factory-<your-marketplace-id>` dir. The
+redirect **behavior** is unconditional and unaffected by the warn rate-limiting.
+
 ## `quality`
 
 Quality-gate thresholds.

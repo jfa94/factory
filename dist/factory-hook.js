@@ -6409,6 +6409,7 @@ var ConfigSchema = external_exports.object({
 // src/config/load.ts
 var log2 = createLogger("config");
 var PLUGIN_NAME = "factory";
+var warnedRedirects = /* @__PURE__ */ new Set();
 function expectedDataDir(opts) {
   const { current, home, pluginRoot } = opts;
   if (!current) return null;
@@ -6462,9 +6463,14 @@ function resolveDataDir(opts = {}) {
   const current = env.CLAUDE_PLUGIN_DATA;
   const corrected = expectedDataDir({ current, home, pluginRoot });
   if (corrected && corrected !== current) {
-    log2.warn(
-      `CLAUDE_PLUGIN_DATA points at foreign plugin dir '${current ?? ""}'; redirecting to '${corrected}'`
-    );
+    const warn = opts.warn ?? ((m) => log2.warn(m));
+    const key = JSON.stringify([current ?? "", corrected]);
+    if (!warnedRedirects.has(key)) {
+      warnedRedirects.add(key);
+      warn(
+        `CLAUDE_PLUGIN_DATA is set to '${current ?? ""}', which belongs to another plugin \u2014 factory auto-redirected to its canonical data dir '${corrected}'. This is benign and self-corrected: no action is required for correctness. To silence this warning permanently, set CLAUDE_PLUGIN_DATA to factory's own dir (e.g. export CLAUDE_PLUGIN_DATA="$HOME/.claude/plugins/data/factory-<your-marketplace-id>").`
+      );
+    }
     return resolve(corrected);
   }
   if (!current) {
