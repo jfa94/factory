@@ -35,31 +35,40 @@ import { dropTask } from "./transitions.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
 import type { PumpDeps } from "./pump.js";
 
+/**
+ * Every variant carries the run's self-resolved context — `run_id`, the canonical
+ * `data_dir` (from {@link resolveDataDir}), and the persisted `ship_mode`. The
+ * `--mode workflow` driver adopts these from the FIRST envelope instead of having
+ * them marshaled through Workflow `args` (a real object passed as `args` arrives
+ * JSON-string-encoded, so a load-bearing arg silently becomes `undefined`).
+ */
+type NextContext = {
+  readonly run_id: string;
+  readonly data_dir: string;
+  readonly ship_mode: RunState["ship_mode"];
+};
+
 export type NextEnvelope =
-  | {
+  | (NextContext & {
       readonly kind: "tasks-ready";
-      readonly run_id: string;
       readonly ready: readonly string[];
       readonly cascade_dropped: readonly string[];
-    }
-  | {
+    })
+  | (NextContext & {
       readonly kind: "all-terminal";
-      readonly run_id: string;
       /** Tasks dropped by the cascade loop in THIS invocation (not cumulative). */
       readonly cascade_dropped: readonly string[];
-    }
-  | {
+    })
+  | (NextContext & {
       readonly kind: "run-terminal";
-      readonly run_id: string;
       readonly run_status: (typeof TERMINAL_RUN_STATUSES)[number];
-    }
-  | {
+    })
+  | (NextContext & {
       readonly kind: "quota-blocked";
-      readonly run_id: string;
       readonly scope: QuotaStop["scope"];
       readonly reason: string;
       readonly resets_at_epoch?: number;
-    };
+    });
 
 /** True iff every dependency of `task` is `done`. */
 function depsSatisfied(run: RunState, task: TaskState): boolean {
@@ -75,10 +84,16 @@ function isUnsatisfiableDep(run: RunState, depId: string): boolean {
 export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelope> {
   let run = await deps.state.read(runId);
 
+  // Self-resolved run context stamped onto EVERY envelope variant (so the workflow
+  // driver adopts run_id/data_dir/ship_mode from the first `next`, never from args).
+  // `data_dir`/`ship_mode` are immutable for the run; reading the current `run`
+  // snapshot at call time is always correct even after the cascade re-reads `run`.
+  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run.ship_mode });
+
   // 1. Terminal run check BEFORE the quota gate — a finished run must never
   //    write a pause checkpoint (mirrors pumpTask in pump.ts).
   if (isTerminalRunStatus(run.status)) {
-    return { kind: "run-terminal", run_id: runId, run_status: run.status };
+    return { ...ctx(), kind: "run-terminal", run_status: run.status };
   }
 
   // 2. All-tasks-terminal check BEFORE the quota gate — if every task is
@@ -88,7 +103,7 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
   //    post-cascade check in step 6. (Mirrors pumpTask's terminal-before-gate
   //    ordering; see the analogous task-level guard in pump.ts.)
   if (Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status))) {
-    return { kind: "all-terminal", run_id: runId, cascade_dropped: [] };
+    return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
   }
 
   // 3. Quota gate — a breach persists the checkpoint and stops cleanly. Workflow
@@ -96,8 +111,8 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
   const stop = await applyQuotaGate(deps, runId, run.mode);
   if (stop !== null) {
     return {
+      ...ctx(),
       kind: "quota-blocked",
-      run_id: runId,
       scope: stop.scope,
       reason: stop.reason,
       ...(stop.resets_at_epoch !== undefined ? { resets_at_epoch: stop.resets_at_epoch } : {}),
@@ -148,7 +163,7 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
   const tasks = Object.values(run.tasks);
 
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
-    return { kind: "all-terminal", run_id: runId, cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
   }
 
   // 7. Build the ready set: non-terminal tasks whose deps are all done.
@@ -169,5 +184,5 @@ export async function pumpRun(deps: PumpDeps, runId: string): Promise<NextEnvelo
     );
   }
 
-  return { kind: "tasks-ready", run_id: runId, ready: ordered, cascade_dropped: cascadeDropped };
+  return { ...ctx(), kind: "tasks-ready", ready: ordered, cascade_dropped: cascadeDropped };
 }

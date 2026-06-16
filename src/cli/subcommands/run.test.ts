@@ -262,6 +262,22 @@ describe("createRun", () => {
     await state.update("run-rt", (s) => ({ ...s, status: "running" as const }));
     expect((await state.read("run-rt")).mode).toBe("workflow");
   });
+
+  it("persists ship_mode (default no-merge; explicit live round-trips) so the workflow reads it back", async () => {
+    const dflt = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-sm0" });
+    expect(dflt.ship_mode).toBe("no-merge");
+    expect((await state.read("run-sm0")).ship_mode).toBe("no-merge");
+
+    const live = await createRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-sm1",
+      shipMode: "live",
+    });
+    expect(live.ship_mode).toBe("live");
+    // Resume-safe: the persisted value survives a fresh read (the workflow's source of truth).
+    expect((await state.read("run-sm1")).ship_mode).toBe("live");
+  });
 });
 
 describe("applyResume", () => {

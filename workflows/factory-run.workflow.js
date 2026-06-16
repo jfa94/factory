@@ -6,11 +6,15 @@ export const meta = {
   phases: [{ title: "Drive", detail: "next/drive pump loop; producers + reviewers per manifest" }],
 };
 
-// args: { runId, shipMode: 'no-merge'|'live', dataDir }
-const { runId, shipMode, dataDir } = args ?? {};
-if (!runId || !shipMode || !dataDir) {
-  throw new Error("factory-run workflow requires args { runId, shipMode, dataDir }");
-}
+// NO Workflow `args`. The run context — runId, dataDir, shipMode — is self-resolved
+// from the FIRST `factory next` envelope below (the engine stamps run_id + data_dir
+// + ship_mode onto every NextEnvelope). A real object passed as `args` arrives in the
+// body JSON-STRING-encoded, so a load-bearing arg would silently become `undefined`;
+// runId/dataDir are engine-internal already, and ship_mode is persisted on `run
+// create` (read back here) — nothing needs marshaling across the launch boundary.
+let runId;
+let dataDir;
+let shipMode;
 
 // Manifest role → plugin agentType. KNOWN GAP: workflow agent() has no maxTurns
 // option, so the manifest's per-agent `max_turns` budget is unenforceable in
@@ -265,7 +269,21 @@ async function driveTask(taskId) {
 phase("Drive");
 const outcomes = [];
 for (;;) {
-  const next = await cli(`factory next --run ${runId}`, "next", "Drive");
+  // Omit --run until runId is known; the engine defaults to runs/current (just
+  // pointed at this run by `run create`) and echoes run_id/data_dir/ship_mode back.
+  const next = await cli(runId ? `factory next --run ${runId}` : "factory next", "next", "Drive");
+  runId ||= next.run_id; // engine-resolved (runs/current → run_id; covered by next.test.ts)
+  dataDir ||= next.data_dir; // canonical path — no $CLAUDE_PLUGIN_DATA marshaling
+  shipMode ||= next.ship_mode; // persisted on `run create`, emitted by the engine
+  if (!runId || !dataDir || !shipMode) {
+    const missing = [!runId && "run_id", !dataDir && "data_dir", !shipMode && "ship_mode"]
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(
+      `factory-run: engine envelope missing ${missing} — rebuild dist (npm run build) ` +
+        `and relaunch via /factory:run --mode workflow`,
+    );
+  }
   if (next.kind === "quota-blocked") {
     return {
       suspended: true,

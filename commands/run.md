@@ -36,10 +36,11 @@ neither or both of `--issue`/`--spec-id`; `--mode` not `session`/`workflow`;
 ## Both modes start the same
 
 Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run
-create --mode <session|workflow>`; read `run_id`). Pass THIS command's `--mode` value through to
-Phase 2's `run create` so it persists on the run — the quota gate paces in `session` and hard-stops
-without pacing in `workflow` (Decision 24). With `--spec-id`, skip Phase 1 — the spec must already
-exist; `run create` fails LOUD otherwise:
+create --mode <session|workflow> --ship-mode <no-merge|live>`; read `run_id`). Pass THIS command's
+`--mode` AND `--ship-mode` values through to Phase 2's `run create` so both persist on the run — the
+quota gate paces in `session` and hard-stops without pacing in `workflow` (Decision 24), and
+`ship_mode` is read back by the workflow driver + resume (never re-passed). With `--spec-id`, skip
+Phase 1 — the spec must already exist; `run create` fails LOUD otherwise:
 
 ```
 Skill(pipeline-orchestrator)
@@ -55,14 +56,14 @@ task at a time, every agent spawned in this session.
 After Phase 2, launch the plugin's workflow driver and relay its result:
 
 ```
-Workflow({
-  scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/factory-run.workflow.js",
-  args: { runId: "<run_id>", shipMode: "<no-merge|live>", dataDir: "$CLAUDE_PLUGIN_DATA" }
-})
+Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/factory-run.workflow.js" })
 ```
 
-(`$CLAUDE_PLUGIN_DATA` = the resolved data dir from your Bash env — pass its VALUE.)
-It drives ready tasks in parallel (engine-enforced gates are identical; merges are
+Pass **no `args`**. The script self-resolves its run context (`run_id`, `data_dir`, `ship_mode`)
+from the first `factory next` envelope — `ship_mode` was persisted by Phase 2's `run create`, and a
+real object passed as `args` arrives JSON-string-encoded (so the script would see every field
+`undefined`). `${CLAUDE_PLUGIN_ROOT}` is expanded by the Workflow tool; nothing else needs
+substituting. It drives ready tasks in parallel (engine-enforced gates are identical; merges are
 file-lock serialized). When it returns:
 
 - `{ suspended: true, scope, resets_at_epoch }` → quota stop: report it; the user
@@ -77,4 +78,6 @@ file-lock serialized). When it returns:
 the skill in session mode, or re-launch the workflow in workflow mode — ask the user
 which mode if it is ambiguous; the engine is indifferent).
 
-Ship mode is not persisted — re-pass the run's original `--ship-mode` on resume; if it was `live` and the flag is omitted, ASK the user rather than defaulting (a silent default flips a live run to no-merge mid-run).
+Ship mode is persisted on the run (Phase 2's `run create --ship-mode`), so a workflow resume re-reads
+it from the first `factory next` envelope — re-launch with `Workflow({ scriptPath })`, no `args`. A
+session resume re-enters Phase 3, which passes the persisted value through as before.

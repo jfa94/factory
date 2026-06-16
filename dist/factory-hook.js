@@ -7108,6 +7108,7 @@ var QuotaCheckpointSchema = external_exports.object({
 });
 var DriverEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
+var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
   schema_version: external_exports.literal(1).default(1),
@@ -7116,6 +7117,7 @@ var RunStateSchema = external_exports.object({
   status: RunStatusEnum.default("running"),
   driver: DriverEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
+  ship_mode: ShipModeEnum.default("no-merge"),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -7296,6 +7298,7 @@ var StateManager = class {
       status: "running",
       driver: args.driver ?? "sequential",
       mode: args.mode ?? "session",
+      ship_mode: args.ship_mode ?? "no-merge",
       spec: args.spec,
       tasks: {},
       started_at: now,

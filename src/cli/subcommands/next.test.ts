@@ -118,7 +118,15 @@ describe("next --run resolution falls back to runs/current", () => {
       const code = await nextCommand.run([]); // no --run
       expect(code).toBe(EXIT.OK);
       const envelope = JSON.parse(stdout.read());
-      expect(envelope).toMatchObject({ kind: "tasks-ready", run_id: "run-current" });
+      // The envelope self-carries the run context the --mode workflow driver adopts
+      // (run_id from runs/current, the canonical data_dir, and the persisted ship_mode
+      // default) — so nothing rides Workflow args.
+      expect(envelope).toMatchObject({
+        kind: "tasks-ready",
+        run_id: "run-current",
+        data_dir: dir,
+        ship_mode: "no-merge",
+      });
     } finally {
       stdout.restore();
     }

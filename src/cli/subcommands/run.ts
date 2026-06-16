@@ -53,13 +53,15 @@ Actions:
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode <session|workflow>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
 
-  --repo      Repo identity 'owner/name' (the first key of the spec store).
-  --issue     PRD issue number — the STABLE lookup key (reruns reuse the spec).
-  --spec-id   Explicit '<issue>-<slug>' spec id (alternative to --issue).
-  --run-id    Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
-  --mode      Execution mode: session (quota-paced, default) | workflow (no pacing — hard-stop).
+  --repo        Repo identity 'owner/name' (the first key of the spec store).
+  --issue       PRD issue number — the STABLE lookup key (reruns reuse the spec).
+  --spec-id     Explicit '<issue>-<slug>' spec id (alternative to --issue).
+  --run-id      Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
+  --mode        Execution mode: session (quota-paced, default) | workflow (no pacing — hard-stop).
+  --ship-mode   no-merge (default — open the rollup PR, never merge) | live (serial-merge into staging).
+                Persisted on the run so the workflow driver + resume read it without re-passing.
 
 Resolves the spec via the durable store (LOUD if none exists — generate one first),
 creates the run, seeds one pending task per spec task, and emits the RunState JSON.`;
@@ -180,6 +182,7 @@ export interface CreateRunOptions {
   readonly specId?: string;
   readonly runId: string;
   readonly mode?: RunState["mode"];
+  readonly shipMode?: RunState["ship_mode"];
 }
 
 /**
@@ -224,6 +227,7 @@ export async function createRun(
     // v1 pump seam drives tasks strictly one at a time — the driver dial is fixed.
     driver: "sequential",
     ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
+    ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
@@ -343,6 +347,7 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
   const runId = optionalString(args.flag("run-id")) ?? makeRunId();
   validateId(runId, "run-id");
   const mode = parseMode(args.flag("mode"));
+  const shipMode = parseShipMode(args.flag("ship-mode"));
 
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
@@ -353,6 +358,7 @@ async function runCreate(argv: string[]): Promise<ExitCode> {
     ...(issue !== undefined ? { issue } : {}),
     ...(specId !== undefined ? { specId } : {}),
     ...(mode !== undefined ? { mode } : {}),
+    ...(shipMode !== undefined ? { shipMode } : {}),
   });
   emitJson(run);
   return EXIT.OK;

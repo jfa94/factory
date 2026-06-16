@@ -57,15 +57,22 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode session|workflow]
+factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode session|workflow] [--ship-mode no-merge|live]
 ```
 
-Pass `--mode` through from the invoking command (default `session`); it persists on the run so the
-quota gate knows whether to pace (Decision 24: `workflow` disables pacing — hard-stop, no pacing).
-Read `run_id` from the emitted RunState. Seed failures (duplicate/dangling/cyclic deps) are spec
-defects — surface them.
+Pass `--mode` AND `--ship-mode` through from the invoking command (defaults `session` / `no-merge`);
+both persist on the run. `mode` tells the quota gate whether to pace (Decision 24: `workflow`
+disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow driver + resume,
+so it is never re-marshaled. Read `run_id` from the emitted RunState. Seed failures
+(duplicate/dangling/cyclic deps) are spec defects — surface them.
+
+**In `--mode workflow`, STOP after this phase** — return control to `/factory:run`, which owns the
+Workflow launch (`commands/run.md`). Do NOT enter Phase 3.
 
 ## Phase 3 — THE LOOP
+
+THE LOOP is the `--mode session` driver ONLY. In `--mode workflow` you stopped after Phase 2 — the
+Workflow script (`workflows/factory-run.workflow.js`) is the loop; do not run this phase.
 
 `<mode>` is the ship mode the invoking command passed through (`no-merge` default | `live`) — pass it verbatim; never choose it yourself.
 

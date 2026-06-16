@@ -366,6 +366,17 @@ export const RunModeEnum = z.enum(["session", "workflow"]);
 export type RunMode = z.infer<typeof RunModeEnum>;
 
 /**
+ * Ship mode for the run's rollup. `no-merge` opens the staging→develop rollup PR
+ * but never merges (cutover-safe default); `live` serial-merges into staging. An
+ * immutable run property set once at `run create` from `--ship-mode` — persisted
+ * so the `--mode workflow` driver and `resume` read it from the run (the source
+ * of truth) instead of re-marshaling it through fragile Workflow `args` or
+ * re-prompting the user. Mirrors {@link RunModeEnum}: a stored property, never a
+ * derived verdict.
+ */
+export const ShipModeEnum = z.enum(["no-merge", "live"]);
+
+/**
  * The whole run. Owns the per-task state map + the spec POINTER (not the spec).
  * `version` is a state-schema version for forward migration; bump only on a
  * breaking schema change.
@@ -386,6 +397,7 @@ export const RunStateSchema = z.object({
   status: RunStatusEnum.default("running"),
   driver: DriverEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
+  ship_mode: ShipModeEnum.default("no-merge"),
 
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,

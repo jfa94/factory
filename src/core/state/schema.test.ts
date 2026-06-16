@@ -44,6 +44,15 @@ describe("schema round-trip", () => {
     expect(() => parseRunState(minimalRun({ mode: "background" }))).toThrow();
   });
 
+  it("defaults ship_mode to no-merge and round-trips an explicit live", () => {
+    expect(parseRunState(minimalRun()).ship_mode).toBe("no-merge");
+    expect(parseRunState(minimalRun({ ship_mode: "live" })).ship_mode).toBe("live");
+  });
+
+  it("rejects an unknown ship_mode", () => {
+    expect(() => parseRunState(minimalRun({ ship_mode: "auto" }))).toThrow();
+  });
+
   it("round-trips through JSON without loss", () => {
     const run = parseRunState(
       minimalRun({

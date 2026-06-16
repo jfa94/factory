@@ -6416,6 +6416,7 @@ var QuotaCheckpointSchema = external_exports.object({
 });
 var DriverEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
+var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
   schema_version: external_exports.literal(1).default(1),
@@ -6424,6 +6425,7 @@ var RunStateSchema = external_exports.object({
   status: RunStatusEnum.default("running"),
   driver: DriverEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
+  ship_mode: ShipModeEnum.default("no-merge"),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -6653,6 +6655,7 @@ var StateManager = class {
       status: "running",
       driver: args.driver ?? "sequential",
       mode: args.mode ?? "session",
+      ship_mode: args.ship_mode ?? "no-merge",
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -11348,17 +11351,18 @@ function isUnsatisfiableDep(run10, depId) {
 }
 async function pumpRun(deps, runId) {
   let run10 = await deps.state.read(runId);
+  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run10.ship_mode });
   if (isTerminalRunStatus(run10.status)) {
-    return { kind: "run-terminal", run_id: runId, run_status: run10.status };
+    return { ...ctx(), kind: "run-terminal", run_status: run10.status };
   }
   if (Object.values(run10.tasks).every((t) => isTerminalTaskStatus(t.status))) {
-    return { kind: "all-terminal", run_id: runId, cascade_dropped: [] };
+    return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
   }
   const stop = await applyQuotaGate(deps, runId, run10.mode);
   if (stop !== null) {
     return {
+      ...ctx(),
       kind: "quota-blocked",
-      run_id: runId,
       scope: stop.scope,
       reason: stop.reason,
       ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
@@ -11398,7 +11402,7 @@ async function pumpRun(deps, runId) {
   }
   const tasks = Object.values(run10.tasks);
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
-    return { kind: "all-terminal", run_id: runId, cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
   }
   const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run10, t));
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
@@ -11410,7 +11414,7 @@ async function pumpRun(deps, runId) {
       `next: no ready tasks but ${remaining.length} remain [${remaining.join(", ")}] \u2014 dependency cycle or deadlock`
     );
   }
-  return { kind: "tasks-ready", run_id: runId, ready: ordered, cascade_dropped: cascadeDropped };
+  return { ...ctx(), kind: "tasks-ready", ready: ordered, cascade_dropped: cascadeDropped };
 }
 
 // src/cli/wiring.ts
@@ -11470,13 +11474,15 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode <session|workflow>]
+  factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
 
-  --repo      Repo identity 'owner/name' (the first key of the spec store).
-  --issue     PRD issue number \u2014 the STABLE lookup key (reruns reuse the spec).
-  --spec-id   Explicit '<issue>-<slug>' spec id (alternative to --issue).
-  --run-id    Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
-  --mode      Execution mode: session (quota-paced, default) | workflow (no pacing \u2014 hard-stop).
+  --repo        Repo identity 'owner/name' (the first key of the spec store).
+  --issue       PRD issue number \u2014 the STABLE lookup key (reruns reuse the spec).
+  --spec-id     Explicit '<issue>-<slug>' spec id (alternative to --issue).
+  --run-id      Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
+  --mode        Execution mode: session (quota-paced, default) | workflow (no pacing \u2014 hard-stop).
+  --ship-mode   no-merge (default \u2014 open the rollup PR, never merge) | live (serial-merge into staging).
+                Persisted on the run so the workflow driver + resume read it without re-passing.
 
 Resolves the spec via the durable store (LOUD if none exists \u2014 generate one first),
 creates the run, seeds one pending task per spec task, and emits the RunState JSON.`;
@@ -11586,7 +11592,8 @@ async function createRun(state, specStore, opts) {
     spec: specStore.toPointer(manifest),
     // v1 pump seam drives tasks strictly one at a time — the driver dial is fixed.
     driver: "sequential",
-    ...opts.mode !== void 0 ? { mode: opts.mode } : {}
+    ...opts.mode !== void 0 ? { mode: opts.mode } : {},
+    ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {}
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
@@ -11657,6 +11664,7 @@ async function runCreate(argv) {
   const runId = optionalString(args.flag("run-id")) ?? makeRunId();
   validateId(runId, "run-id");
   const mode = parseMode(args.flag("mode"));
+  const shipMode = parseShipMode(args.flag("ship-mode"));
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
@@ -11665,7 +11673,8 @@ async function runCreate(argv) {
     runId,
     ...issue !== void 0 ? { issue } : {},
     ...specId !== void 0 ? { specId } : {},
-    ...mode !== void 0 ? { mode } : {}
+    ...mode !== void 0 ? { mode } : {},
+    ...shipMode !== void 0 ? { shipMode } : {}
   });
   emitJson(run10);
   return EXIT.OK;
@@ -12303,11 +12312,13 @@ var HELP6 = `factory next \u2014 one run-loop step: quota gate, cascade-drop, re
 Usage:
   factory next [--run <id>]      (defaults to runs/current)
 
-Emits ONE JSON envelope to stdout:
-  { kind:"tasks-ready", run_id, ready:[...], cascade_dropped:[...] }
-  { kind:"all-terminal", run_id, cascade_dropped:[...] }  \u2192 call \`factory run finalize\`
-  { kind:"run-terminal", run_id, run_status }
-  { kind:"quota-blocked", run_id, scope, reason, resets_at_epoch? }
+Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
+context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the --mode workflow driver
+adopts them from the first \`next\` instead of via Workflow args:
+  { kind:"tasks-ready", run_id, data_dir, ship_mode, ready:[...], cascade_dropped:[...] }
+  { kind:"all-terminal", run_id, data_dir, ship_mode, cascade_dropped:[...] }  \u2192 call \`factory run finalize\`
+  { kind:"run-terminal", run_id, data_dir, ship_mode, run_status }
+  { kind:"quota-blocked", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
 Throws LOUD on a dependency deadlock.`;

@@ -16,11 +16,13 @@ const HELP = `factory next — one run-loop step: quota gate, cascade-drop, read
 Usage:
   factory next [--run <id>]      (defaults to runs/current)
 
-Emits ONE JSON envelope to stdout:
-  { kind:"tasks-ready", run_id, ready:[...], cascade_dropped:[...] }
-  { kind:"all-terminal", run_id, cascade_dropped:[...] }  → call \`factory run finalize\`
-  { kind:"run-terminal", run_id, run_status }
-  { kind:"quota-blocked", run_id, scope, reason, resets_at_epoch? }
+Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
+context — run_id, data_dir (canonical), ship_mode — so the --mode workflow driver
+adopts them from the first \`next\` instead of via Workflow args:
+  { kind:"tasks-ready", run_id, data_dir, ship_mode, ready:[...], cascade_dropped:[...] }
+  { kind:"all-terminal", run_id, data_dir, ship_mode, cascade_dropped:[...] }  → call \`factory run finalize\`
+  { kind:"run-terminal", run_id, data_dir, ship_mode, run_status }
+  { kind:"quota-blocked", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
 Throws LOUD on a dependency deadlock.`;
