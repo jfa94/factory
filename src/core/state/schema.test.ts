@@ -58,6 +58,8 @@ describe("schema round-trip", () => {
     // `run create` so the Stop hook can session-scope its block.
     expect(parseRunState(minimalRun()).owner_session).toBeUndefined();
     expect(parseRunState(minimalRun({ owner_session: "sess-123" })).owner_session).toBe("sess-123");
+    // An EMPTY string is rejected (z.string().min(1)): absent ⇒ omit the key, never "".
+    expect(() => parseRunState(minimalRun({ owner_session: "" }))).toThrow();
   });
 
   it("round-trips through JSON without loss", () => {

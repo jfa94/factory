@@ -498,6 +498,21 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     expect((await state.read("run-derive")).spec.repo).toBe(REPO);
   });
 
+  it("an EMPTY --repo '' is treated as absent → derives from origin", async () => {
+    // End-to-end: `--repo ""` must not be taken as a literal slug. Two guards make it
+    // absent — optionalString coerces ""→undefined (unit-tested in args.test.ts) AND
+    // resolveRepo treats an empty explicit as not-derivable — so either way resolution
+    // falls through to the origin-derive path. This pins the user-visible outcome.
+    const code = await runCreate(["--repo", "", "--issue", "42", "--run-id", "run-empty"], {
+      gitClient: gitWithOrigin(REPO),
+      cwd: "/wherever",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    const state = new StateManager({ dataDir });
+    expect((await state.read("run-empty")).spec.repo).toBe(REPO);
+  });
+
   it("an explicit --repo that MATCHES the origin (case-insensitively) creates the run", async () => {
     // REPO is "acme/widgets"; the origin canonical casing wins, so the spec stored
     // under REPO is found and the run is keyed to the canonical repo id.

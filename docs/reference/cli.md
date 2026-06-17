@@ -62,13 +62,13 @@ probes branch protection — **refusing loudly** when the staging branch is not
 protected, unless `--provision` is set.
 
 ```
-factory scaffold --repo <owner/name> [--provision]
+factory scaffold [--repo <owner/name>] [--provision]
 ```
 
-| Flag                  | Required | Notes                                                 |
-| --------------------- | -------- | ----------------------------------------------------- |
-| `--repo <owner/name>` | yes      | Target GitHub repo; used for the protection probe.    |
-| `--provision`         | no       | Write branch protection if missing (default: refuse). |
+| Flag                  | Required | Notes                                                                                                                                                        |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--repo <owner/name>` | no       | Target GitHub repo (used for the protection probe). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with it fails loud. |
+| `--provision`         | no       | Write branch protection if missing (default: refuse).                                                                                                        |
 
 Emits a `ScaffoldReport`: `{ repo, files_created, files_present, staging,
 protection }`.
@@ -335,4 +335,48 @@ factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends]
 Default (no `--task`): resets `stuck` + `recoverable`, leaving dead-ends dropped;
 reopens a terminal run to `running` when it reset work. Idempotent. Emits
 `{ run_id, run_status, reset, reopened, skipped }`.
-</content>
+
+## `autonomy ensure`
+
+Writer. Materializes the merged settings file an autonomous (headless) relaunch
+runs under. Merges `templates/settings.autonomous.json` with your existing
+user settings into `${CLAUDE_PLUGIN_DATA}/merged-settings.json`: placeholders
+(`${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`) substituted, `env.CLAUDE_PLUGIN_DATA`
+baked, `permissions.allow` unioned (template wins on other keys), and the
+`statusLine` wired to `factory statusline`. If your own (non-factory) `statusLine`
+is present it is preserved by chaining it through `FACTORY_ORIGINAL_STATUSLINE`;
+a stale chain value is dropped. Then prints the relaunch command.
+
+```
+factory autonomy ensure [--user-settings <path>]
+```
+
+| Flag                     | Required | Notes                                                                   |
+| ------------------------ | -------- | ----------------------------------------------------------------------- |
+| `--user-settings <path>` | no       | Override the user-settings source (default: `~/.claude/settings.json`). |
+
+Prints a human-readable relaunch message to stdout that includes the command
+`claude --settings <merged-settings.json>` — not a `{kind:…}` envelope.
+
+## `statusline`
+
+Side-effecting passthrough — NOT a machine subcommand. Wire it as the Claude Code
+`statusLine.command`. Claude Code pipes a JSON payload to stdin on every statusline
+tick; this subcommand:
+
+1. reads the whole stdin payload (may be empty / non-JSON),
+2. if it carries `.rate_limits`, atomically persists `rate_limits + {captured_at}`
+   to `${CLAUDE_PLUGIN_DATA}/usage-cache.json` — the ONLY producer of the cache the
+   session-mode quota pacer (`StatuslineUsageSignal`) reads,
+3. passes the SAME payload through to `$FACTORY_ORIGINAL_STATUSLINE` (if set) and
+   forwards ITS stdout as the displayed statusline (with a 3s timeout).
+
+```
+factory statusline
+```
+
+IO contract: stdout is the DISPLAYED statusline text (passthrough), never a
+`{kind:…}` envelope. Fail-soft invariant: the statusline fires constantly and must
+never crash — every degraded condition (empty/non-JSON stdin, no `rate_limits`,
+unresolvable data dir, a broken/slow original command) is a clean no-op returning
+exit 0. Diagnostics go to stderr.

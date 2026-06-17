@@ -11767,7 +11767,7 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
