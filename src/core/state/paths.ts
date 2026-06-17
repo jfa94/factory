@@ -40,8 +40,17 @@ export const RUNS_DIR = "runs";
  * the run/spec stores stay immutable to it (see {@link worktreesRoot}).
  */
 export const WORKTREES_DIR = "worktrees";
-/** Symlink name pointing at the active run. */
+/** Symlink name pointing at the active run (legacy GLOBAL "most-recent" pointer). */
 export const CURRENT_LINK = "current";
+/**
+ * Subdir name for the PER-REPO current pointers (run-isolation L2.7). A pointer
+ * lives at `<dataDir>/current/<repo-key>` → `../runs/<run-id>`, in a tree SEPARATE
+ * from `runs/` so {@link runsRoot} enumeration ({@link runDir} scan) is untouched
+ * (a sibling dir, never a child of `runs/`). This is the authoritative pointer the
+ * human CLI resolves per checkout; the legacy global `runs/current` stays as the
+ * repo-less "most-recent" fallback.
+ */
+export const CURRENT_DIR = "current";
 /** The per-run state file name. */
 export const STATE_FILE = "state.json";
 /** The per-run append-only metrics log (WS12 telemetry sink). */
@@ -113,9 +122,23 @@ export function runReportPath(dataDir: string, runId: string): string {
   return join(runDir(dataDir, runId), REPORT_FILE);
 }
 
-/** `<dataDir>/runs/current` symlink path. */
+/** `<dataDir>/runs/current` symlink path — the legacy GLOBAL "most-recent" pointer. */
 export function currentLinkPath(dataDir: string): string {
   return join(runsRoot(dataDir), CURRENT_LINK);
+}
+
+/** `<dataDir>/current` — the per-repo pointer tree (sibling of `runs/`, L2.7). */
+export function currentRepoRoot(dataDir: string): string {
+  return join(dataDir, CURRENT_DIR);
+}
+
+/**
+ * `<dataDir>/current/<repo-key>` — the PER-REPO current pointer (L2.7). The repo id
+ * ("owner/name") is folded to one safe segment via {@link repoKey} (which rejects a
+ * pure-dot traversal segment), so a hostile repo id cannot escape the pointer tree.
+ */
+export function currentRepoLinkPath(dataDir: string, repo: string): string {
+  return join(currentRepoRoot(dataDir), repoKey(repo));
 }
 
 /** `<dataDir>/specs`. */

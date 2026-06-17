@@ -7,10 +7,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { stateCommand } from "./state.js";
+import { stateCommand, runState } from "./state.js";
 import { EXIT } from "../exit-codes.js";
 import { StateManager } from "../../core/state/index.js";
+import { FakeGitClient } from "../../git/index.js";
 import type { SpecPointer } from "../../types/index.js";
+
+/** A FakeGitClient whose origin resolves to `slug` (drives per-repo current, L2.8). */
+function gitWithOrigin(slug: string): FakeGitClient {
+  const git = new FakeGitClient();
+  git.setRemoteUrl("origin", `git@github.com:${slug}.git`);
+  return git;
+}
 
 let dataDir: string;
 let prevEnv: string | undefined;
@@ -45,11 +53,12 @@ describe("factory state", () => {
     expect(out()).toEqual({ current: null });
   });
 
-  it("prints the current run's state as JSON", async () => {
+  it("prints the current run's state as JSON (resolved per-repo from cwd)", async () => {
     const state = new StateManager({ dataDir });
     await state.create({ run_id: "run-x", spec: SPEC });
 
-    const code = await stateCommand.run([]);
+    // No --run → resolve the current run for THIS checkout's repo (acme/widgets).
+    const code = await runState([], { gitClient: gitWithOrigin("acme/widgets"), cwd: "/x" });
     expect(code).toBe(EXIT.OK);
     expect(out().run_id).toBe("run-x");
     expect(out().spec.issue_number).toBe(12);
