@@ -21,7 +21,7 @@
  * than surfacing later as a driver deadlock.
  */
 import { EXIT, type ExitCode } from "../exit-codes.js";
-import { parseArgs, isUsageError, UsageError, parseShipMode } from "../args.js";
+import { parseArgs, isUsageError, UsageError, parseShipMode, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { StateManager, RunModeEnum } from "../../core/state/index.js";
@@ -437,11 +437,6 @@ function parseIssue(raw: string | boolean | undefined): number | undefined {
     throw new UsageError(`--issue must be a positive integer, got '${raw}'`);
   }
   return n;
-}
-
-/** Coerce a flag to a non-empty string, treating a bare boolean flag as absent. */
-function optionalString(raw: string | boolean | undefined): string | undefined {
-  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
 /**

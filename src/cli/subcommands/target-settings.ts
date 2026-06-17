@@ -116,14 +116,14 @@ export function mergeTargetSettings(existing: Record<string, unknown>): MergeRes
     changed = true;
   }
 
-  // worktree.baseRef: "head" — the staging-determinism invariant. Bind the
-  // (possibly fresh) worktree object once, then force baseRef. Assigning the same
-  // reference when it already existed is a no-op; flipping baseRef is the only
-  // change-bearing mutation.
+  // worktree.baseRef: "head" — the staging-determinism invariant. Only mutate when
+  // baseRef is not already "head": bind the (possibly fresh) worktree object AND
+  // flip baseRef together inside the change branch, so an existing `{baseRef:"head"}`
+  // is a true no-op (no redundant self-assignment).
   const worktree = isObject(settings.worktree) ? settings.worktree : {};
-  settings.worktree = worktree;
   if (worktree.baseRef !== "head") {
     worktree.baseRef = "head";
+    settings.worktree = worktree;
     changed = true;
   }
 

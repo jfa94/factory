@@ -29,7 +29,7 @@
  */
 import { join } from "node:path";
 import { EXIT, type ExitCode } from "../exit-codes.js";
-import { parseArgs, isUsageError, UsageError } from "../args.js";
+import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { readJsonInput } from "../../driver/index.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
@@ -276,11 +276,6 @@ function parseIssue(raw: string): number {
     throw new UsageError(`--issue must be a positive integer, got '${raw}'`);
   }
   return n;
-}
-
-/** Coerce a flag to a non-empty string, treating a bare boolean flag as absent. */
-function optionalString(raw: string | boolean | undefined): string | undefined {
-  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
 /** Wire production deps once (own wiring — no run exists at spec time, so NOT loadCliDeps). */

@@ -6832,6 +6832,9 @@ function parseShipMode(raw) {
     `unknown --ship-mode '${String(raw)}' (expected ${ShipModeEnum.options.join(" | ")})`
   );
 }
+function optionalString(raw) {
+  return typeof raw === "string" && raw.length > 0 ? raw : void 0;
+}
 
 // src/cli/io.ts
 function emitJson(value) {
@@ -7903,9 +7906,9 @@ function mergeTargetSettings(existing) {
     changed = true;
   }
   const worktree = isObject(settings.worktree) ? settings.worktree : {};
-  settings.worktree = worktree;
   if (worktree.baseRef !== "head") {
     worktree.baseRef = "head";
+    settings.worktree = worktree;
     changed = true;
   }
   return { settings, changed };
@@ -8082,9 +8085,6 @@ async function resolveScaffoldRepo(args, overrides = {}) {
     gitClient: overrides.gitClient ?? new DefaultGitClient()
   });
   return splitRepoSlug(slug);
-}
-function optionalString(raw) {
-  return typeof raw === "string" && raw.length > 0 ? raw : void 0;
 }
 async function run3(argv) {
   const args = parseArgs(argv, { booleans: ["provision"] });
@@ -11969,9 +11969,6 @@ function parseIssue(raw) {
   }
   return n;
 }
-function optionalString2(raw) {
-  return typeof raw === "string" && raw.length > 0 ? raw : void 0;
-}
 function parseMode(raw) {
   if (raw === void 0) return void 0;
   const parsed = RunModeEnum.safeParse(raw);
@@ -11981,7 +11978,7 @@ function parseMode(raw) {
   );
 }
 function resolveOwnerSession(flag, env = process.env) {
-  return optionalString2(flag) ?? optionalString2(env.CLAUDE_CODE_SESSION_ID);
+  return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
 }
 async function runCreate(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["new"] });
@@ -11991,9 +11988,9 @@ async function runCreate(argv, overrides = {}) {
   }
   const cwd = overrides.cwd ?? process.cwd();
   const gitClient = overrides.gitClient ?? new DefaultGitClient();
-  const repo = await resolveRepo({ explicit: optionalString2(args.flag("repo")), cwd, gitClient });
+  const repo = await resolveRepo({ explicit: optionalString(args.flag("repo")), cwd, gitClient });
   const issue = parseIssue(args.flag("issue"));
-  const specId = optionalString2(args.flag("spec-id"));
+  const specId = optionalString(args.flag("spec-id"));
   let selector;
   if (issue !== void 0 && specId !== void 0) {
     throw new UsageError("run create: pass exactly one of --issue or --spec-id");
@@ -12004,7 +12001,7 @@ async function runCreate(argv, overrides = {}) {
   } else {
     throw new UsageError("run create requires --issue <n> or --spec-id <id>");
   }
-  const explicitRunId = optionalString2(args.flag("run-id"));
+  const explicitRunId = optionalString(args.flag("run-id"));
   const runId = explicitRunId ?? makeRunId();
   validateId(runId, "run-id");
   const mode = parseMode(args.flag("mode"));
@@ -12044,7 +12041,7 @@ async function runResume(argv) {
   return EXIT.OK;
 }
 async function resolveRunId(state, args, action) {
-  const explicit = optionalString2(args.flag("run"));
+  const explicit = optionalString(args.flag("run"));
   if (explicit !== void 0) return explicit;
   const current = await state.readCurrent();
   if (current === null) {
@@ -12214,9 +12211,6 @@ function parseIssue2(raw) {
   }
   return n;
 }
-function optionalString3(raw) {
-  return typeof raw === "string" && raw.length > 0 ? raw : void 0;
-}
 function wireDeps() {
   const dataDir = resolveDataDir({});
   const config = loadConfig({ dataDir });
@@ -12234,7 +12228,7 @@ var ACTIONS = {
 };
 async function resolveSpecRepo(args, overrides = {}) {
   return resolveRepo({
-    explicit: optionalString3(args.flag("repo")),
+    explicit: optionalString(args.flag("repo")),
     cwd: overrides.cwd ?? process.cwd(),
     gitClient: overrides.gitClient ?? new DefaultGitClient()
   });
@@ -12541,9 +12535,6 @@ Usage:
 
 Emits ONE JSON document:
   { kind:"score", summary, dead_surface? }`;
-function optionalString4(raw) {
-  return typeof raw === "string" && raw.length > 0 ? raw : void 0;
-}
 async function run7(argv) {
   const args = parseArgs(argv, { booleans: ["dead-surface"] });
   if (args.flag("help") === true) {
@@ -12552,7 +12543,7 @@ async function run7(argv) {
   }
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
-  const explicitRun = optionalString4(args.flag("run"));
+  const explicitRun = optionalString(args.flag("run"));
   const runState = explicitRun !== void 0 ? await state.read(explicitRun) : await state.readCurrent();
   if (runState === null) {
     throw new UsageError("score: no --run given and no current run");
@@ -12564,8 +12555,8 @@ async function run7(argv) {
   let deadSurface;
   if (args.flag("dead-surface") === true) {
     const config = loadConfig({ dataDir });
-    const base = optionalString4(args.flag("base")) ?? `origin/${config.git.baseBranch}`;
-    const cwd = optionalString4(args.flag("project-root")) ?? process.cwd();
+    const base = optionalString(args.flag("base")) ?? `origin/${config.git.baseBranch}`;
+    const cwd = optionalString(args.flag("project-root")) ?? process.cwd();
     deadSurface = await scoreDeadSurface(base, cwd);
   }
   emitJson({
@@ -12858,8 +12849,8 @@ Usage:
 
 Options:
   --user-settings <path>   Override the user-settings source (default: ~/.claude/settings.json)`;
-function factoryStatuslineCommand(pluginRoot) {
-  return `${pluginRoot}/bin/factory statusline`;
+function factoryBinPath(pluginRoot) {
+  return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
   return join16(dataDir, "merged-settings.json");
@@ -12921,8 +12912,7 @@ function materializeMergedSettings(input) {
   const templateAllow = Array.isArray(templatePerms.allow) ? templatePerms.allow.filter((e) => typeof e === "string") : [];
   const unionedAllow = [...userAllow, ...templateAllow.filter((e) => !userAllow.includes(e))];
   merged.permissions = { ...userPerms, ...templatePerms, allow: unionedAllow };
-  const ourCommand = factoryStatuslineCommand(pluginRoot);
-  const ourPath = ourCommand.split(" ")[0] ?? ourCommand;
+  const ourPath = factoryBinPath(pluginRoot);
   const userStatusLine = statusLineCommandOf(input.userSettings);
   const chained = (() => {
     if (userStatusLine === void 0) return void 0;

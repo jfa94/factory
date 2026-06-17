@@ -116,6 +116,17 @@ describe("mergeTargetSettings", () => {
     expect(changed).toBe(true);
     expect((settings.worktree as { baseRef: string }).baseRef).toBe("head");
   });
+
+  it("REPLACES a non-object worktree value with a fresh {baseRef:head}", () => {
+    // The worktree value is not an object (a corrupt/hand-edited settings): it must
+    // be replaced wholesale, not merged onto. Covers the E3 fresh-object branch for
+    // every non-object shape (string / null / array).
+    for (const bad of ["foo", null, [1, 2]] as const) {
+      const { changed, settings } = mergeTargetSettings({ worktree: bad });
+      expect(changed).toBe(true);
+      expect(settings.worktree).toEqual({ baseRef: "head" });
+    }
+  });
 });
 
 describe("ensureTargetSettings", () => {

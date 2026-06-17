@@ -62,9 +62,14 @@ Usage:
 Options:
   --user-settings <path>   Override the user-settings source (default: ~/.claude/settings.json)`;
 
-/** The statusLine command the template wires (the bundle's own writer). */
-function factoryStatuslineCommand(pluginRoot: string): string {
-  return `${pluginRoot}/bin/factory statusline`;
+/**
+ * The `factory` bundle entrypoint (the PATH shim onto the CLI bundle). The
+ * statusLine WRITER the template wires is `<this> statusline`; the ownership check
+ * below compares a user statusLine's first token against this path, so deriving it
+ * here (not by re-splitting a constructed command string) keeps the two in step.
+ */
+function factoryBinPath(pluginRoot: string): string {
+  return `${pluginRoot}/bin/factory`;
 }
 
 /** Path of the materialized merged settings inside the data dir. */
@@ -198,8 +203,7 @@ export function materializeMergedSettings(input: MaterializeInput): Record<strin
   // factory writer, preserve it via FACTORY_ORIGINAL_STATUSLINE (tilde-expanded)
   // so `factory statusline` chains to it. The template's statusLine (the factory
   // writer) always wins as the displayed command.
-  const ourCommand = factoryStatuslineCommand(pluginRoot);
-  const ourPath = ourCommand.split(" ")[0] ?? ourCommand; // ".../bin/factory"
+  const ourPath = factoryBinPath(pluginRoot); // ".../bin/factory"
   const userStatusLine = statusLineCommandOf(input.userSettings);
   // Resolve the user's OWN (non-factory) statusLine to chain, if any.
   const chained = ((): string | undefined => {

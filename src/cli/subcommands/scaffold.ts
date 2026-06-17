@@ -25,7 +25,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXIT, type ExitCode } from "../exit-codes.js";
-import { parseArgs, isUsageError } from "../args.js";
+import { parseArgs, isUsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { createLogger } from "../../shared/index.js";
 import {
@@ -292,11 +292,6 @@ export async function resolveScaffoldRepo(
     gitClient: overrides.gitClient ?? new DefaultGitClient(),
   });
   return splitRepoSlug(slug);
-}
-
-/** Coerce a flag to a non-empty string, treating a bare boolean flag as absent. */
-function optionalString(raw: string | boolean | undefined): string | undefined {
-  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
 async function run(argv: string[]): Promise<ExitCode> {

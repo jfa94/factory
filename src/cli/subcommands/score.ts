@@ -13,7 +13,7 @@
  * throws (a missing tool is `skipped`).
  */
 import { EXIT, type ExitCode } from "../exit-codes.js";
-import { parseArgs, isUsageError, UsageError } from "../args.js";
+import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { StateManager } from "../../core/state/index.js";
@@ -40,11 +40,6 @@ Usage:
 
 Emits ONE JSON document:
   { kind:"score", summary, dead_surface? }`;
-
-/** Coerce a flag to a non-empty string, treating a bare boolean flag as absent. */
-function optionalString(raw: string | boolean | undefined): string | undefined {
-  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
-}
 
 async function run(argv: string[]): Promise<ExitCode> {
   const args = parseArgs(argv, { booleans: ["dead-surface"] });

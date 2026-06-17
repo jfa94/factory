@@ -105,7 +105,14 @@ export function validateRepoSlug(slug: string): string {
   return slug;
 }
 
-/** Split a validated `owner/name` slug into its parts. */
+/**
+ * Split an `owner/name` slug into its parts, re-validating first. The common caller
+ * ({@link resolveScaffoldRepo}) already passes a {@link resolveRepo}-validated slug,
+ * so the {@link validateRepoSlug} call here is INTENTIONAL defense in depth: this is
+ * an exported boundary helper, and re-checking the charset at the split keeps a
+ * future caller that hands it an un-validated slug from leaking `..`/metacharacters
+ * into the gh REST paths. The redundancy on the scaffold path is the price of that.
+ */
 export function splitRepoSlug(slug: string): { owner: string; repo: string } {
   const parts = validateRepoSlug(slug).split("/");
   return { owner: parts[0]!, repo: parts[1]! };

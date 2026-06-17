@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { parseShipMode, isUsageError } from "./args.js";
+import { parseShipMode, optionalString, isUsageError } from "./args.js";
 import { ShipModeEnum } from "../core/state/index.js";
 
 describe("parseShipMode", () => {
@@ -49,5 +49,25 @@ describe("parseShipMode", () => {
         })(),
       ),
     ).toBe(true);
+  });
+});
+
+describe("optionalString", () => {
+  it("returns a non-empty string flag unchanged", () => {
+    expect(optionalString("owner/name")).toBe("owner/name");
+  });
+
+  it("treats an empty string as absent (→ undefined)", () => {
+    expect(optionalString("")).toBeUndefined();
+  });
+
+  it("treats a bare boolean flag as absent (→ undefined)", () => {
+    // `--repo` with no value parses to `true`; that is NOT a usable string.
+    expect(optionalString(true)).toBeUndefined();
+    expect(optionalString(false)).toBeUndefined();
+  });
+
+  it("treats a missing flag as absent (→ undefined)", () => {
+    expect(optionalString(undefined)).toBeUndefined();
   });
 });

@@ -122,3 +122,8 @@ export function parseShipMode(raw: string | boolean | undefined): ShipMode | und
     `unknown --ship-mode '${String(raw)}' (expected ${ShipModeEnum.options.join(" | ")})`,
   );
 }
+
+/** Coerce a flag to a non-empty string, treating a bare boolean flag as absent. */
+export function optionalString(raw: string | boolean | undefined): string | undefined {
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+}
