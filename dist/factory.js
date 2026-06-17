@@ -12621,8 +12621,21 @@ adopts them from the first \`next\` instead of via Workflow args:
   { kind:"run-terminal", run_id, data_dir, ship_mode, run_status }
   { kind:"quota-blocked", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
+  factory next --assert-owner <session>   (loud-assert runs/current ownership)
+
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
 Throws LOUD on a dependency deadlock.`;
+function assertCurrentOwner(current, assertOwner) {
+  const expected = typeof assertOwner === "string" ? assertOwner.trim() : "";
+  if (expected.length === 0) return;
+  const actual = current.owner_session;
+  if (actual === void 0) return;
+  if (actual !== expected) {
+    throw new Error(
+      `next: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Relaunch via /factory:run --mode workflow, or pass --run <id> explicitly.`
+    );
+  }
+}
 async function run9(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
@@ -12637,6 +12650,7 @@ async function run9(argv) {
     const dataDir = resolveDataDir({});
     const current = await new StateManager({ dataDir }).readCurrent();
     if (current === null) throw new UsageError("no --run given and no current run");
+    assertCurrentOwner(current, args.flag("assert-owner"));
     runId = current.run_id;
   }
   const deps = await loadCoroutineDeps({ runId });

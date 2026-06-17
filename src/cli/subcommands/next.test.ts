@@ -133,6 +133,117 @@ describe("next --run resolution falls back to runs/current", () => {
   });
 });
 
+describe("next --assert-owner (workflow run-context loud-assert)", () => {
+  let dir: string;
+  let state: StateManager;
+  let savedEnv: string | undefined;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "factory-next-owner-"));
+    state = new StateManager({
+      dataDir: dir,
+      lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
+    });
+    savedEnv = process.env["CLAUDE_PLUGIN_DATA"];
+    process.env["CLAUDE_PLUGIN_DATA"] = dir;
+  });
+
+  afterEach(async () => {
+    if (savedEnv === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];
+    else process.env["CLAUDE_PLUGIN_DATA"] = savedEnv;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** Seed a current run with one ready task + zero-usage cache; optional owner. */
+  async function seedReadyCurrent(ownerSession?: string) {
+    await state.create({
+      run_id: "run-current",
+      spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
+      ...(ownerSession !== undefined ? { owner_session: ownerSession } : {}),
+    });
+    await state.update("run-current", (s) => ({
+      ...s,
+      tasks: {
+        T1: {
+          task_id: "T1",
+          status: "pending",
+          depends_on: [],
+          risk_tier: "medium",
+          escalation_rung: 0,
+          reviewers: [],
+          merge_resyncs: 0,
+        },
+      },
+    }));
+    const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
+    await new SpecStore({ dataDir: dir, docsRoot: join(dir, "_docs") }).write(spec, "# spec");
+    const nowSec = Math.floor(Date.now() / 1000);
+    await writeFile(
+      usageCachePath(dir),
+      JSON.stringify({
+        captured_at: nowSec,
+        five_hour: { used_percentage: 0, resets_at: nowSec + 18_000 },
+        seven_day: { used_percentage: 0, resets_at: nowSec + 604_800 },
+      }),
+    );
+  }
+
+  it("throws LOUD when runs/current is owned by a different session", async () => {
+    await seedReadyCurrent("sess-A");
+    await expect(nextCommand.run(["--assert-owner", "sess-B"])).rejects.toThrow(
+      /owned by session 'sess-A'.*expected 'sess-B'/s,
+    );
+  });
+
+  it("proceeds when the asserted session matches the run owner", async () => {
+    await seedReadyCurrent("sess-A");
+    const stdout = captureStream(process.stdout);
+    try {
+      const code = await nextCommand.run(["--assert-owner", "sess-A"]);
+      expect(code).toBe(EXIT.OK);
+      expect(JSON.parse(stdout.read())).toMatchObject({
+        kind: "tasks-ready",
+        run_id: "run-current",
+      });
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("degrades safe (no assertion) when the run has no owner_session", async () => {
+    await seedReadyCurrent(); // owner unknown → cannot assert
+    const stdout = captureStream(process.stdout);
+    try {
+      expect(await nextCommand.run(["--assert-owner", "sess-B"])).toBe(EXIT.OK);
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("degrades safe when --assert-owner is empty ($CLAUDE_CODE_SESSION_ID unset)", async () => {
+    await seedReadyCurrent("sess-A");
+    const stdout = captureStream(process.stdout);
+    try {
+      expect(await nextCommand.run(["--assert-owner", ""])).toBe(EXIT.OK);
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("never asserts on the explicit --run path (bypasses runs/current)", async () => {
+    await seedReadyCurrent("sess-A");
+    const stdout = captureStream(process.stdout);
+    try {
+      // Mismatched --assert-owner is ignored because --run is explicit.
+      expect(await nextCommand.run(["--run", "run-current", "--assert-owner", "sess-B"])).toBe(
+        EXIT.OK,
+      );
+    } finally {
+      stdout.restore();
+    }
+  });
+});
+
 describe("next happy path", () => {
   let cleanup: (() => Promise<void>) | undefined;
 
@@ -147,7 +258,10 @@ describe("next happy path", () => {
 
     // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
-    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec");
+    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(
+      spec,
+      "# spec",
+    );
 
     // Write a zero-usage cache so StatuslineUsageSignal proceeds (not quota-blocked).
     const nowSec = Math.floor(Date.now() / 1000);
@@ -191,7 +305,10 @@ describe("next happy path", () => {
 
     // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
-    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec");
+    await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(
+      spec,
+      "# spec",
+    );
 
     const stdout = captureStream(process.stdout);
 

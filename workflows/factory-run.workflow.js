@@ -341,8 +341,12 @@ const outcomes = [];
 for (;;) {
   // Omit --run until runId is known; the engine defaults to runs/current (just
   // pointed at this run by `run create`) and echoes run_id/data_dir/ship_mode back.
+  // `runs/current` is mutable (every `run create` overwrites it), so the FIRST step
+  // passes --assert-owner "$CLAUDE_CODE_SESSION_ID" (Bash-expanded to the launching
+  // session) — the engine fails LOUD if a concurrent create redirected runs/current
+  // onto a run owned by a different session, instead of silently driving it.
   const next = await cli(
-    runId ? `factory next --run ${runId}` : "factory next",
+    runId ? `factory next --run ${runId}` : `factory next --assert-owner "$CLAUDE_CODE_SESSION_ID"`,
     "next",
     "Drive",
     NEXT_KINDS,
