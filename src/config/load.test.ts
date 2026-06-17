@@ -117,6 +117,26 @@ describe("resolveDataDir", () => {
       );
       expect(warn).not.toHaveBeenCalled();
     });
+
+    it("WARNS (not swallows) when the dev-checkout marketplace.json is unparseable", () => {
+      // Dev-checkout layout (pluginRoot NOT under the cache root) with a foreign
+      // CLAUDE_PLUGIN_DATA leak: canonicalization must read marketplace.json. An
+      // unparseable one previously swallowed the error silently, masking the leak.
+      const pluginRoot = mkdtempSync(join(tmpdir(), "factory-devroot-"));
+      try {
+        mkdirSync(join(pluginRoot, ".claude-plugin"), { recursive: true });
+        writeFileSync(join(pluginRoot, ".claude-plugin", "marketplace.json"), "{ not json");
+        const foreignDir = join(home, ".claude", "plugins", "data", "codex-openai-codex");
+        const warn = vi.fn();
+        resolveDataDir({ env: { CLAUDE_PLUGIN_DATA: foreignDir }, home, pluginRoot, warn });
+        expect(warn).toHaveBeenCalledTimes(1);
+        const msg = warn.mock.calls[0]?.[0] as string;
+        expect(msg).toContain("marketplace.json");
+        expect(msg).toContain("CLAUDE_PLUGIN_DATA");
+      } finally {
+        rmSync(pluginRoot, { recursive: true, force: true });
+      }
+    });
   });
 });
 

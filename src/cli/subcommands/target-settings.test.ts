@@ -14,7 +14,7 @@ import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   FACTORY_TARGET_ALLOWLIST,
@@ -151,5 +151,26 @@ describe("ensureTargetSettings", () => {
     const second = await ensureTargetSettings({ targetRoot: root });
     expect(second.created).toBe(false);
     expect(second.changed).toBe(false);
+  });
+
+  it("WARNS (not silently coerces) when an existing settings.json is valid JSON but not an object", async () => {
+    // A non-object settings.json (here a JSON array) is about to be REPLACED by the
+    // merged object — that destructive overwrite must be surfaced, not swallowed.
+    await mkdir(join(root, ".claude"), { recursive: true });
+    await writeFile(settingsPath(), JSON.stringify(["not", "an", "object"]), "utf8");
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const result = await ensureTargetSettings({ targetRoot: root });
+      expect(result.created).toBe(false);
+      // The factory settings object replaced the array.
+      const written = await readSettings();
+      expect((written.worktree as { baseRef: string }).baseRef).toBe("head");
+      // The replacement warned, naming the path + that it's being replaced.
+      const warned = spy.mock.calls.map((c) => String(c[0])).join("");
+      expect(warned).toMatch(/not an object/i);
+      expect(warned).toContain("settings.json");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

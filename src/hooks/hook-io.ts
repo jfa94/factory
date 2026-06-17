@@ -15,6 +15,11 @@
  * fails closed.)
  */
 import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { readStdin } from "../shared/stdin.js";
+
+// readStdin now lives in shared/ (one-way dep: hooks→shared); re-exported here so
+// existing hook call sites keep importing it from hook-io.
+export { readStdin };
 
 /**
  * Parsed PreToolUse / SubagentStop hook input. Claude Code passes a superset of
@@ -90,20 +95,6 @@ export function parseHookInput(raw: string): HookInput | null {
     throw new HookInputError("hook input must be a JSON object");
   }
   return parsed as HookInput;
-}
-
-/**
- * Read the entire stdin stream as a utf-8 string. Injectable for tests via the
- * `stream` arg (any async-iterable of chunks).
- */
-export async function readStdin(
-  stream: AsyncIterable<string | Uint8Array> = process.stdin,
-): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 /**

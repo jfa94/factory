@@ -5936,7 +5936,7 @@ var log2 = createLogger("config");
 var PLUGIN_NAME = "factory";
 var warnedRedirects = /* @__PURE__ */ new Set();
 function expectedDataDir(opts) {
-  const { current, home, pluginRoot } = opts;
+  const { current, home, pluginRoot, warn } = opts;
   if (!current) return null;
   const dataRoot = join2(home, ".claude", "plugins", "data");
   if (!current.startsWith(dataRoot + sep)) return null;
@@ -5962,7 +5962,10 @@ function expectedDataDir(opts) {
       if (marketplaceName.length > 0) {
         return join2(dataRoot, `${PLUGIN_NAME}-${marketplaceName}`);
       }
-    } catch {
+    } catch (err) {
+      warn(
+        `could not parse ${marketplaceJson} (${err.message}); cannot canonicalize the foreign-plugin data dir \u2014 state may land in a foreign directory. Set CLAUDE_PLUGIN_DATA explicitly to factory's own data dir.`
+      );
     }
   }
   return null;
@@ -5991,9 +5994,9 @@ function resolveDataDir(opts = {}) {
   const home = opts.home ?? homedir();
   const pluginRoot = opts.pluginRoot ?? inferPluginRoot();
   const current = env.CLAUDE_PLUGIN_DATA;
-  const corrected = expectedDataDir({ current, home, pluginRoot });
+  const warn = opts.warn ?? ((m) => log2.warn(m));
+  const corrected = expectedDataDir({ current, home, pluginRoot, warn });
   if (corrected && corrected !== current) {
-    const warn = opts.warn ?? ((m) => log2.warn(m));
     const key = JSON.stringify([current ?? "", corrected]);
     if (!warnedRedirects.has(key)) {
       warnedRedirects.add(key);
@@ -7829,6 +7832,7 @@ async function ensureStaging(args) {
 import { mkdir as mkdir6, readFile as readFile3 } from "node:fs/promises";
 import { existsSync as existsSync4 } from "node:fs";
 import { join as join6 } from "node:path";
+var log12 = createLogger("cli:target-settings");
 var FACTORY_TARGET_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
@@ -7859,17 +7863,12 @@ function mergeTargetSettings(existing) {
     permissions.allow = [...currentAllow, ...additions];
     settings.permissions = permissions;
     changed = true;
-  } else if (!Array.isArray(permissions.allow)) {
-    permissions.allow = currentAllow;
-    settings.permissions = permissions;
   }
   const worktree = isObject(settings.worktree) ? settings.worktree : {};
+  settings.worktree = worktree;
   if (worktree.baseRef !== "head") {
     worktree.baseRef = "head";
-    settings.worktree = worktree;
     changed = true;
-  } else {
-    settings.worktree = worktree;
   }
   return { settings, changed };
 }
@@ -7881,7 +7880,13 @@ async function ensureTargetSettings(opts) {
   if (!created) {
     const raw = await readFile3(path2, "utf8");
     const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
-    existing = isObject(parsed) ? parsed : {};
+    if (isObject(parsed)) {
+      existing = parsed;
+    } else {
+      log12.warn(
+        `${path2} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
+      );
+    }
   }
   const { settings, changed } = mergeTargetSettings(existing);
   if (created || changed) {
@@ -7892,7 +7897,7 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold.ts
-var log12 = createLogger("scaffold");
+var log13 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -7924,7 +7929,7 @@ function resolveTemplatesDir() {
 async function copyIfAbsent(src, dest, root, created, present) {
   const rel = relative(root, dest);
   if (!existsSync5(src)) {
-    log12.warn(`template missing, skipping: ${src}`);
+    log13.warn(`template missing, skipping: ${src}`);
     return;
   }
   if (existsSync5(dest)) {
@@ -8302,7 +8307,7 @@ function parseSpecManifest(raw) {
 }
 
 // src/spec/gh.ts
-var log13 = createLogger("spec:gh");
+var log14 = createLogger("spec:gh");
 var GhAuthError = class extends Error {
   constructor(message) {
     super(message);
@@ -8363,7 +8368,7 @@ var RealGhClient = class {
     const rawBody = typeof parsed.body === "string" ? parsed.body : "";
     const { body, body_truncated } = this.capBody(rawBody);
     if (body_truncated) {
-      log13.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
+      log14.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
     }
     const labels = Array.isArray(parsed.labels) ? parsed.labels.map(
       (l) => l && typeof l === "object" && "name" in l && typeof l.name === "string" ? l.name : typeof l === "string" ? l : null
@@ -8390,7 +8395,7 @@ var RealGhClient = class {
 // src/spec/store.ts
 import { readFile as readFile5, readdir as readdir2 } from "node:fs/promises";
 import { join as join8 } from "node:path";
-var log14 = createLogger("spec:store");
+var log15 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
 function makeSpecId(issueNumber, slug) {
@@ -8500,11 +8505,11 @@ var SpecStore = class {
       await atomicWriteFile(join8(reviewDir, TASKS_FILE), tasksJson);
     } catch (err) {
       mirrored = false;
-      log14.warn(
+      log15.warn(
         `could not write reviewable copy to ${reviewDir} (${err instanceof Error ? err.message : String(err)}) \u2014 the canonical spec at ${dir} is unaffected; run continues`
       );
     }
-    log14.info(
+    log15.info(
       `wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir} ` + (mirrored ? `(reviewable copy: ${reviewDir})` : `(reviewable copy SKIPPED \u2014 see warning)`)
     );
     return this.toPointer(parsed);
@@ -8791,7 +8796,7 @@ function decideSpecReview(verdict, opts = {}) {
 }
 
 // src/spec/pipeline.ts
-var log15 = createLogger("spec:pipeline");
+var log16 = createLogger("spec:pipeline");
 function buildManifest(repo, issueNumber, generated) {
   const specId = makeSpecId(issueNumber, generated.slug);
   const slug = specId.replace(/^\d+-/, "");
@@ -8808,7 +8813,7 @@ function buildManifest(repo, issueNumber, generated) {
 // src/quota/usage-source.ts
 import { existsSync as existsSync6, readFileSync as readFileSync3 } from "node:fs";
 import { join as join9 } from "node:path";
-var log16 = createLogger("quota:usage");
+var log17 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
 var STALE_WARN_SECONDS = 120;
 var RawWindowSchema = external_exports.object({
@@ -8839,7 +8844,7 @@ function readingFromCache(raw, nowEpoch2) {
     return unavailable("usage-cache-too-stale");
   }
   if (age > STALE_WARN_SECONDS) {
-    log16.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+    log17.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
   }
   const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
   const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
@@ -8882,14 +8887,14 @@ var StatuslineUsageSignal = class {
     }
     const file = usageCachePath(dataDir);
     if (!existsSync6(file)) {
-      log16.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
+      log17.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
     let raw;
     try {
       raw = parseJson(readFileSync3(file, "utf8"), file);
     } catch {
-      log16.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
+      log17.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-malformed");
     }
     return readingFromCache(raw, now);
@@ -9279,7 +9284,7 @@ async function scanDeadSurface(runner, changedFiles, opts) {
 }
 
 // src/scoring/telemetry.ts
-var log17 = createLogger("telemetry");
+var log18 = createLogger("telemetry");
 async function emitMetric(dataDir, runId, event, data, opts = {}) {
   const record = {
     ts: opts.now ?? nowIso(),
@@ -9290,7 +9295,7 @@ async function emitMetric(dataDir, runId, event, data, opts = {}) {
   try {
     await appendJsonl(runMetricsPath(dataDir, runId), record);
   } catch (err) {
-    log17.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+    log18.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
   }
   return record;
 }
@@ -9473,7 +9478,7 @@ function buildPanelManifest(stageAfter, model, maxTurns) {
 }
 
 // src/verifier/judgment/finding.ts
-var log18 = createLogger("finding");
+var log19 = createLogger("finding");
 var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
 var FindingSchema = external_exports.object({
   /** Which panel reviewer raised this (free-form; the role string). */
@@ -9525,7 +9530,7 @@ function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) 
     }
   }
   if (topUnknown.length > 0 || findingUnknown.length > 0) {
-    log18.warn(
+    log19.warn(
       `review parse: stripped unknown keys from reviewer '${context}' payload: top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`
     );
   }
@@ -10137,7 +10142,7 @@ var buildStrategy = procStrategy(
 );
 
 // src/verifier/deterministic/gate-runner.ts
-var log19 = createLogger("gate-runner");
+var log20 = createLogger("gate-runner");
 function strategyFor(id) {
   switch (id) {
     case "test":
@@ -10179,7 +10184,7 @@ var GateRunner = class {
       if (cached !== void 0) {
         report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
         evidence.push(cached);
-        log19.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
+        log20.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
         continue;
       }
       const strategy = strategyFor(id);
@@ -10200,7 +10205,7 @@ var GateRunner = class {
         memo.putEvidence(id, treeSha, outcome.evidence);
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
-        log19.debug(`gate ${id} skipped: ${outcome.reason}`);
+        log20.debug(`gate ${id} skipped: ${outcome.reason}`);
       }
     }
     const verdict = deriveAllGatesVerdict(evidence);
@@ -10369,14 +10374,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log29 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log29.code !== 0) {
+    const log30 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log30.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log29.code ?? "null"}): ${log29.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log30.code ?? "null"}): ${log30.stderr.trim()}`
       );
     }
-    assertNotTruncated(log29, "git log (tdd classification)");
-    const shas = splitLines(log29.stdout).reverse();
+    assertNotTruncated(log30, "git log (tdd classification)");
+    const shas = splitLines(log30.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -10658,7 +10663,7 @@ var FsHoldoutVerdictStore = class {
 };
 
 // src/driver/finalize.ts
-var log20 = createLogger("finalize");
+var log21 = createLogger("finalize");
 var FACTORY_ISSUE_LABEL = "factory";
 function rollupTitle(report) {
   return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
@@ -10672,7 +10677,7 @@ async function fileFailureIssues(deps, report) {
   for (const failure of report.failures) {
     const issue = renderFailureIssue(failure, report);
     if (existing.has(issue.title)) {
-      log20.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
+      log21.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
       continue;
     }
     await deps.gh.issueCreate({
@@ -10706,17 +10711,17 @@ async function finalizeRun(deps, runId) {
       ...deps.rollup ?? {}
     });
   } else {
-    log20.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
+    log21.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
-  log20.info(
+  log21.info(
     `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
   );
   return { run: finalized, report, ...rollupResult ? { rollup: rollupResult } : {}, issuesFiled };
 }
 
 // src/driver/transitions.ts
-var log21 = createLogger("transitions");
+var log22 = createLogger("transitions");
 function markInFlight(deps, runId, taskId, stage) {
   const status = stageToInFlightStatus(stage);
   return deps.state.updateTask(runId, taskId, (t) => ({
@@ -10735,7 +10740,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function dropTask(deps, runId, taskId, failureClass, reason) {
-  log21.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
+  log22.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "dropped",
@@ -10772,7 +10777,7 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log21.info(
+  log22.info(
     `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`
   );
   return { done: false, stage: resumeStage };
@@ -11059,7 +11064,7 @@ var FsArtifactStore = class {
 // src/driver/fold.ts
 import { readFile as readFile10 } from "node:fs/promises";
 import { join as join14 } from "node:path";
-var log22 = createLogger("fold");
+var log23 = createLogger("fold");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.stage);
@@ -11101,7 +11106,7 @@ function parseVerdictsFailClosed(raw) {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log22.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log23.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
@@ -11202,7 +11207,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
   if (panel.crossVendorAbsence !== void 0) {
-    log22.warn(
+    log23.warn(
       `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` + panel.crossVendorAbsence.reason
     );
   }
@@ -11279,7 +11284,7 @@ function isSpawnStage(stage) {
 }
 
 // src/driver/quota-gate.ts
-var log23 = createLogger("quota-gate");
+var log24 = createLogger("quota-gate");
 async function applyQuotaGate(deps, runId, mode = "session") {
   if (mode === "workflow") return null;
   const reading = await deps.usage.read();
@@ -11291,7 +11296,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
     case "pause-5h":
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
-      log23.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
+      log24.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
       const run11 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
@@ -11305,7 +11310,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
       };
     }
     case "unavailable-halt": {
-      log23.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
+      log24.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
       const run11 = await deps.state.update(runId, (s) => ({
         ...s,
         status: "suspended",
@@ -11319,7 +11324,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
 }
 
 // src/driver/ship.ts
-var log24 = createLogger("ship");
+var log25 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
     throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
@@ -11359,14 +11364,14 @@ async function shipTask(deps, ctx) {
   });
   const outcome = await serializer.merge(pr.number);
   if (outcome.merged) {
-    log24.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    log25.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
     return taskDone();
   }
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
 // src/driver/coroutine.ts
-var log25 = createLogger("coroutine");
+var log26 = createLogger("coroutine");
 var MERGE_RESYNC_CAP = 8;
 function requireTask2(run11, taskId) {
   const task = run11.tasks[taskId];
@@ -11556,7 +11561,7 @@ async function stepTask(deps, runId, taskId, results) {
             if (!step2.done) throw new Error("coroutine: dropStep returned non-terminal step");
             return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
-          log25.info(
+          log26.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
           );
           stage = "exec";
@@ -11707,7 +11712,7 @@ async function loadCliDeps(opts) {
 }
 
 // src/cli/subcommands/run.ts
-var log26 = createLogger("run");
+var log27 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -11840,7 +11845,7 @@ async function resolveSpec(specStore, opts) {
 }
 async function createRunFromManifest(state, specStore, manifest, opts) {
   if (opts.mode === "workflow") {
-    log26.warn(
+    log27.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
     );
   }
@@ -11862,7 +11867,7 @@ async function resolveOrCreateRun(state, specStore, opts) {
     const pointer = specStore.toPointer(manifest);
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
-      log26.info(
+      log27.info(
         `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`
       );
       return { reused: true, run: existing };
@@ -12672,7 +12677,7 @@ var nextCommand = {
   }
 };
 
-// src/hooks/hook-io.ts
+// src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
   const chunks = [];
   for await (const chunk of stream) {
@@ -12682,7 +12687,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log27 = createLogger("cli:statusline");
+var log28 = createLogger("cli:statusline");
 var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -12707,7 +12712,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log27.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log28.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return;
   }
   const now = (deps.now ?? nowEpoch)();
@@ -12715,7 +12720,7 @@ async function writeCache(rateLimits, deps) {
   try {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
   } catch (err) {
-    log27.warn(`failed to write usage-cache.json: ${err.message}`);
+    log28.warn(`failed to write usage-cache.json: ${err.message}`);
   }
 }
 async function passthrough(payload, deps) {
@@ -12724,14 +12729,14 @@ async function passthrough(payload, deps) {
   try {
     const result = await exec(original, [], { shell: true, input: payload });
     if (result.code !== 0) {
-      log27.warn(
+      log28.warn(
         `FACTORY_ORIGINAL_STATUSLINE exited ${result.code ?? "null"}; statusline left empty`
       );
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log27.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log28.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -12767,7 +12772,7 @@ import { existsSync as existsSync7 } from "node:fs";
 import { readFile as readFile11 } from "node:fs/promises";
 import { join as join16 } from "node:path";
 import { homedir as homedir2 } from "node:os";
-var log28 = createLogger("autonomy");
+var log29 = createLogger("autonomy");
 var HELP8 = `factory autonomy ensure \u2014 materialize merged-settings.json for an autonomous relaunch
 
 Merges templates/settings.autonomous.json with your existing settings into
@@ -12888,9 +12893,9 @@ async function runAutonomyEnsure(opts = {}) {
     try {
       const parsed = JSON.parse(await readFile11(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
-      else log28.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      else log29.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
-      log28.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log29.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
   const templatePath = join16(pluginRoot, "templates", "settings.autonomous.json");

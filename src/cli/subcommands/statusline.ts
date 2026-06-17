@@ -23,7 +23,7 @@ import type { ExitCode } from "../exit-codes.js";
 import { EXIT } from "../exit-codes.js";
 import { parseArgs } from "../args.js";
 import { emitLine } from "../io.js";
-import { readStdin } from "../../hooks/hook-io.js";
+import { readStdin } from "../../shared/stdin.js";
 import { resolveDataDir, type DataDirOptions } from "../../config/index.js";
 import { usageCachePath } from "../../quota/usage-source.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";

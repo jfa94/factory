@@ -87,8 +87,9 @@ function expectedDataDir(opts: {
   current: string | undefined;
   home: string;
   pluginRoot: string;
+  warn: (message: string) => void;
 }): string | null {
-  const { current, home, pluginRoot } = opts;
+  const { current, home, pluginRoot, warn } = opts;
   if (!current) return null;
 
   const dataRoot = join(home, ".claude", "plugins", "data");
@@ -133,8 +134,16 @@ function expectedDataDir(opts: {
       if (marketplaceName.length > 0) {
         return join(dataRoot, `${PLUGIN_NAME}-${marketplaceName}`);
       }
-    } catch {
-      /* unparseable marketplace.json → no canonicalization */
+    } catch (err) {
+      // Unparseable marketplace.json: we can't derive the canonical name, so the
+      // foreign-plugin redirect can't fire and state may land in a FOREIGN data
+      // dir (the leak H warns about). Surface it rather than swallow — the silent
+      // catch masked exactly that failure mode.
+      warn(
+        `could not parse ${marketplaceJson} (${(err as Error).message}); cannot ` +
+          `canonicalize the foreign-plugin data dir — state may land in a foreign ` +
+          `directory. Set CLAUDE_PLUGIN_DATA explicitly to factory's own data dir.`,
+      );
     }
   }
 
@@ -194,10 +203,10 @@ export function resolveDataDir(opts: DataDirOptions = {}): string {
   const home = opts.home ?? homedir();
   const pluginRoot = opts.pluginRoot ?? inferPluginRoot();
   const current = env.CLAUDE_PLUGIN_DATA;
+  const warn = opts.warn ?? ((m: string) => log.warn(m));
 
-  const corrected = expectedDataDir({ current, home, pluginRoot });
+  const corrected = expectedDataDir({ current, home, pluginRoot, warn });
   if (corrected && corrected !== current) {
-    const warn = opts.warn ?? ((m: string) => log.warn(m));
     // Fire the warning ONCE per distinct redirect per process (resolveDataDir is
     // called ~20×/command). Keyed on the (current, corrected) pair so a different
     // leak still warns; JSON-encoded so the two paths can't ambiguously collide

@@ -1890,6 +1890,15 @@ function isNestedShellOrHookBypass(cmd) {
   return BYPASS_PATTERNS.some((p) => p.re.test(cmd));
 }
 
+// src/shared/stdin.ts
+async function readStdin(stream = process.stdin) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 // src/hooks/hook-io.ts
 function allow() {
   return { action: "allow" };
@@ -1916,13 +1925,6 @@ function parseHookInput(raw) {
     throw new HookInputError("hook input must be a JSON object");
   }
   return parsed;
-}
-async function readStdin(stream = process.stdin) {
-  const chunks = [];
-  for await (const chunk of stream) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 function commandOf(input) {
   return input?.tool_input?.command ?? "";
@@ -6411,7 +6413,7 @@ var log2 = createLogger("config");
 var PLUGIN_NAME = "factory";
 var warnedRedirects = /* @__PURE__ */ new Set();
 function expectedDataDir(opts) {
-  const { current, home, pluginRoot } = opts;
+  const { current, home, pluginRoot, warn } = opts;
   if (!current) return null;
   const dataRoot = join2(home, ".claude", "plugins", "data");
   if (!current.startsWith(dataRoot + sep)) return null;
@@ -6437,7 +6439,10 @@ function expectedDataDir(opts) {
       if (marketplaceName.length > 0) {
         return join2(dataRoot, `${PLUGIN_NAME}-${marketplaceName}`);
       }
-    } catch {
+    } catch (err) {
+      warn(
+        `could not parse ${marketplaceJson} (${err.message}); cannot canonicalize the foreign-plugin data dir \u2014 state may land in a foreign directory. Set CLAUDE_PLUGIN_DATA explicitly to factory's own data dir.`
+      );
     }
   }
   return null;
@@ -6461,9 +6466,9 @@ function resolveDataDir(opts = {}) {
   const home = opts.home ?? homedir();
   const pluginRoot = opts.pluginRoot ?? inferPluginRoot();
   const current = env.CLAUDE_PLUGIN_DATA;
-  const corrected = expectedDataDir({ current, home, pluginRoot });
+  const warn = opts.warn ?? ((m) => log2.warn(m));
+  const corrected = expectedDataDir({ current, home, pluginRoot, warn });
   if (corrected && corrected !== current) {
-    const warn = opts.warn ?? ((m) => log2.warn(m));
     const key = JSON.stringify([current ?? "", corrected]);
     if (!warnedRedirects.has(key)) {
       warnedRedirects.add(key);

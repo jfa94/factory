@@ -30,6 +30,9 @@ import { join } from "node:path";
 
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";
+import { createLogger } from "../../shared/logging.js";
+
+const log = createLogger("cli:target-settings");
 
 /**
  * The minimal-but-sufficient permission allow-list an interactive factory run
@@ -111,21 +114,17 @@ export function mergeTargetSettings(existing: Record<string, unknown>): MergeRes
     permissions.allow = [...currentAllow, ...additions];
     settings.permissions = permissions;
     changed = true;
-  } else if (!Array.isArray(permissions.allow)) {
-    // No allow key at all but every entry "present" can't happen; guard anyway.
-    permissions.allow = currentAllow;
-    settings.permissions = permissions;
   }
 
-  // worktree.baseRef: "head" — the staging-determinism invariant. Force it,
-  // preserving sibling keys under worktree.
+  // worktree.baseRef: "head" — the staging-determinism invariant. Bind the
+  // (possibly fresh) worktree object once, then force baseRef. Assigning the same
+  // reference when it already existed is a no-op; flipping baseRef is the only
+  // change-bearing mutation.
   const worktree = isObject(settings.worktree) ? settings.worktree : {};
+  settings.worktree = worktree;
   if (worktree.baseRef !== "head") {
     worktree.baseRef = "head";
-    settings.worktree = worktree;
     changed = true;
-  } else {
-    settings.worktree = worktree;
   }
 
   return { settings, changed };
@@ -150,7 +149,19 @@ export async function ensureTargetSettings(opts: {
   if (!created) {
     const raw = await readFile(path, "utf8");
     const parsed: unknown = raw.trim().length > 0 ? JSON.parse(raw) : {};
-    existing = isObject(parsed) ? parsed : {};
+    if (isObject(parsed)) {
+      existing = parsed;
+    } else {
+      // Valid JSON but not an object (array / number / string). We're about to
+      // write a merged settings object, which REPLACES this file — warn loudly so
+      // the destructive overwrite is visible (the non-JSON case already throws via
+      // JSON.parse above; this is the silently-coerced gap).
+      log.warn(
+        `${path} is valid JSON but not an object (${
+          Array.isArray(parsed) ? "array" : typeof parsed
+        }); replacing it with the factory settings object`,
+      );
+    }
   }
 
   const { settings, changed } = mergeTargetSettings(existing);
