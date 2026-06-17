@@ -67,9 +67,14 @@ export const DRIVE_KINDS: ReadonlySet<DriveEnvelope["kind"]> = new Set(
 
 export type EnvelopeKind = NextEnvelope["kind"] | DriveEnvelope["kind"];
 
-/** The shape every envelope shares after the guard: a `kind` discriminant + the rest. */
+/**
+ * The shape every envelope shares after the guard: a `kind` discriminant + the
+ * rest. `kind` is narrowed to {@link EnvelopeKind} — the guard only ever returns
+ * an envelope whose kind passed the `knownKinds` membership check, so TS callers
+ * can switch on it exhaustively rather than re-checking a bare `string`.
+ */
 export interface GuardedEnvelope {
-  readonly kind: string;
+  readonly kind: EnvelopeKind;
   readonly [field: string]: unknown;
 }
 

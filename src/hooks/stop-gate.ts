@@ -43,7 +43,12 @@
  */
 import { EXIT, type ExitCode } from "../cli/exit-codes.js";
 import { createLogger } from "../shared/logging.js";
-import { StateManager, isTerminalTaskStatus, type RunState } from "../core/state/index.js";
+import {
+  StateManager,
+  isTerminalTaskStatus,
+  TERMINAL_RUN_STATUSES,
+  type RunState,
+} from "../core/state/index.js";
 import { decideFinalize } from "../core/stage-machine/engine.js";
 import type { DataDirOptions } from "../config/load.js";
 import { deny, emitBlockDecision, parseHookInput, readStdin } from "./hook-io.js";
@@ -54,7 +59,10 @@ const log = createLogger("hook:stop-gate");
 export type StopAction =
   | { kind: "allow" }
   | { kind: "block"; reason: string }
-  | { kind: "finalize"; status: RunState["status"] };
+  // `finalize` is terminal-by-construction: the producer is `decideFinalize`
+  // (returns completed|partial|failed) and `manager.finalize` rejects any
+  // non-terminal status — so the type matches reality, not the full RunStatus union.
+  | { kind: "finalize"; status: (typeof TERMINAL_RUN_STATUSES)[number] };
 
 const ALLOW: StopAction = { kind: "allow" };
 
