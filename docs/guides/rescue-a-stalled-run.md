@@ -18,7 +18,9 @@ Classify the run without changing anything:
 factory rescue scan [--run <id>]
 ```
 
-`--run` defaults to `runs/current`. The `RescueScan` reports per-task
+`--run` defaults to **this repo's current run**, resolved per repo from the
+caller's checkout (see [reference/cli.md](../reference/cli.md#per-repo-current-run-resolution)).
+The `RescueScan` reports per-task
 dispositions:
 
 | Disposition   | Task shape                                                            | Default rescue action       |
