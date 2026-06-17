@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateManager } from "./manager.js";
-import { runStatePath, runsRoot } from "./paths.js";
+import { runStatePath, runsRoot, specDir } from "./paths.js";
 import { parseRunState, type SpecPointer } from "./schema.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { deriveFloorVerdict } from "./derive.js";
@@ -343,5 +343,48 @@ describe("enumeration: listRuns / findActiveBySpec (resolve-or-reuse)", () => {
     await m.create({ run_id: "run-2", spec: specA });
     const found = await m.findActiveBySpec(specA.repo, specA.spec_id);
     expect(found?.run_id).toBe("run-2");
+  });
+});
+
+describe("withSpecLock serializes the resolve-or-reuse scan→create (TOCTOU close)", () => {
+  const specA: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
+
+  it("throws LOUD when the durable spec dir does not exist (no silent no-op)", async () => {
+    await expect(mgr().withSpecLock(specA.repo, specA.spec_id, async () => 1)).rejects.toThrow(
+      /cannot lock spec .*does not exist/,
+    );
+  });
+
+  it("two concurrent same-spec critical sections run mutually exclusively (no interleave)", async () => {
+    // The lock parent is the durable spec dir; resolve-or-reuse guarantees it before
+    // locking. Create it directly here (no SpecStore in this unit).
+    await mkdir(specDir(dataDir, specA.repo, specA.spec_id), { recursive: true });
+    const m = mgr();
+
+    const events: string[] = [];
+    const critical = (tag: string) =>
+      m.withSpecLock(specA.repo, specA.spec_id, async () => {
+        events.push(`enter-${tag}`);
+        // Yield so an unguarded section WOULD interleave here.
+        await new Promise((r) => setImmediate(r));
+        events.push(`exit-${tag}`);
+      });
+
+    await Promise.all([critical("a"), critical("b")]);
+
+    // Whichever entered first must exit before the other enters — never enter,enter,exit,exit.
+    expect(events).toHaveLength(4);
+    const [first, second, third, fourth] = events;
+    expect(second).toBe(first?.replace("enter", "exit"));
+    expect(fourth).toBe(third?.replace("enter", "exit"));
+  });
+
+  it("a same-spec create() nested inside withSpecLock does not deadlock (distinct lockfiles)", async () => {
+    await mkdir(specDir(dataDir, specA.repo, specA.spec_id), { recursive: true });
+    const m = mgr();
+    const run = await m.withSpecLock(specA.repo, specA.spec_id, async () =>
+      m.create({ run_id: "run-1", spec: specA }),
+    );
+    expect(run.run_id).toBe("run-1");
   });
 });

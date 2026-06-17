@@ -368,6 +368,85 @@ describe("resolveOrCreateRun (idempotent create)", () => {
       resolveOrCreateRun(state, store, { repo: REPO, issue: 999, runId: "run-x" }),
     ).rejects.toThrow(/no spec for issue #999/);
   });
+
+  it("reuses the live run when re-passed --mode/--ship-mode MATCH it", async () => {
+    const first = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-a",
+      mode: "workflow",
+      shipMode: "live",
+    });
+    expect(first.reused).toBe(false);
+
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-b",
+      mode: "workflow",
+      shipMode: "live",
+    });
+    expect(second.reused).toBe(true);
+    expect(second.run.run_id).toBe("run-a");
+  });
+
+  it("reuses the live run when the flags are OMITTED, whatever its stored mode/ship_mode", async () => {
+    // Stored as workflow/live; a bare re-create must NOT be treated as a divergence.
+    await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-a",
+      mode: "workflow",
+      shipMode: "live",
+    });
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-b",
+    });
+    expect(second.reused).toBe(true);
+    expect(second.run.run_id).toBe("run-a");
+    expect(second.run.mode).toBe("workflow");
+    expect(second.run.ship_mode).toBe("live");
+  });
+
+  it("HARD-FAILS (UsageError) when a re-passed --ship-mode diverges from the live run", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // ship_mode=no-merge
+    await expect(
+      resolveOrCreateRun(state, store, {
+        repo: REPO,
+        issue: 42,
+        runId: "run-b",
+        shipMode: "live",
+      }),
+    ).rejects.toMatchObject({ isUsageError: true });
+    // The divergent create never minted a second run.
+    expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
+  });
+
+  it("HARD-FAILS (UsageError) when a re-passed --mode diverges from the live run", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // mode=session
+    await expect(
+      resolveOrCreateRun(state, store, {
+        repo: REPO,
+        issue: 42,
+        runId: "run-b",
+        mode: "workflow",
+      }),
+    ).rejects.toMatchObject({ isUsageError: true });
+    expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
+  });
+
+  it("the divergent-flag reuse rejects as a UsageError at the runCreate boundary (→ EXIT.USAGE)", async () => {
+    const git = new FakeGitClient();
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    await runCreate(["--issue", "42", "--run-id", "run-a"], { gitClient: git, cwd: "/x", dataDir });
+    // A bare re-create (auto id) that re-passes a divergent --ship-mode rejects as a
+    // UsageError; runCommand.run maps that to EXIT.USAGE (mapping proven in the auto-derive block).
+    await expect(
+      runCreate(["--issue", "42", "--ship-mode", "live"], { gitClient: git, cwd: "/x", dataDir }),
+    ).rejects.toMatchObject({ isUsageError: true });
+  });
 });
 
 // ---------------------------------------------------------------------------

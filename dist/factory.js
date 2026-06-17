@@ -6492,19 +6492,21 @@ var StateManager = class {
   lockfilePath(runId) {
     return join4(runDir(this.dataDir, runId), "state.lock");
   }
+  specLockfilePath(repo, specId) {
+    return join4(specDir(this.dataDir, repo, specId), "create.lock");
+  }
   // ---- lock --------------------------------------------------------------
   /**
-   * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
-   * must already exist — `create` mkdirs it before first lock; mutators lock an
-   * existing run. `realpath:false` lets us lock a path whose target may be
-   * mid-rename.
+   * Acquire `lockfilePath` (whose parent `dir` must already exist), run `fn`, and
+   * always release. `realpath:false` lets us lock a path whose target may be
+   * mid-rename or not yet exist (proper-lockfile creates `<path>.lock`).
+   * `label` names the resource in the loud not-found + compromised errors.
    */
-  async withLock(runId, fn) {
-    const dir = runDir(this.dataDir, runId);
+  async runWithLock(dir, lockfilePath, label, fn) {
     if (!existsSync3(dir)) {
-      throw new Error(`state: cannot lock run '${runId}' \u2014 run dir does not exist`);
+      throw new Error(`state: cannot lock ${label} \u2014 dir '${dir}' does not exist`);
     }
-    const release = await (0, import_proper_lockfile.lock)(this.lockfilePath(runId), {
+    const release = await (0, import_proper_lockfile.lock)(lockfilePath, {
       realpath: false,
       stale: this.lockTuning.stale,
       retries: {
@@ -6514,7 +6516,7 @@ var StateManager = class {
         factor: 1.5
       },
       onCompromised: (err) => {
-        log3.error(`state lock for run '${runId}' was compromised: ${err.message}`);
+        log3.error(`state lock for ${label} was compromised: ${err.message}`);
         throw err;
       }
     });
@@ -6523,6 +6525,36 @@ var StateManager = class {
     } finally {
       await release();
     }
+  }
+  /**
+   * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
+   * must already exist — `create` mkdirs it before first lock; mutators lock an
+   * existing run.
+   */
+  async withLock(runId, fn) {
+    return this.runWithLock(
+      runDir(this.dataDir, runId),
+      this.lockfilePath(runId),
+      `run '${runId}'`,
+      fn
+    );
+  }
+  /**
+   * Run `fn` while holding the per-spec lock, keyed by `(repo, specId)`. The
+   * durable spec dir is the lock parent — it always exists once the spec is
+   * resolved, so this is a stable serialization point for the resolve-or-reuse
+   * scan→create critical section (two concurrent same-spec creates can't both
+   * observe "no active run" and mint two orphan runs; the per-run clobber guard
+   * only protects against a same run_id collision). Distinct lockfile from
+   * {@link withLock}, so the nested `create` call inside the body never deadlocks.
+   */
+  async withSpecLock(repo, specId, fn) {
+    return this.runWithLock(
+      specDir(this.dataDir, repo, specId),
+      this.specLockfilePath(repo, specId),
+      `spec '${repo}/${specId}'`,
+      fn
+    );
   }
   // ---- create ------------------------------------------------------------
   /**
@@ -11861,19 +11893,35 @@ async function createRunFromManifest(state, specStore, manifest, opts) {
   });
   return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 }
+function assertReusableFlags(existing, opts) {
+  if (opts.mode !== void 0 && opts.mode !== existing.mode) {
+    throw new UsageError(
+      `run create: run '${existing.run_id}' already exists with mode='${existing.mode}', but you passed --mode ${opts.mode} \u2014 pass --new for a fresh run or omit --mode to reuse it`
+    );
+  }
+  if (opts.shipMode !== void 0 && opts.shipMode !== existing.ship_mode) {
+    throw new UsageError(
+      `run create: run '${existing.run_id}' already exists with ship_mode='${existing.ship_mode}', but you passed --ship-mode ${opts.shipMode} \u2014 pass --new for a fresh run or omit --ship-mode to reuse it`
+    );
+  }
+}
 async function resolveOrCreateRun(state, specStore, opts) {
   const manifest = await resolveSpec(specStore, opts);
-  if (opts.force !== true) {
-    const pointer = specStore.toPointer(manifest);
+  if (opts.force === true) {
+    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+  }
+  const pointer = specStore.toPointer(manifest);
+  return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
+      assertReusableFlags(existing, opts);
       log27.info(
         `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`
       );
       return { reused: true, run: existing };
     }
-  }
-  return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+  });
 }
 async function applyResume(state, runId, reading, config, nowEpochSec) {
   const run11 = await state.read(runId);

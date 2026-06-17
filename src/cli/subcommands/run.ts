@@ -283,11 +283,43 @@ export interface ResolveOrCreateResult {
 }
 
 /**
+ * Guard the reuse path against a SILENT flag drop: when a repeated `run create`
+ * re-passes `--mode`/`--ship-mode` that disagree with the live run it would reuse,
+ * the run keeps its ORIGINAL mode/ship_mode (the reuse returns the existing state
+ * verbatim). Silently driving a run under a ship-mode the caller did not ask for
+ * (`live` vs `no-merge` opens/merges PRs differently) is dangerous, so HARD-FAIL
+ * with actionable guidance instead. An omitted flag (`opts.* === undefined`) is no
+ * divergence — the default re-run ergonomics (`run create --issue N` twice) are
+ * unchanged.
+ */
+function assertReusableFlags(existing: RunState, opts: CreateRunOptions): void {
+  if (opts.mode !== undefined && opts.mode !== existing.mode) {
+    throw new UsageError(
+      `run create: run '${existing.run_id}' already exists with mode='${existing.mode}', ` +
+        `but you passed --mode ${opts.mode} — pass --new for a fresh run or omit --mode to reuse it`,
+    );
+  }
+  if (opts.shipMode !== undefined && opts.shipMode !== existing.ship_mode) {
+    throw new UsageError(
+      `run create: run '${existing.run_id}' already exists with ship_mode='${existing.ship_mode}', ` +
+        `but you passed --ship-mode ${opts.shipMode} — pass --new for a fresh run or omit ` +
+        `--ship-mode to reuse it`,
+    );
+  }
+}
+
+/**
  * Idempotent `run create`: resolve the spec, then (unless `opts.force`) reuse the
  * newest NON-terminal run for this `(repo, spec_id)` instead of spawning a second
  * (orphan) run — the CP3 fix for a re-run that merely wanted to re-grab `run_id`.
  * A terminal run is never reused (the scan ignores it → a fresh run is created).
  * `force` (the `--new` escape hatch) skips the scan and always creates.
+ *
+ * The scan→create is serialized under a per-(repo, spec_id) lock so two concurrent
+ * same-spec creates can't both observe "no active run" and mint two orphan runs —
+ * the per-run clobber guard in {@link StateManager.create} only catches a same
+ * run_id collision, not a same-spec one. Reuse with divergent re-passed flags
+ * hard-fails via {@link assertReusableFlags}.
  */
 export async function resolveOrCreateRun(
   state: StateManager,
@@ -296,17 +328,21 @@ export async function resolveOrCreateRun(
 ): Promise<ResolveOrCreateResult> {
   // Resolve first (LOUD if no spec) — also yields the (repo, spec_id) scan key.
   const manifest = await resolveSpec(specStore, opts);
-  if (opts.force !== true) {
-    const pointer = specStore.toPointer(manifest);
+  if (opts.force === true) {
+    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+  }
+  const pointer = specStore.toPointer(manifest);
+  return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
+      assertReusableFlags(existing, opts);
       log.info(
         `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`,
       );
       return { reused: true, run: existing };
     }
-  }
-  return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+  });
 }
 
 // ---------------------------------------------------------------------------

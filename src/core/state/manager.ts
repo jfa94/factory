@@ -33,7 +33,7 @@ import { parseJson, stringifyJson } from "../../shared/json.js";
 import { nowIso } from "../../shared/time.js";
 import { createLogger } from "../../shared/logging.js";
 import { resolveDataDir, type DataDirOptions } from "../../config/load.js";
-import { currentLinkPath, runDir, runsRoot, runStatePath, RUNS_DIR } from "./paths.js";
+import { currentLinkPath, runDir, runsRoot, runStatePath, specDir, RUNS_DIR } from "./paths.js";
 import {
   parseRunState,
   type RunState,
@@ -101,20 +101,31 @@ export class StateManager {
     return join(runDir(this.dataDir, runId), "state.lock");
   }
 
+  private specLockfilePath(repo: string, specId: string): string {
+    // Dedicated lockfile under the durable spec dir, NOT the spec manifest, so a
+    // scan→create critical section serializes per (repo, spec_id) without
+    // colliding with spec writes.
+    return join(specDir(this.dataDir, repo, specId), "create.lock");
+  }
+
   // ---- lock --------------------------------------------------------------
 
   /**
-   * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
-   * must already exist — `create` mkdirs it before first lock; mutators lock an
-   * existing run. `realpath:false` lets us lock a path whose target may be
-   * mid-rename.
+   * Acquire `lockfilePath` (whose parent `dir` must already exist), run `fn`, and
+   * always release. `realpath:false` lets us lock a path whose target may be
+   * mid-rename or not yet exist (proper-lockfile creates `<path>.lock`).
+   * `label` names the resource in the loud not-found + compromised errors.
    */
-  private async withLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
-    const dir = runDir(this.dataDir, runId);
+  private async runWithLock<T>(
+    dir: string,
+    lockfilePath: string,
+    label: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
     if (!existsSync(dir)) {
-      throw new Error(`state: cannot lock run '${runId}' — run dir does not exist`);
+      throw new Error(`state: cannot lock ${label} — dir '${dir}' does not exist`);
     }
-    const release = await lock(this.lockfilePath(runId), {
+    const release = await lock(lockfilePath, {
       realpath: false,
       stale: this.lockTuning.stale,
       retries: {
@@ -125,7 +136,7 @@ export class StateManager {
       },
       onCompromised: (err) => {
         // Loud, never silent. Re-throw per proper-lockfile's contract.
-        log.error(`state lock for run '${runId}' was compromised: ${err.message}`);
+        log.error(`state lock for ${label} was compromised: ${err.message}`);
         throw err;
       },
     });
@@ -134,6 +145,38 @@ export class StateManager {
     } finally {
       await release();
     }
+  }
+
+  /**
+   * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
+   * must already exist — `create` mkdirs it before first lock; mutators lock an
+   * existing run.
+   */
+  private async withLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+    return this.runWithLock(
+      runDir(this.dataDir, runId),
+      this.lockfilePath(runId),
+      `run '${runId}'`,
+      fn,
+    );
+  }
+
+  /**
+   * Run `fn` while holding the per-spec lock, keyed by `(repo, specId)`. The
+   * durable spec dir is the lock parent — it always exists once the spec is
+   * resolved, so this is a stable serialization point for the resolve-or-reuse
+   * scan→create critical section (two concurrent same-spec creates can't both
+   * observe "no active run" and mint two orphan runs; the per-run clobber guard
+   * only protects against a same run_id collision). Distinct lockfile from
+   * {@link withLock}, so the nested `create` call inside the body never deadlocks.
+   */
+  async withSpecLock<T>(repo: string, specId: string, fn: () => Promise<T>): Promise<T> {
+    return this.runWithLock(
+      specDir(this.dataDir, repo, specId),
+      this.specLockfilePath(repo, specId),
+      `spec '${repo}/${specId}'`,
+      fn,
+    );
   }
 
   // ---- create ------------------------------------------------------------

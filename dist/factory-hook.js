@@ -7240,9 +7240,20 @@ function validateId(id, label = "id") {
 }
 
 // src/core/state/paths.ts
+var SPECS_DIR = "specs";
 var RUNS_DIR = "runs";
 var CURRENT_LINK = "current";
 var STATE_FILE = "state.json";
+function repoKey(repo) {
+  const key = repo.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "");
+  if (key.length === 0) {
+    throw new Error(`repoKey: repo '${repo}' has no usable characters`);
+  }
+  if (/^\.+$/.test(key)) {
+    throw new Error(`repoKey: repo '${repo}' resolves to a path-traversal segment '${key}'`);
+  }
+  return key;
+}
 function runsRoot(dataDir) {
   return join3(dataDir, RUNS_DIR);
 }
@@ -7255,6 +7266,13 @@ function runStatePath(dataDir, runId) {
 }
 function currentLinkPath(dataDir) {
   return join3(runsRoot(dataDir), CURRENT_LINK);
+}
+function specsRoot(dataDir) {
+  return join3(dataDir, SPECS_DIR);
+}
+function specDir(dataDir, repo, specId) {
+  validateId(specId, "spec-id");
+  return join3(specsRoot(dataDir), repoKey(repo), specId);
 }
 
 // src/core/state/manager.ts
@@ -7280,19 +7298,21 @@ var StateManager = class {
   lockfilePath(runId) {
     return join4(runDir(this.dataDir, runId), "state.lock");
   }
+  specLockfilePath(repo, specId) {
+    return join4(specDir(this.dataDir, repo, specId), "create.lock");
+  }
   // ---- lock --------------------------------------------------------------
   /**
-   * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
-   * must already exist — `create` mkdirs it before first lock; mutators lock an
-   * existing run. `realpath:false` lets us lock a path whose target may be
-   * mid-rename.
+   * Acquire `lockfilePath` (whose parent `dir` must already exist), run `fn`, and
+   * always release. `realpath:false` lets us lock a path whose target may be
+   * mid-rename or not yet exist (proper-lockfile creates `<path>.lock`).
+   * `label` names the resource in the loud not-found + compromised errors.
    */
-  async withLock(runId, fn) {
-    const dir = runDir(this.dataDir, runId);
+  async runWithLock(dir, lockfilePath, label, fn) {
     if (!existsSync3(dir)) {
-      throw new Error(`state: cannot lock run '${runId}' \u2014 run dir does not exist`);
+      throw new Error(`state: cannot lock ${label} \u2014 dir '${dir}' does not exist`);
     }
-    const release = await (0, import_proper_lockfile.lock)(this.lockfilePath(runId), {
+    const release = await (0, import_proper_lockfile.lock)(lockfilePath, {
       realpath: false,
       stale: this.lockTuning.stale,
       retries: {
@@ -7302,7 +7322,7 @@ var StateManager = class {
         factor: 1.5
       },
       onCompromised: (err) => {
-        log3.error(`state lock for run '${runId}' was compromised: ${err.message}`);
+        log3.error(`state lock for ${label} was compromised: ${err.message}`);
         throw err;
       }
     });
@@ -7311,6 +7331,36 @@ var StateManager = class {
     } finally {
       await release();
     }
+  }
+  /**
+   * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
+   * must already exist — `create` mkdirs it before first lock; mutators lock an
+   * existing run.
+   */
+  async withLock(runId, fn) {
+    return this.runWithLock(
+      runDir(this.dataDir, runId),
+      this.lockfilePath(runId),
+      `run '${runId}'`,
+      fn
+    );
+  }
+  /**
+   * Run `fn` while holding the per-spec lock, keyed by `(repo, specId)`. The
+   * durable spec dir is the lock parent — it always exists once the spec is
+   * resolved, so this is a stable serialization point for the resolve-or-reuse
+   * scan→create critical section (two concurrent same-spec creates can't both
+   * observe "no active run" and mint two orphan runs; the per-run clobber guard
+   * only protects against a same run_id collision). Distinct lockfile from
+   * {@link withLock}, so the nested `create` call inside the body never deadlocks.
+   */
+  async withSpecLock(repo, specId, fn) {
+    return this.runWithLock(
+      specDir(this.dataDir, repo, specId),
+      this.specLockfilePath(repo, specId),
+      `spec '${repo}/${specId}'`,
+      fn
+    );
   }
   // ---- create ------------------------------------------------------------
   /**
