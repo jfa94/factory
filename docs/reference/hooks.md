@@ -11,15 +11,15 @@ exits `2`.
 
 ## The guards
 
-| Hook                | Fires on                                    | What it does                                                                                                                                |
-| ------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches.                                                                                            |
-| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that stages a known secret shape.                                                                               |
-| `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating via a derived floor verdict. |
-| `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                 |
-| `write-protection`  | PreToolUse `Edit\|Write\|MultiEdit`         | Deny writes to hardcoded TCB (trusted-computing-base) paths.                                                                                |
-| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the driver fold is the single writer of `task.reviewers[]`).                      |
-| `stop-gate`         | Stop                                        | Block a premature session end while a run is live; finalize-on-stop otherwise.                                                              |
+| Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                                      |
+| ------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches.                                                                                                                                                                                                                  |
+| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that stages a known secret shape.                                                                                                                                                                                                     |
+| `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating via a derived floor verdict. Each arm derives its owning run from its own inputs — never the global pointer (see [Run ownership](#run-ownership)). |
+| `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                       |
+| `write-protection`  | PreToolUse `Edit\|Write\|MultiEdit`         | Deny writes to hardcoded TCB (trusted-computing-base) paths.                                                                                                                                                                                                      |
+| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the driver fold is the single writer of `task.reviewers[]`).                                                                                                                                            |
+| `stop-gate`         | Stop                                        | Block a premature session end while a run is live; finalize-on-stop otherwise.                                                                                                                                                                                    |
 
 ## `hooks.json` wiring
 
@@ -46,13 +46,41 @@ Each entry carries a timeout (5–15s) and a status message. The full mapping is
 
 ## Fail-closed posture
 
-The guards fail **closed**: a dangling `runs/current` symlink or broken run state
-is treated as deny, never silently allowed. The `pipeline-guards` ship gate is the
-sharpest example of derive-don't-store — `gh pr create`/`gh pr merge` are admitted
-only when the floor verdict _derived from fresh ground truth_ passes; there is
-structurally no stored `*_gate` boolean to forge (see
+The guards fail **closed**: a write whose target sits inside a run worktree but
+whose run/task state is missing or broken is treated as deny, never silently
+allowed. The `pipeline-guards` ship gate is the sharpest example of
+derive-don't-store — `gh pr create`/`gh pr merge` are admitted only when the floor
+verdict _derived from fresh ground truth_ passes; there is structurally no stored
+`*_gate` boolean to forge (see
 [../explanation/derive-dont-store.md](../explanation/derive-dont-store.md)).
 
-The `pipeline-guards`, `holdout-guard`, and the run-scoped checks only act while a
-run is active (`runs/current` resolves); with no active run they pass through.
+The `pipeline-guards`, `holdout-guard`, and the run-scoped checks act only when
+they can resolve an owning run from their own inputs (below); otherwise they pass
+through — so enabling the plugin in an unrelated session never leaks a live run's
+scope into it.
+
+## Run ownership
+
+No hook reads the shared mutable pointer (`runs/current`). Each guard **derives
+the run it belongs to from the signal it already holds** (Decision 30), so runs
+across different repos run concurrently without cross-contamination:
+
+- **Write-scope arm** (`pipeline-guards`, `Edit\|Write\|MultiEdit`): derives
+  `{run_id, task_id}` from the **absolute target path**. A producer writes into
+  `<dataDir>/worktrees/<run_id>/<task_id>/…`, so the path encodes both ids. A
+  target under no worktree is not a producer write → pass through; a target under
+  a worktree whose run/task state is missing or corrupt → deny (fail closed).
+- **Bash arms** (nested-shell, ship): resolve the live run whose `owner_session`
+  equals `CLAUDE_CODE_SESSION_ID`. No owning run → pass through; env id absent →
+  retain prior behavior (these arms are lower-stakes — the nested-shell arm is a
+  rail, the ship arm is dormant in production).
+- **`stop-gate`**: resolves the run owned by the **stopping session** rather than
+  the global pointer, so a clobber can't make it finalize the wrong run; unknown
+  session → degrade to the global pointer.
+- **`holdout-guard`**: run-independent (reads only `dataDir`) — correctly global.
+
+The write-scope arm is a **rail**, not the boundary: the authoritative TDD
+enforcement is the deterministic commit-order gate on the task branch
+(`src/verifier/deterministic/strategies/tdd.ts`), so a path-anchor miss (e.g. a
+producer write issued via `Bash`) does not weaken enforcement.
 </content>

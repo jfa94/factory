@@ -159,7 +159,10 @@ factory run resume [--run <id>]
 Subject to the same mandatory autonomy gate as `run create` (halts loud unless
 `FACTORY_AUTONOMOUS_MODE=1`).
 
-`--run` defaults to `runs/current`. Emits one of:
+`--run` defaults to **this repo's current run** — resolved from the caller's
+checkout (`origin` remote → `<dataDir>/current/<repoKey>`), falling back to the
+legacy global pointer when the repo can't be derived (see
+[Per-repo current](#per-repo-current-run-resolution)). Emits one of:
 
 - `{kind:"resumed", run}` — window recovered (or the run was already running).
 - `{kind:"still-blocked", run_id, status, reason, resets_at_epoch?}` — not
@@ -192,6 +195,27 @@ factory state --summary       # compact human summary
 
 No current run is not an error: prints `{"current": null}` (or `no current run`
 with `--summary`) and exits `0`. State corruption is loud.
+
+With no `<run-id>`, the current run is resolved **per repo** from the caller's
+checkout — see below. `score`, `rescue`, and `run resume` resolve the same way.
+
+### Per-repo current run resolution
+
+The human reporters/actions that default to "the current run" (`state`, `score`,
+`rescue`, `run resume`) resolve it **per repo** from the shell's cwd, so two runs
+in two different checkouts don't shadow each other:
+
+1. derive the repo from the checkout's `origin` remote;
+2. read `<dataDir>/current/<repoKey>` → that repo's current run;
+3. if the repo can't be derived (no `origin`), fall back to the legacy global
+   `runs/current` (the repo-less "most recent") — degrade-safe, never an error.
+
+`--run <id>` always wins over this resolution; `drive` ignores it entirely
+(always requires `--run`). `next` is the one exception — it stays on the global
+`runs/current` + `--assert-owner` mechanism (see [`next`](#the-coroutine-next--drive)),
+because the drivers always pass `--run` to it explicitly. This is CLI ergonomics
+only: the hooks no longer read the global pointer at all (Decision 30), so
+concurrency-correctness does not depend on it.
 
 ## The coroutine (`next` + `drive`)
 
