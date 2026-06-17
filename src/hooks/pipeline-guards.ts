@@ -31,6 +31,7 @@ import {
   type ActiveRun,
 } from "./hook-context.js";
 import { isNestedShellOrHookBypass } from "./shell-bypass.js";
+import { isAutonomous } from "../autonomy/mode.js";
 import type { DataDirOptions } from "../config/load.js";
 import {
   allow,
@@ -139,7 +140,7 @@ export async function decidePipelineGuards(
     if (!task) {
       // Cannot attribute → fail closed in autonomous mode (a ship op must be
       // attributable to a task whose floor we can derive).
-      const autonomous = deps.autonomousMode ?? process.env.FACTORY_AUTONOMOUS_MODE === "1";
+      const autonomous = deps.autonomousMode ?? isAutonomous();
       if (autonomous) {
         return deny(
           "ship_unattributable",

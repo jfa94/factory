@@ -25,7 +25,11 @@ envelope names, feed the raw results back.**
 ## Phase 0 — Preconditions
 
 1. Confirm a git checkout: `git rev-parse --show-toplevel`. If not, stop.
-2. `factory scaffold` (idempotent; `--repo` is OPTIONAL — auto-derived from the
+2. Confirm autonomous mode: `factory autonomy status` (exits 0 when autonomous, 1 when
+   not). The pipeline runs unattended — `run create`/`run resume` HALT loud otherwise.
+   If not autonomous, tell the user to run `factory autonomy ensure` and relaunch with
+   the printed `claude --settings <merged-settings.json>` command, then stop.
+3. `factory scaffold` (idempotent; `--repo` is OPTIONAL — auto-derived from the
    `origin` remote, pass `--repo <owner/name>` only to override. Refuses if staging
    branch protection is missing → tell the user to re-run with `--provision` or
    protect staging manually, then stop).
@@ -78,6 +82,11 @@ gate) — never a bogus empty owner. Read `run_id` from the emitted RunState. Se
 **Idempotent** (auto-id form): re-running `run create` for the same `(repo, spec_id)` returns the
 existing non-terminal run instead of spawning an orphan — so a lost `run_id` is safe to re-grab by
 re-running create. Pass `--new` (or an explicit `--run-id`) to force a fresh run.
+
+**Autonomy gate:** `run create` HALTS loud (`NotAutonomousError`, non-zero exit) if the orchestrator
+session is not autonomous (`FACTORY_AUTONOMOUS_MODE=1`). This is the deterministic engine refusing to
+start an unattended pipeline in an interactive session — not a transient error. Surface the relaunch
+instruction (Phase 0 step 2); never retry blindly.
 
 **In `--mode workflow`, STOP after this phase** — return control to `/factory:run`, which owns the
 Workflow launch (`commands/run.md`). Do NOT enter Phase 3.

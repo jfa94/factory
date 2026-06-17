@@ -126,6 +126,12 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 | `--ship-mode <mode>`  | `no-merge` (default — open the rollup PR, never merge) \| `live` (serial-merge into staging). Persisted on the run so the workflow driver + resume read it without re-passing.  |
 | `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`; absent ⇒ owner-unknown (gate runs unscoped).                             |
 
+**Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
+exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
+unattended by design; relaunch via `factory autonomy ensure` → `claude --settings
+<merged-settings.json>` first (check with `factory autonomy status`). See
+[Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out).
+
 Loud error if no spec exists for the issue — generate one first. The seeded run's
 `driver` is fixed to `sequential`: the v1 coroutine seam drives tasks one at a time.
 The `--mode session|workflow` value is persisted and selects which _driver_ steps
@@ -149,6 +155,9 @@ A terminal run is a loud error (nothing to resume).
 ```
 factory run resume [--run <id>]
 ```
+
+Subject to the same mandatory autonomy gate as `run create` (halts loud unless
+`FACTORY_AUTONOMOUS_MODE=1`).
 
 `--run` defaults to `runs/current`. Emits one of:
 
@@ -341,9 +350,14 @@ Default (no `--task`): resets `stuck` + `recoverable`, leaving dead-ends dropped
 reopens a terminal run to `running` when it reset work. Idempotent. Emits
 `{ run_id, run_status, reset, reopened, skipped }`.
 
-## `autonomy ensure`
+## `autonomy <ensure|status>`
 
-Writer. Materializes the merged settings file an autonomous (headless) relaunch
+Autonomous mode is **mandatory** for a run (`run create`/`resume` halt without it —
+[Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out)). These verbs set it up and check it.
+
+### `autonomy ensure`
+
+Writer (default verb). Materializes the merged settings file an autonomous (headless) relaunch
 runs under. Merges `templates/settings.autonomous.json` with your existing
 user settings into `${CLAUDE_PLUGIN_DATA}/merged-settings.json`: placeholders
 (`${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`) substituted, `env.CLAUDE_PLUGIN_DATA`
@@ -362,6 +376,25 @@ factory autonomy ensure [--user-settings <path>]
 
 Prints a human-readable relaunch message to stdout that includes the command
 `claude --settings <merged-settings.json>` — not a `{kind:…}` envelope.
+
+### `autonomy status`
+
+Reporter. Reports whether the current session satisfies the autonomy gate. **Exits 0
+when autonomous, 1 when not — and never throws** (it is the diagnostic you run precisely
+when the gate has halted you).
+
+```
+factory autonomy status [--json]
+```
+
+| Flag     | Required | Notes                                          |
+| -------- | -------- | ---------------------------------------------- |
+| `--json` | no       | Emit the machine-readable payload (see below). |
+
+`--json` emits `{ autonomous, envSet, mergedSettingsPresent, mergedSettingsPath }`:
+`autonomous` is the gate predicate (`FACTORY_AUTONOMOUS_MODE === "1"`); `envSet`
+distinguishes an unset var from a wrong value; `mergedSettingsPresent`/`mergedSettingsPath`
+report whether the `ensure` output exists and where.
 
 ## `statusline`
 

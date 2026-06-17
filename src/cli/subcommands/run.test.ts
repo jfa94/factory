@@ -26,6 +26,7 @@ import {
   type SpecSelector,
 } from "./run.js";
 import { EXIT } from "../exit-codes.js";
+import { NotAutonomousError } from "../../autonomy/mode.js";
 import { StateManager } from "../../core/state/manager.js";
 import { SpecStore, parseSpecManifest, type SpecManifest } from "../../spec/index.js";
 import { FakeGitClient } from "../../git/index.js";
@@ -37,6 +38,19 @@ import {
 } from "../../quota/index.js";
 
 const REPO = "acme/widgets";
+
+// `run create`/`run resume` now HALT unless the session is autonomous. Every
+// existing create/resume test exercises the happy path, so make the whole file
+// run as if launched autonomously; the dedicated suite below covers the negative.
+let priorAutonomous: string | undefined;
+beforeEach(() => {
+  priorAutonomous = process.env.FACTORY_AUTONOMOUS_MODE;
+  process.env.FACTORY_AUTONOMOUS_MODE = "1";
+});
+afterEach(() => {
+  if (priorAutonomous === undefined) delete process.env.FACTORY_AUTONOMOUS_MODE;
+  else process.env.FACTORY_AUTONOMOUS_MODE = priorAutonomous;
+});
 
 /** Build one durable spec task with overridable fields. */
 function task(
@@ -89,6 +103,33 @@ void _selNeither;
 // ---------------------------------------------------------------------------
 // arg/usage edges
 // ---------------------------------------------------------------------------
+
+describe("mandatory autonomous-mode gate", () => {
+  // Override the file-level seam: the inner beforeEach runs AFTER the outer one,
+  // so deleting the var here reverts each test to a non-autonomous session.
+  beforeEach(() => {
+    delete process.env.FACTORY_AUTONOMOUS_MODE;
+  });
+
+  it("runCreate refuses to start a run outside autonomous mode", async () => {
+    await expect(runCreate(["--issue", "42"])).rejects.toBeInstanceOf(NotAutonomousError);
+  });
+
+  it("runResume refuses to resume a run outside autonomous mode", async () => {
+    // The gate fires before any run resolution, so no --run / fixtures are needed;
+    // NotAutonomousError bubbles uncaught through runCommand (not a UsageError).
+    await expect(runCommand.run(["resume"])).rejects.toBeInstanceOf(NotAutonomousError);
+  });
+
+  it("the gate is exactly FACTORY_AUTONOMOUS_MODE === '1' (no bypass value)", async () => {
+    process.env.FACTORY_AUTONOMOUS_MODE = "true";
+    await expect(runCreate(["--issue", "42"])).rejects.toBeInstanceOf(NotAutonomousError);
+  });
+
+  it("--help short-circuits BEFORE the gate (help works in any session)", async () => {
+    await expect(runCreate(["--help"])).resolves.toBe(EXIT.OK);
+  });
+});
 
 describe("run arg/usage edges", () => {
   it("no action prints help and exits OK", async () => {

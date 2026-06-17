@@ -41,6 +41,7 @@ import { EXIT } from "../exit-codes.js";
 import { parseArgs, isUsageError } from "../args.js";
 import { emitLine, emitError } from "../io.js";
 import { resolveDataDir, resolvePluginRoot } from "../../config/index.js";
+import { isAutonomous } from "../../autonomy/mode.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";
 import { createLogger } from "../../shared/logging.js";
@@ -48,19 +49,28 @@ import type { Subcommand } from "../main.js";
 
 const log = createLogger("autonomy");
 
-const HELP = `factory autonomy ensure — materialize merged-settings.json for an autonomous relaunch
+const HELP = `factory autonomy <ensure|status> — manage / inspect autonomous mode
 
-Merges templates/settings.autonomous.json with your existing settings into
-\${CLAUDE_PLUGIN_DATA}/merged-settings.json (placeholders substituted, env baked,
-statusLine wired to \`factory statusline\`) and prints the relaunch command:
+The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
+is autonomous (FACTORY_AUTONOMOUS_MODE=1). There is no opt-out.
 
-  claude --settings <merged-settings.json>
+ensure  Merges templates/settings.autonomous.json with your existing settings into
+        \${CLAUDE_PLUGIN_DATA}/merged-settings.json (placeholders substituted, env
+        baked, statusLine wired to \`factory statusline\`) and prints the relaunch
+        command:
+
+          claude --settings <merged-settings.json>
+
+status  Reports whether THIS session is autonomous and whether merged-settings.json
+        exists. Exits 0 when autonomous, 1 when not (never throws).
 
 Usage:
   factory autonomy ensure
+  factory autonomy status [--json]
 
 Options:
-  --user-settings <path>   Override the user-settings source (default: ~/.claude/settings.json)`;
+  --user-settings <path>   (ensure) Override the user-settings source (default: ~/.claude/settings.json)
+  --json                   (status) Emit machine-readable JSON`;
 
 /**
  * The `factory` bundle entrypoint (the PATH shim onto the CLI bundle). The
@@ -328,18 +338,85 @@ export async function runAutonomyEnsure(
   return { path, relaunchCommand };
 }
 
+/** Machine-readable autonomy status (the `--json` payload). */
+export interface AutonomyStatus {
+  /** The gate predicate: FACTORY_AUTONOMOUS_MODE === "1". */
+  readonly autonomous: boolean;
+  /** Whether the env var is present at all (distinguishes "unset" from "wrong value"). */
+  readonly envSet: boolean;
+  /** Whether the merged-settings.json the autonomous relaunch needs exists. */
+  readonly mergedSettingsPresent: boolean;
+  /** Where that file lives (empty when the data dir can't be resolved). */
+  readonly mergedSettingsPath: string;
+}
+
+/** Options for {@link runAutonomyStatus}; injectable for tests. */
+export interface AutonomyStatusOptions {
+  readonly dataDir?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly json?: boolean;
+  readonly writeStdout?: (text: string) => void;
+}
+
+/**
+ * The CHECK half ported from the old bash `pipeline-ensure-autonomy`: report
+ * whether the current session is autonomous and whether the merged settings file
+ * exists. Exits 0 when autonomous, 1 when not — and NEVER throws, because this is
+ * the diagnostic the user runs precisely WHEN the mandatory gate has halted them.
+ */
+export async function runAutonomyStatus(opts: AutonomyStatusOptions = {}): Promise<ExitCode> {
+  const env = opts.env ?? process.env;
+  const write = opts.writeStdout ?? ((t: string) => process.stdout.write(t));
+
+  let path = "";
+  try {
+    const dataDir = opts.dataDir ?? resolveDataDir();
+    path = mergedSettingsPath(dataDir);
+  } catch {
+    /* data dir unresolvable → report the env signal only (never throw) */
+  }
+  const status: AutonomyStatus = {
+    autonomous: isAutonomous(env),
+    envSet: env.FACTORY_AUTONOMOUS_MODE !== undefined,
+    mergedSettingsPresent: path.length > 0 && existsSync(path),
+    mergedSettingsPath: path,
+  };
+
+  if (opts.json === true) {
+    write(stringifyJson(status) + "\n");
+  } else if (status.autonomous) {
+    write(
+      `autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)\n` +
+        `merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}` +
+        `${path.length > 0 ? ` at ${path}` : ""}\n`,
+    );
+  } else {
+    write(
+      `autonomous: NO — the pipeline will refuse to start or resume a run.\n` +
+        `merged-settings: ${status.mergedSettingsPresent ? `present at ${path}` : "absent"}\n` +
+        (status.mergedSettingsPresent
+          ? `Relaunch the session with:\n  claude --settings ${path}\n`
+          : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.\n`),
+    );
+  }
+
+  return status.autonomous ? EXIT.OK : EXIT.ERROR;
+}
+
 async function run(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
     emitLine(HELP);
     return EXIT.OK;
   }
 
-  // Sole verb: `ensure`. Accept it as positional (tolerate a bare `factory
-  // autonomy` too — default to ensure).
+  // Verbs: `ensure` (default) materializes; `status` reports + exits 0/1.
   const verb = args.positionals[0];
+  if (verb === "status") {
+    return runAutonomyStatus({ json: args.flag("json") === true });
+  }
   if (verb !== undefined && verb !== "ensure") {
-    emitError(`autonomy: unknown verb '${verb}' (expected: ensure)`);
+    emitError(`autonomy: unknown verb '${verb}' (expected: ensure | status)`);
     return EXIT.USAGE;
   }
 

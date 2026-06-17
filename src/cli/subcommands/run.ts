@@ -34,6 +34,7 @@ import type { Config, RunState, RunStatus, TaskState } from "../../types/index.j
 import { finalizeRun } from "../../driver/index.js";
 import { loadCliDeps } from "../wiring.js";
 import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
+import { requireAutonomousMode } from "../../autonomy/mode.js";
 import { createLogger } from "../../shared/index.js";
 import type { Subcommand } from "../main.js";
 
@@ -489,6 +490,10 @@ export async function runCreate(
     emitLine(CREATE_HELP);
     return EXIT.OK;
   }
+  // Mandatory autonomous-mode gate: the pipeline runs unattended, no opt-out.
+  // A run can only be born in the foreground orchestrator session (which has the
+  // env), so gating create here halts non-autonomous runs at the source.
+  requireAutonomousMode();
 
   // --repo is OPTIONAL (Prompt G): auto-derive from the origin remote when omitted,
   // and fail LOUD if an explicit value disagrees with the remote.
@@ -545,6 +550,9 @@ async function runResume(argv: string[]): Promise<ExitCode> {
     emitLine(RESUME_HELP);
     return EXIT.OK;
   }
+  // Mandatory autonomous-mode gate (see runCreate): resume re-activates a run and
+  // runs in the foreground `/factory:run resume` session, which has the env.
+  requireAutonomousMode();
 
   const dataDir = resolveDataDir({});
   const config = loadConfig({ dataDir });

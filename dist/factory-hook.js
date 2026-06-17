@@ -1890,6 +1890,11 @@ function isNestedShellOrHookBypass(cmd) {
   return BYPASS_PATTERNS.some((p) => p.re.test(cmd));
 }
 
+// src/autonomy/mode.ts
+function isAutonomous(env = process.env) {
+  return env.FACTORY_AUTONOMOUS_MODE === "1";
+}
+
 // src/shared/stdin.ts
 async function readStdin(stream = process.stdin) {
   const chunks = [];
@@ -2009,7 +2014,7 @@ async function decideBranchProtection(input, deps = {}) {
   const command = commandOf(input);
   if (command.length === 0) return allow();
   const cwd = deps.cwd ?? process.cwd();
-  const autonomousMode = deps.autonomousMode ?? process.env.FACTORY_AUTONOMOUS_MODE === "1";
+  const autonomousMode = deps.autonomousMode ?? isAutonomous();
   if (autonomousMode && isNestedShellOrHookBypass(command)) {
     return deny(
       "nested_shell_denied",
@@ -7750,7 +7755,7 @@ async function decidePipelineGuards(input, deps = {}) {
   if (tool === "Bash" && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {
     const task = activeTask?.task;
     if (!task) {
-      const autonomous = deps.autonomousMode ?? process.env.FACTORY_AUTONOMOUS_MODE === "1";
+      const autonomous = deps.autonomousMode ?? isAutonomous();
       if (autonomous) {
         return deny(
           "ship_unattributable",

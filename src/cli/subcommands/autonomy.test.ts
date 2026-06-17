@@ -15,7 +15,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { materializeMergedSettings, mergedSettingsPath, runAutonomyEnsure } from "./autonomy.js";
+import {
+  materializeMergedSettings,
+  mergedSettingsPath,
+  runAutonomyEnsure,
+  runAutonomyStatus,
+  type AutonomyStatus,
+} from "./autonomy.js";
+import { EXIT } from "../exit-codes.js";
 
 const PLUGIN_ROOT = "/opt/plugins/factory";
 const DATA_DIR = "/home/u/.claude/plugins/data/factory-mkt";
@@ -316,5 +323,93 @@ describe("runAutonomyEnsure", () => {
     // Template defaults still applied; no user statusLine chained (base was empty).
     expect((written.env as Record<string, string>).CLAUDE_PLUGIN_DATA).toBe(dataDir);
     expect((written.env as Record<string, string>).FACTORY_ORIGINAL_STATUSLINE).toBeUndefined();
+  });
+});
+
+describe("runAutonomyStatus", () => {
+  let dataDir: string;
+  const out: string[] = [];
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "factory-autonomy-status-"));
+    out.length = 0;
+  });
+
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it("exits OK and reports autonomous when FACTORY_AUTONOMOUS_MODE=1", async () => {
+    const code = await runAutonomyStatus({
+      dataDir,
+      env: { FACTORY_AUTONOMOUS_MODE: "1" },
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.OK);
+    expect(out.join("")).toContain("autonomous: yes");
+  });
+
+  it("exits ERROR and reports NOT autonomous when the var is unset", async () => {
+    const code = await runAutonomyStatus({
+      dataDir,
+      env: {},
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.ERROR);
+    expect(out.join("")).toContain("autonomous: NO");
+  });
+
+  it("exits ERROR for any non-'1' value (no bypass)", async () => {
+    const code = await runAutonomyStatus({
+      dataDir,
+      env: { FACTORY_AUTONOMOUS_MODE: "true" },
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.ERROR);
+  });
+
+  it("--json emits the full status shape with envSet distinguishing unset from wrong-value", async () => {
+    await runAutonomyStatus({
+      dataDir,
+      env: { FACTORY_AUTONOMOUS_MODE: "0" },
+      json: true,
+      writeStdout: (t) => out.push(t),
+    });
+    const parsed = JSON.parse(out.join("")) as AutonomyStatus;
+    expect(parsed.autonomous).toBe(false);
+    expect(parsed.envSet).toBe(true); // present but "0"
+    expect(parsed.mergedSettingsPresent).toBe(false);
+    expect(parsed.mergedSettingsPath).toBe(mergedSettingsPath(dataDir));
+  });
+
+  it("--json reports envSet:false when the var is entirely absent", async () => {
+    await runAutonomyStatus({ dataDir, env: {}, json: true, writeStdout: (t) => out.push(t) });
+    const parsed = JSON.parse(out.join("")) as AutonomyStatus;
+    expect(parsed.envSet).toBe(false);
+  });
+
+  it("detects an existing merged-settings.json", async () => {
+    await writeFile(mergedSettingsPath(dataDir), "{}", "utf8");
+    await runAutonomyStatus({
+      dataDir,
+      env: { FACTORY_AUTONOMOUS_MODE: "1" },
+      json: true,
+      writeStdout: (t) => out.push(t),
+    });
+    const parsed = JSON.parse(out.join("")) as AutonomyStatus;
+    expect(parsed.mergedSettingsPresent).toBe(true);
+  });
+
+  it("never throws even when the data dir cannot be resolved (degrades to env-only)", async () => {
+    // No dataDir + an env with no resolution hints: must still answer from the env
+    // signal rather than throw (this is the diagnostic the halted user runs).
+    const code = await runAutonomyStatus({
+      env: { FACTORY_AUTONOMOUS_MODE: "1", CLAUDE_PLUGIN_DATA: dataDir },
+      json: true,
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.OK);
+    const parsed = JSON.parse(out.join("")) as AutonomyStatus;
+    expect(parsed.autonomous).toBe(true);
   });
 });

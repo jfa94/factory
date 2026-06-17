@@ -11751,6 +11751,22 @@ async function loadCliDeps(opts) {
   };
 }
 
+// src/autonomy/mode.ts
+function isAutonomous(env = process.env) {
+  return env.FACTORY_AUTONOMOUS_MODE === "1";
+}
+var NotAutonomousError = class extends Error {
+  constructor() {
+    super(
+      "Pipeline halted: not running in autonomous mode (FACTORY_AUTONOMOUS_MODE is unset).\nThe factory runs unattended and refuses to start or resume a run otherwise.\nRun `factory autonomy ensure`, then relaunch the session with:\n  claude --settings <merged-settings.json>\nCheck the current state any time with `factory autonomy status`."
+    );
+    this.name = "NotAutonomousError";
+  }
+};
+function requireAutonomousMode(env = process.env) {
+  if (!isAutonomous(env)) throw new NotAutonomousError();
+}
+
 // src/cli/subcommands/run.ts
 var log27 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
@@ -11986,6 +12002,7 @@ async function runCreate(argv, overrides = {}) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
   }
+  requireAutonomousMode();
   const cwd = overrides.cwd ?? process.cwd();
   const gitClient = overrides.gitClient ?? new DefaultGitClient();
   const repo = await resolveRepo({ explicit: optionalString(args.flag("repo")), cwd, gitClient });
@@ -12031,6 +12048,7 @@ async function runResume(argv) {
     emitLine(RESUME_HELP);
     return EXIT.OK;
   }
+  requireAutonomousMode();
   const dataDir = resolveDataDir({});
   const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
@@ -12836,19 +12854,28 @@ import { readFile as readFile11 } from "node:fs/promises";
 import { join as join16 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 var log29 = createLogger("autonomy");
-var HELP8 = `factory autonomy ensure \u2014 materialize merged-settings.json for an autonomous relaunch
+var HELP8 = `factory autonomy <ensure|status> \u2014 manage / inspect autonomous mode
 
-Merges templates/settings.autonomous.json with your existing settings into
-\${CLAUDE_PLUGIN_DATA}/merged-settings.json (placeholders substituted, env baked,
-statusLine wired to \`factory statusline\`) and prints the relaunch command:
+The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
+is autonomous (FACTORY_AUTONOMOUS_MODE=1). There is no opt-out.
 
-  claude --settings <merged-settings.json>
+ensure  Merges templates/settings.autonomous.json with your existing settings into
+        \${CLAUDE_PLUGIN_DATA}/merged-settings.json (placeholders substituted, env
+        baked, statusLine wired to \`factory statusline\`) and prints the relaunch
+        command:
+
+          claude --settings <merged-settings.json>
+
+status  Reports whether THIS session is autonomous and whether merged-settings.json
+        exists. Exits 0 when autonomous, 1 when not (never throws).
 
 Usage:
   factory autonomy ensure
+  factory autonomy status [--json]
 
 Options:
-  --user-settings <path>   Override the user-settings source (default: ~/.claude/settings.json)`;
+  --user-settings <path>   (ensure) Override the user-settings source (default: ~/.claude/settings.json)
+  --json                   (status) Emit machine-readable JSON`;
 function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
@@ -12985,15 +13012,53 @@ The first agent turn fires the statusline \u2192 a fresh usage-cache.json \u2192
   );
   return { path: path2, relaunchCommand };
 }
+async function runAutonomyStatus(opts = {}) {
+  const env = opts.env ?? process.env;
+  const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
+  let path2 = "";
+  try {
+    const dataDir = opts.dataDir ?? resolveDataDir();
+    path2 = mergedSettingsPath(dataDir);
+  } catch {
+  }
+  const status = {
+    autonomous: isAutonomous(env),
+    envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
+    mergedSettingsPresent: path2.length > 0 && existsSync7(path2),
+    mergedSettingsPath: path2
+  };
+  if (opts.json === true) {
+    write(stringifyJson(status) + "\n");
+  } else if (status.autonomous) {
+    write(
+      `autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)
+merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path2.length > 0 ? ` at ${path2}` : ""}
+`
+    );
+  } else {
+    write(
+      `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
+merged-settings: ${status.mergedSettingsPresent ? `present at ${path2}` : "absent"}
+` + (status.mergedSettingsPresent ? `Relaunch the session with:
+  claude --settings ${path2}
+` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
+`)
+    );
+  }
+  return status.autonomous ? EXIT.OK : EXIT.ERROR;
+}
 async function run10(argv) {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
     emitLine(HELP8);
     return EXIT.OK;
   }
   const verb = args.positionals[0];
+  if (verb === "status") {
+    return runAutonomyStatus({ json: args.flag("json") === true });
+  }
   if (verb !== void 0 && verb !== "ensure") {
-    emitError(`autonomy: unknown verb '${verb}' (expected: ensure)`);
+    emitError(`autonomy: unknown verb '${verb}' (expected: ensure | status)`);
     return EXIT.USAGE;
   }
   const userSettings = args.flag("user-settings");

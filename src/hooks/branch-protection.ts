@@ -24,6 +24,7 @@ import { EXIT, type ExitCode } from "../cli/exit-codes.js";
 import { exec as defaultExec, type ExecResult } from "../shared/exec.js";
 import { parseGitInvocation, type GitInvocation } from "./git-args.js";
 import { isNestedShellOrHookBypass } from "./shell-bypass.js";
+import { isAutonomous } from "../autonomy/mode.js";
 import {
   allow,
   commandOf,
@@ -121,7 +122,7 @@ export async function decideBranchProtection(
   if (command.length === 0) return allow();
 
   const cwd = deps.cwd ?? process.cwd();
-  const autonomousMode = deps.autonomousMode ?? process.env.FACTORY_AUTONOMOUS_MODE === "1";
+  const autonomousMode = deps.autonomousMode ?? isAutonomous();
 
   // Nested-shell / hook-bypass denial (autonomous mode only, matching bash).
   if (autonomousMode && isNestedShellOrHookBypass(command)) {

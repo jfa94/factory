@@ -74,22 +74,19 @@ The `AskUserQuestion` tool is used for the 20–40% pre-launch prompt; default t
 
 ### Autonomy check (precondition for all numbered steps)
 
-The pre-launch quota gate (step 5) reads `usage-cache.json`, which is only written by the factory `statusline-wrapper.sh` while running under `merged-settings.json`. In a non-autonomous session the cache is stale by design and every quota call returns `unavailable`. Verify autonomous mode FIRST — same pattern as `skills/pipeline-orchestrator/SKILL.md:108-122`.
+The pre-launch quota gate (step 5) reads `usage-cache.json`, which is only written by the factory statusline writer (`factory statusline`) while running under `merged-settings.json`. In a non-autonomous session the cache is stale by design and every quota call returns `unavailable`. Verify autonomous mode FIRST — the same engine gate `factory run create` enforces (`src/autonomy/mode.ts`).
 
 ```bash
-result=$(pipeline-ensure-autonomy --json)
-status=$(printf '%s' "$result" | jq -r '.status')
-settings_path=$(printf '%s' "$result" | jq -r '.settings_path')
-reason=$(printf '%s' "$result" | jq -r '.reason // empty')
+factory autonomy status --json   # exits 0 when autonomous, 1 when not
 ```
 
-Persist `state.autonomy = {status, message: <result.message>, checked_at: $(date +%s)}` as part of the initial state object written in step 3 below.
+The payload is `{ autonomous, envSet, mergedSettingsPresent, mergedSettingsPath }`. Persist `state.autonomy = { autonomous, checked_at: $(date +%s) }` as part of the initial state object written in step 3 below.
 
-If `status` is `ok` or `bypass`, proceed into the numbered Setup steps.
+If the command exits 0 (`autonomous: true`), proceed into the numbered Setup steps.
 
-Otherwise, **stop**. Print: `Autonomous mode required for /factory:debug. Relaunch with exactly: claude --settings $settings_path (or export FACTORY_AUTONOMOUS_MODE=1 for CI), then re-run /factory:debug.` Do not append `--dangerously-skip-permissions` — `merged-settings.json` grants scoped autonomy via `permissions.allow` plus the deny list and `PreToolUse` guards; bypassing permissions defeats them. Surface the command verbatim, no extra flags.
+Otherwise, **stop**. Print: `Autonomous mode required for /factory:debug. Relaunch with exactly: claude --settings <mergedSettingsPath> (or export FACTORY_AUTONOMOUS_MODE=1 for CI), then re-run /factory:debug.` Run `factory autonomy ensure` first if `mergedSettingsPresent` is false. Do not append `--dangerously-skip-permissions` — `merged-settings.json` grants scoped autonomy via `permissions.allow` plus the deny list and `PreToolUse` guards; bypassing permissions defeats them. Surface the command verbatim, no extra flags.
 
-Special case `status == "stale-cache"`: the merged settings are wired but the statusline has not ticked recently. Print: `Autonomy ok but usage-cache.json is <reason>. Re-run /factory:debug — the next agent turn will fire the statusline and refresh the cache. If it halts again on the second attempt, the session was not launched with --settings; relaunch with claude --settings $settings_path.` Then break.
+> Note: the old bash `pipeline-ensure-autonomy` distinguished a `stale-cache` state (settings wired but statusline not ticked). `factory autonomy status` reports presence, not freshness; the richer stale-cache state machine is part of the deferred `/factory:debug` redesign epic (see CLAUDE.md "Known gaps").
 
 Not surfaced in the user-facing summary (parity with `/factory:run`); audit only via `state.autonomy.*`.
 
@@ -249,7 +246,7 @@ End with STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
 - [ ] Validated flags (mutually exclusive, severity in allowed set, `--quick` captured)
 - [ ] Resolved base ref BEFORE the first review
 - [ ] Detected reviewer once via `pipeline-detect-reviewer` and used the same branch for both Phase 0 (Codex slot) and every Phase 1 round
-- [ ] **Autonomy check (precondition):** Ran `pipeline-ensure-autonomy` BEFORE the numbered Setup steps; halted with relaunch instructions if status not in `{ok, bypass}`; persisted `state.autonomy.{status, message, checked_at}`. Stale-cache (`status=stale-cache`) printed the re-run-/factory:debug guidance instead of the bin's hardcoded `/factory:run` text.
+- [ ] **Autonomy check (precondition):** Ran `factory autonomy status` BEFORE the numbered Setup steps; halted with relaunch instructions when it exited non-zero (`autonomous: false`); persisted `state.autonomy.{autonomous, checked_at}`.
 - [ ] **Pre-launch quota gate:** Ran `pipeline-quota-check` (unless `QUICK` was already set by flag); applied the ladder (proceed / prompt / forced-quick / user-continue-no-telemetry / user-aborted-no-telemetry / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase0.pre_launch_*` in `state.json`; persisted `phase0.pre_launch_check` (raw quota JSON + `checked_at` + `cache_age_at_check`) for audit. When `detection_method == "unavailable"`, asked the user via `AskUserQuestion` whether to continue with `--quick` or abort (no auto-degrade, no wait).
 - [ ] **Phase 0:** Dispatched architecture, security, quality, implementation reviewers in a SINGLE assistant message (parallel). Codex sweep launched in same message via background `Bash` when `reviewer == codex`. (Skipped when `QUICK == true`.)
 - [ ] **Phase 0:** Captured raw output from every reviewer (and the orchestrator's self-review) under `state_dir/phase0/*.raw.txt`

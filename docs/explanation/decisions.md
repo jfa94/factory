@@ -250,9 +250,9 @@ By default Claude Code's `worktree.baseRef` is `"fresh"` — every `Agent({isola
 
 ## Decision 13: Bundled Autonomous Settings
 
-**Choice:** The plugin ships `templates/settings.autonomous.json`. The `/factory:run` command detects whether the session was launched with these settings.
+**Choice:** The plugin ships `templates/settings.autonomous.json`. `factory autonomy ensure` materializes a `merged-settings.json` from it; relaunching with `claude --settings <merged-settings.json>` puts the session in autonomous mode. `factory autonomy status` reports whether the current session is autonomous (exits 0/1).
 
-**Detection:** The settings file sets `FACTORY_AUTONOMOUS_MODE=1`. The command checks for this env var.
+**Detection:** The settings file sets `FACTORY_AUTONOMOUS_MODE=1`. The single predicate is `src/autonomy/mode.ts` (`isAutonomous` = exactly `FACTORY_AUTONOMOUS_MODE === "1"`), shared by the engine gate (Decision 29) and the branch-protection / pipeline guards.
 
 **Why not hook-based swap?**
 
@@ -333,7 +333,7 @@ The workflow uses `gh pr merge --merge --auto --delete-branch` for staging-to-de
 
 Every narrowing has been tried and produces the same failure mode: the pipeline halts on a command the allow-list did not anticipate, and there is no operator to approve it. The cost of one missed allow rule is a stalled run; the cost of one missed deny rule is bounded by the hook layer.
 
-**Scope:** This design applies only to autonomous mode (sessions launched with `templates/settings.autonomous.json`, identified by `FACTORY_AUTONOMOUS_MODE=1`). Interactive sessions use the user's normal settings, which can — and typically do — enforce a tighter allow-list because a human is present to approve prompts.
+**Scope:** This design applies only to autonomous mode (sessions launched with `templates/settings.autonomous.json`, identified by `FACTORY_AUTONOMOUS_MODE=1`). Since autonomy is now mandatory for a run (Decision 29), every _pipeline_ session is an autonomous one; an interactive session can still use the user's normal (tighter) settings for non-pipeline work, but `factory run create`/`resume` will refuse to start there.
 
 ---
 
@@ -570,6 +570,24 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 **Trade-off:** A driver re-invokes the CLI per step (one process spawn per coroutine call) rather than running the loop in-process, and must persist/relay the per-spawn results file between `drive` calls. Accepted: the spawn boundary is where an `Agent()` call is unavoidable anyway, and per-call idempotency is what makes crash-resume and the two-driver story sound.
 
 **Relationship:** Realises the Model-A split (Decision 2) as a single seam rather than a reporter+writer fan-out; preserves derive-don't-store (Decision 1) and verify-then-fix (Decision 27) — both now fold through `drive --results`; the workflow driver is the unpaced mode of Decision 24.
+
+---
+
+## Decision 29: Autonomy is Mandatory — Enforced in the Engine, No Opt-Out
+
+**Choice:** Autonomous mode is not an opt-in convenience; it is a **precondition** for a run. `factory run create` and `factory run resume` call `requireAutonomousMode()` (`src/autonomy/mode.ts`) as their first act and **HALT loud** (`NotAutonomousError`, non-zero exit) when `FACTORY_AUTONOMOUS_MODE !== "1"`. There is no bypass flag and no opt-out. `factory autonomy status` is the diagnostic (exits 0/1, never throws).
+
+**Why:**
+
+- **The pipeline is designed to run unattended** (Decisions 19/20). A non-autonomous `/factory:run` used to "work" only by degrading into a per-tool permission-prompt crawl — silently defeating the unattended design and leaving half-created runs behind. Refusing loud at the source is the honest behavior.
+- **Enforced in the deterministic engine, not the markdown surface.** The gate is a typed error in the CLI, so it cannot be skipped by editing a prompt or skill; it mirrors `ProtectionMissingError` (Decision 12's branch-protection refusal) as a hard start condition.
+- **Single predicate.** `isAutonomous` is the one source of truth, shared by this gate and the hook layer (branch-protection / pipeline guards), so the autonomous signal can never diverge between "may this run start" and "may this run merge."
+
+**Scope of the gate (deliberately narrow):** Only `create` + `resume` are gated — the two verbs that bring a run into existence or re-activate it, both of which execute in the **foreground orchestrator session** that definitively carries the env. Downstream verbs (`next`/`drive`/`finalize`) operate only on an already-autonomous run and stay ungated, so the `--mode workflow` driver's background exec-agent CLI calls carry no env-propagation dependency. The shipping operations are independently autonomous-gated at the hook layer (`pipelineCanWrite`, Decision 12).
+
+**Trade-off:** A hand-typed `factory drive --run X` in a non-autonomous shell against a pre-existing run is not caught (never something `/factory:run` does). Closeable later by stamping autonomy on the run record (no env dependency) if ever needed.
+
+**Relationship:** Operationalises the autonomy _condition_ of Decisions 19/20 as a runtime precondition; complements Decision 13 (how a session becomes autonomous) with the enforcement of _requiring_ it.
 
 ---
 
