@@ -342,11 +342,19 @@ for (;;) {
   // Omit --run until runId is known; the engine defaults to runs/current (just
   // pointed at this run by `run create`) and echoes run_id/data_dir/ship_mode back.
   // `runs/current` is mutable (every `run create` overwrites it), so the FIRST step
-  // passes --assert-owner "$CLAUDE_CODE_SESSION_ID" (Bash-expanded to the launching
-  // session) — the engine fails LOUD if a concurrent create redirected runs/current
-  // onto a run owned by a different session, instead of silently driving it.
+  // guards it two ways against a concurrent create having redirected the pointer:
+  //   1. --assert-owner "$CLAUDE_CODE_SESSION_ID" — Bash-expands to the launching
+  //      session. CLAUDE_CODE_SESSION_ID is session-scoped and constant across the
+  //      agent tree (verified: an exec-agent's Bash sees the SAME id as the launching
+  //      session), so it equals the orchestrator-stamped owner_session on the happy
+  //      path; a mismatch means a DIFFERENT session moved runs/current → fail LOUD.
+  //   2. --expect-mode workflow — propagation-independent: catches a concurrent
+  //      session-mode create that redirected runs/current, with no env assumptions.
+  // Both run only on the FIRST step; once runId is known, --run pins the run directly.
   const next = await cli(
-    runId ? `factory next --run ${runId}` : `factory next --assert-owner "$CLAUDE_CODE_SESSION_ID"`,
+    runId
+      ? `factory next --run ${runId}`
+      : `factory next --assert-owner "$CLAUDE_CODE_SESSION_ID" --expect-mode workflow`,
     "next",
     "Drive",
     NEXT_KINDS,

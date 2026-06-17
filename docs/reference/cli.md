@@ -205,14 +205,25 @@ read-only. Throws LOUD on a dependency deadlock.
 ```
 factory next [--run <id>]                          # defaults to runs/current
 factory next --assert-owner <session>              # loud-assert runs/current ownership
+factory next --expect-mode <session|workflow>      # loud-assert runs/current mode
 ```
 
-`--assert-owner <session>` is an opt-in guard for the `--mode workflow` driver's
-first `next` (which adopts `runs/current` rather than passing `--run`): if the
-resolved run's persisted `owner_session` disagrees with `<session>`, it throws
-loud instead of silently driving a foreign run that a concurrent `run create`
-redirected `runs/current` onto. Degrades safe (no assertion) when either side is
-unknown. Manual `factory next` never needs it.
+`--assert-owner <session>` and `--expect-mode <mode>` are opt-in guards for the
+`--mode workflow` driver's first `next` (which adopts `runs/current` rather than
+passing `--run`), defending against a concurrent `run create` having redirected
+`runs/current` onto a foreign run:
+
+- `--assert-owner <session>` throws loud if the resolved run's persisted
+  `owner_session` disagrees with `<session>`. The driver passes
+  `"$CLAUDE_CODE_SESSION_ID"`, which is session-scoped and inherited identically by
+  the exec-agent, so it equals the stamped owner on the happy path. Degrades safe
+  (no assertion) when either side is unknown.
+- `--expect-mode <mode>` throws loud if the resolved run's `mode` differs — a
+  propagation-independent guard (no env assumptions) that catches a concurrent
+  session-mode create redirecting the pointer. An invalid value is a usage error.
+
+Manual `factory next` never needs either. Both run only on the `runs/current` path;
+the explicit `--run <id>` path bypasses them.
 
 Every envelope also carries the self-resolved run context (`run_id`, canonical
 `data_dir`, `ship_mode`) so the workflow driver adopts them from the first `next`.

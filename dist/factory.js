@@ -12626,7 +12626,8 @@ adopts them from the first \`next\` instead of via Workflow args:
   { kind:"run-terminal", run_id, data_dir, ship_mode, run_status }
   { kind:"quota-blocked", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
-  factory next --assert-owner <session>   (loud-assert runs/current ownership)
+  factory next --assert-owner <session>          (loud-assert runs/current ownership)
+  factory next --expect-mode <session|workflow>  (loud-assert runs/current mode)
 
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
 Throws LOUD on a dependency deadlock.`;
@@ -12638,6 +12639,20 @@ function assertCurrentOwner(current, assertOwner) {
   if (actual !== expected) {
     throw new Error(
       `next: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Relaunch via /factory:run --mode workflow, or pass --run <id> explicitly.`
+    );
+  }
+}
+function assertExpectedMode(current, expectMode) {
+  if (expectMode === void 0) return;
+  const parsed = RunModeEnum.safeParse(typeof expectMode === "string" ? expectMode : "");
+  if (!parsed.success) {
+    throw new UsageError(
+      `--expect-mode must be ${RunModeEnum.options.map((o) => `'${o}'`).join(" or ")}, got '${String(expectMode)}'`
+    );
+  }
+  if (current.mode !== parsed.data) {
+    throw new Error(
+      `next: runs/current points at run '${current.run_id}' in mode '${current.mode}', but --expect-mode expected '${parsed.data}' \u2014 a concurrent 'run create' moved runs/current onto a run of a different mode. Relaunch via /factory:run --mode workflow, or pass --run <id> explicitly.`
     );
   }
 }
@@ -12656,6 +12671,7 @@ async function run9(argv) {
     const current = await new StateManager({ dataDir }).readCurrent();
     if (current === null) throw new UsageError("no --run given and no current run");
     assertCurrentOwner(current, args.flag("assert-owner"));
+    assertExpectedMode(current, args.flag("expect-mode"));
     runId = current.run_id;
   }
   const deps = await loadCoroutineDeps({ runId });

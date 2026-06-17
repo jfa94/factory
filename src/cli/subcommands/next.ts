@@ -7,7 +7,7 @@ import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadCoroutineDeps } from "../wiring.js";
 import { stepRun } from "../../driver/index.js";
-import { StateManager } from "../../core/state/index.js";
+import { StateManager, RunModeEnum } from "../../core/state/index.js";
 import type { RunState } from "../../core/state/index.js";
 import { resolveDataDir } from "../../config/index.js";
 import type { Subcommand } from "../main.js";
@@ -25,7 +25,8 @@ adopts them from the first \`next\` instead of via Workflow args:
   { kind:"run-terminal", run_id, data_dir, ship_mode, run_status }
   { kind:"quota-blocked", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
-  factory next --assert-owner <session>   (loud-assert runs/current ownership)
+  factory next --assert-owner <session>          (loud-assert runs/current ownership)
+  factory next --expect-mode <session|workflow>  (loud-assert runs/current mode)
 
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
 Throws LOUD on a dependency deadlock.`;
@@ -41,6 +42,12 @@ Throws LOUD on a dependency deadlock.`;
  * silently driving the foreign run. Degrades safely (no assertion) when either the
  * asserted session or the run's owner is unknown — mirrors the Stop gate's
  * best-effort ownership ({@link RunState.owner_session}).
+ *
+ * This asserts identity, it does NOT spuriously fire: `CLAUDE_CODE_SESSION_ID` is
+ * session-scoped and constant across the agent tree (verified — a sub-agent's Bash
+ * sees the SAME value as the launching session), so a Workflow exec-agent's
+ * `"$CLAUDE_CODE_SESSION_ID"` equals the orchestrator-stamped `owner_session` on the
+ * happy path. A throw means runs/current genuinely points at a foreign run.
  */
 function assertCurrentOwner(current: RunState, assertOwner: string | boolean | undefined): void {
   const expected = typeof assertOwner === "string" ? assertOwner.trim() : "";
@@ -53,6 +60,35 @@ function assertCurrentOwner(current: RunState, assertOwner: string | boolean | u
         `but --assert-owner expected '${expected}' — a concurrent 'run create' moved ` +
         `runs/current onto a foreign run. Relaunch via /factory:run --mode workflow, or ` +
         `pass --run <id> explicitly.`,
+    );
+  }
+}
+
+/**
+ * Loud-assert that the runs/current run is in the mode the caller expects. A
+ * PROPAGATION-INDEPENDENT companion to {@link assertCurrentOwner}: the `--mode
+ * workflow` driver passes `--expect-mode workflow`, so a concurrent `run create` that
+ * redirected runs/current onto a run of a DIFFERENT mode (e.g. a session-mode run)
+ * fails loud here regardless of session-id behavior. Necessary-not-sufficient (two
+ * concurrent workflow-mode creates still need the owner assertion above), but it
+ * closes the most likely foreign-run window with zero env assumptions. Absent flag ⇒
+ * no expectation; an invalid value is a loud usage error.
+ */
+function assertExpectedMode(current: RunState, expectMode: string | boolean | undefined): void {
+  if (expectMode === undefined) return; // no expectation requested
+  const parsed = RunModeEnum.safeParse(typeof expectMode === "string" ? expectMode : "");
+  if (!parsed.success) {
+    throw new UsageError(
+      `--expect-mode must be ${RunModeEnum.options.map((o) => `'${o}'`).join(" or ")}, ` +
+        `got '${String(expectMode)}'`,
+    );
+  }
+  if (current.mode !== parsed.data) {
+    throw new Error(
+      `next: runs/current points at run '${current.run_id}' in mode '${current.mode}', but ` +
+        `--expect-mode expected '${parsed.data}' — a concurrent 'run create' moved runs/current ` +
+        `onto a run of a different mode. Relaunch via /factory:run --mode workflow, or pass ` +
+        `--run <id> explicitly.`,
     );
   }
 }
@@ -72,6 +108,7 @@ async function run(argv: string[]): Promise<ExitCode> {
     const current = await new StateManager({ dataDir }).readCurrent();
     if (current === null) throw new UsageError("no --run given and no current run");
     assertCurrentOwner(current, args.flag("assert-owner"));
+    assertExpectedMode(current, args.flag("expect-mode"));
     runId = current.run_id;
   }
 
