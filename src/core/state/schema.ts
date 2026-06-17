@@ -375,6 +375,7 @@ export type RunMode = z.infer<typeof RunModeEnum>;
  * derived verdict.
  */
 export const ShipModeEnum = z.enum(["no-merge", "live"]);
+export type ShipMode = z.infer<typeof ShipModeEnum>;
 
 /**
  * The whole run. Owns the per-task state map + the spec POINTER (not the spec).

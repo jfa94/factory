@@ -25,6 +25,7 @@ export {
   ProducerRoleEnum,
   DriverEnum,
   RunModeEnum,
+  ShipModeEnum,
   EscalationRungSchema,
   // object schemas
   SpecPointerSchema,
@@ -46,6 +47,7 @@ export type {
   ProducerRole,
   Driver,
   RunMode,
+  ShipMode,
   SpecPointer,
   ReviewerResult,
   TaskState,

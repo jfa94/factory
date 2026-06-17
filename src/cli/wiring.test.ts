@@ -99,6 +99,32 @@ describe("loadCliDeps", () => {
     expect(deps.shipMode).toBe("live");
   });
 
+  it("falls back to the run's persisted ship_mode when no override is given (live run)", async () => {
+    // Regression for the silent live→no-merge downgrade: a resumed/manual `drive`
+    // or `finalize` that omits `--ship-mode` must keep the run's persisted `live`.
+    await specs.write(makeManifest("acme/widgets", "42-checkout", 42), "# spec\n");
+    await state.create({
+      run_id: RUN_ID,
+      spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
+      ship_mode: "live",
+    });
+
+    const deps = await loadCliDeps({ dataDir, runId: RUN_ID });
+    expect(deps.shipMode).toBe("live");
+  });
+
+  it("lets an explicit override win over the persisted ship_mode", async () => {
+    await specs.write(makeManifest("acme/widgets", "42-checkout", 42), "# spec\n");
+    await state.create({
+      run_id: RUN_ID,
+      spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
+      ship_mode: "live",
+    });
+
+    const deps = await loadCliDeps({ dataDir, runId: RUN_ID, shipMode: "no-merge" });
+    expect(deps.shipMode).toBe("no-merge");
+  });
+
   it("throws loud when the run does not exist", async () => {
     await expect(loadCliDeps({ dataDir, runId: "no-such-run" })).rejects.toThrow();
   });

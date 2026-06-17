@@ -34,8 +34,13 @@ import type { ArtifactStore } from "./artifacts.js";
  * `live` opens PRs AND serial-merges into staging; `no-merge` opens PRs but never
  * auto-merges (the cutover safety net until the rollup-CI + partial path are
  * proven). It is NOT a human-in-the-loop feature.
+ *
+ * SINGLE SOURCE OF TRUTH: derived from {@link ShipModeEnum} (the persisted-state
+ * Zod enum) and re-exported here so the driver/CLI layers keep their existing
+ * `from "../driver/types.js"` import while the closed set is defined exactly once.
  */
-export type ShipMode = "live" | "no-merge";
+import type { ShipMode } from "../core/state/index.js";
+export type { ShipMode };
 
 /**
  * The read-only inputs a REPORTER (handler) needs. Deliberately carries NO agent

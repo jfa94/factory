@@ -42,7 +42,11 @@ export interface CliDeps extends HandlerDeps {
 export interface LoadCliDepsOptions extends DataDirOptions {
   /** The run whose spec pointer + state the bundle is built for. */
   readonly runId: string;
-  /** `live` serial-merges; `no-merge` (default) opens PRs but never auto-merges. */
+  /**
+   * Explicit `--ship-mode` override. When absent, {@link loadCliDeps} falls back
+   * to the run's persisted `ship_mode` (the source of truth) — NOT a hard-coded
+   * default — so resume/manual invocations keep the run's shipping semantics.
+   */
   readonly shipMode?: ShipMode;
 }
 
@@ -100,7 +104,10 @@ export async function loadCliDeps(opts: LoadCliDepsOptions): Promise<CliDeps> {
     dataDir,
     owner,
     repo,
-    shipMode: opts.shipMode ?? "no-merge",
+    // The explicit `--ship-mode` flag overrides; otherwise honor the value
+    // persisted on the run at create (manual/resume `drive`/`finalize` omit the
+    // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
+    shipMode: opts.shipMode ?? run.ship_mode,
     state,
     run,
   };

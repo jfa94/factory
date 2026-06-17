@@ -6135,147 +6135,6 @@ function isUsageError(err) {
   return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
 }
 
-// src/cli/args.ts
-function parseArgs(argv, opts = {}) {
-  const booleans = /* @__PURE__ */ new Set(["help", "h", ...opts.booleans ?? []]);
-  const positionals = [];
-  const values = /* @__PURE__ */ new Map();
-  const push = (name, value) => {
-    const list = values.get(name) ?? [];
-    list.push(value);
-    values.set(name, list);
-  };
-  let i = 0;
-  let optionsEnded = false;
-  while (i < argv.length) {
-    const tok = argv[i];
-    if (optionsEnded || !tok.startsWith("-")) {
-      positionals.push(tok);
-      i += 1;
-      continue;
-    }
-    if (tok === "--") {
-      optionsEnded = true;
-      i += 1;
-      continue;
-    }
-    const dashless = tok.replace(/^-+/, "");
-    const eq = dashless.indexOf("=");
-    if (eq >= 0) {
-      push(dashless.slice(0, eq), dashless.slice(eq + 1));
-      i += 1;
-      continue;
-    }
-    if (booleans.has(dashless)) {
-      push(dashless, true);
-      i += 1;
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next === void 0 || next.startsWith("-") && next !== "-") {
-      push(dashless, true);
-      i += 1;
-    } else {
-      push(dashless, next);
-      i += 2;
-    }
-  }
-  const lastOf = (name) => {
-    const list = values.get(name);
-    return list === void 0 ? void 0 : list[list.length - 1];
-  };
-  return {
-    positionals,
-    flag: lastOf,
-    all: (name) => (values.get(name) ?? []).map(String),
-    has: (name) => values.has(name),
-    requireFlag(name) {
-      const v = lastOf(name);
-      if (typeof v !== "string" || v.length === 0) {
-        throw new UsageError(`missing required --${name}`);
-      }
-      return v;
-    }
-  };
-}
-function parseShipMode(raw) {
-  if (raw === void 0) return void 0;
-  if (raw === "live" || raw === "no-merge") return raw;
-  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
-}
-
-// src/cli/io.ts
-function emitJson(value) {
-  process.stdout.write(stringifyJson(value) + "\n");
-}
-function emitLine(line) {
-  process.stdout.write(line + "\n");
-}
-function emitError(line) {
-  process.stderr.write(line + "\n");
-}
-
-// src/cli/subcommands/configure.ts
-var HELP = `factory configure \u2014 inspect or edit the config overlay
-
-Usage:
-  factory configure                         Print the resolved config as JSON
-  factory configure --get <key.path>        Print one resolved value as JSON
-  factory configure --set <key.path=value>  Set a value (repeatable), persist, print result
-  factory configure --unset <key.path>      Revert a key to its default (repeatable)
-
-Values parse as JSON when possible (numbers, booleans, arrays); otherwise as a
-bare string. Examples:
-  factory configure --set quality.holdoutPercent=25
-  factory configure --set git.stagingBranch=staging
-  factory configure --set git.autoProvision=true`;
-async function run(argv) {
-  const args = parseArgs(argv);
-  if (args.flag("help") === true) {
-    emitLine(HELP);
-    return EXIT.OK;
-  }
-  const sets = args.all("set");
-  const unsets = args.all("unset");
-  const getKey = args.flag("get");
-  if (typeof getKey === "string") {
-    if (sets.length > 0 || unsets.length > 0) {
-      throw new UsageError("--get cannot be combined with --set/--unset");
-    }
-    emitJson(getAtPath(loadConfig(), splitPath(getKey)));
-    return EXIT.OK;
-  }
-  if (sets.length === 0 && unsets.length === 0) {
-    emitJson(loadConfig());
-    return EXIT.OK;
-  }
-  let raw = readRawConfig();
-  for (const token of sets) {
-    const { path: path2, value } = parseSetToken(token);
-    raw = setAtPath(raw, path2, value);
-  }
-  for (const token of unsets) {
-    raw = unsetAtPath(raw, splitPath(token));
-  }
-  const resolved = await saveRawConfig(raw);
-  emitJson(resolved);
-  return EXIT.OK;
-}
-var configureCommand = {
-  describe: "Inspect or edit the persisted config (--get/--set/--unset)",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`configure: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
-};
-
 // src/core/state/schema.ts
 var RunStatusEnum = external_exports.enum([
   "running",
@@ -6863,6 +6722,150 @@ var StateManager = class {
       log3.warn(`state: could not update runs/current to '${runId}': ${err.message}`);
       await unlink2(tmp).catch(() => {
       });
+    }
+  }
+};
+
+// src/cli/args.ts
+function parseArgs(argv, opts = {}) {
+  const booleans = /* @__PURE__ */ new Set(["help", "h", ...opts.booleans ?? []]);
+  const positionals = [];
+  const values = /* @__PURE__ */ new Map();
+  const push = (name, value) => {
+    const list = values.get(name) ?? [];
+    list.push(value);
+    values.set(name, list);
+  };
+  let i = 0;
+  let optionsEnded = false;
+  while (i < argv.length) {
+    const tok = argv[i];
+    if (optionsEnded || !tok.startsWith("-")) {
+      positionals.push(tok);
+      i += 1;
+      continue;
+    }
+    if (tok === "--") {
+      optionsEnded = true;
+      i += 1;
+      continue;
+    }
+    const dashless = tok.replace(/^-+/, "");
+    const eq = dashless.indexOf("=");
+    if (eq >= 0) {
+      push(dashless.slice(0, eq), dashless.slice(eq + 1));
+      i += 1;
+      continue;
+    }
+    if (booleans.has(dashless)) {
+      push(dashless, true);
+      i += 1;
+      continue;
+    }
+    const next = argv[i + 1];
+    if (next === void 0 || next.startsWith("-") && next !== "-") {
+      push(dashless, true);
+      i += 1;
+    } else {
+      push(dashless, next);
+      i += 2;
+    }
+  }
+  const lastOf = (name) => {
+    const list = values.get(name);
+    return list === void 0 ? void 0 : list[list.length - 1];
+  };
+  return {
+    positionals,
+    flag: lastOf,
+    all: (name) => (values.get(name) ?? []).map(String),
+    has: (name) => values.has(name),
+    requireFlag(name) {
+      const v = lastOf(name);
+      if (typeof v !== "string" || v.length === 0) {
+        throw new UsageError(`missing required --${name}`);
+      }
+      return v;
+    }
+  };
+}
+function parseShipMode(raw) {
+  if (raw === void 0) return void 0;
+  const parsed = ShipModeEnum.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  throw new UsageError(
+    `unknown --ship-mode '${String(raw)}' (expected ${ShipModeEnum.options.join(" | ")})`
+  );
+}
+
+// src/cli/io.ts
+function emitJson(value) {
+  process.stdout.write(stringifyJson(value) + "\n");
+}
+function emitLine(line) {
+  process.stdout.write(line + "\n");
+}
+function emitError(line) {
+  process.stderr.write(line + "\n");
+}
+
+// src/cli/subcommands/configure.ts
+var HELP = `factory configure \u2014 inspect or edit the config overlay
+
+Usage:
+  factory configure                         Print the resolved config as JSON
+  factory configure --get <key.path>        Print one resolved value as JSON
+  factory configure --set <key.path=value>  Set a value (repeatable), persist, print result
+  factory configure --unset <key.path>      Revert a key to its default (repeatable)
+
+Values parse as JSON when possible (numbers, booleans, arrays); otherwise as a
+bare string. Examples:
+  factory configure --set quality.holdoutPercent=25
+  factory configure --set git.stagingBranch=staging
+  factory configure --set git.autoProvision=true`;
+async function run(argv) {
+  const args = parseArgs(argv);
+  if (args.flag("help") === true) {
+    emitLine(HELP);
+    return EXIT.OK;
+  }
+  const sets = args.all("set");
+  const unsets = args.all("unset");
+  const getKey = args.flag("get");
+  if (typeof getKey === "string") {
+    if (sets.length > 0 || unsets.length > 0) {
+      throw new UsageError("--get cannot be combined with --set/--unset");
+    }
+    emitJson(getAtPath(loadConfig(), splitPath(getKey)));
+    return EXIT.OK;
+  }
+  if (sets.length === 0 && unsets.length === 0) {
+    emitJson(loadConfig());
+    return EXIT.OK;
+  }
+  let raw = readRawConfig();
+  for (const token of sets) {
+    const { path: path2, value } = parseSetToken(token);
+    raw = setAtPath(raw, path2, value);
+  }
+  for (const token of unsets) {
+    raw = unsetAtPath(raw, splitPath(token));
+  }
+  const resolved = await saveRawConfig(raw);
+  emitJson(resolved);
+  return EXIT.OK;
+}
+var configureCommand = {
+  describe: "Inspect or edit the persisted config (--get/--set/--unset)",
+  run: async (argv) => {
+    try {
+      return await run(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`configure: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
     }
   }
 };
@@ -11694,7 +11697,10 @@ async function loadCliDeps(opts) {
     dataDir,
     owner,
     repo,
-    shipMode: opts.shipMode ?? "no-merge",
+    // The explicit `--ship-mode` flag overrides; otherwise honor the value
+    // persisted on the run at create (manual/resume `drive`/`finalize` omit the
+    // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
+    shipMode: opts.shipMode ?? run11.ship_mode,
     state,
     run: run11
   };
@@ -11910,8 +11916,11 @@ function optionalString2(raw) {
 }
 function parseMode(raw) {
   if (raw === void 0) return void 0;
-  if (raw === "session" || raw === "workflow") return raw;
-  throw new UsageError(`--mode must be 'session' or 'workflow', got '${String(raw)}'`);
+  const parsed = RunModeEnum.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  throw new UsageError(
+    `--mode must be ${RunModeEnum.options.map((o) => `'${o}'`).join(" or ")}, got '${String(raw)}'`
+  );
 }
 function resolveOwnerSession(flag, env = process.env) {
   return optionalString2(flag) ?? optionalString2(env.CLAUDE_CODE_SESSION_ID);

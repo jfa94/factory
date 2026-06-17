@@ -106,11 +106,19 @@ export function parseArgs(argv: readonly string[], opts: ParseOptions = {}): Par
 export { UsageError, isUsageError } from "../shared/usage-error.js";
 
 import type { ShipMode } from "../driver/types.js";
+import { ShipModeEnum } from "../core/state/index.js";
 export type { ShipMode };
 
-/** Validate the `--ship-mode` flag; returns `undefined` when absent. */
+/**
+ * Validate the `--ship-mode` flag; returns `undefined` when absent. Validates
+ * against {@link ShipModeEnum} (the single source of truth for the closed set) so
+ * adding a mode to the enum can never silently diverge from what the CLI accepts.
+ */
 export function parseShipMode(raw: string | boolean | undefined): ShipMode | undefined {
   if (raw === undefined) return undefined;
-  if (raw === "live" || raw === "no-merge") return raw;
-  throw new UsageError(`unknown --ship-mode '${String(raw)}' (expected live | no-merge)`);
+  const parsed = ShipModeEnum.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  throw new UsageError(
+    `unknown --ship-mode '${String(raw)}' (expected ${ShipModeEnum.options.join(" | ")})`,
+  );
 }

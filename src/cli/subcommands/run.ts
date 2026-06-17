@@ -24,7 +24,7 @@ import { EXIT, type ExitCode } from "../exit-codes.js";
 import { parseArgs, isUsageError, UsageError, parseShipMode } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
-import { StateManager } from "../../core/state/index.js";
+import { StateManager, RunModeEnum } from "../../core/state/index.js";
 import { SpecStore, type SpecManifest } from "../../spec/index.js";
 import { makeRunId, validateId } from "../../shared/ids.js";
 import { nowEpoch } from "../../shared/time.js";
@@ -398,11 +398,18 @@ function optionalString(raw: string | boolean | undefined): string | undefined {
   return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
-/** Validate the optional `--mode` flag; LOUD on anything but session/workflow. */
+/**
+ * Validate the optional `--mode` flag; LOUD on anything but session/workflow.
+ * Validates against {@link RunModeEnum} (the single source of truth for the closed
+ * set) so the CLI's accepted values cannot drift from the persisted-state enum.
+ */
 function parseMode(raw: string | boolean | undefined): RunState["mode"] | undefined {
   if (raw === undefined) return undefined;
-  if (raw === "session" || raw === "workflow") return raw;
-  throw new UsageError(`--mode must be 'session' or 'workflow', got '${String(raw)}'`);
+  const parsed = RunModeEnum.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  throw new UsageError(
+    `--mode must be ${RunModeEnum.options.map((o) => `'${o}'`).join(" or ")}, got '${String(raw)}'`,
+  );
 }
 
 /**
