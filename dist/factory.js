@@ -12847,13 +12847,19 @@ function materializeMergedSettings(input) {
   const ourCommand = factoryStatuslineCommand(pluginRoot);
   const ourPath = ourCommand.split(" ")[0] ?? ourCommand;
   const userStatusLine = statusLineCommandOf(input.userSettings);
-  if (userStatusLine !== void 0) {
+  const chained = (() => {
+    if (userStatusLine === void 0) return void 0;
     const expanded = tildeExpand(userStatusLine, home);
-    const expandedPath = expanded.split(" ")[0] ?? expanded;
-    const isOurs = expanded === ourCommand || expandedPath === ourPath;
-    if (!isOurs) {
-      env.FACTORY_ORIGINAL_STATUSLINE = expanded;
-    }
+    const parts = expanded.split(/\s+/);
+    const expandedPath = parts[0] ?? expanded;
+    const expandedSub = parts[1];
+    const isOurs = expandedPath === ourPath && expandedSub === "statusline";
+    return isOurs ? void 0 : expanded;
+  })();
+  if (chained !== void 0) {
+    env.FACTORY_ORIGINAL_STATUSLINE = chained;
+  } else {
+    delete env.FACTORY_ORIGINAL_STATUSLINE;
   }
   merged.env = env;
   if (input.version !== void 0 && input.version.length > 0) {

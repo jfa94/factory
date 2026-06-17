@@ -121,6 +121,50 @@ describe("materializeMergedSettings", () => {
     expect(env.FACTORY_ORIGINAL_STATUSLINE).toBeUndefined();
   });
 
+  it("CHAINS a user statusLine that points at a NON-statusline factory subcommand", () => {
+    // Tightened ownership check: only the `bin/factory statusline` WRITER is
+    // treated as ours; any other factory subcommand the user wired is preserved.
+    const out = materializeMergedSettings({
+      template: TEMPLATE,
+      userSettings: { statusLine: { command: `${PLUGIN_ROOT}/bin/factory some-other-cmd` } },
+      dataDir: DATA_DIR,
+      pluginRoot: PLUGIN_ROOT,
+      home: HOME,
+    });
+    const env = out.env as Record<string, string>;
+    expect(env.FACTORY_ORIGINAL_STATUSLINE).toBe(`${PLUGIN_ROOT}/bin/factory some-other-cmd`);
+  });
+
+  it("DROPS a stale FACTORY_ORIGINAL_STATUSLINE when the user statusLine is now ours", () => {
+    // A prior autonomous relaunch baked FACTORY_ORIGINAL_STATUSLINE into the user's
+    // env; now the user points at the factory writer, so there is nothing to chain —
+    // the stale value must not survive (else the writer would chain to itself).
+    const out = materializeMergedSettings({
+      template: TEMPLATE,
+      userSettings: {
+        statusLine: { command: `${PLUGIN_ROOT}/bin/factory statusline` },
+        env: { FACTORY_ORIGINAL_STATUSLINE: "/old/stale.sh" },
+      },
+      dataDir: DATA_DIR,
+      pluginRoot: PLUGIN_ROOT,
+      home: HOME,
+    });
+    const env = out.env as Record<string, string>;
+    expect(env.FACTORY_ORIGINAL_STATUSLINE).toBeUndefined();
+  });
+
+  it("DROPS a stale FACTORY_ORIGINAL_STATUSLINE when the user has no statusLine at all", () => {
+    const out = materializeMergedSettings({
+      template: TEMPLATE,
+      userSettings: { env: { FACTORY_ORIGINAL_STATUSLINE: "/old/stale.sh" } },
+      dataDir: DATA_DIR,
+      pluginRoot: PLUGIN_ROOT,
+      home: HOME,
+    });
+    const env = out.env as Record<string, string>;
+    expect(env.FACTORY_ORIGINAL_STATUSLINE).toBeUndefined();
+  });
+
   it("uses the user settings as the base, overlaying template permissions/env/hooks", () => {
     const out = materializeMergedSettings({
       template: TEMPLATE,

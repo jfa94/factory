@@ -166,6 +166,12 @@ export function materializeMergedSettings(input: MaterializeInput): Record<strin
 
   // User settings is the base; template keys overlay it (template wins on
   // conflicts — autonomous mode's permissions/hooks/statusLine must take effect).
+  // NOTE: a top-level `hooks` in the template REPLACES the user's `hooks` (object
+  // spread is shallow). That is intentional and NOT a security regression: the
+  // factory's enforcement hooks load independently via `hooks/hooks.json` (the
+  // plugin's own hook wiring), so the guard boundary holds regardless of what the
+  // merged-settings.json carries. The template's `hooks` here only configures the
+  // autonomous *session*, not the enforcement layer.
   const merged: Record<string, unknown> = { ...input.userSettings, ...template };
 
   // env: union user + template, then bake CLAUDE_PLUGIN_DATA. Both user and
@@ -195,17 +201,30 @@ export function materializeMergedSettings(input: MaterializeInput): Record<strin
   const ourCommand = factoryStatuslineCommand(pluginRoot);
   const ourPath = ourCommand.split(" ")[0] ?? ourCommand; // ".../bin/factory"
   const userStatusLine = statusLineCommandOf(input.userSettings);
-  if (userStatusLine !== undefined) {
+  // Resolve the user's OWN (non-factory) statusLine to chain, if any.
+  const chained = ((): string | undefined => {
+    if (userStatusLine === undefined) return undefined;
     const expanded = tildeExpand(userStatusLine, home);
-    const expandedPath = expanded.split(" ")[0] ?? expanded;
-    // Skip chaining only when the user's command IS the factory writer — compare
-    // the full command AND the bare path (the writer's path is `.../bin/factory`,
-    // which carries a ` statusline` arg, so a path-only compare alone suffices to
-    // catch `.../bin/factory statusline`). This prevents a chain loop.
-    const isOurs = expanded === ourCommand || expandedPath === ourPath;
-    if (!isOurs) {
-      env.FACTORY_ORIGINAL_STATUSLINE = expanded;
-    }
+    const parts = expanded.split(/\s+/);
+    const expandedPath = parts[0] ?? expanded;
+    const expandedSub = parts[1];
+    // "Ours" = the factory statusline WRITER specifically: the `.../bin/factory`
+    // path with the `statusline` subcommand. TIGHTENED (was a path-only compare,
+    // which mis-claimed any `.../bin/factory <other-subcommand>` as ours): a user
+    // who wired some OTHER factory subcommand as their statusLine must still be
+    // chained — only the writer itself is skipped, to avoid a self-referential loop.
+    const isOurs = expandedPath === ourPath && expandedSub === "statusline";
+    return isOurs ? undefined : expanded;
+  })();
+  // Set the chained original, or DROP a stale one. The env block is seeded from the
+  // user's own env (`{...userEnv, ...templateEnv}`), so a FACTORY_ORIGINAL_STATUSLINE
+  // left over from a PRIOR autonomous relaunch can ride along; when there is nothing
+  // legitimate to chain (no user statusLine, or it IS our writer) it must be deleted,
+  // else `factory statusline` would chain to a phantom command — or to itself.
+  if (chained !== undefined) {
+    env.FACTORY_ORIGINAL_STATUSLINE = chained;
+  } else {
+    delete env.FACTORY_ORIGINAL_STATUSLINE;
   }
 
   merged.env = env;
