@@ -53,8 +53,11 @@ runs:
 `--ship-mode` is the cutover-safety knob. The default `no-merge` opens each task
 PR but never merges; pass `live` only when you have explicitly opted into
 auto-merge. Ship mode **is persisted** on the run at create, so the workflow
-driver, `resume`, and `finalize` read it back without re-passing — an explicit
-`--ship-mode` flag overrides the persisted value only when given.
+driver, `resume`, and `finalize` read it back without re-passing. Re-running
+`factory run create` for an existing run is idempotent (it reuses that run); a
+re-passed `--ship-mode` (or `--mode`) that **disagrees** with the reused run is a
+loud error — pass `--new` for a fresh run, or omit the flag to reuse. (`run
+finalize --ship-mode` does override the persisted value for that one finalize call.)
 
 ## 3. What happens (the four phases)
 

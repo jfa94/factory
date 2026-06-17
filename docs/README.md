@@ -1,4 +1,4 @@
-<!-- last-documented: 1ea2ef035fe2cfa5af06d056d76321d16febb776 -->
+<!-- last-documented: a14a532 -->
 
 # Dark Factory Plugin
 
@@ -63,12 +63,12 @@ quiet success.
 
 ## Architecture at a glance
 
-| Layer                | Lives in                                                            | Role                                   |
-| -------------------- | ------------------------------------------------------------------- | -------------------------------------- |
-| Orchestrator surface | `commands/`, `agents/`, `skills/` (markdown)                        | LLM instructions + agent definitions   |
+| Layer                | Lives in                                                            | Role                                        |
+| -------------------- | ------------------------------------------------------------------- | ------------------------------------------- |
+| Orchestrator surface | `commands/`, `agents/`, `skills/` (markdown)                        | LLM instructions + agent definitions        |
 | Deterministic CLI    | `src/` → `dist/factory.js` (via `bin/factory`)                      | The engine: coroutine + reporters + writers |
-| Hook guards          | `src/hooks/` → `dist/factory-hook.js` (wired in `hooks/hooks.json`) | Enforce invariants at tool-use time    |
-| Run / spec state     | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Lives **outside** the target repo      |
+| Hook guards          | `src/hooks/` → `dist/factory-hook.js` (wired in `hooks/hooks.json`) | Enforce invariants at tool-use time         |
+| Run / spec state     | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Lives **outside** the target repo           |
 
 See [architecture/overview.md](./architecture/overview.md) for the full picture.
 

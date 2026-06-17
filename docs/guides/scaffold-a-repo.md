@@ -9,14 +9,18 @@ protection probe and, with `--provision`, the protection write shell out to it).
 From inside the target repo checkout:
 
 ```
-/factory:scaffold --repo <owner/name>
+/factory:scaffold [--repo <owner/name>]
 ```
 
 Or call the CLI directly:
 
 ```bash
-factory scaffold --repo <owner/name>
+factory scaffold [--repo <owner/name>]
 ```
+
+`--repo` is **optional**: when omitted it is auto-derived from the repo's `origin`
+remote. Pass it only to override; an explicit value that disagrees with `origin`
+fails loud.
 
 This is idempotent. It:
 

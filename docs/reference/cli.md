@@ -133,7 +133,12 @@ the seam; `/factory:run` forwards its own `--mode` here (see
 [Run the pipeline](../guides/run-the-pipeline.md)). Create is **idempotent** with the
 auto-generated id: a repeat returns the existing non-terminal run for this
 `(repo, spec_id)` rather than spawning an orphan — pass `--new` (or a `--run-id`) to
-force a fresh run.
+force a fresh run. The resolve-or-reuse scan→create is serialized under a
+per-`(repo, spec_id)` lock so two concurrent same-spec creates cannot both mint an
+orphan. Reuse is strict on the persisted dials: re-passing a `--mode` or `--ship-mode`
+that **disagrees** with the run being reused is a loud `UsageError` (the run keeps its
+original dials — driving it under a ship-mode you did not ask for is dangerous). Omit
+the flag to reuse, or pass `--new` for a fresh run.
 
 ### `run resume`
 
