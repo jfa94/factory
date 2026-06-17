@@ -11864,16 +11864,13 @@ async function resolveSpec(specStore, opts) {
   if (opts.specId !== void 0) {
     return specStore.read(opts.repo, opts.specId);
   }
-  if (opts.issue !== void 0) {
-    const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
-    if (resolved === null) {
-      throw new Error(
-        `run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`
-      );
-    }
-    return resolved;
+  const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
+  if (resolved === null) {
+    throw new Error(
+      `run create: no spec for issue #${opts.issue} in ${opts.repo} \u2014 generate one first`
+    );
   }
-  throw new UsageError("run create requires --issue or --spec-id");
+  return resolved;
 }
 async function createRunFromManifest(state, specStore, manifest, opts) {
   if (opts.mode === "workflow") {
@@ -11989,11 +11986,15 @@ async function runCreate(argv, overrides = {}) {
   const repo = await resolveRepo({ explicit: optionalString2(args.flag("repo")), cwd, gitClient });
   const issue = parseIssue(args.flag("issue"));
   const specId = optionalString2(args.flag("spec-id"));
-  if (issue === void 0 && specId === void 0) {
-    throw new UsageError("run create requires --issue <n> or --spec-id <id>");
-  }
+  let selector;
   if (issue !== void 0 && specId !== void 0) {
     throw new UsageError("run create: pass exactly one of --issue or --spec-id");
+  } else if (issue !== void 0) {
+    selector = { issue };
+  } else if (specId !== void 0) {
+    selector = { specId };
+  } else {
+    throw new UsageError("run create requires --issue <n> or --spec-id <id>");
   }
   const explicitRunId = optionalString2(args.flag("run-id"));
   const runId = explicitRunId ?? makeRunId();
@@ -12010,8 +12011,7 @@ async function runCreate(argv, overrides = {}) {
   const { run: run11 } = await resolveOrCreateRun(state, specStore, {
     repo,
     runId,
-    ...issue !== void 0 ? { issue } : {},
-    ...specId !== void 0 ? { specId } : {},
+    ...selector,
     ...mode !== void 0 ? { mode } : {},
     ...shipMode !== void 0 ? { shipMode } : {},
     ...ownerSession !== void 0 ? { ownerSession } : {},

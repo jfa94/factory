@@ -23,6 +23,7 @@ import {
   applyResume,
   resolveOwnerSession,
   type RunResumeEnvelope,
+  type SpecSelector,
 } from "./run.js";
 import { EXIT } from "../exit-codes.js";
 import { StateManager } from "../../core/state/manager.js";
@@ -68,6 +69,22 @@ function manifest(tasks: ReadonlyArray<Record<string, unknown>>): SpecManifest {
     tasks,
   });
 }
+
+// ---------------------------------------------------------------------------
+// SpecSelector — type-level XOR (compile-time, validated by `npm run typecheck`)
+// ---------------------------------------------------------------------------
+// These assertions FAIL THE BUILD if the XOR regresses to two bare optionals:
+// the @ts-expect-error lines would stop erroring (TS6133 "unused") and tsc fails.
+const _selIssue: SpecSelector = { issue: 1 };
+const _selSpec: SpecSelector = { specId: "x" };
+// @ts-expect-error — BOTH keys is an illegal state, must not type-check
+const _selBoth: SpecSelector = { issue: 1, specId: "x" };
+// @ts-expect-error — NEITHER key is an illegal state, must not type-check
+const _selNeither: SpecSelector = {};
+void _selIssue;
+void _selSpec;
+void _selBoth;
+void _selNeither;
 
 // ---------------------------------------------------------------------------
 // arg/usage edges

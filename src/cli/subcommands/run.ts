@@ -185,11 +185,21 @@ function assertAcyclic(tasks: Record<string, TaskState>, specId: string): void {
 // create
 // ---------------------------------------------------------------------------
 
-/** Resolved options for {@link createRun} (exactly one of issue/specId is set). */
-export interface CreateRunOptions {
+/**
+ * Selects the durable spec to run — EXACTLY one of the two keys, never both,
+ * never neither. The `?: never` padding makes the XOR a genuine TYPE constraint:
+ * a bare `{ issue } | { specId }` only forbids NEITHER (a both-keys object still
+ * structurally satisfies `{ issue: number }`), so each arm explicitly forbids the
+ * OTHER key. Both illegal states (neither / both) are now compile errors, not just
+ * runtime checks. {@link resolveSpec} switches on `"specId" in opts`.
+ */
+export type SpecSelector =
+  | { readonly issue: number; readonly specId?: never }
+  | { readonly specId: string; readonly issue?: never };
+
+/** Resolved options for {@link createRun} — {@link SpecSelector} plus run metadata. */
+export type CreateRunOptions = SpecSelector & {
   readonly repo: string;
-  readonly issue?: number;
-  readonly specId?: string;
   readonly runId: string;
   readonly mode?: RunState["mode"];
   readonly shipMode?: RunState["ship_mode"];
@@ -205,7 +215,7 @@ export interface CreateRunOptions {
    * escape hatch). Ignored by {@link createRun}, which is unconditionally imperative.
    */
   readonly force?: boolean;
-}
+};
 
 /**
  * Resolve the durable spec named by `opts` — by explicit spec-id when given, else
@@ -214,20 +224,20 @@ export interface CreateRunOptions {
  * (resolve-or-reuse) so the spec is resolved exactly once on each path.
  */
 async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promise<SpecManifest> {
+  // The selector is a discriminated union — these two arms are exhaustive (no
+  // neither/both case can reach here, so no defensive fallback is needed). Narrow
+  // on the VALUE (`specId !== undefined`): the `?: never` padding keeps the unused
+  // key structurally present, so `"specId" in opts` would not discriminate cleanly.
   if (opts.specId !== undefined) {
     return specStore.read(opts.repo, opts.specId);
   }
-  if (opts.issue !== undefined) {
-    const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
-    if (resolved === null) {
-      throw new Error(
-        `run create: no spec for issue #${opts.issue} in ${opts.repo} — generate one first`,
-      );
-    }
-    return resolved;
+  const resolved = await specStore.resolveByIssue(opts.repo, opts.issue);
+  if (resolved === null) {
+    throw new Error(
+      `run create: no spec for issue #${opts.issue} in ${opts.repo} — generate one first`,
+    );
   }
-  // Guarded by the command layer; defensive for direct callers.
-  throw new UsageError("run create requires --issue or --spec-id");
+  return resolved;
 }
 
 /**
@@ -492,11 +502,17 @@ export async function runCreate(
   const repo = await resolveRepo({ explicit: optionalString(args.flag("repo")), cwd, gitClient });
   const issue = parseIssue(args.flag("issue"));
   const specId = optionalString(args.flag("spec-id"));
-  if (issue === undefined && specId === undefined) {
-    throw new UsageError("run create requires --issue <n> or --spec-id <id>");
-  }
+  // Collapse the two CLI flags into the exactly-one SpecSelector here, at the
+  // command boundary, so the rest of create works with the type-enforced invariant.
+  let selector: SpecSelector;
   if (issue !== undefined && specId !== undefined) {
     throw new UsageError("run create: pass exactly one of --issue or --spec-id");
+  } else if (issue !== undefined) {
+    selector = { issue };
+  } else if (specId !== undefined) {
+    selector = { specId };
+  } else {
+    throw new UsageError("run create requires --issue <n> or --spec-id <id>");
   }
   const explicitRunId = optionalString(args.flag("run-id"));
   const runId = explicitRunId ?? makeRunId();
@@ -518,8 +534,7 @@ export async function runCreate(
   const { run } = await resolveOrCreateRun(state, specStore, {
     repo,
     runId,
-    ...(issue !== undefined ? { issue } : {}),
-    ...(specId !== undefined ? { specId } : {}),
+    ...selector,
     ...(mode !== undefined ? { mode } : {}),
     ...(shipMode !== undefined ? { shipMode } : {}),
     ...(ownerSession !== undefined ? { ownerSession } : {}),

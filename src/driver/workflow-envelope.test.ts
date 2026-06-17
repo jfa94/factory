@@ -38,9 +38,18 @@ describe("parseEnvelope — happy path", () => {
     });
     const env = parseEnvelope(raw, NEXT_KINDS, "next");
     expect(env.kind).toBe("tasks-ready");
+    // Switching on the discriminant narrows to the per-variant payload type — the
+    // C2 improvement (no bare `{ [field]: unknown }`). Inside this arm `env.ready`
+    // and `env.cascade_dropped` are statically typed string[] / drop[].
+    if (env.kind !== "tasks-ready") throw new Error("expected tasks-ready");
+    // Bind to the concrete per-variant types — this is the type-level regression
+    // guard: if C2 regressed to `{ [field]: unknown }` these annotations would be
+    // `unknown`-source assignments and FAIL the build (not just pass at runtime).
+    const ready: readonly string[] = env.ready;
+    const cascadeDropped: readonly string[] = env.cascade_dropped;
     // Arrays survive as arrays (not stringified) — the corruption this guards against.
-    expect(env.ready).toEqual(["T1", "T2"]);
-    expect(env.cascade_dropped).toEqual([]);
+    expect(ready).toEqual(["T1", "T2"]);
+    expect(cascadeDropped).toEqual([]);
     expect(env.run_id).toBe("run-1");
   });
 
@@ -55,7 +64,11 @@ describe("parseEnvelope — happy path", () => {
     const raw = JSON.stringify({ kind: "spawn", run_id: "r", task_id: "T1", expects: "reviews" });
     const env = parseEnvelope(raw, DRIVE_KINDS, "drive");
     expect(env.kind).toBe("spawn");
-    expect(env.expects).toBe("reviews");
+    // Narrowing to the spawn arm exposes its typed `expects` field.
+    if (env.kind !== "spawn") throw new Error("expected spawn");
+    // Concrete-typed binding — bites at compile time if the narrowing regresses.
+    const expects: string = env.expects;
+    expect(expects).toBe("reviews");
   });
 });
 

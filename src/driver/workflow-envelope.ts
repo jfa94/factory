@@ -67,16 +67,8 @@ export const DRIVE_KINDS: ReadonlySet<DriveEnvelope["kind"]> = new Set(
 
 export type EnvelopeKind = NextEnvelope["kind"] | DriveEnvelope["kind"];
 
-/**
- * The shape every envelope shares after the guard: a `kind` discriminant + the
- * rest. `kind` is narrowed to {@link EnvelopeKind} — the guard only ever returns
- * an envelope whose kind passed the `knownKinds` membership check, so TS callers
- * can switch on it exhaustively rather than re-checking a bare `string`.
- */
-export interface GuardedEnvelope {
-  readonly kind: EnvelopeKind;
-  readonly [field: string]: unknown;
-}
+/** Every engine envelope variant — the typed contract the engine serializes. */
+export type EngineEnvelope = NextEnvelope | DriveEnvelope;
 
 /**
  * Parse one verbatim-copied CLI stdout string and assert its `kind` discriminant
@@ -84,16 +76,32 @@ export interface GuardedEnvelope {
  * non-string input, non-JSON / empty text, a non-object (primitive/array/null)
  * top level, a missing or non-string `kind`, or a `kind` outside `knownKinds`.
  *
+ * Generic over the kind set: passing {@link NEXT_KINDS} narrows the return to the
+ * `NextEnvelope` variants, {@link DRIVE_KINDS} to the `DriveEnvelope` variants, so
+ * a caller can `switch (env.kind)` and get the right per-variant PAYLOAD type
+ * instead of a bare `{ [field]: unknown }`. The narrowing is a single documented
+ * cast at the `return` (see there): the engine is the TRUSTED producer of a
+ * well-formed {@link EngineEnvelope}, and only the `kind` discriminant — the exact
+ * field the exec-agent re-keys — is re-validated at this boundary; the payload
+ * shape is the engine's typed contract, not re-checked here.
+ *
+ * Over-wideness caveat: `"quota-blocked"` is the ONE kind shared by both unions,
+ * so for that single variant `Extract` returns BOTH the Next and Drive payload
+ * shapes (a `NEXT_KINDS` call could surface the Drive quota-blocked member). Every
+ * non-shared kind narrows to its exact variant. This is harmless — the cast still
+ * yields a genuine engine value — and only matters if a caller reads
+ * quota-blocked-specific fields without re-narrowing by union.
+ *
  * @param raw        the agent's verbatim stdout echo (`env.raw`).
  * @param knownKinds {@link NEXT_KINDS} or {@link DRIVE_KINDS} for the call site.
  * @param context    "next" | "drive" — named in the error so a corruption points
  *                   at the boundary it crossed.
  */
-export function parseEnvelope(
+export function parseEnvelope<K extends EnvelopeKind>(
   raw: string,
-  knownKinds: ReadonlySet<string>,
+  knownKinds: ReadonlySet<K>,
   context: "next" | "drive",
-): GuardedEnvelope {
+): Extract<EngineEnvelope, { kind: K }> {
   if (typeof raw !== "string") {
     throw new Error(
       `${context}: envelope raw must be a string, got ${typeof raw} — the exec-agent did not ` +
@@ -126,12 +134,21 @@ export function parseEnvelope(
         `exec-agent re-keyed the engine envelope instead of copying stdout verbatim`,
     );
   }
-  if (!knownKinds.has(env.kind)) {
+  // `knownKinds` is typed `ReadonlySet<K>`; widen for the membership test since
+  // `env.kind` is still an unvalidated `string` here (this IS the validation). The
+  // cast is TS-only — the inline JS mirror in the workflow runs `knownKinds.has(...)`
+  // verbatim, so runtime behavior stays byte-identical.
+  if (!(knownKinds as ReadonlySet<string>).has(env.kind)) {
     throw new Error(
       `${context}: unknown envelope kind '${env.kind}' (expected one of ` +
         `${[...knownKinds].map((k) => `'${k}'`).join(", ")}) — the exec-agent corrupted the ` +
         `engine envelope at the workflow boundary`,
     );
   }
-  return env as GuardedEnvelope;
+  // DOCUMENTED CAST: `kind` is now a verified member of `knownKinds`, so the value
+  // is one of the `Extract<EngineEnvelope, { kind: K }>` variants. We assert the
+  // PAYLOAD shape (not re-validated above) on the strength of the engine being the
+  // trusted producer — the only corruption this boundary defends against is the
+  // exec-agent re-keying `kind`, which the membership check already caught.
+  return env as Extract<EngineEnvelope, { kind: K }>;
 }
