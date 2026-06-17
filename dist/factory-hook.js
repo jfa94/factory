@@ -6983,7 +6983,7 @@ async function readAllStdin4() {
 }
 
 // src/hooks/pipeline-guards.ts
-import { sep as sep4 } from "node:path";
+import { sep as sep5 } from "node:path";
 
 // src/core/state/schema.ts
 var RunStatusEnum = external_exports.enum([
@@ -7234,6 +7234,9 @@ import { join as join3 } from "node:path";
 
 // src/shared/ids.ts
 var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+function isValidId(id) {
+  return ID_PATTERN.test(id);
+}
 function validateId(id, label = "id") {
   if (id.length === 0) {
     throw new Error(`${label}: empty`);
@@ -7247,6 +7250,7 @@ function validateId(id, label = "id") {
 // src/core/state/paths.ts
 var SPECS_DIR = "specs";
 var RUNS_DIR = "runs";
+var WORKTREES_DIR = "worktrees";
 var CURRENT_LINK = "current";
 var STATE_FILE = "state.json";
 function repoKey(repo) {
@@ -7261,6 +7265,9 @@ function repoKey(repo) {
 }
 function runsRoot(dataDir) {
   return join3(dataDir, RUNS_DIR);
+}
+function worktreesRoot(dataDir) {
+  return join3(dataDir, WORKTREES_DIR);
 }
 function runDir(dataDir, runId) {
   validateId(runId, "run-id");
@@ -7487,6 +7494,20 @@ var StateManager = class {
     }
     return null;
   }
+  /**
+   * Find the SINGLE non-terminal run owned by `session` (its `owner_session`), or
+   * null. Powers the session-scoped Bash guards (run-isolation L1.3): a guard fires
+   * only for the run the stopping/acting session actually owns, never a concurrent
+   * run in another repo. An empty session, no match, or ≥2 matches (ambiguous — one
+   * session minting runs in two repos) all return null, so the caller fails SAFE
+   * (passes through) rather than gating the wrong run.
+   */
+  async findActiveByOwner(session) {
+    if (session.length === 0) return null;
+    const runs = await this.listRuns();
+    const owned = runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+    return owned.length === 1 ? owned[0] : null;
+  }
   // ---- update (locked read-modify-write) ---------------------------------
   /**
    * Atomically mutate a run under the lock. `mutator` receives the current state
@@ -7635,6 +7656,7 @@ function decideFinalize(run) {
 // src/hooks/hook-context.ts
 import { existsSync as existsSync4 } from "node:fs";
 import { lstat, readlink } from "node:fs/promises";
+import { isAbsolute as isAbsolute2, relative, sep as sep4 } from "node:path";
 var BrokenRunStateError = class extends Error {
   constructor(target) {
     super(`runs/current symlink is broken (target: ${target}); failing closed`);
@@ -7670,6 +7692,37 @@ async function loadActiveRun(opts = {}) {
   const run = await manager.readCurrent();
   if (run === null) return null;
   return { dataDir, run };
+}
+async function loadOwnerScopedRun(opts = {}) {
+  const env = opts.env ?? process.env;
+  const session = (env.CLAUDE_CODE_SESSION_ID ?? "").trim();
+  if (session.length === 0) {
+    return loadActiveRun(opts);
+  }
+  let dataDir;
+  try {
+    dataDir = resolveDataDir(opts);
+  } catch {
+    return null;
+  }
+  const manager = new StateManager({ ...opts, dataDir });
+  const run = await manager.findActiveByOwner(session);
+  return run === null ? null : { dataDir, run };
+}
+function runTaskForPath(dataDir, absPath) {
+  if (dataDir.length === 0 || absPath.length === 0) return null;
+  const rootCanon = canonicalizePath(worktreesRoot(dataDir));
+  const pathCanon = canonicalizePath(absPath);
+  const rel = relative(rootCanon, pathCanon);
+  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep4}`) || isAbsolute2(rel)) {
+    return null;
+  }
+  const segments = rel.split(sep4);
+  if (segments.length < 2) return null;
+  const [run_id, task_id] = segments;
+  if (!run_id || !task_id) return null;
+  if (!isValidId(run_id) || !isValidId(task_id)) return null;
+  return { run_id, task_id };
 }
 function statusToStage(status) {
   switch (status) {
@@ -7712,10 +7765,10 @@ function isTestWriterPhase(active) {
 // src/hooks/pipeline-guards.ts
 var WRITE_TOOLS2 = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
 function isTestPath(p) {
-  const base = p.split(sep4).pop() ?? p;
+  const base = p.split(sep5).pop() ?? p;
   if (/\.(test|spec)\./.test(base)) return true;
   if (/\.(test-helpers|test-utils)\./.test(base)) return true;
-  const segments = p.split(sep4);
+  const segments = p.split(sep5);
   if (segments.includes("tests") || segments.includes("__tests__")) return true;
   if (segments.includes("fixtures")) return true;
   return false;
@@ -7728,30 +7781,57 @@ function isGhPrCreate(cmd) {
 function isGhPrMerge(cmd) {
   return GH_PR_MERGE_RE.test(cmd);
 }
+async function decideWriteScope(input, deps) {
+  const targets = filePathsOf(input);
+  if (targets.length === 0) return null;
+  let dataDir;
+  try {
+    dataDir = resolveDataDir(deps);
+  } catch {
+    return null;
+  }
+  const loadRunById = deps.loadRunById ?? ((dir, runId) => new StateManager({ ...deps, dataDir: dir }).read(runId));
+  for (const target of targets) {
+    const ref = runTaskForPath(dataDir, target);
+    if (ref === null) continue;
+    let run;
+    try {
+      run = await loadRunById(dataDir, ref.run_id);
+    } catch {
+      return deny(
+        "test_writer_scope_broken",
+        `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', whose run state is missing or corrupt; failing closed.`
+      );
+    }
+    const activeTask = resolveActiveTask(run, ref.task_id);
+    if (isTestWriterPhase(activeTask) && !isTestPath(target)) {
+      return deny(
+        "test_writer_scope",
+        `Test-writer phase: only test files allowed. Detected write to '${target}'. Move implementation code to the GREEN (exec) phase.`
+      );
+    }
+  }
+  return null;
+}
 async function decidePipelineGuards(input, deps = {}) {
-  const loadRun = deps.loadRun ?? loadActiveRun;
+  const tool = toolNameOf(input);
+  const cmd = commandOf(input);
+  if (WRITE_TOOLS2.has(tool)) {
+    const scoped = await decideWriteScope(input, deps);
+    if (scoped !== null) return scoped;
+  }
+  if (cmd.length === 0) return allow();
+  const loadRun = deps.loadRun ?? loadOwnerScopedRun;
   const active = await loadRun(deps);
   if (active === null) return allow();
   const { run } = active;
-  const tool = toolNameOf(input);
-  const cmd = commandOf(input);
-  if (cmd.length > 0 && isNestedShellOrHookBypass(cmd)) {
+  if (isNestedShellOrHookBypass(cmd)) {
     return deny(
       "nested_shell_denied",
       `nested-shell or hook-bypass not allowed while a pipeline run is active: ${cmd}`
     );
   }
   const activeTask = resolveActiveTask(run);
-  if (WRITE_TOOLS2.has(tool) && isTestWriterPhase(activeTask)) {
-    for (const target of filePathsOf(input)) {
-      if (!isTestPath(target)) {
-        return deny(
-          "test_writer_scope",
-          `Test-writer phase: only test files allowed. Detected write to '${target}'. Move implementation code to the GREEN (exec) phase.`
-        );
-      }
-    }
-  }
   if (tool === "Bash" && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {
     const task = activeTask?.task;
     if (!task) {
@@ -7959,6 +8039,13 @@ function decideStop(run, allowStop, stoppingSession) {
   }
   return { kind: "finalize", status: decideFinalize(run).run_status };
 }
+async function resolveStopRun(manager, stoppingSession) {
+  if (stoppingSession === void 0) return manager.readCurrent();
+  const owned = await manager.findActiveByOwner(stoppingSession);
+  if (owned !== null) return owned;
+  const current = await manager.readCurrent();
+  return current !== null && current.owner_session === void 0 ? current : null;
+}
 async function runStopGate(_argv = [], deps = {}) {
   const emit2 = deps.emit ?? ((s) => process.stdout.write(s));
   const allowStop = deps.allowStop ?? process.env.FACTORY_ALLOW_STOP === "1";
@@ -7974,7 +8061,7 @@ async function runStopGate(_argv = [], deps = {}) {
   }
   let run;
   try {
-    run = await manager.readCurrent();
+    run = await resolveStopRun(manager, stoppingSession);
   } catch (err) {
     const reason = `pipeline state unreadable: ${err.message}. Repair runs/current \u2192 state.json (or clear runs/current) before stopping.`;
     log5.error(reason);

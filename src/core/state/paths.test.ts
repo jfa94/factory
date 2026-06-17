@@ -7,6 +7,7 @@ import {
   runStatePath,
   currentLinkPath,
   docsFactoryDir,
+  worktreesRoot,
 } from "./paths.js";
 
 describe("repoKey — repo id to one safe path segment", () => {
@@ -47,6 +48,9 @@ describe("two-store layout", () => {
     expect(runDir(data, "run-1")).toBe(join(data, "runs", "run-1"));
     expect(runStatePath(data, "run-1")).toBe(join(data, "runs", "run-1", "state.json"));
     expect(currentLinkPath(data)).toBe(join(data, "runs", "current"));
+  });
+  it("worktrees root is a sibling of runs/ and specs/ (per-task worktrees live here)", () => {
+    expect(worktreesRoot(data)).toBe(join(data, "worktrees"));
   });
   it("rejects an unsafe run id / spec id", () => {
     expect(() => runDir(data, "../escape")).toThrow();

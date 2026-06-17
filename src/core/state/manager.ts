@@ -321,6 +321,21 @@ export class StateManager {
     return null;
   }
 
+  /**
+   * Find the SINGLE non-terminal run owned by `session` (its `owner_session`), or
+   * null. Powers the session-scoped Bash guards (run-isolation L1.3): a guard fires
+   * only for the run the stopping/acting session actually owns, never a concurrent
+   * run in another repo. An empty session, no match, or ≥2 matches (ambiguous — one
+   * session minting runs in two repos) all return null, so the caller fails SAFE
+   * (passes through) rather than gating the wrong run.
+   */
+  async findActiveByOwner(session: string): Promise<RunState | null> {
+    if (session.length === 0) return null;
+    const runs = await this.listRuns();
+    const owned = runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+    return owned.length === 1 ? owned[0]! : null;
+  }
+
   // ---- update (locked read-modify-write) ---------------------------------
 
   /**

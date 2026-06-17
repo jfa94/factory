@@ -6415,6 +6415,7 @@ var SPECS_DIR = "specs";
 var SPEC_BUILD_DIR = "spec-build";
 var DOCS_FACTORY_DIR = "factory";
 var RUNS_DIR = "runs";
+var WORKTREES_DIR = "worktrees";
 var CURRENT_LINK = "current";
 var STATE_FILE = "state.json";
 var METRICS_FILE = "metrics.jsonl";
@@ -6431,6 +6432,9 @@ function repoKey(repo) {
 }
 function runsRoot(dataDir) {
   return join3(dataDir, RUNS_DIR);
+}
+function worktreesRoot(dataDir) {
+  return join3(dataDir, WORKTREES_DIR);
 }
 function runDir(dataDir, runId) {
   validateId(runId, "run-id");
@@ -6675,6 +6679,20 @@ var StateManager = class {
       }
     }
     return null;
+  }
+  /**
+   * Find the SINGLE non-terminal run owned by `session` (its `owner_session`), or
+   * null. Powers the session-scoped Bash guards (run-isolation L1.3): a guard fires
+   * only for the run the stopping/acting session actually owns, never a concurrent
+   * run in another repo. An empty session, no match, or ≥2 matches (ambiguous — one
+   * session minting runs in two repos) all return null, so the caller fails SAFE
+   * (passes through) rather than gating the wrong run.
+   */
+  async findActiveByOwner(session) {
+    if (session.length === 0) return null;
+    const runs = await this.listRuns();
+    const owned = runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+    return owned.length === 1 ? owned[0] : null;
   }
   // ---- update (locked read-modify-write) ---------------------------------
   /**
@@ -10855,7 +10873,7 @@ import { join as join12 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join12(dataDir, "worktrees", runId, taskId);
+  return join12(worktreesRoot(dataDir), runId, taskId);
 }
 
 // src/driver/handlers.ts

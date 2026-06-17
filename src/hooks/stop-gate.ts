@@ -134,7 +134,7 @@ export function decideStop(
 /** Options for {@link runStopGate} (injectable for tests). */
 export interface StopGateDeps extends DataDirOptions {
   /** Override the StateManager (tests). */
-  manager?: Pick<StateManager, "readCurrent" | "finalize">;
+  manager?: Pick<StateManager, "readCurrent" | "finalize" | "findActiveByOwner">;
   /** Override the escape-hatch flag (else read from FACTORY_ALLOW_STOP). */
   allowStop?: boolean;
   /** stdout writer (tests capture the block JSON). */
@@ -144,9 +144,35 @@ export interface StopGateDeps extends DataDirOptions {
 }
 
 /**
+ * Resolve the run this Stop event should gate — the run the STOPPING SESSION OWNS,
+ * NOT whatever `runs/current` happens to point at. This closes a latent clobber bug:
+ * a 2nd `run create` repoints the global pointer, so a session reading `current`
+ * could finalize/ignore another session's run and leave its OWN run dangling.
+ *
+ * Precedence:
+ *   1. unknown stopper (no stdin)            → global `runs/current` (degraded-safe,
+ *      today's behavior — we cannot attribute by owner).
+ *   2. known stopper owning a live run       → THAT run (clobber-immune).
+ *   3. known stopper owning no STAMPED run   → adopt `runs/current` ONLY if it is
+ *      itself un-stamped (owner unknown) — preserving {@link decideStop}'s
+ *      "owner unknown → degraded-safe block" contract — but NEVER adopt a run owned
+ *      by a DIFFERENT known session (that one isn't ours → pass through).
+ */
+async function resolveStopRun(
+  manager: Pick<StateManager, "readCurrent" | "findActiveByOwner">,
+  stoppingSession: string | undefined,
+): Promise<RunState | null> {
+  if (stoppingSession === undefined) return manager.readCurrent();
+  const owned = await manager.findActiveByOwner(stoppingSession);
+  if (owned !== null) return owned;
+  const current = await manager.readCurrent();
+  return current !== null && current.owner_session === undefined ? current : null;
+}
+
+/**
  * Run the Stop hook end-to-end. Reads the Stop event stdin to extract the STOPPING
  * session id (`session_id`) so the gate can session-scope its block (Prompt J), then
- * inspects the run store. Always returns {@link EXIT.OK} — the block JSON on stdout
+ * resolves the run THAT session owns ({@link resolveStopRun}). Always returns {@link EXIT.OK} — the block JSON on stdout
  * (not the exit code) is the signal Claude Code acts on, and a Stop hook must not
  * crash the session with a non-zero exit. Both "block" cases (live run, finalize/read
  * failure) emit `{decision:"block"}`. A malformed/empty stdin yields an UNKNOWN
@@ -179,7 +205,7 @@ export async function runStopGate(
 
   let run: RunState | null;
   try {
-    run = await manager.readCurrent();
+    run = await resolveStopRun(manager, stoppingSession);
   } catch (err) {
     // Corrupt/unreadable current state.json: block so a human notices (the
     // alternative — silently stopping on corrupt state — is the bug Δ M9 fixed).

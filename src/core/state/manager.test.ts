@@ -346,6 +346,50 @@ describe("enumeration: listRuns / findActiveBySpec (resolve-or-reuse)", () => {
   });
 });
 
+describe("findActiveByOwner — resolve the live run a session owns (run-isolation L1.3)", () => {
+  const specA: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
+  const specB: SpecPointer = { repo: "acme/other", spec_id: "7-search", issue_number: 7 };
+
+  it("returns the non-terminal run whose owner_session matches", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    const found = await m.findActiveByOwner("sess-A");
+    expect(found?.run_id).toBe("run-1");
+  });
+
+  it("ignores runs owned by a DIFFERENT session (cross-session isolation)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    expect(await m.findActiveByOwner("sess-B")).toBeNull();
+  });
+
+  it("ignores terminal runs (a finalized run is not the session's live run)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    await m.finalize("run-1", "completed");
+    expect(await m.findActiveByOwner("sess-A")).toBeNull();
+  });
+
+  it("never matches a run that carries no owner_session", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA }); // no owner stamped
+    expect(await m.findActiveByOwner("sess-A")).toBeNull();
+  });
+
+  it("returns null when the SAME session owns ≥2 live runs (ambiguous → fail-safe)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    await m.create({ run_id: "run-2", spec: specB, owner_session: "sess-A" });
+    expect(await m.findActiveByOwner("sess-A")).toBeNull();
+  });
+
+  it("an empty session id never matches (defensive)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    expect(await m.findActiveByOwner("")).toBeNull();
+  });
+});
+
 describe("withSpecLock serializes the resolve-or-reuse scan→create (TOCTOU close)", () => {
   const specA: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
 
