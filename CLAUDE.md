@@ -4,7 +4,7 @@ Autonomous coding pipeline that converts GitHub PRD issues into merged pull requ
 
 ## Architecture (Model A)
 
-- The plugin surface is markdown (`commands/`, `agents/`, `skills/`) + hooks. The deterministic engine owns ALL control flow and exposes ONE seam — the **coroutine** (`factory next` + `factory drive`). Two thin drivers step it: the in-session LLM orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`, `--mode session`) and the plugin-shipped Workflow script (`workflows/factory-run.workflow.js`, `--mode workflow`). A driver only spawns the `Agent()`s the coroutine's `DriveEnvelope` manifest names — it carries no pipeline logic of its own.
+- The plugin surface is markdown (`commands/`, `agents/`, `skills/`) + hooks. The deterministic engine owns ALL control flow and exposes ONE seam — the **coroutine** (`factory next` + `factory drive`). Two thin drivers step it: the in-session LLM orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`, `--mode session`) and the plugin-shipped Workflow script (`scripts/factory-run-driver.js`, `--mode workflow`). A driver only spawns the `Agent()`s the coroutine's `DriveEnvelope` manifest names — it carries no pipeline logic of its own.
 - The deterministic engine is one Node+TS CLI — `factory <subcommand>` — built by esbuild into two checked-in bundles: `dist/factory.js` (CLI) and `dist/factory-hook.js` (hook dispatcher, wired in `hooks/hooks.json`). `bin/factory` is the PATH shim onto the bundle.
 - The CLI is the coroutine seam + reporters + writers, never an agent-spawner: `factory next` emits the ready-task envelope (`NextEnvelope`); `factory drive` emits the spawn manifest (`DriveEnvelope`) and, via `--results`, folds agent output into ONE state step. The six retired single-step writers (`run-task`/`advance`/`drop`/`record-producer`/`record-holdout`/`record-reviews`) collapsed into the coroutine; the surviving writers are `spec`, `rescue`, `scaffold`, `configure`, `state`.
 - Source lives in `src/` (vitest, colocated `*.test.ts`). `npm run verify` = typecheck && lint && test && build. `npx tsc` is shadowed — use `npm run typecheck`.
@@ -29,7 +29,7 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 ## Key entry points
 
 - `commands/run.md` — main entry (`--mode session|workflow`: session = the orchestrator loop in the invoking Claude Code session; workflow = the Workflow script. See `skills/pipeline-orchestrator/SKILL.md` for the protocol + CLI surface table)
-- `workflows/factory-run.workflow.js` — the `--mode workflow` driver: a Workflow script stepping the same `next`/`drive` seam, wrapping every CLI call in a haiku exec-agent (Workflow JS can't shell out)
+- `scripts/factory-run-driver.js` — the `--mode workflow` driver: a Workflow script stepping the same `next`/`drive` seam, wrapping every CLI call in a haiku exec-agent (Workflow JS can't shell out)
 - `src/cli/main.ts` — the `factory` subcommand registry (run, spec, next, drive, rescue, score, state, scaffold, configure, config-defaults)
 - `src/driver/coroutine.ts` + `src/driver/next.ts` — the task-level and run-level coroutines behind `factory drive`/`factory next` (fold logic in `src/driver/fold.ts`)
 - `src/hooks/main.ts` — the `factory-hook` guard dispatch (TCB write-deny, holdout guard, secret guard, branch protection, stop gates)

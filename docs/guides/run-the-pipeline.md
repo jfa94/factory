@@ -45,7 +45,7 @@ runs:
   (`skills/pipeline-orchestrator/SKILL.md`). It runs in your Claude Code session
   and drives tasks one at a time.
 - **`--mode workflow`** — the plugin-shipped Workflow script
-  (`workflows/factory-run.workflow.js`). It drives ready tasks in the background;
+  (`scripts/factory-run-driver.js`). It drives ready tasks in the background;
   because Workflow JS cannot shell out, it wraps every `factory` CLI call in a
   small exec agent. Note: workflow mode has no quota pacing (it cannot observe the
   usage signal) — it hard-stops when the allowance runs out.

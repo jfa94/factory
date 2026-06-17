@@ -11,7 +11,7 @@
 import js from "@eslint/js";
 import { createRequire } from "node:module";
 
-// Workflow scripts (workflows/**/*.js) are ESM with a top-level `return` — the
+// The Workflow driver script (scripts/factory-run-driver.js) is ESM with a top-level `return` — the
 // Workflow harness wraps the script body in an async function, so the return is
 // legal at runtime. ESLint core force-disables espree's `globalReturn` whenever
 // sourceType is "module" (lib/languages/js/index.js normalizeLanguageOptions),
@@ -32,7 +32,7 @@ export default [
     // settings, and plans — none of it is lintable source. Without this, ESLint
     // walks into `.claude/worktrees/*/` and lints stale copies of the build +
     // workflow scripts (the latter parse-error on their top-level `return`,
-    // since the worktree path doesn't match the `workflows/**` parser override).
+    // since the worktree path doesn't match the driver-script parser override).
     ignores: ["dist/**", "node_modules/**", "coverage/**", "src/**/*.ts", ".claude/**"],
   },
   js.configs.recommended,
@@ -53,7 +53,7 @@ export default [
     // which injects these globals and wraps the body in an async context where
     // top-level `return` is legal (hence `globalReturn` + the delegating parser
     // above). No TS rules apply.
-    files: ["workflows/**/*.js"],
+    files: ["scripts/factory-run-driver.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",

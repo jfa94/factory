@@ -40,7 +40,7 @@ export const PANEL_ROLES: readonly SpawnRole[] = [
  * `prompt_ref` points at a real per-run ProducerContext artifact the driver Reads
  * (handlers.ts `producerSpawn` → `putProducerContext`) — NO driver reads this value
  * for a reviewer. Both drivers (the session `pipeline-orchestrator` SKILL.md panel
- * step and `workflows/factory-run.workflow.js`) build the reviewer prompt INLINE
+ * step and `scripts/factory-run-driver.js`) build the reviewer prompt INLINE
  * from the reviewer's `agents/<role>.md` definition plus the shared
  * `skills/review-protocol/SKILL.md` contract; the reviewer's lens lives in its agent
  * definition + the static protocol, so there is no per-run reviewer prompt file to

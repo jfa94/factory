@@ -36,7 +36,7 @@ with a hard seam between them:
 --results`. It carries no pipeline logic and never decides a transition by prose.
   Two interchangeable drivers (chosen by `--mode` on `/factory:run`): the in-session
   orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`, default) and the
-  plugin-shipped Workflow script (`workflows/factory-run.workflow.js`).
+  plugin-shipped Workflow script (`scripts/factory-run-driver.js`).
 
 The CLI subcommands are **reporters** (read-only; emit one JSON envelope), the
 **coroutine** (`next` / `drive` — the control-flow seam), or **writers** (single-step

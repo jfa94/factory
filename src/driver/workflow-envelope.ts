@@ -25,7 +25,7 @@
  *
  * SOURCE-OF-TRUTH / DELIBERATE MIRROR: the Workflow runtime cannot `import` or
  *   `require` a sibling module (it injects 8 readonly globals and nothing else),
- *   so `workflows/factory-run.workflow.js` INLINES a byte-identical copy of
+ *   so `scripts/factory-run-driver.js` INLINES a byte-identical copy of
  *   {@link parseEnvelope} + the kind sets below. This module is the tested source
  *   of truth; the workflow's inline copy carries a comment pointing back here.
  *   Keep the two in lockstep — a drift is a silent re-introduction of the bug.

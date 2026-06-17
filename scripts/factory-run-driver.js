@@ -1,8 +1,9 @@
 export const meta = {
-  name: "factory-run",
+  name: "factory-run-driver",
   description:
-    "Factory workflow driver: step ready tasks in parallel through the factory CLI engine",
-  whenToUse: "Launched by /factory:run --mode workflow after the spec phase + run create",
+    "INTERNAL workflow driver — launched by /factory:run --mode workflow; not a direct entry point. Steps ready tasks in parallel through the factory CLI engine.",
+  whenToUse:
+    "Internal only. Launched programmatically by /factory:run --mode workflow (after the spec phase + run create) via Workflow({ scriptPath }). Do NOT invoke directly — it skips preconditions/spec/run-create and fails.",
   phases: [
     { title: "Drive", detail: "next/drive coroutine loop; producers + reviewers per manifest" },
   ],
@@ -368,7 +369,7 @@ for (;;) {
       .filter(Boolean)
       .join(", ");
     throw new Error(
-      `factory-run: engine envelope missing ${missing} — rebuild dist (npm run build) ` +
+      `factory-run-driver: engine envelope missing ${missing} — rebuild dist (npm run build) ` +
         `and relaunch via /factory:run --mode workflow`,
     );
   }

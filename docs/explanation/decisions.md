@@ -555,7 +555,7 @@ Every narrowing has been tried and produces the same failure mode: the pipeline 
 A **driver** carries no pipeline logic of its own — it only calls the coroutine, spawns the `Agent()`s the `DriveEnvelope` manifest names, and feeds their output back via `drive --results`. Two interchangeable drivers step the same seam, selected by `--mode` on `/factory:run`:
 
 - `--mode session` (default) — the in-session LLM orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`), which can spawn `Agent()`s directly.
-- `--mode workflow` — the plugin-shipped Workflow script (`workflows/factory-run.workflow.js`), which wraps every CLI call in a small exec agent (Workflow JS cannot shell out).
+- `--mode workflow` — the plugin-shipped Workflow script (`scripts/factory-run-driver.js`), which wraps every CLI call in a small exec agent (Workflow JS cannot shell out).
 
 Both are subscription-only; there is no headless `claude -p` / API-token path.
 

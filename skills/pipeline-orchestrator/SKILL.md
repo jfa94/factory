@@ -85,7 +85,7 @@ Workflow launch (`commands/run.md`). Do NOT enter Phase 3.
 ## Phase 3 — THE LOOP
 
 THE LOOP is the `--mode session` driver ONLY. In `--mode workflow` you stopped after Phase 2 — the
-Workflow script (`workflows/factory-run.workflow.js`) is the loop; do not run this phase.
+Workflow script (`scripts/factory-run-driver.js`) is the loop; do not run this phase.
 
 `<mode>` is the ship mode the invoking command passed through (`no-merge` default | `live`) — pass it verbatim; never choose it yourself.
 

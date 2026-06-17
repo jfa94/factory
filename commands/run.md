@@ -61,7 +61,7 @@ task at a time, every agent spawned in this session.
 After Phase 2, launch the plugin's workflow driver and relay its result:
 
 ```
-Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/factory-run.workflow.js" })
+Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/scripts/factory-run-driver.js" })
 ```
 
 Pass **no `args`**. The script self-resolves its run context (`run_id`, `data_dir`, `ship_mode`)

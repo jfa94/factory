@@ -38,7 +38,7 @@ graph TD
     Cmd[commands/*.md]
     Skill[skills/pipeline-orchestrator/SKILL.md]
     Agents[agents/*.md]
-    WF[workflows/factory-run.workflow.js]
+    WF[scripts/factory-run-driver.js]
   end
 
   subgraph Engine["Deterministic engine (TypeScript)"]

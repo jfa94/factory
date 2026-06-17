@@ -52,7 +52,7 @@ Two interchangeable drivers step the same seam, selected by `--mode` on
   (`skills/pipeline-orchestrator/SKILL.md`), running in the invoking Claude Code
   session. This is the driver that can spawn `Agent()`s directly.
 - **`--mode workflow`** — the plugin-shipped Workflow script
-  (`workflows/factory-run.workflow.js`). Because Workflow JS cannot shell out, it
+  (`scripts/factory-run-driver.js`). Because Workflow JS cannot shell out, it
   wraps every `factory` CLI call in a small exec agent (haiku).
 
 Both are **subscription-only** — there is no headless `claude -p` / API-token path
