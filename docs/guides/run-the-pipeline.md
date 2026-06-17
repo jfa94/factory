@@ -52,7 +52,9 @@ runs:
 
 `--ship-mode` is the cutover-safety knob. The default `no-merge` opens each task
 PR but never merges; pass `live` only when you have explicitly opted into
-auto-merge. Ship mode is not persisted — re-pass it on resume.
+auto-merge. Ship mode **is persisted** on the run at create, so the workflow
+driver, `resume`, and `finalize` read it back without re-passing — an explicit
+`--ship-mode` flag overrides the persisted value only when given.
 
 ## 3. What happens (the four phases)
 

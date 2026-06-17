@@ -111,20 +111,29 @@ runtime). Duplicate, self, dangling, or cyclic dependency edges fail loudly at
 seed time.
 
 ```
-factory run create --repo <owner/name> (--issue <n> | --spec-id <id>) [--run-id <id>]
+factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
+                   [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>] [--session-id <id>]
 ```
 
-| Flag                  | Notes                                                                   |
-| --------------------- | ----------------------------------------------------------------------- |
-| `--repo <owner/name>` | Repo identity (the first key of the spec store). Required.              |
-| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`. |
-| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.   |
-| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests).    |
+| Flag                  | Notes                                                                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <owner/name>` | **Optional.** Repo identity (the first key of the spec store). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with the remote fails loud. |
+| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`.                                                                                                         |
+| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                           |
+| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                          |
+| `--new`               | Force a fresh run even if a live one already exists for this spec (else create is idempotent).                                                                                  |
+| `--mode <mode>`       | `session` (quota-paced, default) \| `workflow` (no pacing — hard-stop). Persisted on the run.                                                                                   |
+| `--ship-mode <mode>`  | `no-merge` (default — open the rollup PR, never merge) \| `live` (serial-merge into staging). Persisted on the run so the workflow driver + resume read it without re-passing.  |
+| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`; absent ⇒ owner-unknown (gate runs unscoped).                             |
 
 Loud error if no spec exists for the issue — generate one first. The seeded run's
 `driver` is fixed to `sequential`: the v1 coroutine seam drives tasks one at a time.
-(The `--mode session|workflow` knob on `/factory:run` selects which _driver_
-steps the seam — not a CLI flag here; see [Run the pipeline](../guides/run-the-pipeline.md).)
+The `--mode session|workflow` value is persisted and selects which _driver_ steps
+the seam; `/factory:run` forwards its own `--mode` here (see
+[Run the pipeline](../guides/run-the-pipeline.md)). Create is **idempotent** with the
+auto-generated id: a repeat returns the existing non-terminal run for this
+`(repo, spec_id)` rather than spawning an orphan — pass `--new` (or a `--run-id`) to
+force a fresh run.
 
 ### `run resume`
 
@@ -194,8 +203,19 @@ then the ready set. Writes only on a quota breach or a cascade-drop; otherwise
 read-only. Throws LOUD on a dependency deadlock.
 
 ```
-factory next [--run <id>]      # defaults to runs/current
+factory next [--run <id>]                          # defaults to runs/current
+factory next --assert-owner <session>              # loud-assert runs/current ownership
 ```
+
+`--assert-owner <session>` is an opt-in guard for the `--mode workflow` driver's
+first `next` (which adopts `runs/current` rather than passing `--run`): if the
+resolved run's persisted `owner_session` disagrees with `<session>`, it throws
+loud instead of silently driving a foreign run that a concurrent `run create`
+redirected `runs/current` onto. Degrades safe (no assertion) when either side is
+unknown. Manual `factory next` never needs it.
+
+Every envelope also carries the self-resolved run context (`run_id`, canonical
+`data_dir`, `ship_mode`) so the workflow driver adopts them from the first `next`.
 
 Emits one of:
 
