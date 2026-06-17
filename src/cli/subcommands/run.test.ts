@@ -21,6 +21,7 @@ import {
   createRun,
   resolveOrCreateRun,
   applyResume,
+  resolveOwnerSession,
   type RunResumeEnvelope,
 } from "./run.js";
 import { EXIT } from "../exit-codes.js";
@@ -434,6 +435,35 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
         dataDir,
       }),
     ).rejects.toMatchObject({ isUsageError: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveOwnerSession — flag-over-env precedence (Prompt J, session-scoped gate)
+// ---------------------------------------------------------------------------
+
+describe("resolveOwnerSession", () => {
+  it("prefers the explicit --session-id flag over the env var", () => {
+    expect(resolveOwnerSession("sess-flag", { CLAUDE_CODE_SESSION_ID: "sess-env" })).toBe(
+      "sess-flag",
+    );
+  });
+
+  it("falls back to CLAUDE_CODE_SESSION_ID when the flag is absent", () => {
+    expect(resolveOwnerSession(undefined, { CLAUDE_CODE_SESSION_ID: "sess-env" })).toBe("sess-env");
+  });
+
+  it("returns undefined when neither flag nor env is set (owner-unknown is supported)", () => {
+    expect(resolveOwnerSession(undefined, {})).toBeUndefined();
+  });
+
+  it("treats a bare boolean flag as absent and falls back to env", () => {
+    expect(resolveOwnerSession(true, { CLAUDE_CODE_SESSION_ID: "sess-env" })).toBe("sess-env");
+  });
+
+  it("treats an empty-string flag/env as absent (degrades to owner-unknown)", () => {
+    expect(resolveOwnerSession("", { CLAUDE_CODE_SESSION_ID: "" })).toBeUndefined();
+    expect(resolveOwnerSession("", { CLAUDE_CODE_SESSION_ID: "sess-env" })).toBe("sess-env");
   });
 });
 

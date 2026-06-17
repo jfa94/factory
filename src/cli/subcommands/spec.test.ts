@@ -2,8 +2,17 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveSpec, gateSpec, storeSpec, specCommand, type SpecBuildDeps } from "./spec.js";
+import {
+  resolveSpec,
+  gateSpec,
+  storeSpec,
+  specCommand,
+  resolveSpecRepo,
+  type SpecBuildDeps,
+} from "./spec.js";
 import { EXIT } from "../exit-codes.js";
+import { parseArgs } from "../args.js";
+import { FakeGitClient } from "../../git/index.js";
 import { loadConfig } from "../../config/index.js";
 import { stringifyJson } from "../../shared/json.js";
 import { specBuildDir } from "../../core/state/paths.js";
@@ -204,7 +213,10 @@ describe("storeSpec", () => {
     expect(env.pointer.spec_id).toBe(`${ISSUE}-email-login`);
 
     // The durable spec is now readable + a subsequent resolve reuses it.
-    const manifest = await new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }).read(REPO, env.pointer.spec_id);
+    const manifest = await new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }).read(
+      REPO,
+      env.pointer.spec_id,
+    );
     expect(manifest.tasks).toHaveLength(1);
     expect(manifest.tasks[0]!.task_id).toBe("T1");
 
@@ -228,10 +240,73 @@ describe("specCommand (dispatch)", () => {
   it("returns USAGE for an unknown action", async () => {
     expect(await specCommand.run(["bogus"])).toBe(EXIT.USAGE);
   });
-  it("returns USAGE when --repo/--issue are missing", async () => {
+  it("returns USAGE when the required --issue is missing (--repo is optional/auto-derived)", async () => {
+    // `--issue` is validated FIRST and short-circuits to USAGE before --repo is
+    // ever resolved, so this exercises the missing-issue edge specifically.
     expect(await specCommand.run(["resolve"])).toBe(EXIT.USAGE);
   });
   it("returns USAGE for a non-positive --issue", async () => {
     expect(await specCommand.run(["gate", "--repo", REPO, "--issue", "0"])).toBe(EXIT.USAGE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveSpecRepo — auto-derive --repo from the origin remote (Prompt G)
+// ---------------------------------------------------------------------------
+
+describe("resolveSpecRepo auto-derives --repo from the origin remote", () => {
+  /** A FakeGitClient whose origin remote-url resolves to the given slug. */
+  function gitWithOrigin(slug: string): FakeGitClient {
+    const git = new FakeGitClient();
+    git.setRemoteUrl("origin", `git@github.com:${slug}.git`);
+    return git;
+  }
+
+  /** Parse a spec argv tail (post-action) into the args resolveSpecRepo consumes. */
+  function argsOf(...argv: string[]): ReturnType<typeof parseArgs> {
+    return parseArgs(argv);
+  }
+
+  it("no --repo flag → derives the repo from origin", async () => {
+    const repo = await resolveSpecRepo(argsOf("--issue", "123"), {
+      gitClient: gitWithOrigin(REPO),
+      cwd: "/wherever",
+    });
+    expect(repo).toBe(REPO);
+  });
+
+  it("an explicit --repo that MATCHES the origin (case-insensitively) wins as canonical", async () => {
+    const repo = await resolveSpecRepo(argsOf("--repo", "Owner/App", "--issue", "123"), {
+      gitClient: gitWithOrigin(REPO),
+      cwd: "/wherever",
+    });
+    expect(repo).toBe(REPO);
+  });
+
+  it("an explicit --repo that MISMATCHES the origin throws LOUD naming both", async () => {
+    await expect(
+      resolveSpecRepo(argsOf("--repo", "owner/other", "--issue", "123"), {
+        gitClient: gitWithOrigin(REPO),
+        cwd: "/wherever",
+      }),
+    ).rejects.toThrow(/owner\/other.*owner\/app|owner\/app.*owner\/other/s);
+  });
+
+  it("the mismatch is a UsageError (maps to EXIT.USAGE through the command wrapper)", async () => {
+    await expect(
+      resolveSpecRepo(argsOf("--repo", "owner/other", "--issue", "123"), {
+        gitClient: gitWithOrigin(REPO),
+        cwd: "/wherever",
+      }),
+    ).rejects.toMatchObject({ isUsageError: true });
+  });
+
+  it("no --repo and no origin remote throws LOUD (cannot auto-derive)", async () => {
+    await expect(
+      resolveSpecRepo(argsOf("--issue", "123"), {
+        gitClient: new FakeGitClient(), // no remotes configured
+        cwd: "/wherever",
+      }),
+    ).rejects.toThrow();
   });
 });

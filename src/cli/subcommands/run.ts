@@ -420,7 +420,7 @@ function parseMode(raw: string | boolean | undefined): RunState["mode"] | undefi
  * neither is available — owner-unknown is a supported (degraded-but-safe) state in
  * which the Stop gate falls back to its unscoped behavior.
  */
-function resolveOwnerSession(
+export function resolveOwnerSession(
   flag: string | boolean | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {

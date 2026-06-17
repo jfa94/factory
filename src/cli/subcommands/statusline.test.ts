@@ -167,6 +167,25 @@ describe("runStatusline (passthrough)", () => {
     expect(displayed).toBe("");
   });
 
+  it("leaves the display empty (EXIT.OK) when the original command exits non-zero", async () => {
+    // Exercises the `result.code !== 0` fail-soft branch (distinct from a spawn
+    // failure): the chained command runs but fails — display degrades to empty.
+    let displayed = "sentinel";
+    const code = await runStatusline([], {
+      dataDirOptions: { dataDir },
+      now: () => 8_999_999_000,
+      readStdin: () => Promise.resolve(ccPayload()),
+      originalStatusline: "exit 3",
+      writeStdout: (s) => {
+        displayed = s;
+      },
+    });
+    expect(code).toBe(EXIT.OK);
+    expect(displayed).toBe("");
+    // The cache is still written even though the passthrough failed.
+    expect(existsSync(usageCachePath(dataDir))).toBe(true);
+  });
+
   it("does not crash the statusline when the original command does not exist", async () => {
     process.env.FACTORY_ORIGINAL_STATUSLINE = "definitely-not-a-real-command-xyz";
     const code = await runStatusline([], {

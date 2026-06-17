@@ -147,6 +147,30 @@ describe("materializeMergedSettings", () => {
     expect(allow).toContain(`Read(${DATA_DIR}/**)`);
   });
 
+  it("throws LOUD when the template is not valid JSON", () => {
+    expect(() =>
+      materializeMergedSettings({
+        template: "not json at all {{{",
+        userSettings: {},
+        dataDir: DATA_DIR,
+        pluginRoot: PLUGIN_ROOT,
+        home: HOME,
+      }),
+    ).toThrow(/JSON/);
+  });
+
+  it("throws LOUD when the template parses to a non-object (e.g. an array)", () => {
+    expect(() =>
+      materializeMergedSettings({
+        template: JSON.stringify([1, 2, 3]),
+        userSettings: {},
+        dataDir: DATA_DIR,
+        pluginRoot: PLUGIN_ROOT,
+        home: HOME,
+      }),
+    ).toThrow(/not a JSON object/);
+  });
+
   it("emits valid JSON (round-trips through stringify/parse)", () => {
     const out = materializeMergedSettings({
       template: TEMPLATE,
@@ -229,5 +253,24 @@ describe("runAutonomyEnsure", () => {
     expect((written.env as Record<string, string>).FACTORY_ORIGINAL_STATUSLINE).toBe(
       `${HOME}/mine.sh`,
     );
+  });
+
+  it("degrades to an empty base (no throw) when the user's settings.json is unparseable", async () => {
+    const userSettingsPath = join(pluginRoot, "user-settings.json");
+    await writeFile(userSettingsPath, "{ this is : not json", "utf8");
+    // Must NOT throw — a corrupt user settings file falls back to {} base.
+    await runAutonomyEnsure({
+      dataDir,
+      pluginRoot,
+      userSettingsPath,
+      home: HOME,
+      writeStdout: (t) => out.push(t),
+    });
+    const written = JSON.parse(
+      await readFile(join(dataDir, "merged-settings.json"), "utf8"),
+    ) as Record<string, unknown>;
+    // Template defaults still applied; no user statusLine chained (base was empty).
+    expect((written.env as Record<string, string>).CLAUDE_PLUGIN_DATA).toBe(dataDir);
+    expect((written.env as Record<string, string>).FACTORY_ORIGINAL_STATUSLINE).toBeUndefined();
   });
 });
