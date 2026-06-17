@@ -16,7 +16,13 @@ export { DefaultGitClient } from "./git-client.js";
 export type { GitClient, GitOpts, PushOptions } from "./git-client.js";
 
 // repo identity resolution (Prompt G / F-repo): auto-derive --repo from origin
-export { parseRemoteUrl, validateRepoSlug, splitRepoSlug, resolveRepo } from "./repo.js";
+export {
+  parseRemoteUrl,
+  validateRepoSlug,
+  isValidRepoSlug,
+  splitRepoSlug,
+  resolveRepo,
+} from "./repo.js";
 export type { ResolveRepoArgs } from "./repo.js";
 
 // gh client

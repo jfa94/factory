@@ -63,6 +63,12 @@ export interface StatuslineDeps {
   writeStdout?: (text: string) => void;
   /** Override `$FACTORY_ORIGINAL_STATUSLINE` (defaults to the real env var). */
   originalStatusline?: string;
+  /**
+   * Override the command runner (defaults to the shared {@link exec}). Tests inject
+   * a double — e.g. one returning a timeout-killed result (`code: null`) — to drive
+   * the fail-soft branches without spawning a real (slow) process.
+   */
+  exec?: typeof exec;
 }
 
 /** Whether a parsed payload carries a usable `rate_limits` object. */
@@ -115,11 +121,17 @@ async function passthrough(payload: string, deps: StatuslineDeps): Promise<strin
     // Run through a shell so the user's command string (which may carry args and
     // a leading `~`) is honored, matching the old wrapper's argv expansion. The
     // value is operator-supplied via settings.json env, not attacker-controlled.
-    const result = await exec(original, [], { shell: true, input: payload });
+    // Hard 3s timeout so a hung original command can't stall EVERY statusline tick;
+    // on expiry the child is signal-killed (code: null), which the code-!==-0 branch
+    // below already converts to a fail-soft empty display.
+    const run = deps.exec ?? exec;
+    const result = await run(original, [], { shell: true, input: payload, timeoutMs: 3000 });
     if (result.code !== 0) {
-      log.warn(
-        `FACTORY_ORIGINAL_STATUSLINE exited ${result.code ?? "null"}; statusline left empty`,
-      );
+      const why =
+        result.code === null
+          ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)`
+          : `exited ${result.code}`;
+      log.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;

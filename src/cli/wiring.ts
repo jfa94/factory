@@ -16,7 +16,7 @@
 import { loadConfig, resolveDataDir, type DataDirOptions } from "../config/index.js";
 import { StateManager } from "../core/state/index.js";
 import { SpecStore } from "../spec/index.js";
-import { DefaultGitClient, DefaultGhClient } from "../git/index.js";
+import { DefaultGitClient, DefaultGhClient, isValidRepoSlug } from "../git/index.js";
 import { defaultGateTools } from "../verifier/deterministic/index.js";
 import { FsArtifactStore } from "../driver/artifacts.js";
 import { FsHoldoutStore } from "../verifier/holdout/index.js";
@@ -53,13 +53,18 @@ export interface LoadCliDepsOptions extends DataDirOptions {
 /**
  * Split a `owner/name` repo slug into its parts. A malformed slug in persisted run
  * state is a STORE-INTEGRITY defect (not user input), so it throws a plain Error —
- * loud, never silently degraded.
+ * loud, never silently degraded. Enforces the SAME charset as {@link isValidRepoSlug}
+ * (the last gate before owner/repo reach the gh REST paths in gh-client.ts): a stale
+ * run persisted before the resolveRepo charset gate must not slip `..`/metacharacters
+ * through to a `/repos/{owner}/{name}` path.
  */
 function splitRepo(slug: string): { owner: string; repo: string } {
-  const parts = slug.split("/");
-  if (parts.length !== 2 || parts[0]!.length === 0 || parts[1]!.length === 0) {
-    throw new Error(`wiring: run spec repo must be '<owner>/<name>', got '${slug}'`);
+  if (!isValidRepoSlug(slug)) {
+    throw new Error(
+      `wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`,
+    );
   }
+  const parts = slug.split("/");
   return { owner: parts[0]!, repo: parts[1]! };
 }
 

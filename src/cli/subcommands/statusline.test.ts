@@ -196,4 +196,36 @@ describe("runStatusline (passthrough)", () => {
     });
     expect(code).toBe(EXIT.OK);
   });
+
+  it("a timeout-killed original (code:null) degrades to an empty display, with a 3s timeout passed", async () => {
+    // The hung-command guard (D2): a signal-killed result (`code: null`, as the 3s
+    // timeout produces) takes the fail-soft branch. Inject an exec double so the
+    // assertion is deterministic (no real sleep) and verify the timeout was set.
+    let displayed = "sentinel";
+    let seenTimeout: number | undefined;
+    const code = await runStatusline([], {
+      dataDirOptions: { dataDir },
+      now: () => 8_999_999_000,
+      readStdin: () => Promise.resolve(ccPayload()),
+      originalStatusline: "sleep 9999",
+      exec: (_cmd, _args, opts) => {
+        seenTimeout = opts?.timeoutMs;
+        return Promise.resolve({
+          stdout: "",
+          stderr: "",
+          code: null, // killed by signal — what the timeout produces
+          signal: "SIGTERM",
+          truncated: false,
+        });
+      },
+      writeStdout: (s) => {
+        displayed = s;
+      },
+    });
+    expect(code).toBe(EXIT.OK);
+    expect(displayed).toBe("");
+    expect(seenTimeout).toBe(3000);
+    // The cache write is independent of the passthrough outcome.
+    expect(existsSync(usageCachePath(dataDir))).toBe(true);
+  });
 });

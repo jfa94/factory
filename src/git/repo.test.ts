@@ -74,8 +74,42 @@ describe("validateRepoSlug", () => {
     expect(validateRepoSlug("acme/widgets")).toBe("acme/widgets");
   });
 
+  it("accepts the full legal charset (dots, underscores, hyphens)", () => {
+    for (const ok of ["owner.name/repo.js", "a-b_c/d", "My.Repo/Some_Thing-1", "..foo/bar.."]) {
+      expect(validateRepoSlug(ok)).toBe(ok);
+    }
+  });
+
   it("throws a UsageError for a slug without exactly one slash", () => {
     for (const bad of ["no-slash", "a/b/c", "/widgets", "acme/", ""]) {
+      try {
+        validateRepoSlug(bad);
+        throw new Error(`expected validateRepoSlug(${JSON.stringify(bad)}) to throw`);
+      } catch (err) {
+        expect(isUsageError(err)).toBe(true);
+        expect((err as Error).message).toMatch(/owner.*name/i);
+      }
+    }
+  });
+
+  it("rejects path-traversal and out-of-charset segments (security boundary)", () => {
+    // `.`/`..` segments (traversal tokens), embedded slashes via encoding, spaces,
+    // shell/URL metacharacters — all must fail loud before reaching a gh REST path.
+    for (const bad of [
+      "../etc",
+      "owner/..",
+      "./x",
+      "owner/.",
+      "a b/c",
+      "acme/wid gets",
+      "acme/widgets;rm",
+      "acme/wid?gets",
+      "acme/wid#gets",
+      "acme/wid@gets",
+      "acme/wid:gets",
+      "acme/wid%2egets",
+      "acme/wid\\gets",
+    ]) {
       try {
         validateRepoSlug(bad);
         throw new Error(`expected validateRepoSlug(${JSON.stringify(bad)}) to throw`);
@@ -160,6 +194,21 @@ describe("resolveRepo", () => {
     await expect(
       resolveRepo({ explicit: "no-slash", cwd: "/repo", gitClient: gitWithOrigin(null) }),
     ).rejects.toThrow(/owner.*name/i);
+  });
+
+  it("no explicit + a DERIVED slug with a path-traversal/illegal segment → fails LOUD (security gate)", async () => {
+    // A malicious/typo'd origin must not inject `..` (or metacharacters) into the
+    // gh REST paths via the now-common auto-derive path. parseRemoteUrl yields the
+    // slug; resolveRepo must hold it to the same charset as an explicit --repo.
+    for (const badUrl of [
+      "git@github.com:owner/..", // → "owner/.." (path traversal)
+      "git@github.com:te st/re po", // → spaces
+      "git@github.com:owner/re;po", // → shell metacharacter
+    ]) {
+      const git = new FakeGitClient();
+      git.setRemoteUrl("origin", badUrl);
+      await expect(resolveRepo({ cwd: "/repo", gitClient: git })).rejects.toThrow(/owner.*name/i);
+    }
   });
 
   it("a remote-url probe that throws (not-a-git-repo) is treated as not-derivable", async () => {

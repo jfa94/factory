@@ -145,4 +145,14 @@ describe("loadCliDeps", () => {
     await seedRun("brokenrepo", "7-thing", 7);
     await expect(loadCliDeps({ dataDir, runId: RUN_ID })).rejects.toThrow(/owner.*name/i);
   });
+
+  it("rejects a persisted two-segment slug carrying a path-traversal/illegal segment", async () => {
+    // The charset gate (not just the segment-count check): `acme/..` is two
+    // non-empty segments — the OLD length-only splitRepo accepted it — but its `..`
+    // segment would escape the `/repos/{owner}/{name}` shape at the gh REST paths.
+    // repoKey("acme/..") sanitizes to "acme-.." (not a pure-dot escape), so the spec
+    // store round-trips and splitRepo's isValidRepoSlug gate is what must refuse it.
+    await seedRun("acme/..", "8-thing", 8);
+    await expect(loadCliDeps({ dataDir, runId: RUN_ID })).rejects.toThrow(/owner.*name/i);
+  });
 });

@@ -65,14 +65,42 @@ export function parseRemoteUrl(url: string): string | null {
 }
 
 /**
- * Validate a `owner/name` slug, returning it unchanged. LOUD {@link UsageError} when
- * it is not exactly two non-empty `/`-separated segments. The ONE repo-slug
- * validator (run / spec / scaffold reuse it).
+ * One repo-slug segment (owner OR name). GitHub names allow ASCII letters, digits,
+ * `.`, `_`, `-`; the `+` forbids an empty segment. A segment that is exactly `.` or
+ * `..` is rejected separately (below) — the char class admits dots, but a pure-dot
+ * segment is a path-traversal token, never a real owner/name.
+ */
+const REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * True iff `slug` is a well-formed `owner/name`: EXACTLY two segments that each
+ * match {@link REPO_SEGMENT} and are neither `.` nor `..`. The single source of
+ * truth for the repo-slug charset, shared by {@link validateRepoSlug} (the loud
+ * UsageError gate) and the persisted-state gate in `src/cli/wiring.ts`.
+ */
+export function isValidRepoSlug(slug: string): boolean {
+  const parts = slug.split("/");
+  return (
+    parts.length === 2 &&
+    parts.every((seg) => REPO_SEGMENT.test(seg) && seg !== "." && seg !== "..")
+  );
+}
+
+/**
+ * Validate a `owner/name` slug, returning it unchanged. LOUD {@link UsageError}
+ * unless {@link isValidRepoSlug}. The ONE repo-slug validator (run / spec / scaffold
+ * reuse it). This is a security boundary: the slug flows verbatim into the gh REST
+ * paths (`src/git/gh-client.ts`), so an unconstrained charset (slashes, spaces,
+ * `..`, `;`, URL metacharacters) would let a malformed slug escape the intended
+ * `/repos/{owner}/{name}` shape. Applied to BOTH an explicit `--repo` AND the
+ * slug derived from the `origin` remote (a malicious/typo'd remote is a real input).
  */
 export function validateRepoSlug(slug: string): string {
-  const parts = slug.split("/");
-  if (parts.length !== 2 || parts[0]!.length === 0 || parts[1]!.length === 0) {
-    throw new UsageError(`--repo must be '<owner>/<name>', got '${slug}'`);
+  if (!isValidRepoSlug(slug)) {
+    throw new UsageError(
+      `--repo must be '<owner>/<name>' where each part is [A-Za-z0-9._-] and not ` +
+        `'.'/'..' (no slashes, spaces, or other characters), got '${slug}'`,
+    );
   }
   return slug;
 }
@@ -133,7 +161,12 @@ export async function resolveRepo(args: ResolveRepoArgs): Promise<string> {
         `(run from a repo checkout with an '${remote}' remote, or pass --repo <owner/name>)`,
     );
   }
-  return derived;
+  // The derived slug reaches the gh REST paths exactly like an explicit one, so it
+  // is held to the SAME charset — a malformed/typo'd `origin` must not inject `..`
+  // or metacharacters into a `/repos/{owner}/{name}` path. (The explicit branch
+  // above validated already; a case-insensitive match means `derived` shares that
+  // charset, so this is the only unvalidated return that needed the gate.)
+  return validateRepoSlug(derived);
 }
 
 /**

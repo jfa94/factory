@@ -7224,10 +7224,16 @@ function parseRemoteUrl(url) {
   if (owner.length === 0 || name.length === 0) return null;
   return `${owner}/${name}`;
 }
-function validateRepoSlug(slug) {
+var REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
+function isValidRepoSlug(slug) {
   const parts = slug.split("/");
-  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
-    throw new UsageError(`--repo must be '<owner>/<name>', got '${slug}'`);
+  return parts.length === 2 && parts.every((seg) => REPO_SEGMENT.test(seg) && seg !== "." && seg !== "..");
+}
+function validateRepoSlug(slug) {
+  if (!isValidRepoSlug(slug)) {
+    throw new UsageError(
+      `--repo must be '<owner>/<name>' where each part is [A-Za-z0-9._-] and not '.'/'..' (no slashes, spaces, or other characters), got '${slug}'`
+    );
   }
   return slug;
 }
@@ -7251,7 +7257,7 @@ async function resolveRepo(args) {
       `--repo is required: could not derive it from the '${remote}' remote (run from a repo checkout with an '${remote}' remote, or pass --repo <owner/name>)`
     );
   }
-  return derived;
+  return validateRepoSlug(derived);
 }
 async function deriveRepo(gitClient, remote, cwd) {
   const url = await gitClient.remoteUrl(remote, { cwd });
@@ -11701,10 +11707,12 @@ async function stepRun(deps, runId) {
 
 // src/cli/wiring.ts
 function splitRepo(slug) {
-  const parts = slug.split("/");
-  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
-    throw new Error(`wiring: run spec repo must be '<owner>/<name>', got '${slug}'`);
+  if (!isValidRepoSlug(slug)) {
+    throw new Error(
+      `wiring: run spec repo must be '<owner>/<name>' ([A-Za-z0-9._-], not '.'/'..'), got '${slug}'`
+    );
   }
+  const parts = slug.split("/");
   return { owner: parts[0], repo: parts[1] };
 }
 async function loadCoroutineDeps(opts) {
@@ -12791,11 +12799,11 @@ async function passthrough(payload, deps) {
   const original = deps.originalStatusline ?? process.env.FACTORY_ORIGINAL_STATUSLINE ?? "";
   if (original.trim().length === 0) return "";
   try {
-    const result = await exec(original, [], { shell: true, input: payload });
+    const run11 = deps.exec ?? exec;
+    const result = await run11(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
-      log28.warn(
-        `FACTORY_ORIGINAL_STATUSLINE exited ${result.code ?? "null"}; statusline left empty`
-      );
+      const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
+      log28.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
