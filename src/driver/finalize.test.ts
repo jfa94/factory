@@ -3,9 +3,10 @@
  *
  * Exercises the resume-safe ordering + idempotency contract end-to-end against the
  * real {@link StateManager} (temp dir) + the exported {@link FakeGhClient}:
- *   - completed  → rollup merges (live) / opens-only (no-merge), 0 issues;
- *   - partial    → terminal partial, PARTIAL: rollup subject, one issue per drop;
- *   - failed     → no rollup (nothing shipped), one issue per drop;
+ *   - completed  → rollup merges (live) / opens-only (no-merge), PRD closed +
+ *                  per-run branch GC'd on a merged rollup, 0 issues;
+ *   - failed     → no rollup (develop untouched, branch retained for rescue),
+ *                  one issue per drop (Decision 34 — develop receives whole PRDs);
  *   - resume     → a second finalize files 0 new issues + short-circuits the rollup;
  *   - anti-spin  → a non-terminal task makes finalize THROW (never advances).
  *
