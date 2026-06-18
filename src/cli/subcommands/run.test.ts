@@ -567,6 +567,12 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect((await state.read("run-old")).status).toBe("superseded");
     // Branch was deleted via gh fake (field: deletedBranches).
     expect(gh.deletedBranches).toContain("staging/run-old");
+    // Protection was torn down too — load-bearing: GitHub blocks deleting a
+    // protected ref, so deleteProtection MUST run (and before the branch delete).
+    expect(gh.protectionDeletes).toContain("staging/run-old");
+    expect(gh.protectionDeletes.indexOf("staging/run-old")).toBeLessThanOrEqual(
+      gh.deletedBranches.indexOf("staging/run-old"),
+    );
   });
 
   it("--supersede without stagingDeps → UsageError", async () => {
