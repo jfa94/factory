@@ -191,11 +191,9 @@ export class StageEngine {
  * explicit fix for the bash `_stage_finalize_run` spin-bug, which returned rc 3 on
  * any non-done task).
  *
- * Rules (Decision 22 partial-rollup; `partial` is the DEFAULT for an incomplete
- * but resolved run):
+ * Rules (Decision 34 — whole-PRD delivery only; no partial rollup):
  *   - every task `done`                       → `completed`
- *   - ≥1 `done` AND ≥1 `dropped` (all terminal) → `partial`
- *   - 0 `done` (nothing shippable)            → `failed`
+ *   - any task not `done` (dropped, etc.)     → `failed` (develop gets nothing)
  *
  * A non-terminal task remaining is a PROGRAMMING ERROR (finalize is only called
  * once the per-task loop has driven every task terminal). It THROWS loudly — it
@@ -217,12 +215,9 @@ export function decideFinalize(run: RunState): FinalizeTerminalResult {
     );
   }
 
-  const doneCount = tasks.filter((t) => t.status === "done").length;
-  if (doneCount === 0) {
-    return finalizeTerminal("failed");
-  }
-  if (doneCount === tasks.length) {
-    return finalizeTerminal("completed");
-  }
-  return finalizeTerminal("partial");
+  // Every task terminal (asserted above). Whole-PRD delivery only: all done => completed,
+  // otherwise => failed (Decision 34 — develop receives only complete PRDs; no partial rollup).
+  // tasks.length > 0 guards the vacuous-truth of Array.every on an empty array.
+  const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
+  return finalizeTerminal(allDone ? "completed" : "failed");
 }
