@@ -12,60 +12,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  bin-tests:
-    name: bin/tests/*.sh
+  verify:
+    name: npm run verify (typecheck · lint · test · build)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history; some tests inspect commit graph
+          fetch-depth: 0 # full history; some tests inspect the commit graph
 
-      - name: Verify jq + gh present
-        run: |
-          set -euo pipefail
-          # Both are preinstalled on ubuntu-latest; smoke-check in case the
-          # runner image changes.
-          jq --version
-          gh --version
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22 # matches package.json engines (node >=22)
 
       - name: Configure git identity for tests
-        # Tests under bin/tests/ create commits inside their tmpdir
-        # workspaces; without an identity, `git commit` aborts with exit
-        # 128. CI runners ship without one, so we set a throwaway here.
+        # Hook tests (branch-protection, secret-guard, the TDD commit-order gate)
+        # create commits inside tmpdir git repos; CI runners ship without a git
+        # identity, so `git commit` would abort with exit 128.
         run: |
           git config --global user.email "tests@factory.ci"
           git config --global user.name "factory-tests"
 
-      - name: Install pnpm
-        # pipeline-quality-gate detects a default package manager of `pnpm`
-        # when no lockfile is present (see bin/pipeline-lib.sh:detect_pkg_manager).
-        # hooks.sh fixtures rely on this — invoke `pnpm run <script>` against
-        # fixture package.json files. Without pnpm the gate exits non-zero
-        # and four hooks.sh assertions fail.
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      - name: Install dependencies
+        # No lockfile is checked in, so `npm ci` is unavailable — use install.
+        run: npm install --no-audit --no-fund
 
-      - name: Run bin/tests/run-all.sh
-        env:
-          # The runner provides a default token; some tests may call
-          # `gh api` for read-only metadata. Auth scope is repo-read-only,
-          # so this is safe.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -uo pipefail   # not -e: we want the artifact upload to run on failure
-          bash bin/tests/run-all.sh 2>&1 | tee /tmp/run-all.log
-          # Preserve the runner's exit code through the tee.
-          exit ${PIPESTATUS[0]}
-
-      - name: Upload baseline log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-all-output
-          path: /tmp/run-all.log
-          retention-days: 7
-          if-no-files-found: ignore
+      - name: Verify (typecheck · lint · test · build)
+        run: npm run verify
