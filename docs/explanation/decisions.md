@@ -675,7 +675,7 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 ## Decision 33: Per-Run Staging Branch (Replaces the Single Shared Staging Branch)
 
-**Status:** Accepted (design, 2026-06-18); NOT yet implemented. Supersedes the single-shared-`staging` model assumed by Decisions 12 and 32 once built.
+**Status:** Implemented (2026-06-18). Supersedes the single-shared-`staging` model assumed by Decisions 12 and 32. `runStagingBranch(runId)` (`src/git/run-staging.ts`) is the single branch-name source; `run create` cuts + protects `staging/<run-id>` from `develop`; ship/handlers/serializer/rollup/finalize target it; scaffold now protects `develop` instead of a shared `staging`; finalize forward-reconciles `develop` into the run branch before rollup.
 
 **Choice:** Each run integrates its tasks on its own private branch `staging/<run-id>`, cut from the current tip of develop at `run create`, instead of all runs sharing one long-lived `staging` branch. Task PRs target the run's own `staging/<run-id>`; that work is invisible to develop and to every other run until the run completes.
 
@@ -699,7 +699,7 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 ## Decision 34: Develop Receives Only Whole PRDs — Incremental Delivery and the `partial` Status Removed
 
-**Status:** Accepted (design, 2026-06-18); NOT yet implemented. Reverses the partial-rollup-to-develop behavior of the current `finalize`/`rollup` (the `PARTIAL:` rollup header is retired).
+**Status:** Implemented (2026-06-18). Reverses the partial-rollup-to-develop behavior of the prior `finalize`/`rollup` (the `PARTIAL:` rollup header is retired). `partial` removed from `RunStatusEnum`; `decideFinalize` is binary `completed | failed`; rollup fires only on `completed`; on a merged rollup finalize comments + closes the PRD (new `issueComment`/`issueClose`) and deletes the per-run branch; a wedged run hits the `next.ts` circuit breaker → `failed`.
 
 **Choice:** The `staging/<run-id>`→develop rollup fires ONLY when the run is `completed` (every task shipped). An incomplete run lands nothing on develop. There is no partial delivery: a run delivers the whole PRD or delivers nothing to develop.
 
@@ -723,7 +723,7 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 ## Decision 35: `run` / `resume` / `rescue` Are Distinct Lifecycle Verbs; `run` Supersedes Rather Than Silently Reuses
 
-**Status:** Accepted (design, 2026-06-18); NOT yet implemented. Revises Decision 32's idempotent-reuse-on-`create`. `resume` becomes its own command (no `commands/resume.md` exists today).
+**Status:** Implemented (2026-06-18). Revises Decision 32's idempotent-reuse-on-`create`. `resume` is now its own top-level command (`commands/resume.md` + `factory resume`, with `run resume` kept as a thin CLI alias). Implemented as "fail loud + flags": bare `run create` with an active run exits `3` and emits `{kind:"exists"}`; `--supersede` marks the old run `superseded` + deletes its branch, `--resume` hands off; the interactive prompt (resume/supersede/cancel) lives in `commands/run.md` via `AskUserQuestion`, mapping the answer to the flag. Adds the `superseded` terminal status. Rescue gains a `rescue-reconciler` git/GitHub drift pass before resume.
 
 **Choice:** Three distinct run-lifecycle commands, plus the unchanged standalone `debug`:
 
