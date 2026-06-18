@@ -6142,12 +6142,12 @@ function isUsageError(err) {
 var RunStatusEnum = external_exports.enum([
   "running",
   "completed",
-  "partial",
+  "superseded",
   "paused",
   "suspended",
   "failed"
 ]);
-var TERMINAL_RUN_STATUSES = ["completed", "partial", "failed"];
+var TERMINAL_RUN_STATUSES = ["completed", "failed", "superseded"];
 function isTerminalRunStatus(s) {
   return TERMINAL_RUN_STATUSES.includes(s);
 }
@@ -6787,7 +6787,7 @@ var StateManager = class {
   async finalize(runId, status) {
     if (!isTerminalRunStatus(status)) {
       throw new Error(
-        `state: finalize requires a terminal status (completed|partial|failed); got '${status}'`
+        `state: finalize requires a terminal status (completed|failed|superseded); got '${status}'`
       );
     }
     return this.update(runId, (state) => {
@@ -7548,7 +7548,6 @@ var DefaultGhClient = class {
 // src/git/rollup.ts
 var log7 = createLogger("git");
 var GIT_DEFAULTS = GitSchema.parse({});
-var PARTIAL_SUBJECT_PREFIX = "PARTIAL: ";
 var DEFAULT_POLL_INTERVAL_MS = 15e3;
 var DEFAULT_MAX_POLLS = 80;
 var realSleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
@@ -7572,7 +7571,7 @@ async function rollup(args) {
       "rollup: baseBranch must not be 'main' (Decision 16 \u2014 the factory never touches main)"
     );
   }
-  const subject = args.partial ? `${PARTIAL_SUBJECT_PREFIX}${args.title}` : args.title;
+  const subject = args.title;
   const existing = await args.ghClient.prList({ head: staging, base, state: "all" });
   const merged = existing.find((p) => p.state === "MERGED");
   if (merged) {
@@ -7629,7 +7628,7 @@ async function rollup(args) {
     return { number, url, resumed, merged: false, reason: "not-mergeable", ci };
   }
   await args.ghClient.prMergeSquash(number, { subject, body: args.body });
-  log7.info(`rollup PR #${number} squash-merged into ${base}${args.partial ? " (PARTIAL)" : ""}`);
+  log7.info(`rollup PR #${number} squash-merged into ${base}`);
   return { number, url, resumed, merged: true, subject, ci };
 }
 
@@ -11845,10 +11844,20 @@ async function stepRun(deps, runId) {
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
   if (ordered.length === 0) {
-    const remaining = tasks.filter((t) => !isTerminalTaskStatus(t.status)).map((t) => `${t.task_id}=${t.status}`);
-    throw new Error(
-      `next: no ready tasks but ${remaining.length} remain [${remaining.join(", ")}] \u2014 dependency cycle or deadlock`
-    );
+    const wedged = tasks.filter((t) => !isTerminalTaskStatus(t.status));
+    const detail = wedged.map((t) => `${t.task_id}=${t.status}`).join(", ");
+    for (const t of wedged) {
+      await dropTask(
+        deps,
+        runId,
+        t.task_id,
+        "spec-defect",
+        `unrunnable: no ready task and no satisfiable path (dependency cycle/deadlock) \u2014 wedged set [${detail}]`
+      );
+      cascadeDropped.push(t.task_id);
+    }
+    run9 = await deps.state.read(runId);
+    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
   }
   return { ...ctx(), kind: "tasks-ready", ready: ordered, cascade_dropped: cascadeDropped };
 }
