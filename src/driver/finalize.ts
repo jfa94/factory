@@ -5,16 +5,19 @@
  * its outcome artifacts and ships them, in a RESUME-SAFE order:
  *
  *   1. derive the terminal status (decideFinalize — THROWS if any task is in-flight)
- *   2. build the deterministic partial-run report (status overridden to the terminal,
+ *   2. build the deterministic run report (status overridden to the terminal,
  *      since state.status is still `running`/`paused` until step 7)
  *   3. persist report.md (atomic) under the run store
  *   4. emit run.finalized + per-drop telemetry (thin jsonl; never fatal)
  *   5. file ONE GitHub issue per dropped task — deduped against existing factory
  *      issues so a resumed finalize never double-files (Δ S; "without repeating dead
  *      ends")
- *   6. (only if something shipped) open + CI-gate + squash-merge the staging→develop
- *      rollup, carrying the `PARTIAL:` header on a partial run (git mechanics live in
- *      src/git/rollup; finalize just decides partial/merge)
+ *   6. rollup fires only on `completed` (Decision 34 — develop receives whole PRDs
+ *      only): open + CI-gate + squash-merge the per-run staging→develop rollup. A
+ *      merged rollup then closes/comments the PRD issue and deletes the per-run
+ *      staging branch (Decision 35: protection first, then branch — GitHub blocks
+ *      deleting a protected ref). A `failed` run leaves develop untouched and keeps
+ *      the branch + protection, banked for rescue / inspection.
  *   7. ONLY THEN flip the run terminal (state.finalize)
  *
  * state.finalize is LAST on purpose: a crash anywhere in 2–6 leaves the run
@@ -210,6 +213,15 @@ export async function finalizeRun(
         repo: report.repo,
         number: report.issue_number,
       });
+    }
+
+    if (rollupResult.merged) {
+      // Branch GC (Decision 35): a completed+merged run is fully contained in develop, so
+      // tear down its per-run staging branch. Protection FIRST — GitHub blocks deleting a
+      // protected ref. A `failed` run (or a `no-merge` open PR) keeps its branch + protection,
+      // banked for rescue / inspection.
+      await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
+      await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
     }
   } else {
     log.warn(`run '${runId}': ${terminal} — develop untouched (no rollup, PRD left open)`);

@@ -159,6 +159,13 @@ describe("finalizeRun", () => {
 
     // persisted run is terminal.
     expect((await state.read(RUN_ID)).status).toBe("completed");
+
+    // Branch GC (Decision 35): protection deleted BEFORE branch; both deleted.
+    expect(gh.protectionDeletes).toContain(`staging/${RUN_ID}`);
+    expect(gh.deletedBranches).toContain(`staging/${RUN_ID}`);
+    expect(gh.protectionDeletes.indexOf(`staging/${RUN_ID}`)).toBeLessThanOrEqual(
+      gh.deletedBranches.indexOf(`staging/${RUN_ID}`),
+    );
   });
 
   it("completed + no-merge: opens the rollup PR but never merges it", async () => {
@@ -172,6 +179,8 @@ describe("finalizeRun", () => {
     expect(result.rollup?.reason).toBe("no-merge");
     expect(gh.merges).toHaveLength(0);
     expect(gh.created).toHaveLength(1); // PR opened for inspection
+    // Branch GC: no-merge → NOT merged → branch retained.
+    expect(gh.deletedBranches).not.toContain(`staging/${RUN_ID}`);
   });
 
   it("failed (some dropped): no rollup, one issue per drop, PRD left open (Decision 34)", async () => {
@@ -202,6 +211,8 @@ describe("finalizeRun", () => {
     expect(gh.merges).toHaveLength(0);
     // PRD issue NOT closed.
     expect(gh.issueCloses).toHaveLength(0);
+    // Branch GC: failed → branch retained for rescue.
+    expect(gh.deletedBranches).not.toContain(`staging/${RUN_ID}`);
   });
 
   it("failed (all dropped): no rollup, one issue per drop, run flips to failed", async () => {

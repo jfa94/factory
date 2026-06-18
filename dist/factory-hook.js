@@ -1621,7 +1621,9 @@ var EXIT = {
   /** Generic failure (uncaught error, classified drop, gate/verify failure). */
   ERROR: 1,
   /** Usage error: unknown subcommand/hook, bad flags, missing required arg. */
-  USAGE: 2
+  USAGE: 2,
+  /** Conflict: an active run already exists and no resolution flag was passed. */
+  CONFLICT: 3
 };
 
 // src/shared/exec.ts

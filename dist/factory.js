@@ -1621,7 +1621,9 @@ var EXIT = {
   /** Generic failure (uncaught error, classified drop, gate/verify failure). */
   ERROR: 1,
   /** Usage error: unknown subcommand/hook, bad flags, missing required arg. */
-  USAGE: 2
+  USAGE: 2,
+  /** Conflict: an active run already exists and no resolution flag was passed. */
+  CONFLICT: 3
 };
 
 // src/config/load.ts
@@ -10890,6 +10892,10 @@ async function finalizeRun(deps, runId) {
         number: report.issue_number
       });
     }
+    if (rollupResult.merged) {
+      await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
+      await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
+    }
   } else {
     log22.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
@@ -12286,11 +12292,20 @@ async function runCreate(argv, overrides = {}) {
     stagingDeps
   );
   if (result.kind === "exists") {
-    throw new UsageError(
-      `run create: an active run '${result.existing.run_id}' already exists for this spec \u2014 pass --supersede to replace it, or use 'factory resume' to continue it`
+    emitJson({
+      kind: "exists",
+      existing: { run_id: result.existing.run_id, status: result.existing.status }
+    });
+    emitError(
+      `run create: active run '${result.existing.run_id}' already exists \u2014 pass --resume to continue it or --supersede to replace it`
     );
+    return EXIT.CONFLICT;
   }
-  emitJson(result.run);
+  if (result.kind === "created") {
+    emitJson({ kind: "created", run: result.run });
+    return EXIT.OK;
+  }
+  emitJson({ kind: "superseded", run: result.run, supersededId: result.supersededId });
   return EXIT.OK;
 }
 async function runResume(argv) {
@@ -12369,6 +12384,20 @@ var runCommand = {
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`run: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+var resumeCommand = {
+  describe: "Resume a paused/suspended run (re-check quota; clear a recovered checkpoint)",
+  run: async (argv) => {
+    try {
+      return await runResume(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`resume: ${err.message}`);
         return EXIT.USAGE;
       }
       throw err;
@@ -13438,6 +13467,7 @@ var cliRegistry = {
     }
   },
   configure: configureCommand,
+  resume: resumeCommand,
   run: runCommand,
   spec: specCommand,
   rescue: rescueCommand,
