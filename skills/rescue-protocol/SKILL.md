@@ -1,15 +1,16 @@
 ---
 name: rescue-protocol
-description: (internal) Recover a factory pipeline run that `factory run resume` cannot untangle — a crashed/suspended session left tasks STUCK mid-stage, or a terminal partial run has recoverable drops to retry. Resets the resettable tasks via `factory rescue apply`, reopens a terminal run, then hands off to resume. v1 reconciles RUN STATE only.
+description: (internal) Recover a factory pipeline run that `factory resume` cannot untangle — a crashed/suspended session left tasks STUCK mid-stage, or a terminal failed run has recoverable drops to retry. Resets the resettable tasks via `factory rescue apply`, reopens a terminal run, reconciles git/GitHub drift via the rescue-reconciler agent, then hands off to resume.
 ---
 
 # rescue-protocol
 
-You are the rescue orchestrator. `factory run resume` only re-checks the quota gate — it
+You are the rescue orchestrator. `factory resume` only re-checks the quota gate — it
 **never touches task state**. When a crashed or suspended session left tasks stuck mid-stage
-(so a re-drive would deadlock), or a terminal `partial` run has `blocked-environmental` drops
+(so a re-drive would deadlock), or a terminal `failed` run has `blocked-environmental` drops
 worth retrying, resume alone cannot recover it. Rescue is that missing seam: it resets the
-resettable tasks, reopens a terminal run, then hands back to resume + the run loop.
+resettable tasks, reopens a terminal run, reconciles git/GitHub drift, then hands back to
+resume + the run loop.
 
 You are **Model A** — the in-session orchestrator. The `factory` CLI is the deterministic
 brain: `factory rescue scan` is a read-only REPORTER, `factory rescue apply` is the only
@@ -105,7 +106,8 @@ dry-run=<bool>`:
 
      (Naming a task IS the assertion the cause is fixed, so `--task` resets a dead-end without
      `--include-dead-ends`.) `leave-dropped` / `no-action` → leave it; the run finalizes
-     partial, which is the correct loud outcome.
+     `failed` with `develop` untouched (Decision 34 — develop receives only whole PRDs), which
+     is the correct loud outcome.
 
    - **Human-asserted.** If a human has confirmed the upstream root cause is fixed for the
      whole set (e.g. the spec was amended, a stronger model is now available), reset them all:
@@ -118,14 +120,34 @@ dry-run=<bool>`:
      (`reset-all-dead-ends` / `diagnose-each` / `leave-dropped`) before resetting — resetting a
      determined failure burns a full pipeline cycle.
 
-6. **Re-scan to confirm (optional).** A second `scan` should show the reset tasks now
+6. **Reconcile git/GitHub drift.** Run state is now repaired, but the remote may still
+   disagree with it (`rescue scan`/`apply` touch RUN STATE only). Re-run `factory rescue scan`
+   for the fresh post-apply picture, then spawn the **`rescue-reconciler`** agent (one
+   `Agent()`) passing the run id, that scan JSON, and the repo context — `target_root`,
+   `owner`, `name`, `staging_branch: staging/<run-id>`, and `base_branch` (`config.git.baseBranch`).
+   The agent is forward-only: it autonomously fetches, forward-merges `origin/<base>` into the
+   run branch, and re-pushes a missing branch, but it NEVER force-pushes, deletes, or discards.
+   Harvest its verdict JSON (`{ reconciled, actions, needs_prompt, blocked, evidence }`):
+   - `blocked: true` → the run cannot be made resumable automatically (a merge conflict, a
+     missing source SHA). Report `evidence` and STOP — do not hand off to resume.
+   - `needs_prompt: [...]` non-empty → for EACH entry, one `AskUserQuestion` (approve / skip)
+     before anything destructive happens. The agent did NOT act on these — on **approve**, the
+     orchestrator (which holds the authority the read-mostly agent lacks) performs that single
+     op itself (e.g. delete the named orphan branch); on **skip**, leave it. Never force-push to
+     satisfy a prompt; if reconciliation genuinely requires a force, that is a STOP, not a fix.
+   - `reconciled: true` with no remaining `needs_prompt`/`blocked` → drift is cleared; proceed.
+
+   Only once the agent reports `reconciled` (or every `needs_prompt` was resolved by an approved
+   op) is the run safe to resume.
+
+7. **Re-scan to confirm (optional).** A second `scan` should show the reset tasks now
    `runnable` and `would_deadlock: false`. `apply` is idempotent, so a re-run is a safe no-op.
 
-7. **Hand off to resume.** Invoke the orchestrator skill directly (the autonomous path — no
+8. **Hand off to resume.** Invoke the orchestrator skill directly (the autonomous path — no
    human round-trip):
 
    ```
-   Skill(pipeline-orchestrator)   # then run its resume entry: factory run resume [--run <id>]
+   Skill(pipeline-orchestrator)   # then run its resume entry: factory resume [--run <id>]
    ```
 
    - `{ kind: "resumed", run }` → continue the Phase 3 run loop; the driver now picks up the
@@ -134,15 +156,15 @@ dry-run=<bool>`:
      has not recovered. Report `reason` (+ `resets_at_epoch` if present) and stop; the reset
      state is durable and a later resume continues from it.
 
-   Do not tell the user to type `/factory:run resume` themselves — calling the skill directly
+   Do not tell the user to type `/factory:resume` themselves — calling the skill directly
    is the autonomous path. The slash command is only the manual-narration fallback.
 
 ## When NOT to use rescue
 
 - The run is **running and healthy** — let it finish; don't reset live work.
-- The only problem is the **quota gate** — that is plain `factory run resume`, no rescue needed.
-- The drops are genuine **dead-ends** and nothing upstream changed — finalizing partial (a
-  report + one GH issue per drop) is the correct outcome, not a reset.
+- The only problem is the **quota gate** — that is plain `factory resume`, no rescue needed.
+- The drops are genuine **dead-ends** and nothing upstream changed — finalizing `failed` (a
+  report + one GH issue per drop, `develop` untouched) is the correct outcome, not a reset.
 
 ## References
 
