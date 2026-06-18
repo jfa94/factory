@@ -43,3 +43,77 @@ export class NotAutonomousError extends Error {
 export function requireAutonomousMode(env: NodeJS.ProcessEnv = process.env): void {
   if (!isAutonomous(env)) throw new NotAutonomousError();
 }
+
+/**
+ * Why a preflight check reached its verdict — one label per {@link decideAutonomyPreflight}
+ * table row, surfaced to the user so a halt explains itself.
+ */
+export type PreflightReason =
+  | "not-autonomous"
+  | "missing-settings"
+  | "stale-version"
+  | "unstamped"
+  | "fresh"
+  | "ci-raw-env"
+  | "version-unknowable";
+
+/**
+ * The run-entry preflight verdict.
+ *
+ * Hard invariant: `regenerate === true ⟹ proceed === false`. A regenerate writes
+ * settings the *running* session cannot load mid-flight; proceeding on them would
+ * reintroduce false freshness. Regenerating always implies halt-for-relaunch.
+ */
+export interface PreflightDecision {
+  readonly proceed: boolean;
+  readonly regenerate: boolean;
+  readonly reason: PreflightReason;
+}
+
+/**
+ * Pure run-entry decision: given the autonomous signal, whether merged-settings
+ * exist, and the plugin vs on-disk `_factoryVersion`, decide whether `/factory:run`
+ * may proceed and whether the merged settings must be (re)scaffolded first.
+ *
+ * Total and IO-free — the CLI wrapper (`runAutonomyPreflight`) supplies the inputs
+ * and acts on the verdict. See Decision 31.
+ */
+export function decideAutonomyPreflight(input: {
+  autonomous: boolean;
+  mergedSettingsPresent: boolean;
+  pluginVersion: string | undefined;
+  onDiskVersion: string | undefined;
+}): PreflightDecision {
+  const { autonomous, mergedSettingsPresent, pluginVersion, onDiskVersion } = input;
+
+  // Not autonomous: this session can never make itself autonomous, so always
+  // (re)scaffold the settings and halt for the relaunch.
+  if (!autonomous) {
+    return {
+      proceed: false,
+      regenerate: true,
+      reason: mergedSettingsPresent ? "not-autonomous" : "missing-settings",
+    };
+  }
+
+  // Autonomous with no settings file: the env was exported directly (CI / raw
+  // env). Nothing to scaffold for the running session — proceed.
+  if (!mergedSettingsPresent) {
+    return { proceed: true, regenerate: false, reason: "ci-raw-env" };
+  }
+
+  // Autonomous with a settings file. Can we prove staleness?
+  if (pluginVersion === undefined) {
+    // Plugin version is unknowable, so a regenerate could not stamp one either:
+    // regenerating would only churn. Proceed.
+    return { proceed: true, regenerate: false, reason: "version-unknowable" };
+  }
+  if (onDiskVersion === undefined) {
+    // A pre-versioning artifact (or hand-edited) — treat as stale.
+    return { proceed: false, regenerate: true, reason: "unstamped" };
+  }
+  if (onDiskVersion !== pluginVersion) {
+    return { proceed: false, regenerate: true, reason: "stale-version" };
+  }
+  return { proceed: true, regenerate: false, reason: "fresh" };
+}

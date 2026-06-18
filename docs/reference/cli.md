@@ -128,9 +128,11 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
 exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
-unattended by design; relaunch via `factory autonomy ensure` → `claude --settings
-<merged-settings.json>` first (check with `factory autonomy status`). See
-[Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out).
+unattended by design; `/factory:run` calls [`factory autonomy preflight`](#autonomy-preflight)
+first, which auto-scaffolds and prints the `claude --settings <merged-settings.json>` relaunch
+command when needed (`ensure`/`status` remain the manual primitives). See
+[Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out)
+and [Decision 31](../explanation/decisions.md#decision-31-run-entry-preflight-auto-scaffolds-autonomous-settings).
 
 Loud error if no spec exists for the issue — generate one first. The seeded run's
 `driver` is fixed to `sequential`: the v1 coroutine seam drives tasks one at a time.
@@ -350,10 +352,10 @@ Default (no `--task`): resets `stuck` + `recoverable`, leaving dead-ends dropped
 reopens a terminal run to `running` when it reset work. Idempotent. Emits
 `{ run_id, run_status, reset, reopened, skipped }`.
 
-## `autonomy <ensure|status>`
+## `autonomy <ensure|status|preflight>`
 
 Autonomous mode is **mandatory** for a run (`run create`/`resume` halt without it —
-[Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out)). These verbs set it up and check it.
+[Decision 29](../explanation/decisions.md#decision-29-autonomy-is-mandatory--enforced-in-the-engine-no-opt-out)). These verbs set it up and check it. `preflight` is the **run-entry composer** `/factory:run` calls; `ensure`/`status` are the manual primitives.
 
 ### `autonomy ensure`
 
@@ -395,6 +397,44 @@ factory autonomy status [--json]
 `autonomous` is the gate predicate (`FACTORY_AUTONOMOUS_MODE === "1"`); `envSet`
 distinguishes an unset var from a wrong value; `mergedSettingsPresent`/`mergedSettingsPath`
 report whether the `ensure` output exists and where.
+
+### `autonomy preflight`
+
+Composer — the run-entry check `/factory:run` (and `/factory:debug`) calls at the top of
+setup ([Decision 31](../explanation/decisions.md#decision-31-run-entry-preflight-auto-scaffolds-autonomous-settings)).
+It restores the old auto-scaffold convenience: rather than merely halting and telling you to
+run `ensure` yourself, it **decides** whether the run may proceed and (re)scaffolds for you
+when it can't.
+
+```
+factory autonomy preflight [--user-settings <path>]
+```
+
+The verdict is a pure function of three inputs — is this session autonomous, does
+`merged-settings.json` exist, and does its stamped `_factoryVersion` match the installed
+plugin version:
+
+| Autonomous? | Settings file | Version           | Outcome                                                       |
+| ----------- | ------------- | ----------------- | ------------------------------------------------------------- |
+| no          | (any)         | (any)             | **regenerate + halt** (`missing-settings` / `not-autonomous`) |
+| yes         | absent        | —                 | **proceed** (`ci-raw-env` — env exported directly)            |
+| yes         | present       | match             | **proceed** (`fresh`)                                         |
+| yes         | present       | differ            | **regenerate + halt** (`stale-version`)                       |
+| yes         | present       | unstamped         | **regenerate + halt** (`unstamped`)                           |
+| yes         | present       | plugin unknowable | **proceed** (`version-unknowable` — no churn)                 |
+
+On a halt it delegates to `ensure` (the single writer path) to (re)materialize the settings,
+prints the same `claude --settings <merged-settings.json>` relaunch block plus a one-line
+reason, and **exits 1**. On proceed it writes nothing and **exits 0**. Like `status`, it is
+infallible on the decision path (an unresolvable data/root dir degrades to a halt-with-message,
+never a throw). The relaunch itself is irreducible — Claude Code reads settings only at launch,
+so a running session can never make _itself_ autonomous; preflight automates the scaffold, not
+the relaunch. The mandatory-autonomy engine gate (`requireAutonomousMode`, Decision 29) stays as
+the correctness backstop behind it.
+
+| Flag                     | Required | Notes                                                             |
+| ------------------------ | -------- | ----------------------------------------------------------------- |
+| `--user-settings <path>` | no       | Override the user-settings source passed through to a regenerate. |
 
 ## `statusline`
 

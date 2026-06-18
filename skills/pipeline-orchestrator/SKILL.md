@@ -25,10 +25,13 @@ envelope names, feed the raw results back.**
 ## Phase 0 — Preconditions
 
 1. Confirm a git checkout: `git rev-parse --show-toplevel`. If not, stop.
-2. Confirm autonomous mode: `factory autonomy status` (exits 0 when autonomous, 1 when
-   not). The pipeline runs unattended — `run create`/`run resume` HALT loud otherwise.
-   If not autonomous, tell the user to run `factory autonomy ensure` and relaunch with
-   the printed `claude --settings <merged-settings.json>` command, then stop.
+2. Confirm autonomous mode: `factory autonomy preflight` (exits 0 to proceed, 1 to halt).
+   It auto-scaffolds `merged-settings.json` when the session is not autonomous OR the
+   settings are stale/missing/unstamped, and prints the relaunch command. The pipeline
+   runs unattended — `run create`/`run resume` HALT loud otherwise. On a non-zero exit,
+   relay the printed `claude --settings <merged-settings.json>` command to the user and
+   stop (the relaunch is the user's irreducible step; a running session cannot make
+   itself autonomous). `factory autonomy status`/`ensure` remain the manual primitives.
 3. `factory scaffold` (idempotent; `--repo` is OPTIONAL — auto-derived from the
    `origin` remote, pass `--repo <owner/name>` only to override. Refuses if staging
    branch protection is missing → tell the user to re-run with `--provision` or

@@ -11766,6 +11766,29 @@ var NotAutonomousError = class extends Error {
 function requireAutonomousMode(env = process.env) {
   if (!isAutonomous(env)) throw new NotAutonomousError();
 }
+function decideAutonomyPreflight(input) {
+  const { autonomous, mergedSettingsPresent, pluginVersion, onDiskVersion } = input;
+  if (!autonomous) {
+    return {
+      proceed: false,
+      regenerate: true,
+      reason: mergedSettingsPresent ? "not-autonomous" : "missing-settings"
+    };
+  }
+  if (!mergedSettingsPresent) {
+    return { proceed: true, regenerate: false, reason: "ci-raw-env" };
+  }
+  if (pluginVersion === void 0) {
+    return { proceed: true, regenerate: false, reason: "version-unknowable" };
+  }
+  if (onDiskVersion === void 0) {
+    return { proceed: false, regenerate: true, reason: "unstamped" };
+  }
+  if (onDiskVersion !== pluginVersion) {
+    return { proceed: false, regenerate: true, reason: "stale-version" };
+  }
+  return { proceed: true, regenerate: false, reason: "fresh" };
+}
 
 // src/cli/subcommands/run.ts
 var log27 = createLogger("run");
@@ -12854,27 +12877,36 @@ import { readFile as readFile11 } from "node:fs/promises";
 import { join as join16 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 var log29 = createLogger("autonomy");
-var HELP8 = `factory autonomy <ensure|status> \u2014 manage / inspect autonomous mode
+var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
 is autonomous (FACTORY_AUTONOMOUS_MODE=1). There is no opt-out.
 
-ensure  Merges templates/settings.autonomous.json with your existing settings into
-        \${CLAUDE_PLUGIN_DATA}/merged-settings.json (placeholders substituted, env
-        baked, statusLine wired to \`factory statusline\`) and prints the relaunch
-        command:
+ensure     Merges templates/settings.autonomous.json with your existing settings into
+           \${CLAUDE_PLUGIN_DATA}/merged-settings.json (placeholders substituted, env
+           baked, statusLine wired to \`factory statusline\`) and prints the relaunch
+           command:
 
-          claude --settings <merged-settings.json>
+             claude --settings <merged-settings.json>
 
-status  Reports whether THIS session is autonomous and whether merged-settings.json
-        exists. Exits 0 when autonomous, 1 when not (never throws).
+status     Reports whether THIS session is autonomous and whether merged-settings.json
+           exists. Exits 0 when autonomous, 1 when not (never throws).
+
+preflight  The run-entry check (what \`/factory:run\` calls). Decides over
+           {autonomous?, merged-settings present?, plugin vs on-disk version} whether
+           the run may proceed. (Re)scaffolds merged-settings.json and halts for a
+           relaunch when the session is not autonomous OR the settings are stale /
+           missing / unstamped; proceeds silently when already fresh (or autonomous via
+           a directly-exported env). Exits 0 to proceed, 1 to halt. Never throws on the
+           decision path.
 
 Usage:
   factory autonomy ensure
   factory autonomy status [--json]
+  factory autonomy preflight
 
 Options:
-  --user-settings <path>   (ensure) Override the user-settings source (default: ~/.claude/settings.json)
+  --user-settings <path>   (ensure / preflight) Override the user-settings source (default: ~/.claude/settings.json)
   --json                   (status) Emit machine-readable JSON`;
 function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
@@ -13047,6 +13079,88 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path2}` : "absen
   }
   return status.autonomous ? EXIT.OK : EXIT.ERROR;
 }
+async function readOnDiskVersion(path2) {
+  if (!existsSync7(path2)) return void 0;
+  try {
+    const parsed = JSON.parse(await readFile11(path2, "utf8"));
+    if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
+      return parsed._factoryVersion;
+    }
+  } catch {
+  }
+  return void 0;
+}
+function describePreflightReason(reason, pluginVersion, onDiskVersion) {
+  switch (reason) {
+    case "fresh":
+      return `merged settings are current (v${pluginVersion ?? "?"})`;
+    case "ci-raw-env":
+      return "autonomous via the environment directly; no merged-settings file needed";
+    case "version-unknowable":
+      return "plugin version is unreadable \u2014 leaving the existing merged settings untouched";
+    case "missing-settings":
+      return "no merged settings exist yet";
+    case "not-autonomous":
+      return "this session is not autonomous";
+    case "stale-version":
+      return `merged settings are stale (v${onDiskVersion ?? "?"} \u2192 v${pluginVersion ?? "?"})`;
+    case "unstamped":
+      return "merged settings predate version stamping (treated as stale)";
+  }
+}
+async function runAutonomyPreflight(opts = {}) {
+  const env = opts.env ?? process.env;
+  const home = opts.home ?? homedir2();
+  const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
+  let dataDir;
+  let pluginRoot;
+  try {
+    dataDir = opts.dataDir ?? resolveDataDir();
+  } catch {
+  }
+  try {
+    pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
+  } catch {
+  }
+  const path2 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
+  const mergedSettingsPresent = path2.length > 0 && existsSync7(path2);
+  const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
+  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path2) : void 0;
+  const decision = decideAutonomyPreflight({
+    autonomous: isAutonomous(env),
+    mergedSettingsPresent,
+    pluginVersion,
+    onDiskVersion
+  });
+  const verdict = describePreflightReason(decision.reason, pluginVersion, onDiskVersion);
+  if (decision.regenerate) {
+    if (dataDir === void 0 || pluginRoot === void 0) {
+      write(
+        `autonomy preflight: ${verdict}
+Cannot resolve the plugin data/root dir to scaffold merged settings here.
+Run \`factory autonomy ensure\` once the environment is set, then relaunch with the printed command.
+`
+      );
+      return EXIT.ERROR;
+    }
+    await runAutonomyEnsure({
+      dataDir,
+      pluginRoot,
+      userSettingsPath: opts.userSettingsPath,
+      home,
+      writeStdout: write
+    });
+    write(
+      `
+autonomy preflight: ${verdict} \u2014 the run is halted until you relaunch (command above).
+`
+    );
+    return EXIT.ERROR;
+  }
+  write(`autonomy preflight: ${verdict} \u2014 proceeding.
+`);
+  return EXIT.OK;
+}
 async function run10(argv) {
   const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
@@ -13057,11 +13171,16 @@ async function run10(argv) {
   if (verb === "status") {
     return runAutonomyStatus({ json: args.flag("json") === true });
   }
+  const userSettings = args.flag("user-settings");
+  if (verb === "preflight") {
+    return runAutonomyPreflight({
+      userSettingsPath: typeof userSettings === "string" ? userSettings : void 0
+    });
+  }
   if (verb !== void 0 && verb !== "ensure") {
-    emitError(`autonomy: unknown verb '${verb}' (expected: ensure | status)`);
+    emitError(`autonomy: unknown verb '${verb}' (expected: ensure | status | preflight)`);
     return EXIT.USAGE;
   }
-  const userSettings = args.flag("user-settings");
   await runAutonomyEnsure({
     userSettingsPath: typeof userSettings === "string" ? userSettings : void 0
   });
