@@ -7223,6 +7223,11 @@ var DefaultGitClient = class {
     args.push(remote, branch);
     await this.execOrThrow(args, opts);
   }
+  async mergeFfOrCommit(branch, ref, opts) {
+    log5.debug(`merge --no-edit ${ref} into ${branch}`);
+    await this.execOrThrow(["checkout", branch], opts);
+    await this.execOrThrow(["merge", "--no-edit", ref], opts);
+  }
 };
 
 // src/git/repo.ts
@@ -8056,9 +8061,10 @@ var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 Usage:
   factory scaffold [--repo <owner/name>] [--provision]
 
-Copies the committed CI + gate-config templates, ensures the staging branch, and
-probes branch protection. Without --provision a repo whose staging branch is not
-protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
+Copies the committed CI + gate-config templates and probes branch protection on
+develop (the integration base). Without --provision a repo whose develop branch is
+not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
+Per-run staging branches are minted at run create \u2014 scaffold no longer touches them.
 
 Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
@@ -8147,13 +8153,7 @@ async function runScaffold(opts) {
   const settingsRel = relative(opts.targetRoot, settings.path);
   if (settings.created) lists.created.push(settingsRel);
   else lists.present.push(settingsRel);
-  const staging = await ensureStaging({
-    gitClient: opts.gitClient,
-    stagingBranch: opts.config.git.stagingBranch,
-    baseBranch: opts.config.git.baseBranch,
-    cwd: opts.targetRoot
-  });
-  const branch = opts.config.git.stagingBranch;
+  const branch = opts.config.git.baseBranch;
   const required = opts.config.git.requiredStatusChecks;
   let state = await probeProtection({
     ghClient: opts.ghClient,
@@ -8180,7 +8180,6 @@ async function runScaffold(opts) {
     files_present: lists.present,
     files_updated: lists.updated,
     files_outdated: lists.outdated,
-    staging: { created: staging.created, staging_tip: staging.stagingTip },
     protection: {
       enabled: state.enabled,
       strict_up_to_date: state.strictUpToDate,
@@ -8211,7 +8210,6 @@ async function run2(argv) {
     owner,
     repo,
     config: loadConfig(),
-    gitClient: new DefaultGitClient(),
     ghClient: new DefaultGhClient(),
     provision: args.flag("provision") === true
   });
@@ -8219,7 +8217,7 @@ async function run2(argv) {
   return EXIT.OK;
 }
 var scaffoldCommand = {
-  describe: "Prepare a repo (templates + staging + branch protection) for the pipeline",
+  describe: "Prepare a repo (templates + develop branch protection) for the pipeline",
   run: async (argv) => {
     try {
       return await run2(argv);
@@ -10852,8 +10850,14 @@ async function finalizeRun(deps, runId) {
   const issuesFiled = await fileFailureIssues(deps, report);
   let rollupResult;
   if (report.totals.shipped > 0) {
+    const stagingBranch = runStagingBranch(runId);
+    await deps.git.fetch("origin", deps.config.git.baseBranch);
+    await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
+    await deps.git.push("origin", stagingBranch);
     rollupResult = await rollup({
       ghClient: deps.gh,
+      stagingBranch,
+      baseBranch: deps.config.git.baseBranch,
       title: rollupTitle(report),
       body: markdown,
       partial: terminal === "partial",
@@ -11338,7 +11342,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     runId,
     taskId,
     worktree,
-    baseRef: deps.config.git.stagingBranch,
+    baseRef: runStagingBranch(runId),
     config: deps.config,
     tools: deps.tools
   };
