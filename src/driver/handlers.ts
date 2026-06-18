@@ -232,7 +232,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
         runId: ctx.run.run_id,
         taskId: task.task_id,
         worktree: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
-        baseRef: deps.config.git.stagingBranch,
+        baseRef: runStagingBranch(ctx.run.run_id),
         config: deps.config,
         tools: deps.tools,
       };
@@ -288,6 +288,11 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
      * (look up by head first — Δ P), then mark the task done. Merge is loop-owned
      * (MergeSerializer) and not performed here; `pr_number` recording is the
      * driver's job (the reporter cannot write state).
+     *
+     * NOTE: this reporter is superseded on the live path by `shipTask` in
+     * `src/driver/ship.ts` (coroutine routes `ship` there directly). Kept
+     * consistent with the per-run branch so it does not become a latent trap once
+     * the shared staging branch is removed.
      */
     async ship(ctx: StageContext): Promise<StageResult> {
       const task = requireTask(ctx, "ship");
@@ -298,7 +303,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
         branch,
         title: specTask.title,
         body: shipBody(ctx.run.run_id, specTask),
-        base: deps.config.git.stagingBranch,
+        base: runStagingBranch(ctx.run.run_id),
       });
       return taskDone();
     },
