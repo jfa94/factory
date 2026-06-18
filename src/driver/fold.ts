@@ -33,7 +33,6 @@ import {
 } from "./transitions.js";
 import { taskWorktreePath } from "./paths.js";
 import { classifyFailure, ESCALATION_CAP, parseProducerStatus } from "../producer/index.js";
-import { runStagingBranch } from "../git/index.js";
 import { nextStage, stageToInFlightStatus } from "../types/index.js";
 import { GateRunner, type GateContext } from "../verifier/deterministic/index.js";
 import {
@@ -60,6 +59,7 @@ import type {
   TaskStage,
 } from "../types/index.js";
 import type { HandlerDeps } from "./types.js";
+import { runStagingBranch } from "./deps.js";
 import type { StateManager } from "./deps.js";
 
 const log = createLogger("fold");

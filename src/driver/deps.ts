@@ -72,6 +72,7 @@ export {
   requireProtectionOrRefuse,
   provisionProtection,
   runScopedBranch,
+  runStagingBranch,
   ensureStaging,
   rollup,
 } from "../git/index.js";

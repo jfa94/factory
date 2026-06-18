@@ -18,6 +18,7 @@ import {
   taskDone,
   waitRetry,
   runScopedBranch,
+  runStagingBranch,
   createTaskPrIdempotent,
   MergeSerializer,
   type MergeOutcome,
@@ -26,7 +27,6 @@ import {
   type StateManager,
   type TaskState,
 } from "./deps.js";
-import { runStagingBranch } from "../git/index.js";
 import { specTaskOf, shipBody } from "./handlers.js";
 import { taskWorktreePath } from "./paths.js";
 import type { HandlerDeps } from "./types.js";

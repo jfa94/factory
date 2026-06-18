@@ -29,7 +29,7 @@ export interface PushOptions extends GitOpts {
 }
 
 /** Options for {@link GitClient.mergeFfOrCommit}. */
-export interface MergeOptions extends GitOpts {}
+export type MergeOptions = GitOpts;
 
 /**
  * The typed git surface WS3 builds on. NO force-push exists here by design.

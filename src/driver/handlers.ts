@@ -34,6 +34,7 @@ import {
   createTaskWorktree,
   createTaskPrIdempotent,
   runScopedBranch,
+  runStagingBranch,
   GateRunner,
   buildPanelManifest,
   resolveReviewModel,
@@ -62,7 +63,6 @@ import {
 import type { HandlerDeps } from "./types.js";
 import { taskWorktreePath } from "./paths.js";
 import { FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
-import { runStagingBranch } from "../git/index.js";
 
 /**
  * A producer role the tests/exec reporters spawn. Mirrors the WS8

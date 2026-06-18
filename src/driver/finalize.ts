@@ -36,6 +36,7 @@ import {
   renderPartialReportMarkdown,
   renderFailureIssue,
   recordRunFinalized,
+  runStagingBranch,
   type Config,
   type GhClient,
   type GitClient,
@@ -46,7 +47,6 @@ import {
   type RollupArgs,
   type RollupResult,
 } from "./deps.js";
-import { runStagingBranch } from "../git/index.js";
 import type { ShipMode } from "./types.js";
 import { atomicWriteFile, createLogger, nowIso } from "../shared/index.js";
 import { runReportPath } from "../core/state/paths.js";
