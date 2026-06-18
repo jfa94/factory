@@ -949,13 +949,16 @@ describe("applyResume", () => {
     expect(env.run.status).toBe("running");
   });
 
-  it("is LOUD on a terminal run (nothing to resume)", async () => {
-    await createBareRun("r1");
-    await state.finalize("r1", "completed");
-    await expect(applyResume(state, "r1", underCurve(), defaultConfig(), NOW)).rejects.toThrow(
-      /terminal/,
-    );
-  });
+  it.each(["completed", "failed", "superseded"] as const)(
+    "is LOUD on a terminal run (%s) — nothing to resume",
+    async (status) => {
+      await createBareRun("r1");
+      await state.finalize("r1", status);
+      await expect(applyResume(state, "r1", underCurve(), defaultConfig(), NOW)).rejects.toThrow(
+        /terminal/,
+      );
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
