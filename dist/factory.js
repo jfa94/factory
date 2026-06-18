@@ -11495,7 +11495,7 @@ async function shipTask(deps, ctx) {
     branch,
     title: specTask.title,
     body: shipBody(runId, specTask),
-    base: deps.config.git.stagingBranch
+    base: runStagingBranch(runId)
   });
   await deps.state.updateTask(runId, task.task_id, (t) => ({
     ...t,
@@ -11509,7 +11509,7 @@ async function shipTask(deps, ctx) {
     ghClient: deps.gh,
     owner: deps.owner,
     repo: deps.repo,
-    stagingBranch: deps.config.git.stagingBranch,
+    stagingBranch: runStagingBranch(runId),
     dataDir: deps.dataDir
   });
   const outcome = await serializer.merge(pr.number);
