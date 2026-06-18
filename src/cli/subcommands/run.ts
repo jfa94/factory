@@ -814,3 +814,19 @@ export const runCommand: Subcommand = {
     }
   },
 };
+
+/** Top-level `factory resume` — alias-equivalent of `run resume` (Decision 35). */
+export const resumeCommand: Subcommand = {
+  describe: "Resume a paused/suspended run (re-check quota; clear a recovered checkpoint)",
+  run: async (argv) => {
+    try {
+      return await runResume(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`resume: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  },
+};
