@@ -7455,6 +7455,15 @@ var DefaultGhClient = class {
       );
     }
   }
+  async deleteProtection(owner, repo, branch, opts) {
+    const argv = ["api", "-X", "DELETE", `/repos/${owner}/${repo}/branches/${branch}/protection`];
+    const r = await this.runner(argv, this.execOpts(opts));
+    if (r.code !== 0 && !/not found|404/i.test(r.stderr)) {
+      throw new Error(
+        `gh api DELETE protection failed for ${owner}/${repo}@${branch}: ${r.stderr}`
+      );
+    }
+  }
   async repoProtection(owner, repo, branch, opts) {
     const path2 = `repos/${owner}/${repo}/branches/${branch}/protection`;
     const r = await this.runner(["api", path2], this.execOpts(opts));
@@ -7879,6 +7888,15 @@ async function ensureStaging(args) {
   throw new Error(
     `staging: ${remote}/${staging} and ${remote}/${base} have DIVERGED (merge-base=${mergeBase}, staging=${stagingTip}, base=${baseTip}) \u2014 refusing to reconcile (no silent main fallback)`
   );
+}
+
+// src/git/run-staging.ts
+var RUN_STAGING_PREFIX = "staging";
+function runStagingBranch(runId) {
+  if (runId.length === 0) {
+    throw new Error("runStagingBranch: empty run id (would yield a bare 'staging/' branch)");
+  }
+  return `${RUN_STAGING_PREFIX}/${runId}`;
 }
 
 // src/cli/current.ts
@@ -12018,7 +12036,7 @@ async function resolveSpec(specStore, opts) {
   }
   return resolved;
 }
-async function createRunFromManifest(state, specStore, manifest, opts) {
+async function createRunFromManifest(state, specStore, manifest, opts, stagingDeps) {
   if (opts.mode === "workflow") {
     log28.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
@@ -12034,7 +12052,25 @@ async function createRunFromManifest(state, specStore, manifest, opts) {
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
     ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {}
   });
-  return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+  const run9 = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+  if (stagingDeps !== void 0) {
+    const branch = runStagingBranch(run9.run_id);
+    await ensureStaging({
+      gitClient: stagingDeps.gitClient,
+      stagingBranch: branch,
+      baseBranch: stagingDeps.config.git.baseBranch,
+      cwd: stagingDeps.targetRoot
+    });
+    await provisionProtection({
+      ghClient: stagingDeps.ghClient,
+      owner: stagingDeps.owner,
+      repo: stagingDeps.repo,
+      branch,
+      requiredChecks: stagingDeps.config.git.requiredStatusChecks,
+      provision: true
+    });
+  }
+  return run9;
 }
 function assertReusableFlags(existing, opts) {
   if (opts.mode !== void 0 && opts.mode !== existing.mode) {
@@ -12048,10 +12084,13 @@ function assertReusableFlags(existing, opts) {
     );
   }
 }
-async function resolveOrCreateRun(state, specStore, opts) {
+async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   const manifest = await resolveSpec(specStore, opts);
   if (opts.force === true) {
-    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return {
+      reused: false,
+      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps)
+    };
   }
   const pointer = specStore.toPointer(manifest);
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
@@ -12063,7 +12102,10 @@ async function resolveOrCreateRun(state, specStore, opts) {
       );
       return { reused: true, run: existing };
     }
-    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return {
+      reused: false,
+      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps)
+    };
   });
 }
 async function applyResume(state, runId, reading, config, nowEpochSec) {
@@ -12119,7 +12161,11 @@ async function runCreate(argv, overrides = {}) {
   requireAutonomousMode();
   const cwd = overrides.cwd ?? process.cwd();
   const gitClient = overrides.gitClient ?? new DefaultGitClient();
-  const repo = await resolveRepo({ explicit: optionalString(args.flag("repo")), cwd, gitClient });
+  const repoSlug = await resolveRepo({
+    explicit: optionalString(args.flag("repo")),
+    cwd,
+    gitClient
+  });
   const issue = parseIssue(args.flag("issue"));
   const specId = optionalString(args.flag("spec-id"));
   let selector;
@@ -12142,17 +12188,33 @@ async function runCreate(argv, overrides = {}) {
   const dataDir = resolveDataDir(
     overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {}
   );
+  const config = loadConfig(overrides.dataDir !== void 0 ? { dataDir } : {});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const { run: run9 } = await resolveOrCreateRun(state, specStore, {
-    repo,
-    runId,
-    ...selector,
-    mode,
-    shipMode,
-    ...ownerSession !== void 0 ? { ownerSession } : {},
-    ...force ? { force } : {}
-  });
+  const ghClient = overrides.ghClient ?? new DefaultGhClient();
+  const { owner, repo } = splitRepoSlug(repoSlug);
+  const stagingDeps = {
+    gitClient,
+    ghClient,
+    config,
+    targetRoot: cwd,
+    owner,
+    repo
+  };
+  const { run: run9 } = await resolveOrCreateRun(
+    state,
+    specStore,
+    {
+      repo: repoSlug,
+      runId,
+      ...selector,
+      mode,
+      shipMode,
+      ...ownerSession !== void 0 ? { ownerSession } : {},
+      ...force ? { force } : {}
+    },
+    stagingDeps
+  );
   emitJson(run9);
   return EXIT.OK;
 }

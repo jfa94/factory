@@ -91,6 +91,9 @@ export type {
 export { ensureStaging } from "./staging.js";
 export type { EnsureStagingArgs, EnsureStagingResult } from "./staging.js";
 
+// per-run staging branch naming (Decision 33)
+export { runStagingBranch, RUN_STAGING_PREFIX } from "./run-staging.js";
+
 // fakes for downstream unit tests
 export { FakeGitClient, FakeGhClient } from "./fakes.js";
 export type { FakeGitOptions, FakeGhOptions } from "./fakes.js";

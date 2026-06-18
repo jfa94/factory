@@ -29,7 +29,7 @@ import { EXIT } from "../exit-codes.js";
 import { NotAutonomousError } from "../../autonomy/mode.js";
 import { StateManager } from "../../core/state/manager.js";
 import { SpecStore, parseSpecManifest, type SpecManifest } from "../../spec/index.js";
-import { FakeGitClient } from "../../git/index.js";
+import { FakeGitClient, FakeGhClient } from "../../git/index.js";
 import { defaultConfig } from "../../config/schema.js";
 import {
   FIVE_HOUR_WINDOW_SECONDS,
@@ -490,14 +490,25 @@ describe("resolveOrCreateRun (idempotent create)", () => {
   });
 
   it("the divergent-intent reuse rejects as a UsageError at the runCreate boundary (→ EXIT.USAGE)", async () => {
-    const git = new FakeGitClient();
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
     // run-a is created with the defaults (session + live).
-    await runCreate(["--issue", "42", "--run-id", "run-a"], { gitClient: git, cwd: "/x", dataDir });
+    await runCreate(["--issue", "42", "--run-id", "run-a"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/x",
+      dataDir,
+    });
     // A bare re-create (auto id) whose intent DIVERGES (--no-ship → no-merge, vs the live
     // run) rejects as a UsageError; runCommand.run maps that to EXIT.USAGE.
     await expect(
-      runCreate(["--issue", "42", "--no-ship"], { gitClient: git, cwd: "/x", dataDir }),
+      runCreate(["--issue", "42", "--no-ship"], {
+        gitClient: git,
+        ghClient: gh,
+        cwd: "/x",
+        dataDir,
+      }),
     ).rejects.toMatchObject({ isUsageError: true });
   });
 });
@@ -509,9 +520,13 @@ describe("resolveOrCreateRun (idempotent create)", () => {
 describe("runCreate auto-derives --repo from the origin remote", () => {
   let dataDir: string;
 
-  /** A FakeGitClient whose origin remote-url resolves to REPO ("acme/widgets"). */
+  /**
+   * A FakeGitClient whose origin remote-url resolves to the given slug AND whose
+   * origin has a `develop` branch seeded — required because `runCreate` now cuts
+   * `staging/<run-id>` from `origin/develop` (Decision 33).
+   */
   function gitWithOrigin(slug: string): FakeGitClient {
-    const git = new FakeGitClient();
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${slug}.git`);
     return git;
   }
@@ -526,6 +541,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   it("no --repo flag → derives the repo from origin and creates the run", async () => {
     const code = await runCreate(["--issue", "42", "--run-id", "run-derive"], {
       gitClient: gitWithOrigin(REPO),
+      ghClient: new FakeGhClient(),
       cwd: "/wherever",
       dataDir,
     });
@@ -541,6 +557,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     // falls through to the origin-derive path. This pins the user-visible outcome.
     const code = await runCreate(["--repo", "", "--issue", "42", "--run-id", "run-empty"], {
       gitClient: gitWithOrigin(REPO),
+      ghClient: new FakeGhClient(),
       cwd: "/wherever",
       dataDir,
     });
@@ -554,6 +571,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     // under REPO is found and the run is keyed to the canonical repo id.
     const code = await runCreate(["--repo", "Acme/Widgets", "--issue", "42", "--run-id", "run-m"], {
       gitClient: gitWithOrigin(REPO),
+      ghClient: new FakeGhClient(),
       cwd: "/wherever",
       dataDir,
     });
@@ -566,6 +584,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     await expect(
       runCreate(["--repo", "acme/other", "--issue", "42", "--run-id", "run-x"], {
         gitClient: gitWithOrigin(REPO),
+        ghClient: new FakeGhClient(),
         cwd: "/wherever",
         dataDir,
       }),
@@ -578,6 +597,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     await expect(
       runCreate(["--repo", "acme/other", "--issue", "42"], {
         gitClient: gitWithOrigin(REPO),
+        ghClient: new FakeGhClient(),
         cwd: "/wherever",
         dataDir,
       }),
@@ -587,6 +607,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   it("no mode/ship flags → persists the no-flag defaults: session + live", async () => {
     const code = await runCreate(["--issue", "42", "--run-id", "run-def"], {
       gitClient: gitWithOrigin(REPO),
+      ghClient: new FakeGhClient(),
       cwd: "/wherever",
       dataDir,
     });
@@ -599,6 +620,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   it("--workflow flips mode to workflow (ship still defaults live)", async () => {
     await runCreate(["--issue", "42", "--run-id", "run-wf", "--workflow"], {
       gitClient: gitWithOrigin(REPO),
+      ghClient: new FakeGhClient(),
       cwd: "/wherever",
       dataDir,
     });
@@ -610,6 +632,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   it("--no-ship flips ship_mode to no-merge (mode still defaults session)", async () => {
     await runCreate(["--issue", "42", "--run-id", "run-ns", "--no-ship"], {
       gitClient: gitWithOrigin(REPO),
+      ghClient: new FakeGhClient(),
       cwd: "/wherever",
       dataDir,
     });
@@ -767,5 +790,79 @@ describe("applyResume", () => {
     await expect(applyResume(state, "r1", underCurve(), defaultConfig(), NOW)).rejects.toThrow(
       /terminal/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// run create: cuts + protects staging/<run-id> from develop (Decision 33)
+// ---------------------------------------------------------------------------
+
+describe("run create cuts and protects staging/<run-id> from develop", () => {
+  let dataDir: string;
+
+  /** Git fake with origin remote URL + develop branch seeded (ensureStaging needs it). */
+  function gitWithDevelop(): FakeGitClient {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    return git;
+  }
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "factory-run-staging-"));
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    await store.write(manifest([task("t1", [])]), "# spec\n");
+  });
+  afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
+
+  it("run create cuts staging/<run-id> from origin/develop and provisions protection on it", async () => {
+    const git = gitWithDevelop();
+    const gh = new FakeGhClient();
+
+    const code = await runCreate(["--issue", "42", "--run-id", "run-20260618-101500"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/target",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+
+    const branch = "staging/run-20260618-101500";
+
+    // (a) branch was cut: checkoutB was called with the per-run staging branch from origin/develop
+    expect(git.calls).toContain(`checkout -B ${branch} origin/develop`);
+    // branch exists in the fake's remote heads (push was called after checkoutB)
+    expect(git.getRemoteHead(branch)).toBeDefined();
+
+    // (b) protection was provisioned on the per-run branch
+    expect(gh.calls).toContain(`api PUT protection ${branch}`);
+    const protection = gh.protection.get(branch);
+    expect(protection?.enabled).toBe(true);
+    expect(protection?.strictUpToDate).toBe(true);
+  });
+
+  it("reused run does NOT cut a second branch (the reuse path skips staging)", async () => {
+    const git = gitWithDevelop();
+    const gh = new FakeGhClient();
+
+    // First create — cuts the branch.
+    await runCreate(["--issue", "42", "--run-id", "run-first"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/target",
+      dataDir,
+    });
+    const callsAfterFirst = [...git.calls];
+
+    // Second create (auto-id, no --new) → reuses the live run, must NOT cut a branch.
+    await runCreate(["--issue", "42"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/target",
+      dataDir,
+    });
+
+    // No new checkoutB calls after the first create.
+    const newCalls = git.calls.slice(callsAfterFirst.length);
+    expect(newCalls.filter((c) => c.startsWith("checkout -B staging/"))).toHaveLength(0);
   });
 });

@@ -33,7 +33,17 @@ import { isTerminalRunStatus } from "../../types/index.js";
 import type { Config, RunState, RunStatus, TaskState } from "../../types/index.js";
 import { finalizeRun } from "../../driver/index.js";
 import { loadCliDeps } from "../wiring.js";
-import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
+import {
+  DefaultGitClient,
+  DefaultGhClient,
+  ensureStaging,
+  provisionProtection,
+  runStagingBranch,
+  resolveRepo,
+  splitRepoSlug,
+  type GitClient,
+  type GhClient,
+} from "../../git/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { requireAutonomousMode } from "../../autonomy/mode.js";
 import { createLogger } from "../../shared/index.js";
@@ -193,6 +203,21 @@ function assertAcyclic(tasks: Record<string, TaskState>, specId: string): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Git/gh deps needed to cut + protect the per-run staging branch (Decision 33).
+ * Passed from `runCreate` into `createRunFromManifest` after all deps are wired.
+ * Absent on the bare `createRun` (direct-API) path so existing unit tests that
+ * call `createRun` directly continue to work without fakes.
+ */
+export interface RunStagingDeps {
+  readonly gitClient: GitClient;
+  readonly ghClient: GhClient;
+  readonly config: Config;
+  readonly targetRoot: string;
+  readonly owner: string;
+  readonly repo: string;
+}
+
+/**
  * Selects the durable spec to run — EXACTLY one of the two keys, never both,
  * never neither. The `?: never` padding makes the XOR a genuine TYPE constraint:
  * a bare `{ issue } | { specId }` only forbids NEITHER (a both-keys object still
@@ -251,12 +276,18 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
  * Create the run from an already-resolved manifest and seed its tasks — the
  * imperative core. Creates the run (status `running`), then folds in the seeded
  * task rows via the one sanctioned write path; returns the seeded {@link RunState}.
+ *
+ * When `stagingDeps` is supplied (always from `runCreate`; absent on the bare
+ * `createRun` direct-API path), cuts `staging/<run-id>` from `develop` and
+ * provisions GitHub branch protection on it (Decision 33). The cut + protect runs
+ * AFTER the run state row is persisted so `run.run_id` is guaranteed to exist.
  */
 async function createRunFromManifest(
   state: StateManager,
   specStore: SpecStore,
   manifest: SpecManifest,
   opts: CreateRunOptions,
+  stagingDeps?: RunStagingDeps,
 ): Promise<RunState> {
   // Decision 24: workflow mode disables quota pacing. Warn ONCE here — at opt-in
   // (run creation) — not on every step; the gate then proceeds silently.
@@ -275,7 +306,28 @@ async function createRunFromManifest(
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
     ...(opts.ownerSession !== undefined ? { owner_session: opts.ownerSession } : {}),
   });
-  return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+  const run = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+
+  // Decision 33: cut + protect the per-run staging branch AFTER the run row exists.
+  if (stagingDeps !== undefined) {
+    const branch = runStagingBranch(run.run_id);
+    await ensureStaging({
+      gitClient: stagingDeps.gitClient,
+      stagingBranch: branch,
+      baseBranch: stagingDeps.config.git.baseBranch,
+      cwd: stagingDeps.targetRoot,
+    });
+    await provisionProtection({
+      ghClient: stagingDeps.ghClient,
+      owner: stagingDeps.owner,
+      repo: stagingDeps.repo,
+      branch,
+      requiredChecks: stagingDeps.config.git.requiredStatusChecks,
+      provision: true,
+    });
+  }
+
+  return run;
 }
 
 /**
@@ -337,16 +389,24 @@ function assertReusableFlags(existing: RunState, opts: CreateRunOptions): void {
  * the per-run clobber guard in {@link StateManager.create} only catches a same
  * run_id collision, not a same-spec one. Reuse with divergent re-passed flags
  * hard-fails via {@link assertReusableFlags}.
+ *
+ * `stagingDeps` is forwarded to {@link createRunFromManifest} to cut + protect the
+ * per-run staging branch on the fresh-create path (Decision 33). The reuse path
+ * never cuts a branch (the branch already exists from the original create).
  */
 export async function resolveOrCreateRun(
   state: StateManager,
   specStore: SpecStore,
   opts: CreateRunOptions,
+  stagingDeps?: RunStagingDeps,
 ): Promise<ResolveOrCreateResult> {
   // Resolve first (LOUD if no spec) — also yields the (repo, spec_id) scan key.
   const manifest = await resolveSpec(specStore, opts);
   if (opts.force === true) {
-    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return {
+      reused: false,
+      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+    };
   }
   const pointer = specStore.toPointer(manifest);
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
@@ -358,7 +418,10 @@ export async function resolveOrCreateRun(
       );
       return { reused: true, run: existing };
     }
-    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return {
+      reused: false,
+      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+    };
   });
 }
 
@@ -462,13 +525,14 @@ export function resolveOwnerSession(
 }
 
 /**
- * Test seam for {@link runCreate}: inject the git seam + cwd + data dir so the
- * `--repo` auto-derive path (Prompt G) is exercised with a fake remote and a temp
- * data dir. Production passes none of these (real {@link DefaultGitClient}, real
- * `process.cwd()`, env-resolved data dir).
+ * Test seam for {@link runCreate}: inject the git seam + gh client + cwd + data dir
+ * so the `--repo` auto-derive path (Prompt G) and the staging cut + protect
+ * (Decision 33) are exercised with fakes and a temp data dir. Production passes
+ * none of these (real clients, real `process.cwd()`, env-resolved data dir).
  */
 export interface RunCreateOverrides {
   readonly gitClient?: GitClient;
+  readonly ghClient?: GhClient;
   readonly cwd?: string;
   readonly dataDir?: string;
 }
@@ -491,7 +555,11 @@ export async function runCreate(
   // and fail LOUD if an explicit value disagrees with the remote.
   const cwd = overrides.cwd ?? process.cwd();
   const gitClient = overrides.gitClient ?? new DefaultGitClient();
-  const repo = await resolveRepo({ explicit: optionalString(args.flag("repo")), cwd, gitClient });
+  const repoSlug = await resolveRepo({
+    explicit: optionalString(args.flag("repo")),
+    cwd,
+    gitClient,
+  });
   const issue = parseIssue(args.flag("issue"));
   const specId = optionalString(args.flag("spec-id"));
   // Collapse the two CLI flags into the exactly-one SpecSelector here, at the
@@ -525,17 +593,35 @@ export async function runCreate(
   const dataDir = resolveDataDir(
     overrides.dataDir !== undefined ? { dataDir: overrides.dataDir } : {},
   );
+  const config = loadConfig(overrides.dataDir !== undefined ? { dataDir } : {});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const { run } = await resolveOrCreateRun(state, specStore, {
+  // Decision 33: build the staging deps bundle (git + gh + config + root + repo
+  // coords) so createRunFromManifest can cut + protect staging/<run-id> from develop.
+  const ghClient = overrides.ghClient ?? new DefaultGhClient();
+  const { owner, repo } = splitRepoSlug(repoSlug);
+  const stagingDeps: RunStagingDeps = {
+    gitClient,
+    ghClient,
+    config,
+    targetRoot: cwd,
+    owner,
     repo,
-    runId,
-    ...selector,
-    mode,
-    shipMode,
-    ...(ownerSession !== undefined ? { ownerSession } : {}),
-    ...(force ? { force } : {}),
-  });
+  };
+  const { run } = await resolveOrCreateRun(
+    state,
+    specStore,
+    {
+      repo: repoSlug,
+      runId,
+      ...selector,
+      mode,
+      shipMode,
+      ...(ownerSession !== undefined ? { ownerSession } : {}),
+      ...(force ? { force } : {}),
+    },
+    stagingDeps,
+  );
   emitJson(run);
   return EXIT.OK;
 }
