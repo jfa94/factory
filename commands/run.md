@@ -1,6 +1,6 @@
 ---
 description: "Run the factory autonomous coding pipeline (PRD issue → task PRs → staging)"
-argument-hint: "[resume] (--issue <N> | --spec-id <id>) [--repo <owner/name>] [--mode session|workflow] [--ship-mode no-merge|live] [--run <id>]"
+argument-hint: "[resume] (--issue <N> | --spec-id <id>) [--repo <owner/name>] [--workflow] [--no-ship] [--run <id>]"
 arguments:
   - name: mode
     description: "Omit to start a run; pass `resume` to re-enter a paused/suspended run"
@@ -14,11 +14,11 @@ arguments:
   - name: "--spec-id"
     description: "Explicit <issue>-<slug> spec id, instead of --issue (start mode)"
     required: false
-  - name: "--mode"
-    description: "session (sequential, in-session agents — default) | workflow (parallel background Workflow)"
+  - name: "--workflow"
+    description: "Run the parallel background Workflow driver. Default (omit): session — sequential, in-session agents"
     required: false
-  - name: "--ship-mode"
-    description: "no-merge (open task PRs, never merge — cutover-safe) | live (auto-merge into staging). Default no-merge"
+  - name: "--no-ship"
+    description: "Open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop"
     required: false
   - name: "--run"
     description: "Run id to resume (resume mode; defaults to the current run)"
@@ -28,35 +28,39 @@ arguments:
 # /factory:run
 
 Drive a full pipeline run. The `factory` CLI is the engine (ALL control flow); the
-driver is a dumb loop. Reject a START call (no `resume`) with a clear message if:
-neither or both of `--issue`/`--spec-id`; `--mode` not `session`/`workflow`;
-`--ship-mode` not `no-merge`/`live`. `--repo` is OPTIONAL — the CLI auto-derives it from the
-`origin` remote of the current checkout (pass `--repo <owner/name>` only to override; an explicit
-value that disagrees with the remote fails loud). Defaults: `--mode session`, `--ship-mode no-merge`
-(`live` only on explicit opt-in — it auto-merges into staging).
+driver is a dumb loop. Reject a START call (no `resume`) with a clear message if neither
+or both of `--issue`/`--spec-id` are given. `--repo` is OPTIONAL — the CLI auto-derives it
+from the `origin` remote of the current checkout (pass `--repo <owner/name>` only to
+override; an explicit value that disagrees with the remote fails loud).
+
+**Defaults (no flags): session + live** — the in-session orchestrator loop, auto-merging
+each task into staging and the staging→develop rollup into develop. Two terse boolean
+overrides: `--workflow` (run the background Workflow driver instead of session) and
+`--no-ship` (open PRs but never merge instead of live).
 
 ## Both modes start the same
 
-Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run
-create --mode <session|workflow> --ship-mode <no-merge|live> --session-id "$CLAUDE_CODE_SESSION_ID"`;
-read `run_id`). Pass THIS command's `--mode` AND `--ship-mode` values through to Phase 2's `run
-create` so both persist on the run — the quota gate paces in `session` and hard-stops without pacing
-in `workflow` (Decision 24), and `ship_mode` is read back by the workflow driver + resume (never
-re-passed). Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` so the run records THIS session as
-its `owner_session` — the Stop gate then keeps the autonomous loop alive only here and lets other
-sessions stop freely (Prompt J). With `--spec-id`, skip Phase 1 — the spec must already exist; `run
-create` fails LOUD otherwise:
+Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run create
+[--workflow] [--no-ship] --session-id "$CLAUDE_CODE_SESSION_ID"`; read `run_id`). Forward
+THIS command's `--workflow`/`--no-ship` flags verbatim to Phase 2's `run create` so the
+resolved mode + ship intent persist on the run — the quota gate paces in `session` and
+hard-stops without pacing in `workflow` (Decision 24), and `ship_mode` is read back by the
+workflow driver + resume + finalize (never re-passed). Always pass `--session-id
+"$CLAUDE_CODE_SESSION_ID"` so the run records THIS session as its `owner_session` — the Stop
+gate then keeps the autonomous loop alive only here and lets other sessions stop freely
+(Prompt J). With `--spec-id`, skip Phase 1 — the spec must already exist; `run create` fails
+LOUD otherwise:
 
 ```
 Skill(pipeline-orchestrator)
 ```
 
-## `--mode session` (default)
+## Session mode (default)
 
 Continue with the skill's Phase 3 THE LOOP and Phase 4 verbatim. Sequential: one
 task at a time, every agent spawned in this session.
 
-## `--mode workflow`
+## Workflow mode (`--workflow`)
 
 After Phase 2, launch the plugin's workflow driver and relay its result:
 
@@ -73,8 +77,9 @@ file-lock serialized). When it returns:
 
 - `{ suspended: true, scope, resets_at_epoch }` → quota stop: report it; the user
   re-runs `/factory:run resume` after the window resets. Do NOT finalize.
-- otherwise → run the skill's Phase 4: `factory run finalize --run <run_id>
---ship-mode <no-merge|live>`, then `factory score` + `factory state --summary`, and report.
+- otherwise → run the skill's Phase 4: `factory run finalize --run <run_id>` (ship mode is
+  read from the run's persisted `ship_mode`), then `factory score` + `factory state --summary`,
+  and report.
 
 ## Autonomous mode (MANDATORY — no opt-in, no opt-out)
 
@@ -117,6 +122,6 @@ never the relaunch.
 the skill in session mode, or re-launch the workflow in workflow mode — ask the user
 which mode if it is ambiguous; the engine is indifferent).
 
-Ship mode is persisted on the run (Phase 2's `run create --ship-mode`), so a workflow resume re-reads
+Ship mode is persisted on the run (Phase 2's `run create`), so a workflow resume re-reads
 it from the first `factory next` envelope — re-launch with `Workflow({ scriptPath })`, no `args`. A
-session resume re-enters Phase 3, which passes the persisted value through as before.
+session resume re-enters Phase 3, which reads the persisted value as before.

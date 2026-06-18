@@ -366,12 +366,14 @@ export const RunModeEnum = z.enum(["session", "workflow"]);
 export type RunMode = z.infer<typeof RunModeEnum>;
 
 /**
- * Ship mode for the run's rollup. `no-merge` opens the staging→develop rollup PR
- * but never merges (cutover-safe default); `live` serial-merges into staging. An
- * immutable run property set once at `run create` from `--ship-mode` — persisted
- * so the `--mode workflow` driver and `resume` read it from the run (the source
- * of truth) instead of re-marshaling it through fragile Workflow `args` or
- * re-prompting the user. Mirrors {@link RunModeEnum}: a stored property, never a
+ * Ship mode for the run's rollup. `live` (the DEFAULT) auto-merges each task into
+ * staging and serial-merges the staging→develop rollup — the pipeline's purpose,
+ * gated by branch protection + the review panel + TDD + the holdout. `no-merge`
+ * (the `--no-ship` opt-out) opens the rollup PR but never merges. An immutable run
+ * property set once at `run create` (from the absence/presence of `--no-ship`) —
+ * persisted so the workflow driver, `resume`, and `finalize` read it from the run
+ * (the source of truth) instead of re-marshaling it through fragile Workflow `args`
+ * or re-prompting the user. Mirrors {@link RunModeEnum}: a stored property, never a
  * derived verdict.
  */
 export const ShipModeEnum = z.enum(["no-merge", "live"]);
@@ -398,7 +400,7 @@ export const RunStateSchema = z.object({
   status: RunStatusEnum.default("running"),
   driver: DriverEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
-  ship_mode: ShipModeEnum.default("no-merge"),
+  ship_mode: ShipModeEnum.default("live"),
 
   /**
    * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop

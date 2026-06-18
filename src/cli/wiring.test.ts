@@ -80,8 +80,8 @@ describe("loadCliDeps", () => {
     // run snapshot carried.
     expect(deps.run.run_id).toBe(RUN_ID);
     expect(deps.run.spec.spec_id).toBe("42-checkout");
-    // ship mode defaults to the cutover-safe no-merge.
-    expect(deps.shipMode).toBe("no-merge");
+    // ship mode defaults to live (auto-merge) — the run's persisted default.
+    expect(deps.shipMode).toBe("live");
     // every deterministic seam is wired (no agent runners — that's the orchestrator's job).
     expect(deps.config).toBeDefined();
     expect(deps.git).toBeDefined();

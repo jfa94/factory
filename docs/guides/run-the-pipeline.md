@@ -9,7 +9,7 @@ and competence with `gh`. For the deterministic detail of each step, see the
 The `factory` CLI is the deterministic engine: it owns all control flow and
 exposes one seam, the **coroutine** (`factory next` + `factory drive`). A thin
 **driver** steps that seam and spawns the agents each envelope names. You pick the
-driver with `--mode` (below); the default runs the loop **in your Claude Code
+driver with `--workflow` (below); by default the loop runs **in your Claude Code
 session**.
 
 ## 1. Scaffold the target repo (once per repo)
@@ -29,35 +29,37 @@ branch manually first. See [Scaffold a target repo](./scaffold-a-repo.md).
 /factory:run --repo <owner/name> --issue <N>
 ```
 
-| Flag                  | Required | Notes                                                                                   |
-| --------------------- | -------- | --------------------------------------------------------------------------------------- |
-| `--repo <owner/name>` | yes      | Target repo.                                                                            |
-| `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                 |
-| `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                    |
-| `--mode`              | no       | `session` (default) \| `workflow`. Which driver steps the seam — see below.             |
-| `--ship-mode`         | no       | `no-merge` (default; opens task PRs, never merges) \| `live` (auto-merge into staging). |
+| Flag                  | Required | Notes                                                                                                   |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `--repo <owner/name>` | yes      | Target repo.                                                                                            |
+| `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                                 |
+| `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                                    |
+| `--workflow`          | no       | Run the background Workflow driver. Omit for the in-session loop (default) — see below.                 |
+| `--no-ship`           | no       | Open the PRs but never merge. Omit for the default **live** — auto-merge tasks→staging, rollup→develop. |
 
-`--mode` selects the driver. Both step the same `factory next` / `factory drive`
+`--workflow` selects the driver. Both step the same `factory next` / `factory drive`
 seam and enforce the identical engine gates; they differ only in where the loop
 runs:
 
-- **`--mode session`** (default) — the in-session LLM orchestrator loop
+- **Session mode** (default, no flag) — the in-session LLM orchestrator loop
   (`skills/pipeline-orchestrator/SKILL.md`). It runs in your Claude Code session
   and drives tasks one at a time.
-- **`--mode workflow`** — the plugin-shipped Workflow script
+- **`--workflow`** — the plugin-shipped Workflow script
   (`scripts/factory-run-driver.js`). It drives ready tasks in the background;
   because Workflow JS cannot shell out, it wraps every `factory` CLI call in a
   small exec agent. Note: workflow mode has no quota pacing (it cannot observe the
   usage signal) — it hard-stops when the allowance runs out.
 
-`--ship-mode` is the cutover-safety knob. The default `no-merge` opens each task
-PR but never merges; pass `live` only when you have explicitly opted into
-auto-merge. Ship mode **is persisted** on the run at create, so the workflow
-driver, `resume`, and `finalize` read it back without re-passing. Re-running
-`factory run create` for an existing run is idempotent (it reuses that run); a
-re-passed `--ship-mode` (or `--mode`) that **disagrees** with the reused run is a
-loud error — pass `--new` for a fresh run, or omit the flag to reuse. (`run
-finalize --ship-mode` does override the persisted value for that one finalize call.)
+`--no-ship` is the cutover-safety opt-out. The default is **live**: each task
+auto-merges into staging and the staging→develop rollup merges into develop (gated
+by branch protection + the review panel + TDD + the holdout). Pass `--no-ship` to
+open the PRs but never merge. Ship mode **is persisted** on the run at create, so
+the workflow driver, `resume`, and `finalize` read it back without re-passing.
+Re-running `factory run create` for an existing run is idempotent (it reuses that
+run); re-running with `--workflow`/`--no-ship` that **disagree** with the reused
+run is a loud error — pass `--new` for a fresh run, or match the run's flags to
+reuse. (`run finalize --no-ship` overrides the persisted value for that one
+finalize call.)
 
 ## 3. What happens (the four phases)
 

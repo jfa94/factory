@@ -162,12 +162,6 @@ describe("run arg/usage edges", () => {
   it("finalize: --help prints help and exits OK", async () => {
     expect(await runCommand.run(["finalize", "--help"])).toBe(EXIT.OK);
   });
-  it("finalize: an unknown --ship-mode is a usage error", async () => {
-    // --run given so the parse short-circuits before any store IO.
-    expect(await runCommand.run(["finalize", "--run", "run-x", "--ship-mode", "auto"])).toBe(
-      EXIT.USAGE,
-    );
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -338,20 +332,20 @@ describe("createRun", () => {
     expect((await state.read("run-rt")).mode).toBe("workflow");
   });
 
-  it("persists ship_mode (default no-merge; explicit live round-trips) so the workflow reads it back", async () => {
+  it("persists ship_mode (default live; explicit no-merge round-trips) so the workflow reads it back", async () => {
     const dflt = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-sm0" });
-    expect(dflt.ship_mode).toBe("no-merge");
-    expect((await state.read("run-sm0")).ship_mode).toBe("no-merge");
+    expect(dflt.ship_mode).toBe("live");
+    expect((await state.read("run-sm0")).ship_mode).toBe("live");
 
-    const live = await createRun(state, store, {
+    const noMerge = await createRun(state, store, {
       repo: REPO,
       issue: 42,
       runId: "run-sm1",
-      shipMode: "live",
+      shipMode: "no-merge",
     });
-    expect(live.ship_mode).toBe("live");
+    expect(noMerge.ship_mode).toBe("no-merge");
     // Resume-safe: the persisted value survives a fresh read (the workflow's source of truth).
-    expect((await state.read("run-sm1")).ship_mode).toBe("live");
+    expect((await state.read("run-sm1")).ship_mode).toBe("no-merge");
   });
 });
 
@@ -427,7 +421,7 @@ describe("resolveOrCreateRun (idempotent create)", () => {
     ).rejects.toThrow(/no spec for issue #999/);
   });
 
-  it("reuses the live run when re-passed --mode/--ship-mode MATCH it", async () => {
+  it("reuses the live run when re-passed mode/ship intent MATCH it", async () => {
     const first = await resolveOrCreateRun(state, store, {
       repo: REPO,
       issue: 42,
@@ -448,8 +442,8 @@ describe("resolveOrCreateRun (idempotent create)", () => {
     expect(second.run.run_id).toBe("run-a");
   });
 
-  it("reuses the live run when the flags are OMITTED, whatever its stored mode/ship_mode", async () => {
-    // Stored as workflow/live; a bare re-create must NOT be treated as a divergence.
+  it("reuses the live run when the intent fields are OMITTED (direct-API path)", async () => {
+    // Stored as workflow/live; an omitted-intent reuse must NOT be treated as a divergence.
     await resolveOrCreateRun(state, store, {
       repo: REPO,
       issue: 42,
@@ -468,14 +462,14 @@ describe("resolveOrCreateRun (idempotent create)", () => {
     expect(second.run.ship_mode).toBe("live");
   });
 
-  it("HARD-FAILS (UsageError) when a re-passed --ship-mode diverges from the live run", async () => {
-    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // ship_mode=no-merge
+  it("HARD-FAILS (UsageError) when a re-passed ship intent diverges from the live run", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // ship_mode=live (default)
     await expect(
       resolveOrCreateRun(state, store, {
         repo: REPO,
         issue: 42,
         runId: "run-b",
-        shipMode: "live",
+        shipMode: "no-merge",
       }),
     ).rejects.toMatchObject({ isUsageError: true });
     // The divergent create never minted a second run.
@@ -495,14 +489,15 @@ describe("resolveOrCreateRun (idempotent create)", () => {
     expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 
-  it("the divergent-flag reuse rejects as a UsageError at the runCreate boundary (→ EXIT.USAGE)", async () => {
+  it("the divergent-intent reuse rejects as a UsageError at the runCreate boundary (→ EXIT.USAGE)", async () => {
     const git = new FakeGitClient();
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    // run-a is created with the defaults (session + live).
     await runCreate(["--issue", "42", "--run-id", "run-a"], { gitClient: git, cwd: "/x", dataDir });
-    // A bare re-create (auto id) that re-passes a divergent --ship-mode rejects as a
-    // UsageError; runCommand.run maps that to EXIT.USAGE (mapping proven in the auto-derive block).
+    // A bare re-create (auto id) whose intent DIVERGES (--no-ship → no-merge, vs the live
+    // run) rejects as a UsageError; runCommand.run maps that to EXIT.USAGE.
     await expect(
-      runCreate(["--issue", "42", "--ship-mode", "live"], { gitClient: git, cwd: "/x", dataDir }),
+      runCreate(["--issue", "42", "--no-ship"], { gitClient: git, cwd: "/x", dataDir }),
     ).rejects.toMatchObject({ isUsageError: true });
   });
 });
@@ -587,6 +582,40 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
         dataDir,
       }),
     ).rejects.toMatchObject({ isUsageError: true });
+  });
+
+  it("no mode/ship flags → persists the no-flag defaults: session + live", async () => {
+    const code = await runCreate(["--issue", "42", "--run-id", "run-def"], {
+      gitClient: gitWithOrigin(REPO),
+      cwd: "/wherever",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    const run = await new StateManager({ dataDir }).read("run-def");
+    expect(run.mode).toBe("session");
+    expect(run.ship_mode).toBe("live");
+  });
+
+  it("--workflow flips mode to workflow (ship still defaults live)", async () => {
+    await runCreate(["--issue", "42", "--run-id", "run-wf", "--workflow"], {
+      gitClient: gitWithOrigin(REPO),
+      cwd: "/wherever",
+      dataDir,
+    });
+    const run = await new StateManager({ dataDir }).read("run-wf");
+    expect(run.mode).toBe("workflow");
+    expect(run.ship_mode).toBe("live");
+  });
+
+  it("--no-ship flips ship_mode to no-merge (mode still defaults session)", async () => {
+    await runCreate(["--issue", "42", "--run-id", "run-ns", "--no-ship"], {
+      gitClient: gitWithOrigin(REPO),
+      cwd: "/wherever",
+      dataDir,
+    });
+    const run = await new StateManager({ dataDir }).read("run-ns");
+    expect(run.mode).toBe("session");
+    expect(run.ship_mode).toBe("no-merge");
   });
 });
 

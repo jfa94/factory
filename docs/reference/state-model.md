@@ -70,20 +70,20 @@ ground truth); the _floor_ (unanimity) is derived from those. See
 untrusted input with `parseRunState` (it layers the run-level cross-field check),
 never `RunStateSchema.parse` directly.
 
-| Field                       | Type                       | Meaning                                                                                                                                     |
-| --------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema_version`            | `1`                        | State-schema version (forward-migration marker).                                                                                            |
-| `run_id`                    | string                     | `run-YYYYMMDD-HHMMSS`.                                                                                                                      |
-| `status`                    | RunStatus                  | See below.                                                                                                                                  |
-| `driver`                    | `sequential \| balanced`   | The driver preset that produced this run.                                                                                                   |
-| `mode`                      | `session \| workflow`      | Execution mode (default `session`). Persisted at create; selects which driver steps the seam and gates quota pacing (workflow = no pacing). |
-| `ship_mode`                 | `no-merge \| live`         | Cutover-safety knob (default `no-merge`). Persisted at create so the workflow driver / `resume` / `finalize` read it without re-passing.    |
-| `owner_session`             | string?                    | Owning Claude Code session id (best-effort). Scopes the Stop gate; absent ⇒ owner-unknown (gate runs unscoped).                             |
-| `spec`                      | SpecPointer                | Pointer to the durable spec (not an embedded spec).                                                                                         |
-| `tasks`                     | record<task_id, TaskState> | Per-task state.                                                                                                                             |
-| `quota`                     | QuotaCheckpoint?           | Resume checkpoint; present _iff_ paused/suspended.                                                                                          |
-| `started_at` / `updated_at` | string                     | ISO-8601.                                                                                                                                   |
-| `ended_at`                  | string \| null             | ISO-8601, null until terminal.                                                                                                              |
+| Field                       | Type                       | Meaning                                                                                                                                                                   |
+| --------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_version`            | `1`                        | State-schema version (forward-migration marker).                                                                                                                          |
+| `run_id`                    | string                     | `run-YYYYMMDD-HHMMSS`.                                                                                                                                                    |
+| `status`                    | RunStatus                  | See below.                                                                                                                                                                |
+| `driver`                    | `sequential \| balanced`   | The driver preset that produced this run.                                                                                                                                 |
+| `mode`                      | `session \| workflow`      | Execution mode (default `session`). Persisted at create; selects which driver steps the seam and gates quota pacing (workflow = no pacing).                               |
+| `ship_mode`                 | `no-merge \| live`         | Ship mode (default `live` — auto-merge; `--no-ship` opts into `no-merge`). Persisted at create so the workflow driver / `resume` / `finalize` read it without re-passing. |
+| `owner_session`             | string?                    | Owning Claude Code session id (best-effort). Scopes the Stop gate; absent ⇒ owner-unknown (gate runs unscoped).                                                           |
+| `spec`                      | SpecPointer                | Pointer to the durable spec (not an embedded spec).                                                                                                                       |
+| `tasks`                     | record<task_id, TaskState> | Per-task state.                                                                                                                                                           |
+| `quota`                     | QuotaCheckpoint?           | Resume checkpoint; present _iff_ paused/suspended.                                                                                                                        |
+| `started_at` / `updated_at` | string                     | ISO-8601.                                                                                                                                                                 |
+| `ended_at`                  | string \| null             | ISO-8601, null until terminal.                                                                                                                                            |
 
 ### `RunStatus`
 

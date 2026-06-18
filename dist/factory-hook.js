@@ -7145,7 +7145,7 @@ var RunStateSchema = external_exports.object({
   status: RunStatusEnum.default("running"),
   driver: DriverEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
-  ship_mode: ShipModeEnum.default("no-merge"),
+  ship_mode: ShipModeEnum.default("live"),
   /**
    * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
    * gate). Stamped ONCE at `run create` from the launching session's
@@ -7400,7 +7400,7 @@ var StateManager = class {
       status: "running",
       driver: args.driver ?? "sequential",
       mode: args.mode ?? "session",
-      ship_mode: args.ship_mode ?? "no-merge",
+      ship_mode: args.ship_mode ?? "live",
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},

@@ -6298,7 +6298,7 @@ var RunStateSchema = external_exports.object({
   status: RunStatusEnum.default("running"),
   driver: DriverEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
-  ship_mode: ShipModeEnum.default("no-merge"),
+  ship_mode: ShipModeEnum.default("live"),
   /**
    * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
    * gate). Stamped ONCE at `run create` from the launching session's
@@ -6586,7 +6586,7 @@ var StateManager = class {
       status: "running",
       driver: args.driver ?? "sequential",
       mode: args.mode ?? "session",
-      ship_mode: args.ship_mode ?? "no-merge",
+      ship_mode: args.ship_mode ?? "live",
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
@@ -11889,7 +11889,7 @@ var RUN_HELP = `factory run \u2014 create or resume a run
 Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
-  factory run finalize [--run <id>] [--ship-mode <mode>]
+  factory run finalize [--run <id>] [--no-ship]
 
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
@@ -11898,7 +11898,7 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--workflow] [--no-ship] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -11908,17 +11908,20 @@ Usage:
   --run-id      Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
                 A named id is an address: it forces a fresh imperative create.
   --new         Force a fresh run even if a live one already exists for this spec.
-  --mode        Execution mode: session (quota-paced, default) | workflow (no pacing \u2014 hard-stop).
-  --ship-mode   no-merge (default \u2014 open the rollup PR, never merge) | live (serial-merge into staging).
-                Persisted on the run so the workflow driver + resume read it without re-passing.
+  --workflow    Run the parallel background Workflow driver. Default (no flag): session \u2014
+                the in-session, quota-paced orchestrator loop.
+  --no-ship     Open the rollup PR but never merge. Default (no flag): live \u2014 auto-merge
+                each task into staging and merge the staging\u2192develop rollup into develop.
+                Persisted on the run so the workflow driver + resume + finalize read it
+                without re-passing.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; absent \u21D2 owner-unknown (Stop gate unscoped).
 
 Resolves the spec via the durable store (LOUD if none exists \u2014 generate one first).
 IDEMPOTENT: with the auto-generated id, a repeated create returns the existing
-non-terminal run for this (repo, spec_id) instead of spawning an orphan; pass --new
-(or a --run-id) to force a fresh run. Seeds one pending task per spec task and emits
-the RunState JSON (run_id is the top-level field).`;
+non-terminal run for this (repo, spec_id) \u2014 when its mode/ship intent matches \u2014 instead
+of spawning an orphan; pass --new (or a --run-id) to force a fresh run. Seeds one pending
+task per spec task and emits the RunState JSON (run_id is the top-level field).`;
 var RESUME_HELP = `factory run resume \u2014 re-check quota and resume a paused/suspended run
 
 Usage:
@@ -11934,14 +11937,16 @@ A terminal run is a loud error (nothing to resume).`;
 var FINALIZE_HELP = `factory run finalize \u2014 turn an all-terminal run into its shipped outcome
 
 Usage:
-  factory run finalize [--run <id>] [--ship-mode <mode>]
+  factory run finalize [--run <id>] [--no-ship]
 
-  --run         The run to finalize (defaults to runs/current).
-  --ship-mode   live | no-merge (default: no-merge \u2014 opens the rollup PR, never merges).
+  --run       The run to finalize (defaults to runs/current).
+  --no-ship   Open the rollup PR but never merge it \u2014 overrides the run's persisted ship
+              mode for THIS finalize only. Default: honor the persisted ship_mode (live
+              merges the staging\u2192develop rollup; no-merge opens it only).
 
 Builds the deterministic partial-run report (report.md), emits run.finalized
 telemetry, files ONE GitHub issue per dropped task (deduped), opens + CI-gates +
-(in live mode) squash-merges the staging\u2192develop rollup, then flips the run
+(when shipping live) squash-merges the staging\u2192develop rollup, then flips the run
 terminal \u2014 in that resume-safe order. LOUD if any task is still non-terminal.
 
 Emits ONE JSON envelope:
@@ -12032,12 +12037,12 @@ async function createRunFromManifest(state, specStore, manifest, opts) {
 function assertReusableFlags(existing, opts) {
   if (opts.mode !== void 0 && opts.mode !== existing.mode) {
     throw new UsageError(
-      `run create: run '${existing.run_id}' already exists with mode='${existing.mode}', but you passed --mode ${opts.mode} \u2014 pass --new for a fresh run or omit --mode to reuse it`
+      `run create: run '${existing.run_id}' already exists with mode='${existing.mode}', but this invocation resolves to mode='${opts.mode}' \u2014 pass --new for a fresh run, or set/clear --workflow to match the existing run`
     );
   }
   if (opts.shipMode !== void 0 && opts.shipMode !== existing.ship_mode) {
     throw new UsageError(
-      `run create: run '${existing.run_id}' already exists with ship_mode='${existing.ship_mode}', but you passed --ship-mode ${opts.shipMode} \u2014 pass --new for a fresh run or omit --ship-mode to reuse it`
+      `run create: run '${existing.run_id}' already exists with ship_mode='${existing.ship_mode}', but this invocation resolves to ship_mode='${opts.shipMode}' \u2014 pass --new for a fresh run, or set/clear --no-ship to match the existing run`
     );
   }
 }
@@ -12100,19 +12105,11 @@ function parseIssue(raw) {
   }
   return n;
 }
-function parseMode(raw) {
-  if (raw === void 0) return void 0;
-  const parsed = RunModeEnum.safeParse(raw);
-  if (parsed.success) return parsed.data;
-  throw new UsageError(
-    `--mode must be ${RunModeEnum.options.map((o) => `'${o}'`).join(" or ")}, got '${String(raw)}'`
-  );
-}
 function resolveOwnerSession(flag, env = process.env) {
   return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
 }
 async function runCreate(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["new"] });
+  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -12136,8 +12133,8 @@ async function runCreate(argv, overrides = {}) {
   const explicitRunId = optionalString(args.flag("run-id"));
   const runId = explicitRunId ?? makeRunId();
   validateId(runId, "run-id");
-  const mode = parseMode(args.flag("mode"));
-  const shipMode = parseShipMode(args.flag("ship-mode"));
+  const mode = args.flag("workflow") === true ? "workflow" : "session";
+  const shipMode = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
   const force = args.flag("new") === true || explicitRunId !== void 0;
   const dataDir = resolveDataDir(
@@ -12149,8 +12146,8 @@ async function runCreate(argv, overrides = {}) {
     repo,
     runId,
     ...selector,
-    ...mode !== void 0 ? { mode } : {},
-    ...shipMode !== void 0 ? { shipMode } : {},
+    mode,
+    shipMode,
     ...ownerSession !== void 0 ? { ownerSession } : {},
     ...force ? { force } : {}
   });
@@ -12183,12 +12180,12 @@ async function resolveRunId(state, args, action, overrides = {}) {
   return current.run_id;
 }
 async function runFinalize(argv) {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["no-ship"] });
   if (args.flag("help") === true) {
     emitLine(FINALIZE_HELP);
     return EXIT.OK;
   }
-  const shipMode = parseShipMode(args.flag("ship-mode"));
+  const shipMode = args.flag("no-ship") === true ? "no-merge" : void 0;
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "finalize");
@@ -12736,7 +12733,8 @@ var HELP5 = `factory drive \u2014 step one task until it needs agents or is term
 Usage:
   factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
 
-Ship modes: no-merge (default) | live
+--ship-mode (optional): no-merge | live \u2014 overrides the run's persisted ship_mode for
+this step only; omit to honor the persisted value (the seam default, never no-merge).
 
 Emits ONE JSON envelope to stdout:
   { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, fold_key, worktree }
@@ -12799,7 +12797,7 @@ Usage:
   factory next [--run <id>]      (defaults to runs/current)
 
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
-context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the --mode workflow driver
+context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the workflow driver
 adopts them from the first \`next\` instead of via Workflow args:
   { kind:"tasks-ready", run_id, data_dir, ship_mode, ready:[...], cascade_dropped:[...] }
   { kind:"all-terminal", run_id, data_dir, ship_mode, cascade_dropped:[...] }  \u2192 call \`factory run finalize\`
@@ -12818,7 +12816,7 @@ function assertCurrentOwner(current, assertOwner) {
   if (actual === void 0) return;
   if (actual !== expected) {
     throw new Error(
-      `next: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Relaunch via /factory:run --mode workflow, or pass --run <id> explicitly.`
+      `next: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Relaunch via /factory:run --workflow, or pass --run <id> explicitly.`
     );
   }
 }
@@ -12832,7 +12830,7 @@ function assertExpectedMode(current, expectMode) {
   }
   if (current.mode !== parsed.data) {
     throw new Error(
-      `next: runs/current points at run '${current.run_id}' in mode '${current.mode}', but --expect-mode expected '${parsed.data}' \u2014 a concurrent 'run create' moved runs/current onto a run of a different mode. Relaunch via /factory:run --mode workflow, or pass --run <id> explicitly.`
+      `next: runs/current points at run '${current.run_id}' in mode '${current.mode}', but --expect-mode expected '${parsed.data}' \u2014 a concurrent 'run create' moved runs/current onto a run of a different mode. Relaunch via /factory:run --workflow, or pass --run <id> explicitly.`
     );
   }
 }
@@ -13126,12 +13124,12 @@ async function runAutonomyEnsure(opts = {}) {
   await atomicWriteFile(path2, stringifyJson(merged));
   const relaunchCommand = `claude --settings ${path2}`;
   write(
-    `Wrote ${path2}
+    `Wrote autonomous settings \u2192 ${path2}
 Relaunch the session in autonomous mode with:
 
   ${relaunchCommand}
 
-The first agent turn fires the statusline \u2192 a fresh usage-cache.json \u2192 session-mode quota pacing.
+(the first agent turn refreshes the usage cache \u2192 session-mode quota pacing.)
 `
   );
   return { path: path2, relaunchCommand };
@@ -13228,9 +13226,8 @@ async function runAutonomyPreflight(opts = {}) {
   if (decision.regenerate) {
     if (dataDir === void 0 || pluginRoot === void 0) {
       write(
-        `autonomy preflight: ${verdict}
-Cannot resolve the plugin data/root dir to scaffold merged settings here.
-Run \`factory autonomy ensure\` once the environment is set, then relaunch with the printed command.
+        `HALT: ${verdict}.
+Cannot resolve the plugin data/root dir to scaffold autonomous settings here \u2014 run \`factory autonomy ensure\` once the environment is set, then relaunch with the printed command.
 `
       );
       return EXIT.ERROR;
@@ -13242,14 +13239,12 @@ Run \`factory autonomy ensure\` once the environment is set, then relaunch with 
       home,
       writeStdout: write
     });
-    write(
-      `
-autonomy preflight: ${verdict} \u2014 the run is halted until you relaunch (command above).
-`
-    );
+    write(`
+HALT: ${verdict} \u2014 relaunch to continue (command above).
+`);
     return EXIT.ERROR;
   }
-  write(`autonomy preflight: ${verdict} \u2014 proceeding.
+  write(`OK: autonomous mode ready \u2014 ${verdict}.
 `);
   return EXIT.OK;
 }

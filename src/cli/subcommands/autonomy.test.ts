@@ -471,6 +471,10 @@ describe("runAutonomyPreflight", () => {
     expect(code).toBe(EXIT.OK);
     // No regenerate ⇒ the sentinel survives untouched.
     expect((await readMerged()).__sentinel).toBe("keep");
+    // Human-facing result: an unmistakable OK: pass line + a one-sentence verdict.
+    const printed = out.join("");
+    expect(printed).toContain("OK:");
+    expect(printed).toMatch(/ready/i);
   });
 
   it("regenerates + exits ERROR with the relaunch command when the on-disk version is stale", async () => {
@@ -490,6 +494,8 @@ describe("runAutonomyPreflight", () => {
     const printed = out.join("");
     expect(printed).toContain(`claude --settings ${settingsPath()}`);
     expect(printed).toContain("stale");
+    // Human-facing result: an unmistakable HALT: line on the relaunch-required path.
+    expect(printed).toContain("HALT:");
   });
 
   it("regenerates + exits ERROR when the existing file lacks _factoryVersion", async () => {

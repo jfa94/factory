@@ -112,19 +112,19 @@ seed time.
 
 ```
 factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
-                   [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>] [--session-id <id>]
+                   [--new] [--workflow] [--no-ship] [--session-id <id>]
 ```
 
-| Flag                  | Notes                                                                                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--repo <owner/name>` | **Optional.** Repo identity (the first key of the spec store). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with the remote fails loud. |
-| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`.                                                                                                         |
-| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                           |
-| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                          |
-| `--new`               | Force a fresh run even if a live one already exists for this spec (else create is idempotent).                                                                                  |
-| `--mode <mode>`       | `session` (quota-paced, default) \| `workflow` (no pacing — hard-stop). Persisted on the run.                                                                                   |
-| `--ship-mode <mode>`  | `no-merge` (default — open the rollup PR, never merge) \| `live` (serial-merge into staging). Persisted on the run so the workflow driver + resume read it without re-passing.  |
-| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`; absent ⇒ owner-unknown (gate runs unscoped).                             |
+| Flag                  | Notes                                                                                                                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <owner/name>` | **Optional.** Repo identity (the first key of the spec store). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with the remote fails loud.                                                       |
+| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`.                                                                                                                                                               |
+| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                                                                                 |
+| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                                                                                |
+| `--new`               | Force a fresh run even if a live one already exists for this spec (else create is idempotent).                                                                                                                                        |
+| `--workflow`          | Run the parallel background Workflow driver. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                  |
+| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into staging and the rollup into develop. Persisted as `ship_mode` so the workflow driver + resume + finalize read it without re-passing. |
+| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`; absent ⇒ owner-unknown (gate runs unscoped).                                                                                   |
 
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
 exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
@@ -136,17 +136,18 @@ and [Decision 31](../explanation/decisions.md#decision-31-run-entry-preflight-au
 
 Loud error if no spec exists for the issue — generate one first. The seeded run's
 `driver` is fixed to `sequential`: the v1 coroutine seam drives tasks one at a time.
-The `--mode session|workflow` value is persisted and selects which _driver_ steps
-the seam; `/factory:run` forwards its own `--mode` here (see
+The persisted `mode` (`session`|`workflow`) selects which _driver_ steps the seam;
+`/factory:run` forwards its own `--workflow` flag here (see
 [Run the pipeline](../guides/run-the-pipeline.md)). Create is **idempotent** with the
 auto-generated id: a repeat returns the existing non-terminal run for this
 `(repo, spec_id)` rather than spawning an orphan — pass `--new` (or a `--run-id`) to
 force a fresh run. The resolve-or-reuse scan→create is serialized under a
 per-`(repo, spec_id)` lock so two concurrent same-spec creates cannot both mint an
-orphan. Reuse is strict on the persisted dials: re-passing a `--mode` or `--ship-mode`
-that **disagrees** with the run being reused is a loud `UsageError` (the run keeps its
-original dials — driving it under a ship-mode you did not ask for is dangerous). Omit
-the flag to reuse, or pass `--new` for a fresh run.
+orphan. Reuse is strict on the persisted dials: re-running with `--workflow`/`--no-ship`
+that resolve to a `mode` or `ship_mode` **disagreeing** with the run being reused is a
+loud `UsageError` (the run keeps its original dials — driving it under a ship mode you
+did not ask for is dangerous). Match the existing run's flags to reuse, or pass `--new`
+for a fresh run.
 
 ### `run resume`
 
@@ -179,11 +180,12 @@ dropped task (deduped), open + CI-gate + (in `live` mode) squash-merge the
 is still non-terminal. Idempotent (a re-entered finalize re-files nothing).
 
 ```
-factory run finalize [--run <id>] [--ship-mode <mode>]
+factory run finalize [--run <id>] [--no-ship]
 ```
 
-`--ship-mode`: `no-merge` (default — opens the rollup PR, never merges) | `live`.
-Emits `{kind:"finalized", run, report, rollup?, issues_filed}`.
+Ship mode defaults to the run's **persisted `ship_mode`** (set at `run create`); no flag
+is needed. `--no-ship` overrides it to no-merge for THIS finalize only (opens the rollup PR
+but never merges). Emits `{kind:"finalized", run, report, rollup?, issues_filed}`.
 
 ## `state`
 
@@ -249,7 +251,7 @@ factory next --expect-mode <session|workflow>      # loud-assert runs/current mo
 ```
 
 `--assert-owner <session>` and `--expect-mode <mode>` are opt-in guards for the
-`--mode workflow` driver's first `next` (which adopts `runs/current` rather than
+workflow driver's first `next` (which adopts `runs/current` rather than
 passing `--run`), defending against a concurrent `run create` having redirected
 `runs/current` onto a foreign run:
 
@@ -291,7 +293,9 @@ the task is terminal. Emits ONE JSON `DriveEnvelope`.
 factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
 ```
 
-`--ship-mode`: `no-merge` (default) | `live`. Emits one of:
+`--ship-mode` (`no-merge` | `live`) is the internal-seam override the drivers pass
+machine-side; omit it to honor the run's persisted `ship_mode` (users never type it —
+the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one of:
 
 - `{ kind:"spawn", run_id, task_id, stage, fold_key, manifest, sidecar?, expects, worktree }`
   — the agents to run (`manifest.agents`) and what to feed back. `stage` is one of

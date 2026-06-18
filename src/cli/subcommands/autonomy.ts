@@ -340,9 +340,9 @@ export async function runAutonomyEnsure(
 
   const relaunchCommand = `claude --settings ${path}`;
   write(
-    `Wrote ${path}\n` +
+    `Wrote autonomous settings → ${path}\n` +
       `Relaunch the session in autonomous mode with:\n\n  ${relaunchCommand}\n\n` +
-      `The first agent turn fires the statusline → a fresh usage-cache.json → session-mode quota pacing.\n`,
+      `(the first agent turn refreshes the usage cache → session-mode quota pacing.)\n`,
   );
 
   return { path, relaunchCommand };
@@ -515,9 +515,9 @@ export async function runAutonomyPreflight(opts: AutonomyPreflightOptions = {}):
     // invariant). If we cannot resolve where to scaffold, degrade to a message.
     if (dataDir === undefined || pluginRoot === undefined) {
       write(
-        `autonomy preflight: ${verdict}\n` +
-          `Cannot resolve the plugin data/root dir to scaffold merged settings here.\n` +
-          "Run `factory autonomy ensure` once the environment is set, then relaunch with the printed command.\n",
+        `HALT: ${verdict}.\n` +
+          `Cannot resolve the plugin data/root dir to scaffold autonomous settings here — ` +
+          "run `factory autonomy ensure` once the environment is set, then relaunch with the printed command.\n",
       );
       return EXIT.ERROR;
     }
@@ -528,14 +528,12 @@ export async function runAutonomyPreflight(opts: AutonomyPreflightOptions = {}):
       home,
       writeStdout: write,
     });
-    write(
-      `\nautonomy preflight: ${verdict} — the run is halted until you relaunch (command above).\n`,
-    );
+    write(`\nHALT: ${verdict} — relaunch to continue (command above).\n`);
     return EXIT.ERROR;
   }
 
   // proceed without regenerating (fresh / ci-raw-env / version-unknowable).
-  write(`autonomy preflight: ${verdict} — proceeding.\n`);
+  write(`OK: autonomous mode ready — ${verdict}.\n`);
   return EXIT.OK;
 }
 

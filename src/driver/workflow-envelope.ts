@@ -1,6 +1,6 @@
 // src/driver/workflow-envelope.ts
 /**
- * The DETERMINISTIC parse + kind-guard that the `--mode workflow` driver applies
+ * The DETERMINISTIC parse + kind-guard that the workflow driver applies
  * to a `factory next` / `factory drive` envelope after it crosses the haiku
  * exec-agent boundary back into Workflow JS.
  *

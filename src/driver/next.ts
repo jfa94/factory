@@ -38,7 +38,7 @@ import type { CoroutineDeps } from "./coroutine.js";
 /**
  * Every variant carries the run's self-resolved context — `run_id`, the canonical
  * `data_dir` (from {@link resolveDataDir}), and the persisted `ship_mode`. The
- * `--mode workflow` driver adopts these from the FIRST envelope instead of having
+ * workflow driver adopts these from the FIRST envelope instead of having
  * them marshaled through Workflow `args` (a real object passed as `args` arrives
  * JSON-string-encoded, so a load-bearing arg silently becomes `undefined`).
  */

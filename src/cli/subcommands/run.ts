@@ -21,10 +21,10 @@
  * than surfacing later as a driver deadlock.
  */
 import { EXIT, type ExitCode } from "../exit-codes.js";
-import { parseArgs, isUsageError, UsageError, parseShipMode, optionalString } from "../args.js";
+import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
-import { StateManager, RunModeEnum } from "../../core/state/index.js";
+import { StateManager } from "../../core/state/index.js";
 import { SpecStore, type SpecManifest } from "../../spec/index.js";
 import { makeRunId, validateId } from "../../shared/ids.js";
 import { nowEpoch } from "../../shared/time.js";
@@ -46,7 +46,7 @@ const RUN_HELP = `factory run — create or resume a run
 Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
-  factory run finalize [--run <id>] [--ship-mode <mode>]
+  factory run finalize [--run <id>] [--no-ship]
 
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
@@ -56,7 +56,7 @@ Actions:
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--mode <session|workflow>] [--ship-mode <no-merge|live>] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--workflow] [--no-ship] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -66,17 +66,20 @@ Usage:
   --run-id      Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
                 A named id is an address: it forces a fresh imperative create.
   --new         Force a fresh run even if a live one already exists for this spec.
-  --mode        Execution mode: session (quota-paced, default) | workflow (no pacing — hard-stop).
-  --ship-mode   no-merge (default — open the rollup PR, never merge) | live (serial-merge into staging).
-                Persisted on the run so the workflow driver + resume read it without re-passing.
+  --workflow    Run the parallel background Workflow driver. Default (no flag): session —
+                the in-session, quota-paced orchestrator loop.
+  --no-ship     Open the rollup PR but never merge. Default (no flag): live — auto-merge
+                each task into staging and merge the staging→develop rollup into develop.
+                Persisted on the run so the workflow driver + resume + finalize read it
+                without re-passing.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; absent ⇒ owner-unknown (Stop gate unscoped).
 
 Resolves the spec via the durable store (LOUD if none exists — generate one first).
 IDEMPOTENT: with the auto-generated id, a repeated create returns the existing
-non-terminal run for this (repo, spec_id) instead of spawning an orphan; pass --new
-(or a --run-id) to force a fresh run. Seeds one pending task per spec task and emits
-the RunState JSON (run_id is the top-level field).`;
+non-terminal run for this (repo, spec_id) — when its mode/ship intent matches — instead
+of spawning an orphan; pass --new (or a --run-id) to force a fresh run. Seeds one pending
+task per spec task and emits the RunState JSON (run_id is the top-level field).`;
 
 const RESUME_HELP = `factory run resume — re-check quota and resume a paused/suspended run
 
@@ -94,14 +97,16 @@ A terminal run is a loud error (nothing to resume).`;
 const FINALIZE_HELP = `factory run finalize — turn an all-terminal run into its shipped outcome
 
 Usage:
-  factory run finalize [--run <id>] [--ship-mode <mode>]
+  factory run finalize [--run <id>] [--no-ship]
 
-  --run         The run to finalize (defaults to runs/current).
-  --ship-mode   live | no-merge (default: no-merge — opens the rollup PR, never merges).
+  --run       The run to finalize (defaults to runs/current).
+  --no-ship   Open the rollup PR but never merge it — overrides the run's persisted ship
+              mode for THIS finalize only. Default: honor the persisted ship_mode (live
+              merges the staging→develop rollup; no-merge opens it only).
 
 Builds the deterministic partial-run report (report.md), emits run.finalized
 telemetry, files ONE GitHub issue per dropped task (deduped), opens + CI-gates +
-(in live mode) squash-merges the staging→develop rollup, then flips the run
+(when shipping live) squash-merges the staging→develop rollup, then flips the run
 terminal — in that resume-safe order. LOUD if any task is still non-terminal.
 
 Emits ONE JSON envelope:
@@ -295,27 +300,27 @@ export interface ResolveOrCreateResult {
 }
 
 /**
- * Guard the reuse path against a SILENT flag drop: when a repeated `run create`
- * re-passes `--mode`/`--ship-mode` that disagree with the live run it would reuse,
- * the run keeps its ORIGINAL mode/ship_mode (the reuse returns the existing state
- * verbatim). Silently driving a run under a ship-mode the caller did not ask for
- * (`live` vs `no-merge` opens/merges PRs differently) is dangerous, so HARD-FAIL
- * with actionable guidance instead. An omitted flag (`opts.* === undefined`) is no
- * divergence — the default re-run ergonomics (`run create --issue N` twice) are
- * unchanged.
+ * Guard the reuse path against a SILENT intent drop: a repeated `run create` resolves
+ * its mode + ship intent from `--workflow`/`--no-ship` (or their defaults), but a reused
+ * run keeps its ORIGINAL mode/ship_mode (the reuse returns the existing state verbatim).
+ * Silently driving a run under an intent the caller did not ask for (`live` vs `no-merge`
+ * opens/merges PRs differently; `workflow` disables quota pacing) is dangerous, so
+ * HARD-FAIL with actionable guidance instead. A field left `undefined` (the direct-API
+ * path, never the CLI — which always resolves both) signals "no intent" and never diverges.
  */
 function assertReusableFlags(existing: RunState, opts: CreateRunOptions): void {
   if (opts.mode !== undefined && opts.mode !== existing.mode) {
     throw new UsageError(
       `run create: run '${existing.run_id}' already exists with mode='${existing.mode}', ` +
-        `but you passed --mode ${opts.mode} — pass --new for a fresh run or omit --mode to reuse it`,
+        `but this invocation resolves to mode='${opts.mode}' — pass --new for a fresh run, ` +
+        `or set/clear --workflow to match the existing run`,
     );
   }
   if (opts.shipMode !== undefined && opts.shipMode !== existing.ship_mode) {
     throw new UsageError(
       `run create: run '${existing.run_id}' already exists with ship_mode='${existing.ship_mode}', ` +
-        `but you passed --ship-mode ${opts.shipMode} — pass --new for a fresh run or omit ` +
-        `--ship-mode to reuse it`,
+        `but this invocation resolves to ship_mode='${opts.shipMode}' — pass --new for a fresh run, ` +
+        `or set/clear --no-ship to match the existing run`,
     );
   }
 }
@@ -442,20 +447,6 @@ function parseIssue(raw: string | boolean | undefined): number | undefined {
 }
 
 /**
- * Validate the optional `--mode` flag; LOUD on anything but session/workflow.
- * Validates against {@link RunModeEnum} (the single source of truth for the closed
- * set) so the CLI's accepted values cannot drift from the persisted-state enum.
- */
-function parseMode(raw: string | boolean | undefined): RunState["mode"] | undefined {
-  if (raw === undefined) return undefined;
-  const parsed = RunModeEnum.safeParse(raw);
-  if (parsed.success) return parsed.data;
-  throw new UsageError(
-    `--mode must be ${RunModeEnum.options.map((o) => `'${o}'`).join(" or ")}, got '${String(raw)}'`,
-  );
-}
-
-/**
  * Resolve the owning Claude Code session id to stamp onto the run (Prompt J —
  * session-scoped Stop gate). Precedence: an explicit `--session-id` flag (the
  * orchestrator/command can pass it deterministically) over the `CLAUDE_CODE_SESSION_ID`
@@ -486,7 +477,7 @@ export async function runCreate(
   argv: string[],
   overrides: RunCreateOverrides = {},
 ): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["new"] });
+  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -518,8 +509,12 @@ export async function runCreate(
   const explicitRunId = optionalString(args.flag("run-id"));
   const runId = explicitRunId ?? makeRunId();
   validateId(runId, "run-id");
-  const mode = parseMode(args.flag("mode"));
-  const shipMode = parseShipMode(args.flag("ship-mode"));
+  // Terse boolean overrides over the no-flag defaults (session + live). Both resolve to
+  // a CONCRETE value so the reuse guard can compare the caller's intent against an
+  // existing run — a bare re-create of a `--workflow`/`--no-ship` run must not silently
+  // reuse it under the (different) default intent.
+  const mode: RunState["mode"] = args.flag("workflow") === true ? "workflow" : "session";
+  const shipMode: RunState["ship_mode"] = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
   // Resolve-or-reuse is the default for the natural (auto-id) invocation — a repeat
   // returns the live run, never an orphan. `--new` OR an explicit `--run-id` opts
@@ -536,8 +531,8 @@ export async function runCreate(
     repo,
     runId,
     ...selector,
-    ...(mode !== undefined ? { mode } : {}),
-    ...(shipMode !== undefined ? { shipMode } : {}),
+    mode,
+    shipMode,
     ...(ownerSession !== undefined ? { ownerSession } : {}),
     ...(force ? { force } : {}),
   });
@@ -587,13 +582,16 @@ async function resolveRunId(
 }
 
 async function runFinalize(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["no-ship"] });
   if (args.flag("help") === true) {
     emitLine(FINALIZE_HELP);
     return EXIT.OK;
   }
 
-  const shipMode = parseShipMode(args.flag("ship-mode"));
+  // --no-ship forces no-merge for THIS finalize; otherwise honor the run's persisted
+  // ship_mode (loadCliDeps falls back to it — never a hard-coded default).
+  const shipMode: RunState["ship_mode"] | undefined =
+    args.flag("no-ship") === true ? "no-merge" : undefined;
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "finalize");

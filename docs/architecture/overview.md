@@ -46,7 +46,7 @@ graph TD
     Hook[factory-hook<br/>dist/factory-hook.js]
   end
 
-  Driver["Driver (--mode session loop | workflow script)"] -->|loads| Skill
+  Driver["Driver (session loop | --workflow script)"] -->|loads| Skill
   Driver -->|steps: next / drive| CLI
   CLI -->|envelope: spawn manifest / next step| Driver
   Driver -->|Agent spawns| Producers[test-writer / executor]
@@ -67,9 +67,8 @@ floor, PR creation — and the pipeline loop itself, exposed through ONE seam, t
 `Agent()` spawn the coroutine's manifest names, collects the agents' raw output, and
 feeds it back via `factory drive --results`. It never decides a transition,
 re-runs a gate, classifies a failure, or writes state by prose. Two interchangeable
-drivers exist (selected by `--mode` on `/factory:run`): the in-session orchestrator
-loop (`--mode session`, default) and the plugin-shipped Workflow script (`--mode
-workflow`).
+drivers exist (selected by `--workflow` on `/factory:run`): the in-session orchestrator
+loop (session, the default) and the plugin-shipped Workflow script (`--workflow`).
 
 The CLI is a **reporter + coroutine + writer**, not a runner:
 

@@ -18,7 +18,8 @@ const HELP = `factory drive — step one task until it needs agents or is termin
 Usage:
   factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
 
-Ship modes: no-merge (default) | live
+--ship-mode (optional): no-merge | live — overrides the run's persisted ship_mode for
+this step only; omit to honor the persisted value (the seam default, never no-merge).
 
 Emits ONE JSON envelope to stdout:
   { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, fold_key, worktree }

@@ -552,10 +552,10 @@ Every narrowing has been tried and produces the same failure mode: the pipeline 
 - `factory next` — the **run-level** coroutine (`src/driver/next.ts`, `stepRun`): emits a `NextEnvelope` of ready tasks (or terminal / quota-blocked).
 - `factory drive` — the **task-level** coroutine (`src/driver/coroutine.ts`, `stepTask`): emits a `DriveEnvelope` spawn manifest; re-invoked with `--results` it folds the spawned agents' raw output into exactly **one** state step (fold cores in `src/driver/fold.ts`).
 
-A **driver** carries no pipeline logic of its own — it only calls the coroutine, spawns the `Agent()`s the `DriveEnvelope` manifest names, and feeds their output back via `drive --results`. Two interchangeable drivers step the same seam, selected by `--mode` on `/factory:run`:
+A **driver** carries no pipeline logic of its own — it only calls the coroutine, spawns the `Agent()`s the `DriveEnvelope` manifest names, and feeds their output back via `drive --results`. Two interchangeable drivers step the same seam, selected by `--workflow` on `/factory:run` (Decision 32):
 
-- `--mode session` (default) — the in-session LLM orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`), which can spawn `Agent()`s directly.
-- `--mode workflow` — the plugin-shipped Workflow script (`scripts/factory-run-driver.js`), which wraps every CLI call in a small exec agent (Workflow JS cannot shell out).
+- session (default, no flag) — the in-session LLM orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`), which can spawn `Agent()`s directly.
+- `--workflow` — the plugin-shipped Workflow script (`scripts/factory-run-driver.js`), which wraps every CLI call in a small exec agent (Workflow JS cannot shell out).
 
 Both are subscription-only; there is no headless `claude -p` / API-token path.
 
@@ -583,7 +583,7 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 - **Enforced in the deterministic engine, not the markdown surface.** The gate is a typed error in the CLI, so it cannot be skipped by editing a prompt or skill; it mirrors `ProtectionMissingError` (Decision 12's branch-protection refusal) as a hard start condition.
 - **Single predicate.** `isAutonomous` is the one source of truth, shared by this gate and the hook layer (branch-protection / pipeline guards), so the autonomous signal can never diverge between "may this run start" and "may this run merge."
 
-**Scope of the gate (deliberately narrow):** Only `create` + `resume` are gated — the two verbs that bring a run into existence or re-activate it, both of which execute in the **foreground orchestrator session** that definitively carries the env. Downstream verbs (`next`/`drive`/`finalize`) operate only on an already-autonomous run and stay ungated, so the `--mode workflow` driver's background exec-agent CLI calls carry no env-propagation dependency. The shipping operations are independently autonomous-gated at the hook layer (`pipelineCanWrite`, Decision 12).
+**Scope of the gate (deliberately narrow):** Only `create` + `resume` are gated — the two verbs that bring a run into existence or re-activate it, both of which execute in the **foreground orchestrator session** that definitively carries the env. Downstream verbs (`next`/`drive`/`finalize`) operate only on an already-autonomous run and stay ungated, so the workflow driver's background exec-agent CLI calls carry no env-propagation dependency. The shipping operations are independently autonomous-gated at the hook layer (`pipelineCanWrite`, Decision 12).
 
 **Trade-off:** A hand-typed `factory drive --run X` in a non-autonomous shell against a pre-existing run is not caught (never something `/factory:run` does). Closeable later by stamping autonomy on the run record (no env dependency) if ever needed.
 
@@ -628,6 +628,27 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 **Trade-off:** Preflight is a UX layer, not a correctness layer — a hand-typed `factory drive` in a non-autonomous shell still bypasses it. That is exactly why `requireAutonomousMode()` (Decision 29) remains the backstop in `create`/`resume`; preflight makes the common path friendly, the gate keeps the uncommon path safe.
 
 **Relationship:** Sits in front of Decision 29 (the mandatory gate, untouched); operationalises Decision 13 (how a session becomes autonomous) as an automatic run-entry step.
+
+---
+
+## Decision 32: Ship Live by Default; Boolean `--workflow` / `--no-ship` Run-Entry Flags
+
+**Choice:** A no-flag `/factory:run` resolves to **session mode + live ship**: the in-session orchestrator loop drives the run, each task auto-merges into staging, and the staging→develop rollup merges into develop. The two deviations from that default are terse booleans on the user-facing lifecycle verbs:
+
+- `--workflow` → run the background Workflow driver instead of the in-session loop (persisted as `mode: "workflow"`).
+- `--no-ship` → open the task/rollup PRs but never merge (persisted as `ship_mode: "no-merge"`).
+
+The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs are **removed** from the user-facing verbs (`run create`, `run finalize`) — not kept as back-compat. `--ship-mode` survives only on the **internal coroutine seam** (`factory drive`, `factory next` via `--expect-mode`), where the drivers machine-generate it and a user never types it; omitting it there honors the run's persisted value. `live` is the single-source-of-truth default in the schema (`ShipModeEnum.default("live")`, `manager.ts`), so schema and CLI agree without a second hardcoded fallback.
+
+**Why:**
+
+- **Auto-merge is the pipeline's purpose, not an opt-in.** A quality-first, TDD-enforced run that ends with an un-merged PR has not shipped. The merge is already gated four ways — branch protection (Decision 12), the risk-invariant review panel (Decision 26), the TDD commit-ordering rail, and the holdout — so `live` is safe to make the default; `no-merge` is the cutover-safety exception, kept for staged rollouts and dry runs.
+- **Boolean flags match how operators think.** "Run it" / "run it in the background" / "run it but don't merge" maps to _nothing_ / `--workflow` / `--no-ship` — no value to remember, no enum to mistype. The verbose pairs added a second spelling of the same two dials for no benefit, so they were removed outright rather than carried as hidden aliases (a second accepted spelling is a maintenance and ambiguity cost with no user value once the boolean exists).
+- **Persisted-once, read-many.** `mode` and `ship_mode` persist on the run at `run create`; `next`/`drive`/`finalize` and the workflow driver + `resume` read them from state, so the orchestrator never re-marshals ship intent through Phase 3. `run finalize` defaults to the persisted `ship_mode`; its `--no-ship` overrides that one finalize call only.
+
+**Trade-off:** Because the CLI now always resolves a concrete `mode`/`ship_mode` from the flags, the reuse-mismatch guard fires whenever a bare re-`create` resolves to a different intent than the run it would reuse — e.g. re-running a `--workflow`/`--no-ship` run without those flags now hard-fails (loud `UsageError`) instead of silently reusing. This is the desired safety (never drive a pre-existing run under a ship intent the operator did not ask for); the fix is to match the run's flags or pass `--new`. Direct-API callers that pass `mode`/`shipMode` as `undefined` still reuse without divergence (the guard compares only defined intent).
+
+**Relationship:** Inherits the two-driver seam of Decision 28 (`--workflow` is just the driver selector) and the unpaced-workflow contract of Decision 24; the live-by-default merge rides the shipping gates of Decisions 12/26; the reuse-mismatch guard composes with the per-`(repo, spec_id)` run isolation of Decision 30.
 
 ---
 

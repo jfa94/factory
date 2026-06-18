@@ -212,7 +212,7 @@ export class StateManager {
       status: "running",
       driver: args.driver ?? "sequential",
       mode: args.mode ?? "session",
-      ship_mode: args.ship_mode ?? "no-merge",
+      ship_mode: args.ship_mode ?? "live",
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...(args.owner_session !== undefined ? { owner_session: args.owner_session } : {}),

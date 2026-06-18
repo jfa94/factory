@@ -34,7 +34,7 @@ with a hard seam between them:
 - A thin **driver**: it steps the seam — spawning exactly the `Agent()`s the
   coroutine's manifest names and feeding their raw output back via `factory drive
 --results`. It carries no pipeline logic and never decides a transition by prose.
-  Two interchangeable drivers (chosen by `--mode` on `/factory:run`): the in-session
+  Two interchangeable drivers (chosen by `--workflow` on `/factory:run`): the in-session
   orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`, default) and the
   plugin-shipped Workflow script (`scripts/factory-run-driver.js`).
 

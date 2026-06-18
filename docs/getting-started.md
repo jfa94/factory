@@ -85,7 +85,7 @@ agents each envelope names — because only a session can call the `Agent` tool.
 That is the Model-A split. Read these two files in order:
 
 1. `commands/run.md` — the `/factory:run` entry point (the spine; picks the driver
-   via `--mode session|workflow`).
+   via `--workflow` — session by default).
 2. `skills/pipeline-orchestrator/SKILL.md` — the session driver's full loop: the
    Iron Laws, the coroutine surface (`next` / `drive`), the agent-spawn matrix, and the
    four phases (preconditions → spec → create → drive → completion).

@@ -45,13 +45,13 @@ seam, two thin drivers**:
   classifies a failure, or writes state by prose. It is a dumb loop around the
   coroutine.
 
-Two interchangeable drivers step the same seam, selected by `--mode` on
+Two interchangeable drivers step the same seam, selected by `--workflow` on
 `/factory:run`:
 
-- **`--mode session`** (default) — the in-session LLM orchestrator loop
+- **Session mode** (default, no flag) — the in-session LLM orchestrator loop
   (`skills/pipeline-orchestrator/SKILL.md`), running in the invoking Claude Code
   session. This is the driver that can spawn `Agent()`s directly.
-- **`--mode workflow`** — the plugin-shipped Workflow script
+- **`--workflow`** — the plugin-shipped Workflow script
   (`scripts/factory-run-driver.js`). Because Workflow JS cannot shell out, it
   wraps every `factory` CLI call in a small exec agent (haiku).
 
