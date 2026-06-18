@@ -207,6 +207,34 @@ describe("deleteRemoteBranch (worktree-safe remote-ref delete, CP2 #11)", () => 
   });
 });
 
+describe("deleteProtection (remove branch protection before deleting a per-run staging branch)", () => {
+  it("deleteProtection issues DELETE on the branch protection path and tolerates 404", async () => {
+    let captured: readonly string[] = [];
+    const runner: GhRunner = async (args) => {
+      captured = args;
+      return result({});
+    };
+    const gh = new DefaultGhClient(runner);
+    await gh.deleteProtection("acme", "widgets", "staging/run-x");
+    expect(captured).toEqual([
+      "api",
+      "-X",
+      "DELETE",
+      "/repos/acme/widgets/branches/staging/run-x/protection",
+    ]);
+    // A 404/Not Found must resolve rather than throw (idempotent)
+    const runner404: GhRunner = async () => result({ code: 1, stderr: "Not Found" });
+    const gh404 = new DefaultGhClient(runner404);
+    await expect(gh404.deleteProtection("acme", "widgets", "missing")).resolves.toBeUndefined();
+  });
+
+  it("throws on a real failure (auth/network is NOT silently swallowed)", async () => {
+    const runner: GhRunner = async () => result({ code: 1, stderr: "HTTP 401: Bad credentials" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.deleteProtection("o", "r", "b")).rejects.toThrow(/401|failed/i);
+  });
+});
+
 describe("prView always requests the schema's required fields (CP2 #15 — rollup subset crash)", () => {
   const fullPr = {
     number: 4,

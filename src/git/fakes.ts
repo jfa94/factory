@@ -241,6 +241,8 @@ export class FakeGhClient implements GhClient {
   }> = [];
   /** Remote head refs deleted via deleteRemoteBranch (worktree-safe cleanup). */
   readonly deletedBranches: string[] = [];
+  /** Branches whose protection was removed via deleteProtection. */
+  readonly protectionDeletes: string[] = [];
   /** Records each issueCreate so tests assert one issue per failed task (Δ S). */
   readonly issues: Array<IssueCreateArgs & { number: number; url: string }> = [];
   /** Per-PR CI sequences; each prChecks call shifts one (the last value sticks). */
@@ -421,5 +423,16 @@ export class FakeGhClient implements GhClient {
   ): Promise<void> {
     this.calls.push(`api DELETE refs/heads/${branch}`);
     this.deletedBranches.push(branch);
+  }
+
+  async deleteProtection(
+    _owner: string,
+    _repo: string,
+    branch: string,
+    _opts?: GhOpts,
+  ): Promise<void> {
+    this.calls.push(`api DELETE protection ${branch}`);
+    this.protectionDeletes.push(branch);
+    this.protection.delete(branch);
   }
 }
