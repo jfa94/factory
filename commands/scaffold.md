@@ -6,7 +6,7 @@ arguments:
     description: "Target GitHub repo as <owner>/<name> (defaults to the current repo's origin)"
     required: false
   - name: "--provision"
-    description: "Write branch protection on staging if missing (default: refuse when unprotected)"
+    description: "Write branch protection on develop if missing (default: refuse when unprotected)"
     required: false
 ---
 
@@ -15,8 +15,8 @@ arguments:
 Prepare a project to be run by the factory pipeline. The pipeline **refuses to start**
 against an unscaffolded or unprotected repo, so run this before any `/factory:run` in a new
 repo. All the work is done by one deterministic CLI call — `factory scaffold` — which copies
-the committed CI + gate-config templates, ensures the `staging` integration branch, and
-probes branch protection.
+the committed CI + gate-config templates, and probes branch protection on `develop` (the
+integration base).
 
 ## Step 1 — Confirm the checkout
 
@@ -53,19 +53,20 @@ This is idempotent. It:
   the factory statusline belongs only to the autonomous relaunch (`factory autonomy ensure`).
   Re-running is safe: existing keys (including your own statusLine) are preserved and entries
   are never duplicated;
-- creates/FF-reconciles the `staging` branch off `develop` (never `main`);
-- probes branch protection on `staging` and **refuses loudly if it is missing**.
+- probes branch protection on `develop` and **refuses loudly if it is missing**.
+  (`develop` is a precondition — scaffold does not create it. Per-run staging branches
+  `staging/<run-id>` are minted at `run create`, not here.)
 
-Print the emitted `ScaffoldReport` JSON: `files_created`, `files_present`, `staging`, and
+Print the emitted `ScaffoldReport` JSON: `files_created`, `files_present`, and
 `protection`.
 
 ## Step 3 — Handle a protection refusal
 
-If scaffold refuses because `staging` is unprotected, the run cannot start safely
+If scaffold refuses because `develop` is unprotected, the run cannot start safely
 (serial-writer correctness depends on required-up-to-date protection, Δ A/L). Offer the user
 two options:
 
-- **Provision it** (writes branch protection on `staging`): re-run with `--provision`.
+- **Provision it** (writes branch protection on `develop`): re-run with `--provision`.
 
   ```bash
   factory scaffold --provision        # --repo auto-derived from origin
@@ -81,8 +82,7 @@ Do not proceed against an unprotected repo.
 Report:
 
 - Files created by scaffold vs. already present.
-- Staging branch: created or reconciled (+ tip SHA).
-- Protection: enabled / strict-up-to-date / required checks / whether just provisioned.
+- Protection on `develop`: enabled / strict-up-to-date / required checks / whether just provisioned.
 
 Then remind the user:
 

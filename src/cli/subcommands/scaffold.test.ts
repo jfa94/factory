@@ -23,7 +23,6 @@ import { FakeGitClient, FakeGhClient } from "../../git/index.js";
 import type { ProtectionApiResult } from "../../git/index.js";
 
 const cfg = defaultConfig();
-const STAGING = cfg.git.stagingBranch; // "staging"
 const BASE = cfg.git.baseBranch; // "develop"
 
 /** Protection state that satisfies requireProtectionOrRefuse (no required checks). */
@@ -46,21 +45,15 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-/** A git client with base seeded so ensureStaging can create staging from it. */
-function gitWithBase(): FakeGitClient {
-  return new FakeGitClient({ remoteHeads: { [BASE]: "sha-base-1" } });
-}
-
 describe("runScaffold", () => {
-  it("copies the CI template + manages .gitignore, and reports a protected staging", async () => {
+  it("copies the CI template + manages .gitignore, and reports protection on develop", async () => {
     const report = await runScaffold({
       targetRoot: root,
       templatesDir,
       owner: "acme",
       repo: "widgets",
       config: cfg,
-      gitClient: gitWithBase(),
-      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
 
@@ -72,7 +65,8 @@ describe("runScaffold", () => {
     expect(existsSync(join(root, ".github", "scripts", "shard-mutation-scope.mjs"))).toBe(true);
     expect(report.files_updated).toEqual([]);
     expect(report.files_outdated).toEqual([]);
-    expect(report.staging.created).toBe(true);
+    // Per-run staging is no longer scaffold's concern — report carries no staging field.
+    expect(report).not.toHaveProperty("staging");
     expect(report.protection.enabled).toBe(true);
     expect(report.protection.provisioned).toBe(false);
 
@@ -104,8 +98,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
-      gitClient: gitWithBase(),
-      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
     expect(report.settings.created).toBe(false);
@@ -128,8 +121,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
-      gitClient: gitWithBase(),
-      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
     expect(noPkg.files_created).not.toContain(".stryker.config.json");
@@ -144,8 +136,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
-      gitClient: gitWithBase(),
-      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
     expect(withPkg.files_created).toContain(".stryker.config.json");
@@ -160,11 +151,11 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
-      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
-    await runScaffold({ ...args, gitClient: gitWithBase() });
-    const second = await runScaffold({ ...args, gitClient: gitWithBase() });
+    await runScaffold(args);
+    const second = await runScaffold(args);
     expect(second.files_created).toEqual([]);
     expect(second.files_present).toContain(".github/workflows/quality-gate.yml");
     // An UNCHANGED managed file is `present`, not `updated`.
@@ -178,7 +169,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
-      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
     // Simulate an already-scaffolded repo carrying an OLD/customized workflow.
@@ -186,7 +177,7 @@ describe("runScaffold", () => {
     await mkdir(dirname(wf), { recursive: true });
     await writeFile(wf, "name: stale round-robin workflow\n", "utf8");
 
-    const report = await runScaffold({ ...args, gitClient: gitWithBase() });
+    const report = await runScaffold(args);
 
     expect(report.files_updated).toContain(".github/workflows/quality-gate.yml");
     expect(report.files_created).not.toContain(".github/workflows/quality-gate.yml");
@@ -205,25 +196,25 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
-      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
     await writeFile(join(root, "package.json"), "{}\n", "utf8");
-    await runScaffold({ ...args, gitClient: gitWithBase() }); // seeds .stryker.config.json
+    await runScaffold(args); // seeds .stryker.config.json
 
     // The user customizes their (user-owned) gate config.
     const stryker = join(root, ".stryker.config.json");
     const customized = '{ "thresholds": { "break": 95 } }\n';
     await writeFile(stryker, customized, "utf8");
 
-    const second = await runScaffold({ ...args, gitClient: gitWithBase() });
+    const second = await runScaffold(args);
     expect(second.files_outdated).toContain(".stryker.config.json");
     expect(second.files_updated).not.toContain(".stryker.config.json");
     // Customization is preserved — SEED files are never overwritten.
     expect(await readFile(stryker, "utf8")).toBe(customized);
   });
 
-  it("REFUSES loudly when staging protection is missing and --provision is off", async () => {
+  it("REFUSES loudly when develop protection is missing and --provision is off", async () => {
     await expect(
       runScaffold({
         targetRoot: root,
@@ -231,7 +222,6 @@ describe("runScaffold", () => {
         owner: "acme",
         repo: "widgets",
         config: cfg,
-        gitClient: gitWithBase(),
         ghClient: new FakeGhClient(), // no protection seeded → disabled
         provision: false,
       }),
@@ -246,14 +236,13 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
-      gitClient: gitWithBase(),
       ghClient: gh,
       provision: true,
     });
     expect(report.protection.provisioned).toBe(true);
     expect(report.protection.strict_up_to_date).toBe(true);
-    // The PUT was issued against the staging branch.
-    expect(gh.calls).toContain(`api PUT protection ${STAGING}`);
+    // The PUT was issued against develop (the integration base), not a shared staging branch.
+    expect(gh.calls).toContain(`api PUT protection ${BASE}`);
   });
 });
 

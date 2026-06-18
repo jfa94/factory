@@ -10,10 +10,10 @@
  * the CI net (`.github/workflows/quality-gate.yml`, Δ Z) and the gate configs
  * (`.stryker.config.json` mutation, `.dependency-cruiser.cjs` arch, `eslint.config.mjs`
  * lint baseline) the GateRunner runs in the target worktree — plus a `.gitignore`
- * guard, then ensures the
- * `staging` integration branch exists/reconciles (never `main`), and PROBES branch
- * protection: refuse-to-run when it is missing (#2 / Δ A), unless `--provision` is
- * opted in to write it.
+ * guard, then PROBES branch protection on `develop` (the integration base):
+ * refuse-to-run when it is missing (#2 / Δ A), unless `--provision` is opted in to
+ * write it. Per-run staging branches (`staging/<run-id>`) are minted at `run create`
+ * — scaffold no longer creates or protects a shared `staging` branch.
  *
  * Run/spec STATE is never written here (it lives outside the repo under the data
  * dir). The bash-era progress files + init.sh are dropped — the new code does not
@@ -31,7 +31,6 @@ import { createLogger } from "../../shared/index.js";
 import {
   DefaultGitClient,
   DefaultGhClient,
-  ensureStaging,
   probeProtection,
   requireProtectionOrRefuse,
   provisionProtection,
@@ -51,9 +50,10 @@ const HELP = `factory scaffold — prepare a repo for the factory pipeline
 Usage:
   factory scaffold [--repo <owner/name>] [--provision]
 
-Copies the committed CI + gate-config templates, ensures the staging branch, and
-probes branch protection. Without --provision a repo whose staging branch is not
-protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
+Copies the committed CI + gate-config templates and probes branch protection on
+develop (the integration base). Without --provision a repo whose develop branch is
+not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
+Per-run staging branches are minted at run create — scaffold no longer touches them.
 
 Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
@@ -73,7 +73,6 @@ export interface ScaffoldOptions {
   readonly owner: string;
   readonly repo: string;
   readonly config: Config;
-  readonly gitClient: GitClient;
   readonly ghClient: GhClient;
   /** --provision: write protection when missing instead of refusing. */
   readonly provision: boolean;
@@ -96,7 +95,6 @@ export interface ScaffoldReport {
    * is usually a deliberate customization.
    */
   readonly files_outdated: string[];
-  readonly staging: { readonly created: boolean; readonly staging_tip: string };
   readonly protection: {
     readonly enabled: boolean;
     readonly strict_up_to_date: boolean;
@@ -230,10 +228,13 @@ async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
 }
 
 /**
- * The scaffold CORE: copy templates, ensure staging, probe/refuse/provision
- * protection. Pure of `process`/argv — driven by {@link ScaffoldOptions} so units
- * exercise it with fakes + temp dirs. Throws loud on a protection shortfall when
- * `--provision` is not set, or on a staging divergence.
+ * The scaffold CORE: copy templates, probe/refuse/provision protection on
+ * `develop` (the integration base). Pure of `process`/argv — driven by
+ * {@link ScaffoldOptions} so units exercise it with fakes + temp dirs. Throws
+ * loud on a protection shortfall when `--provision` is not set.
+ *
+ * Per-run staging branches (`staging/<run-id>`) are minted at `run create` —
+ * scaffold no longer creates or protects a shared `staging` branch.
  */
 export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport> {
   const lists: FileLists = { created: [], present: [], updated: [], outdated: [] };
@@ -267,16 +268,10 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
   if (settings.created) lists.created.push(settingsRel);
   else lists.present.push(settingsRel);
 
-  // 4. staging branch (created from base — develop, never main — or FF-reconciled).
-  const staging = await ensureStaging({
-    gitClient: opts.gitClient,
-    stagingBranch: opts.config.git.stagingBranch,
-    baseBranch: opts.config.git.baseBranch,
-    cwd: opts.targetRoot,
-  });
-
-  // 5. branch protection: probe → refuse-if-missing, OR provision when opted in.
-  const branch = opts.config.git.stagingBranch;
+  // 4. branch protection on develop: probe → refuse-if-missing, OR provision when opted in.
+  //    develop is a PRECONDITION — scaffold does not create it (a missing develop
+  //    makes the probe fail loud, which is acceptable).
+  const branch = opts.config.git.baseBranch;
   const required = opts.config.git.requiredStatusChecks;
   let state = await probeProtection({
     ghClient: opts.ghClient,
@@ -305,7 +300,6 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     files_present: lists.present,
     files_updated: lists.updated,
     files_outdated: lists.outdated,
-    staging: { created: staging.created, staging_tip: staging.stagingTip },
     protection: {
       enabled: state.enabled,
       strict_up_to_date: state.strictUpToDate,
@@ -357,7 +351,6 @@ async function run(argv: string[]): Promise<ExitCode> {
     owner,
     repo,
     config: loadConfig(),
-    gitClient: new DefaultGitClient(),
     ghClient: new DefaultGhClient(),
     provision: args.flag("provision") === true,
   });
@@ -366,7 +359,7 @@ async function run(argv: string[]): Promise<ExitCode> {
 }
 
 export const scaffoldCommand: Subcommand = {
-  describe: "Prepare a repo (templates + staging + branch protection) for the pipeline",
+  describe: "Prepare a repo (templates + develop branch protection) for the pipeline",
   run: async (argv) => {
     try {
       return await run(argv);
