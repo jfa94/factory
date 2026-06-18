@@ -115,7 +115,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     });
     holdout = new InMemoryHoldoutStore();
     artifacts = new InMemoryArtifactStore();
-    git = new FakeGitClient({ remoteHeads: { staging: "sha-staging" } });
+    git = new FakeGitClient({ remoteHeads: { "staging/run-1": "sha-staging" } });
     gh = new FakeGhClient();
     await state.create({
       run_id: RUN_ID,
@@ -171,6 +171,20 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     expect(result).toEqual({ kind: "advance", to: "tests" });
     const wtPath = taskWorktreePath(dataDir, RUN_ID, "t-multi");
     expect(git.worktrees.get(wtPath)).toBe("factory/run-1/t-multi");
+  });
+
+  it("preflight forks the worktree from the per-run staging branch (staging/<run-id>)", async () => {
+    // Seed the per-run staging branch so revParse("origin/staging/run-1") succeeds.
+    const perRunGit = new FakeGitClient({ remoteHeads: { "staging/run-1": "sha-run-staging" } });
+    const handlers = makeStageHandlers(makeDeps({ git: perRunGit }));
+    const ctx = await ctxFor({ task_id: "t-multi" });
+    await handlers.preflight(ctx);
+
+    const wtPath = taskWorktreePath(dataDir, RUN_ID, "t-multi");
+    // The worktree add startPoint must be origin/staging/<run-id>, not origin/staging.
+    expect(perRunGit.calls).toContain(
+      `worktree add -b factory/run-1/t-multi ${wtPath} origin/staging/run-1`,
+    );
   });
 
   // -- tests ----------------------------------------------------------------

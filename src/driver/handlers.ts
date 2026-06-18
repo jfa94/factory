@@ -62,6 +62,7 @@ import {
 import type { HandlerDeps } from "./types.js";
 import { taskWorktreePath } from "./paths.js";
 import { FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
+import { runStagingBranch } from "../git/index.js";
 
 /**
  * A producer role the tests/exec reporters spawn. Mirrors the WS8
@@ -176,7 +177,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
         runId: ctx.run.run_id,
         taskId: task.task_id,
         path: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
-        base: deps.config.git.stagingBranch,
+        base: runStagingBranch(ctx.run.run_id),
       });
       return advance("tests");
     },

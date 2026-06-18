@@ -129,7 +129,9 @@ export interface CoroutineDepsResult {
   cleanup: () => Promise<void>;
 }
 
-export async function makeCoroutineDeps(opts: MakeCoroutineDepsOpts = {}): Promise<CoroutineDepsResult> {
+export async function makeCoroutineDeps(
+  opts: MakeCoroutineDepsOpts = {},
+): Promise<CoroutineDepsResult> {
   const dataDir = await mkdtemp(join(tmpdir(), "factory-coroutine-"));
   const state = new StateManager({
     dataDir,
@@ -181,7 +183,7 @@ export async function makeCoroutineDeps(opts: MakeCoroutineDepsOpts = {}): Promi
   });
 
   const gh = opts.ghClient ?? new FakeGhClient();
-  const git = new FakeGitClient({ remoteHeads: { staging: "sha-staging" } });
+  const git = new FakeGitClient({ remoteHeads: { [`staging/${runId}`]: "sha-staging" } });
 
   const deps: CoroutineDeps = {
     config: defaultConfig(),

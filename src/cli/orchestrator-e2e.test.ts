@@ -185,7 +185,11 @@ interface Answerer {
  * Quota-blocked is treated as an unexpected error (the fake signal never blocks).
  */
 
-async function driveToTerminal(deps: CoroutineDeps, runId: string, answer: Answerer): Promise<RunState> {
+async function driveToTerminal(
+  deps: CoroutineDeps,
+  runId: string,
+  answer: Answerer,
+): Promise<RunState> {
   for (;;) {
     const next = await stepRun(deps, runId);
     if (next.kind === "run-terminal") return deps.state.read(runId);
@@ -232,7 +236,7 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     specStore = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    git = new FakeGitClient({ remoteHeads: { staging: "sha-staging" } });
+    git = new FakeGitClient({ remoteHeads: { [`staging/${RUN_ID}`]: "sha-staging" } });
     gh = new FakeGhClient();
     holdout = new InMemoryHoldoutStore();
     artifacts = new InMemoryArtifactStore();
