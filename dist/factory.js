@@ -7465,7 +7465,7 @@ var DefaultGhClient = class {
   async deleteProtection(owner, repo, branch, opts) {
     const argv = ["api", "-X", "DELETE", `/repos/${owner}/${repo}/branches/${branch}/protection`];
     const r = await this.runner(argv, this.execOpts(opts));
-    if (r.code !== 0 && !/not found|404/i.test(r.stderr)) {
+    if (r.code !== 0 && !/404|Not Found|Branch not protected/i.test(r.stderr)) {
       throw new Error(
         `gh api DELETE protection failed for ${owner}/${repo}@${branch}: ${r.stderr}`
       );

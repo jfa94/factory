@@ -57,6 +57,19 @@ describe("gh truncation safety (reuses ExecResult.truncated seam)", () => {
     await expect(gh.repoProtection("o", "r", "staging")).rejects.toThrow(/401|failed/i);
   });
 
+  it("deleteProtection swallows a 'Branch not protected' 404 (already-unprotected is the answer)", async () => {
+    const runner: GhRunner = async () =>
+      result({ code: 1, stderr: "HTTP 404: Branch not protected (https://docs.github.com/...)" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.deleteProtection("o", "r", "staging/run-1")).resolves.toBeUndefined();
+  });
+
+  it("deleteProtection throws on a genuine failure (auth) — never masked as already-gone", async () => {
+    const runner: GhRunner = async () => result({ code: 1, stderr: "HTTP 401: Bad credentials" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.deleteProtection("o", "r", "staging/run-1")).rejects.toThrow(/401|failed/i);
+  });
+
   it("prCreate parses the PR number from the emitted URL", async () => {
     const runner: GhRunner = async (args) => {
       expect(args[0]).toBe("pr");

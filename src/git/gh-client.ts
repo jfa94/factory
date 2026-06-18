@@ -110,9 +110,9 @@ export interface PrMergeOptions {
   /** Enqueue via merge-queue/auto rather than merge now (probe-detected upgrade). */
   auto?: boolean;
   /**
-   * Override the squash-merge commit subject. The rollup uses this for the
-   * `PARTIAL:` header on an incomplete run (Δ S) so the develop history records
-   * that the rollup shipped a subset.
+   * Override the squash-merge commit subject. The rollup passes the plain run title
+   * here (develop only ever receives a COMPLETE run — Decision 34), so the develop
+   * history records the run that shipped.
    */
   subject?: string;
   /** Override the squash-merge commit body. */
@@ -407,7 +407,11 @@ export class DefaultGhClient implements GhClient {
   ): Promise<void> {
     const argv = ["api", "-X", "DELETE", `/repos/${owner}/${repo}/branches/${branch}/protection`];
     const r = await this.runner(argv, this.execOpts(opts));
-    if (r.code !== 0 && !/not found|404/i.test(r.stderr)) {
+    // A 404 / "Branch not protected" is the ANSWER (the branch had no protection, or was
+    // already deleted by a prior finalize), not an error — mirror repoProtection. Any OTHER
+    // non-zero (403 no-admin, 5xx, network) is a real failure → throw, so an auth/permission
+    // failure is never silently masked as "already gone".
+    if (r.code !== 0 && !/404|Not Found|Branch not protected/i.test(r.stderr)) {
       throw new Error(
         `gh api DELETE protection failed for ${owner}/${repo}@${branch}: ${r.stderr}`,
       );
