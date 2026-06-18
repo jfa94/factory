@@ -336,6 +336,11 @@ async function createRunFromManifest(
  * {@link StateManager.create} if `runId` already exists). Reuse semantics live in
  * {@link resolveOrCreateRun}; this stays unconditional so callers that name a run
  * id (determinism/tests) get a predictable create.
+ *
+ * INTENTIONALLY omits `stagingDeps` — this bare direct-API export creates the run
+ * row WITHOUT cutting/protecting a `staging/<run-id>` branch. Every production run
+ * goes through `runCreate`, which supplies `stagingDeps`. Do NOT route a real run
+ * through here expecting a staging branch (Decision 33).
  */
 export async function createRun(
   state: StateManager,
