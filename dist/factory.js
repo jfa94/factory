@@ -1345,68 +1345,68 @@ var require_lockfile = __commonJS({
       });
     }
     function updateLock(file, options) {
-      const lock4 = locks[file];
-      if (lock4.updateTimeout) {
+      const lock3 = locks[file];
+      if (lock3.updateTimeout) {
         return;
       }
-      lock4.updateDelay = lock4.updateDelay || options.update;
-      lock4.updateTimeout = setTimeout(() => {
-        lock4.updateTimeout = null;
-        options.fs.stat(lock4.lockfilePath, (err, stat) => {
-          const isOverThreshold = lock4.lastUpdate + options.stale < Date.now();
+      lock3.updateDelay = lock3.updateDelay || options.update;
+      lock3.updateTimeout = setTimeout(() => {
+        lock3.updateTimeout = null;
+        options.fs.stat(lock3.lockfilePath, (err, stat) => {
+          const isOverThreshold = lock3.lastUpdate + options.stale < Date.now();
           if (err) {
             if (err.code === "ENOENT" || isOverThreshold) {
-              return setLockAsCompromised(file, lock4, Object.assign(err, { code: "ECOMPROMISED" }));
+              return setLockAsCompromised(file, lock3, Object.assign(err, { code: "ECOMPROMISED" }));
             }
-            lock4.updateDelay = 1e3;
+            lock3.updateDelay = 1e3;
             return updateLock(file, options);
           }
-          const isMtimeOurs = lock4.mtime.getTime() === stat.mtime.getTime();
+          const isMtimeOurs = lock3.mtime.getTime() === stat.mtime.getTime();
           if (!isMtimeOurs) {
             return setLockAsCompromised(
               file,
-              lock4,
+              lock3,
               Object.assign(
                 new Error("Unable to update lock within the stale threshold"),
                 { code: "ECOMPROMISED" }
               )
             );
           }
-          const mtime = mtimePrecision.getMtime(lock4.mtimePrecision);
-          options.fs.utimes(lock4.lockfilePath, mtime, mtime, (err2) => {
-            const isOverThreshold2 = lock4.lastUpdate + options.stale < Date.now();
-            if (lock4.released) {
+          const mtime = mtimePrecision.getMtime(lock3.mtimePrecision);
+          options.fs.utimes(lock3.lockfilePath, mtime, mtime, (err2) => {
+            const isOverThreshold2 = lock3.lastUpdate + options.stale < Date.now();
+            if (lock3.released) {
               return;
             }
             if (err2) {
               if (err2.code === "ENOENT" || isOverThreshold2) {
-                return setLockAsCompromised(file, lock4, Object.assign(err2, { code: "ECOMPROMISED" }));
+                return setLockAsCompromised(file, lock3, Object.assign(err2, { code: "ECOMPROMISED" }));
               }
-              lock4.updateDelay = 1e3;
+              lock3.updateDelay = 1e3;
               return updateLock(file, options);
             }
-            lock4.mtime = mtime;
-            lock4.lastUpdate = Date.now();
-            lock4.updateDelay = null;
+            lock3.mtime = mtime;
+            lock3.lastUpdate = Date.now();
+            lock3.updateDelay = null;
             updateLock(file, options);
           });
         });
-      }, lock4.updateDelay);
-      if (lock4.updateTimeout.unref) {
-        lock4.updateTimeout.unref();
+      }, lock3.updateDelay);
+      if (lock3.updateTimeout.unref) {
+        lock3.updateTimeout.unref();
       }
     }
-    function setLockAsCompromised(file, lock4, err) {
-      lock4.released = true;
-      if (lock4.updateTimeout) {
-        clearTimeout(lock4.updateTimeout);
+    function setLockAsCompromised(file, lock3, err) {
+      lock3.released = true;
+      if (lock3.updateTimeout) {
+        clearTimeout(lock3.updateTimeout);
       }
-      if (locks[file] === lock4) {
+      if (locks[file] === lock3) {
         delete locks[file];
       }
-      lock4.options.onCompromised(err);
+      lock3.options.onCompromised(err);
     }
-    function lock3(file, options, callback) {
+    function lock2(file, options, callback) {
       options = {
         stale: 1e4,
         update: null,
@@ -1436,7 +1436,7 @@ var require_lockfile = __commonJS({
             if (err2) {
               return callback(operation.mainError());
             }
-            const lock4 = locks[file2] = {
+            const lock3 = locks[file2] = {
               lockfilePath: getLockFile(file2, options),
               mtime,
               mtimePrecision: mtimePrecision2,
@@ -1445,7 +1445,7 @@ var require_lockfile = __commonJS({
             };
             updateLock(file2, options);
             callback(null, (releasedCallback) => {
-              if (lock4.released) {
+              if (lock3.released) {
                 return releasedCallback && releasedCallback(Object.assign(new Error("Lock is already released"), { code: "ERELEASED" }));
               }
               unlock(file2, { ...options, realpath: false }, releasedCallback);
@@ -1464,12 +1464,12 @@ var require_lockfile = __commonJS({
         if (err) {
           return callback(err);
         }
-        const lock4 = locks[file2];
-        if (!lock4) {
+        const lock3 = locks[file2];
+        if (!lock3) {
           return callback(Object.assign(new Error("Lock is not acquired/owned by you"), { code: "ENOTACQUIRED" }));
         }
-        lock4.updateTimeout && clearTimeout(lock4.updateTimeout);
-        lock4.released = true;
+        lock3.updateTimeout && clearTimeout(lock3.updateTimeout);
+        lock3.released = true;
         delete locks[file2];
         removeLock(file2, options, callback);
       });
@@ -1506,7 +1506,7 @@ var require_lockfile = __commonJS({
         }
       }
     });
-    module.exports.lock = lock3;
+    module.exports.lock = lock2;
     module.exports.unlock = unlock;
     module.exports.check = check;
     module.exports.getLocks = getLocks;
@@ -1584,7 +1584,7 @@ var require_proper_lockfile = __commonJS({
     "use strict";
     var lockfile = require_lockfile();
     var { toPromise, toSync, toSyncOptions } = require_adapter();
-    async function lock3(file, options) {
+    async function lock2(file, options) {
       const release = await toPromise(lockfile.lock)(file, options);
       return toPromise(release);
     }
@@ -1604,8 +1604,8 @@ var require_proper_lockfile = __commonJS({
     function checkSync(file, options) {
       return toSync(lockfile.check)(file, toSyncOptions(options));
     }
-    module.exports = lock3;
-    module.exports.lock = lock3;
+    module.exports = lock2;
+    module.exports.lock = lock2;
     module.exports.unlock = unlock;
     module.exports.lockSync = lockSync;
     module.exports.unlockSync = unlockSync;
@@ -6372,10 +6372,48 @@ function deriveFloorVerdict(task, gateEvidence) {
 }
 
 // src/core/state/manager.ts
-var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
-import { mkdir as mkdir3, readFile, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
-import { existsSync as existsSync3 } from "node:fs";
+import { mkdir as mkdir4, readFile, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { existsSync as existsSync4 } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
+
+// src/shared/file-lock.ts
+var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+import { mkdir as mkdir3 } from "node:fs/promises";
+import { existsSync as existsSync3 } from "node:fs";
+var log3 = createLogger("lock");
+var DEFAULT_FILE_LOCK_TUNING = {
+  stale: 15e3,
+  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
+  retries: 50,
+  retryMinTimeout: 20,
+  retryMaxTimeout: 500
+};
+async function withFileLock(opts, fn) {
+  if (opts.dirPolicy === "create") {
+    await mkdir3(opts.dir, { recursive: true });
+  } else if (!existsSync3(opts.dir)) {
+    throw new Error(`cannot lock ${opts.label} \u2014 dir '${opts.dir}' does not exist`);
+  }
+  const release = await (0, import_proper_lockfile.lock)(opts.lockfile, {
+    realpath: false,
+    stale: opts.tuning.stale,
+    retries: {
+      retries: opts.tuning.retries,
+      minTimeout: opts.tuning.retryMinTimeout,
+      maxTimeout: opts.tuning.retryMaxTimeout,
+      factor: 1.5
+    },
+    onCompromised: (err) => {
+      log3.error(`lock for ${opts.label} was compromised: ${err.message}`);
+      throw err;
+    }
+  });
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
 
 // src/shared/time.ts
 function nowIso() {
@@ -6481,14 +6519,8 @@ function specBuildDir(dataDir, repo, issueNumber) {
 }
 
 // src/core/state/manager.ts
-var log3 = createLogger("state");
-var DEFAULT_LOCK_TUNING = {
-  stale: 15e3,
-  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
-  retries: 50,
-  retryMinTimeout: 20,
-  retryMaxTimeout: 500
-};
+var log4 = createLogger("state");
+var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
 var StateManager = class {
   dataDir;
   lockTuning;
@@ -6514,28 +6546,10 @@ var StateManager = class {
    * `label` names the resource in the loud not-found + compromised errors.
    */
   async runWithLock(dir, lockfilePath, label, fn) {
-    if (!existsSync3(dir)) {
-      throw new Error(`state: cannot lock ${label} \u2014 dir '${dir}' does not exist`);
-    }
-    const release = await (0, import_proper_lockfile.lock)(lockfilePath, {
-      realpath: false,
-      stale: this.lockTuning.stale,
-      retries: {
-        retries: this.lockTuning.retries,
-        minTimeout: this.lockTuning.retryMinTimeout,
-        maxTimeout: this.lockTuning.retryMaxTimeout,
-        factor: 1.5
-      },
-      onCompromised: (err) => {
-        log3.error(`state lock for ${label} was compromised: ${err.message}`);
-        throw err;
-      }
-    });
-    try {
-      return await fn();
-    } finally {
-      await release();
-    }
+    return withFileLock(
+      { dir, lockfile: lockfilePath, label, dirPolicy: "assert", tuning: this.lockTuning },
+      fn
+    );
   }
   /**
    * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
@@ -6575,11 +6589,11 @@ var StateManager = class {
    */
   async create(args) {
     const dir = runDir(this.dataDir, args.run_id);
-    if (existsSync3(this.statePath(args.run_id))) {
+    if (existsSync4(this.statePath(args.run_id))) {
       throw new Error(`state: run '${args.run_id}' already exists`);
     }
-    await mkdir3(join4(dir, "holdouts"), { recursive: true });
-    await mkdir3(join4(dir, "reviews"), { recursive: true });
+    await mkdir4(join4(dir, "holdouts"), { recursive: true });
+    await mkdir4(join4(dir, "reviews"), { recursive: true });
     const now = nowIso();
     const state = parseRunState({
       run_id: args.run_id,
@@ -6597,7 +6611,7 @@ var StateManager = class {
       ended_at: null
     });
     await this.withLock(args.run_id, async () => {
-      if (existsSync3(this.statePath(args.run_id))) {
+      if (existsSync4(this.statePath(args.run_id))) {
         throw new Error(`state: run '${args.run_id}' already exists`);
       }
       await atomicWriteFile(this.statePath(args.run_id), stringifyJson(state));
@@ -6653,7 +6667,7 @@ var StateManager = class {
    * {@link readCurrentForRepo}.
    */
   async readThroughLink(link) {
-    if (!existsSync3(link)) return null;
+    if (!existsSync4(link)) return null;
     const statePath = join4(link, "state.json");
     let raw;
     try {
@@ -6691,7 +6705,7 @@ var StateManager = class {
         runs.push(await this.read(entry.name));
       } catch (err) {
         if (err.code === "ENOENT") continue;
-        log3.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
+        log4.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
       }
     }
     return runs.sort((a, b) => a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0);
@@ -6823,7 +6837,7 @@ var StateManager = class {
   async repointSymlink(link, target) {
     const tmp = `${link}.tmp.${process.pid}`;
     try {
-      await mkdir3(dirname3(link), { recursive: true });
+      await mkdir4(dirname3(link), { recursive: true });
       await unlink2(tmp).catch(() => {
       });
       await symlink(target, tmp);
@@ -6831,7 +6845,7 @@ var StateManager = class {
       });
       await rename2(tmp, link);
     } catch (err) {
-      log3.warn(
+      log4.warn(
         `state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`
       );
       await unlink2(tmp).catch(() => {
@@ -7078,10 +7092,10 @@ ${result.stderr.trim()}`
 };
 
 // src/shared/jsonl.ts
-import { appendFile, mkdir as mkdir4, readFile as readFile2 } from "node:fs/promises";
+import { appendFile, mkdir as mkdir5, readFile as readFile2 } from "node:fs/promises";
 import { dirname as dirname4 } from "node:path";
 async function appendJsonl(path2, record) {
-  await mkdir4(dirname4(path2), { recursive: true });
+  await mkdir5(dirname4(path2), { recursive: true });
   await appendFile(path2, JSON.stringify(record) + "\n", "utf8");
 }
 
@@ -7143,7 +7157,7 @@ async function runOrThrow(command, runner, args, opts) {
 }
 
 // src/git/git-client.ts
-var log4 = createLogger("git");
+var log5 = createLogger("git");
 var DefaultGitClient = class {
   runner;
   constructor(runner = defaultGitRunner) {
@@ -7172,7 +7186,7 @@ var DefaultGitClient = class {
     throw new Error(`git show-ref failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
   }
   async checkoutB(branch, startPoint, opts) {
-    log4.debug(`checkout -B ${branch} ${startPoint}`);
+    log5.debug(`checkout -B ${branch} ${startPoint}`);
     await this.execOrThrow(["checkout", "-B", branch, startPoint], opts);
   }
   async currentBranch(opts) {
@@ -7279,7 +7293,7 @@ async function deriveRepo(gitClient, remote, cwd) {
 }
 
 // src/git/gh-client.ts
-var log5 = createLogger("gh");
+var log6 = createLogger("gh");
 var PullRequestSchema = external_exports.object({
   number: external_exports.number().int(),
   headRefName: external_exports.string(),
@@ -7481,7 +7495,7 @@ var DefaultGhClient = class {
       required_pull_request_reviews: null,
       restrictions: null
     });
-    log5.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
+    log6.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
     await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path2, "--input", "-"], {
       ...this.execOpts(opts),
       input: payload
@@ -7501,7 +7515,7 @@ var DefaultGhClient = class {
 };
 
 // src/git/rollup.ts
-var log6 = createLogger("git");
+var log7 = createLogger("git");
 var GIT_DEFAULTS = GitSchema.parse({});
 var PARTIAL_SUBJECT_PREFIX = "PARTIAL: ";
 var DEFAULT_POLL_INTERVAL_MS = 15e3;
@@ -7531,7 +7545,7 @@ async function rollup(args) {
   const existing = await args.ghClient.prList({ head: staging, base, state: "all" });
   const merged = existing.find((p) => p.state === "MERGED");
   if (merged) {
-    log6.info(`rollup PR #${merged.number} already merged into ${base} \u2014 finalize resuming`);
+    log7.info(`rollup PR #${merged.number} already merged into ${base} \u2014 finalize resuming`);
     return { number: merged.number, url: merged.url ?? "", resumed: true, merged: true, subject };
   }
   const open2 = existing.find((p) => p.state === "OPEN");
@@ -7539,7 +7553,7 @@ async function rollup(args) {
   let url;
   let resumed;
   if (open2) {
-    log6.info(`resuming rollup PR #${open2.number} (${staging}\u2192${base})`);
+    log7.info(`resuming rollup PR #${open2.number} (${staging}\u2192${base})`);
     number = open2.number;
     url = open2.url ?? "";
     resumed = true;
@@ -7550,22 +7564,22 @@ async function rollup(args) {
       title: args.title,
       body: args.body
     });
-    log6.info(`opened rollup PR #${created.number} (${staging}\u2192${base})`);
+    log7.info(`opened rollup PR #${created.number} (${staging}\u2192${base})`);
     number = created.number;
     url = created.url;
     resumed = false;
   }
   if (!args.merge) {
-    log6.info(`rollup PR #${number}: no-merge mode \u2014 opened, not merged`);
+    log7.info(`rollup PR #${number}: no-merge mode \u2014 opened, not merged`);
     return { number, url, resumed, merged: false, reason: "no-merge" };
   }
   const ci = await waitForCi(args.ghClient, number, args);
   if (ci === "failing") {
-    log6.warn(`rollup PR #${number}: CI failing \u2014 not merged`);
+    log7.warn(`rollup PR #${number}: CI failing \u2014 not merged`);
     return { number, url, resumed, merged: false, reason: "ci-failing", ci };
   }
   if (ci === "pending") {
-    log6.warn(
+    log7.warn(
       `rollup PR #${number}: CI still pending after ${args.maxPolls ?? DEFAULT_MAX_POLLS} polls \u2014 not merged`
     );
     return { number, url, resumed, merged: false, reason: "ci-timeout", ci };
@@ -7580,11 +7594,11 @@ async function rollup(args) {
     return { number, url, resumed, merged: true, subject, ci };
   }
   if (view.mergeable === "CONFLICTING") {
-    log6.warn(`rollup PR #${number} is CONFLICTING \u2014 not merged`);
+    log7.warn(`rollup PR #${number} is CONFLICTING \u2014 not merged`);
     return { number, url, resumed, merged: false, reason: "not-mergeable", ci };
   }
   await args.ghClient.prMergeSquash(number, { subject, body: args.body });
-  log6.info(`rollup PR #${number} squash-merged into ${base}${args.partial ? " (PARTIAL)" : ""}`);
+  log7.info(`rollup PR #${number} squash-merged into ${base}${args.partial ? " (PARTIAL)" : ""}`);
   return { number, url, resumed, merged: true, subject, ci };
 }
 
@@ -7600,7 +7614,7 @@ function runScopedBranch(runId, taskId, prefix = DEFAULT_PREFIX) {
 }
 
 // src/git/worktree.ts
-var log7 = createLogger("git");
+var log8 = createLogger("git");
 var GIT_DEFAULTS2 = GitSchema.parse({});
 async function createTaskWorktree(args) {
   const remote = args.remote ?? "origin";
@@ -7631,14 +7645,14 @@ async function assertBaseIsStagingTip(args) {
 }
 
 // src/git/pr.ts
-var log8 = createLogger("git");
+var log9 = createLogger("git");
 var GIT_DEFAULTS3 = GitSchema.parse({});
 async function createTaskPrIdempotent(args) {
   const base = args.base ?? GIT_DEFAULTS3.stagingBranch;
   const existing = await args.ghClient.prList({ head: args.branch, base, state: "all" });
   const pr = existing.find((p) => p.state === "OPEN") ?? existing.find((p) => p.state === "MERGED");
   if (pr !== void 0) {
-    log8.info(
+    log9.info(
       `resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`
     );
     return { number: pr.number, url: pr.url ?? "", resumed: true };
@@ -7649,17 +7663,16 @@ async function createTaskPrIdempotent(args) {
     title: args.title,
     body: args.body
   });
-  log8.info(`created PR #${created.number} for head '${args.branch}'`);
+  log9.info(`created PR #${created.number} for head '${args.branch}'`);
   return { number: created.number, url: created.url, resumed: false };
 }
 
 // src/git/serial-writer.ts
-var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
-import { mkdir as mkdir5 } from "node:fs/promises";
 import { join as join5 } from "node:path";
-var log9 = createLogger("git");
+var log10 = createLogger("git");
 var GIT_DEFAULTS4 = GitSchema.parse({});
-var DEFAULT_MERGE_LOCK_TUNING = {
+var MERGE_LOCK_DEFAULTS = {
+  ...DEFAULT_FILE_LOCK_TUNING,
   stale: 3e4,
   retries: 100,
   retryMinTimeout: 25,
@@ -7680,34 +7693,23 @@ var MergeSerializer = class {
     this.staging = opts.stagingBranch ?? GIT_DEFAULTS4.stagingBranch;
     this.dataDir = resolveDataDir(opts);
     this.lockScope = opts.lockScope ?? `${opts.owner}__${opts.repo}__${this.staging}`.replace(/[^\w.-]/g, "-");
-    this.tuning = { ...DEFAULT_MERGE_LOCK_TUNING, ...opts.lock ?? {} };
+    this.tuning = { ...MERGE_LOCK_DEFAULTS, ...opts.lock ?? {} };
   }
   lockfilePath() {
     return join5(this.dataDir, "locks", `merge-${this.lockScope}.lock`);
   }
   /** Run `fn` while holding the app-level merge lock (the serial section). */
   async withMergeLock(fn) {
-    const lockfile = this.lockfilePath();
-    await mkdir5(join5(this.dataDir, "locks"), { recursive: true });
-    const release = await (0, import_proper_lockfile2.lock)(lockfile, {
-      realpath: false,
-      stale: this.tuning.stale,
-      retries: {
-        retries: this.tuning.retries,
-        minTimeout: this.tuning.retryMinTimeout,
-        maxTimeout: this.tuning.retryMaxTimeout,
-        factor: 1.5
+    return withFileLock(
+      {
+        dir: join5(this.dataDir, "locks"),
+        lockfile: this.lockfilePath(),
+        label: `merge '${this.lockScope}'`,
+        dirPolicy: "create",
+        tuning: this.tuning
       },
-      onCompromised: (err) => {
-        log9.error(`merge lock '${this.lockScope}' compromised: ${err.message}`);
-        throw err;
-      }
-    });
-    try {
-      return await fn();
-    } finally {
-      await release();
-    }
+      fn
+    );
   }
   /**
    * Serial-merge one task PR into staging. Acquires the app-level lock, RE-VERIFIES
@@ -7727,16 +7729,16 @@ var MergeSerializer = class {
         "mergeStateStatus"
       ]);
       if (pr.state === "MERGED") {
-        log9.info(`PR #${prNumber} already MERGED into ${this.staging} \u2014 ship resuming`);
+        log10.info(`PR #${prNumber} already MERGED into ${this.staging} \u2014 ship resuming`);
         await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
         return { merged: true, via: "app-level", number: prNumber };
       }
       if (pr.mergeable === "CONFLICTING") {
-        log9.warn(`PR #${prNumber} is CONFLICTING \u2014 not merged`);
+        log10.warn(`PR #${prNumber} is CONFLICTING \u2014 not merged`);
         return { merged: false, reason: "not-mergeable", number: prNumber };
       }
       if (pr.mergeStateStatus === "BEHIND") {
-        log9.warn(
+        log10.warn(
           `PR #${prNumber} head is BEHIND ${this.staging} \u2014 refusing to merge (no force-push)`
         );
         return { merged: false, reason: "behind", number: prNumber };
@@ -7748,11 +7750,11 @@ var MergeSerializer = class {
       );
       if (hasMergeQueue) {
         await this.ghClient.prMergeSquash(prNumber, { auto: true, deleteBranch: true });
-        log9.info(`PR #${prNumber} enqueued via native merge-queue`);
+        log10.info(`PR #${prNumber} enqueued via native merge-queue`);
         return { merged: true, via: "merge-queue", number: prNumber };
       }
       await this.ghClient.prMergeSquash(prNumber, {});
-      log9.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
+      log10.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
       await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
       return { merged: true, via: "app-level", number: prNumber };
     });
@@ -7760,7 +7762,7 @@ var MergeSerializer = class {
 };
 
 // src/git/protection.ts
-var log10 = createLogger("git");
+var log11 = createLogger("git");
 var GIT_DEFAULTS5 = GitSchema.parse({});
 var ProtectionMissingError = class extends Error {
   branch;
@@ -7817,7 +7819,7 @@ async function provisionProtection(args) {
       "provisionProtection called without --provision opt-in \u2014 refusing to mutate branch protection"
     );
   }
-  log10.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
+  log11.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
   await args.ghClient.putProtection(args.owner, args.repo, branch, {
     requiredStatusChecks: [...args.requiredChecks],
     strict: true
@@ -7831,7 +7833,7 @@ async function provisionProtection(args) {
 }
 
 // src/git/staging.ts
-var log11 = createLogger("git");
+var log12 = createLogger("git");
 var GIT_DEFAULTS6 = GitSchema.parse({});
 async function ensureStaging(args) {
   const remote = args.remote ?? "origin";
@@ -7851,7 +7853,7 @@ async function ensureStaging(args) {
         `staging: base branch '${remote}/${base}' does not exist \u2014 cannot create staging`
       );
     }
-    log11.info(`creating ${staging} from ${remote}/${base}`);
+    log12.info(`creating ${staging} from ${remote}/${base}`);
     await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
     await args.gitClient.push(remote, staging, { setUpstream: true, cwd: args.cwd });
     return { created: true, stagingTip: baseHead };
@@ -7866,7 +7868,7 @@ async function ensureStaging(args) {
     cwd: args.cwd
   });
   if (mergeBase === stagingTip) {
-    log11.info(`fast-forwarding ${staging} to ${remote}/${base}`);
+    log12.info(`fast-forwarding ${staging} to ${remote}/${base}`);
     await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
     await args.gitClient.push(remote, staging, { cwd: args.cwd });
     return { created: false, stagingTip: baseTip };
@@ -7957,15 +7959,15 @@ var stateCommand = {
 
 // src/cli/subcommands/scaffold.ts
 import { copyFile, mkdir as mkdir7, readFile as readFile4, writeFile } from "node:fs/promises";
-import { existsSync as existsSync5 } from "node:fs";
+import { existsSync as existsSync6 } from "node:fs";
 import { dirname as dirname5, join as join7, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir6, readFile as readFile3 } from "node:fs/promises";
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync5 } from "node:fs";
 import { join as join6 } from "node:path";
-var log12 = createLogger("cli:target-settings");
+var log13 = createLogger("cli:target-settings");
 var FACTORY_TARGET_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
@@ -8008,7 +8010,7 @@ function mergeTargetSettings(existing) {
 async function ensureTargetSettings(opts) {
   const dir = join6(opts.targetRoot, ".claude");
   const path2 = join6(dir, "settings.json");
-  const created = !existsSync4(path2);
+  const created = !existsSync5(path2);
   let existing = {};
   if (!created) {
     const raw = await readFile3(path2, "utf8");
@@ -8016,7 +8018,7 @@ async function ensureTargetSettings(opts) {
     if (isObject(parsed)) {
       existing = parsed;
     } else {
-      log12.warn(
+      log13.warn(
         `${path2} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
@@ -8030,7 +8032,7 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold.ts
-var log13 = createLogger("scaffold");
+var log14 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -8050,7 +8052,7 @@ function resolveTemplatesDir() {
   let dir = dirname5(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     const candidate = join7(dir, "templates");
-    if (existsSync5(join7(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    if (existsSync6(join7(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname5(dir);
@@ -8070,11 +8072,11 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists) {
   const segs = entry.rel.split("/");
   const src = join7(templatesDir, ...segs);
   const dest = join7(targetRoot, ...segs);
-  if (!existsSync5(src)) {
-    log13.warn(`template missing, skipping: ${src}`);
+  if (!existsSync6(src)) {
+    log14.warn(`template missing, skipping: ${src}`);
     return;
   }
-  if (!existsSync5(dest)) {
+  if (!existsSync6(dest)) {
     await mkdir7(dirname5(dest), { recursive: true });
     await copyFile(src, dest);
     lists.created.push(entry.rel);
@@ -8095,7 +8097,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists) {
 async function ensureGitignore(root, lists) {
   const path2 = join7(root, ".gitignore");
   const rel = relative(root, path2);
-  if (!existsSync5(path2)) {
+  if (!existsSync6(path2)) {
     await writeFile(path2, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
@@ -8112,13 +8114,13 @@ async function ensureGitignore(root, lists) {
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [], outdated: [] };
-  const isNodePackage = existsSync5(join7(opts.targetRoot, "package.json"));
+  const isNodePackage = existsSync6(join7(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists);
   }
   if (lists.updated.length > 0) {
-    log13.info(
+    log14.info(
       `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
     );
   }
@@ -8437,7 +8439,7 @@ function parseSpecManifest(raw) {
 }
 
 // src/spec/gh.ts
-var log14 = createLogger("spec:gh");
+var log15 = createLogger("spec:gh");
 var GhAuthError = class extends Error {
   constructor(message) {
     super(message);
@@ -8498,7 +8500,7 @@ var RealGhClient = class {
     const rawBody = typeof parsed.body === "string" ? parsed.body : "";
     const { body, body_truncated } = this.capBody(rawBody);
     if (body_truncated) {
-      log14.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
+      log15.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
     }
     const labels = Array.isArray(parsed.labels) ? parsed.labels.map(
       (l) => l && typeof l === "object" && "name" in l && typeof l.name === "string" ? l.name : typeof l === "string" ? l : null
@@ -8525,7 +8527,7 @@ var RealGhClient = class {
 // src/spec/store.ts
 import { readFile as readFile5, readdir as readdir2 } from "node:fs/promises";
 import { join as join8 } from "node:path";
-var log15 = createLogger("spec:store");
+var log16 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
 function makeSpecId(issueNumber, slug) {
@@ -8635,11 +8637,11 @@ var SpecStore = class {
       await atomicWriteFile(join8(reviewDir, TASKS_FILE), tasksJson);
     } catch (err) {
       mirrored = false;
-      log15.warn(
+      log16.warn(
         `could not write reviewable copy to ${reviewDir} (${err instanceof Error ? err.message : String(err)}) \u2014 the canonical spec at ${dir} is unaffected; run continues`
       );
     }
-    log15.info(
+    log16.info(
       `wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir} ` + (mirrored ? `(reviewable copy: ${reviewDir})` : `(reviewable copy SKIPPED \u2014 see warning)`)
     );
     return this.toPointer(parsed);
@@ -8926,7 +8928,7 @@ function decideSpecReview(verdict, opts = {}) {
 }
 
 // src/spec/pipeline.ts
-var log16 = createLogger("spec:pipeline");
+var log17 = createLogger("spec:pipeline");
 function buildManifest(repo, issueNumber, generated) {
   const specId = makeSpecId(issueNumber, generated.slug);
   const slug = specId.replace(/^\d+-/, "");
@@ -8941,9 +8943,9 @@ function buildManifest(repo, issueNumber, generated) {
 }
 
 // src/quota/usage-source.ts
-import { existsSync as existsSync6, readFileSync as readFileSync3 } from "node:fs";
+import { existsSync as existsSync7, readFileSync as readFileSync3 } from "node:fs";
 import { join as join9 } from "node:path";
-var log17 = createLogger("quota:usage");
+var log18 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
 var STALE_WARN_SECONDS = 120;
 var RawWindowSchema = external_exports.object({
@@ -8974,7 +8976,7 @@ function readingFromCache(raw, nowEpoch2) {
     return unavailable("usage-cache-too-stale");
   }
   if (age > STALE_WARN_SECONDS) {
-    log17.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+    log18.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
   }
   const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
   const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
@@ -9016,15 +9018,15 @@ var StatuslineUsageSignal = class {
       return unavailable("usage-cache-missing");
     }
     const file = usageCachePath(dataDir);
-    if (!existsSync6(file)) {
-      log17.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
+    if (!existsSync7(file)) {
+      log18.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
     let raw;
     try {
       raw = parseJson(readFileSync3(file, "utf8"), file);
     } catch {
-      log17.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
+      log18.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-malformed");
     }
     return readingFromCache(raw, now);
@@ -9414,7 +9416,7 @@ async function scanDeadSurface(runner, changedFiles, opts) {
 }
 
 // src/scoring/telemetry.ts
-var log18 = createLogger("telemetry");
+var log19 = createLogger("telemetry");
 async function emitMetric(dataDir, runId, event, data, opts = {}) {
   const record = {
     ts: opts.now ?? nowIso(),
@@ -9425,7 +9427,7 @@ async function emitMetric(dataDir, runId, event, data, opts = {}) {
   try {
     await appendJsonl(runMetricsPath(dataDir, runId), record);
   } catch (err) {
-    log18.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+    log19.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
   }
   return record;
 }
@@ -9608,7 +9610,7 @@ function buildPanelManifest(stageAfter, model, maxTurns) {
 }
 
 // src/verifier/judgment/finding.ts
-var log19 = createLogger("finding");
+var log20 = createLogger("finding");
 var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
 var FindingSchema = external_exports.object({
   /** Which panel reviewer raised this (free-form; the role string). */
@@ -9660,7 +9662,7 @@ function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) 
     }
   }
   if (topUnknown.length > 0 || findingUnknown.length > 0) {
-    log19.warn(
+    log20.warn(
       `review parse: stripped unknown keys from reviewer '${context}' payload: top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`
     );
   }
@@ -10272,7 +10274,7 @@ var buildStrategy = procStrategy(
 );
 
 // src/verifier/deterministic/gate-runner.ts
-var log20 = createLogger("gate-runner");
+var log21 = createLogger("gate-runner");
 function strategyFor(id) {
   switch (id) {
     case "test":
@@ -10314,7 +10316,7 @@ var GateRunner = class {
       if (cached !== void 0) {
         report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
         evidence.push(cached);
-        log20.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
+        log21.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
         continue;
       }
       const strategy = strategyFor(id);
@@ -10335,7 +10337,7 @@ var GateRunner = class {
         memo.putEvidence(id, treeSha, outcome.evidence);
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
-        log20.debug(`gate ${id} skipped: ${outcome.reason}`);
+        log21.debug(`gate ${id} skipped: ${outcome.reason}`);
       }
     }
     const verdict = deriveAllGatesVerdict(evidence);
@@ -10504,14 +10506,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log30 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log30.code !== 0) {
+    const log31 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log31.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log30.code ?? "null"}): ${log30.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log31.code ?? "null"}): ${log31.stderr.trim()}`
       );
     }
-    assertNotTruncated(log30, "git log (tdd classification)");
-    const shas = splitLines(log30.stdout).reverse();
+    assertNotTruncated(log31, "git log (tdd classification)");
+    const shas = splitLines(log31.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -10793,7 +10795,7 @@ var FsHoldoutVerdictStore = class {
 };
 
 // src/driver/finalize.ts
-var log21 = createLogger("finalize");
+var log22 = createLogger("finalize");
 var FACTORY_ISSUE_LABEL = "factory";
 function rollupTitle(report) {
   return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
@@ -10807,7 +10809,7 @@ async function fileFailureIssues(deps, report) {
   for (const failure of report.failures) {
     const issue = renderFailureIssue(failure, report);
     if (existing.has(issue.title)) {
-      log21.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
+      log22.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
       continue;
     }
     await deps.gh.issueCreate({
@@ -10841,17 +10843,17 @@ async function finalizeRun(deps, runId) {
       ...deps.rollup ?? {}
     });
   } else {
-    log21.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
+    log22.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
-  log21.info(
+  log22.info(
     `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
   );
   return { run: finalized, report, ...rollupResult ? { rollup: rollupResult } : {}, issuesFiled };
 }
 
 // src/driver/transitions.ts
-var log22 = createLogger("transitions");
+var log23 = createLogger("transitions");
 function markInFlight(deps, runId, taskId, stage) {
   const status = stageToInFlightStatus(stage);
   return deps.state.updateTask(runId, taskId, (t) => ({
@@ -10870,7 +10872,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function dropTask(deps, runId, taskId, failureClass, reason) {
-  log22.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
+  log23.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "dropped",
@@ -10907,7 +10909,7 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log22.info(
+  log23.info(
     `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`
   );
   return { done: false, stage: resumeStage };
@@ -11194,7 +11196,7 @@ var FsArtifactStore = class {
 // src/driver/fold.ts
 import { readFile as readFile10 } from "node:fs/promises";
 import { join as join14 } from "node:path";
-var log23 = createLogger("fold");
+var log24 = createLogger("fold");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.stage);
@@ -11236,7 +11238,7 @@ function parseVerdictsFailClosed(raw) {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log23.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log24.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
@@ -11337,7 +11339,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
   if (panel.crossVendorAbsence !== void 0) {
-    log23.warn(
+    log24.warn(
       `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` + panel.crossVendorAbsence.reason
     );
   }
@@ -11414,7 +11416,7 @@ function isSpawnStage(stage) {
 }
 
 // src/driver/quota-gate.ts
-var log24 = createLogger("quota-gate");
+var log25 = createLogger("quota-gate");
 async function applyQuotaGate(deps, runId, mode = "session") {
   if (mode === "workflow") return null;
   const reading = await deps.usage.read();
@@ -11426,7 +11428,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
     case "pause-5h":
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
-      log24.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
+      log25.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
       const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
@@ -11440,7 +11442,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
       };
     }
     case "unavailable-halt": {
-      log24.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
+      log25.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
       const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: "suspended",
@@ -11454,7 +11456,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
 }
 
 // src/driver/ship.ts
-var log25 = createLogger("ship");
+var log26 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
     throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
@@ -11494,14 +11496,14 @@ async function shipTask(deps, ctx) {
   });
   const outcome = await serializer.merge(pr.number);
   if (outcome.merged) {
-    log25.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    log26.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
     return taskDone();
   }
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
 // src/driver/coroutine.ts
-var log26 = createLogger("coroutine");
+var log27 = createLogger("coroutine");
 var MERGE_RESYNC_CAP = 8;
 function requireTask2(run9, taskId) {
   const task = run9.tasks[taskId];
@@ -11691,7 +11693,7 @@ async function stepTask(deps, runId, taskId, results) {
             if (!step2.done) throw new Error("coroutine: dropStep returned non-terminal step");
             return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
-          log26.info(
+          log27.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
           );
           stage = "exec";
@@ -11883,7 +11885,7 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/cli/subcommands/run.ts
-var log27 = createLogger("run");
+var log28 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -12018,7 +12020,7 @@ async function resolveSpec(specStore, opts) {
 }
 async function createRunFromManifest(state, specStore, manifest, opts) {
   if (opts.mode === "workflow") {
-    log27.warn(
+    log28.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
     );
   }
@@ -12056,7 +12058,7 @@ async function resolveOrCreateRun(state, specStore, opts) {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
       assertReusableFlags(existing, opts);
-      log27.info(
+      log28.info(
         `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`
       );
       return { reused: true, run: existing };
@@ -12881,7 +12883,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log28 = createLogger("cli:statusline");
+var log29 = createLogger("cli:statusline");
 var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -12906,7 +12908,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log28.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log29.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return;
   }
   const now = (deps.now ?? nowEpoch)();
@@ -12914,7 +12916,7 @@ async function writeCache(rateLimits, deps) {
   try {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
   } catch (err) {
-    log28.warn(`failed to write usage-cache.json: ${err.message}`);
+    log29.warn(`failed to write usage-cache.json: ${err.message}`);
   }
 }
 async function passthrough(payload, deps) {
@@ -12925,12 +12927,12 @@ async function passthrough(payload, deps) {
     const result = await run9(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log28.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log29.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log28.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log29.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -12962,11 +12964,11 @@ var statuslineCommand = {
 };
 
 // src/cli/subcommands/autonomy.ts
-import { existsSync as existsSync7 } from "node:fs";
+import { existsSync as existsSync8 } from "node:fs";
 import { readFile as readFile11 } from "node:fs/promises";
 import { join as join16 } from "node:path";
 import { homedir as homedir2 } from "node:os";
-var log29 = createLogger("autonomy");
+var log30 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -13085,7 +13087,7 @@ function materializeMergedSettings(input) {
 }
 async function readPluginVersion(pluginRoot) {
   const path2 = join16(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync7(path2)) return void 0;
+  if (!existsSync8(path2)) return void 0;
   try {
     const parsed = JSON.parse(await readFile11(path2, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
@@ -13100,13 +13102,13 @@ async function runAutonomyEnsure(opts = {}) {
   const userSettingsPath = opts.userSettingsPath ?? join16(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
-  if (existsSync7(userSettingsPath)) {
+  if (existsSync8(userSettingsPath)) {
     try {
       const parsed = JSON.parse(await readFile11(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
-      else log29.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      else log30.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
-      log29.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log30.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
   const templatePath = join16(pluginRoot, "templates", "settings.autonomous.json");
@@ -13146,7 +13148,7 @@ async function runAutonomyStatus(opts = {}) {
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path2.length > 0 && existsSync7(path2),
+    mergedSettingsPresent: path2.length > 0 && existsSync8(path2),
     mergedSettingsPath: path2
   };
   if (opts.json === true) {
@@ -13170,7 +13172,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path2}` : "absen
   return status.autonomous ? EXIT.OK : EXIT.ERROR;
 }
 async function readOnDiskVersion(path2) {
-  if (!existsSync7(path2)) return void 0;
+  if (!existsSync8(path2)) return void 0;
   try {
     const parsed = JSON.parse(await readFile11(path2, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
@@ -13213,7 +13215,7 @@ async function runAutonomyPreflight(opts = {}) {
   } catch {
   }
   const path2 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path2.length > 0 && existsSync7(path2);
+  const mergedSettingsPresent = path2.length > 0 && existsSync8(path2);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
   const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path2) : void 0;
   const decision = decideAutonomyPreflight({

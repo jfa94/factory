@@ -19,10 +19,13 @@
  * The app-level lock NEVER arms N concurrent `--auto`: two concurrent merge()
  * calls observe strictly non-overlapping critical sections.
  */
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { lock } from "proper-lockfile";
-import { createLogger } from "../shared/index.js";
+import {
+  createLogger,
+  withFileLock,
+  DEFAULT_FILE_LOCK_TUNING,
+  type FileLockTuning,
+} from "../shared/index.js";
 import { GitSchema } from "../config/schema.js";
 import { resolveDataDir, type DataDirOptions } from "../config/load.js";
 import type { GhClient } from "./gh-client.js";
@@ -31,15 +34,18 @@ const log = createLogger("git");
 
 const GIT_DEFAULTS = GitSchema.parse({});
 
-/** Lock tuning mirrors the StateManager defaults (self-heal + wait-out). */
-export interface MergeLockTuning {
-  stale: number;
-  retries: number;
-  retryMinTimeout: number;
-  retryMaxTimeout: number;
-}
+/**
+ * Lock tuning — the shared {@link FileLockTuning}; kept as a local alias so the
+ * re-export from `./index.ts` stays stable.
+ */
+export type MergeLockTuning = FileLockTuning;
 
-const DEFAULT_MERGE_LOCK_TUNING: MergeLockTuning = {
+/**
+ * Merge overrides on the shared baseline: a git+GitHub merge legitimately runs
+ * longer than a state write, so widen the stale window and retry budget.
+ */
+const MERGE_LOCK_DEFAULTS: MergeLockTuning = {
+  ...DEFAULT_FILE_LOCK_TUNING,
   stale: 30_000,
   retries: 100,
   retryMinTimeout: 25,
@@ -86,7 +92,7 @@ export class MergeSerializer {
     this.dataDir = resolveDataDir(opts);
     this.lockScope =
       opts.lockScope ?? `${opts.owner}__${opts.repo}__${this.staging}`.replace(/[^\w.-]/g, "-");
-    this.tuning = { ...DEFAULT_MERGE_LOCK_TUNING, ...(opts.lock ?? {}) };
+    this.tuning = { ...MERGE_LOCK_DEFAULTS, ...(opts.lock ?? {}) };
   }
 
   private lockfilePath(): string {
@@ -95,27 +101,16 @@ export class MergeSerializer {
 
   /** Run `fn` while holding the app-level merge lock (the serial section). */
   private async withMergeLock<T>(fn: () => Promise<T>): Promise<T> {
-    const lockfile = this.lockfilePath();
-    await mkdir(join(this.dataDir, "locks"), { recursive: true });
-    const release = await lock(lockfile, {
-      realpath: false,
-      stale: this.tuning.stale,
-      retries: {
-        retries: this.tuning.retries,
-        minTimeout: this.tuning.retryMinTimeout,
-        maxTimeout: this.tuning.retryMaxTimeout,
-        factor: 1.5,
+    return withFileLock(
+      {
+        dir: join(this.dataDir, "locks"),
+        lockfile: this.lockfilePath(),
+        label: `merge '${this.lockScope}'`,
+        dirPolicy: "create",
+        tuning: this.tuning,
       },
-      onCompromised: (err) => {
-        log.error(`merge lock '${this.lockScope}' compromised: ${err.message}`);
-        throw err;
-      },
-    });
-    try {
-      return await fn();
-    } finally {
-      await release();
-    }
+      fn,
+    );
   }
 
   /**

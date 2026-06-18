@@ -6898,7 +6898,7 @@ async function decideSecretGuard(input, deps = {}) {
     scanPaths = names.stdout;
     scanDiff = diff.stdout;
   } else {
-    let log6;
+    let log7;
     let names;
     try {
       names = await execFn(
@@ -6906,28 +6906,28 @@ async function decideSecretGuard(input, deps = {}) {
         ["-C", commitDir, "log", "@{upstream}..HEAD", "--name-only", "--format="],
         {}
       );
-      log6 = await execFn("git", ["-C", commitDir, "log", "-p", "@{upstream}..HEAD", "-U0"], {});
+      log7 = await execFn("git", ["-C", commitDir, "log", "-p", "@{upstream}..HEAD", "-U0"], {});
     } catch {
       return deny(
         "git_log_failed",
         "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
       );
     }
-    if (names.code !== 0 || log6.code !== 0) {
+    if (names.code !== 0 || log7.code !== 0) {
       try {
         names = await execFn(
           "git",
           ["-C", commitDir, "log", "HEAD", "--name-only", "--format="],
           {}
         );
-        log6 = await execFn("git", ["-C", commitDir, "log", "-p", "HEAD", "-U0"], {});
+        log7 = await execFn("git", ["-C", commitDir, "log", "-p", "HEAD", "-U0"], {});
       } catch {
         return deny(
           "git_log_failed",
           "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
         );
       }
-      if (names.code !== 0 || log6.code !== 0) {
+      if (names.code !== 0 || log7.code !== 0) {
         return deny(
           "git_log_failed",
           "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
@@ -6935,7 +6935,7 @@ async function decideSecretGuard(input, deps = {}) {
       }
     }
     scanPaths = names.stdout;
-    scanDiff = log6.stdout;
+    scanDiff = log7.stdout;
   }
   const blocks = [];
   for (const raw of scanPaths.split("\n")) {
@@ -7219,10 +7219,48 @@ function deriveFloorVerdict(task, gateEvidence) {
 }
 
 // src/core/state/manager.ts
-var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
-import { mkdir as mkdir2, readFile, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
-import { existsSync as existsSync3 } from "node:fs";
+import { mkdir as mkdir3, readFile, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { existsSync as existsSync4 } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
+
+// src/shared/file-lock.ts
+var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+import { mkdir as mkdir2 } from "node:fs/promises";
+import { existsSync as existsSync3 } from "node:fs";
+var log3 = createLogger("lock");
+var DEFAULT_FILE_LOCK_TUNING = {
+  stale: 15e3,
+  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
+  retries: 50,
+  retryMinTimeout: 20,
+  retryMaxTimeout: 500
+};
+async function withFileLock(opts, fn) {
+  if (opts.dirPolicy === "create") {
+    await mkdir2(opts.dir, { recursive: true });
+  } else if (!existsSync3(opts.dir)) {
+    throw new Error(`cannot lock ${opts.label} \u2014 dir '${opts.dir}' does not exist`);
+  }
+  const release = await (0, import_proper_lockfile.lock)(opts.lockfile, {
+    realpath: false,
+    stale: opts.tuning.stale,
+    retries: {
+      retries: opts.tuning.retries,
+      minTimeout: opts.tuning.retryMinTimeout,
+      maxTimeout: opts.tuning.retryMaxTimeout,
+      factor: 1.5
+    },
+    onCompromised: (err) => {
+      log3.error(`lock for ${opts.label} was compromised: ${err.message}`);
+      throw err;
+    }
+  });
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
 
 // src/shared/time.ts
 function nowIso() {
@@ -7295,14 +7333,8 @@ function specDir(dataDir, repo, specId) {
 }
 
 // src/core/state/manager.ts
-var log3 = createLogger("state");
-var DEFAULT_LOCK_TUNING = {
-  stale: 15e3,
-  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
-  retries: 50,
-  retryMinTimeout: 20,
-  retryMaxTimeout: 500
-};
+var log4 = createLogger("state");
+var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
 var StateManager = class {
   dataDir;
   lockTuning;
@@ -7328,28 +7360,10 @@ var StateManager = class {
    * `label` names the resource in the loud not-found + compromised errors.
    */
   async runWithLock(dir, lockfilePath, label, fn) {
-    if (!existsSync3(dir)) {
-      throw new Error(`state: cannot lock ${label} \u2014 dir '${dir}' does not exist`);
-    }
-    const release = await (0, import_proper_lockfile.lock)(lockfilePath, {
-      realpath: false,
-      stale: this.lockTuning.stale,
-      retries: {
-        retries: this.lockTuning.retries,
-        minTimeout: this.lockTuning.retryMinTimeout,
-        maxTimeout: this.lockTuning.retryMaxTimeout,
-        factor: 1.5
-      },
-      onCompromised: (err) => {
-        log3.error(`state lock for ${label} was compromised: ${err.message}`);
-        throw err;
-      }
-    });
-    try {
-      return await fn();
-    } finally {
-      await release();
-    }
+    return withFileLock(
+      { dir, lockfile: lockfilePath, label, dirPolicy: "assert", tuning: this.lockTuning },
+      fn
+    );
   }
   /**
    * Run `fn` while holding the per-run lock. The lockfile's parent (the run dir)
@@ -7389,11 +7403,11 @@ var StateManager = class {
    */
   async create(args) {
     const dir = runDir(this.dataDir, args.run_id);
-    if (existsSync3(this.statePath(args.run_id))) {
+    if (existsSync4(this.statePath(args.run_id))) {
       throw new Error(`state: run '${args.run_id}' already exists`);
     }
-    await mkdir2(join4(dir, "holdouts"), { recursive: true });
-    await mkdir2(join4(dir, "reviews"), { recursive: true });
+    await mkdir3(join4(dir, "holdouts"), { recursive: true });
+    await mkdir3(join4(dir, "reviews"), { recursive: true });
     const now = nowIso();
     const state = parseRunState({
       run_id: args.run_id,
@@ -7411,7 +7425,7 @@ var StateManager = class {
       ended_at: null
     });
     await this.withLock(args.run_id, async () => {
-      if (existsSync3(this.statePath(args.run_id))) {
+      if (existsSync4(this.statePath(args.run_id))) {
         throw new Error(`state: run '${args.run_id}' already exists`);
       }
       await atomicWriteFile(this.statePath(args.run_id), stringifyJson(state));
@@ -7467,7 +7481,7 @@ var StateManager = class {
    * {@link readCurrentForRepo}.
    */
   async readThroughLink(link) {
-    if (!existsSync3(link)) return null;
+    if (!existsSync4(link)) return null;
     const statePath = join4(link, "state.json");
     let raw;
     try {
@@ -7505,7 +7519,7 @@ var StateManager = class {
         runs.push(await this.read(entry.name));
       } catch (err) {
         if (err.code === "ENOENT") continue;
-        log3.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
+        log4.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
       }
     }
     return runs.sort((a, b) => a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0);
@@ -7637,7 +7651,7 @@ var StateManager = class {
   async repointSymlink(link, target) {
     const tmp = `${link}.tmp.${process.pid}`;
     try {
-      await mkdir2(dirname3(link), { recursive: true });
+      await mkdir3(dirname3(link), { recursive: true });
       await unlink2(tmp).catch(() => {
       });
       await symlink(target, tmp);
@@ -7645,7 +7659,7 @@ var StateManager = class {
       });
       await rename2(tmp, link);
     } catch (err) {
-      log3.warn(
+      log4.warn(
         `state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`
       );
       await unlink2(tmp).catch(() => {
@@ -7715,7 +7729,7 @@ function decideFinalize(run) {
 }
 
 // src/hooks/hook-context.ts
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync5 } from "node:fs";
 import { lstat, readlink } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative, sep as sep4 } from "node:path";
 var BrokenRunStateError = class extends Error {
@@ -7741,7 +7755,7 @@ async function loadActiveRun(opts = {}) {
     return null;
   }
   if (!isLink) return null;
-  if (!existsSync4(link)) {
+  if (!existsSync5(link)) {
     let target = "<unreadable>";
     try {
       target = await readlink(link);
@@ -7973,7 +7987,7 @@ async function readAllStdin5() {
 }
 
 // src/hooks/subagent-stop.ts
-var log4 = createLogger("hook:subagent-stop");
+var log5 = createLogger("hook:subagent-stop");
 function reviewerNameOf(agentType) {
   const t = agentType.replace(/^factory:/, "");
   switch (t) {
@@ -8014,7 +8028,7 @@ async function handleSubagentStop(input, deps = {}) {
   const manager = deps.manager ?? new StateManager(deps);
   const run = await manager.readCurrent();
   if (run === null) {
-    log4.warn(`no active run (runs/current absent) \u2014 reviewer '${reviewer}' result skipped`);
+    log5.warn(`no active run (runs/current absent) \u2014 reviewer '${reviewer}' result skipped`);
     return null;
   }
   let taskId = deps.explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
@@ -8036,19 +8050,19 @@ async function handleSubagentStop(input, deps = {}) {
     if (reviewing.length === 1) taskId = reviewing[0].task_id;
   }
   if (taskId.length === 0) {
-    log4.error(
+    log5.error(
       `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 driver fold is the single writer`
     );
     return null;
   }
   if (!run.tasks[taskId]) {
-    log4.error(
+    log5.error(
       `resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`
     );
     return null;
   }
   const verdict = parseVerdict(input.last_assistant_message);
-  log4.info(
+  log5.info(
     `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 driver folds reviews via the drive --results fold)`
   );
   return null;
@@ -8059,13 +8073,13 @@ async function runSubagentStop(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin6();
     input = parseHookInput(raw);
   } catch (err) {
-    log4.error(`malformed SubagentStop input: ${err.message}`);
+    log5.error(`malformed SubagentStop input: ${err.message}`);
     return EXIT.OK;
   }
   try {
     await handleSubagentStop(input, deps);
   } catch (err) {
-    log4.error(`SubagentStop handler error: ${err.message}`);
+    log5.error(`SubagentStop handler error: ${err.message}`);
   }
   return EXIT.OK;
 }
@@ -8078,7 +8092,7 @@ async function readAllStdin6() {
 }
 
 // src/hooks/stop-gate.ts
-var log5 = createLogger("hook:stop-gate");
+var log6 = createLogger("hook:stop-gate");
 var ALLOW = { kind: "allow" };
 function decideStop(run, allowStop, stoppingSession) {
   if (run === null) return ALLOW;
@@ -8117,7 +8131,7 @@ async function runStopGate(_argv = [], deps = {}) {
     const input = parseHookInput(raw);
     stoppingSession = typeof input?.session_id === "string" && input.session_id.length > 0 ? input.session_id : void 0;
   } catch (err) {
-    log5.warn(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
+    log6.warn(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
     stoppingSession = void 0;
   }
   let run;
@@ -8125,7 +8139,7 @@ async function runStopGate(_argv = [], deps = {}) {
     run = await resolveStopRun(manager, stoppingSession);
   } catch (err) {
     const reason = `pipeline state unreadable: ${err.message}. Repair runs/current \u2192 state.json (or clear runs/current) before stopping.`;
-    log5.error(reason);
+    log6.error(reason);
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;
   }
@@ -8139,10 +8153,10 @@ async function runStopGate(_argv = [], deps = {}) {
     case "finalize": {
       try {
         await manager.finalize(run.run_id, action.status);
-        log5.info(`run ${run.run_id} finalized as '${action.status}' on stop`);
+        log6.info(`run ${run.run_id} finalized as '${action.status}' on stop`);
       } catch (err) {
         const reason = `finalize-on-stop failed for ${run.run_id}: ${err.message}. Run state may be inconsistent; rerun finalize or investigate before stopping.`;
-        log5.error(reason);
+        log6.error(reason);
         emitBlockDecision(deny(reason), emit2);
       }
       return EXIT.OK;

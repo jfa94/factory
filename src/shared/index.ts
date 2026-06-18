@@ -36,4 +36,7 @@ export type { SecretPattern } from "./secret-patterns.js";
 
 export { isValidId, validateId, slugify, ID_PATTERN, SLUG_MAX_LENGTH } from "./ids.js";
 
+export { withFileLock, DEFAULT_FILE_LOCK_TUNING } from "./file-lock.js";
+export type { FileLockTuning, FileLockOptions } from "./file-lock.js";
+
 export { UsageError, isUsageError } from "./usage-error.js";

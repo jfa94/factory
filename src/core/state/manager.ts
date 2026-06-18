@@ -27,7 +27,11 @@
 import { mkdir, readFile, readdir, rename, rm, symlink, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { lock } from "proper-lockfile";
+import {
+  withFileLock,
+  DEFAULT_FILE_LOCK_TUNING,
+  type FileLockTuning,
+} from "../../shared/file-lock.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { parseJson, stringifyJson } from "../../shared/json.js";
 import { nowIso } from "../../shared/time.js";
@@ -52,25 +56,13 @@ import {
 
 const log = createLogger("state");
 
-/** Tunables for the robust lock. Defaults harden past the bash 10s hard-fail. */
-export interface LockTuning {
-  /** Ms after which a held lock is considered stale (crashed holder). */
-  stale: number;
-  /** Total retry attempts to acquire a contended lock before giving up. */
-  retries: number;
-  /** Base backoff (ms) between retries (exponential, capped). */
-  retryMinTimeout: number;
-  /** Max backoff (ms) between retries. */
-  retryMaxTimeout: number;
-}
+/**
+ * Tunables for the robust lock. Now the shared {@link FileLockTuning}; kept as a
+ * local alias so the re-export from `./index.ts` stays stable.
+ */
+export type LockTuning = FileLockTuning;
 
-const DEFAULT_LOCK_TUNING: LockTuning = {
-  stale: 15_000,
-  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
-  retries: 50,
-  retryMinTimeout: 20,
-  retryMaxTimeout: 500,
-};
+const DEFAULT_LOCK_TUNING: LockTuning = DEFAULT_FILE_LOCK_TUNING;
 
 export interface StateManagerOptions extends DataDirOptions {
   /** Override lock tuning (tests use a tighter window). */
@@ -130,29 +122,12 @@ export class StateManager {
     label: string,
     fn: () => Promise<T>,
   ): Promise<T> {
-    if (!existsSync(dir)) {
-      throw new Error(`state: cannot lock ${label} — dir '${dir}' does not exist`);
-    }
-    const release = await lock(lockfilePath, {
-      realpath: false,
-      stale: this.lockTuning.stale,
-      retries: {
-        retries: this.lockTuning.retries,
-        minTimeout: this.lockTuning.retryMinTimeout,
-        maxTimeout: this.lockTuning.retryMaxTimeout,
-        factor: 1.5,
-      },
-      onCompromised: (err) => {
-        // Loud, never silent. Re-throw per proper-lockfile's contract.
-        log.error(`state lock for ${label} was compromised: ${err.message}`);
-        throw err;
-      },
-    });
-    try {
-      return await fn();
-    } finally {
-      await release();
-    }
+    // The caller owns `dir`'s lifecycle (run/spec dir mkdir'd before first lock),
+    // so assert it exists rather than create it.
+    return withFileLock(
+      { dir, lockfile: lockfilePath, label, dirPolicy: "assert", tuning: this.lockTuning },
+      fn,
+    );
   }
 
   /**
