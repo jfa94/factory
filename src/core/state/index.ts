@@ -75,13 +75,18 @@ export {
 export {
   SPECS_DIR,
   RUNS_DIR,
+  WORKTREES_DIR,
   CURRENT_LINK,
+  CURRENT_DIR,
   STATE_FILE,
   repoKey,
   runsRoot,
+  worktreesRoot,
   runDir,
   runStatePath,
   currentLinkPath,
+  currentRepoRoot,
+  currentRepoLinkPath,
   specsRoot,
   specDir,
 } from "./paths.js";

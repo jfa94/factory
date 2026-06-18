@@ -591,9 +591,30 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 
 ---
 
-## Decision 31: Run-Entry Preflight Auto-Scaffolds Autonomous Settings
+## Decision 30: Guards Derive Run Ownership From Their Own Inputs — No Hook Reads the Global Pointer
 
-> Decision 30 is reserved for the concurrent run-isolation work on its own branch; this decision is numbered 31 to avoid a merge collision.
+**Choice:** A hook never asks "what is the active run?" via the shared mutable pointer (`runs/current`). Each guard **derives the owning run from the signal it already holds**, so N runs across different repos run concurrently — each with TDD enforced — while same-repo simultaneous `run create`s stay serialized:
+
+- **Write-scope arm** (the TDD rail in `pipeline-guards.ts`) derives `{run_id, task_id}` from the **target file path**. A producer writes into `<dataDir>/worktrees/<run_id>/<task_id>/…`; Claude's `Edit`/`Write` `file_path` is absolute, so the path encodes both ids (`runTaskForPath`, `hook-context.ts`; `worktreesRoot`, `core/state/paths.ts`). A target under no worktree is not a producer write → pass through (the bug fixed: an unrelated session editing a non-test file no longer trips the live run's test-writer scope). A target under a worktree whose run/task is missing or corrupt → **fail closed** (deny).
+- **Bash arms** (nested-shell, ship) scope by **owner session**: the live run whose `owner_session` equals `CLAUDE_CODE_SESSION_ID` (`StateManager.findActiveByOwner`). No owning run → pass through; env id absent → retain prior behavior (these arms are lower-stakes — nested-shell is a rail, ship is dormant — so they carry the only residual runtime assumption, isolated from the critical write arm).
+- **Stop gate** resolves the run **owned by the stopping session** (`findActiveByOwner(stoppingSession)`) instead of `readCurrent()`, so a clobber can no longer make a stopping owner finalize the wrong run; unknown session → degrade to `readCurrent()`.
+- **`holdout-guard`** reads only `dataDir` — correctly global, untouched.
+
+**Per-repo `current` is CLI-only (not load-bearing for concurrency).** After the guards stop reading the global pointer, concurrency-correctness is already done. A separate `<dataDir>/current/<repoKey>` → `../runs/<run_id>` pointer tree (kept out of `runs/` so `listRuns` is untouched) only makes the human CLI (`state`/`score`/`rescue`/`run` resume with no `--run`) pick the right run for the caller's checkout (`readCurrentForCwd` resolves the repo from `origin`; unresolvable → global fallback). `run create` writes both the per-repo and legacy global pointers; `pointCurrentAt` **refuses loud** (pre-write) to repoint a repo whose current names a still-live run owned by a different known session — the new run's `state.json` already exists, so it stays addressable via `--run`. `next` is left on the global-pointer + `--assert-owner` mechanism untouched; `drive` still requires `--run`.
+
+**Why:**
+
+- **Ownership is a property of the tool call, not of machine-global state.** The root cause of "runs can't coexist" was one design mistake: globally-installed hooks consulting a single shared mutable pointer instead of deriving ownership from the call. Each guard now reads ownership from inputs it already has — the write arm's target path, the Bash/Stop arms' session id — so enabling the plugin in an unrelated session can never leak a live run's scope into it.
+- **The critical arm needs no runtime spike.** Scoping by `session_id` payload or by `process.cwd()` both depend on unprovable-from-repo runtime facts (does a subagent's hook payload carry the orchestrator's id? `Edit`/`Write` honor no `cd`). The worktree target path is the signal the guard **already extracts** and is absolute by construction — verified-correct without a spike. The owner-session scope on the two lower-stakes Bash arms is the only place a runtime assumption survives, and it fails safe.
+- **Defense-in-depth, not a weakened boundary.** The write-scope arm is a rail; the authoritative TDD enforcement remains the deterministic commit-order gate on the task branch (`src/verifier/deterministic/strategies/tdd.ts`), which a path-anchor miss does not weaken.
+
+**Trade-off:** A producer write via `Bash` (rather than `Edit`/`Write`) still bypasses the path-anchored rail — already true and already documented; the commit-order gate is the real boundary. The Bash arms' owner-session scope degrades to prior (occasionally cross-session) behavior when `CLAUDE_CODE_SESSION_ID` is absent in the hook subprocess.
+
+**Relationship:** Extends derive-don't-store (Decision 1) to the hook layer — ownership is derived per call, never stored in a global pointer; shares the single `isAutonomous` predicate path with Decision 29; the clobber refusal mirrors the loud start-condition refusals of Decisions 12/29.
+
+---
+
+## Decision 31: Run-Entry Preflight Auto-Scaffolds Autonomous Settings
 
 **Choice:** `/factory:run` (and `/factory:debug`) call `factory autonomy preflight` as their first setup step. Preflight is a thin CLI wrapper around a **pure decision** (`decideAutonomyPreflight`, `src/autonomy/mode.ts`) over three inputs — is this session autonomous, does `merged-settings.json` exist, and does its stamped `_factoryVersion` match the installed plugin. It **regenerates the merged settings (via `ensure`) and halts for a relaunch** when the session is not autonomous OR the settings are stale / missing / unstamped; it **proceeds** when they are already fresh, or when the session is autonomous via a directly-exported env (the CI path), or when the plugin version is unreadable (regenerating would only churn). It exits 0 to proceed, 1 to halt, and — like `status` — never throws on the decision path. `ensure`/`status` remain the manual primitives.
 

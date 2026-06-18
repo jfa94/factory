@@ -2,12 +2,16 @@
  * WS9 — PreToolUse guard for factory pipeline invariants, RE-TARGETED to the new
  * seam (ports `hooks/pretooluse-pipeline-guards.sh`).
  *
- * Only fires while a run is ACTIVE (runs/current resolves). Three invariants:
- *   (a) TEST-WRITER PHASE scope: while the active task stage is `tests`, an
+ * Each arm derives its OWNING run from its own inputs — no arm reads a single
+ * global pointer, so the guard fires only for the run a given tool call belongs to
+ * (enabling concurrent cross-repo runs). Three invariants:
+ *   (a) TEST-WRITER PHASE scope: while the owning task's stage is `tests`, an
  *       Edit/Write/MultiEdit to a NON-test path is blocked (the test-writer may
- *       commit only failing tests first — TDD).
- *   (b) NESTED-SHELL / hook-bypass denial while a run is active (shared
- *       {@link isNestedShellOrHookBypass}).
+ *       commit only failing tests first — TDD). The owning run+task is derived from
+ *       the TARGET PATH (the per-task worktree the producer writes into), so an
+ *       unrelated session's edit elsewhere never trips it.
+ *   (b) NESTED-SHELL / hook-bypass denial while THIS session's run is active
+ *       (owner-scoped via {@link loadOwnerScopedRun}; shared {@link isNestedShellOrHookBypass}).
  *   (c) SHIP gating via DERIVE-DON'T-STORE (Δ V): `gh pr create`/`gh pr merge`
  *       are admitted only when the floor verdict DERIVED from ground truth
  *       passes. There is structurally NO stored gate boolean to read (WS1
@@ -21,18 +25,20 @@
 import { EXIT, type ExitCode } from "../cli/exit-codes.js";
 import { sep } from "node:path";
 import { derivePanelVerdict, type GateEvidence } from "../core/state/index.js";
-import { deriveFloorVerdict } from "../core/state/index.js";
+import { deriveFloorVerdict, StateManager } from "../core/state/index.js";
 import { TaskStageEnum } from "../core/stage-machine/index.js";
 import {
-  loadActiveRun,
+  loadOwnerScopedRun,
   resolveActiveTask,
   isTestWriterPhase,
+  runTaskForPath,
   BrokenRunStateError,
   type ActiveRun,
 } from "./hook-context.js";
 import { isNestedShellOrHookBypass } from "./shell-bypass.js";
 import { isAutonomous } from "../autonomy/mode.js";
-import type { DataDirOptions } from "../config/load.js";
+import { resolveDataDir, type DataDirOptions } from "../config/load.js";
+import type { RunState } from "../types/index.js";
 import {
   allow,
   commandOf,
@@ -57,8 +63,14 @@ export interface PipelineGuardsDeps extends DataDirOptions {
    * the empty set, which is the correct fail-closed behavior).
    */
   gateEvidence?: Record<string, readonly GateEvidence[]>;
-  /** Override the active-run loader (tests). */
+  /** Override the active-run loader for the Bash arms (tests). */
   loadRun?: (opts: DataDirOptions) => Promise<ActiveRun | null>;
+  /**
+   * Override the per-run-id loader for the path-anchored write-scope arm (tests).
+   * Defaults to `StateManager.read` under the resolved data dir; THROWS (ENOENT /
+   * schema error) for a missing/corrupt run, which the arm maps to a fail-closed deny.
+   */
+  loadRunById?: (dataDir: string, runId: string) => Promise<RunState>;
 }
 
 const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
@@ -93,25 +105,99 @@ function isGhPrMerge(cmd: string): boolean {
 }
 
 /**
- * Decide the pipeline-invariant verdict for a hook input. Resolves the active
- * run; pure thereafter. Throwing loaders (BrokenRunStateError) are mapped to a
- * fail-closed deny by the caller — but this function rethrows so the run-level
- * loud failure is visible; {@link runPipelineGuards} catches it.
+ * The test-writer write-scope arm, anchored to the target path. For each write
+ * target that lands inside a per-task worktree (`<dataDir>/worktrees/<run>/<task>`),
+ * resolve the owning run+task FROM THE PATH and deny a non-test write while that
+ * task is in the test-writer phase. Returns a deny {@link HookDecision}, or `null`
+ * when nothing in scope warrants a deny (no worktree match, or not the RED phase).
+ *
+ * Fail-closed: a target inside a worktree whose run state is missing/corrupt denies
+ * (mirrors the {@link BrokenRunStateError} contract — corruption is never silently
+ * allowed). A target outside every worktree is not a producer write → no scope.
+ */
+async function decideWriteScope(
+  input: HookInput | null,
+  deps: PipelineGuardsDeps,
+): Promise<HookDecision | null> {
+  const targets = filePathsOf(input);
+  if (targets.length === 0) return null;
+
+  let dataDir: string;
+  try {
+    dataDir = resolveDataDir(deps);
+  } catch {
+    return null; // no resolvable data dir → no worktree → nothing to scope
+  }
+
+  const loadRunById =
+    deps.loadRunById ??
+    ((dir: string, runId: string) => new StateManager({ ...deps, dataDir: dir }).read(runId));
+
+  for (const target of targets) {
+    const ref = runTaskForPath(dataDir, target);
+    if (ref === null) continue; // not a producer-worktree write → no scope
+
+    let run: RunState;
+    try {
+      run = await loadRunById(dataDir, ref.run_id);
+    } catch {
+      // The path names a worktree but its run state cannot be read → fail closed.
+      return deny(
+        "test_writer_scope_broken",
+        `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', ` +
+          `whose run state is missing or corrupt; failing closed.`,
+      );
+    }
+
+    const activeTask = resolveActiveTask(run, ref.task_id);
+    if (isTestWriterPhase(activeTask) && !isTestPath(target)) {
+      return deny(
+        "test_writer_scope",
+        `Test-writer phase: only test files allowed. Detected write to '${target}'. ` +
+          `Move implementation code to the GREEN (exec) phase.`,
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Decide the pipeline-invariant verdict for a hook input. The write-scope arm is
+ * path-anchored (per-run read); the Bash arms resolve the active run. Throwing
+ * loaders (BrokenRunStateError) are mapped to a fail-closed deny by the caller —
+ * but this function rethrows so the run-level loud failure is visible;
+ * {@link runPipelineGuards} catches it.
  */
 export async function decidePipelineGuards(
   input: HookInput | null,
   deps: PipelineGuardsDeps = {},
 ): Promise<HookDecision> {
-  const loadRun = deps.loadRun ?? loadActiveRun;
-  const active = await loadRun(deps);
-  if (active === null) return allow(); // no active run → pass through
-
-  const { run } = active;
   const tool = toolNameOf(input);
   const cmd = commandOf(input);
 
+  // (a) test-writer-phase write-scope — anchored to the TARGET PATH, not a global
+  // pointer. A producer writes into its own `<dataDir>/worktrees/<run>/<task>`, so
+  // the write path itself names the owning run+task; an unrelated session's edit
+  // to any other checkout resolves to no run → this arm does not fire.
+  if (WRITE_TOOLS.has(tool)) {
+    const scoped = await decideWriteScope(input, deps);
+    if (scoped !== null) return scoped; // deny; null = no worktree scope, fall through
+  }
+
+  // (b)+(c) Bash arms still resolve the run owning THIS session (global pointer for
+  // now — re-scoped to owner-session in L1.3). No Bash command → nothing to gate.
+  if (cmd.length === 0) return allow();
+
+  // Resolve the run owned by THIS session (env-scoped); fail-safe to the global
+  // pointer when the session id is unavailable (see loadOwnerScopedRun).
+  const loadRun = deps.loadRun ?? loadOwnerScopedRun;
+  const active = await loadRun(deps);
+  if (active === null) return allow(); // no run owned by this session → pass through
+
+  const { run } = active;
+
   // (b) nested-shell / hook-bypass while a run is active.
-  if (cmd.length > 0 && isNestedShellOrHookBypass(cmd)) {
+  if (isNestedShellOrHookBypass(cmd)) {
     return deny(
       "nested_shell_denied",
       `nested-shell or hook-bypass not allowed while a pipeline run is active: ${cmd}`,
@@ -119,19 +205,6 @@ export async function decidePipelineGuards(
   }
 
   const activeTask = resolveActiveTask(run);
-
-  // (a) test-writer-phase write-scope.
-  if (WRITE_TOOLS.has(tool) && isTestWriterPhase(activeTask)) {
-    for (const target of filePathsOf(input)) {
-      if (!isTestPath(target)) {
-        return deny(
-          "test_writer_scope",
-          `Test-writer phase: only test files allowed. Detected write to '${target}'. ` +
-            `Move implementation code to the GREEN (exec) phase.`,
-        );
-      }
-    }
-  }
 
   // (c) ship gating via derive-don't-store.
   if (tool === "Bash" && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {

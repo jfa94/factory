@@ -33,7 +33,15 @@ import { parseJson, stringifyJson } from "../../shared/json.js";
 import { nowIso } from "../../shared/time.js";
 import { createLogger } from "../../shared/logging.js";
 import { resolveDataDir, type DataDirOptions } from "../../config/load.js";
-import { currentLinkPath, runDir, runsRoot, runStatePath, specDir, RUNS_DIR } from "./paths.js";
+import {
+  currentLinkPath,
+  currentRepoLinkPath,
+  runDir,
+  runsRoot,
+  runStatePath,
+  specDir,
+  RUNS_DIR,
+} from "./paths.js";
 import {
   parseRunState,
   type RunState,
@@ -229,7 +237,7 @@ export class StateManager {
     await atomicWriteFile(join(dir, "audit.jsonl"), "");
     await atomicWriteFile(join(dir, "metrics.jsonl"), "");
 
-    await this.pointCurrentAt(args.run_id);
+    await this.pointCurrentAt(state);
     return state;
   }
 
@@ -256,18 +264,43 @@ export class StateManager {
    * a corrupt active run indistinguishable from "no current run".
    */
   async readCurrent(): Promise<RunState | null> {
-    const link = currentLinkPath(this.dataDir);
+    return this.readThroughLink(currentLinkPath(this.dataDir));
+  }
+
+  /**
+   * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
+   * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
+   * (no pointer for this repo yet) falls back to the legacy GLOBAL `runs/current`,
+   * but ONLY adopts it when it belongs to the SAME repo — so a pre-upgrade in-flight
+   * run (global-only) still resolves, while another repo's run never leaks in.
+   * Loud on a corrupt state.json behind either pointer (same contract as readCurrent).
+   */
+  async readCurrentForRepo(repo: string): Promise<RunState | null> {
+    const viaRepo = await this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
+    if (viaRepo !== null) return viaRepo;
+    // Per-repo miss → legacy read-through, scoped to the SAME repo (never cross-repo).
+    const legacy = await this.readCurrent();
+    return legacy !== null && legacy.spec.repo === repo ? legacy : null;
+  }
+
+  /**
+   * Read + validate a run's state THROUGH a `current`-style directory symlink (the
+   * OS follows the link during the path walk, so no readlink is needed). Returns
+   * null ONLY on genuine ABSENCE (missing/dangling link → ENOENT); a corrupt/invalid
+   * state.json propagates LOUDLY (swallowing it would make a corrupt active run
+   * indistinguishable from "no current run"). Shared by {@link readCurrent} and
+   * {@link readCurrentForRepo}.
+   */
+  private async readThroughLink(link: string): Promise<RunState | null> {
     if (!existsSync(link)) return null;
     const statePath = join(link, "state.json");
     let raw: string;
     try {
       raw = await readFile(statePath, "utf8");
     } catch (err) {
-      // Absence (no/dangling current symlink) is the only swallowed case.
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw err;
     }
-    // Parse/schema errors propagate loudly (corruption is never silent).
     return parseRunState(parseJson<unknown>(raw, statePath));
   }
 
@@ -319,6 +352,21 @@ export class StateManager {
       }
     }
     return null;
+  }
+
+  /**
+   * Find the SINGLE non-terminal run owned by `session` (its `owner_session`), or
+   * null. Powers the session-scoped Bash guards (run-isolation L1.3): a guard fires
+   * only for the run the stopping/acting session actually owns, never a concurrent
+   * run in another repo. An empty session, no match, or ≥2 matches (ambiguous — one
+   * session minting runs in two repos) all return null, so the caller fails SAFE
+   * (passes through) rather than gating the wrong run.
+   */
+  async findActiveByOwner(session: string): Promise<RunState | null> {
+    if (session.length === 0) return null;
+    const runs = await this.listRuns();
+    const owned = runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+    return owned.length === 1 ? owned[0]! : null;
   }
 
   // ---- update (locked read-modify-write) ---------------------------------
@@ -408,22 +456,64 @@ export class StateManager {
   // ---- current symlink ---------------------------------------------------
 
   /**
-   * Point `runs/current` at the given run (best-effort, atomic-ish: write a temp
-   * link then rename). A failure here is logged, not fatal — `current` is a
+   * Repoint the current pointers at a freshly-created run (L2.6/L2.7):
+   *   - the PER-REPO pointer `current/<repo-key>` → `../runs/<run-id>` (authoritative
+   *     for the human CLI per checkout), and
+   *   - the legacy GLOBAL `runs/current` → `<run-id>` (the repo-less "most-recent"
+   *     fallback the degraded hook/stop paths still read).
+   *
+   * CLOBBER GUARD (L2.6) — runs BEFORE any write and throws LOUD (NOT swallowed by the
+   * best-effort symlink catch below): if THIS repo's current pointer already names a
+   * still-live run owned by a DIFFERENT known session, refuse to hide it. Same-repo
+   * concurrent runs by distinct sessions are thus serialized, while cross-repo creates
+   * (a different repo's pointer) never trip it. The just-created run's `state.json`
+   * already exists, so it stays addressable via `--run <id>` after the throw.
+   * Degrades safe (no refusal) when either owner is unknown — today's last-wins behavior.
+   */
+  private async pointCurrentAt(state: RunState): Promise<void> {
+    const repo = state.spec.repo;
+    const existing = await this.readCurrentForRepo(repo);
+    if (
+      existing !== null &&
+      existing.run_id !== state.run_id &&
+      !isTerminalRunStatus(existing.status) &&
+      existing.owner_session !== undefined &&
+      state.owner_session !== undefined &&
+      existing.owner_session !== state.owner_session
+    ) {
+      throw new Error(
+        `state: refusing to repoint current for repo '${repo}' — run '${existing.run_id}' is ` +
+          `still live (owned by a different session '${existing.owner_session}'). Run ` +
+          `'${state.run_id}' was created and is addressable via \`--run ${state.run_id}\`; ` +
+          `finalize or rescue '${existing.run_id}' before starting a concurrent run in this repo.`,
+      );
+    }
+    // Per-repo pointer lives one level under <dataDir>/current, so it targets ../runs/<id>.
+    await this.repointSymlink(
+      currentRepoLinkPath(this.dataDir, repo),
+      join("..", RUNS_DIR, state.run_id),
+    );
+    // Legacy global pointer lives under runs/, so it targets the bare <id>.
+    await this.repointSymlink(currentLinkPath(this.dataDir), join(state.run_id));
+  }
+
+  /**
+   * Atomically-ish repoint a `current`-style symlink at `target` (write a temp link
+   * then rename). Best-effort: a failure is logged, not fatal — `current` is a
    * convenience pointer, not load-bearing state.
    */
-  private async pointCurrentAt(runId: string): Promise<void> {
-    const link = currentLinkPath(this.dataDir);
+  private async repointSymlink(link: string, target: string): Promise<void> {
     const tmp = `${link}.tmp.${process.pid}`;
     try {
       await mkdir(dirname(link), { recursive: true });
       await unlink(tmp).catch(() => {});
-      // Relative target so the data dir is relocatable.
-      await symlink(join(runId), tmp);
+      await symlink(target, tmp);
       await rm(link, { force: true, recursive: false }).catch(() => {});
       await rename(tmp, link);
     } catch (err) {
-      log.warn(`state: could not update runs/current to '${runId}': ${(err as Error).message}`);
+      log.warn(
+        `state: could not update current pointer '${link}' → '${target}': ${(err as Error).message}`,
+      );
       await unlink(tmp).catch(() => {});
     }
   }

@@ -161,7 +161,16 @@ spec-id)` where `spec-id = "<issue>-<slug>"`. Reused across runs: re-running a
   PRD issue resolves the same spec.
 - **Ephemeral run store** — `runs/<run-id>/`, holding `state.json`,
   `audit.jsonl`, `metrics.jsonl`, `report.md`, and the `holdouts/` and
-  `reviews/` subdirs. A `runs/current` symlink points at the active run.
+  `reviews/` subdirs.
+- **Per-repo current pointer** — a `current/<repo-key>` symlink names the active
+  run _for that repo_, so concurrent runs against different repos never collide on
+  one global pointer. It is CLI-ergonomics only: the human reporters resolve "the
+  current run" from the caller's checkout, and no hook ever reads it. A legacy
+  global `runs/current` pointer is still written for repo-less "most recent".
+- **Producer worktrees** — `worktrees/<run-id>/<task-id>/`, a sibling of `runs/`.
+  Because the path encodes `(run-id, task-id)`, a guard derives a write's run
+  ownership straight from its target path rather than from any shared pointer (see
+  [explanation/decisions.md](../explanation/decisions.md) Decision 30).
 
 State writes are atomic (write-temp-then-rename) and lock-protected
 (`proper-lockfile`). Crucially, **no gate verdict is ever stored** — every

@@ -18,9 +18,12 @@
  */
 import { existsSync } from "node:fs";
 import { lstat, readlink } from "node:fs/promises";
+import { isAbsolute, relative, sep } from "node:path";
 import { resolveDataDir, type DataDirOptions } from "../config/load.js";
 import { StateManager } from "../core/state/index.js";
-import { currentLinkPath } from "../core/state/index.js";
+import { currentLinkPath, worktreesRoot } from "../core/state/index.js";
+import { isValidId } from "../shared/ids.js";
+import { canonicalizePath } from "./tcb.js";
 import { TaskStageEnum, type TaskStage } from "../core/stage-machine/index.js";
 import type { RunState, TaskState } from "../types/index.js";
 
@@ -87,6 +90,76 @@ export async function loadActiveRun(opts: DataDirOptions = {}): Promise<ActiveRu
   const run = await manager.readCurrent();
   if (run === null) return null;
   return { dataDir, run };
+}
+
+/**
+ * Resolve the active run OWNED BY THE CURRENT SESSION, for the session-scoped Bash
+ * guards (run-isolation L1.3). The owning session is read from
+ * `CLAUDE_CODE_SESSION_ID` (the value `owner_session` was stamped from at run
+ * create); the matching non-terminal run is found via {@link StateManager.findActiveByOwner}.
+ *
+ * Fail-SAFE: when no session id is present in the environment, fall back to the
+ * legacy global `runs/current` resolution ({@link loadActiveRun}) so behavior is
+ * unchanged (and never MORE permissive) where the env signal is unavailable. A
+ * session id that owns no run → `null` (pass through), so a concurrent run owned by
+ * another session is never inherited.
+ */
+export async function loadOwnerScopedRun(opts: DataDirOptions = {}): Promise<ActiveRun | null> {
+  const env = opts.env ?? process.env;
+  const session = (env.CLAUDE_CODE_SESSION_ID ?? "").trim();
+  if (session.length === 0) {
+    // No owner signal → preserve today's global behavior (fail-safe, no regression).
+    return loadActiveRun(opts);
+  }
+  let dataDir: string;
+  try {
+    dataDir = resolveDataDir(opts);
+  } catch {
+    return null; // bare dev shell — no run store to scope
+  }
+  const manager = new StateManager({ ...opts, dataDir });
+  const run = await manager.findActiveByOwner(session);
+  return run === null ? null : { dataDir, run };
+}
+
+/** A run+task ownership reference derived from a producer write path. */
+export interface RunTaskRef {
+  readonly run_id: string;
+  readonly task_id: string;
+}
+
+/**
+ * Derive the owning `{run_id, task_id}` from an absolute write path, or `null`
+ * when the path is not inside a per-task worktree.
+ *
+ * This is the run-isolation anchor for the test-writer write-scope guard: a
+ * producer (test-writer/executor) writes into `<dataDir>/worktrees/<run_id>/<task_id>/…`
+ * ({@link worktreesRoot}), so its Edit/Write `file_path` ALREADY encodes which run
+ * and task own the write — no global pointer, no cwd, no session payload needed.
+ * An unrelated session editing a checkout outside the worktree root resolves to
+ * `null` → that guard arm does not fire (the spurious cross-session block fix).
+ *
+ * Both sides are canonicalized (normalize + realpath, reusing {@link canonicalizePath})
+ * so `..`/symlink evasions resolve to the same under-root decision as a direct
+ * path. The first two segments below the root are the run-id and task-id; both
+ * must be valid id segments (`^[a-zA-Z0-9_-]{1,64}$`) or the path is treated as
+ * not a recognizable worktree path (`null`) rather than throwing.
+ */
+export function runTaskForPath(dataDir: string, absPath: string): RunTaskRef | null {
+  if (dataDir.length === 0 || absPath.length === 0) return null;
+  const rootCanon = canonicalizePath(worktreesRoot(dataDir));
+  const pathCanon = canonicalizePath(absPath);
+  const rel = relative(rootCanon, pathCanon);
+  // Outside the worktree root (`..`-prefixed or absolute, or the root itself) → no owner.
+  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return null;
+  }
+  const segments = rel.split(sep);
+  if (segments.length < 2) return null; // need at least <run_id>/<task_id>
+  const [run_id, task_id] = segments;
+  if (!run_id || !task_id) return null;
+  if (!isValidId(run_id) || !isValidId(task_id)) return null;
+  return { run_id, task_id };
 }
 
 /**

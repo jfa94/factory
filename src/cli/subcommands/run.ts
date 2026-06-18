@@ -34,6 +34,7 @@ import type { Config, RunState, RunStatus, TaskState } from "../../types/index.j
 import { finalizeRun } from "../../driver/index.js";
 import { loadCliDeps } from "../wiring.js";
 import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
+import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { requireAutonomousMode } from "../../autonomy/mode.js";
 import { createLogger } from "../../shared/index.js";
 import type { Subcommand } from "../main.js";
@@ -574,10 +575,11 @@ async function resolveRunId(
   state: StateManager,
   args: ReturnType<typeof parseArgs>,
   action: string,
+  overrides: CurrentRunOverrides = {},
 ): Promise<string> {
   const explicit = optionalString(args.flag("run"));
   if (explicit !== undefined) return explicit;
-  const current = await state.readCurrent();
+  const current = await readCurrentForCwd(state, overrides);
   if (current === null) {
     throw new UsageError(`run ${action}: no --run given and no current run`);
   }

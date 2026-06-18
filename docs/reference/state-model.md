@@ -12,8 +12,10 @@ $CLAUDE_PLUGIN_DATA/
 ├── specs/<repo-key>/<spec-id>/        # DURABLE spec store — reused across runs
 ├── spec-build/<repo-key>/<issue>/     # TRANSIENT spec-build scratch
 │   └── {prd,generated,verdict}.json
+├── current/<repo-key>                # symlink → that repo's current run (CLI-only)
+├── worktrees/<run-id>/<task-id>/     # producer worktrees (write-scope ownership)
 └── runs/
-    ├── current                        # symlink → the active run
+    ├── current                        # legacy global pointer (repo-less "most recent")
     └── <run-id>/
         ├── state.json                 # the RunState
         ├── audit.jsonl                # append-only audit log
@@ -30,10 +32,22 @@ spec-id)` where `spec-id = "<issue>-<slug>"`. The PRD issue number is the stable
   discardable handoff buffer for one generate/review loop (keyed by issue, since no
   spec-id exists yet).
 - **Ephemeral run store** — `runs/<run-id>/`, one per run.
+- **Per-repo current pointer** — `current/<repo-key>` → `../runs/<run-id>`, in a
+  tree **separate** from `runs/` so `listRuns` (which scans `runs/` only) is
+  untouched. It's CLI ergonomics only — the human reporters resolve "the current
+  run" per repo from the caller's checkout (Decision 30). `run create` writes both
+  this and the legacy global `runs/current`; `pointCurrentAt` refuses loud (before
+  any write) to repoint a repo whose current names a still-live run owned by a
+  different known session (the new run stays addressable via `--run`). No hook
+  reads either pointer.
+- **Producer worktrees** — `worktrees/<run-id>/<task-id>/`, a sibling of `runs/`
+  and `specs/`. The producer (test-writer / executor) edits here; because the
+  path encodes `(run-id, task-id)`, the write-scope guard derives run ownership
+  straight from a write's absolute target path (Decision 30, [hooks](./hooks.md#run-ownership)).
 
 `<repo-key>` is a sanitized single path segment derived from `owner/name` (the
 slash and any unsafe char folded to `-`; a pure-dot path-traversal segment is
-rejected).
+rejected). The same sanitizer keys both `specs/` and `current/`.
 
 ## Writes are atomic and locked
 

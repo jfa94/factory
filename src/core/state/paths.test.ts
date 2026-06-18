@@ -6,7 +6,10 @@ import {
   runDir,
   runStatePath,
   currentLinkPath,
+  currentRepoRoot,
+  currentRepoLinkPath,
   docsFactoryDir,
+  worktreesRoot,
 } from "./paths.js";
 
 describe("repoKey — repo id to one safe path segment", () => {
@@ -47,6 +50,20 @@ describe("two-store layout", () => {
     expect(runDir(data, "run-1")).toBe(join(data, "runs", "run-1"));
     expect(runStatePath(data, "run-1")).toBe(join(data, "runs", "run-1", "state.json"));
     expect(currentLinkPath(data)).toBe(join(data, "runs", "current"));
+  });
+  it("worktrees root is a sibling of runs/ and specs/ (per-task worktrees live here)", () => {
+    expect(worktreesRoot(data)).toBe(join(data, "worktrees"));
+  });
+  it("per-repo current tree is a sibling of runs/ (so listRuns is untouched, L2.7)", () => {
+    expect(currentRepoRoot(data)).toBe(join(data, "current"));
+    // NOT under runs/ — that would pollute the runDir enumeration.
+    expect(currentRepoRoot(data)).not.toBe(join(data, "runs", "current"));
+  });
+  it("per-repo current pointer folds the repo id to one safe segment", () => {
+    expect(currentRepoLinkPath(data, "acme/widgets")).toBe(join(data, "current", "acme-widgets"));
+  });
+  it("per-repo current pointer rejects a path-traversal repo id", () => {
+    expect(() => currentRepoLinkPath(data, "..")).toThrow(/traversal/);
   });
   it("rejects an unsafe run id / spec id", () => {
     expect(() => runDir(data, "../escape")).toThrow();

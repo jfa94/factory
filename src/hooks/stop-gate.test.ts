@@ -226,7 +226,11 @@ describe("runStopGate — I/O wiring", () => {
 
   it("no active run → OK, emits nothing", async () => {
     const { out, emit } = emitter();
-    const manager = { readCurrent: async () => null, finalize: vi.fn() };
+    const manager = {
+      findActiveByOwner: async () => null,
+      readCurrent: async () => null,
+      finalize: vi.fn(),
+    };
     const code = await runStopGate([], { manager, emit, allowStop: false, readRaw: emptyStdin });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]);
@@ -236,6 +240,7 @@ describe("runStopGate — I/O wiring", () => {
   it("pending work → emits {decision:block} on stdout, OK", async () => {
     const { out, emit } = emitter();
     const manager = {
+      findActiveByOwner: async () => null,
       readCurrent: async () => run({}, { t1: task({ status: "executing" }) }),
       finalize: vi.fn(),
     };
@@ -250,6 +255,7 @@ describe("runStopGate — I/O wiring", () => {
     const { out, emit } = emitter();
     const finalize = vi.fn(async () => run({ status: "completed" }));
     const manager = {
+      findActiveByOwner: async () => null,
       readCurrent: async () => run({}, { a: task({ task_id: "a", status: "done" }) }),
       finalize,
     };
@@ -262,6 +268,7 @@ describe("runStopGate — I/O wiring", () => {
   it("finalize failure → blocks (surface inconsistency), OK", async () => {
     const { out, emit } = emitter();
     const manager = {
+      findActiveByOwner: async () => null,
       readCurrent: async () => run({}, { a: task({ task_id: "a", status: "done" }) }),
       finalize: vi.fn(async () => {
         throw new Error("disk full");
@@ -276,6 +283,7 @@ describe("runStopGate — I/O wiring", () => {
   it("unreadable current state → blocks (never silently stop on corruption)", async () => {
     const { out, emit } = emitter();
     const manager = {
+      findActiveByOwner: async () => null,
       readCurrent: async () => {
         throw new Error("invalid json");
       },
@@ -292,6 +300,7 @@ describe("runStopGate — I/O wiring", () => {
     const { out, emit } = emitter();
     const finalize = vi.fn();
     const manager = {
+      findActiveByOwner: async () => null,
       readCurrent: async () => run({ mode: "workflow" }, { t1: task({ status: "executing" }) }),
       finalize,
     };
@@ -304,9 +313,15 @@ describe("runStopGate — I/O wiring", () => {
   it("reads the stopping session_id from stdin → unrelated session passes through", async () => {
     const { out, emit } = emitter();
     const finalize = vi.fn();
+    const owner1 = run(
+      { mode: "session", owner_session: "owner-1" },
+      { t1: task({ status: "executing" }) },
+    );
     const manager = {
-      readCurrent: async () =>
-        run({ mode: "session", owner_session: "owner-1" }, { t1: task({ status: "executing" }) }),
+      // intruder-9 owns nothing; the global pointer's run is stamped to owner-1 →
+      // not adopted by the intruder → pass through.
+      findActiveByOwner: async (_s: string) => null,
+      readCurrent: async () => owner1,
       finalize,
     };
     const readRaw = async () =>
@@ -319,9 +334,13 @@ describe("runStopGate — I/O wiring", () => {
 
   it("stdin session_id == owner → still blocks the owning session with pending work", async () => {
     const { out, emit } = emitter();
+    const owner1 = run(
+      { mode: "session", owner_session: "owner-1" },
+      { t1: task({ status: "executing" }) },
+    );
     const manager = {
-      readCurrent: async () =>
-        run({ mode: "session", owner_session: "owner-1" }, { t1: task({ status: "executing" }) }),
+      findActiveByOwner: async (s: string) => (s === "owner-1" ? owner1 : null),
+      readCurrent: async () => owner1,
       finalize: vi.fn(),
     };
     const readRaw = async () => JSON.stringify({ session_id: "owner-1", hook_event_name: "Stop" });
@@ -330,9 +349,72 @@ describe("runStopGate — I/O wiring", () => {
     expect(JSON.parse(out[0]!)).toMatchObject({ decision: "block" });
   });
 
+  it("CLOBBER FIX: finalizes the run the STOPPING session owns, not runs/current", async () => {
+    // The bug: runs/current was repointed to another session's run-B; the owner of
+    // run-A (all tasks done) reads `current` → run-B (owner-B, still live) → prong-b
+    // ALLOW → run-A dangles `running`. Owner-scoped resolution finalizes run-A.
+    const { out, emit } = emitter();
+    const runA = run(
+      { run_id: "run-A", mode: "session", owner_session: "sess-A" },
+      { a: task({ task_id: "a", status: "done" }) },
+    );
+    const runB = run(
+      { run_id: "run-B", mode: "session", owner_session: "sess-B" },
+      { b: task({ task_id: "b", status: "executing" }) },
+    );
+    const finalize = vi.fn(async () => run({ status: "completed" }));
+    const manager = {
+      findActiveByOwner: async (s: string) =>
+        s === "sess-A" ? runA : s === "sess-B" ? runB : null,
+      readCurrent: async () => runB, // the clobbered global pointer
+      finalize,
+    };
+    const readRaw = async () => JSON.stringify({ session_id: "sess-A", hook_event_name: "Stop" });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw });
+    expect(code).toBe(EXIT.OK);
+    expect(finalize).toHaveBeenCalledWith("run-A", "completed"); // NOT run-B
+    expect(out).toEqual([]);
+  });
+
+  it("known stopper owning no run + UN-stamped current → adopts it (degraded-safe block)", async () => {
+    // Preserves the decideStop "owner unknown → block" contract: when the global
+    // run carries no owner_session we cannot prove the stopper is not its owner.
+    const { out, emit } = emitter();
+    const unstamped = run({ mode: "session" }, { t1: task({ status: "executing" }) });
+    const manager = {
+      findActiveByOwner: async (_s: string) => null,
+      readCurrent: async () => unstamped,
+      finalize: vi.fn(),
+    };
+    const readRaw = async () => JSON.stringify({ session_id: "sess-A", hook_event_name: "Stop" });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw });
+    expect(code).toBe(EXIT.OK);
+    expect(JSON.parse(out[0]!)).toMatchObject({ decision: "block" });
+  });
+
+  it("known stopper owning no run + current owned by a DIFFERENT session → pass through", async () => {
+    const { out, emit } = emitter();
+    const otherOwner = run(
+      { mode: "session", owner_session: "sess-B" },
+      { t1: task({ status: "executing" }) },
+    );
+    const finalize = vi.fn();
+    const manager = {
+      findActiveByOwner: async (_s: string) => null,
+      readCurrent: async () => otherOwner, // a DIFFERENT known owner's run
+      finalize,
+    };
+    const readRaw = async () => JSON.stringify({ session_id: "sess-A", hook_event_name: "Stop" });
+    const code = await runStopGate([], { manager, emit, allowStop: false, readRaw });
+    expect(code).toBe(EXIT.OK);
+    expect(out).toEqual([]); // not ours → never block/finalize another session's run
+    expect(finalize).not.toHaveBeenCalled();
+  });
+
   it("malformed stdin → treats stopping session as unknown (degraded-safe, still blocks owner-or-unknown)", async () => {
     const { out, emit } = emitter();
     const manager = {
+      findActiveByOwner: async () => null,
       readCurrent: async () =>
         run({ mode: "session", owner_session: "owner-1" }, { t1: task({ status: "executing" }) }),
       finalize: vi.fn(),

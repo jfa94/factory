@@ -10,6 +10,7 @@
  */
 import { join } from "node:path";
 import { validateId } from "../shared/index.js";
+import { worktreesRoot } from "../core/state/index.js";
 
 /**
  * The absolute worktree path for one task in one run. Deterministic — the
@@ -19,5 +20,5 @@ import { validateId } from "../shared/index.js";
 export function taskWorktreePath(dataDir: string, runId: string, taskId: string): string {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join(dataDir, "worktrees", runId, taskId);
+  return join(worktreesRoot(dataDir), runId, taskId);
 }

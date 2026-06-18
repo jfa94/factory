@@ -6983,7 +6983,7 @@ async function readAllStdin4() {
 }
 
 // src/hooks/pipeline-guards.ts
-import { sep as sep4 } from "node:path";
+import { sep as sep5 } from "node:path";
 
 // src/core/state/schema.ts
 var RunStatusEnum = external_exports.enum([
@@ -7234,6 +7234,9 @@ import { join as join3 } from "node:path";
 
 // src/shared/ids.ts
 var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+function isValidId(id) {
+  return ID_PATTERN.test(id);
+}
 function validateId(id, label = "id") {
   if (id.length === 0) {
     throw new Error(`${label}: empty`);
@@ -7247,7 +7250,9 @@ function validateId(id, label = "id") {
 // src/core/state/paths.ts
 var SPECS_DIR = "specs";
 var RUNS_DIR = "runs";
+var WORKTREES_DIR = "worktrees";
 var CURRENT_LINK = "current";
+var CURRENT_DIR = "current";
 var STATE_FILE = "state.json";
 function repoKey(repo) {
   const key = repo.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "");
@@ -7262,6 +7267,9 @@ function repoKey(repo) {
 function runsRoot(dataDir) {
   return join3(dataDir, RUNS_DIR);
 }
+function worktreesRoot(dataDir) {
+  return join3(dataDir, WORKTREES_DIR);
+}
 function runDir(dataDir, runId) {
   validateId(runId, "run-id");
   return join3(runsRoot(dataDir), runId);
@@ -7271,6 +7279,12 @@ function runStatePath(dataDir, runId) {
 }
 function currentLinkPath(dataDir) {
   return join3(runsRoot(dataDir), CURRENT_LINK);
+}
+function currentRepoRoot(dataDir) {
+  return join3(dataDir, CURRENT_DIR);
+}
+function currentRepoLinkPath(dataDir, repo) {
+  return join3(currentRepoRoot(dataDir), repoKey(repo));
 }
 function specsRoot(dataDir) {
   return join3(dataDir, SPECS_DIR);
@@ -7404,7 +7418,7 @@ var StateManager = class {
     });
     await atomicWriteFile(join4(dir, "audit.jsonl"), "");
     await atomicWriteFile(join4(dir, "metrics.jsonl"), "");
-    await this.pointCurrentAt(args.run_id);
+    await this.pointCurrentAt(state);
     return state;
   }
   // ---- read (lock-free) --------------------------------------------------
@@ -7428,7 +7442,31 @@ var StateManager = class {
    * a corrupt active run indistinguishable from "no current run".
    */
   async readCurrent() {
-    const link = currentLinkPath(this.dataDir);
+    return this.readThroughLink(currentLinkPath(this.dataDir));
+  }
+  /**
+   * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
+   * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
+   * (no pointer for this repo yet) falls back to the legacy GLOBAL `runs/current`,
+   * but ONLY adopts it when it belongs to the SAME repo — so a pre-upgrade in-flight
+   * run (global-only) still resolves, while another repo's run never leaks in.
+   * Loud on a corrupt state.json behind either pointer (same contract as readCurrent).
+   */
+  async readCurrentForRepo(repo) {
+    const viaRepo = await this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
+    if (viaRepo !== null) return viaRepo;
+    const legacy = await this.readCurrent();
+    return legacy !== null && legacy.spec.repo === repo ? legacy : null;
+  }
+  /**
+   * Read + validate a run's state THROUGH a `current`-style directory symlink (the
+   * OS follows the link during the path walk, so no readlink is needed). Returns
+   * null ONLY on genuine ABSENCE (missing/dangling link → ENOENT); a corrupt/invalid
+   * state.json propagates LOUDLY (swallowing it would make a corrupt active run
+   * indistinguishable from "no current run"). Shared by {@link readCurrent} and
+   * {@link readCurrentForRepo}.
+   */
+  async readThroughLink(link) {
     if (!existsSync3(link)) return null;
     const statePath = join4(link, "state.json");
     let raw;
@@ -7486,6 +7524,20 @@ var StateManager = class {
       }
     }
     return null;
+  }
+  /**
+   * Find the SINGLE non-terminal run owned by `session` (its `owner_session`), or
+   * null. Powers the session-scoped Bash guards (run-isolation L1.3): a guard fires
+   * only for the run the stopping/acting session actually owns, never a concurrent
+   * run in another repo. An empty session, no match, or ≥2 matches (ambiguous — one
+   * session minting runs in two repos) all return null, so the caller fails SAFE
+   * (passes through) rather than gating the wrong run.
+   */
+  async findActiveByOwner(session) {
+    if (session.length === 0) return null;
+    const runs = await this.listRuns();
+    const owned = runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+    return owned.length === 1 ? owned[0] : null;
   }
   // ---- update (locked read-modify-write) ---------------------------------
   /**
@@ -7549,23 +7601,53 @@ var StateManager = class {
   }
   // ---- current symlink ---------------------------------------------------
   /**
-   * Point `runs/current` at the given run (best-effort, atomic-ish: write a temp
-   * link then rename). A failure here is logged, not fatal — `current` is a
+   * Repoint the current pointers at a freshly-created run (L2.6/L2.7):
+   *   - the PER-REPO pointer `current/<repo-key>` → `../runs/<run-id>` (authoritative
+   *     for the human CLI per checkout), and
+   *   - the legacy GLOBAL `runs/current` → `<run-id>` (the repo-less "most-recent"
+   *     fallback the degraded hook/stop paths still read).
+   *
+   * CLOBBER GUARD (L2.6) — runs BEFORE any write and throws LOUD (NOT swallowed by the
+   * best-effort symlink catch below): if THIS repo's current pointer already names a
+   * still-live run owned by a DIFFERENT known session, refuse to hide it. Same-repo
+   * concurrent runs by distinct sessions are thus serialized, while cross-repo creates
+   * (a different repo's pointer) never trip it. The just-created run's `state.json`
+   * already exists, so it stays addressable via `--run <id>` after the throw.
+   * Degrades safe (no refusal) when either owner is unknown — today's last-wins behavior.
+   */
+  async pointCurrentAt(state) {
+    const repo = state.spec.repo;
+    const existing = await this.readCurrentForRepo(repo);
+    if (existing !== null && existing.run_id !== state.run_id && !isTerminalRunStatus(existing.status) && existing.owner_session !== void 0 && state.owner_session !== void 0 && existing.owner_session !== state.owner_session) {
+      throw new Error(
+        `state: refusing to repoint current for repo '${repo}' \u2014 run '${existing.run_id}' is still live (owned by a different session '${existing.owner_session}'). Run '${state.run_id}' was created and is addressable via \`--run ${state.run_id}\`; finalize or rescue '${existing.run_id}' before starting a concurrent run in this repo.`
+      );
+    }
+    await this.repointSymlink(
+      currentRepoLinkPath(this.dataDir, repo),
+      join4("..", RUNS_DIR, state.run_id)
+    );
+    await this.repointSymlink(currentLinkPath(this.dataDir), join4(state.run_id));
+  }
+  /**
+   * Atomically-ish repoint a `current`-style symlink at `target` (write a temp link
+   * then rename). Best-effort: a failure is logged, not fatal — `current` is a
    * convenience pointer, not load-bearing state.
    */
-  async pointCurrentAt(runId) {
-    const link = currentLinkPath(this.dataDir);
+  async repointSymlink(link, target) {
     const tmp = `${link}.tmp.${process.pid}`;
     try {
       await mkdir2(dirname3(link), { recursive: true });
       await unlink2(tmp).catch(() => {
       });
-      await symlink(join4(runId), tmp);
+      await symlink(target, tmp);
       await rm(link, { force: true, recursive: false }).catch(() => {
       });
       await rename2(tmp, link);
     } catch (err) {
-      log3.warn(`state: could not update runs/current to '${runId}': ${err.message}`);
+      log3.warn(
+        `state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`
+      );
       await unlink2(tmp).catch(() => {
       });
     }
@@ -7635,6 +7717,7 @@ function decideFinalize(run) {
 // src/hooks/hook-context.ts
 import { existsSync as existsSync4 } from "node:fs";
 import { lstat, readlink } from "node:fs/promises";
+import { isAbsolute as isAbsolute2, relative, sep as sep4 } from "node:path";
 var BrokenRunStateError = class extends Error {
   constructor(target) {
     super(`runs/current symlink is broken (target: ${target}); failing closed`);
@@ -7670,6 +7753,37 @@ async function loadActiveRun(opts = {}) {
   const run = await manager.readCurrent();
   if (run === null) return null;
   return { dataDir, run };
+}
+async function loadOwnerScopedRun(opts = {}) {
+  const env = opts.env ?? process.env;
+  const session = (env.CLAUDE_CODE_SESSION_ID ?? "").trim();
+  if (session.length === 0) {
+    return loadActiveRun(opts);
+  }
+  let dataDir;
+  try {
+    dataDir = resolveDataDir(opts);
+  } catch {
+    return null;
+  }
+  const manager = new StateManager({ ...opts, dataDir });
+  const run = await manager.findActiveByOwner(session);
+  return run === null ? null : { dataDir, run };
+}
+function runTaskForPath(dataDir, absPath) {
+  if (dataDir.length === 0 || absPath.length === 0) return null;
+  const rootCanon = canonicalizePath(worktreesRoot(dataDir));
+  const pathCanon = canonicalizePath(absPath);
+  const rel = relative(rootCanon, pathCanon);
+  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep4}`) || isAbsolute2(rel)) {
+    return null;
+  }
+  const segments = rel.split(sep4);
+  if (segments.length < 2) return null;
+  const [run_id, task_id] = segments;
+  if (!run_id || !task_id) return null;
+  if (!isValidId(run_id) || !isValidId(task_id)) return null;
+  return { run_id, task_id };
 }
 function statusToStage(status) {
   switch (status) {
@@ -7712,10 +7826,10 @@ function isTestWriterPhase(active) {
 // src/hooks/pipeline-guards.ts
 var WRITE_TOOLS2 = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
 function isTestPath(p) {
-  const base = p.split(sep4).pop() ?? p;
+  const base = p.split(sep5).pop() ?? p;
   if (/\.(test|spec)\./.test(base)) return true;
   if (/\.(test-helpers|test-utils)\./.test(base)) return true;
-  const segments = p.split(sep4);
+  const segments = p.split(sep5);
   if (segments.includes("tests") || segments.includes("__tests__")) return true;
   if (segments.includes("fixtures")) return true;
   return false;
@@ -7728,30 +7842,57 @@ function isGhPrCreate(cmd) {
 function isGhPrMerge(cmd) {
   return GH_PR_MERGE_RE.test(cmd);
 }
+async function decideWriteScope(input, deps) {
+  const targets = filePathsOf(input);
+  if (targets.length === 0) return null;
+  let dataDir;
+  try {
+    dataDir = resolveDataDir(deps);
+  } catch {
+    return null;
+  }
+  const loadRunById = deps.loadRunById ?? ((dir, runId) => new StateManager({ ...deps, dataDir: dir }).read(runId));
+  for (const target of targets) {
+    const ref = runTaskForPath(dataDir, target);
+    if (ref === null) continue;
+    let run;
+    try {
+      run = await loadRunById(dataDir, ref.run_id);
+    } catch {
+      return deny(
+        "test_writer_scope_broken",
+        `write to '${target}' resolves to run '${ref.run_id}' / task '${ref.task_id}', whose run state is missing or corrupt; failing closed.`
+      );
+    }
+    const activeTask = resolveActiveTask(run, ref.task_id);
+    if (isTestWriterPhase(activeTask) && !isTestPath(target)) {
+      return deny(
+        "test_writer_scope",
+        `Test-writer phase: only test files allowed. Detected write to '${target}'. Move implementation code to the GREEN (exec) phase.`
+      );
+    }
+  }
+  return null;
+}
 async function decidePipelineGuards(input, deps = {}) {
-  const loadRun = deps.loadRun ?? loadActiveRun;
+  const tool = toolNameOf(input);
+  const cmd = commandOf(input);
+  if (WRITE_TOOLS2.has(tool)) {
+    const scoped = await decideWriteScope(input, deps);
+    if (scoped !== null) return scoped;
+  }
+  if (cmd.length === 0) return allow();
+  const loadRun = deps.loadRun ?? loadOwnerScopedRun;
   const active = await loadRun(deps);
   if (active === null) return allow();
   const { run } = active;
-  const tool = toolNameOf(input);
-  const cmd = commandOf(input);
-  if (cmd.length > 0 && isNestedShellOrHookBypass(cmd)) {
+  if (isNestedShellOrHookBypass(cmd)) {
     return deny(
       "nested_shell_denied",
       `nested-shell or hook-bypass not allowed while a pipeline run is active: ${cmd}`
     );
   }
   const activeTask = resolveActiveTask(run);
-  if (WRITE_TOOLS2.has(tool) && isTestWriterPhase(activeTask)) {
-    for (const target of filePathsOf(input)) {
-      if (!isTestPath(target)) {
-        return deny(
-          "test_writer_scope",
-          `Test-writer phase: only test files allowed. Detected write to '${target}'. Move implementation code to the GREEN (exec) phase.`
-        );
-      }
-    }
-  }
   if (tool === "Bash" && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {
     const task = activeTask?.task;
     if (!task) {
@@ -7959,6 +8100,13 @@ function decideStop(run, allowStop, stoppingSession) {
   }
   return { kind: "finalize", status: decideFinalize(run).run_status };
 }
+async function resolveStopRun(manager, stoppingSession) {
+  if (stoppingSession === void 0) return manager.readCurrent();
+  const owned = await manager.findActiveByOwner(stoppingSession);
+  if (owned !== null) return owned;
+  const current = await manager.readCurrent();
+  return current !== null && current.owner_session === void 0 ? current : null;
+}
 async function runStopGate(_argv = [], deps = {}) {
   const emit2 = deps.emit ?? ((s) => process.stdout.write(s));
   const allowStop = deps.allowStop ?? process.env.FACTORY_ALLOW_STOP === "1";
@@ -7974,7 +8122,7 @@ async function runStopGate(_argv = [], deps = {}) {
   }
   let run;
   try {
-    run = await manager.readCurrent();
+    run = await resolveStopRun(manager, stoppingSession);
   } catch (err) {
     const reason = `pipeline state unreadable: ${err.message}. Repair runs/current \u2192 state.json (or clear runs/current) before stopping.`;
     log5.error(reason);

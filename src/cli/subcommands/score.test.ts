@@ -10,9 +10,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { scoreCommand } from "./score.js";
+import { scoreCommand, runScore } from "./score.js";
 import { EXIT } from "../exit-codes.js";
 import { StateManager } from "../../core/state/index.js";
+import { FakeGitClient } from "../../git/index.js";
 import { SpecStore } from "../../spec/index.js";
 import type { SpecManifest } from "../../spec/index.js";
 import type { SpecPointer, TaskState } from "../../types/index.js";
@@ -131,8 +132,10 @@ describe("score happy paths", () => {
     expect(summary.shipped_prs).toEqual([{ task_id: "a", pr_number: 11, branch: "factory/run/a" }]);
   });
 
-  it("defaults to the current run when --run is omitted", async () => {
-    const code = await scoreCommand.run([]);
+  it("defaults to the current run when --run is omitted (resolved per-repo from cwd)", async () => {
+    const git = new FakeGitClient();
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const code = await runScore([], { gitClient: git, cwd: "/x" });
     expect(code).toBe(EXIT.OK);
     expect((out().summary as Record<string, unknown>).run_id).toBe("run-s");
   });

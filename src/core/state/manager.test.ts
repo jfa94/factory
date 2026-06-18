@@ -346,6 +346,133 @@ describe("enumeration: listRuns / findActiveBySpec (resolve-or-reuse)", () => {
   });
 });
 
+describe("findActiveByOwner — resolve the live run a session owns (run-isolation L1.3)", () => {
+  const specA: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
+  const specB: SpecPointer = { repo: "acme/other", spec_id: "7-search", issue_number: 7 };
+
+  it("returns the non-terminal run whose owner_session matches", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    const found = await m.findActiveByOwner("sess-A");
+    expect(found?.run_id).toBe("run-1");
+  });
+
+  it("ignores runs owned by a DIFFERENT session (cross-session isolation)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    expect(await m.findActiveByOwner("sess-B")).toBeNull();
+  });
+
+  it("ignores terminal runs (a finalized run is not the session's live run)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    await m.finalize("run-1", "completed");
+    expect(await m.findActiveByOwner("sess-A")).toBeNull();
+  });
+
+  it("never matches a run that carries no owner_session", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA }); // no owner stamped
+    expect(await m.findActiveByOwner("sess-A")).toBeNull();
+  });
+
+  it("returns null when the SAME session owns ≥2 live runs (ambiguous → fail-safe)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    await m.create({ run_id: "run-2", spec: specB, owner_session: "sess-A" });
+    expect(await m.findActiveByOwner("sess-A")).toBeNull();
+  });
+
+  it("an empty session id never matches (defensive)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    expect(await m.findActiveByOwner("")).toBeNull();
+  });
+});
+
+describe("per-repo current pointer + clobber guard (run-isolation L2.6/L2.7)", () => {
+  const specA: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
+  const specB: SpecPointer = { repo: "acme/other", spec_id: "7-search", issue_number: 7 };
+  const specA2: SpecPointer = { repo: "acme/widgets", spec_id: "99-extra", issue_number: 99 };
+
+  it("create writes a per-repo pointer under <dataDir>/current (sibling of runs/)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA });
+    expect(existsSync(join(dataDir, "current", "acme-widgets"))).toBe(true);
+    expect(await m.readCurrentForRepo("acme/widgets")).toMatchObject({ run_id: "run-1" });
+  });
+
+  it("resolves each repo's OWN current run concurrently (cross-repo isolation)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-A", spec: specA });
+    await m.create({ run_id: "run-B", spec: specB });
+    expect(await m.readCurrentForRepo("acme/widgets")).toMatchObject({ run_id: "run-A" });
+    expect(await m.readCurrentForRepo("acme/other")).toMatchObject({ run_id: "run-B" });
+  });
+
+  it("never leaks another repo's run via the global read-through", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-A", spec: specA }); // global runs/current → run-A
+    // A repo with no pointer of its own must NOT inherit run-A through the global.
+    expect(await m.readCurrentForRepo("acme/unrelated")).toBeNull();
+  });
+
+  it("falls through to the legacy global pointer for a pre-upgrade run (same repo only)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-A", spec: specA });
+    // Simulate a pre-L2 run: only the global runs/current exists, no per-repo tree.
+    await rm(join(dataDir, "current"), { recursive: true, force: true });
+    expect(await m.readCurrentForRepo("acme/widgets")).toMatchObject({ run_id: "run-A" });
+  });
+
+  it("CLOBBER: a 2nd same-repo run by a DIFFERENT session is refused loud (run stays addressable)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-A", spec: specA, owner_session: "sess-A" });
+    await expect(
+      m.create({ run_id: "run-B", spec: specA2, owner_session: "sess-B" }),
+    ).rejects.toThrow(/refusing to repoint current for repo 'acme\/widgets'/);
+    // The refused run's state.json was written before the throw → addressable via --run.
+    expect(await m.read("run-B")).toMatchObject({ run_id: "run-B" });
+    // The incumbent repo pointer was NOT moved.
+    expect(await m.readCurrentForRepo("acme/widgets")).toMatchObject({ run_id: "run-A" });
+  });
+
+  it("CLOBBER does NOT fire cross-repo (different repos run concurrently)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-A", spec: specA, owner_session: "sess-A" });
+    await expect(
+      m.create({ run_id: "run-B", spec: specB, owner_session: "sess-B" }),
+    ).resolves.toMatchObject({ run_id: "run-B" });
+  });
+
+  it("CLOBBER degrades safe (last-wins) when either owner is unknown", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-A", spec: specA, owner_session: "sess-A" });
+    // New run carries no owner → cannot prove a different session → allowed.
+    await expect(m.create({ run_id: "run-B", spec: specA2 })).resolves.toMatchObject({
+      run_id: "run-B",
+    });
+    expect(await m.readCurrentForRepo("acme/widgets")).toMatchObject({ run_id: "run-B" });
+  });
+
+  it("CLOBBER ignores a TERMINAL incumbent (a finalized run does not block the repo)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-A", spec: specA, owner_session: "sess-A" });
+    await m.finalize("run-A", "completed");
+    await expect(
+      m.create({ run_id: "run-B", spec: specA2, owner_session: "sess-B" }),
+    ).resolves.toMatchObject({ run_id: "run-B" });
+  });
+
+  it("CLOBBER allows the SAME session to repoint its repo (serial re-create)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-A", spec: specA, owner_session: "sess-A" });
+    await expect(
+      m.create({ run_id: "run-B", spec: specA2, owner_session: "sess-A" }),
+    ).resolves.toMatchObject({ run_id: "run-B" });
+  });
+});
+
 describe("withSpecLock serializes the resolve-or-reuse scan→create (TOCTOU close)", () => {
   const specA: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
 

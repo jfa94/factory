@@ -9,6 +9,7 @@
  * closed via runPipelineGuards.
  */
 import { describe, it, expect } from "vitest";
+import { join } from "node:path";
 import { decidePipelineGuards, runPipelineGuards } from "./pipeline-guards.js";
 import { BrokenRunStateError, type ActiveRun } from "./hook-context.js";
 import { parseHookInput, isDeny } from "./hook-io.js";
@@ -30,8 +31,8 @@ function task(over: Partial<TaskState> = {}): TaskState {
   } as TaskState;
 }
 
-function activeRun(tasks: Record<string, TaskState>): ActiveRun {
-  const run = {
+function runState(tasks: Record<string, TaskState>): RunState {
+  return {
     schema_version: 1,
     run_id: "run-x",
     status: "running",
@@ -42,12 +43,23 @@ function activeRun(tasks: Record<string, TaskState>): ActiveRun {
     updated_at: "t",
     ended_at: null,
   } as RunState;
-  return { dataDir: "/data", run };
 }
 
-/** A loadRun seam that returns a fixed run (or null). */
+function activeRun(tasks: Record<string, TaskState>): ActiveRun {
+  return { dataDir: "/data", run: runState(tasks) };
+}
+
+/** A loadRun seam (Bash arms) that returns a fixed run (or null). */
 function withRun(run: ActiveRun | null) {
   return async () => run;
+}
+
+/** A per-run-id loader seam (write-scope arm): returns a run, or throws an injected error. */
+function withRunById(run: RunState | Error) {
+  return async () => {
+    if (run instanceof Error) throw run;
+    return run;
+  };
 }
 
 function bash(command: string) {
@@ -55,6 +67,10 @@ function bash(command: string) {
 }
 function write(file_path: string) {
   return parseHookInput(JSON.stringify({ tool_name: "Write", tool_input: { file_path } }));
+}
+/** A Write whose target is inside a task's worktree (`<dataDir>/worktrees/<run>/<task>/…`). */
+function writeInWorktree(runId: string, taskId: string, rel: string) {
+  return write(join("/data", "worktrees", runId, taskId, rel));
 }
 
 const APPROVE = { reviewer: "quality", verdict: "approve", confirmed_blockers: 0 } as const;
@@ -183,30 +199,68 @@ describe("pipeline-guards — ship gating is DERIVED (Δ V / D1)", () => {
   });
 });
 
-describe("pipeline-guards — test-writer phase write-scope (TDD)", () => {
-  it("blocks an implementation write during the test-writer phase", async () => {
-    const run = activeRun({
-      t1: task({ status: "executing", producer_role: "test-writer" }),
+describe("pipeline-guards — test-writer phase write-scope (path-anchored, TDD)", () => {
+  // The write-scope arm derives its owning run+task from the TARGET PATH (the
+  // worktree the producer writes into), NOT a global pointer — so it fires only on
+  // a write into THAT run's worktree, never on an unrelated session's edit.
+  const DATA = { dataDir: "/data" };
+
+  it("blocks an implementation write into the task worktree during the test-writer phase", async () => {
+    const run = runState({ t1: task({ status: "executing", producer_role: "test-writer" }) });
+    const d = await decidePipelineGuards(writeInWorktree("run-x", "t1", "src/feature.ts"), {
+      ...DATA,
+      loadRunById: withRunById(run),
     });
-    const d = await decidePipelineGuards(write("/repo/src/feature.ts"), { loadRun: withRun(run) });
     expect(isDeny(d)).toBe(true);
   });
 
-  it("allows a test write during the test-writer phase", async () => {
-    const run = activeRun({
-      t1: task({ status: "executing", producer_role: "test-writer" }),
-    });
-    const d = await decidePipelineGuards(write("/repo/src/feature.test.ts"), {
-      loadRun: withRun(run),
+  it("allows a test write into the worktree during the test-writer phase", async () => {
+    const run = runState({ t1: task({ status: "executing", producer_role: "test-writer" }) });
+    const d = await decidePipelineGuards(writeInWorktree("run-x", "t1", "src/feature.test.ts"), {
+      ...DATA,
+      loadRunById: withRunById(run),
     });
     expect(isDeny(d)).toBe(false);
   });
 
   it("allows an implementation write during the executor (GREEN) phase", async () => {
-    const run = activeRun({
-      t1: task({ status: "executing", producer_role: "executor" }),
+    const run = runState({ t1: task({ status: "executing", producer_role: "executor" }) });
+    const d = await decidePipelineGuards(writeInWorktree("run-x", "t1", "src/feature.ts"), {
+      ...DATA,
+      loadRunById: withRunById(run),
     });
-    const d = await decidePipelineGuards(write("/repo/src/feature.ts"), { loadRun: withRun(run) });
+    expect(isDeny(d)).toBe(false);
+  });
+
+  it("allows an unrelated session's write to a NON-worktree checkout (spurious-block fix)", async () => {
+    // No worktree match → the arm never even consults a run, even though a live
+    // test-writer run exists. This is the cross-session false-positive the epic fixes.
+    let consulted = false;
+    const d = await decidePipelineGuards(write("/Users/dev/other-repo/src/x.ts"), {
+      ...DATA,
+      loadRunById: async () => {
+        consulted = true;
+        return runState({ t1: task({ status: "executing", producer_role: "test-writer" }) });
+      },
+    });
+    expect(isDeny(d)).toBe(false);
+    expect(consulted).toBe(false);
+  });
+
+  it("fails closed when the worktree path matches but the run state is missing/corrupt", async () => {
+    const d = await decidePipelineGuards(writeInWorktree("run-x", "t1", "src/feature.ts"), {
+      ...DATA,
+      loadRunById: withRunById(new Error("ENOENT: state.json")),
+    });
+    expect(isDeny(d)).toBe(true);
+  });
+
+  it("does not block a worktree write once the task is past the test-writer phase", async () => {
+    const run = runState({ t1: task({ status: "reviewing" }) });
+    const d = await decidePipelineGuards(writeInWorktree("run-x", "t1", "src/feature.ts"), {
+      ...DATA,
+      loadRunById: withRunById(run),
+    });
     expect(isDeny(d)).toBe(false);
   });
 });

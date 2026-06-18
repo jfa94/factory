@@ -15,6 +15,7 @@ import { EXIT, type ExitCode } from "../exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { StateManager } from "../../core/state/index.js";
+import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { scanRun, applyRescue } from "../../rescue/index.js";
 import type { Subcommand } from "../main.js";
 
@@ -65,17 +66,21 @@ async function resolveRunId(
   state: StateManager,
   args: ReturnType<typeof parseArgs>,
   action: string,
+  overrides: CurrentRunOverrides,
 ): Promise<string> {
   const explicit = args.flag("run");
   if (typeof explicit === "string" && explicit.length > 0) return explicit;
-  const current = await state.readCurrent();
+  const current = await readCurrentForCwd(state, overrides);
   if (current === null) {
     throw new UsageError(`rescue ${action}: no --run given and no current run`);
   }
   return current.run_id;
 }
 
-async function runScan(argv: string[]): Promise<ExitCode> {
+export async function runScan(
+  argv: string[],
+  overrides: CurrentRunOverrides = {},
+): Promise<ExitCode> {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
     emitLine(SCAN_HELP);
@@ -83,13 +88,16 @@ async function runScan(argv: string[]): Promise<ExitCode> {
   }
 
   const state = new StateManager();
-  const runId = await resolveRunId(state, args, "scan");
+  const runId = await resolveRunId(state, args, "scan", overrides);
   const run = await state.read(runId);
   emitJson(scanRun(run));
   return EXIT.OK;
 }
 
-async function runApply(argv: string[]): Promise<ExitCode> {
+export async function runApply(
+  argv: string[],
+  overrides: CurrentRunOverrides = {},
+): Promise<ExitCode> {
   const args = parseArgs(argv, { booleans: ["include-dead-ends"] });
   if (args.flag("help") === true) {
     emitLine(APPLY_HELP);
@@ -97,7 +105,7 @@ async function runApply(argv: string[]): Promise<ExitCode> {
   }
 
   const state = new StateManager();
-  const runId = await resolveRunId(state, args, "apply");
+  const runId = await resolveRunId(state, args, "apply", overrides);
   const tasks = args.all("task");
   const includeDeadEnds = args.flag("include-dead-ends") === true;
 

@@ -6320,13 +6320,13 @@ var RunStateSchema = external_exports.object({
   updated_at: external_exports.string(),
   ended_at: external_exports.string().nullable().default(null)
 });
-function refineRunCrossFields(run11, ctx) {
+function refineRunCrossFields(run9, ctx) {
   const quotaStatuses = ["paused", "suspended"];
-  if (run11.quota != null && !quotaStatuses.includes(run11.status)) {
+  if (run9.quota != null && !quotaStatuses.includes(run9.status)) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["quota"],
-      message: `run '${run11.run_id}' carries a quota checkpoint but status is '${run11.status}' (a quota checkpoint is valid only while paused|suspended)`
+      message: `run '${run9.run_id}' carries a quota checkpoint but status is '${run9.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
   }
 }
@@ -6415,7 +6415,9 @@ var SPECS_DIR = "specs";
 var SPEC_BUILD_DIR = "spec-build";
 var DOCS_FACTORY_DIR = "factory";
 var RUNS_DIR = "runs";
+var WORKTREES_DIR = "worktrees";
 var CURRENT_LINK = "current";
+var CURRENT_DIR = "current";
 var STATE_FILE = "state.json";
 var METRICS_FILE = "metrics.jsonl";
 var REPORT_FILE = "report.md";
@@ -6432,6 +6434,9 @@ function repoKey(repo) {
 function runsRoot(dataDir) {
   return join3(dataDir, RUNS_DIR);
 }
+function worktreesRoot(dataDir) {
+  return join3(dataDir, WORKTREES_DIR);
+}
 function runDir(dataDir, runId) {
   validateId(runId, "run-id");
   return join3(runsRoot(dataDir), runId);
@@ -6447,6 +6452,12 @@ function runReportPath(dataDir, runId) {
 }
 function currentLinkPath(dataDir) {
   return join3(runsRoot(dataDir), CURRENT_LINK);
+}
+function currentRepoRoot(dataDir) {
+  return join3(dataDir, CURRENT_DIR);
+}
+function currentRepoLinkPath(dataDir, repo) {
+  return join3(currentRepoRoot(dataDir), repoKey(repo));
 }
 function specsRoot(dataDir) {
   return join3(dataDir, SPECS_DIR);
@@ -6593,7 +6604,7 @@ var StateManager = class {
     });
     await atomicWriteFile(join4(dir, "audit.jsonl"), "");
     await atomicWriteFile(join4(dir, "metrics.jsonl"), "");
-    await this.pointCurrentAt(args.run_id);
+    await this.pointCurrentAt(state);
     return state;
   }
   // ---- read (lock-free) --------------------------------------------------
@@ -6617,7 +6628,31 @@ var StateManager = class {
    * a corrupt active run indistinguishable from "no current run".
    */
   async readCurrent() {
-    const link = currentLinkPath(this.dataDir);
+    return this.readThroughLink(currentLinkPath(this.dataDir));
+  }
+  /**
+   * Read the run the PER-REPO current pointer (`current/<repo-key>`, L2.7) names —
+   * the authoritative pointer the human CLI resolves per checkout. A per-repo MISS
+   * (no pointer for this repo yet) falls back to the legacy GLOBAL `runs/current`,
+   * but ONLY adopts it when it belongs to the SAME repo — so a pre-upgrade in-flight
+   * run (global-only) still resolves, while another repo's run never leaks in.
+   * Loud on a corrupt state.json behind either pointer (same contract as readCurrent).
+   */
+  async readCurrentForRepo(repo) {
+    const viaRepo = await this.readThroughLink(currentRepoLinkPath(this.dataDir, repo));
+    if (viaRepo !== null) return viaRepo;
+    const legacy = await this.readCurrent();
+    return legacy !== null && legacy.spec.repo === repo ? legacy : null;
+  }
+  /**
+   * Read + validate a run's state THROUGH a `current`-style directory symlink (the
+   * OS follows the link during the path walk, so no readlink is needed). Returns
+   * null ONLY on genuine ABSENCE (missing/dangling link → ENOENT); a corrupt/invalid
+   * state.json propagates LOUDLY (swallowing it would make a corrupt active run
+   * indistinguishable from "no current run"). Shared by {@link readCurrent} and
+   * {@link readCurrentForRepo}.
+   */
+  async readThroughLink(link) {
     if (!existsSync3(link)) return null;
     const statePath = join4(link, "state.json");
     let raw;
@@ -6675,6 +6710,20 @@ var StateManager = class {
       }
     }
     return null;
+  }
+  /**
+   * Find the SINGLE non-terminal run owned by `session` (its `owner_session`), or
+   * null. Powers the session-scoped Bash guards (run-isolation L1.3): a guard fires
+   * only for the run the stopping/acting session actually owns, never a concurrent
+   * run in another repo. An empty session, no match, or ≥2 matches (ambiguous — one
+   * session minting runs in two repos) all return null, so the caller fails SAFE
+   * (passes through) rather than gating the wrong run.
+   */
+  async findActiveByOwner(session) {
+    if (session.length === 0) return null;
+    const runs = await this.listRuns();
+    const owned = runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+    return owned.length === 1 ? owned[0] : null;
   }
   // ---- update (locked read-modify-write) ---------------------------------
   /**
@@ -6738,23 +6787,53 @@ var StateManager = class {
   }
   // ---- current symlink ---------------------------------------------------
   /**
-   * Point `runs/current` at the given run (best-effort, atomic-ish: write a temp
-   * link then rename). A failure here is logged, not fatal — `current` is a
+   * Repoint the current pointers at a freshly-created run (L2.6/L2.7):
+   *   - the PER-REPO pointer `current/<repo-key>` → `../runs/<run-id>` (authoritative
+   *     for the human CLI per checkout), and
+   *   - the legacy GLOBAL `runs/current` → `<run-id>` (the repo-less "most-recent"
+   *     fallback the degraded hook/stop paths still read).
+   *
+   * CLOBBER GUARD (L2.6) — runs BEFORE any write and throws LOUD (NOT swallowed by the
+   * best-effort symlink catch below): if THIS repo's current pointer already names a
+   * still-live run owned by a DIFFERENT known session, refuse to hide it. Same-repo
+   * concurrent runs by distinct sessions are thus serialized, while cross-repo creates
+   * (a different repo's pointer) never trip it. The just-created run's `state.json`
+   * already exists, so it stays addressable via `--run <id>` after the throw.
+   * Degrades safe (no refusal) when either owner is unknown — today's last-wins behavior.
+   */
+  async pointCurrentAt(state) {
+    const repo = state.spec.repo;
+    const existing = await this.readCurrentForRepo(repo);
+    if (existing !== null && existing.run_id !== state.run_id && !isTerminalRunStatus(existing.status) && existing.owner_session !== void 0 && state.owner_session !== void 0 && existing.owner_session !== state.owner_session) {
+      throw new Error(
+        `state: refusing to repoint current for repo '${repo}' \u2014 run '${existing.run_id}' is still live (owned by a different session '${existing.owner_session}'). Run '${state.run_id}' was created and is addressable via \`--run ${state.run_id}\`; finalize or rescue '${existing.run_id}' before starting a concurrent run in this repo.`
+      );
+    }
+    await this.repointSymlink(
+      currentRepoLinkPath(this.dataDir, repo),
+      join4("..", RUNS_DIR, state.run_id)
+    );
+    await this.repointSymlink(currentLinkPath(this.dataDir), join4(state.run_id));
+  }
+  /**
+   * Atomically-ish repoint a `current`-style symlink at `target` (write a temp link
+   * then rename). Best-effort: a failure is logged, not fatal — `current` is a
    * convenience pointer, not load-bearing state.
    */
-  async pointCurrentAt(runId) {
-    const link = currentLinkPath(this.dataDir);
+  async repointSymlink(link, target) {
     const tmp = `${link}.tmp.${process.pid}`;
     try {
       await mkdir3(dirname3(link), { recursive: true });
       await unlink2(tmp).catch(() => {
       });
-      await symlink(join4(runId), tmp);
+      await symlink(target, tmp);
       await rm(link, { force: true, recursive: false }).catch(() => {
       });
       await rename2(tmp, link);
     } catch (err) {
-      log3.warn(`state: could not update runs/current to '${runId}': ${err.message}`);
+      log3.warn(
+        `state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`
+      );
       await unlink2(tmp).catch(() => {
       });
     }
@@ -6907,75 +6986,6 @@ var configureCommand = {
     }
   }
 };
-
-// src/cli/subcommands/state.ts
-var HELP2 = `factory state \u2014 read run state (read-only)
-
-Usage:
-  factory state                 Print the current run's state as JSON
-  factory state <run-id>        Print a specific run's state as JSON
-  factory state --summary       Print a compact human summary instead
-
-Exit OK with {"current": null} when there is no current run.`;
-function summarize(run11) {
-  const lines = [
-    `run ${run11.run_id}  status=${run11.status}  driver=${run11.driver}`,
-    `spec ${run11.spec.repo}#${run11.spec.issue_number} (${run11.spec.spec_id})`,
-    `tasks (${Object.keys(run11.tasks).length}):`
-  ];
-  for (const t of Object.values(run11.tasks)) {
-    const bits = [`  ${t.task_id}`, t.status];
-    if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
-    if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
-    if (t.failure_class !== void 0) bits.push(`class=${t.failure_class}`);
-    lines.push(bits.join("  "));
-  }
-  return lines.join("\n");
-}
-async function run2(argv) {
-  const args = parseArgs(argv, { booleans: ["summary"] });
-  if (args.flag("help") === true) {
-    emitLine(HELP2);
-    return EXIT.OK;
-  }
-  const state = new StateManager();
-  const runId = args.positionals[0];
-  const runState = runId !== void 0 ? await state.read(runId) : await state.readCurrent();
-  if (runState === null) {
-    if (args.flag("summary") === true) {
-      emitLine("no current run");
-    } else {
-      emitJson({ current: null });
-    }
-    return EXIT.OK;
-  }
-  if (args.flag("summary") === true) {
-    emitLine(summarize(runState));
-  } else {
-    emitJson(runState);
-  }
-  return EXIT.OK;
-}
-var stateCommand = {
-  describe: "Print run state (current or by run-id); read-only",
-  run: async (argv) => {
-    try {
-      return await run2(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`state: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
-};
-
-// src/cli/subcommands/scaffold.ts
-import { copyFile, mkdir as mkdir7, readFile as readFile4, writeFile } from "node:fs/promises";
-import { existsSync as existsSync5 } from "node:fs";
-import { dirname as dirname5, join as join7, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 
 // src/shared/exec.ts
 import { spawn } from "node:child_process";
@@ -7869,6 +7879,88 @@ async function ensureStaging(args) {
   );
 }
 
+// src/cli/current.ts
+async function readCurrentForCwd(state, overrides = {}) {
+  const cwd = overrides.cwd ?? process.cwd();
+  const gitClient = overrides.gitClient ?? new DefaultGitClient();
+  let repo;
+  try {
+    repo = await resolveRepo({ cwd, gitClient });
+  } catch {
+    return state.readCurrent();
+  }
+  return state.readCurrentForRepo(repo);
+}
+
+// src/cli/subcommands/state.ts
+var HELP2 = `factory state \u2014 read run state (read-only)
+
+Usage:
+  factory state                 Print the current run's state as JSON
+  factory state <run-id>        Print a specific run's state as JSON
+  factory state --summary       Print a compact human summary instead
+
+Exit OK with {"current": null} when there is no current run.`;
+function summarize(run9) {
+  const lines = [
+    `run ${run9.run_id}  status=${run9.status}  driver=${run9.driver}`,
+    `spec ${run9.spec.repo}#${run9.spec.issue_number} (${run9.spec.spec_id})`,
+    `tasks (${Object.keys(run9.tasks).length}):`
+  ];
+  for (const t of Object.values(run9.tasks)) {
+    const bits = [`  ${t.task_id}`, t.status];
+    if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
+    if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
+    if (t.failure_class !== void 0) bits.push(`class=${t.failure_class}`);
+    lines.push(bits.join("  "));
+  }
+  return lines.join("\n");
+}
+async function runState(argv, overrides = {}) {
+  const args = parseArgs(argv, { booleans: ["summary"] });
+  if (args.flag("help") === true) {
+    emitLine(HELP2);
+    return EXIT.OK;
+  }
+  const state = new StateManager();
+  const runId = args.positionals[0];
+  const runState2 = runId !== void 0 ? await state.read(runId) : await readCurrentForCwd(state, overrides);
+  if (runState2 === null) {
+    if (args.flag("summary") === true) {
+      emitLine("no current run");
+    } else {
+      emitJson({ current: null });
+    }
+    return EXIT.OK;
+  }
+  if (args.flag("summary") === true) {
+    emitLine(summarize(runState2));
+  } else {
+    emitJson(runState2);
+  }
+  return EXIT.OK;
+}
+var stateCommand = {
+  describe: "Print run state (current or by run-id); read-only",
+  run: async (argv) => {
+    try {
+      return await runState(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`state: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/scaffold.ts
+import { copyFile, mkdir as mkdir7, readFile as readFile4, writeFile } from "node:fs/promises";
+import { existsSync as existsSync5 } from "node:fs";
+import { dirname as dirname5, join as join7, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir6, readFile as readFile3 } from "node:fs/promises";
 import { existsSync as existsSync4 } from "node:fs";
@@ -8086,7 +8178,7 @@ async function resolveScaffoldRepo(args, overrides = {}) {
   });
   return splitRepoSlug(slug);
 }
-async function run3(argv) {
+async function run2(argv) {
   const args = parseArgs(argv, { booleans: ["provision"] });
   if (args.flag("help") === true) {
     emitLine(HELP3);
@@ -8110,7 +8202,7 @@ var scaffoldCommand = {
   describe: "Prepare a repo (templates + staging + branch protection) for the pipeline",
   run: async (argv) => {
     try {
-      return await run3(argv);
+      return await run2(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`scaffold: ${err.message}`);
@@ -8277,8 +8369,8 @@ function checkResult(stage, result) {
       return assertNever(result);
   }
 }
-function decideFinalize(run11) {
-  const tasks = Object.values(run11.tasks);
+function decideFinalize(run9) {
+  const tasks = Object.values(run9.tasks);
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
   if (nonTerminal.length > 0) {
     const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
@@ -9049,9 +9141,9 @@ function selectProducerModel(riskTier, config) {
 }
 
 // src/quota/resume.ts
-function planResume(run11, reading, config, nowEpoch2) {
-  if (run11.status !== "paused" && run11.status !== "suspended") {
-    return { kind: "not-resumable", status: run11.status };
+function planResume(run9, reading, config, nowEpoch2) {
+  if (run9.status !== "paused" && run9.status !== "suspended") {
+    return { kind: "not-resumable", status: run9.status };
   }
   const decision = evaluate(reading, config, nowEpoch2);
   if (decision.kind === "proceed") {
@@ -9061,17 +9153,17 @@ function planResume(run11, reading, config, nowEpoch2) {
 }
 
 // src/scoring/partial-report.ts
-function buildPartialReport(run11, manifest, opts = {}) {
+function buildPartialReport(run9, manifest, opts = {}) {
   const specById = new Map(manifest.tasks.map((t) => [t.task_id, t]));
   const orderOf = new Map(manifest.tasks.map((t, i) => [t.task_id, i]));
   const shipped = [];
   const failures = [];
   const incomplete = [];
-  for (const task of Object.values(run11.tasks)) {
+  for (const task of Object.values(run9.tasks)) {
     const spec = specById.get(task.task_id);
     if (spec === void 0) {
       throw new Error(
-        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run11.run_id})`
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run9.run_id})`
       );
     }
     if (task.status === "done") {
@@ -9100,11 +9192,11 @@ function buildPartialReport(run11, manifest, opts = {}) {
   failures.sort(bySpecOrder);
   incomplete.sort(bySpecOrder);
   return {
-    run_id: run11.run_id,
-    run_status: run11.status,
-    spec_id: run11.spec.spec_id,
-    issue_number: run11.spec.issue_number,
-    repo: run11.spec.repo,
+    run_id: run9.run_id,
+    run_status: run9.status,
+    spec_id: run9.spec.spec_id,
+    issue_number: run9.spec.issue_number,
+    repo: run9.spec.repo,
     generated_at: opts.now ?? nowIso(),
     totals: {
       total: shipped.length + failures.length + incomplete.length,
@@ -9192,12 +9284,12 @@ function durationSeconds(startedAt, endedAt) {
   const delta = Math.floor((end - start) / 1e3);
   return delta >= 0 ? delta : null;
 }
-function buildRunSummary(run11, report, opts = {}) {
+function buildRunSummary(run9, report, opts = {}) {
   const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
   for (const f of report.failures) {
     failuresByClass[f.failure_class] += 1;
   }
-  const tasks = Object.values(run11.tasks);
+  const tasks = Object.values(run9.tasks);
   const effort = {
     reviewer_results: tasks.reduce((n, t) => n + t.reviewers.length, 0),
     max_escalation_rung: tasks.reduce((m, t) => Math.max(m, t.escalation_rung), 0)
@@ -9208,17 +9300,17 @@ function buildRunSummary(run11, report, opts = {}) {
     ...s.branch !== void 0 ? { branch: s.branch } : {}
   }));
   return {
-    run_id: run11.run_id,
-    run_status: run11.status,
-    driver: run11.driver,
-    spec_id: run11.spec.spec_id,
-    issue_number: run11.spec.issue_number,
-    repo: run11.spec.repo,
+    run_id: run9.run_id,
+    run_status: run9.status,
+    driver: run9.driver,
+    spec_id: run9.spec.spec_id,
+    issue_number: run9.spec.issue_number,
+    repo: run9.spec.repo,
     generated_at: opts.now ?? nowIso(),
     timing: {
-      started_at: run11.started_at,
-      ended_at: run11.ended_at,
-      duration_seconds: durationSeconds(run11.started_at, run11.ended_at)
+      started_at: run9.started_at,
+      ended_at: run9.ended_at,
+      duration_seconds: durationSeconds(run9.started_at, run9.ended_at)
     },
     totals: report.totals,
     failures_by_class: failuresByClass,
@@ -10731,9 +10823,9 @@ async function fileFailureIssues(deps, report) {
 }
 async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
-  const run11 = await deps.state.read(runId);
-  const terminal = decideFinalize(run11).run_status;
-  const report = buildPartialReport({ ...run11, status: terminal }, deps.spec, { now });
+  const run9 = await deps.state.read(runId);
+  const terminal = decideFinalize(run9).run_status;
+  const report = buildPartialReport({ ...run9, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
@@ -10795,8 +10887,8 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
   if (decision.action === "drop") {
     return dropStep(deps, runId, taskId, decision.failureClass, decision.reason);
   }
-  const run11 = await deps.state.read(runId);
-  const task = run11.tasks[taskId];
+  const run9 = await deps.state.read(runId);
+  const task = run9.tasks[taskId];
   if (task === void 0) {
     throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
   }
@@ -10855,7 +10947,7 @@ import { join as join12 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join12(dataDir, "worktrees", runId, taskId);
+  return join12(worktreesRoot(dataDir), runId, taskId);
 }
 
 // src/driver/handlers.ts
@@ -11124,8 +11216,8 @@ async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
       `record-producer: stage order drift \u2014 nextStage('${info.stage}') !== '${info.after}'`
     );
   }
-  const run11 = await state.read(runId);
-  if (run11.tasks[taskId] === void 0) {
+  const run9 = await state.read(runId);
+  if (run9.tasks[taskId] === void 0) {
     throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
   }
   const outcome = parseProducerStatus(statusLine);
@@ -11208,8 +11300,8 @@ function makeReplayRunnerFactory(input) {
   };
 }
 async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
-  const run11 = await deps.state.read(runId);
-  const task = run11.tasks[taskId];
+  const run9 = await deps.state.read(runId);
+  const task = run9.tasks[taskId];
   if (task === void 0) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
@@ -11335,7 +11427,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
       log24.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
-      const run11 = await deps.state.update(runId, (s) => ({
+      const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
         quota: patch.quota
@@ -11344,17 +11436,17 @@ async function applyQuotaGate(deps, runId, mode = "session") {
         scope: decision.kind === "pause-5h" ? "5h" : "7d",
         reason: decision.reason,
         resets_at_epoch: decision.resetsAtEpoch,
-        run: run11
+        run: run9
       };
     }
     case "unavailable-halt": {
       log24.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
-      const run11 = await deps.state.update(runId, (s) => ({
+      const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: "suspended",
         quota: void 0
       }));
-      return { scope: "unavailable", reason: decision.reason, run: run11 };
+      return { scope: "unavailable", reason: decision.reason, run: run9 };
     }
     default:
       return assertNever(decision);
@@ -11411,10 +11503,10 @@ async function shipTask(deps, ctx) {
 // src/driver/coroutine.ts
 var log26 = createLogger("coroutine");
 var MERGE_RESYNC_CAP = 8;
-function requireTask2(run11, taskId) {
-  const task = run11.tasks[taskId];
+function requireTask2(run9, taskId) {
+  const task = run9.tasks[taskId];
   if (task === void 0) {
-    throw new Error(`coroutine: run '${run11.run_id}' has no task '${taskId}'`);
+    throw new Error(`coroutine: run '${run9.run_id}' has no task '${taskId}'`);
   }
   return task;
 }
@@ -11500,12 +11592,12 @@ async function foldResults(deps, runId, taskId, stage, task, results) {
   return env.step;
 }
 async function stepTask(deps, runId, taskId, results) {
-  let run11 = await deps.state.read(runId);
-  let task = requireTask2(run11, taskId);
+  let run9 = await deps.state.read(runId);
+  let task = requireTask2(run9, taskId);
   if (isTerminalTaskStatus(task.status)) {
     return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
-  const stop = await applyQuotaGate(deps, runId, run11.mode);
+  const stop = await applyQuotaGate(deps, runId, run9.mode);
   if (stop !== null) {
     return {
       kind: "quota-blocked",
@@ -11528,10 +11620,10 @@ async function stepTask(deps, runId, taskId, results) {
   }
   const handlers = makeStageHandlers(deps);
   for (; ; ) {
-    run11 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, stage);
+    run9 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, stage);
     cursorPersisted = true;
-    task = requireTask2(run11, taskId);
-    const ctx = { run: run11, task, attempt: task.escalation_rung + 1 };
+    task = requireTask2(run9, taskId);
+    const ctx = { run: run9, task, attempt: task.escalation_rung + 1 };
     const result = stage === "ship" ? await shipTask(deps, ctx) : await runStage(stage, ctx, handlers);
     switch (result.kind) {
       case "advance": {
@@ -11630,23 +11722,23 @@ async function stepTask(deps, runId, taskId, results) {
 }
 
 // src/driver/next.ts
-function depsSatisfied(run11, task) {
-  return task.depends_on.every((d) => run11.tasks[d]?.status === "done");
+function depsSatisfied(run9, task) {
+  return task.depends_on.every((d) => run9.tasks[d]?.status === "done");
 }
-function isUnsatisfiableDep(run11, depId) {
-  const dep = run11.tasks[depId];
+function isUnsatisfiableDep(run9, depId) {
+  const dep = run9.tasks[depId];
   return dep === void 0 || dep.status === "dropped";
 }
 async function stepRun(deps, runId) {
-  let run11 = await deps.state.read(runId);
-  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run11.ship_mode });
-  if (isTerminalRunStatus(run11.status)) {
-    return { ...ctx(), kind: "run-terminal", run_status: run11.status };
+  let run9 = await deps.state.read(runId);
+  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run9.ship_mode });
+  if (isTerminalRunStatus(run9.status)) {
+    return { ...ctx(), kind: "run-terminal", run_status: run9.status };
   }
-  if (Object.values(run11.tasks).every((t) => isTerminalTaskStatus(t.status))) {
+  if (Object.values(run9.tasks).every((t) => isTerminalTaskStatus(t.status))) {
     return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
   }
-  const stop = await applyQuotaGate(deps, runId, run11.mode);
+  const stop = await applyQuotaGate(deps, runId, run9.mode);
   if (stop !== null) {
     return {
       ...ctx(),
@@ -11656,9 +11748,9 @@ async function stepRun(deps, runId) {
       ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
     };
   }
-  if (run11.status === "paused" || run11.status === "suspended") {
+  if (run9.status === "paused" || run9.status === "suspended") {
     const patch = clearCheckpoint();
-    run11 = await deps.state.update(runId, (s) => ({
+    run9 = await deps.state.update(runId, (s) => ({
       ...s,
       status: patch.status,
       quota: patch.quota
@@ -11666,13 +11758,13 @@ async function stepRun(deps, runId) {
   }
   const cascadeDropped = [];
   for (; ; ) {
-    run11 = await deps.state.read(runId);
-    const blocked = Object.values(run11.tasks).filter(
-      (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run11, d))
+    run9 = await deps.state.read(runId);
+    const blocked = Object.values(run9.tasks).filter(
+      (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run9, d))
     );
     if (blocked.length === 0) break;
     for (const t of blocked) {
-      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run11, d));
+      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run9, d));
       if (unsatisfied === void 0) {
         throw new Error(
           `next: task '${t.task_id}' classified blocked but no unsatisfiable dep found \u2014 unreachable`
@@ -11688,11 +11780,11 @@ async function stepRun(deps, runId) {
       cascadeDropped.push(t.task_id);
     }
   }
-  const tasks = Object.values(run11.tasks);
+  const tasks = Object.values(run9.tasks);
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
     return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
   }
-  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run11, t));
+  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run9, t));
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
@@ -11728,9 +11820,9 @@ async function loadCliDeps(opts) {
   const dirOpts = { ...opts, dataDir };
   const config = loadConfig(dirOpts);
   const state = new StateManager({ ...dirOpts });
-  const run11 = await state.read(opts.runId);
-  const spec = await new SpecStore(dirOpts).read(run11.spec.repo, run11.spec.spec_id);
-  const { owner, repo } = splitRepo(run11.spec.repo);
+  const run9 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run9.spec.repo, run9.spec.spec_id);
+  const { owner, repo } = splitRepo(run9.spec.repo);
   return {
     config,
     spec,
@@ -11745,9 +11837,9 @@ async function loadCliDeps(opts) {
     // The explicit `--ship-mode` flag overrides; otherwise honor the value
     // persisted on the run at create (manual/resume `drive`/`finalize` omit the
     // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
-    shipMode: opts.shipMode ?? run11.ship_mode,
+    shipMode: opts.shipMode ?? run9.ship_mode,
     state,
-    run: run11
+    run: run9
   };
 }
 
@@ -11968,14 +12060,14 @@ async function resolveOrCreateRun(state, specStore, opts) {
   });
 }
 async function applyResume(state, runId, reading, config, nowEpochSec) {
-  const run11 = await state.read(runId);
-  if (isTerminalRunStatus(run11.status)) {
-    throw new Error(`run resume: run '${runId}' is terminal (${run11.status}); nothing to resume`);
+  const run9 = await state.read(runId);
+  if (isTerminalRunStatus(run9.status)) {
+    throw new Error(`run resume: run '${runId}' is terminal (${run9.status}); nothing to resume`);
   }
-  const plan = planResume(run11, reading, config, nowEpochSec);
+  const plan = planResume(run9, reading, config, nowEpochSec);
   switch (plan.kind) {
     case "not-resumable":
-      return { kind: "resumed", run: run11 };
+      return { kind: "resumed", run: run9 };
     case "resume": {
       const updated = await state.update(runId, (s) => ({
         ...s,
@@ -11987,12 +12079,12 @@ async function applyResume(state, runId, reading, config, nowEpochSec) {
     case "still-blocked": {
       const d = plan.decision;
       if (d.kind === "proceed") {
-        return { kind: "resumed", run: run11 };
+        return { kind: "resumed", run: run9 };
       }
       const base = {
         kind: "still-blocked",
         run_id: runId,
-        status: run11.status,
+        status: run9.status,
         reason: d.reason
       };
       return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
@@ -12053,7 +12145,7 @@ async function runCreate(argv, overrides = {}) {
   );
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const { run: run11 } = await resolveOrCreateRun(state, specStore, {
+  const { run: run9 } = await resolveOrCreateRun(state, specStore, {
     repo,
     runId,
     ...selector,
@@ -12062,7 +12154,7 @@ async function runCreate(argv, overrides = {}) {
     ...ownerSession !== void 0 ? { ownerSession } : {},
     ...force ? { force } : {}
   });
-  emitJson(run11);
+  emitJson(run9);
   return EXIT.OK;
 }
 async function runResume(argv) {
@@ -12081,10 +12173,10 @@ async function runResume(argv) {
   emitJson(envelope);
   return EXIT.OK;
 }
-async function resolveRunId(state, args, action) {
+async function resolveRunId(state, args, action, overrides = {}) {
   const explicit = optionalString(args.flag("run"));
   if (explicit !== void 0) return explicit;
-  const current = await state.readCurrent();
+  const current = await readCurrentForCwd(state, overrides);
   if (current === null) {
     throw new UsageError(`run ${action}: no --run given and no current run`);
   }
@@ -12105,17 +12197,17 @@ async function runFinalize(argv) {
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
-  const { run: run11, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
+  const { run: run9, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
   emitJson({
     kind: "finalized",
-    run: run11,
+    run: run9,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     issues_filed: issuesFiled
   });
   return EXIT.OK;
 }
-async function run4(argv) {
+async function run3(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(RUN_HELP);
@@ -12137,7 +12229,7 @@ var runCommand = {
   describe: "Create or resume a run (create resolves+seeds a spec; resume re-checks quota)",
   run: async (argv) => {
     try {
-      return await run4(argv);
+      return await run3(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`run: ${err.message}`);
@@ -12274,7 +12366,7 @@ async function resolveSpecRepo(args, overrides = {}) {
     gitClient: overrides.gitClient ?? new DefaultGitClient()
   });
 }
-async function run5(argv) {
+async function run4(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(SPEC_HELP);
@@ -12299,7 +12391,7 @@ var specCommand = {
   describe: "Build a durable spec (resolve \u2192 gate \u2192 store; orchestrator drives the agent spawns)",
   run: async (argv) => {
     try {
-      return await run5(argv);
+      return await run4(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`spec: ${err.message}`);
@@ -12319,17 +12411,17 @@ function dispositionOf(status, failureClass) {
   }
   return "stuck";
 }
-function depsSatisfied2(run11, depends) {
-  return depends.every((d) => run11.tasks[d]?.status === "done");
+function depsSatisfied2(run9, depends) {
+  return depends.every((d) => run9.tasks[d]?.status === "done");
 }
-function hasUnsatisfiableDep(run11, depends) {
+function hasUnsatisfiableDep(run9, depends) {
   return depends.some((d) => {
-    const dep = run11.tasks[d];
+    const dep = run9.tasks[d];
     return dep === void 0 || dep.status === "dropped";
   });
 }
-function scanRun(run11) {
-  const all = Object.values(run11.tasks);
+function scanRun(run9) {
+  const all = Object.values(run9.tasks);
   const tasks = all.map((t) => ({
     task_id: t.task_id,
     status: t.status,
@@ -12347,13 +12439,13 @@ function scanRun(run11) {
   const dead_ends = deadEnd.map((t) => t.task_id);
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
   const actionablePending = all.some(
-    (t) => t.status === "pending" && (depsSatisfied2(run11, t.depends_on) || hasUnsatisfiableDep(run11, t.depends_on))
+    (t) => t.status === "pending" && (depsSatisfied2(run9, t.depends_on) || hasUnsatisfiableDep(run9, t.depends_on))
   );
   const would_deadlock = !allTerminal && !actionablePending;
   const needs_rescue = resettable.length > 0;
   return {
-    run_id: run11.run_id,
-    run_status: run11.status,
+    run_id: run9.run_id,
+    run_status: run9.status,
     counts: {
       total: all.length,
       shipped: by("shipped").length,
@@ -12366,7 +12458,7 @@ function scanRun(run11) {
     dead_ends,
     needs_rescue,
     would_deadlock,
-    summary: summarize2(run11.status, resettable.length, dead_ends.length, would_deadlock),
+    summary: summarize2(run9.status, resettable.length, dead_ends.length, would_deadlock),
     tasks
   };
 }
@@ -12399,15 +12491,15 @@ function resetTaskRow(task) {
     merge_resyncs: 0
   };
 }
-function selectTargets(run11, opts) {
+function selectTargets(run9, opts) {
   const explicit = opts.tasks ?? [];
   if (explicit.length > 0) {
     const targets2 = [];
     const skipped = [];
     for (const id of explicit) {
-      const task = run11.tasks[id];
+      const task = run9.tasks[id];
       if (task === void 0) {
-        throw new Error(`rescue: run '${run11.run_id}' has no task '${id}'`);
+        throw new Error(`rescue: run '${run9.run_id}' has no task '${id}'`);
       }
       if (task.status === "done") {
         throw new Error(
@@ -12422,32 +12514,32 @@ function selectTargets(run11, opts) {
     }
     return { targets: targets2, skipped };
   }
-  const scan = scanRun(run11);
+  const scan = scanRun(run9);
   const targets = opts.includeDeadEnds ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
   return { targets, skipped: [] };
 }
 async function applyRescue(state, runId, opts = {}) {
   let result = null;
-  const updated = await state.update(runId, (run11) => {
-    const { targets, skipped } = selectTargets(run11, opts);
-    const wasTerminal = isTerminalRunStatus(run11.status);
+  const updated = await state.update(runId, (run9) => {
+    const { targets, skipped } = selectTargets(run9, opts);
+    const wasTerminal = isTerminalRunStatus(run9.status);
     const reopen = wasTerminal && targets.length > 0;
     result = {
       run_id: runId,
-      run_status: reopen ? "running" : run11.status,
+      run_status: reopen ? "running" : run9.status,
       reset: targets,
       reopened: reopen,
       skipped
     };
     if (targets.length === 0 && !reopen) {
-      return run11;
+      return run9;
     }
-    const nextTasks = { ...run11.tasks };
+    const nextTasks = { ...run9.tasks };
     for (const id of targets) {
-      nextTasks[id] = resetTaskRow(run11.tasks[id]);
+      nextTasks[id] = resetTaskRow(run9.tasks[id]);
     }
     return {
-      ...run11,
+      ...run9,
       tasks: nextTasks,
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
@@ -12494,35 +12586,35 @@ to 'running' when it reset work. Idempotent.
 
 Emits ONE JSON document:
   { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
-async function resolveRunId2(state, args, action) {
+async function resolveRunId2(state, args, action, overrides) {
   const explicit = args.flag("run");
   if (typeof explicit === "string" && explicit.length > 0) return explicit;
-  const current = await state.readCurrent();
+  const current = await readCurrentForCwd(state, overrides);
   if (current === null) {
     throw new UsageError(`rescue ${action}: no --run given and no current run`);
   }
   return current.run_id;
 }
-async function runScan(argv) {
+async function runScan(argv, overrides = {}) {
   const args = parseArgs(argv);
   if (args.flag("help") === true) {
     emitLine(SCAN_HELP);
     return EXIT.OK;
   }
   const state = new StateManager();
-  const runId = await resolveRunId2(state, args, "scan");
-  const run11 = await state.read(runId);
-  emitJson(scanRun(run11));
+  const runId = await resolveRunId2(state, args, "scan", overrides);
+  const run9 = await state.read(runId);
+  emitJson(scanRun(run9));
   return EXIT.OK;
 }
-async function runApply(argv) {
+async function runApply(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["include-dead-ends"] });
   if (args.flag("help") === true) {
     emitLine(APPLY_HELP);
     return EXIT.OK;
   }
   const state = new StateManager();
-  const runId = await resolveRunId2(state, args, "apply");
+  const runId = await resolveRunId2(state, args, "apply", overrides);
   const tasks = args.all("task");
   const includeDeadEnds = args.flag("include-dead-ends") === true;
   const result = await applyRescue(state, runId, {
@@ -12532,7 +12624,7 @@ async function runApply(argv) {
   emitJson(result);
   return EXIT.OK;
 }
-async function run6(argv) {
+async function run5(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(RESCUE_HELP);
@@ -12552,7 +12644,7 @@ var rescueCommand = {
   describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
   run: async (argv) => {
     try {
-      return await run6(argv);
+      return await run5(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`rescue: ${err.message}`);
@@ -12576,7 +12668,7 @@ Usage:
 
 Emits ONE JSON document:
   { kind:"score", summary, dead_surface? }`;
-async function run7(argv) {
+async function runScore(argv, overrides = {}) {
   const args = parseArgs(argv, { booleans: ["dead-surface"] });
   if (args.flag("help") === true) {
     emitLine(HELP4);
@@ -12585,14 +12677,14 @@ async function run7(argv) {
   const dataDir = resolveDataDir({});
   const state = new StateManager({ dataDir });
   const explicitRun = optionalString(args.flag("run"));
-  const runState = explicitRun !== void 0 ? await state.read(explicitRun) : await state.readCurrent();
-  if (runState === null) {
+  const runState2 = explicitRun !== void 0 ? await state.read(explicitRun) : await readCurrentForCwd(state, overrides);
+  if (runState2 === null) {
     throw new UsageError("score: no --run given and no current run");
   }
   const specStore = new SpecStore({ dataDir });
-  const manifest = await specStore.read(runState.spec.repo, runState.spec.spec_id);
-  const report = buildPartialReport(runState, manifest);
-  const summary = buildRunSummary(runState, report);
+  const manifest = await specStore.read(runState2.spec.repo, runState2.spec.spec_id);
+  const report = buildPartialReport(runState2, manifest);
+  const summary = buildRunSummary(runState2, report);
   let deadSurface;
   if (args.flag("dead-surface") === true) {
     const config = loadConfig({ dataDir });
@@ -12627,7 +12719,7 @@ var scoreCommand = {
   describe: "Report a run's outcome summary (read-only; optional --dead-surface scan)",
   run: async (argv) => {
     try {
-      return await run7(argv);
+      return await runScore(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`score: ${err.message}`);
@@ -12658,7 +12750,7 @@ envelope's fold_key verbatim; a stale/duplicate key rejects LOUD (re-invoke with
   expects=reviews         \u2192 { "fold_key": {\u2026}, "holdout"?: {"raw": "<validator output>"},
                               "reviews": { reviews, verifications, crossVendorAbsent? } }
 Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
-async function run8(argv) {
+async function run6(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
     emitLine(HELP5);
@@ -12689,7 +12781,7 @@ var driveCommand = {
   describe: "Step one task: run deterministic steps, emit spawn/terminal/quota envelope",
   run: async (argv) => {
     try {
-      return await run8(argv);
+      return await run6(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`drive: ${err.message}`);
@@ -12744,7 +12836,7 @@ function assertExpectedMode(current, expectMode) {
     );
   }
 }
-async function run9(argv) {
+async function run7(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
     emitLine(HELP6);
@@ -12770,7 +12862,7 @@ var nextCommand = {
   describe: "One run-loop step: quota gate, cascade-drop, emit the ready set",
   run: async (argv) => {
     try {
-      return await run9(argv);
+      return await run7(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`next: ${err.message}`);
@@ -12831,8 +12923,8 @@ async function passthrough(payload, deps) {
   const original = deps.originalStatusline ?? process.env.FACTORY_ORIGINAL_STATUSLINE ?? "";
   if (original.trim().length === 0) return "";
   try {
-    const run11 = deps.exec ?? exec;
-    const result = await run11(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
+    const run9 = deps.exec ?? exec;
+    const result = await run9(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
       log28.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
@@ -13161,7 +13253,7 @@ autonomy preflight: ${verdict} \u2014 the run is halted until you relaunch (comm
 `);
   return EXIT.OK;
 }
-async function run10(argv) {
+async function run8(argv) {
   const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
     emitLine(HELP8);
@@ -13190,7 +13282,7 @@ var autonomyCommand = {
   describe: "Materialize merged-settings.json for an autonomous relaunch + print the command",
   run: async (argv) => {
     try {
-      return await run10(argv);
+      return await run8(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`autonomy: ${err.message}`);

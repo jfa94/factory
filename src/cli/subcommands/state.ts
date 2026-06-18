@@ -14,6 +14,7 @@ import { EXIT, type ExitCode } from "../exit-codes.js";
 import { parseArgs, isUsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { StateManager } from "../../core/state/index.js";
+import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import type { RunState } from "../../types/index.js";
 import type { Subcommand } from "../main.js";
 
@@ -43,7 +44,10 @@ function summarize(run: RunState): string {
   return lines.join("\n");
 }
 
-async function run(argv: string[]): Promise<ExitCode> {
+export async function runState(
+  argv: string[],
+  overrides: CurrentRunOverrides = {},
+): Promise<ExitCode> {
   const args = parseArgs(argv, { booleans: ["summary"] });
   if (args.flag("help") === true) {
     emitLine(HELP);
@@ -53,7 +57,8 @@ async function run(argv: string[]): Promise<ExitCode> {
   const state = new StateManager();
   const runId = args.positionals[0];
 
-  const runState = runId !== undefined ? await state.read(runId) : await state.readCurrent();
+  const runState =
+    runId !== undefined ? await state.read(runId) : await readCurrentForCwd(state, overrides);
 
   if (runState === null) {
     if (args.flag("summary") === true) {
@@ -76,7 +81,7 @@ export const stateCommand: Subcommand = {
   describe: "Print run state (current or by run-id); read-only",
   run: async (argv) => {
     try {
-      return await run(argv);
+      return await runState(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`state: ${err.message}`);

@@ -9,9 +9,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { rescueCommand } from "./rescue.js";
+import { rescueCommand, runScan } from "./rescue.js";
 import { EXIT } from "../exit-codes.js";
 import { StateManager } from "../../core/state/index.js";
+import { FakeGitClient } from "../../git/index.js";
 import type { SpecPointer, TaskState } from "../../types/index.js";
 
 const SPEC: SpecPointer = { repo: "acme/widgets", spec_id: "7-x", issue_number: 7 };
@@ -129,8 +130,10 @@ describe("rescue scan/apply happy paths", () => {
     expect(run.tasks.c!.status).toBe("pending");
   });
 
-  it("scan defaults to the current run when --run is omitted", async () => {
-    const code = await rescueCommand.run(["scan"]);
+  it("scan defaults to the current run when --run is omitted (resolved per-repo from cwd)", async () => {
+    const git = new FakeGitClient();
+    git.setRemoteUrl("origin", "git@github.com:acme/widgets.git");
+    const code = await runScan([], { gitClient: git, cwd: "/x" });
     expect(code).toBe(EXIT.OK);
     expect(out().run_id).toBe("run-c");
   });

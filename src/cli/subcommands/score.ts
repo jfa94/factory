@@ -17,6 +17,7 @@ import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js"
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { StateManager } from "../../core/state/index.js";
+import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { SpecStore } from "../../spec/index.js";
 import { DefaultGitProbe } from "../../verifier/deterministic/index.js";
 import {
@@ -41,7 +42,10 @@ Usage:
 Emits ONE JSON document:
   { kind:"score", summary, dead_surface? }`;
 
-async function run(argv: string[]): Promise<ExitCode> {
+export async function runScore(
+  argv: string[],
+  overrides: CurrentRunOverrides = {},
+): Promise<ExitCode> {
   const args = parseArgs(argv, { booleans: ["dead-surface"] });
   if (args.flag("help") === true) {
     emitLine(HELP);
@@ -53,7 +57,9 @@ async function run(argv: string[]): Promise<ExitCode> {
 
   const explicitRun = optionalString(args.flag("run"));
   const runState =
-    explicitRun !== undefined ? await state.read(explicitRun) : await state.readCurrent();
+    explicitRun !== undefined
+      ? await state.read(explicitRun)
+      : await readCurrentForCwd(state, overrides);
   if (runState === null) {
     throw new UsageError("score: no --run given and no current run");
   }
@@ -105,7 +111,7 @@ export const scoreCommand: Subcommand = {
   describe: "Report a run's outcome summary (read-only; optional --dead-surface scan)",
   run: async (argv) => {
     try {
-      return await run(argv);
+      return await runScore(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`score: ${err.message}`);
