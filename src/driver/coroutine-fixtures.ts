@@ -48,10 +48,11 @@ export const PAUSE_5H = reading({ five: 21, seven: 0 }); // 5h breach
 
 export function greenProbe(): FakeGitProbe {
   return new FakeGitProbe({
-    // Include both origin/staging (used by fold.ts applyRecordReviews which still
-    // reads deps.config.git.stagingBranch="staging") and origin/staging/run-1
-    // (used by handlers.verify which now uses runStagingBranch(runId)).
-    refs: { "origin/staging": "sha-base", "origin/staging/run-1": "sha-base", HEAD: "sha-head" },
+    // Only origin/staging/run-1 is needed: both handlers.verify and fold.ts
+    // applyRecordReviews now use runStagingBranch(runId) = "staging/run-1", so the
+    // gate looks up origin/staging/run-1. The shared origin/staging seed was removed
+    // after fold.ts was fixed to use the per-run branch (Decision 33).
+    refs: { "origin/staging/run-1": "sha-base", HEAD: "sha-head" },
     changedFiles: [],
     commits: [
       commit({ sha: "c1", files: ["src/x.test.ts"], tagged: true }),

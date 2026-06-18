@@ -33,6 +33,7 @@ import {
 } from "./transitions.js";
 import { taskWorktreePath } from "./paths.js";
 import { classifyFailure, ESCALATION_CAP, parseProducerStatus } from "../producer/index.js";
+import { runStagingBranch } from "../git/index.js";
 import { nextStage, stageToInFlightStatus } from "../types/index.js";
 import { GateRunner, type GateContext } from "../verifier/deterministic/index.js";
 import {
@@ -360,7 +361,7 @@ export async function applyRecordReviews(
     runId,
     taskId,
     worktree,
-    baseRef: deps.config.git.stagingBranch,
+    baseRef: runStagingBranch(runId),
     config: deps.config,
     tools: deps.tools,
   };
