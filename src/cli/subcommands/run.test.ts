@@ -595,10 +595,10 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
   });
 
   // -------------------------------------------------------------------------
-  // runCreate boundary: kind:"exists" → FAILS LOUD (UsageError)
+  // runCreate boundary: kind:"exists" → EXIT.CONFLICT + structured envelope
   // -------------------------------------------------------------------------
 
-  it("runCreate: active run + no flag → UsageError (fail loud, Task 4.1)", async () => {
+  it("runCreate: active run + no flag → EXIT.CONFLICT (3) + kind:'exists' envelope on stdout (Task 4.2)", async () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
@@ -609,15 +609,36 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       cwd: "/x",
       dataDir,
     });
-    // A bare re-create (auto id) must now FAIL LOUD — no silent reuse.
-    await expect(
-      runCreate(["--issue", "42"], {
+
+    // Capture stdout to assert the structured envelope.
+    const stdoutChunks: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    });
+    // Suppress stderr noise from emitError.
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    let exitCode: number | undefined;
+    try {
+      exitCode = await runCreate(["--issue", "42"], {
         gitClient: git,
         ghClient: gh,
         cwd: "/x",
         dataDir,
-      }),
-    ).rejects.toMatchObject({ isUsageError: true });
+      });
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+
+    // Must return EXIT.CONFLICT (3), not throw.
+    expect(exitCode).toBe(EXIT.CONFLICT);
+
+    // Stdout must carry a kind:"exists" envelope with the active run id.
+    const emitted = JSON.parse(stdoutChunks.join("")) as Record<string, unknown>;
+    expect(emitted.kind).toBe("exists");
+    expect((emitted.existing as Record<string, unknown>).run_id).toBe("run-a");
   });
 
   it("runCreate: --supersede + --resume together → UsageError (at most one)", async () => {
@@ -962,10 +983,10 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
     expect(protection?.strictUpToDate).toBe(true);
   });
 
-  it("a second create without --new fails loud (active run exists) and does NOT cut a branch", async () => {
-    // Decision 35: runCreate no longer silently reuses — it fails loud when an active
-    // run exists and no --supersede/--resume/--new flag was given. The staging branch
-    // must NOT be cut on this rejected path.
+  it("a second create without --new returns EXIT.CONFLICT (active run exists) and does NOT cut a branch", async () => {
+    // Decision 35 / Task 4.2: runCreate no longer silently reuses — it returns
+    // EXIT.CONFLICT with a structured envelope when an active run exists and no
+    // --supersede/--resume/--new flag was given. The staging branch must NOT be cut.
     const git = gitWithDevelop();
     const gh = new FakeGhClient();
 
@@ -978,15 +999,25 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
     });
     const callsAfterFirst = [...git.calls];
 
-    // Second create (auto-id, no --new) → FAILS LOUD (kind:"exists").
-    await expect(
-      runCreate(["--issue", "42"], {
+    // Suppress stdout/stderr output from the conflict response.
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    let exitCode: number | undefined;
+    try {
+      // Second create (auto-id, no --new) → EXIT.CONFLICT (kind:"exists").
+      exitCode = await runCreate(["--issue", "42"], {
         gitClient: git,
         ghClient: gh,
         cwd: "/target",
         dataDir,
-      }),
-    ).rejects.toMatchObject({ isUsageError: true });
+      });
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+
+    expect(exitCode).toBe(EXIT.CONFLICT);
 
     // No new checkoutB calls after the first create (branch was not cut for the rejected run).
     const newCalls = git.calls.slice(callsAfterFirst.length);

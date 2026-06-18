@@ -20,12 +20,14 @@ export const EXIT = {
   ERROR: 1,
   /** Usage error: unknown subcommand/hook, bad flags, missing required arg. */
   USAGE: 2,
+  /** Conflict: an active run already exists and no resolution flag was passed. */
+  CONFLICT: 3,
 } as const;
 
-/** The literal union `0 | 1 | 2` of valid process exit codes. */
+/** The literal union `0 | 1 | 2 | 3` of valid process exit codes. */
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
 
 /** Type guard: is `n` one of the frozen exit codes? */
 export function isExitCode(n: number): n is ExitCode {
-  return n === EXIT.OK || n === EXIT.ERROR || n === EXIT.USAGE;
+  return n === EXIT.OK || n === EXIT.ERROR || n === EXIT.USAGE || n === EXIT.CONFLICT;
 }

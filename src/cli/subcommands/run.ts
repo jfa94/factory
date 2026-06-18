@@ -690,13 +690,22 @@ export async function runCreate(
     stagingDeps,
   );
   if (result.kind === "exists") {
-    // Task 4.2 upgrades this to a structured exit-3 envelope; 4.1 just FAILS LOUD.
-    throw new UsageError(
-      `run create: an active run '${result.existing.run_id}' already exists for this spec — ` +
-        `pass --supersede to replace it, or use 'factory resume' to continue it`,
+    emitJson({
+      kind: "exists",
+      existing: { run_id: result.existing.run_id, status: result.existing.status },
+    });
+    emitError(
+      `run create: active run '${result.existing.run_id}' already exists — ` +
+        `pass --resume to continue it or --supersede to replace it`,
     );
+    return EXIT.CONFLICT;
   }
-  emitJson(result.run); // created | superseded both carry .run
+  if (result.kind === "created") {
+    emitJson({ kind: "created", run: result.run });
+    return EXIT.OK;
+  }
+  // kind === "superseded"
+  emitJson({ kind: "superseded", run: result.run, supersededId: result.supersededId });
   return EXIT.OK;
 }
 
