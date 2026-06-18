@@ -6,7 +6,7 @@
  * state, and (in `live` mode) serial-merges via MergeSerializer. All I/O is
  * injectable (FakeGitClient + FakeGhClient + real StateManager in a tmpdir).
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
