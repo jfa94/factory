@@ -5,8 +5,13 @@
  * pause/suspend) → checkpoint clear on recovery → cascade-drop (transitive,
  * blocked-environmental) → the READY set. Ready = every NON-TERMINAL task whose
  * deps are all `done` — in-flight tasks come first so a crashed driver finishes
- * what it started before opening new work. Deadlock (non-terminal tasks, none
- * ready, none droppable) throws LOUD.
+ * what it started before opening new work.
+ *
+ * Circuit breaker (Decision 34): when no task is actionable yet non-terminal work
+ * remains (dependency cycle / mutually-stuck graph), each wedged task is dropped as
+ * `spec-defect` and the envelope `all-terminal` is returned. The driver routes this
+ * to finalize → `failed`, leaving `develop` clean. Every drop is LOUD (dropTask
+ * warns) with the full wedged set in the reason.
  *
  * Ordering invariant: terminal-run check BEFORE the quota gate — a terminal probe
  * must not write a pause checkpoint (same discipline as stepTask in coroutine.ts).
@@ -175,13 +180,25 @@ export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextE
   const ordered = [...inFlight, ...pending];
 
   if (ordered.length === 0) {
-    const remaining = tasks
-      .filter((t) => !isTerminalTaskStatus(t.status))
-      .map((t) => `${t.task_id}=${t.status}`);
-    throw new Error(
-      `next: no ready tasks but ${remaining.length} remain [${remaining.join(", ")}] — ` +
-        `dependency cycle or deadlock`,
-    );
+    // Circuit breaker (Decision 34): no task is actionable yet non-terminal work
+    // remains — a dependency cycle / mutually-stuck graph that no future iteration
+    // can resolve. Rather than throw (anti-spin), DROP each wedged task as a
+    // spec-defect and fall through to all-terminal → finalize → `failed` (develop
+    // stays clean). LOUD: every drop is recorded with its reason (dropTask warns).
+    const wedged = tasks.filter((t) => !isTerminalTaskStatus(t.status));
+    const detail = wedged.map((t) => `${t.task_id}=${t.status}`).join(", ");
+    for (const t of wedged) {
+      await dropTask(
+        deps,
+        runId,
+        t.task_id,
+        "spec-defect",
+        `unrunnable: no ready task and no satisfiable path (dependency cycle/deadlock) — wedged set [${detail}]`,
+      );
+      cascadeDropped.push(t.task_id);
+    }
+    run = await deps.state.read(runId);
+    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
   }
 
   return { ...ctx(), kind: "tasks-ready", ready: ordered, cascade_dropped: cascadeDropped };
