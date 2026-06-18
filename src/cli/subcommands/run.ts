@@ -61,12 +61,12 @@ Usage:
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
-  finalize   Build the partial report, file per-drop issues, ship the rollup, flip terminal.`;
+  finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.`;
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--workflow] [--no-ship] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -76,6 +76,8 @@ Usage:
   --run-id      Override the generated 'run-YYYYMMDD-HHMMSS' id (determinism/tests).
                 A named id is an address: it forces a fresh imperative create.
   --new         Force a fresh run even if a live one already exists for this spec.
+  --supersede   Terminate the active run for this spec, then create a fresh one.
+  --resume      Continue the active run for this spec (full hand-off: forthcoming).
   --workflow    Run the parallel background Workflow driver. Default (no flag): session —
                 the in-session, quota-paced orchestrator loop.
   --no-ship     Open the rollup PR but never merge. Default (no flag): live — auto-merge
@@ -86,10 +88,10 @@ Usage:
                 Defaults to $CLAUDE_CODE_SESSION_ID; absent ⇒ owner-unknown (Stop gate unscoped).
 
 Resolves the spec via the durable store (LOUD if none exists — generate one first).
-IDEMPOTENT: with the auto-generated id, a repeated create returns the existing
-non-terminal run for this (repo, spec_id) — when its mode/ship intent matches — instead
-of spawning an orphan; pass --new (or a --run-id) to force a fresh run. Seeds one pending
-task per spec task and emits the RunState JSON (run_id is the top-level field).`;
+On an ACTIVE run for this (repo, spec_id): exits CONFLICT (3) and reports it — pass
+--resume to continue it or --supersede to replace it; --new (or an explicit --run-id)
+forces a fresh run regardless. Seeds one pending task per spec task and emits the
+RunState JSON (run_id is the top-level field).`;
 
 const RESUME_HELP = `factory run resume — re-check quota and resume a paused/suspended run
 

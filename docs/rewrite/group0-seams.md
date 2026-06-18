@@ -110,13 +110,13 @@ import type {
 
 A value outside any set is a **loud parse error**, never a silent pass.
 
-| Enum           | Members                                                                 | Notes                                                                                                                                         |
-| -------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RunStatus`    | `running` · `completed` · `partial` · `paused` · `suspended` · `failed` | terminal = {completed, partial, failed}; `partial` is a **quality** outcome, `paused`/`suspended` are **quota** states (Δ E — kept distinct). |
-| `TaskStatus`   | `pending` · `executing` · `reviewing` · `shipping` · `done` · `dropped` | terminal = {done, dropped}. No human-gate statuses (Decision 5).                                                                              |
-| `FailureClass` | `capability-budget` · `spec-defect` · `blocked-environmental`           | closed (Δ D); set **IFF** task is `dropped`.                                                                                                  |
-| `RiskTier`     | `low` · `medium` · `high`                                               | the **single** producer dial (Decision 25); does not size the verifier.                                                                       |
-| `PanelVerdict` | `approve` · `blocked` · `error`                                         | floor is conjunctive (unanimous `approve`); `error` is never silently an approve.                                                             |
+| Enum           | Members                                                                    | Notes                                                                                                                                                                                                                                                  |
+| -------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `RunStatus`    | `running` · `completed` · `superseded` · `paused` · `suspended` · `failed` | terminal = {completed, failed, superseded}; `superseded` marks a run replaced by `--supersede` (Decision 35), `paused`/`suspended` are **quota** states (Δ E — kept distinct). `partial` was retired (Decision 34 — develop receives whole PRDs only). |
+| `TaskStatus`   | `pending` · `executing` · `reviewing` · `shipping` · `done` · `dropped`    | terminal = {done, dropped}. No human-gate statuses (Decision 5).                                                                                                                                                                                       |
+| `FailureClass` | `capability-budget` · `spec-defect` · `blocked-environmental`              | closed (Δ D); set **IFF** task is `dropped`.                                                                                                                                                                                                           |
+| `RiskTier`     | `low` · `medium` · `high`                                                  | the **single** producer dial (Decision 25); does not size the verifier.                                                                                                                                                                                |
+| `PanelVerdict` | `approve` · `blocked` · `error`                                            | floor is conjunctive (unanimous `approve`); `error` is never silently an approve.                                                                                                                                                                      |
 
 ### 2.2 Cross-field invariants (enforced at parse time)
 
@@ -201,7 +201,7 @@ the engine never writes state).
 | `graceful-stop`     | `scope: "5h"\|"7d"`, `reason`, `resets_at_epoch?`       | quota breach — pause (5h) / suspend (7d). Never a drop.                        |
 | `wait-retry`        | `stage`, `reason`, `attempt`, `max_attempts`            | re-invoke SAME stage; **bounded** (engine throws if `attempt > max_attempts`). |
 | `task-terminal`     | `outcome: {done}` or `{dropped, failure_class, reason}` | task reached terminal status.                                                  |
-| `finalize-terminal` | `run_status: "completed"\|"partial"\|"failed"`          | run finalized. Terminal by construction.                                       |
+| `finalize-terminal` | `run_status: "completed"\|"failed"\|"superseded"`       | run finalized. Terminal by construction.                                       |
 
 Build results only via the constructors (`advance`, `spawn`, `gracefulStop`,
 `waitRetry`, `taskDone`, `taskDropped`, `finalizeTerminal`) so the shape never drifts.
@@ -216,8 +216,8 @@ Build results only via the constructors (`advance`, `spawn`, `gracefulStop`,
    `finalize-terminal`; any other kind throws. Symmetrically a per-task stage may
    **never** return `finalize-terminal`. `decideFinalize` throws on a non-terminal
    task (never returns `wait-retry`) — the structural fix for the bash exit-3
-   finalize spin-bug. Rollup: all done → `completed`; ≥1 done + ≥1 dropped →
-   `partial` (the default); 0 done / empty → `failed`.
+   finalize spin-bug. Rollup (Decision 34 — whole-PRD delivery only): all tasks
+   `done` → `completed`; any task not `done` (dropped, etc.) or 0 tasks → `failed`.
 4. **derive-don't-store** (see §2.5) — defense-in-depth so a TCB write-gap is
    non-load-bearing.
 
