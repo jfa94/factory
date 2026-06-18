@@ -411,7 +411,7 @@ export class StateManager {
   async finalize(runId: string, status: RunState["status"]): Promise<RunState> {
     if (!isTerminalRunStatus(status)) {
       throw new Error(
-        `state: finalize requires a terminal status (completed|partial|failed); got '${status}'`,
+        `state: finalize requires a terminal status (completed|failed|superseded); got '${status}'`,
       );
     }
     return this.update(runId, (state) => {

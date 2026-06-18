@@ -142,13 +142,13 @@ describe("applyRescue", () => {
     expect((await state.read(RUN_ID)).tasks.done!.status).toBe("done");
   });
 
-  it("reopens a terminal partial run to running when it reset work", async () => {
+  it("reopens a terminal failed run to running when it reset work", async () => {
     await seed(
       [
         { task_id: "a", status: "done", pr_number: 11 },
         { task_id: "b", status: "dropped", failure_class: "blocked-environmental" },
       ],
-      "partial",
+      "failed",
     );
 
     const result = await applyRescue(state, RUN_ID);
@@ -187,7 +187,7 @@ describe("applyRescue", () => {
         { task_id: "a", status: "done", pr_number: 11 },
         { task_id: "b", status: "dropped", failure_class: "blocked-environmental" },
       ],
-      "partial",
+      "failed",
     );
 
     const first = await applyRescue(state, RUN_ID);

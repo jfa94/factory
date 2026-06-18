@@ -46,7 +46,7 @@ describe("decideStop — pass-through statuses", () => {
     expect(decideStop(null, false)).toEqual({ kind: "allow" });
   });
 
-  it.each(["completed", "partial", "failed", "paused", "suspended"] as const)(
+  it.each(["completed", "superseded", "failed", "paused", "suspended"] as const)(
     "non-running status '%s' → allow (intentional)",
     (status) => {
       expect(decideStop(run({ status }), false)).toEqual({ kind: "allow" });

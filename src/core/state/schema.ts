@@ -33,31 +33,31 @@ import { z } from "zod";
 // ---------------------------------------------------------------------------
 
 /**
- * Run-level status. The three NON-`running` non-terminal-vs-terminal states are
- * the crux of Δ E — they must stay distinct:
+ * Run-level status. The non-`running` states are the crux of Δ E — they must
+ * stay distinct:
  *
  *   - `running`    — actively executing (non-terminal).
- *   - `completed`  — every task done, rollup CI green (TERMINAL, success).
- *   - `partial`    — QUALITY outcome (Decision 22): the retry ladder was
- *                    exhausted on ≥1 task; the dependency-closed done-set shipped
- *                    to `develop`, the failed task(s) handed off loudly. TERMINAL,
- *                    a run-level FAILURE. Never used for a quota event.
+ *   - `completed`  — every task done, rollup CI green. TERMINAL, success.
+ *                    `develop` receives the rollup only on this status.
+ *   - `superseded` — a fresh `run` superseded this run; its `staging/<run-id>`
+ *                    branch + PRs were deleted. TERMINAL.
  *   - `paused`     — QUOTA 5h-window breach (Decision 24): waiting out the rising
  *                    threshold curve in-session. NON-terminal, self-heals.
  *   - `suspended`  — QUOTA 7d-window breach (Decision 24): state persisted and the
  *                    process exited cleanly. NON-terminal; a (human-relaunched in
- *                    v1) `factory run resume` continues from checkpoint. Distinct
- *                    from `partial`: no work was dropped, nothing failed quality.
- *   - `failed`     — the run could not even start / a non-recoverable run-level
- *                    error before any partial delivery is possible (TERMINAL).
+ *                    v1) `factory run resume` continues from checkpoint. No work
+ *                    was dropped, nothing failed quality.
+ *   - `failed`     — the run could not deliver the whole PRD — couldn't start, or
+ *                    gave up after partial work; `develop` is untouched, the PRD
+ *                    left open. TERMINAL.
  *
- * Terminal = {completed, partial, failed}. Non-terminal = {running, paused,
+ * Terminal = {completed, superseded, failed}. Non-terminal = {running, paused,
  * suspended}. {@link isTerminalRunStatus} is the single source of that split.
  */
 export const RunStatusEnum = z.enum([
   "running",
   "completed",
-  "partial",
+  "superseded",
   "paused",
   "suspended",
   "failed",
@@ -65,7 +65,7 @@ export const RunStatusEnum = z.enum([
 export type RunStatus = z.infer<typeof RunStatusEnum>;
 
 /** Run statuses that are TERMINAL (no further work will run without a new run). */
-export const TERMINAL_RUN_STATUSES = ["completed", "partial", "failed"] as const;
+export const TERMINAL_RUN_STATUSES = ["completed", "failed", "superseded"] as const;
 /** Run statuses that are NON-terminal (work may yet continue / resume). */
 export const NONTERMINAL_RUN_STATUSES = ["running", "paused", "suspended"] as const;
 

@@ -38,7 +38,7 @@ function mkRun(
 ): RunState {
   return parseRunState({
     run_id: "run-sum-1",
-    status: opts.status ?? "partial",
+    status: opts.status ?? "failed",
     driver: "balanced",
     spec: { repo: "acme/widgets", spec_id: "7-x", issue_number: 7 },
     tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
@@ -52,7 +52,7 @@ function mkRun(
 function report(over: Partial<PartialRunReport> = {}): PartialRunReport {
   return {
     run_id: "run-sum-1",
-    run_status: "partial",
+    run_status: "failed",
     spec_id: "7-x",
     issue_number: 7,
     repo: "acme/widgets",
@@ -225,7 +225,7 @@ describe("buildRunSummary — passthrough + clock", () => {
     });
     expect(summary).toMatchObject({
       run_id: "run-sum-1",
-      run_status: "partial",
+      run_status: "failed",
       driver: "balanced",
       spec_id: "7-x",
       issue_number: 7,
@@ -263,7 +263,7 @@ describe("renderRunSummaryMarkdown", () => {
     );
     const md = renderRunSummaryMarkdown(summary);
     expect(md).toContain("## Run summary — `run-sum-1`");
-    expect(md).toContain("**PARTIAL**");
+    expect(md).toContain("**FAILED**");
     expect(md).toContain("1 shipped");
     expect(md).toContain("**Drops:** 1 spec-defect");
   });

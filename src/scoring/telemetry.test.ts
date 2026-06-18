@@ -64,7 +64,7 @@ describe("recordRunFinalized", () => {
   function report(overrides: Partial<PartialRunReport> = {}): PartialRunReport {
     return {
       run_id: RUN,
-      run_status: "partial",
+      run_status: "failed",
       spec_id: "42-checkout",
       issue_number: 42,
       repo: "acme/widgets",
@@ -91,7 +91,7 @@ describe("recordRunFinalized", () => {
 
     expect(metrics.map((m) => m.event)).toEqual(["run.finalized", "task.dropped"]);
     expect(metrics[0]!.data).toMatchObject({
-      status: "partial",
+      status: "failed",
       totals: { total: 2, shipped: 1, failed: 1, incomplete: 0 },
     });
     expect(metrics[1]!.data).toEqual({ task_id: "t2", failure_class: "capability-budget" });

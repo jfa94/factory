@@ -11,6 +11,8 @@ import {
   type RunState,
 } from "./schema.js";
 
+const NOW = "2026-01-01T12:00:00Z";
+
 function minimalTask(over: Record<string, unknown> = {}) {
   return { task_id: "t1", risk_tier: "low", ...over };
 }
@@ -65,7 +67,7 @@ describe("schema round-trip", () => {
   it("round-trips through JSON without loss", () => {
     const run = parseRunState(
       minimalRun({
-        status: "partial",
+        status: "failed",
         tasks: {
           t1: minimalTask({
             status: "dropped",
@@ -205,9 +207,9 @@ describe("cross-field invariants are enforced (not just documented)", () => {
   it("rejects a quota checkpoint on a non-paused/suspended run", () => {
     // running (default) — quota is only valid while waiting on quota.
     expect(() => parseRunState(minimalRun({ quota: { binding_window: "5h" } }))).toThrow(/quota/);
-    // terminal partial must not carry a resume horizon.
+    // terminal failed must not carry a resume horizon.
     expect(() =>
-      parseRunState(minimalRun({ status: "partial", quota: { binding_window: "7d" } })),
+      parseRunState(minimalRun({ status: "failed", quota: { binding_window: "7d" } })),
     ).toThrow(/quota/);
   });
 
@@ -227,11 +229,11 @@ describe("cross-field invariants are enforced (not just documented)", () => {
 });
 
 describe("run-status terminal/non-terminal split (Δ E distinctness)", () => {
-  it("classifies the three quota/quality states distinctly", () => {
-    // partial is QUALITY + terminal; paused/suspended are QUOTA + non-terminal.
-    expect(isTerminalRunStatus("partial")).toBe(true);
+  it("classifies the three terminal states distinctly (Decision 34/35)", () => {
+    // completed/failed/superseded are TERMINAL; paused/suspended are QUOTA + non-terminal.
     expect(isTerminalRunStatus("completed")).toBe(true);
     expect(isTerminalRunStatus("failed")).toBe(true);
+    expect(isTerminalRunStatus("superseded")).toBe(true);
     expect(isTerminalRunStatus("paused")).toBe(false);
     expect(isTerminalRunStatus("suspended")).toBe(false);
     expect(isTerminalRunStatus("running")).toBe(false);
@@ -249,6 +251,15 @@ describe("run-status terminal/non-terminal split (Δ E distinctness)", () => {
     expect(isTerminalTaskStatus("done")).toBe(true);
     expect(isTerminalTaskStatus("dropped")).toBe(true);
     expect(isTerminalTaskStatus("executing")).toBe(false);
+  });
+
+  it("parseRunState rejects the removed 'partial' status", () => {
+    expect(() => parseRunState(minimalRun({ status: "partial" }))).toThrow();
+  });
+
+  it("superseded is a valid terminal status", () => {
+    const run = parseRunState(minimalRun({ status: "superseded", ended_at: NOW }));
+    expect(isTerminalRunStatus(run.status)).toBe(true);
   });
 });
 

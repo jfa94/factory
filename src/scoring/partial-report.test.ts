@@ -71,7 +71,7 @@ function makeRun(tasks: TaskState[], overrides: Partial<RunState> = {}): RunStat
   return parseRunState({
     schema_version: 1,
     run_id: "run-1",
-    status: "partial",
+    status: "failed",
     driver: "balanced",
     spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
     tasks: record,
@@ -97,7 +97,7 @@ describe("buildPartialReport", () => {
 
     const report = buildPartialReport(run, spec, { now: NOW });
 
-    expect(report.run_status).toBe("partial");
+    expect(report.run_status).toBe("failed");
     expect(report.totals).toEqual({ total: 3, shipped: 2, failed: 1, incomplete: 0 });
     expect(report.generated_at).toBe(NOW);
     expect(report.spec_id).toBe("42-checkout");
@@ -202,7 +202,7 @@ describe("renderPartialReportMarkdown", () => {
     const md = renderPartialReportMarkdown(buildPartialReport(run, spec, { now: NOW }));
 
     expect(md).toContain("# Factory run report — `run-1`");
-    expect(md).toContain("**Status:** PARTIAL");
+    expect(md).toContain("**Status:** FAILED");
     expect(md).toContain("PRD #42");
     expect(md).toContain("2 total · 1 shipped · 1 failed · 0 incomplete");
     expect(md).toContain("## Shipped (1)");
