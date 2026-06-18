@@ -18,8 +18,9 @@
  *   - run status `interrupted`, task status `needs_human_review`, the `ci_fixing`
  *     ad-hoc status, `humanReviewLevel` / `NEEDS_DISCUSSION` — human gates are
  *     retired (locked decision 5).
- *   - the old conflation of `partial` (quality) with quota states (Δ E) — here
- *     `partial` / `paused` / `suspended` are DISTINCT run-status values.
+ *   - run status `partial` — incremental delivery is retired (Decision 34): a run
+ *     either delivers the whole PRD (`completed`) or leaves `develop` untouched
+ *     (`failed`). `paused` / `suspended` remain DISTINCT quota states (Δ E).
  *   - the two-classifier model (`classify` + `risk` + `risk_tier`) — collapsed to
  *     ONE `risk_tier` producer dial (Decision 25, Δ "review-depth axis deleted").
  *   - stored gate-verdict booleans (`quality_gate.ok`, `mutation_gate`, …) —
