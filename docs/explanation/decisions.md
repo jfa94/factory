@@ -673,6 +673,77 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 ---
 
+## Decision 33: Per-Run Staging Branch (Replaces the Single Shared Staging Branch)
+
+**Status:** Accepted (design, 2026-06-18); NOT yet implemented. Supersedes the single-shared-`staging` model assumed by Decisions 12 and 32 once built.
+
+**Choice:** Each run integrates its tasks on its own private branch `staging/<run-id>`, cut from the current tip of develop at `run create`, instead of all runs sharing one long-lived `staging` branch. Task PRs target the run's own `staging/<run-id>`; that work is invisible to develop and to every other run until the run completes.
+
+**Why:**
+
+- **Confinement makes recovery non-destructive.** An unfinished run's work lives only on its private branch, so superseding, resuming, or rescuing it never touches develop and never reaches for a force-push (forbidden by construction — `GitClient` exposes no force method, `src/git/git-client.ts`).
+- **It removes the cross-PRD contamination hazard** of the shared branch: two concurrent runs no longer pile onto one integration line, so cleaning up one never disturbs another.
+- **"Start from scratch" becomes literally true and safe:** a fresh run gets a clean branch from current develop; the abandoned attempt is just a branch nobody continues.
+
+**Mechanics:**
+
+- Cut `staging/<run-id>` from current `origin/develop` at `run create`, so staging starts up-to-date with develop.
+- Before the completion rollup merges to develop, reconcile forward if develop advanced in the meantime — integrate develop into the run branch (forward-only; never rebase-publish or force-push). The exact sequence (fast-forward vs merge-develop-in to satisfy a "branches up to date" requirement) is an implementation detail, but it is always forward-only and bounded to once per run, at completion.
+- `superseded` deletes its `staging/<run-id>` immediately (auto-closing its open task PRs). `failed` KEEPS its branch so rescue can reopen and resume the work already banked on it. Branches orphaned by a fresh start (rather than supersede) are cleaned up manually.
+
+**Trade-off:** Per-run branches diverge from develop over their lifetime, so a run that completes after another has merged to develop must reconcile forward before its rollup — integration work the single forward-only shared branch did not need. Accepted: the reconciliation is forward-only and bounded, and it buys the confinement that makes the whole recovery model safe.
+
+**Relationship:** Keystone for Decisions 34 and 35; replaces the shared-`staging` assumption in Decision 12's worktree-base invariant and Decision 32's per-task merge-into-staging; preserves the no-force-push global rule.
+
+---
+
+## Decision 34: Develop Receives Only Whole PRDs — Incremental Delivery and the `partial` Status Removed
+
+**Status:** Accepted (design, 2026-06-18); NOT yet implemented. Reverses the partial-rollup-to-develop behavior of the current `finalize`/`rollup` (the `PARTIAL:` rollup header is retired).
+
+**Choice:** The `staging/<run-id>`→develop rollup fires ONLY when the run is `completed` (every task shipped). An incomplete run lands nothing on develop. There is no partial delivery: a run delivers the whole PRD or delivers nothing to develop.
+
+**Why:**
+
+- **It realigns the implementation with the domain.** The glossary already defines a Run as succeeding "only when the whole PRD has been delivered, never partially" (`docs/glossary.md`); the code had drifted into partial rollups. This is the code catching up to the decided domain, not a new invention.
+- **All-or-nothing is what makes the recovery model coherent.** Since an unfinished run's work is confined to its private branch (Decision 33) and never reaches develop, continuing/repairing/replacing it is always safe. Allowing partial develop landings would reintroduce exactly the develop-collision hazard Decision 33 removes.
+- **"Resuming an unfinished run" is the only form of partial progress** — and it is recoverable, not a terminal half-delivery.
+
+**Consequences for the status enum:**
+
+- `partial` is REMOVED. A run is `completed`, or it is unfinished/resumable.
+- A wedged run the circuit breaker gives up on goes terminal `failed` — develop clean, PRD left open. `failed` broadens from "could not start" to "delivered no work to develop" (couldn't-start OR gave-up after banking work on its private branch).
+- On `completed`, finalize CLOSES and COMMENTS the originating PRD issue — net-new behavior; the gh client currently has `issueCreate`/`issueList` but no `issueClose`/`issueComment` (`src/git/gh-client.ts`), which must be added. Closing the PRD is what guarantees `run` never re-touches a delivered PRD (Decision 35).
+
+**Trade-off:** Loses "bank the N good tasks, hand off the failures" incremental value delivery — a run that cannot finish delivers nothing to develop, even if most tasks passed. Accepted deliberately: the banked work is not lost (it survives on the run's private branch for rescue/resume), and atomic per-PRD delivery is worth more than partial landings that complicate develop and recovery.
+
+**Relationship:** Rides on Decision 33's per-run branch (where partial work safely waits); revises the `finalize` rollup; orthogonal to Decision 22 (notify-on-ship, untouched); enables Decision 35's "`run` never sees terminal runs" simplification.
+
+---
+
+## Decision 35: `run` / `resume` / `rescue` Are Distinct Lifecycle Verbs; `run` Supersedes Rather Than Silently Reuses
+
+**Status:** Accepted (design, 2026-06-18); NOT yet implemented. Revises Decision 32's idempotent-reuse-on-`create`. `resume` becomes its own command (no `commands/resume.md` exists today).
+
+**Choice:** Three distinct run-lifecycle commands, plus the unchanged standalone `debug`:
+
+- **`run`** — always a fresh start. It looks for a NON-terminal run on the spec; finding one, it PROMPTS (continue via `resume`, or supersede). Proceeding supersedes: the prior run goes `superseded` (its private branch deleted, Decision 33), a fresh run begins. With no active run it starts silently. It never sees terminal runs (a delivered PRD is closed, Decision 34).
+- **`resume`** — continue an unfinished run if possible. It classifies via the read-only rescue scan: no active run → report the terminal status; quota-paused → re-check the window; running with runnable work → continue; running but deadlocked → STOP and redirect to rescue. It never mutates state and never auto-escalates.
+- **`rescue`** — repair, then auto-resume. It reconciles run-state and git/GitHub drift, then continues driving. Forward-only/non-destructive repair is autonomous; any destructive step (delete a branch, close a PR, discard work) is surfaced for consent; force-push never. Git/GitHub reconciliation is performed by a CODING AGENT that detects, troubleshoots, and addresses the issue — not an enumerated catalog of fix-ups in the deterministic engine. The engine detects "stuck/drifted" and hands off; the open-ended repair is agent work, per Model A.
+- **`debug`** — unchanged; a standalone, run-independent review-fix loop (risk-invariant panel + Codex on a chosen scope), not part of the recovery ladder.
+
+**Why:**
+
+- **The verbs were conflated.** `run` both started AND silently reused (Decision 32), there was no first-class `resume`, and "continue" vs "repair" were undivided — operators hit the bug where `/factory:run` found an existing run and stopped instead of starting fresh. Separating the verbs maps each to one intent: start-over / continue / repair.
+- **Supersede-with-consent honors the never-drop-without-confirmation rule** while still letting an operator start fresh. The at-most-one-non-terminal-run-per-spec invariant it enforces keeps state unambiguous (no zombie parallel runs on one PRD).
+- **Agent-driven reconciliation keeps the engine out of a brittle drift catalog.** The engine is good at detecting that progress is blocked; open-ended diagnosis and repair of git/GitHub state is exactly the agent layer's job under Model A.
+
+**Trade-off:** `run` is no longer a silent idempotent no-op on re-invocation — it stops to ask, costing an interaction in the (rare) re-run case. And agent-driven rescue is less predictable than a fixed reconciliation routine. Both accepted: the prompt prevents silent supersede of real work, and the recovery surface is too open-ended to enumerate safely in TS.
+
+**Relationship:** Replaces the idempotent reuse + reuse-mismatch guard of Decision 32 (the guard's intent — never drive a run under an unintended ship mode — is subsumed by the explicit supersede prompt); leans on Decisions 33/34 (terminal runs are closed and confined, so `run` can ignore them); rescue's agent hand-off mirrors the `rescue-diagnostic` pattern; preserves the autonomy gate of Decision 29 (the supersede prompt is a pre-start human moment, before the run goes autonomous).
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

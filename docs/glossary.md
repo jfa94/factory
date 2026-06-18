@@ -94,6 +94,54 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **synonyms**: —
 - **code anchor**: `src/core/state/schema.ts:TaskState`
 
+## Run continuation & recovery
+
+> A PRD has **at most one active Run at any time**. An unfinished Run is never a finished outcome — it is something a person continues, repairs, or replaces. These three terms name those three choices. None of a Run's work reaches the shared codebase until the whole PRD is delivered; an unfinished Run's work stays private to that attempt, so continuing, repairing, or replacing it never disturbs already-delivered work.
+
+### Resume
+
+- **type**: Operation (on a Run)
+- **status**: accepted
+- **definition**: Carrying an existing, unfinished Run forward from where it stopped. A Run can stop for benign reasons — a capacity window closed, a session ended — and resuming simply continues it toward delivering the whole PRD. Resume continues a Run only when continuation is genuinely possible; when the Run is wedged such that continuation alone cannot clear it, Resume defers to Rescue rather than forcing progress.
+- **invariants**:
+  - Resume applies only to an unfinished Run; a delivered or replaced Run has nothing to resume.
+  - Resume never changes the work or the Run's state — it only continues it. Making a wedged Run continuable again is Rescue's job, not Resume's.
+- **examples**:
+  - A Run pauses when a daily capacity window is exhausted; the next day Resume carries it on from the same point.
+  - Counter-example: a Run whose remaining work cannot proceed at all — Resume does not bulldoze it; it hands off to Rescue.
+- **relationships**: continues a Run; defers to Rescue when continuation is impossible; the alternative to Supersede when an active Run already exists.
+- **synonyms**: —
+
+### Rescue
+
+- **type**: Operation (on a Run)
+- **status**: accepted
+- **definition**: Recovering a Run that cannot simply be resumed — investigating why it is stuck and changing its state until it can continue, then carrying it on. Where Resume only moves a continuable Run forward, Rescue is allowed to repair: clearing wedged work, reconciling the Run's recorded state with what actually happened in the outside world, and reopening a Run that had given up. Repairs that only move things forward are done autonomously; any repair that would discard work is surfaced for a person's consent first.
+- **invariants**:
+  - Rescue is the only operation that repairs a Run's recorded state; Resume and a Run's own progress never do.
+  - Rescue never discards work without explicit consent.
+  - Rescue ends by continuing the Run — recovering a Run it then leaves stopped would not be recovery.
+- **examples**:
+  - A Run gave up after one Task repeatedly failed; Rescue reopens it, clears the wedged Task, and continues.
+  - A Task's work in fact landed but the Run's record missed it; Rescue reconciles the record and carries on.
+- **relationships**: repairs and then continues a Run; the escalation beyond Resume; bounded by the Circuit Breaker's notion of an unsafe Run.
+- **synonyms**: recovery.
+
+### Supersede
+
+- **type**: Operation (relates two Runs over one PRD)
+- **status**: accepted
+- **definition**: Starting a fresh Run for a PRD that already has an active, unfinished Run, where the new Run replaces the old. The replaced Run is abandoned whole — none of its work is delivered — and only the new attempt continues. Superseding is the deliberate choice to start over rather than continue (Resume) or repair (Rescue) the existing attempt.
+- **invariants**:
+  - At most one active Run exists for a PRD at any time; superseding preserves that by abandoning the prior Run as it begins the new one.
+  - A superseded Run delivers none of its work — the PRD is left as if that attempt had not run.
+  - Only an unfinished Run can be superseded; a delivered Run is complete, not replaceable.
+- **examples**:
+  - A Run on the login PRD stalls overnight; the next morning the author deliberately starts over — the stalled Run is superseded and the fresh Run takes its place.
+  - Counter-example: continuing the stalled Run instead — that is Resume, not Supersede; nothing is abandoned.
+- **relationships**: replaces one Run with another over the same PRD; the alternative to Resume and Rescue; enforces the one-active-Run-per-PRD invariant.
+- **synonyms**: replace, start over.
+
 ## Quality & verification
 
 ### Review
