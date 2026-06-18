@@ -10881,18 +10881,18 @@ async function finalizeRun(deps, runId) {
       merge: deps.shipMode === "live",
       ...deps.rollup ?? {}
     });
-    if (rollupResult.merged && report.issue_number) {
-      await deps.gh.issueComment({
-        repo: report.repo,
-        number: report.issue_number,
-        body: prdDoneComment(report, rollupResult)
-      });
+    if (rollupResult.merged) {
+      if (!rollupResult.resumed) {
+        await deps.gh.issueComment({
+          repo: report.repo,
+          number: report.issue_number,
+          body: prdDoneComment(report, rollupResult)
+        });
+      }
       await deps.gh.issueClose({
         repo: report.repo,
         number: report.issue_number
       });
-    }
-    if (rollupResult.merged) {
       await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
       await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
     }

@@ -22,8 +22,9 @@
  *
  * state.finalize is LAST on purpose: a crash anywhere in 2–6 leaves the run
  * non-terminal, so a re-drive re-enters finalize — and every step is idempotent
- * (report rewrite, telemetry append, issue dedup, rollup resume-guard). The run is
- * flipped terminal only once its outcome is fully shipped.
+ * (report rewrite, telemetry append, issue dedup, rollup resume-guard, PRD comment
+ * gated on the first finalize, 404-tolerant branch GC). The run is flipped terminal
+ * only once its outcome is fully shipped.
  *
  * no-merge cutover (ShipMode): the rollup PR is opened but never merged; issues are
  * still filed (the drops are real regardless of merge).
@@ -86,7 +87,7 @@ export interface FinalizeRunDeps {
   readonly config: Config;
   /** Plugin data dir (roots the run store — report.md, metrics.jsonl). */
   readonly dataDir: string;
-  /** Repo owner (unused directly; the canonical slug is the report's repo). */
+  /** Repo owner — used for the per-run staging-branch GC (deleteProtection / deleteRemoteBranch). */
   readonly owner: string;
   /** Repo name. */
   readonly repo: string;
@@ -203,22 +204,28 @@ export async function finalizeRun(
       ...(deps.rollup ?? {}),
     });
 
-    if (rollupResult.merged && report.issue_number) {
-      await deps.gh.issueComment({
-        repo: report.repo,
-        number: report.issue_number,
-        body: prdDoneComment(report, rollupResult),
-      });
+    if (rollupResult.merged) {
+      // PRD-delivered comment + close. issueComment is NOT idempotent (a re-posted
+      // comment is a visible duplicate), so fire it ONLY on the first finalize — a
+      // resumed finalize hits rollup()'s already-merged short-circuit (resumed === true)
+      // and must not double-post. issueClose is naturally idempotent (closing a closed
+      // issue is a no-op), so it stays unconditional. issue_number is a required field
+      // (always ≥1), so there is no presence guard to make.
+      if (!rollupResult.resumed) {
+        await deps.gh.issueComment({
+          repo: report.repo,
+          number: report.issue_number,
+          body: prdDoneComment(report, rollupResult),
+        });
+      }
       await deps.gh.issueClose({
         repo: report.repo,
         number: report.issue_number,
       });
-    }
-
-    if (rollupResult.merged) {
       // Branch GC (Decision 35): a completed+merged run is fully contained in develop, so
       // tear down its per-run staging branch. Protection FIRST — GitHub blocks deleting a
-      // protected ref. A `failed` run (or a `no-merge` open PR) keeps its branch + protection,
+      // protected ref. Both ops are idempotent (404-tolerant), so a resumed finalize safely
+      // repeats them. A `failed` run (or a `no-merge` open PR) keeps its branch + protection,
       // banked for rescue / inspection.
       await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
       await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);

@@ -276,6 +276,30 @@ describe("finalizeRun", () => {
     expect((await state.read(RUN_ID)).status).toBe("failed");
   });
 
+  it("resume-safe (completed+merged): a second finalize re-enters the merged rollup, posts the PRD comment exactly once, and stays completed", async () => {
+    // Idempotency contract (finalize.ts header): a finalize that died after the rollup
+    // merged but before flipping terminal re-enters here. rollup() short-circuits on the
+    // already-merged PR (resumed:true), so the NON-idempotent issueComment must not
+    // double-post. issueClose is naturally idempotent; branch GC is 404-tolerant.
+    const tasks: TaskSeed[] = [
+      { task_id: "t1", status: "done", branch: "factory/run/t1", pr_number: 11 },
+      { task_id: "t2", status: "done", pr_number: 12 },
+    ];
+    await seed(tasks);
+    const spec = makeSpec(tasks);
+
+    const first = await finalizeRun(makeDeps(spec, "live"), RUN_ID);
+    expect(first.rollup?.merged).toBe(true);
+    expect(gh.issueComments).toHaveLength(1);
+    expect(gh.merges).toHaveLength(1);
+
+    const second = await finalizeRun(makeDeps(spec, "live"), RUN_ID);
+    expect(second.rollup?.resumed).toBe(true); // hit the already-merged short-circuit
+    expect(gh.issueComments).toHaveLength(1); // NOT 2 — the fix
+    expect(gh.merges).toHaveLength(1); // never re-merged
+    expect((await state.read(RUN_ID)).status).toBe("completed");
+  });
+
   it("anti-spin: a non-terminal task makes finalize THROW (never advances)", async () => {
     // One done, one still executing → decideFinalize refuses (would otherwise spin).
     await state.update(RUN_ID, (s) => ({
