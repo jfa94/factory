@@ -157,11 +157,12 @@ run already exists for this `(repo, spec_id)`, it exits `3` (CONFLICT) and emits
 
 `--new` (or an explicit `--run-id`) bypasses the conflict scan and forces a fresh
 run unconditionally. The scan→create is serialized under a per-`(repo, spec_id)` lock
-so two concurrent same-spec creates cannot both mint an orphan. The reused/resumed run
-keeps its original persisted dials: handing off via `--resume` with a
-`--workflow`/`--no-ship` that resolves to a `mode` or `ship_mode` **disagreeing** with
-the existing run is a loud `UsageError` (driving it under a ship mode you did not ask
-for is dangerous). Emits `{kind:"created", run}` on the fresh-create path.
+so two concurrent same-spec creates cannot both mint an orphan. `--resume` simply
+reports the conflict (`kind:"exists"`) for the caller to hand off to [`resume`](#resume);
+it does **not** validate the create-time `--workflow`/`--no-ship` flags against the live
+run — flag-compatibility belongs to the resume hand-off, not a premature gate here, so a
+resumed run keeps its own persisted dials regardless. Emits `{kind:"created", run}` on
+the fresh-create path.
 
 ### `run resume`
 

@@ -402,8 +402,8 @@ async function supersedeRun(
 }
 
 /**
- * Resolve the spec, then (unless `opts.force`) inspect the active run for this
- * `(repo, spec_id)` and return a discriminated result (Decision 35):
+ * Resolve the spec, then (unless `opts.intent === "fresh"`) inspect the active run for
+ * this `(repo, spec_id)` and return a discriminated result (Decision 35):
  *
  * - `{ kind: "created" }` — no active run; a fresh run was created.
  * - `{ kind: "exists" }` — an active run exists and no flag was given; the CALLER
