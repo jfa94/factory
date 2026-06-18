@@ -349,7 +349,7 @@ describe("createRun", () => {
   });
 });
 
-describe("resolveOrCreateRun (idempotent create)", () => {
+describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
   let dataDir: string;
   let state: StateManager;
   let store: SpecStore;
@@ -365,36 +365,18 @@ describe("resolveOrCreateRun (idempotent create)", () => {
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
-  it("reuses the active run for the same spec and spawns no orphan", async () => {
+  // -------------------------------------------------------------------------
+  // kind: "created" — no active run exists
+  // -------------------------------------------------------------------------
+
+  it("no active run → kind:'created' (fresh run)", async () => {
     const first = await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
-    expect(first.reused).toBe(false);
+    expect(first.kind).toBe("created");
+    if (first.kind !== "created") throw new Error("narrowing");
     expect(first.run.run_id).toBe("run-a");
-
-    // A second create (different generated id) returns the SAME live run.
-    const second = await resolveOrCreateRun(state, store, {
-      repo: REPO,
-      issue: 42,
-      runId: "run-b",
-    });
-    expect(second.reused).toBe(true);
-    expect(second.run.run_id).toBe("run-a");
-
-    // No orphan: only the original run exists in the store.
-    expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 
-  it("reuse resolves by explicit spec-id too", async () => {
-    await resolveOrCreateRun(state, store, { repo: REPO, specId: "42-checkout", runId: "run-a" });
-    const second = await resolveOrCreateRun(state, store, {
-      repo: REPO,
-      specId: "42-checkout",
-      runId: "run-b",
-    });
-    expect(second.reused).toBe(true);
-    expect(second.run.run_id).toBe("run-a");
-  });
-
-  it("force creates a fresh run even when one is active", async () => {
+  it("force creates a fresh run even when one is active (kind:'created')", async () => {
     await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
     const forced = await resolveOrCreateRun(state, store, {
       repo: REPO,
@@ -402,48 +384,56 @@ describe("resolveOrCreateRun (idempotent create)", () => {
       runId: "run-b",
       force: true,
     });
-    expect(forced.reused).toBe(false);
+    expect(forced.kind).toBe("created");
+    if (forced.kind !== "created") throw new Error("narrowing");
     expect(forced.run.run_id).toBe("run-b");
     expect((await state.listRuns()).map((r) => r.run_id).sort()).toEqual(["run-a", "run-b"]);
   });
 
-  it("creates a new run when the only matching run is terminal", async () => {
+  it("creates a new run when the only matching run is terminal (kind:'created')", async () => {
     await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
     await state.finalize("run-a", "completed");
     const next = await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-b" });
-    expect(next.reused).toBe(false);
+    expect(next.kind).toBe("created");
+    if (next.kind !== "created") throw new Error("narrowing");
     expect(next.run.run_id).toBe("run-b");
   });
 
-  it("is LOUD when no spec exists for the issue (the reuse path resolves the spec first)", async () => {
-    await expect(
-      resolveOrCreateRun(state, store, { repo: REPO, issue: 999, runId: "run-x" }),
-    ).rejects.toThrow(/no spec for issue #999/);
-  });
+  // -------------------------------------------------------------------------
+  // kind: "exists" — active run exists, no flag given (Decision 35: fail loud
+  // at the runCreate boundary; resolveOrCreateRun itself just reports the fact)
+  // -------------------------------------------------------------------------
 
-  it("reuses the live run when re-passed mode/ship intent MATCH it", async () => {
-    const first = await resolveOrCreateRun(state, store, {
-      repo: REPO,
-      issue: 42,
-      runId: "run-a",
-      mode: "workflow",
-      shipMode: "live",
-    });
-    expect(first.reused).toBe(false);
+  it("active run + no flag → kind:'exists' (no silent reuse, no orphan)", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
 
+    // A second create (different generated id) returns the SAME live run as "exists".
     const second = await resolveOrCreateRun(state, store, {
       repo: REPO,
       issue: 42,
       runId: "run-b",
-      mode: "workflow",
-      shipMode: "live",
     });
-    expect(second.reused).toBe(true);
-    expect(second.run.run_id).toBe("run-a");
+    expect(second.kind).toBe("exists");
+    if (second.kind !== "exists") throw new Error("narrowing");
+    expect(second.existing.run_id).toBe("run-a");
+
+    // No orphan: only the original run exists in the store.
+    expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 
-  it("reuses the live run when the intent fields are OMITTED (direct-API path)", async () => {
-    // Stored as workflow/live; an omitted-intent reuse must NOT be treated as a divergence.
+  it("active run + no flag → kind:'exists' resolves by explicit spec-id too", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, specId: "42-checkout", runId: "run-a" });
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      specId: "42-checkout",
+      runId: "run-b",
+    });
+    expect(second.kind).toBe("exists");
+    if (second.kind !== "exists") throw new Error("narrowing");
+    expect(second.existing.run_id).toBe("run-a");
+  });
+
+  it("active run + no flag → kind:'exists' even when intent fields are omitted (direct-API path)", async () => {
     await resolveOrCreateRun(state, store, {
       repo: REPO,
       issue: 42,
@@ -456,40 +446,153 @@ describe("resolveOrCreateRun (idempotent create)", () => {
       issue: 42,
       runId: "run-b",
     });
-    expect(second.reused).toBe(true);
-    expect(second.run.run_id).toBe("run-a");
-    expect(second.run.mode).toBe("workflow");
-    expect(second.run.ship_mode).toBe("live");
+    expect(second.kind).toBe("exists");
+    if (second.kind !== "exists") throw new Error("narrowing");
+    expect(second.existing.run_id).toBe("run-a");
+    expect(second.existing.mode).toBe("workflow");
+    expect(second.existing.ship_mode).toBe("live");
   });
 
-  it("HARD-FAILS (UsageError) when a re-passed ship intent diverges from the live run", async () => {
-    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // ship_mode=live (default)
+  it("active run + no flag → kind:'exists' even when re-passed mode/ship MATCH", async () => {
+    await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-a",
+      mode: "workflow",
+      shipMode: "live",
+    });
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-b",
+      mode: "workflow",
+      shipMode: "live",
+    });
+    expect(second.kind).toBe("exists");
+    if (second.kind !== "exists") throw new Error("narrowing");
+    expect(second.existing.run_id).toBe("run-a");
+  });
+
+  it("active run + no flag → kind:'exists' even when re-passed ship intent diverges (no guard without --resume)", async () => {
+    // Decision 35: resolveOrCreateRun no longer asserts flag compatibility on the
+    // plain "no flag" path — it just reports kind:"exists". The assertReusableFlags
+    // guard only fires on the --resume path (Task 4.2).
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-b",
+      shipMode: "no-merge",
+    });
+    expect(second.kind).toBe("exists");
+    // No orphan minted.
+    expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
+  });
+
+  it("active run + no flag → kind:'exists' even when re-passed --mode diverges (no guard without --resume)", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-b",
+      mode: "workflow",
+    });
+    expect(second.kind).toBe("exists");
+    expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
+  });
+
+  it("--resume with divergent ship intent → HARD-FAILS (UsageError) via assertReusableFlags", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // ship_mode=live
     await expect(
       resolveOrCreateRun(state, store, {
         repo: REPO,
         issue: 42,
         runId: "run-b",
+        resume: true,
         shipMode: "no-merge",
       }),
     ).rejects.toMatchObject({ isUsageError: true });
-    // The divergent create never minted a second run.
+    // No orphan.
     expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 
-  it("HARD-FAILS (UsageError) when a re-passed --mode diverges from the live run", async () => {
+  it("--resume with divergent --mode → HARD-FAILS (UsageError) via assertReusableFlags", async () => {
     await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // mode=session
     await expect(
       resolveOrCreateRun(state, store, {
         repo: REPO,
         issue: 42,
         runId: "run-b",
+        resume: true,
         mode: "workflow",
       }),
     ).rejects.toMatchObject({ isUsageError: true });
     expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 
-  it("the divergent-intent reuse rejects as a UsageError at the runCreate boundary (→ EXIT.USAGE)", async () => {
+  // -------------------------------------------------------------------------
+  // kind: "superseded" — --supersede clears the old run and creates fresh
+  // -------------------------------------------------------------------------
+
+  it("--supersede → kind:'superseded'; old run marked superseded; its branch deleted", async () => {
+    // Seed an active run first (bare state — no staging deps needed for the seed).
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const { defaultConfig } = await import("../../config/schema.js");
+    const stagingDeps = {
+      gitClient: git,
+      ghClient: gh,
+      config: defaultConfig(),
+      targetRoot: "/target",
+      owner: "acme",
+      repo: "widgets",
+    };
+
+    const r = await resolveOrCreateRun(
+      state,
+      store,
+      { repo: REPO, issue: 42, runId: "run-new", supersede: true },
+      stagingDeps,
+    );
+
+    expect(r.kind).toBe("superseded");
+    if (r.kind !== "superseded") throw new Error("narrowing");
+    expect(r.supersededId).toBe("run-old");
+    expect(r.run.run_id).toBe("run-new");
+
+    // Old run is finalized as superseded.
+    expect((await state.read("run-old")).status).toBe("superseded");
+    // Branch was deleted via gh fake (field: deletedBranches).
+    expect(gh.deletedBranches).toContain("staging/run-old");
+  });
+
+  it("--supersede without stagingDeps → UsageError", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+    await expect(
+      resolveOrCreateRun(state, store, {
+        repo: REPO,
+        issue: 42,
+        runId: "run-new",
+        supersede: true,
+        // no stagingDeps passed
+      }),
+    ).rejects.toMatchObject({ isUsageError: true });
+  });
+
+  it("is LOUD when no spec exists for the issue (the reuse path resolves the spec first)", async () => {
+    await expect(
+      resolveOrCreateRun(state, store, { repo: REPO, issue: 999, runId: "run-x" }),
+    ).rejects.toThrow(/no spec for issue #999/);
+  });
+
+  // -------------------------------------------------------------------------
+  // runCreate boundary: kind:"exists" → FAILS LOUD (UsageError)
+  // -------------------------------------------------------------------------
+
+  it("runCreate: active run + no flag → UsageError (fail loud, Task 4.1)", async () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
@@ -500,10 +603,23 @@ describe("resolveOrCreateRun (idempotent create)", () => {
       cwd: "/x",
       dataDir,
     });
-    // A bare re-create (auto id) whose intent DIVERGES (--no-ship → no-merge, vs the live
-    // run) rejects as a UsageError; runCommand.run maps that to EXIT.USAGE.
+    // A bare re-create (auto id) must now FAIL LOUD — no silent reuse.
     await expect(
-      runCreate(["--issue", "42", "--no-ship"], {
+      runCreate(["--issue", "42"], {
+        gitClient: git,
+        ghClient: gh,
+        cwd: "/x",
+        dataDir,
+      }),
+    ).rejects.toMatchObject({ isUsageError: true });
+  });
+
+  it("runCreate: --supersede + --resume together → UsageError (at most one)", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    await expect(
+      runCreate(["--issue", "42", "--supersede", "--resume"], {
         gitClient: git,
         ghClient: gh,
         cwd: "/x",
@@ -840,7 +956,10 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
     expect(protection?.strictUpToDate).toBe(true);
   });
 
-  it("reused run does NOT cut a second branch (the reuse path skips staging)", async () => {
+  it("a second create without --new fails loud (active run exists) and does NOT cut a branch", async () => {
+    // Decision 35: runCreate no longer silently reuses — it fails loud when an active
+    // run exists and no --supersede/--resume/--new flag was given. The staging branch
+    // must NOT be cut on this rejected path.
     const git = gitWithDevelop();
     const gh = new FakeGhClient();
 
@@ -853,15 +972,17 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
     });
     const callsAfterFirst = [...git.calls];
 
-    // Second create (auto-id, no --new) → reuses the live run, must NOT cut a branch.
-    await runCreate(["--issue", "42"], {
-      gitClient: git,
-      ghClient: gh,
-      cwd: "/target",
-      dataDir,
-    });
+    // Second create (auto-id, no --new) → FAILS LOUD (kind:"exists").
+    await expect(
+      runCreate(["--issue", "42"], {
+        gitClient: git,
+        ghClient: gh,
+        cwd: "/target",
+        dataDir,
+      }),
+    ).rejects.toMatchObject({ isUsageError: true });
 
-    // No new checkoutB calls after the first create.
+    // No new checkoutB calls after the first create (branch was not cut for the rejected run).
     const newCalls = git.calls.slice(callsAfterFirst.length);
     expect(newCalls.filter((c) => c.startsWith("checkout -B staging/"))).toHaveLength(0);
   });

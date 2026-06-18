@@ -12129,11 +12129,17 @@ function assertReusableFlags(existing, opts) {
     );
   }
 }
+async function supersedeRun(state, existing, stagingDeps) {
+  const branch = runStagingBranch(existing.run_id);
+  await state.finalize(existing.run_id, "superseded");
+  await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
+  await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
+}
 async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   const manifest = await resolveSpec(specStore, opts);
   if (opts.force === true) {
     return {
-      reused: false,
+      kind: "created",
       run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps)
     };
   }
@@ -12141,14 +12147,26 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
-      assertReusableFlags(existing, opts);
-      log28.info(
-        `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`
-      );
-      return { reused: true, run: existing };
+      if (opts.supersede === true) {
+        if (stagingDeps === void 0) {
+          throw new UsageError("run create --supersede requires the CLI gh deps");
+        }
+        const supersededId = existing.run_id;
+        await supersedeRun(state, existing, stagingDeps);
+        return {
+          kind: "superseded",
+          run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+          supersededId
+        };
+      }
+      if (opts.resume === true) {
+        assertReusableFlags(existing, opts);
+        return { kind: "exists", existing };
+      }
+      return { kind: "exists", existing };
     }
     return {
-      reused: false,
+      kind: "created",
       run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps)
     };
   });
@@ -12198,7 +12216,7 @@ function resolveOwnerSession(flag, env = process.env) {
   return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
 }
 async function runCreate(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship"] });
+  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship", "supersede", "resume"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -12230,6 +12248,11 @@ async function runCreate(argv, overrides = {}) {
   const shipMode = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
   const force = args.flag("new") === true || explicitRunId !== void 0;
+  const supersede = args.flag("supersede") === true;
+  const resume = args.flag("resume") === true;
+  if (supersede && resume) {
+    throw new UsageError("run create: pass at most one of --supersede / --resume");
+  }
   const dataDir = resolveDataDir(
     overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {}
   );
@@ -12246,7 +12269,7 @@ async function runCreate(argv, overrides = {}) {
     owner,
     repo
   };
-  const { run: run9 } = await resolveOrCreateRun(
+  const result = await resolveOrCreateRun(
     state,
     specStore,
     {
@@ -12256,11 +12279,18 @@ async function runCreate(argv, overrides = {}) {
       mode,
       shipMode,
       ...ownerSession !== void 0 ? { ownerSession } : {},
-      ...force ? { force } : {}
+      ...force ? { force } : {},
+      ...supersede ? { supersede } : {},
+      ...resume ? { resume } : {}
     },
     stagingDeps
   );
-  emitJson(run9);
+  if (result.kind === "exists") {
+    throw new UsageError(
+      `run create: an active run '${result.existing.run_id}' already exists for this spec \u2014 pass --supersede to replace it, or use 'factory resume' to continue it`
+    );
+  }
+  emitJson(result.run);
   return EXIT.OK;
 }
 async function runResume(argv) {

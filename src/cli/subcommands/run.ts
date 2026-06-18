@@ -247,6 +247,19 @@ export type CreateRunOptions = SpecSelector & {
    * escape hatch). Ignored by {@link createRun}, which is unconditionally imperative.
    */
   readonly force?: boolean;
+  /**
+   * Decision 35: mark the existing active run `superseded`, delete its
+   * `staging/<run-id>` branch (which auto-closes its task PRs), and create a fresh
+   * run. Requires `stagingDeps` to be present (the gh client must be wired).
+   */
+  readonly supersede?: boolean;
+  /**
+   * Pass-through for Task 4.2: signal that the caller intends to RESUME the active
+   * run rather than create a new one. {@link resolveOrCreateRun} validates flag
+   * compatibility via {@link assertReusableFlags} and returns `{ kind: "exists" }`;
+   * Task 4.2 upgrades the caller to handle this case.
+   */
+  readonly resume?: boolean;
 };
 
 /**
@@ -350,11 +363,22 @@ export async function createRun(
   return createRunFromManifest(state, specStore, await resolveSpec(specStore, opts), opts);
 }
 
-/** Outcome of {@link resolveOrCreateRun}: whether a live run was reused or freshly created. */
-export interface ResolveOrCreateResult {
-  readonly reused: boolean;
-  readonly run: RunState;
-}
+/**
+ * Outcome of {@link resolveOrCreateRun} — a discriminated union (Decision 35).
+ *
+ * - `"created"`: no active run existed (or `--supersede` cleared it) and a fresh run
+ *   was minted. `.run` is the new {@link RunState}.
+ * - `"exists"`: an active run exists and no `--supersede`/`--resume` flag was given.
+ *   The CALLER decides what to do; `runCreate` fails loud with an actionable message.
+ *   `.existing` is the live {@link RunState}.
+ * - `"superseded"`: `--supersede` was given; the old run was marked `superseded` and
+ *   its branch deleted, then a fresh run was created. `.run` is the new run;
+ *   `.supersededId` is the old run's id.
+ */
+export type ResolveOrCreateResult =
+  | { readonly kind: "created"; readonly run: RunState }
+  | { readonly kind: "exists"; readonly existing: RunState }
+  | { readonly kind: "superseded"; readonly run: RunState; readonly supersededId: string };
 
 /**
  * Guard the reuse path against a SILENT intent drop: a repeated `run create` resolves
@@ -383,21 +407,40 @@ function assertReusableFlags(existing: RunState, opts: CreateRunOptions): void {
 }
 
 /**
- * Idempotent `run create`: resolve the spec, then (unless `opts.force`) reuse the
- * newest NON-terminal run for this `(repo, spec_id)` instead of spawning a second
- * (orphan) run — the CP3 fix for a re-run that merely wanted to re-grab `run_id`.
- * A terminal run is never reused (the scan ignores it → a fresh run is created).
- * `force` (the `--new` escape hatch) skips the scan and always creates.
+ * Supersede an active run (Decision 35): mark it `superseded` (durable intent
+ * FIRST, so a crash mid-cleanup leaves a recoverable orphan branch, never a
+ * running run with no branch), then tear down protection (GitHub blocks deleting
+ * a protected ref) and delete `staging/<run-id>` (which auto-closes its task PRs).
+ */
+async function supersedeRun(
+  state: StateManager,
+  existing: RunState,
+  stagingDeps: RunStagingDeps,
+): Promise<void> {
+  const branch = runStagingBranch(existing.run_id);
+  await state.finalize(existing.run_id, "superseded");
+  await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
+  await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
+}
+
+/**
+ * Resolve the spec, then (unless `opts.force`) inspect the active run for this
+ * `(repo, spec_id)` and return a discriminated result (Decision 35):
+ *
+ * - `{ kind: "created" }` — no active run; a fresh run was created.
+ * - `{ kind: "exists" }` — an active run exists and no flag was given; the CALLER
+ *   decides. `runCreate` fails loud with an actionable message here.
+ * - `{ kind: "superseded" }` — `--supersede` given; the old run was finalized +
+ *   its branch deleted, then a fresh run was created.
  *
  * The scan→create is serialized under a per-(repo, spec_id) lock so two concurrent
  * same-spec creates can't both observe "no active run" and mint two orphan runs —
  * the per-run clobber guard in {@link StateManager.create} only catches a same
- * run_id collision, not a same-spec one. Reuse with divergent re-passed flags
- * hard-fails via {@link assertReusableFlags}.
+ * run_id collision, not a same-spec one.
  *
- * `stagingDeps` is forwarded to {@link createRunFromManifest} to cut + protect the
- * per-run staging branch on the fresh-create path (Decision 33). The reuse path
- * never cuts a branch (the branch already exists from the original create).
+ * `stagingDeps` is forwarded to {@link createRunFromManifest} on the fresh-create
+ * path to cut + protect the per-run staging branch (Decision 33), and is required
+ * by the `--supersede` path to delete the old run's branch.
  */
 export async function resolveOrCreateRun(
   state: StateManager,
@@ -409,7 +452,7 @@ export async function resolveOrCreateRun(
   const manifest = await resolveSpec(specStore, opts);
   if (opts.force === true) {
     return {
-      reused: false,
+      kind: "created",
       run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
     };
   }
@@ -417,14 +460,26 @@ export async function resolveOrCreateRun(
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
-      assertReusableFlags(existing, opts);
-      log.info(
-        `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`,
-      );
-      return { reused: true, run: existing };
+      if (opts.supersede === true) {
+        if (stagingDeps === undefined) {
+          throw new UsageError("run create --supersede requires the CLI gh deps");
+        }
+        const supersededId = existing.run_id;
+        await supersedeRun(state, existing, stagingDeps);
+        return {
+          kind: "superseded",
+          run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+          supersededId,
+        };
+      }
+      if (opts.resume === true) {
+        assertReusableFlags(existing, opts);
+        return { kind: "exists", existing };
+      }
+      return { kind: "exists", existing };
     }
     return {
-      reused: false,
+      kind: "created",
       run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
     };
   });
@@ -546,7 +601,7 @@ export async function runCreate(
   argv: string[],
   overrides: RunCreateOverrides = {},
 ): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship"] });
+  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship", "supersede", "resume"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -594,6 +649,11 @@ export async function runCreate(
   // into an imperative fresh create: a named id is an address (determinism/tests),
   // not a reuse request, so it never silently resolves to a different run.
   const force = args.flag("new") === true || explicitRunId !== undefined;
+  const supersede = args.flag("supersede") === true;
+  const resume = args.flag("resume") === true;
+  if (supersede && resume) {
+    throw new UsageError("run create: pass at most one of --supersede / --resume");
+  }
 
   const dataDir = resolveDataDir(
     overrides.dataDir !== undefined ? { dataDir: overrides.dataDir } : {},
@@ -613,7 +673,7 @@ export async function runCreate(
     owner,
     repo,
   };
-  const { run } = await resolveOrCreateRun(
+  const result = await resolveOrCreateRun(
     state,
     specStore,
     {
@@ -624,10 +684,19 @@ export async function runCreate(
       shipMode,
       ...(ownerSession !== undefined ? { ownerSession } : {}),
       ...(force ? { force } : {}),
+      ...(supersede ? { supersede } : {}),
+      ...(resume ? { resume } : {}),
     },
     stagingDeps,
   );
-  emitJson(run);
+  if (result.kind === "exists") {
+    // Task 4.2 upgrades this to a structured exit-3 envelope; 4.1 just FAILS LOUD.
+    throw new UsageError(
+      `run create: an active run '${result.existing.run_id}' already exists for this spec — ` +
+        `pass --supersede to replace it, or use 'factory resume' to continue it`,
+    );
+  }
+  emitJson(result.run); // created | superseded both carry .run
   return EXIT.OK;
 }
 
