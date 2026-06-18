@@ -114,9 +114,11 @@ build/clear. See [explanation/quota-pacing.md](../explanation/quota-pacing.md).
 
 ## Git (`src/git`)
 
-All GitHub / git I/O: the `git-client` and `gh-client` wrappers, branch + PR
-helpers, branch-protection probe/provision, the staging-branch reconciler, the
-serial merge writer, and the `staging → develop` rollup.
+All GitHub / git I/O: the `git-client` and `gh-client` wrappers (incl.
+`issueComment`/`issueClose` for closing a delivered PRD), branch + PR helpers,
+branch-protection probe/provision, the per-run staging deriver
+(`run-staging.ts → staging/<run-id>`), the serial merge writer, and the
+`staging/<run-id> → develop` rollup.
 
 ## Spec (`src/spec`)
 
