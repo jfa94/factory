@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   runScaffold,
@@ -67,6 +67,11 @@ describe("runScaffold", () => {
     expect(existsSync(join(root, ".github", "workflows", "quality-gate.yml"))).toBe(true);
     expect(existsSync(join(root, ".gitignore"))).toBe(true);
     expect(report.files_created).toContain(".github/workflows/quality-gate.yml");
+    // The cost-aware shard helper is a plugin-MANAGED file shipped with the CI net.
+    expect(report.files_created).toContain(".github/scripts/shard-mutation-scope.mjs");
+    expect(existsSync(join(root, ".github", "scripts", "shard-mutation-scope.mjs"))).toBe(true);
+    expect(report.files_updated).toEqual([]);
+    expect(report.files_outdated).toEqual([]);
     expect(report.staging.created).toBe(true);
     expect(report.protection.enabled).toBe(true);
     expect(report.protection.provisioned).toBe(false);
@@ -162,6 +167,60 @@ describe("runScaffold", () => {
     const second = await runScaffold({ ...args, gitClient: gitWithBase() });
     expect(second.files_created).toEqual([]);
     expect(second.files_present).toContain(".github/workflows/quality-gate.yml");
+    // An UNCHANGED managed file is `present`, not `updated`.
+    expect(second.files_updated).toEqual([]);
+  });
+
+  it("auto-updates a drifted plugin-MANAGED file (the CI workflow) — propagation path", async () => {
+    const args = {
+      targetRoot: root,
+      templatesDir,
+      owner: "acme",
+      repo: "widgets",
+      config: cfg,
+      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      provision: false,
+    };
+    // Simulate an already-scaffolded repo carrying an OLD/customized workflow.
+    const wf = join(root, ".github", "workflows", "quality-gate.yml");
+    await mkdir(dirname(wf), { recursive: true });
+    await writeFile(wf, "name: stale round-robin workflow\n", "utf8");
+
+    const report = await runScaffold({ ...args, gitClient: gitWithBase() });
+
+    expect(report.files_updated).toContain(".github/workflows/quality-gate.yml");
+    expect(report.files_created).not.toContain(".github/workflows/quality-gate.yml");
+    // Content was refreshed to the shipped template (the fix reaches the repo).
+    const template = await readFile(
+      join(templatesDir, ".github", "workflows", "quality-gate.yml"),
+      "utf8",
+    );
+    expect(await readFile(wf, "utf8")).toBe(template);
+  });
+
+  it("leaves a drifted SEED config untouched and reports it advisory-outdated", async () => {
+    const args = {
+      targetRoot: root,
+      templatesDir,
+      owner: "acme",
+      repo: "widgets",
+      config: cfg,
+      ghClient: new FakeGhClient({ protection: { [STAGING]: PROTECTED } }),
+      provision: false,
+    };
+    await writeFile(join(root, "package.json"), "{}\n", "utf8");
+    await runScaffold({ ...args, gitClient: gitWithBase() }); // seeds .stryker.config.json
+
+    // The user customizes their (user-owned) gate config.
+    const stryker = join(root, ".stryker.config.json");
+    const customized = '{ "thresholds": { "break": 95 } }\n';
+    await writeFile(stryker, customized, "utf8");
+
+    const second = await runScaffold({ ...args, gitClient: gitWithBase() });
+    expect(second.files_outdated).toContain(".stryker.config.json");
+    expect(second.files_updated).not.toContain(".stryker.config.json");
+    // Customization is preserved — SEED files are never overwritten.
+    expect(await readFile(stryker, "utf8")).toBe(customized);
   });
 
   it("REFUSES loudly when staging protection is missing and --provision is off", async () => {

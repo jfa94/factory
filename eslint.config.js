@@ -33,7 +33,17 @@ export default [
     // walks into `.claude/worktrees/*/` and lints stale copies of the build +
     // workflow scripts (the latter parse-error on their top-level `return`,
     // since the worktree path doesn't match the driver-script parser override).
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "src/**/*.ts", ".claude/**"],
+    // `templates/.github/scripts/**` is a generated, diff-reviewable esbuild
+    // artifact (like `dist/**`) — its TS source under `src/bin/` is what tsc
+    // checks; linting the bundle just trips on injected `process` globals.
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "coverage/**",
+      "src/**/*.ts",
+      ".claude/**",
+      "templates/.github/scripts/**",
+    ],
   },
   js.configs.recommended,
   {

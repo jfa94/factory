@@ -84,6 +84,18 @@ export interface ScaffoldReport {
   readonly repo: string;
   readonly files_created: string[];
   readonly files_present: string[];
+  /**
+   * Plugin-MANAGED template files (the CI net) that drifted from the shipped
+   * template and were AUTO-OVERWRITTEN on this run. The plugin is their sole
+   * author; git is the safety net (the change shows in `git diff`).
+   */
+  readonly files_updated: string[];
+  /**
+   * SEED template files (user-owned configs) present but differing from the
+   * current shipped template — advisory only; never overwritten. A drift here
+   * is usually a deliberate customization.
+   */
+  readonly files_outdated: string[];
   readonly staging: { readonly created: boolean; readonly staging_tip: string };
   readonly protection: {
     readonly enabled: boolean;
@@ -119,46 +131,102 @@ export function resolveTemplatesDir(): string {
   throw new Error("scaffold: could not locate the plugin templates/ directory");
 }
 
-/** Copy `src`→`dest` only when `dest` is absent; record into created/present. */
-async function copyIfAbsent(
-  src: string,
-  dest: string,
-  root: string,
-  created: string[],
-  present: string[],
+/**
+ * Per-file scaffold policy (the user's "plugin-managed vs user-owned" split):
+ *
+ *   - `managed` — the plugin is the SOLE author (the CI net + its helper script).
+ *     Auto-overwritten when it drifts from the shipped template so a template fix
+ *     reaches already-scaffolded repos on the next `factory scaffold`. Git is the
+ *     safety net; customizing a managed file is unsupported by contract.
+ *   - `seed` — copied once if absent, then USER-OWNED. Never overwritten (Decision
+ *     15: don't destroy customizations); drift is reported advisory-only.
+ */
+type TemplatePolicy = "managed" | "seed";
+
+interface TemplateEntry {
+  /** Path relative to BOTH `templatesDir` and `targetRoot` (forward-slashed). */
+  readonly rel: string;
+  readonly policy: TemplatePolicy;
+  /** Only scaffold this file when the target is a Node package (has package.json). */
+  readonly nodeOnly?: boolean;
+}
+
+/**
+ * The committed per-repo artifacts the factory consumes. The CI workflow and its
+ * cost-aware shard helper are MANAGED (plugin-authored, auto-updated); the gate
+ * configs are SEED (a starting point the project then owns + tunes).
+ */
+const TEMPLATE_MANIFEST: readonly TemplateEntry[] = [
+  { rel: ".github/workflows/quality-gate.yml", policy: "managed" },
+  { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
+  { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
+  { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
+  { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true },
+];
+
+/** Mutable file buckets a scaffold run accumulates, surfaced in the report. */
+interface FileLists {
+  readonly created: string[];
+  readonly present: string[];
+  readonly updated: string[];
+  readonly outdated: string[];
+}
+
+/**
+ * Apply one {@link TemplateEntry}: create when absent; for a present file, leave
+ * it (and record drift) under the `seed` policy, or overwrite it under `managed`.
+ * Each file lands in exactly one bucket.
+ */
+async function applyTemplate(
+  entry: TemplateEntry,
+  templatesDir: string,
+  targetRoot: string,
+  lists: FileLists,
 ): Promise<void> {
-  const rel = relative(root, dest);
+  const segs = entry.rel.split("/");
+  const src = join(templatesDir, ...segs);
+  const dest = join(targetRoot, ...segs);
   if (!existsSync(src)) {
     log.warn(`template missing, skipping: ${src}`);
     return;
   }
-  if (existsSync(dest)) {
-    present.push(rel);
+  if (!existsSync(dest)) {
+    await mkdir(dirname(dest), { recursive: true });
+    await copyFile(src, dest);
+    lists.created.push(entry.rel);
     return;
   }
-  await mkdir(dirname(dest), { recursive: true });
-  await copyFile(src, dest);
-  created.push(rel);
+  const [srcText, destText] = await Promise.all([readFile(src, "utf8"), readFile(dest, "utf8")]);
+  if (srcText === destText) {
+    lists.present.push(entry.rel);
+    return;
+  }
+  if (entry.policy === "managed") {
+    await copyFile(src, dest); // sole-author file drifted → refresh it
+    lists.updated.push(entry.rel);
+  } else {
+    lists.outdated.push(entry.rel); // user-owned drift → advisory, never clobber
+  }
 }
 
 /** Append any missing {@link GITIGNORE_ENTRIES} to the target `.gitignore`. */
-async function ensureGitignore(root: string, created: string[], present: string[]): Promise<void> {
+async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
   const path = join(root, ".gitignore");
   const rel = relative(root, path);
   if (!existsSync(path)) {
     await writeFile(path, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
-    created.push(rel);
+    lists.created.push(rel);
     return;
   }
   const current = await readFile(path, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
-    present.push(rel);
+    lists.present.push(rel);
     return;
   }
   const sep = current.endsWith("\n") ? "" : "\n";
   await writeFile(path, current + sep + missing.join("\n") + "\n", "utf8");
-  present.push(rel);
+  lists.present.push(rel);
 }
 
 /**
@@ -168,47 +236,26 @@ async function ensureGitignore(root: string, created: string[], present: string[
  * `--provision` is not set, or on a staging divergence.
  */
 export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport> {
-  const created: string[] = [];
-  const present: string[] = [];
+  const lists: FileLists = { created: [], present: [], updated: [], outdated: [] };
 
-  // 1. CI net (Δ Z) — always.
-  await copyIfAbsent(
-    join(opts.templatesDir, ".github", "workflows", "quality-gate.yml"),
-    join(opts.targetRoot, ".github", "workflows", "quality-gate.yml"),
-    opts.targetRoot,
-    created,
-    present,
-  );
-
-  // 2. Gate configs — only when the target is a Node package (mirrors the gates).
-  if (existsSync(join(opts.targetRoot, "package.json"))) {
-    await copyIfAbsent(
-      join(opts.templatesDir, ".stryker.config.json"),
-      join(opts.targetRoot, ".stryker.config.json"),
-      opts.targetRoot,
-      created,
-      present,
-    );
-    await copyIfAbsent(
-      join(opts.templatesDir, ".dependency-cruiser.cjs"),
-      join(opts.targetRoot, ".dependency-cruiser.cjs"),
-      opts.targetRoot,
-      created,
-      present,
-    );
-    // Default eslint flat config — a baseline so the lint gate becomes meaningful
-    // the moment a project installs eslint (the gate skips until both are present).
-    await copyIfAbsent(
-      join(opts.templatesDir, "eslint.config.mjs"),
-      join(opts.targetRoot, "eslint.config.mjs"),
-      opts.targetRoot,
-      created,
-      present,
+  // 1+2. Committed template artifacts (Δ Z). MANAGED files (the CI net + its shard
+  //       helper) auto-update on drift; SEED gate configs are copy-once + user-owned.
+  //       The `nodeOnly` SEED configs apply only to a Node-package target.
+  const isNodePackage = existsSync(join(opts.targetRoot, "package.json"));
+  for (const entry of TEMPLATE_MANIFEST) {
+    if (entry.nodeOnly && !isNodePackage) continue;
+    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists);
+  }
+  // Surface auto-updated plugin-managed files (e.g. the CI workflow refreshed in a
+  // previously-scaffolded repo) — these are the propagation path, worth a loud line.
+  if (lists.updated.length > 0) {
+    log.info(
+      `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`,
     );
   }
 
   // 3. .gitignore guard (factory state must never be committed).
-  await ensureGitignore(opts.targetRoot, created, present);
+  await ensureGitignore(opts.targetRoot, lists);
 
   // 3b. E1 (F-perm): emit / idempotently merge the target-repo
   //     `.claude/settings.json` (factory allow-list + worktree.baseRef:"head";
@@ -217,8 +264,8 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
   const settings = await ensureTargetSettings({ targetRoot: opts.targetRoot });
   // Surface the .claude/settings.json path in the file lists for transparency.
   const settingsRel = relative(opts.targetRoot, settings.path);
-  if (settings.created) created.push(settingsRel);
-  else present.push(settingsRel);
+  if (settings.created) lists.created.push(settingsRel);
+  else lists.present.push(settingsRel);
 
   // 4. staging branch (created from base — develop, never main — or FF-reconciled).
   const staging = await ensureStaging({
@@ -254,8 +301,10 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
 
   return {
     repo: `${opts.owner}/${opts.repo}`,
-    files_created: created,
-    files_present: present,
+    files_created: lists.created,
+    files_present: lists.present,
+    files_updated: lists.updated,
+    files_outdated: lists.outdated,
     staging: { created: staging.created, staging_tip: staging.stagingTip },
     protection: {
       enabled: state.enabled,
