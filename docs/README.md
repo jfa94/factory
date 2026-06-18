@@ -1,4 +1,4 @@
-<!-- last-documented: a14a532 -->
+<!-- last-documented: fc32023 -->
 
 # Dark Factory Plugin
 
@@ -7,8 +7,8 @@ Requirements Document) issue into merged pull requests, autonomously, through a
 quality-first, TDD-enforced stage machine. A person writes the requirements and
 walks away; the factory generates a spec, decomposes it into a dependency graph
 of tasks, drives each task test-first through implementation and an adversarial
-review floor, and ships the result up a `staging → develop` integration branch —
-never touching `main`.
+review floor, and ships the result up a per-run `staging/<run-id> → develop`
+integration branch — only once the whole PRD is delivered, never touching `main`.
 
 ## What problem it solves
 
@@ -57,8 +57,9 @@ there is structurally nothing in state for an agent to forge.
 
 **Loud, classified failure.** Nothing fails silently. When a task cannot be made
 to meet the bar, it is _dropped_ with a closed-enum failure class and a
-human-facing reason; the run ships the dependency-closed done-set and files one
-GitHub issue per drop. A partial run is a legible, classified outcome — never a
+human-facing reason. Because `develop` receives only whole PRDs, any drop makes
+the run `failed`: `develop` is left untouched, the PRD stays open, and one GitHub
+issue is filed per drop. A `failed` run is a legible, classified outcome — never a
 quiet success.
 
 ## Architecture at a glance
@@ -96,7 +97,7 @@ contract.
 ### How-to guides
 
 - [Run the pipeline](./guides/run-the-pipeline.md) — drive a PRD issue to shipped PRs.
-- [Scaffold a target repo](./guides/scaffold-a-repo.md) — prepare a repo (CI net, gate configs, staging branch, branch protection).
+- [Scaffold a target repo](./guides/scaffold-a-repo.md) — prepare a repo (CI net, gate configs, `develop` branch protection).
 - [Configure the factory](./guides/configure-the-factory.md) — inspect and edit the config overlay.
 - [Rescue a stalled run](./guides/rescue-a-stalled-run.md) — recover a crashed/suspended run that resume cannot untangle.
 - [Build and verify the engine](./guides/build-and-verify.md) — the contributor build/test/bundle workflow.
@@ -115,7 +116,7 @@ contract.
 - [Model A: the deterministic/LLM split](./explanation/model-a.md) — why the brain/hands seam, and what it buys.
 - [The verifier and the risk-invariant floor](./explanation/verifier.md) — the two-layer verifier, the panel, verify-then-fix.
 - [The producer escalation ladder](./explanation/producer-ladder.md) — nuke-and-retry, change-a-variable, classify-before-retry.
-- [Quota pacing and resumption](./explanation/quota-pacing.md) — the two-window pacer; pause vs suspend vs partial.
+- [Quota pacing and resumption](./explanation/quota-pacing.md) — the two-window pacer; pause vs suspend vs halt.
 - [Derive, don't store](./explanation/derive-dont-store.md) — why no gate verdict is ever persisted.
 - [Design Decisions (D1–D27)](./explanation/decisions.md) — the design ledger (preserved; see the cutover annotation).
 

@@ -161,13 +161,13 @@ The judgment panel.
 
 Branch and protection contract.
 
-| Key                    | Type     | Default   | Meaning                                                                                                                                               |
-| ---------------------- | -------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `baseBranch`           | string   | `develop` | The durable base branch staging forks from and rolls up into. Never `main`.                                                                           |
-| `stagingBranch`        | string   | `staging` | The integration branch task PRs serial-merge into.                                                                                                    |
-| `requiredStatusChecks` | string[] | `[]`      | Status checks branch protection must enforce on staging before a run may start. Empty = no specific checks, but protection itself is still mandatory. |
-| `provision`            | boolean  | `false`   | Opt-in protection provisioning. Off by default — the run verifies and refuses when protection is missing.                                             |
-| `branchPrefix`         | string   | `factory` | Prefix for run-scoped task branches: `<branchPrefix>/<run_id>/<task_id>`.                                                                             |
+| Key                    | Type     | Default   | Meaning                                                                                                                                                                                                                                                                                                       |
+| ---------------------- | -------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseBranch`           | string   | `develop` | The durable integration base: each run's `staging/<run-id>` branch forks from it and rolls up into it. Scaffold protects this branch. Never `main`.                                                                                                                                                           |
+| `stagingBranch`        | string   | `staging` | Legacy default for git helpers that still take an optional branch arg (worktree base, rollup, protection probe). The **per-run** branch is `staging/<run-id>` from a hardcoded prefix (`runStagingBranch`, Decision 33) — it does **not** derive from this key. Changing it does not rename per-run branches. |
+| `requiredStatusChecks` | string[] | `[]`      | Status checks branch protection must enforce (on `develop` at scaffold, and on each `staging/<run-id>` at run create). Empty = no specific checks, but protection itself is still mandatory.                                                                                                                  |
+| `provision`            | boolean  | `false`   | Opt-in protection provisioning. Off by default — the run verifies and refuses when protection is missing.                                                                                                                                                                                                     |
+| `branchPrefix`         | string   | `factory` | Prefix for run-scoped task branches: `<branchPrefix>/<run_id>/<task_id>`.                                                                                                                                                                                                                                     |
 
 ## Root keys
 

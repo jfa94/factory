@@ -17,8 +17,8 @@
  *      holdout sidecar surfaced + folded, all six panel reviewers approved.
  *   2. Happy path (live): same chain → `completed`, PR merged.
  *   3. Drop path: two-task run; second task at escalation cap → drops as
- *      `capability-budget`; `finalizeRun` produces a `partial` run (one done, one
- *      dropped) and files one failure issue.
+ *      `capability-budget`; `finalizeRun` produces a `failed` run (Decision 34:
+ *      develop receives only complete PRDs) and files one failure issue.
  *
  * The holdout path (scenario 1/2 trait): the spec carries 5 acceptance criteria, so
  * the tests stage withholds ≥1 criterion, the verify spawn carries a holdout sidecar,
@@ -185,7 +185,11 @@ interface Answerer {
  * Quota-blocked is treated as an unexpected error (the fake signal never blocks).
  */
 
-async function driveToTerminal(deps: CoroutineDeps, runId: string, answer: Answerer): Promise<RunState> {
+async function driveToTerminal(
+  deps: CoroutineDeps,
+  runId: string,
+  answer: Answerer,
+): Promise<RunState> {
   for (;;) {
     const next = await stepRun(deps, runId);
     if (next.kind === "run-terminal") return deps.state.read(runId);
@@ -232,7 +236,7 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     specStore = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    git = new FakeGitClient({ remoteHeads: { staging: "sha-staging" } });
+    git = new FakeGitClient({ remoteHeads: { [`staging/${RUN_ID}`]: "sha-staging" } });
     gh = new FakeGhClient();
     holdout = new InMemoryHoldoutStore();
     artifacts = new InMemoryArtifactStore();
@@ -356,10 +360,10 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 3: Drop path — capability-budget drop → partial finalize
+  // Scenario 3: Drop path — capability-budget drop → failed finalize (Decision 34)
   // -------------------------------------------------------------------------
 
-  it("drops a task at escalation cap → capability-budget → finalizeRun produces partial", async () => {
+  it("drops a task at escalation cap → capability-budget → finalizeRun produces failed (Decision 34)", async () => {
     const manifest = specManifestTwo();
     await specStore.write(manifest, "# checkout spec\n\nvertical slice.");
 
@@ -385,8 +389,8 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
 
     const finalRun = await driveToTerminal(deps, RUN_ID, answer);
 
-    // The run ended as `partial` (one done, one dropped).
-    expect(finalRun.status).toBe("partial");
+    // Decision 34: mixed done+dropped is 'failed' (develop receives only complete PRDs).
+    expect(finalRun.status).toBe("failed");
 
     // t1 shipped normally.
     expect(finalRun.tasks[TASK_ID]!.status).toBe("done");
@@ -398,5 +402,10 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
 
     // finalizeRun filed one failure issue for t2.
     expect(gh.issues).toHaveLength(1);
+
+    // Decision 34: failed run → no rollup → develop is untouched.
+    const rollupPrs = gh.created.filter((p) => p.base === "develop");
+    expect(rollupPrs).toHaveLength(0);
+    expect(gh.merges).toHaveLength(0); // no-merge mode: no PR was auto-merged
   });
 });

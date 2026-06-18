@@ -17,7 +17,7 @@ graph LR
   Author -->|/factory:run| CC[Claude Code session]
   CC -->|reads PRD, opens PRs/issues| GH
   CC -->|persists run/spec state| Data[("$CLAUDE_PLUGIN_DATA")]
-  GH -->|staging → develop rollup| GH
+  GH -->|staging/&lt;run-id&gt; → develop rollup| GH
 ```
 
 The three external dependencies are: the **GitHub repo** (the PRD source and the
@@ -101,7 +101,7 @@ sequenceDiagram
 
   Note over O,CLI: Phase 0 — Preconditions
   O->>CLI: factory scaffold --repo o/n
-  CLI-->>O: CI net + staging + protection (or REFUSE)
+  CLI-->>O: CI net + develop protection (or REFUSE)
 
   Note over O,CLI: Phase 1 — Spec (bounded generate ⇄ review)
   O->>CLI: factory spec resolve/gate/store
@@ -127,7 +127,7 @@ sequenceDiagram
 
   Note over O,CLI: Phase 4 — Completion
   O->>CLI: factory run finalize
-  CLI-->>O: report + per-drop issues + staging→develop rollup, then terminal
+  CLI-->>O: report + per-drop issues + (on completed) staging/&lt;run-id&gt;→develop rollup, then terminal
   O->>CLI: factory score / state --summary
 ```
 
@@ -144,12 +144,14 @@ preflight → tests → exec → verify → ship
 - **exec** — producer stage: the `task-executor` commits the minimal implementation.
 - **verify** — the verifier floor: deterministic gates + holdout validation + the
   six-reviewer panel + verify-then-fix. Derives the floor verdict.
-- **ship** — opens the task PR idempotently; in `live` mode serial-merges into
-  `staging`. The one stage that writes the terminal task status.
+- **ship** — opens the task PR idempotently; in `live` mode serial-merges into the
+  run's `staging/<run-id>` branch. The one stage that writes the terminal task status.
 
 The run-level **finalize** step is a _separate_ stage that runs once, after every
-task is terminal: it builds the report, files one issue per drop, and ships the
-`staging → develop` rollup before flipping the run terminal.
+task is terminal: it builds the report, files one issue per drop, and — **only when
+the whole PRD completed** (Decision 34) — ships the `staging/<run-id> → develop`
+rollup (then closes the PRD issue and deletes the per-run branch) before flipping the
+run terminal. A `failed` run leaves `develop` untouched and keeps its branch.
 
 ## Data flow and state
 

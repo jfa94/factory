@@ -28,7 +28,7 @@ envelope names, feed the raw results back.**
 2. Confirm autonomous mode: `factory autonomy preflight` (exits 0 to proceed, 1 to halt).
    It auto-scaffolds `merged-settings.json` when the session is not autonomous OR the
    settings are stale/missing/unstamped, and prints the relaunch command. The pipeline
-   runs unattended — `run create`/`run resume` HALT loud otherwise. On a non-zero exit,
+   runs unattended — `run create`/`resume` HALT loud otherwise. On a non-zero exit,
    relay the printed `claude --settings <merged-settings.json>` command to the user and
    stop (the relaunch is the user's irreducible step; a running session cannot make
    itself autonomous). `factory autonomy status`/`ensure` remain the manual primitives.
@@ -67,7 +67,7 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--workflow] [--no-ship] --session-id "$CLAUDE_CODE_SESSION_ID"
+factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--supersede | --resume] [--workflow] [--no-ship] --session-id "$CLAUDE_CODE_SESSION_ID"
 ```
 
 `--repo` is OPTIONAL — auto-derived from the `origin` remote of the current checkout (pass it only
@@ -79,12 +79,20 @@ resume + finalize, so it is never re-marshaled. Always pass `--session-id "$CLAU
 orchestrator session as the run's `owner_session`, so the Stop gate keeps the autonomous loop alive
 only in the owning session and lets a _different_ session stop freely (Prompt J). The shell expands
 the env var; if it is unset it expands to empty and the CLI degrades to owner-unknown (unscoped Stop
-gate) — never a bogus empty owner. Read `run_id` from the emitted RunState. Seed failures
-(duplicate/dangling/cyclic deps) are spec defects — surface them.
+gate) — never a bogus empty owner. On success `run create` emits `{kind:"created"|"superseded", run}` —
+read `run_id` from `.run.run_id` (not a bare RunState). Seed failures (duplicate/dangling/cyclic deps)
+are spec defects — surface them.
 
-**Idempotent** (auto-id form): re-running `run create` for the same `(repo, spec_id)` returns the
-existing non-terminal run instead of spawning an orphan — so a lost `run_id` is safe to re-grab by
-re-running create. Pass `--new` (or an explicit `--run-id`) to force a fresh run.
+**No silent reuse (Decision 35).** `run create` never adopts an existing run. If an active run already
+exists for the spec, it exits `3` and emits `{kind:"exists", existing:{run_id, status}}`. Resolve it:
+
+- If the invoking command forwarded `--supersede` or `--resume`, `run create` already acted on it
+  (superseded the old run + created fresh, or the command will hand off to resume) — no prompt.
+- Otherwise surface the conflict to `/factory:run`, which prompts the user (`AskUserQuestion`:
+  resume / supersede / cancel) and re-invokes with the chosen flag. Do NOT re-run bare `create` in a
+  loop hoping it sticks, and do NOT hand-pick the existing run — the flag is the only sanctioned escape.
+
+Pass `--new` (or an explicit `--run-id`) to force an unconditional fresh run with a distinct id.
 
 **Autonomy gate:** `run create` HALTS loud (`NotAutonomousError`, non-zero exit) if the orchestrator
 session is not autonomous (`FACTORY_AUTONOMOUS_MODE=1`). This is the deterministic engine refusing to
@@ -109,7 +117,7 @@ loop:
     "run-terminal"  → go to Phase 4 (report)
     "all-terminal"  → factory run finalize --run <run_id>; go to Phase 4
     "quota-blocked" → report scope/reason/resets_at_epoch; tell the user to re-run
-                      `/factory:run resume` after the window resets; STOP.
+                      `/factory:resume` after the window resets; STOP.
     "tasks-ready"   → step env.ready[0] (sequential driver: ONE task at a time), then loop
 
 step(task):
@@ -185,7 +193,7 @@ Model alias mapping: manifest model id contains `haiku` → `haiku`; `sonnet` �
 ## Phase 4 — Report
 
 - A `quota-blocked` stop is NOT a quality outcome — never finalize it; report the
-  reset horizon and stop (resume re-enters Phase 3 via `factory run resume`, which
+  reset horizon and stop (resume re-enters Phase 3 via `factory resume`, which
   clears a recovered checkpoint, then THE LOOP).
 - After `run finalize`: `factory score --run <run_id>` (add `--dead-surface` for the
   unreferenced-exports report) + `factory state <run_id> --summary`. Surface the run

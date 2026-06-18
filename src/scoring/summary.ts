@@ -4,9 +4,9 @@
  * A compact, deterministic roll-up of a run's outcome, derived PURELY from the
  * persisted {@link RunState} + the {@link PartialRunReport} already built from it.
  * The orchestrator surfaces this (alongside the partial report) so a finished run —
- * `completed`, `partial`, or `failed` — is legible at a glance: what shipped, what
- * dropped and under which failure class, how long it took, and how much producer +
- * reviewer effort it consumed.
+ * `completed` or `failed` — is legible at a glance: what shipped, what dropped and
+ * under which failure class, how long it took, and how much producer + reviewer
+ * effort it consumed.
  *
  * DERIVE-DON'T-STORE: every field is recomputed from ground truth. v1 deliberately
  * does NOT fabricate a numeric "quality score": the runtime never measures one

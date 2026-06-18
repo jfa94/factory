@@ -24,24 +24,30 @@ fails loud.
 
 This is idempotent. It:
 
-- copies `.github/workflows/quality-gate.yml` (the CI net), and — when the target
-  is a Node package — `.stryker.config.json` + `.dependency-cruiser.cjs` (gate
-  configs);
+- copies the plugin-managed CI net (`.github/workflows/quality-gate.yml` and its
+  `.github/scripts/shard-mutation-scope.mjs` helper), and — when the target is a
+  Node package — the seed gate configs `.stryker.config.json`,
+  `.dependency-cruiser.cjs`, and `eslint.config.mjs`;
 - guarantees the `.gitignore` entries that keep factory state un-committed;
-- creates or fast-forward-reconciles the `staging` integration branch off the base
-  branch (`develop` by default — **never** `main`);
-- probes branch protection on `staging` and **refuses loudly if it is missing**.
+- emits / idempotently merges the target `.claude/settings.json` (factory allow-list
+  - `worktree.baseRef:"head"`);
+- probes branch protection on `develop` (the integration base) and **refuses loudly
+  if it is missing**.
 
-It prints a `ScaffoldReport`: `files_created`, `files_present`, `staging` (created
+Scaffold does **not** create or protect a shared `staging` branch. Each run cuts its
+own private `staging/<run-id>` integration branch from `develop` at
+[`run create`](../reference/cli.md#run-create) (Decision 33).
 
-- tip SHA), and `protection` (enabled / strict-up-to-date / required checks /
-  provisioned).
+It prints a `ScaffoldReport`: `files_created`, `files_present`, `files_updated`
+(plugin-managed files refreshed on drift), `files_outdated` (user-owned seed files
+that drifted — advisory only), `protection` (enabled / strict-up-to-date / required
+checks / provisioned), and `settings` (created / changed).
 
 ## 2. Handle a protection refusal
 
-If scaffold refuses because `staging` is unprotected, you have two options.
+If scaffold refuses because `develop` is unprotected, you have two options.
 
-**Provision it** (writes branch protection on `staging`):
+**Provision it** (writes branch protection on `develop`):
 
 ```bash
 factory scaffold --repo <owner/name> --provision

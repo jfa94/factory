@@ -90,7 +90,9 @@ function makeSpec(): SpecManifest {
 /** A git probe whose full default gate sweep is GREEN (TDD-valid history). */
 function greenProbe(): FakeGitProbe {
   return new FakeGitProbe({
-    refs: { "origin/staging": "sha-base", HEAD: "sha-head" },
+    // The verify gate passes baseRef: "staging/run-1" (the per-run branch), so
+    // the TDD strategy resolves "origin/staging/run-1".
+    refs: { "origin/staging/run-1": "sha-base", HEAD: "sha-head" },
     changedFiles: [],
     commits: [
       commit({ sha: "c1", files: ["src/x.test.ts"], tagged: true }),
@@ -115,7 +117,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     });
     holdout = new InMemoryHoldoutStore();
     artifacts = new InMemoryArtifactStore();
-    git = new FakeGitClient({ remoteHeads: { staging: "sha-staging" } });
+    git = new FakeGitClient({ remoteHeads: { "staging/run-1": "sha-staging" } });
     gh = new FakeGhClient();
     await state.create({
       run_id: RUN_ID,
@@ -171,6 +173,20 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     expect(result).toEqual({ kind: "advance", to: "tests" });
     const wtPath = taskWorktreePath(dataDir, RUN_ID, "t-multi");
     expect(git.worktrees.get(wtPath)).toBe("factory/run-1/t-multi");
+  });
+
+  it("preflight forks the worktree from the per-run staging branch (staging/<run-id>)", async () => {
+    // Seed the per-run staging branch so revParse("origin/staging/run-1") succeeds.
+    const perRunGit = new FakeGitClient({ remoteHeads: { "staging/run-1": "sha-run-staging" } });
+    const handlers = makeStageHandlers(makeDeps({ git: perRunGit }));
+    const ctx = await ctxFor({ task_id: "t-multi" });
+    await handlers.preflight(ctx);
+
+    const wtPath = taskWorktreePath(dataDir, RUN_ID, "t-multi");
+    // The worktree add startPoint must be origin/staging/<run-id>, not origin/staging.
+    expect(perRunGit.calls).toContain(
+      `worktree add -b factory/run-1/t-multi ${wtPath} origin/staging/run-1`,
+    );
   });
 
   // -- tests ----------------------------------------------------------------
@@ -291,6 +307,33 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     if (result.kind !== "wait-retry") throw new Error("unreachable");
     expect(result.stage).toBe("verify");
     expect(result.reason).toMatch(/lint/);
+  });
+
+  it("verify gate uses staging/<run-id> as baseRef (per-run branch, not shared staging)", async () => {
+    // Probe that ONLY resolves origin/staging/<run-id>. If the handler still passes
+    // origin/staging, resolveBase returns null → TDD gate fails with base_ref_not_found
+    // → wait-retry (gate failure). With the correct per-run baseRef the TDD gate resolves
+    // the remote and the green commit history passes → advance to ship.
+    const perRunProbe = new FakeGitProbe({
+      refs: { "origin/staging/run-1": "sha-run-staging", HEAD: "sha-head" },
+      changedFiles: [],
+      commits: [
+        commit({ sha: "c1", files: ["src/x.test.ts"], tagged: true }),
+        commit({ sha: "c2", files: ["src/x.ts"], tagged: true }),
+      ],
+    });
+    const deps = makeDeps({ tools: makeFakeTools({ git: perRunProbe }) });
+    const handlers = makeStageHandlers(deps);
+    const reviewers: ReviewerResult[] = [
+      { reviewer: "implementation-reviewer", verdict: "approve", confirmed_blockers: 0 },
+      { reviewer: "security-reviewer", verdict: "approve", confirmed_blockers: 0 },
+    ];
+    const ctx = await ctxFor({ task_id: "t-multi", reviewers });
+    const result = await handlers.verify(ctx);
+
+    // Must advance to ship — the gate must have resolved origin/staging/run-1 as its
+    // diff base, not origin/staging.
+    expect(result).toEqual({ kind: "advance", to: "ship" });
   });
 
   // -- ship (CLI single-step reporter; idempotent PR, no merge) -------------

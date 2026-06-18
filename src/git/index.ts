@@ -13,7 +13,7 @@ export type { CommandRunner, GitRunner, GhRunner } from "./exec-tools.js";
 
 // git client
 export { DefaultGitClient } from "./git-client.js";
-export type { GitClient, GitOpts, PushOptions } from "./git-client.js";
+export type { GitClient, GitOpts, MergeOptions, PushOptions } from "./git-client.js";
 
 // repo identity resolution (Prompt G / F-repo): auto-derive --repo from origin
 export {
@@ -45,7 +45,7 @@ export type {
 } from "./gh-client.js";
 
 // staging → develop rollup (WS12 / §④, Δ S)
-export { rollup, PARTIAL_SUBJECT_PREFIX } from "./rollup.js";
+export { rollup } from "./rollup.js";
 export type { RollupArgs, RollupResult, RollupNotMergedReason } from "./rollup.js";
 
 // run-scoped branch naming (Δ M)
@@ -90,6 +90,9 @@ export type {
 // staging-init / reconcile
 export { ensureStaging } from "./staging.js";
 export type { EnsureStagingArgs, EnsureStagingResult } from "./staging.js";
+
+// per-run staging branch naming (Decision 33)
+export { runStagingBranch, RUN_STAGING_PREFIX } from "./run-staging.js";
 
 // fakes for downstream unit tests
 export { FakeGitClient, FakeGhClient } from "./fakes.js";

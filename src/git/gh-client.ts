@@ -164,6 +164,15 @@ export interface GhClient {
    * cannot be used). Idempotent: a missing ref is success, not an error.
    */
   deleteRemoteBranch(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>;
+  /** DELETE branch protection (`gh api -X DELETE …/branches/<branch>/protection`). 404 → success. */
+  deleteProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>;
+  /** `gh issue comment <number> --repo <repo> --body <body>` (PRD delivered comment). */
+  issueComment(args: { repo: string; number: number; body: string }, opts?: GhOpts): Promise<void>;
+  /** `gh issue close <number> --repo <repo> [--comment <comment>]` (close PRD on completion). */
+  issueClose(
+    args: { repo: string; number: number; comment?: string },
+    opts?: GhOpts,
+  ): Promise<void>;
 }
 
 /** Body for a branch-protection PUT (the subset WS3 sets). */
@@ -388,6 +397,46 @@ export class DefaultGhClient implements GhClient {
         `gh api DELETE ${path} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`,
       );
     }
+  }
+
+  async deleteProtection(
+    owner: string,
+    repo: string,
+    branch: string,
+    opts?: GhOpts,
+  ): Promise<void> {
+    const argv = ["api", "-X", "DELETE", `/repos/${owner}/${repo}/branches/${branch}/protection`];
+    const r = await this.runner(argv, this.execOpts(opts));
+    if (r.code !== 0 && !/not found|404/i.test(r.stderr)) {
+      throw new Error(
+        `gh api DELETE protection failed for ${owner}/${repo}@${branch}: ${r.stderr}`,
+      );
+    }
+  }
+
+  async issueComment(
+    args: { repo: string; number: number; body: string },
+    opts?: GhOpts,
+  ): Promise<void> {
+    const argv = [
+      "issue",
+      "comment",
+      String(args.number),
+      "--repo",
+      args.repo,
+      "--body",
+      args.body,
+    ];
+    await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
+
+  async issueClose(
+    args: { repo: string; number: number; comment?: string },
+    opts?: GhOpts,
+  ): Promise<void> {
+    const argv = ["issue", "close", String(args.number), "--repo", args.repo];
+    if (args.comment !== undefined) argv.push("--comment", args.comment);
+    await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
 
   async repoProtection(

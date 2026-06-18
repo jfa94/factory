@@ -33,20 +33,20 @@ more-constrained window binds and the run exits cleanly to be resumed later.
 
 This produces a closed decision union (`QuotaDecision`):
 
-| Decision           | Trigger                        | RunStatus   | Recovery                                     |
-| ------------------ | ------------------------------ | ----------- | -------------------------------------------- |
-| `proceed`          | both windows at-or-below curve | `running`   | —                                            |
-| `pause-5h`         | 5h over curve (7d OK)          | `paused`    | self-heals in-session as curve rises         |
-| `suspend-7d`       | 7d over curve (dominant)       | `suspended` | `factory run resume` after the window resets |
-| `unavailable-halt` | usage cannot be observed       | clean halt  | fail-closed (see below)                      |
+| Decision           | Trigger                        | RunStatus   | Recovery                                 |
+| ------------------ | ------------------------------ | ----------- | ---------------------------------------- |
+| `proceed`          | both windows at-or-below curve | `running`   | —                                        |
+| `pause-5h`         | 5h over curve (7d OK)          | `paused`    | self-heals in-session as curve rises     |
+| `suspend-7d`       | 7d over curve (dominant)       | `suspended` | `factory resume` after the window resets |
+| `unavailable-halt` | usage cannot be observed       | clean halt  | fail-closed (see below)                  |
 
 ## Decision 2 — Quota never produces a quality outcome
 
 The pacer's vocabulary is deliberately small and **quota-only**. It can describe
-proceed, pause, suspend, or halt — but it has _no_ way to describe a `partial` run
+proceed, pause, suspend, or halt — but it has _no_ way to describe a `failed` run
 or a `dropped` task. Those are quality outcomes owned by the verifier and the
 producer ladder. Because the type has no constructor for them, "quota never emits
-partial/drop" is true by construction, not by convention.
+fail/drop" is true by construction, not by convention.
 
 The reverse separation also holds: the **circuit breaker**
 (`src/quota/circuit-breaker.ts`) is a distinct hard-abort predicate, _not_ part of
@@ -67,7 +67,7 @@ pacer routes on, not an exception it swallows.
 
 ## Resumption
 
-A suspended (or paused) run resumes via `factory run resume`, which calls
+A suspended (or paused) run resumes via `factory resume`, which calls
 `planResume` (`src/quota/resume.ts`). Resume:
 
 1. Pulls a **fresh** usage reading — it does not trust the persisted reset horizon

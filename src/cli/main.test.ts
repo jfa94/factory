@@ -51,4 +51,26 @@ describe("cli dispatch", () => {
       delete cliRegistry["__test-ext"];
     }
   });
+
+  it("top-level resume --help returns OK and emits resume help", async () => {
+    const chunks: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    });
+    const code = await dispatch(["resume", "--help"]);
+    expect(code).toBe(EXIT.OK);
+    expect(chunks.join("")).toContain("re-check quota");
+  });
+
+  it("run resume --help alias returns OK and emits resume help", async () => {
+    const chunks: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    });
+    const code = await dispatch(["run", "resume", "--help"]);
+    expect(code).toBe(EXIT.OK);
+    expect(chunks.join("")).toContain("re-check quota");
+  });
 });

@@ -26,6 +26,7 @@ import {
   type StateManager,
   type TaskState,
 } from "./deps.js";
+import { runStagingBranch } from "../git/index.js";
 import { specTaskOf, shipBody } from "./handlers.js";
 import { taskWorktreePath } from "./paths.js";
 import type { HandlerDeps } from "./types.js";
@@ -74,7 +75,7 @@ export async function shipTask(deps: ShipDeps, ctx: StageContext): Promise<Stage
     branch,
     title: specTask.title,
     body: shipBody(runId, specTask),
-    base: deps.config.git.stagingBranch,
+    base: runStagingBranch(runId),
   });
   await deps.state.updateTask(runId, task.task_id, (t) => ({
     ...t,
@@ -91,7 +92,7 @@ export async function shipTask(deps: ShipDeps, ctx: StageContext): Promise<Stage
     ghClient: deps.gh,
     owner: deps.owner,
     repo: deps.repo,
-    stagingBranch: deps.config.git.stagingBranch,
+    stagingBranch: runStagingBranch(runId),
     dataDir: deps.dataDir,
   });
   const outcome: MergeOutcome = await serializer.merge(pr.number);

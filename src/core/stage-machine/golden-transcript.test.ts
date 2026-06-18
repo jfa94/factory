@@ -120,8 +120,9 @@ describe("golden transcript — fixed StageResult sequence", () => {
     ]);
   });
 
-  it("the run-level finalize over {done, dropped} is finalize-terminal(partial), never wait-retry", async () => {
+  it("the run-level finalize over {done, dropped} is finalize-terminal(failed), never wait-retry (Decision 34)", async () => {
     // Both tasks now terminal: a shipped, b dropped.
+    // Decision 34: develop receives only complete PRDs — mixed done+dropped is 'failed'.
     const ctx: StageContext = {
       run: baseRun({
         a: { task_id: "a", status: "done", risk_tier: "low" },
@@ -135,7 +136,7 @@ describe("golden transcript — fixed StageResult sequence", () => {
       }),
     };
     const r = await runStage("finalize", ctx, scriptedHandlers("ship"));
-    expect(r).toEqual({ kind: "finalize-terminal", run_status: "partial" });
+    expect(r).toEqual({ kind: "finalize-terminal", run_status: "failed" });
     expect(r.kind).not.toBe("wait-retry");
   });
 

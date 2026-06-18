@@ -62,9 +62,9 @@ describe("StageResult constructors build correct discriminants", () => {
   });
 
   it("finalizeTerminal carries the run status", () => {
-    expect(finalizeTerminal("partial")).toEqual({
+    expect(finalizeTerminal("failed")).toEqual({
       kind: "finalize-terminal",
-      run_status: "partial",
+      run_status: "failed",
     });
   });
 });

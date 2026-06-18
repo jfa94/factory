@@ -136,9 +136,9 @@ describe("invariant #3 — finalize is terminal-by-construction at the seam", ()
   });
 
   it("finalize returning finalize-terminal is accepted", async () => {
-    const h = fakeHandlers({ finalize: async () => finalizeTerminal("partial") });
+    const h = fakeHandlers({ finalize: async () => finalizeTerminal("failed") });
     const r = await runStage("finalize", ctx, h);
-    expect(r).toEqual(finalizeTerminal("partial"));
+    expect(r).toEqual(finalizeTerminal("failed"));
   });
 
   it("a per-task stage returning finalize-terminal is rejected (reserved for finalize)", async () => {
@@ -164,7 +164,7 @@ describe("nextStageFor", () => {
 
   it("terminals / wait-retry / graceful-stop imply no resume stage", () => {
     expect(nextStageFor(taskDone())).toBeNull();
-    expect(nextStageFor(finalizeTerminal("partial"))).toBeNull();
+    expect(nextStageFor(finalizeTerminal("failed"))).toBeNull();
     expect(nextStageFor(waitRetry("ship", "x", 1, 3))).toBeNull();
   });
 });
@@ -197,7 +197,7 @@ describe("decideFinalize is pure + terminal-by-construction", () => {
     expect(decideFinalize(run)).toEqual(finalizeTerminal("completed"));
   });
 
-  it("≥1 done + ≥1 dropped → partial", () => {
+  it("some done + some dropped → failed (develop gets nothing, Decision 34)", () => {
     const run = mkRun({
       a: { task_id: "a", status: "done", risk_tier: "low" },
       b: {
@@ -208,7 +208,20 @@ describe("decideFinalize is pure + terminal-by-construction", () => {
         failure_reason: "untestable criterion",
       },
     });
-    expect(decideFinalize(run)).toEqual(finalizeTerminal("partial"));
+    expect(decideFinalize(run)).toEqual(finalizeTerminal("failed"));
+  });
+
+  it("zero done → failed (no partial delivery)", () => {
+    const run = mkRun({
+      a: {
+        task_id: "a",
+        status: "dropped",
+        risk_tier: "low",
+        failure_class: "capability-budget",
+        failure_reason: "producer ladder exhausted",
+      },
+    });
+    expect(decideFinalize(run)).toEqual(finalizeTerminal("failed"));
   });
 
   it("0 done → failed", () => {

@@ -20,8 +20,10 @@ The pipeline refuses to start against an unscaffolded or unprotected repo.
 /factory:scaffold --repo <owner/name>
 ```
 
-If it refuses on missing branch protection, provision it or protect the staging
-branch manually first. See [Scaffold a target repo](./scaffold-a-repo.md).
+If it refuses on missing branch protection, provision it or protect the `develop`
+branch manually first. See [Scaffold a target repo](./scaffold-a-repo.md). (Scaffold
+protects `develop`; each run cuts its own private `staging/<run-id>` integration
+branch at create — there is no shared `staging` branch to protect.)
 
 ## 2. Start the run
 
@@ -29,13 +31,19 @@ branch manually first. See [Scaffold a target repo](./scaffold-a-repo.md).
 /factory:run --repo <owner/name> --issue <N>
 ```
 
+`/factory:run` always starts a **fresh** run — see [Start fresh vs. continue an
+existing run](#start-fresh-vs-continue-an-existing-run) below for what happens when
+an active run already exists for the spec.
+
 | Flag                  | Required | Notes                                                                                                   |
 | --------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `--repo <owner/name>` | yes      | Target repo.                                                                                            |
+| `--repo <owner/name>` | no       | Target repo. Auto-derived from the `origin` remote when omitted.                                        |
 | `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                                 |
 | `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                                    |
 | `--workflow`          | no       | Run the background Workflow driver. Omit for the in-session loop (default) — see below.                 |
 | `--no-ship`           | no       | Open the PRs but never merge. Omit for the default **live** — auto-merge tasks→staging, rollup→develop. |
+| `--supersede`         | no       | If an active run already exists, replace it (see below). Mutually exclusive with `--resume`.            |
+| `--resume`            | no       | If an active run already exists, hand off to `/factory:resume` instead of starting fresh.               |
 
 `--workflow` selects the driver. Both step the same `factory next` / `factory drive`
 seam and enforce the identical engine gates; they differ only in where the loop
@@ -51,15 +59,31 @@ runs:
   usage signal) — it hard-stops when the allowance runs out.
 
 `--no-ship` is the cutover-safety opt-out. The default is **live**: each task
-auto-merges into staging and the staging→develop rollup merges into develop (gated
-by branch protection + the review panel + TDD + the holdout). Pass `--no-ship` to
-open the PRs but never merge. Ship mode **is persisted** on the run at create, so
-the workflow driver, `resume`, and `finalize` read it back without re-passing.
-Re-running `factory run create` for an existing run is idempotent (it reuses that
-run); re-running with `--workflow`/`--no-ship` that **disagree** with the reused
-run is a loud error — pass `--new` for a fresh run, or match the run's flags to
-reuse. (`run finalize --no-ship` overrides the persisted value for that one
-finalize call.)
+auto-merges into the run's `staging/<run-id>` branch and the `staging/<run-id>` →
+develop rollup merges into develop (gated by branch protection + the review panel +
+TDD + the holdout), but **only when the whole PRD completed** (see [Read the
+outcome](#4-read-the-outcome)). Pass `--no-ship` to open the PRs but never merge.
+Ship mode **is persisted** on the run at create, so the workflow driver,
+`/factory:resume`, and `finalize` read it back without re-passing. (`run finalize
+--no-ship` overrides the persisted value for that one finalize call.)
+
+### Start fresh vs. continue an existing run
+
+A PRD has **at most one active run at a time**. `/factory:run` always starts a
+**fresh** run and never silently reuses an existing one. When an active run already
+exists for the spec, `factory run create` exits `3` and emits
+`{kind:"exists", existing:{run_id, status}}`. The command then prompts you
+(AskUserQuestion) to choose:
+
+- **Continue (resume)** — re-enter the existing run where it left off via
+  `/factory:resume`; its `staging/<run-id>` branch and merged work are intact.
+- **Supersede (fresh)** — mark the old run `superseded`, delete its
+  `staging/<run-id>` branch (which auto-closes its task PRs), and start fresh.
+- **Cancel** — leave the existing run untouched.
+
+Pass `--resume` or `--supersede` up front to skip the prompt. To repair a run that
+resume cannot untangle (tasks stuck mid-stage, or git/GitHub drift), use
+[`/factory:rescue`](./rescue-a-stalled-run.md) instead.
 
 ## 3. What happens (the four phases)
 
@@ -78,24 +102,31 @@ tests → exec → verify → ship`), emitting a spawn manifest whenever it need
    agents. The driver spawns the producers and the review panel the manifest
    names, then folds their raw output back with `factory drive --results` (one
    state step). The engine — not the driver — decides every transition.
-5. **Completion** — `factory run finalize` builds the report, files one issue per
-   drop, and ships the `staging → develop` rollup; then `factory score` +
+5. **Completion** — `factory run finalize` builds the report and files one issue
+   per drop; **only when the whole PRD completed** does it ship the
+   `staging/<run-id> → develop` rollup (and, on a merged rollup, comment on + close
+   the originating PRD issue and delete the per-run branch). Then `factory score` +
    `factory state --summary` report the outcome.
 
 ## 4. Read the outcome
 
-The run ends in one of three terminal statuses:
+`develop` receives a run's work **only as a whole PRD** — there is no partial
+delivery. The run ends in one of two finalize statuses:
 
-- `completed` — every task done, rollup CI green.
-- `partial` — the retry ladder was exhausted on one or more tasks; the
-  dependency-closed done-set shipped, and one GitHub issue was filed per dropped
-  task with its failure class (`capability-budget`, `spec-defect`, or
-  `blocked-environmental`).
-- `failed` — the run could not start or hit a non-recoverable error before any
-  partial delivery.
+- `completed` — every task done, rollup CI green; the `staging/<run-id> → develop`
+  rollup merged, the PRD issue was closed, and the per-run branch was deleted.
+- `failed` — one or more tasks could not be delivered (the retry ladder was
+  exhausted, or the run could not start / wedged and tripped the circuit breaker).
+  `develop` is left **untouched**, the PRD issue stays **open**, and the run **keeps
+  its `staging/<run-id>` branch** banked for [rescue](./rescue-a-stalled-run.md). One
+  GitHub issue is filed per dropped task with its failure class (`capability-budget`,
+  `spec-defect`, or `blocked-environmental`).
 
-A `partial`/`failed` run is a legible, classified outcome — read the filed issues
-and the `report.md`. The rollup PR targets `develop`; `main` is never touched.
+(A third terminal status, `superseded`, is set when a fresh run replaces this one —
+see [Start fresh vs. continue](#start-fresh-vs-continue-an-existing-run).)
+
+A `failed` run is a legible, classified outcome — read the filed issues and the
+`report.md`. The rollup PR targets `develop`; `main` is never touched.
 
 ## 5. If the run pauses or suspends on quota
 
@@ -107,7 +138,7 @@ A run that hits a quota window does **not** finalize — it has unfinished work.
 Re-enter it once the window resets:
 
 ```
-/factory:run resume [--run <id>]
+/factory:resume [--run <id>]
 ```
 
 On `{kind:"still-blocked", …}` the orchestrator reports the reason +

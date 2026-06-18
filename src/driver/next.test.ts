@@ -176,7 +176,9 @@ describe("stepRun", () => {
     }
   });
 
-  it("non-terminal tasks but none ready → throws deadlock", async () => {
+  // Decision 34: a dependency cycle must NOT throw — the circuit breaker drops each
+  // wedged task as spec-defect and returns all-terminal so the run finalizes to failed.
+  it("dependency cycle (T1↔T2) → all-terminal with both tasks spec-defect dropped", async () => {
     // Pathological DAG: T1 executing with depends_on [T2], T2 pending depends_on [T1]
     // This bypasses seeding via direct state writes.
     const { deps, runId, cleanup } = await makeCoroutineDeps({
@@ -203,7 +205,16 @@ describe("stepRun", () => {
         },
       }));
 
-      await expect(stepRun(deps, runId)).rejects.toThrow(/deadlock|cycle/);
+      const env = await stepRun(deps, runId);
+      expect(env.kind).toBe("all-terminal");
+      if (env.kind !== "all-terminal") return;
+      expect(env.cascade_dropped.slice().sort()).toEqual(["T1", "T2"]);
+
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T1"]?.status).toBe("dropped");
+      expect(run.tasks["T1"]?.failure_class).toBe("spec-defect");
+      expect(run.tasks["T2"]?.status).toBe("dropped");
+      expect(run.tasks["T2"]?.failure_class).toBe("spec-defect");
     } finally {
       await cleanup();
     }
@@ -324,8 +335,9 @@ describe("stepRun", () => {
     }
   });
 
-  // Self-dependency deadlock: T1 depends_on ["T1"] — must throw /deadlock|cycle/.
-  it("self-dependency (T1 depends_on T1) → throws deadlock", async () => {
+  // Decision 34: self-dependency (T1→T1) is also a wedged/cycle state — the circuit
+  // breaker drops T1 as spec-defect and returns all-terminal.
+  it("self-dependency (T1 depends_on T1) → all-terminal with T1 spec-defect dropped", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
     });
@@ -336,7 +348,14 @@ describe("stepRun", () => {
         depends_on: ["T1"],
       }));
 
-      await expect(stepRun(deps, runId)).rejects.toThrow(/deadlock|cycle/);
+      const env = await stepRun(deps, runId);
+      expect(env.kind).toBe("all-terminal");
+      if (env.kind !== "all-terminal") return;
+      expect(env.cascade_dropped).toContain("T1");
+
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T1"]?.status).toBe("dropped");
+      expect(run.tasks["T1"]?.failure_class).toBe("spec-defect");
     } finally {
       await cleanup();
     }

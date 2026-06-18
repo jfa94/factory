@@ -19,7 +19,7 @@ import { stringifyJson } from "../shared/json.js";
 import { configureCommand } from "./subcommands/configure.js";
 import { stateCommand } from "./subcommands/state.js";
 import { scaffoldCommand } from "./subcommands/scaffold.js";
-import { runCommand } from "./subcommands/run.js";
+import { runCommand, resumeCommand } from "./subcommands/run.js";
 import { specCommand } from "./subcommands/spec.js";
 import { rescueCommand } from "./subcommands/rescue.js";
 import { scoreCommand } from "./subcommands/score.js";
@@ -49,6 +49,7 @@ export const cliRegistry: Record<string, Subcommand> = {
     },
   },
   configure: configureCommand,
+  resume: resumeCommand,
   run: runCommand,
   spec: specCommand,
   rescue: rescueCommand,

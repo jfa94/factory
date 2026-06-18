@@ -154,15 +154,15 @@ describe("finalize is terminal, never spins (Decision 22/24)", () => {
     const m = mgr();
     await m.create({ run_id: "run-1", spec });
     await m.finalize("run-1", "completed");
-    await expect(m.finalize("run-1", "partial")).rejects.toThrow(/already terminal/);
+    await expect(m.finalize("run-1", "failed")).rejects.toThrow(/already terminal/);
   });
 
   it("is idempotent for the same terminal status", async () => {
     const m = mgr();
     await m.create({ run_id: "run-1", spec });
-    const a = await m.finalize("run-1", "partial");
-    const b = await m.finalize("run-1", "partial");
-    expect(b.status).toBe("partial");
+    const a = await m.finalize("run-1", "failed");
+    const b = await m.finalize("run-1", "failed");
+    expect(b.status).toBe("failed");
     expect(b.ended_at).toBe(a.ended_at); // ended_at preserved, not bumped
   });
 });

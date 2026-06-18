@@ -76,7 +76,7 @@ export interface RescueScan {
   /**
    * True iff a re-drive would THROW: non-terminal work remains but no task is
    * actionable (none ready, none cascade-droppable) — the driver's deadlock guard.
-   * A terminal `partial`/`failed` run is never "deadlocked" (it already finalized);
+   * A terminal `failed`/`completed`/`superseded` run is never "deadlocked" (it already finalized);
    * it may still be `needs_rescue` (recoverable drops to retry on reopen).
    */
   would_deadlock: boolean;

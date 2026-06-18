@@ -81,7 +81,9 @@ reserves the expensive model escalation for genuine capability shortfalls.
 ## What a drop becomes
 
 A dropped task is terminal. At run finalize, each drop becomes one GitHub issue
-(labelled with its failure class) and a line in the partial-run report. The
-dependency-closed done-set still ships; the run ends `partial`. Nothing is papered
-over. See [../guides/run-the-pipeline.md](../guides/run-the-pipeline.md).
+(labelled with its failure class) and a line in the run report. Because `develop`
+receives only whole PRDs (Decision 34), any drop makes the run `failed`: `develop`
+is left untouched and the PRD stays open, with the run's `staging/<run-id>` branch
+banked for [rescue](../guides/rescue-a-stalled-run.md). Nothing is papered over. See
+[../guides/run-the-pipeline.md](../guides/run-the-pipeline.md).
 </content>

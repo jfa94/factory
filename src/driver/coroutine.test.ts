@@ -472,12 +472,14 @@ describe("stepTask", () => {
 
   it("live-merge BEHIND exhausted cap drops blocked-environmental", async () => {
     // Pre-seed an OPEN-but-BEHIND PR so every merge attempt refuses.
+    // baseRefName must use the per-run staging branch so createTaskPrIdempotent
+    // finds this PR (it now filters by base: runStagingBranch(runId) = "staging/run-1").
     const gh = new FakeGhClient();
     const branch = "factory/run-1/T1";
     gh.setPr({
       number: 500,
       headRefName: branch,
-      baseRefName: "staging",
+      baseRefName: "staging/run-1",
       state: "OPEN",
       mergeable: "MERGEABLE",
       mergeStateStatus: "BEHIND",

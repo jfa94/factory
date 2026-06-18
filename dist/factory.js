@@ -1621,7 +1621,9 @@ var EXIT = {
   /** Generic failure (uncaught error, classified drop, gate/verify failure). */
   ERROR: 1,
   /** Usage error: unknown subcommand/hook, bad flags, missing required arg. */
-  USAGE: 2
+  USAGE: 2,
+  /** Conflict: an active run already exists and no resolution flag was passed. */
+  CONFLICT: 3
 };
 
 // src/config/load.ts
@@ -6142,12 +6144,12 @@ function isUsageError(err) {
 var RunStatusEnum = external_exports.enum([
   "running",
   "completed",
-  "partial",
+  "superseded",
   "paused",
   "suspended",
   "failed"
 ]);
-var TERMINAL_RUN_STATUSES = ["completed", "partial", "failed"];
+var TERMINAL_RUN_STATUSES = ["completed", "failed", "superseded"];
 function isTerminalRunStatus(s) {
   return TERMINAL_RUN_STATUSES.includes(s);
 }
@@ -6787,7 +6789,7 @@ var StateManager = class {
   async finalize(runId, status) {
     if (!isTerminalRunStatus(status)) {
       throw new Error(
-        `state: finalize requires a terminal status (completed|partial|failed); got '${status}'`
+        `state: finalize requires a terminal status (completed|failed|superseded); got '${status}'`
       );
     }
     return this.update(runId, (state) => {
@@ -7223,6 +7225,11 @@ var DefaultGitClient = class {
     args.push(remote, branch);
     await this.execOrThrow(args, opts);
   }
+  async mergeFfOrCommit(branch, ref, opts) {
+    log5.debug(`merge --no-edit ${ref} into ${branch}`);
+    await this.execOrThrow(["checkout", branch], opts);
+    await this.execOrThrow(["merge", "--no-edit", ref], opts);
+  }
 };
 
 // src/git/repo.ts
@@ -7455,6 +7462,32 @@ var DefaultGhClient = class {
       );
     }
   }
+  async deleteProtection(owner, repo, branch, opts) {
+    const argv = ["api", "-X", "DELETE", `/repos/${owner}/${repo}/branches/${branch}/protection`];
+    const r = await this.runner(argv, this.execOpts(opts));
+    if (r.code !== 0 && !/not found|404/i.test(r.stderr)) {
+      throw new Error(
+        `gh api DELETE protection failed for ${owner}/${repo}@${branch}: ${r.stderr}`
+      );
+    }
+  }
+  async issueComment(args, opts) {
+    const argv = [
+      "issue",
+      "comment",
+      String(args.number),
+      "--repo",
+      args.repo,
+      "--body",
+      args.body
+    ];
+    await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
+  async issueClose(args, opts) {
+    const argv = ["issue", "close", String(args.number), "--repo", args.repo];
+    if (args.comment !== void 0) argv.push("--comment", args.comment);
+    await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
   async repoProtection(owner, repo, branch, opts) {
     const path2 = `repos/${owner}/${repo}/branches/${branch}/protection`;
     const r = await this.runner(["api", path2], this.execOpts(opts));
@@ -7517,7 +7550,6 @@ var DefaultGhClient = class {
 // src/git/rollup.ts
 var log7 = createLogger("git");
 var GIT_DEFAULTS = GitSchema.parse({});
-var PARTIAL_SUBJECT_PREFIX = "PARTIAL: ";
 var DEFAULT_POLL_INTERVAL_MS = 15e3;
 var DEFAULT_MAX_POLLS = 80;
 var realSleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
@@ -7541,7 +7573,7 @@ async function rollup(args) {
       "rollup: baseBranch must not be 'main' (Decision 16 \u2014 the factory never touches main)"
     );
   }
-  const subject = args.partial ? `${PARTIAL_SUBJECT_PREFIX}${args.title}` : args.title;
+  const subject = args.title;
   const existing = await args.ghClient.prList({ head: staging, base, state: "all" });
   const merged = existing.find((p) => p.state === "MERGED");
   if (merged) {
@@ -7598,7 +7630,7 @@ async function rollup(args) {
     return { number, url, resumed, merged: false, reason: "not-mergeable", ci };
   }
   await args.ghClient.prMergeSquash(number, { subject, body: args.body });
-  log7.info(`rollup PR #${number} squash-merged into ${base}${args.partial ? " (PARTIAL)" : ""}`);
+  log7.info(`rollup PR #${number} squash-merged into ${base}`);
   return { number, url, resumed, merged: true, subject, ci };
 }
 
@@ -7881,6 +7913,15 @@ async function ensureStaging(args) {
   );
 }
 
+// src/git/run-staging.ts
+var RUN_STAGING_PREFIX = "staging";
+function runStagingBranch(runId) {
+  if (runId.length === 0) {
+    throw new Error("runStagingBranch: empty run id (would yield a bare 'staging/' branch)");
+  }
+  return `${RUN_STAGING_PREFIX}/${runId}`;
+}
+
 // src/cli/current.ts
 async function readCurrentForCwd(state, overrides = {}) {
   const cwd = overrides.cwd ?? process.cwd();
@@ -8038,9 +8079,10 @@ var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 Usage:
   factory scaffold [--repo <owner/name>] [--provision]
 
-Copies the committed CI + gate-config templates, ensures the staging branch, and
-probes branch protection. Without --provision a repo whose staging branch is not
-protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
+Copies the committed CI + gate-config templates and probes branch protection on
+develop (the integration base). Without --provision a repo whose develop branch is
+not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
+Per-run staging branches are minted at run create \u2014 scaffold no longer touches them.
 
 Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
@@ -8129,13 +8171,7 @@ async function runScaffold(opts) {
   const settingsRel = relative(opts.targetRoot, settings.path);
   if (settings.created) lists.created.push(settingsRel);
   else lists.present.push(settingsRel);
-  const staging = await ensureStaging({
-    gitClient: opts.gitClient,
-    stagingBranch: opts.config.git.stagingBranch,
-    baseBranch: opts.config.git.baseBranch,
-    cwd: opts.targetRoot
-  });
-  const branch = opts.config.git.stagingBranch;
+  const branch = opts.config.git.baseBranch;
   const required = opts.config.git.requiredStatusChecks;
   let state = await probeProtection({
     ghClient: opts.ghClient,
@@ -8162,7 +8198,6 @@ async function runScaffold(opts) {
     files_present: lists.present,
     files_updated: lists.updated,
     files_outdated: lists.outdated,
-    staging: { created: staging.created, staging_tip: staging.stagingTip },
     protection: {
       enabled: state.enabled,
       strict_up_to_date: state.strictUpToDate,
@@ -8193,7 +8228,6 @@ async function run2(argv) {
     owner,
     repo,
     config: loadConfig(),
-    gitClient: new DefaultGitClient(),
     ghClient: new DefaultGhClient(),
     provision: args.flag("provision") === true
   });
@@ -8201,7 +8235,7 @@ async function run2(argv) {
   return EXIT.OK;
 }
 var scaffoldCommand = {
-  describe: "Prepare a repo (templates + staging + branch protection) for the pipeline",
+  describe: "Prepare a repo (templates + develop branch protection) for the pipeline",
   run: async (argv) => {
     try {
       return await run2(argv);
@@ -8380,14 +8414,8 @@ function decideFinalize(run9) {
       `decideFinalize: ${nonTerminal.length} non-terminal task(s) remain [${ids}] \u2014 finalize is terminal and must not be called with in-flight work (would spin in bash)`
     );
   }
-  const doneCount = tasks.filter((t) => t.status === "done").length;
-  if (doneCount === 0) {
-    return finalizeTerminal("failed");
-  }
-  if (doneCount === tasks.length) {
-    return finalizeTerminal("completed");
-  }
-  return finalizeTerminal("partial");
+  const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
+  return finalizeTerminal(allDone ? "completed" : "failed");
 }
 
 // src/spec/schema.ts
@@ -10797,6 +10825,12 @@ var FsHoldoutVerdictStore = class {
 // src/driver/finalize.ts
 var log22 = createLogger("finalize");
 var FACTORY_ISSUE_LABEL = "factory";
+function prdDoneComment(report, rollupResult) {
+  const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`;
+  return `PRD delivered \u2014 all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.
+
+Spec: \`${report.spec_id}\` \xB7 Run: \`${report.run_id}\``;
+}
 function rollupTitle(report) {
   return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
 }
@@ -10833,17 +10867,37 @@ async function finalizeRun(deps, runId) {
   await recordRunFinalized(deps.dataDir, report, { now });
   const issuesFiled = await fileFailureIssues(deps, report);
   let rollupResult;
-  if (report.totals.shipped > 0) {
+  if (terminal === "completed") {
+    const stagingBranch = runStagingBranch(runId);
+    await deps.git.fetch("origin", deps.config.git.baseBranch);
+    await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
+    await deps.git.push("origin", stagingBranch);
     rollupResult = await rollup({
       ghClient: deps.gh,
+      stagingBranch,
+      baseBranch: deps.config.git.baseBranch,
       title: rollupTitle(report),
       body: markdown,
-      partial: terminal === "partial",
       merge: deps.shipMode === "live",
       ...deps.rollup ?? {}
     });
+    if (rollupResult.merged && report.issue_number) {
+      await deps.gh.issueComment({
+        repo: report.repo,
+        number: report.issue_number,
+        body: prdDoneComment(report, rollupResult)
+      });
+      await deps.gh.issueClose({
+        repo: report.repo,
+        number: report.issue_number
+      });
+    }
+    if (rollupResult.merged) {
+      await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
+      await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
+    }
   } else {
-    log22.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
+    log22.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
   log22.info(
@@ -11021,7 +11075,7 @@ function makeStageHandlers(deps) {
         runId: ctx.run.run_id,
         taskId: task.task_id,
         path: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
-        base: deps.config.git.stagingBranch
+        base: runStagingBranch(ctx.run.run_id)
       });
       return advance("tests");
     },
@@ -11068,7 +11122,7 @@ function makeStageHandlers(deps) {
         runId: ctx.run.run_id,
         taskId: task.task_id,
         worktree: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
-        baseRef: deps.config.git.stagingBranch,
+        baseRef: runStagingBranch(ctx.run.run_id),
         config: deps.config,
         tools: deps.tools
       };
@@ -11112,6 +11166,11 @@ function makeStageHandlers(deps) {
      * (look up by head first — Δ P), then mark the task done. Merge is loop-owned
      * (MergeSerializer) and not performed here; `pr_number` recording is the
      * driver's job (the reporter cannot write state).
+     *
+     * NOTE: this reporter is superseded on the live path by `shipTask` in
+     * `src/driver/ship.ts` (coroutine routes `ship` there directly). Kept
+     * consistent with the per-run branch so it does not become a latent trap once
+     * the shared staging branch is removed.
      */
     async ship(ctx) {
       const task = requireTask3(ctx, "ship");
@@ -11122,7 +11181,7 @@ function makeStageHandlers(deps) {
         branch,
         title: specTask.title,
         body: shipBody(ctx.run.run_id, specTask),
-        base: deps.config.git.stagingBranch
+        base: runStagingBranch(ctx.run.run_id)
       });
       return taskDone();
     },
@@ -11315,7 +11374,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     runId,
     taskId,
     worktree,
-    baseRef: deps.config.git.stagingBranch,
+    baseRef: runStagingBranch(runId),
     config: deps.config,
     tools: deps.tools
   };
@@ -11477,7 +11536,7 @@ async function shipTask(deps, ctx) {
     branch,
     title: specTask.title,
     body: shipBody(runId, specTask),
-    base: deps.config.git.stagingBranch
+    base: runStagingBranch(runId)
   });
   await deps.state.updateTask(runId, task.task_id, (t) => ({
     ...t,
@@ -11491,7 +11550,7 @@ async function shipTask(deps, ctx) {
     ghClient: deps.gh,
     owner: deps.owner,
     repo: deps.repo,
-    stagingBranch: deps.config.git.stagingBranch,
+    stagingBranch: runStagingBranch(runId),
     dataDir: deps.dataDir
   });
   const outcome = await serializer.merge(pr.number);
@@ -11791,10 +11850,20 @@ async function stepRun(deps, runId) {
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
   if (ordered.length === 0) {
-    const remaining = tasks.filter((t) => !isTerminalTaskStatus(t.status)).map((t) => `${t.task_id}=${t.status}`);
-    throw new Error(
-      `next: no ready tasks but ${remaining.length} remain [${remaining.join(", ")}] \u2014 dependency cycle or deadlock`
-    );
+    const wedged = tasks.filter((t) => !isTerminalTaskStatus(t.status));
+    const detail = wedged.map((t) => `${t.task_id}=${t.status}`).join(", ");
+    for (const t of wedged) {
+      await dropTask(
+        deps,
+        runId,
+        t.task_id,
+        "spec-defect",
+        `unrunnable: no ready task and no satisfiable path (dependency cycle/deadlock) \u2014 wedged set [${detail}]`
+      );
+      cascadeDropped.push(t.task_id);
+    }
+    run9 = await deps.state.read(runId);
+    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
   }
   return { ...ctx(), kind: "tasks-ready", ready: ordered, cascade_dropped: cascadeDropped };
 }
@@ -12018,7 +12087,7 @@ async function resolveSpec(specStore, opts) {
   }
   return resolved;
 }
-async function createRunFromManifest(state, specStore, manifest, opts) {
+async function createRunFromManifest(state, specStore, manifest, opts, stagingDeps) {
   if (opts.mode === "workflow") {
     log28.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
@@ -12034,7 +12103,25 @@ async function createRunFromManifest(state, specStore, manifest, opts) {
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
     ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {}
   });
-  return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+  const run9 = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+  if (stagingDeps !== void 0) {
+    const branch = runStagingBranch(run9.run_id);
+    await ensureStaging({
+      gitClient: stagingDeps.gitClient,
+      stagingBranch: branch,
+      baseBranch: stagingDeps.config.git.baseBranch,
+      cwd: stagingDeps.targetRoot
+    });
+    await provisionProtection({
+      ghClient: stagingDeps.ghClient,
+      owner: stagingDeps.owner,
+      repo: stagingDeps.repo,
+      branch,
+      requiredChecks: stagingDeps.config.git.requiredStatusChecks,
+      provision: true
+    });
+  }
+  return run9;
 }
 function assertReusableFlags(existing, opts) {
   if (opts.mode !== void 0 && opts.mode !== existing.mode) {
@@ -12048,22 +12135,46 @@ function assertReusableFlags(existing, opts) {
     );
   }
 }
-async function resolveOrCreateRun(state, specStore, opts) {
+async function supersedeRun(state, existing, stagingDeps) {
+  const branch = runStagingBranch(existing.run_id);
+  await state.finalize(existing.run_id, "superseded");
+  await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
+  await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
+}
+async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   const manifest = await resolveSpec(specStore, opts);
   if (opts.force === true) {
-    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return {
+      kind: "created",
+      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps)
+    };
   }
   const pointer = specStore.toPointer(manifest);
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
-      assertReusableFlags(existing, opts);
-      log28.info(
-        `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`
-      );
-      return { reused: true, run: existing };
+      if (opts.supersede === true) {
+        if (stagingDeps === void 0) {
+          throw new UsageError("run create --supersede requires the CLI gh deps");
+        }
+        const supersededId = existing.run_id;
+        await supersedeRun(state, existing, stagingDeps);
+        return {
+          kind: "superseded",
+          run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+          supersededId
+        };
+      }
+      if (opts.resume === true) {
+        assertReusableFlags(existing, opts);
+        return { kind: "exists", existing };
+      }
+      return { kind: "exists", existing };
     }
-    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return {
+      kind: "created",
+      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps)
+    };
   });
 }
 async function applyResume(state, runId, reading, config, nowEpochSec) {
@@ -12111,7 +12222,7 @@ function resolveOwnerSession(flag, env = process.env) {
   return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
 }
 async function runCreate(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship"] });
+  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship", "supersede", "resume"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -12119,7 +12230,11 @@ async function runCreate(argv, overrides = {}) {
   requireAutonomousMode();
   const cwd = overrides.cwd ?? process.cwd();
   const gitClient = overrides.gitClient ?? new DefaultGitClient();
-  const repo = await resolveRepo({ explicit: optionalString(args.flag("repo")), cwd, gitClient });
+  const repoSlug = await resolveRepo({
+    explicit: optionalString(args.flag("repo")),
+    cwd,
+    gitClient
+  });
   const issue = parseIssue(args.flag("issue"));
   const specId = optionalString(args.flag("spec-id"));
   let selector;
@@ -12139,21 +12254,58 @@ async function runCreate(argv, overrides = {}) {
   const shipMode = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
   const force = args.flag("new") === true || explicitRunId !== void 0;
+  const supersede = args.flag("supersede") === true;
+  const resume = args.flag("resume") === true;
+  if (supersede && resume) {
+    throw new UsageError("run create: pass at most one of --supersede / --resume");
+  }
   const dataDir = resolveDataDir(
     overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {}
   );
+  const config = loadConfig(overrides.dataDir !== void 0 ? { dataDir } : {});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const { run: run9 } = await resolveOrCreateRun(state, specStore, {
-    repo,
-    runId,
-    ...selector,
-    mode,
-    shipMode,
-    ...ownerSession !== void 0 ? { ownerSession } : {},
-    ...force ? { force } : {}
-  });
-  emitJson(run9);
+  const ghClient = overrides.ghClient ?? new DefaultGhClient();
+  const { owner, repo } = splitRepoSlug(repoSlug);
+  const stagingDeps = {
+    gitClient,
+    ghClient,
+    config,
+    targetRoot: cwd,
+    owner,
+    repo
+  };
+  const result = await resolveOrCreateRun(
+    state,
+    specStore,
+    {
+      repo: repoSlug,
+      runId,
+      ...selector,
+      mode,
+      shipMode,
+      ...ownerSession !== void 0 ? { ownerSession } : {},
+      ...force ? { force } : {},
+      ...supersede ? { supersede } : {},
+      ...resume ? { resume } : {}
+    },
+    stagingDeps
+  );
+  if (result.kind === "exists") {
+    emitJson({
+      kind: "exists",
+      existing: { run_id: result.existing.run_id, status: result.existing.status }
+    });
+    emitError(
+      `run create: active run '${result.existing.run_id}' already exists \u2014 pass --resume to continue it or --supersede to replace it`
+    );
+    return EXIT.CONFLICT;
+  }
+  if (result.kind === "created") {
+    emitJson({ kind: "created", run: result.run });
+    return EXIT.OK;
+  }
+  emitJson({ kind: "superseded", run: result.run, supersededId: result.supersededId });
   return EXIT.OK;
 }
 async function runResume(argv) {
@@ -12232,6 +12384,20 @@ var runCommand = {
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`run: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+var resumeCommand = {
+  describe: "Resume a paused/suspended run (re-check quota; clear a recovered checkpoint)",
+  run: async (argv) => {
+    try {
+      return await runResume(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`resume: ${err.message}`);
         return EXIT.USAGE;
       }
       throw err;
@@ -13301,6 +13467,7 @@ var cliRegistry = {
     }
   },
   configure: configureCommand,
+  resume: resumeCommand,
   run: runCommand,
   spec: specCommand,
   rescue: rescueCommand,

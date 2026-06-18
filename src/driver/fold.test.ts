@@ -176,7 +176,9 @@ describe("applyRecordHoldout fold", () => {
 /** A git probe whose full default gate sweep is GREEN (TDD test→impl history). */
 function greenProbe(): FakeGitProbe {
   return new FakeGitProbe({
-    refs: { "origin/staging": "sha-base", HEAD: "sha-head" },
+    // Seed origin/staging/run-1 (the per-run branch for RUN_ID="run-1") so the
+    // TDD strategy resolves origin/${runStagingBranch("run-1")} after the fix.
+    refs: { "origin/staging/run-1": "sha-base", HEAD: "sha-head" },
     changedFiles: [],
     commits: [
       commit({ sha: "c1", files: ["src/x.test.ts"], tagged: true }),
@@ -594,6 +596,46 @@ describe("applyRecordReviews fold", () => {
 
     expect(env.crossVendorAbsence).toBeUndefined();
     expect(stderr).not.toMatch(/cross-vendor/i);
+  });
+
+  it("gate baseRef is per-run staging/<run-id>, not shared staging (Decision 33)", async () => {
+    // Probe seeded with ONLY origin/staging/<run-id>. If the fold still passes
+    // deps.config.git.stagingBranch ("staging") as baseRef, the TDD strategy will
+    // look up origin/staging (missing) → gate fails → floor blocks → step !== ship.
+    // After the fix (runStagingBranch(runId)), the probe resolves origin/staging/run-1
+    // and the green gate + approve panel advance to ship.
+    const perRunProbe = new FakeGitProbe({
+      refs: { "origin/staging/run-1": "sha-base", HEAD: "sha-head" },
+      changedFiles: [],
+      commits: [
+        commit({ sha: "c1", files: ["src/x.test.ts"], tagged: true }),
+        commit({ sha: "c2", files: ["src/x.ts"], tagged: true }),
+      ],
+    });
+    const deps: FoldDeps = {
+      config: defaultConfig(),
+      spec: reviewsSpec(),
+      git: new FakeGitClient({ remoteHeads: { "staging/run-1": "sha-staging" } }),
+      gh: new FakeGhClient(),
+      tools: makeFakeTools({ git: perRunProbe }),
+      artifacts: new InMemoryArtifactStore(),
+      holdout,
+      dataDir,
+      owner: "acme",
+      repo: "widgets",
+      shipMode: "no-merge",
+      state,
+    };
+    const input: RecordReviewsInput = {
+      reviews: [approve("quality"), approve("security")],
+      verifications: [],
+    };
+
+    const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
+
+    // Gate must be GREEN (per-run ref resolved) and floor must pass → advance to ship.
+    expect(env.floor.passed).toBe(true);
+    expect(env.step).toEqual({ done: false, stage: "ship" });
   });
 });
 

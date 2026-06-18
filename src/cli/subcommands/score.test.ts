@@ -96,7 +96,7 @@ describe("score happy paths", () => {
     await state.create({ run_id: "run-s", spec: SPEC });
     await state.update("run-s", (s) => ({
       ...s,
-      status: "partial",
+      status: "failed",
       tasks: {
         a: task({ task_id: "a", status: "done", pr_number: 11, branch: "factory/run/a" }),
         b: task({ task_id: "b", status: "dropped", failure_class: "spec-defect" }),
@@ -122,7 +122,7 @@ describe("score happy paths", () => {
 
     const summary = env.summary as Record<string, unknown>;
     expect(summary.run_id).toBe("run-s");
-    expect(summary.run_status).toBe("partial");
+    expect(summary.run_status).toBe("failed");
     expect(summary.totals).toEqual({ total: 2, shipped: 1, failed: 1, incomplete: 0 });
     expect(summary.failures_by_class).toEqual({
       "capability-budget": 0,

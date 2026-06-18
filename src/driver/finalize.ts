@@ -5,16 +5,19 @@
  * its outcome artifacts and ships them, in a RESUME-SAFE order:
  *
  *   1. derive the terminal status (decideFinalize — THROWS if any task is in-flight)
- *   2. build the deterministic partial-run report (status overridden to the terminal,
+ *   2. build the deterministic run report (status overridden to the terminal,
  *      since state.status is still `running`/`paused` until step 7)
  *   3. persist report.md (atomic) under the run store
  *   4. emit run.finalized + per-drop telemetry (thin jsonl; never fatal)
  *   5. file ONE GitHub issue per dropped task — deduped against existing factory
  *      issues so a resumed finalize never double-files (Δ S; "without repeating dead
  *      ends")
- *   6. (only if something shipped) open + CI-gate + squash-merge the staging→develop
- *      rollup, carrying the `PARTIAL:` header on a partial run (git mechanics live in
- *      src/git/rollup; finalize just decides partial/merge)
+ *   6. rollup fires only on `completed` (Decision 34 — develop receives whole PRDs
+ *      only): open + CI-gate + squash-merge the per-run staging→develop rollup. A
+ *      merged rollup then closes/comments the PRD issue and deletes the per-run
+ *      staging branch (Decision 35: protection first, then branch — GitHub blocks
+ *      deleting a protected ref). A `failed` run leaves develop untouched and keeps
+ *      the branch + protection, banked for rescue / inspection.
  *   7. ONLY THEN flip the run terminal (state.finalize)
  *
  * state.finalize is LAST on purpose: a crash anywhere in 2–6 leaves the run
@@ -32,7 +35,9 @@ import {
   renderPartialReportMarkdown,
   renderFailureIssue,
   recordRunFinalized,
+  type Config,
   type GhClient,
+  type GitClient,
   type RunState,
   type SpecManifest,
   type StateManager,
@@ -40,6 +45,7 @@ import {
   type RollupArgs,
   type RollupResult,
 } from "./deps.js";
+import { runStagingBranch } from "../git/index.js";
 import type { ShipMode } from "./types.js";
 import { atomicWriteFile, createLogger, nowIso } from "../shared/index.js";
 import { runReportPath } from "../core/state/paths.js";
@@ -49,14 +55,35 @@ const log = createLogger("finalize");
 /** The label every factory-filed issue carries (the finalize dedup key). */
 const FACTORY_ISSUE_LABEL = "factory";
 
+/** Comment body posted to the PRD issue when the rollup merges (Decision 34). */
+function prdDoneComment(report: PartialRunReport, rollupResult: RollupResult): string {
+  const prRef = rollupResult.url
+    ? `[#${rollupResult.number}](${rollupResult.url})`
+    : `#${rollupResult.number}`;
+  return (
+    `PRD delivered — all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.\n\n` +
+    `Spec: \`${report.spec_id}\` · Run: \`${report.run_id}\``
+  );
+}
+
 /** The deps the finalize coordinator needs — a subset of {@link import("./coroutine.js").CoroutineDeps} + CLI deps. */
 export interface FinalizeRunDeps {
   /** The only sanctioned state read/write path. */
   readonly state: StateManager;
   /** gh client for the rollup PR + per-failure issues. */
   readonly gh: GhClient;
+  /**
+   * git client for the forward-reconcile (fetch + merge + push) before the rollup.
+   * Operates on the target repo working tree (process.cwd() by default).
+   */
+  readonly git: GitClient;
   /** The run's durable spec (source of the unmet acceptance criteria). */
   readonly spec: SpecManifest;
+  /**
+   * Resolved plugin config (provides `git.baseBranch` for the forward-reconcile +
+   * rollup `baseBranch` arg).
+   */
+  readonly config: Config;
   /** Plugin data dir (roots the run store — report.md, metrics.jsonl). */
   readonly dataDir: string;
   /** Repo owner (unused directly; the canonical slug is the report's repo). */
@@ -154,20 +181,50 @@ export async function finalizeRun(
   // 5. one GH issue per drop, deduped against existing factory issues.
   const issuesFiled = await fileFailureIssues(deps, report);
 
-  // 6. rollup — only when something shipped (an all-dropped run has nothing on
-  //    staging beyond base; opening a no-diff PR would fail).
+  // 6. rollup — only on completed (Decision 34: develop receives whole PRDs only).
+  //    On failed, develop is untouched (per-drop issues are already filed above).
   let rollupResult: RollupResult | undefined;
-  if (report.totals.shipped > 0) {
+  if (terminal === "completed") {
+    const stagingBranch = runStagingBranch(runId);
+    // Forward-reconcile (Decision 33): bring develop's new commits into the run branch
+    // (no force-push) so the rollup PR is up-to-date. A conflict here is
+    // non-auto-recoverable → surfaces for rescue.
+    await deps.git.fetch("origin", deps.config.git.baseBranch);
+    await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
+    await deps.git.push("origin", stagingBranch);
+
     rollupResult = await rollup({
       ghClient: deps.gh,
+      stagingBranch,
+      baseBranch: deps.config.git.baseBranch,
       title: rollupTitle(report),
       body: markdown,
-      partial: terminal === "partial",
       merge: deps.shipMode === "live",
       ...(deps.rollup ?? {}),
     });
+
+    if (rollupResult.merged && report.issue_number) {
+      await deps.gh.issueComment({
+        repo: report.repo,
+        number: report.issue_number,
+        body: prdDoneComment(report, rollupResult),
+      });
+      await deps.gh.issueClose({
+        repo: report.repo,
+        number: report.issue_number,
+      });
+    }
+
+    if (rollupResult.merged) {
+      // Branch GC (Decision 35): a completed+merged run is fully contained in develop, so
+      // tear down its per-run staging branch. Protection FIRST — GitHub blocks deleting a
+      // protected ref. A `failed` run (or a `no-merge` open PR) keeps its branch + protection,
+      // banked for rescue / inspection.
+      await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
+      await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
+    }
   } else {
-    log.warn(`run '${runId}': 0 tasks shipped — no rollup PR (nothing on staging to ship)`);
+    log.warn(`run '${runId}': ${terminal} — develop untouched (no rollup, PRD left open)`);
   }
 
   // 7. flip terminal LAST (so a crash in 2–6 leaves the run resumable).

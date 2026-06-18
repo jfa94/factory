@@ -33,7 +33,17 @@ import { isTerminalRunStatus } from "../../types/index.js";
 import type { Config, RunState, RunStatus, TaskState } from "../../types/index.js";
 import { finalizeRun } from "../../driver/index.js";
 import { loadCliDeps } from "../wiring.js";
-import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
+import {
+  DefaultGitClient,
+  DefaultGhClient,
+  ensureStaging,
+  provisionProtection,
+  runStagingBranch,
+  resolveRepo,
+  splitRepoSlug,
+  type GitClient,
+  type GhClient,
+} from "../../git/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { requireAutonomousMode } from "../../autonomy/mode.js";
 import { createLogger } from "../../shared/index.js";
@@ -193,6 +203,21 @@ function assertAcyclic(tasks: Record<string, TaskState>, specId: string): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Git/gh deps needed to cut + protect the per-run staging branch (Decision 33).
+ * Passed from `runCreate` into `createRunFromManifest` after all deps are wired.
+ * Absent on the bare `createRun` (direct-API) path so existing unit tests that
+ * call `createRun` directly continue to work without fakes.
+ */
+export interface RunStagingDeps {
+  readonly gitClient: GitClient;
+  readonly ghClient: GhClient;
+  readonly config: Config;
+  readonly targetRoot: string;
+  readonly owner: string;
+  readonly repo: string;
+}
+
+/**
  * Selects the durable spec to run — EXACTLY one of the two keys, never both,
  * never neither. The `?: never` padding makes the XOR a genuine TYPE constraint:
  * a bare `{ issue } | { specId }` only forbids NEITHER (a both-keys object still
@@ -222,6 +247,19 @@ export type CreateRunOptions = SpecSelector & {
    * escape hatch). Ignored by {@link createRun}, which is unconditionally imperative.
    */
   readonly force?: boolean;
+  /**
+   * Decision 35: mark the existing active run `superseded`, delete its
+   * `staging/<run-id>` branch (which auto-closes its task PRs), and create a fresh
+   * run. Requires `stagingDeps` to be present (the gh client must be wired).
+   */
+  readonly supersede?: boolean;
+  /**
+   * Pass-through for Task 4.2: signal that the caller intends to RESUME the active
+   * run rather than create a new one. {@link resolveOrCreateRun} validates flag
+   * compatibility via {@link assertReusableFlags} and returns `{ kind: "exists" }`;
+   * Task 4.2 upgrades the caller to handle this case.
+   */
+  readonly resume?: boolean;
 };
 
 /**
@@ -251,12 +289,18 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
  * Create the run from an already-resolved manifest and seed its tasks — the
  * imperative core. Creates the run (status `running`), then folds in the seeded
  * task rows via the one sanctioned write path; returns the seeded {@link RunState}.
+ *
+ * When `stagingDeps` is supplied (always from `runCreate`; absent on the bare
+ * `createRun` direct-API path), cuts `staging/<run-id>` from `develop` and
+ * provisions GitHub branch protection on it (Decision 33). The cut + protect runs
+ * AFTER the run state row is persisted so `run.run_id` is guaranteed to exist.
  */
 async function createRunFromManifest(
   state: StateManager,
   specStore: SpecStore,
   manifest: SpecManifest,
   opts: CreateRunOptions,
+  stagingDeps?: RunStagingDeps,
 ): Promise<RunState> {
   // Decision 24: workflow mode disables quota pacing. Warn ONCE here — at opt-in
   // (run creation) — not on every step; the gate then proceeds silently.
@@ -275,7 +319,28 @@ async function createRunFromManifest(
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
     ...(opts.ownerSession !== undefined ? { owner_session: opts.ownerSession } : {}),
   });
-  return state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+  const run = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+
+  // Decision 33: cut + protect the per-run staging branch AFTER the run row exists.
+  if (stagingDeps !== undefined) {
+    const branch = runStagingBranch(run.run_id);
+    await ensureStaging({
+      gitClient: stagingDeps.gitClient,
+      stagingBranch: branch,
+      baseBranch: stagingDeps.config.git.baseBranch,
+      cwd: stagingDeps.targetRoot,
+    });
+    await provisionProtection({
+      ghClient: stagingDeps.ghClient,
+      owner: stagingDeps.owner,
+      repo: stagingDeps.repo,
+      branch,
+      requiredChecks: stagingDeps.config.git.requiredStatusChecks,
+      provision: true,
+    });
+  }
+
+  return run;
 }
 
 /**
@@ -284,6 +349,11 @@ async function createRunFromManifest(
  * {@link StateManager.create} if `runId` already exists). Reuse semantics live in
  * {@link resolveOrCreateRun}; this stays unconditional so callers that name a run
  * id (determinism/tests) get a predictable create.
+ *
+ * INTENTIONALLY omits `stagingDeps` — this bare direct-API export creates the run
+ * row WITHOUT cutting/protecting a `staging/<run-id>` branch. Every production run
+ * goes through `runCreate`, which supplies `stagingDeps`. Do NOT route a real run
+ * through here expecting a staging branch (Decision 33).
  */
 export async function createRun(
   state: StateManager,
@@ -293,11 +363,22 @@ export async function createRun(
   return createRunFromManifest(state, specStore, await resolveSpec(specStore, opts), opts);
 }
 
-/** Outcome of {@link resolveOrCreateRun}: whether a live run was reused or freshly created. */
-export interface ResolveOrCreateResult {
-  readonly reused: boolean;
-  readonly run: RunState;
-}
+/**
+ * Outcome of {@link resolveOrCreateRun} — a discriminated union (Decision 35).
+ *
+ * - `"created"`: no active run existed (or `--supersede` cleared it) and a fresh run
+ *   was minted. `.run` is the new {@link RunState}.
+ * - `"exists"`: an active run exists and no `--supersede`/`--resume` flag was given.
+ *   The CALLER decides what to do; `runCreate` fails loud with an actionable message.
+ *   `.existing` is the live {@link RunState}.
+ * - `"superseded"`: `--supersede` was given; the old run was marked `superseded` and
+ *   its branch deleted, then a fresh run was created. `.run` is the new run;
+ *   `.supersededId` is the old run's id.
+ */
+export type ResolveOrCreateResult =
+  | { readonly kind: "created"; readonly run: RunState }
+  | { readonly kind: "exists"; readonly existing: RunState }
+  | { readonly kind: "superseded"; readonly run: RunState; readonly supersededId: string };
 
 /**
  * Guard the reuse path against a SILENT intent drop: a repeated `run create` resolves
@@ -326,39 +407,81 @@ function assertReusableFlags(existing: RunState, opts: CreateRunOptions): void {
 }
 
 /**
- * Idempotent `run create`: resolve the spec, then (unless `opts.force`) reuse the
- * newest NON-terminal run for this `(repo, spec_id)` instead of spawning a second
- * (orphan) run — the CP3 fix for a re-run that merely wanted to re-grab `run_id`.
- * A terminal run is never reused (the scan ignores it → a fresh run is created).
- * `force` (the `--new` escape hatch) skips the scan and always creates.
+ * Supersede an active run (Decision 35): mark it `superseded` (durable intent
+ * FIRST, so a crash mid-cleanup leaves a recoverable orphan branch, never a
+ * running run with no branch), then tear down protection (GitHub blocks deleting
+ * a protected ref) and delete `staging/<run-id>` (which auto-closes its task PRs).
+ */
+async function supersedeRun(
+  state: StateManager,
+  existing: RunState,
+  stagingDeps: RunStagingDeps,
+): Promise<void> {
+  const branch = runStagingBranch(existing.run_id);
+  await state.finalize(existing.run_id, "superseded");
+  await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
+  await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
+}
+
+/**
+ * Resolve the spec, then (unless `opts.force`) inspect the active run for this
+ * `(repo, spec_id)` and return a discriminated result (Decision 35):
+ *
+ * - `{ kind: "created" }` — no active run; a fresh run was created.
+ * - `{ kind: "exists" }` — an active run exists and no flag was given; the CALLER
+ *   decides. `runCreate` fails loud with an actionable message here.
+ * - `{ kind: "superseded" }` — `--supersede` given; the old run was finalized +
+ *   its branch deleted, then a fresh run was created.
  *
  * The scan→create is serialized under a per-(repo, spec_id) lock so two concurrent
  * same-spec creates can't both observe "no active run" and mint two orphan runs —
  * the per-run clobber guard in {@link StateManager.create} only catches a same
- * run_id collision, not a same-spec one. Reuse with divergent re-passed flags
- * hard-fails via {@link assertReusableFlags}.
+ * run_id collision, not a same-spec one.
+ *
+ * `stagingDeps` is forwarded to {@link createRunFromManifest} on the fresh-create
+ * path to cut + protect the per-run staging branch (Decision 33), and is required
+ * by the `--supersede` path to delete the old run's branch.
  */
 export async function resolveOrCreateRun(
   state: StateManager,
   specStore: SpecStore,
   opts: CreateRunOptions,
+  stagingDeps?: RunStagingDeps,
 ): Promise<ResolveOrCreateResult> {
   // Resolve first (LOUD if no spec) — also yields the (repo, spec_id) scan key.
   const manifest = await resolveSpec(specStore, opts);
   if (opts.force === true) {
-    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return {
+      kind: "created",
+      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+    };
   }
   const pointer = specStore.toPointer(manifest);
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
-      assertReusableFlags(existing, opts);
-      log.info(
-        `run create: reusing active run '${existing.run_id}' for ${pointer.repo} ${pointer.spec_id} (use --new to force a fresh run)`,
-      );
-      return { reused: true, run: existing };
+      if (opts.supersede === true) {
+        if (stagingDeps === undefined) {
+          throw new UsageError("run create --supersede requires the CLI gh deps");
+        }
+        const supersededId = existing.run_id;
+        await supersedeRun(state, existing, stagingDeps);
+        return {
+          kind: "superseded",
+          run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+          supersededId,
+        };
+      }
+      if (opts.resume === true) {
+        assertReusableFlags(existing, opts);
+        return { kind: "exists", existing };
+      }
+      return { kind: "exists", existing };
     }
-    return { reused: false, run: await createRunFromManifest(state, specStore, manifest, opts) };
+    return {
+      kind: "created",
+      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+    };
   });
 }
 
@@ -462,13 +585,14 @@ export function resolveOwnerSession(
 }
 
 /**
- * Test seam for {@link runCreate}: inject the git seam + cwd + data dir so the
- * `--repo` auto-derive path (Prompt G) is exercised with a fake remote and a temp
- * data dir. Production passes none of these (real {@link DefaultGitClient}, real
- * `process.cwd()`, env-resolved data dir).
+ * Test seam for {@link runCreate}: inject the git seam + gh client + cwd + data dir
+ * so the `--repo` auto-derive path (Prompt G) and the staging cut + protect
+ * (Decision 33) are exercised with fakes and a temp data dir. Production passes
+ * none of these (real clients, real `process.cwd()`, env-resolved data dir).
  */
 export interface RunCreateOverrides {
   readonly gitClient?: GitClient;
+  readonly ghClient?: GhClient;
   readonly cwd?: string;
   readonly dataDir?: string;
 }
@@ -477,7 +601,7 @@ export async function runCreate(
   argv: string[],
   overrides: RunCreateOverrides = {},
 ): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship"] });
+  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship", "supersede", "resume"] });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -491,7 +615,11 @@ export async function runCreate(
   // and fail LOUD if an explicit value disagrees with the remote.
   const cwd = overrides.cwd ?? process.cwd();
   const gitClient = overrides.gitClient ?? new DefaultGitClient();
-  const repo = await resolveRepo({ explicit: optionalString(args.flag("repo")), cwd, gitClient });
+  const repoSlug = await resolveRepo({
+    explicit: optionalString(args.flag("repo")),
+    cwd,
+    gitClient,
+  });
   const issue = parseIssue(args.flag("issue"));
   const specId = optionalString(args.flag("spec-id"));
   // Collapse the two CLI flags into the exactly-one SpecSelector here, at the
@@ -521,22 +649,63 @@ export async function runCreate(
   // into an imperative fresh create: a named id is an address (determinism/tests),
   // not a reuse request, so it never silently resolves to a different run.
   const force = args.flag("new") === true || explicitRunId !== undefined;
+  const supersede = args.flag("supersede") === true;
+  const resume = args.flag("resume") === true;
+  if (supersede && resume) {
+    throw new UsageError("run create: pass at most one of --supersede / --resume");
+  }
 
   const dataDir = resolveDataDir(
     overrides.dataDir !== undefined ? { dataDir: overrides.dataDir } : {},
   );
+  const config = loadConfig(overrides.dataDir !== undefined ? { dataDir } : {});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
-  const { run } = await resolveOrCreateRun(state, specStore, {
+  // Decision 33: build the staging deps bundle (git + gh + config + root + repo
+  // coords) so createRunFromManifest can cut + protect staging/<run-id> from develop.
+  const ghClient = overrides.ghClient ?? new DefaultGhClient();
+  const { owner, repo } = splitRepoSlug(repoSlug);
+  const stagingDeps: RunStagingDeps = {
+    gitClient,
+    ghClient,
+    config,
+    targetRoot: cwd,
+    owner,
     repo,
-    runId,
-    ...selector,
-    mode,
-    shipMode,
-    ...(ownerSession !== undefined ? { ownerSession } : {}),
-    ...(force ? { force } : {}),
-  });
-  emitJson(run);
+  };
+  const result = await resolveOrCreateRun(
+    state,
+    specStore,
+    {
+      repo: repoSlug,
+      runId,
+      ...selector,
+      mode,
+      shipMode,
+      ...(ownerSession !== undefined ? { ownerSession } : {}),
+      ...(force ? { force } : {}),
+      ...(supersede ? { supersede } : {}),
+      ...(resume ? { resume } : {}),
+    },
+    stagingDeps,
+  );
+  if (result.kind === "exists") {
+    emitJson({
+      kind: "exists",
+      existing: { run_id: result.existing.run_id, status: result.existing.status },
+    });
+    emitError(
+      `run create: active run '${result.existing.run_id}' already exists — ` +
+        `pass --resume to continue it or --supersede to replace it`,
+    );
+    return EXIT.CONFLICT;
+  }
+  if (result.kind === "created") {
+    emitJson({ kind: "created", run: result.run });
+    return EXIT.OK;
+  }
+  // kind === "superseded"
+  emitJson({ kind: "superseded", run: result.run, supersededId: result.supersededId });
   return EXIT.OK;
 }
 
@@ -639,6 +808,22 @@ export const runCommand: Subcommand = {
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`run: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  },
+};
+
+/** Top-level `factory resume` — alias-equivalent of `run resume` (Decision 35). */
+export const resumeCommand: Subcommand = {
+  describe: "Resume a paused/suspended run (re-check quota; clear a recovered checkpoint)",
+  run: async (argv) => {
+    try {
+      return await runResume(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`resume: ${err.message}`);
         return EXIT.USAGE;
       }
       throw err;

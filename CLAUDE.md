@@ -28,9 +28,9 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 
 ## Key entry points
 
-- `commands/run.md` — main entry (`--mode session|workflow`: session = the orchestrator loop in the invoking Claude Code session; workflow = the Workflow script. See `skills/pipeline-orchestrator/SKILL.md` for the protocol + CLI surface table)
-- `scripts/factory-run-driver.js` — the `--mode workflow` driver: a Workflow script stepping the same `next`/`drive` seam, wrapping every CLI call in a haiku exec-agent (Workflow JS can't shell out)
-- `src/cli/main.ts` — the `factory` subcommand registry (run, spec, next, drive, rescue, score, state, scaffold, configure, config-defaults)
+- `commands/run.md` — main entry (`--workflow`/`--no-ship`; default session+live: session = the orchestrator loop in the invoking Claude Code session; workflow = the Workflow script. See `skills/pipeline-orchestrator/SKILL.md` for the protocol + CLI surface table). Four distinct lifecycle verbs (Decision 35): `run` starts FRESH (no silent reuse — on an active run it exits 3 / prompts resume·supersede·cancel), `commands/resume.md` (`/factory:resume`, `factory resume`) continues an unfinished run, `commands/rescue.md` repairs git/GitHub drift then resumes, `commands/debug.md` is the standalone review-fix loop.
+- `scripts/factory-run-driver.js` — the `--workflow` driver: a Workflow script stepping the same `next`/`drive` seam, wrapping every CLI call in a haiku exec-agent (Workflow JS can't shell out)
+- `src/cli/main.ts` — the `factory` subcommand registry (run, resume, spec, next, drive, rescue, score, state, scaffold, configure, config-defaults)
 - `src/driver/coroutine.ts` + `src/driver/next.ts` — the task-level and run-level coroutines behind `factory drive`/`factory next` (fold logic in `src/driver/fold.ts`)
 - `src/hooks/main.ts` — the `factory-hook` guard dispatch (TCB write-deny, holdout guard, secret guard, branch protection, stop gates)
 

@@ -1621,7 +1621,9 @@ var EXIT = {
   /** Generic failure (uncaught error, classified drop, gate/verify failure). */
   ERROR: 1,
   /** Usage error: unknown subcommand/hook, bad flags, missing required arg. */
-  USAGE: 2
+  USAGE: 2,
+  /** Conflict: an active run already exists and no resolution flag was passed. */
+  CONFLICT: 3
 };
 
 // src/shared/exec.ts
@@ -6989,12 +6991,12 @@ import { sep as sep5 } from "node:path";
 var RunStatusEnum = external_exports.enum([
   "running",
   "completed",
-  "partial",
+  "superseded",
   "paused",
   "suspended",
   "failed"
 ]);
-var TERMINAL_RUN_STATUSES = ["completed", "partial", "failed"];
+var TERMINAL_RUN_STATUSES = ["completed", "failed", "superseded"];
 function isTerminalRunStatus(s) {
   return TERMINAL_RUN_STATUSES.includes(s);
 }
@@ -7601,7 +7603,7 @@ var StateManager = class {
   async finalize(runId, status) {
     if (!isTerminalRunStatus(status)) {
       throw new Error(
-        `state: finalize requires a terminal status (completed|partial|failed); got '${status}'`
+        `state: finalize requires a terminal status (completed|failed|superseded); got '${status}'`
       );
     }
     return this.update(runId, (state) => {
@@ -7718,14 +7720,8 @@ function decideFinalize(run) {
       `decideFinalize: ${nonTerminal.length} non-terminal task(s) remain [${ids}] \u2014 finalize is terminal and must not be called with in-flight work (would spin in bash)`
     );
   }
-  const doneCount = tasks.filter((t) => t.status === "done").length;
-  if (doneCount === 0) {
-    return finalizeTerminal("failed");
-  }
-  if (doneCount === tasks.length) {
-    return finalizeTerminal("completed");
-  }
-  return finalizeTerminal("partial");
+  const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
+  return finalizeTerminal(allDone ? "completed" : "failed");
 }
 
 // src/hooks/hook-context.ts

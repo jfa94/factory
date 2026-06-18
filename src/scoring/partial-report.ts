@@ -1,13 +1,13 @@
 /**
  * WS12 — the deterministic partial-run report (Decision 22, Δ S).
  *
- * "Never ship silently." When a run finalizes to `partial` (≥1 task shipped,
- * ≥1 dropped) or `failed` (nothing shippable), this module turns the persisted
- * {@link RunState} + the durable {@link SpecManifest} into a precise, deterministic
- * account of WHAT shipped and WHAT failed and WHY — the source of truth for the
- * rollup-commit `PARTIAL:` header (WS12 rollup unit) and the per-failure GitHub
- * issues. It is also useful mid-flight (a `suspended`/`paused` run) to describe
- * which tasks are still incomplete.
+ * "Never ship silently." When a run finalizes to `completed` or `failed`
+ * (Decision 34: develop receives only complete PRDs), this module turns the
+ * persisted {@link RunState} + the durable {@link SpecManifest} into a precise,
+ * deterministic account of WHAT shipped and WHAT failed and WHY — the source of
+ * truth for the per-failure GitHub issues and the rollup PR body. It is also useful
+ * mid-flight (a `suspended`/`paused` run) to describe which tasks are still
+ * incomplete.
  *
  * PURE + DERIVE-DON'T-STORE: the report is computed afresh from ground truth
  * (task status + the spec's acceptance criteria) every time. Nothing here is read

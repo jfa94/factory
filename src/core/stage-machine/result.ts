@@ -77,12 +77,12 @@ export interface TaskTerminalResult {
 /**
  * The run-level `finalize` result. ALWAYS terminal — there is deliberately no
  * `wait-retry` reachable from finalize (the explicit fix for the bash
- * `_stage_finalize_run` spin-bug). `partial` is the DEFAULT for an incomplete run
- * (≥1 dropped, ≥1 done); `completed` = all done; `failed` = nothing shippable.
+ * `_stage_finalize_run` spin-bug). Two outcomes only (Decision 34): `completed`
+ * = all tasks done; `failed` = any task dropped or run could not finish.
  */
 export interface FinalizeTerminalResult {
   kind: "finalize-terminal";
-  run_status: "completed" | "partial" | "failed";
+  run_status: "completed" | "failed";
 }
 
 /** The closed StageResult discriminated union (literal `kind`). */

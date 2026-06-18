@@ -18,19 +18,24 @@ arguments:
 
 # /factory:rescue
 
-Recover a run that `factory run resume` cannot untangle. Resume only re-checks the quota gate;
+Recover a run that `factory resume` cannot untangle. Resume only re-checks the quota gate;
 it never touches task state. When a crashed/suspended session left tasks **stuck mid-stage**
-(so a re-drive would deadlock), or a terminal `partial` run has **recoverable** drops worth
-retrying, rescue resets the resettable tasks, reopens a terminal run, then hands off to resume.
+(so a re-drive would deadlock), or a terminal `failed` run has **recoverable** drops worth
+retrying, rescue resets the resettable tasks, reopens a terminal run, reconciles git/GitHub
+drift, then hands off to resume.
 
-**v1 reconciles RUN STATE only.** GitHub-side drift (a PR merged but not recorded, an orphan
-branch/worktree, a merge conflict, duplicate/closed-unmerged PRs) is **out of scope** — it is
-surfaced, not auto-fixed. See `skills/rescue-protocol/reference/disposition-taxonomy.md`.
+**Run state THEN git/GitHub drift.** `rescue scan`/`apply` repair RUN STATE (stuck/recoverable
+tasks, reopen a terminal run). The `rescue-reconciler` agent then repairs remote drift (a run
+branch missing or behind `develop`, a PR/state mismatch, an orphan branch) — **forward-only and
+autonomous** (fetch, forward-merge, re-push a missing branch); anything **destructive** (force,
+delete, discard, an unresolved merge conflict) is surfaced for a confirmation prompt, never
+auto-done. See `skills/rescue-protocol/reference/disposition-taxonomy.md`.
 
 Invoke the `rescue-protocol` skill. It runs: resolve target run → `factory rescue scan`
 (read-only classification) → short-circuit if clean → `factory rescue apply` for the default
 safe set (stuck ∪ recoverable) → for ambiguous dead-ends, spawn the read-only
-`rescue-diagnostic` agent and reset only those it recommends → hand off to `factory run resume`.
+`rescue-diagnostic` agent and reset only those it recommends → spawn `rescue-reconciler` to
+clear git/GitHub drift (prompting before anything destructive) → hand off to `factory resume`.
 
 Parse the flags from the user's input, then load the skill:
 

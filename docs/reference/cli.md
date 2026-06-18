@@ -20,6 +20,8 @@ Run/spec state is read from and written to `$CLAUDE_PLUGIN_DATA`.
 - No args / `--help` / `-h` → prints the registry, exits `0`.
 - Unknown subcommand → stderr message, exits `2` (USAGE).
 - A subcommand's own usage error → exits `2`; any other error → exits `1`.
+- `run create` against an already-active run → exits `3` (CONFLICT) — see
+  [`run create`](#run-create).
 
 See [exit-codes.md](./exit-codes.md).
 
@@ -56,10 +58,11 @@ string. `--get` cannot be combined with `--set`/`--unset`. Example:
 
 Action. Prepares a target repo for the pipeline: idempotently copies the CI net
 (`.github/workflows/quality-gate.yml`) and, for Node packages, the gate configs
-(`.stryker.config.json`, `.dependency-cruiser.cjs`); ensures the `.gitignore`
-guard; ensures the staging branch (from the base branch, never `main`); and
-probes branch protection — **refusing loudly** when the staging branch is not
-protected, unless `--provision` is set.
+(`.stryker.config.json`, `.dependency-cruiser.cjs`, `eslint.config.mjs`); ensures
+the `.gitignore` guard; and probes branch protection on `develop` (the integration
+base) — **refusing loudly** when `develop` is not protected, unless `--provision` is
+set. Per-run `staging/<run-id>` branches are minted at [`run create`](#run-create);
+scaffold no longer creates or protects a shared `staging` branch.
 
 ```
 factory scaffold [--repo <owner/name>] [--provision]
@@ -70,8 +73,8 @@ factory scaffold [--repo <owner/name>] [--provision]
 | `--repo <owner/name>` | no       | Target GitHub repo (used for the protection probe). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with it fails loud. |
 | `--provision`         | no       | Write branch protection if missing (default: refuse).                                                                                                        |
 
-Emits a `ScaffoldReport`: `{ repo, files_created, files_present, staging,
-protection }`.
+Emits a `ScaffoldReport`: `{ repo, files_created, files_present, files_updated,
+files_outdated, protection, settings }`.
 
 ## `spec <resolve|gate|store>`
 
@@ -105,26 +108,29 @@ The orchestrator loops generate ⇄ review (bounded by `max_iterations`) until
 ### `run create`
 
 Action. Resolves a durable spec, creates a fresh run, seeds one `pending` task per
-spec task, and emits the `RunState`. Seeding copies only the producer dial
-(`risk_tier`) + dependency edges — never `tdd_exempt` (read from the spec at
-runtime). Duplicate, self, dangling, or cyclic dependency edges fail loudly at
-seed time.
+spec task, cuts + GitHub-protects the run's `staging/<run-id>` integration branch
+from `develop` (Decision 33), and emits `{kind:"created", run}`. Seeding copies only
+the producer dial (`risk_tier`) + dependency edges — never `tdd_exempt` (read from
+the spec at runtime). Duplicate, self, dangling, or cyclic dependency edges fail
+loudly at seed time.
 
 ```
 factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
-                   [--new] [--workflow] [--no-ship] [--session-id <id>]
+                   [--new] [--supersede | --resume] [--workflow] [--no-ship] [--session-id <id>]
 ```
 
-| Flag                  | Notes                                                                                                                                                                                                                                 |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--repo <owner/name>` | **Optional.** Repo identity (the first key of the spec store). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with the remote fails loud.                                                       |
-| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`.                                                                                                                                                               |
-| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                                                                                 |
-| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                                                                                |
-| `--new`               | Force a fresh run even if a live one already exists for this spec (else create is idempotent).                                                                                                                                        |
-| `--workflow`          | Run the parallel background Workflow driver. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                  |
-| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into staging and the rollup into develop. Persisted as `ship_mode` so the workflow driver + resume + finalize read it without re-passing. |
-| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`; absent ⇒ owner-unknown (gate runs unscoped).                                                                                   |
+| Flag                  | Notes                                                                                                                                                                                                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <owner/name>` | **Optional.** Repo identity (the first key of the spec store). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with the remote fails loud.                                                                                   |
+| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`.                                                                                                                                                                                           |
+| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                                                                                                             |
+| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                                                                                                            |
+| `--new`               | Force a fresh run, bypassing the active-run conflict scan.                                                                                                                                                                                                        |
+| `--supersede`         | If an active run exists for this spec, mark it `superseded`, delete its `staging/<run-id>` branch (auto-closing its task PRs), then create a fresh run. Emits `{kind:"superseded", run, supersededId}`. Mutually exclusive with `--resume`.                       |
+| `--resume`            | If an active run exists, do not create — return the conflict (exit `3`) so the caller hands off to [`resume`](#resume). Mutually exclusive with `--supersede`.                                                                                                    |
+| `--workflow`          | Run the parallel background Workflow driver. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                                              |
+| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging/<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow driver + resume + finalize read it without re-passing. |
+| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`; absent ⇒ owner-unknown (gate runs unscoped).                                                                                                               |
 
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
 exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
@@ -138,25 +144,65 @@ Loud error if no spec exists for the issue — generate one first. The seeded ru
 `driver` is fixed to `sequential`: the v1 coroutine seam drives tasks one at a time.
 The persisted `mode` (`session`|`workflow`) selects which _driver_ steps the seam;
 `/factory:run` forwards its own `--workflow` flag here (see
-[Run the pipeline](../guides/run-the-pipeline.md)). Create is **idempotent** with the
-auto-generated id: a repeat returns the existing non-terminal run for this
-`(repo, spec_id)` rather than spawning an orphan — pass `--new` (or a `--run-id`) to
-force a fresh run. The resolve-or-reuse scan→create is serialized under a
-per-`(repo, spec_id)` lock so two concurrent same-spec creates cannot both mint an
-orphan. Reuse is strict on the persisted dials: re-running with `--workflow`/`--no-ship`
-that resolve to a `mode` or `ship_mode` **disagreeing** with the run being reused is a
-loud `UsageError` (the run keeps its original dials — driving it under a ship mode you
-did not ask for is dangerous). Match the existing run's flags to reuse, or pass `--new`
-for a fresh run.
+[Run the pipeline](../guides/run-the-pipeline.md)).
+
+**Active-run conflict (Decision 35 — no silent reuse).** A PRD has at most one active
+run at a time. `run create` does **not** reuse an existing run: when a non-terminal
+run already exists for this `(repo, spec_id)`, it exits `3` (CONFLICT) and emits
+`{kind:"exists", existing:{run_id, status}}`. Two escapes resolve the conflict:
+
+- `--supersede` — mark the old run `superseded`, delete its `staging/<run-id>` branch
+  - PRs, and create a fresh run (`{kind:"superseded", run, supersededId}`).
+- `--resume` — return the conflict so the caller hands off to [`resume`](#resume).
+
+`--new` (or an explicit `--run-id`) bypasses the conflict scan and forces a fresh
+run unconditionally. The scan→create is serialized under a per-`(repo, spec_id)` lock
+so two concurrent same-spec creates cannot both mint an orphan. The reused/resumed run
+keeps its original persisted dials: handing off via `--resume` with a
+`--workflow`/`--no-ship` that resolves to a `mode` or `ship_mode` **disagreeing** with
+the existing run is a loud `UsageError` (driving it under a ship mode you did not ask
+for is dangerous). Emits `{kind:"created", run}` on the fresh-create path.
 
 ### `run resume`
 
-Action. Re-checks the live quota window and resumes a paused/suspended run if the
-binding window recovered. Reads nothing else; leaves state untouched when blocked.
-A terminal run is a loud error (nothing to resume).
+Thin CLI alias of the top-level [`resume`](#resume) command, kept for one release.
+Prefer `factory resume`.
 
 ```
 factory run resume [--run <id>]
+```
+
+### `run finalize`
+
+Action. Turns an all-terminal run into its shipped outcome, in resume-safe order:
+build the report (`report.md`), emit telemetry, file one GitHub issue per dropped
+task (deduped), then — **only when the run completed** (Decision 34: develop receives
+whole PRDs only) — forward-reconcile `develop` into the run branch (no force-push),
+open + CI-gate + (in `live` mode) squash-merge the `staging/<run-id> → develop`
+rollup, comment on + close the originating PRD issue, and delete the per-run branch;
+finally flip the run terminal **last**. A `failed` run leaves `develop` untouched,
+the PRD open, and keeps its branch for rescue. Loud if any task is still non-terminal.
+Idempotent (a re-entered finalize re-files nothing).
+
+```
+factory run finalize [--run <id>] [--no-ship]
+```
+
+Ship mode defaults to the run's **persisted `ship_mode`** (set at `run create`); no flag
+is needed. `--no-ship` overrides it to no-merge for THIS finalize only (opens the
+`staging/<run-id> → develop` rollup PR but never merges). Emits
+`{kind:"finalized", run, report, rollup?, issues_filed}`.
+
+## `resume`
+
+Action (Decision 35 — a top-level verb, distinct from `run`/`rescue`/`debug`).
+Re-checks the live quota window and resumes a paused/suspended run if the binding
+window recovered. Reads nothing else; leaves state untouched when blocked. A terminal
+run is a loud error (nothing to resume). `factory run resume` is a thin alias of this
+command.
+
+```
+factory resume [--run <id>]
 ```
 
 Subject to the same mandatory autonomy gate as `run create` (halts loud unless
@@ -170,22 +216,6 @@ legacy global pointer when the repo can't be derived (see
 - `{kind:"resumed", run}` — window recovered (or the run was already running).
 - `{kind:"still-blocked", run_id, status, reason, resets_at_epoch?}` — not
   recovered; state untouched.
-
-### `run finalize`
-
-Action. Turns an all-terminal run into its shipped outcome, in resume-safe order:
-build the partial report (`report.md`), emit telemetry, file one GitHub issue per
-dropped task (deduped), open + CI-gate + (in `live` mode) squash-merge the
-`staging → develop` rollup, then flip the run terminal **last**. Loud if any task
-is still non-terminal. Idempotent (a re-entered finalize re-files nothing).
-
-```
-factory run finalize [--run <id>] [--no-ship]
-```
-
-Ship mode defaults to the run's **persisted `ship_mode`** (set at `run create`); no flag
-is needed. `--no-ship` overrides it to no-merge for THIS finalize only (opens the rollup PR
-but never merges). Emits `{kind:"finalized", run, report, rollup?, issues_filed}`.
 
 ## `state`
 
@@ -201,12 +231,12 @@ No current run is not an error: prints `{"current": null}` (or `no current run`
 with `--summary`) and exits `0`. State corruption is loud.
 
 With no `<run-id>`, the current run is resolved **per repo** from the caller's
-checkout — see below. `score`, `rescue`, and `run resume` resolve the same way.
+checkout — see below. `score`, `rescue`, and `resume` resolve the same way.
 
 ### Per-repo current run resolution
 
 The human reporters/actions that default to "the current run" (`state`, `score`,
-`rescue`, `run resume`) resolve it **per repo** from the shell's cwd, so two runs
+`rescue`, `resume`) resolve it **per repo** from the shell's cwd, so two runs
 in two different checkouts don't shadow each other:
 
 1. derive the repo from the checkout's `origin` remote;
@@ -346,8 +376,11 @@ tune the `--dead-surface` scan. Emits `{ kind:"score", summary, dead_surface? }`
 
 ## `rescue <scan|apply>`
 
-Recover a stalled run that `run resume` cannot untangle (resume only clears the
-quota gate; it never touches task state).
+Recover a stalled run that `resume` cannot untangle (resume only clears the
+quota gate; it never touches task state). The `/factory:rescue` command pairs these
+subcommands with the `rescue-reconciler` agent (git/GitHub drift repair) before
+handing off to [`resume`](#resume) — see
+[Rescue a stalled run](../guides/rescue-a-stalled-run.md).
 
 ### `rescue scan`
 

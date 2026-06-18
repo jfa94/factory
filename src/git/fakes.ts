@@ -7,7 +7,7 @@
  * protection state are all SCRIPTABLE with zero real git/gh invocation. Every
  * WS3 unit test and downstream consumer (WS6/WS10/WS12) uses these fixtures.
  */
-import type { GitClient, GitOpts, PushOptions } from "./git-client.js";
+import type { GitClient, GitOpts, MergeOptions, PushOptions } from "./git-client.js";
 import type {
   ChecksState,
   CreatedIssue,
@@ -62,6 +62,11 @@ export class FakeGitClient implements GitClient {
   failRemoteUrl = false;
   /** Ordered log of git ops, for assertions. */
   readonly calls: string[] = [];
+  /**
+   * Records merges: branch → list of refs merged into it (for `mergeFfOrCommit`
+   * assertions). Keyed by the branch name receiving the merge.
+   */
+  readonly mergesInto: Record<string, string[]> = {};
   private head: string;
   private shaCounter = 0;
 
@@ -197,6 +202,12 @@ export class FakeGitClient implements GitClient {
     const sha = this.localBranches.get(branch) ?? this.nextSha();
     this.setRemoteHead(branch, sha, remote);
   }
+
+  async mergeFfOrCommit(branch: string, ref: string, _opts?: MergeOptions): Promise<void> {
+    this.calls.push(`merge --no-edit ${ref} into ${branch}`);
+    if (!this.mergesInto[branch]) this.mergesInto[branch] = [];
+    this.mergesInto[branch]!.push(ref);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -241,8 +252,14 @@ export class FakeGhClient implements GhClient {
   }> = [];
   /** Remote head refs deleted via deleteRemoteBranch (worktree-safe cleanup). */
   readonly deletedBranches: string[] = [];
+  /** Branches whose protection was removed via deleteProtection. */
+  readonly protectionDeletes: string[] = [];
   /** Records each issueCreate so tests assert one issue per failed task (Δ S). */
   readonly issues: Array<IssueCreateArgs & { number: number; url: string }> = [];
+  /** Records each issueComment call (PRD delivered comment on completed runs). */
+  readonly issueComments: Array<{ number: number; body: string; repo: string }> = [];
+  /** Records each issueClose call (PRD closed on completed runs). */
+  readonly issueCloses: Array<{ number: number; repo: string; comment?: string }> = [];
   /** Per-PR CI sequences; each prChecks call shifts one (the last value sticks). */
   private readonly checksQueue = new Map<number, ChecksState[]>();
   private readonly defaultChecks: ChecksState;
@@ -421,5 +438,36 @@ export class FakeGhClient implements GhClient {
   ): Promise<void> {
     this.calls.push(`api DELETE refs/heads/${branch}`);
     this.deletedBranches.push(branch);
+  }
+
+  async deleteProtection(
+    _owner: string,
+    _repo: string,
+    branch: string,
+    _opts?: GhOpts,
+  ): Promise<void> {
+    this.calls.push(`api DELETE protection ${branch}`);
+    this.protectionDeletes.push(branch);
+    this.protection.delete(branch);
+  }
+
+  async issueComment(
+    args: { repo: string; number: number; body: string },
+    _opts?: GhOpts,
+  ): Promise<void> {
+    this.calls.push(`issue comment ${args.number}`);
+    this.issueComments.push({ number: args.number, body: args.body, repo: args.repo });
+  }
+
+  async issueClose(
+    args: { repo: string; number: number; comment?: string },
+    _opts?: GhOpts,
+  ): Promise<void> {
+    this.calls.push(`issue close ${args.number}`);
+    this.issueCloses.push({
+      number: args.number,
+      repo: args.repo,
+      ...(args.comment !== undefined ? { comment: args.comment } : {}),
+    });
   }
 }

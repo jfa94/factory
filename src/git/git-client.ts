@@ -28,6 +28,9 @@ export interface PushOptions extends GitOpts {
   setUpstream?: boolean;
 }
 
+/** Options for {@link GitClient.mergeFfOrCommit}. */
+export interface MergeOptions extends GitOpts {}
+
 /**
  * The typed git surface WS3 builds on. NO force-push exists here by design.
  */
@@ -64,6 +67,12 @@ export interface GitClient {
   worktreeRemove(args: readonly string[], opts?: GitOpts): Promise<number | null>;
   /** `git push [-u] <remote> <branch>` — fatal on failure. NO force flag. */
   push(remote: string, branch: string, opts?: PushOptions): Promise<void>;
+  /**
+   * Check out `branch` from its origin tracking ref, then `git merge --no-edit <ref>`.
+   * Fast-forwards when possible; else makes a merge commit. FATAL on a merge conflict
+   * (non-auto-recoverable → surfaces for rescue). NEVER uses `--force` or `-f`.
+   */
+  mergeFfOrCommit(branch: string, ref: string, opts?: MergeOptions): Promise<void>;
 }
 
 /** Default GitClient over the real (or an injected) git runner. */
@@ -150,5 +159,12 @@ export class DefaultGitClient implements GitClient {
     if (opts?.setUpstream) args.push("-u");
     args.push(remote, branch);
     await this.execOrThrow(args, opts);
+  }
+
+  async mergeFfOrCommit(branch: string, ref: string, opts?: MergeOptions): Promise<void> {
+    log.debug(`merge --no-edit ${ref} into ${branch}`);
+    // Check out the branch from its origin tracking ref first, then merge.
+    await this.execOrThrow(["checkout", branch], opts);
+    await this.execOrThrow(["merge", "--no-edit", ref], opts);
   }
 }

@@ -170,7 +170,7 @@ describe("scanRun — would_deadlock (the driver's guard, mirrored)", () => {
           { task_id: "a", status: "done" },
           { task_id: "b", status: "dropped", failure_class: "blocked-environmental" },
         ],
-        "partial",
+        "failed",
       ),
     );
     expect(scan.would_deadlock).toBe(false);
@@ -198,7 +198,7 @@ describe("scanRun — summary", () => {
           { task_id: "a", status: "done" },
           { task_id: "b", status: "dropped", failure_class: "blocked-environmental" },
         ],
-        "partial",
+        "failed",
       ),
     );
     expect(scan.summary).toMatch(/will reopen the run/);

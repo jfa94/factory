@@ -68,20 +68,20 @@ Both the review panel and the holdout-validator are spawned against the **task
 worktree** and inspect the change with:
 
 ```bash
-git -C <taskWorktree> diff origin/staging
+git -C <taskWorktree> diff origin/staging/<run-id>
 ```
 
-The diff base is `origin/staging` — the **remote-tracking ref**, not a local
-`staging` branch. This is load-bearing: `createTaskWorktree`
-(`src/git/worktree.ts`) creates the worktree with
-`git worktree add -b <branch> <path> origin/staging`, so it forks from
-`origin/staging` (fetched fresh at creation) and **never creates or maintains a
-local `staging` branch**. A bare `git diff staging` therefore resolves to a stale
-or absent local ref — it degraded silently in session mode (a local `staging`
+The diff base is the run's per-run integration branch `origin/staging/<run-id>`
+(Decision 33) — the **remote-tracking ref**, not a local branch. This is
+load-bearing: `createTaskWorktree` (`src/git/worktree.ts`) creates the worktree with
+`git worktree add -b <branch> <path> origin/staging/<run-id>`, so it forks from that
+remote-tracking ref (fetched fresh at creation) and **never creates or maintains a
+local staging branch**. A bare `git diff` against a local name therefore resolves to
+a stale or absent ref — it degraded silently in session mode (a local branch
 sometimes happened to be current, and reviewers Read files directly) and would
-hard-error in workflow mode (the background Workflow never checks out `staging`).
-`origin/staging` is exactly the fork point, so it is the deterministic base for
-every "inspect the diff" instruction. (Same root cause as the worktree-base
+hard-error in workflow mode (the background Workflow never checks out the branch).
+`origin/staging/<run-id>` is exactly the fork point, so it is the deterministic base
+for every "inspect the diff" instruction. (Same root cause as the worktree-base
 invariant — see [decisions.md Decision 12](./decisions.md#decision-12-staging-branch-as-integration-point).)
 
 A reviewer's lens is **not** delivered as a per-run prompt file. The spawn

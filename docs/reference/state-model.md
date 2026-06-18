@@ -87,17 +87,18 @@ never `RunStateSchema.parse` directly.
 
 ### `RunStatus`
 
-| Value       | Terminal? | Meaning                                                                                                |
-| ----------- | --------- | ------------------------------------------------------------------------------------------------------ |
-| `running`   | no        | Actively executing.                                                                                    |
-| `paused`    | no        | Quota 5h-window breach; waiting out the curve in-session, self-heals.                                  |
-| `suspended` | no        | Quota 7d-window breach; state persisted, process exited cleanly; resume continues from checkpoint.     |
-| `completed` | yes       | Every task done, rollup CI green (success).                                                            |
-| `partial`   | yes       | Retry ladder exhausted on ≥1 task; the done-set shipped, failures handed off loudly (quality failure). |
-| `failed`    | yes       | Could not start / non-recoverable error before any partial delivery.                                   |
+| Value        | Terminal? | Meaning                                                                                                                           |
+| ------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `running`    | no        | Actively executing.                                                                                                               |
+| `paused`     | no        | Quota 5h-window breach; waiting out the curve in-session, self-heals.                                                             |
+| `suspended`  | no        | Quota 7d-window breach; state persisted, process exited cleanly; resume continues from checkpoint.                                |
+| `completed`  | yes       | Every task done, rollup CI green; `staging/<run-id> → develop` merged, PRD closed, per-run branch deleted (success).              |
+| `failed`     | yes       | A task was dropped, or the run could not start / wedged (circuit breaker). `develop` untouched, PRD open, branch kept for rescue. |
+| `superseded` | yes       | A fresh run replaced this one; its `staging/<run-id>` branch + PRs were deleted.                                                  |
 
-`paused`/`suspended` are **quota** states; `partial` is a **quality** outcome —
-they must stay distinct.
+`develop` receives a run's work **only as a whole PRD** (Decision 34) — there is no
+`partial` status. `paused`/`suspended` are **quota** states; `completed`/`failed`/
+`superseded` are the terminal **outcomes** — they must stay distinct.
 
 ### `SpecPointer`
 
@@ -130,8 +131,8 @@ one.
 | `pending`   | no        | Not started, or blocked on an unsatisfied dependency.                  |
 | `executing` | no        | A producer stage (test-writer / executor) is in flight.                |
 | `reviewing` | no        | The verifier floor (gates + panel) is in flight.                       |
-| `shipping`  | no        | Verified; PR open / merging into staging.                              |
-| `done`      | yes       | Merged into staging (success).                                         |
+| `shipping`  | no        | Verified; PR open / merging into the run's `staging/<run-id>` branch.  |
+| `done`      | yes       | Merged into `staging/<run-id>` (success).                              |
 | `dropped`   | yes       | Ladder exhausted; a classified loud drop (pairs with `failure_class`). |
 
 ### `FailureClass`

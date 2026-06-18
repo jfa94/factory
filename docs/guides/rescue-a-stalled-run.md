@@ -1,14 +1,20 @@
 # How to Rescue a Stalled Run
 
-Use rescue when `factory run resume` cannot recover a run. Resume only re-checks
-the quota gate — it never touches task state. When a crashed or suspended session
-left tasks **stuck mid-stage** (so a re-drive would deadlock), or a terminal
-`partial` run has **recoverable** drops worth retrying, rescue resets the
-resettable tasks, reopens a terminal run, and hands off to resume.
+Use rescue when `factory resume` cannot recover a run. Resume only re-checks the
+quota gate — it never touches task state. When a crashed or suspended session left
+tasks **stuck mid-stage** (so a re-drive would deadlock), or a terminal `failed`
+run has **recoverable** drops worth retrying, rescue resets the resettable tasks,
+reopens a terminal run, reconciles git/GitHub drift, then hands off to resume.
 
-**v1 reconciles run state only.** GitHub-side drift (a PR merged but not recorded,
-an orphan branch/worktree, a closed-unmerged PR) is out of scope — it is surfaced,
-not auto-fixed. See `skills/rescue-protocol/SKILL.md` and its `reference/` dir.
+**Rescue repairs run state, then git/GitHub drift.** `rescue scan`/`apply` repair
+RUN STATE (stuck/recoverable tasks, reopen a terminal run). The `rescue-reconciler`
+agent then repairs **remote** drift that run state cannot see — a `staging/<run-id>`
+branch missing or behind `develop`, a PR whose merged/closed status disagrees with
+state, an orphan branch/worktree. Reconciliation is **forward-only and autonomous**
+(fetch, forward-merge `origin/develop` into the run branch, re-push a missing
+branch); anything **destructive** (a force-push, a branch/PR deletion, discarding
+commits, an unresolved merge conflict) is **surfaced for a prompt**, never
+auto-done. See `skills/rescue-protocol/SKILL.md` and its `reference/` dir.
 
 ## 1. Scan first (read-only)
 
@@ -64,19 +70,29 @@ cause:
 factory rescue apply --include-dead-ends
 ```
 
-## 4. Resume
+## 4. Reconcile git/GitHub drift
 
-After applying, continue the run:
+Before resuming, reconcile any **remote** drift run state cannot see (a run branch
+missing or behind `develop`, a PR/state mismatch, an orphan branch). This is the
+`rescue-reconciler` agent's job — driven by the `/factory:rescue` command, not a
+standalone CLI subcommand. It acts only on **forward-only, non-destructive** repairs
+autonomously and surfaces anything destructive for a confirmation prompt. Run it via
+the command (below) rather than by hand.
+
+## 5. Resume
+
+After applying and reconciling, continue the run:
 
 ```bash
-factory run resume [--run <id>]
+factory resume [--run <id>]
 ```
 
 ## Via the command
 
 The `/factory:rescue` command wraps this whole flow (scan → short-circuit if clean
 → apply the safe set → for ambiguous dead-ends, consult the read-only
-`rescue-diagnostic` agent → hand off to resume):
+`rescue-diagnostic` agent → spawn `rescue-reconciler` to clear git/GitHub drift,
+prompting before anything destructive → hand off to resume):
 
 ```
 /factory:rescue [--run <id>] [--task <id>]... [--include-dead-ends] [--dry-run]
