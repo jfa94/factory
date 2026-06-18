@@ -52,6 +52,17 @@ const log = createLogger("finalize");
 /** The label every factory-filed issue carries (the finalize dedup key). */
 const FACTORY_ISSUE_LABEL = "factory";
 
+/** Comment body posted to the PRD issue when the rollup merges (Decision 34). */
+function prdDoneComment(report: PartialRunReport, rollupResult: RollupResult): string {
+  const prRef = rollupResult.url
+    ? `[#${rollupResult.number}](${rollupResult.url})`
+    : `#${rollupResult.number}`;
+  return (
+    `PRD delivered — all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.\n\n` +
+    `Spec: \`${report.spec_id}\` · Run: \`${report.run_id}\``
+  );
+}
+
 /** The deps the finalize coordinator needs — a subset of {@link import("./coroutine.js").CoroutineDeps} + CLI deps. */
 export interface FinalizeRunDeps {
   /** The only sanctioned state read/write path. */
@@ -167,10 +178,10 @@ export async function finalizeRun(
   // 5. one GH issue per drop, deduped against existing factory issues.
   const issuesFiled = await fileFailureIssues(deps, report);
 
-  // 6. rollup — only when something shipped (an all-dropped run has nothing on
-  //    staging beyond base; opening a no-diff PR would fail).
+  // 6. rollup — only on completed (Decision 34: develop receives whole PRDs only).
+  //    On failed, develop is untouched (per-drop issues are already filed above).
   let rollupResult: RollupResult | undefined;
-  if (report.totals.shipped > 0) {
+  if (terminal === "completed") {
     const stagingBranch = runStagingBranch(runId);
     // Forward-reconcile (Decision 33): bring develop's new commits into the run branch
     // (no force-push) so the rollup PR is up-to-date. A conflict here is
@@ -185,12 +196,23 @@ export async function finalizeRun(
       baseBranch: deps.config.git.baseBranch,
       title: rollupTitle(report),
       body: markdown,
-      partial: terminal === "partial",
       merge: deps.shipMode === "live",
       ...(deps.rollup ?? {}),
     });
+
+    if (rollupResult.merged && report.issue_number) {
+      await deps.gh.issueComment({
+        repo: report.repo,
+        number: report.issue_number,
+        body: prdDoneComment(report, rollupResult),
+      });
+      await deps.gh.issueClose({
+        repo: report.repo,
+        number: report.issue_number,
+      });
+    }
   } else {
-    log.warn(`run '${runId}': 0 tasks shipped — no rollup PR (nothing on staging to ship)`);
+    log.warn(`run '${runId}': ${terminal} — develop untouched (no rollup, PRD left open)`);
   }
 
   // 7. flip terminal LAST (so a crash in 2–6 leaves the run resumable).

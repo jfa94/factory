@@ -48,8 +48,8 @@ export interface RollupArgs {
   title: string;
   /** Rollup PR body — the partial-run report markdown is the natural fit. */
   body: string;
-  /** PARTIAL run → prefix the squash subject with `PARTIAL: ` (Δ S). */
-  partial: boolean;
+  /** PARTIAL run → prefix the squash subject with `PARTIAL: ` (Δ S). Defaults to false. */
+  partial?: boolean;
   /**
    * `true` (live) → wait for CI + squash-merge. `false` (no-merge cutover) → open
    * the PR and stop. The coordinator maps ShipMode (`live`/`no-merge`) → this.

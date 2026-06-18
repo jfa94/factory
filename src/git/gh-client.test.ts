@@ -235,6 +235,65 @@ describe("deleteProtection (remove branch protection before deleting a per-run s
   });
 });
 
+describe("issueComment", () => {
+  it("passes issue number, --repo, and --body to gh issue comment", async () => {
+    let captured: readonly string[] = [];
+    const runner: GhRunner = async (args) => {
+      captured = args;
+      return result({});
+    };
+    const gh = new DefaultGhClient(runner);
+    await gh.issueComment({ repo: "acme/widgets", number: 42, body: "PRD delivered" });
+    expect(captured.slice(0, 3)).toEqual(["issue", "comment", "42"]);
+    expect(captured).toContain("--repo");
+    expect(captured[captured.indexOf("--repo") + 1]).toBe("acme/widgets");
+    expect(captured).toContain("--body");
+    expect(captured[captured.indexOf("--body") + 1]).toBe("PRD delivered");
+  });
+
+  it("throws on a non-zero exit (not silently swallowed)", async () => {
+    const runner: GhRunner = async () => result({ code: 1, stderr: "HTTP 401: Bad credentials" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.issueComment({ repo: "acme/widgets", number: 1, body: "hi" })).rejects.toThrow(
+      /401|failed/i,
+    );
+  });
+});
+
+describe("issueClose", () => {
+  it("passes issue number and --repo to gh issue close", async () => {
+    let captured: readonly string[] = [];
+    const runner: GhRunner = async (args) => {
+      captured = args;
+      return result({});
+    };
+    const gh = new DefaultGhClient(runner);
+    await gh.issueClose({ repo: "acme/widgets", number: 42 });
+    expect(captured.slice(0, 3)).toEqual(["issue", "close", "42"]);
+    expect(captured).toContain("--repo");
+    expect(captured[captured.indexOf("--repo") + 1]).toBe("acme/widgets");
+    expect(captured).not.toContain("--comment");
+  });
+
+  it("passes --comment when provided", async () => {
+    let captured: readonly string[] = [];
+    const runner: GhRunner = async (args) => {
+      captured = args;
+      return result({});
+    };
+    const gh = new DefaultGhClient(runner);
+    await gh.issueClose({ repo: "acme/widgets", number: 42, comment: "Closing as delivered" });
+    expect(captured).toContain("--comment");
+    expect(captured[captured.indexOf("--comment") + 1]).toBe("Closing as delivered");
+  });
+
+  it("throws on a non-zero exit (not silently swallowed)", async () => {
+    const runner: GhRunner = async () => result({ code: 1, stderr: "HTTP 401: Bad credentials" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.issueClose({ repo: "acme/widgets", number: 1 })).rejects.toThrow(/401|failed/i);
+  });
+});
+
 describe("prView always requests the schema's required fields (CP2 #15 — rollup subset crash)", () => {
   const fullPr = {
     number: 4,

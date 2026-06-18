@@ -184,7 +184,7 @@ describe("decideStop — live run, all tasks terminal → finalize", () => {
     expect(action).toEqual({ kind: "finalize", status: "completed" });
   });
 
-  it("mix of done + dropped → finalize partial", () => {
+  it("mix of done + dropped → finalize failed (Decision 34: no partial rollup)", () => {
     const action = decideStop(
       run(
         {},
@@ -195,7 +195,7 @@ describe("decideStop — live run, all tasks terminal → finalize", () => {
       ),
       false,
     );
-    expect(action).toEqual({ kind: "finalize", status: "partial" });
+    expect(action).toEqual({ kind: "finalize", status: "failed" });
   });
 
   it("all dropped (zero done) → finalize failed", () => {

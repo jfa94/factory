@@ -256,6 +256,10 @@ export class FakeGhClient implements GhClient {
   readonly protectionDeletes: string[] = [];
   /** Records each issueCreate so tests assert one issue per failed task (Δ S). */
   readonly issues: Array<IssueCreateArgs & { number: number; url: string }> = [];
+  /** Records each issueComment call (PRD delivered comment on completed runs). */
+  readonly issueComments: Array<{ number: number; body: string; repo: string }> = [];
+  /** Records each issueClose call (PRD closed on completed runs). */
+  readonly issueCloses: Array<{ number: number; repo: string; comment?: string }> = [];
   /** Per-PR CI sequences; each prChecks call shifts one (the last value sticks). */
   private readonly checksQueue = new Map<number, ChecksState[]>();
   private readonly defaultChecks: ChecksState;
@@ -445,5 +449,25 @@ export class FakeGhClient implements GhClient {
     this.calls.push(`api DELETE protection ${branch}`);
     this.protectionDeletes.push(branch);
     this.protection.delete(branch);
+  }
+
+  async issueComment(
+    args: { repo: string; number: number; body: string },
+    _opts?: GhOpts,
+  ): Promise<void> {
+    this.calls.push(`issue comment ${args.number}`);
+    this.issueComments.push({ number: args.number, body: args.body, repo: args.repo });
+  }
+
+  async issueClose(
+    args: { repo: string; number: number; comment?: string },
+    _opts?: GhOpts,
+  ): Promise<void> {
+    this.calls.push(`issue close ${args.number}`);
+    this.issueCloses.push({
+      number: args.number,
+      repo: args.repo,
+      ...(args.comment !== undefined ? { comment: args.comment } : {}),
+    });
   }
 }

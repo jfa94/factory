@@ -175,7 +175,9 @@ describe("finalizeRun", () => {
     expect(gh.created).toHaveLength(1); // PR opened for inspection
   });
 
-  it("partial: terminal partial, PARTIAL: rollup subject, one issue per drop", async () => {
+  it("failed (some dropped): no rollup, one issue per drop, PRD left open (Decision 34)", async () => {
+    // Decision 34: develop receives only complete PRDs. A mixed done+dropped run is
+    // 'failed', gets no rollup, and the PRD issue is left open.
     const tasks: TaskSeed[] = [
       { task_id: "t1", status: "done", pr_number: 11 },
       {
@@ -190,15 +192,17 @@ describe("finalizeRun", () => {
 
     const result = await finalizeRun(makeDeps(spec, "live"), RUN_ID);
 
-    expect(result.run.status).toBe("partial");
+    expect(result.run.status).toBe("failed");
     expect(result.issuesFiled).toBe(1);
     expect(gh.issues).toHaveLength(1);
     // the issue carries the factory + per-class labels (the dedup + triage keys).
     expect(gh.issues[0]!.labels).toEqual(["factory", "factory:spec-defect"]);
     expect(gh.issues[0]!.title).toContain("t2");
-    // partial rollup → PARTIAL: subject.
-    expect(result.rollup?.merged).toBe(true);
-    expect(result.rollup?.subject?.startsWith(PARTIAL_SUBJECT_PREFIX)).toBe(true);
+    // Decision 34: no rollup on failed — develop is untouched.
+    expect(result.rollup).toBeUndefined();
+    expect(gh.merges).toHaveLength(0);
+    // PRD issue NOT closed.
+    expect(gh.issueCloses).toHaveLength(0);
   });
 
   it("failed (all dropped): no rollup, one issue per drop, run flips to failed", async () => {
@@ -228,16 +232,19 @@ describe("finalizeRun", () => {
 
     const md = await readFile(runReportPath(dataDir, RUN_ID), "utf8");
     expect(md).toContain("# Factory run report");
-    expect(md).toContain("Status:** PARTIAL");
+    // Decision 34: mixed done+dropped is 'failed', not 'partial'.
+    expect(md).toContain("Status:** FAILED");
     expect(md).toContain(NOW);
 
     const metrics = await readMetrics(dataDir, RUN_ID);
     const finalized = metrics.find((m) => m.event === "run.finalized");
-    expect(finalized?.data?.status).toBe("partial");
+    expect(finalized?.data?.status).toBe("failed");
     expect(metrics.filter((m) => m.event === "task.dropped")).toHaveLength(1);
   });
 
-  it("resume-safe: a second finalize files 0 new issues and short-circuits the rollup", async () => {
+  it("resume-safe (failed): a second finalize on a failed run files 0 new issues and stays failed", async () => {
+    // Decision 34: a failed run has no rollup to resume; idempotency means the
+    // second finalize also files 0 new issues and leaves the run status as failed.
     const tasks: TaskSeed[] = [
       { task_id: "t1", status: "done", pr_number: 11 },
       { task_id: "t2", status: "dropped", failure_class: "spec-defect" },
@@ -247,17 +254,15 @@ describe("finalizeRun", () => {
 
     const first = await finalizeRun(makeDeps(spec, "live"), RUN_ID);
     expect(first.issuesFiled).toBe(1);
-    expect(first.rollup?.resumed).toBe(false);
-    const mergesAfterFirst = gh.merges.length;
+    expect(first.rollup).toBeUndefined(); // no rollup on failed
 
-    // Re-enter finalize (simulating a resumed run): idempotent across the board.
+    // Re-enter finalize: idempotent across the board.
     const second = await finalizeRun(makeDeps(spec, "live"), RUN_ID);
     expect(second.issuesFiled).toBe(0); // deduped against the existing factory issue
     expect(gh.issues).toHaveLength(1); // no duplicate filed
-    expect(second.rollup?.resumed).toBe(true); // existing PR reused
-    expect(second.rollup?.merged).toBe(true);
-    expect(gh.merges).toHaveLength(mergesAfterFirst); // no second merge
-    expect((await state.read(RUN_ID)).status).toBe("partial");
+    expect(second.rollup).toBeUndefined(); // still no rollup
+    expect(gh.merges).toHaveLength(0); // never merged
+    expect((await state.read(RUN_ID)).status).toBe("failed");
   });
 
   it("anti-spin: a non-terminal task makes finalize THROW (never advances)", async () => {
@@ -285,6 +290,51 @@ describe("finalizeRun", () => {
     await expect(finalizeRun(makeDeps(spec, "live"), RUN_ID)).rejects.toThrow();
     // state untouched — still running, resumable.
     expect((await state.read(RUN_ID)).status).toBe("running");
+  });
+
+  it("completed: rolls up, comments + closes the PRD issue (Decision 34)", async () => {
+    const tasks: TaskSeed[] = [
+      { task_id: "t1", status: "done", branch: "factory/run/t1", pr_number: 11 },
+      { task_id: "t2", status: "done", pr_number: 12 },
+    ];
+    await seed(tasks);
+    const spec = makeSpec(tasks);
+
+    await finalizeRun(makeDeps(spec, "live"), RUN_ID);
+
+    // rollup merged
+    expect(gh.merges).toHaveLength(1);
+    // PRD comment filed with the issue number
+    expect(gh.issueComments.map((c) => c.number)).toContain(ISSUE);
+    // PRD closed
+    expect(gh.issueCloses.map((c) => c.number)).toContain(ISSUE);
+  });
+
+  it("completed + no-merge: no merge, no PRD close (rollup opened only)", async () => {
+    const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
+    await seed(tasks);
+
+    await finalizeRun(makeDeps(makeSpec(tasks), "no-merge"), RUN_ID);
+
+    expect(gh.merges).toHaveLength(0);
+    // PR opened but not merged → no PRD close/comment
+    expect(gh.issueCloses).toHaveLength(0);
+    expect(gh.issueComments).toHaveLength(0);
+  });
+
+  it("failed (some dropped): no rollup, PRD NOT closed (Decision 34)", async () => {
+    const tasks: TaskSeed[] = [
+      { task_id: "t1", status: "done", pr_number: 11 },
+      { task_id: "t2", status: "dropped", failure_class: "capability-budget" },
+    ];
+    await seed(tasks);
+
+    const res = await finalizeRun(makeDeps(makeSpec(tasks), "live"), RUN_ID);
+
+    expect(res.run.status).toBe("failed");
+    expect(gh.merges).toHaveLength(0);
+    expect(gh.issueCloses).toHaveLength(0);
+    expect(gh.issueComments).toHaveLength(0);
   });
 
   it("reconciles develop into staging/<run-id> then rolls up that branch", async () => {

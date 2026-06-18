@@ -7718,14 +7718,8 @@ function decideFinalize(run) {
       `decideFinalize: ${nonTerminal.length} non-terminal task(s) remain [${ids}] \u2014 finalize is terminal and must not be called with in-flight work (would spin in bash)`
     );
   }
-  const doneCount = tasks.filter((t) => t.status === "done").length;
-  if (doneCount === 0) {
-    return finalizeTerminal("failed");
-  }
-  if (doneCount === tasks.length) {
-    return finalizeTerminal("completed");
-  }
-  return finalizeTerminal("partial");
+  const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
+  return finalizeTerminal(allDone ? "completed" : "failed");
 }
 
 // src/hooks/hook-context.ts

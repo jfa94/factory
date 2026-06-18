@@ -7469,6 +7469,23 @@ var DefaultGhClient = class {
       );
     }
   }
+  async issueComment(args, opts) {
+    const argv = [
+      "issue",
+      "comment",
+      String(args.number),
+      "--repo",
+      args.repo,
+      "--body",
+      args.body
+    ];
+    await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
+  async issueClose(args, opts) {
+    const argv = ["issue", "close", String(args.number), "--repo", args.repo];
+    if (args.comment !== void 0) argv.push("--comment", args.comment);
+    await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
   async repoProtection(owner, repo, branch, opts) {
     const path2 = `repos/${owner}/${repo}/branches/${branch}/protection`;
     const r = await this.runner(["api", path2], this.execOpts(opts));
@@ -8396,14 +8413,8 @@ function decideFinalize(run9) {
       `decideFinalize: ${nonTerminal.length} non-terminal task(s) remain [${ids}] \u2014 finalize is terminal and must not be called with in-flight work (would spin in bash)`
     );
   }
-  const doneCount = tasks.filter((t) => t.status === "done").length;
-  if (doneCount === 0) {
-    return finalizeTerminal("failed");
-  }
-  if (doneCount === tasks.length) {
-    return finalizeTerminal("completed");
-  }
-  return finalizeTerminal("partial");
+  const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
+  return finalizeTerminal(allDone ? "completed" : "failed");
 }
 
 // src/spec/schema.ts
@@ -10813,6 +10824,12 @@ var FsHoldoutVerdictStore = class {
 // src/driver/finalize.ts
 var log22 = createLogger("finalize");
 var FACTORY_ISSUE_LABEL = "factory";
+function prdDoneComment(report, rollupResult) {
+  const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`;
+  return `PRD delivered \u2014 all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.
+
+Spec: \`${report.spec_id}\` \xB7 Run: \`${report.run_id}\``;
+}
 function rollupTitle(report) {
   return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
 }
@@ -10849,7 +10866,7 @@ async function finalizeRun(deps, runId) {
   await recordRunFinalized(deps.dataDir, report, { now });
   const issuesFiled = await fileFailureIssues(deps, report);
   let rollupResult;
-  if (report.totals.shipped > 0) {
+  if (terminal === "completed") {
     const stagingBranch = runStagingBranch(runId);
     await deps.git.fetch("origin", deps.config.git.baseBranch);
     await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
@@ -10860,12 +10877,22 @@ async function finalizeRun(deps, runId) {
       baseBranch: deps.config.git.baseBranch,
       title: rollupTitle(report),
       body: markdown,
-      partial: terminal === "partial",
       merge: deps.shipMode === "live",
       ...deps.rollup ?? {}
     });
+    if (rollupResult.merged && report.issue_number) {
+      await deps.gh.issueComment({
+        repo: report.repo,
+        number: report.issue_number,
+        body: prdDoneComment(report, rollupResult)
+      });
+      await deps.gh.issueClose({
+        repo: report.repo,
+        number: report.issue_number
+      });
+    }
   } else {
-    log22.warn(`run '${runId}': 0 tasks shipped \u2014 no rollup PR (nothing on staging to ship)`);
+    log22.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
   log22.info(
