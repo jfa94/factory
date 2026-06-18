@@ -60,15 +60,24 @@ jobs:
         with:
           extra_args: --only-verified
 
-  # Mutation testing strategy (2026-05-18):
+  # Mutation testing strategy (2026-05-18; rebalanced 2026-06-18):
   #   mutation-scope: single runner. Diffs HEAD against origin/<base_ref>
-  #     to produce a comma-separated list of changed src .ts files,
-  #     then splits round-robin into 4 shards (JSON job output).
+  #     to produce a comma-separated list of changed src .ts files, then
+  #     splits them into 4 shards via `.github/scripts/shard-mutation-scope.mjs`
+  #     (JSON job output).
   #   mutation: matrix x4. Each shard runs `stryker run --mutate <slice>`
   #     against its slice, with its own incremental cache + incrementalFile.
   #   Why: develop-target full-scope was hitting ~3.5h wall-clock as the
   #     mutable surface grew. Tight scope + 4-way shard drops typical
   #     rollups to ~10-30 min slowest-shard. Empty slices no-op.
+  #   Balancing: the shard script is cost-aware — LPT (longest-processing-time)
+  #     bin-packing weighted by per-file source-lines, NOT round-robin by file
+  #     count. Round-robin overloaded shard 1 (remainder skew + `git diff`
+  #     sorting the heavy foundational modules into low-index shards), making
+  #     it a ~1h long pole while the rest finished in 10-15 min. The script is a
+  #     checked-in build artifact generated from the plugin's tested TS source
+  #     (src/bin/shard-mutation-scope.ts); the factory scaffolds + auto-updates
+  #     it as a plugin-managed file.
   mutation-scope:
     name: Mutation Scope
     runs-on: ubuntu-latest
@@ -106,23 +115,12 @@ jobs:
               echo 'shards=["","","",""]' >> "$GITHUB_OUTPUT"
               exit 0
           fi
-          IFS=',' read -ra files <<< "$SCOPE"
-          declare -a b0 b1 b2 b3
-          for i in "${!files[@]}"; do
-              case $((i % 4)) in
-                  0) b0+=("${files[$i]}") ;;
-                  1) b1+=("${files[$i]}") ;;
-                  2) b2+=("${files[$i]}") ;;
-                  3) b3+=("${files[$i]}") ;;
-              esac
-          done
-          to_csv() { local IFS=','; printf '%s' "$*"; }
-          shards_json=$(jq -nc \
-              --arg s0 "$(to_csv "${b0[@]}")" \
-              --arg s1 "$(to_csv "${b1[@]}")" \
-              --arg s2 "$(to_csv "${b2[@]}")" \
-              --arg s3 "$(to_csv "${b3[@]}")" \
-              '[$s0, $s1, $s2, $s3]')
+          # Cost-aware split: LPT bin-packing weighted by per-file source-lines
+          # (.github/scripts/shard-mutation-scope.mjs), replacing the old
+          # round-robin-by-count that overloaded shard 1. The script reads each
+          # scoped file's sloc from the checked-out tree and emits the 4-element
+          # shards JSON. Uses ubuntu's preinstalled node (no setup-node needed).
+          shards_json=$(node .github/scripts/shard-mutation-scope.mjs "$SCOPE")
           echo "any=true" >> "$GITHUB_OUTPUT"
           echo "shards=$shards_json" >> "$GITHUB_OUTPUT"
 

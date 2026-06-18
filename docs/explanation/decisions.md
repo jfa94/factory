@@ -276,15 +276,36 @@ One rebase resolves most simple conflicts. If it still fails, the conflict is li
 
 ## Decision 15: Project Scaffolding
 
-**Choice:** `pipeline-scaffold` creates project files on first run. Files only created if absent (idempotent).
+**Choice:** `factory scaffold` writes project files idempotently, under a **two-tier
+file policy**:
+
+- **MANAGED** — files the plugin is the sole author of: the CI net
+  `.github/workflows/quality-gate.yml` and its cost-aware shard helper
+  `.github/scripts/shard-mutation-scope.mjs`. These **auto-update by default**:
+  when an already-scaffolded repo's copy drifts from the shipped template, the next
+  `factory scaffold` overwrites it (reported under `files_updated`). This is the
+  propagation path — a template fix (e.g. the 2026-06-18 mutation-shard rebalance)
+  reaches downstream repos without a manual delete-and-re-scaffold.
+- **SEED** — files the project owns after first write: `.stryker.config.json`,
+  `.dependency-cruiser.cjs`, `eslint.config.mjs`. Copied once when absent, then
+  **never overwritten**. Drift from the current template is reported advisory-only
+  (`files_outdated`), since for these files drift is usually a deliberate
+  customization.
+- **MERGE** — `.gitignore` and `.claude/settings.json` are reconciled
+  non-destructively (append missing entries / merge keys).
 
 **Why scaffold instead of bundled templates?**
 
-Scaffolding files are project-specific artifacts. They belong in the user's repository, versioned and visible to teammates.
+Scaffolding files are project-specific artifacts. They belong in the user's
+repository, versioned and visible to teammates.
 
-**Why idempotent?**
+**Why auto-update only the MANAGED tier?**
 
-Users may customize files after first run. Overwriting would destroy customizations.
+The CI workflow + shard helper encode plugin-owned pipeline machinery, not project
+preferences; customizing them is unsupported by contract, and git is the safety net
+(an auto-overwrite shows up in `git diff`). User-owned configs (SEED) are still never
+clobbered — the original "overwriting would destroy customizations" concern applies
+to exactly that tier.
 
 ---
 

@@ -8059,76 +8059,74 @@ function resolveTemplatesDir() {
   }
   throw new Error("scaffold: could not locate the plugin templates/ directory");
 }
-async function copyIfAbsent(src, dest, root, created, present) {
-  const rel = relative(root, dest);
+var TEMPLATE_MANIFEST = [
+  { rel: ".github/workflows/quality-gate.yml", policy: "managed" },
+  { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
+  { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
+  { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
+  { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true }
+];
+async function applyTemplate(entry, templatesDir, targetRoot, lists) {
+  const segs = entry.rel.split("/");
+  const src = join7(templatesDir, ...segs);
+  const dest = join7(targetRoot, ...segs);
   if (!existsSync5(src)) {
     log13.warn(`template missing, skipping: ${src}`);
     return;
   }
-  if (existsSync5(dest)) {
-    present.push(rel);
+  if (!existsSync5(dest)) {
+    await mkdir7(dirname5(dest), { recursive: true });
+    await copyFile(src, dest);
+    lists.created.push(entry.rel);
     return;
   }
-  await mkdir7(dirname5(dest), { recursive: true });
-  await copyFile(src, dest);
-  created.push(rel);
+  const [srcText, destText] = await Promise.all([readFile4(src, "utf8"), readFile4(dest, "utf8")]);
+  if (srcText === destText) {
+    lists.present.push(entry.rel);
+    return;
+  }
+  if (entry.policy === "managed") {
+    await copyFile(src, dest);
+    lists.updated.push(entry.rel);
+  } else {
+    lists.outdated.push(entry.rel);
+  }
 }
-async function ensureGitignore(root, created, present) {
+async function ensureGitignore(root, lists) {
   const path2 = join7(root, ".gitignore");
   const rel = relative(root, path2);
   if (!existsSync5(path2)) {
     await writeFile(path2, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
-    created.push(rel);
+    lists.created.push(rel);
     return;
   }
   const current = await readFile4(path2, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
-    present.push(rel);
+    lists.present.push(rel);
     return;
   }
   const sep2 = current.endsWith("\n") ? "" : "\n";
   await writeFile(path2, current + sep2 + missing.join("\n") + "\n", "utf8");
-  present.push(rel);
+  lists.present.push(rel);
 }
 async function runScaffold(opts) {
-  const created = [];
-  const present = [];
-  await copyIfAbsent(
-    join7(opts.templatesDir, ".github", "workflows", "quality-gate.yml"),
-    join7(opts.targetRoot, ".github", "workflows", "quality-gate.yml"),
-    opts.targetRoot,
-    created,
-    present
-  );
-  if (existsSync5(join7(opts.targetRoot, "package.json"))) {
-    await copyIfAbsent(
-      join7(opts.templatesDir, ".stryker.config.json"),
-      join7(opts.targetRoot, ".stryker.config.json"),
-      opts.targetRoot,
-      created,
-      present
-    );
-    await copyIfAbsent(
-      join7(opts.templatesDir, ".dependency-cruiser.cjs"),
-      join7(opts.targetRoot, ".dependency-cruiser.cjs"),
-      opts.targetRoot,
-      created,
-      present
-    );
-    await copyIfAbsent(
-      join7(opts.templatesDir, "eslint.config.mjs"),
-      join7(opts.targetRoot, "eslint.config.mjs"),
-      opts.targetRoot,
-      created,
-      present
+  const lists = { created: [], present: [], updated: [], outdated: [] };
+  const isNodePackage = existsSync5(join7(opts.targetRoot, "package.json"));
+  for (const entry of TEMPLATE_MANIFEST) {
+    if (entry.nodeOnly && !isNodePackage) continue;
+    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists);
+  }
+  if (lists.updated.length > 0) {
+    log13.info(
+      `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
     );
   }
-  await ensureGitignore(opts.targetRoot, created, present);
+  await ensureGitignore(opts.targetRoot, lists);
   const settings = await ensureTargetSettings({ targetRoot: opts.targetRoot });
   const settingsRel = relative(opts.targetRoot, settings.path);
-  if (settings.created) created.push(settingsRel);
-  else present.push(settingsRel);
+  if (settings.created) lists.created.push(settingsRel);
+  else lists.present.push(settingsRel);
   const staging = await ensureStaging({
     gitClient: opts.gitClient,
     stagingBranch: opts.config.git.stagingBranch,
@@ -8158,8 +8156,10 @@ async function runScaffold(opts) {
   requireProtectionOrRefuse(state, required, branch);
   return {
     repo: `${opts.owner}/${opts.repo}`,
-    files_created: created,
-    files_present: present,
+    files_created: lists.created,
+    files_present: lists.present,
+    files_updated: lists.updated,
+    files_outdated: lists.outdated,
     staging: { created: staging.created, staging_tip: staging.stagingTip },
     protection: {
       enabled: state.enabled,
