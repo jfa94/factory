@@ -13,7 +13,7 @@ export type { CommandRunner, GitRunner, GhRunner } from "./exec-tools.js";
 
 // git client
 export { DefaultGitClient } from "./git-client.js";
-export type { GitClient, GitOpts, PushOptions } from "./git-client.js";
+export type { GitClient, GitOpts, MergeOptions, PushOptions } from "./git-client.js";
 
 // repo identity resolution (Prompt G / F-repo): auto-derive --repo from origin
 export {

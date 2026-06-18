@@ -32,7 +32,9 @@ import {
   renderPartialReportMarkdown,
   renderFailureIssue,
   recordRunFinalized,
+  type Config,
   type GhClient,
+  type GitClient,
   type RunState,
   type SpecManifest,
   type StateManager,
@@ -40,6 +42,7 @@ import {
   type RollupArgs,
   type RollupResult,
 } from "./deps.js";
+import { runStagingBranch } from "../git/index.js";
 import type { ShipMode } from "./types.js";
 import { atomicWriteFile, createLogger, nowIso } from "../shared/index.js";
 import { runReportPath } from "../core/state/paths.js";
@@ -55,8 +58,18 @@ export interface FinalizeRunDeps {
   readonly state: StateManager;
   /** gh client for the rollup PR + per-failure issues. */
   readonly gh: GhClient;
+  /**
+   * git client for the forward-reconcile (fetch + merge + push) before the rollup.
+   * Operates on the target repo working tree (process.cwd() by default).
+   */
+  readonly git: GitClient;
   /** The run's durable spec (source of the unmet acceptance criteria). */
   readonly spec: SpecManifest;
+  /**
+   * Resolved plugin config (provides `git.baseBranch` for the forward-reconcile +
+   * rollup `baseBranch` arg).
+   */
+  readonly config: Config;
   /** Plugin data dir (roots the run store — report.md, metrics.jsonl). */
   readonly dataDir: string;
   /** Repo owner (unused directly; the canonical slug is the report's repo). */
@@ -158,8 +171,18 @@ export async function finalizeRun(
   //    staging beyond base; opening a no-diff PR would fail).
   let rollupResult: RollupResult | undefined;
   if (report.totals.shipped > 0) {
+    const stagingBranch = runStagingBranch(runId);
+    // Forward-reconcile (Decision 33): bring develop's new commits into the run branch
+    // (no force-push) so the rollup PR is up-to-date. A conflict here is
+    // non-auto-recoverable → surfaces for rescue.
+    await deps.git.fetch("origin", deps.config.git.baseBranch);
+    await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
+    await deps.git.push("origin", stagingBranch);
+
     rollupResult = await rollup({
       ghClient: deps.gh,
+      stagingBranch,
+      baseBranch: deps.config.git.baseBranch,
       title: rollupTitle(report),
       body: markdown,
       partial: terminal === "partial",

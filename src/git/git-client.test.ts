@@ -66,4 +66,32 @@ describe("DefaultGitClient over an injectable runner (no real git)", () => {
     const absent = new DefaultGitClient(async () => result({ code: 1, stderr: "no such remote" }));
     await expect(absent.remoteUrl("origin")).resolves.toBeNull();
   });
+
+  it("mergeFfOrCommit checks out the branch then issues merge --no-edit <ref> (no force flag)", async () => {
+    const calls: Array<readonly string[]> = [];
+    const runner = vi.fn<GitRunner>(async (args) => {
+      calls.push(args);
+      return result({ code: 0 });
+    });
+    const git = new DefaultGitClient(runner);
+    await git.mergeFfOrCommit("staging/run-1", "origin/develop");
+
+    // First call: checkout branch
+    expect(calls[0]).toEqual(["checkout", "staging/run-1"]);
+    // Second call: merge --no-edit <ref> — no force flag anywhere
+    expect(calls[1]).toEqual(["merge", "--no-edit", "origin/develop"]);
+    expect(calls[1]!.some((a) => /force/i.test(a) || a === "-f")).toBe(false);
+  });
+
+  it("mergeFfOrCommit is fatal on non-zero (merge conflict propagates)", async () => {
+    const runner: GitRunner = async (args) => {
+      // checkout succeeds; merge fails (simulates a conflict)
+      if (args[0] === "merge") return result({ code: 1, stderr: "CONFLICT" });
+      return result({ code: 0 });
+    };
+    const git = new DefaultGitClient(runner);
+    await expect(git.mergeFfOrCommit("staging/run-1", "origin/develop")).rejects.toThrow(
+      /command failed/,
+    );
+  });
 });

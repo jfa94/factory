@@ -19,11 +19,12 @@ import { join } from "node:path";
 
 import { finalizeRun, type FinalizeRunDeps } from "./finalize.js";
 import { StateManager } from "../core/state/manager.js";
-import { FakeGhClient } from "../git/fakes.js";
+import { FakeGhClient, FakeGitClient } from "../git/fakes.js";
 import { parseSpecManifest, type SpecManifest } from "../spec/index.js";
 import { readMetrics } from "../scoring/index.js";
 import { runReportPath } from "../core/state/paths.js";
 import { PARTIAL_SUBJECT_PREFIX } from "../git/index.js";
+import { defaultConfig } from "../config/schema.js";
 import type { ShipMode } from "./types.js";
 import type { FailureClass, TaskState } from "../types/index.js";
 
@@ -93,6 +94,7 @@ describe("finalizeRun", () => {
   let dataDir: string;
   let state: StateManager;
   let gh: FakeGhClient;
+  let git: FakeGitClient;
 
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "factory-finalize-"));
@@ -101,6 +103,7 @@ describe("finalizeRun", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     gh = new FakeGhClient();
+    git = new FakeGitClient();
     await state.create({
       run_id: RUN_ID,
       spec: { repo: REPO, spec_id: SPEC_ID, issue_number: ISSUE },
@@ -124,6 +127,8 @@ describe("finalizeRun", () => {
     return {
       state,
       gh,
+      git,
+      config: defaultConfig(),
       spec,
       dataDir,
       owner: "acme",
@@ -280,5 +285,23 @@ describe("finalizeRun", () => {
     await expect(finalizeRun(makeDeps(spec, "live"), RUN_ID)).rejects.toThrow();
     // state untouched — still running, resumable.
     expect((await state.read(RUN_ID)).status).toBe("running");
+  });
+
+  it("reconciles develop into staging/<run-id> then rolls up that branch", async () => {
+    const tasks: TaskSeed[] = [
+      { task_id: "t1", status: "done", pr_number: 11 },
+      { task_id: "t2", status: "done", pr_number: 12 },
+    ];
+    await seed(tasks);
+    const spec = makeSpec(tasks);
+
+    const res = await finalizeRun(makeDeps(spec, "live"), RUN_ID);
+
+    // (a) git merged origin/develop into staging/<run-id> before the rollup PR.
+    expect(git.mergesInto[`staging/${RUN_ID}`]).toContain("origin/develop");
+    // (b) the rollup PR head is staging/<run-id>.
+    expect(gh.created.at(-1)?.head).toBe(`staging/${RUN_ID}`);
+    // (c) run reached completed.
+    expect(res.run.status).toBe("completed");
   });
 });

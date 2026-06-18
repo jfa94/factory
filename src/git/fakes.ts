@@ -7,7 +7,7 @@
  * protection state are all SCRIPTABLE with zero real git/gh invocation. Every
  * WS3 unit test and downstream consumer (WS6/WS10/WS12) uses these fixtures.
  */
-import type { GitClient, GitOpts, PushOptions } from "./git-client.js";
+import type { GitClient, GitOpts, MergeOptions, PushOptions } from "./git-client.js";
 import type {
   ChecksState,
   CreatedIssue,
@@ -62,6 +62,11 @@ export class FakeGitClient implements GitClient {
   failRemoteUrl = false;
   /** Ordered log of git ops, for assertions. */
   readonly calls: string[] = [];
+  /**
+   * Records merges: branch → list of refs merged into it (for `mergeFfOrCommit`
+   * assertions). Keyed by the branch name receiving the merge.
+   */
+  readonly mergesInto: Record<string, string[]> = {};
   private head: string;
   private shaCounter = 0;
 
@@ -196,6 +201,12 @@ export class FakeGitClient implements GitClient {
     this.calls.push(`push${opts?.setUpstream ? " -u" : ""} ${remote} ${branch}`);
     const sha = this.localBranches.get(branch) ?? this.nextSha();
     this.setRemoteHead(branch, sha, remote);
+  }
+
+  async mergeFfOrCommit(branch: string, ref: string, _opts?: MergeOptions): Promise<void> {
+    this.calls.push(`merge --no-edit ${ref} into ${branch}`);
+    if (!this.mergesInto[branch]) this.mergesInto[branch] = [];
+    this.mergesInto[branch]!.push(ref);
   }
 }
 
