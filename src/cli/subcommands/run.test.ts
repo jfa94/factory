@@ -24,6 +24,7 @@ import {
   resolveOwnerSession,
   type RunResumeEnvelope,
   type SpecSelector,
+  type CreateRunOptions,
 } from "./run.js";
 import { EXIT } from "../exit-codes.js";
 import { NotAutonomousError } from "../../autonomy/mode.js";
@@ -99,6 +100,29 @@ void _selIssue;
 void _selSpec;
 void _selBoth;
 void _selNeither;
+
+// ---------------------------------------------------------------------------
+// RunIntent — type-level XOR (compile-time, validated by `npm run typecheck`)
+// ---------------------------------------------------------------------------
+// Illegal flag combinations (force+supersede, supersede+resume, …) are now
+// UN-REPRESENTABLE: each is exactly one `intent`. The @ts-expect-error guards the
+// closed literal set — a typo'd intent must not type-check.
+const _intentDefault: CreateRunOptions = { repo: REPO, runId: "r", issue: 1 }; // intent omitted = default
+const _intentFresh: CreateRunOptions = { repo: REPO, runId: "r", issue: 1, intent: "fresh" };
+const _intentSupersede: CreateRunOptions = {
+  repo: REPO,
+  runId: "r",
+  issue: 1,
+  intent: "supersede",
+};
+const _intentResume: CreateRunOptions = { repo: REPO, runId: "r", issue: 1, intent: "resume" };
+// @ts-expect-error — an unknown intent is an illegal state, must not type-check
+const _intentBogus: CreateRunOptions = { repo: REPO, runId: "r", issue: 1, intent: "nope" };
+void _intentDefault;
+void _intentFresh;
+void _intentSupersede;
+void _intentResume;
+void _intentBogus;
 
 // ---------------------------------------------------------------------------
 // arg/usage edges
@@ -382,7 +406,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       repo: REPO,
       issue: 42,
       runId: "run-b",
-      force: true,
+      intent: "fresh",
     });
     expect(forced.kind).toBe("created");
     if (forced.kind !== "created") throw new Error("narrowing");
@@ -507,7 +531,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       repo: REPO,
       issue: 42,
       runId: "run-b",
-      resume: true,
+      intent: "resume",
       shipMode: "no-merge",
     });
     expect(second.kind).toBe("exists");
@@ -521,7 +545,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       repo: REPO,
       issue: 42,
       runId: "run-b",
-      resume: true,
+      intent: "resume",
       mode: "workflow",
     });
     expect(second.kind).toBe("exists");
@@ -552,7 +576,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const r = await resolveOrCreateRun(
       state,
       store,
-      { repo: REPO, issue: 42, runId: "run-new", supersede: true },
+      { repo: REPO, issue: 42, runId: "run-new", intent: "supersede" },
       stagingDeps,
     );
 
@@ -580,7 +604,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
         repo: REPO,
         issue: 42,
         runId: "run-new",
-        supersede: true,
+        intent: "supersede",
         // no stagingDeps passed
       }),
     ).rejects.toMatchObject({ isUsageError: true });

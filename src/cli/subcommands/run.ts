@@ -229,38 +229,40 @@ export type SpecSelector =
   | { readonly issue: number; readonly specId?: never }
   | { readonly specId: string; readonly issue?: never };
 
-/** Resolved options for {@link createRun} — {@link SpecSelector} plus run metadata. */
-export type CreateRunOptions = SpecSelector & {
-  readonly repo: string;
-  readonly runId: string;
-  readonly mode?: RunState["mode"];
-  readonly shipMode?: RunState["ship_mode"];
-  /**
-   * The owning Claude Code session id (Prompt J — session-scoped Stop gate),
-   * stamped once onto the run so the Stop hook can session-scope its block. Absent
-   * when the launching session id could not be resolved (best-effort).
-   */
-  readonly ownerSession?: RunState["owner_session"];
-  /**
-   * Skip the resolve-or-reuse scan in {@link resolveOrCreateRun} and always create
-   * a fresh run, even when a live run already exists for this spec (the `--new`
-   * escape hatch). Ignored by {@link createRun}, which is unconditionally imperative.
-   */
-  readonly force?: boolean;
-  /**
-   * Decision 35: mark the existing active run `superseded`, delete its
-   * `staging/<run-id>` branch (which auto-closes its task PRs), and create a fresh
-   * run. Requires `stagingDeps` to be present (the gh client must be wired).
-   */
-  readonly supersede?: boolean;
-  /**
-   * Pass-through for Task 4.2: signal that the caller intends to RESUME the active
-   * run rather than create a new one. {@link resolveOrCreateRun} currently reports
-   * `{ kind: "exists" }` for it (identical to the no-flag path — no premature
-   * flag-compatibility gate); Task 4.2 upgrades the caller to hand off to resume.
-   */
-  readonly resume?: boolean;
-};
+/**
+ * The run-creation intent — exactly one of the mutually-exclusive lifecycle modes
+ * (Decision 35). Modeled as a discriminated union so illegal combinations
+ * (force+supersede, supersede+resume, …) are UN-REPRESENTABLE at compile time — the
+ * same illegal-states-unrepresentable discipline {@link SpecSelector} uses for
+ * issue/spec-id — replacing three independent booleans whose XOR was only runtime-checked.
+ *
+ *  - `"default"`   : resolve-or-report — an active run is returned as kind:"exists" (CONFLICT).
+ *  - `"fresh"`     : `--new` / an explicit `--run-id` — always create, even if a run exists.
+ *  - `"supersede"` : Decision 35 — terminate the active run + create a fresh one. Requires
+ *                    `stagingDeps` (the gh client must be wired) to delete the old branch.
+ *  - `"resume"`    : signal intent to continue the active run; currently reported as
+ *                    kind:"exists" (the caller hand-off is Task 4.2).
+ */
+export type RunIntent =
+  | { readonly intent?: "default" }
+  | { readonly intent: "fresh" }
+  | { readonly intent: "supersede" }
+  | { readonly intent: "resume" };
+
+/** Resolved options for {@link createRun} — {@link SpecSelector} + {@link RunIntent} + run metadata. */
+export type CreateRunOptions = SpecSelector &
+  RunIntent & {
+    readonly repo: string;
+    readonly runId: string;
+    readonly mode?: RunState["mode"];
+    readonly shipMode?: RunState["ship_mode"];
+    /**
+     * The owning Claude Code session id (Prompt J — session-scoped Stop gate),
+     * stamped once onto the run so the Stop hook can session-scope its block. Absent
+     * when the launching session id could not be resolved (best-effort).
+     */
+    readonly ownerSession?: RunState["owner_session"];
+  };
 
 /**
  * Resolve the durable spec named by `opts` — by explicit spec-id when given, else
@@ -424,7 +426,7 @@ export async function resolveOrCreateRun(
 ): Promise<ResolveOrCreateResult> {
   // Resolve first (LOUD if no spec) — also yields the (repo, spec_id) scan key.
   const manifest = await resolveSpec(specStore, opts);
-  if (opts.force === true) {
+  if (opts.intent === "fresh") {
     return {
       kind: "created",
       run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
@@ -434,7 +436,7 @@ export async function resolveOrCreateRun(
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
-      if (opts.supersede === true) {
+      if (opts.intent === "supersede") {
         if (stagingDeps === undefined) {
           throw new UsageError("run create --supersede requires the CLI gh deps");
         }
@@ -617,16 +619,20 @@ export async function runCreate(
   const mode: RunState["mode"] = args.flag("workflow") === true ? "workflow" : "session";
   const shipMode: RunState["ship_mode"] = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
-  // Resolve-or-reuse is the default for the natural (auto-id) invocation — a repeat
-  // returns the live run, never an orphan. `--new` OR an explicit `--run-id` opts
-  // into an imperative fresh create: a named id is an address (determinism/tests),
-  // not a reuse request, so it never silently resolves to a different run.
-  const force = args.flag("new") === true || explicitRunId !== undefined;
+  // Exactly-one-of the lifecycle flags → the typed intent. --new and an explicit
+  // --run-id both mean "fresh" (a named id is an address — determinism/tests — not a
+  // reuse request, so it never silently resolves to a different run). On an ACTIVE run,
+  // the "default" intent reports it as kind:"exists" (CONFLICT) — never a silent reuse.
+  const fresh = args.flag("new") === true || explicitRunId !== undefined;
   const supersede = args.flag("supersede") === true;
   const resume = args.flag("resume") === true;
-  if (supersede && resume) {
-    throw new UsageError("run create: pass at most one of --supersede / --resume");
+  const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
+    Boolean,
+  ) as RunIntent["intent"][];
+  if (picked.length > 1) {
+    throw new UsageError("run create: pass at most one of --new / --supersede / --resume");
   }
+  const intent: NonNullable<RunIntent["intent"]> = picked[0] ?? "default";
 
   const dataDir = resolveDataDir(
     overrides.dataDir !== undefined ? { dataDir: overrides.dataDir } : {},
@@ -656,9 +662,7 @@ export async function runCreate(
       mode,
       shipMode,
       ...(ownerSession !== undefined ? { ownerSession } : {}),
-      ...(force ? { force } : {}),
-      ...(supersede ? { supersede } : {}),
-      ...(resume ? { resume } : {}),
+      intent,
     },
     stagingDeps,
   );

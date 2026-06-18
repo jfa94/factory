@@ -12131,7 +12131,7 @@ async function supersedeRun(state, existing, stagingDeps) {
 }
 async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   const manifest = await resolveSpec(specStore, opts);
-  if (opts.force === true) {
+  if (opts.intent === "fresh") {
     return {
       kind: "created",
       run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps)
@@ -12141,7 +12141,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
-      if (opts.supersede === true) {
+      if (opts.intent === "supersede") {
         if (stagingDeps === void 0) {
           throw new UsageError("run create --supersede requires the CLI gh deps");
         }
@@ -12237,12 +12237,16 @@ async function runCreate(argv, overrides = {}) {
   const mode = args.flag("workflow") === true ? "workflow" : "session";
   const shipMode = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
-  const force = args.flag("new") === true || explicitRunId !== void 0;
+  const fresh = args.flag("new") === true || explicitRunId !== void 0;
   const supersede = args.flag("supersede") === true;
   const resume = args.flag("resume") === true;
-  if (supersede && resume) {
-    throw new UsageError("run create: pass at most one of --supersede / --resume");
+  const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
+    Boolean
+  );
+  if (picked.length > 1) {
+    throw new UsageError("run create: pass at most one of --new / --supersede / --resume");
   }
+  const intent = picked[0] ?? "default";
   const dataDir = resolveDataDir(
     overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {}
   );
@@ -12269,9 +12273,7 @@ async function runCreate(argv, overrides = {}) {
       mode,
       shipMode,
       ...ownerSession !== void 0 ? { ownerSession } : {},
-      ...force ? { force } : {},
-      ...supersede ? { supersede } : {},
-      ...resume ? { resume } : {}
+      intent
     },
     stagingDeps
   );
