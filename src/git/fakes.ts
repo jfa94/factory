@@ -60,6 +60,8 @@ export class FakeGitClient implements GitClient {
   readonly remoteUrls = new Map<string, string>();
   /** When true, `remoteUrl` reports a miss (simulate a non-git dir / no remote). */
   failRemoteUrl = false;
+  /** When true, `mergeFfOrCommit` throws (simulate a non-auto-recoverable merge conflict). */
+  failMerge = false;
   /** Ordered log of git ops, for assertions. */
   readonly calls: string[] = [];
   /**
@@ -205,6 +207,9 @@ export class FakeGitClient implements GitClient {
 
   async mergeFfOrCommit(branch: string, ref: string, _opts?: MergeOptions): Promise<void> {
     this.calls.push(`merge --no-edit ${ref} into ${branch}`);
+    if (this.failMerge) {
+      throw new Error(`merge conflict: ${ref} into ${branch} (simulated)`);
+    }
     if (!this.mergesInto[branch]) this.mergesInto[branch] = [];
     this.mergesInto[branch]!.push(ref);
   }

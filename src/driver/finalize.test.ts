@@ -300,6 +300,25 @@ describe("finalizeRun", () => {
     expect((await state.read(RUN_ID)).status).toBe("completed");
   });
 
+  it("completed: a forward-merge conflict surfaces (no rollup, no comment) and leaves the run non-terminal for rescue", async () => {
+    // finalize.ts step 6: the forward-reconcile (mergeFfOrCommit) can hit a
+    // non-auto-recoverable conflict. It must propagate BEFORE the rollup, and step 7
+    // (flip terminal) must NOT run — the run stays resumable for rescue.
+    const tasks: TaskSeed[] = [
+      { task_id: "t1", status: "done", pr_number: 11 },
+      { task_id: "t2", status: "done", pr_number: 12 },
+    ];
+    await seed(tasks);
+    const spec = makeSpec(tasks);
+    git.failMerge = true;
+
+    await expect(finalizeRun(makeDeps(spec, "live"), RUN_ID)).rejects.toThrow(/merge conflict/);
+
+    expect(gh.merges).toHaveLength(0); // surfaced before the rollup
+    expect(gh.issueComments).toHaveLength(0);
+    expect((await state.read(RUN_ID)).status).toBe("running"); // step 7 never reached
+  });
+
   it("anti-spin: a non-terminal task makes finalize THROW (never advances)", async () => {
     // One done, one still executing → decideFinalize refuses (would otherwise spin).
     await state.update(RUN_ID, (s) => ({
