@@ -255,9 +255,9 @@ export type CreateRunOptions = SpecSelector & {
   readonly supersede?: boolean;
   /**
    * Pass-through for Task 4.2: signal that the caller intends to RESUME the active
-   * run rather than create a new one. {@link resolveOrCreateRun} validates flag
-   * compatibility via {@link assertReusableFlags} and returns `{ kind: "exists" }`;
-   * Task 4.2 upgrades the caller to handle this case.
+   * run rather than create a new one. {@link resolveOrCreateRun} currently reports
+   * `{ kind: "exists" }` for it (identical to the no-flag path — no premature
+   * flag-compatibility gate); Task 4.2 upgrades the caller to hand off to resume.
    */
   readonly resume?: boolean;
 };
@@ -381,32 +381,6 @@ export type ResolveOrCreateResult =
   | { readonly kind: "superseded"; readonly run: RunState; readonly supersededId: string };
 
 /**
- * Guard the reuse path against a SILENT intent drop: a repeated `run create` resolves
- * its mode + ship intent from `--workflow`/`--no-ship` (or their defaults), but a reused
- * run keeps its ORIGINAL mode/ship_mode (the reuse returns the existing state verbatim).
- * Silently driving a run under an intent the caller did not ask for (`live` vs `no-merge`
- * opens/merges PRs differently; `workflow` disables quota pacing) is dangerous, so
- * HARD-FAIL with actionable guidance instead. A field left `undefined` (the direct-API
- * path, never the CLI — which always resolves both) signals "no intent" and never diverges.
- */
-function assertReusableFlags(existing: RunState, opts: CreateRunOptions): void {
-  if (opts.mode !== undefined && opts.mode !== existing.mode) {
-    throw new UsageError(
-      `run create: run '${existing.run_id}' already exists with mode='${existing.mode}', ` +
-        `but this invocation resolves to mode='${opts.mode}' — pass --new for a fresh run, ` +
-        `or set/clear --workflow to match the existing run`,
-    );
-  }
-  if (opts.shipMode !== undefined && opts.shipMode !== existing.ship_mode) {
-    throw new UsageError(
-      `run create: run '${existing.run_id}' already exists with ship_mode='${existing.ship_mode}', ` +
-        `but this invocation resolves to ship_mode='${opts.shipMode}' — pass --new for a fresh run, ` +
-        `or set/clear --no-ship to match the existing run`,
-    );
-  }
-}
-
-/**
  * Supersede an active run (Decision 35): mark it `superseded` (durable intent
  * FIRST, so a crash mid-cleanup leaves a recoverable orphan branch, never a
  * running run with no branch), then tear down protection (GitHub blocks deleting
@@ -472,10 +446,9 @@ export async function resolveOrCreateRun(
           supersededId,
         };
       }
-      if (opts.resume === true) {
-        assertReusableFlags(existing, opts);
-        return { kind: "exists", existing };
-      }
+      // --resume currently reports the live run (kind:"exists"); the full continue-the-run
+      // hand-off is the caller's job (Task 4.2). No flag-compatibility assert here — that
+      // belongs with the resume implementation, not a premature gate (review #3).
       return { kind: "exists", existing };
     }
     return {

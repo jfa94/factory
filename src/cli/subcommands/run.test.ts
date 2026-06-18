@@ -501,32 +501,30 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 
-  it("--resume with divergent ship intent → HARD-FAILS (UsageError) via assertReusableFlags", async () => {
+  it("--resume with divergent ship intent → kind:'exists' (no premature guard; resume continues the live run)", async () => {
     await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // ship_mode=live
-    await expect(
-      resolveOrCreateRun(state, store, {
-        repo: REPO,
-        issue: 42,
-        runId: "run-b",
-        resume: true,
-        shipMode: "no-merge",
-      }),
-    ).rejects.toMatchObject({ isUsageError: true });
-    // No orphan.
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-b",
+      resume: true,
+      shipMode: "no-merge",
+    });
+    expect(second.kind).toBe("exists");
+    // No orphan: the live run is reported, not replaced.
     expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 
-  it("--resume with divergent --mode → HARD-FAILS (UsageError) via assertReusableFlags", async () => {
+  it("--resume with divergent --mode → kind:'exists' (no premature guard)", async () => {
     await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // mode=session
-    await expect(
-      resolveOrCreateRun(state, store, {
-        repo: REPO,
-        issue: 42,
-        runId: "run-b",
-        resume: true,
-        mode: "workflow",
-      }),
-    ).rejects.toMatchObject({ isUsageError: true });
+    const second = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-b",
+      resume: true,
+      mode: "workflow",
+    });
+    expect(second.kind).toBe("exists");
     expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 

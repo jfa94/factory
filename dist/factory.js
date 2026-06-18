@@ -12123,18 +12123,6 @@ async function createRunFromManifest(state, specStore, manifest, opts, stagingDe
   }
   return run9;
 }
-function assertReusableFlags(existing, opts) {
-  if (opts.mode !== void 0 && opts.mode !== existing.mode) {
-    throw new UsageError(
-      `run create: run '${existing.run_id}' already exists with mode='${existing.mode}', but this invocation resolves to mode='${opts.mode}' \u2014 pass --new for a fresh run, or set/clear --workflow to match the existing run`
-    );
-  }
-  if (opts.shipMode !== void 0 && opts.shipMode !== existing.ship_mode) {
-    throw new UsageError(
-      `run create: run '${existing.run_id}' already exists with ship_mode='${existing.ship_mode}', but this invocation resolves to ship_mode='${opts.shipMode}' \u2014 pass --new for a fresh run, or set/clear --no-ship to match the existing run`
-    );
-  }
-}
 async function supersedeRun(state, existing, stagingDeps) {
   const branch = runStagingBranch(existing.run_id);
   await state.finalize(existing.run_id, "superseded");
@@ -12164,10 +12152,6 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
           run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
           supersededId
         };
-      }
-      if (opts.resume === true) {
-        assertReusableFlags(existing, opts);
-        return { kind: "exists", existing };
       }
       return { kind: "exists", existing };
     }
