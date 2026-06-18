@@ -84,20 +84,31 @@ bypass flag. The gate lives in the deterministic engine (`src/autonomy/mode.ts`,
 `NotAutonomousError`), so a non-autonomous `/factory:run` cannot start a run — it exits
 non-zero with the relaunch instruction rather than degrading to per-tool permission prompts.
 
-To launch (or relaunch) autonomously:
+`/factory:run` calls `factory autonomy preflight` as its first step (Phase 0 of the
+orchestrator skill). Preflight auto-scaffolds the merged settings when needed, so the user's
+only manual act is the relaunch itself:
 
 ```bash
-factory autonomy ensure        # writes ${CLAUDE_PLUGIN_DATA}/merged-settings.json + prints the command
-factory autonomy status        # check: exits 0 if autonomous, 1 if not (add --json for the payload)
+factory autonomy preflight     # run-entry check: (re)scaffolds when needed, prints the relaunch command,
+                               #   exits 0 to proceed / 1 to halt (decides over autonomous? + settings
+                               #   present? + plugin vs on-disk version). Never throws on the decision path.
+factory autonomy ensure        # manual primitive: always (re)writes merged-settings.json + prints the command
+factory autonomy status        # manual primitive: exits 0 if autonomous, 1 if not (add --json for the payload)
 ```
 
-`ensure` merges `templates/settings.autonomous.json` with the user's `~/.claude/settings.json`
-(placeholders substituted, `CLAUDE_PLUGIN_DATA` baked into `env`, `statusLine` wired to
-`factory statusline`, the user's own statusline chained via `FACTORY_ORIGINAL_STATUSLINE`),
-then prints `claude --settings <merged-settings.json>`. Relaunching with that command sets
-`FACTORY_AUTONOMOUS_MODE=1` and produces a fresh `usage-cache.json` on the first turn, which
-the session-mode quota pacer reads. Run `factory autonomy status` any time to confirm the
-current session satisfies the gate before invoking `/factory:run`.
+Preflight regenerates `${CLAUDE_PLUGIN_DATA}/merged-settings.json` (via `ensure`) and halts for a
+relaunch when the session is **not autonomous** OR the settings are **stale** (the stamped
+`_factoryVersion` differs from the installed plugin), **missing**, or **unstamped**; it proceeds
+silently when the settings are already fresh, or when the session is autonomous via a
+directly-exported env (the sanctioned CI path). `ensure` merges
+`templates/settings.autonomous.json` with the user's `~/.claude/settings.json` (placeholders
+substituted, `CLAUDE_PLUGIN_DATA` baked into `env`, `statusLine` wired to `factory statusline`, the
+user's own statusline chained via `FACTORY_ORIGINAL_STATUSLINE`), then prints
+`claude --settings <merged-settings.json>`. Relaunching with that command sets
+`FACTORY_AUTONOMOUS_MODE=1` and produces a fresh `usage-cache.json` on the first turn, which the
+session-mode quota pacer reads. The relaunch is irreducible: Claude Code reads settings only at
+launch, so a running session can never make _itself_ autonomous — automation covers the scaffold,
+never the relaunch.
 
 ## Resume mode (`/factory:run resume [--run <id>]`)
 

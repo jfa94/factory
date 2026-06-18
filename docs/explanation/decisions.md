@@ -591,6 +591,25 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 
 ---
 
+## Decision 31: Run-Entry Preflight Auto-Scaffolds Autonomous Settings
+
+> Decision 30 is reserved for the concurrent run-isolation work on its own branch; this decision is numbered 31 to avoid a merge collision.
+
+**Choice:** `/factory:run` (and `/factory:debug`) call `factory autonomy preflight` as their first setup step. Preflight is a thin CLI wrapper around a **pure decision** (`decideAutonomyPreflight`, `src/autonomy/mode.ts`) over three inputs — is this session autonomous, does `merged-settings.json` exist, and does its stamped `_factoryVersion` match the installed plugin. It **regenerates the merged settings (via `ensure`) and halts for a relaunch** when the session is not autonomous OR the settings are stale / missing / unstamped; it **proceeds** when they are already fresh, or when the session is autonomous via a directly-exported env (the CI path), or when the plugin version is unreadable (regenerating would only churn). It exits 0 to proceed, 1 to halt, and — like `status` — never throws on the decision path. `ensure`/`status` remain the manual primitives.
+
+**Why:**
+
+- **Restores a lost convenience, faithfully.** The old bash `pipeline-ensure-autonomy` auto-regenerated the merged settings on (missing OR version-changed) and halted with the relaunch command; the Node+TS port shipped `ensure`/`status` as clean primitives but dropped the detect-and-regenerate step and wired no caller. The convenience fell through the cutover — it was a gap, not a reasoned UX decision. Preflight re-composes the primitives into that run-entry behavior.
+- **Decision logic lives in the engine, not prose.** The verdict is a pure, total, IO-free function (Model A): testable in isolation, with the markdown surface reduced to "run preflight; on non-zero relay the printed command and stop." The CLI wrapper does IO only and delegates every write to the one `ensure` writer path (idempotency + statusLine chaining for free).
+- **The relaunch is irreducible.** Claude Code reads settings only at session launch, so a running session can never make _itself_ autonomous. Automation can cover the **scaffold**, never the relaunch — so preflight stops at printing the command. The hard invariant `regenerate ⟹ halt` encodes this: settings written mid-session can't load into the running session, so proceeding on a fresh regenerate would reintroduce false freshness.
+- **No lock needed.** `merged-settings.json` is a pure function of (template, user-settings, plugin version), so concurrent atomic writes from racing preflights converge to the same bytes.
+
+**Trade-off:** Preflight is a UX layer, not a correctness layer — a hand-typed `factory drive` in a non-autonomous shell still bypasses it. That is exactly why `requireAutonomousMode()` (Decision 29) remains the backstop in `create`/`resume`; preflight makes the common path friendly, the gate keeps the uncommon path safe.
+
+**Relationship:** Sits in front of Decision 29 (the mandatory gate, untouched); operationalises Decision 13 (how a session becomes autonomous) as an automatic run-entry step.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

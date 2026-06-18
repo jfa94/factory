@@ -19,6 +19,7 @@ import {
   materializeMergedSettings,
   mergedSettingsPath,
   runAutonomyEnsure,
+  runAutonomyPreflight,
   runAutonomyStatus,
   type AutonomyStatus,
 } from "./autonomy.js";
@@ -411,5 +412,175 @@ describe("runAutonomyStatus", () => {
     expect(code).toBe(EXIT.OK);
     const parsed = JSON.parse(out.join("")) as AutonomyStatus;
     expect(parsed.autonomous).toBe(true);
+  });
+});
+
+describe("runAutonomyPreflight", () => {
+  let dataDir: string;
+  let pluginRoot: string;
+  const out: string[] = [];
+
+  /** Path of the merged settings under the current temp data dir. */
+  const settingsPath = (): string => mergedSettingsPath(dataDir);
+
+  /** Stage `.claude-plugin/plugin.json` with the given version under the fake root. */
+  async function stagePluginVersion(version: string): Promise<void> {
+    await mkdir(join(pluginRoot, ".claude-plugin"), { recursive: true });
+    await writeFile(
+      join(pluginRoot, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "factory", version }),
+      "utf8",
+    );
+  }
+
+  /** Write a merged-settings.json carrying a sentinel key (and optional version stamp). */
+  async function stageMergedSettings(version?: string): Promise<void> {
+    const obj: Record<string, unknown> = { __sentinel: "keep" };
+    if (version !== undefined) obj._factoryVersion = version;
+    await writeFile(settingsPath(), JSON.stringify(obj), "utf8");
+  }
+
+  /** Read back the written merged-settings.json as an object. */
+  async function readMerged(): Promise<Record<string, unknown>> {
+    return JSON.parse(await readFile(settingsPath(), "utf8")) as Record<string, unknown>;
+  }
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "factory-preflight-data-"));
+    pluginRoot = await mkdtemp(join(tmpdir(), "factory-preflight-root-"));
+    await mkdir(join(pluginRoot, "templates"), { recursive: true });
+    await writeFile(join(pluginRoot, "templates", "settings.autonomous.json"), TEMPLATE, "utf8");
+    await stagePluginVersion("1.0.0");
+    out.length = 0;
+  });
+
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+    await rm(pluginRoot, { recursive: true, force: true });
+  });
+
+  it("exits OK and does NOT regenerate when autonomous + fresh", async () => {
+    await stageMergedSettings("1.0.0");
+    const code = await runAutonomyPreflight({
+      dataDir,
+      pluginRoot,
+      env: { FACTORY_AUTONOMOUS_MODE: "1" },
+      home: HOME,
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.OK);
+    // No regenerate ⇒ the sentinel survives untouched.
+    expect((await readMerged()).__sentinel).toBe("keep");
+  });
+
+  it("regenerates + exits ERROR with the relaunch command when the on-disk version is stale", async () => {
+    await stageMergedSettings("0.9.0");
+    const code = await runAutonomyPreflight({
+      dataDir,
+      pluginRoot,
+      env: { FACTORY_AUTONOMOUS_MODE: "1" },
+      home: HOME,
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.ERROR);
+    const written = await readMerged();
+    // Regenerated: sentinel gone, version re-stamped to the plugin version.
+    expect(written.__sentinel).toBeUndefined();
+    expect(written._factoryVersion).toBe("1.0.0");
+    const printed = out.join("");
+    expect(printed).toContain(`claude --settings ${settingsPath()}`);
+    expect(printed).toContain("stale");
+  });
+
+  it("regenerates + exits ERROR when the existing file lacks _factoryVersion", async () => {
+    await stageMergedSettings(); // no version stamp
+    const code = await runAutonomyPreflight({
+      dataDir,
+      pluginRoot,
+      env: { FACTORY_AUTONOMOUS_MODE: "1" },
+      home: HOME,
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.ERROR);
+    const written = await readMerged();
+    expect(written.__sentinel).toBeUndefined();
+    expect(written._factoryVersion).toBe("1.0.0");
+  });
+
+  it("generates + exits ERROR when not autonomous + the file is missing (first run)", async () => {
+    expect(existsSync(settingsPath())).toBe(false);
+    const code = await runAutonomyPreflight({
+      dataDir,
+      pluginRoot,
+      env: {}, // not autonomous
+      home: HOME,
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.ERROR);
+    expect(existsSync(settingsPath())).toBe(true);
+    expect(out.join("")).toContain(`claude --settings ${settingsPath()}`);
+  });
+
+  it("exits OK without writing when autonomous via raw env + no file (CI path)", async () => {
+    expect(existsSync(settingsPath())).toBe(false);
+    const code = await runAutonomyPreflight({
+      dataDir,
+      pluginRoot,
+      env: { FACTORY_AUTONOMOUS_MODE: "1" },
+      home: HOME,
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.OK);
+    // No file existed and none was written — the env alone is sanctioned (CI).
+    expect(existsSync(settingsPath())).toBe(false);
+  });
+
+  it("exits OK without writing when the plugin version can't be read (no churn)", async () => {
+    await rm(join(pluginRoot, ".claude-plugin"), { recursive: true, force: true });
+    await stageMergedSettings("0.9.0"); // would look stale IF we could compare
+    const code = await runAutonomyPreflight({
+      dataDir,
+      pluginRoot,
+      env: { FACTORY_AUTONOMOUS_MODE: "1" },
+      home: HOME,
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.OK);
+    // Can't prove staleness ⇒ leave the file untouched (sentinel survives).
+    expect((await readMerged()).__sentinel).toBe("keep");
+  });
+
+  it("passes --user-settings through to the regenerate (chains the statusLine)", async () => {
+    const userSettingsPath = join(pluginRoot, "user-settings.json");
+    await writeFile(
+      userSettingsPath,
+      JSON.stringify({ statusLine: { command: "~/mine.sh" } }),
+      "utf8",
+    );
+    const code = await runAutonomyPreflight({
+      dataDir,
+      pluginRoot,
+      userSettingsPath,
+      env: {}, // not autonomous + missing file ⇒ regenerate
+      home: HOME,
+      writeStdout: (t) => out.push(t),
+    });
+    expect(code).toBe(EXIT.ERROR);
+    const written = await readMerged();
+    expect((written.env as Record<string, string>).FACTORY_ORIGINAL_STATUSLINE).toBe(
+      `${HOME}/mine.sh`,
+    );
+  });
+
+  it("the printed relaunch command points at the merged-settings path on every halt", async () => {
+    await stageMergedSettings("0.9.0"); // stale ⇒ halt
+    await runAutonomyPreflight({
+      dataDir,
+      pluginRoot,
+      env: { FACTORY_AUTONOMOUS_MODE: "1" },
+      home: HOME,
+      writeStdout: (t) => out.push(t),
+    });
+    expect(out.join("")).toContain(`claude --settings ${settingsPath()}`);
   });
 });

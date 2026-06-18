@@ -41,7 +41,8 @@ import { EXIT } from "../exit-codes.js";
 import { parseArgs, isUsageError } from "../args.js";
 import { emitLine, emitError } from "../io.js";
 import { resolveDataDir, resolvePluginRoot } from "../../config/index.js";
-import { isAutonomous } from "../../autonomy/mode.js";
+import { decideAutonomyPreflight, isAutonomous } from "../../autonomy/mode.js";
+import type { PreflightReason } from "../../autonomy/mode.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";
 import { createLogger } from "../../shared/logging.js";
@@ -49,27 +50,36 @@ import type { Subcommand } from "../main.js";
 
 const log = createLogger("autonomy");
 
-const HELP = `factory autonomy <ensure|status> — manage / inspect autonomous mode
+const HELP = `factory autonomy <ensure|status|preflight> — manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
 is autonomous (FACTORY_AUTONOMOUS_MODE=1). There is no opt-out.
 
-ensure  Merges templates/settings.autonomous.json with your existing settings into
-        \${CLAUDE_PLUGIN_DATA}/merged-settings.json (placeholders substituted, env
-        baked, statusLine wired to \`factory statusline\`) and prints the relaunch
-        command:
+ensure     Merges templates/settings.autonomous.json with your existing settings into
+           \${CLAUDE_PLUGIN_DATA}/merged-settings.json (placeholders substituted, env
+           baked, statusLine wired to \`factory statusline\`) and prints the relaunch
+           command:
 
-          claude --settings <merged-settings.json>
+             claude --settings <merged-settings.json>
 
-status  Reports whether THIS session is autonomous and whether merged-settings.json
-        exists. Exits 0 when autonomous, 1 when not (never throws).
+status     Reports whether THIS session is autonomous and whether merged-settings.json
+           exists. Exits 0 when autonomous, 1 when not (never throws).
+
+preflight  The run-entry check (what \`/factory:run\` calls). Decides over
+           {autonomous?, merged-settings present?, plugin vs on-disk version} whether
+           the run may proceed. (Re)scaffolds merged-settings.json and halts for a
+           relaunch when the session is not autonomous OR the settings are stale /
+           missing / unstamped; proceeds silently when already fresh (or autonomous via
+           a directly-exported env). Exits 0 to proceed, 1 to halt. Never throws on the
+           decision path.
 
 Usage:
   factory autonomy ensure
   factory autonomy status [--json]
+  factory autonomy preflight
 
 Options:
-  --user-settings <path>   (ensure) Override the user-settings source (default: ~/.claude/settings.json)
+  --user-settings <path>   (ensure / preflight) Override the user-settings source (default: ~/.claude/settings.json)
   --json                   (status) Emit machine-readable JSON`;
 
 /**
@@ -403,6 +413,132 @@ export async function runAutonomyStatus(opts: AutonomyStatusOptions = {}): Promi
   return status.autonomous ? EXIT.OK : EXIT.ERROR;
 }
 
+/**
+ * Read the stamped `_factoryVersion` from an existing merged-settings.json.
+ * Missing file / unparseable JSON / unstamped → `undefined` (the decision fn
+ * treats an absent stamp as a pre-versioning artifact = stale).
+ */
+async function readOnDiskVersion(path: string): Promise<string | undefined> {
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+    if (isObject(parsed) && typeof parsed._factoryVersion === "string") {
+      return parsed._factoryVersion;
+    }
+  } catch {
+    /* unparseable merged-settings.json → treat as unstamped (stale) */
+  }
+  return undefined;
+}
+
+/** Human-facing one-liner explaining a preflight verdict (for the printed report). */
+function describePreflightReason(
+  reason: PreflightReason,
+  pluginVersion: string | undefined,
+  onDiskVersion: string | undefined,
+): string {
+  switch (reason) {
+    case "fresh":
+      return `merged settings are current (v${pluginVersion ?? "?"})`;
+    case "ci-raw-env":
+      return "autonomous via the environment directly; no merged-settings file needed";
+    case "version-unknowable":
+      return "plugin version is unreadable — leaving the existing merged settings untouched";
+    case "missing-settings":
+      return "no merged settings exist yet";
+    case "not-autonomous":
+      return "this session is not autonomous";
+    case "stale-version":
+      return `merged settings are stale (v${onDiskVersion ?? "?"} → v${pluginVersion ?? "?"})`;
+    case "unstamped":
+      return "merged settings predate version stamping (treated as stale)";
+  }
+}
+
+/** Options for {@link runAutonomyPreflight}; injectable for tests. */
+export interface AutonomyPreflightOptions {
+  readonly dataDir?: string;
+  readonly pluginRoot?: string;
+  readonly userSettingsPath?: string;
+  readonly home?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly writeStdout?: (text: string) => void;
+}
+
+/**
+ * The run-entry composer ported from the old `pipeline-ensure-autonomy` step:
+ * decide — over {autonomous, merged-settings present, plugin vs on-disk version}
+ * via the pure {@link decideAutonomyPreflight} — whether `/factory:run` may
+ * proceed, scaffolding (delegating to {@link runAutonomyEnsure}, the single
+ * writer path) and halting for the irreducible relaunch when it must.
+ *
+ * Infallible on the decision path (like `status`): an unresolvable data/root dir
+ * degrades to a halt-with-message rather than a throw. A throw can surface only
+ * from inside the atomic `ensure` write itself. Returns `EXIT.OK` to proceed,
+ * `EXIT.ERROR` to halt.
+ */
+export async function runAutonomyPreflight(opts: AutonomyPreflightOptions = {}): Promise<ExitCode> {
+  const env = opts.env ?? process.env;
+  const home = opts.home ?? homedir();
+  const write = opts.writeStdout ?? ((t: string) => process.stdout.write(t));
+
+  // Resolve paths defensively — never throw while DECIDING (the throw budget
+  // belongs to the ensure write, below).
+  let dataDir: string | undefined;
+  let pluginRoot: string | undefined;
+  try {
+    dataDir = opts.dataDir ?? resolveDataDir();
+  } catch {
+    /* unresolvable data dir → handled as a degraded halt below */
+  }
+  try {
+    pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
+  } catch {
+    /* unresolvable plugin root → handled as a degraded halt below */
+  }
+
+  const path = dataDir !== undefined ? mergedSettingsPath(dataDir) : "";
+  const mergedSettingsPresent = path.length > 0 && existsSync(path);
+  const pluginVersion = pluginRoot !== undefined ? await readPluginVersion(pluginRoot) : undefined;
+  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path) : undefined;
+
+  const decision = decideAutonomyPreflight({
+    autonomous: isAutonomous(env),
+    mergedSettingsPresent,
+    pluginVersion,
+    onDiskVersion,
+  });
+  const verdict = describePreflightReason(decision.reason, pluginVersion, onDiskVersion);
+
+  if (decision.regenerate) {
+    // A regenerate always implies halt-for-relaunch (the PreflightDecision
+    // invariant). If we cannot resolve where to scaffold, degrade to a message.
+    if (dataDir === undefined || pluginRoot === undefined) {
+      write(
+        `autonomy preflight: ${verdict}\n` +
+          `Cannot resolve the plugin data/root dir to scaffold merged settings here.\n` +
+          "Run `factory autonomy ensure` once the environment is set, then relaunch with the printed command.\n",
+      );
+      return EXIT.ERROR;
+    }
+    await runAutonomyEnsure({
+      dataDir,
+      pluginRoot,
+      userSettingsPath: opts.userSettingsPath,
+      home,
+      writeStdout: write,
+    });
+    write(
+      `\nautonomy preflight: ${verdict} — the run is halted until you relaunch (command above).\n`,
+    );
+    return EXIT.ERROR;
+  }
+
+  // proceed without regenerating (fresh / ci-raw-env / version-unknowable).
+  write(`autonomy preflight: ${verdict} — proceeding.\n`);
+  return EXIT.OK;
+}
+
 async function run(argv: string[]): Promise<ExitCode> {
   const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
@@ -410,17 +546,23 @@ async function run(argv: string[]): Promise<ExitCode> {
     return EXIT.OK;
   }
 
-  // Verbs: `ensure` (default) materializes; `status` reports + exits 0/1.
+  // Verbs: `ensure` (default) materializes; `status` reports + exits 0/1;
+  // `preflight` decides + scaffolds-and-halts when needed (the run-entry call).
   const verb = args.positionals[0];
   if (verb === "status") {
     return runAutonomyStatus({ json: args.flag("json") === true });
   }
+  const userSettings = args.flag("user-settings");
+  if (verb === "preflight") {
+    return runAutonomyPreflight({
+      userSettingsPath: typeof userSettings === "string" ? userSettings : undefined,
+    });
+  }
   if (verb !== undefined && verb !== "ensure") {
-    emitError(`autonomy: unknown verb '${verb}' (expected: ensure | status)`);
+    emitError(`autonomy: unknown verb '${verb}' (expected: ensure | status | preflight)`);
     return EXIT.USAGE;
   }
 
-  const userSettings = args.flag("user-settings");
   await runAutonomyEnsure({
     userSettingsPath: typeof userSettings === "string" ? userSettings : undefined,
   });
