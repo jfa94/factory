@@ -23,7 +23,6 @@ import { FakeGhClient, FakeGitClient } from "../git/fakes.js";
 import { parseSpecManifest, type SpecManifest } from "../spec/index.js";
 import { readMetrics } from "../scoring/index.js";
 import { runReportPath } from "../core/state/paths.js";
-import { PARTIAL_SUBJECT_PREFIX } from "../git/index.js";
 import { defaultConfig } from "../config/schema.js";
 import type { ShipMode } from "./types.js";
 import type { FailureClass, TaskState } from "../types/index.js";
@@ -153,9 +152,9 @@ describe("finalizeRun", () => {
     expect(result.report.run_status).toBe("completed");
     expect(result.issuesFiled).toBe(0);
     expect(gh.issues).toHaveLength(0);
-    // rollup merged with a plain (non-PARTIAL) subject.
+    // rollup merged with the plain title as subject (Decision 34: develop gets only complete runs).
     expect(result.rollup?.merged).toBe(true);
-    expect(result.rollup?.subject?.startsWith(PARTIAL_SUBJECT_PREFIX)).toBe(false);
+    expect(result.rollup?.subject).not.toMatch(/^PARTIAL:/);
     expect(gh.merges).toHaveLength(1);
 
     // persisted run is terminal.

@@ -3,8 +3,8 @@
  *
  * After every task PR has serial-merged into `staging`, the rollup opens ONE PR
  * (head = staging, base = develop), waits for the single full-CI gate to resolve,
- * and squash-merges it into develop. On a PARTIAL run the squash subject carries a
- * `PARTIAL:` header (Δ S) so develop history records the rollup shipped a subset.
+ * and squash-merges it into develop. Decision 34: develop receives only COMPLETE
+ * runs, so the rollup is only ever called on a fully-completed run (no partial path).
  * NEVER targets `main` (D16 — enforced here and upstream by {@link ensureStaging}).
  *
  * PURE over {@link GhClient}: no StateManager, no report/issue knowledge. The
@@ -29,9 +29,6 @@ const log = createLogger("git");
 
 const GIT_DEFAULTS = GitSchema.parse({});
 
-/** Squash-subject prefix marking a rollup that shipped a SUBSET of the spec (Δ S). */
-export const PARTIAL_SUBJECT_PREFIX = "PARTIAL: ";
-
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_MAX_POLLS = 80; // ~20 min at 15s — the full-CI gate's outer bound.
 
@@ -44,12 +41,10 @@ export interface RollupArgs {
   stagingBranch?: string;
   /** Base branch. Defaults to the configured base (`develop`). NEVER `main`. */
   baseBranch?: string;
-  /** Rollup PR title (also the squash subject when the run is complete). */
+  /** Rollup PR title (also the squash subject — develop only ever gets a complete run, Decision 34). */
   title: string;
-  /** Rollup PR body — the partial-run report markdown is the natural fit. */
+  /** Rollup PR body — the run report markdown is the natural fit. */
   body: string;
-  /** PARTIAL run → prefix the squash subject with `PARTIAL: ` (Δ S). Defaults to false. */
-  partial?: boolean;
   /**
    * `true` (live) → wait for CI + squash-merge. `false` (no-merge cutover) → open
    * the PR and stop. The coordinator maps ShipMode (`live`/`no-merge`) → this.
@@ -73,7 +68,7 @@ export interface RollupResult {
   /** True iff an existing rollup PR was reused (open or already-merged). */
   resumed: boolean;
   merged: boolean;
-  /** The squash subject used (carries `PARTIAL:` on a partial run). Set when merged. */
+  /** The squash subject used (the plain rollup title). Set when merged. */
   subject?: string;
   /** Why not merged. Absent when `merged`. */
   reason?: RollupNotMergedReason;
@@ -112,7 +107,7 @@ export async function rollup(args: RollupArgs): Promise<RollupResult> {
       "rollup: baseBranch must not be 'main' (Decision 16 — the factory never touches main)",
     );
   }
-  const subject = args.partial ? `${PARTIAL_SUBJECT_PREFIX}${args.title}` : args.title;
+  const subject = args.title;
 
   // Single lookup over ALL states → distinguish already-merged / open / none.
   const existing = await args.ghClient.prList({ head: staging, base, state: "all" });
@@ -179,6 +174,6 @@ export async function rollup(args: RollupArgs): Promise<RollupResult> {
   }
 
   await args.ghClient.prMergeSquash(number, { subject, body: args.body });
-  log.info(`rollup PR #${number} squash-merged into ${base}${args.partial ? " (PARTIAL)" : ""}`);
+  log.info(`rollup PR #${number} squash-merged into ${base}`);
   return { number, url, resumed, merged: true, subject, ci };
 }

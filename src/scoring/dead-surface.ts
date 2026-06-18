@@ -4,7 +4,7 @@
  * A run that ships a dependency-closed subset of its tasks can leave UNREFERENCED
  * EXPORTS on the integration branch — code that is dead-but-not-broken (an export
  * whose only caller was a task that dropped, scaffolding for a later run, etc.).
- * The dead-surface scan ENUMERATES that surface so a partial run never hides it.
+ * The dead-surface scan ENUMERATES that surface so a failed run never hides it.
  *
  * REPORT-ONLY, by design (Δ S): it never blocks the rollup. A hard gate would
  * false-positive on legitimate public API and next-run scaffolding and stall

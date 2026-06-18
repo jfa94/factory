@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeGhClient } from "./fakes.js";
 import type { PullRequest } from "./gh-client.js";
-import { PARTIAL_SUBJECT_PREFIX, rollup, type RollupArgs } from "./rollup.js";
+import { rollup, type RollupArgs } from "./rollup.js";
 
 /** A seeded OPEN rollup PR (head=staging → base=develop). */
 function openRollupPr(number: number, over: Partial<PullRequest> = {}): PullRequest {
@@ -27,7 +27,6 @@ function makeArgs(gh: FakeGhClient, over: Partial<RollupArgs> & { sleeps?: { n: 
     baseBranch: "develop",
     title: "Rollup run-1",
     body: "## report",
-    partial: false,
     merge: true,
     sleep: async () => {
       counter.n += 1;
@@ -54,16 +53,6 @@ describe("rollup — open + full-CI gate + squash-merge (§④, Δ S)", () => {
     ]);
     expect(gh.merges).toHaveLength(1);
     expect(gh.merges[0]).toMatchObject({ number: r.number, subject: "Rollup run-1" });
-  });
-
-  it("partial run: squash subject carries the PARTIAL: header", async () => {
-    const gh = new FakeGhClient();
-    const { args } = makeArgs(gh, { partial: true });
-    const r = await rollup(args);
-
-    expect(r.merged).toBe(true);
-    expect(r.subject).toBe(`${PARTIAL_SUBJECT_PREFIX}Rollup run-1`);
-    expect(gh.merges[0]?.subject).toBe("PARTIAL: Rollup run-1");
   });
 
   it("no-merge cutover mode: opens the PR but never merges", async () => {
@@ -143,11 +132,11 @@ describe("rollup — idempotent / resume-safe", () => {
 
   it("short-circuits when the rollup PR is already MERGED (re-create would fail)", async () => {
     const gh = new FakeGhClient({ prs: [openRollupPr(48, { state: "MERGED" })] });
-    const { args } = makeArgs(gh, { partial: true });
+    const { args } = makeArgs(gh);
     const r = await rollup(args);
 
     expect(r).toMatchObject({ number: 48, resumed: true, merged: true });
-    expect(r.subject).toBe("PARTIAL: Rollup run-1");
+    expect(r.subject).toBe("Rollup run-1"); // plain title — no PARTIAL: prefix
     expect(gh.created).toHaveLength(0);
     expect(gh.merges).toHaveLength(0); // not merged twice
   });

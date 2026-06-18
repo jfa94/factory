@@ -402,5 +402,10 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
 
     // finalizeRun filed one failure issue for t2.
     expect(gh.issues).toHaveLength(1);
+
+    // Decision 34: failed run → no rollup → develop is untouched.
+    const rollupPrs = gh.created.filter((p) => p.base === "develop");
+    expect(rollupPrs).toHaveLength(0);
+    expect(gh.merges).toHaveLength(0); // no-merge mode: no PR was auto-merged
   });
 });
