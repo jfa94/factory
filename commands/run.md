@@ -1,18 +1,15 @@
 ---
-description: "Run the factory autonomous coding pipeline (PRD issue → task PRs → staging)"
-argument-hint: "[resume] (--issue <N> | --spec-id <id>) [--repo <owner/name>] [--workflow] [--no-ship] [--run <id>]"
+description: "Start a fresh factory autonomous coding pipeline run (PRD issue → task PRs → staging → develop)"
+argument-hint: "(--issue <N> | --spec-id <id>) [--repo <owner/name>] [--workflow] [--no-ship] [--supersede | --resume]"
 arguments:
-  - name: mode
-    description: "Omit to start a run; pass `resume` to re-enter a paused/suspended run"
-    required: false
   - name: "--repo"
     description: "Target GitHub repo as <owner>/<name> (OPTIONAL — auto-derived from the origin remote; pass to override)"
     required: false
   - name: "--issue"
-    description: "PRD issue number — the stable spec lookup key (start mode)"
+    description: "PRD issue number — the stable spec lookup key"
     required: false
   - name: "--spec-id"
-    description: "Explicit <issue>-<slug> spec id, instead of --issue (start mode)"
+    description: "Explicit <issue>-<slug> spec id, instead of --issue"
     required: false
   - name: "--workflow"
     description: "Run the parallel background Workflow driver. Default (omit): session — sequential, in-session agents"
@@ -20,18 +17,23 @@ arguments:
   - name: "--no-ship"
     description: "Open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop"
     required: false
-  - name: "--run"
-    description: "Run id to resume (resume mode; defaults to the current run)"
+  - name: "--supersede"
+    description: "If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — skips the conflict prompt"
+    required: false
+  - name: "--resume"
+    description: "If an active run already exists, hand off to `/factory:resume` instead of starting fresh — skips the conflict prompt"
     required: false
 ---
 
 # /factory:run
 
-Drive a full pipeline run. The `factory` CLI is the engine (ALL control flow); the
-driver is a dumb loop. Reject a START call (no `resume`) with a clear message if neither
-or both of `--issue`/`--spec-id` are given. `--repo` is OPTIONAL — the CLI auto-derives it
-from the `origin` remote of the current checkout (pass `--repo <owner/name>` only to
-override; an explicit value that disagrees with the remote fails loud).
+Start a **fresh** pipeline run. The `factory` CLI is the engine (ALL control flow); the
+driver is a dumb loop. `/factory:run` never silently reuses an existing run — to continue
+one, use `/factory:resume`; to repair a stalled one, use `/factory:rescue`. Reject the call
+with a clear message if neither or both of `--issue`/`--spec-id` are given. `--repo` is
+OPTIONAL — the CLI auto-derives it from the `origin` remote of the current checkout (pass
+`--repo <owner/name>` only to override; an explicit value that disagrees with the remote fails
+loud).
 
 **Defaults (no flags): session + live** — the in-session orchestrator loop, auto-merging
 each task into staging and the staging→develop rollup into develop. Two terse boolean
@@ -41,11 +43,12 @@ overrides: `--workflow` (run the background Workflow driver instead of session) 
 ## Both modes start the same
 
 Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run create
-[--workflow] [--no-ship] --session-id "$CLAUDE_CODE_SESSION_ID"`; read `run_id`). Forward
-THIS command's `--workflow`/`--no-ship` flags verbatim to Phase 2's `run create` so the
-resolved mode + ship intent persist on the run — the quota gate paces in `session` and
-hard-stops without pacing in `workflow` (Decision 24), and `ship_mode` is read back by the
-workflow driver + resume + finalize (never re-passed). Always pass `--session-id
+[--workflow] [--no-ship] [--supersede | --resume] --session-id "$CLAUDE_CODE_SESSION_ID"`;
+read `run_id` from the emitted `{kind:"created"|"superseded", run}` envelope). Forward THIS
+command's `--workflow`/`--no-ship`/`--supersede`/`--resume` flags verbatim to Phase 2's `run
+create` so the resolved mode + ship intent persist on the run — the quota gate paces in
+`session` and hard-stops without pacing in `workflow` (Decision 24), and `ship_mode` is read
+back by the workflow driver + resume + finalize (never re-passed). Always pass `--session-id
 "$CLAUDE_CODE_SESSION_ID"` so the run records THIS session as its `owner_session` — the Stop
 gate then keeps the autonomous loop alive only here and lets other sessions stop freely
 (Prompt J). With `--spec-id`, skip Phase 1 — the spec must already exist; `run create` fails
@@ -54,6 +57,24 @@ LOUD otherwise:
 ```
 Skill(pipeline-orchestrator)
 ```
+
+## Active-run conflict (Decision 35 — no silent reuse)
+
+If an active run already exists for this spec, Phase 2's `run create` does **not** reuse it:
+it exits `3` and emits `{kind:"exists", existing:{run_id, status}}`. The orchestrator skill
+surfaces this back to the command; unless the user already passed `--supersede`/`--resume`
+(which the skill forwards, skipping the prompt), ask with one `AskUserQuestion` before doing
+anything destructive:
+
+- **Continue (resume)** → run `/factory:resume --run <existing.run_id>` — re-enter the
+  existing run where it left off (its staging branch + merged work are intact).
+- **Supersede (fresh)** → re-run `factory run create … --supersede`: the old run is marked
+  `superseded`, its `staging/<run-id>` branch + task PRs are deleted, and a fresh run starts.
+  Then drive the fresh run.
+- **Cancel** → stop; leave the existing run untouched.
+
+Map the answer to the `--resume` / `--supersede` flag — the CLI stays the single source of
+truth (never hand-edit run state from the command).
 
 ## Session mode (default)
 
@@ -76,14 +97,14 @@ substituting. It drives ready tasks in parallel (engine-enforced gates are ident
 file-lock serialized). When it returns:
 
 - `{ suspended: true, scope, resets_at_epoch }` → quota stop: report it; the user
-  re-runs `/factory:run resume` after the window resets. Do NOT finalize.
+  re-runs `/factory:resume` after the window resets. Do NOT finalize.
 - otherwise → run the skill's Phase 4: `factory run finalize --run <run_id>` (ship mode is
   read from the run's persisted `ship_mode`), then `factory score` + `factory state --summary`,
   and report.
 
 ## Autonomous mode (MANDATORY — no opt-in, no opt-out)
 
-The pipeline runs unattended by design. `factory run create` and `factory run resume`
+The pipeline runs unattended by design. `factory run create` and `factory resume`
 **HALT loud** unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`); there is no
 bypass flag. The gate lives in the deterministic engine (`src/autonomy/mode.ts`,
 `NotAutonomousError`), so a non-autonomous `/factory:run` cannot start a run — it exits
@@ -115,13 +136,8 @@ session-mode quota pacer reads. The relaunch is irreducible: Claude Code reads s
 launch, so a running session can never make _itself_ autonomous — automation covers the scaffold,
 never the relaunch.
 
-## Resume mode (`/factory:run resume [--run <id>]`)
+## Resuming a run → `/factory:resume`
 
-`factory run resume [--run <id>]`. On `{kind:"still-blocked"}` report reason +
-`resets_at_epoch` and stop. On `{kind:"resumed"}` re-enter the run loop (Phase 3 of
-the skill in session mode, or re-launch the workflow in workflow mode — ask the user
-which mode if it is ambiguous; the engine is indifferent).
-
-Ship mode is persisted on the run (Phase 2's `run create`), so a workflow resume re-reads
-it from the first `factory next` envelope — re-launch with `Workflow({ scriptPath })`, no `args`. A
-session resume re-enters Phase 3, which reads the persisted value as before.
+Resuming a paused/suspended run is now its own command — see `/factory:resume [--run <id>]`.
+`/factory:run` only ever starts fresh. (`factory run resume` remains as a thin CLI alias for
+one release; the documented entry is `/factory:resume`.)
