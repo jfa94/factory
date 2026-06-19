@@ -30,7 +30,7 @@ import { ESCALATION_CAP } from "../producer/index.js";
 import { makeCoroutineDeps, PAUSE_5H } from "./coroutine-fixtures.js";
 import type { CoroutineDeps } from "./coroutine.js";
 import { FakeGhClient, FakeGitClient } from "../git/fakes.js";
-import { runScopedBranch } from "../git/index.js";
+import { runScopedBranch, runStagingBranch } from "../git/index.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -344,6 +344,48 @@ describe("stepTask", () => {
       expect(env.manifest.agents).toHaveLength(PANEL_ROLES.length);
       expect(env.sidecar?.kind).toBe("holdout-validate");
       expect(env.worktree).toContain("T1");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("the verify spawn envelope carries the per-run base ref (origin/staging-<run-id>)", async () => {
+    const { deps, runId, holdout, cleanup } = await makeCoroutineDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
+    });
+    try {
+      await holdout.put(runId, makeHoldoutRecord("T1", ["d", "e"], 5));
+      await driveToVerify(deps, runId, "T1");
+      const env = await stepTask(deps, runId, "T1");
+      expect(env.kind).toBe("spawn");
+      if (env.kind !== "spawn") return;
+      // The worktree forks from origin/staging-<run-id>; reviewers + the holdout
+      // sidecar MUST diff against THAT ref, never the namespace-colliding bare
+      // `origin/staging` (root cause #2 of the PRD-2d stall).
+      expect(env.base_ref).toBe(`origin/${runStagingBranch(runId)}`);
+      expect(env.base_ref).toBe("origin/staging-run-1");
+      expect(env.sidecar?.prompt).toContain("git -C");
+      expect(env.sidecar?.prompt).toContain("diff origin/staging-run-1");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("the verify base ref + holdout prompt honor a mid-run PINNED staging branch", async () => {
+    const { deps, runId, holdout, cleanup } = await makeCoroutineDeps({
+      tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
+    });
+    try {
+      await holdout.put(runId, makeHoldoutRecord("T1", ["d", "e"], 5));
+      await driveToVerify(deps, runId, "T1");
+      // Simulate a mid-run staging rename: pin a branch DIFFERING from the recompute.
+      // Readers must use the pin (the branch the run actually cut), not runStagingBranch.
+      await deps.state.update(runId, (s) => ({ ...s, staging_branch: "staging-PINNED" }));
+      const env = await stepTask(deps, runId, "T1");
+      expect(env.kind).toBe("spawn");
+      if (env.kind !== "spawn") return;
+      expect(env.base_ref).toBe("origin/staging-PINNED");
+      expect(env.sidecar?.prompt).toContain("diff origin/staging-PINNED");
     } finally {
       await cleanup();
     }

@@ -286,6 +286,14 @@ describe("createRun", () => {
     expect((await state.readCurrent())!.run_id).toBe("run-a");
   });
 
+  it("pins the per-run staging branch on the run row (Decision 33 hardening)", async () => {
+    const run = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-pin" });
+    // Stored ONCE at create so every later base-ref resolution reads the branch the
+    // run actually cut — never a value recomputed by runStagingBranch(run_id).
+    expect(run.staging_branch).toBe("staging-run-pin");
+    expect((await state.read("run-pin")).staging_branch).toBe("staging-run-pin");
+  });
+
   it("resolves the spec by explicit spec-id and hardcodes the sequential driver", async () => {
     const run = await createRun(state, store, {
       repo: REPO,

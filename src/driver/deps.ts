@@ -63,6 +63,7 @@ export type {
 // --- git / PR I/O (src/git) -------------------------------------------------
 export {
   createTaskWorktree,
+  provisionWorktree,
   assertBaseIsStagingTip,
   ensureOnStaging,
   removeWorktree,
@@ -73,6 +74,7 @@ export {
   provisionProtection,
   runScopedBranch,
   runStagingBranch,
+  resolveStagingBranch,
   ensureStaging,
   rollup,
 } from "../git/index.js";
@@ -81,6 +83,7 @@ export type {
   GhClient,
   TaskWorktree,
   CreateTaskWorktreeArgs,
+  ProvisionWorktreeFn,
   CreateTaskPrArgs,
   TaskPrResult,
   MergeOutcome,

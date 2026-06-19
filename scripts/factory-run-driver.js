@@ -247,7 +247,7 @@ async function runVerifyCollection(taskId, env) {
         (a) => () =>
           agent(
             `You are the factory ${a.role}. Review task ${taskId}.\n` +
-              `Inspect the change via: git -C ${env.worktree} diff origin/staging (plus Read/Grep in ${env.worktree}).\n` +
+              `Inspect the change via: git -C ${env.worktree} diff ${env.base_ref} (plus Read/Grep in ${env.worktree}).\n` +
               `Emit ONE RawReview object: {"reviewer":"${a.role}","verdict":"approve|blocked|error",` +
               `"findings":[{"reviewer":"${a.role}","severity":"info|warning|error|critical","blocking":true|false,` +
               `"file":"<path>","line":<n>,"quote":"<verbatim code>","description":"<concern>"}]}. ` +
@@ -281,7 +281,7 @@ async function runVerifyCollection(taskId, env) {
         (f) => () =>
           agent(
             `Adversarially verify this code-review finding — try to REFUTE it against the actual code.\n` +
-              `Inspect via: git -C ${env.worktree} diff origin/staging and Read ${env.worktree}/${f.file} around line ${f.line}.\n` +
+              `Inspect via: git -C ${env.worktree} diff ${env.base_ref} and Read ${env.worktree}/${f.file} around line ${f.line}.\n` +
               `Finding by ${review.reviewer}: ${f.file}:${f.line} — ${f.description}\nQuoted code: ${f.quote}\n` +
               `Return {"holds": true|false, "note": "<why>"} (holds=true iff the finding is real).`,
             {

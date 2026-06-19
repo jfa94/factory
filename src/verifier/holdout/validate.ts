@@ -92,12 +92,25 @@ function clampThreshold(raw: number): number {
  * criteria; verify each against the diff and answer in a strict per-criterion JSON
  * shape (one entry per criterion, same order — a missing entry is a FAIL).
  */
-export function buildHoldoutPrompt(record: HoldoutRecord, worktree?: string): string {
+export function buildHoldoutPrompt(
+  record: HoldoutRecord,
+  worktree?: string,
+  baseRef?: string,
+): string {
   const lines: string[] = [];
   if (worktree !== undefined && worktree.length > 0) {
+    // The worktree forks from the per-run staging base (origin/staging-<run-id>);
+    // diffing a hardcoded `origin/staging` resolves to an unrelated/colliding ref
+    // after a repo branch rename. Fail loud rather than silently emit the wrong ref.
+    if (baseRef === undefined || baseRef.length === 0) {
+      throw new Error(
+        "buildHoldoutPrompt: baseRef is required when a worktree is provided " +
+          "(the per-run staging base ref the worktree forked from)",
+      );
+    }
     lines.push(
       `The implementation lives in the task worktree at: ${worktree}`,
-      `Inspect it with: git -C ${worktree} diff origin/staging`,
+      `Inspect it with: git -C ${worktree} diff ${baseRef}`,
       `Do NOT rely on your own working directory — it is a fresh checkout with no diff.`,
       "",
     );

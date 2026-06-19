@@ -19,3 +19,21 @@ export function runStagingBranch(runId: string): string {
   }
   return `${RUN_STAGING_PREFIX}-${runId}`;
 }
+
+/**
+ * Resolve a run's staging branch: the name PINNED on the run row at create
+ * (`RunState.staging_branch`) when present, else recompute from the run id (legacy
+ * runs predating the pin). Reading the pin keeps every base-ref consumer agreed on
+ * the branch the run actually cut — a mid-run naming-scheme change can't desync them.
+ *
+ * Pure: takes the id + optional pinned name, never the `RunState` type, so it stays
+ * in the git layer without importing core/state (preserves the layering direction).
+ * A blank pin is treated as unset (falls back) — the fallback then re-applies the
+ * empty-run-id loud guard.
+ */
+export function resolveStagingBranch(runId: string, pinned?: string): string {
+  if (pinned !== undefined && pinned.length > 0) {
+    return pinned;
+  }
+  return runStagingBranch(runId);
+}

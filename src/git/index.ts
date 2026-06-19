@@ -66,6 +66,14 @@ export type {
   EnsureOnStagingArgs,
 } from "./worktree.js";
 
+// worktree dependency provisioning (setupCommand / lockfile install before gates)
+export { provisionWorktree, resolveSetupCommand } from "./provision.js";
+export type {
+  ProvisionWorktreeArgs,
+  ProvisionWorktreeFn,
+  ProvisionRunResult,
+} from "./provision.js";
+
 // idempotent PR create (Δ P)
 export { createTaskPrIdempotent } from "./pr.js";
 export type { CreateTaskPrArgs, TaskPrResult } from "./pr.js";
@@ -92,7 +100,7 @@ export { ensureStaging } from "./staging.js";
 export type { EnsureStagingArgs, EnsureStagingResult } from "./staging.js";
 
 // per-run staging branch naming (Decision 33)
-export { runStagingBranch, RUN_STAGING_PREFIX } from "./run-staging.js";
+export { runStagingBranch, resolveStagingBranch, RUN_STAGING_PREFIX } from "./run-staging.js";
 
 // fakes for downstream unit tests
 export { FakeGitClient, FakeGhClient } from "./fakes.js";

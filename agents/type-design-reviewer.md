@@ -19,7 +19,7 @@ makes the bug unrepresentable. You judge whether the change's types make illegal
 impossible, or merely document them. Not "is the logic correct" (quality-reviewer) — "could
 this whole class of bug have been designed out of existence?".
 
-Inspect the change with `git -C <taskWorktree> diff origin/staging`, then `Read` each changed file in
+Inspect the change with `git -C <taskWorktree> diff <baseRef>`, then `Read` each changed file in
 full — a weak type is only a hazard in light of the values that actually flow through it, so
 you need the construction and use sites.
 
@@ -85,7 +85,7 @@ type preferences with no admitted bad value. Note at most one adjacent issue as
 
 ## Process
 
-1. `git -C <taskWorktree> diff origin/staging` for scope; `Read` each changed/added type, interface,
+1. `git -C <taskWorktree> diff <baseRef>` for scope; `Read` each changed/added type, interface,
    signature, and cast.
 2. For each, ask: what illegal value does this admit that a tighter type would reject? Trace a
    construction or call site to confirm the bad value can actually occur here.

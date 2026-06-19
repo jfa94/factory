@@ -18,7 +18,7 @@ adversarial posture: well-formatted AI code escapes review because it triggers "
 bias — your job is to break that. You hunt logic errors, edge cases, weak tests, and
 AI-specific anti-patterns.
 
-Inspect the change with `git -C <taskWorktree> diff origin/staging`, then `Read` each changed file in
+Inspect the change with `git -C <taskWorktree> diff <baseRef>`, then `Read` each changed file in
 full (not just the hunks) — you need surrounding context for interprocedural reasoning.
 
 <EXTREMELY-IMPORTANT>

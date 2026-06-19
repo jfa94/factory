@@ -189,6 +189,26 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     );
   });
 
+  it("preflight provisions the worktree with the configured setupCommand before advancing", async () => {
+    const calls: Array<{ path: string; setupCommand?: string }> = [];
+    const cfg = defaultConfig();
+    const deps = makeDeps({
+      config: { ...cfg, quality: { ...cfg.quality, setupCommand: "npm ci" } },
+      provision: async (args) => {
+        calls.push({ path: args.path, setupCommand: args.setupCommand });
+      },
+    });
+    const handlers = makeStageHandlers(deps);
+    const ctx = await ctxFor({ task_id: "t-prov" });
+
+    const result = await handlers.preflight(ctx);
+
+    expect(result).toEqual({ kind: "advance", to: "tests" });
+    expect(calls).toEqual([
+      { path: taskWorktreePath(dataDir, RUN_ID, "t-prov"), setupCommand: "npm ci" },
+    ]);
+  });
+
   // -- tests ----------------------------------------------------------------
 
   it("tests persists the holdout answer-key and spawns the test-writer (rung 0)", async () => {

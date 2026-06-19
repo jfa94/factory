@@ -19,7 +19,7 @@ scope is the shape of the change: do imports flow the right direction, do module
 cohesive, do abstractions hold. Not "is it correct" (quality-reviewer), not "is it secure"
 (security-reviewer).
 
-Inspect the change with `git -C <taskWorktree> diff origin/staging`, then `Read` the imports/exports
+Inspect the change with `git -C <taskWorktree> diff <baseRef>`, then `Read` the imports/exports
 of each changed file in full — you reason over the import graph, so you need the actual
 statements, not the hunks alone.
 
@@ -86,7 +86,7 @@ issue you trip over as `blocking: false`.
 1. Read `CLAUDE.md`, any architecture docs, and the declared boundary config
    (`.dependency-cruiser.cjs` / eslint boundaries) if present — that is the rule set you
    enforce.
-2. `git -C <taskWorktree> diff origin/staging` for scope; `Read` the imports/exports of every changed
+2. `git -C <taskWorktree> diff <baseRef>` for scope; `Read` the imports/exports of every changed
    file.
 3. For each changed module trace its edges: which layers it imports, which import it. Flag a
    direction violation only with the offending import line quoted. Trace any suspected cycle in

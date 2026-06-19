@@ -123,14 +123,18 @@ describe("buildHoldoutPrompt", () => {
     expect(prompt).toContain("missing entry is treated as a failure");
   });
 
-  it("prepends worktree inspection guidance keyed to origin/staging (CP2 #14)", () => {
-    const prompt = buildHoldoutPrompt(record, "/wt/task-1");
+  it("keys the worktree inspect command to the per-run base ref", () => {
+    const prompt = buildHoldoutPrompt(record, "/wt/task-1", "origin/staging-run-1");
     expect(prompt).toContain("/wt/task-1");
-    // The task worktree forks from origin/staging and never maintains a local
-    // `staging` branch, so the inspect command MUST diff against origin/staging —
-    // a bare `staging` resolves to a stale/absent local ref.
-    expect(prompt).toContain("git -C /wt/task-1 diff origin/staging");
+    // The task worktree forks from the per-run staging base (origin/staging-<run-id>),
+    // never a bare `staging`/`origin/staging`, so the inspect command MUST diff THAT
+    // ref — the bare ref namespace-collides after a repo-side branch rename.
+    expect(prompt).toContain("git -C /wt/task-1 diff origin/staging-run-1");
     expect(prompt).not.toContain("diff staging");
+  });
+
+  it("throws fail-loud when a worktree is given without a base ref (Iron Law 3)", () => {
+    expect(() => buildHoldoutPrompt(record, "/wt/task-1")).toThrow(/baseRef/i);
   });
 });
 

@@ -78,6 +78,8 @@ export interface CreateRunArgs {
   ship_mode?: RunState["ship_mode"];
   /** The owning Claude Code session id (Prompt J — session-scoped Stop gate). */
   owner_session?: RunState["owner_session"];
+  /** The per-run staging branch to PIN on the row (Decision 33); recomputed if absent. */
+  staging_branch?: RunState["staging_branch"];
 }
 
 export class StateManager {
@@ -191,6 +193,7 @@ export class StateManager {
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...(args.owner_session !== undefined ? { owner_session: args.owner_session } : {}),
+      ...(args.staging_branch !== undefined ? { staging_branch: args.staging_branch } : {}),
       spec: args.spec,
       tasks: {},
       started_at: now,

@@ -32,9 +32,10 @@ import {
   waitRetry,
   deriveFloorVerdict,
   createTaskWorktree,
+  provisionWorktree,
   createTaskPrIdempotent,
   runScopedBranch,
-  runStagingBranch,
+  resolveStagingBranch,
   GateRunner,
   buildPanelManifest,
   resolveReviewModel,
@@ -172,12 +173,20 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
      */
     async preflight(ctx: StageContext): Promise<StageResult> {
       const task = requireTask(ctx, "preflight");
+      const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
       await createTaskWorktree({
         gitClient: deps.git,
         runId: ctx.run.run_id,
         taskId: task.task_id,
-        path: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
-        base: runStagingBranch(ctx.run.run_id),
+        path: worktree,
+        base: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
+      });
+      // Make the worktree runnable BEFORE the command-gates: install deps via the
+      // configured setupCommand (else a lockfile-detected install). FAILS LOUD on a
+      // bad env so it halts here, not as an opaque test/type/build gate failure.
+      await (deps.provision ?? provisionWorktree)({
+        path: worktree,
+        setupCommand: deps.config.quality.setupCommand,
       });
       return advance("tests");
     },
@@ -232,7 +241,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
         runId: ctx.run.run_id,
         taskId: task.task_id,
         worktree: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
-        baseRef: runStagingBranch(ctx.run.run_id),
+        baseRef: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
         config: deps.config,
         tools: deps.tools,
       };
@@ -303,7 +312,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
         branch,
         title: specTask.title,
         body: shipBody(ctx.run.run_id, specTask),
-        base: runStagingBranch(ctx.run.run_id),
+        base: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
       });
       return taskDone();
     },

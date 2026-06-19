@@ -36,7 +36,7 @@ import {
   renderPartialReportMarkdown,
   renderFailureIssue,
   recordRunFinalized,
-  runStagingBranch,
+  resolveStagingBranch,
   type Config,
   type GhClient,
   type GitClient,
@@ -186,7 +186,7 @@ export async function finalizeRun(
   //    On failed, develop is untouched (per-drop issues are already filed above).
   let rollupResult: RollupResult | undefined;
   if (terminal === "completed") {
-    const stagingBranch = runStagingBranch(runId);
+    const stagingBranch = resolveStagingBranch(runId, run.staging_branch);
     // Forward-reconcile (Decision 33): bring develop's new commits into the run branch
     // (no force-push) so the rollup PR is up-to-date. A conflict here is
     // non-auto-recoverable → surfaces for rescue.

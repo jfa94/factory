@@ -39,6 +39,7 @@ import {
   ensureStaging,
   provisionProtection,
   runStagingBranch,
+  resolveStagingBranch,
   resolveRepo,
   splitRepoSlug,
   type GitClient,
@@ -314,9 +315,14 @@ async function createRunFromManifest(
     );
   }
   const seeded = seedTasksFromSpec(manifest);
+  // Decision 33 hardening: compute the per-run staging branch ONCE and PIN it on the
+  // row, so every later base-ref resolution reads this exact name (never a recompute
+  // that a mid-run naming-scheme change could desync). Reused below for the actual cut.
+  const branch = runStagingBranch(opts.runId);
   await state.create({
     run_id: opts.runId,
     spec: specStore.toPointer(manifest),
+    staging_branch: branch,
     // v1 coroutine seam drives tasks strictly one at a time — the driver dial is fixed.
     driver: "sequential",
     ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
@@ -327,7 +333,6 @@ async function createRunFromManifest(
 
   // Decision 33: cut + protect the per-run staging branch AFTER the run row exists.
   if (stagingDeps !== undefined) {
-    const branch = runStagingBranch(run.run_id);
     await ensureStaging({
       gitClient: stagingDeps.gitClient,
       stagingBranch: branch,
@@ -395,7 +400,9 @@ async function supersedeRun(
   existing: RunState,
   stagingDeps: RunStagingDeps,
 ): Promise<void> {
-  const branch = runStagingBranch(existing.run_id);
+  // Resolve the PINNED branch: superseding must tear down the branch the run actually
+  // cut, not a recompute that a mid-run naming change could have desynced (Decision 33).
+  const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
   await state.finalize(existing.run_id, "superseded");
   await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
   await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);

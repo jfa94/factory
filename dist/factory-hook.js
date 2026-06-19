@@ -6290,7 +6290,15 @@ var QualitySchema = external_exports.object({
    * Custom "red test" verification command for exotic runners (Go, Ruby,
    * Deno, …) so TDD enforcement need not be bypassed. Optional.
    */
-  redTestCommand: external_exports.string().optional()
+  redTestCommand: external_exports.string().optional(),
+  /**
+   * Per-worktree environment-prep command run once after the task worktree is
+   * created, BEFORE the deterministic command-gates (test/type/build). When
+   * unset, a lockfile in the worktree is auto-detected (`package-lock.json` →
+   * `npm ci`, `pnpm-lock.yaml`/`yarn.lock` → frozen install); a repo with no
+   * lockfile is a no-op. Set this for non-JS repos or custom setups. Optional.
+   */
+  setupCommand: external_exports.string().optional()
 }).default({});
 var QuotaSchema = external_exports.object({
   /** Max single sleep chunk per gate call, seconds. */
@@ -7158,6 +7166,19 @@ var RunStateSchema = external_exports.object({
    * behavior (degraded but safe). An immutable property, never a derived verdict.
    */
   owner_session: external_exports.string().min(1).optional(),
+  /**
+   * The per-run staging branch this run cut + pushed (`staging-<run-id>`). PINNED
+   * ONCE at `run create` (Decision 33) so every later base-ref resolution — worktree
+   * fork point, deterministic-gate diff base, reviewer/holdout inspect ref, ship
+   * merge target, rollup source — reads the branch the run ACTUALLY created, not a
+   * value recomputed by `runStagingBranch(run_id)`. A mid-run naming-scheme change
+   * (e.g. the slashed→flat rename) would otherwise silently desync the recompute from
+   * the already-pushed branch. Optional for backward-compat: legacy runs predating the
+   * pin lack it; readers fall back to `runStagingBranch(run_id)` via `resolveStagingBranch`.
+   * Git provenance / immutable identity — NOT a derived verdict, so derive-don't-store
+   * does not apply.
+   */
+  staging_branch: external_exports.string().min(1).optional(),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -7420,6 +7441,7 @@ var StateManager = class {
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
+      ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,

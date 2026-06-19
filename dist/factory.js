@@ -89,14 +89,14 @@ var require_polyfills = __commonJS({
       fs.fstatSync = statFixSync(fs.fstatSync);
       fs.lstatSync = statFixSync(fs.lstatSync);
       if (fs.chmod && !fs.lchmod) {
-        fs.lchmod = function(path2, mode, cb) {
+        fs.lchmod = function(path3, mode, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchmodSync = function() {
         };
       }
       if (fs.chown && !fs.lchown) {
-        fs.lchown = function(path2, uid, gid, cb) {
+        fs.lchown = function(path3, uid, gid, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchownSync = function() {
@@ -163,9 +163,9 @@ var require_polyfills = __commonJS({
         };
       })(fs.readSync);
       function patchLchmod(fs2) {
-        fs2.lchmod = function(path2, mode, callback) {
+        fs2.lchmod = function(path3, mode, callback) {
           fs2.open(
-            path2,
+            path3,
             constants.O_WRONLY | constants.O_SYMLINK,
             mode,
             function(err, fd) {
@@ -181,8 +181,8 @@ var require_polyfills = __commonJS({
             }
           );
         };
-        fs2.lchmodSync = function(path2, mode) {
-          var fd = fs2.openSync(path2, constants.O_WRONLY | constants.O_SYMLINK, mode);
+        fs2.lchmodSync = function(path3, mode) {
+          var fd = fs2.openSync(path3, constants.O_WRONLY | constants.O_SYMLINK, mode);
           var threw = true;
           var ret;
           try {
@@ -203,8 +203,8 @@ var require_polyfills = __commonJS({
       }
       function patchLutimes(fs2) {
         if (constants.hasOwnProperty("O_SYMLINK") && fs2.futimes) {
-          fs2.lutimes = function(path2, at, mt, cb) {
-            fs2.open(path2, constants.O_SYMLINK, function(er, fd) {
+          fs2.lutimes = function(path3, at, mt, cb) {
+            fs2.open(path3, constants.O_SYMLINK, function(er, fd) {
               if (er) {
                 if (cb) cb(er);
                 return;
@@ -216,8 +216,8 @@ var require_polyfills = __commonJS({
               });
             });
           };
-          fs2.lutimesSync = function(path2, at, mt) {
-            var fd = fs2.openSync(path2, constants.O_SYMLINK);
+          fs2.lutimesSync = function(path3, at, mt) {
+            var fd = fs2.openSync(path3, constants.O_SYMLINK);
             var ret;
             var threw = true;
             try {
@@ -335,11 +335,11 @@ var require_legacy_streams = __commonJS({
         ReadStream,
         WriteStream
       };
-      function ReadStream(path2, options) {
-        if (!(this instanceof ReadStream)) return new ReadStream(path2, options);
+      function ReadStream(path3, options) {
+        if (!(this instanceof ReadStream)) return new ReadStream(path3, options);
         Stream.call(this);
         var self = this;
-        this.path = path2;
+        this.path = path3;
         this.fd = null;
         this.readable = true;
         this.paused = false;
@@ -384,10 +384,10 @@ var require_legacy_streams = __commonJS({
           self._read();
         });
       }
-      function WriteStream(path2, options) {
-        if (!(this instanceof WriteStream)) return new WriteStream(path2, options);
+      function WriteStream(path3, options) {
+        if (!(this instanceof WriteStream)) return new WriteStream(path3, options);
         Stream.call(this);
-        this.path = path2;
+        this.path = path3;
         this.fd = null;
         this.writable = true;
         this.flags = "w";
@@ -530,14 +530,14 @@ var require_graceful_fs = __commonJS({
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
       fs2.readFile = readFile12;
-      function readFile12(path2, options, cb) {
+      function readFile12(path3, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$readFile(path2, options, cb);
-        function go$readFile(path3, options2, cb2, startTime) {
-          return fs$readFile(path3, options2, function(err) {
+        return go$readFile(path3, options, cb);
+        function go$readFile(path4, options2, cb2, startTime) {
+          return fs$readFile(path4, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$readFile, [path3, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$readFile, [path4, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -547,14 +547,14 @@ var require_graceful_fs = __commonJS({
       }
       var fs$writeFile = fs2.writeFile;
       fs2.writeFile = writeFile2;
-      function writeFile2(path2, data, options, cb) {
+      function writeFile2(path3, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$writeFile(path2, data, options, cb);
-        function go$writeFile(path3, data2, options2, cb2, startTime) {
-          return fs$writeFile(path3, data2, options2, function(err) {
+        return go$writeFile(path3, data, options, cb);
+        function go$writeFile(path4, data2, options2, cb2, startTime) {
+          return fs$writeFile(path4, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$writeFile, [path3, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$writeFile, [path4, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -565,14 +565,14 @@ var require_graceful_fs = __commonJS({
       var fs$appendFile = fs2.appendFile;
       if (fs$appendFile)
         fs2.appendFile = appendFile2;
-      function appendFile2(path2, data, options, cb) {
+      function appendFile2(path3, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$appendFile(path2, data, options, cb);
-        function go$appendFile(path3, data2, options2, cb2, startTime) {
-          return fs$appendFile(path3, data2, options2, function(err) {
+        return go$appendFile(path3, data, options, cb);
+        function go$appendFile(path4, data2, options2, cb2, startTime) {
+          return fs$appendFile(path4, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$appendFile, [path3, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$appendFile, [path4, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -603,31 +603,31 @@ var require_graceful_fs = __commonJS({
       var fs$readdir = fs2.readdir;
       fs2.readdir = readdir3;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir3(path2, options, cb) {
+      function readdir3(path3, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path3, options2, cb2, startTime) {
-          return fs$readdir(path3, fs$readdirCallback(
-            path3,
+        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path4, options2, cb2, startTime) {
+          return fs$readdir(path4, fs$readdirCallback(
+            path4,
             options2,
             cb2,
             startTime
           ));
-        } : function go$readdir2(path3, options2, cb2, startTime) {
-          return fs$readdir(path3, options2, fs$readdirCallback(
-            path3,
+        } : function go$readdir2(path4, options2, cb2, startTime) {
+          return fs$readdir(path4, options2, fs$readdirCallback(
+            path4,
             options2,
             cb2,
             startTime
           ));
         };
-        return go$readdir(path2, options, cb);
-        function fs$readdirCallback(path3, options2, cb2, startTime) {
+        return go$readdir(path3, options, cb);
+        function fs$readdirCallback(path4, options2, cb2, startTime) {
           return function(err, files) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
               enqueue([
                 go$readdir,
-                [path3, options2, cb2],
+                [path4, options2, cb2],
                 err,
                 startTime || Date.now(),
                 Date.now()
@@ -698,7 +698,7 @@ var require_graceful_fs = __commonJS({
         enumerable: true,
         configurable: true
       });
-      function ReadStream(path2, options) {
+      function ReadStream(path3, options) {
         if (this instanceof ReadStream)
           return fs$ReadStream.apply(this, arguments), this;
         else
@@ -718,7 +718,7 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function WriteStream(path2, options) {
+      function WriteStream(path3, options) {
         if (this instanceof WriteStream)
           return fs$WriteStream.apply(this, arguments), this;
         else
@@ -736,22 +736,22 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function createReadStream(path2, options) {
-        return new fs2.ReadStream(path2, options);
+      function createReadStream(path3, options) {
+        return new fs2.ReadStream(path3, options);
       }
-      function createWriteStream(path2, options) {
-        return new fs2.WriteStream(path2, options);
+      function createWriteStream(path3, options) {
+        return new fs2.WriteStream(path3, options);
       }
       var fs$open = fs2.open;
       fs2.open = open2;
-      function open2(path2, flags, mode, cb) {
+      function open2(path3, flags, mode, cb) {
         if (typeof mode === "function")
           cb = mode, mode = null;
-        return go$open(path2, flags, mode, cb);
-        function go$open(path3, flags2, mode2, cb2, startTime) {
-          return fs$open(path3, flags2, mode2, function(err, fd) {
+        return go$open(path3, flags, mode, cb);
+        function go$open(path4, flags2, mode2, cb2, startTime) {
+          return fs$open(path4, flags2, mode2, function(err, fd) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$open, [path3, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$open, [path4, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -1280,7 +1280,7 @@ var require_mtime_precision = __commonJS({
 var require_lockfile = __commonJS({
   "node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/lib/lockfile.js"(exports, module) {
     "use strict";
-    var path2 = __require("path");
+    var path3 = __require("path");
     var fs = require_graceful_fs();
     var retry = require_retry2();
     var onExit = require_signal_exit();
@@ -1291,7 +1291,7 @@ var require_lockfile = __commonJS({
     }
     function resolveCanonicalPath(file, options, callback) {
       if (!options.realpath) {
-        return callback(null, path2.resolve(file));
+        return callback(null, path3.resolve(file));
       }
       options.fs.realpath(file, callback);
     }
@@ -1724,10 +1724,10 @@ async function bestEffortUnlink(p) {
 var JsonParseError = class extends Error {
   path;
   cause;
-  constructor(message, path2, cause) {
+  constructor(message, path3, cause) {
     super(message);
     this.name = "JsonParseError";
-    this.path = path2;
+    this.path = path3;
     this.cause = cause;
   }
 };
@@ -2225,8 +2225,8 @@ function getErrorMap() {
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path2, errorMaps, issueData } = params;
-  const fullPath = [...path2, ...issueData.path || []];
+  const { data, path: path3, errorMaps, issueData } = params;
+  const fullPath = [...path3, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -2342,11 +2342,11 @@ var errorUtil;
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path2, key) {
+  constructor(parent, value, path3, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path2;
+    this._path = path3;
     this._key = key;
   }
   get path() {
@@ -5808,7 +5808,15 @@ var QualitySchema = external_exports.object({
    * Custom "red test" verification command for exotic runners (Go, Ruby,
    * Deno, …) so TDD enforcement need not be bypassed. Optional.
    */
-  redTestCommand: external_exports.string().optional()
+  redTestCommand: external_exports.string().optional(),
+  /**
+   * Per-worktree environment-prep command run once after the task worktree is
+   * created, BEFORE the deterministic command-gates (test/type/build). When
+   * unset, a lockfile in the worktree is auto-detected (`package-lock.json` →
+   * `npm ci`, `pnpm-lock.yaml`/`yarn.lock` → frozen install); a repo with no
+   * lockfile is a no-op. Set this for non-JS repos or custom setups. Optional.
+   */
+  setupCommand: external_exports.string().optional()
 }).default({});
 var QuotaSchema = external_exports.object({
   /** Max single sleep chunk per gate call, seconds. */
@@ -6057,9 +6065,9 @@ function parseSetToken(token) {
   if (eq <= 0) {
     throw new Error(`configure: --set expects 'key.path=value', got '${token}'`);
   }
-  const path2 = splitPath(token.slice(0, eq));
+  const path3 = splitPath(token.slice(0, eq));
   const rawValue = token.slice(eq + 1);
-  return { path: path2, value: coerceValue(rawValue) };
+  return { path: path3, value: coerceValue(rawValue) };
 }
 function coerceValue(raw) {
   try {
@@ -6069,32 +6077,32 @@ function coerceValue(raw) {
   }
 }
 function splitPath(dotted) {
-  const path2 = dotted.split(".");
-  if (path2.length === 0 || path2.some((s) => s.length === 0)) {
+  const path3 = dotted.split(".");
+  if (path3.length === 0 || path3.some((s) => s.length === 0)) {
     throw new Error(`configure: invalid key path '${dotted}'`);
   }
-  return path2;
+  return path3;
 }
-function setAtPath(obj, path2, value) {
+function setAtPath(obj, path3, value) {
   const next = structuredClone(obj);
   let cursor = next;
-  for (let i = 0; i < path2.length - 1; i++) {
-    const key = path2[i];
+  for (let i = 0; i < path3.length - 1; i++) {
+    const key = path3[i];
     const existing = cursor[key];
     if (existing === void 0 || existing === null || typeof existing !== "object" || Array.isArray(existing)) {
       cursor[key] = {};
     }
     cursor = cursor[key];
   }
-  cursor[path2[path2.length - 1]] = value;
+  cursor[path3[path3.length - 1]] = value;
   return next;
 }
-function unsetAtPath(obj, path2) {
+function unsetAtPath(obj, path3) {
   const next = structuredClone(obj);
   const parents = [];
   let cursor = next;
-  for (let i = 0; i < path2.length - 1; i++) {
-    const key = path2[i];
+  for (let i = 0; i < path3.length - 1; i++) {
+    const key = path3[i];
     const child = cursor[key];
     if (child === void 0 || child === null || typeof child !== "object" || Array.isArray(child)) {
       return next;
@@ -6102,7 +6110,7 @@ function unsetAtPath(obj, path2) {
     parents.push({ container: cursor, key });
     cursor = child;
   }
-  delete cursor[path2[path2.length - 1]];
+  delete cursor[path3[path3.length - 1]];
   for (let i = parents.length - 1; i >= 0; i--) {
     const { container, key } = parents[i];
     const child = container[key];
@@ -6114,14 +6122,14 @@ function unsetAtPath(obj, path2) {
   }
   return next;
 }
-function getAtPath(config, path2) {
+function getAtPath(config, path3) {
   let cursor = config;
-  for (const key of path2) {
+  for (const key of path3) {
     if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) {
-      throw new Error(`configure: '${path2.join(".")}' has no value (not an object at '${key}')`);
+      throw new Error(`configure: '${path3.join(".")}' has no value (not an object at '${key}')`);
     }
     if (!(key in cursor)) {
-      throw new Error(`configure: unknown config key '${path2.join(".")}'`);
+      throw new Error(`configure: unknown config key '${path3.join(".")}'`);
     }
     cursor = cursor[key];
   }
@@ -6311,6 +6319,19 @@ var RunStateSchema = external_exports.object({
    * behavior (degraded but safe). An immutable property, never a derived verdict.
    */
   owner_session: external_exports.string().min(1).optional(),
+  /**
+   * The per-run staging branch this run cut + pushed (`staging-<run-id>`). PINNED
+   * ONCE at `run create` (Decision 33) so every later base-ref resolution — worktree
+   * fork point, deterministic-gate diff base, reviewer/holdout inspect ref, ship
+   * merge target, rollup source — reads the branch the run ACTUALLY created, not a
+   * value recomputed by `runStagingBranch(run_id)`. A mid-run naming-scheme change
+   * (e.g. the slashed→flat rename) would otherwise silently desync the recompute from
+   * the already-pushed branch. Optional for backward-compat: legacy runs predating the
+   * pin lack it; readers fall back to `runStagingBranch(run_id)` via `resolveStagingBranch`.
+   * Git provenance / immutable identity — NOT a derived verdict, so derive-don't-store
+   * does not apply.
+   */
+  staging_branch: external_exports.string().min(1).optional(),
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
@@ -6606,6 +6627,7 @@ var StateManager = class {
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
+      ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -6630,9 +6652,9 @@ var StateManager = class {
    * schema/JSON violation (never a silent partial).
    */
   async read(runId) {
-    const path2 = this.statePath(runId);
-    const raw = await readFile(path2, "utf8");
-    return parseRunState(parseJson(raw, path2));
+    const path3 = this.statePath(runId);
+    const raw = await readFile(path3, "utf8");
+    return parseRunState(parseJson(raw, path3));
   }
   /**
    * Read the run currently pointed at by `runs/current`, or null if there is no
@@ -6978,8 +7000,8 @@ async function run(argv) {
   }
   let raw = readRawConfig();
   for (const token of sets) {
-    const { path: path2, value } = parseSetToken(token);
-    raw = setAtPath(raw, path2, value);
+    const { path: path3, value } = parseSetToken(token);
+    raw = setAtPath(raw, path3, value);
   }
   for (const token of unsets) {
     raw = unsetAtPath(raw, splitPath(token));
@@ -7096,9 +7118,9 @@ ${result.stderr.trim()}`
 // src/shared/jsonl.ts
 import { appendFile, mkdir as mkdir5, readFile as readFile2 } from "node:fs/promises";
 import { dirname as dirname4 } from "node:path";
-async function appendJsonl(path2, record) {
-  await mkdir5(dirname4(path2), { recursive: true });
-  await appendFile(path2, JSON.stringify(record) + "\n", "utf8");
+async function appendJsonl(path3, record) {
+  await mkdir5(dirname4(path3), { recursive: true });
+  await appendFile(path3, JSON.stringify(record) + "\n", "utf8");
 }
 
 // src/shared/secret-patterns.ts
@@ -7236,20 +7258,20 @@ var DefaultGitClient = class {
 function parseRemoteUrl(url) {
   const trimmed = url.trim();
   if (trimmed.length === 0) return null;
-  let path2;
+  let path3;
   const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
   if (scp && !trimmed.includes("://")) {
-    path2 = scp[1];
+    path3 = scp[1];
   } else {
     const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
     if (withScheme) {
       const afterScheme = withScheme[1];
       const firstSlash = afterScheme.indexOf("/");
-      if (firstSlash >= 0) path2 = afterScheme.slice(firstSlash + 1);
+      if (firstSlash >= 0) path3 = afterScheme.slice(firstSlash + 1);
     }
   }
-  if (path2 === void 0) return null;
-  let p = path2.replace(/\/+$/, "");
+  if (path3 === void 0) return null;
+  let p = path3.replace(/\/+$/, "");
   p = p.replace(/\.git$/i, "");
   const segments = p.split("/").filter((s) => s.length > 0);
   if (segments.length < 2) return null;
@@ -7454,11 +7476,11 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async deleteRemoteBranch(owner, repo, branch, opts) {
-    const path2 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
-    const r = await this.runner(["api", "--method", "DELETE", path2], this.execOpts(opts));
+    const path3 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
+    const r = await this.runner(["api", "--method", "DELETE", path3], this.execOpts(opts));
     if (r.code !== 0 && !/Reference does not exist|404|Not Found|422/i.test(r.stderr)) {
       throw new Error(
-        `gh api DELETE ${path2} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
+        `gh api DELETE ${path3} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
       );
     }
   }
@@ -7489,8 +7511,8 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async repoProtection(owner, repo, branch, opts) {
-    const path2 = `repos/${owner}/${repo}/branches/${branch}/protection`;
-    const r = await this.runner(["api", path2], this.execOpts(opts));
+    const path3 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const r = await this.runner(["api", path3], this.execOpts(opts));
     if (r.code !== 0) {
       if (/404|Not Found|Branch not protected/i.test(r.stderr)) {
         return {
@@ -7500,14 +7522,14 @@ var DefaultGhClient = class {
           hasMergeQueue: false
         };
       }
-      throw new Error(`gh api ${path2} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+      throw new Error(`gh api ${path3} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
     if (r.truncated) {
       throw new Error(
-        `gh api ${path2}: output truncated \u2014 refusing to parse clipped protection JSON`
+        `gh api ${path3}: output truncated \u2014 refusing to parse clipped protection JSON`
       );
     }
-    const raw = parseJson(r.stdout, path2);
+    const raw = parseJson(r.stdout, path3);
     const rsc = raw.required_status_checks ?? null;
     const mq = await this.mergeQueueProbe(owner, repo, branch, opts);
     return {
@@ -7518,7 +7540,7 @@ var DefaultGhClient = class {
     };
   }
   async putProtection(owner, repo, branch, body, opts) {
-    const path2 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const path3 = `repos/${owner}/${repo}/branches/${branch}/protection`;
     const payload = JSON.stringify({
       required_status_checks: {
         strict: body.strict,
@@ -7529,17 +7551,17 @@ var DefaultGhClient = class {
       restrictions: null
     });
     log6.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
-    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path2, "--input", "-"], {
+    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path3, "--input", "-"], {
       ...this.execOpts(opts),
       input: payload
     });
   }
   async mergeQueueProbe(owner, repo, branch, opts) {
-    const path2 = `repos/${owner}/${repo}/rules/branches/${branch}`;
-    const r = await this.runner(["api", path2], this.execOpts(opts));
+    const path3 = `repos/${owner}/${repo}/rules/branches/${branch}`;
+    const r = await this.runner(["api", path3], this.execOpts(opts));
     if (r.code !== 0 || r.truncated) return false;
     try {
-      const rules = parseJson(r.stdout, path2);
+      const rules = parseJson(r.stdout, path3);
       return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
     } catch {
       return false;
@@ -7676,15 +7698,63 @@ async function assertBaseIsStagingTip(args) {
   }
 }
 
+// src/git/provision.ts
+import { access } from "node:fs/promises";
+import path from "node:path";
+var log9 = createLogger("provision");
+var LOCKFILE_INSTALL = [
+  ["pnpm-lock.yaml", "pnpm install --frozen-lockfile"],
+  ["yarn.lock", "yarn install --frozen-lockfile"],
+  ["package-lock.json", "npm ci"],
+  ["npm-shrinkwrap.json", "npm ci"]
+];
+async function defaultFileExists(absPath) {
+  try {
+    await access(absPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function defaultRun(command, cwd) {
+  const r = await exec(command, [], { cwd, shell: true });
+  return { code: r.code, stderr: r.stderr };
+}
+async function resolveSetupCommand(worktreePath, setupCommand, fileExists) {
+  if (setupCommand !== void 0 && setupCommand.trim().length > 0) return setupCommand;
+  for (const [lockfile, command] of LOCKFILE_INSTALL) {
+    if (await fileExists(path.join(worktreePath, lockfile))) return command;
+  }
+  return null;
+}
+async function provisionWorktree(args) {
+  const fileExists = args.fileExists ?? defaultFileExists;
+  const run9 = args.run ?? defaultRun;
+  const command = await resolveSetupCommand(args.path, args.setupCommand, fileExists);
+  if (command === null) {
+    log9.debug(`no setupCommand and no lockfile in ${args.path} \u2014 skipping worktree provisioning`);
+    return;
+  }
+  log9.info(`provisioning worktree: ${command} (cwd=${args.path})`);
+  const res = await run9(command, args.path);
+  if (res.code !== 0) {
+    const detail = res.stderr.trim();
+    throw new Error(
+      `worktree provisioning failed: \`${command}\` exited ${res.code ?? "null"} in ${args.path}` + (detail.length > 0 ? `
+${detail}` : "")
+    );
+  }
+}
+
 // src/git/pr.ts
-var log9 = createLogger("git");
+var log10 = createLogger("git");
 var GIT_DEFAULTS3 = GitSchema.parse({});
 async function createTaskPrIdempotent(args) {
   const base = args.base ?? GIT_DEFAULTS3.stagingBranch;
   const existing = await args.ghClient.prList({ head: args.branch, base, state: "all" });
   const pr = existing.find((p) => p.state === "OPEN") ?? existing.find((p) => p.state === "MERGED");
   if (pr !== void 0) {
-    log9.info(
+    log10.info(
       `resuming existing PR #${pr.number} (${pr.state}) for head '${args.branch}' (no duplicate created)`
     );
     return { number: pr.number, url: pr.url ?? "", resumed: true };
@@ -7695,13 +7765,13 @@ async function createTaskPrIdempotent(args) {
     title: args.title,
     body: args.body
   });
-  log9.info(`created PR #${created.number} for head '${args.branch}'`);
+  log10.info(`created PR #${created.number} for head '${args.branch}'`);
   return { number: created.number, url: created.url, resumed: false };
 }
 
 // src/git/serial-writer.ts
 import { join as join5 } from "node:path";
-var log10 = createLogger("git");
+var log11 = createLogger("git");
 var GIT_DEFAULTS4 = GitSchema.parse({});
 var MERGE_LOCK_DEFAULTS = {
   ...DEFAULT_FILE_LOCK_TUNING,
@@ -7761,16 +7831,16 @@ var MergeSerializer = class {
         "mergeStateStatus"
       ]);
       if (pr.state === "MERGED") {
-        log10.info(`PR #${prNumber} already MERGED into ${this.staging} \u2014 ship resuming`);
+        log11.info(`PR #${prNumber} already MERGED into ${this.staging} \u2014 ship resuming`);
         await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
         return { merged: true, via: "app-level", number: prNumber };
       }
       if (pr.mergeable === "CONFLICTING") {
-        log10.warn(`PR #${prNumber} is CONFLICTING \u2014 not merged`);
+        log11.warn(`PR #${prNumber} is CONFLICTING \u2014 not merged`);
         return { merged: false, reason: "not-mergeable", number: prNumber };
       }
       if (pr.mergeStateStatus === "BEHIND") {
-        log10.warn(
+        log11.warn(
           `PR #${prNumber} head is BEHIND ${this.staging} \u2014 refusing to merge (no force-push)`
         );
         return { merged: false, reason: "behind", number: prNumber };
@@ -7782,11 +7852,11 @@ var MergeSerializer = class {
       );
       if (hasMergeQueue) {
         await this.ghClient.prMergeSquash(prNumber, { auto: true, deleteBranch: true });
-        log10.info(`PR #${prNumber} enqueued via native merge-queue`);
+        log11.info(`PR #${prNumber} enqueued via native merge-queue`);
         return { merged: true, via: "merge-queue", number: prNumber };
       }
       await this.ghClient.prMergeSquash(prNumber, {});
-      log10.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
+      log11.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
       await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
       return { merged: true, via: "app-level", number: prNumber };
     });
@@ -7794,7 +7864,7 @@ var MergeSerializer = class {
 };
 
 // src/git/protection.ts
-var log11 = createLogger("git");
+var log12 = createLogger("git");
 var GIT_DEFAULTS5 = GitSchema.parse({});
 var ProtectionMissingError = class extends Error {
   branch;
@@ -7851,7 +7921,7 @@ async function provisionProtection(args) {
       "provisionProtection called without --provision opt-in \u2014 refusing to mutate branch protection"
     );
   }
-  log11.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
+  log12.info(`--provision: writing branch protection for ${args.owner}/${args.repo}@${branch}`);
   await args.ghClient.putProtection(args.owner, args.repo, branch, {
     requiredStatusChecks: [...args.requiredChecks],
     strict: true
@@ -7865,7 +7935,7 @@ async function provisionProtection(args) {
 }
 
 // src/git/staging.ts
-var log12 = createLogger("git");
+var log13 = createLogger("git");
 var GIT_DEFAULTS6 = GitSchema.parse({});
 async function ensureStaging(args) {
   const remote = args.remote ?? "origin";
@@ -7885,7 +7955,7 @@ async function ensureStaging(args) {
         `staging: base branch '${remote}/${base}' does not exist \u2014 cannot create staging`
       );
     }
-    log12.info(`creating ${staging} from ${remote}/${base}`);
+    log13.info(`creating ${staging} from ${remote}/${base}`);
     await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
     await args.gitClient.push(remote, staging, { setUpstream: true, cwd: args.cwd });
     return { created: true, stagingTip: baseHead };
@@ -7900,7 +7970,7 @@ async function ensureStaging(args) {
     cwd: args.cwd
   });
   if (mergeBase === stagingTip) {
-    log12.info(`fast-forwarding ${staging} to ${remote}/${base}`);
+    log13.info(`fast-forwarding ${staging} to ${remote}/${base}`);
     await args.gitClient.checkoutB(staging, `${remote}/${base}`, { cwd: args.cwd });
     await args.gitClient.push(remote, staging, { cwd: args.cwd });
     return { created: false, stagingTip: baseTip };
@@ -7920,6 +7990,12 @@ function runStagingBranch(runId) {
     throw new Error("runStagingBranch: empty run id (would yield a bare 'staging-' branch)");
   }
   return `${RUN_STAGING_PREFIX}-${runId}`;
+}
+function resolveStagingBranch(runId, pinned) {
+  if (pinned !== void 0 && pinned.length > 0) {
+    return pinned;
+  }
+  return runStagingBranch(runId);
 }
 
 // src/cli/current.ts
@@ -8008,7 +8084,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir as mkdir6, readFile as readFile3 } from "node:fs/promises";
 import { existsSync as existsSync5 } from "node:fs";
 import { join as join6 } from "node:path";
-var log13 = createLogger("cli:target-settings");
+var log14 = createLogger("cli:target-settings");
 var FACTORY_TARGET_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
@@ -8059,30 +8135,30 @@ function mergeTargetSettings(existing) {
 }
 async function ensureTargetSettings(opts) {
   const dir = join6(opts.targetRoot, ".claude");
-  const path2 = join6(dir, "settings.json");
-  const created = !existsSync5(path2);
+  const path3 = join6(dir, "settings.json");
+  const created = !existsSync5(path3);
   let existing = {};
   if (!created) {
-    const raw = await readFile3(path2, "utf8");
+    const raw = await readFile3(path3, "utf8");
     const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
     if (isObject(parsed)) {
       existing = parsed;
     } else {
-      log13.warn(
-        `${path2} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
+      log14.warn(
+        `${path3} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
   }
   const { settings, changed } = mergeTargetSettings(existing);
   if (created || changed) {
     await mkdir6(dir, { recursive: true });
-    await atomicWriteFile(path2, stringifyJson(settings));
+    await atomicWriteFile(path3, stringifyJson(settings));
   }
-  return { settings, changed, created, path: path2 };
+  return { settings, changed, created, path: path3 };
 }
 
 // src/cli/subcommands/scaffold.ts
-var log14 = createLogger("scaffold");
+var log15 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -8124,7 +8200,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists) {
   const src = join7(templatesDir, ...segs);
   const dest = join7(targetRoot, ...segs);
   if (!existsSync6(src)) {
-    log14.warn(`template missing, skipping: ${src}`);
+    log15.warn(`template missing, skipping: ${src}`);
     return;
   }
   if (!existsSync6(dest)) {
@@ -8146,21 +8222,21 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists) {
   }
 }
 async function ensureGitignore(root, lists) {
-  const path2 = join7(root, ".gitignore");
-  const rel = relative(root, path2);
-  if (!existsSync6(path2)) {
-    await writeFile(path2, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
+  const path3 = join7(root, ".gitignore");
+  const rel = relative(root, path3);
+  if (!existsSync6(path3)) {
+    await writeFile(path3, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile4(path2, "utf8");
+  const current = await readFile4(path3, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
     return;
   }
   const sep2 = current.endsWith("\n") ? "" : "\n";
-  await writeFile(path2, current + sep2 + missing.join("\n") + "\n", "utf8");
+  await writeFile(path3, current + sep2 + missing.join("\n") + "\n", "utf8");
   lists.present.push(rel);
 }
 async function runScaffold(opts) {
@@ -8171,7 +8247,7 @@ async function runScaffold(opts) {
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists);
   }
   if (lists.updated.length > 0) {
-    log14.info(
+    log15.info(
       `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
     );
   }
@@ -8476,7 +8552,7 @@ function parseSpecManifest(raw) {
 }
 
 // src/spec/gh.ts
-var log15 = createLogger("spec:gh");
+var log16 = createLogger("spec:gh");
 var GhAuthError = class extends Error {
   constructor(message) {
     super(message);
@@ -8537,7 +8613,7 @@ var RealGhClient = class {
     const rawBody = typeof parsed.body === "string" ? parsed.body : "";
     const { body, body_truncated } = this.capBody(rawBody);
     if (body_truncated) {
-      log15.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
+      log16.warn(`PRD body for issue #${issueNumber} exceeded ${this.bodyMaxBytes} bytes; truncated`);
     }
     const labels = Array.isArray(parsed.labels) ? parsed.labels.map(
       (l) => l && typeof l === "object" && "name" in l && typeof l.name === "string" ? l.name : typeof l === "string" ? l : null
@@ -8564,7 +8640,7 @@ var RealGhClient = class {
 // src/spec/store.ts
 import { readFile as readFile5, readdir as readdir2 } from "node:fs/promises";
 import { join as join8 } from "node:path";
-var log16 = createLogger("spec:store");
+var log17 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
 function makeSpecId(issueNumber, slug) {
@@ -8674,11 +8750,11 @@ var SpecStore = class {
       await atomicWriteFile(join8(reviewDir, TASKS_FILE), tasksJson);
     } catch (err) {
       mirrored = false;
-      log16.warn(
+      log17.warn(
         `could not write reviewable copy to ${reviewDir} (${err instanceof Error ? err.message : String(err)}) \u2014 the canonical spec at ${dir} is unaffected; run continues`
       );
     }
-    log16.info(
+    log17.info(
       `wrote spec ${parsed.spec_id} (${parsed.tasks.length} tasks) to ${dir} ` + (mirrored ? `(reviewable copy: ${reviewDir})` : `(reviewable copy SKIPPED \u2014 see warning)`)
     );
     return this.toPointer(parsed);
@@ -8965,7 +9041,7 @@ function decideSpecReview(verdict, opts = {}) {
 }
 
 // src/spec/pipeline.ts
-var log17 = createLogger("spec:pipeline");
+var log18 = createLogger("spec:pipeline");
 function buildManifest(repo, issueNumber, generated) {
   const specId = makeSpecId(issueNumber, generated.slug);
   const slug = specId.replace(/^\d+-/, "");
@@ -8982,7 +9058,7 @@ function buildManifest(repo, issueNumber, generated) {
 // src/quota/usage-source.ts
 import { existsSync as existsSync7, readFileSync as readFileSync3 } from "node:fs";
 import { join as join9 } from "node:path";
-var log18 = createLogger("quota:usage");
+var log19 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
 var STALE_WARN_SECONDS = 120;
 var RawWindowSchema = external_exports.object({
@@ -9013,7 +9089,7 @@ function readingFromCache(raw, nowEpoch2) {
     return unavailable("usage-cache-too-stale");
   }
   if (age > STALE_WARN_SECONDS) {
-    log18.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+    log19.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
   }
   const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
   const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
@@ -9056,14 +9132,14 @@ var StatuslineUsageSignal = class {
     }
     const file = usageCachePath(dataDir);
     if (!existsSync7(file)) {
-      log18.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
+      log19.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
     let raw;
     try {
       raw = parseJson(readFileSync3(file, "utf8"), file);
     } catch {
-      log18.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
+      log19.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-malformed");
     }
     return readingFromCache(raw, now);
@@ -9453,7 +9529,7 @@ async function scanDeadSurface(runner, changedFiles, opts) {
 }
 
 // src/scoring/telemetry.ts
-var log19 = createLogger("telemetry");
+var log20 = createLogger("telemetry");
 async function emitMetric(dataDir, runId, event, data, opts = {}) {
   const record = {
     ts: opts.now ?? nowIso(),
@@ -9464,7 +9540,7 @@ async function emitMetric(dataDir, runId, event, data, opts = {}) {
   try {
     await appendJsonl(runMetricsPath(dataDir, runId), record);
   } catch (err) {
-    log19.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+    log20.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
   }
   return record;
 }
@@ -9647,7 +9723,7 @@ function buildPanelManifest(stageAfter, model, maxTurns) {
 }
 
 // src/verifier/judgment/finding.ts
-var log20 = createLogger("finding");
+var log21 = createLogger("finding");
 var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
 var FindingSchema = external_exports.object({
   /** Which panel reviewer raised this (free-form; the role string). */
@@ -9699,7 +9775,7 @@ function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) 
     }
   }
   if (topUnknown.length > 0 || findingUnknown.length > 0) {
-    log20.warn(
+    log21.warn(
       `review parse: stripped unknown keys from reviewer '${context}' payload: top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`
     );
   }
@@ -10311,7 +10387,7 @@ var buildStrategy = procStrategy(
 );
 
 // src/verifier/deterministic/gate-runner.ts
-var log21 = createLogger("gate-runner");
+var log22 = createLogger("gate-runner");
 function strategyFor(id) {
   switch (id) {
     case "test":
@@ -10353,7 +10429,7 @@ var GateRunner = class {
       if (cached !== void 0) {
         report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
         evidence.push(cached);
-        log21.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
+        log22.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
         continue;
       }
       const strategy = strategyFor(id);
@@ -10374,7 +10450,7 @@ var GateRunner = class {
         memo.putEvidence(id, treeSha, outcome.evidence);
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
-        log21.debug(`gate ${id} skipped: ${outcome.reason}`);
+        log22.debug(`gate ${id} skipped: ${outcome.reason}`);
       }
     }
     const verdict = deriveAllGatesVerdict(evidence);
@@ -10383,8 +10459,8 @@ var GateRunner = class {
 };
 
 // src/verifier/deterministic/tools.ts
-import { access, readFile as readFile6 } from "node:fs/promises";
-import path from "node:path";
+import { access as access2, readFile as readFile6 } from "node:fs/promises";
+import path2 from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
 }
@@ -10431,7 +10507,7 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
   async run(mutate, opts) {
     const csv = mutate.join(",");
     const proc2 = toProc(await exec("npx", ["stryker", "run", "--mutate", csv], { cwd: opts.cwd }));
-    const reportPath = path.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
+    const reportPath = path2.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
       raw = await readFile6(reportPath, "utf8");
@@ -10457,7 +10533,7 @@ function extractMutationScore(report) {
 }
 var DefaultCoverageReader = class {
   async read(label, opts) {
-    const file = path.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
+    const file = path2.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
     let raw;
     try {
       raw = await readFile6(file, "utf8");
@@ -10477,7 +10553,7 @@ var DefaultCoverageReader = class {
 var DefaultFsProbe = class {
   async exists(relPath, opts) {
     try {
-      await access(path.join(opts.cwd, relPath));
+      await access2(path2.join(opts.cwd, relPath));
       return true;
     } catch {
       return false;
@@ -10543,14 +10619,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log31 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log31.code !== 0) {
+    const log32 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log32.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log31.code ?? "null"}): ${log31.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log32.code ?? "null"}): ${log32.stderr.trim()}`
       );
     }
-    assertNotTruncated(log31, "git log (tdd classification)");
-    const shas = splitLines(log31.stdout).reverse();
+    assertNotTruncated(log32, "git log (tdd classification)");
+    const shas = splitLines(log32.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -10682,14 +10758,14 @@ var FsHoldoutStore = class {
     return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
-    const path2 = this.path(runId, record.task_id);
-    await mkdir8(dirname6(path2), { recursive: true });
-    await atomicWriteFile(path2, stringifyJson(record));
+    const path3 = this.path(runId, record.task_id);
+    await mkdir8(dirname6(path3), { recursive: true });
+    await atomicWriteFile(path3, stringifyJson(record));
   }
   async get(runId, taskId) {
-    const path2 = this.path(runId, taskId);
-    const raw = await readFile7(path2, "utf8");
-    return parseHoldoutRecord(parseJson(raw, path2), path2);
+    const path3 = this.path(runId, taskId);
+    const raw = await readFile7(path3, "utf8");
+    return parseHoldoutRecord(parseJson(raw, path3), path3);
   }
   async has(runId, taskId) {
     try {
@@ -10709,12 +10785,17 @@ function clampThreshold(raw) {
   const t = Math.floor(raw);
   return t < 1 ? 1 : t;
 }
-function buildHoldoutPrompt(record, worktree) {
+function buildHoldoutPrompt(record, worktree, baseRef) {
   const lines = [];
   if (worktree !== void 0 && worktree.length > 0) {
+    if (baseRef === void 0 || baseRef.length === 0) {
+      throw new Error(
+        "buildHoldoutPrompt: baseRef is required when a worktree is provided (the per-run staging base ref the worktree forked from)"
+      );
+    }
     lines.push(
       `The implementation lives in the task worktree at: ${worktree}`,
-      `Inspect it with: git -C ${worktree} diff origin/staging`,
+      `Inspect it with: git -C ${worktree} diff ${baseRef}`,
       `Do NOT rely on your own working directory \u2014 it is a fresh checkout with no diff.`,
       ""
     );
@@ -10812,14 +10893,14 @@ var FsHoldoutVerdictStore = class {
     return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
-    const path2 = this.path(runId, taskId);
-    await mkdir9(dirname7(path2), { recursive: true });
-    await atomicWriteFile(path2, stringifyJson([...verdicts]));
+    const path3 = this.path(runId, taskId);
+    await mkdir9(dirname7(path3), { recursive: true });
+    await atomicWriteFile(path3, stringifyJson([...verdicts]));
   }
   async get(runId, taskId) {
-    const path2 = this.path(runId, taskId);
-    const raw = await readFile8(path2, "utf8");
-    return HoldoutVerdictsSchema.parse(parseJson(raw, path2));
+    const path3 = this.path(runId, taskId);
+    const raw = await readFile8(path3, "utf8");
+    return HoldoutVerdictsSchema.parse(parseJson(raw, path3));
   }
   async has(runId, taskId) {
     try {
@@ -10832,7 +10913,7 @@ var FsHoldoutVerdictStore = class {
 };
 
 // src/driver/finalize.ts
-var log22 = createLogger("finalize");
+var log23 = createLogger("finalize");
 var FACTORY_ISSUE_LABEL = "factory";
 function prdDoneComment(report, rollupResult) {
   const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`;
@@ -10852,7 +10933,7 @@ async function fileFailureIssues(deps, report) {
   for (const failure of report.failures) {
     const issue = renderFailureIssue(failure, report);
     if (existing.has(issue.title)) {
-      log22.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
+      log23.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
       continue;
     }
     await deps.gh.issueCreate({
@@ -10877,7 +10958,7 @@ async function finalizeRun(deps, runId) {
   const issuesFiled = await fileFailureIssues(deps, report);
   let rollupResult;
   if (terminal === "completed") {
-    const stagingBranch = runStagingBranch(runId);
+    const stagingBranch = resolveStagingBranch(runId, run9.staging_branch);
     await deps.git.fetch("origin", deps.config.git.baseBranch);
     await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
     await deps.git.push("origin", stagingBranch);
@@ -10906,17 +10987,17 @@ async function finalizeRun(deps, runId) {
       await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
     }
   } else {
-    log22.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
+    log23.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
-  log22.info(
+  log23.info(
     `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
   );
   return { run: finalized, report, ...rollupResult ? { rollup: rollupResult } : {}, issuesFiled };
 }
 
 // src/driver/transitions.ts
-var log23 = createLogger("transitions");
+var log24 = createLogger("transitions");
 function markInFlight(deps, runId, taskId, stage) {
   const status = stageToInFlightStatus(stage);
   return deps.state.updateTask(runId, taskId, (t) => ({
@@ -10935,7 +11016,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function dropTask(deps, runId, taskId, failureClass, reason) {
-  log23.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
+  log24.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "dropped",
@@ -10972,7 +11053,7 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log23.info(
+  log24.info(
     `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`
   );
   return { done: false, stage: resumeStage };
@@ -11079,12 +11160,17 @@ function makeStageHandlers(deps) {
      */
     async preflight(ctx) {
       const task = requireTask3(ctx, "preflight");
+      const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
       await createTaskWorktree({
         gitClient: deps.git,
         runId: ctx.run.run_id,
         taskId: task.task_id,
-        path: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
-        base: runStagingBranch(ctx.run.run_id)
+        path: worktree,
+        base: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch)
+      });
+      await (deps.provision ?? provisionWorktree)({
+        path: worktree,
+        setupCommand: deps.config.quality.setupCommand
       });
       return advance("tests");
     },
@@ -11131,7 +11217,7 @@ function makeStageHandlers(deps) {
         runId: ctx.run.run_id,
         taskId: task.task_id,
         worktree: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
-        baseRef: runStagingBranch(ctx.run.run_id),
+        baseRef: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
         config: deps.config,
         tools: deps.tools
       };
@@ -11190,7 +11276,7 @@ function makeStageHandlers(deps) {
         branch,
         title: specTask.title,
         body: shipBody(ctx.run.run_id, specTask),
-        base: runStagingBranch(ctx.run.run_id)
+        base: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch)
       });
       return taskDone();
     },
@@ -11249,30 +11335,30 @@ var FsArtifactStore = class {
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
-    const path2 = this.absPath(runId, ref);
-    await mkdir10(dirname8(path2), { recursive: true });
-    await atomicWriteFile(path2, stringifyJson(context));
+    const path3 = this.absPath(runId, ref);
+    await mkdir10(dirname8(path3), { recursive: true });
+    await atomicWriteFile(path3, stringifyJson(context));
     return ref;
   }
   async getProducerContext(runId, promptRef) {
-    const path2 = this.absPath(runId, promptRef);
-    const raw = await readFile9(path2, "utf8");
-    return parseJson(raw, path2);
+    const path3 = this.absPath(runId, promptRef);
+    const raw = await readFile9(path3, "utf8");
+    return parseJson(raw, path3);
   }
 };
 
 // src/driver/fold.ts
 import { readFile as readFile10 } from "node:fs/promises";
 import { join as join14 } from "node:path";
-var log24 = createLogger("fold");
+var log25 = createLogger("fold");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.stage);
   }
 }
-async function readJsonInput(path2) {
-  const raw = await readFile10(path2, "utf8");
-  return parseJson(raw, path2);
+async function readJsonInput(path3) {
+  const raw = await readFile10(path3, "utf8");
+  return parseJson(raw, path3);
 }
 function producerStageInfo(stage) {
   if (stage === "tests") return { role: "test-writer", stage: "tests", after: "exec" };
@@ -11306,7 +11392,7 @@ function parseVerdictsFailClosed(raw) {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log24.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log25.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
@@ -11383,7 +11469,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     runId,
     taskId,
     worktree,
-    baseRef: runStagingBranch(runId),
+    baseRef: resolveStagingBranch(runId, run9.staging_branch),
     config: deps.config,
     tools: deps.tools
   };
@@ -11407,7 +11493,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
   if (panel.crossVendorAbsence !== void 0) {
-    log24.warn(
+    log25.warn(
       `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` + panel.crossVendorAbsence.reason
     );
   }
@@ -11484,7 +11570,7 @@ function isSpawnStage(stage) {
 }
 
 // src/driver/quota-gate.ts
-var log25 = createLogger("quota-gate");
+var log26 = createLogger("quota-gate");
 async function applyQuotaGate(deps, runId, mode = "session") {
   if (mode === "workflow") return null;
   const reading = await deps.usage.read();
@@ -11496,7 +11582,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
     case "pause-5h":
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
-      log25.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
+      log26.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
       const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
@@ -11510,7 +11596,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
       };
     }
     case "unavailable-halt": {
-      log25.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
+      log26.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
       const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: "suspended",
@@ -11524,7 +11610,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
 }
 
 // src/driver/ship.ts
-var log26 = createLogger("ship");
+var log27 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
     throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
@@ -11545,7 +11631,7 @@ async function shipTask(deps, ctx) {
     branch,
     title: specTask.title,
     body: shipBody(runId, specTask),
-    base: runStagingBranch(runId)
+    base: resolveStagingBranch(runId, ctx.run.staging_branch)
   });
   await deps.state.updateTask(runId, task.task_id, (t) => ({
     ...t,
@@ -11559,19 +11645,19 @@ async function shipTask(deps, ctx) {
     ghClient: deps.gh,
     owner: deps.owner,
     repo: deps.repo,
-    stagingBranch: runStagingBranch(runId),
+    stagingBranch: resolveStagingBranch(runId, ctx.run.staging_branch),
     dataDir: deps.dataDir
   });
   const outcome = await serializer.merge(pr.number);
   if (outcome.merged) {
-    log26.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    log27.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
     return taskDone();
   }
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
 // src/driver/coroutine.ts
-var log27 = createLogger("coroutine");
+var log28 = createLogger("coroutine");
 var MERGE_RESYNC_CAP = 8;
 function requireTask2(run9, taskId) {
   const task = run9.tasks[taskId];
@@ -11606,7 +11692,7 @@ function asSpawnStage(stage) {
     `coroutine: stage '${stage}' cannot spawn agents (only tests|exec|verify can) \u2014 unreachable`
   );
 }
-async function holdoutSidecar(deps, runId, taskId) {
+async function holdoutSidecar(deps, runId, taskId, baseRef) {
   if (!await deps.holdout.has(runId, taskId)) {
     return void 0;
   }
@@ -11618,7 +11704,7 @@ async function holdoutSidecar(deps, runId, taskId) {
     worktree,
     model: resolveReviewModel(deps.config),
     max_turns: deps.config.review.maxTurnsDeep,
-    prompt: buildHoldoutPrompt(record, worktree)
+    prompt: buildHoldoutPrompt(record, worktree, baseRef)
   };
 }
 async function foldResults(deps, runId, taskId, stage, task, results) {
@@ -11705,7 +11791,8 @@ async function stepTask(deps, runId, taskId, results) {
         const spawnStage = asSpawnStage(stage);
         const expects = spawnStage === "verify" ? "reviews" : "producer-status";
         const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-        const sidecar = spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId) : void 0;
+        const base_ref = `origin/${resolveStagingBranch(runId, run9.staging_branch)}`;
+        const sidecar = spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : void 0;
         const fold_key = { stage: spawnStage, rung: task.escalation_rung };
         return {
           kind: "spawn",
@@ -11716,7 +11803,8 @@ async function stepTask(deps, runId, taskId, results) {
           manifest: result.manifest,
           ...sidecar !== void 0 ? { sidecar } : {},
           expects,
-          worktree
+          worktree,
+          base_ref
         };
       }
       case "task-terminal": {
@@ -11761,7 +11849,7 @@ async function stepTask(deps, runId, taskId, results) {
             if (!step2.done) throw new Error("coroutine: dropStep returned non-terminal step");
             return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
-          log27.info(
+          log28.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
           );
           stage = "exec";
@@ -11963,7 +12051,7 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/cli/subcommands/run.ts
-var log28 = createLogger("run");
+var log29 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -12100,14 +12188,16 @@ async function resolveSpec(specStore, opts) {
 }
 async function createRunFromManifest(state, specStore, manifest, opts, stagingDeps) {
   if (opts.mode === "workflow") {
-    log28.warn(
+    log29.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
     );
   }
   const seeded = seedTasksFromSpec(manifest);
+  const branch = runStagingBranch(opts.runId);
   await state.create({
     run_id: opts.runId,
     spec: specStore.toPointer(manifest),
+    staging_branch: branch,
     // v1 coroutine seam drives tasks strictly one at a time — the driver dial is fixed.
     driver: "sequential",
     ...opts.mode !== void 0 ? { mode: opts.mode } : {},
@@ -12116,7 +12206,6 @@ async function createRunFromManifest(state, specStore, manifest, opts, stagingDe
   });
   const run9 = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
   if (stagingDeps !== void 0) {
-    const branch = runStagingBranch(run9.run_id);
     await ensureStaging({
       gitClient: stagingDeps.gitClient,
       stagingBranch: branch,
@@ -12135,7 +12224,7 @@ async function createRunFromManifest(state, specStore, manifest, opts, stagingDe
   return run9;
 }
 async function supersedeRun(state, existing, stagingDeps) {
-  const branch = runStagingBranch(existing.run_id);
+  const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
   await state.finalize(existing.run_id, "superseded");
   await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
   await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
@@ -13046,7 +13135,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log29 = createLogger("cli:statusline");
+var log30 = createLogger("cli:statusline");
 var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -13071,7 +13160,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log29.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log30.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return;
   }
   const now = (deps.now ?? nowEpoch)();
@@ -13079,7 +13168,7 @@ async function writeCache(rateLimits, deps) {
   try {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
   } catch (err) {
-    log29.warn(`failed to write usage-cache.json: ${err.message}`);
+    log30.warn(`failed to write usage-cache.json: ${err.message}`);
   }
 }
 async function passthrough(payload, deps) {
@@ -13090,12 +13179,12 @@ async function passthrough(payload, deps) {
     const result = await run9(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log29.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log30.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log29.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log30.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -13131,7 +13220,7 @@ import { existsSync as existsSync8 } from "node:fs";
 import { readFile as readFile11 } from "node:fs/promises";
 import { join as join16 } from "node:path";
 import { homedir as homedir2 } from "node:os";
-var log30 = createLogger("autonomy");
+var log31 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -13249,10 +13338,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path2 = join16(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync8(path2)) return void 0;
+  const path3 = join16(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync8(path3)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile11(path2, "utf8"));
+    const parsed = JSON.parse(await readFile11(path3, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -13269,9 +13358,9 @@ async function runAutonomyEnsure(opts = {}) {
     try {
       const parsed = JSON.parse(await readFile11(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
-      else log30.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      else log31.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
-      log30.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log31.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
   const templatePath = join16(pluginRoot, "templates", "settings.autonomous.json");
@@ -13285,11 +13374,11 @@ async function runAutonomyEnsure(opts = {}) {
     home,
     version
   });
-  const path2 = mergedSettingsPath(dataDir);
-  await atomicWriteFile(path2, stringifyJson(merged));
-  const relaunchCommand = `claude --settings ${path2}`;
+  const path3 = mergedSettingsPath(dataDir);
+  await atomicWriteFile(path3, stringifyJson(merged));
+  const relaunchCommand = `claude --settings ${path3}`;
   write(
-    `Wrote autonomous settings \u2192 ${path2}
+    `Wrote autonomous settings \u2192 ${path3}
 Relaunch the session in autonomous mode with:
 
   ${relaunchCommand}
@@ -13297,47 +13386,47 @@ Relaunch the session in autonomous mode with:
 (the first agent turn refreshes the usage cache \u2192 session-mode quota pacing.)
 `
   );
-  return { path: path2, relaunchCommand };
+  return { path: path3, relaunchCommand };
 }
 async function runAutonomyStatus(opts = {}) {
   const env = opts.env ?? process.env;
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
-  let path2 = "";
+  let path3 = "";
   try {
     const dataDir = opts.dataDir ?? resolveDataDir();
-    path2 = mergedSettingsPath(dataDir);
+    path3 = mergedSettingsPath(dataDir);
   } catch {
   }
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path2.length > 0 && existsSync8(path2),
-    mergedSettingsPath: path2
+    mergedSettingsPresent: path3.length > 0 && existsSync8(path3),
+    mergedSettingsPath: path3
   };
   if (opts.json === true) {
     write(stringifyJson(status) + "\n");
   } else if (status.autonomous) {
     write(
       `autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)
-merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path2.length > 0 ? ` at ${path2}` : ""}
+merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path3.length > 0 ? ` at ${path3}` : ""}
 `
     );
   } else {
     write(
       `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
-merged-settings: ${status.mergedSettingsPresent ? `present at ${path2}` : "absent"}
+merged-settings: ${status.mergedSettingsPresent ? `present at ${path3}` : "absent"}
 ` + (status.mergedSettingsPresent ? `Relaunch the session with:
-  claude --settings ${path2}
+  claude --settings ${path3}
 ` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
 `)
     );
   }
   return status.autonomous ? EXIT.OK : EXIT.ERROR;
 }
-async function readOnDiskVersion(path2) {
-  if (!existsSync8(path2)) return void 0;
+async function readOnDiskVersion(path3) {
+  if (!existsSync8(path3)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile11(path2, "utf8"));
+    const parsed = JSON.parse(await readFile11(path3, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }
@@ -13377,10 +13466,10 @@ async function runAutonomyPreflight(opts = {}) {
     pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
   } catch {
   }
-  const path2 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path2.length > 0 && existsSync8(path2);
+  const path3 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
+  const mergedSettingsPresent = path3.length > 0 && existsSync8(path3);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
-  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path2) : void 0;
+  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path3) : void 0;
   const decision = decideAutonomyPreflight({
     autonomous: isAutonomous(env),
     mergedSettingsPresent,

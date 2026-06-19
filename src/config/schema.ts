@@ -44,6 +44,14 @@ export const QualitySchema = z
      * Deno, …) so TDD enforcement need not be bypassed. Optional.
      */
     redTestCommand: z.string().optional(),
+    /**
+     * Per-worktree environment-prep command run once after the task worktree is
+     * created, BEFORE the deterministic command-gates (test/type/build). When
+     * unset, a lockfile in the worktree is auto-detected (`package-lock.json` →
+     * `npm ci`, `pnpm-lock.yaml`/`yarn.lock` → frozen install); a repo with no
+     * lockfile is a no-op. Set this for non-JS repos or custom setups. Optional.
+     */
+    setupCommand: z.string().optional(),
   })
   .default({});
 

@@ -25,7 +25,14 @@
  * coroutine's {@link import("./coroutine.js").CoroutineDeps} extends it with the state manager +
  * the quota signal.
  */
-import type { Config, GhClient, GitClient, HoldoutStore, SpecManifest } from "./deps.js";
+import type {
+  Config,
+  GhClient,
+  GitClient,
+  HoldoutStore,
+  ProvisionWorktreeFn,
+  SpecManifest,
+} from "./deps.js";
 import type { GateTools } from "../verifier/deterministic/index.js";
 import type { ArtifactStore } from "./artifacts.js";
 
@@ -56,6 +63,12 @@ export interface HandlerDeps {
   readonly spec: SpecManifest;
   /** Injectable git client (worktree create in preflight). */
   readonly git: GitClient;
+  /**
+   * Injectable worktree provisioner (installs deps after worktree create, before
+   * the command-gates). Optional — defaults to the real {@link import("../git/index.js").provisionWorktree}
+   * in {@link import("./handlers.js").makeStageHandlers}; tests inject a spy.
+   */
+  readonly provision?: ProvisionWorktreeFn;
   /** Injectable gh client (idempotent PR create in ship). */
   readonly gh: GhClient;
   /** Deterministic gate tools (the verify reporter runs the GateRunner). */

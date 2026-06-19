@@ -26,6 +26,12 @@ describe("ConfigSchema", () => {
     expect(defaultConfig()).toEqual(ConfigSchema.parse({}));
   });
 
+  it("quality.setupCommand is optional and round-trips when set", () => {
+    expect(ConfigSchema.parse({}).quality.setupCommand).toBeUndefined();
+    const cfg = ConfigSchema.parse({ quality: { setupCommand: "pnpm install --frozen-lockfile" } });
+    expect(cfg.quality.setupCommand).toBe("pnpm install --frozen-lockfile");
+  });
+
   it("merges partial overrides while defaulting the rest", () => {
     const cfg = ConfigSchema.parse({ quality: { holdoutPercent: 35 } });
     expect(cfg.quality.holdoutPercent).toBe(35);

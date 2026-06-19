@@ -64,6 +64,15 @@ describe("schema round-trip", () => {
     expect(() => parseRunState(minimalRun({ owner_session: "" }))).toThrow();
   });
 
+  it("staging_branch is optional (undefined when absent) and round-trips a pinned value", () => {
+    // Pinned ONCE at run-create so readers never recompute the branch the run cut.
+    expect(parseRunState(minimalRun()).staging_branch).toBeUndefined();
+    expect(parseRunState(minimalRun({ staging_branch: "staging-run-x" })).staging_branch).toBe(
+      "staging-run-x",
+    );
+    expect(() => parseRunState(minimalRun({ staging_branch: "" }))).toThrow();
+  });
+
   it("round-trips through JSON without loss", () => {
     const run = parseRunState(
       minimalRun({

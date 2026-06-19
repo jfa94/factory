@@ -18,11 +18,15 @@ contract every panel member obeys.
 
 ## What you inspect
 
-Your prompt gives you a **task worktree path**. Inspect the change with:
+Your prompt gives you a **task worktree path** and the **base ref** that worktree forked
+from (the per-run staging branch, e.g. `origin/staging-<run-id>`). Inspect the change with:
 
 ```bash
-git -C <taskWorktree> diff origin/staging
+git -C <taskWorktree> diff <baseRef>
 ```
+
+Use the exact `<baseRef>` from your prompt — never a bare `origin/staging`, which
+namespace-collides after a repo branch rename and resolves to the wrong (or no) commit.
 
 Read the actual files in that worktree to confirm anything you flag. You have read-only
 intent: report, do not modify.

@@ -155,14 +155,14 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    `"worktree"`, model mapped from `sidecar.model`, `maxTurns = sidecar.max_turns`,
    prompt = `sidecar.prompt` VERBATIM. Keep its raw output.
 2. **Panel:** spawn all six `manifest.agents` (each isolation `"worktree"`, model mapped from each agent's `model`, `max_turns` from the manifest). Construct each prompt per
-   `skills/review-protocol/SKILL.md`: inspect via `git -C <tenv.worktree> diff origin/staging`,
+   `skills/review-protocol/SKILL.md`: inspect via `git -C <tenv.worktree> diff <tenv.base_ref>`,
    emit ONE RawReview JSON:
    `{ "reviewer":"<role>", "verdict":"approve|blocked|error", "findings":[ { "reviewer","severity","blocking","file","line","quote","description" } ] }`
    (`quote` REQUIRED; `file`+`line` make a finding citable; `findings` may be empty.)
 3. **Verify-then-fix:** for EACH finding that is `blocking:true` AND citable, spawn an
    INDEPENDENT finding-verifier (`general-purpose`, isolation `"worktree"`, model
    `opus`, adversarial framing — _"try to refute this finding against the actual
-   code"_, inspecting via `git -C <tenv.worktree> diff origin/staging`). It returns
+   code"_, inspecting via `git -C <tenv.worktree> diff <tenv.base_ref>`). It returns
    `{ "holds": true|false, "note": "<why>" }`.
 4. Results file:
    ```json

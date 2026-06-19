@@ -328,12 +328,19 @@ factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
 machine-side; omit it to honor the run's persisted `ship_mode` (users never type it —
 the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one of:
 
-- `{ kind:"spawn", run_id, task_id, stage, fold_key, manifest, sidecar?, expects, worktree }`
+- `{ kind:"spawn", run_id, task_id, stage, fold_key, manifest, sidecar?, expects, worktree, base_ref }`
   — the agents to run (`manifest.agents`) and what to feed back. `stage` is one of
   `tests | exec | verify` (preflight only advances; ship never spawns). `expects`
   is `producer-status` (tests/exec — one producer agent) or `reviews` (verify —
   the six-reviewer panel); a `sidecar` accompanies `verify` when a holdout answer
   key was withheld. `worktree` is the task working tree the agents commit in.
+  `base_ref` is the per-run staging base that worktree forked from
+  (`origin/staging-<run-id>`); the panel and holdout sidecar diff against THIS, never
+  a bare `origin/staging` (which namespace-collides after a repo branch rename). Its
+  branch is resolved via `resolveStagingBranch(run_id, run.staging_branch)` — the name
+  pinned in `RunState` at create ([state model](./state-model.md#runstate)), not
+  recomputed — so it stays fixed to the branch already pushed to origin even if the
+  naming scheme changes mid-run.
 - `{ kind:"terminal", run_id, task_id, outcome }` — the task is `done` or a
   classified `dropped`.
 - `{ kind:"quota-blocked", run_id, task_id, scope, reason, resets_at_epoch? }`.

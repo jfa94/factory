@@ -55,6 +55,7 @@ import {
   type FoldDeps,
 } from "./fold.js";
 import { makeStageHandlers } from "./handlers.js";
+import { resolveStagingBranch } from "./deps.js";
 import { shipTask } from "./ship.js";
 import { taskWorktreePath } from "./paths.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
@@ -96,6 +97,12 @@ export type DriveEnvelope =
       readonly sidecar?: HoldoutSidecar;
       readonly expects: DriveExpects;
       readonly worktree: string;
+      /**
+       * The per-run base ref the worktree forked from (`origin/staging-<run-id>`).
+       * Reviewers + the holdout sidecar diff against THIS — never a bare
+       * `origin/staging`, which namespace-collides after a repo branch rename.
+       */
+      readonly base_ref: string;
     }
   | {
       readonly kind: "terminal";
@@ -168,6 +175,7 @@ export async function holdoutSidecar(
   deps: CoroutineDeps,
   runId: string,
   taskId: string,
+  baseRef: string,
 ): Promise<HoldoutSidecar | undefined> {
   if (!(await deps.holdout.has(runId, taskId))) {
     return undefined;
@@ -180,7 +188,7 @@ export async function holdoutSidecar(
     worktree,
     model: resolveReviewModel(deps.config),
     max_turns: deps.config.review.maxTurnsDeep,
-    prompt: buildHoldoutPrompt(record, worktree),
+    prompt: buildHoldoutPrompt(record, worktree, baseRef),
   };
 }
 
@@ -321,8 +329,11 @@ export async function stepTask(
         const spawnStage = asSpawnStage(stage);
         const expects: DriveExpects = spawnStage === "verify" ? "reviews" : "producer-status";
         const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
+        // The base ref the worktree forked from — plumbed into every spawn so
+        // reviewers/holdout diff the per-run staging branch, not a bare `origin/staging`.
+        const base_ref = `origin/${resolveStagingBranch(runId, run.staging_branch)}`;
         const sidecar =
-          spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId) : undefined;
+          spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : undefined;
         const fold_key: FoldKey = { stage: spawnStage, rung: task.escalation_rung };
         return {
           kind: "spawn",
@@ -334,6 +345,7 @@ export async function stepTask(
           ...(sidecar !== undefined ? { sidecar } : {}),
           expects,
           worktree,
+          base_ref,
         };
       }
       case "task-terminal": {

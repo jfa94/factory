@@ -18,7 +18,7 @@ import {
   taskDone,
   waitRetry,
   runScopedBranch,
-  runStagingBranch,
+  resolveStagingBranch,
   createTaskPrIdempotent,
   MergeSerializer,
   type MergeOutcome,
@@ -75,7 +75,7 @@ export async function shipTask(deps: ShipDeps, ctx: StageContext): Promise<Stage
     branch,
     title: specTask.title,
     body: shipBody(runId, specTask),
-    base: runStagingBranch(runId),
+    base: resolveStagingBranch(runId, ctx.run.staging_branch),
   });
   await deps.state.updateTask(runId, task.task_id, (t) => ({
     ...t,
@@ -92,7 +92,7 @@ export async function shipTask(deps: ShipDeps, ctx: StageContext): Promise<Stage
     ghClient: deps.gh,
     owner: deps.owner,
     repo: deps.repo,
-    stagingBranch: runStagingBranch(runId),
+    stagingBranch: resolveStagingBranch(runId, ctx.run.staging_branch),
     dataDir: deps.dataDir,
   });
   const outcome: MergeOutcome = await serializer.merge(pr.number);

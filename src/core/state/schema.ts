@@ -414,6 +414,20 @@ export const RunStateSchema = z.object({
    */
   owner_session: z.string().min(1).optional(),
 
+  /**
+   * The per-run staging branch this run cut + pushed (`staging-<run-id>`). PINNED
+   * ONCE at `run create` (Decision 33) so every later base-ref resolution — worktree
+   * fork point, deterministic-gate diff base, reviewer/holdout inspect ref, ship
+   * merge target, rollup source — reads the branch the run ACTUALLY created, not a
+   * value recomputed by `runStagingBranch(run_id)`. A mid-run naming-scheme change
+   * (e.g. the slashed→flat rename) would otherwise silently desync the recompute from
+   * the already-pushed branch. Optional for backward-compat: legacy runs predating the
+   * pin lack it; readers fall back to `runStagingBranch(run_id)` via `resolveStagingBranch`.
+   * Git provenance / immutable identity — NOT a derived verdict, so derive-don't-store
+   * does not apply.
+   */
+  staging_branch: z.string().min(1).optional(),
+
   /** Pointer to the durable spec (Δ X) — NOT an embedded spec. */
   spec: SpecPointerSchema,
 

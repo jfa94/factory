@@ -59,7 +59,7 @@ import type {
   TaskStage,
 } from "../types/index.js";
 import type { HandlerDeps } from "./types.js";
-import { runStagingBranch } from "./deps.js";
+import { resolveStagingBranch } from "./deps.js";
 import type { StateManager } from "./deps.js";
 
 const log = createLogger("fold");
@@ -361,7 +361,7 @@ export async function applyRecordReviews(
     runId,
     taskId,
     worktree,
-    baseRef: runStagingBranch(runId),
+    baseRef: resolveStagingBranch(runId, run.staging_branch),
     config: deps.config,
     tools: deps.tools,
   };
