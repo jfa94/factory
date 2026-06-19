@@ -17,12 +17,14 @@ import { join } from "node:path";
 import {
   runCommand,
   runCreate,
+  runCancel,
   seedTasksFromSpec,
   createRun,
   resolveOrCreateRun,
   applyResume,
   resolveOwnerSession,
   type RunResumeEnvelope,
+  type RunCancelOverrides,
   type SpecSelector,
   type CreateRunOptions,
 } from "./run.js";
@@ -879,6 +881,184 @@ describe("resolveOwnerSession", () => {
   it("treats an empty-string flag/env as absent (degrades to owner-unknown)", () => {
     expect(resolveOwnerSession("", { CLAUDE_CODE_SESSION_ID: "" })).toBeUndefined();
     expect(resolveOwnerSession("", { CLAUDE_CODE_SESSION_ID: "sess-env" })).toBe("sess-env");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runCancel — abandon a live run so the Stop gate releases the owning session
+// ---------------------------------------------------------------------------
+// The "stuck Stop-gate" trap: a live run (a task still executing) left the owning
+// session unable to end, with no in-session escape. `cancel` marks the run terminal
+// (reuses `failed`) via the one sanctioned writer — works WITH a task executing (the
+// exact mechanism `--supersede` uses), so the gate stops blocking. See Decision 35.
+describe("runCancel (abandon a live run, Decision 35)", () => {
+  let dataDir: string;
+  let state: StateManager;
+  let store: SpecStore;
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "factory-run-cancel-"));
+    state = new StateManager({
+      dataDir,
+      lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
+    });
+    store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    await store.write(manifest([task("t1", []), task("t2", ["t1"])]), "# spec\n");
+  });
+  afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
+
+  /** Seed a run (status `running`) for the durable spec; optionally stamp an owner. */
+  async function seed(runId: string, owner?: string): Promise<void> {
+    await createRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId,
+      ...(owner !== undefined ? { ownerSession: owner } : {}),
+    });
+  }
+
+  /** Force a seeded task into `executing` — the exact in-flight state that traps finalize. */
+  async function setExecuting(runId: string, taskId: string): Promise<void> {
+    await state.update(runId, (s) => ({
+      ...s,
+      tasks: { ...s.tasks, [taskId]: { ...s.tasks[taskId]!, status: "executing" as const } },
+    }));
+  }
+
+  /** Run cancel with stdout/stderr suppressed; return the parsed JSON envelope + exit code. */
+  async function cancel(
+    argv: string[],
+    overrides: RunCancelOverrides,
+  ): Promise<{ env: Record<string, unknown>; code: number }> {
+    const chunks: string[] = [];
+    const out = vi.spyOn(process.stdout, "write").mockImplementation((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    });
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let code: number;
+    try {
+      code = await runCancel(argv, overrides);
+    } finally {
+      out.mockRestore();
+      err.mockRestore();
+    }
+    return { env: JSON.parse(chunks.join("")) as Record<string, unknown>, code };
+  }
+
+  it("cancels a run with a task still executing → status failed (the headline trap)", async () => {
+    await seed("run-live");
+    await setExecuting("run-live", "t1");
+
+    const { env, code } = await cancel(["--run", "run-live"], { dataDir });
+
+    expect(code).toBe(EXIT.OK);
+    expect(env.kind).toBe("cancelled");
+    expect((env.run as Record<string, unknown>).status).toBe("failed");
+    // The decoupling the fix relies on: finalize(…, "failed") does NOT inspect tasks,
+    // so an executing T1 is no barrier (the same path --supersede already takes).
+    expect((await state.read("run-live")).status).toBe("failed");
+  });
+
+  it("is idempotent — re-cancelling a failed run stays failed and exits OK", async () => {
+    await seed("run-i");
+    await cancel(["--run", "run-i"], { dataDir }); // first
+    const { code } = await cancel(["--run", "run-i"], { dataDir }); // re-cancel
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-i")).status).toBe("failed");
+  });
+
+  it("is LOUD when the run is already terminal as completed (cannot re-finalize as failed)", async () => {
+    await seed("run-done");
+    await state.finalize("run-done", "completed");
+    // Not a UsageError — the manager's "already terminal as X" guard bubbles uncaught.
+    await expect(runCancel(["--run", "run-done"], { dataDir })).rejects.toThrow(/already terminal/);
+  });
+
+  it("resolves the run THIS session owns (owner-scan) over a repointed runs/current", async () => {
+    // run-A (repo acme/widgets, owned sess-1) is the one to cancel. run-B lives in a
+    // DIFFERENT repo (the engine forbids two live same-repo runs from different sessions)
+    // and, created last, becomes the GLOBAL current pointer. So the current fallback would
+    // resolve run-B — owner-scan must win and cancel run-A instead (the stuck-session
+    // condition: the run is found by owner_session, independent of runs/current).
+    const otherRepo = "other/svc";
+    await store.write(
+      parseSpecManifest({
+        spec_id: "99-other",
+        issue_number: 99,
+        slug: "other",
+        repo: otherRepo,
+        generated_at: "2026-06-01T00:00:00.000Z",
+        tasks: [task("t1", [])],
+      }),
+      "# spec\n",
+    );
+    await seed("run-A", "sess-1");
+    await createRun(state, store, {
+      repo: otherRepo,
+      issue: 99,
+      runId: "run-B",
+      ownerSession: "sess-2",
+    });
+    await setExecuting("run-A", "t1");
+
+    // No --run; non-repo cwd → the current fallback resolves the global pointer (run-B).
+    await cancel(["--session-id", "sess-1"], { dataDir, cwd: dataDir });
+
+    expect((await state.read("run-A")).status).toBe("failed");
+    expect((await state.read("run-B")).status).toBe("running");
+  });
+
+  it("falls back to runs/current when neither --run nor a session id is given", async () => {
+    await seed("run-cur");
+    await setExecuting("run-cur", "t1");
+    // Non-repo cwd → readCurrentForCwd degrades to the global current pointer (run-cur).
+    await cancel([], { dataDir, cwd: dataDir });
+    expect((await state.read("run-cur")).status).toBe("failed");
+  });
+
+  it("is a usage error when no run can be resolved (no --run, no owner, no current)", async () => {
+    await expect(runCancel([], { dataDir, cwd: dataDir })).rejects.toMatchObject({
+      isUsageError: true,
+    });
+  });
+
+  it("leaves the staging branch + task PRs untouched by default (no --cleanup)", async () => {
+    await seed("run-keep");
+    const gh = new FakeGhClient();
+    const { env } = await cancel(["--run", "run-keep"], { dataDir, ghClient: gh });
+    expect(env.cleaned_up).toBe(false);
+    expect(gh.deletedBranches).toHaveLength(0);
+    expect(gh.protectionDeletes).toHaveLength(0);
+  });
+
+  it("--cleanup tears down protection then the pinned staging branch (auto-closing task PRs)", async () => {
+    await seed("run-clean");
+    await setExecuting("run-clean", "t1");
+    const gh = new FakeGhClient();
+    const { env } = await cancel(["--run", "run-clean", "--cleanup"], { dataDir, ghClient: gh });
+
+    expect(env.cleaned_up).toBe(true);
+    expect(gh.protectionDeletes).toContain("staging-run-clean");
+    expect(gh.deletedBranches).toContain("staging-run-clean");
+    // Protection BEFORE branch delete (GitHub blocks deleting a protected ref).
+    expect(gh.protectionDeletes.indexOf("staging-run-clean")).toBeLessThanOrEqual(
+      gh.deletedBranches.indexOf("staging-run-clean"),
+    );
+  });
+
+  it("works OUTSIDE autonomous mode — cancel is the escape verb, never gated", async () => {
+    // The whole file runs as autonomous; cancel must free a stuck session regardless.
+    delete process.env.FACTORY_AUTONOMOUS_MODE;
+    await seed("run-esc");
+    await setExecuting("run-esc", "t1");
+    const { code } = await cancel(["--run", "run-esc"], { dataDir });
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-esc")).status).toBe("failed");
+  });
+
+  it("--help short-circuits and exits OK (wired into the run dispatch)", async () => {
+    expect(await runCommand.run(["cancel", "--help"])).toBe(EXIT.OK);
   });
 });
 

@@ -58,11 +58,13 @@ Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
+  factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
-  finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.`;
+  finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
+  cancel     Abandon a live run (mark it failed) so the owning session can stop; --cleanup also tears down its branch.`;
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
@@ -124,6 +126,26 @@ terminal — in that resume-safe order. LOUD if any task is still non-terminal.
 
 Emits ONE JSON envelope:
   { kind:"finalized", run, report, rollup?, issues_filed }`;
+
+const CANCEL_HELP = `factory run cancel — abandon a live run (mark it failed) so the session can stop
+
+Usage:
+  factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
+
+  --run         The run to cancel. Default: the active run THIS session owns
+                (--session-id / $CLAUDE_CODE_SESSION_ID), else runs/current.
+  --cleanup     Also tear down the run's staging branch + task PRs (like --supersede).
+                Default: leave them in place for manual handling.
+  --session-id  Owning session id used to locate the run when --run is omitted
+                (defaults to $CLAUDE_CODE_SESSION_ID).
+
+The in-session escape from the Stop gate: marks the run 'failed' via the one sanctioned
+state writer — works even with a task still executing (no rollup CI, no ship), so the gate
+stops blocking the owning session. Idempotent; a run already terminal as completed/superseded
+is a LOUD error. NOT resumable (cancelled is terminal) — start a fresh run instead.
+
+Emits ONE JSON envelope:
+  { kind:"cancelled", run, cleaned_up }`;
 
 // ---------------------------------------------------------------------------
 // Seeding (pure)
@@ -767,6 +789,110 @@ async function runFinalize(argv: string[]): Promise<ExitCode> {
   return EXIT.OK;
 }
 
+/**
+ * Test seam for {@link runCancel}: inject the gh client (the `--cleanup` teardown),
+ * the git client + cwd (current-run repo resolution), and the data dir. Production
+ * passes none (real clients, real `process.cwd()`, env-resolved data dir).
+ */
+export interface RunCancelOverrides {
+  readonly ghClient?: GhClient;
+  readonly gitClient?: GitClient;
+  readonly cwd?: string;
+  readonly dataDir?: string;
+}
+
+/**
+ * Resolve the run `cancel` abandons. Precedence: explicit `--run`; else the single
+ * active run THIS session owns ({@link StateManager.findActiveByOwner} — robust to a
+ * detached/repointed `runs/current`, the exact stuck-session condition); else the
+ * current run for the checkout. LOUD if none resolves.
+ *
+ * Unlike {@link resolveRunId} (resume/finalize), the owner-scan is interposed BEFORE
+ * the current-pointer fallback: a trapped session always knows its own session id but
+ * may have lost the pointer, so the owned run must win.
+ */
+async function resolveCancelRunId(
+  state: StateManager,
+  args: ReturnType<typeof parseArgs>,
+  sessionId: string | undefined,
+  overrides: CurrentRunOverrides = {},
+): Promise<string> {
+  const explicit = optionalString(args.flag("run"));
+  if (explicit !== undefined) return explicit;
+  if (sessionId !== undefined) {
+    const owned = await state.findActiveByOwner(sessionId);
+    if (owned !== null) return owned.run_id;
+  }
+  const current = await readCurrentForCwd(state, overrides);
+  if (current === null) {
+    throw new UsageError("run cancel: no --run given and no owned/current run to cancel");
+  }
+  return current.run_id;
+}
+
+/**
+ * `factory run cancel` — abandon a live run so the Stop gate releases the owning
+ * session (Decision 35). Marks the run `failed` DIRECTLY via {@link StateManager.finalize}
+ * — NOT {@link finalizeRun}: cancel must not attempt rollup CI / ship of a partial run.
+ * `finalize` validates only that the TARGET status is terminal (it does not inspect task
+ * statuses), so a run with a task still `executing` is cancellable — the exact mechanism
+ * `--supersede` already uses. Idempotent for `failed`; an already completed/superseded run
+ * hits the loud "already terminal" guard.
+ *
+ * NO {@link requireAutonomousMode}: cancel is the in-session ESCAPE verb (the Stop gate's
+ * documented way out), so it must work from ANY session — including a non-autonomous one —
+ * letting a stuck owner always free the gate. Like `finalize`, it is a terminal/cleanup op,
+ * not a run-starter.
+ */
+export async function runCancel(
+  argv: string[],
+  overrides: RunCancelOverrides = {},
+): Promise<ExitCode> {
+  const args = parseArgs(argv, { booleans: ["cleanup"] });
+  if (args.flag("help") === true) {
+    emitLine(CANCEL_HELP);
+    return EXIT.OK;
+  }
+
+  const dataDir = resolveDataDir(
+    overrides.dataDir !== undefined ? { dataDir: overrides.dataDir } : {},
+  );
+  const state = new StateManager({ dataDir });
+  const sessionId = resolveOwnerSession(args.flag("session-id"));
+  const currentOverrides: CurrentRunOverrides = {
+    ...(overrides.gitClient !== undefined ? { gitClient: overrides.gitClient } : {}),
+    ...(overrides.cwd !== undefined ? { cwd: overrides.cwd } : {}),
+  };
+  const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides);
+
+  // Mark terminal via the one sanctioned writer (the CLI bypasses the TCB write-deny
+  // hook by design — it guards Edit/Write tools, not the engine's own fs writes).
+  const run = await state.finalize(runId, "failed");
+
+  const cleanup = args.flag("cleanup") === true;
+  // Resolve the PINNED branch (Decision 33) so any teardown targets the branch the run
+  // actually cut, never a recompute a mid-run rename could have desynced.
+  const branch = resolveStagingBranch(run.run_id, run.staging_branch);
+  if (cleanup) {
+    // Reuse the supersede teardown: protection FIRST (GitHub blocks deleting a protected
+    // ref), then delete staging-<run-id> (auto-closing its task PRs). Repo coords come from
+    // the run's OWN spec pointer — cancel needs no cwd/--repo.
+    const ghClient = overrides.ghClient ?? new DefaultGhClient();
+    const { owner, repo } = splitRepoSlug(run.spec.repo);
+    await ghClient.deleteProtection(owner, repo, branch);
+    await ghClient.deleteRemoteBranch(owner, repo, branch);
+  }
+
+  emitJson({ kind: "cancelled", run, cleaned_up: cleanup });
+  emitError(
+    `run ${run.run_id} cancelled (marked failed)` +
+      (cleanup
+        ? `; staging branch '${branch}' + its task PRs torn down.`
+        : `; staging branch '${branch}' left in place — delete it manually or re-run with --cleanup.`),
+  );
+  return EXIT.OK;
+}
+
 async function run(argv: string[]): Promise<ExitCode> {
   const action = argv[0];
   if (action === undefined || action === "--help" || action === "-h") {
@@ -781,8 +907,12 @@ async function run(argv: string[]): Promise<ExitCode> {
       return runResume(rest);
     case "finalize":
       return runFinalize(rest);
+    case "cancel":
+      return runCancel(rest);
     default:
-      throw new UsageError(`unknown run action '${action}' (expected create | resume | finalize)`);
+      throw new UsageError(
+        `unknown run action '${action}' (expected create | resume | finalize | cancel)`,
+      );
   }
 }
 

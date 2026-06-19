@@ -8,7 +8,7 @@ for `state`); `--help` on any subcommand prints its contract. The binary is
 
 Subcommands are **reporters** (read-only; emit an envelope), **the coroutine** (`next`
 folds nothing; `drive --results` folds an agent spawn's output into ONE state
-step), or **writers** (one state mutation). `run create`, `run finalize`,
+step), or **writers** (one state mutation). `run create`, `run finalize`, `run cancel`,
 `scaffold`, and the coroutine's `drive` ship step perform actions (state and/or GitHub
 side effects). The coroutine is the only seam that spawns nothing itself — it emits a
 manifest the driver spawns from (see [Model A](../explanation/model-a.md)).
@@ -103,7 +103,7 @@ prd_path, generated_path, max_iterations}`).
 The orchestrator loops generate ⇄ review (bounded by `max_iterations`) until
 `reuse` or `stored`.
 
-## `run <create|resume|finalize>`
+## `run <create|resume|finalize|cancel>`
 
 ### `run create`
 
@@ -193,6 +193,30 @@ Ship mode defaults to the run's **persisted `ship_mode`** (set at `run create`);
 is needed. `--no-ship` overrides it to no-merge for THIS finalize only (opens the
 `staging-<run-id> → develop` rollup PR but never merges). Emits
 `{kind:"finalized", run, report, rollup?, issues_filed}`.
+
+### `run cancel`
+
+Action. **Abandons a live run** so its owning session can stop — the in-session escape
+from the Stop gate (Decision 35 addendum). Marks the run terminal by reusing `failed`,
+via `state.finalize` **directly** (NOT the `run finalize` ship path): no rollup CI, no
+merge, no PRD close. Because `finalize` validates only that the _target_ status is
+terminal — never the task statuses — a run with a task still `executing` is cancellable
+(the same mechanism `--supersede` uses). Idempotent for `failed`; a run already terminal
+as `completed`/`superseded` is a loud error. A cancelled run is **not resumable** — start
+fresh with `/factory:run`.
+
+```
+factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
+```
+
+| Flag                | Notes                                                                                                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--run <id>`        | The run to cancel. Default: the active run THIS session owns (`findActiveByOwner`, robust to a detached `runs/current`), then the current run for the checkout. Loud if none resolves. |
+| `--cleanup`         | Also tear down the run's PINNED `staging-<run-id>` branch + its task PRs (protection first, then the branch — GitHub blocks deleting a protected ref). **Default (omit): leave them.** |
+| `--session-id <id>` | Owning session id used to locate the run when `--run` is omitted. Defaults to `$CLAUDE_CODE_SESSION_ID`.                                                                               |
+
+Unlike `run create`/`resume`, cancel has **no autonomy gate** — it is the documented exit
+from the Stop gate and must work from any session. Emits `{kind:"cancelled", run, cleaned_up}`.
 
 ## `resume`
 

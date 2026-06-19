@@ -123,7 +123,8 @@ export function decideStop(
       reason:
         `run ${run.run_id} is still live (${detail}). Advance the run ` +
         `(\`factory next --run ${run.run_id}\`, then \`factory drive --run ${run.run_id} --task <task>\`) or finalize it. ` +
-        `Set FACTORY_ALLOW_STOP=1 to stop anyway (leaves the run resumable).`,
+        `To abandon it from here, run \`factory run cancel --run ${run.run_id}\` (marks it failed — the run is then NOT resumable). ` +
+        `Or set FACTORY_ALLOW_STOP=1 to stop anyway (leaves the run resumable).`,
     };
   }
 

@@ -71,10 +71,16 @@ anything destructive:
 - **Supersede (fresh)** → re-run `factory run create … --supersede`: the old run is marked
   `superseded`, its `staging/<run-id>` branch + task PRs are deleted, and a fresh run starts.
   Then drive the fresh run.
-- **Cancel** → stop; leave the existing run untouched.
+- **Cancel the prompt** → stop here; leave the existing run untouched and `running` (this
+  declines to start a fresh run — it does NOT abandon the existing one).
 
 Map the answer to the `--resume` / `--supersede` flag — the CLI stays the single source of
 truth (never hand-edit run state from the command).
+
+To genuinely **abandon** the existing run (mark it terminal so its owning session can stop),
+that session runs `factory run cancel --run <run_id>` (`--cleanup` also deletes its staging
+branch + task PRs). A cancelled run is `failed` and NOT resumable — start fresh with
+`/factory:run`. See Decision 35's addendum.
 
 ## Session mode (default)
 
