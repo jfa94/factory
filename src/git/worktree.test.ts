@@ -34,6 +34,25 @@ describe("D12 — worktree base semantics + fallback", () => {
     );
   });
 
+  it("is REPLAY-SAFE: a re-create on an existing worktree reuses it (checkout -B), no second `worktree add`", async () => {
+    const git = new FakeGitClient({ remoteHeads: { staging: "sha-staging-1" } });
+    const args = { gitClient: git, runId: "run-1", taskId: "t1", path: "/tmp/wt-replay" };
+    // First create registers the worktree (the normal preflight path).
+    await createTaskWorktree(args);
+    expect(git.worktrees.has("/tmp/wt-replay")).toBe(true);
+    const addsBefore = git.calls.filter((c) => c.startsWith("worktree add")).length;
+
+    // Simulate a resume re-entering preflight after a mid-stage failure: a bare
+    // `worktree add -b` would FATAL on the existing path. The re-create must REUSE
+    // the worktree (checkout -B onto the staging tip) instead of wedging.
+    const wt = await createTaskWorktree(args);
+
+    expect(wt.branch).toBe("factory/run-1/t1");
+    // Reuse path → NO second `worktree add`; a `checkout -B` re-point instead.
+    expect(git.calls.filter((c) => c.startsWith("worktree add")).length).toBe(addsBefore);
+    expect(git.calls).toContain("checkout -B factory/run-1/t1 origin/staging");
+  });
+
   it("createTaskWorktree itself throws on drift injected before the assertion", async () => {
     const git = new FakeGitClient({ remoteHeads: { staging: "sha-staging-1" } });
     // Make worktreeAdd birth the branch on a stale sha rather than the tip.

@@ -209,6 +209,30 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     ]);
   });
 
+  it("preflight is REPLAY-SAFE: a resume after a provisioning failure re-creates and reaches provision again, not a worktree-add fatal", async () => {
+    let provisionCalls = 0;
+    const deps = makeDeps({
+      provision: async () => {
+        provisionCalls += 1;
+        if (provisionCalls === 1) throw new Error("npm ci failed (simulated network blip)");
+      },
+    });
+    const handlers = makeStageHandlers(deps);
+    const ctx = await ctxFor({ task_id: "t-multi" });
+
+    // First preflight: the worktree is created, provisioning throws → the task cursor
+    // stays at preflight (the stage never advanced) with the worktree on disk.
+    await expect(handlers.preflight(ctx)).rejects.toThrow(/npm ci failed/);
+    const wtPath = taskWorktreePath(dataDir, RUN_ID, "t-multi");
+    expect(git.worktrees.has(wtPath)).toBe(true);
+
+    // Resume: preflight re-runs. createTaskWorktree must REUSE the existing worktree
+    // (not fatal on `worktree add`), so provisioning — now succeeding — advances.
+    const result = await handlers.preflight(ctx);
+    expect(result).toEqual({ kind: "advance", to: "tests" });
+    expect(provisionCalls).toBe(2);
+  });
+
   // -- tests ----------------------------------------------------------------
 
   it("tests persists the holdout answer-key and spawns the test-writer (rung 0)", async () => {

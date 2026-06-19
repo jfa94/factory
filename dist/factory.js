@@ -7237,6 +7237,10 @@ var DefaultGitClient = class {
   async worktreeAdd(args, opts) {
     await this.execOrThrow(["worktree", "add", ...args], opts);
   }
+  async worktreeExists(path3, opts) {
+    const r = await this.execOrThrow(["worktree", "list", "--porcelain"], opts);
+    return r.stdout.split("\n").some((line) => line === `worktree ${path3}`);
+  }
   async worktreeRemove(args, opts) {
     const r = await this.exec(["worktree", "remove", ...args], opts);
     return r.code;
@@ -7676,7 +7680,11 @@ async function createTaskWorktree(args) {
   const branch = runScopedBranch(args.runId, args.taskId);
   const startPoint = `${remote}/${base}`;
   await args.gitClient.fetch(remote, base);
-  await args.gitClient.worktreeAdd(["-b", branch, args.path, startPoint]);
+  if (await args.gitClient.worktreeExists(args.path)) {
+    await ensureOnStaging({ gitClient: args.gitClient, path: args.path, branch, remote, base });
+  } else {
+    await args.gitClient.worktreeAdd(["-b", branch, args.path, startPoint]);
+  }
   await assertBaseIsStagingTip({
     gitClient: args.gitClient,
     path: args.path,
@@ -7696,6 +7704,13 @@ async function assertBaseIsStagingTip(args) {
       `worktree base drift: merge-base(HEAD, ${remote}/${base})=${mergeBase} != ${remote}/${base} tip=${stagingTip} \u2014 worktree did not birth on the staging tip (D12 invariant #4)`
     );
   }
+}
+async function ensureOnStaging(args) {
+  const remote = args.remote ?? "origin";
+  const base = args.base ?? GIT_DEFAULTS2.stagingBranch;
+  const opts = { cwd: args.path };
+  log8.debug(`ensureOnStaging: checkout -B ${args.branch} ${remote}/${base}`);
+  await args.gitClient.checkoutB(args.branch, `${remote}/${base}`, opts);
 }
 
 // src/git/provision.ts

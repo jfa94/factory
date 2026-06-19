@@ -157,6 +157,27 @@ describe("shipTask", () => {
     expect(mergedPr?.baseRefName).toBe("staging-run-B");
   });
 
+  it("honors a DIVERGENT staging_branch pin for PR base + serializer (revert-to-recompute guard)", async () => {
+    const { deps, ctx, gh, dataDir } = await makeShipFixture({ runId: "run-D", shipMode: "live" });
+    fixtures.push(dataDir);
+
+    // Pin a branch that does NOT equal runStagingBranch("run-D") (= "staging-run-D").
+    // A revert of resolveStagingBranch → the bare recompute would silently open AND
+    // merge the PR against the WRONG branch; seeding a divergent pin makes the
+    // assertion fail unless the pin is honored (the recompute-equal fixtures can't).
+    const pinned = "staging-LEGACY-run-D";
+    const pinnedCtx: StageContext = { ...ctx, run: { ...ctx.run, staging_branch: pinned } };
+
+    const result = await shipTask(deps, pinnedCtx);
+
+    expect(result).toEqual({ kind: "task-terminal", outcome: { outcome: "done" } });
+    // PR base is the PINNED branch (not the "staging-run-D" recompute).
+    expect(gh.created[0]?.base).toBe(pinned);
+    // The serializer merged against the same pinned base.
+    expect(gh.merges).toHaveLength(1);
+    expect(gh.prs.get("factory/run-D/t-1")?.baseRefName).toBe(pinned);
+  });
+
   it("records branch and pr_number in state after ship", async () => {
     const { deps, ctx, state, dataDir } = await makeShipFixture({ runId: "run-C" });
     fixtures.push(dataDir);

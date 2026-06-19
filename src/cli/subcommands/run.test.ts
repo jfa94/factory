@@ -605,6 +605,44 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     );
   });
 
+  it("--supersede tears down the OLD run's PINNED branch, not a recompute (revert guard)", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+    // Desync the pin from runStagingBranch("run-old") (= "staging-run-old") — exactly the
+    // mid-run rename Decision 33 defends against. A revert of supersedeRun to the recompute
+    // would delete "staging-run-old" and orphan the branch the run actually cut.
+    const legacyBranch = "staging-LEGACY-run-old";
+    await state.update("run-old", (s) => ({ ...s, staging_branch: legacyBranch }));
+
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const { defaultConfig } = await import("../../config/schema.js");
+    const stagingDeps = {
+      gitClient: git,
+      ghClient: gh,
+      config: defaultConfig(),
+      targetRoot: "/target",
+      owner: "acme",
+      repo: "widgets",
+    };
+
+    await resolveOrCreateRun(
+      state,
+      store,
+      { repo: REPO, issue: 42, runId: "run-new", intent: "supersede" },
+      stagingDeps,
+    );
+
+    // Teardown targeted the PINNED legacy branch, NOT the "staging-run-old" recompute.
+    expect(gh.protectionDeletes).toContain(legacyBranch);
+    expect(gh.deletedBranches).toContain(legacyBranch);
+    expect(gh.deletedBranches).not.toContain("staging-run-old");
+    // Protection first, then branch (GitHub blocks deleting a protected ref).
+    expect(gh.protectionDeletes.indexOf(legacyBranch)).toBeLessThanOrEqual(
+      gh.deletedBranches.indexOf(legacyBranch),
+    );
+  });
+
   it("--supersede without stagingDeps → UsageError", async () => {
     await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
     await expect(

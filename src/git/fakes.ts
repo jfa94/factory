@@ -180,16 +180,27 @@ export class FakeGitClient implements GitClient {
 
   async worktreeAdd(args: readonly string[], _opts?: GitOpts): Promise<void> {
     this.calls.push(`worktree add ${args.join(" ")}`);
-    // Parse `-b <branch> <path> <startPoint>` shape we emit from worktree.ts.
-    const bIdx = args.indexOf("-b");
+    // Parse `-b|-B <branch> <path> <startPoint>` shape we emit from worktree.ts.
+    const bIdx = args.findIndex((a) => a === "-b" || a === "-B");
     const branch = bIdx >= 0 ? args[bIdx + 1] : undefined;
     const path = bIdx >= 0 ? args[bIdx + 2] : undefined;
     const startPoint = bIdx >= 0 ? args[bIdx + 3] : undefined;
     if (branch && path && startPoint) {
+      // Faithful to real git: `git worktree add` FATALS when <path> is already a
+      // registered worktree (the resume-wedge — a prior preflight created it, then
+      // died before advancing). Model that so a non-idempotent re-create surfaces
+      // as a failure here instead of a silent overwrite that hides the bug.
+      if (this.worktrees.has(path)) {
+        throw new Error(`fatal: '${path}' already exists (worktree add)`);
+      }
       const startSha = await this.revParse(startPoint).catch(() => this.nextSha());
       this.localBranches.set(branch, startSha);
       this.worktrees.set(path, branch);
     }
+  }
+
+  async worktreeExists(path: string, _opts?: GitOpts): Promise<boolean> {
+    return this.worktrees.has(path);
   }
 
   async worktreeRemove(args: readonly string[], _opts?: GitOpts): Promise<number | null> {

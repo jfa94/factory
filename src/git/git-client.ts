@@ -63,6 +63,13 @@ export interface GitClient {
   mergeBase(a: string, b: string, opts?: GitOpts): Promise<string>;
   /** `git worktree add ...` — fatal on failure. */
   worktreeAdd(args: readonly string[], opts?: GitOpts): Promise<void>;
+  /**
+   * True iff `path` is a registered worktree (`git worktree list --porcelain`
+   * lists a `worktree <path>` line). Makes task-worktree creation REPLAY-SAFE: a
+   * resume after a mid-preflight failure reuses the existing worktree instead of
+   * fataling on `worktree add`.
+   */
+  worktreeExists(path: string, opts?: GitOpts): Promise<boolean>;
   /** `git worktree remove ...` — returns the raw exit code (caller may retry). */
   worktreeRemove(args: readonly string[], opts?: GitOpts): Promise<number | null>;
   /** `git push [-u] <remote> <branch>` — fatal on failure. NO force flag. */
@@ -147,6 +154,14 @@ export class DefaultGitClient implements GitClient {
 
   async worktreeAdd(args: readonly string[], opts?: GitOpts): Promise<void> {
     await this.execOrThrow(["worktree", "add", ...args], opts);
+  }
+
+  async worktreeExists(path: string, opts?: GitOpts): Promise<boolean> {
+    // `git worktree list --porcelain` emits one `worktree <abs-path>` line per
+    // registered worktree. A non-zero exit means the dir is not a git repo at all
+    // — a real error, so fail loud (execOrThrow) rather than masking it as absent.
+    const r = await this.execOrThrow(["worktree", "list", "--porcelain"], opts);
+    return r.stdout.split("\n").some((line) => line === `worktree ${path}`);
   }
 
   async worktreeRemove(args: readonly string[], opts?: GitOpts): Promise<number | null> {

@@ -45,6 +45,15 @@ export interface TaskWorktree {
  * run-scoped branch (Δ M). Fetches first so the fork point is the CURRENT staging
  * tip, then `git worktree add -b <branch> <path> origin/<base>`. Asserts the base
  * is the staging tip (invariant #4) before returning.
+ *
+ * REPLAY-SAFE: the preflight stage persists its cursor BEFORE running, so a crash
+ * after the worktree is created but before the stage advances (e.g. dependency
+ * provisioning or the base-tip assert throwing) leaves the worktree on disk. A
+ * resume re-enters preflight — so if the worktree already exists we REUSE it by
+ * re-pointing its branch onto the current staging tip (the D12 idempotent
+ * `checkout -B`) rather than a bare `worktree add`, which fatals on the existing
+ * path/branch and would wedge the run. The base-tip assertion still guards BOTH
+ * paths.
  */
 export async function createTaskWorktree(args: CreateTaskWorktreeArgs): Promise<TaskWorktree> {
   const remote = args.remote ?? "origin";
@@ -53,7 +62,14 @@ export async function createTaskWorktree(args: CreateTaskWorktreeArgs): Promise<
   const startPoint = `${remote}/${base}`;
 
   await args.gitClient.fetch(remote, base);
-  await args.gitClient.worktreeAdd(["-b", branch, args.path, startPoint]);
+
+  if (await args.gitClient.worktreeExists(args.path)) {
+    // Resume after a mid-preflight failure: reuse the already-registered worktree,
+    // re-pointing its branch onto the freshly-fetched staging tip.
+    await ensureOnStaging({ gitClient: args.gitClient, path: args.path, branch, remote, base });
+  } else {
+    await args.gitClient.worktreeAdd(["-b", branch, args.path, startPoint]);
+  }
 
   await assertBaseIsStagingTip({
     gitClient: args.gitClient,
