@@ -236,7 +236,7 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     specStore = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    git = new FakeGitClient({ remoteHeads: { [`staging/${RUN_ID}`]: "sha-staging" } });
+    git = new FakeGitClient({ remoteHeads: { [`staging-${RUN_ID}`]: "sha-staging" } });
     gh = new FakeGhClient();
     holdout = new InMemoryHoldoutStore();
     artifacts = new InMemoryArtifactStore();

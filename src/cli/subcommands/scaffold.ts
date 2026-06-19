@@ -12,7 +12,7 @@
  * lint baseline) the GateRunner runs in the target worktree — plus a `.gitignore`
  * guard, then PROBES branch protection on `develop` (the integration base):
  * refuse-to-run when it is missing (#2 / Δ A), unless `--provision` is opted in to
- * write it. Per-run staging branches (`staging/<run-id>`) are minted at `run create`
+ * write it. Per-run staging branches (`staging-<run-id>`) are minted at `run create`
  * — scaffold no longer creates or protects a shared `staging` branch.
  *
  * Run/spec STATE is never written here (it lives outside the repo under the data
@@ -233,7 +233,7 @@ async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
  * {@link ScaffoldOptions} so units exercise it with fakes + temp dirs. Throws
  * loud on a protection shortfall when `--provision` is not set.
  *
- * Per-run staging branches (`staging/<run-id>`) are minted at `run create` —
+ * Per-run staging branches (`staging-<run-id>`) are minted at `run create` —
  * scaffold no longer creates or protects a shared `staging` branch.
  */
 export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport> {

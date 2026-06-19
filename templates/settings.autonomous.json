@@ -6,6 +6,7 @@
     "FACTORY_AUTONOMOUS_MODE": "1"
   },
   "permissions": {
+    "additionalDirectories": ["${CLAUDE_PLUGIN_DATA}"],
     "allow": [
       "Bash(*)",
       "Read",

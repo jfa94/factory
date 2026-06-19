@@ -176,9 +176,9 @@ describe("applyRecordHoldout fold", () => {
 /** A git probe whose full default gate sweep is GREEN (TDD test→impl history). */
 function greenProbe(): FakeGitProbe {
   return new FakeGitProbe({
-    // Seed origin/staging/run-1 (the per-run branch for RUN_ID="run-1") so the
+    // Seed origin/staging-run-1 (the per-run branch for RUN_ID="run-1") so the
     // TDD strategy resolves origin/${runStagingBranch("run-1")} after the fix.
-    refs: { "origin/staging/run-1": "sha-base", HEAD: "sha-head" },
+    refs: { "origin/staging-run-1": "sha-base", HEAD: "sha-head" },
     changedFiles: [],
     commits: [
       commit({ sha: "c1", files: ["src/x.test.ts"], tagged: true }),
@@ -602,10 +602,10 @@ describe("applyRecordReviews fold", () => {
     // Probe seeded with ONLY origin/staging/<run-id>. If the fold still passes
     // deps.config.git.stagingBranch ("staging") as baseRef, the TDD strategy will
     // look up origin/staging (missing) → gate fails → floor blocks → step !== ship.
-    // After the fix (runStagingBranch(runId)), the probe resolves origin/staging/run-1
+    // After the fix (runStagingBranch(runId)), the probe resolves origin/staging-run-1
     // and the green gate + approve panel advance to ship.
     const perRunProbe = new FakeGitProbe({
-      refs: { "origin/staging/run-1": "sha-base", HEAD: "sha-head" },
+      refs: { "origin/staging-run-1": "sha-base", HEAD: "sha-head" },
       changedFiles: [],
       commits: [
         commit({ sha: "c1", files: ["src/x.test.ts"], tagged: true }),
@@ -615,7 +615,7 @@ describe("applyRecordReviews fold", () => {
     const deps: FoldDeps = {
       config: defaultConfig(),
       spec: reviewsSpec(),
-      git: new FakeGitClient({ remoteHeads: { "staging/run-1": "sha-staging" } }),
+      git: new FakeGitClient({ remoteHeads: { "staging-run-1": "sha-staging" } }),
       gh: new FakeGhClient(),
       tools: makeFakeTools({ git: perRunProbe }),
       artifacts: new InMemoryArtifactStore(),

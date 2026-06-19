@@ -8,7 +8,7 @@ reopens a terminal run, reconciles git/GitHub drift, then hands off to resume.
 
 **Rescue repairs run state, then git/GitHub drift.** `rescue scan`/`apply` repair
 RUN STATE (stuck/recoverable tasks, reopen a terminal run). The `rescue-reconciler`
-agent then repairs **remote** drift that run state cannot see — a `staging/<run-id>`
+agent then repairs **remote** drift that run state cannot see — a `staging-<run-id>`
 branch missing or behind `develop`, a PR whose merged/closed status disagrees with
 state, an orphan branch/worktree. Reconciliation is **forward-only and autonomous**
 (fetch, forward-merge `origin/develop` into the run branch, re-push a missing

@@ -22,7 +22,7 @@ The pipeline refuses to start against an unscaffolded or unprotected repo.
 
 If it refuses on missing branch protection, provision it or protect the `develop`
 branch manually first. See [Scaffold a target repo](./scaffold-a-repo.md). (Scaffold
-protects `develop`; each run cuts its own private `staging/<run-id>` integration
+protects `develop`; each run cuts its own private `staging-<run-id>` integration
 branch at create — there is no shared `staging` branch to protect.)
 
 ## 2. Start the run
@@ -59,7 +59,7 @@ runs:
   usage signal) — it hard-stops when the allowance runs out.
 
 `--no-ship` is the cutover-safety opt-out. The default is **live**: each task
-auto-merges into the run's `staging/<run-id>` branch and the `staging/<run-id>` →
+auto-merges into the run's `staging-<run-id>` branch and the `staging-<run-id>` →
 develop rollup merges into develop (gated by branch protection + the review panel +
 TDD + the holdout), but **only when the whole PRD completed** (see [Read the
 outcome](#4-read-the-outcome)). Pass `--no-ship` to open the PRs but never merge.
@@ -76,9 +76,9 @@ exists for the spec, `factory run create` exits `3` and emits
 (AskUserQuestion) to choose:
 
 - **Continue (resume)** — re-enter the existing run where it left off via
-  `/factory:resume`; its `staging/<run-id>` branch and merged work are intact.
+  `/factory:resume`; its `staging-<run-id>` branch and merged work are intact.
 - **Supersede (fresh)** — mark the old run `superseded`, delete its
-  `staging/<run-id>` branch (which auto-closes its task PRs), and start fresh.
+  `staging-<run-id>` branch (which auto-closes its task PRs), and start fresh.
 - **Cancel** — leave the existing run untouched.
 
 Pass `--resume` or `--supersede` up front to skip the prompt. To repair a run that
@@ -104,7 +104,7 @@ tests → exec → verify → ship`), emitting a spawn manifest whenever it need
    state step). The engine — not the driver — decides every transition.
 5. **Completion** — `factory run finalize` builds the report and files one issue
    per drop; **only when the whole PRD completed** does it ship the
-   `staging/<run-id> → develop` rollup (and, on a merged rollup, comment on + close
+   `staging-<run-id> → develop` rollup (and, on a merged rollup, comment on + close
    the originating PRD issue and delete the per-run branch). Then `factory score` +
    `factory state --summary` report the outcome.
 
@@ -113,12 +113,12 @@ tests → exec → verify → ship`), emitting a spawn manifest whenever it need
 `develop` receives a run's work **only as a whole PRD** — there is no partial
 delivery. The run ends in one of two finalize statuses:
 
-- `completed` — every task done, rollup CI green; the `staging/<run-id> → develop`
+- `completed` — every task done, rollup CI green; the `staging-<run-id> → develop`
   rollup merged, the PRD issue was closed, and the per-run branch was deleted.
 - `failed` — one or more tasks could not be delivered (the retry ladder was
   exhausted, or the run could not start / wedged and tripped the circuit breaker).
   `develop` is left **untouched**, the PRD issue stays **open**, and the run **keeps
-  its `staging/<run-id>` branch** banked for [rescue](./rescue-a-stalled-run.md). One
+  its `staging-<run-id>` branch** banked for [rescue](./rescue-a-stalled-run.md). One
   GitHub issue is filed per dropped task with its failure class (`capability-budget`,
   `spec-defect`, or `blocked-environmental`).
 

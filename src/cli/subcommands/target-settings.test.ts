@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   FACTORY_TARGET_ALLOWLIST,
+  FACTORY_TARGET_ADDITIONAL_DIRS,
   mergeTargetSettings,
   ensureTargetSettings,
 } from "./target-settings.js";
@@ -107,6 +108,42 @@ describe("mergeTargetSettings", () => {
     expect(changed).toBe(false);
     const allow = (twice.permissions as { allow: string[] }).allow;
     expect(new Set(allow).size).toBe(allow.length); // no duplicates on re-merge
+    const dirs = (twice.permissions as { additionalDirectories: string[] }).additionalDirectories;
+    expect(new Set(dirs).size).toBe(dirs.length); // no duplicate dirs on re-merge
+  });
+
+  it("from empty: declares the plugin data dir in permissions.additionalDirectories", () => {
+    // The allow-list grants the tool; additionalDirectories grants the
+    // working-directory boundary for out-of-tree writes (results/, worktrees/).
+    const { settings } = mergeTargetSettings({});
+    const dirs = (settings.permissions as { additionalDirectories: string[] })
+      .additionalDirectories;
+    for (const d of FACTORY_TARGET_ADDITIONAL_DIRS) expect(dirs).toContain(d);
+    expect(dirs).toContain("${CLAUDE_PLUGIN_DATA}");
+  });
+
+  it("unions additionalDirectories, preserving the user's own entries", () => {
+    const existing = {
+      permissions: { additionalDirectories: ["/my/extra/dir"] },
+    };
+    const { settings, changed } = mergeTargetSettings(existing);
+    expect(changed).toBe(true);
+    const dirs = (settings.permissions as { additionalDirectories: string[] })
+      .additionalDirectories;
+    expect(dirs).toContain("/my/extra/dir"); // user entry kept
+    expect(dirs).toContain("${CLAUDE_PLUGIN_DATA}"); // factory entry added
+  });
+
+  it("reports changed when additionalDirectories is missing even if allow-list is complete", () => {
+    // Build a fully-merged settings, then strip ONLY additionalDirectories: a
+    // re-merge must re-add it (and report changed), independent of the allow-list.
+    const base = mergeTargetSettings({}).settings;
+    delete (base.permissions as { additionalDirectories?: unknown }).additionalDirectories;
+    const { changed, settings } = mergeTargetSettings(base);
+    expect(changed).toBe(true);
+    const dirs = (settings.permissions as { additionalDirectories: string[] })
+      .additionalDirectories;
+    expect(dirs).toContain("${CLAUDE_PLUGIN_DATA}");
   });
 
   it("reports changed when baseRef was not yet head even if allow-list is complete", () => {

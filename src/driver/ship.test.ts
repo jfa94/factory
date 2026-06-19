@@ -138,7 +138,7 @@ describe("shipTask", () => {
     expect(result).toEqual({ kind: "task-terminal", outcome: { outcome: "done" } });
     // PR was created with the per-run staging branch as base
     expect(gh.created).toHaveLength(1);
-    expect(gh.created[0]?.base).toBe("staging/run-A");
+    expect(gh.created[0]?.base).toBe("staging-run-A");
   });
 
   it("ships task PRs against staging/<run-id> in live mode and serializer targets per-run branch", async () => {
@@ -149,12 +149,12 @@ describe("shipTask", () => {
 
     expect(result).toEqual({ kind: "task-terminal", outcome: { outcome: "done" } });
     // PR base is the per-run staging branch
-    expect(gh.created[0]?.base).toBe("staging/run-B");
+    expect(gh.created[0]?.base).toBe("staging-run-B");
     // Serializer executed a merge (confirms it reached the merge path with per-run branch)
     expect(gh.merges).toHaveLength(1);
     // The merged PR had base pointing at the per-run staging branch
     const mergedPr = gh.prs.get("factory/run-B/t-1");
-    expect(mergedPr?.baseRefName).toBe("staging/run-B");
+    expect(mergedPr?.baseRefName).toBe("staging-run-B");
   });
 
   it("records branch and pr_number in state after ship", async () => {

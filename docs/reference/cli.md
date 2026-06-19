@@ -61,7 +61,7 @@ Action. Prepares a target repo for the pipeline: idempotently copies the CI net
 (`.stryker.config.json`, `.dependency-cruiser.cjs`, `eslint.config.mjs`); ensures
 the `.gitignore` guard; and probes branch protection on `develop` (the integration
 base) — **refusing loudly** when `develop` is not protected, unless `--provision` is
-set. Per-run `staging/<run-id>` branches are minted at [`run create`](#run-create);
+set. Per-run `staging-<run-id>` branches are minted at [`run create`](#run-create);
 scaffold no longer creates or protects a shared `staging` branch.
 
 ```
@@ -108,7 +108,7 @@ The orchestrator loops generate ⇄ review (bounded by `max_iterations`) until
 ### `run create`
 
 Action. Resolves a durable spec, creates a fresh run, seeds one `pending` task per
-spec task, cuts + GitHub-protects the run's `staging/<run-id>` integration branch
+spec task, cuts + GitHub-protects the run's `staging-<run-id>` integration branch
 from `develop` (Decision 33), and emits `{kind:"created", run}`. Seeding copies only
 the producer dial (`risk_tier`) + dependency edges — never `tdd_exempt` (read from
 the spec at runtime). Duplicate, self, dangling, or cyclic dependency edges fail
@@ -126,10 +126,10 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 | `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                                                                                                             |
 | `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                                                                                                            |
 | `--new`               | Force a fresh run, bypassing the active-run conflict scan.                                                                                                                                                                                                        |
-| `--supersede`         | If an active run exists for this spec, mark it `superseded`, delete its `staging/<run-id>` branch (auto-closing its task PRs), then create a fresh run. Emits `{kind:"superseded", run, supersededId}`. Mutually exclusive with `--resume`.                       |
+| `--supersede`         | If an active run exists for this spec, mark it `superseded`, delete its `staging-<run-id>` branch (auto-closing its task PRs), then create a fresh run. Emits `{kind:"superseded", run, supersededId}`. Mutually exclusive with `--resume`.                       |
 | `--resume`            | If an active run exists, do not create — return the conflict (exit `3`) so the caller hands off to [`resume`](#resume). Mutually exclusive with `--supersede`.                                                                                                    |
 | `--workflow`          | Run the parallel background Workflow driver. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                                              |
-| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging/<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow driver + resume + finalize read it without re-passing. |
+| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging-<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow driver + resume + finalize read it without re-passing. |
 | `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`; absent ⇒ owner-unknown (gate runs unscoped).                                                                                                               |
 
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
@@ -151,7 +151,7 @@ run at a time. `run create` does **not** reuse an existing run: when a non-termi
 run already exists for this `(repo, spec_id)`, it exits `3` (CONFLICT) and emits
 `{kind:"exists", existing:{run_id, status}}`. Two escapes resolve the conflict:
 
-- `--supersede` — mark the old run `superseded`, delete its `staging/<run-id>` branch
+- `--supersede` — mark the old run `superseded`, delete its `staging-<run-id>` branch
   - PRs, and create a fresh run (`{kind:"superseded", run, supersededId}`).
 - `--resume` — return the conflict so the caller hands off to [`resume`](#resume).
 
@@ -179,7 +179,7 @@ Action. Turns an all-terminal run into its shipped outcome, in resume-safe order
 build the report (`report.md`), emit telemetry, file one GitHub issue per dropped
 task (deduped), then — **only when the run completed** (Decision 34: develop receives
 whole PRDs only) — forward-reconcile `develop` into the run branch (no force-push),
-open + CI-gate + (in `live` mode) squash-merge the `staging/<run-id> → develop`
+open + CI-gate + (in `live` mode) squash-merge the `staging-<run-id> → develop`
 rollup, comment on + close the originating PRD issue, and delete the per-run branch;
 finally flip the run terminal **last**. A `failed` run leaves `develop` untouched,
 the PRD open, and keeps its branch for rescue. Loud if any task is still non-terminal.
@@ -191,7 +191,7 @@ factory run finalize [--run <id>] [--no-ship]
 
 Ship mode defaults to the run's **persisted `ship_mode`** (set at `run create`); no flag
 is needed. `--no-ship` overrides it to no-merge for THIS finalize only (opens the
-`staging/<run-id> → develop` rollup PR but never merges). Emits
+`staging-<run-id> → develop` rollup PR but never merges). Emits
 `{kind:"finalized", run, report, rollup?, issues_filed}`.
 
 ## `resume`

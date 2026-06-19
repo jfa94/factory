@@ -30,12 +30,15 @@ This is idempotent. It:
   `.dependency-cruiser.cjs`, and `eslint.config.mjs`;
 - guarantees the `.gitignore` entries that keep factory state un-committed;
 - emits / idempotently merges the target `.claude/settings.json` (factory allow-list
-  - `worktree.baseRef:"head"`);
+  - `permissions.additionalDirectories: ["${CLAUDE_PLUGIN_DATA}"]` so the built-in
+    file tools reach the out-of-tree plugin data dir — `results/`, `worktrees/`,
+    `runs/`, `specs/` — without tripping the working-directory-boundary prompt +
+    `worktree.baseRef:"head"`);
 - probes branch protection on `develop` (the integration base) and **refuses loudly
   if it is missing**.
 
 Scaffold does **not** create or protect a shared `staging` branch. Each run cuts its
-own private `staging/<run-id>` integration branch from `develop` at
+own private `staging-<run-id>` integration branch from `develop` at
 [`run create`](../reference/cli.md#run-create) (Decision 33).
 
 It prints a `ScaffoldReport`: `files_created`, `files_present`, `files_updated`

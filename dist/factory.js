@@ -7917,9 +7917,9 @@ async function ensureStaging(args) {
 var RUN_STAGING_PREFIX = "staging";
 function runStagingBranch(runId) {
   if (runId.length === 0) {
-    throw new Error("runStagingBranch: empty run id (would yield a bare 'staging/' branch)");
+    throw new Error("runStagingBranch: empty run id (would yield a bare 'staging-' branch)");
   }
-  return `${RUN_STAGING_PREFIX}/${runId}`;
+  return `${RUN_STAGING_PREFIX}-${runId}`;
 }
 
 // src/cli/current.ts
@@ -8025,6 +8025,7 @@ var FACTORY_TARGET_ALLOWLIST = [
   "Write(${CLAUDE_PLUGIN_DATA}/**)",
   "Edit(${CLAUDE_PLUGIN_DATA}/**)"
 ];
+var FACTORY_TARGET_ADDITIONAL_DIRS = ["${CLAUDE_PLUGIN_DATA}"];
 function isObject(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -8037,6 +8038,14 @@ function mergeTargetSettings(existing) {
   const additions = FACTORY_TARGET_ALLOWLIST.filter((e) => !have.has(e));
   if (additions.length > 0) {
     permissions.allow = [...currentAllow, ...additions];
+    settings.permissions = permissions;
+    changed = true;
+  }
+  const currentDirs = Array.isArray(permissions.additionalDirectories) ? permissions.additionalDirectories.filter((e) => typeof e === "string") : [];
+  const haveDirs = new Set(currentDirs);
+  const dirAdditions = FACTORY_TARGET_ADDITIONAL_DIRS.filter((e) => !haveDirs.has(e));
+  if (dirAdditions.length > 0) {
+    permissions.additionalDirectories = [...currentDirs, ...dirAdditions];
     settings.permissions = permissions;
     changed = true;
   }

@@ -40,7 +40,7 @@ import { z } from "zod";
  *   - `running`    — actively executing (non-terminal).
  *   - `completed`  — every task done, rollup CI green. TERMINAL, success.
  *                    `develop` receives the rollup only on this status.
- *   - `superseded` — a fresh `run` superseded this run; its `staging/<run-id>`
+ *   - `superseded` — a fresh `run` superseded this run; its `staging-<run-id>`
  *                    branch + PRs were deleted. TERMINAL.
  *   - `paused`     — QUOTA 5h-window breach (Decision 24): waiting out the rising
  *                    threshold curve in-session. NON-terminal, self-heals.

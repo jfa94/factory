@@ -295,7 +295,7 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
  * task rows via the one sanctioned write path; returns the seeded {@link RunState}.
  *
  * When `stagingDeps` is supplied (always from `runCreate`; absent on the bare
- * `createRun` direct-API path), cuts `staging/<run-id>` from `develop` and
+ * `createRun` direct-API path), cuts `staging-<run-id>` from `develop` and
  * provisions GitHub branch protection on it (Decision 33). The cut + protect runs
  * AFTER the run state row is persisted so `run.run_id` is guaranteed to exist.
  */
@@ -355,7 +355,7 @@ async function createRunFromManifest(
  * id (determinism/tests) get a predictable create.
  *
  * INTENTIONALLY omits `stagingDeps` — this bare direct-API export creates the run
- * row WITHOUT cutting/protecting a `staging/<run-id>` branch. Every production run
+ * row WITHOUT cutting/protecting a `staging-<run-id>` branch. Every production run
  * goes through `runCreate`, which supplies `stagingDeps`. Do NOT route a real run
  * through here expecting a staging branch (Decision 33).
  */
@@ -388,7 +388,7 @@ export type ResolveOrCreateResult =
  * Supersede an active run (Decision 35): mark it `superseded` (durable intent
  * FIRST, so a crash mid-cleanup leaves a recoverable orphan branch, never a
  * running run with no branch), then tear down protection (GitHub blocks deleting
- * a protected ref) and delete `staging/<run-id>` (which auto-closes its task PRs).
+ * a protected ref) and delete `staging-<run-id>` (which auto-closes its task PRs).
  */
 async function supersedeRun(
   state: StateManager,
@@ -643,7 +643,7 @@ export async function runCreate(
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
   // Decision 33: build the staging deps bundle (git + gh + config + root + repo
-  // coords) so createRunFromManifest can cut + protect staging/<run-id> from develop.
+  // coords) so createRunFromManifest can cut + protect staging-<run-id> from develop.
   const ghClient = overrides.ghClient ?? new DefaultGhClient();
   const { owner, repo } = splitRepoSlug(repoSlug);
   const stagingDeps: RunStagingDeps = {

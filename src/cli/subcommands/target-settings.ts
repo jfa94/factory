@@ -52,6 +52,19 @@ const log = createLogger("cli:target-settings");
  *                                 touch it constantly. The `${CLAUDE_PLUGIN_DATA}`
  *                                 placeholder is expanded by Claude Code at load
  *                                 time, so it stays portable across installs.
+ *
+ * The allow-list is NOT sufficient on its own: Claude Code's tool-permission
+ * rules and its working-directory boundary are INDEPENDENT checks. A
+ * `Write(${CLAUDE_PLUGIN_DATA}/**)` allow rule grants the TOOL, but a built-in
+ * file tool (Read/Write/Edit) touching a path OUTSIDE the launch directory still
+ * trips the boundary and prompts the user to "add" the directory. The plugin
+ * writes to several such out-of-tree paths under the data dir — `results/<run>`
+ * (workflow-driver handoff files, written with the Write tool) and
+ * `worktrees/<run>/<task>` (where producer agents author code/tests). So we ALSO
+ * declare the data dir in {@link FACTORY_TARGET_ADDITIONAL_DIRS} →
+ * `permissions.additionalDirectories`. The single parent entry grants recursive
+ * access, covering every managed subdir (`specs/ spec-build/ runs/ worktrees/
+ * current/ results/`) now and in future.
  */
 export const FACTORY_TARGET_ALLOWLIST: readonly string[] = [
   "Bash(factory:*)",
@@ -69,6 +82,15 @@ export const FACTORY_TARGET_ALLOWLIST: readonly string[] = [
   "Write(${CLAUDE_PLUGIN_DATA}/**)",
   "Edit(${CLAUDE_PLUGIN_DATA}/**)",
 ];
+
+/**
+ * Out-of-tree directories the plugin's built-in file tools must reach without a
+ * working-directory-boundary prompt. The data dir parent covers every managed
+ * subdir recursively (see {@link FACTORY_TARGET_ALLOWLIST} for why the allow-list
+ * alone is insufficient). The `${CLAUDE_PLUGIN_DATA}` placeholder is expanded by
+ * Claude Code at load time, keeping it portable across installs.
+ */
+export const FACTORY_TARGET_ADDITIONAL_DIRS: readonly string[] = ["${CLAUDE_PLUGIN_DATA}"];
 
 /** Result of an idempotent {@link mergeTargetSettings}. */
 export interface MergeResult {
@@ -112,6 +134,20 @@ export function mergeTargetSettings(existing: Record<string, unknown>): MergeRes
   const additions = FACTORY_TARGET_ALLOWLIST.filter((e) => !have.has(e));
   if (additions.length > 0) {
     permissions.allow = [...currentAllow, ...additions];
+    settings.permissions = permissions;
+    changed = true;
+  }
+
+  // permissions.additionalDirectories — union the out-of-tree plugin dirs so the
+  // built-in file tools never trip the working-directory boundary (separate from
+  // the allow-list above). Same union/dedup/idempotency contract as `allow`.
+  const currentDirs = Array.isArray(permissions.additionalDirectories)
+    ? permissions.additionalDirectories.filter((e): e is string => typeof e === "string")
+    : [];
+  const haveDirs = new Set(currentDirs);
+  const dirAdditions = FACTORY_TARGET_ADDITIONAL_DIRS.filter((e) => !haveDirs.has(e));
+  if (dirAdditions.length > 0) {
+    permissions.additionalDirectories = [...currentDirs, ...dirAdditions];
     settings.permissions = permissions;
     changed = true;
   }

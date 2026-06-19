@@ -354,6 +354,8 @@ The workflow uses `gh pr merge --merge --auto --delete-branch` for staging-to-de
 
 Every narrowing has been tried and produces the same failure mode: the pipeline halts on a command the allow-list did not anticipate, and there is no operator to approve it. The cost of one missed allow rule is a stalled run; the cost of one missed deny rule is bounded by the hook layer.
 
+**`additionalDirectories` (working-directory boundary):** Both `templates/settings.autonomous.json` and the scaffolded target `.claude/settings.json` declare `permissions.additionalDirectories: ["${CLAUDE_PLUGIN_DATA}"]`. The allow-list grants the _tool_, but Claude Code's working-directory boundary is an independent check: a built-in file tool (Read/Write/Edit) touching a path outside the launch directory still prompts the user to "add" the directory. The plugin writes to out-of-tree paths under the data dir (`results/`, `worktrees/`, `runs/`, `specs/`); declaring the single data-dir parent grants recursive access so those writes never trip the boundary — fatal in autonomous mode, where no human is present to approve the prompt.
+
 **Scope:** This design applies only to autonomous mode (sessions launched with `templates/settings.autonomous.json`, identified by `FACTORY_AUTONOMOUS_MODE=1`). Since autonomy is now mandatory for a run (Decision 29), every _pipeline_ session is an autonomous one; an interactive session can still use the user's normal (tighter) settings for non-pipeline work, but `factory run create`/`resume` will refuse to start there.
 
 ---
@@ -675,9 +677,9 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 ## Decision 33: Per-Run Staging Branch (Replaces the Single Shared Staging Branch)
 
-**Status:** Implemented (2026-06-18). Supersedes the single-shared-`staging` model assumed by Decisions 12 and 32. `runStagingBranch(runId)` (`src/git/run-staging.ts`) is the single branch-name source; `run create` cuts + protects `staging/<run-id>` from `develop`; ship/handlers/serializer/rollup/finalize target it; scaffold now protects `develop` instead of a shared `staging`; finalize forward-reconciles `develop` into the run branch before rollup.
+**Status:** Implemented (2026-06-18). Supersedes the single-shared-`staging` model assumed by Decisions 12 and 32. `runStagingBranch(runId)` (`src/git/run-staging.ts`) is the single branch-name source; `run create` cuts + protects `staging-<run-id>` from `develop`; ship/handlers/serializer/rollup/finalize target it; scaffold now protects `develop` instead of a shared `staging`; finalize forward-reconciles `develop` into the run branch before rollup.
 
-**Choice:** Each run integrates its tasks on its own private branch `staging/<run-id>`, cut from the current tip of develop at `run create`, instead of all runs sharing one long-lived `staging` branch. Task PRs target the run's own `staging/<run-id>`; that work is invisible to develop and to every other run until the run completes.
+**Choice:** Each run integrates its tasks on its own private branch `staging-<run-id>`, cut from the current tip of develop at `run create`, instead of all runs sharing one long-lived `staging` branch. Task PRs target the run's own `staging-<run-id>`; that work is invisible to develop and to every other run until the run completes.
 
 **Why:**
 
@@ -687,9 +689,11 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 **Mechanics:**
 
-- Cut `staging/<run-id>` from current `origin/develop` at `run create`, so staging starts up-to-date with develop.
+- Cut `staging-<run-id>` from current `origin/develop` at `run create`, so staging starts up-to-date with develop.
 - Before the completion rollup merges to develop, reconcile forward if develop advanced in the meantime — integrate develop into the run branch (forward-only; never rebase-publish or force-push). The exact sequence (fast-forward vs merge-develop-in to satisfy a "branches up to date" requirement) is an implementation detail, but it is always forward-only and bounded to once per run, at completion.
-- `superseded` deletes its `staging/<run-id>` immediately (auto-closing its open task PRs). `failed` KEEPS its branch so rescue can reopen and resume the work already banked on it. Branches orphaned by a fresh start (rather than supersede) are cleaned up manually.
+- `superseded` deletes its `staging-<run-id>` immediately (auto-closing its open task PRs). `failed` KEEPS its branch so rescue can reopen and resume the work already banked on it. Branches orphaned by a fresh start (rather than supersede) are cleaned up manually.
+
+**Amendment (2026-06-19) — flat `-` delimiter, not `/`.** The per-run branch is `staging-<run-id>`, not `staging/<run-id>`. Git stores refs as files (`refs/heads/…`), so a slashed `staging/<run-id>` requires `staging` to be a _directory_ — which collides with a target repo's long-lived `refs/heads/staging` release branch (the common `develop → staging → main` flow). That collision is config-unfixable (the prefix is hardcoded) and blocks every `run create` in such a repo. A flat `staging-<run-id>` shares no path segment with `refs/heads/staging`, so the two coexist regardless of the target repo's branch layout. `runStagingBranch(runId)` (`src/git/run-staging.ts`) builds the name construct-only — nothing parses it — so no callers changed. Runs created before this change live on the old slashed name; they are ephemeral, so supersede/restart rather than migrate.
 
 **Trade-off:** Per-run branches diverge from develop over their lifetime, so a run that completes after another has merged to develop must reconcile forward before its rollup — integration work the single forward-only shared branch did not need. Accepted: the reconciliation is forward-only and bounded, and it buys the confinement that makes the whole recovery model safe.
 
@@ -701,7 +705,7 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 **Status:** Implemented (2026-06-18). Reverses the partial-rollup-to-develop behavior of the prior `finalize`/`rollup` (the `PARTIAL:` rollup header is retired). `partial` removed from `RunStatusEnum`; `decideFinalize` is binary `completed | failed`; rollup fires only on `completed`; on a merged rollup finalize comments + closes the PRD (new `issueComment`/`issueClose`) and deletes the per-run branch; a wedged run hits the `next.ts` circuit breaker → `failed`.
 
-**Choice:** The `staging/<run-id>`→develop rollup fires ONLY when the run is `completed` (every task shipped). An incomplete run lands nothing on develop. There is no partial delivery: a run delivers the whole PRD or delivers nothing to develop.
+**Choice:** The `staging-<run-id>`→develop rollup fires ONLY when the run is `completed` (every task shipped). An incomplete run lands nothing on develop. There is no partial delivery: a run delivers the whole PRD or delivers nothing to develop.
 
 **Why:**
 

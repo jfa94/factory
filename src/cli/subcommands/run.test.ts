@@ -588,12 +588,12 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     // Old run is finalized as superseded.
     expect((await state.read("run-old")).status).toBe("superseded");
     // Branch was deleted via gh fake (field: deletedBranches).
-    expect(gh.deletedBranches).toContain("staging/run-old");
+    expect(gh.deletedBranches).toContain("staging-run-old");
     // Protection was torn down too — load-bearing: GitHub blocks deleting a
     // protected ref, so deleteProtection MUST run (and before the branch delete).
-    expect(gh.protectionDeletes).toContain("staging/run-old");
-    expect(gh.protectionDeletes.indexOf("staging/run-old")).toBeLessThanOrEqual(
-      gh.deletedBranches.indexOf("staging/run-old"),
+    expect(gh.protectionDeletes).toContain("staging-run-old");
+    expect(gh.protectionDeletes.indexOf("staging-run-old")).toBeLessThanOrEqual(
+      gh.deletedBranches.indexOf("staging-run-old"),
     );
   });
 
@@ -994,7 +994,7 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
     });
     expect(code).toBe(EXIT.OK);
 
-    const branch = "staging/run-20260618-101500";
+    const branch = "staging-run-20260618-101500";
 
     // (a) branch was cut: checkoutB was called with the per-run staging branch from origin/develop
     expect(git.calls).toContain(`checkout -B ${branch} origin/develop`);
@@ -1046,6 +1046,6 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
 
     // No new checkoutB calls after the first create (branch was not cut for the rejected run).
     const newCalls = git.calls.slice(callsAfterFirst.length);
-    expect(newCalls.filter((c) => c.startsWith("checkout -B staging/"))).toHaveLength(0);
+    expect(newCalls.filter((c) => c.startsWith("checkout -B staging-"))).toHaveLength(0);
   });
 });

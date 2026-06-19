@@ -162,10 +162,10 @@ describe("finalizeRun", () => {
     expect((await state.read(RUN_ID)).status).toBe("completed");
 
     // Branch GC (Decision 35): protection deleted BEFORE branch; both deleted.
-    expect(gh.protectionDeletes).toContain(`staging/${RUN_ID}`);
-    expect(gh.deletedBranches).toContain(`staging/${RUN_ID}`);
-    expect(gh.protectionDeletes.indexOf(`staging/${RUN_ID}`)).toBeLessThanOrEqual(
-      gh.deletedBranches.indexOf(`staging/${RUN_ID}`),
+    expect(gh.protectionDeletes).toContain(`staging-${RUN_ID}`);
+    expect(gh.deletedBranches).toContain(`staging-${RUN_ID}`);
+    expect(gh.protectionDeletes.indexOf(`staging-${RUN_ID}`)).toBeLessThanOrEqual(
+      gh.deletedBranches.indexOf(`staging-${RUN_ID}`),
     );
   });
 
@@ -181,7 +181,7 @@ describe("finalizeRun", () => {
     expect(gh.merges).toHaveLength(0);
     expect(gh.created).toHaveLength(1); // PR opened for inspection
     // Branch GC: no-merge → NOT merged → branch retained.
-    expect(gh.deletedBranches).not.toContain(`staging/${RUN_ID}`);
+    expect(gh.deletedBranches).not.toContain(`staging-${RUN_ID}`);
   });
 
   it("failed (some dropped): no rollup, one issue per drop, PRD left open (Decision 34)", async () => {
@@ -213,7 +213,7 @@ describe("finalizeRun", () => {
     // PRD issue NOT closed.
     expect(gh.issueCloses).toHaveLength(0);
     // Branch GC: failed → branch retained for rescue.
-    expect(gh.deletedBranches).not.toContain(`staging/${RUN_ID}`);
+    expect(gh.deletedBranches).not.toContain(`staging-${RUN_ID}`);
   });
 
   it("failed (all dropped): no rollup, one issue per drop, run flips to failed", async () => {
@@ -402,9 +402,9 @@ describe("finalizeRun", () => {
     const res = await finalizeRun(makeDeps(spec, "live"), RUN_ID);
 
     // (a) git merged origin/develop into staging/<run-id> before the rollup PR.
-    expect(git.mergesInto[`staging/${RUN_ID}`]).toContain("origin/develop");
+    expect(git.mergesInto[`staging-${RUN_ID}`]).toContain("origin/develop");
     // (b) the rollup PR head is staging/<run-id>.
-    expect(gh.created.at(-1)?.head).toBe(`staging/${RUN_ID}`);
+    expect(gh.created.at(-1)?.head).toBe(`staging-${RUN_ID}`);
     // (c) run reached completed.
     expect(res.run.status).toBe("completed");
   });

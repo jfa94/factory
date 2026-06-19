@@ -7,7 +7,7 @@ Requirements Document) issue into merged pull requests, autonomously, through a
 quality-first, TDD-enforced stage machine. A person writes the requirements and
 walks away; the factory generates a spec, decomposes it into a dependency graph
 of tasks, drives each task test-first through implementation and an adversarial
-review floor, and ships the result up a per-run `staging/<run-id> → develop`
+review floor, and ships the result up a per-run `staging-<run-id> → develop`
 integration branch — only once the whole PRD is delivered, never touching `main`.
 
 ## What problem it solves
