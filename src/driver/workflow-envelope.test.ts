@@ -104,6 +104,22 @@ describe("parseEnvelope — corrupt kind (the re-key failure)", () => {
     const raw = JSON.stringify({ kind: 42 });
     expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow();
   });
+
+  it("missing kind surfaces the raw payload and names the real failure modes (not just 're-key')", () => {
+    // The exact misattribution from run-20260620-085154: the engine crashed with EMPTY
+    // stdout (an --expect-mode mismatch) and the exec-agent FABRICATED a kindless object.
+    // The error must show the bytes and name fabrication/swallowed-exit, not blame a re-key.
+    const raw = JSON.stringify({ error: "expect-mode mismatch: session != workflow", run_id: "r" });
+    expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow(/raw was:/);
+    expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow(/expect-mode mismatch/);
+    expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow(/fabricated|swallowed/);
+  });
+
+  it("unknown kind surfaces the raw payload too (legible corruption, not bare blame)", () => {
+    const raw = JSON.stringify({ kind: "factory-envelope", ready: '["T1","T2"]' });
+    expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow(/raw was:/);
+    expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow(/T1/);
+  });
 });
 
 describe("parseEnvelope — garbage / non-JSON", () => {

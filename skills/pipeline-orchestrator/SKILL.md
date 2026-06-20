@@ -99,8 +99,13 @@ session is not autonomous (`FACTORY_AUTONOMOUS_MODE=1`). This is the determinist
 start an unattended pipeline in an interactive session — not a transient error. Surface the relaunch
 instruction (Phase 0 step 2); never retry blindly.
 
-**When the run is in workflow mode (the command passed `--workflow`), STOP after this phase** — return
-control to `/factory:run`, which owns the Workflow launch (`commands/run.md`). Do NOT enter Phase 3.
+**When the run is in workflow mode, STOP after this phase** — return control to `/factory:run`,
+which owns the Workflow launch (`commands/run.md`). Do NOT enter Phase 3. Read the mode from the
+run's **persisted** `mode` (the `created`/`resumed` envelope), which the forwarded `--workflow`
+flag set at create — NOT from the invoking flags directly. On a **resume** re-entry (`factory
+resume` → `{kind:"resumed", run}`), the driver is `resumed.run.mode` verbatim (`session` → Phase 3;
+`workflow` → hand back to `/factory:resume` for the Workflow launch); `mode` is immutable, so it is
+never ambiguous and resume itself takes no mode flag.
 
 ## Phase 3 — THE LOOP
 

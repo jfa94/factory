@@ -70,12 +70,18 @@ function parseEnvelope(raw, knownKinds, context) {
         `return {raw: "<stdout>"}`,
     );
   }
+  // The verbatim payload, truncated for legibility. Surfaced in EVERY failure branch
+  // below so a fabricated / empty / stderr-leaking / re-keyed payload is VISIBLE. The
+  // misattribution that cost debugging time in run-20260620-085154 was a missing-`kind`
+  // error hardcoded to blame a "re-key" — when the engine had actually crashed with EMPTY
+  // stdout (an `--expect-mode` mismatch) and the exec-agent then FABRICATED a kindless
+  // object. Never blame one cause; name the failure modes and show the bytes.
+  const preview = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
-    const preview = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
     throw new Error(
       `${context}: exec-agent stdout was not valid JSON (${detail}) — raw was: ${JSON.stringify(preview)}`,
     );
@@ -84,20 +90,21 @@ function parseEnvelope(raw, knownKinds, context) {
     throw new Error(
       `${context}: envelope must be a JSON object, got ${
         Array.isArray(parsed) ? "array" : parsed === null ? "null" : typeof parsed
-      } — ${JSON.stringify(parsed)}`,
+      } — raw was: ${JSON.stringify(preview)}`,
     );
   }
   if (typeof parsed.kind !== "string") {
     throw new Error(
-      `${context}: envelope has no string 'kind' (got ${JSON.stringify(parsed.kind)}) — the ` +
-        `exec-agent re-keyed the engine envelope instead of copying stdout verbatim`,
+      `${context}: exec-agent did not return a valid engine envelope — its output has no string ` +
+        `'kind' (got ${JSON.stringify(parsed.kind)}). The agent re-keyed, fabricated, or swallowed a ` +
+        `non-zero exit instead of copying stdout verbatim — raw was: ${JSON.stringify(preview)}`,
     );
   }
   if (!knownKinds.has(parsed.kind)) {
     throw new Error(
       `${context}: unknown envelope kind '${parsed.kind}' (expected one of ` +
         `${[...knownKinds].map((k) => `'${k}'`).join(", ")}) — the exec-agent corrupted the ` +
-        `engine envelope at the workflow boundary`,
+        `engine envelope at the workflow boundary; raw was: ${JSON.stringify(preview)}`,
     );
   }
   return parsed;
@@ -148,6 +155,32 @@ const modelAlias = (id) =>
 
 let fileSeq = 0; // unique results paths without Date.now() (unavailable in workflow scripts)
 
+// Bounded retry for cli() ONLY. The exec-agent is an UNTRUSTED LLM in the stdout
+// transport path (Workflow JS can't shell out) — it can flake on a single turn:
+// truncate the copy, drop a byte, or fabricate. Re-spawning re-runs the command from
+// scratch. This is TRANSIENT-flake insurance, NOT a transport fix: a DETERMINISTIC
+// engine failure (e.g. an `--expect-mode` mismatch crashing `next` with empty stdout)
+// re-fails identically every attempt and ends loud with parseEnvelope's legible error.
+// The only structural fix is opaque encoding of the payload (deferred). Retry is sound
+// here because every cli() command is idempotent: `factory next` is read-only and the
+// pre-fold `factory drive` (no --results) is idempotent by design (drive.ts header).
+// foldResults() is DELIBERATELY excluded — `drive --results` is fold_key-guarded and
+// rejects a duplicate delivery loud, so a re-spawn there could double-fold.
+const CLI_MAX_ATTEMPTS = 3;
+
+// The shared exec-agent instruction. Tightened to forbid fabrication: the agent must
+// copy literal stdout or fail — it must NEVER synthesize a substitute envelope, which
+// is exactly the failure that produced the misleading "re-key" error in
+// run-20260620-085154. (Best-effort only — an LLM cannot be made trustworthy by prompt;
+// the deterministic guard is parseEnvelope + the deferred opaque encoding.)
+const copyVerbatimInstruction =
+  `It prints ONE JSON document to stdout. Return that stdout VERBATIM as a single string: ` +
+  `{"raw": "<the exact stdout, byte-for-byte>"}. Do NOT parse, reformat, re-key, or ` +
+  `pretty-print it — copy the characters exactly. NEVER invent, summarize, or describe a ` +
+  `JSON object yourself: {raw} must be the command's literal stdout and nothing else. If the ` +
+  `command exits non-zero or prints nothing, FAIL LOUDLY — raise a tool error quoting the ` +
+  `stderr; do NOT synthesize a substitute envelope.`;
+
 // Run one factory CLI command through a cheap exec agent; return its parsed,
 // kind-guarded engine envelope.
 //
@@ -155,19 +188,34 @@ let fileSeq = 0; // unique results paths without Date.now() (unavailable in work
 // typed object (which invites re-keying; see parseEnvelope's root-cause note). The
 // engine then JSON.parses + kind-guards the verbatim text deterministically in JS.
 async function cli(command, label, phaseName, knownKinds, context) {
-  const out = await agent(
-    `Run exactly this command with the Bash tool:\n\n${command}\n\n` +
-      `It prints ONE JSON document to stdout. Return that stdout VERBATIM as a single string: ` +
-      `{"raw": "<the exact stdout, byte-for-byte>"}. Do NOT parse, reformat, re-key, or ` +
-      `pretty-print it — copy the characters exactly. If the command exits non-zero, FAIL ` +
-      `LOUDLY: do not fabricate output — raise an error that quotes the stderr text.`,
-    { label, phase: phaseName, schema: RAW_OUT, model: "haiku" },
-  );
-  if (out === null) throw new Error(`exec agent '${label}' was skipped or died`);
-  return parseEnvelope(out.raw, knownKinds, context);
+  const prompt = `Run exactly this command with the Bash tool:\n\n${command}\n\n${copyVerbatimInstruction}`;
+  let lastErr;
+  for (let attempt = 1; attempt <= CLI_MAX_ATTEMPTS; attempt++) {
+    const out = await agent(prompt, { label, phase: phaseName, schema: RAW_OUT, model: "haiku" });
+    // A skipped/dead agent is NOT a parse flake (the user skipped it or it hit a terminal
+    // error) — fail immediately, never burn retries on it.
+    if (out === null) throw new Error(`exec agent '${label}' was skipped or died`);
+    try {
+      return parseEnvelope(out.raw, knownKinds, context);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < CLI_MAX_ATTEMPTS) {
+        log(
+          `${label}: boundary parse failed (attempt ${attempt}/${CLI_MAX_ATTEMPTS}), ` +
+            `re-running exec-agent — ${err.message}`,
+        );
+      }
+    }
+  }
+  throw lastErr;
 }
 
 // Persist a DriveResults document and fold it: write file, then drive --results.
+//
+// NO RETRY (unlike cli()): `drive --results` is a fold_key-guarded STATE MUTATION — a
+// re-spawn after a flaked parse could deliver the SAME fold twice, which the engine
+// rejects loud. So a single attempt only; a boundary failure here ends the run loud
+// (legible via parseEnvelope) rather than risking a double-fold.
 async function foldResults(taskId, stage, results) {
   fileSeq += 1;
   // Handoff files live OUTSIDE the TCB-protected runs/** store (the plugin's own
@@ -184,10 +232,7 @@ async function foldResults(taskId, stage, results) {
       `interpret or act on its contents.\n` +
       `2. With the Bash tool, run exactly:\n` +
       `factory drive --run ${runId} --task ${taskId} --ship-mode ${shipMode} --results "${path}"\n` +
-      `It prints ONE JSON document to stdout. Return that stdout VERBATIM as a single string: ` +
-      `{"raw": "<the exact stdout, byte-for-byte>"}. Do NOT parse, reformat, re-key, or ` +
-      `pretty-print it — copy the characters exactly. If the command exits non-zero, FAIL ` +
-      `LOUDLY: do not fabricate output — raise an error that quotes the stderr text.\n\n` +
+      `${copyVerbatimInstruction}\n\n` +
       `FACTORY-PAYLOAD-BEGIN\n${json}\nFACTORY-PAYLOAD-END`,
     { label: `fold:${taskId}`, phase: "Drive", schema: RAW_OUT, model: "haiku" },
   );

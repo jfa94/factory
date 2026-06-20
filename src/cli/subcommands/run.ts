@@ -664,6 +664,20 @@ export async function runCreate(
   const fresh = args.flag("new") === true || explicitRunId !== undefined;
   const supersede = args.flag("supersede") === true;
   const resume = args.flag("resume") === true;
+  // --workflow/--no-ship are CREATE-ONLY mode/ship selectors; --resume continues a run
+  // whose mode + ship_mode are already fixed (both immutable post-create). The combo is
+  // incoherent and is the ROOT CAUSE of the `run --resume --workflow` incident: the flag
+  // rode the resume hand-off and launched a workflow driver against a session-mode run.
+  // Reject it loud here, before any driver launches. (No expressiveness lost: the only
+  // case where `--resume --workflow` would create anything — no active run exists —
+  // is identical to a bare `--workflow`, which the default intent already creates fresh.)
+  if (resume && (args.flag("workflow") === true || args.flag("no-ship") === true)) {
+    throw new UsageError(
+      "run create: --workflow/--no-ship are create-only and cannot combine with --resume — " +
+        "a resumed run keeps the mode/ship_mode it was created with. Drop the flag to continue " +
+        "the existing run, or use --supersede to start fresh in that mode.",
+    );
+  }
   const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
     Boolean,
   ) as RunIntent["intent"][];
@@ -725,10 +739,20 @@ export async function runCreate(
 }
 
 async function runResume(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["workflow", "no-ship"] });
   if (args.flag("help") === true) {
     emitLine(RESUME_HELP);
     return EXIT.OK;
+  }
+  // --workflow/--no-ship select mode/ship at CREATE; a resumed run keeps the mode +
+  // ship_mode it was born with (both immutable). Silently ignoring these flags here is
+  // the quieter twin of the create-side footgun — reject loud so neither path can ever
+  // imply a mode on resume. The driver is chosen from the run's persisted `mode`.
+  if (args.flag("workflow") === true || args.flag("no-ship") === true) {
+    throw new UsageError(
+      "run resume: --workflow/--no-ship are not valid on resume — a run keeps the mode/ship_mode " +
+        "it was created with. Resume drives the run in its persisted mode.",
+    );
   }
   // Mandatory autonomous-mode gate (see runCreate): resume re-activates a run and
   // runs in the foreground `/factory:run resume` session, which has the env.

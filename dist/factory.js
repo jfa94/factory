@@ -12469,6 +12469,11 @@ async function runCreate(argv, overrides = {}) {
   const fresh = args.flag("new") === true || explicitRunId !== void 0;
   const supersede = args.flag("supersede") === true;
   const resume = args.flag("resume") === true;
+  if (resume && (args.flag("workflow") === true || args.flag("no-ship") === true)) {
+    throw new UsageError(
+      "run create: --workflow/--no-ship are create-only and cannot combine with --resume \u2014 a resumed run keeps the mode/ship_mode it was created with. Drop the flag to continue the existing run, or use --supersede to start fresh in that mode."
+    );
+  }
   const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
     Boolean
   );
@@ -12524,10 +12529,15 @@ async function runCreate(argv, overrides = {}) {
   return EXIT.OK;
 }
 async function runResume(argv) {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { booleans: ["workflow", "no-ship"] });
   if (args.flag("help") === true) {
     emitLine(RESUME_HELP);
     return EXIT.OK;
+  }
+  if (args.flag("workflow") === true || args.flag("no-ship") === true) {
+    throw new UsageError(
+      "run resume: --workflow/--no-ship are not valid on resume \u2014 a run keeps the mode/ship_mode it was created with. Resume drives the run in its persisted mode."
+    );
   }
   requireAutonomousMode();
   const dataDir = resolveDataDir({});

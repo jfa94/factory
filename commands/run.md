@@ -12,16 +12,16 @@ arguments:
     description: "Explicit <issue>-<slug> spec id, instead of --issue"
     required: false
   - name: "--workflow"
-    description: "Run the parallel background Workflow driver. Default (omit): session — sequential, in-session agents"
+    description: "CREATE-ONLY mode selector: run the parallel background Workflow driver. Default (omit): session — sequential, in-session agents. Cannot combine with --resume (rejected loud)"
     required: false
   - name: "--no-ship"
-    description: "Open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop"
+    description: "CREATE-ONLY ship selector: open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop. Cannot combine with --resume (rejected loud)"
     required: false
   - name: "--supersede"
     description: "If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — skips the conflict prompt"
     required: false
   - name: "--resume"
-    description: "If an active run already exists, hand off to `/factory:resume` instead of starting fresh — skips the conflict prompt"
+    description: "If an active run already exists, hand off to `/factory:resume` instead of starting fresh — skips the conflict prompt. Continues the run in its PERSISTED mode/ship; never pass --workflow/--no-ship alongside it"
     required: false
 ---
 
@@ -48,7 +48,10 @@ read `run_id` from the emitted `{kind:"created"|"superseded", run}` envelope). F
 command's `--workflow`/`--no-ship`/`--supersede`/`--resume` flags verbatim to Phase 2's `run
 create` so the resolved mode + ship intent persist on the run — the quota gate paces in
 `session` and hard-stops without pacing in `workflow` (Decision 24), and `ship_mode` is read
-back by the workflow driver + resume + finalize (never re-passed). Always pass `--session-id
+back by the workflow driver + resume + finalize (never re-passed). `--workflow`/`--no-ship`
+are **create-only** mode/ship selectors: combining either with `--resume` is rejected loud by
+`run create` (a resumed run keeps the `mode`/`ship_mode` it was born with — both immutable), so
+never let a mode flag ride a resume hand-off. Always pass `--session-id
 "$CLAUDE_CODE_SESSION_ID"` so the run records THIS session as its `owner_session` — the Stop
 gate then keeps the autonomous loop alive only here and lets other sessions stop freely
 (Prompt J). With `--spec-id`, skip Phase 1 — the spec must already exist; `run create` fails
@@ -67,7 +70,10 @@ surfaces this back to the command; unless the user already passed `--supersede`/
 anything destructive:
 
 - **Continue (resume)** → run `/factory:resume --run <existing.run_id>` — re-enter the
-  existing run where it left off (its staging branch + merged work are intact).
+  existing run where it left off (its staging branch + merged work are intact). The driver is
+  chosen from the run's **persisted** `mode` (`session` → in-session loop; `workflow` → the
+  Workflow driver), NOT from any `--workflow` flag on this `/factory:run` invocation — so a
+  `--resume --workflow` is a contradiction and `run create` rejects it loud.
 - **Supersede (fresh)** → re-run `factory run create … --supersede`: the old run is marked
   `superseded`, its `staging/<run-id>` branch + task PRs are deleted, and a fresh run starts.
   Then drive the fresh run.

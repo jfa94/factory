@@ -182,6 +182,22 @@ describe("run arg/usage edges", () => {
   it("create: --help prints help and exits OK", async () => {
     expect(await runCommand.run(["create", "--help"])).toBe(EXIT.OK);
   });
+  it("create: --resume + --workflow is a usage error (mode flag on a resume path)", async () => {
+    expect(
+      await runCommand.run(["create", "--repo", REPO, "--issue", "1", "--resume", "--workflow"]),
+    ).toBe(EXIT.USAGE);
+  });
+  it("create: --resume + --no-ship is a usage error (ship flag on a resume path)", async () => {
+    expect(
+      await runCommand.run(["create", "--repo", REPO, "--issue", "1", "--resume", "--no-ship"]),
+    ).toBe(EXIT.USAGE);
+  });
+  it("resume: --workflow is a usage error (mode is persisted, never re-passed)", async () => {
+    expect(await runCommand.run(["resume", "--workflow"])).toBe(EXIT.USAGE);
+  });
+  it("resume: --no-ship is a usage error (ship_mode is persisted, never re-passed)", async () => {
+    expect(await runCommand.run(["resume", "--no-ship"])).toBe(EXIT.USAGE);
+  });
   it("resume: --help prints help and exits OK", async () => {
     expect(await runCommand.run(["resume", "--help"])).toBe(EXIT.OK);
   });
@@ -804,6 +820,63 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
         dataDir,
       }),
     ).rejects.toMatchObject({ isUsageError: true });
+  });
+
+  it("runCreate: --resume + --workflow → UsageError naming the create-only flags (root-cause guard)", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    await expect(
+      runCreate(["--issue", "42", "--resume", "--workflow"], {
+        gitClient: git,
+        ghClient: gh,
+        cwd: "/x",
+        dataDir,
+      }),
+    ).rejects.toMatchObject({
+      isUsageError: true,
+      message: expect.stringMatching(/create-only and cannot combine with --resume/),
+    });
+  });
+
+  it("runCreate: bare --workflow still creates a fresh run with mode='workflow' (guard is scoped to --resume)", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const code = await runCreate(["--issue", "42", "--run-id", "run-wf", "--workflow"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/x",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-wf")).mode).toBe("workflow");
+  });
+
+  it("runCreate: --supersede + --workflow replaces the active run in workflow mode (guard is scoped to --resume)", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    await runCreate(["--issue", "42", "--run-id", "run-old"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/x",
+      dataDir,
+    });
+    // No --run-id on the supersede call: an explicit id means "fresh" and would
+    // collide with --supersede (picked.length > 1). The superseding run gets a
+    // generated id, which we resolve back out of the run list.
+    const code = await runCreate(["--issue", "42", "--supersede", "--workflow"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/x",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-old")).status).toBe("superseded");
+    const fresh = (await state.listRuns()).find((r) => r.run_id !== "run-old");
+    expect(fresh?.mode).toBe("workflow");
+    expect(fresh?.status).toBe("running");
   });
 });
 

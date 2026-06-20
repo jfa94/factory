@@ -108,12 +108,18 @@ export function parseEnvelope<K extends EnvelopeKind>(
         `return {raw: "<stdout>"}`,
     );
   }
+  // The verbatim payload, truncated for legibility. Surfaced in EVERY failure branch
+  // below so a fabricated / empty / stderr-leaking / re-keyed payload is VISIBLE. The
+  // misattribution that cost debugging time in run-20260620-085154 was a missing-`kind`
+  // error hardcoded to blame a "re-key" — when the engine had actually crashed with EMPTY
+  // stdout (an `--expect-mode` mismatch) and the exec-agent then FABRICATED a kindless
+  // object. Never blame one cause; name the failure modes and show the bytes.
+  const preview = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
-    const preview = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
     throw new Error(
       `${context}: exec-agent stdout was not valid JSON (${detail}) — raw was: ${JSON.stringify(
         preview,
@@ -124,14 +130,15 @@ export function parseEnvelope<K extends EnvelopeKind>(
     throw new Error(
       `${context}: envelope must be a JSON object, got ${
         Array.isArray(parsed) ? "array" : parsed === null ? "null" : typeof parsed
-      } — ${JSON.stringify(parsed)}`,
+      } — raw was: ${JSON.stringify(preview)}`,
     );
   }
   const env = parsed as Record<string, unknown>;
   if (typeof env.kind !== "string") {
     throw new Error(
-      `${context}: envelope has no string 'kind' (got ${JSON.stringify(env.kind)}) — the ` +
-        `exec-agent re-keyed the engine envelope instead of copying stdout verbatim`,
+      `${context}: exec-agent did not return a valid engine envelope — its output has no string ` +
+        `'kind' (got ${JSON.stringify(env.kind)}). The agent re-keyed, fabricated, or swallowed a ` +
+        `non-zero exit instead of copying stdout verbatim — raw was: ${JSON.stringify(preview)}`,
     );
   }
   // `knownKinds` is typed `ReadonlySet<K>`; widen for the membership test since
@@ -142,7 +149,7 @@ export function parseEnvelope<K extends EnvelopeKind>(
     throw new Error(
       `${context}: unknown envelope kind '${env.kind}' (expected one of ` +
         `${[...knownKinds].map((k) => `'${k}'`).join(", ")}) — the exec-agent corrupted the ` +
-        `engine envelope at the workflow boundary`,
+        `engine envelope at the workflow boundary; raw was: ${JSON.stringify(preview)}`,
     );
   }
   // DOCUMENTED CAST: `kind` is now a verified member of `knownKinds`, so the value
