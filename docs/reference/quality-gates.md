@@ -29,6 +29,36 @@ empty-evidence** sweep **fails** — "nothing ran" is never "passed". A strategy
 that throws (e.g. truncated tool output) propagates; the runner never swallows it
 into a silent pass.
 
+## How a command gate resolves its tool
+
+The command-running gates (`test`, `type`, `lint`, `mutation`) execute the
+worktree's **own** binary — they do **not** shell out via `npx <tool>`. For each,
+the runner resolves `node_modules/.bin/<tool>` by walking up from the worktree cwd
+to the filesystem root (`resolveLocalBin` /
+`defaultLocalBinResolver`, `src/verifier/deterministic/tools.ts`), so a
+monorepo/workspace bin at a parent root is found too, and execs that path directly.
+
+When no local bin resolves, the tool **fails closed**: `runTool` returns a
+synthetic exit-`127` result (`missingBinResult`) whose stderr names the missing
+tool — it never falls back to `npx`. The `lint` and `mutation` strategies skip
+first on a missing bin (gate not applicable), so in practice only the unconditional
+`type` and `test` gates reach the fail-closed path, where a missing `tsc`/`vitest`
+in a provisioned worktree is a genuine failure.
+
+Why not `npx`? Under corepack with a `packageManager: pnpm@…` field (node ≥ 24), a
+bare `npx <tool>` bypasses the installed `node_modules/.bin` and resolves a remote
+registry package of the same name instead — e.g. `npx tsc` fetches an unrelated
+`tsc` decoy and exits 1, a false type-gate failure independent of the code under
+test. Executing the local bin directly is package-manager-agnostic and never
+touches the network.
+
+The `test` gate additionally runs vitest with `--coverage.enabled=false`
+(`DefaultVitestTool`). It is a diff-scoped pass/fail gate (only the changed test
+files); a project whose vitest config forces global per-file coverage thresholds
+would otherwise fail the scoped run — every file the scoped tests don't exercise
+reports 0% — a false negative unrelated to whether the tests pass. Coverage is the
+`coverage` gate's job (before/after summaries), never the `test` gate's.
+
 Evidence is memoized by the worktree's git tree-SHA, so an identical-content
 re-run skips re-executing the tool — but the verdict is still re-derived, so a
 cache hit never bypasses re-derivation.

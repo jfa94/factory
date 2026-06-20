@@ -124,6 +124,18 @@ the producer re-attempts. A structurally-unfixable gate or an environmental bloc
 is classified-before-retry and drops immediately without burning a rung. See
 [producer-ladder.md](./producer-ladder.md).
 
+The human-facing block reason names what actually failed. A single shared helper
+(`floorBlockReason`, `src/core/state/derive.ts`) is the source of truth for both
+live verify paths — the fresh-review path (`runPanel` in `panel-run.ts`) and the
+resume / merge-resync re-entry path (`handlers.ts`) — so the two cannot drift apart.
+It inspects both halves of the floor: failing deterministic gates are named with
+their detail (e.g. `failed gates: type (tsc exit=1)`), an empty gate-evidence set is
+called out explicitly (`no deterministic gate evidence`) rather than masked, and
+blocked or errored reviewers are listed. Only when nothing specific is identifiable
+does it fall back to the generic `floor not unanimous`. This is what surfaces a
+fail-closed gate (a missing local tool bin, or a gate sweep that produced no
+evidence) instead of hiding it behind unanimity wording.
+
 ## Derive, don't store
 
 No floor verdict, panel verdict (as a floor), or gate verdict is persisted. The
