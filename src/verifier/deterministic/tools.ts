@@ -217,25 +217,135 @@ function assertNotTruncated(r: ExecResult, what: string): void {
   }
 }
 
-/** Default VitestTool: `npx vitest run [files...]`. */
+async function pathExists(absPath: string): Promise<boolean> {
+  try {
+    await access(absPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The closed set of external command-gate tools resolved via `node_modules/.bin`. */
+export type GateTool = "vitest" | "tsc" | "eslint" | "stryker";
+
+/**
+ * Resolve a {@link GateTool} to the worktree's OWN `node_modules/.bin/<tool>`,
+ * walking UP from `cwd` so a monorepo/workspace bin at a parent root is found too.
+ * Returns the absolute bin path, or null when no `node_modules/.bin/<tool>` exists
+ * up to the filesystem root.
+ *
+ * WHY this exists: the command-gates must NOT shell out via `npx <tool>`. Under
+ * corepack + a `packageManager: pnpm@…` field (node ≥ 24), a bare `npx <tool>`
+ * bypasses the installed `node_modules/.bin` and resolves a REMOTE registry
+ * package instead — e.g. `npx tsc` fetches the unrelated `tsc` decoy and exits 1,
+ * a false type-gate failure independent of the code under test. Executing the
+ * local bin directly is package-manager-agnostic and never touches the network.
+ * When no local bin resolves, {@link runTool} FAILS CLOSED (a named non-zero
+ * result) rather than reintroducing the npx path — so npx is never reached.
+ *
+ * SECURITY (deliberate non-containment): the candidate is returned as-is and
+ * exec'd by {@link runTool} WITHOUT realpath/containment, and the walk-up ascends
+ * to the filesystem root. This is intentional. (1) A `node_modules/.bin` entry is
+ * normally a symlink — pnpm's point INTO the content-addressed `.pnpm` store
+ * outside the package dir — so a naive "realpath must stay inside the worktree"
+ * guard would REJECT every pnpm install (the exact package manager whose npx
+ * decoy this code exists to dodge). (2) The gate layer already executes
+ * worktree-controlled code on this same trust boundary (`DefaultBuildTool` runs
+ * `npm run build`; vitest/stryker honour worktree configs), so following a
+ * `.bin` symlink crosses no privilege boundary the gates did not already cross.
+ */
+export async function resolveLocalBin(
+  cwd: string,
+  tool: GateTool,
+  exists: (absPath: string) => Promise<boolean> = pathExists,
+): Promise<string | null> {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    const candidate = path.join(dir, "node_modules", ".bin", tool);
+    if (await exists(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null; // reached the filesystem root
+    dir = parent;
+  }
+}
+
+/** A tool→local-bin resolver, injectable so the Default* tools unit-test without fs. */
+export type LocalBinResolver = (tool: GateTool, opts: ToolRunOpts) => Promise<string | null>;
+
+/** Production resolver: walk up from the worktree cwd to the nearest local bin. */
+export const defaultLocalBinResolver: LocalBinResolver = (tool, opts) =>
+  resolveLocalBin(opts.cwd, tool);
+
+/**
+ * The synthetic FAIL-CLOSED result a command gate gets when no local bin resolves:
+ * exit 127 (the shell "command not found" convention) with a stderr that names the
+ * missing tool and WHY we do not fall back to npx. {@link procOutcome} maps the
+ * non-zero code to a failing {@link GateOutcome}, so the gate blocks LOUDLY instead
+ * of silently shelling to a network-fetched decoy. lint/mutation never reach here
+ * (their strategies skip on a missing bin first); only the unconditional type/test
+ * gates can, and a missing tsc/vitest in a provisioned worktree IS a real failure.
+ */
+function missingBinResult(tool: GateTool, cwd: string): ExecResult {
+  return {
+    stdout: "",
+    stderr:
+      `${tool}: no local binary found under node_modules/.bin (walked up from ${cwd}); ` +
+      `refusing the npx fallback — a bare \`npx ${tool}\` resolves a remote registry ` +
+      `decoy under corepack/pnpm. Install dev dependencies so ${tool} resolves locally.`,
+    code: 127,
+    signal: null,
+    truncated: false,
+  };
+}
+
+/**
+ * Resolve `tool`'s worktree-local bin and exec it DIRECTLY; if none resolves, fail
+ * closed via {@link missingBinResult} (never npx). Package-manager-agnostic and
+ * network-free on both paths.
+ */
+async function runTool(
+  resolve: LocalBinResolver,
+  tool: GateTool,
+  toolArgs: readonly string[],
+  opts: ToolRunOpts,
+): Promise<ExecResult> {
+  const localBin = await resolve(tool, opts);
+  if (localBin === null) return missingBinResult(tool, opts.cwd);
+  return exec(localBin, [...toolArgs], { cwd: opts.cwd });
+}
+
+/** Default VitestTool: local `vitest run [files...]`, coverage DISABLED. */
 export class DefaultVitestTool implements VitestTool {
+  constructor(private readonly resolve: LocalBinResolver = defaultLocalBinResolver) {}
+
   async run(files: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
-    const args = ["vitest", "run", ...files];
-    return toProc(await exec("npx", args, { cwd: opts.cwd }));
+    // Coverage is DISABLED here on purpose. The test gate is a PASS/FAIL gate and
+    // it runs DIFF-SCOPED (only the changed test files). A project whose vitest
+    // config forces `coverage.enabled: true` with perFile thresholds would FAIL a
+    // scoped run — every file the scoped tests don't exercise reports 0% — a false
+    // negative unrelated to whether the tests pass. Coverage is the coverage
+    // gate's job (before/after summaries), never this gate's.
+    const args = ["run", "--coverage.enabled=false", ...files];
+    return toProc(await runTool(this.resolve, "vitest", args, opts));
   }
 }
 
-/** Default TscTool: `npx tsc --noEmit`. */
+/** Default TscTool: local `tsc --noEmit`. */
 export class DefaultTscTool implements TscTool {
+  constructor(private readonly resolve: LocalBinResolver = defaultLocalBinResolver) {}
+
   async typecheck(opts: ToolRunOpts): Promise<ProcResult> {
-    return toProc(await exec("npx", ["tsc", "--noEmit"], { cwd: opts.cwd }));
+    return toProc(await runTool(this.resolve, "tsc", ["--noEmit"], opts));
   }
 }
 
-/** Default EslintTool: `npx eslint .`. */
+/** Default EslintTool: local `eslint .`. */
 export class DefaultEslintTool implements EslintTool {
+  constructor(private readonly resolve: LocalBinResolver = defaultLocalBinResolver) {}
+
   async lint(opts: ToolRunOpts): Promise<ProcResult> {
-    return toProc(await exec("npx", ["eslint", "."], { cwd: opts.cwd }));
+    return toProc(await runTool(this.resolve, "eslint", ["."], opts));
   }
 }
 
@@ -257,14 +367,16 @@ export class DefaultSemgrepTool implements SemgrepTool {
   }
 }
 
-/** Default StrykerTool: `npx stryker run --mutate <csv>`, then read the report. */
+/** Default StrykerTool: local `stryker run --mutate <csv>`, then read the report. */
 export class DefaultStrykerTool implements StrykerTool {
   /** Report path relative to the worktree (stryker html/json reporter default). */
   static readonly REPORT_PATH = "reports/mutation/mutation.json";
 
+  constructor(private readonly resolve: LocalBinResolver = defaultLocalBinResolver) {}
+
   async run(mutate: readonly string[], opts: ToolRunOpts): Promise<StrykerResult> {
     const csv = mutate.join(",");
-    const proc = toProc(await exec("npx", ["stryker", "run", "--mutate", csv], { cwd: opts.cwd }));
+    const proc = toProc(await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts));
     // A non-zero stryker exit is a legitimate ANSWER (stryker-failed) — the
     // strategy branches on proc.code; we still attempt to read a report.
     const reportPath = path.join(opts.cwd, DefaultStrykerTool.REPORT_PATH);

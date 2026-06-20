@@ -144,3 +144,42 @@ export function deriveFloorVerdict(
     from: [...det.from, ...panel.from],
   };
 }
+
+/**
+ * The human-facing reason a {@link deriveFloorVerdict} came back blocked — the
+ * SINGLE source of truth shared by every live verify path (the fresh-review path
+ * in `panel-run.ts` ← `runPanel`, and the resume / merge-resync re-entry path in
+ * `handlers.ts`). Kept here, beside the floor derivation it explains, so the two
+ * drivers cannot drift apart again (they previously held divergent copies — one
+ * dropped the gate `detail`, one used different wording).
+ *
+ * Inspects BOTH halves of the floor (Decision 26):
+ *   - Deterministic gates. An EMPTY evidence set is named EXPLICITLY ("no
+ *     deterministic gate evidence"): `deriveAllGatesVerdict` fails an empty set
+ *     ("nothing ran" is never a pass), yet an empty set surfaces no failing gate
+ *     and — under a unanimous panel — no blocked/errored reviewer either, so the
+ *     old reason fell through to the generic fallback and MASKED the real cause.
+ *     A present-but-failing gate is named WITH its `detail` (e.g. `tsc exit=1`).
+ *   - The reviewer panel. Blocked and errored reviewers are named.
+ * Only when nothing specific is identifiable does the generic fallback remain.
+ */
+export function floorBlockReason(
+  reviewers: readonly ReviewerResult[],
+  gateEvidence: readonly GateEvidence[],
+): string {
+  const parts: string[] = [];
+  if (gateEvidence.length === 0) {
+    parts.push("no deterministic gate evidence");
+  } else {
+    const failed = gateEvidence.filter((g) => g.observed !== true);
+    if (failed.length > 0) {
+      const named = failed.map((g) => (g.detail ? `${g.gate} (${g.detail})` : g.gate));
+      parts.push(`failed gates: ${named.join(", ")}`);
+    }
+  }
+  const blocked = reviewers.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
+  const errored = reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
+  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
+  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
+  return parts.length > 0 ? parts.join("; ") : "floor not unanimous";
+}

@@ -36,6 +36,7 @@ export {
   derivePanelVerdict,
   deriveAllGatesVerdict,
   deriveFloorVerdict,
+  floorBlockReason,
   StateManager,
 } from "../types/index.js";
 export type {

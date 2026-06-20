@@ -4,6 +4,7 @@ import {
   deriveAllGatesVerdict,
   derivePanelVerdict,
   deriveFloorVerdict,
+  floorBlockReason,
   type GateEvidence,
 } from "./derive.js";
 import type { ReviewerResult } from "./schema.js";
@@ -104,5 +105,69 @@ describe("combined floor verdict requires BOTH layers", () => {
 
   it("fails with no gate evidence even if the panel approves", () => {
     expect(deriveFloorVerdict(task, []).passed).toBe(false);
+  });
+});
+
+describe("floorBlockReason — the single shared diagnostic for a blocked floor", () => {
+  const blockedReviewer = (reviewer: string): ReviewerResult => ({
+    reviewer,
+    verdict: "blocked",
+    confirmed_blockers: 1,
+  });
+  const erroredReviewer = (reviewer: string): ReviewerResult => ({
+    reviewer,
+    verdict: "error",
+    confirmed_blockers: 0,
+  });
+
+  it("names a failing deterministic gate WITH its detail (not the generic fallback)", () => {
+    const reason = floorBlockReason(
+      [approve("impl")],
+      [{ gate: "type", observed: false, detail: "tsc exit=1" }],
+    );
+    expect(reason).toContain("type");
+    expect(reason).toContain("tsc exit=1");
+    expect(reason).not.toBe("floor not unanimous");
+  });
+
+  it("names a failing gate without a detail by its id alone", () => {
+    const reason = floorBlockReason([approve("impl")], [{ gate: "lint", observed: false }]);
+    expect(reason).toContain("lint");
+    expect(reason).not.toContain("(");
+  });
+
+  it("reports EMPTY gate evidence explicitly — the masking class the old fallback hid", () => {
+    // deriveAllGatesVerdict fails an empty set, but with no failing-gate AND a
+    // unanimous panel the old reason fell through to the generic string, hiding
+    // that NO deterministic gate ran. The shared helper must name that cause.
+    const reason = floorBlockReason([approve("impl")], []);
+    expect(reason).toContain("no deterministic gate evidence");
+    expect(reason).not.toBe("floor not unanimous");
+  });
+
+  it("names blocked and errored reviewers", () => {
+    const reason = floorBlockReason(
+      [blockedReviewer("security"), erroredReviewer("quality")],
+      [{ gate: "tests", observed: true }],
+    );
+    expect(reason).toContain("blocked by: security");
+    expect(reason).toContain("unresolved (verifier error): quality");
+  });
+
+  it("combines a failing gate AND a blocked reviewer in one reason", () => {
+    const reason = floorBlockReason(
+      [blockedReviewer("security")],
+      [{ gate: "type", observed: false, detail: "tsc exit=1" }],
+    );
+    expect(reason).toContain("failed gates: type (tsc exit=1)");
+    expect(reason).toContain("blocked by: security");
+  });
+
+  it("falls back to the generic reason only when nothing specific is identifiable", () => {
+    // Gates present + observed; reviewers all approve — the only way control
+    // reaches here in practice is a derivation the caller already deemed blocked.
+    expect(floorBlockReason([approve("impl")], [{ gate: "tests", observed: true }])).toBe(
+      "floor not unanimous",
+    );
   });
 });

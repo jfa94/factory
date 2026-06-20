@@ -31,6 +31,7 @@ import {
   taskDone,
   waitRetry,
   deriveFloorVerdict,
+  floorBlockReason,
   createTaskWorktree,
   provisionWorktree,
   createTaskPrIdempotent,
@@ -48,10 +49,8 @@ import {
   decideFinalize,
   type Config,
   type GateContext,
-  type GateEvidence,
   type PriorFailureNote,
   type ProducerContext,
-  type ReviewerResult,
   type SpawnManifest,
   type SpecManifest,
   type SpecTask,
@@ -326,21 +325,6 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
       return Promise.resolve(decideFinalize(ctx.run));
     },
   };
-}
-
-/** A human-facing reason summarising why the verifier floor is blocked. */
-function floorBlockReason(
-  reviewers: readonly ReviewerResult[],
-  gateEvidence: readonly GateEvidence[],
-): string {
-  const parts: string[] = [];
-  const blocked = reviewers.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
-  const errored = reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
-  const failedGates = gateEvidence.filter((e) => !e.observed).map((e) => e.gate);
-  if (failedGates.length > 0) parts.push(`gates failed: ${failedGates.join(", ")}`);
-  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
-  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
-  return parts.length > 0 ? parts.join("; ") : "verifier floor not unanimous";
 }
 
 /**

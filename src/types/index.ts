@@ -53,6 +53,7 @@ export {
   deriveAllGatesVerdict,
   derivePanelVerdict,
   deriveFloorVerdict,
+  floorBlockReason,
 } from "../core/state/index.js";
 
 export type {

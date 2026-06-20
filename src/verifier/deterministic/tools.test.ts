@@ -7,7 +7,10 @@
  *  - DefaultGitProbe.commits: OLDEST-FIRST reversal of `git log` + merge classified
  *    against its FIRST parent + `[task-id]` tag detection (exec is mocked — no git).
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 vi.mock("../../shared/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../shared/index.js")>();
@@ -15,7 +18,18 @@ vi.mock("../../shared/index.js", async (importOriginal) => {
 });
 
 import { exec, type ExecResult } from "../../shared/index.js";
-import { DefaultGitProbe, extractMutationScore, parseCoverageSummary } from "./tools.js";
+import {
+  DefaultEslintTool,
+  DefaultGitProbe,
+  DefaultStrykerTool,
+  DefaultTscTool,
+  DefaultVitestTool,
+  defaultLocalBinResolver,
+  extractMutationScore,
+  parseCoverageSummary,
+  resolveLocalBin,
+  type LocalBinResolver,
+} from "./tools.js";
 
 const execMock = vi.mocked(exec);
 
@@ -74,6 +88,135 @@ describe("parseCoverageSummary (dual-shape)", () => {
     expect(parseCoverageSummary(null)).toBeNull();
     expect(parseCoverageSummary({})).toBeNull();
     expect(parseCoverageSummary({ total: null })).toBeNull();
+  });
+});
+
+describe("resolveLocalBin + defaultLocalBinResolver against a REAL filesystem", () => {
+  // Exercises the PRODUCTION resolver path — the real `pathExists` (fs.access),
+  // the real walk-up, and the filesystem-root termination — none of which the
+  // injected-predicate unit tests below touch. A regression in the production
+  // wiring (wrong path segment, walk-up that never terminates) would pass every
+  // mocked test yet break every gate; this is the only test that would catch it.
+  let root: string;
+  let bare: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "factory-localbin-"));
+    bare = await mkdtemp(join(tmpdir(), "factory-nobin-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(bare, { recursive: true, force: true });
+  });
+
+  it("finds a tool planted in a PARENT's node_modules/.bin, walking up from a nested cwd", async () => {
+    const binPath = join(root, "node_modules", ".bin", "tsc");
+    await mkdir(join(root, "node_modules", ".bin"), { recursive: true });
+    await writeFile(binPath, "#!/bin/sh\n");
+    const nested = join(root, "packages", "app");
+    await mkdir(nested, { recursive: true });
+
+    expect(await resolveLocalBin(nested, "tsc")).toBe(binPath);
+    // defaultLocalBinResolver wires opts.cwd → the real resolveLocalBin/pathExists.
+    expect(await defaultLocalBinResolver("tsc", { cwd: nested })).toBe(binPath);
+  });
+
+  it("returns null when no node_modules/.bin holds the tool up to the filesystem root (real termination)", async () => {
+    expect(await resolveLocalBin(bare, "vitest")).toBeNull();
+    expect(await defaultLocalBinResolver("vitest", { cwd: bare })).toBeNull();
+  });
+});
+
+describe("resolveLocalBin (walk-up node_modules/.bin)", () => {
+  const existsIn = (paths: readonly string[]): ((p: string) => Promise<boolean>) => {
+    const set = new Set(paths);
+    return async (p: string) => set.has(p);
+  };
+
+  it("resolves the bin in the cwd's own node_modules/.bin", async () => {
+    const bin = "/repo/wt/node_modules/.bin/vitest";
+    expect(await resolveLocalBin("/repo/wt", "vitest", existsIn([bin]))).toBe(bin);
+  });
+
+  it("walks up to a parent's node_modules/.bin (monorepo/workspace root)", async () => {
+    const bin = "/repo/node_modules/.bin/vitest";
+    expect(await resolveLocalBin("/repo/packages/app", "vitest", existsIn([bin]))).toBe(bin);
+  });
+
+  it("returns null when no node_modules/.bin holds the tool up to the root", async () => {
+    expect(await resolveLocalBin("/repo/wt", "vitest", existsIn([]))).toBeNull();
+  });
+});
+
+describe("Default command tools: local-bin resolution + test-gate coverage", () => {
+  // NB: brace body — a bare `() => execMock.mockReset()` RETURNS the mock, which
+  // vitest would register as a teardown callback and invoke (see the probe describe).
+  beforeEach(() => {
+    execMock.mockReset();
+  });
+
+  const found =
+    (bin: string): LocalBinResolver =>
+    async () =>
+      bin;
+  const missing: LocalBinResolver = async () => null;
+  const lastCall = (): readonly [string, readonly string[] | undefined] => {
+    const call = execMock.mock.calls[execMock.mock.calls.length - 1]!;
+    return [call[0], call[1]];
+  };
+
+  it("DefaultTscTool execs the resolved local tsc with --noEmit (never npx)", async () => {
+    execMock.mockResolvedValue(res(""));
+    await new DefaultTscTool(found("/wt/node_modules/.bin/tsc")).typecheck({ cwd: "/wt" });
+    const [cmd, args] = lastCall();
+    expect(cmd).toBe("/wt/node_modules/.bin/tsc");
+    expect(args).toEqual(["--noEmit"]);
+  });
+
+  it("DefaultTscTool FAILS CLOSED (no exec, never npx) when no local bin exists", async () => {
+    // The whole reason this code exists: a bare `npx tsc` under corepack+pnpm
+    // resolves a REMOTE registry decoy. So a missing local bin must NOT shell out
+    // to npx — it returns a synthetic non-zero result that fails the gate closed,
+    // naming the tool, without touching a subprocess or the network.
+    const result = await new DefaultTscTool(missing).typecheck({ cwd: "/wt" });
+    expect(execMock).not.toHaveBeenCalled();
+    expect(result.code).toBe(127);
+    expect(result.stderr).toContain("tsc");
+  });
+
+  it("DefaultVitestTool DISABLES coverage on the diff-scoped test gate", async () => {
+    execMock.mockResolvedValue(res(""));
+    await new DefaultVitestTool(found("/wt/node_modules/.bin/vitest")).run(["a.test.ts"], {
+      cwd: "/wt",
+    });
+    const [cmd, args] = lastCall();
+    expect(cmd).toBe("/wt/node_modules/.bin/vitest");
+    expect(args).toEqual(["run", "--coverage.enabled=false", "a.test.ts"]);
+  });
+
+  it("DefaultVitestTool also FAILS CLOSED when no local vitest bin exists (never npx)", async () => {
+    const result = await new DefaultVitestTool(missing).run([], { cwd: "/wt" });
+    expect(execMock).not.toHaveBeenCalled();
+    expect(result.code).toBe(127);
+    expect(result.stderr).toContain("vitest");
+  });
+
+  it("DefaultEslintTool execs the resolved local eslint over `.`", async () => {
+    execMock.mockResolvedValue(res(""));
+    await new DefaultEslintTool(found("/wt/node_modules/.bin/eslint")).lint({ cwd: "/wt" });
+    const [cmd, args] = lastCall();
+    expect(cmd).toBe("/wt/node_modules/.bin/eslint");
+    expect(args).toEqual(["."]);
+  });
+
+  it("DefaultStrykerTool execs the resolved local stryker with the mutate CSV", async () => {
+    execMock.mockResolvedValue(res("")); // report read fails → absent; we assert only the argv
+    await new DefaultStrykerTool(found("/wt/node_modules/.bin/stryker")).run(["a.ts", "b.ts"], {
+      cwd: "/wt",
+    });
+    const strykerCall = execMock.mock.calls.find((c) => String(c[0]).endsWith("stryker"))!;
+    expect(strykerCall[0]).toBe("/wt/node_modules/.bin/stryker");
+    expect(strykerCall[1]).toEqual(["run", "--mutate", "a.ts,b.ts"]);
   });
 });
 

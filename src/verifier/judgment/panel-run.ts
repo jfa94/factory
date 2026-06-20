@@ -23,6 +23,7 @@
 import {
   advance,
   deriveFloorVerdict,
+  floorBlockReason,
   spawn,
   waitRetry,
   type GateEvidence,
@@ -195,7 +196,7 @@ export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
     ? advance(nextOrSelf(input.stage))
     : waitRetry(
         input.stage,
-        floorBlockReason(reviewerResults),
+        floorBlockReason(reviewerResults, input.gateEvidence),
         input.attempt ?? 1,
         input.maxAttempts ?? 1,
       );
@@ -221,14 +222,4 @@ export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
  */
 function nextOrSelf(stage: TaskStage): TaskStage {
   return stage === "verify" ? "ship" : stage;
-}
-
-/** A human-facing reason summarising why the floor is blocked. */
-function floorBlockReason(results: readonly ReviewerResult[]): string {
-  const errored = results.filter((r) => r.verdict === "error").map((r) => r.reviewer);
-  const blocked = results.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
-  const parts: string[] = [];
-  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
-  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
-  return parts.length > 0 ? parts.join("; ") : "floor not unanimous";
 }

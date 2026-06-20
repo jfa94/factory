@@ -187,6 +187,25 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
     });
     expect(res.floor.passed).toBe(false);
   });
+
+  it("NAMES the failing deterministic gate in the wait-retry reason (not the generic 'floor not unanimous')", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: [{ gate: "type", observed: false, detail: "tsc exit=1" }],
+      stage: "verify",
+    });
+    expect(res.floor.passed).toBe(false);
+    expect(res.result.kind).toBe("wait-retry");
+    if (res.result.kind === "wait-retry") {
+      // The masking bug returned "floor not unanimous" when a GATE (not a reviewer)
+      // failed — hiding the real cause. The reason must name the gate + its detail.
+      expect(res.result.reason).toContain("type");
+      expect(res.result.reason).toContain("tsc exit=1");
+      expect(res.result.reason).not.toBe("floor not unanimous");
+    }
+  });
 });
 
 describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", () => {

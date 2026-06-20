@@ -353,6 +353,26 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     expect(result.reason).toMatch(/lint/);
   });
 
+  it("verify (resume path) names the failing gate WITH its detail, via the shared floorBlockReason", async () => {
+    // The handlers verify reporter used to hold a TWIN floorBlockReason that named
+    // gates by id ALONE ("gates failed: lint") — dropping the `detail`. After
+    // unifying on the shared helper, the resume / merge-resync path must surface
+    // the same gate detail (e.g. "eslint exit=1") the fresh-review path does.
+    const deps = makeDeps({
+      tools: makeFakeTools({ git: greenProbe(), eslint: new FakeEslint(proc(1)) }),
+    });
+    const handlers = makeStageHandlers(deps);
+    const reviewers: ReviewerResult[] = [
+      { reviewer: "implementation-reviewer", verdict: "approve", confirmed_blockers: 0 },
+    ];
+    const ctx = await ctxFor({ task_id: "t-multi", reviewers });
+    const result = await handlers.verify(ctx);
+
+    expect(result.kind).toBe("wait-retry");
+    if (result.kind !== "wait-retry") throw new Error("unreachable");
+    expect(result.reason).toMatch(/failed gates: lint \(eslint exit=/);
+  });
+
   it("verify gate uses staging/<run-id> as baseRef (per-run branch, not shared staging)", async () => {
     // Probe that ONLY resolves origin/staging/<run-id>. If the handler still passes
     // origin/staging, resolveBase returns null → TDD gate fails with base_ref_not_found

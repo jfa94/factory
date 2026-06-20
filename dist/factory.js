@@ -6393,6 +6393,23 @@ function deriveFloorVerdict(task, gateEvidence) {
     from: [...det.from, ...panel.from]
   };
 }
+function floorBlockReason(reviewers, gateEvidence) {
+  const parts = [];
+  if (gateEvidence.length === 0) {
+    parts.push("no deterministic gate evidence");
+  } else {
+    const failed = gateEvidence.filter((g) => g.observed !== true);
+    if (failed.length > 0) {
+      const named = failed.map((g) => g.detail ? `${g.gate} (${g.detail})` : g.gate);
+      parts.push(`failed gates: ${named.join(", ")}`);
+    }
+  }
+  const blocked = reviewers.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
+  const errored = reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
+  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
+  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
+  return parts.length > 0 ? parts.join("; ") : "floor not unanimous";
+}
 
 // src/core/state/manager.ts
 import { mkdir as mkdir4, readFile, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
@@ -9969,7 +9986,7 @@ async function runPanel(input) {
   const floor = deriveFloorVerdict({ reviewers: reviewerResults }, input.gateEvidence);
   const result = floor.passed ? advance(nextOrSelf(input.stage)) : waitRetry(
     input.stage,
-    floorBlockReason(reviewerResults),
+    floorBlockReason(reviewerResults, input.gateEvidence),
     input.attempt ?? 1,
     input.maxAttempts ?? 1
   );
@@ -9978,14 +9995,6 @@ async function runPanel(input) {
 }
 function nextOrSelf(stage) {
   return stage === "verify" ? "ship" : stage;
-}
-function floorBlockReason(results) {
-  const errored = results.filter((r) => r.verdict === "error").map((r) => r.reviewer);
-  const blocked = results.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
-  const parts = [];
-  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
-  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
-  return parts.length > 0 ? parts.join("; ") : "floor not unanimous";
 }
 
 // src/producer/ladder.ts
@@ -10535,20 +10544,62 @@ function assertNotTruncated(r, what) {
     );
   }
 }
+async function pathExists(absPath) {
+  try {
+    await access2(absPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function resolveLocalBin(cwd, tool, exists = pathExists) {
+  let dir = path2.resolve(cwd);
+  for (; ; ) {
+    const candidate = path2.join(dir, "node_modules", ".bin", tool);
+    if (await exists(candidate)) return candidate;
+    const parent = path2.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+var defaultLocalBinResolver = (tool, opts) => resolveLocalBin(opts.cwd, tool);
+function missingBinResult(tool, cwd) {
+  return {
+    stdout: "",
+    stderr: `${tool}: no local binary found under node_modules/.bin (walked up from ${cwd}); refusing the npx fallback \u2014 a bare \`npx ${tool}\` resolves a remote registry decoy under corepack/pnpm. Install dev dependencies so ${tool} resolves locally.`,
+    code: 127,
+    signal: null,
+    truncated: false
+  };
+}
+async function runTool(resolve2, tool, toolArgs, opts) {
+  const localBin = await resolve2(tool, opts);
+  if (localBin === null) return missingBinResult(tool, opts.cwd);
+  return exec(localBin, [...toolArgs], { cwd: opts.cwd });
+}
 var DefaultVitestTool = class {
+  constructor(resolve2 = defaultLocalBinResolver) {
+    this.resolve = resolve2;
+  }
   async run(files, opts) {
-    const args = ["vitest", "run", ...files];
-    return toProc(await exec("npx", args, { cwd: opts.cwd }));
+    const args = ["run", "--coverage.enabled=false", ...files];
+    return toProc(await runTool(this.resolve, "vitest", args, opts));
   }
 };
 var DefaultTscTool = class {
+  constructor(resolve2 = defaultLocalBinResolver) {
+    this.resolve = resolve2;
+  }
   async typecheck(opts) {
-    return toProc(await exec("npx", ["tsc", "--noEmit"], { cwd: opts.cwd }));
+    return toProc(await runTool(this.resolve, "tsc", ["--noEmit"], opts));
   }
 };
 var DefaultEslintTool = class {
+  constructor(resolve2 = defaultLocalBinResolver) {
+    this.resolve = resolve2;
+  }
   async lint(opts) {
-    return toProc(await exec("npx", ["eslint", "."], { cwd: opts.cwd }));
+    return toProc(await runTool(this.resolve, "eslint", ["."], opts));
   }
 };
 var DefaultBuildTool = class {
@@ -10566,11 +10617,14 @@ var DefaultSemgrepTool = class {
   }
 };
 var DefaultStrykerTool = class _DefaultStrykerTool {
+  constructor(resolve2 = defaultLocalBinResolver) {
+    this.resolve = resolve2;
+  }
   /** Report path relative to the worktree (stryker html/json reporter default). */
   static REPORT_PATH = "reports/mutation/mutation.json";
   async run(mutate, opts) {
     const csv = mutate.join(",");
-    const proc2 = toProc(await exec("npx", ["stryker", "run", "--mutate", csv], { cwd: opts.cwd }));
+    const proc2 = toProc(await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts));
     const reportPath = path2.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
@@ -11315,7 +11369,7 @@ function makeStageHandlers(deps) {
       }
       return waitRetry(
         "verify",
-        floorBlockReason2(task.reviewers, gate.evidence),
+        floorBlockReason(task.reviewers, gate.evidence),
         ctx.attempt ?? 1,
         ESCALATION_CAP + 1
       );
@@ -11353,16 +11407,6 @@ function makeStageHandlers(deps) {
       return Promise.resolve(decideFinalize(ctx.run));
     }
   };
-}
-function floorBlockReason2(reviewers, gateEvidence) {
-  const parts = [];
-  const blocked = reviewers.filter((r) => r.verdict === "blocked").map((r) => r.reviewer);
-  const errored = reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
-  const failedGates = gateEvidence.filter((e) => !e.observed).map((e) => e.gate);
-  if (failedGates.length > 0) parts.push(`gates failed: ${failedGates.join(", ")}`);
-  if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
-  if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
-  return parts.length > 0 ? parts.join("; ") : "verifier floor not unanimous";
 }
 function specTaskOf(spec, taskId) {
   const found = spec.tasks.find((t) => t.task_id === taskId);
