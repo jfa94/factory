@@ -5,7 +5,8 @@
  * `/factory:run` in the scaffolded repo runs the CLI + agents WITHOUT a
  * permission prompt per call. It writes (or non-destructively MERGES into) the
  * target's `.claude/settings.json`:
- *   - unions {@link FACTORY_TARGET_ALLOWLIST} into `permissions.allow`,
+ *   - unions {@link FACTORY_TARGET_BASE_ALLOWLIST} + the baked data-dir rules
+ *     (from {@link buildTargetDataDirRules}) into `permissions.allow`,
  *   - forces `worktree.baseRef: "head"` (the staging-determinism invariant —
  *     CLAUDE.md "Worktree base invariant", Decision 12),
  * and leaves every other user key — including the user's OWN `statusLine` —
@@ -31,12 +32,14 @@ import { join } from "node:path";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";
 import { createLogger } from "../../shared/logging.js";
+import { tildeShorten } from "../../shared/paths.js";
 
 const log = createLogger("cli:target-settings");
 
 /**
- * The minimal-but-sufficient permission allow-list an interactive factory run
- * needs in the TARGET repo. Each entry maps to a concrete pipeline action:
+ * The data-dir-INDEPENDENT half of the permission allow-list an interactive
+ * factory run needs in the TARGET repo. Each entry maps to a concrete pipeline
+ * action:
  *
  *   - `Bash(factory:*)`        — the orchestrator shells `factory next/drive/…`.
  *   - `Bash(git:*)` / `Bash(gh:*)` — preflight `git rev-parse`, reviewer
@@ -47,26 +50,12 @@ const log = createLogger("cli:target-settings");
  *   - `Read`/`Write`/`Edit`/`Grep`/`Glob`/`Agent` — the agent tools every
  *                                 producer + reviewer (and the orchestrator's
  *                                 Agent() spawns) use.
- *   - `Read|Write|Edit(${CLAUDE_PLUGIN_DATA}/**)` — run/spec state lives OUTSIDE
- *                                 the repo under the data dir; the CLI + agents
- *                                 touch it constantly. The `${CLAUDE_PLUGIN_DATA}`
- *                                 placeholder is expanded by Claude Code at load
- *                                 time, so it stays portable across installs.
  *
- * The allow-list is NOT sufficient on its own: Claude Code's tool-permission
- * rules and its working-directory boundary are INDEPENDENT checks. A
- * `Write(${CLAUDE_PLUGIN_DATA}/**)` allow rule grants the TOOL, but a built-in
- * file tool (Read/Write/Edit) touching a path OUTSIDE the launch directory still
- * trips the boundary and prompts the user to "add" the directory. The plugin
- * writes to several such out-of-tree paths under the data dir — `results/<run>`
- * (workflow-driver handoff files, written with the Write tool) and
- * `worktrees/<run>/<task>` (where producer agents author code/tests). So we ALSO
- * declare the data dir in {@link FACTORY_TARGET_ADDITIONAL_DIRS} →
- * `permissions.additionalDirectories`. The single parent entry grants recursive
- * access, covering every managed subdir (`specs/ spec-build/ runs/ worktrees/
- * current/ results/`) now and in future.
+ * The data-dir-SCOPED rules (`Read|Write|Edit(<data-dir>/**)`) are NOT here —
+ * they are baked per-install from the CLI-resolved data dir by
+ * {@link buildTargetDataDirRules} (see below for why).
  */
-export const FACTORY_TARGET_ALLOWLIST: readonly string[] = [
+export const FACTORY_TARGET_BASE_ALLOWLIST: readonly string[] = [
   "Bash(factory:*)",
   "Bash(git:*)",
   "Bash(gh:*)",
@@ -78,19 +67,74 @@ export const FACTORY_TARGET_ALLOWLIST: readonly string[] = [
   "Grep",
   "Glob",
   "Agent",
+];
+
+/** The verbs scoped to the data dir in the baked `Read|Write|Edit(<dir>/**)` rules. */
+const DATA_DIR_VERBS = ["Read", "Write", "Edit"] as const;
+
+/**
+ * STALE allow entries the OLD emitter wrote: the literal `${CLAUDE_PLUGIN_DATA}`
+ * placeholder form. We migrate these away (strip on re-merge) because the
+ * placeholder does NOT work: env-var interpolation inside permission rules is
+ * undocumented in Claude Code, AND `CLAUDE_PLUGIN_DATA` is session-globally
+ * corruptible by other plugins (the Codex plugin's SessionStart hook re-exports
+ * its OWN data dir into `$CLAUDE_ENV_FILE`), so the rule resolves to the wrong
+ * dir or stays literal — never matching factory's data dir. Matched EXACTLY (not
+ * via a `.includes("${CLAUDE_PLUGIN_DATA}")` heuristic) so a user rule that
+ * legitimately references the var is never clobbered.
+ */
+const STALE_DATA_DIR_ALLOW: readonly string[] = [
   "Read(${CLAUDE_PLUGIN_DATA}/**)",
   "Write(${CLAUDE_PLUGIN_DATA}/**)",
   "Edit(${CLAUDE_PLUGIN_DATA}/**)",
 ];
 
+/** The stale literal-placeholder `additionalDirectories` entry (see {@link STALE_DATA_DIR_ALLOW}). */
+const STALE_DATA_DIR_ADDITIONAL = "${CLAUDE_PLUGIN_DATA}";
+
 /**
- * Out-of-tree directories the plugin's built-in file tools must reach without a
- * working-directory-boundary prompt. The data dir parent covers every managed
- * subdir recursively (see {@link FACTORY_TARGET_ALLOWLIST} for why the allow-list
- * alone is insufficient). The `${CLAUDE_PLUGIN_DATA}` placeholder is expanded by
- * Claude Code at load time, keeping it portable across installs.
+ * The baked, per-install data-dir permission strings. Built from the CLI-resolved
+ * canonical data dir (which already CORRECTS the foreign-plugin env-var leak via
+ * `resolveDataDir`), NOT from the runtime `${CLAUDE_PLUGIN_DATA}` placeholder — so
+ * the rules keep matching even when another plugin has hijacked the env var.
  */
-export const FACTORY_TARGET_ADDITIONAL_DIRS: readonly string[] = ["${CLAUDE_PLUGIN_DATA}"];
+export interface TargetDataDirRules {
+  /**
+   * Base path for the `Read|Write|Edit(<base>/**)` allow globs. The `~`-tilde
+   * form when the data dir is under `$HOME` (git-safe in a committed
+   * `.claude/settings.json` — no username leaked; Claude Code expands `~/` in
+   * Read/Write/Edit globs), else the absolute path.
+   */
+  readonly allowGlobBase: string;
+  /** The `permissions.additionalDirectories` value (same tilde-or-absolute form). */
+  readonly additionalDir: string;
+}
+
+/**
+ * Build the {@link TargetDataDirRules} for a CLI-resolved data dir. Prefers the
+ * `~`-tilde form so a committed target `.claude/settings.json` stays portable and
+ * leaks no `$HOME`; falls back to the absolute path when the data dir is outside
+ * `$HOME` (e.g. a custom `CLAUDE_PLUGIN_DATA`).
+ *
+ * NOTE: `~/` in `additionalDirectories` is undocumented in Claude Code (it IS
+ * documented for Read/Write/Edit globs). This is the single switch point — if the
+ * working-directory-boundary prompt persists for the additional dir, change ONLY
+ * `additionalDir` to the absolute form (`opts.dataDir`).
+ */
+export function buildTargetDataDirRules(opts: {
+  /** The absolute, canonical data dir (from `resolveDataDir()`). */
+  readonly dataDir: string;
+  /** `$HOME`, for the tilde shortening. */
+  readonly home: string;
+}): TargetDataDirRules {
+  const baked = tildeShorten(opts.dataDir, opts.home);
+  return { allowGlobBase: baked, additionalDir: baked };
+}
+
+/** The three baked `Read|Write|Edit(<base>/**)` allow rules for a resolved dir. */
+function dataDirAllowRules(allowGlobBase: string): string[] {
+  return DATA_DIR_VERBS.map((verb) => `${verb}(${allowGlobBase}/**)`);
+}
 
 /** Result of an idempotent {@link mergeTargetSettings}. */
 export interface MergeResult {
@@ -113,41 +157,63 @@ function isObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Union {@link FACTORY_TARGET_ALLOWLIST} into `existing.permissions.allow` and
- * force `worktree.baseRef:"head"`, preserving every other key. Pure: clones the
- * input and never mutates it. `changed` is false iff the result is byte-equal in
- * the keys we own (allow-list fully present + baseRef already "head").
+ * Migrate-and-union the factory permission rules into `existing` and force
+ * `worktree.baseRef:"head"`, preserving every other key. Pure: clones the input
+ * and never mutates it.
+ *
+ * For both `permissions.allow` and `permissions.additionalDirectories` the merge:
+ *   1. STRIPS the stale literal-`${CLAUDE_PLUGIN_DATA}` entries the old emitter
+ *      wrote (exact-string match — see {@link STALE_DATA_DIR_ALLOW}), and
+ *   2. UNIONS the target entries ({@link FACTORY_TARGET_BASE_ALLOWLIST} + the
+ *      baked data-dir rules from `dataDirRules`), order-preserving, deduped.
+ *
+ * `changed` is driven off `removedStale || additions.length > 0` so a repo that
+ * still carries the stale placeholder is rewritten even when the baked rules are
+ * already present. Idempotent: re-merging an already-baked, stale-free settings
+ * reports `changed:false`.
  */
-export function mergeTargetSettings(existing: Record<string, unknown>): MergeResult {
+export function mergeTargetSettings(
+  existing: Record<string, unknown>,
+  dataDirRules: TargetDataDirRules,
+): MergeResult {
   // Structured clone so the caller's object is never mutated (test isolation +
   // safe re-merge of an already-merged object).
   const settings: Record<string, unknown> = structuredClone(existing);
   let changed = false;
 
-  // permissions.allow — union, preserving order: user entries first, then any
-  // missing factory entries appended (dedup keeps re-merge a no-op).
+  // permissions.allow — strip the stale placeholder rules (migration), then union
+  // the base allow-list + the baked data-dir rules. User entries kept first.
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
   const currentAllow = Array.isArray(permissions.allow)
     ? permissions.allow.filter((e): e is string => typeof e === "string")
     : [];
-  const have = new Set(currentAllow);
-  const additions = FACTORY_TARGET_ALLOWLIST.filter((e) => !have.has(e));
-  if (additions.length > 0) {
-    permissions.allow = [...currentAllow, ...additions];
+  const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e));
+  const removedStaleAllow = strippedAllow.length !== currentAllow.length;
+  const targetAllow = [
+    ...FACTORY_TARGET_BASE_ALLOWLIST,
+    ...dataDirAllowRules(dataDirRules.allowGlobBase),
+  ];
+  const have = new Set(strippedAllow);
+  const additions = targetAllow.filter((e) => !have.has(e));
+  if (removedStaleAllow || additions.length > 0) {
+    permissions.allow = [...strippedAllow, ...additions];
     settings.permissions = permissions;
     changed = true;
   }
 
-  // permissions.additionalDirectories — union the out-of-tree plugin dirs so the
-  // built-in file tools never trip the working-directory boundary (separate from
-  // the allow-list above). Same union/dedup/idempotency contract as `allow`.
+  // permissions.additionalDirectories — same strip-then-union so the built-in file
+  // tools never trip the working-directory boundary on out-of-tree data-dir writes
+  // (`results/<run>`, `worktrees/<run>/<task>`). The single baked parent entry
+  // grants recursive access to every managed subdir.
   const currentDirs = Array.isArray(permissions.additionalDirectories)
     ? permissions.additionalDirectories.filter((e): e is string => typeof e === "string")
     : [];
-  const haveDirs = new Set(currentDirs);
-  const dirAdditions = FACTORY_TARGET_ADDITIONAL_DIRS.filter((e) => !haveDirs.has(e));
-  if (dirAdditions.length > 0) {
-    permissions.additionalDirectories = [...currentDirs, ...dirAdditions];
+  const strippedDirs = currentDirs.filter((e) => e !== STALE_DATA_DIR_ADDITIONAL);
+  const removedStaleDir = strippedDirs.length !== currentDirs.length;
+  const haveDirs = new Set(strippedDirs);
+  const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e));
+  if (removedStaleDir || dirAdditions.length > 0) {
+    permissions.additionalDirectories = [...strippedDirs, ...dirAdditions];
     settings.permissions = permissions;
     changed = true;
   }
@@ -168,14 +234,19 @@ export function mergeTargetSettings(existing: Record<string, unknown>): MergeRes
 
 /**
  * Read the target repo's `.claude/settings.json` (if any), merge the factory
- * allow-list + worktree.baseRef into it, and write it back atomically. Creates
- * `.claude/` as needed. Idempotent: a second call reports `changed:false` and
- * rewrites nothing.
+ * allow-list + the baked data-dir rules + worktree.baseRef into it, and write it
+ * back atomically. Creates `.claude/` as needed. Idempotent: a second call
+ * reports `changed:false` and rewrites nothing.
  *
- * @param opts.targetRoot The target repo working tree.
+ * @param opts.targetRoot   The target repo working tree.
+ * @param opts.dataDirRules The baked, CLI-resolved data-dir permission rules
+ *   (from {@link buildTargetDataDirRules}). REQUIRED — there is no placeholder
+ *   fallback by design, so a misresolved dir fails loud instead of silently
+ *   re-emitting the broken `${CLAUDE_PLUGIN_DATA}` rule.
  */
 export async function ensureTargetSettings(opts: {
   readonly targetRoot: string;
+  readonly dataDirRules: TargetDataDirRules;
 }): Promise<EnsureResult> {
   const dir = join(opts.targetRoot, ".claude");
   const path = join(dir, "settings.json");
@@ -200,7 +271,7 @@ export async function ensureTargetSettings(opts: {
     }
   }
 
-  const { settings, changed } = mergeTargetSettings(existing);
+  const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
 
   // Write when creating OR when the merge altered something. A no-op merge of an
   // existing file leaves the file byte-for-byte untouched (idempotent on disk).

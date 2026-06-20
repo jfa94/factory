@@ -19,11 +19,18 @@ import {
 import { parseArgs } from "../args.js";
 import { EXIT } from "../exit-codes.js";
 import { defaultConfig } from "../../config/index.js";
+import { buildTargetDataDirRules } from "./target-settings.js";
 import { FakeGitClient, FakeGhClient } from "../../git/index.js";
 import type { ProtectionApiResult } from "../../git/index.js";
 
 const cfg = defaultConfig();
 const BASE = cfg.git.baseBranch; // "develop"
+
+/** Baked data-dir permission rules injected into runScaffold (E1, F-perm). */
+const DATA_DIR_RULES = buildTargetDataDirRules({
+  dataDir: "/Users/jo/.claude/plugins/data/factory-jfa94",
+  home: "/Users/jo",
+});
 
 /** Protection state that satisfies requireProtectionOrRefuse (no required checks). */
 const PROTECTED: ProtectionApiResult = {
@@ -53,6 +60,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
+      dataDirRules: DATA_DIR_RULES,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
@@ -74,13 +82,19 @@ describe("runScaffold", () => {
     expect(gitignore).toMatch(/\.claude-plugin-data\//);
 
     // E1: a target-repo .claude/settings.json is emitted with the factory
-    // allow-list + worktree.baseRef:"head", and NO statusLine.
+    // allow-list + the BAKED data-dir rules + worktree.baseRef:"head", and NO
+    // statusLine — and crucially NO literal ${CLAUDE_PLUGIN_DATA} placeholder.
     expect(report.settings.created).toBe(true);
-    const settings = JSON.parse(
-      await readFile(join(root, ".claude", "settings.json"), "utf8"),
-    ) as Record<string, unknown>;
+    const settingsRaw = await readFile(join(root, ".claude", "settings.json"), "utf8");
+    expect(settingsRaw).not.toContain("${CLAUDE_PLUGIN_DATA}"); // the bug we fixed
+    const settings = JSON.parse(settingsRaw) as Record<string, unknown>;
     expect((settings.worktree as { baseRef: string }).baseRef).toBe("head");
-    expect((settings.permissions as { allow: string[] }).allow).toContain("Bash(factory:*)");
+    const allow = (settings.permissions as { allow: string[] }).allow;
+    expect(allow).toContain("Bash(factory:*)");
+    expect(allow).toContain(`Read(${DATA_DIR_RULES.allowGlobBase}/**)`); // baked, resolved dir
+    const dirs = (settings.permissions as { additionalDirectories: string[] })
+      .additionalDirectories;
+    expect(dirs).toContain(DATA_DIR_RULES.additionalDir);
     expect(settings).not.toHaveProperty("statusLine");
     expect(report.files_created).toContain(".claude/settings.json");
   });
@@ -98,6 +112,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
+      dataDirRules: DATA_DIR_RULES,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
@@ -121,6 +136,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
+      dataDirRules: DATA_DIR_RULES,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
@@ -136,6 +152,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
+      dataDirRules: DATA_DIR_RULES,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
@@ -151,6 +168,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
+      dataDirRules: DATA_DIR_RULES,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
@@ -169,6 +187,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
+      dataDirRules: DATA_DIR_RULES,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
@@ -196,6 +215,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
+      dataDirRules: DATA_DIR_RULES,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
@@ -222,6 +242,7 @@ describe("runScaffold", () => {
         owner: "acme",
         repo: "widgets",
         config: cfg,
+        dataDirRules: DATA_DIR_RULES,
         ghClient: new FakeGhClient(), // no protection seeded → disabled
         provision: false,
       }),
@@ -236,6 +257,7 @@ describe("runScaffold", () => {
       owner: "acme",
       repo: "widgets",
       config: cfg,
+      dataDirRules: DATA_DIR_RULES,
       ghClient: gh,
       provision: true,
     });

@@ -46,6 +46,7 @@ import type { PreflightReason } from "../../autonomy/mode.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";
 import { createLogger } from "../../shared/logging.js";
+import { tildeShorten } from "../../shared/paths.js";
 import type { Subcommand } from "../main.js";
 
 const log = createLogger("autonomy");
@@ -95,14 +96,6 @@ function factoryBinPath(pluginRoot: string): string {
 /** Path of the materialized merged settings inside the data dir. */
 export function mergedSettingsPath(dataDir: string): string {
   return join(dataDir, "merged-settings.json");
-}
-
-/** The `~`-shortened form of an absolute path under `$HOME` (else unchanged). */
-function tildeShorten(absPath: string, home: string): string {
-  if (home.length > 0 && absPath.startsWith(home)) {
-    return "~" + absPath.slice(home.length);
-  }
-  return absPath;
 }
 
 /** Expand a leading `~` in a user command to the absolute `$HOME` path. */

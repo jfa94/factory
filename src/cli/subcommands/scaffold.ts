@@ -21,6 +21,7 @@
  */
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,8 +40,12 @@ import {
   type GitClient,
   type GhClient,
 } from "../../git/index.js";
-import { loadConfig, type Config } from "../../config/index.js";
-import { ensureTargetSettings } from "./target-settings.js";
+import { loadConfig, resolveDataDir, type Config } from "../../config/index.js";
+import {
+  ensureTargetSettings,
+  buildTargetDataDirRules,
+  type TargetDataDirRules,
+} from "./target-settings.js";
 import type { Subcommand } from "../main.js";
 
 const log = createLogger("scaffold");
@@ -74,6 +79,14 @@ export interface ScaffoldOptions {
   readonly repo: string;
   readonly config: Config;
   readonly ghClient: GhClient;
+  /**
+   * The baked, CLI-resolved data-dir permission rules for the target repo's
+   * `.claude/settings.json` (from {@link buildTargetDataDirRules}). Injected at
+   * the command boundary — `run(argv)` resolves the canonical data dir via
+   * `resolveDataDir()` (which corrects the foreign-plugin env-var leak) so the
+   * emitted rules never carry the broken `${CLAUDE_PLUGIN_DATA}` placeholder.
+   */
+  readonly dataDirRules: TargetDataDirRules;
   /** --provision: write protection when missing instead of refusing. */
   readonly provision: boolean;
 }
@@ -259,10 +272,15 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
   await ensureGitignore(opts.targetRoot, lists);
 
   // 3b. E1 (F-perm): emit / idempotently merge the target-repo
-  //     `.claude/settings.json` (factory allow-list + worktree.baseRef:"head";
-  //     NO statusLine — that belongs to E2's merged-settings). Non-destructive:
-  //     a user's existing settings keys (incl. their own statusLine) are kept.
-  const settings = await ensureTargetSettings({ targetRoot: opts.targetRoot });
+  //     `.claude/settings.json` (factory allow-list + baked data-dir rules +
+  //     worktree.baseRef:"head"; NO statusLine — that belongs to E2's
+  //     merged-settings). Non-destructive: a user's existing settings keys (incl.
+  //     their own statusLine) are kept, and any stale `${CLAUDE_PLUGIN_DATA}`
+  //     placeholder rules from an older scaffold are migrated to the baked form.
+  const settings = await ensureTargetSettings({
+    targetRoot: opts.targetRoot,
+    dataDirRules: opts.dataDirRules,
+  });
   // Surface the .claude/settings.json path in the file lists for transparency.
   const settingsRel = relative(opts.targetRoot, settings.path);
   if (settings.created) lists.created.push(settingsRel);
@@ -352,6 +370,11 @@ async function run(argv: string[]): Promise<ExitCode> {
     repo,
     config: loadConfig(),
     ghClient: new DefaultGhClient(),
+    // Resolve the CANONICAL data dir at the command boundary (corrects the
+    // foreign-plugin env-var leak) and bake it into the target permission rules.
+    // resolveDataDir() throwing on an unresolvable dir is the correct loud
+    // failure — there is deliberately no placeholder fallback.
+    dataDirRules: buildTargetDataDirRules({ dataDir: resolveDataDir(), home: homedir() }),
     provision: args.flag("provision") === true,
   });
   emitJson(report);

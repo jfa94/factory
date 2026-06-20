@@ -7177,6 +7177,17 @@ function redactSecrets(text) {
   return text.replace(re, REDACTION_TOKEN);
 }
 
+// src/shared/paths.ts
+function tildeShorten(absPath, home) {
+  if (home.length === 0) return absPath;
+  if (absPath === home) return "~";
+  const base = home.endsWith("/") ? home.slice(0, -1) : home;
+  if (absPath.startsWith(base + "/")) {
+    return "~" + absPath.slice(base.length);
+  }
+  return absPath;
+}
+
 // src/git/exec-tools.ts
 function makeRunner(command) {
   return (args, opts) => exec(command, args, opts);
@@ -8103,6 +8114,7 @@ var stateCommand = {
 // src/cli/subcommands/scaffold.ts
 import { copyFile, mkdir as mkdir7, readFile as readFile4, writeFile } from "node:fs/promises";
 import { existsSync as existsSync6 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
 import { dirname as dirname5, join as join7, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8111,7 +8123,7 @@ import { mkdir as mkdir6, readFile as readFile3 } from "node:fs/promises";
 import { existsSync as existsSync5 } from "node:fs";
 import { join as join6 } from "node:path";
 var log14 = createLogger("cli:target-settings");
-var FACTORY_TARGET_ALLOWLIST = [
+var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
   "Bash(gh:*)",
@@ -8122,32 +8134,50 @@ var FACTORY_TARGET_ALLOWLIST = [
   "Edit",
   "Grep",
   "Glob",
-  "Agent",
+  "Agent"
+];
+var DATA_DIR_VERBS = ["Read", "Write", "Edit"];
+var STALE_DATA_DIR_ALLOW = [
   "Read(${CLAUDE_PLUGIN_DATA}/**)",
   "Write(${CLAUDE_PLUGIN_DATA}/**)",
   "Edit(${CLAUDE_PLUGIN_DATA}/**)"
 ];
-var FACTORY_TARGET_ADDITIONAL_DIRS = ["${CLAUDE_PLUGIN_DATA}"];
+var STALE_DATA_DIR_ADDITIONAL = "${CLAUDE_PLUGIN_DATA}";
+function buildTargetDataDirRules(opts) {
+  const baked = tildeShorten(opts.dataDir, opts.home);
+  return { allowGlobBase: baked, additionalDir: baked };
+}
+function dataDirAllowRules(allowGlobBase) {
+  return DATA_DIR_VERBS.map((verb) => `${verb}(${allowGlobBase}/**)`);
+}
 function isObject(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
-function mergeTargetSettings(existing) {
+function mergeTargetSettings(existing, dataDirRules) {
   const settings = structuredClone(existing);
   let changed = false;
   const permissions = isObject(settings.permissions) ? settings.permissions : {};
   const currentAllow = Array.isArray(permissions.allow) ? permissions.allow.filter((e) => typeof e === "string") : [];
-  const have = new Set(currentAllow);
-  const additions = FACTORY_TARGET_ALLOWLIST.filter((e) => !have.has(e));
-  if (additions.length > 0) {
-    permissions.allow = [...currentAllow, ...additions];
+  const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e));
+  const removedStaleAllow = strippedAllow.length !== currentAllow.length;
+  const targetAllow = [
+    ...FACTORY_TARGET_BASE_ALLOWLIST,
+    ...dataDirAllowRules(dataDirRules.allowGlobBase)
+  ];
+  const have = new Set(strippedAllow);
+  const additions = targetAllow.filter((e) => !have.has(e));
+  if (removedStaleAllow || additions.length > 0) {
+    permissions.allow = [...strippedAllow, ...additions];
     settings.permissions = permissions;
     changed = true;
   }
   const currentDirs = Array.isArray(permissions.additionalDirectories) ? permissions.additionalDirectories.filter((e) => typeof e === "string") : [];
-  const haveDirs = new Set(currentDirs);
-  const dirAdditions = FACTORY_TARGET_ADDITIONAL_DIRS.filter((e) => !haveDirs.has(e));
-  if (dirAdditions.length > 0) {
-    permissions.additionalDirectories = [...currentDirs, ...dirAdditions];
+  const strippedDirs = currentDirs.filter((e) => e !== STALE_DATA_DIR_ADDITIONAL);
+  const removedStaleDir = strippedDirs.length !== currentDirs.length;
+  const haveDirs = new Set(strippedDirs);
+  const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e));
+  if (removedStaleDir || dirAdditions.length > 0) {
+    permissions.additionalDirectories = [...strippedDirs, ...dirAdditions];
     settings.permissions = permissions;
     changed = true;
   }
@@ -8175,7 +8205,7 @@ async function ensureTargetSettings(opts) {
       );
     }
   }
-  const { settings, changed } = mergeTargetSettings(existing);
+  const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
   if (created || changed) {
     await mkdir6(dir, { recursive: true });
     await atomicWriteFile(path3, stringifyJson(settings));
@@ -8278,7 +8308,10 @@ async function runScaffold(opts) {
     );
   }
   await ensureGitignore(opts.targetRoot, lists);
-  const settings = await ensureTargetSettings({ targetRoot: opts.targetRoot });
+  const settings = await ensureTargetSettings({
+    targetRoot: opts.targetRoot,
+    dataDirRules: opts.dataDirRules
+  });
   const settingsRel = relative(opts.targetRoot, settings.path);
   if (settings.created) lists.created.push(settingsRel);
   else lists.present.push(settingsRel);
@@ -8340,6 +8373,11 @@ async function run2(argv) {
     repo,
     config: loadConfig(),
     ghClient: new DefaultGhClient(),
+    // Resolve the CANONICAL data dir at the command boundary (corrects the
+    // foreign-plugin env-var leak) and bake it into the target permission rules.
+    // resolveDataDir() throwing on an unresolvable dir is the correct loud
+    // failure — there is deliberately no placeholder fallback.
+    dataDirRules: buildTargetDataDirRules({ dataDir: resolveDataDir(), home: homedir2() }),
     provision: args.flag("provision") === true
   });
   emitJson(report);
@@ -13338,7 +13376,7 @@ var statuslineCommand = {
 import { existsSync as existsSync8 } from "node:fs";
 import { readFile as readFile11 } from "node:fs/promises";
 import { join as join16 } from "node:path";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 var log31 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
@@ -13376,12 +13414,6 @@ function factoryBinPath(pluginRoot) {
 }
 function mergedSettingsPath(dataDir) {
   return join16(dataDir, "merged-settings.json");
-}
-function tildeShorten(absPath, home) {
-  if (home.length > 0 && absPath.startsWith(home)) {
-    return "~" + absPath.slice(home.length);
-  }
-  return absPath;
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -13467,7 +13499,7 @@ async function readPluginVersion(pluginRoot) {
   return void 0;
 }
 async function runAutonomyEnsure(opts = {}) {
-  const home = opts.home ?? homedir2();
+  const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
   const userSettingsPath = opts.userSettingsPath ?? join16(home, ".claude", "settings.json");
@@ -13573,7 +13605,7 @@ function describePreflightReason(reason, pluginVersion, onDiskVersion) {
 }
 async function runAutonomyPreflight(opts = {}) {
   const env = opts.env ?? process.env;
-  const home = opts.home ?? homedir2();
+  const home = opts.home ?? homedir3();
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let dataDir;
   let pluginRoot;

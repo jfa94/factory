@@ -30,10 +30,16 @@ This is idempotent. It:
   `.dependency-cruiser.cjs`, and `eslint.config.mjs`;
 - guarantees the `.gitignore` entries that keep factory state un-committed;
 - emits / idempotently merges the target `.claude/settings.json` (factory allow-list
-  - `permissions.additionalDirectories: ["${CLAUDE_PLUGIN_DATA}"]` so the built-in
-    file tools reach the out-of-tree plugin data dir — `results/`, `worktrees/`,
-    `runs/`, `specs/` — without tripping the working-directory-boundary prompt +
-    `worktree.baseRef:"head"`);
+  - `permissions.additionalDirectories` plus `Read|Write|Edit(<data-dir>/**)` allow
+    rules so the built-in file tools reach the out-of-tree plugin data dir —
+    `results/`, `worktrees/`, `runs/`, `specs/` — without tripping the
+    working-directory-boundary prompt + `worktree.baseRef:"head"`). The data-dir path
+    is the **CLI-resolved canonical dir baked in at scaffold time** (the `~`-tilde form
+    when under `$HOME`, absolute otherwise), **not** the literal `${CLAUDE_PLUGIN_DATA}`
+    placeholder: env-var interpolation in permission rules is unsupported and the var
+    is hijackable by co-installed plugins, so a placeholder rule would match nothing.
+    Re-scaffolding an older repo migrates any stale `${CLAUDE_PLUGIN_DATA}` rules to the
+    baked form. See [Decision 17](../explanation/decisions.md#decision-17-coarse-bash-allow-with-hook-enforced-defense-in-depth);
 - probes branch protection on `develop` (the integration base) and **refuses loudly
   if it is missing**.
 
