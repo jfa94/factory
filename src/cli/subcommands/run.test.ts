@@ -599,11 +599,12 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect((await state.read("run-old")).status).toBe("superseded");
     // Branch was deleted via gh fake (field: deletedBranches).
     expect(gh.deletedBranches).toContain("staging-run-old");
-    // Protection was torn down too — load-bearing: GitHub blocks deleting a
-    // protected ref, so deleteProtection MUST run (and before the branch delete).
+    // Protection was torn down too — load-bearing: GitHub blocks deleting a protected
+    // ref, so deleteProtection MUST run before the branch delete. Assert on the SINGLE
+    // ordered `calls` log (cross-array indexOf would be a 0<=0 tautology).
     expect(gh.protectionDeletes).toContain("staging-run-old");
-    expect(gh.protectionDeletes.indexOf("staging-run-old")).toBeLessThanOrEqual(
-      gh.deletedBranches.indexOf("staging-run-old"),
+    expect(gh.calls.indexOf("api DELETE protection staging-run-old")).toBeLessThan(
+      gh.calls.indexOf("api DELETE refs/heads/staging-run-old"),
     );
   });
 
@@ -639,10 +640,90 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect(gh.protectionDeletes).toContain(legacyBranch);
     expect(gh.deletedBranches).toContain(legacyBranch);
     expect(gh.deletedBranches).not.toContain("staging-run-old");
-    // Protection first, then branch (GitHub blocks deleting a protected ref).
-    expect(gh.protectionDeletes.indexOf(legacyBranch)).toBeLessThanOrEqual(
-      gh.deletedBranches.indexOf(legacyBranch),
+    // Protection first, then branch (GitHub blocks deleting a protected ref) — assert on
+    // the single ordered `calls` log, not a cross-array tautology.
+    expect(gh.calls.indexOf(`api DELETE protection ${legacyBranch}`)).toBeLessThan(
+      gh.calls.indexOf(`api DELETE refs/heads/${legacyBranch}`),
     );
+  });
+
+  it("--supersede teardown failure leaves the old run ACTIVE (terminal write is LAST) — no fresh run", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    gh.failDeleteProtection = new Error("HTTP 403: Resource not accessible by integration");
+    const { defaultConfig } = await import("../../config/schema.js");
+    const stagingDeps = {
+      gitClient: git,
+      ghClient: gh,
+      config: defaultConfig(),
+      targetRoot: "/target",
+      owner: "acme",
+      repo: "widgets",
+    };
+
+    await expect(
+      resolveOrCreateRun(
+        state,
+        store,
+        { repo: REPO, issue: 42, runId: "run-new", intent: "supersede" },
+        stagingDeps,
+      ),
+    ).rejects.toThrow(/403/);
+
+    // finalize runs LAST, so a teardown throw never reached it → the old run is still
+    // non-terminal and fully recoverable (a re-run resolves it and retries the teardown).
+    expect((await state.read("run-old")).status).toBe("running");
+    // The fresh run was never created (the abort happened before createRunFromManifest).
+    expect((await state.listRuns()).map((r) => r.run_id)).not.toContain("run-new");
+    // Protection threw FIRST → the branch delete never ran (no half-torn-down state).
+    expect(gh.deletedBranches).not.toContain("staging-run-old");
+  });
+
+  it("--supersede retries idempotently after a transient teardown failure — no orphaned branch", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    gh.failDeleteProtection = new Error("HTTP 500: server error");
+    const { defaultConfig } = await import("../../config/schema.js");
+    const stagingDeps = {
+      gitClient: git,
+      ghClient: gh,
+      config: defaultConfig(),
+      targetRoot: "/target",
+      owner: "acme",
+      repo: "widgets",
+    };
+
+    // First attempt fails mid-teardown; the old run stays active (the recoverable state).
+    await expect(
+      resolveOrCreateRun(
+        state,
+        store,
+        { repo: REPO, issue: 42, runId: "run-new", intent: "supersede" },
+        stagingDeps,
+      ),
+    ).rejects.toThrow(/500/);
+    expect((await state.read("run-old")).status).toBe("running");
+
+    // GitHub recovers; the retry re-resolves the STILL-ACTIVE old run and completes.
+    gh.failDeleteProtection = undefined;
+    const r = await resolveOrCreateRun(
+      state,
+      store,
+      { repo: REPO, issue: 42, runId: "run-new", intent: "supersede" },
+      stagingDeps,
+    );
+
+    expect(r.kind).toBe("superseded");
+    expect((await state.read("run-old")).status).toBe("superseded");
+    // Branch + protection were GC'd on the successful retry → no orphan left behind.
+    expect(gh.protectionDeletes).toContain("staging-run-old");
+    expect(gh.deletedBranches).toContain("staging-run-old");
   });
 
   it("--supersede without stagingDeps → UsageError", async () => {

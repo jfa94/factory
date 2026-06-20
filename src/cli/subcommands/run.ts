@@ -412,10 +412,17 @@ export type ResolveOrCreateResult =
   | { readonly kind: "superseded"; readonly run: RunState; readonly supersededId: string };
 
 /**
- * Supersede an active run (Decision 35): mark it `superseded` (durable intent
- * FIRST, so a crash mid-cleanup leaves a recoverable orphan branch, never a
- * running run with no branch), then tear down protection (GitHub blocks deleting
- * a protected ref) and delete `staging-<run-id>` (which auto-closes its task PRs).
+ * Supersede an active run (Decision 35): tear down its protection (GitHub blocks
+ * deleting a protected ref) + `staging-<run-id>` branch (auto-closing its task PRs),
+ * THEN mark it `superseded`. Terminal write is LAST — the resume-safe convention
+ * {@link finalizeRun} uses: a teardown throw (401/403/5xx; already-gone 404/422 is
+ * tolerated by the gh client) leaves the old run NON-terminal, so `findActiveBySpec`
+ * still resolves it and re-running `run --supersede` retries the whole step idempotently,
+ * leaving NO orphaned protected branch. (Finalizing FIRST would strand it: a terminal
+ * `superseded` run is excluded from the active scan, so nothing ever re-tears its branch
+ * down — rescue scopes out branch GC.) This is the DELIBERATE inverse of {@link runCancel},
+ * which finalizes FIRST because its priority is releasing the Stop gate even if teardown
+ * fails; supersede has no gate, so a clean, recoverable replacement wins.
  */
 async function supersedeRun(
   state: StateManager,
@@ -425,9 +432,9 @@ async function supersedeRun(
   // Resolve the PINNED branch: superseding must tear down the branch the run actually
   // cut, not a recompute that a mid-run naming change could have desynced (Decision 33).
   const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
-  await state.finalize(existing.run_id, "superseded");
   await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
   await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
+  await state.finalize(existing.run_id, "superseded"); // terminal LAST (resume-safe)
 }
 
 /**

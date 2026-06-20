@@ -12272,9 +12272,9 @@ async function createRunFromManifest(state, specStore, manifest, opts, stagingDe
 }
 async function supersedeRun(state, existing, stagingDeps) {
   const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
-  await state.finalize(existing.run_id, "superseded");
   await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
   await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
+  await state.finalize(existing.run_id, "superseded");
 }
 async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   const manifest = await resolveSpec(specStore, opts);
