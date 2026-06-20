@@ -6750,17 +6750,28 @@ var StateManager = class {
     return null;
   }
   /**
+   * ALL non-terminal runs owned by `session` (its `owner_session`), newest-first
+   * (empty session → `[]`). The raw list behind {@link findActiveByOwner}: callers
+   * that must DISTINGUISH "none owned" from "ambiguous (≥2 owned)" — e.g. `run cancel`,
+   * which fails LOUD on ambiguity rather than guessing which run to abandon — branch
+   * on `.length`.
+   */
+  async findAllActiveByOwner(session) {
+    if (session.length === 0) return [];
+    const runs = await this.listRuns();
+    return runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+  }
+  /**
    * Find the SINGLE non-terminal run owned by `session` (its `owner_session`), or
    * null. Powers the session-scoped Bash guards (run-isolation L1.3): a guard fires
    * only for the run the stopping/acting session actually owns, never a concurrent
    * run in another repo. An empty session, no match, or ≥2 matches (ambiguous — one
    * session minting runs in two repos) all return null, so the caller fails SAFE
-   * (passes through) rather than gating the wrong run.
+   * (passes through) rather than gating the wrong run. Callers that must tell "none"
+   * from "ambiguous" apart use {@link findAllActiveByOwner} and branch on its length.
    */
   async findActiveByOwner(session) {
-    if (session.length === 0) return null;
-    const runs = await this.listRuns();
-    const owned = runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+    const owned = await this.findAllActiveByOwner(session);
     return owned.length === 1 ? owned[0] : null;
   }
   // ---- update (locked read-modify-write) ---------------------------------
@@ -12073,11 +12084,13 @@ Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
+  factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
-  finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.`;
+  finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
+  cancel     Abandon a live run (mark it failed) so the owning session can stop; --cleanup also tears down its branch.`;
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
@@ -12136,6 +12149,25 @@ terminal \u2014 in that resume-safe order. LOUD if any task is still non-termina
 
 Emits ONE JSON envelope:
   { kind:"finalized", run, report, rollup?, issues_filed }`;
+var CANCEL_HELP = `factory run cancel \u2014 abandon a live run (mark it failed) so the session can stop
+
+Usage:
+  factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
+
+  --run         The run to cancel. Default: the active run THIS session owns
+                (--session-id / $CLAUDE_CODE_SESSION_ID), else runs/current.
+  --cleanup     Also tear down the run's staging branch + task PRs (like --supersede).
+                Default: leave them in place for manual handling.
+  --session-id  Owning session id used to locate the run when --run is omitted
+                (defaults to $CLAUDE_CODE_SESSION_ID).
+
+The in-session escape from the Stop gate: marks the run 'failed' via the one sanctioned
+state writer \u2014 works even with a task still executing (no rollup CI, no ship), so the gate
+stops blocking the owning session. Idempotent; a run already terminal as completed/superseded
+is a LOUD error. NOT resumable (cancelled is terminal) \u2014 start a fresh run instead.
+
+Emits ONE JSON envelope:
+  { kind:"cancelled", run, cleaned_up }`;
 function seedTasksFromSpec(manifest) {
   const ids = new Set(manifest.tasks.map((t) => t.task_id));
   const tasks = {};
@@ -12240,9 +12272,9 @@ async function createRunFromManifest(state, specStore, manifest, opts, stagingDe
 }
 async function supersedeRun(state, existing, stagingDeps) {
   const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
-  await state.finalize(existing.run_id, "superseded");
   await stagingDeps.ghClient.deleteProtection(stagingDeps.owner, stagingDeps.repo, branch);
   await stagingDeps.ghClient.deleteRemoteBranch(stagingDeps.owner, stagingDeps.repo, branch);
+  await state.finalize(existing.run_id, "superseded");
 }
 async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   const manifest = await resolveSpec(specStore, opts);
@@ -12459,6 +12491,74 @@ async function runFinalize(argv) {
   });
   return EXIT.OK;
 }
+async function resolveCancelRunId(state, args, sessionId, overrides = {}) {
+  const explicit = optionalString(args.flag("run"));
+  if (explicit !== void 0) return explicit;
+  if (sessionId !== void 0) {
+    const owned = await state.findAllActiveByOwner(sessionId);
+    if (owned.length === 1) return owned[0].run_id;
+    if (owned.length >= 2) {
+      const ids = owned.map((r) => r.run_id).join(", ");
+      throw new UsageError(
+        `run cancel: session '${sessionId}' owns ${owned.length} live runs (${ids}); pass --run <id> to choose which to cancel`
+      );
+    }
+  }
+  const current = await readCurrentForCwd(state, overrides);
+  if (current === null) {
+    throw new UsageError("run cancel: no --run given and no owned/current run to cancel");
+  }
+  return current.run_id;
+}
+async function runCancel(argv, overrides = {}) {
+  const args = parseArgs(argv, { booleans: ["cleanup"] });
+  if (args.flag("help") === true) {
+    emitLine(CANCEL_HELP);
+    return EXIT.OK;
+  }
+  const dataDir = resolveDataDir(
+    overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {}
+  );
+  const state = new StateManager({ dataDir });
+  const sessionId = resolveOwnerSession(args.flag("session-id"));
+  const currentOverrides = {
+    ...overrides.gitClient !== void 0 ? { gitClient: overrides.gitClient } : {},
+    ...overrides.cwd !== void 0 ? { cwd: overrides.cwd } : {}
+  };
+  const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides);
+  const run9 = await state.finalize(runId, "failed");
+  const cleanup = args.flag("cleanup") === true;
+  const branch = resolveStagingBranch(run9.run_id, run9.staging_branch);
+  let cleanedUp = false;
+  let cleanupError;
+  if (cleanup) {
+    const ghClient = overrides.ghClient ?? new DefaultGhClient();
+    const { owner, repo } = splitRepoSlug(run9.spec.repo);
+    try {
+      await ghClient.deleteProtection(owner, repo, branch);
+      await ghClient.deleteRemoteBranch(owner, repo, branch);
+      cleanedUp = true;
+    } catch (err) {
+      cleanupError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  emitJson({
+    kind: "cancelled",
+    run: run9,
+    cleaned_up: cleanedUp,
+    ...cleanupError !== void 0 ? { cleanup_error: cleanupError } : {}
+  });
+  if (cleanupError !== void 0) {
+    emitError(
+      `run ${run9.run_id} cancelled (marked failed), but --cleanup did NOT finish for staging branch '${branch}': ${cleanupError}. The branch may still exist \u2014 re-run \`factory run cancel --run ${run9.run_id} --cleanup\` to retry the teardown.`
+    );
+  } else {
+    emitError(
+      `run ${run9.run_id} cancelled (marked failed)` + (cleanup ? `; staging branch '${branch}' + its task PRs torn down.` : `; staging branch '${branch}' left in place \u2014 delete it manually or re-run with --cleanup.`)
+    );
+  }
+  return EXIT.OK;
+}
 async function run3(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
@@ -12473,8 +12573,12 @@ async function run3(argv) {
       return runResume(rest);
     case "finalize":
       return runFinalize(rest);
+    case "cancel":
+      return runCancel(rest);
     default:
-      throw new UsageError(`unknown run action '${action}' (expected create | resume | finalize)`);
+      throw new UsageError(
+        `unknown run action '${action}' (expected create | resume | finalize | cancel)`
+      );
   }
 }
 var runCommand = {

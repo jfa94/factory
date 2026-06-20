@@ -17,12 +17,14 @@ import { join } from "node:path";
 import {
   runCommand,
   runCreate,
+  runCancel,
   seedTasksFromSpec,
   createRun,
   resolveOrCreateRun,
   applyResume,
   resolveOwnerSession,
   type RunResumeEnvelope,
+  type RunCancelOverrides,
   type SpecSelector,
   type CreateRunOptions,
 } from "./run.js";
@@ -597,11 +599,12 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect((await state.read("run-old")).status).toBe("superseded");
     // Branch was deleted via gh fake (field: deletedBranches).
     expect(gh.deletedBranches).toContain("staging-run-old");
-    // Protection was torn down too — load-bearing: GitHub blocks deleting a
-    // protected ref, so deleteProtection MUST run (and before the branch delete).
+    // Protection was torn down too — load-bearing: GitHub blocks deleting a protected
+    // ref, so deleteProtection MUST run before the branch delete. Assert on the SINGLE
+    // ordered `calls` log (cross-array indexOf would be a 0<=0 tautology).
     expect(gh.protectionDeletes).toContain("staging-run-old");
-    expect(gh.protectionDeletes.indexOf("staging-run-old")).toBeLessThanOrEqual(
-      gh.deletedBranches.indexOf("staging-run-old"),
+    expect(gh.calls.indexOf("api DELETE protection staging-run-old")).toBeLessThan(
+      gh.calls.indexOf("api DELETE refs/heads/staging-run-old"),
     );
   });
 
@@ -637,10 +640,90 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect(gh.protectionDeletes).toContain(legacyBranch);
     expect(gh.deletedBranches).toContain(legacyBranch);
     expect(gh.deletedBranches).not.toContain("staging-run-old");
-    // Protection first, then branch (GitHub blocks deleting a protected ref).
-    expect(gh.protectionDeletes.indexOf(legacyBranch)).toBeLessThanOrEqual(
-      gh.deletedBranches.indexOf(legacyBranch),
+    // Protection first, then branch (GitHub blocks deleting a protected ref) — assert on
+    // the single ordered `calls` log, not a cross-array tautology.
+    expect(gh.calls.indexOf(`api DELETE protection ${legacyBranch}`)).toBeLessThan(
+      gh.calls.indexOf(`api DELETE refs/heads/${legacyBranch}`),
     );
+  });
+
+  it("--supersede teardown failure leaves the old run ACTIVE (terminal write is LAST) — no fresh run", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    gh.failDeleteProtection = new Error("HTTP 403: Resource not accessible by integration");
+    const { defaultConfig } = await import("../../config/schema.js");
+    const stagingDeps = {
+      gitClient: git,
+      ghClient: gh,
+      config: defaultConfig(),
+      targetRoot: "/target",
+      owner: "acme",
+      repo: "widgets",
+    };
+
+    await expect(
+      resolveOrCreateRun(
+        state,
+        store,
+        { repo: REPO, issue: 42, runId: "run-new", intent: "supersede" },
+        stagingDeps,
+      ),
+    ).rejects.toThrow(/403/);
+
+    // finalize runs LAST, so a teardown throw never reached it → the old run is still
+    // non-terminal and fully recoverable (a re-run resolves it and retries the teardown).
+    expect((await state.read("run-old")).status).toBe("running");
+    // The fresh run was never created (the abort happened before createRunFromManifest).
+    expect((await state.listRuns()).map((r) => r.run_id)).not.toContain("run-new");
+    // Protection threw FIRST → the branch delete never ran (no half-torn-down state).
+    expect(gh.deletedBranches).not.toContain("staging-run-old");
+  });
+
+  it("--supersede retries idempotently after a transient teardown failure — no orphaned branch", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    gh.failDeleteProtection = new Error("HTTP 500: server error");
+    const { defaultConfig } = await import("../../config/schema.js");
+    const stagingDeps = {
+      gitClient: git,
+      ghClient: gh,
+      config: defaultConfig(),
+      targetRoot: "/target",
+      owner: "acme",
+      repo: "widgets",
+    };
+
+    // First attempt fails mid-teardown; the old run stays active (the recoverable state).
+    await expect(
+      resolveOrCreateRun(
+        state,
+        store,
+        { repo: REPO, issue: 42, runId: "run-new", intent: "supersede" },
+        stagingDeps,
+      ),
+    ).rejects.toThrow(/500/);
+    expect((await state.read("run-old")).status).toBe("running");
+
+    // GitHub recovers; the retry re-resolves the STILL-ACTIVE old run and completes.
+    gh.failDeleteProtection = undefined;
+    const r = await resolveOrCreateRun(
+      state,
+      store,
+      { repo: REPO, issue: 42, runId: "run-new", intent: "supersede" },
+      stagingDeps,
+    );
+
+    expect(r.kind).toBe("superseded");
+    expect((await state.read("run-old")).status).toBe("superseded");
+    // Branch + protection were GC'd on the successful retry → no orphan left behind.
+    expect(gh.protectionDeletes).toContain("staging-run-old");
+    expect(gh.deletedBranches).toContain("staging-run-old");
   });
 
   it("--supersede without stagingDeps → UsageError", async () => {
@@ -879,6 +962,285 @@ describe("resolveOwnerSession", () => {
   it("treats an empty-string flag/env as absent (degrades to owner-unknown)", () => {
     expect(resolveOwnerSession("", { CLAUDE_CODE_SESSION_ID: "" })).toBeUndefined();
     expect(resolveOwnerSession("", { CLAUDE_CODE_SESSION_ID: "sess-env" })).toBe("sess-env");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runCancel — abandon a live run so the Stop gate releases the owning session
+// ---------------------------------------------------------------------------
+// The "stuck Stop-gate" trap: a live run (a task still executing) left the owning
+// session unable to end, with no in-session escape. `cancel` marks the run terminal
+// (reuses `failed`) via the one sanctioned writer — works WITH a task executing (the
+// exact mechanism `--supersede` uses), so the gate stops blocking. See Decision 35.
+describe("runCancel (abandon a live run, Decision 35)", () => {
+  let dataDir: string;
+  let state: StateManager;
+  let store: SpecStore;
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "factory-run-cancel-"));
+    state = new StateManager({
+      dataDir,
+      lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
+    });
+    store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    await store.write(manifest([task("t1", []), task("t2", ["t1"])]), "# spec\n");
+  });
+  afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
+
+  /** Seed a run (status `running`) for the durable spec; optionally stamp an owner. */
+  async function seed(runId: string, owner?: string): Promise<void> {
+    await createRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId,
+      ...(owner !== undefined ? { ownerSession: owner } : {}),
+    });
+  }
+
+  /** Force a seeded task into `executing` — the exact in-flight state that traps finalize. */
+  async function setExecuting(runId: string, taskId: string): Promise<void> {
+    await state.update(runId, (s) => ({
+      ...s,
+      tasks: { ...s.tasks, [taskId]: { ...s.tasks[taskId]!, status: "executing" as const } },
+    }));
+  }
+
+  /** Run cancel; capture stdout (the JSON envelope) + stderr (the loud line) + exit code. */
+  async function cancel(
+    argv: string[],
+    overrides: RunCancelOverrides,
+  ): Promise<{ env: Record<string, unknown>; code: number; stderr: string }> {
+    const chunks: string[] = [];
+    const errChunks: string[] = [];
+    const out = vi.spyOn(process.stdout, "write").mockImplementation((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    });
+    const err = vi.spyOn(process.stderr, "write").mockImplementation((c: unknown) => {
+      errChunks.push(String(c));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await runCancel(argv, overrides);
+    } finally {
+      out.mockRestore();
+      err.mockRestore();
+    }
+    return {
+      env: JSON.parse(chunks.join("")) as Record<string, unknown>,
+      code,
+      stderr: errChunks.join(""),
+    };
+  }
+
+  it("cancels a run with a task still executing → status failed (the headline trap)", async () => {
+    await seed("run-live");
+    await setExecuting("run-live", "t1");
+
+    const { env, code } = await cancel(["--run", "run-live"], { dataDir });
+
+    expect(code).toBe(EXIT.OK);
+    expect(env.kind).toBe("cancelled");
+    expect((env.run as Record<string, unknown>).status).toBe("failed");
+    // The decoupling the fix relies on: finalize(…, "failed") does NOT inspect tasks,
+    // so an executing T1 is no barrier (the same path --supersede already takes).
+    expect((await state.read("run-live")).status).toBe("failed");
+  });
+
+  it("is idempotent — re-cancelling a failed run stays failed and exits OK", async () => {
+    await seed("run-i");
+    await cancel(["--run", "run-i"], { dataDir }); // first
+    const { code } = await cancel(["--run", "run-i"], { dataDir }); // re-cancel
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-i")).status).toBe("failed");
+  });
+
+  it("is LOUD when the run is already terminal as completed (cannot re-finalize as failed)", async () => {
+    await seed("run-done");
+    await state.finalize("run-done", "completed");
+    // Not a UsageError — the manager's "already terminal as X" guard bubbles uncaught.
+    await expect(runCancel(["--run", "run-done"], { dataDir })).rejects.toThrow(/already terminal/);
+  });
+
+  it("resolves the run THIS session owns (owner-scan) over a repointed runs/current", async () => {
+    // run-A (repo acme/widgets, owned sess-1) is the one to cancel. run-B lives in a
+    // DIFFERENT repo (the engine forbids two live same-repo runs from different sessions)
+    // and, created last, becomes the GLOBAL current pointer. So the current fallback would
+    // resolve run-B — owner-scan must win and cancel run-A instead (the stuck-session
+    // condition: the run is found by owner_session, independent of runs/current).
+    const otherRepo = "other/svc";
+    await store.write(
+      parseSpecManifest({
+        spec_id: "99-other",
+        issue_number: 99,
+        slug: "other",
+        repo: otherRepo,
+        generated_at: "2026-06-01T00:00:00.000Z",
+        tasks: [task("t1", [])],
+      }),
+      "# spec\n",
+    );
+    await seed("run-A", "sess-1");
+    await createRun(state, store, {
+      repo: otherRepo,
+      issue: 99,
+      runId: "run-B",
+      ownerSession: "sess-2",
+    });
+    await setExecuting("run-A", "t1");
+
+    // No --run; non-repo cwd → the current fallback resolves the global pointer (run-B).
+    await cancel(["--session-id", "sess-1"], { dataDir, cwd: dataDir });
+
+    expect((await state.read("run-A")).status).toBe("failed");
+    expect((await state.read("run-B")).status).toBe("running");
+  });
+
+  it("is LOUD when the session owns ≥2 live runs — refuses to guess, demands --run", async () => {
+    // Two live runs owned by ONE session, in different repos (the engine forbids two
+    // live same-repo runs from different sessions). Without --run, cancel must NOT guess
+    // which to abandon — a wrong-run finalize is unrecoverable — so it surfaces BOTH
+    // candidates and requires --run, never silently falling through to runs/current.
+    const otherRepo = "other/svc";
+    await store.write(
+      parseSpecManifest({
+        spec_id: "99-other",
+        issue_number: 99,
+        slug: "other",
+        repo: otherRepo,
+        generated_at: "2026-06-01T00:00:00.000Z",
+        tasks: [task("t1", [])],
+      }),
+      "# spec\n",
+    );
+    await seed("run-m1", "sess-multi");
+    await createRun(state, store, {
+      repo: otherRepo,
+      issue: 99,
+      runId: "run-m2",
+      ownerSession: "sess-multi",
+    });
+
+    let caught: unknown;
+    try {
+      await runCancel(["--session-id", "sess-multi"], { dataDir, cwd: dataDir });
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as { isUsageError?: boolean }).isUsageError).toBe(true);
+    // The message names BOTH candidates so the operator can pick one with --run.
+    expect((caught as Error).message).toContain("run-m1");
+    expect((caught as Error).message).toContain("run-m2");
+    // Neither run was finalized — no wrong-run guess slipped through.
+    expect((await state.read("run-m1")).status).toBe("running");
+    expect((await state.read("run-m2")).status).toBe("running");
+  });
+
+  it("falls through to runs/current when the given session owns nothing (0-owned, not ambiguous)", async () => {
+    await seed("run-cur0"); // no owner stamped
+    await setExecuting("run-cur0", "t1");
+    // sess-none owns nothing → owner-scan yields 0 (NOT ambiguous) → current pointer wins.
+    await cancel(["--session-id", "sess-none"], { dataDir, cwd: dataDir });
+    expect((await state.read("run-cur0")).status).toBe("failed");
+  });
+
+  it("falls back to runs/current when neither --run nor a session id is given", async () => {
+    await seed("run-cur");
+    await setExecuting("run-cur", "t1");
+    // Non-repo cwd → readCurrentForCwd degrades to the global current pointer (run-cur).
+    await cancel([], { dataDir, cwd: dataDir });
+    expect((await state.read("run-cur")).status).toBe("failed");
+  });
+
+  it("is a usage error when no run can be resolved (no --run, no owner, no current)", async () => {
+    await expect(runCancel([], { dataDir, cwd: dataDir })).rejects.toMatchObject({
+      isUsageError: true,
+    });
+  });
+
+  it("leaves the staging branch + task PRs untouched by default (no --cleanup)", async () => {
+    await seed("run-keep");
+    const gh = new FakeGhClient();
+    const { env } = await cancel(["--run", "run-keep"], { dataDir, ghClient: gh });
+    expect(env.cleaned_up).toBe(false);
+    expect(gh.deletedBranches).toHaveLength(0);
+    expect(gh.protectionDeletes).toHaveLength(0);
+  });
+
+  it("--cleanup tears down protection then the pinned staging branch (auto-closing task PRs)", async () => {
+    await seed("run-clean");
+    await setExecuting("run-clean", "t1");
+    const gh = new FakeGhClient();
+    const { env } = await cancel(["--run", "run-clean", "--cleanup"], { dataDir, ghClient: gh });
+
+    expect(env.cleaned_up).toBe(true);
+    expect(env.cleanup_error).toBeUndefined(); // honest envelope: clean run carries no error
+    expect(gh.protectionDeletes).toContain("staging-run-clean");
+    expect(gh.deletedBranches).toContain("staging-run-clean");
+    // Protection BEFORE branch delete (GitHub blocks deleting a protected ref). Assert on
+    // the SINGLE ordered `calls` log — comparing indices across two separate arrays would
+    // be a tautology (each is 0 in its own array).
+    const protIdx = gh.calls.indexOf("api DELETE protection staging-run-clean");
+    const branchIdx = gh.calls.indexOf("api DELETE refs/heads/staging-run-clean");
+    expect(protIdx).toBeGreaterThanOrEqual(0);
+    expect(protIdx).toBeLessThan(branchIdx);
+  });
+
+  it("--cleanup throw on deleteProtection: run still failed, exit OK, loud + honest envelope", async () => {
+    await seed("run-fp");
+    const gh = new FakeGhClient();
+    gh.failDeleteProtection = new Error("HTTP 403: Resource not accessible by integration");
+    const { env, code, stderr } = await cancel(["--run", "run-fp", "--cleanup"], {
+      dataDir,
+      ghClient: gh,
+    });
+
+    // PRIMARY contract met despite the teardown failure: the run is terminal, gate released.
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-fp")).status).toBe("failed");
+    // Envelope is honest: cleanup did NOT complete, and the real error is surfaced.
+    expect(env.cleaned_up).toBe(false);
+    expect(env.cleanup_error).toContain("403");
+    // Protection threw FIRST → the branch delete was never reached.
+    expect(gh.deletedBranches).toHaveLength(0);
+    // LOUD on stderr, with the branch and a safe-retry hint (not a silent swallow).
+    expect(stderr).toContain("staging-run-fp");
+    expect(stderr).toContain("--run run-fp --cleanup");
+  });
+
+  it("--cleanup throw on deleteRemoteBranch (after protection succeeded): same honest exit", async () => {
+    await seed("run-fb");
+    const gh = new FakeGhClient();
+    gh.failDeleteRemoteBranch = new Error("HTTP 500: server error");
+    const { env, code, stderr } = await cancel(["--run", "run-fb", "--cleanup"], {
+      dataDir,
+      ghClient: gh,
+    });
+
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-fb")).status).toBe("failed");
+    expect(env.cleaned_up).toBe(false);
+    expect(env.cleanup_error).toContain("500");
+    // Protection ran first and SUCCEEDED; only the branch delete failed.
+    expect(gh.protectionDeletes).toContain("staging-run-fb");
+    expect(gh.deletedBranches).toHaveLength(0);
+    expect(stderr).toContain("retry the teardown");
+  });
+
+  it("works OUTSIDE autonomous mode — cancel is the escape verb, never gated", async () => {
+    // The whole file runs as autonomous; cancel must free a stuck session regardless.
+    delete process.env.FACTORY_AUTONOMOUS_MODE;
+    await seed("run-esc");
+    await setExecuting("run-esc", "t1");
+    const { code } = await cancel(["--run", "run-esc"], { dataDir });
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-esc")).status).toBe("failed");
+  });
+
+  it("--help short-circuits and exits OK (wired into the run dispatch)", async () => {
+    expect(await runCommand.run(["cancel", "--help"])).toBe(EXIT.OK);
   });
 });
 

@@ -148,4 +148,18 @@ On `{kind:"still-blocked", …}` the orchestrator reports the reason +
 
 If a session crashed and left tasks stuck in flight (so a re-drive would
 deadlock), `resume` cannot help — use [Rescue a stalled run](./rescue-a-stalled-run.md).
-</content>
+
+## 7. If you need to abandon a run
+
+To walk away from a live run entirely — and free the owning session, which the
+Stop gate otherwise keeps alive while the run has unfinished work — run:
+
+```
+factory run cancel --run <run_id>
+```
+
+This marks the run terminal (`failed`) without shipping anything; it works even
+with a task still executing. Add `--cleanup` to also delete the run's
+`staging-<run-id>` branch and its task PRs (omit it to keep them). A cancelled run
+is **not** resumable — start over with `/factory:run`. Do not hand-edit run state
+or set `FACTORY_ALLOW_STOP` mid-session; `run cancel` is the sanctioned exit.

@@ -288,6 +288,14 @@ export class FakeGhClient implements GhClient {
    * serial (non-overlapping) execution.
    */
   onMergeEnter?: (number: number) => Promise<void> | void;
+  /**
+   * When set, deleteProtection throws this instead of recording the delete — lets a
+   * test simulate a genuine GitHub failure (401/403/5xx) the real gh client propagates
+   * (already-gone 404/422 it would tolerate, so those need no simulation).
+   */
+  failDeleteProtection?: Error;
+  /** When set, deleteRemoteBranch throws this (simulate a propagated 401/403/5xx). */
+  failDeleteRemoteBranch?: Error;
 
   constructor(opts: FakeGhOptions = {}) {
     for (const pr of opts.prs ?? []) this.prs.set(pr.headRefName, pr);
@@ -452,6 +460,7 @@ export class FakeGhClient implements GhClient {
     branch: string,
     _opts?: GhOpts,
   ): Promise<void> {
+    if (this.failDeleteRemoteBranch) throw this.failDeleteRemoteBranch;
     this.calls.push(`api DELETE refs/heads/${branch}`);
     this.deletedBranches.push(branch);
   }
@@ -462,6 +471,7 @@ export class FakeGhClient implements GhClient {
     branch: string,
     _opts?: GhOpts,
   ): Promise<void> {
+    if (this.failDeleteProtection) throw this.failDeleteProtection;
     this.calls.push(`api DELETE protection ${branch}`);
     this.protectionDeletes.push(branch);
     this.protection.delete(branch);

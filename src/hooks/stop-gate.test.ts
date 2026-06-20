@@ -154,6 +154,11 @@ describe("decideStop — live run with pending work → block", () => {
     );
     // guidance must name the coroutine seam, not deleted run-task
     expect((action as Extract<StopAction, { kind: "block" }>).reason).toMatch(/factory next --run/);
+    // guidance must advertise the in-session escape (the "stuck Stop-gate" fix):
+    // a launch-time-only FACTORY_ALLOW_STOP is no help to a trapped session.
+    expect((action as Extract<StopAction, { kind: "block" }>).reason).toMatch(
+      /factory run cancel --run/,
+    );
   });
 
   it("blocks when setup is unfinished (zero tasks)", () => {

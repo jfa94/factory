@@ -132,6 +132,8 @@ step(task):
 
 If `drive` rejects `--results` as stale/duplicate (fold_key mismatch), re-invoke WITHOUT `--results` to get the current envelope and continue — the ONE sanctioned retry (Iron Law 3 applies to everything else).
 
+**Abandoning a run (the in-session escape).** If the user asks to abort/cancel/abandon this run mid-loop, run `factory run cancel --run <run_id>` (defaults to the run THIS session owns, then `runs/current`). It marks the run `failed` via the engine's own writer — so it works even with a task still executing — which releases the Stop gate and frees the session to end. A cancelled run is terminal and NOT resumable (start a fresh `/factory:run` instead). Add `--cleanup` to also tear down the staging branch + its task PRs (omit it to keep them for manual handling). Never edit `state.json` by hand or set `FACTORY_ALLOW_STOP` mid-session — `run cancel` is the sanctioned exit.
+
 ### Collecting a spawn envelope
 
 Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the dir). NEVER write under `runs/**` or `specs/**` — the plugin's own TCB hooks deny those writes; `drive --results` reads from any path. Every spawn envelope names `expects`:

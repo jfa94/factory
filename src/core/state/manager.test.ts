@@ -390,6 +390,51 @@ describe("findActiveByOwner — resolve the live run a session owns (run-isolati
   });
 });
 
+describe("findAllActiveByOwner — the raw owned-runs list that distinguishes none from ≥2", () => {
+  const specA: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
+  const specB: SpecPointer = { repo: "acme/other", spec_id: "7-search", issue_number: 7 };
+
+  it("an empty session id yields no runs", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    expect(await m.findAllActiveByOwner("")).toEqual([]);
+  });
+
+  it("a session owning nothing yields [] (the 0-owned case findActiveByOwner can't distinguish)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    expect(await m.findAllActiveByOwner("sess-B")).toEqual([]);
+  });
+
+  it("returns exactly the single owned run", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    const owned = await m.findAllActiveByOwner("sess-A");
+    expect(owned.map((r) => r.run_id)).toEqual(["run-1"]);
+  });
+
+  it("returns BOTH runs when one session owns ≥2 (the ambiguity the loud caller acts on)", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    await m.create({ run_id: "run-2", spec: specB, owner_session: "sess-A" });
+    const owned = await m.findAllActiveByOwner("sess-A");
+    expect(owned.map((r) => r.run_id).sort()).toEqual(["run-1", "run-2"]);
+  });
+
+  it("excludes terminal and other-session runs", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec: specA, owner_session: "sess-A" });
+    await m.create({ run_id: "run-2", spec: specB, owner_session: "sess-A" });
+    await m.finalize("run-2", "completed");
+    await m.create({
+      run_id: "run-3",
+      spec: { repo: "acme/z", spec_id: "9-z", issue_number: 9 },
+      owner_session: "sess-Z",
+    });
+    expect((await m.findAllActiveByOwner("sess-A")).map((r) => r.run_id)).toEqual(["run-1"]);
+  });
+});
+
 describe("per-repo current pointer + clobber guard (run-isolation L2.6/L2.7)", () => {
   const specA: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
   const specB: SpecPointer = { repo: "acme/other", spec_id: "7-search", issue_number: 7 };

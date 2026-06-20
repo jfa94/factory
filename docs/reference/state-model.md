@@ -88,14 +88,14 @@ never `RunStateSchema.parse` directly.
 
 ### `RunStatus`
 
-| Value        | Terminal? | Meaning                                                                                                                           |
-| ------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `running`    | no        | Actively executing.                                                                                                               |
-| `paused`     | no        | Quota 5h-window breach; waiting out the curve in-session, self-heals.                                                             |
-| `suspended`  | no        | Quota 7d-window breach; state persisted, process exited cleanly; resume continues from checkpoint.                                |
-| `completed`  | yes       | Every task done, rollup CI green; `staging-<run-id> → develop` merged, PRD closed, per-run branch deleted (success).              |
-| `failed`     | yes       | A task was dropped, or the run could not start / wedged (circuit breaker). `develop` untouched, PRD open, branch kept for rescue. |
-| `superseded` | yes       | A fresh run replaced this one; its `staging-<run-id>` branch + PRs were deleted.                                                  |
+| Value        | Terminal? | Meaning                                                                                                                                                                                                           |
+| ------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `running`    | no        | Actively executing.                                                                                                                                                                                               |
+| `paused`     | no        | Quota 5h-window breach; waiting out the curve in-session, self-heals.                                                                                                                                             |
+| `suspended`  | no        | Quota 7d-window breach; state persisted, process exited cleanly; resume continues from checkpoint.                                                                                                                |
+| `completed`  | yes       | Every task done, rollup CI green; `staging-<run-id> → develop` merged, PRD closed, per-run branch deleted (success).                                                                                              |
+| `failed`     | yes       | A task was dropped, the run could not start / wedged (circuit breaker), or the operator abandoned it via `factory run cancel`. `develop` untouched, PRD open, branch kept for rescue (unless `cancel --cleanup`). |
+| `superseded` | yes       | A fresh run replaced this one; its `staging-<run-id>` branch + PRs were deleted.                                                                                                                                  |
 
 `develop` receives a run's work **only as a whole PRD** (Decision 34) — there is no
 `partial` status. `paused`/`suspended` are **quota** states; `completed`/`failed`/
