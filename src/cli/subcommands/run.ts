@@ -803,13 +803,18 @@ export interface RunCancelOverrides {
 
 /**
  * Resolve the run `cancel` abandons. Precedence: explicit `--run`; else the single
- * active run THIS session owns ({@link StateManager.findActiveByOwner} — robust to a
+ * active run THIS session owns ({@link StateManager.findAllActiveByOwner} — robust to a
  * detached/repointed `runs/current`, the exact stuck-session condition); else the
- * current run for the checkout. LOUD if none resolves.
+ * current run for the checkout. LOUD if none resolves — and LOUD (demanding `--run`)
+ * when the session owns ≥2 live runs: guessing which to abandon could finalize the
+ * WRONG run, so ambiguity is surfaced, never silently fallen through to the pointer.
  *
  * Unlike {@link resolveRunId} (resume/finalize), the owner-scan is interposed BEFORE
  * the current-pointer fallback: a trapped session always knows its own session id but
- * may have lost the pointer, so the owned run must win.
+ * may have lost the pointer, so the owned run must win. Explicit `--run` stays a
+ * deliberate operator override with NO ownership check — the cross-session escape
+ * hatch a crashed owner's run needs (single-operator local trust model), consistent
+ * with how `resume`/`finalize` honor `--run`.
  */
 async function resolveCancelRunId(
   state: StateManager,
@@ -820,8 +825,16 @@ async function resolveCancelRunId(
   const explicit = optionalString(args.flag("run"));
   if (explicit !== undefined) return explicit;
   if (sessionId !== undefined) {
-    const owned = await state.findActiveByOwner(sessionId);
-    if (owned !== null) return owned.run_id;
+    const owned = await state.findAllActiveByOwner(sessionId);
+    if (owned.length === 1) return owned[0]!.run_id;
+    if (owned.length >= 2) {
+      const ids = owned.map((r) => r.run_id).join(", ");
+      throw new UsageError(
+        `run cancel: session '${sessionId}' owns ${owned.length} live runs (${ids}); ` +
+          `pass --run <id> to choose which to cancel`,
+      );
+    }
+    // owned.length === 0 → fall through to the current pointer (the run for this checkout).
   }
   const current = await readCurrentForCwd(state, overrides);
   if (current === null) {
@@ -873,23 +886,48 @@ export async function runCancel(
   // Resolve the PINNED branch (Decision 33) so any teardown targets the branch the run
   // actually cut, never a recompute a mid-run rename could have desynced.
   const branch = resolveStagingBranch(run.run_id, run.staging_branch);
+  let cleanedUp = false;
+  let cleanupError: string | undefined;
   if (cleanup) {
     // Reuse the supersede teardown: protection FIRST (GitHub blocks deleting a protected
     // ref), then delete staging-<run-id> (auto-closing its task PRs). Repo coords come from
     // the run's OWN spec pointer — cancel needs no cwd/--repo.
     const ghClient = overrides.ghClient ?? new DefaultGhClient();
     const { owner, repo } = splitRepoSlug(run.spec.repo);
-    await ghClient.deleteProtection(owner, repo, branch);
-    await ghClient.deleteRemoteBranch(owner, repo, branch);
+    try {
+      await ghClient.deleteProtection(owner, repo, branch);
+      await ghClient.deleteRemoteBranch(owner, repo, branch);
+      cleanedUp = true;
+    } catch (err) {
+      // The run is ALREADY failed — the Stop gate is released, so cancel's PRIMARY
+      // contract is met. A genuine teardown throw (401/403/5xx; already-gone 404/422 is
+      // tolerated upstream by the gh client) must NOT fail the abandon: surface it LOUD
+      // and exit OK. Retry is safe — deleteProtection/deleteRemoteBranch tolerate an
+      // already-gone branch and finalize is idempotent for `failed`.
+      cleanupError = err instanceof Error ? err.message : String(err);
+    }
   }
 
-  emitJson({ kind: "cancelled", run, cleaned_up: cleanup });
-  emitError(
-    `run ${run.run_id} cancelled (marked failed)` +
-      (cleanup
-        ? `; staging branch '${branch}' + its task PRs torn down.`
-        : `; staging branch '${branch}' left in place — delete it manually or re-run with --cleanup.`),
-  );
+  emitJson({
+    kind: "cancelled",
+    run,
+    cleaned_up: cleanedUp,
+    ...(cleanupError !== undefined ? { cleanup_error: cleanupError } : {}),
+  });
+  if (cleanupError !== undefined) {
+    emitError(
+      `run ${run.run_id} cancelled (marked failed), but --cleanup did NOT finish for staging ` +
+        `branch '${branch}': ${cleanupError}. The branch may still exist — re-run ` +
+        `\`factory run cancel --run ${run.run_id} --cleanup\` to retry the teardown.`,
+    );
+  } else {
+    emitError(
+      `run ${run.run_id} cancelled (marked failed)` +
+        (cleanup
+          ? `; staging branch '${branch}' + its task PRs torn down.`
+          : `; staging branch '${branch}' left in place — delete it manually or re-run with --cleanup.`),
+    );
+  }
   return EXIT.OK;
 }
 

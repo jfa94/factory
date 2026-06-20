@@ -7564,17 +7564,28 @@ var StateManager = class {
     return null;
   }
   /**
+   * ALL non-terminal runs owned by `session` (its `owner_session`), newest-first
+   * (empty session → `[]`). The raw list behind {@link findActiveByOwner}: callers
+   * that must DISTINGUISH "none owned" from "ambiguous (≥2 owned)" — e.g. `run cancel`,
+   * which fails LOUD on ambiguity rather than guessing which run to abandon — branch
+   * on `.length`.
+   */
+  async findAllActiveByOwner(session) {
+    if (session.length === 0) return [];
+    const runs = await this.listRuns();
+    return runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+  }
+  /**
    * Find the SINGLE non-terminal run owned by `session` (its `owner_session`), or
    * null. Powers the session-scoped Bash guards (run-isolation L1.3): a guard fires
    * only for the run the stopping/acting session actually owns, never a concurrent
    * run in another repo. An empty session, no match, or ≥2 matches (ambiguous — one
    * session minting runs in two repos) all return null, so the caller fails SAFE
-   * (passes through) rather than gating the wrong run.
+   * (passes through) rather than gating the wrong run. Callers that must tell "none"
+   * from "ambiguous" apart use {@link findAllActiveByOwner} and branch on its length.
    */
   async findActiveByOwner(session) {
-    if (session.length === 0) return null;
-    const runs = await this.listRuns();
-    const owned = runs.filter((r) => r.owner_session === session && !isTerminalRunStatus(r.status));
+    const owned = await this.findAllActiveByOwner(session);
     return owned.length === 1 ? owned[0] : null;
   }
   // ---- update (locked read-modify-write) ---------------------------------

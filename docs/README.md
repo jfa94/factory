@@ -1,4 +1,4 @@
-<!-- last-documented: 8e94217 -->
+<!-- last-documented: 5b815c4 -->
 
 # Dark Factory Plugin
 
@@ -118,7 +118,7 @@ contract.
 - [The producer escalation ladder](./explanation/producer-ladder.md) — nuke-and-retry, change-a-variable, classify-before-retry.
 - [Quota pacing and resumption](./explanation/quota-pacing.md) — the two-window pacer; pause vs suspend vs halt.
 - [Derive, don't store](./explanation/derive-dont-store.md) — why no gate verdict is ever persisted.
-- [Design Decisions (D1–D27)](./explanation/decisions.md) — the design ledger (preserved; see the cutover annotation).
+- [Design Decisions (D1–D35)](./explanation/decisions.md) — the design ledger (preserved; see the cutover annotation).
 
 ### Domain
 

@@ -925,17 +925,21 @@ describe("runCancel (abandon a live run, Decision 35)", () => {
     }));
   }
 
-  /** Run cancel with stdout/stderr suppressed; return the parsed JSON envelope + exit code. */
+  /** Run cancel; capture stdout (the JSON envelope) + stderr (the loud line) + exit code. */
   async function cancel(
     argv: string[],
     overrides: RunCancelOverrides,
-  ): Promise<{ env: Record<string, unknown>; code: number }> {
+  ): Promise<{ env: Record<string, unknown>; code: number; stderr: string }> {
     const chunks: string[] = [];
+    const errChunks: string[] = [];
     const out = vi.spyOn(process.stdout, "write").mockImplementation((c: unknown) => {
       chunks.push(String(c));
       return true;
     });
-    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const err = vi.spyOn(process.stderr, "write").mockImplementation((c: unknown) => {
+      errChunks.push(String(c));
+      return true;
+    });
     let code: number;
     try {
       code = await runCancel(argv, overrides);
@@ -943,7 +947,11 @@ describe("runCancel (abandon a live run, Decision 35)", () => {
       out.mockRestore();
       err.mockRestore();
     }
-    return { env: JSON.parse(chunks.join("")) as Record<string, unknown>, code };
+    return {
+      env: JSON.parse(chunks.join("")) as Record<string, unknown>,
+      code,
+      stderr: errChunks.join(""),
+    };
   }
 
   it("cancels a run with a task still executing → status failed (the headline trap)", async () => {
@@ -1009,6 +1017,54 @@ describe("runCancel (abandon a live run, Decision 35)", () => {
     expect((await state.read("run-B")).status).toBe("running");
   });
 
+  it("is LOUD when the session owns ≥2 live runs — refuses to guess, demands --run", async () => {
+    // Two live runs owned by ONE session, in different repos (the engine forbids two
+    // live same-repo runs from different sessions). Without --run, cancel must NOT guess
+    // which to abandon — a wrong-run finalize is unrecoverable — so it surfaces BOTH
+    // candidates and requires --run, never silently falling through to runs/current.
+    const otherRepo = "other/svc";
+    await store.write(
+      parseSpecManifest({
+        spec_id: "99-other",
+        issue_number: 99,
+        slug: "other",
+        repo: otherRepo,
+        generated_at: "2026-06-01T00:00:00.000Z",
+        tasks: [task("t1", [])],
+      }),
+      "# spec\n",
+    );
+    await seed("run-m1", "sess-multi");
+    await createRun(state, store, {
+      repo: otherRepo,
+      issue: 99,
+      runId: "run-m2",
+      ownerSession: "sess-multi",
+    });
+
+    let caught: unknown;
+    try {
+      await runCancel(["--session-id", "sess-multi"], { dataDir, cwd: dataDir });
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as { isUsageError?: boolean }).isUsageError).toBe(true);
+    // The message names BOTH candidates so the operator can pick one with --run.
+    expect((caught as Error).message).toContain("run-m1");
+    expect((caught as Error).message).toContain("run-m2");
+    // Neither run was finalized — no wrong-run guess slipped through.
+    expect((await state.read("run-m1")).status).toBe("running");
+    expect((await state.read("run-m2")).status).toBe("running");
+  });
+
+  it("falls through to runs/current when the given session owns nothing (0-owned, not ambiguous)", async () => {
+    await seed("run-cur0"); // no owner stamped
+    await setExecuting("run-cur0", "t1");
+    // sess-none owns nothing → owner-scan yields 0 (NOT ambiguous) → current pointer wins.
+    await cancel(["--session-id", "sess-none"], { dataDir, cwd: dataDir });
+    expect((await state.read("run-cur0")).status).toBe("failed");
+  });
+
   it("falls back to runs/current when neither --run nor a session id is given", async () => {
     await seed("run-cur");
     await setExecuting("run-cur", "t1");
@@ -1039,12 +1095,57 @@ describe("runCancel (abandon a live run, Decision 35)", () => {
     const { env } = await cancel(["--run", "run-clean", "--cleanup"], { dataDir, ghClient: gh });
 
     expect(env.cleaned_up).toBe(true);
+    expect(env.cleanup_error).toBeUndefined(); // honest envelope: clean run carries no error
     expect(gh.protectionDeletes).toContain("staging-run-clean");
     expect(gh.deletedBranches).toContain("staging-run-clean");
-    // Protection BEFORE branch delete (GitHub blocks deleting a protected ref).
-    expect(gh.protectionDeletes.indexOf("staging-run-clean")).toBeLessThanOrEqual(
-      gh.deletedBranches.indexOf("staging-run-clean"),
-    );
+    // Protection BEFORE branch delete (GitHub blocks deleting a protected ref). Assert on
+    // the SINGLE ordered `calls` log — comparing indices across two separate arrays would
+    // be a tautology (each is 0 in its own array).
+    const protIdx = gh.calls.indexOf("api DELETE protection staging-run-clean");
+    const branchIdx = gh.calls.indexOf("api DELETE refs/heads/staging-run-clean");
+    expect(protIdx).toBeGreaterThanOrEqual(0);
+    expect(protIdx).toBeLessThan(branchIdx);
+  });
+
+  it("--cleanup throw on deleteProtection: run still failed, exit OK, loud + honest envelope", async () => {
+    await seed("run-fp");
+    const gh = new FakeGhClient();
+    gh.failDeleteProtection = new Error("HTTP 403: Resource not accessible by integration");
+    const { env, code, stderr } = await cancel(["--run", "run-fp", "--cleanup"], {
+      dataDir,
+      ghClient: gh,
+    });
+
+    // PRIMARY contract met despite the teardown failure: the run is terminal, gate released.
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-fp")).status).toBe("failed");
+    // Envelope is honest: cleanup did NOT complete, and the real error is surfaced.
+    expect(env.cleaned_up).toBe(false);
+    expect(env.cleanup_error).toContain("403");
+    // Protection threw FIRST → the branch delete was never reached.
+    expect(gh.deletedBranches).toHaveLength(0);
+    // LOUD on stderr, with the branch and a safe-retry hint (not a silent swallow).
+    expect(stderr).toContain("staging-run-fp");
+    expect(stderr).toContain("--run run-fp --cleanup");
+  });
+
+  it("--cleanup throw on deleteRemoteBranch (after protection succeeded): same honest exit", async () => {
+    await seed("run-fb");
+    const gh = new FakeGhClient();
+    gh.failDeleteRemoteBranch = new Error("HTTP 500: server error");
+    const { env, code, stderr } = await cancel(["--run", "run-fb", "--cleanup"], {
+      dataDir,
+      ghClient: gh,
+    });
+
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-fb")).status).toBe("failed");
+    expect(env.cleaned_up).toBe(false);
+    expect(env.cleanup_error).toContain("500");
+    // Protection ran first and SUCCEEDED; only the branch delete failed.
+    expect(gh.protectionDeletes).toContain("staging-run-fb");
+    expect(gh.deletedBranches).toHaveLength(0);
+    expect(stderr).toContain("retry the teardown");
   });
 
   it("works OUTSIDE autonomous mode — cancel is the escape verb, never gated", async () => {
