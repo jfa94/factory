@@ -14,7 +14,7 @@ graph TD
   Driver --> Git[src/git<br/>PR / staging / rollup]
   Driver --> Quota[src/quota<br/>two-window pacer]
   CLI --> Spec[src/spec<br/>spec-build pipeline]
-  CLI --> Scoring[src/scoring<br/>summary + report + dead-surface]
+  CLI --> Scoring[src/scoring<br/>summary + report + telemetry]
   CLI --> Config[src/config<br/>schema + load/save]
   Hooks[src/hooks<br/>guard dispatch] --> State
   Verifier --> State
@@ -129,8 +129,7 @@ spec-id), and the spawn-spec builders the `factory spec` reporter actions emit.
 ## Scoring (`src/scoring`)
 
 The run-outcome reporters: the compact `RunSummary`, the deterministic
-partial-run `report.md`, the telemetry sink, and the best-effort `--dead-surface`
-scan (unreferenced exports in the run diff via `ts-prune`).
+partial-run `report.md`, and the telemetry sink.
 
 ## Config (`src/config`)
 
@@ -143,7 +142,7 @@ helpers `configure` uses. See [reference/configuration.md](../reference/configur
 The `factory-hook` guard dispatch (`main.ts`) and the individual guards. These run
 at Claude Code tool-use time, independent of any CLI call, to enforce invariants
 that must hold _before_ an action (e.g. deny a write to a TCB path, deny a read of
-the holdout key, gate `gh pr create`/`merge` on a derived floor verdict). See
+the holdout key, deny an agent-initiated `gh pr create`/`merge`). See
 [reference/hooks.md](../reference/hooks.md).
 
 ## Shared (`src/shared`, `src/types`)

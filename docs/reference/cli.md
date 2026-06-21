@@ -395,16 +395,13 @@ by a persisted per-task budget (`merge_resyncs`).
 ## `score`
 
 Reporter (read-only). Resolves the run + its spec, derives the partial report, and
-emits the compact `RunSummary`. `--dead-surface` additionally enumerates
-unreferenced exports in the run diff (report-only, best-effort; a probe failure
-degrades to an `error` entry rather than crashing).
+emits the compact `RunSummary`.
 
 ```
-factory score [--run <id>] [--dead-surface] [--base <ref>] [--project-root <dir>]
+factory score [--run <id>]
 ```
 
-`--base` (default `origin/<git.baseBranch>`) and `--project-root` (default cwd)
-tune the `--dead-surface` scan. Emits `{ kind:"score", summary, dead_surface? }`.
+Emits `{ kind:"score", summary }`.
 
 ## `rescue <scan|apply>`
 
