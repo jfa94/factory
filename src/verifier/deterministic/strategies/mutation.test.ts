@@ -145,3 +145,57 @@ describe("mutationStrategy (Δ O)", () => {
     await expect(mutationStrategy.run(ctx(tools))).rejects.toThrow(/truncated/i);
   });
 });
+
+describe("mutationStrategy — derivable score is authoritative over exit code", () => {
+  // Target repos gate CI via stryker's `break: N` exit code, so a stryker run that
+  // meets the FACTORY's mutationScoreTarget can still exit non-zero (CI's bar differs).
+  // A present, derivable score must win over that exit — only a NO-score report lets
+  // the non-zero exit decide (a crash before scoring).
+  it("non-zero exit + present passing score → pass (break must not mask a passing score)", async () => {
+    const tools = makeFakeTools({
+      git: probe(["src/foo.ts"]),
+      stryker: new FakeStryker(strykerResult({ code: 1, score: 94, reportPresent: true })),
+    });
+    const out = await mutationStrategy.run(ctx(tools));
+    expect((out as GateRan).evidence.observed).toBe(true);
+    expect((out as GateRan).evidence.detail).toContain("94");
+  });
+
+  it("non-zero exit + present failing score → score-below-target (not stryker-failed)", async () => {
+    const tools = makeFakeTools({
+      git: probe(["src/foo.ts"]),
+      stryker: new FakeStryker(strykerResult({ code: 1, score: 50, reportPresent: true })),
+    });
+    const out = await mutationStrategy.run(ctx(tools));
+    const ev = (out as GateRan).evidence;
+    expect(ev.observed).toBe(false);
+    expect(ev.detail).toContain("score-below-target");
+  });
+
+  it("non-zero exit + absent report → stryker-failed (no score to trust)", async () => {
+    const tools = makeFakeTools({
+      git: probe(["src/foo.ts"]),
+      stryker: new FakeStryker(strykerResult({ code: 7, reportPresent: false })),
+    });
+    const out = await mutationStrategy.run(ctx(tools));
+    expect((out as GateRan).evidence.detail).toContain("stryker-failed");
+  });
+
+  it("non-zero exit + unparseable report → stryker-failed", async () => {
+    const tools = makeFakeTools({
+      git: probe(["src/foo.ts"]),
+      stryker: new FakeStryker(strykerResult({ code: 1, unparseable: true })),
+    });
+    const out = await mutationStrategy.run(ctx(tools));
+    expect((out as GateRan).evidence.detail).toContain("stryker-failed");
+  });
+
+  it("non-zero exit + present but score-less report → stryker-failed (exit decides)", async () => {
+    const tools = makeFakeTools({
+      git: probe(["src/foo.ts"]),
+      stryker: new FakeStryker(strykerResult({ code: 1, score: null, reportPresent: true })),
+    });
+    const out = await mutationStrategy.run(ctx(tools));
+    expect((out as GateRan).evidence.detail).toContain("stryker-failed");
+  });
+});

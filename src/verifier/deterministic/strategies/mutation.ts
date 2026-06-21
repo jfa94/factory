@@ -8,11 +8,16 @@
  *      EMPTY scope ⇒ SKIP "no-mutable-changes" (exit 0 in bash; here a GateSkip so
  *      it is excluded from the conjunction, never a default pass).
  *   2. Require origin/<base> to exist (else fail-closed "base-missing").
- *   3. Run stryker --mutate <csv>. Non-zero ⇒ "stryker-failed".
- *   4. With NON-EMPTY scope: no report ⇒ "no-report"; report w/o score ⇒
- *      "no-score" (both fail-closed — bash A2/T4d).
+ *   3. Run stryker --mutate <csv>. A DERIVABLE score is authoritative over the exit
+ *      code: a present report with a non-null score is compared against the target
+ *      regardless of stryker's `break` exit (the factory's target, not CI's bar).
+ *   4. Only when NO score is derivable does the exit matter: non-zero ⇒
+ *      "stryker-failed"; else (green) no report ⇒ "no-report", report w/o derivable
+ *      score ⇒ "no-score" (both fail-closed — bash A2/T4d).
  *   5. STRICT float compare (no half-up rounding): score < target ⇒
  *      "score-below-target"; score >= target ⇒ pass (T4b2/T4b3/T4b4 boundaries).
+ *      The score is DERIVED in-engine from the stock json report's per-file mutant
+ *      tally (extractMutationScore) — the stock reporter emits no `.metrics`.
  *
  * Target comes from `quality.mutationScoreTarget` (the ONE config).
  *
@@ -82,25 +87,30 @@ export const mutationStrategy: GateStrategy<GateTools> = {
         "mutation gate: stryker report truncated — refusing to parse a clipped payload",
       );
     }
+    const report = result.report;
+    // A present, derivable score is AUTHORITATIVE — compare against the factory's
+    // own `mutationScoreTarget` regardless of stryker's exit code. Target repos gate
+    // CI via stryker's `break: N` threshold (a non-zero exit when CI's bar isn't
+    // met); that bar must NOT double-gate the factory's independent target here. Only
+    // when no score is derivable does the exit code matter (a crash before scoring).
+    if (report.report === "present" && report.mutationScore !== null) {
+      const score = report.mutationScore;
+      return scorePasses(score, target)
+        ? ran("mutation", true, `mutation score ${score} >= ${target} (scope ${scope.length})`)
+        : ran("mutation", false, `score-below-target: ${score} < ${target}`);
+    }
+    // No derivable score. A non-zero exit means stryker crashed BEFORE producing one.
     if (result.proc.code !== 0) {
       return ran("mutation", false, `stryker-failed: exit=${result.proc.code ?? "null"}`);
     }
-    // Scope is non-empty here, so an absent / unparseable / score-less report is an
-    // anomaly → fail-closed (bash A2 / T4d), never a silent waive.
-    const report = result.report;
+    // Green exit but still no score: scope is non-empty, so an absent / unparseable /
+    // score-less report is an anomaly → fail-closed (bash A2 / T4d), never a waive.
     if (report.report === "absent") {
       return ran("mutation", false, "no-report: stryker produced no report despite mutable files");
     }
     if (report.report === "unparseable") {
       return ran("mutation", false, "unparseable-report: stryker report JSON did not parse");
     }
-    if (report.mutationScore === null) {
-      return ran("mutation", false, "no-score: report has no .metrics.mutationScore");
-    }
-    const score = report.mutationScore;
-    if (!scorePasses(score, target)) {
-      return ran("mutation", false, `score-below-target: ${score} < ${target}`);
-    }
-    return ran("mutation", true, `mutation score ${score} >= ${target} (scope ${scope.length})`);
+    return ran("mutation", false, "no-score: report has no derivable mutation score");
   },
 };

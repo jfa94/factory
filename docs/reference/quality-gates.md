@@ -70,7 +70,7 @@ cache hit never bypasses re-derivation.
 | `test`     | The project test suite passes.                                                                                              | Tests fail or cannot run.                                                                                     |
 | `tdd`      | Tests precede implementation on the pre-squash task branch (test-before-impl commit ordering).                              | An impl commit lands with no preceding failing-test commit. Memoized by tip SHA; a no-op on squashed history. |
 | `coverage` | No metric (`lines`, `branches`, `functions`, `statements`) regressed by more than `quality.coverageRegressionTolerancePct`. | Either before/after coverage summary is missing or invalid.                                                   |
-| `mutation` | Mutation score meets `quality.mutationScoreTarget`.                                                                         | Score below target.                                                                                           |
+| `mutation` | Mutation score (derived in-engine from the stock json report's per-file mutants) meets `quality.mutationScoreTarget`.       | Score below target, or no score is derivable from a present report (non-empty scope).                         |
 | `sast`     | Static security analysis (built-in semgrep or `quality.securityCommand`) finds no blocking issue.                           | Findings present (unless `quality.securityAllowFailures`).                                                    |
 | `type`     | The project type-check passes.                                                                                              | Type errors.                                                                                                  |
 | `lint`     | The linter passes.                                                                                                          | Lint errors.                                                                                                  |
@@ -91,6 +91,32 @@ impl-before-test ordering blocks the task.
   task), or `package.json.factory.tddExempt` (globally). Read from those sources,
   **never** from `state.json` (derive-don't-store). For exotic test runners (Go,
   Ruby, Deno…), set `quality.redTestCommand` rather than bypassing enforcement.
+
+## The mutation gate in detail
+
+The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modified
+`src/**/*.ts` minus tests/types/data/index, mirroring CI) and reads
+`reports/mutation/mutation.json`.
+
+- **Score is derived in-engine.** Stryker's stock `json` reporter writes a
+  schema-1.0 report (`files` / `dependencies` / `system`) with **no**
+  `.metrics.mutationScore` — that field is a metric the HTML reporter computes, not
+  something the json report carries. So the gate computes the score itself from the
+  per-file mutant tally, using Stryker's own formula: `detected = killed + timeout`,
+  `valid = detected + survived + noCoverage`, `score = detected / valid * 100`
+  (CompileError / RuntimeError / Ignored / Pending are excluded from `valid`). A
+  finite `.metrics.mutationScore`, if a metrics-emitting reporter is configured, is
+  honored as a fast path. No special reporter config is required.
+- **A derivable score overrides the exit code.** Target repos gate CI via Stryker's
+  `break: N` threshold, which exits non-zero when CI's bar isn't met. That bar is
+  independent of `quality.mutationScoreTarget`, so a present report with a derivable
+  score is compared against the factory's target **regardless** of the exit code.
+  Only when no score is derivable does a non-zero exit decide (`stryker-failed`) — a
+  crash before scoring.
+- **Fail-closed (non-empty scope):** score below target (`score-below-target`); a
+  present-but-score-less report on a green exit (`no-score`); no report (`no-report`);
+  unparseable report (`unparseable-report`); a truncated report **throws** rather
+  than risk mis-parsing a clipped payload.
 
 ## Beyond the deterministic gates
 

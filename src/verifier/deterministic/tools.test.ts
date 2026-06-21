@@ -60,6 +60,82 @@ describe("extractMutationScore", () => {
   });
 });
 
+describe("extractMutationScore — derive from schema-1.0 mutants (stock json reporter)", () => {
+  // Build a schema-1.0 report shape: { files: { <path>: { mutants: [{ status }] } } }.
+  // The stock stryker `json` reporter emits NO top-level `.metrics`, so the gate must
+  // compute the score from the per-file mutant tally (Stryker's own formula:
+  //   detected = killed + timeout; valid = detected + survived + noCoverage;
+  //   score = detected / valid * 100).
+  function report(...statuses: string[]) {
+    return { files: { "a.ts": { mutants: statuses.map((status) => ({ status })) } } };
+  }
+
+  it("computes detected/valid*100 from mutant statuses (no metrics field)", () => {
+    // 3 killed + 1 survived → detected 3, valid 4 → 75.
+    expect(extractMutationScore(report("Killed", "Killed", "Killed", "Survived"))).toBe(75);
+  });
+
+  it("all detected (killed/timeout) → 100", () => {
+    expect(extractMutationScore(report("Killed", "Timeout", "Killed"))).toBe(100);
+  });
+
+  it("all undetected (survived/noCoverage) → 0", () => {
+    expect(extractMutationScore(report("Survived", "NoCoverage"))).toBe(0);
+  });
+
+  it("excludes CompileError/RuntimeError/Ignored/Pending from `valid`", () => {
+    // 1 killed + 1 survived = 50; the four non-valid statuses must NOT move it.
+    const score = extractMutationScore(
+      report("Killed", "Survived", "CompileError", "RuntimeError", "Ignored", "Pending"),
+    );
+    expect(score).toBe(50);
+  });
+
+  it("returns null when there are zero VALID mutants (only ignored/errored)", () => {
+    expect(
+      extractMutationScore(report("CompileError", "RuntimeError", "Ignored", "Pending")),
+    ).toBeNull();
+  });
+
+  it("tallies status strings case-insensitively", () => {
+    // killed, KILLED, Survived → detected 2, valid 3 → 66.67.
+    expect(extractMutationScore(report("killed", "KILLED", "Survived"))).toBeCloseTo(200 / 3, 10);
+  });
+
+  it("aggregates across multiple files", () => {
+    const multi = {
+      files: {
+        "a.ts": { mutants: [{ status: "Killed" }, { status: "Survived" }] },
+        "b.ts": { mutants: [{ status: "Killed" }, { status: "Timeout" }] },
+      },
+    };
+    // detected = 3 (2 killed + 1 timeout), valid = 4 → 75.
+    expect(extractMutationScore(multi)).toBe(75);
+  });
+
+  it("prefers a finite .metrics.mutationScore (fast path) even when files are present", () => {
+    // metrics wins: 42 is returned, NOT the 100 the all-killed files would compute.
+    const withBoth = { metrics: { mutationScore: 42 }, ...report("Killed", "Killed") };
+    expect(extractMutationScore(withBoth)).toBe(42);
+  });
+
+  it("falls through to the mutant tally when .metrics.mutationScore is non-finite", () => {
+    const withNaN = { metrics: { mutationScore: Number.NaN }, ...report("Killed", "Survived") };
+    expect(extractMutationScore(withNaN)).toBe(50);
+  });
+
+  it("ignores files whose `mutants` is missing or not an array", () => {
+    const messy = {
+      files: {
+        "a.ts": { mutants: [{ status: "Killed" }, { status: "Survived" }] },
+        "b.ts": {}, // no mutants
+        "c.ts": { mutants: "nope" }, // wrong type
+      },
+    };
+    expect(extractMutationScore(messy)).toBe(50);
+  });
+});
+
 describe("parseCoverageSummary (dual-shape)", () => {
   it("parses the {pct} object shape", () => {
     const r = parseCoverageSummary({

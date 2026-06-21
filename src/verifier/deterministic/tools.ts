@@ -117,8 +117,9 @@ export interface SemgrepTool {
  * score-less report:
  *   - `absent`      — no report file was produced.
  *   - `unparseable` — a report file existed but its JSON did not parse (corrupt).
- *   - `present`     — the report parsed; `mutationScore` is the extracted score, or
- *                     null when it carries no `.metrics.mutationScore`.
+ *   - `present`     — the report parsed; `mutationScore` is the derived score
+ *                     (from `.metrics.mutationScore` if present, else computed from
+ *                     the per-file mutant tally), or null when no score is derivable.
  * The strategy maps absent/unparseable/score-null to fail-closed answers when the
  * mutation scope is non-empty.
  */
@@ -400,13 +401,69 @@ export class DefaultStrykerTool implements StrykerTool {
   }
 }
 
-/** Pull `.metrics.mutationScore` (a finite number) out of a parsed report. */
+/**
+ * Pull the mutation score (a finite number, 0-100) out of a parsed stryker report.
+ *
+ * Two paths, in order:
+ *   1. FAST PATH — a finite `.metrics.mutationScore`. Stryker's STOCK `json`
+ *      reporter (schema-1.0) does NOT emit this; it is a *derived* metric the HTML
+ *      reporter / `mutation-testing-metrics` compute. We honor it only if a
+ *      metrics-emitting reporter happens to be configured (forward-compat).
+ *   2. DERIVE — else compute from the schema-1.0 `files[*].mutants[*].status`
+ *      tally, exactly as stryker's own `break` threshold and the metrics lib do
+ *      (see {@link computeMutationScore}). This is the path that actually fires for
+ *      the stock reporter every target repo + the factory template use.
+ * `null` only when NEITHER yields a finite number (no metrics AND no scorable
+ * mutants) — preserving the gate's fail-closed posture for a genuinely score-less
+ * report.
+ */
 export function extractMutationScore(report: unknown): number | null {
   if (typeof report !== "object" || report === null) return null;
   const metrics = (report as { metrics?: unknown }).metrics;
-  if (typeof metrics !== "object" || metrics === null) return null;
-  const score = (metrics as { mutationScore?: unknown }).mutationScore;
-  return typeof score === "number" && Number.isFinite(score) ? score : null;
+  if (typeof metrics === "object" && metrics !== null) {
+    const score = (metrics as { mutationScore?: unknown }).mutationScore;
+    if (typeof score === "number" && Number.isFinite(score)) return score;
+  }
+  return computeMutationScore(report);
+}
+
+/** Mutant statuses counted as DETECTED in stryker's mutation-score formula. */
+const DETECTED_STATUSES = new Set(["killed", "timeout"]);
+/** Mutant statuses counted as UNDETECTED (valid but live). */
+const UNDETECTED_STATUSES = new Set(["survived", "nocoverage"]);
+
+/**
+ * Derive `mutationScore` from a schema-1.0 report's per-file mutant statuses,
+ * matching `mutation-testing-metrics` (and what stryker's `break` compares):
+ *   detected = killed + timeout
+ *   undetected = survived + noCoverage
+ *   valid = detected + undetected   (excludes CompileError/RuntimeError/Ignored/Pending)
+ *   score = valid > 0 ? detected / valid * 100 : null
+ * Status strings are lower-cased before tallying so casing variants
+ * ("Killed"/"killed") count identically. Returns `null` when there are no files,
+ * no mutants, or zero VALID mutants — the gate then fails closed.
+ */
+function computeMutationScore(report: unknown): number | null {
+  const files = (report as { files?: unknown }).files;
+  if (typeof files !== "object" || files === null) return null;
+  let detected = 0;
+  let valid = 0;
+  for (const file of Object.values(files as Record<string, unknown>)) {
+    const mutants = (file as { mutants?: unknown }).mutants;
+    if (!Array.isArray(mutants)) continue;
+    for (const mutant of mutants) {
+      const rawStatus = (mutant as { status?: unknown }).status;
+      if (typeof rawStatus !== "string") continue;
+      const status = rawStatus.toLowerCase();
+      if (DETECTED_STATUSES.has(status)) {
+        detected += 1;
+        valid += 1;
+      } else if (UNDETECTED_STATUSES.has(status)) {
+        valid += 1;
+      }
+    }
+  }
+  return valid > 0 ? (detected / valid) * 100 : null;
 }
 
 /**

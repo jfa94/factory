@@ -10297,24 +10297,21 @@ var mutationStrategy = {
         "mutation gate: stryker report truncated \u2014 refusing to parse a clipped payload"
       );
     }
+    const report = result.report;
+    if (report.report === "present" && report.mutationScore !== null) {
+      const score = report.mutationScore;
+      return scorePasses(score, target) ? ran("mutation", true, `mutation score ${score} >= ${target} (scope ${scope.length})`) : ran("mutation", false, `score-below-target: ${score} < ${target}`);
+    }
     if (result.proc.code !== 0) {
       return ran("mutation", false, `stryker-failed: exit=${result.proc.code ?? "null"}`);
     }
-    const report = result.report;
     if (report.report === "absent") {
       return ran("mutation", false, "no-report: stryker produced no report despite mutable files");
     }
     if (report.report === "unparseable") {
       return ran("mutation", false, "unparseable-report: stryker report JSON did not parse");
     }
-    if (report.mutationScore === null) {
-      return ran("mutation", false, "no-score: report has no .metrics.mutationScore");
-    }
-    const score = report.mutationScore;
-    if (!scorePasses(score, target)) {
-      return ran("mutation", false, `score-below-target: ${score} < ${target}`);
-    }
-    return ran("mutation", true, `mutation score ${score} >= ${target} (scope ${scope.length})`);
+    return ran("mutation", false, "no-score: report has no derivable mutation score");
   }
 };
 
@@ -10645,9 +10642,35 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
 function extractMutationScore(report) {
   if (typeof report !== "object" || report === null) return null;
   const metrics = report.metrics;
-  if (typeof metrics !== "object" || metrics === null) return null;
-  const score = metrics.mutationScore;
-  return typeof score === "number" && Number.isFinite(score) ? score : null;
+  if (typeof metrics === "object" && metrics !== null) {
+    const score = metrics.mutationScore;
+    if (typeof score === "number" && Number.isFinite(score)) return score;
+  }
+  return computeMutationScore(report);
+}
+var DETECTED_STATUSES = /* @__PURE__ */ new Set(["killed", "timeout"]);
+var UNDETECTED_STATUSES = /* @__PURE__ */ new Set(["survived", "nocoverage"]);
+function computeMutationScore(report) {
+  const files = report.files;
+  if (typeof files !== "object" || files === null) return null;
+  let detected = 0;
+  let valid = 0;
+  for (const file of Object.values(files)) {
+    const mutants = file.mutants;
+    if (!Array.isArray(mutants)) continue;
+    for (const mutant of mutants) {
+      const rawStatus = mutant.status;
+      if (typeof rawStatus !== "string") continue;
+      const status = rawStatus.toLowerCase();
+      if (DETECTED_STATUSES.has(status)) {
+        detected += 1;
+        valid += 1;
+      } else if (UNDETECTED_STATUSES.has(status)) {
+        valid += 1;
+      }
+    }
+  }
+  return valid > 0 ? detected / valid * 100 : null;
 }
 var DefaultCoverageReader = class {
   async read(label, opts) {
