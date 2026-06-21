@@ -83,8 +83,8 @@ CLI's JSON contract.
 ## What the seam buys
 
 - **Testability.** Every transition, gate, classification, and ladder step is a
-  pure function with unit tests (1140 of them). The non-deterministic parts are
-  pushed to the edges (the agent prompts), where they belong.
+  pure function with unit tests (over a thousand of them). The non-deterministic
+  parts are pushed to the edges (the agent prompts), where they belong.
 - **Loud failure.** An unknown envelope kind, an unexpected non-zero CLI exit, a
   missing field, or a deadlock is a hard stop, not a silent fall-through. The Iron
   Laws in the orchestrator skill exist precisely to forbid the "I'll just advance"

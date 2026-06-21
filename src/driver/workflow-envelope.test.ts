@@ -189,6 +189,24 @@ describe("parseEnvelope — markdown-fence tolerance (blocker #9 backstop)", () 
   it("a fenced block wrapping NON-JSON still throws loud (no silent pass)", () => {
     expect(() => parseEnvelope("```json\nnot json at all\n```", NEXT_KINDS, "next")).toThrow();
   });
+
+  it("recovers a fence with a non-json language tag (```js, ```text, etc.)", () => {
+    // The strip drops the ENTIRE opening fence line (``` + any tag) up to the first
+    // newline, so a mislabeled fence still recovers — not just ``` / ```json. The old
+    // regex hard-coded `(?:json)?` and left every other tag fenced-then-failing.
+    for (const tag of ["js", "javascript", "text", "sh", "python"]) {
+      const env = parseEnvelope("```" + tag + "\n" + json + "\n```", NEXT_KINDS, "next");
+      expect(env.kind, `tag=${tag}`).toBe("tasks-ready");
+    }
+  });
+
+  it("an unclosed, whitespace-heavy fence fails loud and fast (ReDoS guard)", () => {
+    // The prior /^```(?:json)?\s*([\s\S]*?)\s*```$/ backtracked for SECONDS on this
+    // input (dueling \s* runs over an unterminated body). The string-ops strip is O(n):
+    // it throws immediately. A hang would surface here as a vitest timeout, not a pass.
+    const pathological = "```json" + " ".repeat(5000);
+    expect(() => parseEnvelope(pathological, NEXT_KINDS, "next")).toThrow();
+  });
 });
 
 describe("EnvelopeKind type", () => {
@@ -301,6 +319,16 @@ describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => 
       name: "internal ``` in value (anchor must NOT fire)",
       raw: JSON.stringify({ kind: "terminal", note: "fence ``` here" }),
       set: "drive",
+    },
+    {
+      name: "non-json lang-tag fence (```js strip branch)",
+      raw: "```js\n" + JSON.stringify({ kind: "spawn", task_id: "T1" }) + "\n```",
+      set: "drive",
+    },
+    {
+      name: "whitespace-padded fence (trim branch)",
+      raw: "  \n```json\n" + JSON.stringify({ kind: "tasks-ready", ready: ["T1"] }) + "\n```\n  ",
+      set: "next",
     },
   ];
 

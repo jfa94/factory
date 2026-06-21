@@ -82,8 +82,7 @@ export const QuotaSchema = z
      * (the old `--tier` routine/feature/security review caps are DELETED).
      * Defaults: low/medium→sonnet (balanced), high→opus (strong). low defaults to
      * SONNET, not haiku — even low-risk work is code generation, which haiku
-     * underperforms (the verbatim-fidelity failure behind blocker #9); override
-     * `producerModels.low` per-repo for cheaper low-risk runs.
+     * underperforms; override `producerModels.low` per-repo for cheaper low-risk runs.
      */
     producerModels: z
       .object({

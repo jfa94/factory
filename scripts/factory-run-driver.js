@@ -70,15 +70,21 @@ function parseEnvelope(raw, knownKinds, context) {
         `return {raw: "<stdout>"}`,
     );
   }
-  // Tolerate a markdown-fenced payload: a flaky exec-agent may wrap the verbatim stdout
-  // in a ```json … ``` block despite the instruction. Strip a FULLY-WRAPPING fence
-  // (anchored to the whole trimmed string) before parsing. SAFE BY CONSTRUCTION: a real
-  // envelope starts with `{` and never matches the leading-``` anchor, and a ``` inside a
-  // string VALUE is untouched (the match spans the whole string, not a substring). On no
-  // match `text` IS `raw`, so the unfenced path stays byte-identical to before; `preview`
+  // Tolerate a markdown-fenced payload: a flaky exec-agent may wrap the verbatim stdout in a
+  // ```json … ``` (or ```js / bare ```) block despite the instruction. If the WHOLE trimmed string
+  // is fence-wrapped, drop the opening fence LINE (``` + any lang tag, up to the first newline) and
+  // the trailing ```. NON-BACKTRACKING string ops, NOT a regex: the prior
+  // /^```(?:json)?\s*([\s\S]*?)\s*```$/ had catastrophic backtracking (dueling \s* runs) that hung
+  // for seconds on an unclosed, whitespace-heavy body. Anchored to the whole string, so a real
+  // envelope (starts with `{`) and a ``` inside a string VALUE are both untouched. A newline after
+  // the opening fence is required (the real-world form); a degenerate one-line ```{}``` is left for
+  // JSON.parse to reject loud. On no match `text` IS `raw` (unfenced path byte-identical); `preview`
   // keeps the ORIGINAL bytes so a fenced payload stays visible in any error below.
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(raw.trim());
-  const text = fenced?.[1] ?? raw;
+  const trimmed = raw.trim();
+  const nl = trimmed.indexOf("\n");
+  const fenced =
+    trimmed.length >= 6 && trimmed.startsWith("```") && trimmed.endsWith("```") && nl !== -1;
+  const text = fenced ? trimmed.slice(nl + 1, -3) : raw;
   // The verbatim payload, truncated for legibility. Surfaced in EVERY failure branch
   // below so a fabricated / empty / stderr-leaking / re-keyed payload is VISIBLE. The
   // misattribution that cost debugging time in run-20260620-085154 was a missing-`kind`
@@ -178,11 +184,13 @@ let fileSeq = 0; // unique results paths without Date.now() (unavailable in work
 const CLI_MAX_ATTEMPTS = 3;
 
 // The model for the stdout-transport exec-agents (cli() + foldResults()). SONNET, not
-// haiku: this agent's one job is to copy CLI stdout into {raw} byte-for-byte, and
-// haiku's infidelity at exactly that — re-keying the envelope — is what caused the
-// workflow boundary corruption (blocker #9, run-20260620-085154). Verbatim transport is
-// reliability-critical, not "simple"; parseEnvelope is the deterministic backstop, this
-// is the model-side defense.
+// haiku: this agent's one job is to copy CLI stdout into {raw} byte-for-byte, and haiku's
+// infidelity at exactly that — re-keying, fabricating, or papering over an empty/failed
+// stdout — is what caused the workflow boundary corruption (blocker #9,
+// run-20260620-085154). See parseEnvelope's `preview` post-mortem above for the full
+// failure-mode list (never a single cause). Verbatim transport is reliability-critical,
+// not "simple"; parseEnvelope is the deterministic backstop, this is the model-side
+// defense.
 const EXEC_AGENT_MODEL = "sonnet";
 
 // The shared exec-agent instruction. Tightened to forbid fabrication: the agent must

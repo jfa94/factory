@@ -30,9 +30,9 @@ The single command that typechecks, lints, tests, and builds is:
 npm run verify
 ```
 
-You should see the test suite pass (108 test files, 1140 tests at the time of
-writing) and two bundles written to `dist/`. This command is the contract the CI
-gate enforces; if it is green, your checkout is healthy.
+You should see the test suite pass (over a hundred test files, well over a
+thousand tests) and two bundles written to `dist/`. This command is the contract
+the CI gate enforces; if it is green, your checkout is healthy.
 
 > Note: `npx tsc` is shadowed in this repo. Always use `npm run typecheck` for a
 > standalone type check.
