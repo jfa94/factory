@@ -57,7 +57,8 @@ export const hookRegistry: Record<string, Hook> = {
     run: (argv) => runSubagentStop(argv),
   },
   "stop-gate": {
-    describe: "Stop: block premature session end while a run is live; finalize-on-stop otherwise",
+    describe:
+      "Stop: finalize-on-stop an owned all-terminal run; block ONLY on state corruption (never on pending work — the run stays resumable)",
     run: (argv) => runStopGate(argv),
   },
 };

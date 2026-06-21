@@ -151,8 +151,7 @@ deadlock), `resume` cannot help — use [Rescue a stalled run](./rescue-a-stalle
 
 ## 7. If you need to abandon a run
 
-To walk away from a live run entirely — and free the owning session, which the
-Stop gate otherwise keeps alive while the run has unfinished work — run:
+To deliberately discard a live run — mark it terminal without shipping anything — run:
 
 ```
 factory run cancel --run <run_id>
@@ -161,5 +160,10 @@ factory run cancel --run <run_id>
 This marks the run terminal (`failed`) without shipping anything; it works even
 with a task still executing. Add `--cleanup` to also delete the run's
 `staging-<run-id>` branch and its task PRs (omit it to keep them). A cancelled run
-is **not** resumable — start over with `/factory:run`. Do not hand-edit run state
-or set `FACTORY_ALLOW_STOP` mid-session; `run cancel` is the sanctioned exit.
+is **not** resumable — start over with `/factory:run`. Do not hand-edit run state;
+`run cancel` is the sanctioned abandon verb.
+
+> You do **not** need `cancel` merely to end a session. The Stop hook no longer
+> blocks a session whose run still has unfinished work — the session may stop, and
+> the run stays resumable via `factory resume` (`/factory:resume`). Use `cancel`
+> only when you want to throw the run away.

@@ -19,7 +19,7 @@ exits `2`.
 | `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                       |
 | `write-protection`  | PreToolUse `Edit\|Write\|MultiEdit`         | Deny writes to hardcoded TCB (trusted-computing-base) paths.                                                                                                                                                                                                      |
 | `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the driver fold is the single writer of `task.reviewers[]`).                                                                                                                                            |
-| `stop-gate`         | Stop                                        | Block a premature session end while a run is live; finalize-on-stop otherwise.                                                                                                                                                                                    |
+| `stop-gate`         | Stop                                        | Finalize-on-stop an owned, all-terminal run so it never dangles `running`; block ONLY on state corruption (unreadable state / finalize failure). Does NOT block a session end with pending work — the run stays resumable via `factory resume`.                   |
 
 ## `hooks.json` wiring
 

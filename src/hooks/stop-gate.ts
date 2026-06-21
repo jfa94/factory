@@ -1,45 +1,42 @@
 /**
- * WS9/WS10 — Stop hook: the autonomous-continuation + finalize-on-stop safety net.
+ * WS9/WS10 — Stop hook: the finalize-on-stop safety net.
  *
  * Ports the PURPOSE of `hooks/stop-gate.sh` onto the NEW state model — NOT a 1:1
  * port. The bash delegated finalize to `pipeline-state finalize-on-stop`; here we
  * use the {@link StateManager} (atomic + locked) and the PURE
  * {@link decideFinalize} so finalize behaviour has the one home WS2 gave it.
  *
- *   1. BLOCK premature stop. While a run is `running` with work still pending
- *      (in-flight tasks, OR setup not finished — no tasks populated yet), the
- *      OWNING session must not end: emit `{decision:"block"}` so the in-session
- *      orchestrator keeps driving the stage machine. Escape hatch:
- *      `FACTORY_ALLOW_STOP=1` (emergency recovery / debugging) allows the stop and
- *      leaves the run resumable. (Δ vs bash: dropped the `FACTORY_AUTONOMOUS_MODE`
- *      gate.)
+ * The hook NO LONGER blocks a premature stop. A live run with pending work used to
+ * emit `{decision:"block"}` to force the in-session orchestrator to keep driving —
+ * the "session-hostage" behaviour that trapped a session which could not progress.
+ * That arm (and its `FACTORY_ALLOW_STOP` escape hatch) is removed: a session may
+ * always stop, and a run left `running` with pending work stays cleanly resumable via
+ * `factory resume` (an idempotent re-entry — see `applyResume`).
  *
- *      SESSION-SCOPED + MODE-AWARE (Prompt J — fixes two false-blocks):
- *        (a) MODE — in `mode === "workflow"` the interactive session is NOT the
- *            driver: a background Workflow owns continuation AND finalize-on-stop, so
- *            the session passes through (blocking it + telling the user to hand-run
- *            `factory next`/`drive` would be actively wrong).
- *        (b) OWNERSHIP — when the run carries an `owner_session` (stamped at
- *            `run create`) and the STOPPING session id (read from the Stop hook's
- *            stdin `session_id`) is a DIFFERENT session, that session is unrelated to
- *            this run and passes through. Only the actual owner is gated. When the
- *            owner is UNKNOWN (couldn't be stamped) OR the stopping session is unknown
- *            (no stdin), we fall back to the unscoped block (degraded but safe — never
- *            let the real owner stop silently with pending work).
+ *   FINALIZE-on-stop. If a session-mode `running` run has ≥1 task and EVERY task is
+ *   terminal but the run was never explicitly finalized (the session ended right after
+ *   the last task), derive the terminal run status ({@link decideFinalize}) and persist
+ *   it via {@link StateManager.finalize} — so a completed-but-unfinalized run never
+ *   dangles as `running`. This is the ONLY state mutation the hook performs.
  *
- *   2. FINALIZE-on-stop. If a `running` run has ≥1 task and EVERY task is terminal
- *      but the run was never explicitly finalized (the session ended right after
- *      the last task), derive the terminal run status ({@link decideFinalize}) and
- *      persist it via {@link StateManager.finalize} — so a completed-but-
- *      unfinalized run never dangles as `running`.
+ *   SESSION-SCOPED + MODE-AWARE (Prompt J — so the hook finalizes the RIGHT run, and
+ *   only its own):
+ *     (a) MODE — in `mode === "workflow"` the interactive session is NOT the driver: a
+ *         background Workflow owns continuation AND finalize-on-stop, so the session
+ *         passes through (finalizing on its behalf could race the Workflow).
+ *     (b) OWNERSHIP — when the run carries an `owner_session` (stamped at `run create`)
+ *         and the STOPPING session id (read from the Stop hook's stdin `session_id`) is
+ *         a DIFFERENT session, that run is unrelated to this session and passes through
+ *         — a session never finalizes another session's run.
  *
  * Non-`running` statuses pass through untouched: `paused` self-heals in-session,
- * `suspended` is a clean quota exit, and terminal runs are done. A finalize
- * FAILURE blocks the stop (M9 — surface the inconsistency, never silently accept a
- * corrupt-state stop); likewise an unreadable current `state.json` blocks.
+ * `suspended` is a clean quota exit, and terminal runs are done. A finalize FAILURE
+ * blocks the stop (M9 — surface the inconsistency, never silently accept a corrupt-state
+ * stop); likewise an unreadable current `state.json` blocks. These two are the hook's
+ * ONLY remaining blocks, and both signal genuine state CORRUPTION — not lack of progress.
  *
- * Output contract (Stop hook): a block is `{decision:"block",reason}` on STDOUT
- * with exit 0 (the JSON is the block signal). Allow = no output, exit 0.
+ * Output contract (Stop hook): a block (corruption only) is `{decision:"block",reason}`
+ * on STDOUT with exit 0 (the JSON is the block signal). Allow = no output, exit 0.
  */
 import { EXIT, type ExitCode } from "../cli/exit-codes.js";
 import { createLogger } from "../shared/logging.js";
@@ -55,10 +52,14 @@ import { deny, emitBlockDecision, parseHookInput, readStdin } from "./hook-io.js
 
 const log = createLogger("hook:stop-gate");
 
-/** The pure stop decision (separated from I/O so it is trivially unit-testable). */
+/**
+ * The pure stop decision (separated from I/O so it is trivially unit-testable). With
+ * the pending-work block removed, the hook only ever ALLOWS or FINALIZES; the two
+ * remaining corruption blocks (unreadable state, finalize failure) are emitted
+ * directly by {@link runStopGate}, not modelled here.
+ */
 export type StopAction =
   | { kind: "allow" }
-  | { kind: "block"; reason: string }
   // `finalize` is terminal-by-construction: the producer is `decideFinalize`
   // (returns completed|partial|failed) and `manager.finalize` rejects any
   // non-terminal status — so the type matches reality, not the full RunStatus union.
@@ -67,37 +68,34 @@ export type StopAction =
 const ALLOW: StopAction = { kind: "allow" };
 
 /**
- * Decide what to do when the session tries to stop, given a run snapshot, the
- * escape-hatch flag (`FACTORY_ALLOW_STOP===\"1\"`), and the id of the STOPPING
- * session (from the Stop hook stdin; `undefined` when it could not be read). Pure —
- * no I/O, no state writes.
+ * Decide what to do when the session tries to stop, given a run snapshot and the id of
+ * the STOPPING session (from the Stop hook stdin; `undefined` when it could not be read).
+ * Pure — no I/O, no state writes. Returns `allow` in EVERY case except an owned,
+ * session-mode, all-terminal run, which finalizes-on-stop.
  *
- * Precedence (each earlier rule short-circuits):
- *   1. no active run / not `running`               → allow (unchanged).
- *   2. `mode === "workflow"`                        → allow (prong a: the Workflow,
- *      not the session, drives continuation + finalize-on-stop).
- *   3. owner KNOWN and stopping session ≠ owner     → allow (prong b: an unrelated
- *      session must not be blocked by another session's run).
- *   4. otherwise (the owner, or an unknown owner/stopping session — degraded-safe)
- *      → the existing pending/block + all-terminal/finalize logic (unchanged).
+ * Precedence (each earlier rule short-circuits to `allow`):
+ *   1. no active run / not `running`            → allow.
+ *   2. `mode === "workflow"`                     → allow (the Workflow, not the session,
+ *      drives continuation + finalize-on-stop).
+ *   3. owner KNOWN and stopping session ≠ owner  → allow (a session never finalizes
+ *      another session's run).
+ *   4. pending work (in-flight tasks, or setup unfinished) → allow (NO hostage: the run
+ *      stays `running` and resumable via `factory resume`).
+ *   5. otherwise (≥1 task, all terminal)         → finalize-on-stop.
  */
-export function decideStop(
-  run: RunState | null,
-  allowStop: boolean,
-  stoppingSession?: string,
-): StopAction {
+export function decideStop(run: RunState | null, stoppingSession?: string): StopAction {
   if (run === null) return ALLOW; // no active run — nothing to gate.
   if (run.status !== "running") return ALLOW; // terminal / paused / suspended: intentional.
 
   // (a) MODE-AWARENESS — workflow mode: the background Workflow owns continuation +
-  // finalize-on-stop, so the interactive session is never the driver here. Pass
-  // through (the Stop hook must not block it, nor finalize on its behalf).
+  // finalize-on-stop, so the interactive session is never the driver here. Pass through
+  // (finalizing on its behalf could race the Workflow's own finalization).
   if (run.mode === "workflow") return ALLOW;
 
-  // (b) SESSION-OWNERSHIP — when the owning session is KNOWN and a DIFFERENT session
-  // is stopping, that session is unrelated to this run: pass through. An unknown
-  // owner, or an unknown stopping session, falls through to the unscoped block below
-  // (degraded but safe — we cannot prove the stopper is NOT the owner).
+  // (b) SESSION-OWNERSHIP — when the owning session is KNOWN and a DIFFERENT session is
+  // stopping, that run is unrelated to this session: pass through. (An unknown owner or
+  // unknown stopper falls through; with no block arm left, the only consequence is
+  // finalizing one's own all-terminal run, which is safe.)
   if (
     run.owner_session !== undefined &&
     stoppingSession !== undefined &&
@@ -111,22 +109,9 @@ export function decideStop(
   // Pending = in-flight tasks OR setup not finished (spec/tasks not yet populated).
   const pending = tasks.length === 0 || nonTerminal.length > 0;
 
-  if (pending) {
-    if (allowStop) return ALLOW; // emergency escape — leave the run resumable.
-    const detail =
-      tasks.length === 0
-        ? "spec/tasks not yet populated"
-        : `${nonTerminal.length} non-terminal task(s): ` +
-          nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
-    return {
-      kind: "block",
-      reason:
-        `run ${run.run_id} is still live (${detail}). Advance the run ` +
-        `(\`factory next --run ${run.run_id}\`, then \`factory drive --run ${run.run_id} --task <task>\`) or finalize it. ` +
-        `To abandon it from here, run \`factory run cancel --run ${run.run_id}\` (marks it failed — the run is then NOT resumable). ` +
-        `Or set FACTORY_ALLOW_STOP=1 to stop anyway (leaves the run resumable).`,
-    };
-  }
+  // Pending work NO LONGER blocks the stop (the session-hostage fix). The session may
+  // end; the run stays `running` and is resumed idempotently by `factory resume`.
+  if (pending) return ALLOW;
 
   // ≥1 task, all terminal, run still `running` → finalize-on-stop.
   return { kind: "finalize", status: decideFinalize(run).run_status };
@@ -136,8 +121,6 @@ export function decideStop(
 export interface StopGateDeps extends DataDirOptions {
   /** Override the StateManager (tests). */
   manager?: Pick<StateManager, "readCurrent" | "finalize" | "findActiveByOwner">;
-  /** Override the escape-hatch flag (else read from FACTORY_ALLOW_STOP). */
-  allowStop?: boolean;
   /** stdout writer (tests capture the block JSON). */
   emit?: (s: string) => void;
   /** Read the raw Stop-hook stdin (tests inject; prod reads process.stdin). */
@@ -155,9 +138,9 @@ export interface StopGateDeps extends DataDirOptions {
  *      today's behavior — we cannot attribute by owner).
  *   2. known stopper owning a live run       → THAT run (clobber-immune).
  *   3. known stopper owning no STAMPED run   → adopt `runs/current` ONLY if it is
- *      itself un-stamped (owner unknown) — preserving {@link decideStop}'s
- *      "owner unknown → degraded-safe block" contract — but NEVER adopt a run owned
- *      by a DIFFERENT known session (that one isn't ours → pass through).
+ *      itself un-stamped (owner unknown) — so the stopper still finalizes a legacy
+ *      un-owned all-terminal run — but NEVER adopt a run owned by a DIFFERENT known
+ *      session (that one isn't ours → pass through).
  */
 async function resolveStopRun(
   manager: Pick<StateManager, "readCurrent" | "findActiveByOwner">,
@@ -172,19 +155,19 @@ async function resolveStopRun(
 
 /**
  * Run the Stop hook end-to-end. Reads the Stop event stdin to extract the STOPPING
- * session id (`session_id`) so the gate can session-scope its block (Prompt J), then
+ * session id (`session_id`) so the gate can session-scope its finalize (Prompt J), then
  * resolves the run THAT session owns ({@link resolveStopRun}). Always returns {@link EXIT.OK} — the block JSON on stdout
- * (not the exit code) is the signal Claude Code acts on, and a Stop hook must not
- * crash the session with a non-zero exit. Both "block" cases (live run, finalize/read
- * failure) emit `{decision:"block"}`. A malformed/empty stdin yields an UNKNOWN
- * stopping session (degraded-safe: the gate then keeps the unscoped block).
+ * (not the exit code) is the signal Claude Code acts on, and a Stop hook must not crash
+ * the session with a non-zero exit. The ONLY blocks are the two corruption cases
+ * (unreadable state, finalize failure); a live run with pending work passes through. A
+ * malformed/empty stdin yields an UNKNOWN stopping session (degraded-safe: resolution
+ * falls back to `runs/current`).
  */
 export async function runStopGate(
   _argv: string[] = [],
   deps: StopGateDeps = {},
 ): Promise<ExitCode> {
   const emit = deps.emit ?? ((s: string) => process.stdout.write(s));
-  const allowStop = deps.allowStop ?? process.env.FACTORY_ALLOW_STOP === "1";
   const manager = deps.manager ?? new StateManager(deps);
 
   // Resolve the stopping session id from the Stop event stdin (best-effort: a
@@ -218,12 +201,9 @@ export async function runStopGate(
     return EXIT.OK;
   }
 
-  const action = decideStop(run, allowStop, stoppingSession);
+  const action = decideStop(run, stoppingSession);
   switch (action.kind) {
     case "allow":
-      return EXIT.OK;
-    case "block":
-      emitBlockDecision(deny(action.reason), emit);
       return EXIT.OK;
     case "finalize": {
       try {

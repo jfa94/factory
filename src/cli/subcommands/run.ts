@@ -64,7 +64,7 @@ Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
-  cancel     Abandon a live run (mark it failed) so the owning session can stop; --cleanup also tears down its branch.`;
+  cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
@@ -127,7 +127,7 @@ terminal — in that resume-safe order. LOUD if any task is still non-terminal.
 Emits ONE JSON envelope:
   { kind:"finalized", run, report, rollup?, issues_filed }`;
 
-const CANCEL_HELP = `factory run cancel — abandon a live run (mark it failed) so the session can stop
+const CANCEL_HELP = `factory run cancel — abandon a live run (mark it failed; not resumable)
 
 Usage:
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
@@ -139,10 +139,11 @@ Usage:
   --session-id  Owning session id used to locate the run when --run is omitted
                 (defaults to $CLAUDE_CODE_SESSION_ID).
 
-The in-session escape from the Stop gate: marks the run 'failed' via the one sanctioned
-state writer — works even with a task still executing (no rollup CI, no ship), so the gate
-stops blocking the owning session. Idempotent; a run already terminal as completed/superseded
-is a LOUD error. NOT resumable (cancelled is terminal) — start a fresh run instead.
+The explicit abandon verb: marks the run 'failed' via the one sanctioned state writer —
+works even with a task still executing (no rollup CI, no ship). Idempotent; a run already
+terminal as completed/superseded is a LOUD error. NOT resumable (cancelled is terminal) —
+start a fresh run instead. (A session no longer needs this to stop: the Stop hook lets a
+session end and leaves the run resumable; cancel is for deliberately discarding a run.)
 
 Emits ONE JSON envelope:
   { kind:"cancelled", run, cleaned_up }`;
@@ -875,18 +876,17 @@ async function resolveCancelRunId(
 }
 
 /**
- * `factory run cancel` — abandon a live run so the Stop gate releases the owning
- * session (Decision 35). Marks the run `failed` DIRECTLY via {@link StateManager.finalize}
- * — NOT {@link finalizeRun}: cancel must not attempt rollup CI / ship of a partial run.
- * `finalize` validates only that the TARGET status is terminal (it does not inspect task
- * statuses), so a run with a task still `executing` is cancellable — the exact mechanism
- * `--supersede` already uses. Idempotent for `failed`; an already completed/superseded run
- * hits the loud "already terminal" guard.
+ * `factory run cancel` — explicitly abandon a live run (Decision 35). Marks the run
+ * `failed` DIRECTLY via {@link StateManager.finalize} — NOT {@link finalizeRun}: cancel must
+ * not attempt rollup CI / ship of a partial run. `finalize` validates only that the TARGET
+ * status is terminal (it does not inspect task statuses), so a run with a task still
+ * `executing` is cancellable — the exact mechanism `--supersede` already uses. Idempotent for
+ * `failed`; an already completed/superseded run hits the loud "already terminal" guard.
  *
- * NO {@link requireAutonomousMode}: cancel is the in-session ESCAPE verb (the Stop gate's
- * documented way out), so it must work from ANY session — including a non-autonomous one —
- * letting a stuck owner always free the gate. Like `finalize`, it is a terminal/cleanup op,
- * not a run-starter.
+ * NO {@link requireAutonomousMode}: cancel is a terminal/cleanup op that must work from ANY
+ * session (including a non-autonomous one), like `finalize` — not a run-starter. It is NOT
+ * required to let a session stop (the Stop hook no longer blocks on pending work); it is the
+ * verb for deliberately discarding a run you do not intend to resume.
  */
 export async function runCancel(
   argv: string[],
@@ -930,8 +930,8 @@ export async function runCancel(
       await ghClient.deleteRemoteBranch(owner, repo, branch);
       cleanedUp = true;
     } catch (err) {
-      // The run is ALREADY failed — the Stop gate is released, so cancel's PRIMARY
-      // contract is met. A genuine teardown throw (401/403/5xx; already-gone 404/422 is
+      // The run is ALREADY failed — cancel's PRIMARY contract (abandon) is met. A genuine
+      // teardown throw (401/403/5xx; already-gone 404/422 is
       // tolerated upstream by the gh client) must NOT fail the abandon: surface it LOUD
       // and exit OK. Retry is safe — deleteProtection/deleteRemoteBranch tolerate an
       // already-gone branch and finalize is idempotent for `failed`.

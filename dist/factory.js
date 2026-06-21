@@ -12150,7 +12150,7 @@ Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
-  cancel     Abandon a live run (mark it failed) so the owning session can stop; --cleanup also tears down its branch.`;
+  cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
@@ -12209,7 +12209,7 @@ terminal \u2014 in that resume-safe order. LOUD if any task is still non-termina
 
 Emits ONE JSON envelope:
   { kind:"finalized", run, report, rollup?, issues_filed }`;
-var CANCEL_HELP = `factory run cancel \u2014 abandon a live run (mark it failed) so the session can stop
+var CANCEL_HELP = `factory run cancel \u2014 abandon a live run (mark it failed; not resumable)
 
 Usage:
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
@@ -12221,10 +12221,11 @@ Usage:
   --session-id  Owning session id used to locate the run when --run is omitted
                 (defaults to $CLAUDE_CODE_SESSION_ID).
 
-The in-session escape from the Stop gate: marks the run 'failed' via the one sanctioned
-state writer \u2014 works even with a task still executing (no rollup CI, no ship), so the gate
-stops blocking the owning session. Idempotent; a run already terminal as completed/superseded
-is a LOUD error. NOT resumable (cancelled is terminal) \u2014 start a fresh run instead.
+The explicit abandon verb: marks the run 'failed' via the one sanctioned state writer \u2014
+works even with a task still executing (no rollup CI, no ship). Idempotent; a run already
+terminal as completed/superseded is a LOUD error. NOT resumable (cancelled is terminal) \u2014
+start a fresh run instead. (A session no longer needs this to stop: the Stop hook lets a
+session end and leaves the run resumable; cancel is for deliberately discarding a run.)
 
 Emits ONE JSON envelope:
   { kind:"cancelled", run, cleaned_up }`;

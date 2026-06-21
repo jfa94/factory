@@ -76,8 +76,8 @@ command's `--workflow`/`--no-ship` flags verbatim (defaults — no flag: session
 `mode` and `ship_mode` persist on the run. `mode` tells the quota gate whether to pace (Decision 24:
 `workflow` disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow driver +
 resume + finalize, so it is never re-marshaled. Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` — this stamps THIS
-orchestrator session as the run's `owner_session`, so the Stop gate keeps the autonomous loop alive
-only in the owning session and lets a _different_ session stop freely (Prompt J). The shell expands
+orchestrator session as the run's `owner_session`, so the Stop gate's finalize-on-stop is scoped to
+the owning session and never finalizes a _different_ session's run (Prompt J). The shell expands
 the env var; if it is unset it expands to empty and the CLI degrades to owner-unknown (unscoped Stop
 gate) — never a bogus empty owner. On success `run create` emits `{kind:"created"|"superseded", run}` —
 read `run_id` from `.run.run_id` (not a bare RunState). Seed failures (duplicate/dangling/cyclic deps)
@@ -137,7 +137,7 @@ step(task):
 
 If `drive` rejects `--results` as stale/duplicate (fold_key mismatch), re-invoke WITHOUT `--results` to get the current envelope and continue — the ONE sanctioned retry (Iron Law 3 applies to everything else).
 
-**Abandoning a run (the in-session escape).** If the user asks to abort/cancel/abandon this run mid-loop, run `factory run cancel --run <run_id>` (defaults to the run THIS session owns, then `runs/current`). It marks the run `failed` via the engine's own writer — so it works even with a task still executing — which releases the Stop gate and frees the session to end. A cancelled run is terminal and NOT resumable (start a fresh `/factory:run` instead). Add `--cleanup` to also tear down the staging branch + its task PRs (omit it to keep them for manual handling). Never edit `state.json` by hand or set `FACTORY_ALLOW_STOP` mid-session — `run cancel` is the sanctioned exit.
+**Abandoning a run.** If the user asks to abort/cancel/abandon this run mid-loop, run `factory run cancel --run <run_id>` (defaults to the run THIS session owns, then `runs/current`). It marks the run `failed` via the engine's own writer — so it works even with a task still executing. A cancelled run is terminal and NOT resumable (start a fresh `/factory:run` instead). Add `--cleanup` to also tear down the staging branch + its task PRs (omit it to keep them for manual handling). Cancel is for deliberately DISCARDING a run — you no longer need it merely to stop: the Stop hook lets a session end and leaves the run resumable via `factory resume`. Never edit `state.json` by hand — `run cancel` is the sanctioned abandon verb.
 
 ### Collecting a spawn envelope
 

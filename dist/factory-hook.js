@@ -8054,7 +8054,7 @@ async function readAllStdin6() {
 // src/hooks/stop-gate.ts
 var log6 = createLogger("hook:stop-gate");
 var ALLOW = { kind: "allow" };
-function decideStop(run, allowStop, stoppingSession) {
+function decideStop(run, stoppingSession) {
   if (run === null) return ALLOW;
   if (run.status !== "running") return ALLOW;
   if (run.mode === "workflow") return ALLOW;
@@ -8064,14 +8064,7 @@ function decideStop(run, allowStop, stoppingSession) {
   const tasks = Object.values(run.tasks);
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
   const pending = tasks.length === 0 || nonTerminal.length > 0;
-  if (pending) {
-    if (allowStop) return ALLOW;
-    const detail = tasks.length === 0 ? "spec/tasks not yet populated" : `${nonTerminal.length} non-terminal task(s): ` + nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
-    return {
-      kind: "block",
-      reason: `run ${run.run_id} is still live (${detail}). Advance the run (\`factory next --run ${run.run_id}\`, then \`factory drive --run ${run.run_id} --task <task>\`) or finalize it. To abandon it from here, run \`factory run cancel --run ${run.run_id}\` (marks it failed \u2014 the run is then NOT resumable). Or set FACTORY_ALLOW_STOP=1 to stop anyway (leaves the run resumable).`
-    };
-  }
+  if (pending) return ALLOW;
   return { kind: "finalize", status: decideFinalize(run).run_status };
 }
 async function resolveStopRun(manager, stoppingSession) {
@@ -8083,7 +8076,6 @@ async function resolveStopRun(manager, stoppingSession) {
 }
 async function runStopGate(_argv = [], deps = {}) {
   const emit2 = deps.emit ?? ((s) => process.stdout.write(s));
-  const allowStop = deps.allowStop ?? process.env.FACTORY_ALLOW_STOP === "1";
   const manager = deps.manager ?? new StateManager(deps);
   let stoppingSession;
   try {
@@ -8103,12 +8095,9 @@ async function runStopGate(_argv = [], deps = {}) {
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;
   }
-  const action = decideStop(run, allowStop, stoppingSession);
+  const action = decideStop(run, stoppingSession);
   switch (action.kind) {
     case "allow":
-      return EXIT.OK;
-    case "block":
-      emitBlockDecision(deny(action.reason), emit2);
       return EXIT.OK;
     case "finalize": {
       try {
@@ -8151,7 +8140,7 @@ var hookRegistry = {
     run: (argv) => runSubagentStop(argv)
   },
   "stop-gate": {
-    describe: "Stop: block premature session end while a run is live; finalize-on-stop otherwise",
+    describe: "Stop: finalize-on-stop an owned all-terminal run; block ONLY on state corruption (never on pending work \u2014 the run stays resumable)",
     run: (argv) => runStopGate(argv)
   }
 };
