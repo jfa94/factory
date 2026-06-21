@@ -93,7 +93,7 @@ The two-window quota pacer.
 | `wallBudgetMin`         | int >0    | `75`                     | Accumulated wall-clock wait budget across cycles (minutes). |
 | `hourlyThresholds`      | number[5] | `[20,40,60,80,90]`       | 5h-window utilization caps by hour 1..5 (%).                |
 | `dailyThresholds`       | number[7] | `[14,29,43,57,71,86,95]` | 7d-window utilization caps by day 1..7 (%).                 |
-| `producerModels.low`    | string    | `claude-haiku-4-5`       | Producer model for low risk tier.                           |
+| `producerModels.low`    | string    | `claude-sonnet-4-5`      | Producer model for low risk tier.                           |
 | `producerModels.medium` | string    | `claude-sonnet-4-5`      | Producer model for medium risk tier.                        |
 | `producerModels.high`   | string    | `claude-opus-4-6`        | Producer model for high risk tier.                          |
 

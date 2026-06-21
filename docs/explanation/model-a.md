@@ -53,7 +53,7 @@ Two interchangeable drivers step the same seam, selected by `--workflow` on
   session. This is the driver that can spawn `Agent()`s directly.
 - **`--workflow`** — the plugin-shipped Workflow script
   (`scripts/factory-run-driver.js`). Because Workflow JS cannot shell out, it
-  wraps every `factory` CLI call in a small exec agent (haiku).
+  wraps every `factory` CLI call in a small exec agent (sonnet).
 
 Both are **subscription-only** — there is no headless `claude -p` / API-token path
 anywhere. The driver's entire job is the glue: step → spawn what the manifest names

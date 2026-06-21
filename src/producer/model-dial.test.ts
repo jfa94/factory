@@ -37,10 +37,27 @@ describe("model-dial — escalation derives from the SAME producerModels map (D2
     expect(r1.injectsPriorFailure).toBe(false);
   });
 
-  it("rung 2 from low ESCALATES the model one tier up (low→medium) + injects prior-failure", () => {
+  it("rung 2 from low escalates the TIER to medium + injects prior-failure (D25)", () => {
     const r2 = dialForRung("low", 2, cfg);
-    expect(r2.model).toBe(cfg.quota.producerModels.medium);
-    expect(r2.model).not.toBe(dialForRung("low", 0, cfg).model); // model CHANGED
+    expect(r2.model).toBe(cfg.quota.producerModels.medium); // escalated tier = medium
+    // By default low===medium (both sonnet — low defaults to sonnet, not haiku: even
+    // low-risk work is code generation), so the MODEL value is unchanged and the changed
+    // variable is the injected context — exactly like the high-ceiling case below. The
+    // model-BUMP path (when the tiers carry distinct models) is asserted by the next test.
+    expect(r2.injectsPriorFailure).toBe(true);
+  });
+
+  it("rung 2 model-BUMP fires when the tiers carry distinct models (override)", () => {
+    const distinct: Config = {
+      ...cfg,
+      quota: {
+        ...cfg.quota,
+        producerModels: { low: "tier-low", medium: "tier-mid", high: "tier-high" },
+      },
+    };
+    const r2 = dialForRung("low", 2, distinct);
+    expect(r2.model).toBe("tier-mid"); // escalated low→medium
+    expect(r2.model).not.toBe(dialForRung("low", 0, distinct).model); // model CHANGED
     expect(r2.injectsPriorFailure).toBe(true);
   });
 

@@ -168,6 +168,14 @@ let fileSeq = 0; // unique results paths without Date.now() (unavailable in work
 // rejects a duplicate delivery loud, so a re-spawn there could double-fold.
 const CLI_MAX_ATTEMPTS = 3;
 
+// The model for the stdout-transport exec-agents (cli() + foldResults()). SONNET, not
+// haiku: this agent's one job is to copy CLI stdout into {raw} byte-for-byte, and
+// haiku's infidelity at exactly that — re-keying the envelope — is what caused the
+// workflow boundary corruption (blocker #9, run-20260620-085154). Verbatim transport is
+// reliability-critical, not "simple"; parseEnvelope is the deterministic backstop, this
+// is the model-side defense.
+const EXEC_AGENT_MODEL = "sonnet";
+
 // The shared exec-agent instruction. Tightened to forbid fabrication: the agent must
 // copy literal stdout or fail — it must NEVER synthesize a substitute envelope, which
 // is exactly the failure that produced the misleading "re-key" error in
@@ -191,7 +199,12 @@ async function cli(command, label, phaseName, knownKinds, context) {
   const prompt = `Run exactly this command with the Bash tool:\n\n${command}\n\n${copyVerbatimInstruction}`;
   let lastErr;
   for (let attempt = 1; attempt <= CLI_MAX_ATTEMPTS; attempt++) {
-    const out = await agent(prompt, { label, phase: phaseName, schema: RAW_OUT, model: "haiku" });
+    const out = await agent(prompt, {
+      label,
+      phase: phaseName,
+      schema: RAW_OUT,
+      model: EXEC_AGENT_MODEL,
+    });
     // A skipped/dead agent is NOT a parse flake (the user skipped it or it hit a terminal
     // error) — fail immediately, never burn retries on it.
     if (out === null) throw new Error(`exec agent '${label}' was skipped or died`);
@@ -234,7 +247,7 @@ async function foldResults(taskId, stage, results) {
       `factory drive --run ${runId} --task ${taskId} --ship-mode ${shipMode} --results "${path}"\n` +
       `${copyVerbatimInstruction}\n\n` +
       `FACTORY-PAYLOAD-BEGIN\n${json}\nFACTORY-PAYLOAD-END`,
-    { label: `fold:${taskId}`, phase: "Drive", schema: RAW_OUT, model: "haiku" },
+    { label: `fold:${taskId}`, phase: "Drive", schema: RAW_OUT, model: EXEC_AGENT_MODEL },
   );
   if (out === null) throw new Error(`fold agent for ${taskId} was skipped or died`);
   // drive emits a DriveEnvelope; kind-guard the verbatim stdout in JS.

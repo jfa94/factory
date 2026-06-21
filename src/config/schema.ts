@@ -80,11 +80,14 @@ export const QuotaSchema = z
      * its risk tier; this is the ONLY dial it carries — the review panel is
      * risk-INVARIANT (Decision 25/26), so there is NO review-depth/round cap here
      * (the old `--tier` routine/feature/security review caps are DELETED).
-     * Defaults: low→fast model, medium→balanced, high→strong.
+     * Defaults: low/medium→sonnet (balanced), high→opus (strong). low defaults to
+     * SONNET, not haiku — even low-risk work is code generation, which haiku
+     * underperforms (the verbatim-fidelity failure behind blocker #9); override
+     * `producerModels.low` per-repo for cheaper low-risk runs.
      */
     producerModels: z
       .object({
-        low: z.string().default("claude-haiku-4-5"),
+        low: z.string().default("claude-sonnet-4-5"),
         medium: z.string().default("claude-sonnet-4-5"),
         high: z.string().default("claude-opus-4-6"),
       })
