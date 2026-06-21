@@ -46,3 +46,24 @@ export const STRYKER_CONFIG_BASENAMES: readonly string[] = [
   ".stryker.config.mjs",
   ".stryker.config.cjs",
 ] as const;
+
+/**
+ * Every basename dependency-cruiser's config discovery loads (first-existing
+ * wins). Mirrors dependency-cruiser's `RULES_FILE_NAME_SEARCH_ARRAY`
+ * (src/cli/defaults.mjs) — exactly these four:
+ *   `.dependency-cruiser` × {`.json`, `.js`, `.cjs`, `.mjs`}.
+ *
+ * Same protection class as Stryker (jfa94/factory#11, same gap class): the
+ * `.js`/`.cjs`/`.mjs` variants are EXECUTABLE JavaScript imported and run inside
+ * the trusted arch/lint gate process, so an unprotected sibling is both a config
+ * shadow AND arbitrary code execution. ALL four are write-protected — and ONLY
+ * these four: the prior denylist erroneously protected `dependency-cruiser.config.cjs`
+ * (a name dependency-cruiser never loads, so not a real vector) while MISSING the
+ * discoverable `.dependency-cruiser.json` and `.dependency-cruiser.mjs`.
+ */
+export const DEPENDENCY_CRUISER_CONFIG_BASENAMES: readonly string[] = [
+  ".dependency-cruiser.json",
+  ".dependency-cruiser.js",
+  ".dependency-cruiser.cjs",
+  ".dependency-cruiser.mjs",
+] as const;

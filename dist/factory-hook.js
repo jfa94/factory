@@ -6524,6 +6524,12 @@ var STRYKER_CONFIG_BASENAMES = [
   ".stryker.config.mjs",
   ".stryker.config.cjs"
 ];
+var DEPENDENCY_CRUISER_CONFIG_BASENAMES = [
+  ".dependency-cruiser.json",
+  ".dependency-cruiser.js",
+  ".dependency-cruiser.cjs",
+  ".dependency-cruiser.mjs"
+];
 
 // src/hooks/tcb.ts
 function isAtOrUnder(p, base) {
@@ -6566,9 +6572,7 @@ function baseName(absPath) {
 }
 var GATE_CONFIG_BASENAMES = /* @__PURE__ */ new Set([
   ...STRYKER_CONFIG_BASENAMES,
-  ".dependency-cruiser.cjs",
-  ".dependency-cruiser.js",
-  "dependency-cruiser.config.cjs"
+  ...DEPENDENCY_CRUISER_CONFIG_BASENAMES
 ]);
 function buildTcbRules(ctx = {}) {
   const rules = [];

@@ -62,6 +62,22 @@ describe("write-protection — TCB write-deny (Δ W)", () => {
     }
   });
 
+  // jfa94/factory#11 (same gap class): dependency-cruiser's discovery loads
+  // `.dependency-cruiser.{json,js,cjs,mjs}`; the executable variants run arbitrary
+  // JS in the arch/lint gate process. The prior denylist protected only .cjs/.js
+  // (and a never-loaded `dependency-cruiser.config.cjs`) — .json and .mjs were open.
+  it("Δ W: Write to dependency-cruiser config siblings is blocked (shadow + code-exec vectors)", () => {
+    for (const name of [
+      ".dependency-cruiser.json",
+      ".dependency-cruiser.js",
+      ".dependency-cruiser.cjs",
+      ".dependency-cruiser.mjs",
+    ]) {
+      const p = join(repoRoot, name);
+      expect(isDeny(decideWriteProtection(editInput("Write", p), deps()))).toBe(true);
+    }
+  });
+
   it("Δ W: Edit to hooks/* is blocked", () => {
     const p = join(repoRoot, "hooks", "write-protection.sh");
     writeFileSync(p, "x");
