@@ -19,7 +19,7 @@ describe("ConfigSchema", () => {
     expect(cfg.quota.dailyThresholds).toEqual([14, 29, 43, 57, 71, 86, 95]);
     // Top-level.
     expect(cfg.maxConsecutiveFailures).toBe(3);
-    expect(cfg.observability.auditLog).toBe(true);
+    expect(cfg.maxRuntimeMinutes).toBe(480);
   });
 
   it("defaultConfig() equals parsing {}", () => {

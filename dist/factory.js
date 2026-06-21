@@ -5878,23 +5878,8 @@ var ReviewSchema = external_exports.object({
 var TestWriterSchema = external_exports.object({
   maxTurns: external_exports.number().int().positive().default(30)
 }).default({});
-var ScribeSchema = external_exports.object({
-  maxTurns: external_exports.number().int().positive().default(20)
-}).default({});
 var CodexSchema = external_exports.object({
   model: external_exports.string().optional()
-}).default({});
-var ObservabilitySchema = external_exports.object({
-  /** Emit the jsonl audit log. */
-  auditLog: external_exports.boolean().default(true),
-  /** Days to retain metrics before pruning. */
-  metricsRetentionDays: external_exports.number().int().positive().default(30)
-}).default({});
-var DependenciesSchema = external_exports.object({
-  /** Poll interval while waiting on a dependency PR, seconds. */
-  pollInterval: external_exports.number().int().positive().default(30),
-  /** Timeout waiting for a PR to merge, seconds. */
-  prMergeTimeout: external_exports.number().int().positive().default(1800)
 }).default({});
 var GitSchema = external_exports.object({
   /**
@@ -5930,10 +5915,7 @@ var ConfigSchema = external_exports.object({
   spec: SpecSchema,
   review: ReviewSchema,
   testWriter: TestWriterSchema,
-  scribe: ScribeSchema,
   codex: CodexSchema,
-  observability: ObservabilitySchema,
-  dependencies: DependenciesSchema,
   git: GitSchema,
   /** Consecutive task failures before the run aborts. */
   maxConsecutiveFailures: external_exports.number().int().positive().default(3),
@@ -9122,7 +9104,6 @@ function decideSpecReview(verdict, opts = {}) {
 }
 
 // src/spec/pipeline.ts
-var log18 = createLogger("spec:pipeline");
 function buildManifest(repo, issueNumber, generated) {
   const specId = makeSpecId(issueNumber, generated.slug);
   const slug = specId.replace(/^\d+-/, "");
@@ -9139,7 +9120,7 @@ function buildManifest(repo, issueNumber, generated) {
 // src/quota/usage-source.ts
 import { existsSync as existsSync7, readFileSync as readFileSync3 } from "node:fs";
 import { join as join9 } from "node:path";
-var log19 = createLogger("quota:usage");
+var log18 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
 var STALE_WARN_SECONDS = 120;
 var RawWindowSchema = external_exports.object({
@@ -9170,7 +9151,7 @@ function readingFromCache(raw, nowEpoch2) {
     return unavailable("usage-cache-too-stale");
   }
   if (age > STALE_WARN_SECONDS) {
-    log19.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+    log18.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
   }
   const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
   const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
@@ -9213,14 +9194,14 @@ var StatuslineUsageSignal = class {
     }
     const file = usageCachePath(dataDir);
     if (!existsSync7(file)) {
-      log19.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
+      log18.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
     let raw;
     try {
       raw = parseJson(readFileSync3(file, "utf8"), file);
     } catch {
-      log19.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
+      log18.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-malformed");
     }
     return readingFromCache(raw, now);
@@ -9515,102 +9496,8 @@ function buildRunSummary(run9, report, opts = {}) {
   };
 }
 
-// src/scoring/dead-surface.ts
-function parseTsPruneOutput(stdout) {
-  const out = [];
-  for (const raw of stdout.split("\n")) {
-    const line = raw.trim();
-    if (line.length === 0) continue;
-    const m = /^(.+):(\d+) - (.+)$/.exec(line);
-    if (m === null) continue;
-    out.push({ file: m[1], line: Number(m[2]), name: m[3] });
-  }
-  return out;
-}
-function normalizePath(p) {
-  return p.startsWith("./") ? p.slice(2) : p;
-}
-function scopeToChangedFiles(findings, changedFiles) {
-  const changed = new Set(changedFiles.map(normalizePath));
-  return findings.filter((f) => changed.has(normalizePath(f.file)));
-}
-var UNAVAILABLE_MARKERS = [
-  "could not determine executable",
-  "command not found",
-  "not found",
-  "no such file"
-];
-var TsPruneRunner = class {
-  tool = "ts-prune";
-  /** Timeout for the detector, ms. Report-only — a slow tool must not wedge finalize. */
-  timeoutMs;
-  constructor(opts = {}) {
-    this.timeoutMs = opts.timeoutMs ?? 12e4;
-  }
-  async run({ cwd }) {
-    try {
-      const r = await exec("npx", ["--no-install", "ts-prune"], { cwd, timeoutMs: this.timeoutMs });
-      const stderrLc = r.stderr.toLowerCase();
-      const looksMissing = r.stdout.trim().length === 0 && UNAVAILABLE_MARKERS.some((m) => stderrLc.includes(m));
-      return {
-        available: !looksMissing,
-        code: r.code,
-        stdout: r.stdout,
-        stderr: r.stderr,
-        truncated: r.truncated
-      };
-    } catch (err) {
-      if (err.code === "ENOENT") {
-        return { available: false, code: null, stdout: "", stderr: String(err), truncated: false };
-      }
-      throw err;
-    }
-  }
-};
-async function scanDeadSurface(runner, changedFiles, opts) {
-  const base = {
-    tool: runner.tool,
-    changed_file_count: changedFiles.length,
-    total_found: 0,
-    findings: []
-  };
-  let result;
-  try {
-    result = await runner.run({ cwd: opts.cwd });
-  } catch (err) {
-    return { ...base, status: "error", note: `${runner.tool} failed: ${err.message}` };
-  }
-  if (!result.available) {
-    return {
-      ...base,
-      status: "skipped",
-      note: `${runner.tool} not available \u2014 install it to enumerate dead surface`
-    };
-  }
-  if (result.truncated) {
-    return {
-      ...base,
-      status: "error",
-      note: `${runner.tool} output was truncated \u2014 findings unreliable, not reported`
-    };
-  }
-  if (result.code === null) {
-    return { ...base, status: "error", note: `${runner.tool} was killed before completing` };
-  }
-  const all = parseTsPruneOutput(result.stdout);
-  const scoped = scopeToChangedFiles(all, changedFiles);
-  return {
-    tool: runner.tool,
-    status: "ok",
-    changed_file_count: changedFiles.length,
-    total_found: all.length,
-    findings: scoped,
-    note: changedFiles.length === 0 ? "run diff is empty \u2014 no files to scope findings to" : `${scoped.length} unreferenced export(s) in the run diff (of ${all.length} project-wide)`
-  };
-}
-
 // src/scoring/telemetry.ts
-var log20 = createLogger("telemetry");
+var log19 = createLogger("telemetry");
 async function emitMetric(dataDir, runId, event, data, opts = {}) {
   const record = {
     ts: opts.now ?? nowIso(),
@@ -9621,7 +9508,7 @@ async function emitMetric(dataDir, runId, event, data, opts = {}) {
   try {
     await appendJsonl(runMetricsPath(dataDir, runId), record);
   } catch (err) {
-    log20.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+    log19.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
   }
   return record;
 }
@@ -9768,236 +9655,7 @@ function classifyFailure(signal) {
   }
 }
 
-// src/verifier/judgment/config.ts
-var FALLBACK_REVIEW_MODEL = "opus";
-function resolveReviewModel(config) {
-  const m = config.review.model;
-  if (m !== void 0 && m.trim().length === 0) {
-    throw new Error(
-      "review.model is configured but empty \u2014 set a non-empty fixed reviewer model or unset it"
-    );
-  }
-  return m ?? FALLBACK_REVIEW_MODEL;
-}
-
-// src/verifier/judgment/panel.ts
-var PANEL_ROLES = [
-  "implementation-reviewer",
-  "quality-reviewer",
-  "architecture-reviewer",
-  "security-reviewer",
-  "silent-failure-hunter",
-  "type-design-reviewer"
-];
-function promptRefFor(role) {
-  return `reviews/prompts/${role}.md`;
-}
-function buildPanelManifest(stageAfter, model, maxTurns) {
-  const agents = PANEL_ROLES.map((role) => ({
-    role,
-    isolation: "worktree",
-    model,
-    max_turns: maxTurns,
-    prompt_ref: promptRefFor(role)
-  }));
-  return parseSpawnManifest({ stage_after: stageAfter, agents });
-}
-
-// src/verifier/judgment/finding.ts
-var log21 = createLogger("finding");
-var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
-var FindingSchema = external_exports.object({
-  /** Which panel reviewer raised this (free-form; the role string). */
-  reviewer: external_exports.string().min(1),
-  /** Closed severity. */
-  severity: FindingSeverityEnum,
-  /** True iff this finding, if upheld, BLOCKS the floor. */
-  blocking: external_exports.boolean(),
-  /** Cited file path (run-tree relative). Absent ⇒ uncitable. */
-  file: external_exports.string().min(1).optional(),
-  /** Cited 1-based line number. Absent ⇒ uncitable. Must be positive. */
-  line: external_exports.number().int().positive().optional(),
-  /**
-   * The VERBATIM code the reviewer claims to be quoting. Required and non-empty —
-   * a finding with no quote cannot be citation-verified, so we reject it loudly
-   * rather than admit an unverifiable claim. (An empty string is rejected by
-   * `.min(1)`.)
-   */
-  quote: external_exports.string().min(1),
-  /** Human-facing description of the concern. */
-  description: external_exports.string().min(1)
-});
-var RawReviewVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
-var RawReviewSchema = external_exports.object({
-  /** The reviewer identity (role string). */
-  reviewer: external_exports.string().min(1),
-  /** The reviewer's self-reported verdict. */
-  verdict: RawReviewVerdictEnum,
-  /** Findings raised. May be empty (an `approve` with no findings). */
-  findings: external_exports.array(FindingSchema)
-});
-var KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape));
-var KNOWN_FINDING_KEYS = new Set(Object.keys(FindingSchema.shape));
-function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) {
-  const topUnknown = [];
-  const findingUnknown = [];
-  if (topObj !== null && typeof topObj === "object" && !Array.isArray(topObj)) {
-    for (const k of Object.keys(topObj)) {
-      if (!topKnown.has(k)) topUnknown.push(k);
-    }
-  }
-  if (Array.isArray(findingsArr)) {
-    for (const f of findingsArr) {
-      if (f !== null && typeof f === "object" && !Array.isArray(f)) {
-        for (const k of Object.keys(f)) {
-          if (!findingKnown.has(k) && !findingUnknown.includes(k)) findingUnknown.push(k);
-        }
-      }
-    }
-  }
-  if (topUnknown.length > 0 || findingUnknown.length > 0) {
-    log21.warn(
-      `review parse: stripped unknown keys from reviewer '${context}' payload: top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`
-    );
-  }
-}
-function parseRawReview(raw) {
-  const result = RawReviewSchema.parse(raw);
-  const reviewerLabel = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? String(raw.reviewer ?? result.reviewer) : result.reviewer;
-  const rawFindings = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw.findings : void 0;
-  warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS);
-  return result;
-}
-function isCitable(f) {
-  return f.file !== void 0 && f.line !== void 0;
-}
-
-// src/verifier/judgment/citation-verify.ts
-var CITATION_WINDOW = 2;
-function redactFinding(f) {
-  return { ...f, quote: redactSecrets(f.quote), description: redactSecrets(f.description) };
-}
-function checkQuote(quote, line, lines) {
-  const lo = Math.max(1, line - CITATION_WINDOW);
-  const hi = Math.min(lines.length, line + CITATION_WINDOW);
-  if (lo > hi) {
-    return "line-out-of-range";
-  }
-  for (let n = lo; n <= hi; n++) {
-    const text = lines[n - 1];
-    if (text !== void 0 && text.includes(quote)) return null;
-  }
-  return "quote-not-in-window";
-}
-function verifyCitations(findings, source, options = {}) {
-  const redact = options.redact ?? true;
-  const kept = [];
-  const dropped = [];
-  const audit = [];
-  for (const f of findings) {
-    if (!isCitable(f)) {
-      dropped.push({ finding: f, reason: "uncitable" });
-      audit.push(`DROP uncitable: ${f.reviewer} \u2014 ${f.description}`);
-      continue;
-    }
-    const lines = source.readLines(f.file);
-    if (lines === null) {
-      dropped.push({ finding: f, reason: "file-not-found" });
-      audit.push(`DROP file-not-found ${f.file}:${f.line}: ${f.reviewer}`);
-      continue;
-    }
-    const reason = checkQuote(f.quote, f.line, lines);
-    if (reason !== null) {
-      dropped.push({ finding: f, reason });
-      audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
-      continue;
-    }
-    const retained = redact ? redactFinding(f) : f;
-    kept.push(retained);
-    audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`);
-  }
-  return { kept, dropped, audit };
-}
-
-// src/verifier/judgment/finding-verifier.ts
-async function confirmBlocker(finding, runner, finderIdentity) {
-  if (runner.identity === finderIdentity) {
-    throw new Error(
-      `finding-verifier identity '${runner.identity}' equals the finder's \u2014 the verifier must be INDEPENDENT (D27)`
-    );
-  }
-  let verdict;
-  try {
-    verdict = await runner.confirm(finding);
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return { status: "error", reason: `finding-verifier errored: ${detail}` };
-  }
-  return verdict.holds ? { status: "confirmed", evidence: { note: verdict.note } } : { status: "refuted", reason: verdict.note };
-}
-
-// src/verifier/judgment/panel-run.ts
-async function adjudicateReviewer(review, source, makeRunner2, redact) {
-  const blocking = review.findings.filter((f) => f.blocking);
-  const { kept } = verifyCitations(blocking, source, { redact });
-  const runner = makeRunner2(review);
-  const confirmed = [];
-  let hadVerifierError = false;
-  for (const finding of kept) {
-    if (!isCitable(finding)) continue;
-    const outcome = await confirmBlocker(finding, runner, review.reviewer);
-    if (outcome.status === "confirmed") {
-      confirmed.push(finding);
-    } else if (outcome.status === "error") {
-      hadVerifierError = true;
-    }
-  }
-  return {
-    reviewer: review.reviewer,
-    rawVerdict: review.verdict,
-    confirmedBlockers: confirmed,
-    hadVerifierError
-  };
-}
-function reviewerResultOf(a) {
-  if (a.hadVerifierError || a.rawVerdict === "error") {
-    return {
-      reviewer: a.reviewer,
-      verdict: "error",
-      confirmed_blockers: a.confirmedBlockers.length
-    };
-  }
-  if (a.confirmedBlockers.length > 0) {
-    return {
-      reviewer: a.reviewer,
-      verdict: "blocked",
-      confirmed_blockers: a.confirmedBlockers.length
-    };
-  }
-  return { reviewer: a.reviewer, verdict: "approve", confirmed_blockers: 0 };
-}
-async function runPanel(input) {
-  const redact = input.redact ?? true;
-  const adjudicated = [];
-  for (const review of input.reviews) {
-    adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
-  }
-  const reviewerResults = adjudicated.map(reviewerResultOf);
-  const floor = deriveFloorVerdict({ reviewers: reviewerResults }, input.gateEvidence);
-  const result = floor.passed ? advance(nextOrSelf(input.stage)) : waitRetry(
-    input.stage,
-    floorBlockReason(reviewerResults, input.gateEvidence),
-    input.attempt ?? 1,
-    input.maxAttempts ?? 1
-  );
-  const crossVendorAbsence = input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : void 0;
-  return crossVendorAbsence === void 0 ? { adjudicated, reviewerResults, floor, result } : { adjudicated, reviewerResults, floor, result, crossVendorAbsence };
-}
-function nextOrSelf(stage) {
-  return stage === "verify" ? "ship" : stage;
-}
-
-// src/producer/ladder.ts
+// src/producer/escalation.ts
 var ESCALATION_CAP = 2;
 
 // src/verifier/deterministic/gate-id.ts
@@ -10468,7 +10126,7 @@ var buildStrategy = procStrategy(
 );
 
 // src/verifier/deterministic/gate-runner.ts
-var log22 = createLogger("gate-runner");
+var log20 = createLogger("gate-runner");
 function strategyFor(id) {
   switch (id) {
     case "test":
@@ -10510,7 +10168,7 @@ var GateRunner = class {
       if (cached !== void 0) {
         report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
         evidence.push(cached);
-        log22.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
+        log20.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
         continue;
       }
       const strategy = strategyFor(id);
@@ -10531,7 +10189,7 @@ var GateRunner = class {
         memo.putEvidence(id, treeSha, outcome.evidence);
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
-        log22.debug(`gate ${id} skipped: ${outcome.reason}`);
+        log20.debug(`gate ${id} skipped: ${outcome.reason}`);
       }
     }
     const verdict = deriveAllGatesVerdict(evidence);
@@ -10817,14 +10475,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log32 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log32.code !== 0) {
+    const log31 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log31.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log32.code ?? "null"}): ${log32.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log31.code ?? "null"}): ${log31.stderr.trim()}`
       );
     }
-    assertNotTruncated(log32, "git log (tdd classification)");
-    const shas = splitLines(log32.stdout).reverse();
+    assertNotTruncated(log31, "git log (tdd classification)");
+    const shas = splitLines(log31.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -10883,6 +10541,235 @@ function defaultGateTools() {
     coverage: new DefaultCoverageReader(),
     fs: new DefaultFsProbe()
   };
+}
+
+// src/verifier/judgment/config.ts
+var FALLBACK_REVIEW_MODEL = "opus";
+function resolveReviewModel(config) {
+  const m = config.review.model;
+  if (m !== void 0 && m.trim().length === 0) {
+    throw new Error(
+      "review.model is configured but empty \u2014 set a non-empty fixed reviewer model or unset it"
+    );
+  }
+  return m ?? FALLBACK_REVIEW_MODEL;
+}
+
+// src/verifier/judgment/panel.ts
+var PANEL_ROLES = [
+  "implementation-reviewer",
+  "quality-reviewer",
+  "architecture-reviewer",
+  "security-reviewer",
+  "silent-failure-hunter",
+  "type-design-reviewer"
+];
+function promptRefFor(role) {
+  return `reviews/prompts/${role}.md`;
+}
+function buildPanelManifest(stageAfter, model, maxTurns) {
+  const agents = PANEL_ROLES.map((role) => ({
+    role,
+    isolation: "worktree",
+    model,
+    max_turns: maxTurns,
+    prompt_ref: promptRefFor(role)
+  }));
+  return parseSpawnManifest({ stage_after: stageAfter, agents });
+}
+
+// src/verifier/judgment/finding.ts
+var log21 = createLogger("finding");
+var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
+var FindingSchema = external_exports.object({
+  /** Which panel reviewer raised this (free-form; the role string). */
+  reviewer: external_exports.string().min(1),
+  /** Closed severity. */
+  severity: FindingSeverityEnum,
+  /** True iff this finding, if upheld, BLOCKS the floor. */
+  blocking: external_exports.boolean(),
+  /** Cited file path (run-tree relative). Absent ⇒ uncitable. */
+  file: external_exports.string().min(1).optional(),
+  /** Cited 1-based line number. Absent ⇒ uncitable. Must be positive. */
+  line: external_exports.number().int().positive().optional(),
+  /**
+   * The VERBATIM code the reviewer claims to be quoting. Required and non-empty —
+   * a finding with no quote cannot be citation-verified, so we reject it loudly
+   * rather than admit an unverifiable claim. (An empty string is rejected by
+   * `.min(1)`.)
+   */
+  quote: external_exports.string().min(1),
+  /** Human-facing description of the concern. */
+  description: external_exports.string().min(1)
+});
+var RawReviewVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
+var RawReviewSchema = external_exports.object({
+  /** The reviewer identity (role string). */
+  reviewer: external_exports.string().min(1),
+  /** The reviewer's self-reported verdict. */
+  verdict: RawReviewVerdictEnum,
+  /** Findings raised. May be empty (an `approve` with no findings). */
+  findings: external_exports.array(FindingSchema)
+});
+var KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape));
+var KNOWN_FINDING_KEYS = new Set(Object.keys(FindingSchema.shape));
+function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) {
+  const topUnknown = [];
+  const findingUnknown = [];
+  if (topObj !== null && typeof topObj === "object" && !Array.isArray(topObj)) {
+    for (const k of Object.keys(topObj)) {
+      if (!topKnown.has(k)) topUnknown.push(k);
+    }
+  }
+  if (Array.isArray(findingsArr)) {
+    for (const f of findingsArr) {
+      if (f !== null && typeof f === "object" && !Array.isArray(f)) {
+        for (const k of Object.keys(f)) {
+          if (!findingKnown.has(k) && !findingUnknown.includes(k)) findingUnknown.push(k);
+        }
+      }
+    }
+  }
+  if (topUnknown.length > 0 || findingUnknown.length > 0) {
+    log21.warn(
+      `review parse: stripped unknown keys from reviewer '${context}' payload: top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`
+    );
+  }
+}
+function parseRawReview(raw) {
+  const result = RawReviewSchema.parse(raw);
+  const reviewerLabel = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? String(raw.reviewer ?? result.reviewer) : result.reviewer;
+  const rawFindings = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw.findings : void 0;
+  warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS);
+  return result;
+}
+function isCitable(f) {
+  return f.file !== void 0 && f.line !== void 0;
+}
+
+// src/verifier/judgment/citation-verify.ts
+var CITATION_WINDOW = 2;
+function redactFinding(f) {
+  return { ...f, quote: redactSecrets(f.quote), description: redactSecrets(f.description) };
+}
+function checkQuote(quote, line, lines) {
+  const lo = Math.max(1, line - CITATION_WINDOW);
+  const hi = Math.min(lines.length, line + CITATION_WINDOW);
+  if (lo > hi) {
+    return "line-out-of-range";
+  }
+  for (let n = lo; n <= hi; n++) {
+    const text = lines[n - 1];
+    if (text !== void 0 && text.includes(quote)) return null;
+  }
+  return "quote-not-in-window";
+}
+function verifyCitations(findings, source, options = {}) {
+  const redact = options.redact ?? true;
+  const kept = [];
+  const dropped = [];
+  const audit = [];
+  for (const f of findings) {
+    if (!isCitable(f)) {
+      dropped.push({ finding: f, reason: "uncitable" });
+      audit.push(`DROP uncitable: ${f.reviewer} \u2014 ${f.description}`);
+      continue;
+    }
+    const lines = source.readLines(f.file);
+    if (lines === null) {
+      dropped.push({ finding: f, reason: "file-not-found" });
+      audit.push(`DROP file-not-found ${f.file}:${f.line}: ${f.reviewer}`);
+      continue;
+    }
+    const reason = checkQuote(f.quote, f.line, lines);
+    if (reason !== null) {
+      dropped.push({ finding: f, reason });
+      audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
+      continue;
+    }
+    const retained = redact ? redactFinding(f) : f;
+    kept.push(retained);
+    audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`);
+  }
+  return { kept, dropped, audit };
+}
+
+// src/verifier/judgment/finding-verifier.ts
+async function confirmBlocker(finding, runner, finderIdentity) {
+  if (runner.identity === finderIdentity) {
+    throw new Error(
+      `finding-verifier identity '${runner.identity}' equals the finder's \u2014 the verifier must be INDEPENDENT (D27)`
+    );
+  }
+  let verdict;
+  try {
+    verdict = await runner.confirm(finding);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { status: "error", reason: `finding-verifier errored: ${detail}` };
+  }
+  return verdict.holds ? { status: "confirmed", evidence: { note: verdict.note } } : { status: "refuted", reason: verdict.note };
+}
+
+// src/verifier/judgment/panel-run.ts
+async function adjudicateReviewer(review, source, makeRunner2, redact) {
+  const blocking = review.findings.filter((f) => f.blocking);
+  const { kept } = verifyCitations(blocking, source, { redact });
+  const runner = makeRunner2(review);
+  const confirmed = [];
+  let hadVerifierError = false;
+  for (const finding of kept) {
+    if (!isCitable(finding)) continue;
+    const outcome = await confirmBlocker(finding, runner, review.reviewer);
+    if (outcome.status === "confirmed") {
+      confirmed.push(finding);
+    } else if (outcome.status === "error") {
+      hadVerifierError = true;
+    }
+  }
+  return {
+    reviewer: review.reviewer,
+    rawVerdict: review.verdict,
+    confirmedBlockers: confirmed,
+    hadVerifierError
+  };
+}
+function reviewerResultOf(a) {
+  if (a.hadVerifierError || a.rawVerdict === "error") {
+    return {
+      reviewer: a.reviewer,
+      verdict: "error",
+      confirmed_blockers: a.confirmedBlockers.length
+    };
+  }
+  if (a.confirmedBlockers.length > 0) {
+    return {
+      reviewer: a.reviewer,
+      verdict: "blocked",
+      confirmed_blockers: a.confirmedBlockers.length
+    };
+  }
+  return { reviewer: a.reviewer, verdict: "approve", confirmed_blockers: 0 };
+}
+async function runPanel(input) {
+  const redact = input.redact ?? true;
+  const adjudicated = [];
+  for (const review of input.reviews) {
+    adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
+  }
+  const reviewerResults = adjudicated.map(reviewerResultOf);
+  const floor = deriveFloorVerdict({ reviewers: reviewerResults }, input.gateEvidence);
+  const result = floor.passed ? advance(nextOrSelf(input.stage)) : waitRetry(
+    input.stage,
+    floorBlockReason(reviewerResults, input.gateEvidence),
+    input.attempt ?? 1,
+    input.maxAttempts ?? 1
+  );
+  const crossVendorAbsence = input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : void 0;
+  return crossVendorAbsence === void 0 ? { adjudicated, reviewerResults, floor, result } : { adjudicated, reviewerResults, floor, result, crossVendorAbsence };
+}
+function nextOrSelf(stage) {
+  return stage === "verify" ? "ship" : stage;
 }
 
 // src/verifier/holdout/split.ts
@@ -11111,7 +10998,7 @@ var FsHoldoutVerdictStore = class {
 };
 
 // src/driver/finalize.ts
-var log23 = createLogger("finalize");
+var log22 = createLogger("finalize");
 var FACTORY_ISSUE_LABEL = "factory";
 function prdDoneComment(report, rollupResult) {
   const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`;
@@ -11131,7 +11018,7 @@ async function fileFailureIssues(deps, report) {
   for (const failure of report.failures) {
     const issue = renderFailureIssue(failure, report);
     if (existing.has(issue.title)) {
-      log23.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
+      log22.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
       continue;
     }
     await deps.gh.issueCreate({
@@ -11185,17 +11072,17 @@ async function finalizeRun(deps, runId) {
       await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
     }
   } else {
-    log23.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
+    log22.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
-  log23.info(
+  log22.info(
     `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
   );
   return { run: finalized, report, ...rollupResult ? { rollup: rollupResult } : {}, issuesFiled };
 }
 
 // src/driver/transitions.ts
-var log24 = createLogger("transitions");
+var log23 = createLogger("transitions");
 function markInFlight(deps, runId, taskId, stage) {
   const status = stageToInFlightStatus(stage);
   return deps.state.updateTask(runId, taskId, (t) => ({
@@ -11214,7 +11101,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function dropTask(deps, runId, taskId, failureClass, reason) {
-  log24.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
+  log23.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "dropped",
@@ -11251,7 +11138,7 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log24.info(
+  log23.info(
     `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`
   );
   return { done: false, stage: resumeStage };
@@ -11548,7 +11435,7 @@ var FsArtifactStore = class {
 // src/driver/fold.ts
 import { readFile as readFile11 } from "node:fs/promises";
 import { join as join14 } from "node:path";
-var log25 = createLogger("fold");
+var log24 = createLogger("fold");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.stage);
@@ -11590,7 +11477,7 @@ function parseVerdictsFailClosed(raw) {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log25.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log24.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
@@ -11692,7 +11579,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
   if (panel.crossVendorAbsence !== void 0) {
-    log25.warn(
+    log24.warn(
       `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` + panel.crossVendorAbsence.reason
     );
   }
@@ -11769,7 +11656,7 @@ function isSpawnStage(stage) {
 }
 
 // src/driver/quota-gate.ts
-var log26 = createLogger("quota-gate");
+var log25 = createLogger("quota-gate");
 async function applyQuotaGate(deps, runId, mode = "session") {
   if (mode === "workflow") return null;
   const reading = await deps.usage.read();
@@ -11781,7 +11668,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
     case "pause-5h":
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
-      log26.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
+      log25.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
       const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
@@ -11795,7 +11682,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
       };
     }
     case "unavailable-halt": {
-      log26.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
+      log25.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
       const run9 = await deps.state.update(runId, (s) => ({
         ...s,
         status: "suspended",
@@ -11809,7 +11696,7 @@ async function applyQuotaGate(deps, runId, mode = "session") {
 }
 
 // src/driver/ship.ts
-var log27 = createLogger("ship");
+var log26 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
     throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
@@ -11849,14 +11736,14 @@ async function shipTask(deps, ctx) {
   });
   const outcome = await serializer.merge(pr.number);
   if (outcome.merged) {
-    log27.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    log26.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
     return taskDone();
   }
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
 // src/driver/coroutine.ts
-var log28 = createLogger("coroutine");
+var log27 = createLogger("coroutine");
 var MERGE_RESYNC_CAP = 8;
 function requireTask2(run9, taskId) {
   const task = run9.tasks[taskId];
@@ -12048,7 +11935,7 @@ async function stepTask(deps, runId, taskId, results) {
             if (!step2.done) throw new Error("coroutine: dropStep returned non-terminal step");
             return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
-          log28.info(
+          log27.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
           );
           stage = "exec";
@@ -12250,7 +12137,7 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/cli/subcommands/run.ts
-var log29 = createLogger("run");
+var log28 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -12408,7 +12295,7 @@ async function resolveSpec(specStore, opts) {
 }
 async function createRunFromManifest(state, specStore, manifest, opts, stagingDeps) {
   if (opts.mode === "workflow") {
-    log29.warn(
+    log28.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
     );
   }
@@ -13212,17 +13099,14 @@ var rescueCommand = {
 var HELP4 = `factory score \u2014 report a run's outcome summary (read-only)
 
 Usage:
-  factory score [--run <id>] [--dead-surface] [--base <ref>] [--project-root <dir>]
+  factory score [--run <id>]
 
   --run            The run to score (defaults to runs/current).
-  --dead-surface   Also enumerate unreferenced exports in the run diff (report-only).
-  --base           Diff base for --dead-surface (default: origin/<git.baseBranch>).
-  --project-root   Repo checkout to scan for --dead-surface (default: cwd).
 
 Emits ONE JSON document:
-  { kind:"score", summary, dead_surface? }`;
+  { kind:"score", summary }`;
 async function runScore(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["dead-surface"] });
+  const args = parseArgs(argv);
   if (args.flag("help") === true) {
     emitLine(HELP4);
     return EXIT.OK;
@@ -13238,38 +13122,11 @@ async function runScore(argv, overrides = {}) {
   const manifest = await specStore.read(runState2.spec.repo, runState2.spec.spec_id);
   const report = buildPartialReport(runState2, manifest);
   const summary = buildRunSummary(runState2, report);
-  let deadSurface;
-  if (args.flag("dead-surface") === true) {
-    const config = loadConfig({ dataDir });
-    const base = optionalString(args.flag("base")) ?? `origin/${config.git.baseBranch}`;
-    const cwd = optionalString(args.flag("project-root")) ?? process.cwd();
-    deadSurface = await scoreDeadSurface(base, cwd);
-  }
-  emitJson({
-    kind: "score",
-    summary,
-    ...deadSurface !== void 0 ? { dead_surface: deadSurface } : {}
-  });
+  emitJson({ kind: "score", summary });
   return EXIT.OK;
 }
-async function scoreDeadSurface(base, cwd) {
-  let changedFiles;
-  try {
-    changedFiles = await new DefaultGitProbe().changedFiles(base, { cwd });
-  } catch (err) {
-    return {
-      tool: "ts-prune",
-      status: "error",
-      changed_file_count: 0,
-      total_found: 0,
-      findings: [],
-      note: `could not resolve the run diff against '${base}': ${err.message}`
-    };
-  }
-  return scanDeadSurface(new TsPruneRunner(), changedFiles, { cwd });
-}
 var scoreCommand = {
-  describe: "Report a run's outcome summary (read-only; optional --dead-surface scan)",
+  describe: "Report a run's outcome summary (read-only)",
   run: async (argv) => {
     try {
       return await runScore(argv);
@@ -13437,7 +13294,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log30 = createLogger("cli:statusline");
+var log29 = createLogger("cli:statusline");
 var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -13462,7 +13319,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log30.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log29.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return;
   }
   const now = (deps.now ?? nowEpoch)();
@@ -13470,7 +13327,7 @@ async function writeCache(rateLimits, deps) {
   try {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
   } catch (err) {
-    log30.warn(`failed to write usage-cache.json: ${err.message}`);
+    log29.warn(`failed to write usage-cache.json: ${err.message}`);
   }
 }
 async function passthrough(payload, deps) {
@@ -13481,12 +13338,12 @@ async function passthrough(payload, deps) {
     const result = await run9(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log30.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log29.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log30.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log29.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -13522,7 +13379,7 @@ import { existsSync as existsSync8 } from "node:fs";
 import { readFile as readFile12 } from "node:fs/promises";
 import { join as join16 } from "node:path";
 import { homedir as homedir3 } from "node:os";
-var log31 = createLogger("autonomy");
+var log30 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -13654,9 +13511,9 @@ async function runAutonomyEnsure(opts = {}) {
     try {
       const parsed = JSON.parse(await readFile12(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
-      else log31.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      else log30.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
-      log31.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log30.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
   const templatePath = join16(pluginRoot, "templates", "settings.autonomous.json");

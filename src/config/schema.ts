@@ -161,37 +161,10 @@ export const TestWriterSchema = z
   })
   .default({});
 
-/** Scribe (docs) agent config (WS10/WS12). */
-export const ScribeSchema = z
-  .object({
-    maxTurns: z.number().int().positive().default(20),
-  })
-  .default({});
-
 /** Codex cross-vendor executor config (WS7/WS8). */
 export const CodexSchema = z
   .object({
     model: z.string().optional(),
-  })
-  .default({});
-
-/** Observability / telemetry config (WS12). */
-export const ObservabilitySchema = z
-  .object({
-    /** Emit the jsonl audit log. */
-    auditLog: z.boolean().default(true),
-    /** Days to retain metrics before pruning. */
-    metricsRetentionDays: z.number().int().positive().default(30),
-  })
-  .default({});
-
-/** Cross-task dependency / PR-merge polling config (WS3). */
-export const DependenciesSchema = z
-  .object({
-    /** Poll interval while waiting on a dependency PR, seconds. */
-    pollInterval: z.number().int().positive().default(30),
-    /** Timeout waiting for a PR to merge, seconds. */
-    prMergeTimeout: z.number().int().positive().default(1800),
   })
   .default({});
 
@@ -246,10 +219,7 @@ export const ConfigSchema = z
     spec: SpecSchema,
     review: ReviewSchema,
     testWriter: TestWriterSchema,
-    scribe: ScribeSchema,
     codex: CodexSchema,
-    observability: ObservabilitySchema,
-    dependencies: DependenciesSchema,
     git: GitSchema,
     /** Consecutive task failures before the run aborts. */
     maxConsecutiveFailures: z.number().int().positive().default(3),

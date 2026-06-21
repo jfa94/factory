@@ -60,16 +60,6 @@ export {
   type VerifierEvidence,
 } from "./finding-verifier.js";
 
-// producer rebuttal (one shot, independently adjudicated)
-export {
-  adjudicateRebuttal,
-  RebuttalLedger,
-  type ProducerRebuttal,
-  type AdjudicationVerdict,
-  type RebuttalAdjudicator,
-  type RebuttalOutcome,
-} from "./rebuttal.js";
-
 // end-to-end verify pass (derive-don't-store floor)
 export {
   runPanel,

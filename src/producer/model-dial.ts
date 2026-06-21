@@ -12,10 +12,9 @@
  *   - Rung 2 — an ESCALATED model: the next tier UP the producerModels ladder
  *              (low→medium→high), PLUS injected prior-failure context. When the
  *              dial is already at the ceiling (`high`), the model cannot climb
- *              further, so the changed variable is the injected context alone. The
- *              ladder's {@link import("./ladder.js").assertRungChange} derives
- *              whether the model changed (cur.model !== prev.model) — it is NOT
- *              stored on the result (derive-don't-store, Δ V).
+ *              further, so the changed variable is the injected context alone.
+ *              Whether the model changed is DERIVED (cur.model !== prev.model) — it
+ *              is NOT stored on the result (derive-don't-store, Δ V).
  *
  * The escalated model is derived from the SAME config.quota.producerModels map
  * (no new literal, no new config knob): low's escalation is medium, medium's is

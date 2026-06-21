@@ -7,7 +7,6 @@
  *   - usage-source : the injectable {@link UsageSignal} + fail-closed reader.
  *   - window       : pure two-window position + threshold math.
  *   - pacer        : the pure two-window decision → {@link QuotaDecision}.
- *   - to-stage-result : the ONE adapter to the frozen StageResult (gracefulStop only).
  *   - checkpoint   : typed RunState patches honoring the quota-IFF-paused invariant.
  *   - circuit-breaker : the pure run-level hard-abort predicate (distinct from pacing).
  *   - router       : the narrowed quota-router (producer dial only).
@@ -45,9 +44,6 @@ export {
 export { evaluate } from "./pacer.js";
 export type { QuotaDecision } from "./pacer.js";
 
-// StageResult adapter
-export { decisionToStageResult } from "./to-stage-result.js";
-
 // Checkpoint patches
 export { buildCheckpoint, clearCheckpoint } from "./checkpoint.js";
 export type {
@@ -60,9 +56,8 @@ export type {
 export { evaluate as evaluateCircuitBreaker } from "./circuit-breaker.js";
 export type { CircuitBreakerInput, CircuitBreakerResult } from "./circuit-breaker.js";
 
-// Quota-router
-export { selectProducerModel, quotaGate } from "./router.js";
-export type { QuotaGateResult } from "./router.js";
+// Quota-router (producer dial only)
+export { selectProducerModel } from "./router.js";
 
 // Resume seam
 export { planResume } from "./resume.js";

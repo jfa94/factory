@@ -105,7 +105,6 @@ export type { PartialRunReport, FailureLine } from "../scoring/index.js";
 // --- quota pacing (src/quota) -----------------------------------------------
 export {
   evaluate as evaluateQuota,
-  decisionToStageResult,
   buildCheckpoint,
   clearCheckpoint,
   selectProducerModel,

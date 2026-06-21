@@ -1,9 +1,8 @@
 /**
  * `factory score` (WS12) — arg/usage edges plus the reporter happy paths through
  * {@link scoreCommand} against an isolated temp data dir ($CLAUDE_PLUGIN_DATA + a
- * real StateManager + SpecStore). Proves the `{kind:"score", summary}` envelope, the
- * default-to-current-run behavior, and that `--dead-surface` degrades to a report-only
- * error entry when the diff cannot be resolved (cwd is not a git repo).
+ * real StateManager + SpecStore). Proves the `{kind:"score", summary}` envelope and
+ * the default-to-current-run behavior.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -113,12 +112,11 @@ describe("score happy paths", () => {
 
   const out = () => JSON.parse(stdout.join("")) as Record<string, unknown>;
 
-  it("emits a {kind:'score', summary} envelope with no dead_surface by default", async () => {
+  it("emits a {kind:'score', summary} envelope", async () => {
     const code = await scoreCommand.run(["--run", "run-s"]);
     expect(code).toBe(EXIT.OK);
     const env = out();
     expect(env.kind).toBe("score");
-    expect(env.dead_surface).toBeUndefined();
 
     const summary = env.summary as Record<string, unknown>;
     expect(summary.run_id).toBe("run-s");
@@ -138,20 +136,5 @@ describe("score happy paths", () => {
     const code = await runScore([], { gitClient: git, cwd: "/x" });
     expect(code).toBe(EXIT.OK);
     expect((out().summary as Record<string, unknown>).run_id).toBe("run-s");
-  });
-
-  it("--dead-surface degrades to a report-only error when the diff can't be resolved", async () => {
-    // project-root is the (non-git) data dir → git diff fails → error entry, not a crash.
-    const code = await scoreCommand.run([
-      "--run",
-      "run-s",
-      "--dead-surface",
-      "--project-root",
-      dataDir,
-    ]);
-    expect(code).toBe(EXIT.OK);
-    const ds = out().dead_surface as Record<string, unknown>;
-    expect(ds.status).toBe("error");
-    expect(ds.findings).toEqual([]);
   });
 });

@@ -5,7 +5,7 @@
  *
  * WS8 imports the frozen seams FROM `src/types` (StageResult constructors,
  * enums, Config), the WS4 dial (selectProducerModel via src/quota), and the WS7
- * judgment surface (rebuttal / finding); it adds NOTHING to those barrels.
+ * judgment surface (Finding); it adds NOTHING to those barrels.
  */
 
 // Injectable producer-agent boundary + outcome parse.
@@ -32,33 +32,6 @@ export {
 // Classify-before-retry (Δ D).
 export { classifyFailure, type FailureSignal, type ClassifyDecision } from "./classify.js";
 
-// Fix-forward inner loop (D27).
-export {
-  runFixForward,
-  type FixForwardInput,
-  type FixForwardResult,
-  type RebuttalRequest,
-} from "./fix-forward.js";
-
-// The bounded nuke-and-retry OUTER loop — the escalation ladder entrypoint.
-export {
-  runLadder,
-  assertRungChange,
-  ESCALATION_CAP,
-  type LadderTask,
-  type LadderDeps,
-  type VerifyPass,
-  type VerifyPassResult,
-} from "./ladder.js";
-
-// Exported fakes for downstream + own unit tests.
-export {
-  FakeProducerAgentRunner,
-  FakeRebuttalAdjudicator,
-  FakeVendorProbe,
-  makeFakeVerify,
-  verifyBlocked,
-  fakeFinding,
-  VERIFY_CLEAR,
-  VERIFY_ERROR,
-} from "./fakes.js";
+// The escalation cap. The bounded nuke-and-retry ladder is re-expressed by the
+// driver via the persisted `escalation_rung` (src/driver/transitions.ts), capped here.
+export { ESCALATION_CAP } from "./escalation.js";

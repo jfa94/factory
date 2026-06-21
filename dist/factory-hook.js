@@ -6360,23 +6360,8 @@ var ReviewSchema = external_exports.object({
 var TestWriterSchema = external_exports.object({
   maxTurns: external_exports.number().int().positive().default(30)
 }).default({});
-var ScribeSchema = external_exports.object({
-  maxTurns: external_exports.number().int().positive().default(20)
-}).default({});
 var CodexSchema = external_exports.object({
   model: external_exports.string().optional()
-}).default({});
-var ObservabilitySchema = external_exports.object({
-  /** Emit the jsonl audit log. */
-  auditLog: external_exports.boolean().default(true),
-  /** Days to retain metrics before pruning. */
-  metricsRetentionDays: external_exports.number().int().positive().default(30)
-}).default({});
-var DependenciesSchema = external_exports.object({
-  /** Poll interval while waiting on a dependency PR, seconds. */
-  pollInterval: external_exports.number().int().positive().default(30),
-  /** Timeout waiting for a PR to merge, seconds. */
-  prMergeTimeout: external_exports.number().int().positive().default(1800)
 }).default({});
 var GitSchema = external_exports.object({
   /**
@@ -6412,10 +6397,7 @@ var ConfigSchema = external_exports.object({
   spec: SpecSchema,
   review: ReviewSchema,
   testWriter: TestWriterSchema,
-  scribe: ScribeSchema,
   codex: CodexSchema,
-  observability: ObservabilitySchema,
-  dependencies: DependenciesSchema,
   git: GitSchema,
   /** Consecutive task failures before the run aborts. */
   maxConsecutiveFailures: external_exports.number().int().positive().default(3),

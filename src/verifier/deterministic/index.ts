@@ -77,9 +77,6 @@ export {
 // memoization (Δ N/O)
 export { GateMemo } from "./memo.js";
 
-// gate-of-record (Δ Z)
-export { runGatesInCleanCheckout, type CleanCheckoutArgs } from "./clean-checkout.js";
-
 // injectable tool interfaces + default impls
 export {
   defaultGateTools,

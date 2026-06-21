@@ -132,31 +132,11 @@ The judgment panel.
 | ---------- | ------ | ------- | ------------------------------- |
 | `maxTurns` | int >0 | `30`    | Max turns for a producer agent. |
 
-## `scribe`
-
-| Key        | Type   | Default | Meaning                                |
-| ---------- | ------ | ------- | -------------------------------------- |
-| `maxTurns` | int >0 | `20`    | Max turns for the docs (Scribe) agent. |
-
 ## `codex`
 
 | Key     | Type              | Default | Meaning                            |
 | ------- | ----------------- | ------- | ---------------------------------- |
 | `model` | string (optional) | —       | Codex cross-vendor executor model. |
-
-## `observability`
-
-| Key                    | Type    | Default | Meaning                                |
-| ---------------------- | ------- | ------- | -------------------------------------- |
-| `auditLog`             | boolean | `true`  | Emit the jsonl audit log.              |
-| `metricsRetentionDays` | int >0  | `30`    | Days to retain metrics before pruning. |
-
-## `dependencies`
-
-| Key              | Type   | Default | Meaning                                                   |
-| ---------------- | ------ | ------- | --------------------------------------------------------- |
-| `pollInterval`   | int >0 | `30`    | Poll interval while waiting on a dependency PR (seconds). |
-| `prMergeTimeout` | int >0 | `1800`  | Timeout waiting for a PR to merge (seconds).              |
 
 ## `git`
 
