@@ -360,4 +360,66 @@ describe("stepRun", () => {
       await cleanup();
     }
   });
+
+  // WS4 run-level circuit breaker: capability-budget drops at the cap abort the run —
+  // every remaining runnable task is dropped and the run finalizes (all-terminal → failed).
+  it("circuit breaker: capability-budget drops at the cap abort runnable work → all-terminal", async () => {
+    const { deps, runId, cleanup } = await makeCoroutineDeps({
+      tasks: [
+        { task_id: "T1", acceptance_criteria: ["only one"] },
+        { task_id: "T2", acceptance_criteria: ["only one"] },
+        { task_id: "T3", acceptance_criteria: ["only one"] },
+        { task_id: "T4", acceptance_criteria: ["only one"] }, // independent, runnable
+      ],
+    });
+    try {
+      for (const id of ["T1", "T2", "T3"]) {
+        await deps.state.updateTask(runId, id, (t) => ({
+          ...t,
+          status: "dropped",
+          failure_class: "capability-budget",
+          failure_reason: "test seed",
+        }));
+      }
+
+      const env = await stepRun(deps, runId);
+      expect(env.kind).toBe("all-terminal");
+      if (env.kind !== "all-terminal") return;
+      expect(env.cascade_dropped).toContain("T4");
+
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T4"]?.status).toBe("dropped");
+      expect(run.tasks["T4"]?.failure_class).toBe("capability-budget");
+      expect(run.tasks["T4"]?.failure_reason).toMatch(/circuit breaker tripped/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Below the cap the breaker stays silent — an independent ready task is still
+  // scheduled (the breaker must not abort runnable work prematurely).
+  it("circuit breaker: below the cap does not abort — ready task still scheduled", async () => {
+    const { deps, runId, cleanup } = await makeCoroutineDeps({
+      tasks: [
+        { task_id: "T1", acceptance_criteria: ["only one"] },
+        { task_id: "T2", acceptance_criteria: ["only one"] },
+        { task_id: "T3", acceptance_criteria: ["only one"] }, // independent, runnable
+      ],
+    });
+    try {
+      for (const id of ["T1", "T2"]) {
+        await deps.state.updateTask(runId, id, (t) => ({
+          ...t,
+          status: "dropped",
+          failure_class: "capability-budget",
+          failure_reason: "test seed",
+        }));
+      }
+
+      const env = await stepRun(deps, runId);
+      expect(env).toMatchObject({ kind: "tasks-ready", ready: ["T3"] });
+    } finally {
+      await cleanup();
+    }
+  });
 });

@@ -6444,6 +6444,16 @@ function nowIso() {
 function nowEpoch() {
   return Math.floor(Date.now() / 1e3);
 }
+function parseIso8601ToEpoch(iso) {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) {
+    throw new RangeError(`parseIso8601ToEpoch: unparseable ISO-8601 timestamp: ${iso}`);
+  }
+  return Math.floor(ms / 1e3);
+}
+function epochToIso(epochSeconds) {
+  return new Date(epochSeconds * 1e3).toISOString();
+}
 
 // src/core/state/paths.ts
 import { join as join3 } from "node:path";
@@ -9302,6 +9312,51 @@ function clearCheckpoint() {
   return { status: "running", quota: void 0 };
 }
 
+// src/quota/circuit-breaker.ts
+function isNonNegativeFinite(value) {
+  return Number.isFinite(value) && value >= 0;
+}
+function evaluate2(input, config, nowEpoch2) {
+  const { consecutiveFailures, pausedMinutes, startedAtIso } = input;
+  if (!isNonNegativeFinite(consecutiveFailures)) {
+    return {
+      tripped: true,
+      reason: `circuit breaker fail-closed: consecutiveFailures is not a non-negative finite number (got ${String(consecutiveFailures)})`
+    };
+  }
+  if (!isNonNegativeFinite(pausedMinutes)) {
+    return {
+      tripped: true,
+      reason: `circuit breaker fail-closed: pausedMinutes is not a non-negative finite number (got ${String(pausedMinutes)})`
+    };
+  }
+  const { maxConsecutiveFailures, maxRuntimeMinutes } = config;
+  if (consecutiveFailures >= maxConsecutiveFailures) {
+    return {
+      tripped: true,
+      reason: `max consecutive failures (${consecutiveFailures} >= ${maxConsecutiveFailures})`
+    };
+  }
+  let startEpoch;
+  try {
+    startEpoch = parseIso8601ToEpoch(startedAtIso);
+  } catch {
+    return {
+      tripped: true,
+      reason: `circuit breaker fail-closed: unparseable startedAtIso '${startedAtIso}'`
+    };
+  }
+  const wallMinutes = Math.floor((nowEpoch2 - startEpoch) / 60);
+  const runtimeMinutes = Math.max(0, wallMinutes - pausedMinutes);
+  if (runtimeMinutes >= maxRuntimeMinutes) {
+    return {
+      tripped: true,
+      reason: `max runtime reached (${runtimeMinutes}min >= ${maxRuntimeMinutes}min)`
+    };
+  }
+  return { tripped: false };
+}
+
 // src/quota/router.ts
 function selectProducerModel(riskTier, config) {
   const models = config.quota.producerModels;
@@ -11965,6 +12020,22 @@ async function stepTask(deps, runId, taskId, results) {
   }
 }
 
+// src/driver/circuit-breaker-gate.ts
+async function applyCircuitBreaker(deps, runId) {
+  const run9 = await deps.state.read(runId);
+  const now = deps.now();
+  const capabilityFailures = Object.values(run9.tasks).filter(
+    (t) => t.status === "dropped" && t.failure_class === "capability-budget"
+  ).length;
+  const startedAtIso = run9.mode === "workflow" ? run9.started_at : epochToIso(now);
+  const verdict = evaluate2(
+    { startedAtIso, consecutiveFailures: capabilityFailures, pausedMinutes: 0 },
+    deps.config,
+    now
+  );
+  return verdict.tripped ? verdict : null;
+}
+
 // src/driver/next.ts
 function depsSatisfied(run9, task) {
   return task.depends_on.every((d) => run9.tasks[d]?.status === "done");
@@ -12026,6 +12097,21 @@ async function stepRun(deps, runId) {
   }
   const tasks = Object.values(run9.tasks);
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
+    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
+  }
+  const breaker = await applyCircuitBreaker(deps, runId);
+  if (breaker !== null) {
+    for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
+      await dropTask(
+        deps,
+        runId,
+        t.task_id,
+        "capability-budget",
+        `circuit breaker tripped: ${breaker.reason}`
+      );
+      cascadeDropped.push(t.task_id);
+    }
+    run9 = await deps.state.read(runId);
     return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
   }
   const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run9, t));

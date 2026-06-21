@@ -38,6 +38,7 @@ import {
 } from "./deps.js";
 import { dropTask } from "./transitions.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
+import { applyCircuitBreaker } from "./circuit-breaker-gate.js";
 import type { CoroutineDeps } from "./coroutine.js";
 
 /**
@@ -168,6 +169,32 @@ export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextE
   const tasks = Object.values(run.tasks);
 
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
+    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
+  }
+
+  // 6b. Run-level circuit breaker (WS4) — a HARD run-abort guard, distinct from both
+  //     the recoverable quota pause and the Decision-34 wedge-drop below. Trips on
+  //     genuine repeated capability failures (BOTH modes) or — workflow only — the
+  //     runtime ceiling (see circuit-breaker-gate.ts for why session disarms runtime).
+  //     Placed AFTER the terminal checks (never abort an already-finished run; never
+  //     write on a terminal run) and AFTER the quota gate (a paused run early-returns
+  //     above, so quota waiting never trips the breaker). On a trip, drop every
+  //     remaining non-terminal task LOUD (capability-budget, breaker reason carried)
+  //     and fall through to all-terminal → finalize → `failed`, reusing the wedge-drop
+  //     path — so no new envelope kind or driver change is needed.
+  const breaker = await applyCircuitBreaker(deps, runId);
+  if (breaker !== null) {
+    for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
+      await dropTask(
+        deps,
+        runId,
+        t.task_id,
+        "capability-budget",
+        `circuit breaker tripped: ${breaker.reason}`,
+      );
+      cascadeDropped.push(t.task_id);
+    }
+    run = await deps.state.read(runId);
     return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
   }
 

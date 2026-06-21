@@ -50,10 +50,27 @@ fail/drop" is true by construction, not by convention.
 
 The reverse separation also holds: the **circuit breaker**
 (`src/quota/circuit-breaker.ts`) is a distinct hard-abort predicate, _not_ part of
-the pacer. It trips on `consecutiveFailures >= maxConsecutiveFailures` (default 3)
-or on effective runtime `>= maxRuntimeMinutes` (default 480). Critically, **paused
-minutes are deducted from wall time** — waiting out a quota curve never counts
-against the runtime budget, so a quota pause can never trip the breaker.
+the pacer. The pure predicate trips on `consecutiveFailures >= maxConsecutiveFailures`
+(default 3) or on effective runtime `(wall − paused) >= maxRuntimeMinutes` (default
+480). The driver wires it into the run coroutine through
+`src/driver/circuit-breaker-gate.ts` (evaluated in `stepRun`, mirroring the
+`applyQuotaGate` seam); on a trip every remaining non-terminal task is dropped
+`capability-budget` and the run finalizes `failed`. Following derive-don't-store, **no
+breaker counter is persisted** — the gate derives both signals from run state:
+
+- **Failure-count arm (both modes)** — the count of `capability-budget` drops, i.e.
+  tasks whose producer ladder genuinely exhausted its budget. `blocked-environmental`
+  (dependency cascades) and `spec-defect` (wedge) drops are deliberately **excluded**:
+  they are consequences of a failure, not independent failures, so one real failure
+  that cascades to two dependents can never masquerade as three "consecutive" failures
+  and abort still-runnable work.
+- **Runtime arm (workflow mode only)** — wall-time since `run.started_at`. It is exact
+  only in workflow mode, which never pauses on quota (Decision 24), so wall-time _is_
+  the effective runtime and `pausedMinutes` is structurally 0. Session mode pauses and
+  suspends, `started_at` is never reset, and paused minutes are not tracked — so the
+  gate **disarms** the runtime ceiling there (a stale wall clock would otherwise
+  falsely trip on resume) and lets the usage pacer own session time/quota. Either way,
+  a quota pause can **never** trip the breaker.
 
 ## Decision 3 — Fail closed; absence is never permission
 
@@ -64,6 +81,22 @@ that has already reset — maps to a first-class `unavailable` reading, which th
 pacer turns into `unavailable-halt`. An observability gap **halts cleanly**; it is
 never treated as "under curve, proceed". The unobservable case is a value the
 pacer routes on, not an exception it swallows.
+
+## Mode scopes the safety net
+
+Usage-based pacing requires _observing_ the usage cache, and only the in-session
+driver can read it. Workflow mode (Decision 24) runs as a background Workflow script
+with no access to the cache, so `applyQuotaGate` (`src/driver/quota-gate.ts`) returns
+`proceed` unconditionally when `mode` is `workflow` — the two-window pacer is
+structurally **session-only**. That is not a gap: workflow's runaway protection is the
+state-based **circuit breaker** above, which derives its signals from run state and
+needs no usage signal. The two safety nets therefore divide cleanly by mode:
+
+| Mechanism                | Session | Workflow | Needs usage signal |
+| ------------------------ | ------- | -------- | ------------------ |
+| Two-window pacer         | ✅      | —        | yes                |
+| Circuit-breaker failures | ✅      | ✅       | no                 |
+| Circuit-breaker runtime  | —       | ✅       | no                 |
 
 ## Resumption
 
@@ -88,11 +121,12 @@ future scheduler would fire the same `planResume`.
 ## The single producer dial
 
 The quota router (`src/quota/router.ts`) carries the _only_ risk-tier dial in the
-system: it selects a producer model from `quota.producerModels` by the task's risk
-tier (low / medium / high). It exposes no review-depth axis — the verifier floor is
-risk-invariant (see [verifier.md](./verifier.md)). On a non-proceed pacer decision
-the router returns the graceful-stop result and **no** model: a throttled run does
-not produce.
+system: `selectProducerModel` picks a producer model from `quota.producerModels` by
+the task's risk tier (low / medium / high). It exposes no review-depth axis — the
+verifier floor is risk-invariant (see [verifier.md](./verifier.md)). It is a **pure
+dial**: throttling lives upstream in `applyQuotaGate`, which stops the run on a
+non-proceed decision _before_ the coroutine ever selects a model — a throttled run
+never reaches the producer.
 
 ## See also
 

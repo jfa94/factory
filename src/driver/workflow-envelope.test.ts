@@ -1,4 +1,7 @@
 // src/driver/workflow-envelope.test.ts
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { DRIVE_KINDS, NEXT_KINDS, parseEnvelope, type EnvelopeKind } from "./workflow-envelope.js";
 
@@ -154,5 +157,128 @@ describe("EnvelopeKind type", () => {
   it("accepts the union of both kind sets at compile time", () => {
     const k: EnvelopeKind = "spawn";
     expect(DRIVE_KINDS.has(k)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drift guard — the inline copy in scripts/factory-run-driver.js MUST stay
+// behaviorally identical to the TS source of truth above. The Workflow runtime
+// cannot import this module (it injects readonly globals and nothing else), so the
+// driver script INLINES parseEnvelope + the kind sets as a deliberate byte-for-byte
+// mirror with NO compile-time link. This test reconstructs the SHIPPED JS bytes in
+// isolation (the script has top-level side effects, so it can't just be imported) and
+// runs the same input battery through both implementations — any divergence (a kind
+// added to one set only, an edited branch, a changed message) fails HERE, where the
+// vitest coverage lives, instead of silently re-opening the boundary corruption.
+// ---------------------------------------------------------------------------
+describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => {
+  const driverSrc = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "../../scripts/factory-run-driver.js"),
+    "utf8",
+  );
+
+  const nextSetSrc = /const NEXT_KINDS = (new Set\(\[[^\]]*\]\))/.exec(driverSrc)?.[1];
+  const driveSetSrc = /const DRIVE_KINDS = (new Set\(\[[^\]]*\]\))/.exec(driverSrc)?.[1];
+  const fnStart = driverSrc.indexOf("function parseEnvelope(");
+  // The inline function ends at the next top-level declaration; slicing to that anchor
+  // is robust to the braces/template-literals inside the function body.
+  const fnEnd = driverSrc.indexOf("\nconst STATUS_OUT", fnStart);
+
+  it("the inline definitions are present (extraction sanity)", () => {
+    expect(nextSetSrc, "inline NEXT_KINDS not found").not.toBeUndefined();
+    expect(driveSetSrc, "inline DRIVE_KINDS not found").not.toBeUndefined();
+    expect(fnStart, "inline parseEnvelope not found").toBeGreaterThanOrEqual(0);
+    expect(fnEnd, "STATUS_OUT anchor not found").toBeGreaterThan(fnStart);
+  });
+
+  if (nextSetSrc === undefined || driveSetSrc === undefined || fnStart < 0 || fnEnd <= fnStart) {
+    // Extraction failed — the sanity test above reports it; nothing more to compare.
+    return;
+  }
+
+  // Reconstruct the inline copies (the body refs only JSON/Error/Array/String globals).
+  const jsNext = new Function(`return ${nextSetSrc};`)() as Set<string>;
+  const jsDrive = new Function(`return ${driveSetSrc};`)() as Set<string>;
+  const jsParse = new Function(`return (${driverSrc.slice(fnStart, fnEnd).trim()});`)() as (
+    raw: unknown,
+    knownKinds: ReadonlySet<string>,
+    context: string,
+  ) => unknown;
+
+  it("inline NEXT_KINDS matches the TS source of truth", () => {
+    expect([...jsNext].sort()).toEqual([...NEXT_KINDS].sort());
+  });
+
+  it("inline DRIVE_KINDS matches the TS source of truth", () => {
+    expect([...jsDrive].sort()).toEqual([...DRIVE_KINDS].sort());
+  });
+
+  type Probe = { name: string; raw: unknown; set: "next" | "drive" };
+  const PROBES: Probe[] = [
+    {
+      name: "valid tasks-ready",
+      raw: JSON.stringify({ kind: "tasks-ready", ready: ["T1"], cascade_dropped: [] }),
+      set: "next",
+    },
+    { name: "valid run-terminal", raw: JSON.stringify({ kind: "run-terminal" }), set: "next" },
+    { name: "valid spawn", raw: JSON.stringify({ kind: "spawn", task_id: "T1" }), set: "drive" },
+    { name: "valid terminal", raw: JSON.stringify({ kind: "terminal" }), set: "drive" },
+    {
+      name: "shared quota-blocked (next)",
+      raw: JSON.stringify({ kind: "quota-blocked" }),
+      set: "next",
+    },
+    { name: "non-string raw", raw: 42, set: "next" },
+    { name: "invalid JSON", raw: "{ not json", set: "next" },
+    { name: "empty string", raw: "", set: "next" },
+    { name: "array top-level", raw: "[1,2,3]", set: "next" },
+    { name: "json null", raw: "null", set: "next" },
+    { name: "json primitive string", raw: JSON.stringify("tasks-ready"), set: "next" },
+    { name: "missing kind", raw: JSON.stringify({ run_id: "r" }), set: "next" },
+    { name: "non-string kind", raw: JSON.stringify({ kind: 7 }), set: "next" },
+    {
+      name: "unknown kind (re-key)",
+      raw: JSON.stringify({ kind: "factory-envelope", ready: '["T1"]' }),
+      set: "next",
+    },
+    { name: "drive kind to next set", raw: JSON.stringify({ kind: "spawn" }), set: "next" },
+    { name: "next kind to drive set", raw: JSON.stringify({ kind: "tasks-ready" }), set: "drive" },
+    {
+      name: "long payload (preview truncation branch)",
+      raw: JSON.stringify({ kind: "z".repeat(300) }),
+      set: "next",
+    },
+  ];
+
+  type Outcome = { ok: true; value: unknown } | { ok: false; message: string };
+  const call = (
+    fn: (raw: unknown, k: ReadonlySet<string>, c: string) => unknown,
+    raw: unknown,
+    k: ReadonlySet<string>,
+    c: string,
+  ): Outcome => {
+    try {
+      return { ok: true, value: fn(raw, k, c) };
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    }
+  };
+
+  // For EVERY branch, the inline JS copy must produce the IDENTICAL outcome (return
+  // value, or thrown message verbatim) as the TS parseEnvelope.
+  it.each(PROBES)("identical outcome for: $name", ({ raw, set }) => {
+    const tsSet = (set === "next" ? NEXT_KINDS : DRIVE_KINDS) as ReadonlySet<string>;
+    const jsSet = set === "next" ? jsNext : jsDrive;
+    const ts = call(
+      (r, k, c) =>
+        parseEnvelope(r as string, k as ReadonlySet<EnvelopeKind>, c as "next" | "drive"),
+      raw,
+      tsSet,
+      set,
+    );
+    const js = call(jsParse, raw, jsSet, set);
+    expect(js.ok).toBe(ts.ok);
+    if (ts.ok && js.ok) expect(js.value).toEqual(ts.value);
+    else if (!ts.ok && !js.ok) expect(js.message).toBe(ts.message);
   });
 });
