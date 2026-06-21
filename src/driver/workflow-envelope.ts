@@ -108,6 +108,15 @@ export function parseEnvelope<K extends EnvelopeKind>(
         `return {raw: "<stdout>"}`,
     );
   }
+  // Tolerate a markdown-fenced payload: a flaky exec-agent may wrap the verbatim stdout
+  // in a ```json … ``` block despite the instruction. Strip a FULLY-WRAPPING fence
+  // (anchored to the whole trimmed string) before parsing. SAFE BY CONSTRUCTION: a real
+  // envelope starts with `{` and never matches the leading-``` anchor, and a ``` inside a
+  // string VALUE is untouched (the match spans the whole string, not a substring). On no
+  // match `text` IS `raw`, so the unfenced path stays byte-identical to before; `preview`
+  // keeps the ORIGINAL bytes so a fenced payload stays visible in any error below.
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(raw.trim());
+  const text = fenced?.[1] ?? raw;
   // The verbatim payload, truncated for legibility. Surfaced in EVERY failure branch
   // below so a fabricated / empty / stderr-leaking / re-keyed payload is VISIBLE. The
   // misattribution that cost debugging time in run-20260620-085154 was a missing-`kind`
@@ -117,7 +126,7 @@ export function parseEnvelope<K extends EnvelopeKind>(
   const preview = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(text);
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
     throw new Error(

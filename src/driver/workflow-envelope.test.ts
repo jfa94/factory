@@ -153,6 +153,44 @@ describe("parseEnvelope — garbage / non-JSON", () => {
   });
 });
 
+describe("parseEnvelope — markdown-fence tolerance (blocker #9 backstop)", () => {
+  // A flaky exec-agent may wrap the verbatim stdout in a ```json … ``` block despite
+  // the "no fences" instruction. The deterministic guard strips a FULLY-WRAPPING fence
+  // so the most common LLM-output flake doesn't fail the run — defense-in-depth behind
+  // the sonnet model upgrade.
+  const json = JSON.stringify({ kind: "tasks-ready", ready: ["T1", "T2"], cascade_dropped: [] });
+
+  it("strips a ```json fence and parses the inner envelope", () => {
+    const env = parseEnvelope("```json\n" + json + "\n```", NEXT_KINDS, "next");
+    expect(env.kind).toBe("tasks-ready");
+    if (env.kind !== "tasks-ready") throw new Error("expected tasks-ready");
+    expect(env.ready).toEqual(["T1", "T2"]); // arrays survive, not stringified
+  });
+
+  it("strips a bare ``` fence (no language tag)", () => {
+    const env = parseEnvelope("```\n" + json + "\n```", NEXT_KINDS, "next");
+    expect(env.kind).toBe("tasks-ready");
+  });
+
+  it("tolerates surrounding whitespace/newlines around a fenced payload", () => {
+    const env = parseEnvelope("  \n```json\n" + json + "\n```\n  ", NEXT_KINDS, "next");
+    expect(env.kind).toBe("tasks-ready");
+  });
+
+  it("does NOT mangle an unfenced envelope whose string VALUE contains a ``` run", () => {
+    // A review finding can quote a code fence; the strip is anchored to the WHOLE
+    // string, so a ``` inside a value (the payload starts with `{`) is never touched.
+    const raw = JSON.stringify({ kind: "spawn", task_id: "T1", note: "fence ``` here" });
+    const env = parseEnvelope(raw, DRIVE_KINDS, "drive");
+    expect(env.kind).toBe("spawn");
+    expect((env as { note?: string }).note).toBe("fence ``` here");
+  });
+
+  it("a fenced block wrapping NON-JSON still throws loud (no silent pass)", () => {
+    expect(() => parseEnvelope("```json\nnot json at all\n```", NEXT_KINDS, "next")).toThrow();
+  });
+});
+
 describe("EnvelopeKind type", () => {
   it("accepts the union of both kind sets at compile time", () => {
     const k: EnvelopeKind = "spawn";
@@ -247,6 +285,22 @@ describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => 
       name: "long payload (preview truncation branch)",
       raw: JSON.stringify({ kind: "z".repeat(300) }),
       set: "next",
+    },
+    {
+      name: "fenced ```json wrapper (strip branch)",
+      raw: "```json\n" + JSON.stringify({ kind: "tasks-ready", ready: ["T1"] }) + "\n```",
+      set: "next",
+    },
+    {
+      name: "bare ``` fenced wrapper (strip branch)",
+      raw: "```\n" + JSON.stringify({ kind: "spawn", task_id: "T1" }) + "\n```",
+      set: "drive",
+    },
+    { name: "fenced non-json (strip then fail)", raw: "```json\nnot json\n```", set: "next" },
+    {
+      name: "internal ``` in value (anchor must NOT fire)",
+      raw: JSON.stringify({ kind: "terminal", note: "fence ``` here" }),
+      set: "drive",
     },
   ];
 

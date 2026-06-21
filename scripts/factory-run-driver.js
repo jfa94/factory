@@ -70,6 +70,15 @@ function parseEnvelope(raw, knownKinds, context) {
         `return {raw: "<stdout>"}`,
     );
   }
+  // Tolerate a markdown-fenced payload: a flaky exec-agent may wrap the verbatim stdout
+  // in a ```json … ``` block despite the instruction. Strip a FULLY-WRAPPING fence
+  // (anchored to the whole trimmed string) before parsing. SAFE BY CONSTRUCTION: a real
+  // envelope starts with `{` and never matches the leading-``` anchor, and a ``` inside a
+  // string VALUE is untouched (the match spans the whole string, not a substring). On no
+  // match `text` IS `raw`, so the unfenced path stays byte-identical to before; `preview`
+  // keeps the ORIGINAL bytes so a fenced payload stays visible in any error below.
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(raw.trim());
+  const text = fenced?.[1] ?? raw;
   // The verbatim payload, truncated for legibility. Surfaced in EVERY failure branch
   // below so a fabricated / empty / stderr-leaking / re-keyed payload is VISIBLE. The
   // misattribution that cost debugging time in run-20260620-085154 was a missing-`kind`
@@ -79,7 +88,7 @@ function parseEnvelope(raw, knownKinds, context) {
   const preview = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(text);
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
     throw new Error(
@@ -184,10 +193,11 @@ const EXEC_AGENT_MODEL = "sonnet";
 const copyVerbatimInstruction =
   `It prints ONE JSON document to stdout. Return that stdout VERBATIM as a single string: ` +
   `{"raw": "<the exact stdout, byte-for-byte>"}. Do NOT parse, reformat, re-key, or ` +
-  `pretty-print it — copy the characters exactly. NEVER invent, summarize, or describe a ` +
-  `JSON object yourself: {raw} must be the command's literal stdout and nothing else. If the ` +
-  `command exits non-zero or prints nothing, FAIL LOUDLY — raise a tool error quoting the ` +
-  `stderr; do NOT synthesize a substitute envelope.`;
+  `pretty-print it — copy the characters exactly. Do NOT wrap {raw} in a markdown code ` +
+  `fence (no \`\`\`json, no \`\`\`) — the FIRST character of {raw} must be "{". NEVER ` +
+  `invent, summarize, or describe a JSON object yourself: {raw} must be the command's ` +
+  `literal stdout and nothing else. If the command exits non-zero or prints nothing, FAIL ` +
+  `LOUDLY — raise a tool error quoting the stderr; do NOT synthesize a substitute envelope.`;
 
 // Run one factory CLI command through a cheap exec agent; return its parsed,
 // kind-guarded engine envelope.
