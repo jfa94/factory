@@ -89,14 +89,14 @@ var require_polyfills = __commonJS({
       fs.fstatSync = statFixSync(fs.fstatSync);
       fs.lstatSync = statFixSync(fs.lstatSync);
       if (fs.chmod && !fs.lchmod) {
-        fs.lchmod = function(path3, mode, cb) {
+        fs.lchmod = function(path4, mode, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchmodSync = function() {
         };
       }
       if (fs.chown && !fs.lchown) {
-        fs.lchown = function(path3, uid, gid, cb) {
+        fs.lchown = function(path4, uid, gid, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchownSync = function() {
@@ -163,9 +163,9 @@ var require_polyfills = __commonJS({
         };
       })(fs.readSync);
       function patchLchmod(fs2) {
-        fs2.lchmod = function(path3, mode, callback) {
+        fs2.lchmod = function(path4, mode, callback) {
           fs2.open(
-            path3,
+            path4,
             constants.O_WRONLY | constants.O_SYMLINK,
             mode,
             function(err, fd) {
@@ -181,8 +181,8 @@ var require_polyfills = __commonJS({
             }
           );
         };
-        fs2.lchmodSync = function(path3, mode) {
-          var fd = fs2.openSync(path3, constants.O_WRONLY | constants.O_SYMLINK, mode);
+        fs2.lchmodSync = function(path4, mode) {
+          var fd = fs2.openSync(path4, constants.O_WRONLY | constants.O_SYMLINK, mode);
           var threw = true;
           var ret;
           try {
@@ -203,8 +203,8 @@ var require_polyfills = __commonJS({
       }
       function patchLutimes(fs2) {
         if (constants.hasOwnProperty("O_SYMLINK") && fs2.futimes) {
-          fs2.lutimes = function(path3, at, mt, cb) {
-            fs2.open(path3, constants.O_SYMLINK, function(er, fd) {
+          fs2.lutimes = function(path4, at, mt, cb) {
+            fs2.open(path4, constants.O_SYMLINK, function(er, fd) {
               if (er) {
                 if (cb) cb(er);
                 return;
@@ -216,8 +216,8 @@ var require_polyfills = __commonJS({
               });
             });
           };
-          fs2.lutimesSync = function(path3, at, mt) {
-            var fd = fs2.openSync(path3, constants.O_SYMLINK);
+          fs2.lutimesSync = function(path4, at, mt) {
+            var fd = fs2.openSync(path4, constants.O_SYMLINK);
             var ret;
             var threw = true;
             try {
@@ -335,11 +335,11 @@ var require_legacy_streams = __commonJS({
         ReadStream,
         WriteStream
       };
-      function ReadStream(path3, options) {
-        if (!(this instanceof ReadStream)) return new ReadStream(path3, options);
+      function ReadStream(path4, options) {
+        if (!(this instanceof ReadStream)) return new ReadStream(path4, options);
         Stream.call(this);
         var self = this;
-        this.path = path3;
+        this.path = path4;
         this.fd = null;
         this.readable = true;
         this.paused = false;
@@ -384,10 +384,10 @@ var require_legacy_streams = __commonJS({
           self._read();
         });
       }
-      function WriteStream(path3, options) {
-        if (!(this instanceof WriteStream)) return new WriteStream(path3, options);
+      function WriteStream(path4, options) {
+        if (!(this instanceof WriteStream)) return new WriteStream(path4, options);
         Stream.call(this);
-        this.path = path3;
+        this.path = path4;
         this.fd = null;
         this.writable = true;
         this.flags = "w";
@@ -529,15 +529,15 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile12;
-      function readFile12(path3, options, cb) {
+      fs2.readFile = readFile13;
+      function readFile13(path4, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$readFile(path3, options, cb);
-        function go$readFile(path4, options2, cb2, startTime) {
-          return fs$readFile(path4, options2, function(err) {
+        return go$readFile(path4, options, cb);
+        function go$readFile(path5, options2, cb2, startTime) {
+          return fs$readFile(path5, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$readFile, [path4, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$readFile, [path5, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -547,14 +547,14 @@ var require_graceful_fs = __commonJS({
       }
       var fs$writeFile = fs2.writeFile;
       fs2.writeFile = writeFile2;
-      function writeFile2(path3, data, options, cb) {
+      function writeFile2(path4, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$writeFile(path3, data, options, cb);
-        function go$writeFile(path4, data2, options2, cb2, startTime) {
-          return fs$writeFile(path4, data2, options2, function(err) {
+        return go$writeFile(path4, data, options, cb);
+        function go$writeFile(path5, data2, options2, cb2, startTime) {
+          return fs$writeFile(path5, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$writeFile, [path4, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$writeFile, [path5, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -565,14 +565,14 @@ var require_graceful_fs = __commonJS({
       var fs$appendFile = fs2.appendFile;
       if (fs$appendFile)
         fs2.appendFile = appendFile2;
-      function appendFile2(path3, data, options, cb) {
+      function appendFile2(path4, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$appendFile(path3, data, options, cb);
-        function go$appendFile(path4, data2, options2, cb2, startTime) {
-          return fs$appendFile(path4, data2, options2, function(err) {
+        return go$appendFile(path4, data, options, cb);
+        function go$appendFile(path5, data2, options2, cb2, startTime) {
+          return fs$appendFile(path5, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$appendFile, [path4, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$appendFile, [path5, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -603,31 +603,31 @@ var require_graceful_fs = __commonJS({
       var fs$readdir = fs2.readdir;
       fs2.readdir = readdir3;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir3(path3, options, cb) {
+      function readdir3(path4, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path4, options2, cb2, startTime) {
-          return fs$readdir(path4, fs$readdirCallback(
-            path4,
+        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path5, options2, cb2, startTime) {
+          return fs$readdir(path5, fs$readdirCallback(
+            path5,
             options2,
             cb2,
             startTime
           ));
-        } : function go$readdir2(path4, options2, cb2, startTime) {
-          return fs$readdir(path4, options2, fs$readdirCallback(
-            path4,
+        } : function go$readdir2(path5, options2, cb2, startTime) {
+          return fs$readdir(path5, options2, fs$readdirCallback(
+            path5,
             options2,
             cb2,
             startTime
           ));
         };
-        return go$readdir(path3, options, cb);
-        function fs$readdirCallback(path4, options2, cb2, startTime) {
+        return go$readdir(path4, options, cb);
+        function fs$readdirCallback(path5, options2, cb2, startTime) {
           return function(err, files) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
               enqueue([
                 go$readdir,
-                [path4, options2, cb2],
+                [path5, options2, cb2],
                 err,
                 startTime || Date.now(),
                 Date.now()
@@ -698,7 +698,7 @@ var require_graceful_fs = __commonJS({
         enumerable: true,
         configurable: true
       });
-      function ReadStream(path3, options) {
+      function ReadStream(path4, options) {
         if (this instanceof ReadStream)
           return fs$ReadStream.apply(this, arguments), this;
         else
@@ -718,7 +718,7 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function WriteStream(path3, options) {
+      function WriteStream(path4, options) {
         if (this instanceof WriteStream)
           return fs$WriteStream.apply(this, arguments), this;
         else
@@ -736,22 +736,22 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function createReadStream(path3, options) {
-        return new fs2.ReadStream(path3, options);
+      function createReadStream(path4, options) {
+        return new fs2.ReadStream(path4, options);
       }
-      function createWriteStream(path3, options) {
-        return new fs2.WriteStream(path3, options);
+      function createWriteStream(path4, options) {
+        return new fs2.WriteStream(path4, options);
       }
       var fs$open = fs2.open;
       fs2.open = open2;
-      function open2(path3, flags, mode, cb) {
+      function open2(path4, flags, mode, cb) {
         if (typeof mode === "function")
           cb = mode, mode = null;
-        return go$open(path3, flags, mode, cb);
-        function go$open(path4, flags2, mode2, cb2, startTime) {
-          return fs$open(path4, flags2, mode2, function(err, fd) {
+        return go$open(path4, flags, mode, cb);
+        function go$open(path5, flags2, mode2, cb2, startTime) {
+          return fs$open(path5, flags2, mode2, function(err, fd) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$open, [path4, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$open, [path5, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -1280,7 +1280,7 @@ var require_mtime_precision = __commonJS({
 var require_lockfile = __commonJS({
   "node_modules/.pnpm/proper-lockfile@4.1.2/node_modules/proper-lockfile/lib/lockfile.js"(exports, module) {
     "use strict";
-    var path3 = __require("path");
+    var path4 = __require("path");
     var fs = require_graceful_fs();
     var retry = require_retry2();
     var onExit = require_signal_exit();
@@ -1291,7 +1291,7 @@ var require_lockfile = __commonJS({
     }
     function resolveCanonicalPath(file, options, callback) {
       if (!options.realpath) {
-        return callback(null, path3.resolve(file));
+        return callback(null, path4.resolve(file));
       }
       options.fs.realpath(file, callback);
     }
@@ -1724,10 +1724,10 @@ async function bestEffortUnlink(p) {
 var JsonParseError = class extends Error {
   path;
   cause;
-  constructor(message, path3, cause) {
+  constructor(message, path4, cause) {
     super(message);
     this.name = "JsonParseError";
-    this.path = path3;
+    this.path = path4;
     this.cause = cause;
   }
 };
@@ -2225,8 +2225,8 @@ function getErrorMap() {
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path3, errorMaps, issueData } = params;
-  const fullPath = [...path3, ...issueData.path || []];
+  const { data, path: path4, errorMaps, issueData } = params;
+  const fullPath = [...path4, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -2342,11 +2342,11 @@ var errorUtil;
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path3, key) {
+  constructor(parent, value, path4, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path3;
+    this._path = path4;
     this._key = key;
   }
   get path() {
@@ -6065,9 +6065,9 @@ function parseSetToken(token) {
   if (eq <= 0) {
     throw new Error(`configure: --set expects 'key.path=value', got '${token}'`);
   }
-  const path3 = splitPath(token.slice(0, eq));
+  const path4 = splitPath(token.slice(0, eq));
   const rawValue = token.slice(eq + 1);
-  return { path: path3, value: coerceValue(rawValue) };
+  return { path: path4, value: coerceValue(rawValue) };
 }
 function coerceValue(raw) {
   try {
@@ -6077,32 +6077,32 @@ function coerceValue(raw) {
   }
 }
 function splitPath(dotted) {
-  const path3 = dotted.split(".");
-  if (path3.length === 0 || path3.some((s) => s.length === 0)) {
+  const path4 = dotted.split(".");
+  if (path4.length === 0 || path4.some((s) => s.length === 0)) {
     throw new Error(`configure: invalid key path '${dotted}'`);
   }
-  return path3;
+  return path4;
 }
-function setAtPath(obj, path3, value) {
+function setAtPath(obj, path4, value) {
   const next = structuredClone(obj);
   let cursor = next;
-  for (let i = 0; i < path3.length - 1; i++) {
-    const key = path3[i];
+  for (let i = 0; i < path4.length - 1; i++) {
+    const key = path4[i];
     const existing = cursor[key];
     if (existing === void 0 || existing === null || typeof existing !== "object" || Array.isArray(existing)) {
       cursor[key] = {};
     }
     cursor = cursor[key];
   }
-  cursor[path3[path3.length - 1]] = value;
+  cursor[path4[path4.length - 1]] = value;
   return next;
 }
-function unsetAtPath(obj, path3) {
+function unsetAtPath(obj, path4) {
   const next = structuredClone(obj);
   const parents = [];
   let cursor = next;
-  for (let i = 0; i < path3.length - 1; i++) {
-    const key = path3[i];
+  for (let i = 0; i < path4.length - 1; i++) {
+    const key = path4[i];
     const child = cursor[key];
     if (child === void 0 || child === null || typeof child !== "object" || Array.isArray(child)) {
       return next;
@@ -6110,7 +6110,7 @@ function unsetAtPath(obj, path3) {
     parents.push({ container: cursor, key });
     cursor = child;
   }
-  delete cursor[path3[path3.length - 1]];
+  delete cursor[path4[path4.length - 1]];
   for (let i = parents.length - 1; i >= 0; i--) {
     const { container, key } = parents[i];
     const child = container[key];
@@ -6122,14 +6122,14 @@ function unsetAtPath(obj, path3) {
   }
   return next;
 }
-function getAtPath(config, path3) {
+function getAtPath(config, path4) {
   let cursor = config;
-  for (const key of path3) {
+  for (const key of path4) {
     if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) {
-      throw new Error(`configure: '${path3.join(".")}' has no value (not an object at '${key}')`);
+      throw new Error(`configure: '${path4.join(".")}' has no value (not an object at '${key}')`);
     }
     if (!(key in cursor)) {
-      throw new Error(`configure: unknown config key '${path3.join(".")}'`);
+      throw new Error(`configure: unknown config key '${path4.join(".")}'`);
     }
     cursor = cursor[key];
   }
@@ -6669,9 +6669,9 @@ var StateManager = class {
    * schema/JSON violation (never a silent partial).
    */
   async read(runId) {
-    const path3 = this.statePath(runId);
-    const raw = await readFile(path3, "utf8");
-    return parseRunState(parseJson(raw, path3));
+    const path4 = this.statePath(runId);
+    const raw = await readFile(path4, "utf8");
+    return parseRunState(parseJson(raw, path4));
   }
   /**
    * Read the run currently pointed at by `runs/current`, or null if there is no
@@ -7028,8 +7028,8 @@ async function run(argv) {
   }
   let raw = readRawConfig();
   for (const token of sets) {
-    const { path: path3, value } = parseSetToken(token);
-    raw = setAtPath(raw, path3, value);
+    const { path: path4, value } = parseSetToken(token);
+    raw = setAtPath(raw, path4, value);
   }
   for (const token of unsets) {
     raw = unsetAtPath(raw, splitPath(token));
@@ -7146,9 +7146,9 @@ ${result.stderr.trim()}`
 // src/shared/jsonl.ts
 import { appendFile, mkdir as mkdir5, readFile as readFile2 } from "node:fs/promises";
 import { dirname as dirname4 } from "node:path";
-async function appendJsonl(path3, record) {
-  await mkdir5(dirname4(path3), { recursive: true });
-  await appendFile(path3, JSON.stringify(record) + "\n", "utf8");
+async function appendJsonl(path4, record) {
+  await mkdir5(dirname4(path4), { recursive: true });
+  await appendFile(path4, JSON.stringify(record) + "\n", "utf8");
 }
 
 // src/shared/secret-patterns.ts
@@ -7276,9 +7276,9 @@ var DefaultGitClient = class {
   async worktreeAdd(args, opts) {
     await this.execOrThrow(["worktree", "add", ...args], opts);
   }
-  async worktreeExists(path3, opts) {
+  async worktreeExists(path4, opts) {
     const r = await this.execOrThrow(["worktree", "list", "--porcelain"], opts);
-    return r.stdout.split("\n").some((line) => line === `worktree ${path3}`);
+    return r.stdout.split("\n").some((line) => line === `worktree ${path4}`);
   }
   async worktreeRemove(args, opts) {
     const r = await this.exec(["worktree", "remove", ...args], opts);
@@ -7301,20 +7301,20 @@ var DefaultGitClient = class {
 function parseRemoteUrl(url) {
   const trimmed = url.trim();
   if (trimmed.length === 0) return null;
-  let path3;
+  let path4;
   const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
   if (scp && !trimmed.includes("://")) {
-    path3 = scp[1];
+    path4 = scp[1];
   } else {
     const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
     if (withScheme) {
       const afterScheme = withScheme[1];
       const firstSlash = afterScheme.indexOf("/");
-      if (firstSlash >= 0) path3 = afterScheme.slice(firstSlash + 1);
+      if (firstSlash >= 0) path4 = afterScheme.slice(firstSlash + 1);
     }
   }
-  if (path3 === void 0) return null;
-  let p = path3.replace(/\/+$/, "");
+  if (path4 === void 0) return null;
+  let p = path4.replace(/\/+$/, "");
   p = p.replace(/\.git$/i, "");
   const segments = p.split("/").filter((s) => s.length > 0);
   if (segments.length < 2) return null;
@@ -7519,11 +7519,11 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async deleteRemoteBranch(owner, repo, branch, opts) {
-    const path3 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
-    const r = await this.runner(["api", "--method", "DELETE", path3], this.execOpts(opts));
+    const path4 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
+    const r = await this.runner(["api", "--method", "DELETE", path4], this.execOpts(opts));
     if (r.code !== 0 && !/Reference does not exist|404|Not Found|422/i.test(r.stderr)) {
       throw new Error(
-        `gh api DELETE ${path3} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
+        `gh api DELETE ${path4} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
       );
     }
   }
@@ -7554,8 +7554,8 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async repoProtection(owner, repo, branch, opts) {
-    const path3 = `repos/${owner}/${repo}/branches/${branch}/protection`;
-    const r = await this.runner(["api", path3], this.execOpts(opts));
+    const path4 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const r = await this.runner(["api", path4], this.execOpts(opts));
     if (r.code !== 0) {
       if (/404|Not Found|Branch not protected/i.test(r.stderr)) {
         return {
@@ -7565,14 +7565,14 @@ var DefaultGhClient = class {
           hasMergeQueue: false
         };
       }
-      throw new Error(`gh api ${path3} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+      throw new Error(`gh api ${path4} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
     if (r.truncated) {
       throw new Error(
-        `gh api ${path3}: output truncated \u2014 refusing to parse clipped protection JSON`
+        `gh api ${path4}: output truncated \u2014 refusing to parse clipped protection JSON`
       );
     }
-    const raw = parseJson(r.stdout, path3);
+    const raw = parseJson(r.stdout, path4);
     const rsc = raw.required_status_checks ?? null;
     const mq = await this.mergeQueueProbe(owner, repo, branch, opts);
     return {
@@ -7583,7 +7583,7 @@ var DefaultGhClient = class {
     };
   }
   async putProtection(owner, repo, branch, body, opts) {
-    const path3 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const path4 = `repos/${owner}/${repo}/branches/${branch}/protection`;
     const payload = JSON.stringify({
       required_status_checks: {
         strict: body.strict,
@@ -7594,17 +7594,17 @@ var DefaultGhClient = class {
       restrictions: null
     });
     log6.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
-    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path3, "--input", "-"], {
+    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path4, "--input", "-"], {
       ...this.execOpts(opts),
       input: payload
     });
   }
   async mergeQueueProbe(owner, repo, branch, opts) {
-    const path3 = `repos/${owner}/${repo}/rules/branches/${branch}`;
-    const r = await this.runner(["api", path3], this.execOpts(opts));
+    const path4 = `repos/${owner}/${repo}/rules/branches/${branch}`;
+    const r = await this.runner(["api", path4], this.execOpts(opts));
     if (r.code !== 0 || r.truncated) return false;
     try {
-      const rules = parseJson(r.stdout, path3);
+      const rules = parseJson(r.stdout, path4);
       return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
     } catch {
       return false;
@@ -8208,26 +8208,26 @@ function mergeTargetSettings(existing, dataDirRules) {
 }
 async function ensureTargetSettings(opts) {
   const dir = join6(opts.targetRoot, ".claude");
-  const path3 = join6(dir, "settings.json");
-  const created = !existsSync5(path3);
+  const path4 = join6(dir, "settings.json");
+  const created = !existsSync5(path4);
   let existing = {};
   if (!created) {
-    const raw = await readFile3(path3, "utf8");
+    const raw = await readFile3(path4, "utf8");
     const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
     if (isObject(parsed)) {
       existing = parsed;
     } else {
       log14.warn(
-        `${path3} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
+        `${path4} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
   }
   const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
   if (created || changed) {
     await mkdir6(dir, { recursive: true });
-    await atomicWriteFile(path3, stringifyJson(settings));
+    await atomicWriteFile(path4, stringifyJson(settings));
   }
-  return { settings, changed, created, path: path3 };
+  return { settings, changed, created, path: path4 };
 }
 
 // src/cli/subcommands/scaffold.ts
@@ -8295,21 +8295,21 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists) {
   }
 }
 async function ensureGitignore(root, lists) {
-  const path3 = join7(root, ".gitignore");
-  const rel = relative(root, path3);
-  if (!existsSync6(path3)) {
-    await writeFile(path3, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
+  const path4 = join7(root, ".gitignore");
+  const rel = relative(root, path4);
+  if (!existsSync6(path4)) {
+    await writeFile(path4, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile4(path3, "utf8");
+  const current = await readFile4(path4, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
     return;
   }
   const sep2 = current.endsWith("\n") ? "" : "\n";
-  await writeFile(path3, current + sep2 + missing.join("\n") + "\n", "utf8");
+  await writeFile(path4, current + sep2 + missing.join("\n") + "\n", "utf8");
   lists.present.push(rel);
 }
 async function runScaffold(opts) {
@@ -10539,9 +10539,55 @@ var GateRunner = class {
   }
 };
 
-// src/verifier/deterministic/tools.ts
-import { access as access2, readFile as readFile6 } from "node:fs/promises";
+// src/verifier/deterministic/tdd-exempt.ts
+import { readFile as readFile6 } from "node:fs/promises";
 import path2 from "node:path";
+function isTddExempt(taskId, tasksJson, packageJson) {
+  const list = extractTaskList(tasksJson);
+  for (const entry of list) {
+    if (typeof entry === "object" && entry !== null && entry.task_id === taskId && entry.tdd_exempt === true) {
+      return true;
+    }
+  }
+  if (typeof packageJson === "object" && packageJson !== null && typeof packageJson.factory === "object" && packageJson.factory?.tddExempt === true) {
+    return true;
+  }
+  return false;
+}
+function extractTaskList(tasksJson) {
+  if (Array.isArray(tasksJson)) return tasksJson;
+  if (typeof tasksJson === "object" && tasksJson !== null && Array.isArray(tasksJson.tasks)) {
+    return tasksJson.tasks;
+  }
+  return [];
+}
+var DefaultExemptReader = class {
+  constructor(args) {
+    this.args = args;
+  }
+  async isExempt(taskId) {
+    const tasksJson = await readJsonOrNull(path2.join(this.args.specDir, "tasks.json"));
+    const packageJson = await readJsonOrNull(path2.join(this.args.worktree, "package.json"));
+    return isTddExempt(taskId, tasksJson, packageJson);
+  }
+};
+async function readJsonOrNull(file) {
+  let raw;
+  try {
+    raw = await readFile6(file, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+// src/verifier/deterministic/tools.ts
+import { access as access2, readFile as readFile7 } from "node:fs/promises";
+import path3 from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
 }
@@ -10561,11 +10607,11 @@ async function pathExists(absPath) {
   }
 }
 async function resolveLocalBin(cwd, tool, exists = pathExists) {
-  let dir = path2.resolve(cwd);
+  let dir = path3.resolve(cwd);
   for (; ; ) {
-    const candidate = path2.join(dir, "node_modules", ".bin", tool);
+    const candidate = path3.join(dir, "node_modules", ".bin", tool);
     if (await exists(candidate)) return candidate;
-    const parent = path2.dirname(dir);
+    const parent = path3.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -10633,10 +10679,10 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
   async run(mutate, opts) {
     const csv = mutate.join(",");
     const proc2 = toProc(await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts));
-    const reportPath = path2.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
+    const reportPath = path3.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
-      raw = await readFile6(reportPath, "utf8");
+      raw = await readFile7(reportPath, "utf8");
     } catch {
       return { proc: proc2, report: { report: "absent" } };
     }
@@ -10685,10 +10731,10 @@ function computeMutationScore(report) {
 }
 var DefaultCoverageReader = class {
   async read(label, opts) {
-    const file = path2.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
+    const file = path3.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
     let raw;
     try {
-      raw = await readFile6(file, "utf8");
+      raw = await readFile7(file, "utf8");
     } catch {
       return { state: "absent" };
     }
@@ -10705,7 +10751,7 @@ var DefaultCoverageReader = class {
 var DefaultFsProbe = class {
   async exists(relPath, opts) {
     try {
-      await access2(path2.join(opts.cwd, relPath));
+      await access2(path3.join(opts.cwd, relPath));
       return true;
     } catch {
       return false;
@@ -10875,7 +10921,7 @@ function splitHoldout(criteria, percent, seed) {
 }
 
 // src/verifier/holdout/store.ts
-import { mkdir as mkdir8, readFile as readFile7 } from "node:fs/promises";
+import { mkdir as mkdir8, readFile as readFile8 } from "node:fs/promises";
 import { dirname as dirname6, join as join10 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
@@ -10910,18 +10956,18 @@ var FsHoldoutStore = class {
     return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
-    const path3 = this.path(runId, record.task_id);
-    await mkdir8(dirname6(path3), { recursive: true });
-    await atomicWriteFile(path3, stringifyJson(record));
+    const path4 = this.path(runId, record.task_id);
+    await mkdir8(dirname6(path4), { recursive: true });
+    await atomicWriteFile(path4, stringifyJson(record));
   }
   async get(runId, taskId) {
-    const path3 = this.path(runId, taskId);
-    const raw = await readFile7(path3, "utf8");
-    return parseHoldoutRecord(parseJson(raw, path3), path3);
+    const path4 = this.path(runId, taskId);
+    const raw = await readFile8(path4, "utf8");
+    return parseHoldoutRecord(parseJson(raw, path4), path4);
   }
   async has(runId, taskId) {
     try {
-      await readFile7(this.path(runId, taskId), "utf8");
+      await readFile8(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -11028,7 +11074,7 @@ function holdoutEvidence(result) {
 }
 
 // src/verifier/holdout/verdict-store.ts
-import { mkdir as mkdir9, readFile as readFile8 } from "node:fs/promises";
+import { mkdir as mkdir9, readFile as readFile9 } from "node:fs/promises";
 import { dirname as dirname7, join as join11 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
@@ -11045,18 +11091,18 @@ var FsHoldoutVerdictStore = class {
     return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
-    const path3 = this.path(runId, taskId);
-    await mkdir9(dirname7(path3), { recursive: true });
-    await atomicWriteFile(path3, stringifyJson([...verdicts]));
+    const path4 = this.path(runId, taskId);
+    await mkdir9(dirname7(path4), { recursive: true });
+    await atomicWriteFile(path4, stringifyJson([...verdicts]));
   }
   async get(runId, taskId) {
-    const path3 = this.path(runId, taskId);
-    const raw = await readFile8(path3, "utf8");
-    return HoldoutVerdictsSchema.parse(parseJson(raw, path3));
+    const path4 = this.path(runId, taskId);
+    const raw = await readFile9(path4, "utf8");
+    return HoldoutVerdictsSchema.parse(parseJson(raw, path4));
   }
   async has(runId, taskId) {
     try {
-      await readFile8(this.path(runId, taskId), "utf8");
+      await readFile9(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -11248,6 +11294,14 @@ function taskWorktreePath(dataDir, runId, taskId) {
   return join12(worktreesRoot(dataDir), runId, taskId);
 }
 
+// src/driver/exempt.ts
+function taskExemptReader(deps, worktree) {
+  return new DefaultExemptReader({
+    specDir: specDir(deps.dataDir, deps.spec.repo, deps.spec.spec_id),
+    worktree
+  });
+}
+
 // src/driver/handlers.ts
 function makeStageHandlers(deps) {
   function requireTask3(ctx, stage) {
@@ -11365,13 +11419,15 @@ function makeStageHandlers(deps) {
      */
     async verify(ctx) {
       const task = requireTask3(ctx, "verify");
+      const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
       const gateCtx = {
         runId: ctx.run.run_id,
         taskId: task.task_id,
-        worktree: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
+        worktree,
         baseRef: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
         config: deps.config,
-        tools: deps.tools
+        tools: deps.tools,
+        exemptReader: taskExemptReader(deps, worktree)
       };
       const gate = await new GateRunner().run(gateCtx);
       if (task.reviewers.length === 0) {
@@ -11463,7 +11519,7 @@ function shipBody(runId, specTask) {
 }
 
 // src/driver/artifacts.ts
-import { mkdir as mkdir10, readFile as readFile9 } from "node:fs/promises";
+import { mkdir as mkdir10, readFile as readFile10 } from "node:fs/promises";
 import { dirname as dirname8, join as join13 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
@@ -11477,20 +11533,20 @@ var FsArtifactStore = class {
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
-    const path3 = this.absPath(runId, ref);
-    await mkdir10(dirname8(path3), { recursive: true });
-    await atomicWriteFile(path3, stringifyJson(context));
+    const path4 = this.absPath(runId, ref);
+    await mkdir10(dirname8(path4), { recursive: true });
+    await atomicWriteFile(path4, stringifyJson(context));
     return ref;
   }
   async getProducerContext(runId, promptRef) {
-    const path3 = this.absPath(runId, promptRef);
-    const raw = await readFile9(path3, "utf8");
-    return parseJson(raw, path3);
+    const path4 = this.absPath(runId, promptRef);
+    const raw = await readFile10(path4, "utf8");
+    return parseJson(raw, path4);
   }
 };
 
 // src/driver/fold.ts
-import { readFile as readFile10 } from "node:fs/promises";
+import { readFile as readFile11 } from "node:fs/promises";
 import { join as join14 } from "node:path";
 var log25 = createLogger("fold");
 async function persistStepCursor(deps, runId, taskId, step) {
@@ -11498,9 +11554,9 @@ async function persistStepCursor(deps, runId, taskId, step) {
     await markInFlight(deps, runId, taskId, step.stage);
   }
 }
-async function readJsonInput(path3) {
-  const raw = await readFile10(path3, "utf8");
-  return parseJson(raw, path3);
+async function readJsonInput(path4) {
+  const raw = await readFile11(path4, "utf8");
+  return parseJson(raw, path4);
 }
 function producerStageInfo(stage) {
   if (stage === "tests") return { role: "test-writer", stage: "tests", after: "exec" };
@@ -11561,7 +11617,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile10(join14(worktree, file), "utf8");
+      const text = await readFile11(join14(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch {
       lines.set(file, null);
@@ -11613,7 +11669,8 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     worktree,
     baseRef: resolveStagingBranch(runId, run9.staging_branch),
     config: deps.config,
-    tools: deps.tools
+    tools: deps.tools,
+    exemptReader: taskExemptReader(deps, worktree)
   };
   const gate = await new GateRunner().run(gateCtx);
   const gateEvidence = [...gate.evidence];
@@ -13462,7 +13519,7 @@ var statuslineCommand = {
 
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync8 } from "node:fs";
-import { readFile as readFile11 } from "node:fs/promises";
+import { readFile as readFile12 } from "node:fs/promises";
 import { join as join16 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log31 = createLogger("autonomy");
@@ -13577,10 +13634,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path3 = join16(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync8(path3)) return void 0;
+  const path4 = join16(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync8(path4)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile11(path3, "utf8"));
+    const parsed = JSON.parse(await readFile12(path4, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -13595,7 +13652,7 @@ async function runAutonomyEnsure(opts = {}) {
   let userSettings = {};
   if (existsSync8(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile11(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile12(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
       else log31.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
@@ -13603,7 +13660,7 @@ async function runAutonomyEnsure(opts = {}) {
     }
   }
   const templatePath = join16(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile11(templatePath, "utf8");
+  const template = await readFile12(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -13613,11 +13670,11 @@ async function runAutonomyEnsure(opts = {}) {
     home,
     version
   });
-  const path3 = mergedSettingsPath(dataDir);
-  await atomicWriteFile(path3, stringifyJson(merged));
-  const relaunchCommand = `claude --settings ${path3}`;
+  const path4 = mergedSettingsPath(dataDir);
+  await atomicWriteFile(path4, stringifyJson(merged));
+  const relaunchCommand = `claude --settings ${path4}`;
   write(
-    `Wrote autonomous settings \u2192 ${path3}
+    `Wrote autonomous settings \u2192 ${path4}
 Relaunch the session in autonomous mode with:
 
   ${relaunchCommand}
@@ -13625,47 +13682,47 @@ Relaunch the session in autonomous mode with:
 (the first agent turn refreshes the usage cache \u2192 session-mode quota pacing.)
 `
   );
-  return { path: path3, relaunchCommand };
+  return { path: path4, relaunchCommand };
 }
 async function runAutonomyStatus(opts = {}) {
   const env = opts.env ?? process.env;
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
-  let path3 = "";
+  let path4 = "";
   try {
     const dataDir = opts.dataDir ?? resolveDataDir();
-    path3 = mergedSettingsPath(dataDir);
+    path4 = mergedSettingsPath(dataDir);
   } catch {
   }
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path3.length > 0 && existsSync8(path3),
-    mergedSettingsPath: path3
+    mergedSettingsPresent: path4.length > 0 && existsSync8(path4),
+    mergedSettingsPath: path4
   };
   if (opts.json === true) {
     write(stringifyJson(status) + "\n");
   } else if (status.autonomous) {
     write(
       `autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)
-merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path3.length > 0 ? ` at ${path3}` : ""}
+merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path4.length > 0 ? ` at ${path4}` : ""}
 `
     );
   } else {
     write(
       `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
-merged-settings: ${status.mergedSettingsPresent ? `present at ${path3}` : "absent"}
+merged-settings: ${status.mergedSettingsPresent ? `present at ${path4}` : "absent"}
 ` + (status.mergedSettingsPresent ? `Relaunch the session with:
-  claude --settings ${path3}
+  claude --settings ${path4}
 ` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
 `)
     );
   }
   return status.autonomous ? EXIT.OK : EXIT.ERROR;
 }
-async function readOnDiskVersion(path3) {
-  if (!existsSync8(path3)) return void 0;
+async function readOnDiskVersion(path4) {
+  if (!existsSync8(path4)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile11(path3, "utf8"));
+    const parsed = JSON.parse(await readFile12(path4, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }
@@ -13705,10 +13762,10 @@ async function runAutonomyPreflight(opts = {}) {
     pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
   } catch {
   }
-  const path3 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path3.length > 0 && existsSync8(path3);
+  const path4 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
+  const mergedSettingsPresent = path4.length > 0 && existsSync8(path4);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
-  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path3) : void 0;
+  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path4) : void 0;
   const decision = decideAutonomyPreflight({
     autonomous: isAutonomous(env),
     mergedSettingsPresent,

@@ -62,6 +62,7 @@ import {
 } from "./deps.js";
 import type { HandlerDeps } from "./types.js";
 import { taskWorktreePath } from "./paths.js";
+import { taskExemptReader } from "./exempt.js";
 import { FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
 
 /**
@@ -236,13 +237,15 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
      */
     async verify(ctx: StageContext): Promise<StageResult> {
       const task = requireTask(ctx, "verify");
+      const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
       const gateCtx: GateContext = {
         runId: ctx.run.run_id,
         taskId: task.task_id,
-        worktree: taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id),
+        worktree,
         baseRef: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
         config: deps.config,
         tools: deps.tools,
+        exemptReader: taskExemptReader(deps, worktree),
       };
       const gate = await new GateRunner().run(gateCtx);
 

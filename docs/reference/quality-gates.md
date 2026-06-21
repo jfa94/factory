@@ -65,16 +65,29 @@ cache hit never bypasses re-derivation.
 
 ## The gates
 
-| Gate       | Checks                                                                                                                      | Fail-closed when                                                                                              |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `test`     | The project test suite passes.                                                                                              | Tests fail or cannot run.                                                                                     |
-| `tdd`      | Tests precede implementation on the pre-squash task branch (test-before-impl commit ordering).                              | An impl commit lands with no preceding failing-test commit. Memoized by tip SHA; a no-op on squashed history. |
-| `coverage` | No metric (`lines`, `branches`, `functions`, `statements`) regressed by more than `quality.coverageRegressionTolerancePct`. | Either before/after coverage summary is missing or invalid.                                                   |
-| `mutation` | Mutation score (derived in-engine from the stock json report's per-file mutants) meets `quality.mutationScoreTarget`.       | Score below target, or no score is derivable from a present report (non-empty scope).                         |
-| `sast`     | Static security analysis (built-in semgrep or `quality.securityCommand`) finds no blocking issue.                           | Findings present (unless `quality.securityAllowFailures`).                                                    |
-| `type`     | The project type-check passes.                                                                                              | Type errors.                                                                                                  |
-| `lint`     | The linter passes.                                                                                                          | Lint errors.                                                                                                  |
-| `build`    | The project builds.                                                                                                         | Build fails.                                                                                                  |
+| Gate       | Checks                                                                                                                      | Fail-closed when                                                                                                                          |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `test`     | The project test suite passes.                                                                                              | Tests fail or cannot run.                                                                                                                 |
+| `tdd`      | Tests precede implementation on the pre-squash task branch (test-before-impl commit ordering).                              | An impl commit lands with no preceding failing-test commit. Memoized by tip SHA; a no-op on squashed history.                             |
+| `coverage` | No metric (`lines`, `branches`, `functions`, `statements`) regressed by more than `quality.coverageRegressionTolerancePct`. | Exactly one of the before/after summaries is missing, or either is invalid. **Both absent → _skipped_, not failed** (opt-in — see below). |
+| `mutation` | Mutation score (derived in-engine from the stock json report's per-file mutants) meets `quality.mutationScoreTarget`.       | Score below target, or no score is derivable from a present report (non-empty scope).                                                     |
+| `sast`     | Static security analysis (built-in semgrep or `quality.securityCommand`) finds no blocking issue.                           | Findings present (unless `quality.securityAllowFailures`).                                                                                |
+| `type`     | The project type-check passes.                                                                                              | Type errors.                                                                                                                              |
+| `lint`     | The linter passes.                                                                                                          | Lint errors.                                                                                                                              |
+| `build`    | The project builds.                                                                                                         | Build fails.                                                                                                                              |
+
+## The coverage gate is opt-in
+
+The `coverage` gate compares a **before** and **after** coverage summary
+(coverage-v8 totals) that the gate reads from the target repo's worktree. The
+factory does **not** itself produce these summaries — a repo opts in by having its
+test/CI step write them where the gate's `coverage` tool reads them. When **both**
+summaries are absent the gate is **not applicable** and is _skipped_
+(`no-coverage-data`), excluded from the conjunction — it never fail-closes a repo
+that never opted in. So on a repo that captures no coverage, this gate is inert by
+design; coverage-regression protection switches on only once the repo emits the
+summaries. (An asymmetric reading — exactly one present — or a corrupt summary is a
+real capture anomaly and _does_ fail closed: "half a measurement" is never a pass.)
 
 ## The TDD gate in detail
 

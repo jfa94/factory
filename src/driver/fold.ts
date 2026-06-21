@@ -32,6 +32,7 @@ import {
   type TaskStep,
 } from "./transitions.js";
 import { taskWorktreePath } from "./paths.js";
+import { taskExemptReader } from "./exempt.js";
 import { classifyFailure, ESCALATION_CAP, parseProducerStatus } from "../producer/index.js";
 import { nextStage, stageToInFlightStatus } from "../types/index.js";
 import { GateRunner, type GateContext } from "../verifier/deterministic/index.js";
@@ -364,6 +365,7 @@ export async function applyRecordReviews(
     baseRef: resolveStagingBranch(runId, run.staging_branch),
     config: deps.config,
     tools: deps.tools,
+    exemptReader: taskExemptReader(deps, worktree),
   };
   const gate = await new GateRunner().run(gateCtx);
   const gateEvidence: GateEvidence[] = [...gate.evidence];

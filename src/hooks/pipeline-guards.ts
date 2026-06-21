@@ -12,20 +12,21 @@
  *       unrelated session's edit elsewhere never trips it.
  *   (b) NESTED-SHELL / hook-bypass denial while THIS session's run is active
  *       (owner-scoped via {@link loadOwnerScopedRun}; shared {@link isNestedShellOrHookBypass}).
- *   (c) SHIP gating via DERIVE-DON'T-STORE (Δ V): `gh pr create`/`gh pr merge`
- *       are admitted only when the floor verdict DERIVED from ground truth
- *       passes. There is structurally NO stored gate boolean to read (WS1
- *       schema) — a forged `*_gate` field cannot satisfy the guard because the
- *       verdict comes from {@link deriveFloorVerdict}/{@link derivePanelVerdict},
- *       never from state.json.
+ *   (c) SHIP guard (agent-deny): `gh pr create`/`gh pr merge` are categorically
+ *       denied while a run is active. The factory ENGINE opens and merges PRs
+ *       deterministically from inside `factory drive` (a child_process `gh` call
+ *       that never transits this Bash-tool hook — src/driver/ship.ts), and the
+ *       verifier floor that actually gates shipping is derived THERE
+ *       (derive-don't-store). So any ship command reaching this hook is an
+ *       agent-initiated attempt, which the boundary simply refuses — there is no
+ *       floor to re-derive here.
  *
  * A dangling runs/current symlink fails CLOSED (deny) — corruption is never
  * silently allowed. No active run → pass through.
  */
 import { EXIT, type ExitCode } from "../cli/exit-codes.js";
-import { sep } from "node:path";
-import { derivePanelVerdict, type GateEvidence } from "../core/state/index.js";
-import { deriveFloorVerdict, StateManager } from "../core/state/index.js";
+import { isTestPath } from "../verifier/deterministic/scope.js";
+import { StateManager } from "../core/state/index.js";
 import { TaskStageEnum } from "../core/stage-machine/index.js";
 import {
   loadOwnerScopedRun,
@@ -36,7 +37,6 @@ import {
   type ActiveRun,
 } from "./hook-context.js";
 import { isNestedShellOrHookBypass } from "./shell-bypass.js";
-import { isAutonomous } from "../autonomy/mode.js";
 import { resolveDataDir, type DataDirOptions } from "../config/load.js";
 import type { RunState } from "../types/index.js";
 import {
@@ -55,14 +55,6 @@ import {
 /** Options for {@link decidePipelineGuards} (injectable). */
 export interface PipelineGuardsDeps extends DataDirOptions {
   cwd?: string;
-  autonomousMode?: boolean;
-  /**
-   * Ground-truth gate evidence for the SHIP gating check (Δ V). Supplied by the
-   * driver at guard time from a fresh gate run — NEVER read from state. Keyed by
-   * task id. Absent → no deterministic-gate evidence (the floor then fails on
-   * the empty set, which is the correct fail-closed behavior).
-   */
-  gateEvidence?: Record<string, readonly GateEvidence[]>;
   /** Override the active-run loader for the Bash arms (tests). */
   loadRun?: (opts: DataDirOptions) => Promise<ActiveRun | null>;
   /**
@@ -75,16 +67,11 @@ export interface PipelineGuardsDeps extends DataDirOptions {
 
 const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
 
-/** Is the path a test/fixture path (allowed during the test-writer phase)? */
-export function isTestPath(p: string): boolean {
-  const base = p.split(sep).pop() ?? p;
-  if (/\.(test|spec)\./.test(base)) return true;
-  if (/\.(test-helpers|test-utils)\./.test(base)) return true;
-  const segments = p.split(sep);
-  if (segments.includes("tests") || segments.includes("__tests__")) return true;
-  if (segments.includes("fixtures")) return true;
-  return false;
-}
+// The test-path classification (write-scope arm) shares the verifier's single
+// source of truth ({@link isTestPath} in verifier/deterministic/scope.ts) so the
+// hook's RED-phase write gate and the TDD gate's commit classification AGREE on
+// what counts as a test file — a prior local copy diverged (narrower) and would
+// wrongly block test-writer writes in Go/Ruby/alt-layout repos.
 
 // Boundary-aware so a prefixed/compound command cannot evade the ship gate:
 // `cd /r && gh pr create`, `true; gh pr create`, `GH=1 gh pr create`, `a | gh …`
@@ -194,8 +181,6 @@ export async function decidePipelineGuards(
   const active = await loadRun(deps);
   if (active === null) return allow(); // no run owned by this session → pass through
 
-  const { run } = active;
-
   // (b) nested-shell / hook-bypass while a run is active.
   if (isNestedShellOrHookBypass(cmd)) {
     return deny(
@@ -204,61 +189,20 @@ export async function decidePipelineGuards(
     );
   }
 
-  const activeTask = resolveActiveTask(run);
-
-  // (c) ship gating via derive-don't-store.
+  // (c) SHIP guard — agent-deny. The factory engine ships deterministically from
+  // INSIDE `factory drive` (a child_process `gh` call that never transits this
+  // Bash-tool hook — src/driver/ship.ts), so any `gh pr create`/`gh pr merge` that
+  // DOES reach this hook is an agent-initiated ship attempt while a run is active.
+  // That is categorically denied: PRs are opened and merged ONLY by the engine,
+  // whose verifier floor gates shipping (derive-don't-store) — there is nothing to
+  // re-derive here, just a security boundary to hold.
   if (tool === "Bash" && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {
-    // Resolve the task this ship op is for.
-    const task = activeTask?.task;
-    if (!task) {
-      // Cannot attribute → fail closed in autonomous mode (a ship op must be
-      // attributable to a task whose floor we can derive).
-      const autonomous = deps.autonomousMode ?? isAutonomous();
-      if (autonomous) {
-        return deny(
-          "ship_unattributable",
-          "gh pr create/merge cannot run without an attributable task whose verifier floor can be derived",
-        );
-      }
-      return allow();
-    }
-
-    const evidence = deps.gateEvidence?.[task.task_id] ?? [];
-    if (isGhPrCreate(cmd)) {
-      // PR create requires the full verifier floor (gates + panel) to PASS,
-      // DERIVED from ground truth — never a stored boolean.
-      const floor = deriveFloorVerdict(task, evidence);
-      if (!floor.passed) {
-        return deny(
-          "ship_floor_not_met",
-          `gh pr create for task '${task.task_id}' blocked: derived verifier floor did not pass ` +
-            `(gates+panel; verdict is derived from ground truth, not a stored gate boolean).`,
-        );
-      }
-    } else {
-      // PR merge requires the panel floor (unanimous approve) AND a recorded PR
-      // number. The CI-green signal is ground truth supplied as gate evidence.
-      const panel = derivePanelVerdict(task);
-      if (!panel.passed) {
-        return deny(
-          "ship_panel_not_met",
-          `gh pr merge for task '${task.task_id}' blocked: derived panel verdict did not pass.`,
-        );
-      }
-      if (task.pr_number === undefined) {
-        return deny(
-          "ship_no_pr",
-          `gh pr merge for task '${task.task_id}' blocked: no recorded pr_number.`,
-        );
-      }
-      const ci = deriveFloorVerdict(task, evidence);
-      if (!ci.passed) {
-        return deny(
-          "ship_ci_not_green",
-          `gh pr merge for task '${task.task_id}' blocked: derived CI/floor verdict did not pass.`,
-        );
-      }
-    }
+    const op = isGhPrCreate(cmd) ? "gh pr create" : "gh pr merge";
+    return deny(
+      "ship_agent_denied",
+      `agent-initiated '${op}' is not allowed while a pipeline run is active: ` +
+        `the factory engine opens and merges PRs deterministically, never an agent.`,
+    );
   }
 
   return allow();

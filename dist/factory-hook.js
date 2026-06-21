@@ -7016,8 +7016,17 @@ async function readAllStdin4() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-// src/hooks/pipeline-guards.ts
-import { sep as sep5 } from "node:path";
+// src/verifier/deterministic/scope.ts
+function isTestPath(file) {
+  if (/\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs)$/.test(file)) return true;
+  if (/_test\.(go|py|rb|exs)$/.test(file)) return true;
+  if (/Test\.(java|kt|php)$/.test(file)) return true;
+  if (/Tests\.(swift|cs)$/.test(file)) return true;
+  if (/_spec\.rb$/.test(file)) return true;
+  if (/^(tests|test|spec|__tests__)\//.test(file)) return true;
+  if (/\/(tests|test|spec|__tests__)\//.test(file)) return true;
+  return false;
+}
 
 // src/core/state/schema.ts
 var RunStatusEnum = external_exports.enum([
@@ -7227,42 +7236,6 @@ function refineRunCrossFields(run, ctx) {
 var RunStateChecked = RunStateSchema.superRefine(refineRunCrossFields);
 function parseRunState(raw) {
   return RunStateChecked.parse(raw);
-}
-
-// src/core/state/derive.ts
-function deriveAllGatesVerdict(evidence) {
-  const passed = evidence.length > 0 && evidence.every((e) => e.observed === true);
-  return {
-    passed,
-    gate: "all",
-    __derived: true,
-    from: [...evidence]
-  };
-}
-function derivePanelVerdict(reviewersOrTask) {
-  const reviewers = Array.isArray(reviewersOrTask) ? reviewersOrTask : reviewersOrTask.reviewers;
-  const passed = reviewers.length > 0 && reviewers.every((r) => r.verdict === "approve");
-  return {
-    passed,
-    gate: "panel",
-    __derived: true,
-    // The panel's "evidence" is each reviewer's verdict; expose it for audit.
-    from: reviewers.map((r) => ({
-      gate: `panel:${r.reviewer}`,
-      observed: r.verdict === "approve",
-      detail: `verdict=${r.verdict} confirmed_blockers=${r.confirmed_blockers}`
-    }))
-  };
-}
-function deriveFloorVerdict(task, gateEvidence) {
-  const det = deriveAllGatesVerdict(gateEvidence);
-  const panel = derivePanelVerdict(task);
-  return {
-    passed: det.passed && panel.passed,
-    gate: "floor",
-    __derived: true,
-    from: [...det.from, ...panel.from]
-  };
 }
 
 // src/core/state/manager.ts
@@ -7892,15 +7865,6 @@ function isTestWriterPhase(active) {
 
 // src/hooks/pipeline-guards.ts
 var WRITE_TOOLS2 = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
-function isTestPath(p) {
-  const base = p.split(sep5).pop() ?? p;
-  if (/\.(test|spec)\./.test(base)) return true;
-  if (/\.(test-helpers|test-utils)\./.test(base)) return true;
-  const segments = p.split(sep5);
-  if (segments.includes("tests") || segments.includes("__tests__")) return true;
-  if (segments.includes("fixtures")) return true;
-  return false;
-}
 var GH_PR_CREATE_RE = /(^|[\s&;|(])gh\s+pr\s+create\b/;
 var GH_PR_MERGE_RE = /(^|[\s&;|(])gh\s+pr\s+merge\b/;
 function isGhPrCreate(cmd) {
@@ -7952,57 +7916,18 @@ async function decidePipelineGuards(input, deps = {}) {
   const loadRun = deps.loadRun ?? loadOwnerScopedRun;
   const active = await loadRun(deps);
   if (active === null) return allow();
-  const { run } = active;
   if (isNestedShellOrHookBypass(cmd)) {
     return deny(
       "nested_shell_denied",
       `nested-shell or hook-bypass not allowed while a pipeline run is active: ${cmd}`
     );
   }
-  const activeTask = resolveActiveTask(run);
   if (tool === "Bash" && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {
-    const task = activeTask?.task;
-    if (!task) {
-      const autonomous = deps.autonomousMode ?? isAutonomous();
-      if (autonomous) {
-        return deny(
-          "ship_unattributable",
-          "gh pr create/merge cannot run without an attributable task whose verifier floor can be derived"
-        );
-      }
-      return allow();
-    }
-    const evidence = deps.gateEvidence?.[task.task_id] ?? [];
-    if (isGhPrCreate(cmd)) {
-      const floor = deriveFloorVerdict(task, evidence);
-      if (!floor.passed) {
-        return deny(
-          "ship_floor_not_met",
-          `gh pr create for task '${task.task_id}' blocked: derived verifier floor did not pass (gates+panel; verdict is derived from ground truth, not a stored gate boolean).`
-        );
-      }
-    } else {
-      const panel = derivePanelVerdict(task);
-      if (!panel.passed) {
-        return deny(
-          "ship_panel_not_met",
-          `gh pr merge for task '${task.task_id}' blocked: derived panel verdict did not pass.`
-        );
-      }
-      if (task.pr_number === void 0) {
-        return deny(
-          "ship_no_pr",
-          `gh pr merge for task '${task.task_id}' blocked: no recorded pr_number.`
-        );
-      }
-      const ci = deriveFloorVerdict(task, evidence);
-      if (!ci.passed) {
-        return deny(
-          "ship_ci_not_green",
-          `gh pr merge for task '${task.task_id}' blocked: derived CI/floor verdict did not pass.`
-        );
-      }
-    }
+    const op = isGhPrCreate(cmd) ? "gh pr create" : "gh pr merge";
+    return deny(
+      "ship_agent_denied",
+      `agent-initiated '${op}' is not allowed while a pipeline run is active: the factory engine opens and merges PRs deterministically, never an agent.`
+    );
   }
   return allow();
 }

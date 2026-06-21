@@ -1,12 +1,13 @@
 /**
- * WS9 — pipeline-invariant guard tests (Δ V + Decision 1: derive-don't-store).
+ * WS9 — pipeline-invariant guard tests.
  *
- * The load-bearing property: ship admission (`gh pr create`/`gh pr merge`) is
- * decided by a verdict DERIVED from ground truth (reviewer array + injected gate
- * evidence) — there is no stored gate boolean, so a forged state field cannot
- * open the gate. Also covers: no active run → pass through; test-writer phase
- * write-scope; nested-shell denial while a run is active; dangling-symlink fail
- * closed via runPipelineGuards.
+ * The load-bearing property: while a run is active, ship commands
+ * (`gh pr create`/`gh pr merge`) are categorically denied — the factory ENGINE
+ * opens and merges PRs from inside `factory drive` (a child_process gh call that
+ * never transits this Bash-tool hook), so any ship command reaching the hook is an
+ * agent-initiated attempt. Also covers: no active run → pass through; test-writer
+ * phase write-scope; nested-shell denial while a run is active; dangling-symlink
+ * fail closed via runPipelineGuards.
  */
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
@@ -14,7 +15,6 @@ import { decidePipelineGuards, runPipelineGuards } from "./pipeline-guards.js";
 import { BrokenRunStateError, type ActiveRun } from "./hook-context.js";
 import { parseHookInput, isDeny } from "./hook-io.js";
 import { EXIT } from "../cli/exit-codes.js";
-import type { GateEvidence } from "../core/state/index.js";
 import type { RunState, TaskState } from "../types/index.js";
 
 const SPEC = { repo: "o/n", spec_id: "1-x", issue_number: 1 } as const;
@@ -74,9 +74,6 @@ function writeInWorktree(runId: string, taskId: string, rel: string) {
 }
 
 const APPROVE = { reviewer: "quality", verdict: "approve", confirmed_blockers: 0 } as const;
-const BLOCKED = { reviewer: "quality", verdict: "blocked", confirmed_blockers: 1 } as const;
-const GATE_OK: GateEvidence[] = [{ gate: "tests", observed: true }];
-const GATE_FAIL: GateEvidence[] = [{ gate: "tests", observed: false }];
 
 describe("pipeline-guards — no active run passes through", () => {
   it("allows any write when there is no active run", async () => {
@@ -85,117 +82,53 @@ describe("pipeline-guards — no active run passes through", () => {
   });
 });
 
-describe("pipeline-guards — ship gating is DERIVED (Δ V / D1)", () => {
-  it("gh pr create ALLOWED only when derived floor passes (gates+panel)", async () => {
-    const run = activeRun({ t1: task({ reviewers: [APPROVE] }) });
-    const d = await decidePipelineGuards(bash("gh pr create --fill"), {
-      loadRun: withRun(run),
-      gateEvidence: { t1: GATE_OK },
-    });
-    expect(isDeny(d)).toBe(false);
+describe("pipeline-guards — ship guard is agent-deny while a run is active", () => {
+  // The engine ships from inside `factory drive` (a child_process gh call that
+  // never transits this Bash-tool hook — src/driver/ship.ts), so ANY ship command
+  // reaching the hook is an agent-initiated attempt and is categorically denied,
+  // independent of reviewers / pr_number / gate evidence.
+  it("denies gh pr create while a run is active", async () => {
+    const run = activeRun({ t1: task() });
+    const d = await decidePipelineGuards(bash("gh pr create --fill"), { loadRun: withRun(run) });
+    expect(isDeny(d)).toBe(true);
+    if (isDeny(d)) expect(d.reason).toBe("ship_agent_denied");
   });
 
-  it("gh pr create BLOCKED when panel approves but gate evidence fails", async () => {
-    const run = activeRun({ t1: task({ reviewers: [APPROVE] }) });
-    const d = await decidePipelineGuards(bash("gh pr create --fill"), {
+  it("denies gh pr merge while a run is active", async () => {
+    const run = activeRun({ t1: task({ pr_number: 42 }) });
+    const d = await decidePipelineGuards(bash("gh pr merge 42 --squash"), {
       loadRun: withRun(run),
-      gateEvidence: { t1: GATE_FAIL },
     });
+    expect(isDeny(d)).toBe(true);
+    if (isDeny(d)) expect(d.reason).toBe("ship_agent_denied");
+  });
+
+  it("denies even when the task looks fully shippable (pure agent boundary, not floor-derived)", async () => {
+    // Unanimous approvals + a recorded pr_number — STILL denied: the hook no longer
+    // derives a floor, agents simply never ship.
+    const run = activeRun({ t1: task({ reviewers: [APPROVE], pr_number: 42 }) });
+    const d = await decidePipelineGuards(bash("gh pr create --fill"), { loadRun: withRun(run) });
     expect(isDeny(d)).toBe(true);
   });
 
-  it("gh pr create BLOCKED when gates pass but a reviewer is blocked", async () => {
-    const run = activeRun({ t1: task({ reviewers: [BLOCKED] }) });
-    const d = await decidePipelineGuards(bash("gh pr create --fill"), {
-      loadRun: withRun(run),
-      gateEvidence: { t1: GATE_OK },
-    });
-    expect(isDeny(d)).toBe(true);
-  });
-
-  it("gh pr create BLOCKED with NO gate evidence (empty set fails closed)", async () => {
-    const run = activeRun({ t1: task({ reviewers: [APPROVE] }) });
-    const d = await decidePipelineGuards(bash("gh pr create --fill"), {
-      loadRun: withRun(run),
-      // gateEvidence omitted → empty set → floor fails
-    });
-    expect(isDeny(d)).toBe(true);
-  });
-
-  // Regression: a prefixed/compound command must NOT evade the ship gate by
-  // command composition (the `^\s*` anchor used to let these through as "not a
-  // ship command" → allow; boundary-aware detection now subjects them to the floor).
+  // Regression: a prefixed/compound command must NOT evade the ship guard by
+  // command composition (boundary-aware detection, not a leading-anchor match).
   it.each([
     "cd /repo && gh pr create --fill",
     "true; gh pr create --fill",
     "GH=1 gh pr create --fill",
     "echo hi | gh pr create --fill",
-  ])(
-    "compound command '%s' is still subject to the floor (BLOCKED on a failed floor)",
-    async (cmd) => {
-      const run = activeRun({ t1: task({ reviewers: [BLOCKED] }) });
-      const d = await decidePipelineGuards(bash(cmd), {
-        loadRun: withRun(run),
-        gateEvidence: { t1: GATE_OK },
-      });
-      expect(isDeny(d)).toBe(true);
-    },
-  );
+    "cd /repo && gh pr merge 42 --squash",
+  ])("denies the compound ship command '%s'", async (cmd) => {
+    const run = activeRun({ t1: task() });
+    const d = await decidePipelineGuards(bash(cmd), { loadRun: withRun(run) });
+    expect(isDeny(d)).toBe(true);
+  });
 
-  it("a compound gh pr create with a PASSING floor is still allowed (no over-block)", async () => {
-    const run = activeRun({ t1: task({ reviewers: [APPROVE] }) });
-    const d = await decidePipelineGuards(bash("cd /repo && gh pr create --fill"), {
-      loadRun: withRun(run),
-      gateEvidence: { t1: GATE_OK },
-    });
+  it("allows an unrelated gh command while a run is active (no over-block)", async () => {
+    const run = activeRun({ t1: task() });
+    const d = await decidePipelineGuards(bash("gh pr view 42"), { loadRun: withRun(run) });
     expect(isDeny(d)).toBe(false);
-  });
-
-  it("gh pr merge ALLOWED only with unanimous panel + pr_number + green CI", async () => {
-    const run = activeRun({ t1: task({ reviewers: [APPROVE], pr_number: 42 }) });
-    const d = await decidePipelineGuards(bash("gh pr merge 42 --squash"), {
-      loadRun: withRun(run),
-      gateEvidence: { t1: GATE_OK },
-    });
-    expect(isDeny(d)).toBe(false);
-  });
-
-  it("gh pr merge BLOCKED when pr_number is absent", async () => {
-    const run = activeRun({ t1: task({ reviewers: [APPROVE] }) });
-    const d = await decidePipelineGuards(bash("gh pr merge --squash"), {
-      loadRun: withRun(run),
-      gateEvidence: { t1: GATE_OK },
-    });
-    expect(isDeny(d)).toBe(true);
-  });
-
-  it("gh pr merge BLOCKED when panel not unanimous", async () => {
-    const run = activeRun({ t1: task({ reviewers: [BLOCKED], pr_number: 42 }) });
-    const d = await decidePipelineGuards(bash("gh pr merge 42 --squash"), {
-      loadRun: withRun(run),
-      gateEvidence: { t1: GATE_OK },
-    });
-    expect(isDeny(d)).toBe(true);
-  });
-
-  it("gh pr merge BLOCKED when CI/floor evidence is not green", async () => {
-    const run = activeRun({ t1: task({ reviewers: [APPROVE], pr_number: 42 }) });
-    const d = await decidePipelineGuards(bash("gh pr merge 42 --squash"), {
-      loadRun: withRun(run),
-      gateEvidence: { t1: GATE_FAIL },
-    });
-    expect(isDeny(d)).toBe(true);
-  });
-
-  it("a forged task field cannot open the gate (no stored boolean exists to read)", async () => {
-    // The task carries NO approving reviewers; whatever extra fields a forger
-    // adds, the derived verdict still sees an empty reviewer set → fail.
-    const run = activeRun({ t1: task({ reviewers: [] }) });
-    const d = await decidePipelineGuards(bash("gh pr create --fill"), {
-      loadRun: withRun(run),
-      gateEvidence: { t1: GATE_OK },
-    });
-    expect(isDeny(d)).toBe(true);
   });
 });
 
