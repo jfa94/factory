@@ -10256,20 +10256,31 @@ var coverageStrategy = {
   }
 };
 
-// src/verifier/deterministic/strategies/mutation.ts
-function scorePasses(score, target) {
-  return score >= target;
-}
-var STRYKER_CONFIGS = [
+// src/shared/gate-config-names.ts
+var STRYKER_CONFIG_BASENAMES = [
+  "stryker.conf.json",
+  "stryker.conf.js",
+  "stryker.conf.mjs",
+  "stryker.conf.cjs",
   "stryker.config.json",
   "stryker.config.js",
   "stryker.config.mjs",
   "stryker.config.cjs",
-  "stryker.conf.json",
-  "stryker.conf.js",
+  ".stryker.conf.json",
+  ".stryker.conf.js",
+  ".stryker.conf.mjs",
+  ".stryker.conf.cjs",
   ".stryker.config.json",
-  ".stryker.conf.json"
+  ".stryker.config.js",
+  ".stryker.config.mjs",
+  ".stryker.config.cjs"
 ];
+
+// src/verifier/deterministic/strategies/mutation.ts
+function scorePasses(score, target) {
+  return score >= target;
+}
+var STRYKER_CONFIGS = STRYKER_CONFIG_BASENAMES;
 var STRYKER_BIN = "node_modules/.bin/stryker";
 var mutationStrategy = {
   id: "mutation",

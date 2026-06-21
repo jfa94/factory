@@ -46,6 +46,22 @@ describe("write-protection — TCB write-deny (Δ W)", () => {
     expect(isDeny(decideWriteProtection(editInput("Write", p), deps()))).toBe(true);
   });
 
+  // jfa94/factory#11: an UNPROTECTED Stryker config sibling could be created and
+  // loaded by Stryker ahead of the scaffolded .stryker.config.json; the .mjs/.js/
+  // .cjs variants run arbitrary JS in the trusted gate process. All must be denied.
+  it("Δ W: Write to executable Stryker config siblings is blocked (shadow + code-exec vectors)", () => {
+    for (const name of [
+      "stryker.config.mjs",
+      "stryker.config.js",
+      "stryker.config.cjs",
+      "stryker.conf.js",
+      ".stryker.config.mjs", // the dotted variant the outsidey repo actually had
+    ]) {
+      const p = join(repoRoot, name);
+      expect(isDeny(decideWriteProtection(editInput("Write", p), deps()))).toBe(true);
+    }
+  });
+
   it("Δ W: Edit to hooks/* is blocked", () => {
     const p = join(repoRoot, "hooks", "write-protection.sh");
     writeFileSync(p, "x");

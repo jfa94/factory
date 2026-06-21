@@ -117,6 +117,13 @@ The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modifi
   present-but-score-less report on a green exit (`no-score`); no report (`no-report`);
   unparseable report (`unparseable-report`); a truncated report **throws** rather
   than risk mis-parsing a clipped payload.
+- **The Stryker config is shadow-proof.** TCB write-protection covers **every**
+  basename Stryker's discovery can load (the full `{'',.'} × {.conf,.config} ×
+{json,js,mjs,cjs}` set), not just the scaffolded `.stryker.config.json`. An
+  executor therefore cannot create an unprotected sibling (e.g. `stryker.config.mjs`
+  — executable JS that would run inside the gate process) to shadow or weaken the
+  gate config. The protected set and the gate's applicability set are both derived
+  from one list (`src/shared/gate-config-names.ts`) with a drift-guard test.
 
 ## Beyond the deterministic gates
 

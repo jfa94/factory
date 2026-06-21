@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync, realpathSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isTcbProtected, buildTcbRules, canonicalizePath, TCB_DENY } from "./tcb.js";
+import { STRYKER_CONFIG_BASENAMES } from "../shared/gate-config-names.js";
 
 describe("tcb — hardcoded denylist (Δ W)", () => {
   let repoRoot: string;
@@ -37,6 +38,19 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
 
   it("Δ W: matches gate config by basename (.stryker.config.json, .dependency-cruiser.cjs)", () => {
     for (const name of [".stryker.config.json", ".dependency-cruiser.cjs"]) {
+      const p = join(repoRoot, name);
+      writeFileSync(p, "x");
+      expect(isTcbProtected(p, ctx())?.rule.category).toBe("gate-config");
+    }
+  });
+
+  // jfa94/factory#11 drift guard: EVERY Stryker-discoverable config basename must
+  // be write-protected, else an executor could create an unprotected sibling that
+  // Stryker loads ahead of the scaffolded config (the .js/.mjs/.cjs variants are
+  // executable JS run inside the gate). Behavioral — pins protection ⊇ discovery
+  // set even if the wiring is later refactored.
+  it("Δ W: tcb-stryker-discovery — every Stryker discovery basename is gate-config protected", () => {
+    for (const name of STRYKER_CONFIG_BASENAMES) {
       const p = join(repoRoot, name);
       writeFileSync(p, "x");
       expect(isTcbProtected(p, ctx())?.rule.category).toBe("gate-config");

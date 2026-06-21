@@ -37,6 +37,7 @@
  */
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, normalize, resolve, sep } from "node:path";
+import { STRYKER_CONFIG_BASENAMES } from "../shared/gate-config-names.js";
 
 /**
  * CLOSED category enum for a protected path. A new category is a DESIGN change
@@ -141,11 +142,17 @@ function baseName(absPath: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
-/** Root-level gate/CI config files (matched by basename anywhere in repo root). */
+/**
+ * Root-level gate/CI config files (matched by basename anywhere in repo root).
+ *
+ * The Stryker entries are the FULL discovery set ({@link STRYKER_CONFIG_BASENAMES})
+ * — not just the scaffolded `.stryker.config.json` — so an executor cannot dodge
+ * the gate by creating an UNPROTECTED sibling Stryker config that Stryker would
+ * load ahead of it (jfa94/factory#11). The `tcb-stryker-discovery` drift-guard
+ * test pins this set ⊇ the discovery list.
+ */
 const GATE_CONFIG_BASENAMES = new Set<string>([
-  ".stryker.config.json",
-  "stryker.config.json",
-  ".stryker.conf.json",
+  ...STRYKER_CONFIG_BASENAMES,
   ".dependency-cruiser.cjs",
   ".dependency-cruiser.js",
   "dependency-cruiser.config.cjs",

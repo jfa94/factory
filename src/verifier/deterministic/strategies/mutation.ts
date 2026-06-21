@@ -32,23 +32,21 @@ import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js"
 import { ran, skip } from "../strategy.js";
 import { mutationScope } from "../scope.js";
 import type { GateTools } from "../tools.js";
+import { STRYKER_CONFIG_BASENAMES } from "../../../shared/gate-config-names.js";
 
 /** Strict float compare: pass IFF score >= target (no rounding). */
 export function scorePasses(score: number, target: number): boolean {
   return score >= target;
 }
 
-/** Stryker config filenames that mark mutation testing as opted-in. */
-export const STRYKER_CONFIGS = [
-  "stryker.config.json",
-  "stryker.config.js",
-  "stryker.config.mjs",
-  "stryker.config.cjs",
-  "stryker.conf.json",
-  "stryker.conf.js",
-  ".stryker.config.json",
-  ".stryker.conf.json",
-] as const;
+/**
+ * Stryker config filenames that mark mutation testing as opted-in. Re-points at
+ * the shared {@link STRYKER_CONFIG_BASENAMES} (Stryker's full discovery set) so
+ * the gate recognizes EVERY config Stryker could load — a repo whose only config
+ * is e.g. `.stryker.config.mjs` is no longer silently skipped `no-mutation-config`
+ * while CI runs Stryker. Same list backs the TCB write-protection (jfa94#11).
+ */
+export const STRYKER_CONFIGS = STRYKER_CONFIG_BASENAMES;
 
 /** Worktree-relative path the stryker binary resolves to after `npm install`. */
 export const STRYKER_BIN = "node_modules/.bin/stryker";

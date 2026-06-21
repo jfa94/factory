@@ -6504,6 +6504,28 @@ function resolveDataDir(opts = {}) {
 // src/hooks/tcb.ts
 import { existsSync as existsSync2, realpathSync } from "node:fs";
 import { isAbsolute, normalize, resolve as resolve2, sep as sep2 } from "node:path";
+
+// src/shared/gate-config-names.ts
+var STRYKER_CONFIG_BASENAMES = [
+  "stryker.conf.json",
+  "stryker.conf.js",
+  "stryker.conf.mjs",
+  "stryker.conf.cjs",
+  "stryker.config.json",
+  "stryker.config.js",
+  "stryker.config.mjs",
+  "stryker.config.cjs",
+  ".stryker.conf.json",
+  ".stryker.conf.js",
+  ".stryker.conf.mjs",
+  ".stryker.conf.cjs",
+  ".stryker.config.json",
+  ".stryker.config.js",
+  ".stryker.config.mjs",
+  ".stryker.config.cjs"
+];
+
+// src/hooks/tcb.ts
 function isAtOrUnder(p, base) {
   if (p === base) return true;
   return p.startsWith(base.endsWith(sep2) ? base : base + sep2);
@@ -6543,9 +6565,7 @@ function baseName(absPath) {
   return parts[parts.length - 1] ?? "";
 }
 var GATE_CONFIG_BASENAMES = /* @__PURE__ */ new Set([
-  ".stryker.config.json",
-  "stryker.config.json",
-  ".stryker.conf.json",
+  ...STRYKER_CONFIG_BASENAMES,
   ".dependency-cruiser.cjs",
   ".dependency-cruiser.js",
   "dependency-cruiser.config.cjs"
