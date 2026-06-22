@@ -154,6 +154,13 @@ preflight → tests → exec → verify → ship
   six-reviewer panel + verify-then-fix. Derives the floor verdict.
 - **ship** — opens the task PR idempotently; in `live` mode serial-merges into the
   run's `staging-<run-id>` branch. The one stage that writes the terminal task status.
+  It probes for a native GitHub merge queue and, when present, enqueues via
+  `--auto`; otherwise it app-level squash-merges. The probe distinguishes a genuine
+  "no merge queue" (a `404`) from a "couldn't tell" gh failure (auth, rate-limit,
+  5xx, truncated body): the latter **throws** rather than silently degrading off a
+  real merge queue. The merge writer catches that throw, logs a warning, and falls
+  back to app-level squash — an observable, contained degrade (both paths squash;
+  only `--auto` differs), never a crashed run.
 
 When all tasks are terminal and the PRD would be `completed`, `factory next`
 returns `docs-ready` instead of `all-terminal` — provided the repo keeps a `/docs`

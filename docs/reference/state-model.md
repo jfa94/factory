@@ -109,23 +109,28 @@ one.
 
 ## `TaskState`
 
-| Field                     | Type                       | Meaning                                                         |
-| ------------------------- | -------------------------- | --------------------------------------------------------------- |
-| `task_id`                 | string                     | —                                                               |
-| `status`                  | TaskStatus                 | See below.                                                      |
-| `depends_on`              | string[]                   | Task ids this task depends on (the vertical-slice DAG).         |
-| `risk_tier`               | `low \| medium \| high`    | The single producer dial, set at spec time, never re-assessed.  |
-| `escalation_rung`         | int ≥0                     | Current rung on the producer escalation ladder (0 = starting).  |
-| `producer_role`           | `test-writer \| executor`? | Which producer role is/last ran.                                |
-| `reviewers`               | ReviewerResult[]           | Per-reviewer panel results (the floor is derived from these).   |
-| `branch`                  | string?                    | Run-scoped branch `factory/<run_id>/<task_id>`.                 |
-| `pr_number`               | int >0?                    | PR number once created.                                         |
-| `failure_class`           | FailureClass?              | Set _iff_ `status === "dropped"`.                               |
-| `failure_reason`          | string?                    | Human-facing drop reason; set _iff_ dropped.                    |
-| `stage`                   | TaskStage?                 | The drive coroutine's resume cursor (see below).                |
-| `merge_resyncs`           | int ≥0 (default 0)         | Ship live-merge re-sync count (see below).                      |
-| `spawn_in_flight`         | object?                    | Spawn-in-flight checkpoint for idempotent re-spawn (see below). |
-| `started_at` / `ended_at` | string?                    | ISO-8601.                                                       |
+| Field                     | Type                       | Meaning                                                                                                                                                                                                                                                                        |
+| ------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `task_id`                 | string                     | —                                                                                                                                                                                                                                                                              |
+| `status`                  | TaskStatus                 | See below.                                                                                                                                                                                                                                                                     |
+| `depends_on`              | string[]                   | Task ids this task depends on (the vertical-slice DAG). A deliberate denormalization: copied from the `SpecTask` at seed time and then frozen, so DAG-traversal readers (ready-task selection, rescue drift-scan) read edges off run state without coupling to the spec store. |
+| `escalation_rung`         | int ≥0                     | Current rung on the producer escalation ladder (0 = starting).                                                                                                                                                                                                                 |
+| `producer_role`           | `test-writer \| executor`? | Which producer role is/last ran.                                                                                                                                                                                                                                               |
+| `reviewers`               | ReviewerResult[]           | Per-reviewer panel results (the floor is derived from these).                                                                                                                                                                                                                  |
+| `branch`                  | string?                    | Run-scoped branch `factory/<run_id>/<task_id>`.                                                                                                                                                                                                                                |
+| `pr_number`               | int >0?                    | PR number once created.                                                                                                                                                                                                                                                        |
+| `failure_class`           | FailureClass?              | Set _iff_ `status === "dropped"`.                                                                                                                                                                                                                                              |
+| `failure_reason`          | string?                    | Human-facing drop reason; set _iff_ dropped.                                                                                                                                                                                                                                   |
+| `stage`                   | TaskStage?                 | The drive coroutine's resume cursor (see below).                                                                                                                                                                                                                               |
+| `merge_resyncs`           | int ≥0 (default 0)         | Ship live-merge re-sync count (see below).                                                                                                                                                                                                                                     |
+| `spawn_in_flight`         | object?                    | Spawn-in-flight checkpoint for idempotent re-spawn (see below).                                                                                                                                                                                                                |
+| `started_at` / `ended_at` | string?                    | ISO-8601.                                                                                                                                                                                                                                                                      |
+
+`TaskState` stores **no** `risk_tier`. The single producer dial (`low | medium |
+high`, set at spec time and never re-assessed mid-run) lives on the `SpecTask` and
+is read live via the spec pointer — never copied into run state (derive-don't-store,
+Decision 25). On-disk state written before this change still parses: the schema
+strips the now-unknown key, and `schema_version` is unchanged.
 
 ### `TaskStatus`
 

@@ -14,7 +14,7 @@ exits `2`.
 | Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches.                                                                                                                                                                                                                                                                                                                                                           |
-| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that stages a known secret shape.                                                                                                                                                                                                                                                                                                                                              |
+| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that stages a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                                                                                                                                                                                 |
 | `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating (categorical agent-deny of `gh pr create`/`gh pr merge`). Each arm derives its owning run from its own inputs — never the global pointer (see [Run ownership](#run-ownership)).                                                                                                             |
 | `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                                                                                                                                                                |
 | `write-protection`  | PreToolUse `Edit\|Write\|MultiEdit`         | Deny writes to hardcoded TCB (trusted-computing-base) paths.                                                                                                                                                                                                                                                                                                                                               |
@@ -86,4 +86,32 @@ The write-scope arm is a **rail**, not the boundary: the authoritative TDD
 enforcement is the deterministic commit-order gate on the task branch
 (`src/verifier/deterministic/strategies/tdd.ts`), so a path-anchor miss (e.g. a
 producer write issued via `Bash`) does not weaken enforcement.
+
+## secret-guard
+
+`secret-guard` fires on every `Bash` (autonomous **and** human sessions). It
+detects `git commit` / `git push` (including fused-override forms), resolves the
+target repo, scans the staged (`git diff --cached`) or unpushed (`git log -p`) diff
+for known secret shapes, and denies on a match.
+
+Before it scans, it denies — **fail-closed** — the redirection bypasses that would
+decouple the index/repo it scans from the one actually committed, so a staged
+secret could otherwise slip past:
+
+| Deny reason                          | Triggered by                                                                                                                                                                                           |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `git_dir_override_denied`            | A `--git-dir` or `--work-tree` flag on the git command.                                                                                                                                                |
+| `git_redirect_env_denied`            | A `VAR=` env-prefix in the index/repo-redirection family: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE`. |
+| `non_git_target`                     | The resolved target directory is not a git repository.                                                                                                                                                 |
+| `git_diff_failed` / `git_log_failed` | The staged-diff / unpushed-log scan could not be produced.                                                                                                                                             |
+
+The env-prefix deny is **not** a blanket `GIT_*` block: benign overrides
+(`GIT_SSH_COMMAND`, `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, `GIT_EDITOR`, `GIT_PAGER`, …)
+are explicitly allowed, so a human's `GIT_SSH_COMMAND=… git push` is not a false
+positive. Only the listed family redirects the index/object store and is denied.
+
+Target-repo resolution honors `git -C <dir>` with **last-wins** semantics (via the
+canonical `parseGitInvocation` parser), so a `git -C <clean> -C <secret> commit`
+that points the scan at one directory and the commit at another cannot evade the
+guard — the scan tracks the same directory the commit uses.
 </content>
