@@ -505,3 +505,28 @@ describe("docs-ready gate", () => {
     }
   });
 });
+
+describe("docs ordering invariant", () => {
+  const DONE_AT = "2026-01-01T00:00:00.000Z";
+
+  it("docs-ready precedes all-terminal; all-terminal only after docs done", async () => {
+    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+
+      // Before docs: the gate withholds all-terminal.
+      expect((await stepRun(deps, runId)).kind).toBe("docs-ready");
+
+      // Simulate the fold marking docs done (Task 5's done path).
+      await state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: DONE_AT } }));
+
+      // Now finalize is reachable.
+      expect((await stepRun(deps, runId)).kind).toBe("all-terminal");
+    } finally {
+      await cleanup();
+    }
+  });
+});
