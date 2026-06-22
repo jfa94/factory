@@ -13,6 +13,18 @@
 /** The closed set of deterministic gates. */
 export type GateId = "test" | "tdd" | "coverage" | "mutation" | "sast" | "type" | "lint" | "build";
 
+/**
+ * The closed evidence-label domain for {@link GateEvidence.gate}. A gate verdict's
+ * evidence is produced by ONE of three sources, each with a structurally-closed
+ * label: a deterministic gate ({@link GateId}), the holdout check (`"holdout"`),
+ * or a panel reviewer (`` `panel:${reviewer}` ``). The template-literal member
+ * captures the dynamic-but-closed panel labels in-place, so every construction
+ * site type-checks while an arbitrary/typo'd label (e.g. `"tests"` — canonical is
+ * `"test"`) is rejected at compile time. Widening this to `string` would re-open
+ * the hole; keep it a closed union.
+ */
+export type EvidenceGate = GateId | "holdout" | `panel:${string}`;
+
 /** All gate ids, in canonical order (drives default enablement + iteration). */
 export const GATE_IDS: readonly GateId[] = [
   "test",

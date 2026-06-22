@@ -17,13 +17,13 @@ const approve = (reviewer: string): ReviewerResult => ({
 
 describe("derive-don't-store: verdicts are computed from ground truth (Δ V)", () => {
   it("a single gate verdict reflects the observed evidence", () => {
-    const pass = deriveGateVerdict({ gate: "tests", observed: true });
-    const fail = deriveGateVerdict({ gate: "tests", observed: false });
+    const pass = deriveGateVerdict({ gate: "test", observed: true });
+    const fail = deriveGateVerdict({ gate: "test", observed: false });
     expect(pass.passed).toBe(true);
     expect(fail.passed).toBe(false);
     // It is branded as derived and carries its evidence — never a bare boolean.
     expect(pass.__derived).toBe(true);
-    expect(pass.from).toEqual([{ gate: "tests", observed: true }]);
+    expect(pass.from).toEqual([{ gate: "test", observed: true }]);
   });
 
   it("flipping the evidence flips the verdict (re-derivation, not a cached read)", () => {
@@ -40,13 +40,13 @@ describe("derive-don't-store: verdicts are computed from ground truth (Δ V)", (
   it("the conjunction passes only when every gate passes", () => {
     expect(
       deriveAllGatesVerdict([
-        { gate: "tests", observed: true },
+        { gate: "test", observed: true },
         { gate: "coverage", observed: true },
       ]).passed,
     ).toBe(true);
     expect(
       deriveAllGatesVerdict([
-        { gate: "tests", observed: true },
+        { gate: "test", observed: true },
         { gate: "coverage", observed: false },
       ]).passed,
     ).toBe(false);
@@ -89,18 +89,18 @@ describe("combined floor verdict requires BOTH layers", () => {
   const task = { reviewers: [approve("impl"), approve("security")] };
 
   it("passes when gates AND panel pass", () => {
-    expect(deriveFloorVerdict(task, [{ gate: "tests", observed: true }]).passed).toBe(true);
+    expect(deriveFloorVerdict(task, [{ gate: "test", observed: true }]).passed).toBe(true);
   });
 
   it("fails when gates fail even if the panel approves", () => {
-    expect(deriveFloorVerdict(task, [{ gate: "tests", observed: false }]).passed).toBe(false);
+    expect(deriveFloorVerdict(task, [{ gate: "test", observed: false }]).passed).toBe(false);
   });
 
   it("fails when the panel blocks even if gates pass", () => {
     const blocked = {
       reviewers: [{ reviewer: "x", verdict: "blocked" as const, confirmed_blockers: 1 }],
     };
-    expect(deriveFloorVerdict(blocked, [{ gate: "tests", observed: true }]).passed).toBe(false);
+    expect(deriveFloorVerdict(blocked, [{ gate: "test", observed: true }]).passed).toBe(false);
   });
 
   it("fails with no gate evidence even if the panel approves", () => {
@@ -148,7 +148,7 @@ describe("floorBlockReason — the single shared diagnostic for a blocked floor"
   it("names blocked and errored reviewers", () => {
     const reason = floorBlockReason(
       [blockedReviewer("security"), erroredReviewer("quality")],
-      [{ gate: "tests", observed: true }],
+      [{ gate: "test", observed: true }],
     );
     expect(reason).toContain("blocked by: security");
     expect(reason).toContain("unresolved (verifier error): quality");
@@ -166,7 +166,7 @@ describe("floorBlockReason — the single shared diagnostic for a blocked floor"
   it("falls back to the generic reason only when nothing specific is identifiable", () => {
     // Gates present + observed; reviewers all approve — the only way control
     // reaches here in practice is a derivation the caller already deemed blocked.
-    expect(floorBlockReason([approve("impl")], [{ gate: "tests", observed: true }])).toBe(
+    expect(floorBlockReason([approve("impl")], [{ gate: "test", observed: true }])).toBe(
       "floor not unanimous",
     );
   });

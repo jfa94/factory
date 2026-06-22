@@ -20,6 +20,7 @@
  * of machine-checkable evidence; the panel (judgment) floor is the conjunction
  * (unanimity) over reviewer results — itself derived, never stored.
  */
+import type { EvidenceGate } from "../../verifier/deterministic/gate-id.js";
 import type { ReviewerResult, TaskState } from "./schema.js";
 
 /**
@@ -30,8 +31,14 @@ import type { ReviewerResult, TaskState } from "./schema.js";
  * trail of where it came from.
  */
 export interface GateEvidence {
-  /** Stable gate id, e.g. "tests" | "coverage" | "mutation" | "sast" | … */
-  gate: string;
+  /**
+   * Stable evidence label, drawn from the closed {@link EvidenceGate} domain: a
+   * deterministic gate id (`"test"`/`"coverage"`/…), the holdout check
+   * (`"holdout"`), or a panel reviewer (`` `panel:${reviewer}` ``). NOT `string` —
+   * a typo'd label (e.g. `"tests"`) is a compile error, not a silently-mislabelled
+   * audit entry.
+   */
+  gate: EvidenceGate;
   /**
    * The raw machine-checkable outcome of running the gate NOW. The whole point of
    * derive-don't-store: this is produced by executing the gate, not by reading a

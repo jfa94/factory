@@ -22,7 +22,7 @@ const source: SourceReader = { readLines: (f) => SRC[f] ?? null };
 
 // A passing deterministic gate so the floor's deterministic layer is satisfied;
 // the panel layer is what these tests exercise.
-const PASSING_GATES: readonly GateEvidence[] = [{ gate: "tests", observed: true }];
+const PASSING_GATES: readonly GateEvidence[] = [{ gate: "test", observed: true }];
 
 function confirmAll(holds: boolean): (r: RawReview) => FindingVerifierRunner {
   return (review) => ({
@@ -182,7 +182,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       reviews: [approve("implementation-reviewer")],
       source,
       makeRunner: confirmAll(true),
-      gateEvidence: [{ gate: "tests", observed: false }],
+      gateEvidence: [{ gate: "test", observed: false }],
       stage: "verify",
     });
     expect(res.floor.passed).toBe(false);

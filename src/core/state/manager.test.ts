@@ -211,7 +211,7 @@ describe("derive-don't-store survives a forged on-disk verdict (Δ V, end-to-end
 
     // 2) The floor verdict is re-derived from ground truth (the blocked panel +
     //    real gate evidence) and IGNORES the forgery — it FAILS, as it must.
-    const verdict = deriveFloorVerdict(reread.tasks.t1!, [{ gate: "tests", observed: true }]);
+    const verdict = deriveFloorVerdict(reread.tasks.t1!, [{ gate: "test", observed: true }]);
     expect(verdict.passed).toBe(false);
     expect(verdict.__derived).toBe(true);
   });
