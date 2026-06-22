@@ -6937,6 +6937,18 @@ var REDIRECT_ENV = /* @__PURE__ */ new Set([
   "GIT_COMMON_DIR",
   "GIT_NAMESPACE"
 ]);
+async function execOrDeny(execFn, cwd, argvs, reason, msg) {
+  const results = [];
+  try {
+    for (const argv of argvs) {
+      results.push(await execFn("git", ["-C", cwd, ...argv], {}));
+    }
+  } catch {
+    return deny(reason, msg);
+  }
+  if (results.some((r) => r.code !== 0)) return deny(reason, msg);
+  return results;
+}
 async function decideSecretGuard(input, deps = {}) {
   const command = commandOf(input);
   if (command.length === 0) return allow();
@@ -6966,82 +6978,57 @@ async function decideSecretGuard(input, deps = {}) {
     );
   }
   const commitDir = inv.workDir.length > 0 ? inv.workDir : cwd;
-  let repoCheck;
-  try {
-    repoCheck = await execFn("git", ["-C", commitDir, "rev-parse", "--git-dir"], {});
-  } catch {
-    return deny(
-      "non_git_target",
-      `secret-commit-guard: cannot scan, '${commitDir}' is not a git repository`
-    );
-  }
-  if (repoCheck.code !== 0) {
-    return deny(
-      "non_git_target",
-      `secret-commit-guard: cannot scan, '${commitDir}' is not a git repository`
-    );
-  }
+  const repo = await execOrDeny(
+    execFn,
+    commitDir,
+    [["rev-parse", "--git-dir"]],
+    "non_git_target",
+    `secret-commit-guard: cannot scan, '${commitDir}' is not a git repository`
+  );
+  if (!Array.isArray(repo)) return repo;
   let scanPaths = "";
   let scanDiff = "";
   if (isCommit) {
-    let names;
-    let diff;
-    try {
-      names = await execFn("git", ["-C", commitDir, "diff", "--cached", "--name-only"], {});
-      diff = await execFn("git", ["-C", commitDir, "diff", "--cached", "-U0"], {});
-    } catch {
-      return deny(
-        "git_diff_failed",
-        "secret-commit-guard: git diff failed \u2014 cannot verify staged changes"
-      );
-    }
-    if (names.code !== 0 || diff.code !== 0) {
-      return deny(
-        "git_diff_failed",
-        "secret-commit-guard: git diff failed \u2014 cannot verify staged changes"
-      );
-    }
-    scanPaths = names.stdout;
-    scanDiff = diff.stdout;
+    const res = await execOrDeny(
+      execFn,
+      commitDir,
+      [
+        ["diff", "--cached", "--name-only"],
+        ["diff", "--cached", "-U0"]
+      ],
+      "git_diff_failed",
+      "secret-commit-guard: git diff failed \u2014 cannot verify staged changes"
+    );
+    if (!Array.isArray(res)) return res;
+    scanPaths = res[0].stdout;
+    scanDiff = res[1].stdout;
   } else {
-    let log8;
-    let names;
-    try {
-      names = await execFn(
-        "git",
-        ["-C", commitDir, "log", "@{upstream}..HEAD", "--name-only", "--format="],
-        {}
-      );
-      log8 = await execFn("git", ["-C", commitDir, "log", "-p", "@{upstream}..HEAD", "-U0"], {});
-    } catch {
-      return deny(
+    const logFailed = "secret-commit-guard: git log failed \u2014 cannot verify pushed commits";
+    let res = await execOrDeny(
+      execFn,
+      commitDir,
+      [
+        ["log", "@{upstream}..HEAD", "--name-only", "--format="],
+        ["log", "-p", "@{upstream}..HEAD", "-U0"]
+      ],
+      "git_log_failed",
+      logFailed
+    );
+    if (!Array.isArray(res)) {
+      res = await execOrDeny(
+        execFn,
+        commitDir,
+        [
+          ["log", "HEAD", "--name-only", "--format="],
+          ["log", "-p", "HEAD", "-U0"]
+        ],
         "git_log_failed",
-        "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
+        logFailed
       );
+      if (!Array.isArray(res)) return res;
     }
-    if (names.code !== 0 || log8.code !== 0) {
-      try {
-        names = await execFn(
-          "git",
-          ["-C", commitDir, "log", "HEAD", "--name-only", "--format="],
-          {}
-        );
-        log8 = await execFn("git", ["-C", commitDir, "log", "-p", "HEAD", "-U0"], {});
-      } catch {
-        return deny(
-          "git_log_failed",
-          "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
-        );
-      }
-      if (names.code !== 0 || log8.code !== 0) {
-        return deny(
-          "git_log_failed",
-          "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
-        );
-      }
-    }
-    scanPaths = names.stdout;
-    scanDiff = log8.stdout;
+    scanPaths = res[0].stdout;
+    scanDiff = res[1].stdout;
   }
   const blocks = [];
   for (const raw of scanPaths.split("\n")) {

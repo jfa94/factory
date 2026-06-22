@@ -101,9 +101,32 @@ const REDIRECT_ENV: ReadonlySet<string> = new Set([
   "GIT_NAMESPACE",
 ]);
 
-/** Parse a redaction-safe preview of a matched secret token. */
-function redactPreview(s: string): string {
-  return `${s.slice(0, 4)}****`;
+/**
+ * Run a sequence of git exec calls FAIL-CLOSED. Returns the results only if every
+ * call resolves AND exits 0; on any throw or non-zero exit returns a deny
+ * {@link HookDecision} carrying `reason`/`msg`. Each argv is prefixed with
+ * `-C <cwd>`. This is the guard's fail-closed-DENY exec contract — deliberately
+ * the OPPOSITE of `shared/exec`'s throw-on-non-zero — and collapses the four
+ * byte-identical exec→catch→deny blocks (repo check, commit diff, push log, and
+ * the push-retry log) into one. Callers branch on `Array.isArray`.
+ */
+async function execOrDeny(
+  execFn: ExecFn,
+  cwd: string,
+  argvs: readonly (readonly string[])[],
+  reason: string,
+  msg: string,
+): Promise<ExecResult[] | HookDecision> {
+  const results: ExecResult[] = [];
+  try {
+    for (const argv of argvs) {
+      results.push(await execFn("git", ["-C", cwd, ...argv], {}));
+    }
+  } catch {
+    return deny(reason, msg);
+  }
+  if (results.some((r) => r.code !== 0)) return deny(reason, msg);
+  return results;
 }
 
 /**
@@ -162,87 +185,64 @@ export async function decideSecretGuard(
   const commitDir = inv.workDir.length > 0 ? inv.workDir : cwd;
 
   // Confirm the target is a git repo; non-git → fail closed.
-  let repoCheck: ExecResult;
-  try {
-    repoCheck = await execFn("git", ["-C", commitDir, "rev-parse", "--git-dir"], {});
-  } catch {
-    return deny(
-      "non_git_target",
-      `secret-commit-guard: cannot scan, '${commitDir}' is not a git repository`,
-    );
-  }
-  if (repoCheck.code !== 0) {
-    return deny(
-      "non_git_target",
-      `secret-commit-guard: cannot scan, '${commitDir}' is not a git repository`,
-    );
-  }
+  const repo = await execOrDeny(
+    execFn,
+    commitDir,
+    [["rev-parse", "--git-dir"]],
+    "non_git_target",
+    `secret-commit-guard: cannot scan, '${commitDir}' is not a git repository`,
+  );
+  if (!Array.isArray(repo)) return repo;
 
   // --- Gather scan paths + diff ---
   let scanPaths = "";
   let scanDiff = "";
   if (isCommit) {
-    let names: ExecResult;
-    let diff: ExecResult;
-    try {
-      names = await execFn("git", ["-C", commitDir, "diff", "--cached", "--name-only"], {});
-      diff = await execFn("git", ["-C", commitDir, "diff", "--cached", "-U0"], {});
-    } catch {
-      return deny(
-        "git_diff_failed",
-        "secret-commit-guard: git diff failed — cannot verify staged changes",
-      );
-    }
-    if (names.code !== 0 || diff.code !== 0) {
-      return deny(
-        "git_diff_failed",
-        "secret-commit-guard: git diff failed — cannot verify staged changes",
-      );
-    }
-    scanPaths = names.stdout;
-    scanDiff = diff.stdout;
+    const res = await execOrDeny(
+      execFn,
+      commitDir,
+      [
+        ["diff", "--cached", "--name-only"],
+        ["diff", "--cached", "-U0"],
+      ],
+      "git_diff_failed",
+      "secret-commit-guard: git diff failed — cannot verify staged changes",
+    );
+    if (!Array.isArray(res)) return res;
+    scanPaths = res[0]!.stdout;
+    scanDiff = res[1]!.stdout;
   } else {
-    // Push: scan unpushed commits (upstream..HEAD, else all of HEAD).
-    let log: ExecResult;
-    let names: ExecResult;
-    try {
-      names = await execFn(
-        "git",
-        ["-C", commitDir, "log", "@{upstream}..HEAD", "--name-only", "--format="],
-        {},
-      );
-      log = await execFn("git", ["-C", commitDir, "log", "-p", "@{upstream}..HEAD", "-U0"], {});
-    } catch {
-      return deny(
+    // Push: scan unpushed commits (`@{upstream}..HEAD`). No upstream is a
+    // legitimate first-push, not a malfunction, so on failure retry the full HEAD
+    // range; if THAT also fails, fail closed. (A spawn-level throw recurs on the
+    // retry with the same binary, so it still lands on the same deny — only a
+    // non-zero exit, the real no-upstream signal, is genuinely recoverable.)
+    const logFailed = "secret-commit-guard: git log failed — cannot verify pushed commits";
+    let res = await execOrDeny(
+      execFn,
+      commitDir,
+      [
+        ["log", "@{upstream}..HEAD", "--name-only", "--format="],
+        ["log", "-p", "@{upstream}..HEAD", "-U0"],
+      ],
+      "git_log_failed",
+      logFailed,
+    );
+    if (!Array.isArray(res)) {
+      res = await execOrDeny(
+        execFn,
+        commitDir,
+        [
+          ["log", "HEAD", "--name-only", "--format="],
+          ["log", "-p", "HEAD", "-U0"],
+        ],
         "git_log_failed",
-        "secret-commit-guard: git log failed — cannot verify pushed commits",
+        logFailed,
       );
+      if (!Array.isArray(res)) return res;
     }
-    if (names.code !== 0 || log.code !== 0) {
-      // No upstream is a legitimate first-push, not a malfunction: retry the full
-      // HEAD range. If THAT also fails, fail closed.
-      try {
-        names = await execFn(
-          "git",
-          ["-C", commitDir, "log", "HEAD", "--name-only", "--format="],
-          {},
-        );
-        log = await execFn("git", ["-C", commitDir, "log", "-p", "HEAD", "-U0"], {});
-      } catch {
-        return deny(
-          "git_log_failed",
-          "secret-commit-guard: git log failed — cannot verify pushed commits",
-        );
-      }
-      if (names.code !== 0 || log.code !== 0) {
-        return deny(
-          "git_log_failed",
-          "secret-commit-guard: git log failed — cannot verify pushed commits",
-        );
-      }
-    }
-    scanPaths = names.stdout;
-    scanDiff = log.stdout;
+    scanPaths = res[0]!.stdout;
+    scanDiff = res[1]!.stdout;
   }
 
   const blocks: string[] = [];
@@ -295,9 +295,6 @@ export async function runSecretGuard(
   emitPermissionDecision(decision);
   return decisionToExitCode(decision);
 }
-
-/** redact preview kept exported for the deny-detail tests. */
-export { redactPreview };
 
 /** Read all of process.stdin as utf-8. */
 async function readAllStdin(): Promise<string> {
