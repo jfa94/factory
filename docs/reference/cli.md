@@ -332,9 +332,14 @@ Emits one of:
 - `{ kind:"tasks-ready", run_id, ready:[...], cascade_dropped:[...] }` — ready
   tasks, **in-flight first** (crash-resume finishes started work before opening
   new), then pending in spec order.
+- `{ kind:"docs-ready", run_id, data_dir, ship_mode }` — all tasks are terminal
+  and the run will complete, but `/docs` needs updating first. The driver runs
+  `factory run docs`, which emits a scribe manifest; the driver spawns the scribe
+  agent and folds the docs commit onto the staging branch. `next` emits
+  `all-terminal` only after that fold.
 - `{ kind:"all-terminal", run_id, cascade_dropped:[...] }` — nothing left to
-  schedule; the driver calls `factory run finalize` next. `cascade_dropped` is
-  this-invocation-only.
+  schedule and the docs stage (when applicable) is already `done`; the driver
+  calls `factory run finalize` next. `cascade_dropped` is this-invocation-only.
 - `{ kind:"run-terminal", run_id, run_status }` — the run is already terminal.
 - `{ kind:"quota-blocked", run_id, scope, reason, resets_at_epoch? }` — a quota
   window blocked; the checkpoint is persisted.

@@ -114,8 +114,8 @@ tests → exec → verify → ship`), emitting a spawn manifest whenever it need
    posts one comment on the PRD issue listing the dropped tasks; **only when the
    whole PRD completed** does it ship the `staging-<run-id> → develop` rollup (which
    includes the docs commit, since it landed on staging before finalize), comment on
-   - close the originating PRD issue, and delete the per-run branch. Then
-     `factory score` + `factory state --summary` report the outcome.
+   and close the originating PRD issue, and delete the per-run branch. Then
+   `factory score` + `factory state --summary` report the outcome.
 
 ## 4. Read the outcome
 
