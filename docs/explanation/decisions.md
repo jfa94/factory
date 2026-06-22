@@ -789,6 +789,22 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 ---
 
+## Decision 37 — Documentation Is an Engine Stage Before Finalize
+
+Docs generation was a Phase-4 markdown conditional that ran AFTER the rollup PR
+merged and the PRD issue closed, leaving doc updates uncommitted. It is now a
+deterministic, blocking, resumable engine stage: `factory next` returns
+`docs-ready` when the prospective status is `completed`, the repo keeps `/docs`,
+docs are not opted out (`package.json` `factory.docs.enabled`), and the docs
+stage isn't `done`. A driver runs `factory run docs` (emit a scribe manifest on a
+staging-rooted worktree → fold publishes the docs commit onto staging). Because
+`next` withholds `all-terminal` until docs are `done`, the rollup/PRD-close cannot
+fire while docs pend. A docs failure suspends the run (one attempt; resumable via
+`/factory:resume`), never shipping half-documented. Whole-PRD diff
+(`origin/<baseBranch>..HEAD`); ships inside the one rollup PR (Decision 34).
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

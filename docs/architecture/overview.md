@@ -114,9 +114,9 @@ sequenceDiagram
   CLI-->>O: RunState (tasks seeded, status running)
 
   Note over O,CLI: Phase 3 — Drive (run coroutine picks a task, task coroutine advances it)
-  loop until all-terminal
+  loop until docs-ready or all-terminal
     O->>CLI: factory next
-    CLI-->>O: NextEnvelope (tasks-ready | all-terminal | quota-blocked)
+    CLI-->>O: NextEnvelope (tasks-ready | docs-ready | all-terminal | quota-blocked)
     loop drive the ready task: preflight→tests→exec→verify→ship
       O->>CLI: factory drive --task <t> [--results <prev>]
       CLI-->>O: DriveEnvelope (spawn manifest | terminal | quota-blocked)
@@ -125,9 +125,17 @@ sequenceDiagram
     end
   end
 
+  Note over O,CLI: Phase 3b — Docs (when all tasks completed and /docs is applicable)
+  O->>CLI: factory run docs
+  CLI-->>O: DocsEnvelope (scribe manifest on staging-rooted worktree)
+  O->>A: spawn scribe
+  A-->>O: docs commit on staging
+  O->>CLI: factory run docs --results <output>
+  CLI-->>O: all-terminal (docs marked done; fold merges commit onto staging)
+
   Note over O,CLI: Phase 4 — Completion
   O->>CLI: factory run finalize
-  CLI-->>O: report + (on failed) PRD-issue drops comment + (on completed) staging-&lt;run-id&gt;→develop rollup, then terminal
+  CLI-->>O: report + (on failed) PRD-issue drops comment + (on completed) staging-&lt;run-id&gt;→develop rollup (includes docs commit), then terminal
   O->>CLI: factory score / state --summary
 ```
 
@@ -147,12 +155,25 @@ preflight → tests → exec → verify → ship
 - **ship** — opens the task PR idempotently; in `live` mode serial-merges into the
   run's `staging-<run-id>` branch. The one stage that writes the terminal task status.
 
+When all tasks are terminal and the PRD would be `completed`, `factory next`
+returns `docs-ready` instead of `all-terminal` — provided the repo keeps a `/docs`
+directory and docs are not opted out (`package.json` `factory.docs.enabled !== false`)
+and the run's docs stage isn't already `done`. The driver then runs `factory run docs`,
+which emits a scribe manifest for a staging-rooted worktree; the driver spawns the
+`scribe` agent, then folds the docs commit back via `factory run docs --results`. The
+fold merges/pushes the docs commit onto the staging branch. Only once docs are `done`
+does `factory next` emit `all-terminal`. A docs failure suspends the run (one attempt;
+resumable via `/factory:resume`). On a `failed` run, or when docs are opted out, the
+docs stage is skipped and `all-terminal` fires immediately (Decision 37).
+
 The run-level **finalize** step is a _separate_ stage that runs once, after every
-task is terminal: it builds the report, and — on a `failed` run — posts one comment
-on the PRD issue listing the dropped tasks (Decision 36), or — **only when the whole
-PRD completed** (Decision 34) — ships the `staging-<run-id> → develop` rollup (then
-closes the PRD issue and deletes the per-run branch) before flipping the run terminal.
-A `failed` run leaves `develop` untouched and keeps its branch.
+task is terminal and the docs stage (if applicable) is `done`: it builds the report,
+and — on a `failed` run — posts one comment on the PRD issue listing the dropped tasks
+(Decision 36), or — **only when the whole PRD completed** (Decision 34) — ships the
+`staging-<run-id> → develop` rollup (which now includes the docs commit, since it
+landed on staging before finalize) then closes the PRD issue and deletes the per-run
+branch before flipping the run terminal. A `failed` run leaves `develop` untouched
+and keeps its branch.
 
 ## Data flow and state
 

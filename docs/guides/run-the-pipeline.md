@@ -102,12 +102,20 @@ tests → exec → verify → ship`), emitting a spawn manifest whenever it need
    agents. The driver spawns the producers and the review panel the manifest
    names, then folds their raw output back with `factory drive --results` (one
    state step). The engine — not the driver — decides every transition.
-5. **Completion** — `factory run finalize` builds the report; on a `failed` run it
+5. **Docs** — once all tasks are terminal and the PRD would be `completed`,
+   `factory next` returns `docs-ready` (not yet `all-terminal`) if the repo keeps a
+   `/docs` directory and docs aren't opted out. The driver runs `factory run docs`,
+   which emits a scribe manifest; the driver spawns the `scribe` agent and folds the
+   docs commit onto the `staging-<run-id>` branch. Only after that fold does `next`
+   emit `all-terminal`. A docs failure suspends the run (resumable via
+   `/factory:resume`). On a `failed` run, or when docs are opted out, this stage is
+   skipped.
+6. **Completion** — `factory run finalize` builds the report; on a `failed` run it
    posts one comment on the PRD issue listing the dropped tasks; **only when the
-   whole PRD completed** does it ship the `staging-<run-id> → develop` rollup (and,
-   on a merged rollup, comment on + close the originating PRD issue and delete the
-   per-run branch). Then `factory score` + `factory state --summary` report the
-   outcome.
+   whole PRD completed** does it ship the `staging-<run-id> → develop` rollup (which
+   includes the docs commit, since it landed on staging before finalize), comment on
+   - close the originating PRD issue, and delete the per-run branch. Then
+     `factory score` + `factory state --summary` report the outcome.
 
 ## 4. Read the outcome
 
