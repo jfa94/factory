@@ -1,0 +1,16 @@
+# Generated build artifacts — NOT authored source.
+#
+# `dist/factory.js` and `dist/factory-hook.js` are esbuild bundles: our source
+# (src/**) compiled together with its npm dependencies (commander, zod, …) into
+# two checked-in files. Security-scanning them means scanning third-party vendor
+# code, which yields only false positives in deps we don't author
+# (detect-non-literal-regexp, prototype-pollution-loop, spawn-shell-true — all
+# inside bundled libraries). The AUTHORED source under src/** and scripts/** is
+# scanned normally and must stay clean; the bundles are build output.
+dist/
+
+# Local agent worktrees (ephemeral copies created by Agent isolation:"worktree").
+.claude/worktrees/
+
+# Dependencies.
+node_modules/
