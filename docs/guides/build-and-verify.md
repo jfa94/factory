@@ -68,6 +68,34 @@ they are kept un-minified so the checked-in artifact stays diff-reviewable.
 `npm run verify`) and commit the regenerated `dist/` alongside your source change,
 or CI will fail on a stale bundle.
 
+### The build-integrity gate: `committed dist == build(src)`
+
+The shipped artifacts are checked in, but the security scan (semgrep) is told to
+ignore them — `.semgrepignore` excludes `dist/`, so the scan only ever sees `src/`.
+That leaves a gap on its own: a hand-edited or stale bundle could ship code the
+scan never inspected. A dedicated CI step in `.github/workflows/tests.yml` closes
+it at the root:
+
+```yaml
+- name: Assert committed bundles match a fresh build (semgrep scans src, ships dist)
+  run: |
+    npm run build
+    git diff --exit-code -- dist/ templates/.github/scripts/shard-mutation-scope.mjs
+```
+
+Because `scripts/build.mjs` is a deterministic, dependency-inlined esbuild (no
+`external`), `build(src)` is reproducible: rebuilding on CI and asserting the
+working tree is unchanged proves the **committed `dist/` is exactly `build(src)`**.
+That equivalence is what makes scanning `src/` sufficient — the scanned source and
+the shipped artifact are provably the same code. The same `git diff --exit-code`
+also covers the templates build output (`shard-mutation-scope.mjs`), catching the
+case where someone edits a bundle by hand or forgets to rebuild and commit. The
+step fails loud on any drift.
+
+This is the CI half of the invariant; the scaffold-doc half (how the template
+artifact reaches downstream repos) lives in
+[Decision 15](../explanation/decisions.md).
+
 ## The CLI registry seam
 
 To add a subcommand, create `src/cli/subcommands/<name>.ts` exporting a
