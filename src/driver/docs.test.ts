@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { StateManager } from "../core/state/manager.js";
 import { defaultConfig } from "../config/schema.js";
 import { FakeGitClient } from "../git/fakes.js";
-import { runDocsEmit, type DocsRunDeps } from "./docs.js";
+import { runDocsEmit, runDocsFold, type DocsRunDeps } from "./docs.js";
 
 const RUN_ID = "run-1";
 let dataDir: string;
@@ -27,6 +27,36 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
+});
+
+describe("runDocsFold", () => {
+  it("DONE → ff-merges docs into staging, pushes, removes worktree, marks docs done", async () => {
+    await runDocsEmit(deps(), RUN_ID); // create the worktree first
+    const env = await runDocsFold(deps(), RUN_ID, { status: "STATUS: DONE" });
+    expect(env.kind).toBe("done");
+    // FakeGitClient: mergeFfOrCommit(staging, docsBranch) → mergesInto[staging] = [docsBranch]
+    expect(git.mergesInto[`staging-${RUN_ID}`]).toContain(`docs-${RUN_ID}`);
+    expect(git.calls.some((c) => c === `push origin staging-${RUN_ID}`)).toBe(true);
+    expect(git.calls.some((c) => c.startsWith("worktree remove"))).toBe(true);
+    const run = await state.read(RUN_ID);
+    expect(run.docs?.status).toBe("done");
+    expect(run.status).not.toBe("suspended");
+  });
+
+  it("non-DONE → suspends the run, records the failure reason, never pushes", async () => {
+    await runDocsEmit(deps(), RUN_ID);
+    const env = await runDocsFold(deps(), RUN_ID, {
+      status: "STATUS: BLOCKED — ESCALATE missing context",
+    });
+    expect(env.kind).toBe("blocked");
+    if (env.kind !== "blocked") throw new Error("expected blocked");
+    expect(env.reason).toContain("BLOCKED");
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("suspended");
+    expect(run.docs?.status).toBe("failed");
+    expect(run.docs?.reason).toContain("BLOCKED");
+    expect(git.calls.some((c) => c.startsWith("push"))).toBe(false);
+  });
 });
 
 describe("runDocsEmit", () => {

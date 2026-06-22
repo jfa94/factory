@@ -68,5 +68,13 @@ export {
 // -- run-level coroutine (factory next seam) --------------------------------------
 export { stepRun, type NextEnvelope } from "./next.js";
 
-// -- docs stage emit coroutine (factory run docs seam) --------------------------
-export { runDocsEmit, docsWorktreePath, type DocsRunDeps, type DocsEnvelope } from "./docs.js";
+// -- docs stage emit + fold coroutines (factory run docs seam) -----------------
+export {
+  runDocsEmit,
+  runDocsFold,
+  docsWorktreePath,
+  DocsResultsSchema,
+  type DocsRunDeps,
+  type DocsEnvelope,
+  type DocsResults,
+} from "./docs.js";

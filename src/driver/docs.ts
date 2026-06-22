@@ -1,4 +1,7 @@
 import { join } from "node:path";
+import { z } from "zod";
+import { nowIso } from "../shared/index.js";
+import { parseProducerStatus } from "../producer/agents.js";
 import { resolveStagingBranch, type Config, type GitClient, type StateManager } from "./deps.js";
 
 export interface DocsRunDeps {
@@ -71,4 +74,38 @@ export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<Doc
     max_turns: DOCS_MAX_TURNS,
     prompt: buildScribePrompt(worktree, baseRef),
   };
+}
+
+export const DocsResultsSchema = z.object({ status: z.string().min(1) }).strict();
+export type DocsResults = z.infer<typeof DocsResultsSchema>;
+
+/** Fold a scribe result: publish the docs commit + mark done, or suspend the run. */
+export async function runDocsFold(
+  deps: DocsRunDeps,
+  runId: string,
+  results: DocsResults,
+): Promise<DocsEnvelope> {
+  const run = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run.staging_branch);
+  const docsBranch = `docs-${runId}`;
+  const worktree = docsWorktreePath(deps.dataDir, runId);
+  const outcome = parseProducerStatus(results.status);
+
+  if (outcome.status === "done") {
+    // docsBranch = staging tip (+ at most one docs commit) → ff-merge is clean.
+    await deps.git.mergeFfOrCommit(staging, docsBranch);
+    await deps.git.push("origin", staging);
+    await deps.git.worktreeRemove([worktree, "--force"]);
+    await deps.state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: nowIso() } }));
+    return { kind: "done", run_id: runId };
+  }
+
+  // One attempt: suspend (resumable). Keep the staging branch + worktree for retry on resume.
+  const reason = "reason" in outcome ? outcome.reason : "docs stage failed";
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    status: "suspended",
+    docs: { status: "failed", reason, ended_at: nowIso() },
+  }));
+  return { kind: "blocked", run_id: runId, reason };
 }
