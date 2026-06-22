@@ -48,9 +48,10 @@ own private `staging-<run-id>` integration branch from `develop` at
 [`run create`](../reference/cli.md#run-create) (Decision 33).
 
 It prints a `ScaffoldReport`: `files_created`, `files_present`, `files_updated`
-(plugin-managed files refreshed on drift), `files_outdated` (user-owned seed files
-that drifted — advisory only), `protection` (enabled / strict-up-to-date / required
-checks / provisioned), and `settings` (created / changed).
+(plugin-managed files refreshed on drift), `protection` (enabled / strict-up-to-date
+/ required checks / provisioned), and `settings` (created / changed). SEED gate
+configs are project-owned after first write — an existing one (even a richer
+superset of the shipped baseline) is reported under `files_present`, never as drift.
 
 ## 2. Handle a protection refusal
 

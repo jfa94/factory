@@ -22,6 +22,22 @@ module.exports = {
       to: { path: "^src/services" },
     },
     {
+      name: "lib-not-to-app",
+      severity: "error",
+      comment: "lib/* must not depend on app/* — app may consume lib, never the reverse",
+      from: { path: "^src/lib" },
+      to: { path: "^src/app" },
+    },
+    {
+      name: "components-no-app",
+      severity: "error",
+      comment:
+        "components/* must not couple to app/* page/route/layout modules — " +
+        "src/app/actions/** is exempted: server actions are an idiomatic public API boundary in Next.js",
+      from: { path: "^src/components" },
+      to: { path: "^src/app", pathNot: "^src/app/actions" },
+    },
+    {
       name: "not-to-test",
       severity: "error",
       from: { pathNot: "\\.(test|spec)\\." },

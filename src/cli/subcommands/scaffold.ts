@@ -66,8 +66,49 @@ Options:
                         explicit value disagreeing with the remote fails loud.
   --provision           Write branch protection if missing (default: refuse)`;
 
-/** The `.gitignore` lines scaffold guarantees (factory state must stay un-committed). */
-const GITIGNORE_ENTRIES = ["# factory plugin state", ".claude-plugin-data/", "*.worktree"];
+/**
+ * The `.gitignore` lines scaffold guarantees. Two invariants drive the list:
+ *
+ *   - The TRACKED/IGNORED split inside `.claude/` is made EXPLICIT — each ignored
+ *     `.claude/` child (per-machine local state) is enumerated individually so the
+ *     guarantee never relies on a wildcard, a global `core.excludesfile`, or Claude
+ *     Code's own gitignore management. Crucially `.claude/` is NOT ignored wholesale
+ *     and `.claude/settings.json` is NOT listed, so the factory-emitted
+ *     `.claude/settings.json` stays TRACKED while `.claude/settings.local.json`
+ *     (per-machine overrides) is IGNORED.
+ *   - Factory + worktree state (`.claude-plugin-data/`, `*.worktree`) must never be
+ *     committed.
+ *
+ * NOTE: `docs/factory/**` (the generated spec.md + tasks.json a run mirrors into the
+ * repo) is deliberately NOT ignored — it is tracked as durable, PR-reviewable
+ * provenance of the spec that drove each merged PR.
+ */
+const GITIGNORE_ENTRIES = [
+  "# Claude Code local state (factory scaffold guarantee)",
+  ".claude/worktrees/",
+  ".claude/plugins/",
+  ".claude/file-history/",
+  ".claude/backups/",
+  ".claude/debug/",
+  ".claude/todos/",
+  ".claude/plans/",
+  ".claude/memory/",
+  ".claude/statsig/",
+  ".claude/cache/",
+  ".claude/paste-cache/",
+  ".claude/projects/",
+  ".claude/shell-snapshots/",
+  ".claude/tasks/",
+  ".claude/telemetry/",
+  ".claude/workflows/",
+  ".claude/history.jsonl",
+  ".claude/CLAUDE.local.md",
+  ".claude/tool-audit.jsonl",
+  ".claude/settings.local.json",
+  "# factory plugin state",
+  ".claude-plugin-data/",
+  "*.worktree",
+];
 
 /** Injectable inputs to the scaffold CORE (the `run(argv)` wrapper wires real ones). */
 export interface ScaffoldOptions {
@@ -102,12 +143,6 @@ export interface ScaffoldReport {
    * author; git is the safety net (the change shows in `git diff`).
    */
   readonly files_updated: string[];
-  /**
-   * SEED template files (user-owned configs) present but differing from the
-   * current shipped template — advisory only; never overwritten. A drift here
-   * is usually a deliberate customization.
-   */
-  readonly files_outdated: string[];
   readonly protection: {
     readonly enabled: boolean;
     readonly strict_up_to_date: boolean;
@@ -149,8 +184,11 @@ export function resolveTemplatesDir(): string {
  *     Auto-overwritten when it drifts from the shipped template so a template fix
  *     reaches already-scaffolded repos on the next `factory scaffold`. Git is the
  *     safety net; customizing a managed file is unsupported by contract.
- *   - `seed` — copied once if absent, then USER-OWNED. Never overwritten (Decision
- *     15: don't destroy customizations); drift is reported advisory-only.
+ *   - `seed` — scaffold-once, then PROJECT-OWNED. Copied verbatim only when ABSENT
+ *     (a load-safe baseline); once present the project owns it. An existing file is
+ *     reported `present` and never read, compared, overwritten, or re-flagged
+ *     (Decision 15) — so a repo that has grown its own richer config (e.g. an
+ *     eslint.config.mjs that imports plugins) is recognized as current, not stale.
  */
 type TemplatePolicy = "managed" | "seed";
 
@@ -180,13 +218,13 @@ interface FileLists {
   readonly created: string[];
   readonly present: string[];
   readonly updated: string[];
-  readonly outdated: string[];
 }
 
 /**
- * Apply one {@link TemplateEntry}: create when absent; for a present file, leave
- * it (and record drift) under the `seed` policy, or overwrite it under `managed`.
- * Each file lands in exactly one bucket.
+ * Apply one {@link TemplateEntry}, landing it in exactly one bucket:
+ *   - absent           → copy the template in (`created`)
+ *   - present + seed    → project-owned: report `present`, never read/compare/overwrite
+ *   - present + managed → refresh on drift (`updated`), else `present`
  */
 async function applyTemplate(
   entry: TemplateEntry,
@@ -207,17 +245,22 @@ async function applyTemplate(
     lists.created.push(entry.rel);
     return;
   }
+  // A present SEED file is PROJECT-OWNED: never read, compared, overwritten, or
+  // re-flagged. A repo's grown-up config (e.g. an eslint.config.mjs that imports
+  // plugins) is recognized as current, not stale (Decision 15).
+  if (entry.policy === "seed") {
+    lists.present.push(entry.rel);
+    return;
+  }
+  // MANAGED: the plugin is the sole author — refresh the target when it drifts so a
+  // template fix propagates to already-scaffolded repos. Git is the safety net.
   const [srcText, destText] = await Promise.all([readFile(src, "utf8"), readFile(dest, "utf8")]);
   if (srcText === destText) {
     lists.present.push(entry.rel);
     return;
   }
-  if (entry.policy === "managed") {
-    await copyFile(src, dest); // sole-author file drifted → refresh it
-    lists.updated.push(entry.rel);
-  } else {
-    lists.outdated.push(entry.rel); // user-owned drift → advisory, never clobber
-  }
+  await copyFile(src, dest);
+  lists.updated.push(entry.rel);
 }
 
 /** Append any missing {@link GITIGNORE_ENTRIES} to the target `.gitignore`. */
@@ -250,7 +293,7 @@ async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
  * scaffold no longer creates or protects a shared `staging` branch.
  */
 export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport> {
-  const lists: FileLists = { created: [], present: [], updated: [], outdated: [] };
+  const lists: FileLists = { created: [], present: [], updated: [] };
 
   // 1+2. Committed template artifacts (Δ Z). MANAGED files (the CI net + its shard
   //       helper) auto-update on drift; SEED gate configs are copy-once + user-owned.
@@ -317,7 +360,6 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
     files_created: lists.created,
     files_present: lists.present,
     files_updated: lists.updated,
-    files_outdated: lists.outdated,
     protection: {
       enabled: state.enabled,
       strict_up_to_date: state.strictUpToDate,

@@ -74,7 +74,8 @@ factory scaffold [--repo <owner/name>] [--provision]
 | `--provision`         | no       | Write branch protection if missing (default: refuse).                                                                                                        |
 
 Emits a `ScaffoldReport`: `{ repo, files_created, files_present, files_updated,
-files_outdated, protection, settings }`.
+protection, settings }`. SEED gate configs are scaffold-once / project-owned — an
+existing one is reported under `files_present`, never flagged (no `files_outdated`).
 
 ## `spec <resolve|gate|store>`
 

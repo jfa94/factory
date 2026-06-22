@@ -291,12 +291,25 @@ file policy**:
   propagation path — a template fix (e.g. the 2026-06-18 mutation-shard rebalance)
   reaches downstream repos without a manual delete-and-re-scaffold.
 - **SEED** — files the project owns after first write: `.stryker.config.json`,
-  `.dependency-cruiser.cjs`, `eslint.config.mjs`. Copied once when absent, then
-  **never overwritten**. Drift from the current template is reported advisory-only
-  (`files_outdated`), since for these files drift is usually a deliberate
-  customization.
+  `.dependency-cruiser.cjs`, `eslint.config.mjs`. **Scaffold-once, then
+  project-owned**: copied verbatim only when absent (a load-safe baseline), and an
+  existing file is reported under `files_present` — never read, compared,
+  overwritten, or flagged. There is no `files_outdated` bucket (retired): a SEED
+  file that has grown into a richer project config (e.g. an `eslint.config.mjs`
+  that imports `typescript-eslint`/plugins, or a `.dependency-cruiser.cjs` with
+  extra boundary rules) is **recognized as current, not stale**. This is what
+  preserves the never-fail-close lint property — a fresh repo only ever receives
+  the dependency-free baseline (which loads before any plugin is installed), while
+  an established repo's full config is left untouched.
 - **MERGE** — `.gitignore` and `.claude/settings.json` are reconciled
-  non-destructively (append missing entries / merge keys).
+  non-destructively (append missing entries / merge keys). The `.gitignore`
+  guarantee makes the in-repo split **explicit**: each per-machine `.claude/` child
+  (`worktrees/`, `projects/`, `settings.local.json`, …) is enumerated individually
+  so `.claude/settings.json` stays **tracked** while `.claude/settings.local.json`
+  is **ignored** — never via a wildcard `.claude/`, a sibling-enumeration, or a
+  global `core.excludesfile` (which is not portable). `docs/factory/**` (the
+  in-repo spec mirror) is deliberately **left tracked** as durable, PR-reviewable
+  provenance of the spec that drove each merged PR.
 
 **Why scaffold instead of bundled templates?**
 

@@ -8268,7 +8268,32 @@ Options:
                         Auto-derived from the 'origin' remote when omitted; an
                         explicit value disagreeing with the remote fails loud.
   --provision           Write branch protection if missing (default: refuse)`;
-var GITIGNORE_ENTRIES = ["# factory plugin state", ".claude-plugin-data/", "*.worktree"];
+var GITIGNORE_ENTRIES = [
+  "# Claude Code local state (factory scaffold guarantee)",
+  ".claude/worktrees/",
+  ".claude/plugins/",
+  ".claude/file-history/",
+  ".claude/backups/",
+  ".claude/debug/",
+  ".claude/todos/",
+  ".claude/plans/",
+  ".claude/memory/",
+  ".claude/statsig/",
+  ".claude/cache/",
+  ".claude/paste-cache/",
+  ".claude/projects/",
+  ".claude/shell-snapshots/",
+  ".claude/tasks/",
+  ".claude/telemetry/",
+  ".claude/workflows/",
+  ".claude/history.jsonl",
+  ".claude/CLAUDE.local.md",
+  ".claude/tool-audit.jsonl",
+  ".claude/settings.local.json",
+  "# factory plugin state",
+  ".claude-plugin-data/",
+  "*.worktree"
+];
 function resolveTemplatesDir() {
   let dir = dirname5(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
@@ -8303,17 +8328,17 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists) {
     lists.created.push(entry.rel);
     return;
   }
+  if (entry.policy === "seed") {
+    lists.present.push(entry.rel);
+    return;
+  }
   const [srcText, destText] = await Promise.all([readFile4(src, "utf8"), readFile4(dest, "utf8")]);
   if (srcText === destText) {
     lists.present.push(entry.rel);
     return;
   }
-  if (entry.policy === "managed") {
-    await copyFile(src, dest);
-    lists.updated.push(entry.rel);
-  } else {
-    lists.outdated.push(entry.rel);
-  }
+  await copyFile(src, dest);
+  lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
   const path4 = join7(root, ".gitignore");
@@ -8334,7 +8359,7 @@ async function ensureGitignore(root, lists) {
   lists.present.push(rel);
 }
 async function runScaffold(opts) {
-  const lists = { created: [], present: [], updated: [], outdated: [] };
+  const lists = { created: [], present: [], updated: [] };
   const isNodePackage = existsSync6(join7(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
@@ -8379,7 +8404,6 @@ async function runScaffold(opts) {
     files_created: lists.created,
     files_present: lists.present,
     files_updated: lists.updated,
-    files_outdated: lists.outdated,
     protection: {
       enabled: state.enabled,
       strict_up_to_date: state.strictUpToDate,

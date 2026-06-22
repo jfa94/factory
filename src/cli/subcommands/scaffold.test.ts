@@ -72,7 +72,9 @@ describe("runScaffold", () => {
     expect(report.files_created).toContain(".github/scripts/shard-mutation-scope.mjs");
     expect(existsSync(join(root, ".github", "scripts", "shard-mutation-scope.mjs"))).toBe(true);
     expect(report.files_updated).toEqual([]);
-    expect(report.files_outdated).toEqual([]);
+    // The advisory `files_outdated` bucket was retired with the project-owned SEED
+    // model (Decision 15) — a SEED file is either created or present, never "outdated".
+    expect(report).not.toHaveProperty("files_outdated");
     // Per-run staging is no longer scaffold's concern — report carries no staging field.
     expect(report).not.toHaveProperty("staging");
     expect(report.protection.enabled).toBe(true);
@@ -208,7 +210,7 @@ describe("runScaffold", () => {
     expect(await readFile(wf, "utf8")).toBe(template);
   });
 
-  it("leaves a drifted SEED config untouched and reports it advisory-outdated", async () => {
+  it("treats an existing SEED config as project-owned: present, never overwritten, never re-flagged", async () => {
     const args = {
       targetRoot: root,
       templatesDir,
@@ -222,16 +224,59 @@ describe("runScaffold", () => {
     await writeFile(join(root, "package.json"), "{}\n", "utf8");
     await runScaffold(args); // seeds .stryker.config.json
 
-    // The user customizes their (user-owned) gate config.
+    // The project grows its own (user-owned) gate config — exactly the outsidey
+    // case where the repo's config has diverged into a richer superset.
     const stryker = join(root, ".stryker.config.json");
     const customized = '{ "thresholds": { "break": 95 } }\n';
     await writeFile(stryker, customized, "utf8");
 
     const second = await runScaffold(args);
-    expect(second.files_outdated).toContain(".stryker.config.json");
+    // A present SEED file is project-owned: reported `present`, NOT created/updated,
+    // and there is no advisory "outdated" bucket to land in.
+    expect(second.files_present).toContain(".stryker.config.json");
+    expect(second.files_created).not.toContain(".stryker.config.json");
     expect(second.files_updated).not.toContain(".stryker.config.json");
+    expect(second).not.toHaveProperty("files_outdated");
     // Customization is preserved — SEED files are never overwritten.
     expect(await readFile(stryker, "utf8")).toBe(customized);
+  });
+
+  it("guarantees the explicit TRACKED/IGNORED .gitignore split", async () => {
+    const args = {
+      targetRoot: root,
+      templatesDir,
+      owner: "acme",
+      repo: "widgets",
+      config: cfg,
+      dataDirRules: DATA_DIR_RULES,
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
+      provision: false,
+    };
+    await runScaffold(args);
+    const gitignore = await readFile(join(root, ".gitignore"), "utf8");
+    const lines = gitignore.split("\n");
+
+    // IGNORED: per-machine local state + factory/worktree state are guaranteed.
+    for (const entry of [
+      ".claude/settings.local.json",
+      ".claude/worktrees/",
+      ".claude/projects/",
+      ".claude/tool-audit.jsonl",
+      ".claude-plugin-data/",
+      "*.worktree",
+    ]) {
+      expect(lines).toContain(entry);
+    }
+    // TRACKED: `.claude/settings.json` must NOT be ignored — neither by an exact
+    // line nor by a wholesale `.claude/` rule. The split is explicit, never reliant
+    // on enumerating siblings or a global excludes file.
+    expect(lines).not.toContain(".claude/settings.json");
+    expect(lines).not.toContain(".claude/");
+    expect(lines).not.toContain(".claude/*");
+
+    // Idempotent + non-duplicating: a second run appends nothing.
+    await runScaffold(args);
+    expect(await readFile(join(root, ".gitignore"), "utf8")).toBe(gitignore);
   });
 
   it("REFUSES loudly when develop protection is missing and --provision is off", async () => {
@@ -325,5 +370,15 @@ describe("resolveScaffoldRepo (auto-derive --repo from origin)", () => {
     await expect(
       resolveScaffoldRepo(parseArgs([]), { gitClient: gitWithOrigin(null), cwd: "/wherever" }),
     ).rejects.toThrow(/--repo/);
+  });
+});
+
+describe("dependency-cruiser template content", () => {
+  it("seeds the architectural boundary rules, incl. lib-not-to-app + components-no-app", async () => {
+    const cjs = await readFile(join(resolveTemplatesDir(), ".dependency-cruiser.cjs"), "utf8");
+    expect(cjs).toContain("lib-not-to-app");
+    expect(cjs).toContain("components-no-app");
+    // The exemption that keeps Next.js server actions a legal cross-layer boundary.
+    expect(cjs).toContain("^src/app/actions");
   });
 });
