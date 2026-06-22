@@ -112,7 +112,8 @@ file-lock serialized). When it returns:
   re-runs `/factory:resume` after the window resets. Do NOT finalize.
 - otherwise → run the skill's Phase 4: `factory run finalize --run <run_id>` (ship mode is
   read from the run's persisted `ship_mode`), then `factory score` + `factory state --summary`,
-  and report.
+  and report. (Documentation is handled in-loop as the `docs-ready` engine stage before
+  finalize — not a separate post-finalize step here.)
 
 ## Autonomous mode (MANDATORY — no opt-in, no opt-out)
 

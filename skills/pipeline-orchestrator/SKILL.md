@@ -121,6 +121,8 @@ loop:
   case env.kind:
     "run-terminal"  → go to Phase 4 (report)
     "all-terminal"  → factory run finalize --run <run_id>; go to Phase 4
+    "docs-ready"    → run the DOCS STAGE (below); on done, loop; on blocked,
+                      report the reason + STOP (run is suspended — /factory:resume retries)
     "quota-blocked" → report scope/reason/resets_at_epoch; tell the user to re-run
                       `/factory:resume` after the window resets; STOP.
     "tasks-ready"   → step env.ready[0] (sequential driver: ONE task at a time), then loop
@@ -136,6 +138,21 @@ step(task):
 ```
 
 If `drive` rejects `--results` as stale/duplicate (fold_key mismatch), re-invoke WITHOUT `--results` to get the current envelope and continue — the ONE sanctioned retry (Iron Law 3 applies to everything else).
+
+```
+docs stage:
+  denv = factory run docs --run <run_id>
+  case denv.kind:
+    "done"    → loop                      # idempotent: already published
+    "blocked" → report denv.reason; STOP  # run suspended; /factory:resume retries
+    "spawn"   → spawn scribe (subagent_type `scribe`, model per denv.model,
+                isolation OMITTED — it works IN denv.worktree), prompt = denv.prompt VERBATIM.
+                Capture its terminal STATUS line.
+                Write {"status":"<line>"} to a results file under
+                $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+                denv2 = factory run docs --run <run_id> --results <file>
+                case denv2.kind: "done" → loop; "blocked" → report + STOP
+```
 
 **Abandoning a run.** If the user asks to abort/cancel/abandon this run mid-loop, run `factory run cancel --run <run_id>` (defaults to the run THIS session owns, then `runs/current`). It marks the run `failed` via the engine's own writer — so it works even with a task still executing. A cancelled run is terminal and NOT resumable (start a fresh `/factory:run` instead). Add `--cleanup` to also tear down the staging branch + its task PRs (omit it to keep them for manual handling). Cancel is for deliberately DISCARDING a run — you no longer need it merely to stop: the Stop hook lets a session end and leaves the run resumable via `factory resume`. Never edit `state.json` by hand — `run cancel` is the sanctioned abandon verb.
 
@@ -210,8 +227,8 @@ so no aliasing applies; it appears only on producer spawns, never reviewers.
   unreferenced-exports report) + `factory state <run_id> --summary`. Surface the run
   status (`completed | failed`), the rollup PR, filed issues, and every
   drop with its class — plainly, never papered over.
-- If the shipped work changed the target repo's behavior and it keeps `/docs`,
-  spawn `scribe` to update it.
+- Documentation is no longer a Phase-4 step: the engine runs it as the
+  `docs-ready` stage in THE LOOP (Phase 3), before finalize ships the rollup.
 
 ## When NOT to use this skill
 
