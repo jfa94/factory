@@ -377,6 +377,24 @@ export const QuotaCheckpointSchema = z.object({
 export type QuotaCheckpoint = z.infer<typeof QuotaCheckpointSchema>;
 
 // ---------------------------------------------------------------------------
+// Docs stage marker (engine-owned documentation stage)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run-level documentation stage marker (engine-owned docs stage). `done` once
+ * scribe's output is committed onto staging (or a no-op pass); `failed` records a
+ * one-attempt failure while the run sits `suspended` (resumable via /factory:resume).
+ * Absent until the stage runs. Not applicable (no /docs, opted out) leaves it absent —
+ * `next` decides applicability read-only, so there is no `skipped` value.
+ */
+export const DocsStageSchema = z.object({
+  status: z.enum(["done", "failed"]),
+  reason: z.string().optional(),
+  ended_at: z.string(),
+});
+export type DocsStage = z.infer<typeof DocsStageSchema>;
+
+// ---------------------------------------------------------------------------
 // RunState
 // ---------------------------------------------------------------------------
 
@@ -465,6 +483,9 @@ export const RunStateSchema = z.object({
 
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
+
+  /** Documentation stage marker; absent until the docs stage runs (engine docs stage). */
+  docs: DocsStageSchema.optional(),
 
   /** Lifecycle timestamps (ISO-8601). */
   started_at: z.string(),

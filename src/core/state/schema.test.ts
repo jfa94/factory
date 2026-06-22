@@ -310,6 +310,33 @@ describe("RunStateSchema default()", () => {
   });
 });
 
+describe("docs stage marker", () => {
+  it("absent by default → undefined", () => {
+    expect(parseRunState(minimalRun()).docs).toBeUndefined();
+  });
+
+  it("round-trips a done docs marker", () => {
+    const run = parseRunState(minimalRun({ docs: { status: "done", ended_at: NOW } }));
+    expect(run.docs).toEqual({ status: "done", ended_at: NOW });
+  });
+
+  it("round-trips a failed docs marker on a suspended run (no quota checkpoint)", () => {
+    const run = parseRunState(
+      minimalRun({
+        status: "suspended",
+        docs: { status: "failed", reason: "scribe BLOCKED", ended_at: NOW },
+      }),
+    );
+    expect(run.status).toBe("suspended");
+    expect(run.docs).toEqual({ status: "failed", reason: "scribe BLOCKED", ended_at: NOW });
+    expect(run.quota).toBeUndefined();
+  });
+
+  it("rejects an unknown docs status", () => {
+    expect(() => parseRunState(minimalRun({ docs: { status: "weird", ended_at: NOW } }))).toThrow();
+  });
+});
+
 describe("TaskState.stage cursor", () => {
   it("accepts the five task stages and defaults to absent", () => {
     const base = parseTaskState(minimalTask());
