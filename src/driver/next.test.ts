@@ -493,13 +493,19 @@ describe("docs-ready gate", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      // Seed a real quota checkpoint so the quota-cleared assertion discriminates
+      // (rather than being vacuously true).
       await state.update(runId, (s) => ({
         ...s,
         status: "suspended",
+        quota: { binding_window: "5h" as const, resets_at_epoch: 1_700_018_000 },
         docs: { status: "failed", reason: "prior", ended_at: DONE_AT },
       }));
       expect((await stepRun(deps, runId)).kind).toBe("docs-ready");
-      expect((await state.read(runId)).status).toBe("running");
+      const resumed = await state.read(runId);
+      expect(resumed.status).toBe("running");
+      // the checkpoint clear that returned the run to running must also drop quota
+      expect(resumed.quota).toBeUndefined();
     } finally {
       await cleanup();
     }
