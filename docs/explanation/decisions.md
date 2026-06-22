@@ -383,6 +383,19 @@ The workflow uses `gh pr merge --merge --auto --delete-branch` for staging-to-de
 - `hooks/write-protection.sh` — blocks `Edit`/`Write` on `main`/`master` and protected files.
 - The `permissions.deny` block in the same `templates/settings.autonomous.json` — dense list covering destructive shell patterns (`rm -rf /`, `git push --force*`, `--no-verify`), language `-e`/`-c` interpreters (`python -c`, `node -e`, `eval`), AWS destructive APIs (`iam delete-*`, `s3 rb`, `rds delete-*`), and writes to `~/.ssh`, `~/.aws`, `~/.claude/**`, etc.
 
+**Why the nested-shell / hook-bypass guard is autonomous-only (by design, not an oversight):**
+
+The TS port (`decideBranchProtection`, `src/hooks/branch-protection.ts`) denies a nested
+shell (`bash -c …`, `sh -c …`) or hook-bypass **only when `isAutonomous()` is true** — a
+faithful port of the bash `_is_nested_shell_or_hook_bypass` gate. A nested shell is a
+legitimate, everyday tool in a **human** dev session (build scripts, one-liners, editor
+integrations); denying it there would be a constant false-positive. It is dangerous only
+in an **unattended** run, where it is the canonical way to smuggle a git write past the
+parsed-command guards (the guard parses the visible command string; a nested shell hides
+the real command from that parse). Scoping the gate to autonomous mode is therefore the
+correct security/usability trade-off, not a gap — the same single `isAutonomous` predicate
+that gates every other autonomous-only rail (Decision 13/29).
+
 **Why not narrow the allow-list?**
 
 Every narrowing has been tried and produces the same failure mode: the pipeline halts on a command the allow-list did not anticipate, and there is no operator to approve it. The cost of one missed allow rule is a stalled run; the cost of one missed deny rule is bounded by the hook layer.

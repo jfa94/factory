@@ -263,7 +263,9 @@ export interface RunStagingDeps {
  * a bare `{ issue } | { specId }` only forbids NEITHER (a both-keys object still
  * structurally satisfies `{ issue: number }`), so each arm explicitly forbids the
  * OTHER key. Both illegal states (neither / both) are now compile errors, not just
- * runtime checks. {@link resolveSpec} switches on `"specId" in opts`.
+ * runtime checks. {@link resolveSpec} discriminates on the VALUE
+ * (`opts.specId !== undefined`), not `"specId" in opts` — the `?: never` padding keeps
+ * the unused key structurally present, so the `in` test would not discriminate cleanly.
  */
 export type SpecSelector =
   | { readonly issue: number; readonly specId?: never }
@@ -566,8 +568,13 @@ export async function applyResume(
     }
     case "still-blocked": {
       const d = plan.decision;
-      // planResume only emits still-blocked for a non-proceed decision; narrow
-      // defensively so the `proceed` arm (which has no reason) is unreachable.
+      // NB: two distinct `.kind` unions are in play here — the OUTER `plan.kind`
+      // (ResumePlan: not-resumable | resume | still-blocked, switched above) and this
+      // INNER `d.kind` (QuotaDecision: proceed | pause-5h | suspend-7d | unavailable-halt).
+      // planResume only ever pairs `still-blocked` with a NON-proceed QuotaDecision, so
+      // `proceed` is not expected here — but this is a DEFENSIVE TYPE NARROW, not dead
+      // code: without it the compiler cannot prove `d.reason` (below) exists, since the
+      // `proceed` arm of QuotaDecision carries no `reason`. The guard discharges that.
       if (d.kind === "proceed") {
         return { kind: "resumed", run };
       }

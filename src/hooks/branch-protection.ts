@@ -140,7 +140,13 @@ export async function decideBranchProtection(
   const cwd = deps.cwd ?? process.cwd();
   const autonomousMode = deps.autonomousMode ?? isAutonomous();
 
-  // Nested-shell / hook-bypass denial (autonomous mode only, matching bash).
+  // Nested-shell / hook-bypass denial — AUTONOMOUS MODE ONLY, by design (a faithful
+  // port of the bash hook, NOT an oversight). A nested shell (`bash -c …`, `sh -c …`)
+  // or hook-bypass is a legitimate, everyday tool in a HUMAN dev session, so denying it
+  // there would be a constant false-positive. It is a risk only in an UNATTENDED run,
+  // where it is the canonical way to smuggle a git write past the parsed-command guards
+  // below. Hence the gate is scoped to autonomousMode. See Decision 12 (and the
+  // branch-protection note in docs/explanation/decisions.md).
   if (autonomousMode && isNestedShellOrHookBypass(command)) {
     return deny(
       "nested_shell_denied",

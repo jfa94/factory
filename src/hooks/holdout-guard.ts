@@ -40,7 +40,9 @@ const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 /**
  * Known file-reader binaries. NO LONGER a gate — Bash denial is path-based — kept
  * as an OPTIONAL signal: a recognized reader alongside a holdouts path is a stronger
- * exfiltration tell, noted in the deny reason.
+ * exfiltration tell, noted in the BASH deny reason only (the `viaReader` suffix at
+ * the Bash branch below). The Read/Grep/Glob deny path is a structured-tool match
+ * and carries no such suffix.
  */
 const READ_COMMAND_RE =
   /\b(cat|less|more|head|tail|grep|egrep|fgrep|rg|sed|awk|od|xxd|hexdump|strings|nl|tac|cut|sort|uniq|jq|yq)\b/;
