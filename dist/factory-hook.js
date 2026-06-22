@@ -1930,6 +1930,18 @@ function basename2(tok) {
   return parts[parts.length - 1] ?? tok;
 }
 function parseGitInvocation(command) {
+  const ENV_PREFIX_RE = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+  const tokens = [];
+  const envNames = [];
+  for (const tok of command.split(/\s+/)) {
+    if (tok.length === 0) continue;
+    const m = ENV_PREFIX_RE.exec(tok);
+    if (m) {
+      envNames.push(m[1]);
+      continue;
+    }
+    tokens.push(tok);
+  }
   const result = {
     subcommand: null,
     workDir: "",
@@ -1939,9 +1951,9 @@ function parseGitInvocation(command) {
     isForce: false,
     isPlusRef: false,
     isHardReset: false,
-    sawRemote: false
+    sawRemote: false,
+    envNames
   };
-  const tokens = command.split(/\s+/).filter((t) => t.length > 0).filter((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
   const n = tokens.length;
   let i = 0;
   let foundGit = false;
@@ -6916,11 +6928,15 @@ var GIT_PUSH_RE = /(^|[\s&;])git(\s+-[^\s]+\s+[^\s]+)*\s+push(\s|$)/;
 var GIT_SUBCMD_LOOSE_RE = /(^|[\s&;])git(\s+[^\s]+)*\s+(commit|push)(\s|$)/;
 var GIT_DIR_FLAG_RE = /(^|\s)--git-dir(=|\s)/;
 var WORK_TREE_FLAG_RE = /(^|\s)--work-tree(=|\s)/;
-var GIT_ENV_OVERRIDE_RE = /^\s*([A-Z_][A-Z0-9_]*=[^\s]+\s+)*GIT_(DIR|WORK_TREE)=/;
-function resolveCommitDir(command, cwd) {
-  const m = command.match(/git\s+-C\s+([^\s]+)/);
-  return m ? m[1] : cwd;
-}
+var REDIRECT_ENV = /* @__PURE__ */ new Set([
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_NAMESPACE"
+]);
 async function decideSecretGuard(input, deps = {}) {
   const command = commandOf(input);
   if (command.length === 0) return allow();
@@ -6938,10 +6954,18 @@ async function decideSecretGuard(input, deps = {}) {
   if (!isCommit && !isPush) {
     if (!GIT_SUBCMD_LOOSE_RE.test(command)) return allow();
   }
-  if (GIT_DIR_FLAG_RE.test(command) || WORK_TREE_FLAG_RE.test(command) || GIT_ENV_OVERRIDE_RE.test(command)) {
+  const inv = parseGitInvocation(command);
+  if (GIT_DIR_FLAG_RE.test(command) || WORK_TREE_FLAG_RE.test(command)) {
     return deny("git_dir_override_denied", `git-dir/work-tree override blocked: ${command}`);
   }
-  const commitDir = resolveCommitDir(command, cwd);
+  const redirectEnv = inv.envNames.filter((name) => REDIRECT_ENV.has(name));
+  if (redirectEnv.length > 0) {
+    return deny(
+      "git_redirect_env_denied",
+      `git index/repo-redirecting env override blocked (${redirectEnv.join(", ")}): ${command}`
+    );
+  }
+  const commitDir = inv.workDir.length > 0 ? inv.workDir : cwd;
   let repoCheck;
   try {
     repoCheck = await execFn("git", ["-C", commitDir, "rev-parse", "--git-dir"], {});

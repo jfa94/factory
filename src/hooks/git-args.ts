@@ -31,6 +31,13 @@ export interface GitInvocation {
   isHardReset: boolean;
   /** True if push saw a remote token (so an implicit-current push can be detected). */
   sawRemote: boolean;
+  /**
+   * Names of every `VAR=` env-prefix token stripped from the command, in order
+   * (e.g. `["GIT_INDEX_FILE", "FOO"]`). The tokenizer records names and judges
+   * none — a consumer decides which matter (secret-guard denies the git
+   * index/repo-redirection family). Empty when no env prefixes were present.
+   */
+  envNames: readonly string[];
 }
 
 /** Strip one layer of surrounding single/double quotes from a token. */
@@ -57,6 +64,24 @@ function basename(tok: string): string {
  * non-git command and passes through).
  */
 export function parseGitInvocation(command: string): GitInvocation {
+  // Tokenize on whitespace; partition off env-var prefix tokens (VAR=value /
+  // VAR=). They are dropped from the token stream (as before) but their NAMES are
+  // recorded on `envNames` so a consumer can detect index/repo-redirecting
+  // overrides (GIT_INDEX_FILE, GIT_DIR, …). git-args stays a dumb tokenizer — it
+  // judges no name; the consumer (secret-guard) decides which are dangerous.
+  const ENV_PREFIX_RE = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+  const tokens: string[] = [];
+  const envNames: string[] = [];
+  for (const tok of command.split(/\s+/)) {
+    if (tok.length === 0) continue;
+    const m = ENV_PREFIX_RE.exec(tok);
+    if (m) {
+      envNames.push(m[1]!);
+      continue;
+    }
+    tokens.push(tok);
+  }
+
   const result: GitInvocation = {
     subcommand: null,
     workDir: "",
@@ -67,13 +92,8 @@ export function parseGitInvocation(command: string): GitInvocation {
     isPlusRef: false,
     isHardReset: false,
     sawRemote: false,
+    envNames,
   };
-
-  // Tokenize on whitespace; drop env-var prefix tokens (VAR=value / VAR=).
-  const tokens = command
-    .split(/\s+/)
-    .filter((t) => t.length > 0)
-    .filter((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
 
   const n = tokens.length;
   let i = 0;

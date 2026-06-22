@@ -1,7 +1,9 @@
 /**
- * WS9 — secret-guard tests (Δ B). A staged secret blocks; git-dir override and
- * non-git target fail CLOSED; clean diff passes; nested-shell denied. The exec
- * seam is faked to return canned diffs (no real git).
+ * WS9 — secret-guard tests (Δ B). A staged secret blocks; the redirection bypasses
+ * (--git-dir/--work-tree flags + the index/repo-redirecting env family) and a
+ * non-git target fail CLOSED; benign GIT_* and clean diffs pass; nested-shell
+ * denied; the `-C` target is resolved last-wins. The exec seam is faked to return
+ * canned diffs (no real git).
  */
 import { describe, it, expect } from "vitest";
 import { decideSecretGuard, type ExecFn } from "./secret-guard.js";
@@ -108,6 +110,78 @@ describe("secret-guard — fail-closed (Δ B)", () => {
     };
     const d = await decideSecretGuard(bashInput("git commit -m x"), { exec, cwd: "/repo" });
     expect(isDeny(d)).toBe(true);
+  });
+});
+
+describe("secret-guard — redirection bypasses (Theme A root fix)", () => {
+  // The index/repo-redirecting env family — each decouples the committed
+  // index/store from what `git diff --cached` scans, so each must deny fail-closed.
+  const REDIRECT_VARS = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+  ];
+  for (const v of REDIRECT_VARS) {
+    it(`${v}= env override on commit → fail-closed deny`, async () => {
+      const d = await decideSecretGuard(bashInput(`${v}=/tmp/x git commit -m x`), {
+        exec: fakeExec("+clean"),
+        cwd: "/repo",
+      });
+      expect(isDeny(d)).toBe(true);
+    });
+  }
+
+  // Regression guard for the deny-all-GIT_* correction: this guard fires on EVERY
+  // Bash (not only autonomous), so a human's benign GIT_* must pass.
+  it("benign GIT_SSH_COMMAND= on push is ALLOWED (not a redirection bypass)", async () => {
+    const d = await decideSecretGuard(
+      bashInput("GIT_SSH_COMMAND=/usr/bin/ssh git push origin main"),
+      { exec: fakeExec("+const x = 1"), cwd: "/repo" },
+    );
+    expect(isDeny(d)).toBe(false);
+  });
+
+  it("benign GIT_AUTHOR_NAME= on commit is ALLOWED", async () => {
+    const d = await decideSecretGuard(bashInput("GIT_AUTHOR_NAME=alice git commit -m x"), {
+      exec: fakeExec("+const x = 1"),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(false);
+  });
+
+  // Last-wins `-C`: git honors the LAST -C, so the guard must scan that repo. A
+  // first-match scan read /clean and missed a secret staged in /secret.
+  function dirAwareExec(): ExecFn {
+    return async (_cmd, args = []) => {
+      const a = args.join(" ");
+      if (a.includes("rev-parse --git-dir")) return ok(".git");
+      const scansSecret = a.includes("-C /secret");
+      if (a.includes("--name-only")) return ok("src/x.ts");
+      if (a.includes("diff") || a.includes("log")) {
+        return ok(scansSecret ? "+key=ghp_" + "a".repeat(36) : "+const x = 1");
+      }
+      return ok();
+    };
+  }
+
+  it("last-wins -C: scans the repo git will commit (git -C /clean -C /secret)", async () => {
+    const d = await decideSecretGuard(bashInput("git -C /clean -C /secret commit -m x"), {
+      exec: dirAwareExec(),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true); // last -C is /secret → scanned it, caught the secret
+  });
+
+  it("last-wins -C: a secret in an EARLIER -C the commit won't use does not block", async () => {
+    const d = await decideSecretGuard(bashInput("git -C /secret -C /clean commit -m x"), {
+      exec: dirAwareExec(),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(false); // last -C is /clean → that's what git commits & we scan
   });
 });
 

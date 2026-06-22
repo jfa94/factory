@@ -4,10 +4,17 @@
  *
  * Ports `hooks/secret-commit-guard.sh` onto the typed seam:
  *   - detects `git commit` / `git push` (incl. fused override forms);
- *   - DENIES git-dir/work-tree override bypass forms FAIL-CLOSED (an override
- *     could redirect the scan to a different repo than the one committed);
- *   - resolves the target repo (honors `git -C <dir>`); a non-git target fails
- *     CLOSED;
+ *   - DENIES, FAIL-CLOSED, the redirection bypasses that decouple the scanned
+ *     index/repo from the one actually committed: the `--git-dir`/`--work-tree`
+ *     FLAGS and the index/repo-redirecting ENV family (GIT_DIR, GIT_WORK_TREE,
+ *     GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES,
+ *     GIT_COMMON_DIR, GIT_NAMESPACE — see {@link REDIRECT_ENV}). Benign GIT_*
+ *     (GIT_SSH_COMMAND, GIT_AUTHOR_*, GIT_EDITOR, …) are NOT denied: this guard
+ *     fires on EVERY Bash (not only autonomous), so a human's
+ *     `GIT_SSH_COMMAND=… git push` must not false-positive;
+ *   - resolves the target repo via the canonical {@link parseGitInvocation} parser
+ *     with LAST-WINS `git -C <dir>` (a first-match scan let
+ *     `git -C <clean> -C <secret> commit` evade it); a non-git target fails CLOSED;
  *   - scans the staged (`git diff --cached`) or unpushed (`git log -p`) diff via
  *     the INJECTABLE exec seam and runs {@link detectSecrets} +
  *     {@link SECRET_REDACTION_PATTERNS} over it plus a path blocklist;
@@ -19,6 +26,7 @@ import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { exec as defaultExec, type ExecResult } from "../shared/exec.js";
 import { detectSecrets } from "../shared/secret-patterns.js";
 import { isNestedShellOrHookBypass } from "./shell-bypass.js";
+import { parseGitInvocation } from "./git-args.js";
 import {
   allow,
   commandOf,
@@ -70,16 +78,28 @@ const GIT_PUSH_RE = /(^|[\s&;])git(\s+-[^\s]+\s+[^\s]+)*\s+push(\s|$)/;
 /** Looser detector (any flags) used to catch fused-override commit/push. */
 const GIT_SUBCMD_LOOSE_RE = /(^|[\s&;])git(\s+[^\s]+)*\s+(commit|push)(\s|$)/;
 
-/** git-dir / work-tree override bypass detectors (fail-closed deny). */
+/** git-dir / work-tree override FLAG detectors (fail-closed deny). */
 const GIT_DIR_FLAG_RE = /(^|\s)--git-dir(=|\s)/;
 const WORK_TREE_FLAG_RE = /(^|\s)--work-tree(=|\s)/;
-const GIT_ENV_OVERRIDE_RE = /^\s*([A-Z_][A-Z0-9_]*=[^\s]+\s+)*GIT_(DIR|WORK_TREE)=/;
 
-/** Resolve the `-C <dir>` target repo from a git command (else cwd). */
-function resolveCommitDir(command: string, cwd: string): string {
-  const m = command.match(/git\s+-C\s+([^\s]+)/);
-  return m ? m[1]! : cwd;
-}
+/**
+ * The git env vars that DECOUPLE the scanned index/repo from the one actually
+ * committed — the root-cause set the guard denies fail-closed. A commit under any
+ * of these reads a different index/object store than `git diff --cached` scans, so
+ * a staged secret would slip past. NOT a blanket GIT_* deny: benign vars
+ * (GIT_SSH_COMMAND, GIT_AUTHOR_* and GIT_COMMITTER_*, GIT_EDITOR, GIT_PAGER, …)
+ * are allowed so a human's `GIT_SSH_COMMAND=… git push` is not a false positive
+ * (the guard runs on EVERY Bash, not only autonomous runs).
+ */
+const REDIRECT_ENV: ReadonlySet<string> = new Set([
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_NAMESPACE",
+]);
 
 /** Parse a redaction-safe preview of a matched secret token. */
 function redactPreview(s: string): string {
@@ -118,16 +138,28 @@ export async function decideSecretGuard(
     if (!GIT_SUBCMD_LOOSE_RE.test(command)) return allow();
   }
 
-  // --- Deny git-dir/work-tree override bypass (fail-closed) ---
-  if (
-    GIT_DIR_FLAG_RE.test(command) ||
-    WORK_TREE_FLAG_RE.test(command) ||
-    GIT_ENV_OVERRIDE_RE.test(command)
-  ) {
+  const inv = parseGitInvocation(command);
+
+  // --- Deny redirection bypasses (fail-closed) ---
+  // (a) --git-dir / --work-tree FLAGS. Kept as loose regexes: the parser captures a
+  //     single git-dir and does not retain work-tree, so the regex scan is broader.
+  if (GIT_DIR_FLAG_RE.test(command) || WORK_TREE_FLAG_RE.test(command)) {
     return deny("git_dir_override_denied", `git-dir/work-tree override blocked: ${command}`);
   }
+  // (b) ENV-prefix overrides in the index/repo-redirection family (GIT_INDEX_FILE,
+  //     GIT_DIR, …). These point the commit at a different index/store than the
+  //     scan reads. Benign GIT_* are intentionally NOT denied (see REDIRECT_ENV).
+  const redirectEnv = inv.envNames.filter((name) => REDIRECT_ENV.has(name));
+  if (redirectEnv.length > 0) {
+    return deny(
+      "git_redirect_env_denied",
+      `git index/repo-redirecting env override blocked (${redirectEnv.join(", ")}): ${command}`,
+    );
+  }
 
-  const commitDir = resolveCommitDir(command, cwd);
+  // Resolve the target repo with LAST-WINS `-C <dir>` (matches branch-protection);
+  // a first-match scan let `git -C <clean> -C <secret> commit` evade the guard.
+  const commitDir = inv.workDir.length > 0 ? inv.workDir : cwd;
 
   // Confirm the target is a git repo; non-git → fail closed.
   let repoCheck: ExecResult;
