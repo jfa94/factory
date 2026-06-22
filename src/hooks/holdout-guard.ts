@@ -18,6 +18,7 @@
 import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { sep } from "node:path";
 import { resolveDataDir, type DataDirOptions } from "../config/load.js";
+import { createLogger } from "../shared/index.js";
 import { canonicalizePath } from "./tcb.js";
 import {
   allow,
@@ -30,6 +31,8 @@ import {
   type HookDecision,
   type HookInput,
 } from "./hook-io.js";
+
+const log = createLogger("holdout-guard");
 
 /** In-repo read tools that take a `file_path`/`path`/`pattern`. */
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
@@ -85,8 +88,17 @@ export function decideHoldoutGuard(
   let dataDir: string | undefined;
   try {
     dataDir = resolveDataDir(deps);
-  } catch {
+  } catch (err) {
+    // resolveDataDir throws ONLY when CLAUDE_PLUGIN_DATA is unset — i.e. no holdout
+    // store exists, so allowing is SAFE: there is nothing for the Bash textual
+    // race-catch arm to protect. The canonical-path arm still applies. But surface
+    // it LOUDLY rather than swallow: the textual arm is now inert, and any
+    // UNEXPECTED resolver failure must be detectable, not silent.
     dataDir = undefined;
+    log.warn(
+      `holdout store dir unresolved (${(err as Error).message}); ` +
+        `the Bash textual-match arm is inert (no store configured) — canonical-path denial still applies`,
+    );
   }
 
   const tool = toolNameOf(input);

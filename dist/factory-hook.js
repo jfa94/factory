@@ -6823,6 +6823,7 @@ async function readAllStdin2() {
 
 // src/hooks/holdout-guard.ts
 import { sep as sep3 } from "node:path";
+var log5 = createLogger("holdout-guard");
 var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep", "Glob"]);
 var READ_COMMAND_RE = /\b(cat|less|more|head|tail|grep|egrep|fgrep|rg|sed|awk|od|xxd|hexdump|strings|nl|tac|cut|sort|uniq|jq|yq)\b/;
 function isHoldoutPath(canonical) {
@@ -6845,8 +6846,11 @@ function decideHoldoutGuard(input, deps = {}) {
   let dataDir;
   try {
     dataDir = resolveDataDir(deps);
-  } catch {
+  } catch (err) {
     dataDir = void 0;
+    log5.warn(
+      `holdout store dir unresolved (${err.message}); the Bash textual-match arm is inert (no store configured) \u2014 canonical-path denial still applies`
+    );
   }
   const tool = toolNameOf(input);
   if (READ_TOOLS.has(tool)) {
@@ -7389,7 +7393,7 @@ function specDir(dataDir, repo, specId) {
 }
 
 // src/core/state/manager.ts
-var log5 = createLogger("state");
+var log6 = createLogger("state");
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
 var StateManager = class {
   dataDir;
@@ -7576,7 +7580,7 @@ var StateManager = class {
         runs.push(await this.read(entry.name));
       } catch (err) {
         if (err.code === "ENOENT") continue;
-        log5.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
+        log6.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
       }
     }
     return runs.sort((a, b) => a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0);
@@ -7727,7 +7731,7 @@ var StateManager = class {
       });
       await rename2(tmp, link);
     } catch (err) {
-      log5.warn(
+      log6.warn(
         `state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`
       );
       await unlink2(tmp).catch(() => {
@@ -8007,7 +8011,7 @@ async function readAllStdin5() {
 }
 
 // src/hooks/subagent-stop.ts
-var log6 = createLogger("hook:subagent-stop");
+var log7 = createLogger("hook:subagent-stop");
 function reviewerNameOf(agentType) {
   const t = agentType.replace(/^factory:/, "");
   switch (t) {
@@ -8048,7 +8052,7 @@ async function handleSubagentStop(input, deps = {}) {
   const manager = deps.manager ?? new StateManager(deps);
   const run = await manager.readCurrent();
   if (run === null) {
-    log6.warn(`no active run (runs/current absent) \u2014 reviewer '${reviewer}' result skipped`);
+    log7.warn(`no active run (runs/current absent) \u2014 reviewer '${reviewer}' result skipped`);
     return null;
   }
   let taskId = deps.explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
@@ -8070,19 +8074,19 @@ async function handleSubagentStop(input, deps = {}) {
     if (reviewing.length === 1) taskId = reviewing[0].task_id;
   }
   if (taskId.length === 0) {
-    log6.error(
+    log7.error(
       `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 driver fold is the single writer`
     );
     return null;
   }
   if (!run.tasks[taskId]) {
-    log6.error(
+    log7.error(
       `resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`
     );
     return null;
   }
   const verdict = parseVerdict(input.last_assistant_message);
-  log6.info(
+  log7.info(
     `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 driver folds reviews via the drive --results fold)`
   );
   return null;
@@ -8093,13 +8097,13 @@ async function runSubagentStop(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin6();
     input = parseHookInput(raw);
   } catch (err) {
-    log6.error(`malformed SubagentStop input: ${err.message}`);
+    log7.error(`malformed SubagentStop input: ${err.message}`);
     return EXIT.OK;
   }
   try {
     await handleSubagentStop(input, deps);
   } catch (err) {
-    log6.error(`SubagentStop handler error: ${err.message}`);
+    log7.error(`SubagentStop handler error: ${err.message}`);
   }
   return EXIT.OK;
 }
@@ -8112,7 +8116,7 @@ async function readAllStdin6() {
 }
 
 // src/hooks/stop-gate.ts
-var log7 = createLogger("hook:stop-gate");
+var log8 = createLogger("hook:stop-gate");
 var ALLOW = { kind: "allow" };
 function decideStop(run, stoppingSession) {
   if (run === null) return ALLOW;
@@ -8143,7 +8147,7 @@ async function runStopGate(_argv = [], deps = {}) {
     const input = parseHookInput(raw);
     stoppingSession = typeof input?.session_id === "string" && input.session_id.length > 0 ? input.session_id : void 0;
   } catch (err) {
-    log7.warn(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
+    log8.warn(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
     stoppingSession = void 0;
   }
   let run;
@@ -8151,7 +8155,7 @@ async function runStopGate(_argv = [], deps = {}) {
     run = await resolveStopRun(manager, stoppingSession);
   } catch (err) {
     const reason = `pipeline state unreadable: ${err.message}. Repair runs/current \u2192 state.json (or clear runs/current) before stopping.`;
-    log7.error(reason);
+    log8.error(reason);
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;
   }
@@ -8162,10 +8166,10 @@ async function runStopGate(_argv = [], deps = {}) {
     case "finalize": {
       try {
         await manager.finalize(run.run_id, action.status);
-        log7.info(`run ${run.run_id} finalized as '${action.status}' on stop`);
+        log8.info(`run ${run.run_id} finalized as '${action.status}' on stop`);
       } catch (err) {
         const reason = `finalize-on-stop failed for ${run.run_id}: ${err.message}. Run state may be inconsistent; rerun finalize or investigate before stopping.`;
-        log7.error(reason);
+        log8.error(reason);
         emitBlockDecision(deny(reason), emit2);
       }
       return EXIT.OK;
