@@ -34,6 +34,7 @@ export function docsWorktreePath(dataDir: string, runId: string): string {
   return join(dataDir, "runs", runId, "docs-worktree");
 }
 
+/** Build the scribe prompt for the docs stage. @internal */
 function buildScribePrompt(worktree: string, baseRef: string): string {
   return [
     "You are the factory scribe running the pipeline's documentation stage.",
@@ -84,7 +85,7 @@ export async function runDocsFold(
   deps: DocsRunDeps,
   runId: string,
   results: DocsResults,
-): Promise<DocsEnvelope> {
+): Promise<Extract<DocsEnvelope, { kind: "done" | "blocked" }>> {
   const run = await deps.state.read(runId);
   const staging = resolveStagingBranch(runId, run.staging_branch);
   const docsBranch = `docs-${runId}`;

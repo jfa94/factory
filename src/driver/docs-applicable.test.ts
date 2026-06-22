@@ -45,4 +45,15 @@ describe("isDocsApplicable", () => {
     );
     expect(await isDocsApplicable(dir)).toBe(true);
   });
+
+  it("true when package.json is malformed (fail-open: docs enabled)", async () => {
+    await mkdir(join(dir, "docs"));
+    await writeFile(join(dir, "package.json"), "{ not valid json");
+    expect(await isDocsApplicable(dir)).toBe(true);
+  });
+
+  it("false when /docs is a plain file, not a directory", async () => {
+    await writeFile(join(dir, "docs"), "");
+    expect(await isDocsApplicable(dir)).toBe(false);
+  });
 });

@@ -44,7 +44,7 @@ Mermaid diagrams only where they add clarity over prose — do not add diagrams 
    - If populated → **incremental**
 2. If the user explicitly says "full sweep" → override to full sweep regardless.
 3. In incremental mode:
-   - If a base ref was provided by the factory docs stage, use `git diff <base_ref>..HEAD` to identify changed files. This overrides the last-documented marker logic below.
+   - If a base ref was provided by the factory docs stage, use `git diff <base_ref>..HEAD --name-only` to identify changed files. This overrides the last-documented marker logic below.
    - Otherwise, read the first line of `docs/README.md` to find `<!-- last-documented: <hash> -->`
    - If found: run `git diff <hash>..HEAD --name-only` to identify changed files
    - If not found: run `git diff HEAD~1 --name-only`

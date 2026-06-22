@@ -41,6 +41,9 @@ describe("runDocsFold", () => {
     const run = await state.read(RUN_ID);
     expect(run.docs?.status).toBe("done");
     expect(run.status).not.toBe("suspended");
+    // nowIso() must stamp ended_at; a refactor dropping it would go undetected.
+    expect(run.docs?.ended_at).toBeDefined();
+    expect(run.docs?.ended_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("non-DONE → suspends the run, records the failure reason, never pushes", async () => {
@@ -55,6 +58,9 @@ describe("runDocsFold", () => {
     expect(run.status).toBe("suspended");
     expect(run.docs?.status).toBe("failed");
     expect(run.docs?.reason).toContain("BLOCKED");
+    // nowIso() must stamp ended_at on the failure path too.
+    expect(run.docs?.ended_at).toBeDefined();
+    expect(run.docs?.ended_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(git.calls.some((c) => c.startsWith("push"))).toBe(false);
   });
 });
@@ -77,11 +83,17 @@ describe("runDocsEmit", () => {
   });
 
   it("is idempotent when the worktree already exists (resume): no second worktree add", async () => {
-    await runDocsEmit(deps(), RUN_ID);
+    const first = await runDocsEmit(deps(), RUN_ID);
     const callsAfterFirst = git.calls.length;
     const second = await runDocsEmit(deps(), RUN_ID);
     expect(second.kind).toBe("spawn");
     const addsAfter = git.calls.slice(callsAfterFirst).filter((c) => c.startsWith("worktree add"));
     expect(addsAfter).toHaveLength(0);
+    // resume returns an identical spawn manifest, not merely *a* spawn envelope.
+    if (first.kind !== "spawn" || second.kind !== "spawn") throw new Error("expected spawn");
+    expect(second.staging_branch).toBe(first.staging_branch);
+    expect(second.docs_branch).toBe(first.docs_branch);
+    expect(second.base_ref).toBe(first.base_ref);
+    expect(second.worktree).toBe(first.worktree);
   });
 });
