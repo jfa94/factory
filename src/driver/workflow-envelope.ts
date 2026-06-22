@@ -49,6 +49,7 @@ import type { DriveEnvelope } from "./coroutine.js";
 const NEXT_KIND_MIRROR: Record<NextEnvelope["kind"], true> = {
   "tasks-ready": true,
   "all-terminal": true,
+  "docs-ready": true,
   "run-terminal": true,
   "quota-blocked": true,
 };

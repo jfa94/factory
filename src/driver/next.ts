@@ -33,6 +33,7 @@ import {
   isTerminalRunStatus,
   isTerminalTaskStatus,
   clearCheckpoint,
+  decideFinalize,
   type RunState,
   type TaskState,
 } from "./deps.js";
@@ -66,6 +67,9 @@ export type NextEnvelope =
       readonly cascade_dropped: readonly string[];
     })
   | (NextContext & {
+      readonly kind: "docs-ready";
+    })
+  | (NextContext & {
       readonly kind: "run-terminal";
       readonly run_status: (typeof TERMINAL_RUN_STATUSES)[number];
     })
@@ -87,6 +91,17 @@ function isUnsatisfiableDep(run: RunState, depId: string): boolean {
   return dep === undefined || dep.status === "dropped";
 }
 
+/**
+ * True iff a fully-terminal run still needs its docs stage: prospective status
+ * `completed`, docs not already `done`, and docs applicable to the target repo.
+ * The caller MUST guarantee all tasks are terminal — decideFinalize throws otherwise.
+ */
+async function wantsDocs(deps: CoroutineDeps, run: RunState): Promise<boolean> {
+  if (run.docs?.status === "done") return false;
+  if (decideFinalize(run).run_status !== "completed") return false;
+  return deps.docsApplicable();
+}
+
 export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextEnvelope> {
   let run = await deps.state.read(runId);
 
@@ -102,13 +117,14 @@ export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextE
     return { ...ctx(), kind: "run-terminal", run_status: run.status };
   }
 
-  // 2. All-tasks-terminal check BEFORE the quota gate — if every task is
-  //    already done/dropped there is nothing left to schedule and we must not
-  //    write a pause checkpoint on a run that is effectively finished. An empty
-  //    run (tasks: {}) is vacuously all-terminal — same semantics as the
-  //    post-cascade check in step 6. (Mirrors stepTask's terminal-before-gate
-  //    ordering; see the analogous task-level guard in coroutine.ts.)
-  if (Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status))) {
+  // 2. All-tasks-terminal check BEFORE the quota gate. A GENUINELY finished run
+  //    early-returns here (a finished run must never write a pause checkpoint). But a
+  //    run whose tasks are all terminal yet whose docs stage is still pending is NOT
+  //    finished: it falls through to the quota gate + checkpoint clear so a
+  //    docs-suspended run resumes cleanly, then returns `docs-ready` after step 4.
+  const allTerminal = Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status));
+  const needsDocs = allTerminal && (await wantsDocs(deps, run));
+  if (allTerminal && !needsDocs) {
     return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
   }
 
@@ -135,6 +151,14 @@ export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextE
       status: patch.status,
       quota: patch.quota,
     }));
+  }
+
+  // Docs gate: a completed run with a pending, applicable docs stage. Reached only
+  // when `needsDocs` (all tasks terminal), and AFTER the checkpoint clear so a
+  // docs-suspended run is back to `running` first. `needsDocs` was computed from the
+  // entry snapshot; the checkpoint clear changes only status/quota, never tasks/docs.
+  if (needsDocs) {
+    return { ...ctx(), kind: "docs-ready" };
   }
 
   // 5. Cascade-drop until stable. Pending tasks with an unsatisfiable dep are

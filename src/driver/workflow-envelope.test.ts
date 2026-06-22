@@ -7,12 +7,18 @@ import { DRIVE_KINDS, NEXT_KINDS, parseEnvelope, type EnvelopeKind } from "./wor
 
 describe("NEXT_KINDS / DRIVE_KINDS (engine-derived)", () => {
   // The authoritative discriminants, copied from the engine unions:
-  //   NextEnvelope  (src/driver/next.ts)      = tasks-ready | all-terminal | run-terminal | quota-blocked
+  //   NextEnvelope  (src/driver/next.ts)      = tasks-ready | all-terminal | docs-ready | run-terminal | quota-blocked
   //   DriveEnvelope (src/driver/coroutine.ts) = spawn | terminal | quota-blocked
   // The sets themselves are derived from a `Record<Union["kind"], true>` mirror,
   // so omitting a kind is a compile error; this test pins the runtime values to
   // the same authoritative lists (catching an accidental EXTRA kind in the mirror).
-  const NEXT_AUTHORITATIVE = ["tasks-ready", "all-terminal", "run-terminal", "quota-blocked"];
+  const NEXT_AUTHORITATIVE = [
+    "tasks-ready",
+    "all-terminal",
+    "docs-ready",
+    "run-terminal",
+    "quota-blocked",
+  ];
   const DRIVE_AUTHORITATIVE = ["spawn", "terminal", "quota-blocked"];
 
   it("NEXT_KINDS is exactly the NextEnvelope discriminants", () => {

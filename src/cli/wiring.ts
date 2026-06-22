@@ -22,6 +22,7 @@ import { FsArtifactStore } from "../driver/artifacts.js";
 import { FsHoldoutStore } from "../verifier/holdout/index.js";
 import { StatuslineUsageSignal } from "../quota/index.js";
 import { nowEpoch } from "../shared/time.js";
+import { isDocsApplicable } from "../driver/docs-applicable.js";
 import type { HandlerDeps, ShipMode } from "../driver/types.js";
 import type { RunState } from "../core/state/index.js";
 import type { CoroutineDeps } from "../driver/coroutine.js";
@@ -78,6 +79,7 @@ export async function loadCoroutineDeps(opts: LoadCliDepsOptions): Promise<Corou
     ...deps,
     usage: new StatuslineUsageSignal({ dataDir: deps.dataDir }),
     now: nowEpoch,
+    docsApplicable: () => isDocsApplicable(process.cwd()),
   };
 }
 

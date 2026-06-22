@@ -198,6 +198,7 @@ async function driveToTerminal(
       return deps.state.read(runId);
     }
     if (next.kind === "quota-blocked") throw new Error(`unexpected quota stop: ${next.reason}`);
+    if (next.kind === "docs-ready") throw new Error("unexpected docs-ready in E2E helper");
 
     const taskId = next.ready[0]!; // sequential driver: first ready task
     let results: DriveResults | undefined;
@@ -268,6 +269,7 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
         capturedAt: NOW,
       }),
       now: () => NOW,
+      docsApplicable: async () => false,
     };
   }
 

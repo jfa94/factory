@@ -122,6 +122,8 @@ export interface MakeCoroutineDepsOpts {
    * gate skip pacing, so stepRun/stepTask proceed regardless of the usage signal.
    */
   modeOverride?: RunState["mode"];
+  /** Docs-applicability gate result (default false → existing all-terminal tests unaffected). */
+  docsApplicable?: boolean;
 }
 
 export interface CoroutineDepsResult {
@@ -204,6 +206,7 @@ export async function makeCoroutineDeps(
     state,
     usage: fakeUsageSignal(opts.usage ?? PROCEED),
     now: () => NOW,
+    docsApplicable: async () => opts.docsApplicable ?? false,
   };
 
   return {

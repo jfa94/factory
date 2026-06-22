@@ -125,6 +125,8 @@ export interface CoroutineDeps extends HandlerDeps {
   readonly usage: UsageSignal;
   /** Epoch SECONDS. */
   readonly now: () => number;
+  /** True iff the target repo keeps /docs and docs are not opted out (docs stage gate). */
+  readonly docsApplicable: () => Promise<boolean>;
 }
 
 /** Resolve the live task row (LOUD if absent — run/spec drift). */

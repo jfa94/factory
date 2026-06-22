@@ -423,3 +423,85 @@ describe("stepRun", () => {
     }
   });
 });
+
+describe("docs-ready gate", () => {
+  const DONE_AT = "2026-01-01T00:00:00.000Z";
+
+  it("completed + docs applicable + docs not done → docs-ready", async () => {
+    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      expect((await stepRun(deps, runId)).kind).toBe("docs-ready");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("completed + docs NOT applicable → all-terminal", async () => {
+    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: false,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      expect((await stepRun(deps, runId)).kind).toBe("all-terminal");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("completed + docs already done → all-terminal", async () => {
+    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: DONE_AT } }));
+      expect((await stepRun(deps, runId)).kind).toBe("all-terminal");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("failed run (a dropped task) → all-terminal, never docs-ready", async () => {
+    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({
+        ...t,
+        status: "dropped",
+        failure_class: "spec-defect",
+        failure_reason: "x",
+        ended_at: DONE_AT,
+      }));
+      expect((await stepRun(deps, runId)).kind).toBe("all-terminal");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("docs-suspended run resumes through the gate to docs-ready (status cleared to running)", async () => {
+    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({
+        ...s,
+        status: "suspended",
+        docs: { status: "failed", reason: "prior", ended_at: DONE_AT },
+      }));
+      expect((await stepRun(deps, runId)).kind).toBe("docs-ready");
+      expect((await state.read(runId)).status).toBe("running");
+    } finally {
+      await cleanup();
+    }
+  });
+});

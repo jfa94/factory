@@ -60,7 +60,13 @@ function agentTypeOf(role) {
 // error). The Workflow runtime can't import that module, so the values are copied
 // here as plain arrays with NO compile-time guarantee — they MUST stay
 // byte-identical to the TS sets. A drift silently re-opens the boundary corruption.
-const NEXT_KINDS = new Set(["tasks-ready", "all-terminal", "run-terminal", "quota-blocked"]);
+const NEXT_KINDS = new Set([
+  "tasks-ready",
+  "all-terminal",
+  "docs-ready",
+  "run-terminal",
+  "quota-blocked",
+]);
 const DRIVE_KINDS = new Set(["spawn", "terminal", "quota-blocked"]);
 
 function parseEnvelope(raw, knownKinds, context) {
