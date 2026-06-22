@@ -99,8 +99,10 @@ reserves the expensive model escalation for genuine capability shortfalls.
 
 ## What a drop becomes
 
-A dropped task is terminal. At run finalize, each drop becomes one GitHub issue
-(labelled with its failure class) and a line in the run report. Because `develop`
+A dropped task is terminal. At run finalize, every drop is surfaced as a single
+deduped comment on the originating PRD issue, listing each dropped task with its
+failure class, failure reason, and unmet acceptance criteria (Decision 36 retired
+the old per-drop GitHub issues), plus a line in the run report. Because `develop`
 receives only whole PRDs (Decision 34), any drop makes the run `failed`: `develop`
 is left untouched and the PRD stays open, with the run's `staging-<run-id>` branch
 banked for [rescue](../guides/rescue-a-stalled-run.md). Nothing is papered over. See
