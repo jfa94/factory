@@ -248,6 +248,14 @@ async function applyTemplate(
   // A present SEED file is PROJECT-OWNED: never read, compared, overwritten, or
   // re-flagged. A repo's grown-up config (e.g. an eslint.config.mjs that imports
   // plugins) is recognized as current, not stale (Decision 15).
+  //
+  // KNOWN, DELIBERATE LIMITATION: this also means a NEW baseline rule added to a
+  // shipped SEED template (e.g. an extra .dependency-cruiser.cjs boundary rule) does
+  // NOT propagate to already-scaffolded repos — their copy is left as-is. That is the
+  // price of the project-ownership guarantee; there is intentionally no SEED
+  // drift-detection (it would reintroduce the clobber risk this tier prevents). A repo
+  // opts into a refreshed baseline by deleting the file and re-scaffolding. Machinery
+  // that must stay in lockstep belongs in the MANAGED tier. See Decision 15.
   if (entry.policy === "seed") {
     lists.present.push(entry.rel);
     return;

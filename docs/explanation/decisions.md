@@ -324,6 +324,22 @@ preferences; customizing them is unsupported by contract, and git is the safety 
 clobbered — the original "overwriting would destroy customizations" concern applies
 to exactly that tier.
 
+**Known limitation — SEED rules do not propagate (deliberate).**
+
+Because a present SEED file is never read, compared, or overwritten
+(`applyTemplate`, `src/cli/subcommands/scaffold.ts`), a _new_ baseline rule added to
+a shipped SEED template — e.g. an extra boundary rule in `.dependency-cruiser.cjs` or
+a tightened `.stryker.config.json` threshold — does **not** reach repos that were
+already scaffolded. Their existing copy is recognized as current. This is the
+unavoidable cost of the project-ownership guarantee: the same rule that refuses to
+clobber a repo's grown-up config also refuses to back-fill plugin baseline changes
+into it. There is deliberately **no** drift-detection or merge mechanism for SEED
+files — adding one would reintroduce exactly the clobber risk this tier exists to
+prevent. A repo that wants a refreshed baseline opts in explicitly by deleting its
+SEED file and re-running `factory scaffold` (which then re-copies the current
+template). Plugin-owned machinery that _must_ stay in lockstep belongs in the MANAGED
+tier, not SEED.
+
 ---
 
 ## Decision 16: Asymmetric Auto-Merge Strategy
