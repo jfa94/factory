@@ -26,7 +26,7 @@ export type { TcbCategory, TcbRule, TcbMatch } from "./tcb.js";
 
 export type { ExecResult, ExecOptions } from "../shared/exec.js";
 
-export type { Config } from "../config/schema.js";
+export type { Config, Effort } from "../config/schema.js";
 
 // WS1 — state core seam. Re-exported so `(repo, spec-id)`-keyed run state, the
 // closed enums (run/task status, failure-class, risk-tier, panel-verdict), and

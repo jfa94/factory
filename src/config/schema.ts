@@ -22,6 +22,16 @@
  */
 import { z } from "zod";
 
+/**
+ * The closed Agent effort/reasoning domain (weakest→strongest). THE one home for
+ * the effort enum: the Decision-21 apex pin ({@link SpecSchema}'s `specEffort`),
+ * the spawn manifest (`SpawnAgentSchema.effort`), and the producer dial's effort
+ * ladder (`model-dial.ts`) all reuse it, so an out-of-domain effort is rejected at
+ * the boundary instead of flowing through as an open string. Mirrors `RiskTierEnum`.
+ */
+export const EffortEnum = z.enum(["low", "medium", "high", "xhigh", "max"]);
+export type Effort = z.infer<typeof EffortEnum>;
+
 /** Quality gate thresholds (WS6 extends). Defaults from the bash gate scripts. */
 export const QualitySchema = z
   .object({
@@ -124,7 +134,7 @@ export const SpecSchema = z
     /** Apex model the spec generator AND reviewer are pinned to (Decision 21). */
     specModel: z.string().min(1).default("opus"),
     /** Apex effort the spec generator AND reviewer are pinned to (Decision 21). */
-    specEffort: z.string().min(1).default("max"),
+    specEffort: EffortEnum.default("max"),
     /** Max bytes of PRD body retained from `gh issue view` before truncation. */
     prdBodyMaxBytes: z
       .number()

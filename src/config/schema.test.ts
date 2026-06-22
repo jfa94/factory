@@ -50,6 +50,14 @@ describe("ConfigSchema", () => {
     expect(() => ConfigSchema.parse({ quota: { hourlyThresholds: [1, 2, 3] } })).toThrow();
   });
 
+  it("spec.specEffort defaults to 'max' and is a CLOSED enum (out-of-domain rejected loud)", () => {
+    expect(ConfigSchema.parse({}).spec.specEffort).toBe("max");
+    // An in-domain effort round-trips.
+    expect(ConfigSchema.parse({ spec: { specEffort: "high" } }).spec.specEffort).toBe("high");
+    // An out-of-domain effort is rejected, not silently coerced to a string.
+    expect(() => ConfigSchema.parse({ spec: { specEffort: "turbo" } })).toThrow();
+  });
+
   it("does NOT carry forward retired human-gate keys", () => {
     const cfg = ConfigSchema.parse({});
     expect("humanReviewLevel" in cfg).toBe(false);

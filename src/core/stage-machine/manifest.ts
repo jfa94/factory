@@ -17,6 +17,7 @@
  */
 import { z } from "zod";
 import { TaskStageEnum } from "./stages.js";
+import { EffortEnum } from "../../config/schema.js";
 
 /**
  * The reviewer/producer roles the engine may ask the driver to spawn. CLOSED set:
@@ -55,11 +56,11 @@ export const SpawnAgentSchema = z.object({
   /** Pointer to the prompt artifact, run-store relative (non-empty). */
   prompt_ref: z.string().min(1),
   /**
-   * Optional effort/reasoning level to spawn at (the `Agent` effort enum:
+   * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
    * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
    * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
    */
-  effort: z.string().min(1).optional(),
+  effort: EffortEnum.optional(),
 });
 export type SpawnAgent = z.infer<typeof SpawnAgentSchema>;
 

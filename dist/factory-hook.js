@@ -6390,6 +6390,7 @@ var coerce = {
 var NEVER = INVALID;
 
 // src/config/schema.ts
+var EffortEnum = external_exports.enum(["low", "medium", "high", "xhigh", "max"]);
 var QualitySchema = external_exports.object({
   /** Percent of acceptance criteria held out as an unreadable answer-key. */
   holdoutPercent: external_exports.number().min(0).max(100).default(20),
@@ -6465,7 +6466,7 @@ var SpecSchema = external_exports.object({
   /** Apex model the spec generator AND reviewer are pinned to (Decision 21). */
   specModel: external_exports.string().min(1).default("opus"),
   /** Apex effort the spec generator AND reviewer are pinned to (Decision 21). */
-  specEffort: external_exports.string().min(1).default("max"),
+  specEffort: EffortEnum.default("max"),
   /** Max bytes of PRD body retained from `gh issue view` before truncation. */
   prdBodyMaxBytes: external_exports.number().int().positive().default(64 * 1024)
 }).default({});
@@ -7768,11 +7769,11 @@ var SpawnAgentSchema = external_exports.object({
   /** Pointer to the prompt artifact, run-store relative (non-empty). */
   prompt_ref: external_exports.string().min(1),
   /**
-   * Optional effort/reasoning level to spawn at (the `Agent` effort enum:
+   * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
    * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
    * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
    */
-  effort: external_exports.string().min(1).optional()
+  effort: EffortEnum.optional()
 });
 var SpawnManifestSchema = external_exports.object({
   /** Engine resumes here after the agents return. A per-task stage. */

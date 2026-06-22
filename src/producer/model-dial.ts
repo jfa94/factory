@@ -30,6 +30,7 @@
  */
 import type { Config } from "../types/index.js";
 import type { RiskTier } from "../types/index.js";
+import type { Effort } from "../types/index.js";
 import { selectProducerModel } from "../quota/index.js";
 
 /**
@@ -38,7 +39,7 @@ import { selectProducerModel } from "../quota/index.js";
  * generator's `"max"` pin (Decision 21). Hardcoded (not config) — consistent with
  * the hardcoded {@link ESCALATION_CAP}.
  */
-const EFFORT_LADDER: readonly string[] = ["xhigh", "max"] as const;
+const EFFORT_LADDER: readonly Effort[] = ["xhigh", "max"] as const;
 
 /** The result of dialing a model + effort for a given rung. */
 export interface DialResult {
@@ -57,13 +58,13 @@ export interface DialResult {
    * reached its ceiling. Omitted (`undefined`) on rungs that have not begun the
    * effort climb — the producer then inherits the spawn default (today's behavior).
    */
-  readonly effort?: string;
+  readonly effort?: Effort;
 }
 
 /** One step on the escalation ladder: a model, optionally with an effort override. */
 interface EscalationStep {
   readonly model: string;
-  readonly effort?: string;
+  readonly effort?: Effort;
 }
 
 /**
