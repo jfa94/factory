@@ -171,7 +171,6 @@ export async function makeCoroutineDeps(
         task_id: tDef.task_id,
         status: override.status ?? "pending",
         depends_on: [...(tDef.depends_on ?? [])],
-        risk_tier: tDef.risk_tier ?? "medium",
         escalation_rung: override.escalation_rung ?? 0,
         reviewers: override.reviewers ?? [],
         merge_resyncs: override.merge_resyncs ?? 0,

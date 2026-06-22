@@ -42,7 +42,6 @@ function doneTask(id: string, pr: number): TaskState {
   return {
     task_id: id,
     status: "done",
-    risk_tier: "medium",
     branch: `factory/run-1/${id}`,
     pr_number: pr,
   } as TaskState;
@@ -56,14 +55,13 @@ function droppedTask(
   return {
     task_id: id,
     status: "dropped",
-    risk_tier: "medium",
     failure_class,
     failure_reason: reason,
   } as TaskState;
 }
 
 function pendingTask(id: string, status: TaskState["status"] = "pending"): TaskState {
-  return { task_id: id, status, risk_tier: "medium" } as TaskState;
+  return { task_id: id, status } as TaskState;
 }
 
 function makeRun(tasks: TaskState[], overrides: Partial<RunState> = {}): RunState {

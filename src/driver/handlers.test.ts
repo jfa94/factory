@@ -135,7 +135,6 @@ describe("makeStageHandlers (Model-A reporters)", () => {
       task_id: task.task_id,
       status: task.status ?? "pending",
       depends_on: task.depends_on ?? [],
-      risk_tier: task.risk_tier ?? "medium",
       escalation_rung: task.escalation_rung ?? 0,
       reviewers: task.reviewers ?? [],
       merge_resyncs: task.merge_resyncs ?? 0,

@@ -14,7 +14,7 @@ import {
 const NOW = "2026-01-01T12:00:00Z";
 
 function minimalTask(over: Record<string, unknown> = {}) {
-  return { task_id: "t1", risk_tier: "low", ...over };
+  return { task_id: "t1", ...over };
 }
 
 function minimalRun(over: Record<string, unknown> = {}): unknown {
@@ -124,9 +124,13 @@ describe("closed enums reject out-of-domain values (loud, not silent)", () => {
     ).toThrow();
   });
 
-  it("rejects an out-of-domain risk tier (the single producer dial)", () => {
-    expect(() => parseTaskState(minimalTask({ risk_tier: "security" }))).toThrow();
-    expect(() => parseTaskState({ task_id: "t1" })).toThrow(); // risk_tier required
+  it("parses a minimal task row — risk_tier is the spec's dial, not a stored field", () => {
+    // The risk_tier producer dial lives on SpecTask (spec/schema.ts) and is read
+    // live via specTaskOf — it is NOT a TaskState field. A row carrying only task_id
+    // is therefore valid (other fields default), and any stray risk_tier key is
+    // stripped by the plain z.object. Out-of-domain risk_tier rejection is covered
+    // on SpecTask in spec/schema.test.ts (D25).
+    expect(parseTaskState({ task_id: "t1" }).task_id).toBe("t1");
   });
 
   it("rejects an out-of-domain panel verdict", () => {

@@ -6191,11 +6191,17 @@ var ReviewerResultSchema = external_exports.object({
 var TaskStateSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   status: TaskStatusEnum.default("pending"),
-  /** Task ids this task depends on (the vertical-slice DAG, Decision 23). */
+  /**
+   * Task ids this task depends on (the vertical-slice DAG, Decision 23). A
+   * deliberate denormalization: copied from the {@link SpecTask} at seed time and
+   * then frozen (never mutated), so the hot DAG-traversal readers — `next.ts`
+   * (ready-task selection) and `rescue/scan.ts` (drift scan, which has NO spec in
+   * scope) — read edges straight off run state without coupling to the spec store.
+   * Integrity is pinned at seed time by `seedTasksFromSpec`, where dangling, self,
+   * cyclic, and duplicate edges all fail LOUD.
+   */
   depends_on: external_exports.array(external_exports.string()).default([]),
-  // --- Producer dial + ladder (Decision 25) ---
-  /** The single producer dial, set at spec time and never re-assessed mid-run. */
-  risk_tier: RiskTierEnum,
+  // --- Producer ladder (Decision 25; the risk_tier dial lives on the SpecTask, not here) ---
   /** Current rung on the producer escalation ladder (0 = starting rung). */
   escalation_rung: EscalationRungSchema.default(0),
   /** Which producer role is/last ran. */
@@ -12531,8 +12537,11 @@ function seedTasksFromSpec(manifest) {
     tasks[t.task_id] = {
       task_id: t.task_id,
       status: "pending",
+      // Frozen denormalization of the spec DAG edges for hot traversal (next.ts,
+      // rescue/scan.ts); integrity pinned by the dangling/self/cyclic/duplicate
+      // checks above. The risk_tier dial is NOT copied — it is read live from the
+      // SpecTask via specTaskOf (derive-don't-store, Decision 25).
       depends_on: [...t.depends_on],
-      risk_tier: t.risk_tier,
       escalation_rung: 0,
       reviewers: [],
       merge_resyncs: 0

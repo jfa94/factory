@@ -15,8 +15,10 @@
  * terminal run is a LOUD error — there is nothing to resume.
  *
  * Seeding maps each {@link SpecTask} to a `pending` {@link TaskState} carrying ONLY
- * the producer dial (`risk_tier`) + the dependency edges — never `tdd_exempt` (that
- * is read from `spec/tasks.json` at runtime, never from `state.json`). Dangling,
+ * the dependency edges (a frozen denormalization for hot DAG traversal) — never the
+ * `risk_tier` dial (read live from the spec via `specTaskOf`, derive-don't-store)
+ * and never `tdd_exempt` (read from `spec/tasks.json` at runtime, never from
+ * `state.json`). Dangling,
  * self, cyclic, and duplicate dependency edges are caught LOUDLY at seed time rather
  * than surfacing later as a driver deadlock.
  */
@@ -193,8 +195,11 @@ export function seedTasksFromSpec(manifest: SpecManifest): Record<string, TaskSt
     tasks[t.task_id] = {
       task_id: t.task_id,
       status: "pending",
+      // Frozen denormalization of the spec DAG edges for hot traversal (next.ts,
+      // rescue/scan.ts); integrity pinned by the dangling/self/cyclic/duplicate
+      // checks above. The risk_tier dial is NOT copied — it is read live from the
+      // SpecTask via specTaskOf (derive-don't-store, Decision 25).
       depends_on: [...t.depends_on],
-      risk_tier: t.risk_tier,
       escalation_rung: 0,
       reviewers: [],
       merge_resyncs: 0,

@@ -61,7 +61,6 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
           task_id: t.task_id,
           status: t.status ?? "pending",
           depends_on: t.depends_on ?? [],
-          risk_tier: t.risk_tier ?? "medium",
           escalation_rung: t.escalation_rung ?? 0,
           reviewers: t.reviewers ?? [],
           merge_resyncs: t.merge_resyncs ?? 0,

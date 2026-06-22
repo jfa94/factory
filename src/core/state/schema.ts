@@ -206,20 +206,28 @@ export const ReviewerResultSchema = z.object({
 export type ReviewerResult = z.infer<typeof ReviewerResultSchema>;
 
 /**
- * Per-task state. Carries the producer dial + ladder, the panel results, the
+ * Per-task state. Carries the producer ladder position, the panel results, the
  * git/PR pointers, and the failure classification — but NO stored gate-verdict
- * booleans. A gate's pass/fail is always re-derived (derive.ts) from ground
- * truth, so there is structurally nothing here to forge (Δ V).
+ * booleans, and NO producer dial: the `risk_tier` dial is read live from the spec
+ * via `specTaskOf`, never copied here (derive-don't-store, Decision 25). A gate's
+ * pass/fail is always re-derived (derive.ts) from ground truth, so there is
+ * structurally nothing here to forge (Δ V).
  */
 export const TaskStateSchema = z.object({
   task_id: z.string().min(1),
   status: TaskStatusEnum.default("pending"),
-  /** Task ids this task depends on (the vertical-slice DAG, Decision 23). */
+  /**
+   * Task ids this task depends on (the vertical-slice DAG, Decision 23). A
+   * deliberate denormalization: copied from the {@link SpecTask} at seed time and
+   * then frozen (never mutated), so the hot DAG-traversal readers — `next.ts`
+   * (ready-task selection) and `rescue/scan.ts` (drift scan, which has NO spec in
+   * scope) — read edges straight off run state without coupling to the spec store.
+   * Integrity is pinned at seed time by `seedTasksFromSpec`, where dangling, self,
+   * cyclic, and duplicate edges all fail LOUD.
+   */
   depends_on: z.array(z.string()).default([]),
 
-  // --- Producer dial + ladder (Decision 25) ---
-  /** The single producer dial, set at spec time and never re-assessed mid-run. */
-  risk_tier: RiskTierEnum,
+  // --- Producer ladder (Decision 25; the risk_tier dial lives on the SpecTask, not here) ---
   /** Current rung on the producer escalation ladder (0 = starting rung). */
   escalation_rung: EscalationRungSchema.default(0),
   /** Which producer role is/last ran. */
@@ -429,7 +437,7 @@ export type ShipMode = z.infer<typeof ShipModeEnum>;
 
 /**
  * The whole run. Owns the per-task state map + the spec POINTER (not the spec).
- * `version` is a state-schema version for forward migration; bump only on a
+ * `schema_version` is a state-schema version for forward migration; bump only on a
  * breaking schema change.
  *
  * ⚠️ For persisted-state validation, call {@link parseRunState}, NOT

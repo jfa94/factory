@@ -74,7 +74,6 @@ function taskRow(t: TaskSeed): TaskState {
     task_id: t.task_id,
     status: t.status,
     depends_on: [],
-    risk_tier: "medium",
     escalation_rung: 0,
     reviewers: [],
     merge_resyncs: 0,
