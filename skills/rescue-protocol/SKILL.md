@@ -164,7 +164,8 @@ dry-run=<bool>`:
 - The run is **running and healthy** — let it finish; don't reset live work.
 - The only problem is the **quota gate** — that is plain `factory resume`, no rescue needed.
 - The drops are genuine **dead-ends** and nothing upstream changed — finalizing `failed` (a
-  report + one GH issue per drop, `develop` untouched) is the correct outcome, not a reset.
+  report + one comment on the PRD issue listing the drops, `develop` untouched) is the correct
+  outcome, not a reset.
 
 ## References
 

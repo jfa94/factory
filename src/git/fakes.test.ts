@@ -56,18 +56,22 @@ describe("Fakes contract — structural conformance + zero-binary smoke", () => 
   });
 });
 
-describe("FakeGhClient.issueCreate (per-failed-task GH issue, Δ S)", () => {
-  it("records each issue, assigns monotonic numbers, and returns a matching url", async () => {
+describe("FakeGhClient.listIssueComments (backs finalize's idempotency check)", () => {
+  it("returns the bodies of previously-recorded comments matching repo + number", async () => {
     const gh = new FakeGhClient();
-    const a = await gh.issueCreate({ title: "t1 dropped", body: "why", repo: "acme/widgets" });
-    const b = await gh.issueCreate({ title: "t2 dropped", body: "why2", labels: ["factory"] });
+    await gh.issueComment({ repo: "acme/widgets", number: 42, body: "PRD delivered" });
+    await gh.issueComment({ repo: "acme/widgets", number: 42, body: "run failed" });
+    // a comment on a different issue/repo must not leak in
+    await gh.issueComment({ repo: "acme/widgets", number: 7, body: "other issue" });
+    await gh.issueComment({ repo: "other/repo", number: 42, body: "other repo" });
 
-    expect(b.number).toBe(a.number + 1);
-    expect(a.url).toBe(`https://github.com/acme/widgets/issues/${a.number}`);
-    expect(b.url).toBe(`https://github.com/fake/repo/issues/${b.number}`);
-    expect(gh.issues).toHaveLength(2);
-    expect(gh.issues[0]).toMatchObject({ title: "t1 dropped", number: a.number });
-    expect(gh.issues[1]).toMatchObject({ labels: ["factory"], number: b.number });
+    const bodies = await gh.listIssueComments({ repo: "acme/widgets", number: 42 });
+    expect(bodies).toEqual(["PRD delivered", "run failed"]);
+  });
+
+  it("returns an empty array when the issue has no comments yet", async () => {
+    const gh = new FakeGhClient();
+    expect(await gh.listIssueComments({ repo: "acme/widgets", number: 42 })).toEqual([]);
   });
 });
 

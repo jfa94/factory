@@ -120,12 +120,13 @@ Usage:
               merges the staging→develop rollup; no-merge opens it only).
 
 Builds the deterministic partial-run report (report.md), emits run.finalized
-telemetry, files ONE GitHub issue per dropped task (deduped), opens + CI-gates +
-(when shipping live) squash-merges the staging→develop rollup, then flips the run
-terminal — in that resume-safe order. LOUD if any task is still non-terminal.
+telemetry, on a failed run comments the dropped tasks on the PRD issue (deduped),
+opens + CI-gates + (when shipping live) squash-merges the staging→develop rollup,
+then flips the run terminal — in that resume-safe order. LOUD if any task is still
+non-terminal.
 
 Emits ONE JSON envelope:
-  { kind:"finalized", run, report, rollup?, issues_filed }`;
+  { kind:"finalized", run, report, rollup?, failure_comment_posted }`;
 
 const CANCEL_HELP = `factory run cancel — abandon a live run (mark it failed; not resumable)
 
@@ -810,13 +811,13 @@ async function runFinalize(argv: string[]): Promise<ExitCode> {
     runId,
     ...(shipMode !== undefined ? { shipMode } : {}),
   });
-  const { run, report, rollup, issuesFiled } = await finalizeRun(deps, runId);
+  const { run, report, rollup, failureCommentPosted } = await finalizeRun(deps, runId);
   emitJson({
     kind: "finalized",
     run,
     report,
     ...(rollup !== undefined ? { rollup } : {}),
-    issues_filed: issuesFiled,
+    failure_comment_posted: failureCommentPosted,
   });
   return EXIT.OK;
 }

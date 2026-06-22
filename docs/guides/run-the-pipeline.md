@@ -102,11 +102,12 @@ tests → exec → verify → ship`), emitting a spawn manifest whenever it need
    agents. The driver spawns the producers and the review panel the manifest
    names, then folds their raw output back with `factory drive --results` (one
    state step). The engine — not the driver — decides every transition.
-5. **Completion** — `factory run finalize` builds the report and files one issue
-   per drop; **only when the whole PRD completed** does it ship the
-   `staging-<run-id> → develop` rollup (and, on a merged rollup, comment on + close
-   the originating PRD issue and delete the per-run branch). Then `factory score` +
-   `factory state --summary` report the outcome.
+5. **Completion** — `factory run finalize` builds the report; on a `failed` run it
+   posts one comment on the PRD issue listing the dropped tasks; **only when the
+   whole PRD completed** does it ship the `staging-<run-id> → develop` rollup (and,
+   on a merged rollup, comment on + close the originating PRD issue and delete the
+   per-run branch). Then `factory score` + `factory state --summary` report the
+   outcome.
 
 ## 4. Read the outcome
 
@@ -119,14 +120,14 @@ delivery. The run ends in one of two finalize statuses:
   exhausted, or the run could not start / wedged and tripped the circuit breaker).
   `develop` is left **untouched**, the PRD issue stays **open**, and the run **keeps
   its `staging-<run-id>` branch** banked for [rescue](./rescue-a-stalled-run.md). One
-  GitHub issue is filed per dropped task with its failure class (`capability-budget`,
-  `spec-defect`, or `blocked-environmental`).
+  comment is posted on the PRD issue listing every dropped task with its failure class
+  (`capability-budget`, `spec-defect`, or `blocked-environmental`).
 
 (A third terminal status, `superseded`, is set when a fresh run replaces this one —
 see [Start fresh vs. continue](#start-fresh-vs-continue-an-existing-run).)
 
-A `failed` run is a legible, classified outcome — read the filed issues and the
-`report.md`. The rollup PR targets `develop`; `main` is never touched.
+A `failed` run is a legible, classified outcome — read the PRD-issue drops comment
+and the `report.md`. The rollup PR targets `develop`; `main` is never touched.
 
 ## 5. If the run pauses or suspends on quota
 

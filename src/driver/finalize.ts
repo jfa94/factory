@@ -9,9 +9,11 @@
  *      since state.status is still `running`/`paused` until step 7)
  *   3. persist report.md (atomic) under the run store
  *   4. emit run.finalized + per-drop telemetry (thin jsonl; never fatal)
- *   5. file ONE GitHub issue per dropped task — deduped against existing factory
- *      issues so a resumed finalize never double-files (Δ S; "without repeating dead
- *      ends")
+ *   5. on a `failed` run, post ONE comment on the originating PRD issue listing every
+ *      dropped task (class + reason + unmet criteria) — GitHub issues are PRDs, not
+ *      tasks; the per-task status already lives in the run state. Idempotent: a hidden
+ *      run-id marker lets a resumed finalize detect its own prior comment and skip
+ *      (Δ S; "without repeating dead ends"). The PRD is left OPEN.
  *   6. rollup fires only on `completed` (Decision 34 — develop receives whole PRDs
  *      only): open + CI-gate + squash-merge the per-run staging→develop rollup. A
  *      merged rollup then closes/comments the PRD issue and deletes the per-run
@@ -26,15 +28,16 @@
  * gated on the first finalize, 404-tolerant branch GC). The run is flipped terminal
  * only once its outcome is fully shipped.
  *
- * no-merge cutover (ShipMode): the rollup PR is opened but never merged; issues are
- * still filed (the drops are real regardless of merge).
+ * no-merge cutover (ShipMode): the rollup PR is opened but never merged; the failure
+ * comment is still posted (the drops are real regardless of merge).
  */
 import {
   decideFinalize,
   rollup,
   buildPartialReport,
   renderPartialReportMarkdown,
-  renderFailureIssue,
+  renderFailureComment,
+  failureCommentMarker,
   recordRunFinalized,
   resolveStagingBranch,
   type Config,
@@ -52,9 +55,6 @@ import { atomicWriteFile, createLogger, nowIso } from "../shared/index.js";
 import { runReportPath } from "../core/state/paths.js";
 
 const log = createLogger("finalize");
-
-/** The label every factory-filed issue carries (the finalize dedup key). */
-const FACTORY_ISSUE_LABEL = "factory";
 
 /** Comment body posted to the PRD issue when the rollup merges (Decision 34). */
 function prdDoneComment(report: PartialRunReport, rollupResult: RollupResult): string {
@@ -112,8 +112,8 @@ export interface FinalizeRunResult {
   readonly report: PartialRunReport;
   /** The rollup outcome, or undefined when nothing shipped (no rollup attempted). */
   readonly rollup?: RollupResult;
-  /** How many NEW issues were filed (deduped — a resume files 0). */
-  readonly issuesFiled: number;
+  /** Whether a NEW failure comment was posted to the PRD (deduped — a resume posts none). */
+  readonly failureCommentPosted: boolean;
 }
 
 /** The rollup PR title — names the spec + originating PRD issue. */
@@ -122,36 +122,39 @@ function rollupTitle(report: PartialRunReport): string {
 }
 
 /**
- * File one GitHub issue per dropped task, skipping any whose title already exists
- * among the repo's factory-labelled issues (so a resumed finalize does not
- * double-file). Returns the count of NEW issues filed.
+ * On a `failed` run, post ONE comment on the originating PRD issue summarizing every
+ * dropped task. GitHub issues are PRDs, not tasks — the authoritative per-task status
+ * lives in the run state; this is the human-facing "loud drop" surface (Δ S), PRD-scoped
+ * and symmetric with the completed path's PRD-delivered comment. The PRD is left OPEN.
+ *
+ * Idempotent: the comment body carries a hidden run-id marker, so a resumed finalize
+ * scans the PRD's existing comments and skips if its own comment is already there
+ * (mirrors the old issue-title dedup). Returns whether a NEW comment was posted (a
+ * resume posts none). A `completed` run has no failures → no comment here (its PRD
+ * comment + close happens in the rollup step).
  */
-async function fileFailureIssues(deps: FinalizeRunDeps, report: PartialRunReport): Promise<number> {
-  if (report.failures.length === 0) return 0;
+async function commentFailuresOnPrd(
+  deps: FinalizeRunDeps,
+  report: PartialRunReport,
+): Promise<boolean> {
+  if (report.failures.length === 0) return false;
 
-  const existing = new Set(
-    (
-      await deps.gh.issueList({ repo: report.repo, labels: [FACTORY_ISSUE_LABEL], state: "all" })
-    ).map((i) => i.title),
-  );
-
-  let filed = 0;
-  for (const failure of report.failures) {
-    const issue = renderFailureIssue(failure, report);
-    if (existing.has(issue.title)) {
-      log.info(`issue already filed for dropped task '${failure.task_id}' — skipping duplicate`);
-      continue;
-    }
-    await deps.gh.issueCreate({
-      title: issue.title,
-      body: issue.body,
-      repo: report.repo,
-      labels: [FACTORY_ISSUE_LABEL, `factory:${failure.failure_class}`],
-    });
-    existing.add(issue.title); // guard a same-run duplicate (two drops, same title)
-    filed += 1;
+  const marker = failureCommentMarker(report.run_id);
+  const existing = await deps.gh.listIssueComments({
+    repo: report.repo,
+    number: report.issue_number,
+  });
+  if (existing.some((body) => body.includes(marker))) {
+    log.info(`failure comment already posted for run '${report.run_id}' — skipping duplicate`);
+    return false;
   }
-  return filed;
+
+  await deps.gh.issueComment({
+    repo: report.repo,
+    number: report.issue_number,
+    body: renderFailureComment(report),
+  });
+  return true;
 }
 
 /**
@@ -179,11 +182,11 @@ export async function finalizeRun(
   // 4. telemetry (swallows its own IO errors — never fatal).
   await recordRunFinalized(deps.dataDir, report, { now });
 
-  // 5. one GH issue per drop, deduped against existing factory issues.
-  const issuesFiled = await fileFailureIssues(deps, report);
+  // 5. on a failed run, one PRD comment summarizing the drops (deduped by run-id marker).
+  const failureCommentPosted = await commentFailuresOnPrd(deps, report);
 
   // 6. rollup — only on completed (Decision 34: develop receives whole PRDs only).
-  //    On failed, develop is untouched (per-drop issues are already filed above).
+  //    On failed, develop is untouched (the PRD failure comment is already posted above).
   let rollupResult: RollupResult | undefined;
   if (terminal === "completed") {
     const stagingBranch = resolveStagingBranch(runId, run.staging_branch);
@@ -238,9 +241,15 @@ export async function finalizeRun(
   const finalized = await deps.state.finalize(runId, terminal);
   log.info(
     `run '${runId}' finalized: ${terminal} ` +
-      `(${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed` +
+      `(${report.totals.shipped} shipped, ${report.totals.failed} failed` +
+      `${failureCommentPosted ? ", PRD failure comment posted" : ""}` +
       `${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`,
   );
 
-  return { run: finalized, report, ...(rollupResult ? { rollup: rollupResult } : {}), issuesFiled };
+  return {
+    run: finalized,
+    report,
+    ...(rollupResult ? { rollup: rollupResult } : {}),
+    failureCommentPosted,
+  };
 }

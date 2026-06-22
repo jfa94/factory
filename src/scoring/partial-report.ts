@@ -5,8 +5,8 @@
  * (Decision 34: develop receives only complete PRDs), this module turns the
  * persisted {@link RunState} + the durable {@link SpecManifest} into a precise,
  * deterministic account of WHAT shipped and WHAT failed and WHY — the source of
- * truth for the per-failure GitHub issues and the rollup PR body. It is also useful
- * mid-flight (a `suspended`/`paused` run) to describe which tasks are still
+ * truth for the PRD failure comment (Decision 36) and the rollup PR body. It is also
+ * useful mid-flight (a `suspended`/`paused` run) to describe which tasks are still
  * incomplete.
  *
  * PURE + DERIVE-DON'T-STORE: the report is computed afresh from ground truth
@@ -160,33 +160,41 @@ export function buildPartialReport(
   };
 }
 
-/** A failed task formatted as a GitHub issue (title + markdown body). */
-export interface FailureIssue {
-  title: string;
-  body: string;
+/**
+ * The hidden HTML-comment marker that tags the PRD failure comment with its run id.
+ * Single source of truth for both the renderer (which embeds it) and finalize's
+ * idempotency check (which scans existing PRD comments for it), so a resumed
+ * finalize detects its own prior comment and never double-posts.
+ */
+export function failureCommentMarker(runId: string): string {
+  return `<!-- factory:run-failed:${runId} -->`;
 }
 
 /**
- * Render one failed task as a GitHub issue. One issue per failed task (Δ S) so the
- * human has an actionable, classified handle on each drop. The body links back to
- * the originating PRD issue and names the failure class + unmet criteria.
+ * Render the dropped tasks of a failed run as ONE markdown comment for the
+ * originating PRD issue. Replaces the retired one-issue-per-drop behavior: GitHub
+ * issues are PRDs, drops are run-internal, and the authoritative per-task status
+ * already lives in the run state. Drops-only content — each block names the failure
+ * class, the human reason, and the task's FULL acceptance criteria (all unmet,
+ * because a drop never cleared the floor). The leading marker makes a re-finalize
+ * idempotent (see {@link failureCommentMarker}).
  */
-export function renderFailureIssue(failure: FailureLine, report: PartialRunReport): FailureIssue {
+export function renderFailureComment(report: PartialRunReport): string {
   const lines: string[] = [
-    `Task \`${failure.task_id}\` was dropped during factory run \`${report.run_id}\`.`,
-    "",
-    `- **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number})`,
-    `- **Failure class:** \`${failure.failure_class}\``,
-    `- **Reason:** ${failure.failure_reason}`,
+    failureCommentMarker(report.run_id),
+    `Factory run \`${report.run_id}\` failed — ${report.failures.length} task(s) dropped. ` +
+      `PRD left open for rescue/resume.`,
   ];
-  if (failure.branch !== undefined) lines.push(`- **Branch:** \`${failure.branch}\``);
-  if (failure.pr_number !== undefined) lines.push(`- **PR:** #${failure.pr_number}`);
-  lines.push("", "**Unmet acceptance criteria:**", "");
-  for (const c of failure.unmet_criteria) lines.push(`- [ ] ${c}`);
-  return {
-    title: `[factory] ${failure.task_id} dropped (${failure.failure_class}): ${failure.title}`,
-    body: lines.join("\n"),
-  };
+  for (const failure of report.failures) {
+    lines.push("", `### \`${failure.task_id}\` — ${failure.title}`);
+    lines.push(`- **Class:** \`${failure.failure_class}\``);
+    lines.push(`- **Reason:** ${failure.failure_reason}`);
+    if (failure.branch !== undefined) lines.push(`- **Branch:** \`${failure.branch}\``);
+    if (failure.pr_number !== undefined) lines.push(`- **PR:** #${failure.pr_number}`);
+    lines.push("- **Unmet acceptance criteria:**");
+    for (const c of failure.unmet_criteria) lines.push(`  - [ ] ${c}`);
+  }
+  return lines.join("\n");
 }
 
 /** A short uppercase label for a run status, for report headers. */

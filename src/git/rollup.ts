@@ -8,9 +8,9 @@
  * NEVER targets `main` (D16 — enforced here and upstream by {@link ensureStaging}).
  *
  * PURE over {@link GhClient}: no StateManager, no report/issue knowledge. The
- * finalize coordinator builds the report, files the per-failed-task issues, and
- * calls THIS for the git mechanics only — keeping the dependency direction right
- * (src/git is a lower layer than src/scoring / src/driver).
+ * finalize coordinator builds the report, posts the PRD-issue failure comment on a
+ * dropped run, and calls THIS for the git mechanics only — keeping the dependency
+ * direction right (src/git is a lower layer than src/scoring / src/driver).
  *
  * Idempotent (resume-safe): a finalize that died mid-rollup re-enters here. A
  * single `pr list --state all` distinguishes (a) already-merged → short-circuit

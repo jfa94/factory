@@ -82,39 +82,34 @@ describe("gh truncation safety (reuses ExecResult.truncated seam)", () => {
   });
 });
 
-describe("issueCreate", () => {
-  it("parses the issue number from the emitted URL and passes repo + labels", async () => {
+describe("listIssueComments", () => {
+  it("requests the comments field via gh issue view and returns the bodies", async () => {
     let captured: readonly string[] = [];
     const runner: GhRunner = async (args) => {
       captured = args;
-      return result({ stdout: "https://github.com/acme/widgets/issues/77\n" });
+      return result({
+        stdout: JSON.stringify({
+          comments: [{ body: "PRD delivered" }, { body: "<!-- factory:run-failed:run-1 -->\n…" }],
+        }),
+      });
     };
     const gh = new DefaultGhClient(runner);
-    const created = await gh.issueCreate({
-      title: "drop",
-      body: "why",
-      repo: "acme/widgets",
-      labels: ["factory", "factory:dropped"],
-    });
-    expect(created).toEqual({ number: 77, url: "https://github.com/acme/widgets/issues/77" });
-    expect(captured.slice(0, 6)).toEqual(["issue", "create", "--title", "drop", "--body", "why"]);
+    const bodies = await gh.listIssueComments({ repo: "acme/widgets", number: 42 });
+
+    expect(captured.slice(0, 3)).toEqual(["issue", "view", "42"]);
     expect(captured).toContain("--repo");
-    expect(captured.filter((a) => a === "--label")).toHaveLength(2);
+    expect(captured[captured.indexOf("--repo") + 1]).toBe("acme/widgets");
+    expect(captured).toContain("--json");
+    expect(captured[captured.indexOf("--json") + 1]).toBe("comments");
+    expect(bodies).toEqual(["PRD delivered", "<!-- factory:run-failed:run-1 -->\n…"]);
   });
 
-  it("throws when the issue number cannot be parsed (no silent fabrication)", async () => {
-    const runner: GhRunner = async () => result({ stdout: "something went wrong\n" });
+  it("throws on a non-zero exit (not silently swallowed)", async () => {
+    const runner: GhRunner = async () => result({ code: 1, stderr: "HTTP 404: Not Found" });
     const gh = new DefaultGhClient(runner);
-    await expect(gh.issueCreate({ title: "t", body: "b" })).rejects.toThrow(
-      /could not parse issue number/,
+    await expect(gh.listIssueComments({ repo: "acme/widgets", number: 1 })).rejects.toThrow(
+      /404|failed/i,
     );
-  });
-
-  it("throws on a truncated payload rather than trusting a clipped URL", async () => {
-    const runner: GhRunner = async () =>
-      result({ stdout: "https://github.com/o/r/iss", truncated: true });
-    const gh = new DefaultGhClient(runner);
-    await expect(gh.issueCreate({ title: "t", body: "b" })).rejects.toThrow(/truncated/i);
   });
 });
 

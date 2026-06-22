@@ -18,7 +18,7 @@
  *   2. Happy path (live): same chain → `completed`, PR merged.
  *   3. Drop path: two-task run; second task at escalation cap → drops as
  *      `capability-budget`; `finalizeRun` produces a `failed` run (Decision 34:
- *      develop receives only complete PRDs) and files one failure issue.
+ *      develop receives only complete PRDs) and posts one PRD-issue failure comment.
  *
  * The holdout path (scenario 1/2 trait): the spec carries 5 acceptance criteria, so
  * the tests stage withholds ≥1 criterion, the verify spawn carries a holdout sidecar,
@@ -400,8 +400,10 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
     expect(droppedTask.status).toBe("dropped");
     expect(droppedTask.failure_class).toBe("capability-budget");
 
-    // finalizeRun filed one failure issue for t2.
-    expect(gh.issues).toHaveLength(1);
+    // finalizeRun posted ONE failure comment on the PRD issue (drops surfaced there,
+    // not as per-task GitHub issues) naming the dropped task.
+    expect(gh.issueComments).toHaveLength(1);
+    expect(gh.issueComments[0]!.body).toContain(TASK_ID_2);
 
     // Decision 34: failed run → no rollup → develop is untouched.
     const rollupPrs = gh.created.filter((p) => p.base === "develop");

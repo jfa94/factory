@@ -7,14 +7,14 @@
 export {
   buildPartialReport,
   renderPartialReportMarkdown,
-  renderFailureIssue,
+  renderFailureComment,
+  failureCommentMarker,
 } from "./partial-report.js";
 export type {
   PartialRunReport,
   ShippedLine,
   FailureLine,
   IncompleteLine,
-  FailureIssue,
   BuildPartialReportOptions,
 } from "./partial-report.js";
 

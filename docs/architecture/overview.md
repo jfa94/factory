@@ -127,7 +127,7 @@ sequenceDiagram
 
   Note over O,CLI: Phase 4 — Completion
   O->>CLI: factory run finalize
-  CLI-->>O: report + per-drop issues + (on completed) staging-&lt;run-id&gt;→develop rollup, then terminal
+  CLI-->>O: report + (on failed) PRD-issue drops comment + (on completed) staging-&lt;run-id&gt;→develop rollup, then terminal
   O->>CLI: factory score / state --summary
 ```
 
@@ -148,10 +148,11 @@ preflight → tests → exec → verify → ship
   run's `staging-<run-id>` branch. The one stage that writes the terminal task status.
 
 The run-level **finalize** step is a _separate_ stage that runs once, after every
-task is terminal: it builds the report, files one issue per drop, and — **only when
-the whole PRD completed** (Decision 34) — ships the `staging-<run-id> → develop`
-rollup (then closes the PRD issue and deletes the per-run branch) before flipping the
-run terminal. A `failed` run leaves `develop` untouched and keeps its branch.
+task is terminal: it builds the report, and — on a `failed` run — posts one comment
+on the PRD issue listing the dropped tasks (Decision 36), or — **only when the whole
+PRD completed** (Decision 34) — ships the `staging-<run-id> → develop` rollup (then
+closes the PRD issue and deletes the per-run branch) before flipping the run terminal.
+A `failed` run leaves `develop` untouched and keeps its branch.
 
 ## Data flow and state
 

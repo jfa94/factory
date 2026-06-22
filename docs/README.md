@@ -58,9 +58,9 @@ there is structurally nothing in state for an agent to forge.
 **Loud, classified failure.** Nothing fails silently. When a task cannot be made
 to meet the bar, it is _dropped_ with a closed-enum failure class and a
 human-facing reason. Because `develop` receives only whole PRDs, any drop makes
-the run `failed`: `develop` is left untouched, the PRD stays open, and one GitHub
-issue is filed per drop. A `failed` run is a legible, classified outcome — never a
-quiet success.
+the run `failed`: `develop` is left untouched, the PRD stays open, and one comment
+listing every dropped task is posted on the PRD issue. A `failed` run is a legible,
+classified outcome — never a quiet success.
 
 ## Architecture at a glance
 

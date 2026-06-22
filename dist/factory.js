@@ -7462,43 +7462,6 @@ var DefaultGhClient = class {
     }
     return { number: Number(m[1]), url };
   }
-  async issueCreate(args, opts) {
-    const argv = ["issue", "create", "--title", args.title, "--body", args.body];
-    if (args.repo) argv.push("--repo", args.repo);
-    for (const label of args.labels ?? []) argv.push("--label", label);
-    const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
-    if (r.truncated) {
-      throw new Error("gh issue create: output truncated \u2014 cannot trust the emitted issue URL");
-    }
-    const url = r.stdout.trim().split(/\s+/).pop() ?? "";
-    const m = url.match(/\/issues\/(\d+)\s*$/);
-    if (!m) {
-      throw new Error(
-        `gh issue create: could not parse issue number from output: ${r.stdout.trim()}`
-      );
-    }
-    return { number: Number(m[1]), url };
-  }
-  async issueList(args, opts) {
-    const argv = [
-      "issue",
-      "list",
-      "--json",
-      "number,title",
-      "--limit",
-      "200",
-      "--state",
-      args.state ?? "open"
-    ];
-    if (args.repo) argv.push("--repo", args.repo);
-    for (const label of args.labels ?? []) argv.push("--label", label);
-    const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
-    return parseGhJson(
-      r,
-      external_exports.array(external_exports.object({ number: external_exports.number().int(), title: external_exports.string() })),
-      "gh issue list"
-    );
-  }
   async prView(number, fields, opts) {
     const requested = Array.from(/* @__PURE__ */ new Set([...REQUIRED_VIEW_FIELDS, ...fields]));
     const r = await runOrThrow(
@@ -7566,6 +7529,20 @@ var DefaultGhClient = class {
       args.body
     ];
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
+  async listIssueComments(args, opts) {
+    const r = await runOrThrow(
+      "gh",
+      this.runner,
+      ["issue", "view", String(args.number), "--repo", args.repo, "--json", "comments"],
+      this.execOpts(opts)
+    );
+    const parsed = parseGhJson(
+      r,
+      external_exports.object({ comments: external_exports.array(external_exports.object({ body: external_exports.string() })) }),
+      "gh issue view comments"
+    );
+    return parsed.comments.map((c) => c.body);
   }
   async issueClose(args, opts) {
     const argv = ["issue", "close", String(args.number), "--repo", args.repo];
@@ -9492,22 +9469,24 @@ function buildPartialReport(run9, manifest, opts = {}) {
     incomplete
   };
 }
-function renderFailureIssue(failure, report) {
+function failureCommentMarker(runId) {
+  return `<!-- factory:run-failed:${runId} -->`;
+}
+function renderFailureComment(report) {
   const lines = [
-    `Task \`${failure.task_id}\` was dropped during factory run \`${report.run_id}\`.`,
-    "",
-    `- **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number})`,
-    `- **Failure class:** \`${failure.failure_class}\``,
-    `- **Reason:** ${failure.failure_reason}`
+    failureCommentMarker(report.run_id),
+    `Factory run \`${report.run_id}\` failed \u2014 ${report.failures.length} task(s) dropped. PRD left open for rescue/resume.`
   ];
-  if (failure.branch !== void 0) lines.push(`- **Branch:** \`${failure.branch}\``);
-  if (failure.pr_number !== void 0) lines.push(`- **PR:** #${failure.pr_number}`);
-  lines.push("", "**Unmet acceptance criteria:**", "");
-  for (const c of failure.unmet_criteria) lines.push(`- [ ] ${c}`);
-  return {
-    title: `[factory] ${failure.task_id} dropped (${failure.failure_class}): ${failure.title}`,
-    body: lines.join("\n")
-  };
+  for (const failure of report.failures) {
+    lines.push("", `### \`${failure.task_id}\` \u2014 ${failure.title}`);
+    lines.push(`- **Class:** \`${failure.failure_class}\``);
+    lines.push(`- **Reason:** ${failure.failure_reason}`);
+    if (failure.branch !== void 0) lines.push(`- **Branch:** \`${failure.branch}\``);
+    if (failure.pr_number !== void 0) lines.push(`- **PR:** #${failure.pr_number}`);
+    lines.push("- **Unmet acceptance criteria:**");
+    for (const c of failure.unmet_criteria) lines.push(`  - [ ] ${c}`);
+  }
+  return lines.join("\n");
 }
 function statusLabel(status) {
   return status.toUpperCase();
@@ -11115,7 +11094,6 @@ var FsHoldoutVerdictStore = class {
 
 // src/driver/finalize.ts
 var log22 = createLogger("finalize");
-var FACTORY_ISSUE_LABEL = "factory";
 function prdDoneComment(report, rollupResult) {
   const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`;
   return `PRD delivered \u2014 all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.
@@ -11125,28 +11103,23 @@ Spec: \`${report.spec_id}\` \xB7 Run: \`${report.run_id}\``;
 function rollupTitle(report) {
   return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
 }
-async function fileFailureIssues(deps, report) {
-  if (report.failures.length === 0) return 0;
-  const existing = new Set(
-    (await deps.gh.issueList({ repo: report.repo, labels: [FACTORY_ISSUE_LABEL], state: "all" })).map((i) => i.title)
-  );
-  let filed = 0;
-  for (const failure of report.failures) {
-    const issue = renderFailureIssue(failure, report);
-    if (existing.has(issue.title)) {
-      log22.info(`issue already filed for dropped task '${failure.task_id}' \u2014 skipping duplicate`);
-      continue;
-    }
-    await deps.gh.issueCreate({
-      title: issue.title,
-      body: issue.body,
-      repo: report.repo,
-      labels: [FACTORY_ISSUE_LABEL, `factory:${failure.failure_class}`]
-    });
-    existing.add(issue.title);
-    filed += 1;
+async function commentFailuresOnPrd(deps, report) {
+  if (report.failures.length === 0) return false;
+  const marker = failureCommentMarker(report.run_id);
+  const existing = await deps.gh.listIssueComments({
+    repo: report.repo,
+    number: report.issue_number
+  });
+  if (existing.some((body) => body.includes(marker))) {
+    log22.info(`failure comment already posted for run '${report.run_id}' \u2014 skipping duplicate`);
+    return false;
   }
-  return filed;
+  await deps.gh.issueComment({
+    repo: report.repo,
+    number: report.issue_number,
+    body: renderFailureComment(report)
+  });
+  return true;
 }
 async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
@@ -11156,7 +11129,7 @@ async function finalizeRun(deps, runId) {
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
-  const issuesFiled = await fileFailureIssues(deps, report);
+  const failureCommentPosted = await commentFailuresOnPrd(deps, report);
   let rollupResult;
   if (terminal === "completed") {
     const stagingBranch = resolveStagingBranch(runId, run9.staging_branch);
@@ -11192,9 +11165,14 @@ async function finalizeRun(deps, runId) {
   }
   const finalized = await deps.state.finalize(runId, terminal);
   log22.info(
-    `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed, ${issuesFiled} issue(s) filed${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
+    `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed${failureCommentPosted ? ", PRD failure comment posted" : ""}${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
   );
-  return { run: finalized, report, ...rollupResult ? { rollup: rollupResult } : {}, issuesFiled };
+  return {
+    run: finalized,
+    report,
+    ...rollupResult ? { rollup: rollupResult } : {},
+    failureCommentPosted
+  };
 }
 
 // src/driver/transitions.ts
@@ -12364,12 +12342,13 @@ Usage:
               merges the staging\u2192develop rollup; no-merge opens it only).
 
 Builds the deterministic partial-run report (report.md), emits run.finalized
-telemetry, files ONE GitHub issue per dropped task (deduped), opens + CI-gates +
-(when shipping live) squash-merges the staging\u2192develop rollup, then flips the run
-terminal \u2014 in that resume-safe order. LOUD if any task is still non-terminal.
+telemetry, on a failed run comments the dropped tasks on the PRD issue (deduped),
+opens + CI-gates + (when shipping live) squash-merges the staging\u2192develop rollup,
+then flips the run terminal \u2014 in that resume-safe order. LOUD if any task is still
+non-terminal.
 
 Emits ONE JSON envelope:
-  { kind:"finalized", run, report, rollup?, issues_filed }`;
+  { kind:"finalized", run, report, rollup?, failure_comment_posted }`;
 var CANCEL_HELP = `factory run cancel \u2014 abandon a live run (mark it failed; not resumable)
 
 Usage:
@@ -12713,13 +12692,13 @@ async function runFinalize(argv) {
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
-  const { run: run9, report, rollup: rollup2, issuesFiled } = await finalizeRun(deps, runId);
+  const { run: run9, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(deps, runId);
   emitJson({
     kind: "finalized",
     run: run9,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
-    issues_filed: issuesFiled
+    failure_comment_posted: failureCommentPosted
   });
   return EXIT.OK;
 }

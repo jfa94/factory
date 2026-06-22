@@ -89,8 +89,8 @@ Workflow script).
   `dropStep`, `escalateOrDrop`, `applyProducerOutcome`) the coroutine and the fold cores
   both call, so a live step and a crash-resume fold can never diverge.
 - `ship.ts` (`shipTask`) opens the PR + serial-merges; `finalize.ts` is the
-  run-completion coordinator (report → per-drop issues → rollup → flip terminal, in
-  resume-safe order).
+  run-completion coordinator (report → PRD-issue drops comment → rollup → flip
+  terminal, in resume-safe order).
 
 ## Producer (`src/producer`)
 

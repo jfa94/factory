@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildPartialReport,
   renderPartialReportMarkdown,
-  renderFailureIssue,
+  renderFailureComment,
+  failureCommentMarker,
 } from "./partial-report.js";
 import { parseRunState, type RunState, type TaskState } from "../types/index.js";
 import { parseSpecManifest, type SpecManifest, type SpecTask } from "../spec/schema.js";
@@ -233,22 +234,38 @@ describe("renderPartialReportMarkdown", () => {
   });
 });
 
-describe("renderFailureIssue", () => {
-  it("builds a classified issue title + body with unmet criteria checkboxes", () => {
-    const spec = makeSpec([specTask("t1")]);
-    const run = makeRun([droppedTask("t1", "capability-budget", "ladder exhausted at rung 2")], {
-      status: "failed",
-    });
-    const report = buildPartialReport(run, spec, { now: NOW });
-    const issue = renderFailureIssue(report.failures[0]!, report);
+describe("failureCommentMarker", () => {
+  it("embeds the run id in a hidden HTML comment", () => {
+    expect(failureCommentMarker("run-1")).toBe("<!-- factory:run-failed:run-1 -->");
+  });
+});
 
-    expect(issue.title).toBe("[factory] t1 dropped (capability-budget): Title t1");
-    expect(issue.body).toContain("factory run `run-1`");
-    expect(issue.body).toContain("PRD #42");
-    expect(issue.body).toContain("**Failure class:** `capability-budget`");
-    expect(issue.body).toContain("**Reason:** ladder exhausted at rung 2");
-    expect(issue.body).toContain("- [ ] t1 criterion one");
-    expect(issue.body).toContain("- [ ] t1 criterion two");
+describe("renderFailureComment", () => {
+  it("leads with the marker and renders one block per drop with unmet criteria checkboxes", () => {
+    const spec = makeSpec([specTask("t1"), specTask("t2")]);
+    const run = makeRun(
+      [
+        droppedTask("t1", "capability-budget", "ladder exhausted at rung 2"),
+        droppedTask("t2", "spec-defect", "criterion unattainable"),
+      ],
+      { status: "failed" },
+    );
+    const report = buildPartialReport(run, spec, { now: NOW });
+    const body = renderFailureComment(report);
+
+    // Marker is the very first line → finalize's dedup scan finds it on re-entry.
+    expect(body.startsWith(failureCommentMarker("run-1"))).toBe(true);
+    expect(body).toContain("Factory run `run-1` failed — 2 task(s) dropped");
+    expect(body).toContain("PRD left open for rescue/resume");
+    // One block per dropped task.
+    expect(body).toContain("### `t1` — Title t1");
+    expect(body).toContain("- **Class:** `capability-budget`");
+    expect(body).toContain("- **Reason:** ladder exhausted at rung 2");
+    expect(body).toContain("### `t2` — Title t2");
+    expect(body).toContain("- **Class:** `spec-defect`");
+    // Full acceptance criteria rendered as unmet checkboxes.
+    expect(body).toContain("  - [ ] t1 criterion one");
+    expect(body).toContain("  - [ ] t1 criterion two");
   });
 
   it("includes branch + PR pointers when present", () => {
@@ -260,9 +277,9 @@ describe("renderFailureIssue", () => {
     };
     const run = makeRun([dropped], { status: "failed" });
     const report = buildPartialReport(run, spec, { now: NOW });
-    const issue = renderFailureIssue(report.failures[0]!, report);
+    const body = renderFailureComment(report);
 
-    expect(issue.body).toContain("**Branch:** `factory/run-1/t1`");
-    expect(issue.body).toContain("**PR:** #7");
+    expect(body).toContain("- **Branch:** `factory/run-1/t1`");
+    expect(body).toContain("- **PR:** #7");
   });
 });

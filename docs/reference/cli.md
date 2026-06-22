@@ -176,14 +176,16 @@ factory run resume [--run <id>]
 ### `run finalize`
 
 Action. Turns an all-terminal run into its shipped outcome, in resume-safe order:
-build the report (`report.md`), emit telemetry, file one GitHub issue per dropped
-task (deduped), then — **only when the run completed** (Decision 34: develop receives
-whole PRDs only) — forward-reconcile `develop` into the run branch (no force-push),
-open + CI-gate + (in `live` mode) squash-merge the `staging-<run-id> → develop`
-rollup, comment on + close the originating PRD issue, and delete the per-run branch;
-finally flip the run terminal **last**. A `failed` run leaves `develop` untouched,
-the PRD open, and keeps its branch for rescue. Loud if any task is still non-terminal.
-Idempotent (a re-entered finalize re-files nothing).
+build the report (`report.md`), emit telemetry, then — **when the run failed** —
+post ONE comment on the originating PRD issue listing every dropped task (deduped via
+a hidden run marker, Decision 36; the PRD stays open), or — **only when the run
+completed** (Decision 34: develop receives whole PRDs only) — forward-reconcile
+`develop` into the run branch (no force-push), open + CI-gate + (in `live` mode)
+squash-merge the `staging-<run-id> → develop` rollup, comment on + close the
+originating PRD issue, and delete the per-run branch; finally flip the run terminal
+**last**. A `failed` run leaves `develop` untouched, the PRD open, and keeps its
+branch for rescue. Loud if any task is still non-terminal. Idempotent (a re-entered
+finalize posts no duplicate comment).
 
 ```
 factory run finalize [--run <id>] [--no-ship]
@@ -192,7 +194,7 @@ factory run finalize [--run <id>] [--no-ship]
 Ship mode defaults to the run's **persisted `ship_mode`** (set at `run create`); no flag
 is needed. `--no-ship` overrides it to no-merge for THIS finalize only (opens the
 `staging-<run-id> → develop` rollup PR but never merges). Emits
-`{kind:"finalized", run, report, rollup?, issues_filed}`.
+`{kind:"finalized", run, report, rollup?, failure_comment_posted}`.
 
 ### `run cancel`
 

@@ -97,7 +97,8 @@ export type {
 export {
   buildPartialReport,
   renderPartialReportMarkdown,
-  renderFailureIssue,
+  renderFailureComment,
+  failureCommentMarker,
   recordRunFinalized,
 } from "../scoring/index.js";
 export type { PartialRunReport, FailureLine } from "../scoring/index.js";

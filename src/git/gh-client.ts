@@ -41,42 +41,6 @@ export interface CreatedPr {
  */
 export type ChecksState = "passing" | "pending" | "failing" | "none";
 
-/** Args for {@link GhClient.issueCreate} (one issue per failed task, Δ S). */
-export interface IssueCreateArgs {
-  title: string;
-  body: string;
-  /** Labels to attach (e.g. ["factory", "factory:dropped"]). */
-  labels?: string[];
-  /**
-   * Repo to create the issue in, "owner/name". Passed as `--repo` so the issue
-   * can be filed without being inside the repo's worktree (finalize runs from the
-   * staging worktree). Omit to use the cwd's repo.
-   */
-  repo?: string;
-}
-
-/** Result of {@link GhClient.issueCreate}. */
-export interface CreatedIssue {
-  number: number;
-  url: string;
-}
-
-/** Args for {@link GhClient.issueList} (the finalize dedup lookup). */
-export interface IssueListArgs {
-  /** Repo "owner/name". Omit to use the cwd's repo. */
-  repo?: string;
-  /** Filter to issues carrying ALL these labels (matches `gh --label` AND-semantics). */
-  labels?: string[];
-  /** Issue state filter. Defaults to `open`. */
-  state?: "open" | "closed" | "all";
-}
-
-/** A minimal issue reference returned by {@link GhClient.issueList}. */
-export interface IssueRef {
-  number: number;
-  title: string;
-}
-
 /** Branch-protection facts as the probe reads them (raw GET shape, narrowed). */
 export interface ProtectionApiResult {
   /** Whether a protection record exists at all (404 → false). */
@@ -130,10 +94,6 @@ export interface GhClient {
   prList(args: PrListArgs, opts?: GhOpts): Promise<PullRequest[]>;
   /** `gh pr create ...` → {number, url}. */
   prCreate(args: PrCreateArgs, opts?: GhOpts): Promise<CreatedPr>;
-  /** `gh issue create --title --body [--label ...] [--repo ...]` → {number, url} (Δ S). */
-  issueCreate(args: IssueCreateArgs, opts?: GhOpts): Promise<CreatedIssue>;
-  /** `gh issue list --json number,title [--label ...] [--state] [--repo]` (finalize dedup). */
-  issueList(args: IssueListArgs, opts?: GhOpts): Promise<IssueRef[]>;
   /** `gh pr view <number> --json <fields>`. */
   prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest>;
   /** `gh pr checks <number> --json bucket` aggregated to a single CI state (§④ gate). */
@@ -166,8 +126,13 @@ export interface GhClient {
   deleteRemoteBranch(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>;
   /** DELETE branch protection (`gh api -X DELETE …/branches/<branch>/protection`). 404 → success. */
   deleteProtection(owner: string, repo: string, branch: string, opts?: GhOpts): Promise<void>;
-  /** `gh issue comment <number> --repo <repo> --body <body>` (PRD delivered comment). */
+  /** `gh issue comment <number> --repo <repo> --body <body>` (PRD delivered + failure comments). */
   issueComment(args: { repo: string; number: number; body: string }, opts?: GhOpts): Promise<void>;
+  /**
+   * `gh issue view <number> --repo <repo> --json comments` → existing comment bodies.
+   * The finalize failure-comment dedup lookup (scan for the run's marker).
+   */
+  listIssueComments(args: { repo: string; number: number }, opts?: GhOpts): Promise<string[]>;
   /** `gh issue close <number> --repo <repo> [--comment <comment>]` (close PRD on completion). */
   issueClose(
     args: { repo: string; number: number; comment?: string },
@@ -295,45 +260,6 @@ export class DefaultGhClient implements GhClient {
     return { number: Number(m[1]), url };
   }
 
-  async issueCreate(args: IssueCreateArgs, opts?: GhOpts): Promise<CreatedIssue> {
-    const argv = ["issue", "create", "--title", args.title, "--body", args.body];
-    if (args.repo) argv.push("--repo", args.repo);
-    for (const label of args.labels ?? []) argv.push("--label", label);
-    const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
-    if (r.truncated) {
-      throw new Error("gh issue create: output truncated — cannot trust the emitted issue URL");
-    }
-    const url = r.stdout.trim().split(/\s+/).pop() ?? "";
-    const m = url.match(/\/issues\/(\d+)\s*$/);
-    if (!m) {
-      throw new Error(
-        `gh issue create: could not parse issue number from output: ${r.stdout.trim()}`,
-      );
-    }
-    return { number: Number(m[1]), url };
-  }
-
-  async issueList(args: IssueListArgs, opts?: GhOpts): Promise<IssueRef[]> {
-    const argv = [
-      "issue",
-      "list",
-      "--json",
-      "number,title",
-      "--limit",
-      "200",
-      "--state",
-      args.state ?? "open",
-    ];
-    if (args.repo) argv.push("--repo", args.repo);
-    for (const label of args.labels ?? []) argv.push("--label", label);
-    const r = await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
-    return parseGhJson(
-      r,
-      z.array(z.object({ number: z.number().int(), title: z.string() })),
-      "gh issue list",
-    );
-  }
-
   async prView(number: number, fields: readonly string[], opts?: GhOpts): Promise<PullRequest> {
     // Always request the schema's required fields (REQUIRED_VIEW_FIELDS): a caller
     // may pass only a subset (e.g. the rollup wants state+mergeable), but the strict
@@ -432,6 +358,24 @@ export class DefaultGhClient implements GhClient {
       args.body,
     ];
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
+  }
+
+  async listIssueComments(
+    args: { repo: string; number: number },
+    opts?: GhOpts,
+  ): Promise<string[]> {
+    const r = await runOrThrow(
+      "gh",
+      this.runner,
+      ["issue", "view", String(args.number), "--repo", args.repo, "--json", "comments"],
+      this.execOpts(opts),
+    );
+    const parsed = parseGhJson(
+      r,
+      z.object({ comments: z.array(z.object({ body: z.string() })) }),
+      "gh issue view comments",
+    );
+    return parsed.comments.map((c) => c.body);
   }
 
   async issueClose(

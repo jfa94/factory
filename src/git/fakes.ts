@@ -10,13 +10,9 @@
 import type { GitClient, GitOpts, MergeOptions, PushOptions } from "./git-client.js";
 import type {
   ChecksState,
-  CreatedIssue,
   CreatedPr,
   GhClient,
   GhOpts,
-  IssueCreateArgs,
-  IssueListArgs,
-  IssueRef,
   PrCreateArgs,
   PrListArgs,
   PrMergeOptions,
@@ -280,9 +276,7 @@ export class FakeGhClient implements GhClient {
   readonly deletedBranches: string[] = [];
   /** Branches whose protection was removed via deleteProtection. */
   readonly protectionDeletes: string[] = [];
-  /** Records each issueCreate so tests assert one issue per failed task (Δ S). */
-  readonly issues: Array<IssueCreateArgs & { number: number; url: string }> = [];
-  /** Records each issueComment call (PRD delivered comment on completed runs). */
+  /** Records each issueComment call (PRD delivered comment + failure comment). */
   readonly issueComments: Array<{ number: number; body: string; repo: string }> = [];
   /** Records each issueClose call (PRD closed on completed runs). */
   readonly issueCloses: Array<{ number: number; repo: string; comment?: string }> = [];
@@ -290,7 +284,6 @@ export class FakeGhClient implements GhClient {
   private readonly checksQueue = new Map<number, ChecksState[]>();
   private readonly defaultChecks: ChecksState;
   private numberCounter = 100;
-  private issueCounter = 500;
   private readonly truncate: boolean;
   /**
    * Optional async barrier invoked at the START of prMergeSquash, BEFORE the
@@ -363,22 +356,6 @@ export class FakeGhClient implements GhClient {
       url,
     });
     return { number, url };
-  }
-
-  async issueCreate(args: IssueCreateArgs, _opts?: GhOpts): Promise<CreatedIssue> {
-    this.calls.push(`issue create --title ${args.title}`);
-    const number = this.issueCounter++;
-    const url = `https://github.com/${args.repo ?? "fake/repo"}/issues/${number}`;
-    this.issues.push({ ...args, number, url });
-    return { number, url };
-  }
-
-  async issueList(args: IssueListArgs, _opts?: GhOpts): Promise<IssueRef[]> {
-    this.calls.push(`issue list`);
-    const want = args.labels ?? [];
-    return this.issues
-      .filter((i) => want.every((l) => (i.labels ?? []).includes(l)))
-      .map((i) => ({ number: i.number, title: i.title }));
   }
 
   async prView(number: number, _fields: readonly string[], _opts?: GhOpts): Promise<PullRequest> {
@@ -493,6 +470,18 @@ export class FakeGhClient implements GhClient {
   ): Promise<void> {
     this.calls.push(`issue comment ${args.number}`);
     this.issueComments.push({ number: args.number, body: args.body, repo: args.repo });
+  }
+
+  /** Backed by the same recording array issueComment writes, so the finalize marker
+   * dedup is exercised for real (post once → re-finalize sees the marker → skips). */
+  async listIssueComments(
+    args: { repo: string; number: number },
+    _opts?: GhOpts,
+  ): Promise<string[]> {
+    this.calls.push(`issue view ${args.number} --json comments`);
+    return this.issueComments
+      .filter((c) => c.repo === args.repo && c.number === args.number)
+      .map((c) => c.body);
   }
 
   async issueClose(
