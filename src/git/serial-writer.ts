@@ -161,12 +161,18 @@ export class MergeSerializer {
       }
 
       // Probe for native merge-queue (optional upgrade). When present, enqueue via
-      // --auto and let GitHub serialize. Otherwise app-level squash-merge now.
-      const hasMergeQueue = await this.ghClient.mergeQueueProbe(
-        this.owner,
-        this.repo,
-        this.staging,
-      );
+      // --auto and let GitHub serialize. Otherwise app-level squash-merge now. The
+      // probe THROWS on a "couldn't tell" gh failure (auth/rate-limit/5xx); CONTAIN
+      // it here — log and degrade to app-level squash rather than letting it crash
+      // `factory drive` (which catches only UsageError, so a bare throw would WEDGE
+      // the run). The degrade is benign: both paths squash-merge, only --auto differs.
+      let hasMergeQueue = false;
+      try {
+        hasMergeQueue = await this.ghClient.mergeQueueProbe(this.owner, this.repo, this.staging);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        log.warn(`merge-queue probe failed (${detail}) — falling back to app-level squash`);
+      }
       if (hasMergeQueue) {
         await this.ghClient.prMergeSquash(prNumber, { auto: true, deleteBranch: true });
         log.info(`PR #${prNumber} enqueued via native merge-queue`);

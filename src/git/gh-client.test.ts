@@ -82,6 +82,47 @@ describe("gh truncation safety (reuses ExecResult.truncated seam)", () => {
   });
 });
 
+describe("mergeQueueProbe (Theme D1 — distinguishes 'no queue' from 'couldn't tell')", () => {
+  it("returns true when a native merge_queue rule applies to the branch", async () => {
+    const runner: GhRunner = async () =>
+      result({ stdout: JSON.stringify([{ type: "pull_request" }, { type: "merge_queue" }]) });
+    const gh = new DefaultGhClient(runner);
+    expect(await gh.mergeQueueProbe("o", "r", "staging")).toBe(true);
+  });
+
+  it("returns false on a 200 body with no merge_queue rule (the genuine negative)", async () => {
+    const runner: GhRunner = async () =>
+      result({ stdout: JSON.stringify([{ type: "pull_request" }]) });
+    const gh = new DefaultGhClient(runner);
+    expect(await gh.mergeQueueProbe("o", "r", "staging")).toBe(false);
+  });
+
+  it("maps a 404 / Not Found to false (no ruleset record is a normal answer)", async () => {
+    const runner: GhRunner = async () => result({ code: 1, stderr: "HTTP 404: Not Found" });
+    const gh = new DefaultGhClient(runner);
+    expect(await gh.mergeQueueProbe("o", "r", "staging")).toBe(false);
+  });
+
+  it("THROWS on a non-404 failure (auth) — a transient blip must NOT read as 'no queue'", async () => {
+    const runner: GhRunner = async () => result({ code: 1, stderr: "HTTP 401: Bad credentials" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.mergeQueueProbe("o", "r", "staging")).rejects.toThrow(/401|failed/i);
+  });
+
+  it("THROWS on a 5xx failure (server error is 'couldn't tell', not absence)", async () => {
+    const runner: GhRunner = async () =>
+      result({ code: 1, stderr: "HTTP 503: Service Unavailable" });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.mergeQueueProbe("o", "r", "staging")).rejects.toThrow(/503|failed/i);
+  });
+
+  it("THROWS on a truncated body rather than mis-reading the ruleset", async () => {
+    const runner: GhRunner = async () => result({ stdout: '[{"type":"merge_q', truncated: true });
+    const gh = new DefaultGhClient(runner);
+    await expect(gh.mergeQueueProbe("o", "r", "staging")).rejects.toThrow(/truncated/i);
+  });
+});
+
 describe("listIssueComments", () => {
   it("requests the comments field via gh issue view and returns the bodies", async () => {
     let captured: readonly string[] = [];

@@ -299,6 +299,12 @@ export class FakeGhClient implements GhClient {
   failDeleteProtection?: Error;
   /** When set, deleteRemoteBranch throws this (simulate a propagated 401/403/5xx). */
   failDeleteRemoteBranch?: Error;
+  /**
+   * When set, mergeQueueProbe throws this instead of answering — simulates the
+   * honest probe's "couldn't tell" throw (auth/rate-limit/5xx/truncated) so a test
+   * can prove the caller degrades-and-logs rather than crashing (Theme D1).
+   */
+  failMergeQueueProbe?: Error;
 
   constructor(opts: FakeGhOptions = {}) {
     for (const pr of opts.prs ?? []) this.prs.set(pr.headRefName, pr);
@@ -438,6 +444,7 @@ export class FakeGhClient implements GhClient {
     branch: string,
     _opts?: GhOpts,
   ): Promise<boolean> {
+    if (this.failMergeQueueProbe) throw this.failMergeQueueProbe;
     return this.protection.get(branch)?.hasMergeQueue ?? false;
   }
 

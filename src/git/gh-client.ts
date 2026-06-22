@@ -417,7 +417,17 @@ export class DefaultGhClient implements GhClient {
       required_status_checks?: { strict?: boolean; contexts?: string[] } | null;
     }>(r.stdout, path);
     const rsc = raw.required_status_checks ?? null;
-    const mq = await this.mergeQueueProbe(owner, repo, branch, opts);
+    // hasMergeQueue is ADVISORY metadata here — no consumer reads it for a decision
+    // (the merge path re-probes via the serial writer). The probe now throws on a
+    // "couldn't tell" gh failure; CONTAIN it so a transient ruleset-API blip can't
+    // make this preflight protection read fail-loud and refuse the run.
+    let mq = false;
+    try {
+      mq = await this.mergeQueueProbe(owner, repo, branch, opts);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      log.warn(`merge-queue probe failed during protection read (${detail}) — assuming no queue`);
+    }
     return {
       enabled: true,
       requiredStatusChecks: rsc?.contexts ?? [],
@@ -456,12 +466,22 @@ export class DefaultGhClient implements GhClient {
     branch: string,
     opts?: GhOpts,
   ): Promise<boolean> {
-    // Detect a native merge-queue rule via the branch rulesets API. A missing
-    // rule (or any non-zero / 404) means "no merge queue" — the app-level serial
-    // path is used instead. We never throw here: absence is a normal answer.
+    // Detect a native merge-queue rule via the branch rulesets API. A 404 / Not
+    // Found (no ruleset record for the branch) is the GENUINE negative → false. Any
+    // OTHER non-zero exit (auth, rate-limit, 5xx) or a truncated body means
+    // "couldn't tell" — THROW rather than lie "absent", so the caller degrades
+    // observably instead of silently downgrading off a real native merge queue
+    // (mirrors repoProtection). A successfully-fetched but oddly-shaped 200 body is
+    // a real negative (no merge_queue rule) → false.
     const path = `repos/${owner}/${repo}/rules/branches/${branch}`;
     const r = await this.runner(["api", path], this.execOpts(opts));
-    if (r.code !== 0 || r.truncated) return false;
+    if (r.code !== 0) {
+      if (/404|Not Found/i.test(r.stderr)) return false;
+      throw new Error(`gh api ${path} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+    }
+    if (r.truncated) {
+      throw new Error(`gh api ${path}: output truncated — refusing to parse clipped ruleset JSON`);
+    }
     try {
       const rules = parseJson<Array<{ type?: string }>>(r.stdout, path);
       return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");

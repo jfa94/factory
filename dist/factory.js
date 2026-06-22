@@ -7583,7 +7583,13 @@ var DefaultGhClient = class {
     }
     const raw = parseJson(r.stdout, path4);
     const rsc = raw.required_status_checks ?? null;
-    const mq = await this.mergeQueueProbe(owner, repo, branch, opts);
+    let mq = false;
+    try {
+      mq = await this.mergeQueueProbe(owner, repo, branch, opts);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      log6.warn(`merge-queue probe failed during protection read (${detail}) \u2014 assuming no queue`);
+    }
     return {
       enabled: true,
       requiredStatusChecks: rsc?.contexts ?? [],
@@ -7611,7 +7617,13 @@ var DefaultGhClient = class {
   async mergeQueueProbe(owner, repo, branch, opts) {
     const path4 = `repos/${owner}/${repo}/rules/branches/${branch}`;
     const r = await this.runner(["api", path4], this.execOpts(opts));
-    if (r.code !== 0 || r.truncated) return false;
+    if (r.code !== 0) {
+      if (/404|Not Found/i.test(r.stderr)) return false;
+      throw new Error(`gh api ${path4} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+    }
+    if (r.truncated) {
+      throw new Error(`gh api ${path4}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
+    }
     try {
       const rules = parseJson(r.stdout, path4);
       return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
@@ -7908,11 +7920,13 @@ var MergeSerializer = class {
         );
         return { merged: false, reason: "behind", number: prNumber };
       }
-      const hasMergeQueue = await this.ghClient.mergeQueueProbe(
-        this.owner,
-        this.repo,
-        this.staging
-      );
+      let hasMergeQueue = false;
+      try {
+        hasMergeQueue = await this.ghClient.mergeQueueProbe(this.owner, this.repo, this.staging);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        log11.warn(`merge-queue probe failed (${detail}) \u2014 falling back to app-level squash`);
+      }
       if (hasMergeQueue) {
         await this.ghClient.prMergeSquash(prNumber, { auto: true, deleteBranch: true });
         log11.info(`PR #${prNumber} enqueued via native merge-queue`);

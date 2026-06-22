@@ -209,4 +209,24 @@ describe("Δ L — serial writer (#1)", () => {
     expect(stderr).toMatch(/\[WARN\]/);
     expect(stderr).toContain("factory/run-1/t2");
   });
+
+  // -- Theme D1: a "couldn't tell" merge-queue probe must DEGRADE, not crash ----
+  it("merge-queue probe failure degrades to app-level squash (warns, does NOT crash)", async () => {
+    // The honest probe THROWS on a "couldn't tell" gh failure (auth/rate-limit/5xx).
+    // merge() must CONTAIN it: log and fall back to app-level squash, never let the
+    // throw escape — `factory drive` catches only UsageError, so a bare throw would
+    // WEDGE the run (results persisted but the stage re-throws on every retry).
+    const gh = new FakeGhClient({ prs: [openPr(340, "factory/run-1/t1")] });
+    gh.failMergeQueueProbe = new Error("HTTP 503: Service Unavailable");
+
+    const { result, stderr } = await captureStderr(() => serializer(gh).merge(340));
+
+    // Degraded to app-level squash — same squash, only --auto differs — head ref deleted.
+    expect(result).toEqual({ merged: true, via: "app-level", number: 340 });
+    expect(gh.merges).toEqual([{ number: 340, auto: false, deleteBranch: false }]);
+    expect(gh.deletedBranches).toEqual(["factory/run-1/t1"]);
+    // Observable, not silent: the probe failure is WARNED.
+    expect(stderr).toMatch(/\[WARN\]/);
+    expect(stderr).toMatch(/merge-queue probe failed/i);
+  });
 });
