@@ -31,7 +31,13 @@ import { nowEpoch } from "../../shared/time.js";
 import { planResume, StatuslineUsageSignal, type UsageReading } from "../../quota/index.js";
 import { isTerminalRunStatus } from "../../types/index.js";
 import type { Config, RunState, RunStatus, TaskState } from "../../types/index.js";
-import { finalizeRun } from "../../driver/index.js";
+import {
+  finalizeRun,
+  runDocsEmit,
+  runDocsFold,
+  DocsResultsSchema,
+  readJsonInput,
+} from "../../driver/index.js";
 import { loadCliDeps } from "../wiring.js";
 import {
   DefaultGitClient,
@@ -58,12 +64,14 @@ Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
+  factory run docs [--run <id>] [--results <path>]
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
+  docs       Emit the documentation-stage spawn manifest, or (with --results) fold a scribe result.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
@@ -822,6 +830,42 @@ async function runFinalize(argv: string[]): Promise<ExitCode> {
   return EXIT.OK;
 }
 
+const DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
+
+Emit the documentation-stage spawn manifest, or (with --results) fold a scribe
+result: publish the docs commit onto staging and mark the stage done, or suspend
+the run on failure. The CLI never spawns scribe — a driver does.`;
+
+async function runDocs(argv: string[]): Promise<ExitCode> {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(DOCS_HELP);
+    return EXIT.OK;
+  }
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const runId = await resolveRunId(state, args, "docs");
+  const deps = await loadCliDeps({ dataDir, runId });
+
+  const resultsPath = args.flag("results");
+  if (typeof resultsPath === "string" && resultsPath.length > 0) {
+    let results;
+    try {
+      results = DocsResultsSchema.parse(await readJsonInput<unknown>(resultsPath));
+    } catch (err) {
+      throw new UsageError(
+        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    emitJson(await runDocsFold(deps, runId, results));
+  } else if (resultsPath !== undefined) {
+    throw new UsageError("--results requires a file path");
+  } else {
+    emitJson(await runDocsEmit(deps, runId));
+  }
+  return EXIT.OK;
+}
+
 /**
  * Test seam for {@link runCancel}: inject the gh client (the `--cleanup` teardown),
  * the git client + cwd (current-run repo resolution), and the data dir. Production
@@ -977,11 +1021,13 @@ async function run(argv: string[]): Promise<ExitCode> {
       return runResume(rest);
     case "finalize":
       return runFinalize(rest);
+    case "docs":
+      return runDocs(rest);
     case "cancel":
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | cancel)`,
+        `unknown run action '${action}' (expected create | resume | finalize | docs | cancel)`,
       );
   }
 }

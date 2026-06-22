@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile13;
-      function readFile13(path4, options, cb) {
+      fs2.readFile = readFile14;
+      function readFile14(path4, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path4, options, cb);
@@ -1242,11 +1242,11 @@ var require_mtime_precision = __commonJS({
     function probe(file, fs, callback) {
       const cachedPrecision = fs[cacheSymbol];
       if (cachedPrecision) {
-        return fs.stat(file, (err, stat) => {
+        return fs.stat(file, (err, stat2) => {
           if (err) {
             return callback(err);
           }
-          callback(null, stat.mtime, cachedPrecision);
+          callback(null, stat2.mtime, cachedPrecision);
         });
       }
       const mtime = new Date(Math.ceil(Date.now() / 1e3) * 1e3 + 5);
@@ -1254,13 +1254,13 @@ var require_mtime_precision = __commonJS({
         if (err) {
           return callback(err);
         }
-        fs.stat(file, (err2, stat) => {
+        fs.stat(file, (err2, stat2) => {
           if (err2) {
             return callback(err2);
           }
-          const precision = stat.mtime.getTime() % 1e3 === 0 ? "s" : "ms";
+          const precision = stat2.mtime.getTime() % 1e3 === 0 ? "s" : "ms";
           Object.defineProperty(fs, cacheSymbol, { value: precision });
-          callback(null, stat.mtime, precision);
+          callback(null, stat2.mtime, precision);
         });
       });
     }
@@ -1314,14 +1314,14 @@ var require_lockfile = __commonJS({
         if (options.stale <= 0) {
           return callback(Object.assign(new Error("Lock file is already being held"), { code: "ELOCKED", file }));
         }
-        options.fs.stat(lockfilePath, (err2, stat) => {
+        options.fs.stat(lockfilePath, (err2, stat2) => {
           if (err2) {
             if (err2.code === "ENOENT") {
               return acquireLock(file, { ...options, stale: 0 }, callback);
             }
             return callback(err2);
           }
-          if (!isLockStale(stat, options)) {
+          if (!isLockStale(stat2, options)) {
             return callback(Object.assign(new Error("Lock file is already being held"), { code: "ELOCKED", file }));
           }
           removeLock(file, options, (err3) => {
@@ -1333,8 +1333,8 @@ var require_lockfile = __commonJS({
         });
       });
     }
-    function isLockStale(stat, options) {
-      return stat.mtime.getTime() < Date.now() - options.stale;
+    function isLockStale(stat2, options) {
+      return stat2.mtime.getTime() < Date.now() - options.stale;
     }
     function removeLock(file, options, callback) {
       options.fs.rmdir(getLockFile(file, options), (err) => {
@@ -1352,7 +1352,7 @@ var require_lockfile = __commonJS({
       lock3.updateDelay = lock3.updateDelay || options.update;
       lock3.updateTimeout = setTimeout(() => {
         lock3.updateTimeout = null;
-        options.fs.stat(lock3.lockfilePath, (err, stat) => {
+        options.fs.stat(lock3.lockfilePath, (err, stat2) => {
           const isOverThreshold = lock3.lastUpdate + options.stale < Date.now();
           if (err) {
             if (err.code === "ENOENT" || isOverThreshold) {
@@ -1361,7 +1361,7 @@ var require_lockfile = __commonJS({
             lock3.updateDelay = 1e3;
             return updateLock(file, options);
           }
-          const isMtimeOurs = lock3.mtime.getTime() === stat.mtime.getTime();
+          const isMtimeOurs = lock3.mtime.getTime() === stat2.mtime.getTime();
           if (!isMtimeOurs) {
             return setLockAsCompromised(
               file,
@@ -1486,11 +1486,11 @@ var require_lockfile = __commonJS({
         if (err) {
           return callback(err);
         }
-        options.fs.stat(getLockFile(file2, options), (err2, stat) => {
+        options.fs.stat(getLockFile(file2, options), (err2, stat2) => {
           if (err2) {
             return err2.code === "ENOENT" ? callback(null, false) : callback(err2);
           }
-          return callback(null, !isLockStale(stat, options));
+          return callback(null, !isLockStale(stat2, options));
         });
       });
     }
@@ -6310,6 +6310,11 @@ var QuotaCheckpointSchema = external_exports.object({
   /** Which window forced the last pause/suspend, if any. */
   binding_window: external_exports.enum(["5h", "7d"]).optional()
 });
+var DocsStageSchema = external_exports.object({
+  status: external_exports.enum(["done", "failed"]),
+  reason: external_exports.string().optional(),
+  ended_at: external_exports.string()
+});
 var DriverEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
@@ -6351,6 +6356,8 @@ var RunStateSchema = external_exports.object({
   tasks: external_exports.record(external_exports.string(), TaskStateChecked).default({}),
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
+  /** Documentation stage marker; absent until the docs stage runs (engine docs stage). */
+  docs: DocsStageSchema.optional(),
   /** Lifecycle timestamps (ISO-8601). */
   started_at: external_exports.string(),
   updated_at: external_exports.string(),
@@ -12097,13 +12104,20 @@ function isUnsatisfiableDep(run9, depId) {
   const dep = run9.tasks[depId];
   return dep === void 0 || dep.status === "dropped";
 }
+async function wantsDocs(deps, run9) {
+  if (run9.docs?.status === "done") return false;
+  if (decideFinalize(run9).run_status !== "completed") return false;
+  return deps.docsApplicable();
+}
 async function stepRun(deps, runId) {
   let run9 = await deps.state.read(runId);
   const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run9.ship_mode });
   if (isTerminalRunStatus(run9.status)) {
     return { ...ctx(), kind: "run-terminal", run_status: run9.status };
   }
-  if (Object.values(run9.tasks).every((t) => isTerminalTaskStatus(t.status))) {
+  const allTerminal = Object.values(run9.tasks).every((t) => isTerminalTaskStatus(t.status));
+  const needsDocs = allTerminal && await wantsDocs(deps, run9);
+  if (allTerminal && !needsDocs) {
     return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
   }
   const stop = await applyQuotaGate(deps, runId, run9.mode);
@@ -12123,6 +12137,9 @@ async function stepRun(deps, runId) {
       status: patch.status,
       quota: patch.quota
     }));
+  }
+  if (needsDocs) {
+    return { ...ctx(), kind: "docs-ready" };
   }
   const cascadeDropped = [];
   for (; ; ) {
@@ -12190,6 +12207,101 @@ async function stepRun(deps, runId) {
   return { ...ctx(), kind: "tasks-ready", ready: ordered, cascade_dropped: cascadeDropped };
 }
 
+// src/driver/docs.ts
+import { join as join15 } from "node:path";
+var DOCS_MODEL = "opus";
+var DOCS_MAX_TURNS = 60;
+function docsWorktreePath(dataDir, runId) {
+  return join15(dataDir, "runs", runId, "docs-worktree");
+}
+function buildScribePrompt(worktree, baseRef) {
+  return [
+    "You are the factory scribe running the pipeline's documentation stage.",
+    `1. cd into your worktree: ${worktree} (already checked out on the docs branch off the staging tip).`,
+    `2. Determine the whole-PRD change set with: git diff ${baseRef}..HEAD`,
+    "3. Update /docs (Di\xE1taxis) to reflect those changes, per agents/scribe.md.",
+    "4. COMMIT your changes IN this worktree. Do NOT push (the engine pushes on fold).",
+    "5. If nothing material changed, make no commit.",
+    'Finish with your terminal STATUS line and return it as {"status": "<line>"}.'
+  ].join("\n");
+}
+async function runDocsEmit(deps, runId) {
+  const run9 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const base = deps.config.git.baseBranch;
+  const docsBranch = `docs-${runId}`;
+  const worktree = docsWorktreePath(deps.dataDir, runId);
+  const baseRef = `origin/${base}`;
+  await deps.git.fetch("origin", staging);
+  await deps.git.fetch("origin", base);
+  if (!await deps.git.worktreeExists(worktree)) {
+    await deps.git.worktreeAdd(["-b", docsBranch, worktree, `origin/${staging}`]);
+  }
+  return {
+    kind: "spawn",
+    run_id: runId,
+    worktree,
+    base_ref: baseRef,
+    staging_branch: staging,
+    docs_branch: docsBranch,
+    model: DOCS_MODEL,
+    max_turns: DOCS_MAX_TURNS,
+    prompt: buildScribePrompt(worktree, baseRef)
+  };
+}
+var DocsResultsSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
+async function runDocsFold(deps, runId, results) {
+  const run9 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const docsBranch = `docs-${runId}`;
+  const worktree = docsWorktreePath(deps.dataDir, runId);
+  const outcome = parseProducerStatus(results.status);
+  if (outcome.status === "done") {
+    await deps.git.mergeFfOrCommit(staging, docsBranch);
+    await deps.git.push("origin", staging);
+    await deps.git.worktreeRemove([worktree, "--force"]);
+    await deps.state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: nowIso() } }));
+    return { kind: "done", run_id: runId };
+  }
+  const reason = "reason" in outcome ? outcome.reason : "docs stage failed";
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    status: "suspended",
+    docs: { status: "failed", reason, ended_at: nowIso() }
+  }));
+  return { kind: "blocked", run_id: runId, reason };
+}
+
+// src/driver/docs-applicable.ts
+import { readFile as readFile12, stat } from "node:fs/promises";
+import { join as join16 } from "node:path";
+async function readJsonOrNull2(file) {
+  let raw;
+  try {
+    raw = await readFile12(file, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function docsEnabled(packageJson) {
+  const enabled = packageJson?.factory?.docs?.enabled;
+  return enabled !== false;
+}
+async function isDocsApplicable(repoRoot) {
+  try {
+    const s = await stat(join16(repoRoot, "docs"));
+    if (!s.isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return docsEnabled(await readJsonOrNull2(join16(repoRoot, "package.json")));
+}
+
 // src/cli/wiring.ts
 function splitRepo(slug) {
   if (!isValidRepoSlug(slug)) {
@@ -12205,7 +12317,8 @@ async function loadCoroutineDeps(opts) {
   return {
     ...deps,
     usage: new StatuslineUsageSignal({ dataDir: deps.dataDir }),
-    now: nowEpoch
+    now: nowEpoch,
+    docsApplicable: () => isDocsApplicable(process.cwd())
   };
 }
 async function loadCliDeps(opts) {
@@ -12283,12 +12396,14 @@ Usage:
   factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
+  factory run docs [--run <id>] [--results <path>]
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
+  docs       Emit the documentation-stage spawn manifest, or (with --results) fold a scribe result.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
@@ -12702,6 +12817,39 @@ async function runFinalize(argv) {
   });
   return EXIT.OK;
 }
+var DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
+
+Emit the documentation-stage spawn manifest, or (with --results) fold a scribe
+result: publish the docs commit onto staging and mark the stage done, or suspend
+the run on failure. The CLI never spawns scribe \u2014 a driver does.`;
+async function runDocs(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(DOCS_HELP);
+    return EXIT.OK;
+  }
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const runId = await resolveRunId(state, args, "docs");
+  const deps = await loadCliDeps({ dataDir, runId });
+  const resultsPath = args.flag("results");
+  if (typeof resultsPath === "string" && resultsPath.length > 0) {
+    let results;
+    try {
+      results = DocsResultsSchema.parse(await readJsonInput(resultsPath));
+    } catch (err) {
+      throw new UsageError(
+        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    emitJson(await runDocsFold(deps, runId, results));
+  } else if (resultsPath !== void 0) {
+    throw new UsageError("--results requires a file path");
+  } else {
+    emitJson(await runDocsEmit(deps, runId));
+  }
+  return EXIT.OK;
+}
 async function resolveCancelRunId(state, args, sessionId, overrides = {}) {
   const explicit = optionalString(args.flag("run"));
   if (explicit !== void 0) return explicit;
@@ -12784,11 +12932,13 @@ async function run3(argv) {
       return runResume(rest);
     case "finalize":
       return runFinalize(rest);
+    case "docs":
+      return runDocs(rest);
     case "cancel":
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | cancel)`
+        `unknown run action '${action}' (expected create | resume | finalize | docs | cancel)`
       );
   }
 }
@@ -12822,7 +12972,7 @@ var resumeCommand = {
 };
 
 // src/cli/subcommands/spec.ts
-import { join as join15 } from "node:path";
+import { join as join17 } from "node:path";
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
@@ -12847,9 +12997,9 @@ var VERDICT_FILE = "verdict.json";
 function scratchPaths(dataDir, repo, issue) {
   const dir = specBuildDir(dataDir, repo, issue);
   return {
-    prdPath: join15(dir, PRD_FILE),
-    generatedPath: join15(dir, GENERATED_FILE),
-    verdictPath: join15(dir, VERDICT_FILE)
+    prdPath: join17(dir, PRD_FILE),
+    generatedPath: join17(dir, GENERATED_FILE),
+    verdictPath: join17(dir, VERDICT_FILE)
   };
 }
 async function resolveSpec2(deps, repo, issue) {
@@ -13517,8 +13667,8 @@ var statuslineCommand = {
 
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync8 } from "node:fs";
-import { readFile as readFile12 } from "node:fs/promises";
-import { join as join16 } from "node:path";
+import { readFile as readFile13 } from "node:fs/promises";
+import { join as join18 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log30 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -13556,7 +13706,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join16(dataDir, "merged-settings.json");
+  return join18(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -13632,10 +13782,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path4 = join16(pluginRoot, ".claude-plugin", "plugin.json");
+  const path4 = join18(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync8(path4)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile12(path4, "utf8"));
+    const parsed = JSON.parse(await readFile13(path4, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -13645,20 +13795,20 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join16(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join18(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync8(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile12(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile13(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
       else log30.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
       log30.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join16(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile12(templatePath, "utf8");
+  const templatePath = join18(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile13(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -13720,7 +13870,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path4}` : "absen
 async function readOnDiskVersion(path4) {
   if (!existsSync8(path4)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile12(path4, "utf8"));
+    const parsed = JSON.parse(await readFile13(path4, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }
