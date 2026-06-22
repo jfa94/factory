@@ -8,10 +8,11 @@ for `state`); `--help` on any subcommand prints its contract. The binary is
 
 Subcommands are **reporters** (read-only; emit an envelope), **the coroutine** (`next`
 folds nothing; `drive --results` folds an agent spawn's output into ONE state
-step), or **writers** (one state mutation). `run create`, `run finalize`, `run cancel`,
-`scaffold`, and the coroutine's `drive` ship step perform actions (state and/or GitHub
-side effects). The coroutine is the only seam that spawns nothing itself — it emits a
-manifest the driver spawns from (see [Model A](../explanation/model-a.md)).
+step; `run docs --results` folds a scribe spawn's output likewise), or **writers** (one
+state mutation). `run create`, `run finalize`, `run cancel`, `scaffold`, and the
+coroutines' (`drive` ship / `run docs` fold) side effects perform actions (state and/or
+GitHub side effects). The coroutine seams spawn nothing themselves — they emit a manifest
+the driver spawns from (see [Model A](../explanation/model-a.md)).
 
 Run/spec state is read from and written to `$CLAUDE_PLUGIN_DATA`.
 
@@ -196,6 +197,34 @@ Ship mode defaults to the run's **persisted `ship_mode`** (set at `run create`);
 is needed. `--no-ship` overrides it to no-merge for THIS finalize only (opens the
 `staging-<run-id> → develop` rollup PR but never merges). Emits
 `{kind:"finalized", run, report, rollup?, failure_comment_posted}`.
+
+### `run docs`
+
+Coroutine (emit + fold), symmetric with [`drive`](#drive): the engine-owned
+documentation stage ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-stage-before-finalize)).
+The CLI **never spawns scribe** — a driver does.
+
+```
+factory run docs [--run <id>] [--results <path>]
+```
+
+- **Emit** (no `--results`): prepares a docs worktree on a `docs-<run-id>` branch off
+  the run's `staging-<run-id>` tip and returns a `DocsEnvelope` spawn manifest
+  `{kind:"spawn", run_id, worktree, base_ref, staging_branch, docs_branch, model, max_turns, prompt}`.
+  `base_ref` is `origin/<baseBranch>` (the whole-PRD diff base); the prompt directs
+  scribe to `cd` into the worktree, diff `base_ref..HEAD`, update `/docs`, and commit
+  **in the worktree without pushing**. Idempotent on resume — an existing worktree from
+  a prior failed attempt is reused, not re-created.
+- **Fold** (`--results <path>`): reads a `{status:"<scribe STATUS line>"}` JSON file. On
+  `STATUS: DONE`, fast-forward/merges `docs-<run-id>` into `staging-<run-id>`, pushes the
+  staging branch (scribe's commit, if any, rides along), removes the worktree, marks the
+  `docs` stage `done`, and returns `{kind:"done", run_id}`. On any non-`DONE` status,
+  records a one-attempt `failed` docs marker, transitions the run to **suspended** (the
+  staging branch + worktree are kept for retry), and returns `{kind:"blocked", run_id, reason}`.
+
+The driver runs `run docs` only when [`next`](#next) emits `docs-ready`. `next`
+withholds `all-terminal` until the `docs` stage is `done`, so `run finalize` never
+ships a half-documented rollup.
 
 ### `run cancel`
 

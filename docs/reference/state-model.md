@@ -83,6 +83,7 @@ never `RunStateSchema.parse` directly.
 | `spec`                      | SpecPointer                | Pointer to the durable spec (not an embedded spec).                                                                                                                                                                                                                                                                                                                               |
 | `tasks`                     | record<task_id, TaskState> | Per-task state.                                                                                                                                                                                                                                                                                                                                                                   |
 | `quota`                     | QuotaCheckpoint?           | Resume checkpoint; present _iff_ paused/suspended.                                                                                                                                                                                                                                                                                                                                |
+| `docs`                      | DocsStage?                 | Documentation-stage marker; absent until the engine docs stage runs ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-stage-before-finalize)).                                                                                                                                                                                                   |
 | `started_at` / `updated_at` | string                     | ISO-8601.                                                                                                                                                                                                                                                                                                                                                                         |
 | `ended_at`                  | string \| null             | ISO-8601, null until terminal.                                                                                                                                                                                                                                                                                                                                                    |
 
@@ -205,4 +206,15 @@ rung)` before any results were folded, the coroutine resets the worktree to
 `{ resets_at_epoch?, binding_window?: "5h"|"7d" }` — the minimal state a resumable
 run persists. Present _iff_ the run is `paused` or `suspended`; resume must clear
 it before returning to `running`.
+
+## `DocsStage`
+
+`{ status: "done" | "failed", reason?, ended_at }` — the engine-owned documentation
+stage marker ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-stage-before-finalize)).
+Absent until the stage runs. `done` once scribe's output is committed onto the
+`staging-<run-id>` branch (or a no-op pass); `failed` (with a `reason`) records the
+one-attempt failure while the run sits `suspended`, resumable via `/factory:resume`.
+There is no `skipped` value — when docs are not applicable (no `/docs` directory or
+`package.json` `factory.docs.enabled: false`), `factory next` decides applicability
+read-only and the marker simply stays absent.
 </content>
