@@ -20,8 +20,9 @@
  * an orchestrator worktree (cwd under `.claude/worktrees/orchestrator-*`) — the
  * serial writer merges task PRs into staging there.
  */
-import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { exec as defaultExec, type ExecResult } from "../shared/exec.js";
+import { createLogger } from "../shared/index.js";
 import { parseGitInvocation, type GitInvocation } from "./git-args.js";
 import { isNestedShellOrHookBypass } from "./shell-bypass.js";
 import { isAutonomous } from "../autonomy/mode.js";
@@ -49,6 +50,8 @@ export const PROTECTED_BRANCHES: readonly string[] = [
 
 /** Pipeline-managed branches writable from an orchestrator worktree. */
 export const PIPELINE_MANAGED_BRANCHES: readonly string[] = ["staging"];
+
+const log = createLogger("branch-protection");
 
 /** A function that resolves the current branch for a repo (injectable). */
 export type CurrentBranchResolver = (inv: GitInvocation) => Promise<string>;
@@ -102,10 +105,23 @@ function makeDefaultResolver(
     try {
       const r = await execFn("git", args, {});
       if (r.code === 0) return r.stdout.trim();
-    } catch {
-      /* detached HEAD / bad path → empty (treated as unprotected) */
+      // Non-zero exit (notably 128 on a detached HEAD): git ran fine but there is
+      // no symbolic current branch. Expected and benign — no branch to protect, so
+      // treat as unprotected SILENTLY (warning here would be noise on every
+      // detached-HEAD op).
+      return "";
+    } catch (err) {
+      // A THROWN error is NOT a detached HEAD (that is the non-zero exit handled
+      // above) — it means the resolver itself could not run: git missing (ENOENT),
+      // permission denied (EACCES), or a spawn failure. We still fail open (an
+      // unresolvable branch cannot be proven protected), but LOUDLY: warn so a push
+      // that silently skipped the protected-branch guard is detectable.
+      log.warn(
+        `current-branch resolution failed (${(err as Error).message}); ` +
+          `treating as unprotected — a protected-branch guard may not apply`,
+      );
+      return "";
     }
-    return "";
   };
 }
 

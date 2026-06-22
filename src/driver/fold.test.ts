@@ -16,9 +16,11 @@ import {
   applyRecordHoldout,
   applyRecordReviews,
   applyRecordProducer,
+  buildWorktreeSource,
   type RecordReviewsInput,
   type FoldDeps,
 } from "./fold.js";
+import type { RawReview } from "../verifier/judgment/index.js";
 import { taskWorktreePath } from "./paths.js";
 import { defaultConfig } from "../config/schema.js";
 import { parseSpecManifest } from "../spec/index.js";
@@ -793,5 +795,56 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
     await expect(
       applyRecordProducer(state, RUN_ID, "t1", "verify", "STATUS: DONE"),
     ).rejects.toThrow(/producer stage \(tests \| exec\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WS7 — buildWorktreeSource swallows ONLY ENOENT (the cited file is genuinely
+// absent → null → citations unverifiable → dropped). Any OTHER read error
+// (EACCES, EISDIR, I/O) is a real failure that must RETHROW, never be demoted to
+// "missing" — a silent demotion would drop a citation that may back a real blocker.
+// ---------------------------------------------------------------------------
+describe("buildWorktreeSource — ENOENT-only swallow (citation source loader)", () => {
+  let wt: string;
+  beforeEach(async () => {
+    wt = await mkdtemp(join(tmpdir(), "factory-fold-source-"));
+  });
+  afterEach(async () => {
+    await rm(wt, { recursive: true, force: true });
+  });
+
+  const citing = (file: string): RawReview => ({
+    reviewer: "quality",
+    verdict: "blocked",
+    findings: [
+      {
+        reviewer: "quality",
+        severity: "critical",
+        blocking: true,
+        file,
+        line: 1,
+        quote: "x",
+        description: "d",
+      },
+    ],
+  });
+
+  it("a genuinely ABSENT cited file (ENOENT) maps to null — unverifiable, dropped", async () => {
+    const src = await buildWorktreeSource(wt, [citing("does/not/exist.ts")]);
+    expect(src.readLines("does/not/exist.ts")).toBeNull();
+  });
+
+  it("a present cited file loads its split lines", async () => {
+    await writeFile(join(wt, "present.ts"), "a\nb\nc\n");
+    const src = await buildWorktreeSource(wt, [citing("present.ts")]);
+    expect(src.readLines("present.ts")).toEqual(["a", "b", "c", ""]);
+  });
+
+  it("a NON-ENOENT read error (cited path is a directory → EISDIR) RETHROWS — never demoted to 'missing'", async () => {
+    // A real blocker citation whose file cannot be read for a reason OTHER than
+    // absence must NOT be silently swallowed to null. Make the cited path a
+    // directory so readFile raises EISDIR rather than ENOENT.
+    await mkdir(join(wt, "a-directory"), { recursive: true });
+    await expect(buildWorktreeSource(wt, [citing("a-directory")])).rejects.toThrow();
   });
 });

@@ -21,6 +21,7 @@ import { stepTask, MERGE_RESYNC_CAP, type DriveEnvelope } from "./coroutine.js";
 import { TASK_STAGE_ORDER } from "../types/index.js";
 import { TaskStateSchema } from "../core/state/index.js";
 import type { DriveResults, FoldKey } from "./results.js";
+import { SPAWN_STAGES } from "./results.js";
 
 import { makeHoldoutRecord, FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
 import { taskWorktreePath } from "./paths.js";
@@ -154,6 +155,15 @@ describe("stage-cursor literals", () => {
     const stageEnum = stageField.unwrap();
     expect(stageEnum.options).toEqual([...TASK_STAGE_ORDER]);
   });
+
+  it("TaskState.spawn_in_flight.stage enum equals SPAWN_STAGES (cross-module pin)", () => {
+    // The checkpoint's stage literal is duplicated in core/state (it must not import
+    // the driver), so pin it equal to driver/results' SPAWN_STAGES source of truth —
+    // a drift here would let the coroutine persist a checkpoint the schema rejects.
+    const sif = TaskStateSchema.shape.spawn_in_flight;
+    const stageEnum = sif.unwrap().shape.stage; // z.object({...}).optional() → object → .stage
+    expect(stageEnum.options).toEqual([...SPAWN_STAGES]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -207,6 +217,95 @@ describe("stepTask", () => {
     }
   });
 
+  // -- WS2: stop-mid-spawn idempotent re-spawn --------------------------------
+  // Producers commit to the SHARED task worktree (isolation omitted), so a stop in
+  // the post-spawn / pre-fold window leaves the abandoned producer's partial commits
+  // on the task branch. The coroutine captures the pre-spawn tip at emit and, on a
+  // resume that re-enters the SAME (stage, rung), resets the worktree to it.
+
+  it("captures the pre-spawn tip on a fresh spawn and does not reset the worktree (WS2)", async () => {
+    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    try {
+      const git = deps.git as FakeGitClient;
+      const env1 = await stepTask(deps, runId, "T1"); // fresh tests spawn
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") return;
+
+      // A fresh spawn never resets (nothing abandoned yet)...
+      expect(git.calls.filter((c) => c.startsWith("reset --hard"))).toEqual([]);
+      // ...but it DOES persist the checkpoint naming this exact spawn + the pre-spawn tip.
+      const taskBranch = runScopedBranch(runId, "T1");
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T1"]?.spawn_in_flight).toEqual({
+        stage: "tests",
+        rung: 0,
+        tip_sha: git.localBranches.get(taskBranch),
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("resets the task worktree to the pre-spawn tip when re-emitting an abandoned spawn (WS2)", async () => {
+    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    try {
+      const git = deps.git as FakeGitClient;
+      const taskBranch = runScopedBranch(runId, "T1");
+
+      // 1. First step → tests spawn; the coroutine captures the pre-spawn task-branch tip.
+      const env1 = await stepTask(deps, runId, "T1");
+      expect(env1.kind).toBe("spawn");
+      if (env1.kind !== "spawn") return;
+      const preSpawnTip = git.localBranches.get(taskBranch);
+      expect(preSpawnTip).toBeDefined();
+
+      // 2. Simulate the test-writer committing partial work to the shared task worktree,
+      //    then a STOP before any results were folded (advance the task-branch tip).
+      git.localBranches.set(taskBranch, "sha-abandoned-partial");
+
+      // 3. Resume WITHOUT results → re-emit the SAME spawn AND discard the partial work
+      //    by resetting the worktree to the captured pre-spawn tip.
+      const callsBefore = git.calls.length;
+      const env2 = await stepTask(deps, runId, "T1");
+      expect(env2).toEqual(env1); // identical spawn envelope (idempotent re-emit)
+
+      const resetCalls = git.calls.slice(callsBefore).filter((c) => c.startsWith("reset --hard"));
+      expect(resetCalls).toEqual([`reset --hard ${preSpawnTip}`]);
+      // The abandoned partial commit is gone — worktree restored to the pre-spawn tip.
+      expect(git.localBranches.get(taskBranch)).toBe(preSpawnTip);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("advancing stages overwrites the checkpoint so a stale prior-stage entry never resets (WS2)", async () => {
+    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    try {
+      const git = deps.git as FakeGitClient;
+      const env1 = await stepTask(deps, runId, "T1"); // tests spawn → checkpoint {tests,0}
+      if (env1.kind !== "spawn") throw new Error("expected tests spawn");
+
+      // Fold tests DONE → exec spawn. The advance changes the stage, so this is a FRESH
+      // spawn that OVERWRITES the checkpoint (never a reset against the stale tests entry).
+      const callsBefore = git.calls.length;
+      const env2 = await stepTask(deps, runId, "T1", {
+        fold_key: env1.fold_key,
+        producer: { status: "STATUS: DONE" },
+      });
+      if (env2.kind !== "spawn") throw new Error("expected exec spawn");
+      expect(env2.stage).toBe("exec");
+      expect(git.calls.slice(callsBefore).filter((c) => c.startsWith("reset --hard"))).toEqual([]);
+      const run = await deps.state.read(runId);
+      expect(run.tasks["T1"]?.spawn_in_flight).toEqual({
+        stage: "exec",
+        rung: 0,
+        tip_sha: git.localBranches.get(runScopedBranch(runId, "T1")),
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("folds a producer DONE and advances to the exec spawn", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
@@ -238,13 +337,23 @@ describe("stepTask", () => {
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") return;
 
-      // Wrap updateTask to count writes whose produced task lands on the exec cursor.
+      // Wrap updateTask to count CURSOR writes that land on the exec cursor. A cursor
+      // write (persistStepCursor / markInFlight) only sets stage+status, leaving
+      // spawn_in_flight untouched (spread `...t`, same reference); the WS2 capture write
+      // REPLACES spawn_in_flight with a fresh object. Counting only writes that preserve
+      // the spawn_in_flight reference isolates the cursor RMW this test guards — and still
+      // catches the original bug (a duplicate markInFlight cursor write also preserves it).
       const realUpdateTask = deps.state.updateTask.bind(deps.state);
       let execCursorWrites = 0;
       deps.state.updateTask = (rid, tid, mutator) =>
         realUpdateTask(rid, tid, (t) => {
           const next = mutator(t);
-          if (tid === "T1" && next.stage === "exec" && next.status === "executing") {
+          if (
+            tid === "T1" &&
+            next.stage === "exec" &&
+            next.status === "executing" &&
+            next.spawn_in_flight === t.spawn_in_flight
+          ) {
             execCursorWrites += 1;
           }
           return next;

@@ -45,19 +45,42 @@ export interface GateEvidence {
 }
 
 /**
+ * Phantom nominal brand. A module-private `unique symbol` no other module can
+ * name, so a `GateVerdict` cannot be assembled from an object literal outside this
+ * file — only the {@link mkVerdict} factory below (the sole `as`-cast site) can
+ * mint one. `declare const` ⇒ the brand is type-only: it has NO runtime presence,
+ * so it never appears in `Object.keys`, JSON, or the observable `__derived` field.
+ */
+declare const DERIVED_BRAND: unique symbol;
+
+/**
  * A computed verdict. There is intentionally no constructor that takes a
  * pre-existing verdict — a `GateVerdict` can only come out of a `derive*`
- * function in this module, so it always carries its derivation.
+ * function in this module, so it always carries its derivation. The
+ * {@link DERIVED_BRAND} phantom makes this structurally true: external code that
+ * tries to build the shape by hand fails to typecheck (it cannot supply the
+ * symbol key), turning the old by-convention rule into a compiler-enforced one.
  */
 export interface GateVerdict {
   /** True iff the gate passes, computed from the supplied evidence. */
   readonly passed: boolean;
   /** The gate this verdict is for. */
   readonly gate: string;
-  /** Brand: marks this value as freshly derived, not reconstructed from JSON. */
+  /** Observable brand: marks this value as freshly derived, not reconstructed from JSON. */
   readonly __derived: true;
+  /** Phantom nominal brand (type-only; see {@link DERIVED_BRAND}). */
+  readonly [DERIVED_BRAND]: true;
   /** The evidence the verdict was derived from (audit trail). */
   readonly from: readonly GateEvidence[];
+}
+
+/**
+ * The SOLE `GateVerdict` mint. Centralizes the one `as` cast needed to attach the
+ * phantom {@link DERIVED_BRAND} (which has no runtime value), so every `derive*`
+ * function stays a plain literal builder and external code has no mint at all.
+ */
+function mkVerdict(passed: boolean, gate: string, from: readonly GateEvidence[]): GateVerdict {
+  return { passed, gate, __derived: true, from } as GateVerdict;
 }
 
 /**
@@ -68,12 +91,7 @@ export interface GateVerdict {
  * always receives exactly one piece of evidence.)
  */
 export function deriveGateVerdict(evidence: GateEvidence): GateVerdict {
-  return {
-    passed: evidence.observed === true,
-    gate: evidence.gate,
-    __derived: true,
-    from: [evidence],
-  };
+  return mkVerdict(evidence.observed === true, evidence.gate, [evidence]);
 }
 
 /**
@@ -83,12 +101,7 @@ export function deriveGateVerdict(evidence: GateEvidence): GateVerdict {
  */
 export function deriveAllGatesVerdict(evidence: readonly GateEvidence[]): GateVerdict {
   const passed = evidence.length > 0 && evidence.every((e) => e.observed === true);
-  return {
-    passed,
-    gate: "all",
-    __derived: true,
-    from: [...evidence],
-  };
+  return mkVerdict(passed, "all", [...evidence]);
 }
 
 /**
@@ -112,17 +125,16 @@ export function derivePanelVerdict(
     ? reviewersOrTask
     : (reviewersOrTask as Pick<TaskState, "reviewers">).reviewers;
   const passed = reviewers.length > 0 && reviewers.every((r) => r.verdict === "approve");
-  return {
+  // The panel's "evidence" is each reviewer's verdict; expose it for audit.
+  return mkVerdict(
     passed,
-    gate: "panel",
-    __derived: true,
-    // The panel's "evidence" is each reviewer's verdict; expose it for audit.
-    from: reviewers.map((r) => ({
+    "panel",
+    reviewers.map((r) => ({
       gate: `panel:${r.reviewer}`,
       observed: r.verdict === "approve",
       detail: `verdict=${r.verdict} confirmed_blockers=${r.confirmed_blockers}`,
     })),
-  };
+  );
 }
 
 /**
@@ -137,12 +149,7 @@ export function deriveFloorVerdict(
 ): GateVerdict {
   const det = deriveAllGatesVerdict(gateEvidence);
   const panel = derivePanelVerdict(task);
-  return {
-    passed: det.passed && panel.passed,
-    gate: "floor",
-    __derived: true,
-    from: [...det.from, ...panel.from],
-  };
+  return mkVerdict(det.passed && panel.passed, "floor", [...det.from, ...panel.from]);
 }
 
 /**

@@ -41,51 +41,13 @@ import {
   STRYKER_CONFIG_BASENAMES,
   DEPENDENCY_CRUISER_CONFIG_BASENAMES,
 } from "../shared/gate-config-names.js";
+import type { TcbCategory, TcbRule, TcbMatch, TcbContext } from "../types/tcb.js";
 
-/**
- * CLOSED category enum for a protected path. A new category is a DESIGN change
- * (a deliberate compile-break across the adversarial suite), not a config tweak
- * — mirrors the WS1/WS2 closed-enum discipline.
- */
-export type TcbCategory =
-  | "ci-workflows"
-  | "gate-config"
-  | "hooks"
-  | "data-runs"
-  | "data-specs"
-  | "docs-factory";
-
-/** One compiled denylist rule. `test(absPath)` decides membership. */
-export interface TcbRule {
-  /** Which protection class this rule enforces. */
-  readonly category: TcbCategory;
-  /** Human-readable description of what the rule protects (for deny reasons). */
-  readonly describe: string;
-  /** True iff the (already canonicalized, absolute) path is protected by this rule. */
-  readonly test: (absPath: string) => boolean;
-}
-
-/** A positive match: the rule that fired + the canonical path it matched. */
-export interface TcbMatch {
-  /** The rule that matched. */
-  readonly rule: TcbRule;
-  /** The canonical absolute path that matched (post normalize/realpath). */
-  readonly canonical: string;
-}
-
-/**
- * Context for a TCB check. ALL fields are PATH-RESOLUTION inputs only — none is
- * a policy input. There is intentionally no `config` field: the denylist cannot
- * be widened/narrowed by config (Δ W). `dataDir` is supplied so the out-of-repo
- * run/spec stores can be protected at their absolute location, but it sets only
- * WHERE the data dir is, never WHETHER it is protected.
- */
-export interface TcbContext {
-  /** The repo root (target repo) absolute path. Used for `.github/`, `hooks/`. */
-  readonly repoRoot?: string;
-  /** The plugin data dir absolute path (out-of-repo `runs/`, `specs/`). */
-  readonly dataDir?: string;
-}
+// The TCB structural types (TcbCategory, TcbRule, TcbMatch, TcbContext) now live
+// in the foundational `src/types/tcb.ts` leaf — imported above and re-exported
+// here so the type facade points DOWN (hooks → types) while existing consumers
+// (write-protection, hooks/index, types/index) still resolve them from `./tcb.js`.
+export type { TcbCategory, TcbRule, TcbMatch, TcbContext };
 
 /** Normalize a path segment test: is `p` equal to `base` or under `base/`? */
 function isAtOrUnder(p: string, base: string): boolean {

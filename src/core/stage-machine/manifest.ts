@@ -54,6 +54,12 @@ export const SpawnAgentSchema = z.object({
   max_turns: z.number().int().positive(),
   /** Pointer to the prompt artifact, run-store relative (non-empty). */
   prompt_ref: z.string().min(1),
+  /**
+   * Optional effort/reasoning level to spawn at (the `Agent` effort enum:
+   * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
+   * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
+   */
+  effort: z.string().min(1).optional(),
 });
 export type SpawnAgent = z.infer<typeof SpawnAgentSchema>;
 

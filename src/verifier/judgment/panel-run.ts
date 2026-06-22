@@ -16,9 +16,10 @@
  *      `wait-retry` (floor blocked — bounded re-review/re-fix). State writes are
  *      the driver's job; this module never touches the StateManager.
  *
- * Producer rebuttal (D27) is a separate, explicitly-driven step (rebuttal.ts);
- * runPanel exposes the confirmed blockers so the driver can route ONE rebuttal
- * before re-deriving. runPanel does not loop a debate.
+ * The fold ends at the independent finding-verifier (D27 verify-then-fix): a
+ * confirmed blocker fails the floor. There is no producer-rebuttal stage — runPanel
+ * exposes the confirmed blockers and the driver routes a bounded fix-forward
+ * re-spawn; runPanel does not loop a debate.
  */
 import {
   advance,

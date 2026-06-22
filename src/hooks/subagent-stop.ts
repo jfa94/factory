@@ -32,14 +32,14 @@
  * a hook. In the new design those properties are achieved STRUCTURALLY and more
  * robustly downstream: a no-op producer (zero commits) leaves the task branch ==
  * base, so the WS6 deterministic gates (tests + TDD gate) fail → the task never
- * advances → the WS8 escalation ladder (bounded retries, cap 2) retries then emits
+ * advances → the escalation ladder (bounded retries, cap 4) retries then emits
  * a classified loud drop. The reviewer STATUS check survives here as
  * {@link parseVerdict} (absent STATUS ⇒ blocked, never a silent approve). The
  * warn-only artifact checks (missing spec.md/tasks.json/review files) move to the
  * WS12 telemetry sink. Net: one SubagentStop hook (this file) with one observational
  * job, instead of two bash hooks duplicating the stage machine.
  */
-import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { createLogger } from "../shared/logging.js";
 import { StateManager, PanelVerdictEnum } from "../core/state/index.js";
 import type { DataDirOptions } from "../config/load.js";

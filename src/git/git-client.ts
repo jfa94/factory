@@ -80,6 +80,19 @@ export interface GitClient {
    * (non-auto-recoverable → surfaces for rescue). NEVER uses `--force` or `-f`.
    */
   mergeFfOrCommit(branch: string, ref: string, opts?: MergeOptions): Promise<void>;
+  /**
+   * `git reset --hard <ref>` then `git clean -fd` — restore the worktree to `ref`,
+   * discarding every commit/staged/unstaged change above it AND untracked (NON-ignored)
+   * files. The coroutine's idempotent re-spawn uses this to discard an abandoned
+   * producer's partial work before re-spawning at the same (stage, rung).
+   *
+   * `-fd` (NOT `-fdx`) deliberately preserves IGNORED files so the provisioned deps
+   * (node_modules, build caches) survive the reset. This is a LOCAL worktree op on a
+   * local-until-ship task branch — NOT a history rewrite of a pushed ref, so it does
+   * NOT breach the no-force-push rule (cf. {@link import("./worktree.js").removeWorktree}'s
+   * teardown `--force`). Fatal on failure.
+   */
+  resetHardClean(ref: string, opts?: GitOpts): Promise<void>;
 }
 
 /** Default GitClient over the real (or an injected) git runner. */
@@ -181,5 +194,13 @@ export class DefaultGitClient implements GitClient {
     // Check out the branch from its origin tracking ref first, then merge.
     await this.execOrThrow(["checkout", branch], opts);
     await this.execOrThrow(["merge", "--no-edit", ref], opts);
+  }
+
+  async resetHardClean(ref: string, opts?: GitOpts): Promise<void> {
+    log.debug(`reset --hard ${ref} && clean -fd`);
+    await this.execOrThrow(["reset", "--hard", ref], opts);
+    // `-fd` only (no `-x`): drop untracked source the producer added, but KEEP ignored
+    // provisioned deps (node_modules) so the re-spawned producer is not left bare.
+    await this.execOrThrow(["clean", "-fd"], opts);
   }
 }

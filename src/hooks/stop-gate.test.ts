@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { decideStop, runStopGate } from "./stop-gate.js";
-import { EXIT } from "../cli/exit-codes.js";
+import { EXIT } from "../shared/exit-codes.js";
 import type { RunState, TaskState } from "../types/index.js";
 
 const SPEC = { repo: "o/n", spec_id: "1-x", issue_number: 1 } as const;

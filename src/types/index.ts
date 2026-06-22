@@ -11,17 +11,18 @@
  * module; this file just makes the seam addressable from one place.
  */
 
-export { EXIT, isExitCode } from "../cli/exit-codes.js";
-export type { ExitCode } from "../cli/exit-codes.js";
+export { EXIT, isExitCode } from "../shared/exit-codes.js";
+export type { ExitCode } from "../shared/exit-codes.js";
 
-// WS9 — Trusted Computing Base (TCB) types. Owned by WS9 (the stated
-// src/types/index.ts exception). These name the shape the hardcoded TCB
-// write-deny (src/hooks/tcb.ts, Δ W) and the hook I/O layer share. They live
-// here — not in src/hooks — so any future workstream that needs to reason about
-// the trust boundary imports a STABLE seam, and so the closed `TcbCategory`
-// enum is one addressable union (a new protected category is a deliberate
-// compile-break, mirroring the WS1/WS2 closed-enum discipline).
-export type { TcbCategory, TcbRule, TcbMatch } from "../hooks/tcb.js";
+// Trusted Computing Base (TCB) types. These name the shape the hardcoded TCB
+// write-deny (src/hooks/tcb.ts, Δ W) and the hook I/O layer share. Their
+// definition home is the foundational leaf src/types/tcb.ts — NOT src/hooks — so
+// any workstream that needs to reason about the trust boundary imports a STABLE
+// seam without reaching up into the hooks enforcement layer (the dependency now
+// points hooks → types), and so the closed `TcbCategory` enum is one addressable
+// union (a new protected category is a deliberate compile-break, mirroring the
+// WS1/WS2 closed-enum discipline). src/hooks/tcb.ts re-exports them for back-compat.
+export type { TcbCategory, TcbRule, TcbMatch } from "./tcb.js";
 
 export type { ExecResult, ExecOptions } from "../shared/exec.js";
 
@@ -74,7 +75,7 @@ export type {
 } from "../core/state/index.js";
 
 // WS2 — stage-machine seam. A COMPLETE mirror of src/core/stage-machine: the PURE
-// per-task stage engine (runStage / nextStageFor / decideFinalize / StageEngine),
+// per-task stage engine (runStage / nextStageFor / decideFinalize),
 // its result contract (StageResult union + constructors + assertNever), the Zod
 // SpawnManifest, the stage vocabulary + helpers, and the fakeable StageHandlers
 // interface. The WS10 session driver and v2 Workflow driver import the engine
@@ -107,7 +108,6 @@ export {
   runStage,
   nextStageFor,
   decideFinalize,
-  StageEngine,
 } from "../core/stage-machine/index.js";
 
 export type {

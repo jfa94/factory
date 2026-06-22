@@ -36,8 +36,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-import type { ExitCode } from "../exit-codes.js";
-import { EXIT } from "../exit-codes.js";
+import type { ExitCode } from "../../shared/exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError } from "../args.js";
 import { emitLine, emitError } from "../io.js";
 import { resolveDataDir, resolvePluginRoot } from "../../config/index.js";
@@ -47,7 +47,7 @@ import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";
 import { createLogger } from "../../shared/logging.js";
 import { tildeShorten } from "../../shared/paths.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const log = createLogger("autonomy");
 

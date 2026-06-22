@@ -14,7 +14,7 @@
  * only, never policy (see tcb.ts header). If the data dir cannot be resolved the
  * component-anchored TCB rules still fire.
  */
-import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { resolveDataDir, type DataDirOptions } from "../config/load.js";
 import { isTcbProtected, type TcbContext } from "./tcb.js";
 import {

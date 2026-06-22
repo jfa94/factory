@@ -10,23 +10,23 @@ const START_EPOCH = parseIso8601ToEpoch(START);
 function input(over: Partial<CircuitBreakerInput> = {}): CircuitBreakerInput {
   return {
     startedAtIso: START,
-    consecutiveFailures: 0,
+    cumulativeFailures: 0,
     pausedMinutes: 0,
     ...over,
   };
 }
 
-describe("Circuit breaker — consecutive-failure trip", () => {
+describe("Circuit breaker — cumulative-failure trip", () => {
   it("does not trip below the cap", () => {
-    expect(evaluate(input({ consecutiveFailures: 2 }), CONFIG, START_EPOCH)).toEqual({
+    expect(evaluate(input({ cumulativeFailures: 2 }), CONFIG, START_EPOCH)).toEqual({
       tripped: false,
     });
   });
 
   it("trips at the cap (>= maxConsecutiveFailures)", () => {
-    const r = evaluate(input({ consecutiveFailures: 3 }), CONFIG, START_EPOCH);
+    const r = evaluate(input({ cumulativeFailures: 3 }), CONFIG, START_EPOCH);
     expect(r.tripped).toBe(true);
-    if (r.tripped) expect(r.reason).toMatch(/consecutive failures/);
+    if (r.tripped) expect(r.reason).toMatch(/cumulative failures/);
   });
 });
 
@@ -55,16 +55,16 @@ describe("Circuit breaker — runtime trip with paused-minutes deduction", () =>
 });
 
 describe("Circuit breaker — fail-closed on malformed inputs (treated as tripped)", () => {
-  it("non-finite consecutiveFailures trips", () => {
-    expect(evaluate(input({ consecutiveFailures: NaN }), CONFIG, START_EPOCH).tripped).toBe(true);
+  it("non-finite cumulativeFailures trips", () => {
+    expect(evaluate(input({ cumulativeFailures: NaN }), CONFIG, START_EPOCH).tripped).toBe(true);
     expect(
-      evaluate(input({ consecutiveFailures: Number.POSITIVE_INFINITY }), CONFIG, START_EPOCH)
+      evaluate(input({ cumulativeFailures: Number.POSITIVE_INFINITY }), CONFIG, START_EPOCH)
         .tripped,
     ).toBe(true);
   });
 
-  it("negative consecutiveFailures trips", () => {
-    expect(evaluate(input({ consecutiveFailures: -1 }), CONFIG, START_EPOCH).tripped).toBe(true);
+  it("negative cumulativeFailures trips", () => {
+    expect(evaluate(input({ cumulativeFailures: -1 }), CONFIG, START_EPOCH).tripped).toBe(true);
   });
 
   it("non-finite / negative pausedMinutes trips", () => {
@@ -85,7 +85,7 @@ describe("Circuit breaker — independent of quota", () => {
     // must NOT trip the breaker.
     const now = START_EPOCH + 600 * 60;
     expect(
-      evaluate(input({ consecutiveFailures: 0, pausedMinutes: 300 }), CONFIG, now).tripped,
+      evaluate(input({ cumulativeFailures: 0, pausedMinutes: 300 }), CONFIG, now).tripped,
     ).toBe(false);
   });
 });

@@ -11,13 +11,13 @@
  * scan (its input) + apply (the consumer of its decisions); it does NOT run the
  * diagnostic itself.
  */
-import { EXIT, type ExitCode } from "../exit-codes.js";
+import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { StateManager } from "../../core/state/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { scanRun, applyRescue } from "../../rescue/index.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const RESCUE_HELP = `factory rescue — scan or recover a stalled run
 

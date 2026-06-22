@@ -1,9 +1,12 @@
 # The Producer Escalation Ladder
 
 When a producer's output fails the floor, the factory does not blindly retry. It
-runs a bounded, structured escalation — the **ladder** (`src/producer/ladder.ts`)
-— governed by three rules: classify before retry, change a variable each rung, and
-cap the retries before a loud classified drop. This document explains why each rule
+runs a bounded, structured escalation — the **ladder** — governed by three rules:
+classify before retry, change a variable each rung, and cap the retries before a
+loud classified drop. The ladder is not one module: the cap lives in
+`src/producer/escalation.ts` (`ESCALATION_CAP`), the per-rung model + effort dial in
+`src/producer/model-dial.ts` (`dialForRung`), and the rung-bump-or-drop decision in
+`src/driver/transitions.ts` (`escalateOrDrop`). This document explains why each rule
 exists.
 
 ## The shape
@@ -22,8 +25,8 @@ graph TD
   Esc -->|CAP exhausted| DropCap[drop: capability-budget]
 ```
 
-- **Outer loop** — the bounded nuke-and-retry over rungs `0..CAP` (CAP = 2 extra
-  attempts). Each rung is a fresh start that changes a variable.
+- **Outer loop** — the bounded nuke-and-retry over rungs `0..CAP` (CAP = 4 extra
+  attempts ⇒ 5 total). Each rung is a fresh start that changes a variable.
 - **Inner loop** — fix-forward: after a `done` producer spawn, the floor runs; on
   confirmed misses the producer is re-spawned to _patch the specific remaining
   blockers_ (not nuked), bounded by a patch budget and by making progress.
@@ -45,28 +48,44 @@ human what to do, and tells the ladder whether to retry.
 
 A blind re-roll (re-running the same producer on the same model with the same
 context) wastes attempts — if it failed once, it will likely fail again. So each
-rung must change something:
+escalation rung must change something. The dial (`dialForRung`) climbs the **model
+to its ceiling first, then the effort/reasoning level**:
 
-- **Rung 0** — the model dialed for the task's risk tier, fresh context.
+- **Rung 0** — the model dialed for the task's risk tier, fresh context, default effort.
 - **Rung 1** — the _same_ dialed model, _fresh_ context (the clean slate is the
-  change).
-- **Rung 2** — an _escalated_ model (the next tier up the `producerModels` map:
-  low→medium→high; high is the ceiling) _plus_ injected prior-failure context.
+  change), default effort.
+- **Rung ≥ 2** — escalation, with injected prior-failure context. The model **jumps
+  straight to the ceiling** (the `high`-tier `producerModels` entry — Opus by
+  default) on the first escalation rung, then the effort climbs along a hardcoded
+  `["xhigh", "max"]` ladder. A task whose dialed model already _is_ the ceiling (a
+  high-risk task) skips the model-jump rung and begins climbing effort immediately.
 
-The escalated model comes from the same `quota.producerModels` config map — no new
-literal, no new knob — so a config override flows through every rung. The ladder
-asserts the change at runtime (`assertRungChange`): a true blind re-roll throws.
-This is the only place the `risk_tier` dial acts — it sets the producer's starting
-model and escalation budget. (The verifier floor is risk-invariant; see
-[verifier.md](./verifier.md).)
+Concrete, over rungs 0–4 (CAP = 4):
+
+| starting tier | rung 0 | rung 1 | rung 2       | rung 3       | rung 4        |
+| ------------- | ------ | ------ | ------------ | ------------ | ------------- |
+| low / medium  | base   | base   | **Opus**     | Opus · xhigh | Opus · max    |
+| high (= Opus) | Opus   | Opus   | Opus · xhigh | Opus · max   | Opus · max \* |
+
+\* Nothing exists above `max` effort, so an already-ceiling task's final rung changes
+only the accumulated prior-failure context — the ladder saturates honestly.
+
+The ceiling model comes from the same `quota.producerModels` config map — no new
+literal, no new knob — so a config override flows through every rung; the effort
+ladder is a hardcoded constant, consistent with the hardcoded `ESCALATION_CAP`. The
+dial is the only place the `risk_tier` value acts — it sets the producer's starting
+model and thus how many rungs separate it from the ceiling. (The verifier floor is
+risk-invariant; see [verifier.md](./verifier.md).)
 
 ## Rule 3 — Cap, then drop loud
 
-The retries are capped (CAP = 2 past the starting rung). When the cap is exhausted
-with the floor still blocked, the task is dropped with `capability-budget` and a
-reason — a third retry never spawns. Every terminal path of the ladder is loud and
-classified: success is an `advance`, every failure is a `taskDropped`. There is no
-silent return.
+The retries are capped (CAP = 4 past the starting rung, i.e. 5 attempts total —
+raised from 2 so a hard task gets the full model→effort climb before a drop; see
+`jfa94/outsidey#231`). The cap is SHARED across producer failures and reviewer
+send-backs — one `escalation_rung` counter spans both. When the cap is exhausted with
+the floor still blocked, the task is dropped with `capability-budget` and a reason — a
+sixth attempt never spawns. Every terminal path of the ladder is loud and classified:
+success is an `advance`, every failure is a `taskDropped`. There is no silent return.
 
 ## The inner fix-forward loop
 

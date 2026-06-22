@@ -5,7 +5,7 @@
  * esbuild bundles THIS file into `dist/factory-hook.js`.
  */
 import { dispatchHook } from "../hooks/main.js";
-import { EXIT } from "../cli/exit-codes.js";
+import { EXIT } from "../shared/exit-codes.js";
 
 dispatchHook(process.argv.slice(2))
   .then((code) => process.exit(code))

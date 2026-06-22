@@ -4,15 +4,22 @@ import type { Config } from "../types/index.js";
 import { dialForRung } from "./model-dial.js";
 
 const cfg = defaultConfig();
+const CEILING = cfg.quota.producerModels.high;
 
-describe("model-dial — producer model TRACKS the WS5/WS4 dial (D21/D25)", () => {
+describe("model-dial — producer model TRACKS the dial (D21/D25)", () => {
   it("rung 0 returns config.quota.producerModels for the matching RiskTier (never a literal)", () => {
     expect(dialForRung("low", 0, cfg).model).toBe(cfg.quota.producerModels.low);
     expect(dialForRung("medium", 0, cfg).model).toBe(cfg.quota.producerModels.medium);
     expect(dialForRung("high", 0, cfg).model).toBe(cfg.quota.producerModels.high);
   });
 
-  it("a config OVERRIDE of producerModels flows through the dial", () => {
+  it("rung 0 carries no effort override and no prior-failure context", () => {
+    const r0 = dialForRung("low", 0, cfg);
+    expect(r0.effort).toBeUndefined();
+    expect(r0.injectsPriorFailure).toBe(false);
+  });
+
+  it("a config OVERRIDE of producerModels flows through the dial (base + ceiling)", () => {
     const overridden: Config = {
       ...cfg,
       quota: {
@@ -23,56 +30,71 @@ describe("model-dial — producer model TRACKS the WS5/WS4 dial (D21/D25)", () =
     expect(dialForRung("low", 0, overridden).model).toBe("custom-low");
     expect(dialForRung("medium", 0, overridden).model).toBe("custom-mid");
     expect(dialForRung("high", 0, overridden).model).toBe("custom-high");
+    // The escalation ceiling tracks the overridden high-tier model, not a literal.
+    expect(dialForRung("low", 2, overridden).model).toBe("custom-high");
   });
 });
 
-describe("model-dial — escalation derives from the SAME producerModels map (D25)", () => {
-  // Escalation is DERIVED, not stored (Δ V): the observable is the dialed `model`
-  // (and injectsPriorFailure), compared against rung 0 — there is no `escalated`
-  // boolean to read back.
-  it("rung 1 = SAME dialed model, fresh context (no model escalation, no prior-failure)", () => {
+describe("model-dial — combined model→effort escalation ladder (D25)", () => {
+  // The ladder climbs the MODEL to its ceiling first (jump straight to the
+  // high-tier model on the first escalation rung), THEN climbs effort
+  // (xhigh→max). Every escalation rung also injects prior-failure context.
+
+  it("rung 1 = SAME dialed model, fresh context (no escalation, no prior-failure, no effort)", () => {
     const r1 = dialForRung("low", 1, cfg);
     expect(r1.model).toBe(cfg.quota.producerModels.low);
     expect(r1.model).toBe(dialForRung("low", 0, cfg).model); // model did NOT change
     expect(r1.injectsPriorFailure).toBe(false);
+    expect(r1.effort).toBeUndefined();
   });
 
-  it("rung 2 from low escalates the TIER to medium + injects prior-failure (D25)", () => {
-    const r2 = dialForRung("low", 2, cfg);
-    expect(r2.model).toBe(cfg.quota.producerModels.medium); // escalated tier = medium
-    // By default low===medium (both sonnet — low defaults to sonnet, not haiku: even
-    // low-risk work is code generation), so the MODEL value is unchanged and the changed
-    // variable is the injected context — exactly like the high-ceiling case below. The
-    // model-BUMP path (when the tiers carry distinct models) is asserted by the next test.
-    expect(r2.injectsPriorFailure).toBe(true);
+  describe("low / medium base (below the ceiling): model climbs to ceiling, THEN effort", () => {
+    for (const tier of ["low", "medium"] as const) {
+      it(`${tier}: rung 2 JUMPS straight to the ceiling model (default effort), injects prior-failure`, () => {
+        const r2 = dialForRung(tier, 2, cfg);
+        expect(r2.model).toBe(CEILING); // jump to ceiling, NOT one tier up
+        expect(r2.effort).toBeUndefined(); // model first; effort not yet climbing
+        expect(r2.injectsPriorFailure).toBe(true);
+      });
+
+      it(`${tier}: rung 3 = ceiling model + xhigh effort`, () => {
+        const r3 = dialForRung(tier, 3, cfg);
+        expect(r3.model).toBe(CEILING);
+        expect(r3.effort).toBe("xhigh");
+        expect(r3.injectsPriorFailure).toBe(true);
+      });
+
+      it(`${tier}: rung 4 = ceiling model + max effort`, () => {
+        const r4 = dialForRung(tier, 4, cfg);
+        expect(r4.model).toBe(CEILING);
+        expect(r4.effort).toBe("max");
+        expect(r4.injectsPriorFailure).toBe(true);
+      });
+    }
   });
 
-  it("rung 2 model-BUMP fires when the tiers carry distinct models (override)", () => {
-    const distinct: Config = {
-      ...cfg,
-      quota: {
-        ...cfg.quota,
-        producerModels: { low: "tier-low", medium: "tier-mid", high: "tier-high" },
-      },
-    };
-    const r2 = dialForRung("low", 2, distinct);
-    expect(r2.model).toBe("tier-mid"); // escalated low→medium
-    expect(r2.model).not.toBe(dialForRung("low", 0, distinct).model); // model CHANGED
-    expect(r2.injectsPriorFailure).toBe(true);
-  });
+  describe("high base (already at the ceiling): skip the model jump, climb effort immediately", () => {
+    it("rung 2 = ceiling model + xhigh effort (no wasted model-jump rung)", () => {
+      const r2 = dialForRung("high", 2, cfg);
+      expect(r2.model).toBe(CEILING);
+      expect(r2.model).toBe(dialForRung("high", 0, cfg).model); // already at ceiling
+      expect(r2.effort).toBe("xhigh");
+      expect(r2.injectsPriorFailure).toBe(true);
+    });
 
-  it("rung 2 from medium ESCALATES medium→high", () => {
-    const r2 = dialForRung("medium", 2, cfg);
-    expect(r2.model).toBe(cfg.quota.producerModels.high);
-    expect(r2.model).not.toBe(dialForRung("medium", 0, cfg).model); // model CHANGED
-  });
+    it("rung 3 = ceiling model + max effort", () => {
+      const r3 = dialForRung("high", 3, cfg);
+      expect(r3.model).toBe(CEILING);
+      expect(r3.effort).toBe("max");
+    });
 
-  it("rung 2 from high is at the CEILING: model unchanged, but context still changes (injects=true)", () => {
-    const r2 = dialForRung("high", 2, cfg);
-    expect(r2.model).toBe(cfg.quota.producerModels.high);
-    expect(r2.model).toBe(dialForRung("high", 0, cfg).model); // ceiling: model unchanged
-    // The changed variable at the ceiling is the injected context.
-    expect(r2.injectsPriorFailure).toBe(true);
+    it("rung 4 SATURATES at ceiling model + max effort (nothing above max)", () => {
+      const r4 = dialForRung("high", 4, cfg);
+      expect(r4.model).toBe(CEILING);
+      expect(r4.effort).toBe("max");
+      // saturated: identical model+effort to rung 3, the changed variable is context
+      expect(r4.effort).toBe(dialForRung("high", 3, cfg).effort);
+    });
   });
 
   it("rejects a negative / non-integer rung (LOUD)", () => {

@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 
 import { nextCommand } from "./next.js";
-import { EXIT } from "../exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 import { captureStream } from "../test-helpers.js";
 import { makeCoroutineDeps, makeSpec } from "../../driver/coroutine-fixtures.js";
 import { StateManager } from "../../core/state/manager.js";

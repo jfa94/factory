@@ -21,7 +21,7 @@ import {
   taskIdFromHeader,
 } from "./subagent-stop.js";
 import { parseHookInput } from "./hook-io.js";
-import { EXIT } from "../cli/exit-codes.js";
+import { EXIT } from "../shared/exit-codes.js";
 import type { RunState, TaskState } from "../types/index.js";
 
 const SPEC = { repo: "o/n", spec_id: "1-x", issue_number: 1 } as const;

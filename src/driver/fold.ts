@@ -265,8 +265,13 @@ export interface RecordReviewsEnvelope extends TransitionEnvelope {
 
 /**
  * Build a {@link SourceReader} over the task worktree for citation-verify: async-load
- * every cited file ONCE into a map, then serve `readLines` synchronously (a missing
- * file → `null`, so its citations are unverifiable and dropped).
+ * every cited file ONCE into a map, then serve `readLines` synchronously.
+ *
+ * Only ENOENT — the cited file is genuinely ABSENT from the worktree — maps to
+ * `null` (its citations are then unverifiable and dropped). Any OTHER read error
+ * (EACCES, EISDIR, an I/O fault) is a REAL failure and RETHROWS: demoting it to
+ * "missing" would silently drop a citation that may back a real blocker, turning a
+ * read fault into a false floor-pass. Fail loud instead.
  */
 export async function buildWorktreeSource(
   worktree: string,
@@ -283,8 +288,9 @@ export async function buildWorktreeSource(
     try {
       const text = await readFile(join(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
-    } catch {
-      lines.set(file, null);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
+      lines.set(file, null); // genuinely absent → unverifiable → dropped
     }
   }
   return { readLines: (file) => lines.get(file) ?? null };

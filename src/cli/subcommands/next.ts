@@ -2,7 +2,7 @@
  * `factory next [--run <id>]` — the run-level coroutine: quota gate, checkpoint
  * recovery, cascade-drop, and the ready set. Emits ONE JSON NextEnvelope.
  */
-import { EXIT, type ExitCode } from "../exit-codes.js";
+import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadCoroutineDeps } from "../wiring.js";
@@ -10,7 +10,7 @@ import { stepRun } from "../../driver/index.js";
 import { StateManager, RunModeEnum } from "../../core/state/index.js";
 import type { RunState } from "../../core/state/index.js";
 import { resolveDataDir } from "../../config/index.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const HELP = `factory next — one run-loop step: quota gate, cascade-drop, ready set
 

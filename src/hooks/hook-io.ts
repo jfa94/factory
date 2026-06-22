@@ -14,7 +14,7 @@
  * guard can choose pass-through, and THROWS on malformed JSON so the dispatcher
  * fails closed.)
  */
-import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { readStdin } from "../shared/stdin.js";
 
 // readStdin now lives in shared/ (one-way dep: hooks→shared); re-exported here so

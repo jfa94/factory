@@ -15,7 +15,7 @@
  *
  * git is reached ONLY through the injected exec seam, so units run without git.
  */
-import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { exec as defaultExec, type ExecResult } from "../shared/exec.js";
 import { detectSecrets } from "../shared/secret-patterns.js";
 import { isNestedShellOrHookBypass } from "./shell-bypass.js";

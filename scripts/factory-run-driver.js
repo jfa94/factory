@@ -288,6 +288,9 @@ async function runProducer(taskId, env) {
       agentType: agentTypeOf(a.role),
       model: modelAlias(a.model),
       schema: STATUS_OUT,
+      // The producer dial climbs effort once the model hits its ceiling; forward it
+      // to the spawn when set (omitted ⇒ inherit the default), mirroring `model`.
+      ...(a.effort !== undefined ? { effort: a.effort } : {}),
     },
   );
   // A skipped/dead agent is a TRANSIENT harness failure — fold a status that

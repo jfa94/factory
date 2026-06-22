@@ -163,24 +163,6 @@ export function nextStageFor(result: StageResult): TaskStage | null {
   }
 }
 
-/**
- * Thin class wrapper over {@link runStage} for callers that prefer to bind the
- * handler set once. Holds no mutable state — purely a closure over `handlers`.
- */
-export class StageEngine {
-  constructor(private readonly handlers: StageHandlers) {}
-
-  /** See {@link runStage}. */
-  run(stage: EngineStage, ctx: StageContext): Promise<StageResult> {
-    return runStage(stage, ctx, this.handlers);
-  }
-
-  /** See {@link nextStageFor}. */
-  nextStageFor(result: StageResult): TaskStage | null {
-    return nextStageFor(result);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Finalize decision (pure, terminal-by-construction)
 // ---------------------------------------------------------------------------

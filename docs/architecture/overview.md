@@ -183,8 +183,8 @@ state schema is in [reference/state-model.md](../reference/state-model.md).
 
 The engine is shipped as two checked-in esbuild bundles
 (`dist/factory.js`, `dist/factory-hook.js`), fully inlined so they run at a
-user's site with no `node_modules`. `npm run verify` (typecheck → lint → test →
-build) is the release gate. There is no separate deploy: the plugin _is_ the
+user's site with no `node_modules`. `npm run verify` (typecheck → check:circular →
+lint → test → build) is the release gate. There is no separate deploy: the plugin _is_ the
 checked-in markdown surface plus the two bundles. See
 [guides/build-and-verify.md](../guides/build-and-verify.md).
 

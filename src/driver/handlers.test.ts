@@ -258,6 +258,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     // and the rung-0 dial injects NO prior-failure note.
     const dial = dialForRung("medium", 0, deps.config);
     expect(agent.model).toBe(dial.model);
+    expect(agent.effort).toBeUndefined(); // rung 0 carries no effort override
     const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref);
     expect(persisted.acceptanceCriteria).toHaveLength(4); // 5 total − 1 withheld
     expect(persisted.injectedPriorFailure).toBe(false);
@@ -293,10 +294,31 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     const agent = result.manifest.agents[0]!;
     const dial = dialForRung("medium", 2, deps.config);
     expect(agent.model).toBe(dial.model);
+    // Rung 2 for a sub-ceiling tier JUMPS to the ceiling model but has NOT begun the
+    // effort climb, so the dialed effort is still undefined — and the manifest omits it.
+    expect(agent.effort).toBe(dial.effort);
+    expect(agent.effort).toBeUndefined();
     expect(dial.injectsPriorFailure).toBe(true);
     const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref);
     expect(persisted.injectedPriorFailure).toBe(true);
     expect(persisted.priorFailures.length).toBeGreaterThan(0);
+  });
+
+  it("tests threads the dialed effort into the manifest once the model has hit its ceiling (rung 3 = ceiling+xhigh)", async () => {
+    const deps = makeDeps();
+    const handlers = makeStageHandlers(deps);
+    const ctx = await ctxFor({ task_id: "t-multi", escalation_rung: 3 });
+    const result = await handlers.tests(ctx);
+
+    expect(result.kind).toBe("spawn-agents");
+    if (result.kind !== "spawn-agents") throw new Error("unreachable");
+    const agent = result.manifest.agents[0]!;
+    const dial = dialForRung("medium", 3, deps.config);
+    // The effort climb is now live: the manifest must carry the dialed effort verbatim.
+    expect(dial.effort).toBe("xhigh");
+    expect(agent.effort).toBe("xhigh");
+    expect(agent.effort).toBe(dial.effort);
+    expect(agent.model).toBe(dial.model);
   });
 
   // -- exec -----------------------------------------------------------------
@@ -400,21 +422,17 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     expect(result).toEqual({ kind: "advance", to: "ship" });
   });
 
-  // -- ship (CLI single-step reporter; idempotent PR, no merge) -------------
+  // -- ship (stubbed: routed to shipTask on the live path) ------------------
 
-  it("ship opens the task PR idempotently and marks the task done", async () => {
+  it("ship is a loud throw-stub — runStage must never dispatch it (routed to shipTask)", async () => {
     const handlers = makeStageHandlers(makeDeps());
     const ctx = await ctxFor({ task_id: "t-multi" });
 
-    const first = await handlers.ship(ctx);
-    expect(first).toEqual({ kind: "task-terminal", outcome: { outcome: "done" } });
-    expect(gh.created).toHaveLength(1);
-    expect(gh.created[0]!.head).toBe("factory/run-1/t-multi");
-
-    // A second ship of the same task must NOT open a duplicate PR (Δ P).
-    const second = await handlers.ship(ctx);
-    expect(second.kind).toBe("task-terminal");
-    expect(gh.created).toHaveLength(1);
+    // The coroutine runs the stateful shipTask (src/driver/ship.ts) directly; this
+    // reporter exists ONLY to keep StageHandlers total. Invoking it is a programming
+    // error → synchronous loud throw, with no PR opened as a side effect.
+    expect(() => handlers.ship(ctx)).toThrow(/ship is routed to shipTask/);
+    expect(gh.created).toHaveLength(0);
   });
 
   // -- finalize -------------------------------------------------------------

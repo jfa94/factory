@@ -68,6 +68,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
           ...(t.started_at ? { started_at: t.started_at } : {}),
           ...(t.ended_at ? { ended_at: t.ended_at } : {}),
           ...(t.producer_role ? { producer_role: t.producer_role } : {}),
+          ...(t.spawn_in_flight ? { spawn_in_flight: t.spawn_in_flight } : {}),
         },
       },
     }));
@@ -122,6 +123,16 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     expect((await readTask("t1")).ended_at).toBe(ended);
   });
 
+  it("completeTask clears any spawn_in_flight checkpoint (WS2 terminal hygiene)", async () => {
+    await seedTask({
+      task_id: "t1",
+      status: "shipping",
+      spawn_in_flight: { stage: "verify", rung: 0, tip_sha: "sha-tip" },
+    });
+    await completeTask(deps, RUN_ID, "t1");
+    expect((await readTask("t1")).spawn_in_flight).toBeUndefined();
+  });
+
   // -- dropTask / dropStep --------------------------------------------------
 
   it("dropTask persists the closed failure_class + reason (loud drop)", async () => {
@@ -133,6 +144,16 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     expect(task.failure_class).toBe("spec-defect");
     expect(task.failure_reason).toBe("criterion self-contradictory");
     expect(task.ended_at).toBeDefined();
+  });
+
+  it("dropTask clears any spawn_in_flight checkpoint (WS2 terminal hygiene)", async () => {
+    await seedTask({
+      task_id: "t1",
+      status: "executing",
+      spawn_in_flight: { stage: "exec", rung: 2, tip_sha: "sha-tip" },
+    });
+    await dropTask(deps, RUN_ID, "t1", "capability-budget", "cap reached");
+    expect((await readTask("t1")).spawn_in_flight).toBeUndefined();
   });
 
   it("dropStep drops then returns the dropped outcome step", async () => {

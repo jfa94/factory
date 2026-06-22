@@ -7,7 +7,7 @@
  * real `process.exit`. esbuild bundles THIS file into `dist/factory.js`.
  */
 import { dispatch } from "../cli/main.js";
-import { EXIT } from "../cli/exit-codes.js";
+import { EXIT } from "../shared/exit-codes.js";
 
 dispatch(process.argv.slice(2))
   .then((code) => process.exit(code))

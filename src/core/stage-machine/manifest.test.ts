@@ -52,6 +52,21 @@ describe("parseSpawnManifest", () => {
     ).toThrow();
   });
 
+  it("accepts an optional effort and rejects an empty one (loud)", () => {
+    const withEffort = parseSpawnManifest({
+      stage_after: "exec",
+      agents: [{ ...validAgent, role: "executor", effort: "xhigh" }],
+    });
+    expect(withEffort.agents[0]?.effort).toBe("xhigh");
+    // Omitted ⇒ undefined (inherit the spawn default), never coerced to a value.
+    const noEffort = parseSpawnManifest({ stage_after: "exec", agents: [validAgent] });
+    expect(noEffort.agents[0]?.effort).toBeUndefined();
+    // An empty effort is a loud parse error (min(1)) — not a silent passthrough.
+    expect(() =>
+      parseSpawnManifest({ stage_after: "exec", agents: [{ ...validAgent, effort: "" }] }),
+    ).toThrow();
+  });
+
   it("SpawnManifestSchema is the same validator", () => {
     expect(
       SpawnManifestSchema.safeParse({ stage_after: "tests", agents: [validAgent] }).success,

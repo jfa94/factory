@@ -28,14 +28,11 @@
 import {
   advance,
   spawn,
-  taskDone,
   waitRetry,
   deriveFloorVerdict,
   floorBlockReason,
   createTaskWorktree,
   provisionWorktree,
-  createTaskPrIdempotent,
-  runScopedBranch,
   resolveStagingBranch,
   GateRunner,
   buildPanelManifest,
@@ -156,6 +153,10 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
           // test-writer cap (documented WS10 decision).
           max_turns: deps.config.testWriter.maxTurns,
           prompt_ref: promptRef,
+          // Effort is set ONLY once the dial has climbed the model to its ceiling
+          // (rung ≥ 3 for sub-ceiling tasks, ≥ 2 for high-tier). Omitted ⇒ the agent
+          // inherits the spawn default — never pass `effort: undefined`.
+          ...(dial.effort !== undefined ? { effort: dial.effort } : {}),
         },
       ],
     });
@@ -295,28 +296,21 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
     },
 
     /**
-     * ship (CLI single-step reporter): open the task PR into staging IDEMPOTENTLY
-     * (look up by head first — Δ P), then mark the task done. Merge is loop-owned
-     * (MergeSerializer) and not performed here; `pr_number` recording is the
-     * driver's job (the reporter cannot write state).
+     * ship — NOT served from this reporter. The coroutine runs the stateful
+     * {@link import("./ship.js").shipTask} directly (PR pointer writes + the live
+     * MergeSerializer), since a reporter can neither write state nor merge; the
+     * coroutine intercepts `ship` before {@link import("./engine.js").runStage} can
+     * ever dispatch it here.
      *
-     * NOTE: this reporter is superseded on the live path by `shipTask` in
-     * `src/driver/ship.ts` (coroutine routes `ship` there directly). Kept
-     * consistent with the per-run branch so it does not become a latent trap once
-     * the shared staging branch is removed.
+     * This method exists ONLY to keep {@link StageHandlers} TOTAL — the engine's
+     * exhaustive per-task stage switch (engine.ts) requires a handler for every
+     * `TaskStage`. Its body is a LOUD throw: routing `ship` through `runStage` is a
+     * programming error (it would re-open the PR with none of shipTask's state
+     * writes), so it fails fast rather than silently drifting from the live path.
+     * (`shipBody` / `specTaskOf` remain exported below — `ship.ts` is their caller.)
      */
-    async ship(ctx: StageContext): Promise<StageResult> {
-      const task = requireTask(ctx, "ship");
-      const specTask = specTaskOf(deps.spec, task.task_id);
-      const branch = runScopedBranch(ctx.run.run_id, task.task_id);
-      await createTaskPrIdempotent({
-        ghClient: deps.gh,
-        branch,
-        title: specTask.title,
-        body: shipBody(ctx.run.run_id, specTask),
-        base: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch),
-      });
-      return taskDone();
+    ship(_ctx: StageContext): Promise<StageResult> {
+      throw new Error("ship is routed to shipTask; runStage must never dispatch ship");
     },
 
     /**

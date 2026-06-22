@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { dispatchHook, hookRegistry } from "./main.js";
-import { EXIT } from "../cli/exit-codes.js";
+import { EXIT } from "../shared/exit-codes.js";
 
 describe("hook dispatch", () => {
   afterEach(() => vi.restoreAllMocks());

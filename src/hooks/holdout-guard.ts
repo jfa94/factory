@@ -1,19 +1,21 @@
 /**
  * WS9 — holdout read-confinement enforcer (Δ Y).
  *
- * PreToolUse guard denying Read/Grep/Glob and Bash-read (cat/grep/less/head/…)
- * of the holdout answer-key store (`<dataDir>/runs/<run>/holdouts/**`), so the
+ * PreToolUse guard denying Read/Grep/Glob and ANY Bash command that references
+ * the holdout answer-key store (`<dataDir>/runs/<run>/holdouts/**`), so the
  * holdout criteria are UNREADABLE from an executor worktree. Defense-in-depth:
  * the data dir already lives OUTSIDE the repo (WS1) so in-repo Read tools cannot
- * reach it, but an executor could shell a `cat` at the absolute data-dir path —
- * this guard denies that, with absolute and `..`/symlink-traversal forms
- * collapsing to the same canonical deny.
+ * reach it, but an executor could shell at the absolute data-dir path — this guard
+ * denies that, with absolute and `..`/symlink-traversal forms collapsing to the
+ * same canonical deny. Bash denial is PATH-based (the holdouts path in argv), not a
+ * reader-binary denylist: `python`/`node`/`dd`/`base64`/`cp` exfiltration is denied
+ * just like `cat`, since any binary that opens the file leaks the key.
  *
  * Path matching reuses tcb.ts's canonicalization; the holdout-specific matcher
  * is narrower than the full TCB write-deny (it targets the holdouts subtree, the
  * answer key proper, rather than all of `runs/**`).
  */
-import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { sep } from "node:path";
 import { resolveDataDir, type DataDirOptions } from "../config/load.js";
 import { canonicalizePath } from "./tcb.js";
@@ -32,7 +34,11 @@ import {
 /** In-repo read tools that take a `file_path`/`path`/`pattern`. */
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 
-/** Bash read commands that could exfiltrate file contents. */
+/**
+ * Known file-reader binaries. NO LONGER a gate — Bash denial is path-based — kept
+ * as an OPTIONAL signal: a recognized reader alongside a holdouts path is a stronger
+ * exfiltration tell, noted in the deny reason.
+ */
 const READ_COMMAND_RE =
   /\b(cat|less|more|head|tail|grep|egrep|fgrep|rg|sed|awk|od|xxd|hexdump|strings|nl|tac|cut|sort|uniq|jq|yq)\b/;
 
@@ -99,28 +105,32 @@ export function decideHoldoutGuard(
     return allow();
   }
 
-  // Bash: only inspect read-shaped commands; scan path tokens.
+  // Bash: PATH-based denial, binary-agnostic. We do NOT gate on a reader-binary
+  // denylist — that let any other binary that opens a file (python -c open().read(),
+  // node -e readFileSync, dd if=, base64, cp, tar, …) exfiltrate the answer key
+  // untouched. Instead scan EVERY path token of ANY command and deny if it reaches
+  // the holdouts subtree. The reader list survives only as an OPTIONAL signal folded
+  // into the deny reason (a recognized reader is a stronger exfiltration tell).
   if (tool === "Bash") {
     const cmd = commandOf(input);
     if (cmd.length === 0) return allow();
-    if (!READ_COMMAND_RE.test(cmd)) return allow();
+    const viaReader = READ_COMMAND_RE.test(cmd) ? " via a reader command" : "";
     for (const tokRaw of bashPathTokens(cmd)) {
       const tok = tokRaw.replace(/^["']|["']$/g, "");
       // Cheap pre-filter: only canonicalize tokens that could be paths.
       if (!tok.includes("holdouts") && !tok.includes("/") && !tok.includes("..")) continue;
       const canonical = canonicalizePath(tok, cwd);
-      if (isHoldoutPath(canonical)) {
+      // Deny on the canonical landing in a holdouts subtree, OR the raw token
+      // textually embedding the absolute data-dir holdouts path (catches a
+      // create-then-read race / non-existent leaf that does not resolve on disk).
+      const reachesHoldout =
+        isHoldoutPath(canonical) ||
+        Boolean(dataDir && tok.includes("holdouts") && tok.includes(dataDir));
+      if (reachesHoldout) {
+        const target = isHoldoutPath(canonical) ? canonical : tok;
         return deny(
           "holdout_read_denied",
-          `Bash read of the holdout answer-key store ('${canonical}') is forbidden (Δ Y)`,
-        );
-      }
-      // Also catch an absolute data-dir holdouts path even if the token did not
-      // resolve on disk (a create-then-read race / non-existent leaf).
-      if (dataDir && tok.includes("holdouts") && tok.includes(dataDir)) {
-        return deny(
-          "holdout_read_denied",
-          `Bash read of the holdout answer-key store ('${tok}') is forbidden (Δ Y)`,
+          `Bash command referencing the holdout answer-key store ('${target}')${viaReader} is forbidden (Δ Y)`,
         );
       }
     }

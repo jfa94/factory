@@ -19,8 +19,8 @@
  * `rate_limits`, unresolvable data dir, a broken original statusline command) is
  * a clean no-op that still returns {@link EXIT.OK}; nothing here throws.
  */
-import type { ExitCode } from "../exit-codes.js";
-import { EXIT } from "../exit-codes.js";
+import type { ExitCode } from "../../shared/exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 import { parseArgs } from "../args.js";
 import { emitLine } from "../io.js";
 import { readStdin } from "../../shared/stdin.js";
@@ -31,7 +31,7 @@ import { stringifyJson } from "../../shared/json.js";
 import { nowEpoch as defaultNowEpoch } from "../../shared/time.js";
 import { exec } from "../../shared/exec.js";
 import { createLogger } from "../../shared/logging.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const log = createLogger("cli:statusline");
 

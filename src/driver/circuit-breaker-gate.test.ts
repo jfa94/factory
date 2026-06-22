@@ -48,7 +48,7 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
       await drop(state, runId, "T3", "capability-budget");
       const v = await applyCircuitBreaker(deps, runId);
       expect(v?.tripped).toBe(true);
-      if (v) expect(v.reason).toMatch(/consecutive failures/);
+      if (v) expect(v.reason).toMatch(/cumulative failures/);
     } finally {
       await cleanup();
     }
@@ -65,7 +65,7 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
       await drop(state, runId, "T3", "capability-budget");
       const v = await applyCircuitBreaker(deps, runId);
       expect(v?.tripped).toBe(true);
-      if (v) expect(v.reason).toMatch(/consecutive failures/);
+      if (v) expect(v.reason).toMatch(/cumulative failures/);
     } finally {
       await cleanup();
     }

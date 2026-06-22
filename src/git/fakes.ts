@@ -224,6 +224,16 @@ export class FakeGitClient implements GitClient {
     if (!this.mergesInto[branch]) this.mergesInto[branch] = [];
     this.mergesInto[branch]!.push(ref);
   }
+
+  async resetHardClean(ref: string, opts?: GitOpts): Promise<void> {
+    this.calls.push(`reset --hard ${ref}`);
+    this.calls.push(`clean -fd`);
+    // `git reset --hard <ref>` moves the cwd-worktree's checked-out branch tip to
+    // `ref` (discarding the commits above it); `git clean -fd` drops untracked files.
+    // The coroutine passes the sha it captured at spawn-emit, so set the worktree's
+    // branch tip back to it — restoring the pre-spawn state.
+    this.localBranches.set(this.headBranch(opts), ref);
+  }
 }
 
 // ---------------------------------------------------------------------------

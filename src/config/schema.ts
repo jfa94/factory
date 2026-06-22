@@ -223,7 +223,11 @@ export const ConfigSchema = z
     testWriter: TestWriterSchema,
     codex: CodexSchema,
     git: GitSchema,
-    /** Consecutive task failures before the run aborts. */
+    /**
+     * Cumulative genuine capability-budget task failures before the run aborts.
+     * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
+     * total capability-budget drops); the field keeps its name for config back-compat.
+     */
     maxConsecutiveFailures: z.number().int().positive().default(3),
     /** Hard wall-clock cap for a whole run, minutes. */
     maxRuntimeMinutes: z.number().int().positive().default(480),

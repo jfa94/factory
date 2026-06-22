@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { scoreCommand, runScore } from "./score.js";
-import { EXIT } from "../exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 import { StateManager } from "../../core/state/index.js";
 import { FakeGitClient } from "../../git/index.js";
 import { SpecStore } from "../../spec/index.js";

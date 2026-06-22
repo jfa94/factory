@@ -50,9 +50,12 @@ fail/drop" is true by construction, not by convention.
 
 The reverse separation also holds: the **circuit breaker**
 (`src/quota/circuit-breaker.ts`) is a distinct hard-abort predicate, _not_ part of
-the pacer. The pure predicate trips on `consecutiveFailures >= maxConsecutiveFailures`
+the pacer. The pure predicate trips on `cumulativeFailures >= maxConsecutiveFailures`
 (default 3) or on effective runtime `(wall − paused) >= maxRuntimeMinutes` (default
-480). The driver wires it into the run coroutine through
+480). The predicate's failure input is named `cumulativeFailures` to match the
+signal it actually bounds; the public config key keeps its historical name
+`maxConsecutiveFailures` for back-compat (the threshold is unchanged, only its
+documentation was corrected to say "cumulative"). The driver wires it into the run coroutine through
 `src/driver/circuit-breaker-gate.ts` (evaluated in `stepRun`, mirroring the
 `applyQuotaGate` seam); on a trip every remaining non-terminal task is dropped
 `capability-budget` and the run finalizes `failed`. Following derive-don't-store, **no
@@ -62,7 +65,7 @@ breaker counter is persisted** — the gate derives both signals from run state:
   tasks whose producer ladder genuinely exhausted its budget. `blocked-environmental`
   (dependency cascades) and `spec-defect` (wedge) drops are deliberately **excluded**:
   they are consequences of a failure, not independent failures, so one real failure
-  that cascades to two dependents can never masquerade as three "consecutive" failures
+  that cascades to two dependents can never masquerade as three counted failures
   and abort still-runnable work.
 - **Runtime arm (workflow mode only)** — wall-time since `run.started_at`. It is exact
   only in workflow mode, which never pauses on quota (Decision 24), so wall-time _is_

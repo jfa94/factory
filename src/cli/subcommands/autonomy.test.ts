@@ -23,7 +23,7 @@ import {
   runAutonomyStatus,
   type AutonomyStatus,
 } from "./autonomy.js";
-import { EXIT } from "../exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 
 const PLUGIN_ROOT = "/opt/plugins/factory";
 const DATA_DIR = "/home/u/.claude/plugins/data/factory-mkt";

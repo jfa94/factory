@@ -4,7 +4,7 @@
  * and for WS10 to wire into hooks.json later.
  */
 export { dispatchHook, hookRegistry } from "./main.js";
-export type { Hook } from "./main.js";
+export type { Hook } from "./registry-types.js";
 
 // Guard bodies (importable, directly unit-testable).
 export { runBranchProtection, decideBranchProtection } from "./branch-protection.js";

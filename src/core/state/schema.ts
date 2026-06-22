@@ -135,9 +135,10 @@ export type RiskTier = z.infer<typeof RiskTierEnum>;
 /**
  * Escalation rung — where on the producer ladder the task currently sits
  * (Decision 25). Rung 0 = the starting rung implied by the risk tier; each
- * nuke-and-retry bumps it. The ladder cap (Δ "cap = 2 extra attempts") is
- * enforced by WS8, not the schema; the schema only records the rung reached so
- * a resume continues from the right place. Non-negative integer.
+ * nuke-and-retry bumps it. The ladder cap (`ESCALATION_CAP` = 4 extra attempts) is
+ * enforced by the driver (`src/driver/transitions.ts` escalateOrDrop), not the
+ * schema; the schema only records the rung reached so a resume continues from the
+ * right place. Non-negative integer.
  */
 export const EscalationRungSchema = z.number().int().min(0);
 
@@ -246,13 +247,41 @@ export const TaskStateSchema = z.object({
    * summary; `stage` is the machine cursor. Absent = not started (preflight).
    * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
    * not a resume point — terminal writers do not clear it.
-   * NOTE: literals duplicate stage-machine's TASK_STAGE_ORDER because core/state
-   * must not import stage-machine (dependency direction) — a cross-check test in
-   * src/driver/coroutine.test.ts pins them equal.
+   * NOTE: these literals DUPLICATE stage-machine's TASK_STAGE_ORDER because
+   * core/state must not import stage-machine (dependency direction, enforced by
+   * `madge --circular` in verify). The duplication is kept honest by a LOAD-BEARING
+   * cross-check test — "TaskState.stage enum equals TASK_STAGE_ORDER (cross-module
+   * pin)" in src/driver/coroutine.test.ts — which fails the instant the two drift.
+   * Do NOT delete that test: it is the only thing tying this hand-copied list to its
+   * source of truth.
    */
   stage: z.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
   /** Ship live-merge re-sync count (cap enforced by the coroutine; persisted so the cap survives process boundaries). */
   merge_resyncs: z.number().int().min(0).default(0),
+
+  /**
+   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the coroutine when it
+   * EMITS a spawn for `stage` at `rung`, recording the task-branch `tip_sha` at emit
+   * time. Producers commit to the SHARED task worktree, so a stop in the post-spawn /
+   * pre-fold window leaves the abandoned producer's partial commits on the branch. On
+   * the resume that re-enters the SAME (stage, rung) before any results were folded,
+   * the coroutine resets the worktree to `tip_sha` — discarding ONLY the interrupted
+   * stage's work (prior completed stages live below it) — then re-spawns. A fresh
+   * spawn overwrites it; terminal writers (complete/drop) clear it. Absent = no spawn
+   * in flight (the steady state between stages).
+   *
+   * `stage` is the spawn-stage subset (tests|exec|verify) — preflight/ship never spawn.
+   * The literal duplicates driver/results' SPAWN_STAGES because core/state must not
+   * import the driver (dependency direction); a cross-check test in
+   * src/driver/coroutine.test.ts pins them equal (mirrors the `stage` field's pin).
+   */
+  spawn_in_flight: z
+    .object({
+      stage: z.enum(["tests", "exec", "verify"]),
+      rung: z.number().int().min(0),
+      tip_sha: z.string().min(1),
+    })
+    .optional(),
 
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: z.string().optional(),

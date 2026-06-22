@@ -6,12 +6,12 @@
  * `spawn` (the agents to run + what to feed back), `terminal`, or
  * `quota-blocked`. Re-invoking without --results is idempotent.
  */
-import { EXIT, type ExitCode } from "../exit-codes.js";
+import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, parseShipMode } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadCoroutineDeps } from "../wiring.js";
 import { stepTask, parseDriveResults, readJsonInput } from "../../driver/index.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const HELP = `factory drive — step one task until it needs agents or is terminal
 
@@ -22,7 +22,7 @@ Usage:
 this step only; omit to honor the persisted value (the seam default, never no-merge).
 
 Emits ONE JSON envelope to stdout:
-  { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, fold_key, worktree }
+  { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, fold_key, worktree, base_ref }
   { kind:"terminal", run_id, task_id, outcome }
   { kind:"quota-blocked", run_id, task_id, scope, reason, resets_at_epoch? }
 

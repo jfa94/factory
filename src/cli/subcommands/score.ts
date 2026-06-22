@@ -5,7 +5,7 @@
  * deterministic partial-run report, and folds it into the compact {@link RunSummary}
  * the orchestrator surfaces. Nothing here writes state.
  */
-import { EXIT, type ExitCode } from "../exit-codes.js";
+import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { resolveDataDir } from "../../config/index.js";
@@ -13,7 +13,7 @@ import { StateManager } from "../../core/state/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { SpecStore } from "../../spec/index.js";
 import { buildPartialReport, buildRunSummary } from "../../scoring/index.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const HELP = `factory score — report a run's outcome summary (read-only)
 

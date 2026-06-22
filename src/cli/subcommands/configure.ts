@@ -11,7 +11,7 @@
  * config). Writes are the SPARSE overlay (saveRawConfig), so future default
  * changes stay visible to anyone who ran `configure`.
  */
-import { EXIT, type ExitCode } from "../exit-codes.js";
+import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import {
@@ -24,7 +24,7 @@ import {
   unsetAtPath,
   getAtPath,
 } from "../../config/index.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const HELP = `factory configure — inspect or edit the config overlay
 

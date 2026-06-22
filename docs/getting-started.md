@@ -24,7 +24,8 @@ npm install
 
 ## 2. Run the full verification
 
-The single command that typechecks, lints, tests, and builds is:
+The single command that typechecks, checks for circular imports, lints, tests,
+and builds is:
 
 ```bash
 npm run verify

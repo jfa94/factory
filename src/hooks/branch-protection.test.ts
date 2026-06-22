@@ -6,6 +6,8 @@
 import { describe, it, expect } from "vitest";
 import { decideBranchProtection, type BranchProtectionDeps } from "./branch-protection.js";
 import { parseHookInput, isDeny } from "./hook-io.js";
+import { captureStream } from "../cli/test-helpers.js";
+import type { ExecResult } from "../shared/exec.js";
 
 function bashInput(command: string) {
   return parseHookInput(JSON.stringify({ tool_name: "Bash", tool_input: { command } }));
@@ -121,5 +123,64 @@ describe("branch-protection — nested-shell denial (autonomous)", () => {
       deps("feature", { autonomousMode: true }),
     );
     expect(isDeny(d)).toBe(true);
+  });
+});
+
+describe("branch-protection — default current-branch resolver (WS9)", () => {
+  async function captureStderr<T>(fn: () => Promise<T>): Promise<{ result: T; stderr: string }> {
+    const saved = process.env["FACTORY_LOG_LEVEL"];
+    process.env["FACTORY_LOG_LEVEL"] = "info"; // force warn-level through
+    const cap = captureStream(process.stderr);
+    try {
+      const result = await fn();
+      return { result, stderr: cap.read() };
+    } finally {
+      cap.restore();
+      if (saved === undefined) delete process.env["FACTORY_LOG_LEVEL"];
+      else process.env["FACTORY_LOG_LEVEL"] = saved;
+    }
+  }
+
+  /** deps that exercise the REAL default resolver via an injected exec seam. */
+  function execDeps(exec: BranchProtectionDeps["exec"]): BranchProtectionDeps {
+    return { exec, cwd: "/work/repo", autonomousMode: false };
+  }
+
+  function execResult(over: Partial<ExecResult>): ExecResult {
+    return { stdout: "", stderr: "", code: 0, signal: null, truncated: false, ...over };
+  }
+
+  it("warns when current-branch resolution THROWS (git missing / EACCES), then fails open", async () => {
+    const throwingExec = async () => {
+      throw new Error("spawn git ENOENT");
+    };
+    const { result, stderr } = await captureStderr(() =>
+      decideBranchProtection(bashInput("git push"), execDeps(throwingExec)),
+    );
+    // A thrown resolver cannot prove the branch is protected → fail open (no block)…
+    expect(isDeny(result)).toBe(false);
+    // …but LOUDLY, so a silently-unguarded push is detectable.
+    expect(stderr).toMatch(/\[WARN\]/);
+    expect(stderr).toMatch(/current-branch resolution failed/);
+  });
+
+  it("does NOT warn on a detached HEAD (non-zero exit is expected), and fails open", async () => {
+    // git symbolic-ref exits 128 on a detached HEAD — expected, benign, silent.
+    const detachedExec = async () =>
+      execResult({ code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" });
+    const { result, stderr } = await captureStderr(() =>
+      decideBranchProtection(bashInput("git push"), execDeps(detachedExec)),
+    );
+    expect(isDeny(result)).toBe(false);
+    expect(stderr).not.toMatch(/current-branch resolution failed/);
+  });
+
+  it("resolves the current branch from exit-0 stdout and blocks a protected push", async () => {
+    const onMain = async () => execResult({ code: 0, stdout: "main\n" });
+    const { result, stderr } = await captureStderr(() =>
+      decideBranchProtection(bashInput("git push"), execDeps(onMain)),
+    );
+    expect(isDeny(result)).toBe(true); // standing on main → implicit push denied
+    expect(stderr).not.toMatch(/current-branch resolution failed/);
   });
 });

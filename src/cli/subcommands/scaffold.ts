@@ -25,7 +25,7 @@ import { homedir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { EXIT, type ExitCode } from "../exit-codes.js";
+import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { createLogger } from "../../shared/index.js";
@@ -46,7 +46,7 @@ import {
   buildTargetDataDirRules,
   type TargetDataDirRules,
 } from "./target-settings.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const log = createLogger("scaffold");
 

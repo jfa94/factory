@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { configureCommand } from "./configure.js";
-import { EXIT } from "../exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 
 let dataDir: string;
 let prevEnv: string | undefined;

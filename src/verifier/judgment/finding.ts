@@ -6,7 +6,7 @@
  * {@link import("../../types/index.js").ReviewerResult}, which is the PERSISTED,
  * post-adjudication PER-REVIEWER SUMMARY (verdict + confirmed_blocker count). A
  * Finding is the raw, pre-citation-verify, pre-confirmation atom that flows
- * through citation-verify → finding-verifier → rebuttal before it ever turns into
+ * through citation-verify → finding-verifier before it ever turns into
  * a confirmed blocker counted in a ReviewerResult.
  *
  * LOUD parsing (mirrors the WS1 closed-enum discipline): a malformed reviewer
@@ -18,6 +18,7 @@
  */
 import { z } from "zod";
 import { createLogger } from "../../shared/index.js";
+import type { PanelVerdict } from "../../core/state/index.js";
 
 const log = createLogger("finding");
 
@@ -63,11 +64,25 @@ export const RawReviewVerdictEnum = z.enum(["approve", "blocked", "error"]);
 export type RawReviewVerdict = z.infer<typeof RawReviewVerdictEnum>;
 
 /**
+ * Compile-time drift pin. `RawReviewVerdict` is a deliberately LOCAL enum (no
+ * runtime dependency on core/state — see {@link RawReviewSchema}), but its member
+ * set MUST stay identical to the panel verdict vocabulary ({@link PanelVerdict}).
+ * `_VerdictsEqual` is `true` only when the two unions are mutually assignable, so
+ * the `= true` assignment fails to typecheck the instant either enum drifts —
+ * catching the divergence at COMPILE time, not just in a test. The `import type`
+ * keeps this a type-only edge: zero runtime coupling.
+ */
+type _VerdictsEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const _verdictPin: _VerdictsEqual<RawReviewVerdict, PanelVerdict> = true;
+void _verdictPin;
+
+/**
  * A raw reviewer output: the reviewer's own verdict plus its findings. `verdict`
  * reuses the frozen {@link import("../../types/index.js").PanelVerdict} vocabulary
  * — but as a closed local enum so this schema has no runtime dependency on a WS1
- * value (the strings are identical and asserted in tests). `findings` MUST be an
- * array (a non-array is a LOUD parse error, never coerced).
+ * value (the strings are identical, pinned to `PanelVerdict` at compile time by
+ * `_verdictPin` above and also asserted in tests). `findings` MUST be an array (a
+ * non-array is a LOUD parse error, never coerced).
  *
  * Non-strictness is DELIBERATE: LLM reviewers routinely add cosmetic keys (e.g.
  * `confidence`, `rationale`) and hard-failing on format drift would burn escalation

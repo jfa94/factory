@@ -353,7 +353,11 @@ machine-side; omit it to honor the run's persisted `ship_mode` (users never type
 the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one of:
 
 - `{ kind:"spawn", run_id, task_id, stage, fold_key, manifest, sidecar?, expects, worktree, base_ref }`
-  — the agents to run (`manifest.agents`) and what to feed back. `stage` is one of
+  — the agents to run (`manifest.agents`) and what to feed back. Each agent carries
+  `{ role, model, max_turns, prompt_ref, isolation, effort? }`; `effort` (the `Agent`
+  reasoning level) appears only on a high producer-escalation rung once the model
+  dial has climbed to its ceiling (see [producer-ladder](../explanation/producer-ladder.md))
+  and is omitted otherwise so the agent inherits the spawn default. `stage` is one of
   `tests | exec | verify` (preflight only advances; ship never spawns). `expects`
   is `producer-status` (tests/exec — one producer agent) or `reviews` (verify —
   the six-reviewer panel); a `sidecar` accompanies `verify` when a holdout answer
@@ -384,7 +388,13 @@ The fold is **at-least-once delivery, exactly-once application**: the `fold_key`
 (`{stage, rung}`) is validated against the live cursor before any mutation, so a
 stale or duplicate delivery is rejected LOUD rather than double-folded. On a
 rejection, re-invoke **without** `--results` to re-derive the current spawn
-envelope (re-invoking without results is idempotent). The `reviews` fold runs the
+envelope (re-invoking without results is idempotent). When that re-derived spawn
+matches a recorded `spawn_in_flight` checkpoint — i.e. a previous spawn for the
+same `(stage, rung)` was emitted but never folded (a stop in the post-spawn /
+pre-fold window) — the coroutine first resets the shared task worktree to the
+checkpoint's `tip_sha`, discarding the abandoned producer's partial commits before
+re-spawning clean ([state model](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)).
+The `reviews` fold runs the
 full verify floor internally — re-runs the deterministic gates, re-derives the
 persisted holdout evidence, citation-verifies the reviews against the worktree,
 and confirms each surviving blocker via the supplied `verifications` (a kept

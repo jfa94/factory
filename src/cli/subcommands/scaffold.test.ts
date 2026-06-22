@@ -17,7 +17,7 @@ import {
   resolveScaffoldRepo,
 } from "./scaffold.js";
 import { parseArgs } from "../args.js";
-import { EXIT } from "../exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 import { defaultConfig } from "../../config/index.js";
 import { buildTargetDataDirRules } from "./target-settings.js";
 import { FakeGitClient, FakeGhClient } from "../../git/index.js";

@@ -13,7 +13,8 @@
  *   - a subcommand's own errors  → it returns EXIT.ERROR (or throws, which the
  *                                  entry maps to EXIT.ERROR).
  */
-import { EXIT, type ExitCode } from "./exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
+import type { Subcommand } from "./registry-types.js";
 import { loadConfig } from "../config/index.js";
 import { stringifyJson } from "../shared/json.js";
 import { configureCommand } from "./subcommands/configure.js";
@@ -27,14 +28,6 @@ import { driveCommand } from "./subcommands/drive.js";
 import { nextCommand } from "./subcommands/next.js";
 import { statuslineCommand } from "./subcommands/statusline.js";
 import { autonomyCommand } from "./subcommands/autonomy.js";
-
-/** A single CLI subcommand. `run` returns (or resolves to) an {@link ExitCode}. */
-export interface Subcommand {
-  /** One-line description shown in `--help`. */
-  describe: string;
-  /** Execute the subcommand with its remaining argv (after the name). */
-  run: (argv: string[]) => Promise<ExitCode> | ExitCode;
-}
 
 /** The mutable subcommand registry. Downstream WS add entries to this object. */
 export const cliRegistry: Record<string, Subcommand> = {

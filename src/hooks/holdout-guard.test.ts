@@ -78,4 +78,42 @@ describe("holdout-guard — read confinement (Δ Y)", () => {
   it("a non-read Bash command (echo) passes", () => {
     expect(isDeny(decideHoldoutGuard(bashInput("echo hi"), deps()))).toBe(false);
   });
+
+  // -- WS7: PATH-based denial, not a reader-binary denylist. The old guard only
+  //         inspected cat/grep/head/… commands, so ANY other binary that opens a
+  //         file (python/node/dd/base64/cp/tar/…) could exfiltrate the answer key.
+  //         Denial is now keyed on the holdouts PATH appearing in argv, regardless
+  //         of the binary; the reader list survives only as an optional signal.
+
+  it("WS7: `python3 -c open(holdout).read()` is denied (not a reader binary)", () => {
+    const cmd = `python3 -c "import sys; sys.stdout.write(open('${holdoutFile}').read())"`;
+    expect(isDeny(decideHoldoutGuard(bashInput(cmd), deps()))).toBe(true);
+  });
+
+  it("WS7: `node -e readFileSync(holdout)` is denied", () => {
+    const cmd = `node -e "process.stdout.write(require('fs').readFileSync('${holdoutFile}','utf8'))"`;
+    expect(isDeny(decideHoldoutGuard(bashInput(cmd), deps()))).toBe(true);
+  });
+
+  it("WS7: `dd if=<holdout>` is denied", () => {
+    expect(isDeny(decideHoldoutGuard(bashInput(`dd if=${holdoutFile} of=/tmp/x`), deps()))).toBe(
+      true,
+    );
+  });
+
+  it("WS7: `base64 <holdout>` is denied", () => {
+    expect(isDeny(decideHoldoutGuard(bashInput(`base64 ${holdoutFile}`), deps()))).toBe(true);
+  });
+
+  it("WS7: `cp <holdout> /tmp` exfiltration is denied", () => {
+    expect(isDeny(decideHoldoutGuard(bashInput(`cp ${holdoutFile} /tmp/leak.json`), deps()))).toBe(
+      true,
+    );
+  });
+
+  it("WS7: a non-holdout path under a non-reader binary still passes (no over-denial)", () => {
+    const other = join(dataDir, "runs", "run-1", "state.json");
+    writeFileSync(other, "{}");
+    expect(isDeny(decideHoldoutGuard(bashInput(`cp ${other} /tmp/x.json`), deps()))).toBe(false);
+  });
 });

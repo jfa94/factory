@@ -28,7 +28,7 @@
  * difference is WHO drives the agent spawns and the loop.
  */
 import { join } from "node:path";
-import { EXIT, type ExitCode } from "../exit-codes.js";
+import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { readJsonInput } from "../../driver/index.js";
@@ -52,7 +52,7 @@ import {
 } from "../../spec/index.js";
 import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
 import type { Config, SpecPointer } from "../../types/index.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const SPEC_HELP = `factory spec — deterministic spec-build seam (resolve → gate → store)
 

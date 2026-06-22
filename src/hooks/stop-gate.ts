@@ -11,7 +11,11 @@
  * the "session-hostage" behaviour that trapped a session which could not progress.
  * That arm (and its `FACTORY_ALLOW_STOP` escape hatch) is removed: a session may
  * always stop, and a run left `running` with pending work stays cleanly resumable via
- * `factory resume` (an idempotent re-entry — see `applyResume`).
+ * `factory resume`. Re-entry is idempotent even when the stop landed mid-spawn: the
+ * coroutine records a `spawn_in_flight` checkpoint at every spawn emit, so a resume that
+ * re-enters the same (stage, rung) before results were folded resets the task worktree to
+ * the captured pre-spawn tip — discarding the abandoned producer's partial work — before
+ * re-spawning (see `coroutine.ts` spawn-agents case + `applyResume`).
  *
  *   FINALIZE-on-stop. If a session-mode `running` run has ≥1 task and EVERY task is
  *   terminal but the run was never explicitly finalized (the session ended right after
@@ -38,7 +42,7 @@
  * Output contract (Stop hook): a block (corruption only) is `{decision:"block",reason}`
  * on STDOUT with exit 0 (the JSON is the block signal). Allow = no output, exit 0.
  */
-import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { createLogger } from "../shared/logging.js";
 import {
   StateManager,
@@ -61,8 +65,8 @@ const log = createLogger("hook:stop-gate");
 export type StopAction =
   | { kind: "allow" }
   // `finalize` is terminal-by-construction: the producer is `decideFinalize`
-  // (returns completed|partial|failed) and `manager.finalize` rejects any
-  // non-terminal status — so the type matches reality, not the full RunStatus union.
+  // (returns completed|failed — whole-PRD delivery, Decision 34) and `manager.finalize`
+  // rejects any non-terminal status — so the type matches reality, not the full RunStatus union.
   | { kind: "finalize"; status: (typeof TERMINAL_RUN_STATUSES)[number] };
 
 const ALLOW: StopAction = { kind: "allow" };

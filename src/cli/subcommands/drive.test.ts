@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { driveCommand } from "./drive.js";
-import { EXIT } from "../exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 import { captureStream } from "../test-helpers.js";
 import { makeCoroutineDeps, makeSpec } from "../../driver/coroutine-fixtures.js";
 import { SpecStore } from "../../spec/index.js";

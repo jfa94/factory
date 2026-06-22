@@ -10,13 +10,13 @@
  * throws). All run-state MUTATION lives in the coroutine (`factory drive`/`next`);
  * this one only reads.
  */
-import { EXIT, type ExitCode } from "../exit-codes.js";
+import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { StateManager } from "../../core/state/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import type { RunState } from "../../types/index.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const HELP = `factory state — read run state (read-only)
 

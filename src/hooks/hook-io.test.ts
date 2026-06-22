@@ -2,7 +2,7 @@
  * WS9 — hook I/O tests: stdin parse, deny/allow shapes, fail-closed, exit-code map.
  */
 import { describe, it, expect } from "vitest";
-import { EXIT } from "../cli/exit-codes.js";
+import { EXIT } from "../shared/exit-codes.js";
 import {
   allow,
   deny,

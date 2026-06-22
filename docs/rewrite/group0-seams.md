@@ -54,7 +54,6 @@ import {
   runStage,
   nextStageFor,
   decideFinalize,
-  StageEngine,
   advance,
   spawn,
   gracefulStop,
@@ -246,7 +245,6 @@ interface StageHandlers { preflight/tests/exec/verify/ship/finalize(ctx): Promis
 runStage(stage, ctx, handlers): Promise<StageResult>   // dispatch → ONE exhaustiveness check
 nextStageFor(result): TaskStage | null                 // shared transition logic (advance→.to, spawn→.stage_after, else null)
 decideFinalize(run): FinalizeTerminalResult            // pure rollup; throws on non-terminal task
-new StageEngine(handlers).run(stage, ctx) / .nextStageFor(result)
 ```
 
 The engine **does not** shell out, read/write state, sleep, or loop. Handlers

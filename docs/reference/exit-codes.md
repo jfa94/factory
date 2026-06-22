@@ -1,15 +1,16 @@
 # Exit Codes
 
 The `factory` CLI and the `factory-hook` dispatcher share one small, frozen
-exit-code enum (`src/cli/exit-codes.ts`). The thin entry points
+exit-code enum (`src/shared/exit-codes.ts`). The thin entry points
 (`src/bin/factory.ts`, `src/bin/factory-hook.ts`) are the only places
 `process.exit` is called.
 
-| Code | Name    | Meaning                                                                       |
-| ---- | ------- | ----------------------------------------------------------------------------- |
-| `0`  | `OK`    | Success.                                                                      |
-| `1`  | `ERROR` | Generic failure: an uncaught error, a classified drop, a gate/verify failure. |
-| `2`  | `USAGE` | Usage error: unknown subcommand/hook, bad flags, a missing required argument. |
+| Code | Name       | Meaning                                                                                                                                                         |
+| ---- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | `OK`       | Success.                                                                                                                                                        |
+| `1`  | `ERROR`    | Generic failure: an uncaught error, a classified drop, a gate/verify failure.                                                                                   |
+| `2`  | `USAGE`    | Usage error: unknown subcommand/hook, bad flags, a missing required argument.                                                                                   |
+| `3`  | `CONFLICT` | An active run already exists and no resolution was selected — `factory run` refuses to silently reuse or clobber it (Decision 35: resume / supersede / cancel). |
 
 ## Design rules
 

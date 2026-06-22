@@ -51,5 +51,5 @@ export type {
 export type { StageContext, StageHandlers } from "./handlers.js";
 
 // --- The engine ---
-export { runStage, nextStageFor, decideFinalize, StageEngine } from "./engine.js";
+export { runStage, nextStageFor, decideFinalize } from "./engine.js";
 export type { EngineStage } from "./engine.js";

@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runStatusline } from "./statusline.js";
 import { usageCachePath, StatuslineUsageSignal } from "../../quota/usage-source.js";
-import { EXIT } from "../exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 
 /** A representative Claude Code statusline payload with rate_limits. */
 function ccPayload(overrides: Record<string, unknown> = {}): string {

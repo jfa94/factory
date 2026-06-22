@@ -10,20 +10,34 @@ esbuild bundles in `dist/`.
 npm run verify
 ```
 
-`verify` runs, in order: `typecheck` → `lint` → `test` → `build`. This is the
-contract CI enforces and the gate for a release-worthy state. If it is green, the
-checkout is healthy and the bundles are current.
+`verify` runs, in order: `typecheck` → `check:circular` → `lint` → `test` →
+`build`. This is the contract CI enforces and the gate for a release-worthy state.
+If it is green, the checkout is healthy and the bundles are current.
 
 ## The individual steps
 
-| Step         | Command                                   | Notes                                                                             |
-| ------------ | ----------------------------------------- | --------------------------------------------------------------------------------- |
-| Type-check   | `npm run typecheck`                       | `tsc --noEmit`. **Use this, not `npx tsc`** — `npx tsc` is shadowed in this repo. |
-| Lint         | `npm run lint`                            | `eslint .`                                                                        |
-| Test         | `npm run test`                            | `vitest run` (one shot).                                                          |
-| Test (watch) | `npm run test:watch`                      | `vitest`.                                                                         |
-| Build        | `npm run build`                           | `node scripts/build.mjs` → both bundles.                                          |
-| Format       | `npm run format` / `npm run format:check` | `prettier`.                                                                       |
+| Step           | Command                                   | Notes                                                                             |
+| -------------- | ----------------------------------------- | --------------------------------------------------------------------------------- |
+| Type-check     | `npm run typecheck`                       | `tsc --noEmit`. **Use this, not `npx tsc`** — `npx tsc` is shadowed in this repo. |
+| Circular check | `npm run check:circular`                  | `madge --circular --extensions ts src/`. Fails on any import cycle (see below).   |
+| Lint           | `npm run lint`                            | `eslint .`                                                                        |
+| Test           | `npm run test`                            | `vitest run` (one shot).                                                          |
+| Test (watch)   | `npm run test:watch`                      | `vitest`.                                                                         |
+| Build          | `npm run build`                           | `node scripts/build.mjs` → both bundles.                                          |
+| Format         | `npm run format` / `npm run format:check` | `prettier`.                                                                       |
+
+## The no-circular-dependency gate
+
+`check:circular` runs `madge --circular` over `src/` and fails if any module
+import cycle exists. The engine holds itself to the same no-circular-dependency
+bar it scaffolds into target repos (the `.dependency-cruiser.cjs` SEED file, see
+[scaffold a repo](./scaffold-a-repo.md)): a cycle is a hard `verify` failure, not
+advisory. Leaf modules exist precisely to break cycles — dependency-free interface
+modules such as `src/shared/exit-codes.ts` and the `src/cli/registry-types.ts` /
+`src/hooks/registry-types.ts` registry-interface extractions keep heavy modules
+from importing each other transitively. When you add a cross-module type that
+introduces a cycle, extract the shared declaration into a leaf rather than
+suppressing the check.
 
 ## Running a subset of tests
 

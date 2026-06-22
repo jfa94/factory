@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emitMetric, readMetrics, recordRunFinalized } from "./telemetry.js";
 import { runMetricsPath, runsRoot } from "../core/state/paths.js";
+import { captureStream } from "../cli/test-helpers.js";
 import type { PartialRunReport } from "./partial-report.js";
 
 let dataDir: string;
@@ -109,5 +110,41 @@ describe("recordRunFinalized", () => {
     );
     const metrics = await readMetrics(dataDir, RUN);
     expect(metrics.map((m) => m.event)).toEqual(["run.finalized"]);
+  });
+
+  // --- WS9: end-of-run dropped-write counter (telemetry loss must be detectable) ---
+  async function captureStderr<T>(fn: () => Promise<T>): Promise<{ result: T; stderr: string }> {
+    const saved = process.env["FACTORY_LOG_LEVEL"];
+    process.env["FACTORY_LOG_LEVEL"] = "info"; // force warn-level through
+    const cap = captureStream(process.stderr);
+    try {
+      const result = await fn();
+      return { result, stderr: cap.read() };
+    } finally {
+      cap.restore();
+      if (saved === undefined) delete process.env["FACTORY_LOG_LEVEL"];
+      else process.env["FACTORY_LOG_LEVEL"] = saved;
+    }
+  }
+
+  it("warns once with the aggregate count when metric writes are dropped", async () => {
+    // Plant a FILE where the run dir should be so every metric write for this run fails.
+    await mkdir(runsRoot(dataDir), { recursive: true });
+    await writeFile(join(runsRoot(dataDir), RUN), "blocker", "utf8");
+
+    const { stderr } = await captureStderr(() =>
+      recordRunFinalized(dataDir, report(), { now: NOW }),
+    );
+
+    // report() carries 1 failure → run.finalized + 1 task.dropped = 2 attempted writes,
+    // both dropped against the blocked path → exactly one aggregate warn naming the count.
+    expect(stderr).toMatch(/telemetry: 2 metric write\(s\) dropped/);
+  });
+
+  it("does not warn about dropped writes when telemetry is healthy", async () => {
+    const { stderr } = await captureStderr(() =>
+      recordRunFinalized(dataDir, report(), { now: NOW }),
+    );
+    expect(stderr).not.toMatch(/metric write\(s\) dropped/);
   });
 });

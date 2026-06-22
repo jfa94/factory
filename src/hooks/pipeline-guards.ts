@@ -24,7 +24,7 @@
  * A dangling runs/current symlink fails CLOSED (deny) — corruption is never
  * silently allowed. No active run → pass through.
  */
-import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { isTestPath } from "../verifier/deterministic/scope.js";
 import { StateManager } from "../core/state/index.js";
 import { TaskStageEnum } from "../core/stage-machine/index.js";

@@ -68,7 +68,19 @@ Workflow script).
 - `coroutine.ts` (`stepTask`) — the **task-level** coroutine: resume at the persisted stage
   cursor, optionally fold the previous spawn's results, then run the stage machine
   until a spawn is needed (emit a `DriveEnvelope` manifest) or the task is
-  terminal.
+  terminal. It also owns the **spawn-in-flight checkpoint** (`TaskState.spawn_in_flight`):
+  on a fresh spawn it captures the task-branch tip; on a resume that re-enters the
+  same `(stage, rung)` before any results were folded, it resets the shared worktree
+  to that tip — discarding only the abandoned producer's partial work — before
+  re-spawning, so a stop-mid-spawn plus `factory resume` is idempotent.
+- `handlers.ts` — the stage **reporters** (`preflight`/`tests`/`exec`/`verify`),
+  built by `makeStageHandlers`. Each reads the frozen `StageContext` and returns a
+  `StageResult`; none writes state or spawns. The `producerSpawn` helper dials the
+  model **and effort** for the current rung (`dialForRung`) and threads an optional
+  `effort` into the spawn agent. The `ship` and `finalize` entries complete the
+  `StageHandlers` interface: `finalize` calls the pure `decideFinalize`, while
+  `ship` is a deliberate **throw-stub** — `ship` is routed through `shipTask`, never
+  dispatched via `runStage`, so the stub fails loud if that invariant is ever broken.
 - `fold.ts` — the fold cores `stepTask --results` calls: `applyRecordProducer`,
   `applyRecordHoldout`, `applyRecordReviews` (folded in from the retired
   `record-*` CLI writers, so the spawn-path fold and a crash-resume fold run
@@ -76,16 +88,19 @@ Workflow script).
 - `transitions.ts` — the shared step primitives (`markInFlight`, `completeTask`,
   `dropStep`, `escalateOrDrop`, `applyProducerOutcome`) the coroutine and the fold cores
   both call, so a live step and a crash-resume fold can never diverge.
-- `ship.ts` opens the PR + serial-merges; `finalize.ts` is the run-completion
-  coordinator (report → per-drop issues → rollup → flip terminal, in resume-safe
-  order).
+- `ship.ts` (`shipTask`) opens the PR + serial-merges; `finalize.ts` is the
+  run-completion coordinator (report → per-drop issues → rollup → flip terminal, in
+  resume-safe order).
 
 ## Producer (`src/producer`)
 
-The bounded nuke-and-retry escalation ladder (`ladder.ts`), the model dial
-(`model-dial.ts` — each rung changes a variable), failure classification
-(`classify.ts` — classify-before-retry), the inner fix-forward patch loop
-(`fix-forward.ts`), and the producer prompt-context builder. See
+The escalation cap (`escalation.ts` — `ESCALATION_CAP`), the combined model→effort
+dial (`model-dial.ts` — each rung changes a variable), failure classification
+(`classify.ts` — classify-before-retry), and the producer prompt-context builder
+(`prompt-context.ts`). The ladder's control flow is the driver's, not a producer
+module: the rung bump-or-drop is `escalateOrDrop` (`src/driver/transitions.ts`) and
+the inner fix-forward patch loop is the executor re-spawn the coroutine drives
+(`src/driver/handlers.ts`). See
 [explanation/producer-ladder.md](../explanation/producer-ladder.md).
 
 ## Verifier (`src/verifier`)
@@ -149,6 +164,18 @@ the holdout key, deny an agent-initiated `gh pr create`/`merge`). See
 
 `src/types` re-exports the closed enums, the stage/state types, and the
 `StageResult` union — the vocabulary every module shares. `src/shared` holds the
-cross-cutting primitives: atomic file write, the exec wrapper, id
-generation/validation, JSON/JSONL helpers, logging, secret patterns, and time.
+cross-cutting primitives: the dependency-free `exit-codes.ts` leaf (the frozen
+CLI/hook exit enum, imported by ~every entry point — see
+[reference/exit-codes.md](../reference/exit-codes.md)), atomic file write, the exec
+wrapper, id generation/validation, JSON/JSONL helpers, logging, secret patterns,
+and time.
+
+Several modules are deliberately **leaf modules** — they declare an interface or
+constant with no further imports — so heavier modules can share a type without
+importing each other transitively. `src/shared/exit-codes.ts`, the registry
+interfaces (`src/cli/registry-types.ts`, `src/hooks/registry-types.ts`), and the
+`Tcb*` type home (`src/types/tcb.ts`, re-exported by `src/hooks/tcb.ts` for
+back-compat) exist to break import cycles. The no-circular-dependency bar is
+enforced as a `verify` gate (`check:circular`, `madge --circular`) — the engine
+holds itself to the same rule it scaffolds into target repos.
 </content>

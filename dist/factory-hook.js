@@ -1614,7 +1614,7 @@ var require_proper_lockfile = __commonJS({
   }
 });
 
-// src/cli/exit-codes.ts
+// src/shared/exit-codes.ts
 var EXIT = {
   /** Success. */
   OK: 0,
@@ -1700,6 +1700,224 @@ function exec(command, args = [], opts = {}) {
   });
 }
 
+// src/shared/logging.ts
+var LEVEL_RANK = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+  silent: 100
+};
+function activeThreshold() {
+  const raw = (process.env.FACTORY_LOG_LEVEL ?? "").trim().toLowerCase();
+  if (raw && raw in LEVEL_RANK) {
+    return LEVEL_RANK[raw];
+  }
+  if (process.env.FACTORY_QUIET === "1") return LEVEL_RANK.error;
+  return LEVEL_RANK.info;
+}
+function emit(level, scope, args) {
+  if (LEVEL_RANK[level] < activeThreshold()) return;
+  const ts = (/* @__PURE__ */ new Date()).toISOString();
+  const msg = args.map((a) => typeof a === "string" ? a : safeStringify(a)).join(" ");
+  process.stderr.write(`[${ts}] [${level.toUpperCase()}] ${scope}: ${msg}
+`);
+}
+function safeStringify(value) {
+  if (value instanceof Error) return value.stack ?? value.message;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+function createLogger(scope) {
+  return {
+    debug: (...args) => emit("debug", scope, args),
+    info: (...args) => emit("info", scope, args),
+    warn: (...args) => emit("warn", scope, args),
+    error: (...args) => emit("error", scope, args),
+    child: (subScope) => createLogger(`${scope}:${subScope}`)
+  };
+}
+var log = createLogger("factory");
+
+// src/shared/atomic-write.ts
+import { mkdir, open, rename, unlink } from "node:fs/promises";
+import { dirname, basename, join } from "node:path";
+import { randomBytes } from "node:crypto";
+function tempPathFor(target) {
+  const dir = dirname(target);
+  const name = basename(target);
+  const rand = randomBytes(6).toString("hex");
+  return join(dir, `.${name}.${process.pid}.${rand}.tmp`);
+}
+async function atomicWriteFile(target, data) {
+  const dir = dirname(target);
+  await mkdir(dir, { recursive: true });
+  const tmp = tempPathFor(target);
+  const handle = await open(tmp, "w", 384);
+  try {
+    await handle.writeFile(data);
+    await handle.sync();
+  } catch (err) {
+    await handle.close();
+    await bestEffortUnlink(tmp);
+    throw err;
+  }
+  await handle.close();
+  try {
+    await rename(tmp, target);
+  } catch (err) {
+    await bestEffortUnlink(tmp);
+    throw err;
+  }
+  try {
+    const dirHandle = await open(dir, "r");
+    try {
+      await dirHandle.sync();
+    } finally {
+      await dirHandle.close();
+    }
+  } catch {
+  }
+}
+async function bestEffortUnlink(p) {
+  try {
+    await unlink(p);
+  } catch {
+  }
+}
+
+// src/shared/json.ts
+var JsonParseError = class extends Error {
+  path;
+  cause;
+  constructor(message, path, cause) {
+    super(message);
+    this.name = "JsonParseError";
+    this.path = path;
+    this.cause = cause;
+  }
+};
+function parseJson(text, sourcePath) {
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    const where = sourcePath ? ` (from ${sourcePath})` : "";
+    throw new JsonParseError(
+      `invalid JSON${where}: ${cause.message}`,
+      sourcePath,
+      cause
+    );
+  }
+}
+function stringifyJson(value) {
+  return JSON.stringify(value, null, 2) + "\n";
+}
+
+// src/shared/time.ts
+function nowIso() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+
+// src/shared/secret-patterns.ts
+var SECRET_CONTENT_PATTERNS = [
+  { name: "aws-access-key-id", source: "AKIA[0-9A-Z]{16}" },
+  { name: "github-pat-classic", source: "ghp_[A-Za-z0-9]{36}" },
+  { name: "github-server-token", source: "ghs_[A-Za-z0-9]{36}" },
+  { name: "github-oauth-token", source: "gho_[A-Za-z0-9]{36}" },
+  { name: "github-refresh-token", source: "ghr_[A-Za-z0-9]{36}" },
+  { name: "anthropic-api-key", source: "sk-ant-(api03-)?[A-Za-z0-9_-]{20,}" },
+  { name: "openai-style-key", source: "sk-[A-Za-z0-9]{20,}" },
+  { name: "slack-token", source: "xox[bpars]-[A-Za-z0-9-]{10,}" },
+  { name: "google-api-key", source: "AIza[A-Za-z0-9_-]{35}" },
+  { name: "stripe-live-secret", source: "sk_live_[A-Za-z0-9]{20,}" },
+  { name: "stripe-live-restricted", source: "rk_live_[A-Za-z0-9]{20,}" },
+  {
+    name: "jwt",
+    source: "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+"
+  },
+  {
+    name: "aws-secret-access-key",
+    source: "aws_secret_access_key\\s*=\\s*[A-Za-z0-9/+=]{40}"
+  },
+  // Quote-anchored detector — EXCLUDED from redaction (see header note).
+  { name: "json-private-key", source: '"private_key"\\s*:\\s*"-----BEGIN' },
+  { name: "pem-private-key", source: "-----BEGIN ([A-Z]+ )?PRIVATE KEY-----" },
+  { name: "github-pat-fine-grained", source: "github_pat_[A-Za-z0-9_]{60,}" },
+  { name: "openai-project-key", source: "sk-proj-[A-Za-z0-9_-]{40,}" },
+  { name: "nvidia-api-key", source: "nvapi-[A-Za-z0-9_-]{40,}" },
+  { name: "xai-api-key", source: "xai-[A-Za-z0-9]{40,}" }
+];
+function hasLiteralQuote(p) {
+  return p.source.includes('"');
+}
+var SECRET_REDACTION_PATTERNS = SECRET_CONTENT_PATTERNS.filter(
+  (p) => !hasLiteralQuote(p)
+);
+function detectSecrets(text) {
+  const hits = [];
+  for (const p of SECRET_CONTENT_PATTERNS) {
+    if (new RegExp(p.source).test(text)) hits.push(p.name);
+  }
+  return hits;
+}
+
+// src/shared/ids.ts
+var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+function isValidId(id) {
+  return ID_PATTERN.test(id);
+}
+function validateId(id, label = "id") {
+  if (id.length === 0) {
+    throw new Error(`${label}: empty`);
+  }
+  if (!ID_PATTERN.test(id)) {
+    throw new Error(`${label}: invalid (must match ${ID_PATTERN.source}): ${id}`);
+  }
+  return id;
+}
+
+// src/shared/file-lock.ts
+var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+import { mkdir as mkdir2 } from "node:fs/promises";
+import { existsSync } from "node:fs";
+var log2 = createLogger("lock");
+var DEFAULT_FILE_LOCK_TUNING = {
+  stale: 15e3,
+  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
+  retries: 50,
+  retryMinTimeout: 20,
+  retryMaxTimeout: 500
+};
+async function withFileLock(opts, fn) {
+  if (opts.dirPolicy === "create") {
+    await mkdir2(opts.dir, { recursive: true });
+  } else if (!existsSync(opts.dir)) {
+    throw new Error(`cannot lock ${opts.label} \u2014 dir '${opts.dir}' does not exist`);
+  }
+  const release = await (0, import_proper_lockfile.lock)(opts.lockfile, {
+    realpath: false,
+    stale: opts.tuning.stale,
+    retries: {
+      retries: opts.tuning.retries,
+      minTimeout: opts.tuning.retryMinTimeout,
+      maxTimeout: opts.tuning.retryMaxTimeout,
+      factor: 1.5
+    },
+    onCompromised: (err) => {
+      log2.error(`lock for ${opts.label} was compromised: ${err.message}`);
+      throw err;
+    }
+  });
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
+
 // src/hooks/git-args.ts
 function unquote(tok) {
   let t = tok;
@@ -1707,7 +1925,7 @@ function unquote(tok) {
   if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
   return t;
 }
-function basename(tok) {
+function basename2(tok) {
   const parts = tok.split("/");
   return parts[parts.length - 1] ?? tok;
 }
@@ -1728,7 +1946,7 @@ function parseGitInvocation(command) {
   let i = 0;
   let foundGit = false;
   while (i < n) {
-    if (basename(tokens[i]) === "git") {
+    if (basename2(tokens[i]) === "git") {
       foundGit = true;
       i++;
       break;
@@ -1987,6 +2205,7 @@ var PROTECTED_BRANCHES = [
   "prod"
 ];
 var PIPELINE_MANAGED_BRANCHES = ["staging"];
+var log3 = createLogger("branch-protection");
 function isProtectedBranch(name) {
   return PROTECTED_BRANCHES.includes(name);
 }
@@ -2007,9 +2226,13 @@ function makeDefaultResolver(execFn) {
     try {
       const r = await execFn("git", args, {});
       if (r.code === 0) return r.stdout.trim();
-    } catch {
+      return "";
+    } catch (err) {
+      log3.warn(
+        `current-branch resolution failed (${err.message}); treating as unprotected \u2014 a protected-branch guard may not apply`
+      );
+      return "";
     }
-    return "";
   };
 }
 async function decideBranchProtection(input, deps = {}) {
@@ -2109,125 +2332,9 @@ async function readAllStdin() {
 }
 
 // src/config/load.ts
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync as existsSync2, readFileSync } from "node:fs";
 import { basename as basename3, dirname as dirname2, join as join2, resolve, sep } from "node:path";
 import { homedir } from "node:os";
-
-// src/shared/logging.ts
-var LEVEL_RANK = {
-  debug: 10,
-  info: 20,
-  warn: 30,
-  error: 40,
-  silent: 100
-};
-function activeThreshold() {
-  const raw = (process.env.FACTORY_LOG_LEVEL ?? "").trim().toLowerCase();
-  if (raw && raw in LEVEL_RANK) {
-    return LEVEL_RANK[raw];
-  }
-  if (process.env.FACTORY_QUIET === "1") return LEVEL_RANK.error;
-  return LEVEL_RANK.info;
-}
-function emit(level, scope, args) {
-  if (LEVEL_RANK[level] < activeThreshold()) return;
-  const ts = (/* @__PURE__ */ new Date()).toISOString();
-  const msg = args.map((a) => typeof a === "string" ? a : safeStringify(a)).join(" ");
-  process.stderr.write(`[${ts}] [${level.toUpperCase()}] ${scope}: ${msg}
-`);
-}
-function safeStringify(value) {
-  if (value instanceof Error) return value.stack ?? value.message;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-function createLogger(scope) {
-  return {
-    debug: (...args) => emit("debug", scope, args),
-    info: (...args) => emit("info", scope, args),
-    warn: (...args) => emit("warn", scope, args),
-    error: (...args) => emit("error", scope, args),
-    child: (subScope) => createLogger(`${scope}:${subScope}`)
-  };
-}
-var log = createLogger("factory");
-
-// src/shared/atomic-write.ts
-import { mkdir, open, rename, unlink } from "node:fs/promises";
-import { dirname, basename as basename2, join } from "node:path";
-import { randomBytes } from "node:crypto";
-function tempPathFor(target) {
-  const dir = dirname(target);
-  const name = basename2(target);
-  const rand = randomBytes(6).toString("hex");
-  return join(dir, `.${name}.${process.pid}.${rand}.tmp`);
-}
-async function atomicWriteFile(target, data) {
-  const dir = dirname(target);
-  await mkdir(dir, { recursive: true });
-  const tmp = tempPathFor(target);
-  const handle = await open(tmp, "w", 384);
-  try {
-    await handle.writeFile(data);
-    await handle.sync();
-  } catch (err) {
-    await handle.close();
-    await bestEffortUnlink(tmp);
-    throw err;
-  }
-  await handle.close();
-  try {
-    await rename(tmp, target);
-  } catch (err) {
-    await bestEffortUnlink(tmp);
-    throw err;
-  }
-  try {
-    const dirHandle = await open(dir, "r");
-    try {
-      await dirHandle.sync();
-    } finally {
-      await dirHandle.close();
-    }
-  } catch {
-  }
-}
-async function bestEffortUnlink(p) {
-  try {
-    await unlink(p);
-  } catch {
-  }
-}
-
-// src/shared/json.ts
-var JsonParseError = class extends Error {
-  path;
-  cause;
-  constructor(message, path, cause) {
-    super(message);
-    this.name = "JsonParseError";
-    this.path = path;
-    this.cause = cause;
-  }
-};
-function parseJson(text, sourcePath) {
-  try {
-    return JSON.parse(text);
-  } catch (cause) {
-    const where = sourcePath ? ` (from ${sourcePath})` : "";
-    throw new JsonParseError(
-      `invalid JSON${where}: ${cause.message}`,
-      sourcePath,
-      cause
-    );
-  }
-}
-function stringifyJson(value) {
-  return JSON.stringify(value, null, 2) + "\n";
-}
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
@@ -6401,14 +6508,18 @@ var ConfigSchema = external_exports.object({
   testWriter: TestWriterSchema,
   codex: CodexSchema,
   git: GitSchema,
-  /** Consecutive task failures before the run aborts. */
+  /**
+   * Cumulative genuine capability-budget task failures before the run aborts.
+   * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
+   * total capability-budget drops); the field keeps its name for config back-compat.
+   */
   maxConsecutiveFailures: external_exports.number().int().positive().default(3),
   /** Hard wall-clock cap for a whole run, minutes. */
   maxRuntimeMinutes: external_exports.number().int().positive().default(480)
 }).default({});
 
 // src/config/load.ts
-var log2 = createLogger("config");
+var log4 = createLogger("config");
 var PLUGIN_NAME = "factory";
 var warnedRedirects = /* @__PURE__ */ new Set();
 function expectedDataDir(opts) {
@@ -6428,7 +6539,7 @@ function expectedDataDir(opts) {
     return join2(dataRoot, `${pluginFromPath}-${marketplaceFromPath}`);
   }
   const marketplaceJson = join2(pluginRoot, ".claude-plugin", "marketplace.json");
-  if (existsSync(marketplaceJson)) {
+  if (existsSync2(marketplaceJson)) {
     try {
       const parsed = parseJson(
         readFileSync(marketplaceJson, "utf8"),
@@ -6451,7 +6562,7 @@ function inferPluginRoot() {
     const here = new URL(".", import.meta.url).pathname;
     let dir = here;
     for (let i = 0; i < 4; i++) {
-      if (existsSync(join2(dir, ".claude-plugin"))) return dir;
+      if (existsSync2(join2(dir, ".claude-plugin"))) return dir;
       dir = dirname2(dir);
     }
     return resolve(here, "..");
@@ -6465,7 +6576,7 @@ function resolveDataDir(opts = {}) {
   const home = opts.home ?? homedir();
   const pluginRoot = opts.pluginRoot ?? inferPluginRoot();
   const current = env.CLAUDE_PLUGIN_DATA;
-  const warn = opts.warn ?? ((m) => log2.warn(m));
+  const warn = opts.warn ?? ((m) => log4.warn(m));
   const corrected = expectedDataDir({ current, home, pluginRoot, warn });
   if (corrected && corrected !== current) {
     const key = JSON.stringify([current ?? "", corrected]);
@@ -6486,7 +6597,7 @@ function resolveDataDir(opts = {}) {
 }
 
 // src/hooks/tcb.ts
-import { existsSync as existsSync2, realpathSync } from "node:fs";
+import { existsSync as existsSync3, realpathSync } from "node:fs";
 import { isAbsolute, normalize, resolve as resolve2, sep as sep2 } from "node:path";
 
 // src/shared/gate-config-names.ts
@@ -6523,14 +6634,14 @@ function isAtOrUnder(p, base) {
 function canonicalizeAnchor(dir) {
   const normalized = normalize(resolve2(dir));
   try {
-    if (existsSync2(normalized)) return realpathSync(normalized);
+    if (existsSync3(normalized)) return realpathSync(normalized);
   } catch {
   }
   const parts = normalized.split(sep2);
   for (let cut = parts.length - 1; cut > 0; cut--) {
     const ancestor = parts.slice(0, cut).join(sep2) || sep2;
     try {
-      if (existsSync2(ancestor)) {
+      if (existsSync3(ancestor)) {
         const realAncestor = realpathSync(ancestor);
         const tail = parts.slice(cut).join(sep2);
         return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
@@ -6616,7 +6727,7 @@ function canonicalizePath(candidate, cwd = process.cwd()) {
   const abs = isAbsolute(candidate) ? candidate : resolve2(cwd, candidate);
   const normalized = normalize(abs);
   try {
-    if (existsSync2(normalized)) {
+    if (existsSync3(normalized)) {
       return realpathSync(normalized);
     }
   } catch {
@@ -6625,7 +6736,7 @@ function canonicalizePath(candidate, cwd = process.cwd()) {
   for (let cut = parts.length - 1; cut > 0; cut--) {
     const ancestor = parts.slice(0, cut).join(sep2) || sep2;
     try {
-      if (existsSync2(ancestor)) {
+      if (existsSync3(ancestor)) {
         const realAncestor = realpathSync(ancestor);
         const tail = parts.slice(cut).join(sep2);
         return tail.length > 0 ? resolve2(realAncestor, tail) : realAncestor;
@@ -6741,21 +6852,17 @@ function decideHoldoutGuard(input, deps = {}) {
   if (tool === "Bash") {
     const cmd = commandOf(input);
     if (cmd.length === 0) return allow();
-    if (!READ_COMMAND_RE.test(cmd)) return allow();
+    const viaReader = READ_COMMAND_RE.test(cmd) ? " via a reader command" : "";
     for (const tokRaw of bashPathTokens(cmd)) {
       const tok = tokRaw.replace(/^["']|["']$/g, "");
       if (!tok.includes("holdouts") && !tok.includes("/") && !tok.includes("..")) continue;
       const canonical = canonicalizePath(tok, cwd);
-      if (isHoldoutPath(canonical)) {
+      const reachesHoldout = isHoldoutPath(canonical) || Boolean(dataDir && tok.includes("holdouts") && tok.includes(dataDir));
+      if (reachesHoldout) {
+        const target = isHoldoutPath(canonical) ? canonical : tok;
         return deny(
           "holdout_read_denied",
-          `Bash read of the holdout answer-key store ('${canonical}') is forbidden (\u0394 Y)`
-        );
-      }
-      if (dataDir && tok.includes("holdouts") && tok.includes(dataDir)) {
-        return deny(
-          "holdout_read_denied",
-          `Bash read of the holdout answer-key store ('${tok}') is forbidden (\u0394 Y)`
+          `Bash command referencing the holdout answer-key store ('${target}')${viaReader} is forbidden (\u0394 Y)`
         );
       }
     }
@@ -6783,49 +6890,6 @@ async function readAllStdin3() {
     chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");
-}
-
-// src/shared/secret-patterns.ts
-var SECRET_CONTENT_PATTERNS = [
-  { name: "aws-access-key-id", source: "AKIA[0-9A-Z]{16}" },
-  { name: "github-pat-classic", source: "ghp_[A-Za-z0-9]{36}" },
-  { name: "github-server-token", source: "ghs_[A-Za-z0-9]{36}" },
-  { name: "github-oauth-token", source: "gho_[A-Za-z0-9]{36}" },
-  { name: "github-refresh-token", source: "ghr_[A-Za-z0-9]{36}" },
-  { name: "anthropic-api-key", source: "sk-ant-(api03-)?[A-Za-z0-9_-]{20,}" },
-  { name: "openai-style-key", source: "sk-[A-Za-z0-9]{20,}" },
-  { name: "slack-token", source: "xox[bpars]-[A-Za-z0-9-]{10,}" },
-  { name: "google-api-key", source: "AIza[A-Za-z0-9_-]{35}" },
-  { name: "stripe-live-secret", source: "sk_live_[A-Za-z0-9]{20,}" },
-  { name: "stripe-live-restricted", source: "rk_live_[A-Za-z0-9]{20,}" },
-  {
-    name: "jwt",
-    source: "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+"
-  },
-  {
-    name: "aws-secret-access-key",
-    source: "aws_secret_access_key\\s*=\\s*[A-Za-z0-9/+=]{40}"
-  },
-  // Quote-anchored detector — EXCLUDED from redaction (see header note).
-  { name: "json-private-key", source: '"private_key"\\s*:\\s*"-----BEGIN' },
-  { name: "pem-private-key", source: "-----BEGIN ([A-Z]+ )?PRIVATE KEY-----" },
-  { name: "github-pat-fine-grained", source: "github_pat_[A-Za-z0-9_]{60,}" },
-  { name: "openai-project-key", source: "sk-proj-[A-Za-z0-9_-]{40,}" },
-  { name: "nvidia-api-key", source: "nvapi-[A-Za-z0-9_-]{40,}" },
-  { name: "xai-api-key", source: "xai-[A-Za-z0-9]{40,}" }
-];
-function hasLiteralQuote(p) {
-  return p.source.includes('"');
-}
-var SECRET_REDACTION_PATTERNS = SECRET_CONTENT_PATTERNS.filter(
-  (p) => !hasLiteralQuote(p)
-);
-function detectSecrets(text) {
-  const hits = [];
-  for (const p of SECRET_CONTENT_PATTERNS) {
-    if (new RegExp(p.source).test(text)) hits.push(p.name);
-  }
-  return hits;
 }
 
 // src/hooks/secret-guard.ts
@@ -6916,7 +6980,7 @@ async function decideSecretGuard(input, deps = {}) {
     scanPaths = names.stdout;
     scanDiff = diff.stdout;
   } else {
-    let log7;
+    let log8;
     let names;
     try {
       names = await execFn(
@@ -6924,28 +6988,28 @@ async function decideSecretGuard(input, deps = {}) {
         ["-C", commitDir, "log", "@{upstream}..HEAD", "--name-only", "--format="],
         {}
       );
-      log7 = await execFn("git", ["-C", commitDir, "log", "-p", "@{upstream}..HEAD", "-U0"], {});
+      log8 = await execFn("git", ["-C", commitDir, "log", "-p", "@{upstream}..HEAD", "-U0"], {});
     } catch {
       return deny(
         "git_log_failed",
         "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
       );
     }
-    if (names.code !== 0 || log7.code !== 0) {
+    if (names.code !== 0 || log8.code !== 0) {
       try {
         names = await execFn(
           "git",
           ["-C", commitDir, "log", "HEAD", "--name-only", "--format="],
           {}
         );
-        log7 = await execFn("git", ["-C", commitDir, "log", "-p", "HEAD", "-U0"], {});
+        log8 = await execFn("git", ["-C", commitDir, "log", "-p", "HEAD", "-U0"], {});
       } catch {
         return deny(
           "git_log_failed",
           "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
         );
       }
-      if (names.code !== 0 || log7.code !== 0) {
+      if (names.code !== 0 || log8.code !== 0) {
         return deny(
           "git_log_failed",
           "secret-commit-guard: git log failed \u2014 cannot verify pushed commits"
@@ -6953,7 +7017,7 @@ async function decideSecretGuard(input, deps = {}) {
       }
     }
     scanPaths = names.stdout;
-    scanDiff = log7.stdout;
+    scanDiff = log8.stdout;
   }
   const blocks = [];
   for (const raw of scanPaths.split("\n")) {
@@ -7095,13 +7159,38 @@ var TaskStateSchema = external_exports.object({
    * summary; `stage` is the machine cursor. Absent = not started (preflight).
    * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
    * not a resume point — terminal writers do not clear it.
-   * NOTE: literals duplicate stage-machine's TASK_STAGE_ORDER because core/state
-   * must not import stage-machine (dependency direction) — a cross-check test in
-   * src/driver/coroutine.test.ts pins them equal.
+   * NOTE: these literals DUPLICATE stage-machine's TASK_STAGE_ORDER because
+   * core/state must not import stage-machine (dependency direction, enforced by
+   * `madge --circular` in verify). The duplication is kept honest by a LOAD-BEARING
+   * cross-check test — "TaskState.stage enum equals TASK_STAGE_ORDER (cross-module
+   * pin)" in src/driver/coroutine.test.ts — which fails the instant the two drift.
+   * Do NOT delete that test: it is the only thing tying this hand-copied list to its
+   * source of truth.
    */
   stage: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
   /** Ship live-merge re-sync count (cap enforced by the coroutine; persisted so the cap survives process boundaries). */
   merge_resyncs: external_exports.number().int().min(0).default(0),
+  /**
+   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the coroutine when it
+   * EMITS a spawn for `stage` at `rung`, recording the task-branch `tip_sha` at emit
+   * time. Producers commit to the SHARED task worktree, so a stop in the post-spawn /
+   * pre-fold window leaves the abandoned producer's partial commits on the branch. On
+   * the resume that re-enters the SAME (stage, rung) before any results were folded,
+   * the coroutine resets the worktree to `tip_sha` — discarding ONLY the interrupted
+   * stage's work (prior completed stages live below it) — then re-spawns. A fresh
+   * spawn overwrites it; terminal writers (complete/drop) clear it. Absent = no spawn
+   * in flight (the steady state between stages).
+   *
+   * `stage` is the spawn-stage subset (tests|exec|verify) — preflight/ship never spawn.
+   * The literal duplicates driver/results' SPAWN_STAGES because core/state must not
+   * import the driver (dependency direction); a cross-check test in
+   * src/driver/coroutine.test.ts pins them equal (mirrors the `stage` field's pin).
+   */
+  spawn_in_flight: external_exports.object({
+    stage: external_exports.enum(["tests", "exec", "verify"]),
+    rung: external_exports.number().int().min(0),
+    tip_sha: external_exports.string().min(1)
+  }).optional(),
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: external_exports.string().optional(),
   ended_at: external_exports.string().optional()
@@ -7227,69 +7316,8 @@ import { mkdir as mkdir3, readFile, readdir, rename as rename2, rm, symlink, unl
 import { existsSync as existsSync4 } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
 
-// src/shared/file-lock.ts
-var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
-import { mkdir as mkdir2 } from "node:fs/promises";
-import { existsSync as existsSync3 } from "node:fs";
-var log3 = createLogger("lock");
-var DEFAULT_FILE_LOCK_TUNING = {
-  stale: 15e3,
-  // Enough attempts that ≥3 concurrent writers all eventually win their turn.
-  retries: 50,
-  retryMinTimeout: 20,
-  retryMaxTimeout: 500
-};
-async function withFileLock(opts, fn) {
-  if (opts.dirPolicy === "create") {
-    await mkdir2(opts.dir, { recursive: true });
-  } else if (!existsSync3(opts.dir)) {
-    throw new Error(`cannot lock ${opts.label} \u2014 dir '${opts.dir}' does not exist`);
-  }
-  const release = await (0, import_proper_lockfile.lock)(opts.lockfile, {
-    realpath: false,
-    stale: opts.tuning.stale,
-    retries: {
-      retries: opts.tuning.retries,
-      minTimeout: opts.tuning.retryMinTimeout,
-      maxTimeout: opts.tuning.retryMaxTimeout,
-      factor: 1.5
-    },
-    onCompromised: (err) => {
-      log3.error(`lock for ${opts.label} was compromised: ${err.message}`);
-      throw err;
-    }
-  });
-  try {
-    return await fn();
-  } finally {
-    await release();
-  }
-}
-
-// src/shared/time.ts
-function nowIso() {
-  return (/* @__PURE__ */ new Date()).toISOString();
-}
-
 // src/core/state/paths.ts
 import { join as join3 } from "node:path";
-
-// src/shared/ids.ts
-var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
-function isValidId(id) {
-  return ID_PATTERN.test(id);
-}
-function validateId(id, label = "id") {
-  if (id.length === 0) {
-    throw new Error(`${label}: empty`);
-  }
-  if (!ID_PATTERN.test(id)) {
-    throw new Error(`${label}: invalid (must match ${ID_PATTERN.source}): ${id}`);
-  }
-  return id;
-}
-
-// src/core/state/paths.ts
 var SPECS_DIR = "specs";
 var RUNS_DIR = "runs";
 var WORKTREES_DIR = "worktrees";
@@ -7337,7 +7365,7 @@ function specDir(dataDir, repo, specId) {
 }
 
 // src/core/state/manager.ts
-var log4 = createLogger("state");
+var log5 = createLogger("state");
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
 var StateManager = class {
   dataDir;
@@ -7524,7 +7552,7 @@ var StateManager = class {
         runs.push(await this.read(entry.name));
       } catch (err) {
         if (err.code === "ENOENT") continue;
-        log4.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
+        log5.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
       }
     }
     return runs.sort((a, b) => a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0);
@@ -7675,7 +7703,7 @@ var StateManager = class {
       });
       await rename2(tmp, link);
     } catch (err) {
-      log4.warn(
+      log5.warn(
         `state: could not update current pointer '${link}' \u2192 '${target}': ${err.message}`
       );
       await unlink2(tmp).catch(() => {
@@ -7710,7 +7738,13 @@ var SpawnAgentSchema = external_exports.object({
   /** Hard turn budget for the agent (positive integer). */
   max_turns: external_exports.number().int().positive(),
   /** Pointer to the prompt artifact, run-store relative (non-empty). */
-  prompt_ref: external_exports.string().min(1)
+  prompt_ref: external_exports.string().min(1),
+  /**
+   * Optional effort/reasoning level to spawn at (the `Agent` effort enum:
+   * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
+   * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
+   */
+  effort: external_exports.string().min(1).optional()
 });
 var SpawnManifestSchema = external_exports.object({
   /** Engine resumes here after the agents return. A per-task stage. */
@@ -7949,7 +7983,7 @@ async function readAllStdin5() {
 }
 
 // src/hooks/subagent-stop.ts
-var log5 = createLogger("hook:subagent-stop");
+var log6 = createLogger("hook:subagent-stop");
 function reviewerNameOf(agentType) {
   const t = agentType.replace(/^factory:/, "");
   switch (t) {
@@ -7990,7 +8024,7 @@ async function handleSubagentStop(input, deps = {}) {
   const manager = deps.manager ?? new StateManager(deps);
   const run = await manager.readCurrent();
   if (run === null) {
-    log5.warn(`no active run (runs/current absent) \u2014 reviewer '${reviewer}' result skipped`);
+    log6.warn(`no active run (runs/current absent) \u2014 reviewer '${reviewer}' result skipped`);
     return null;
   }
   let taskId = deps.explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
@@ -8012,19 +8046,19 @@ async function handleSubagentStop(input, deps = {}) {
     if (reviewing.length === 1) taskId = reviewing[0].task_id;
   }
   if (taskId.length === 0) {
-    log5.error(
+    log6.error(
       `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 driver fold is the single writer`
     );
     return null;
   }
   if (!run.tasks[taskId]) {
-    log5.error(
+    log6.error(
       `resolved task_id '${taskId}' is not in run ${run.run_id}; reviewer '${reviewer}' result skipped`
     );
     return null;
   }
   const verdict = parseVerdict(input.last_assistant_message);
-  log5.info(
+  log6.info(
     `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 driver folds reviews via the drive --results fold)`
   );
   return null;
@@ -8035,13 +8069,13 @@ async function runSubagentStop(_argv = [], deps = {}) {
     const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin6();
     input = parseHookInput(raw);
   } catch (err) {
-    log5.error(`malformed SubagentStop input: ${err.message}`);
+    log6.error(`malformed SubagentStop input: ${err.message}`);
     return EXIT.OK;
   }
   try {
     await handleSubagentStop(input, deps);
   } catch (err) {
-    log5.error(`SubagentStop handler error: ${err.message}`);
+    log6.error(`SubagentStop handler error: ${err.message}`);
   }
   return EXIT.OK;
 }
@@ -8054,7 +8088,7 @@ async function readAllStdin6() {
 }
 
 // src/hooks/stop-gate.ts
-var log6 = createLogger("hook:stop-gate");
+var log7 = createLogger("hook:stop-gate");
 var ALLOW = { kind: "allow" };
 function decideStop(run, stoppingSession) {
   if (run === null) return ALLOW;
@@ -8085,7 +8119,7 @@ async function runStopGate(_argv = [], deps = {}) {
     const input = parseHookInput(raw);
     stoppingSession = typeof input?.session_id === "string" && input.session_id.length > 0 ? input.session_id : void 0;
   } catch (err) {
-    log6.warn(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
+    log7.warn(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
     stoppingSession = void 0;
   }
   let run;
@@ -8093,7 +8127,7 @@ async function runStopGate(_argv = [], deps = {}) {
     run = await resolveStopRun(manager, stoppingSession);
   } catch (err) {
     const reason = `pipeline state unreadable: ${err.message}. Repair runs/current \u2192 state.json (or clear runs/current) before stopping.`;
-    log6.error(reason);
+    log7.error(reason);
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;
   }
@@ -8104,10 +8138,10 @@ async function runStopGate(_argv = [], deps = {}) {
     case "finalize": {
       try {
         await manager.finalize(run.run_id, action.status);
-        log6.info(`run ${run.run_id} finalized as '${action.status}' on stop`);
+        log7.info(`run ${run.run_id} finalized as '${action.status}' on stop`);
       } catch (err) {
         const reason = `finalize-on-stop failed for ${run.run_id}: ${err.message}. Run state may be inconsistent; rerun finalize or investigate before stopping.`;
-        log6.error(reason);
+        log7.error(reason);
         emitBlockDecision(deny(reason), emit2);
       }
       return EXIT.OK;

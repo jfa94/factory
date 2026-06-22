@@ -1614,7 +1614,7 @@ var require_proper_lockfile = __commonJS({
   }
 });
 
-// src/cli/exit-codes.ts
+// src/shared/exit-codes.ts
 var EXIT = {
   /** Success. */
   OK: 0,
@@ -5919,7 +5919,11 @@ var ConfigSchema = external_exports.object({
   testWriter: TestWriterSchema,
   codex: CodexSchema,
   git: GitSchema,
-  /** Consecutive task failures before the run aborts. */
+  /**
+   * Cumulative genuine capability-budget task failures before the run aborts.
+   * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
+   * total capability-budget drops); the field keeps its name for config back-compat.
+   */
   maxConsecutiveFailures: external_exports.number().int().positive().default(3),
   /** Hard wall-clock cap for a whole run, minutes. */
   maxRuntimeMinutes: external_exports.number().int().positive().default(480)
@@ -6215,13 +6219,38 @@ var TaskStateSchema = external_exports.object({
    * summary; `stage` is the machine cursor. Absent = not started (preflight).
    * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
    * not a resume point — terminal writers do not clear it.
-   * NOTE: literals duplicate stage-machine's TASK_STAGE_ORDER because core/state
-   * must not import stage-machine (dependency direction) — a cross-check test in
-   * src/driver/coroutine.test.ts pins them equal.
+   * NOTE: these literals DUPLICATE stage-machine's TASK_STAGE_ORDER because
+   * core/state must not import stage-machine (dependency direction, enforced by
+   * `madge --circular` in verify). The duplication is kept honest by a LOAD-BEARING
+   * cross-check test — "TaskState.stage enum equals TASK_STAGE_ORDER (cross-module
+   * pin)" in src/driver/coroutine.test.ts — which fails the instant the two drift.
+   * Do NOT delete that test: it is the only thing tying this hand-copied list to its
+   * source of truth.
    */
   stage: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
   /** Ship live-merge re-sync count (cap enforced by the coroutine; persisted so the cap survives process boundaries). */
   merge_resyncs: external_exports.number().int().min(0).default(0),
+  /**
+   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the coroutine when it
+   * EMITS a spawn for `stage` at `rung`, recording the task-branch `tip_sha` at emit
+   * time. Producers commit to the SHARED task worktree, so a stop in the post-spawn /
+   * pre-fold window leaves the abandoned producer's partial commits on the branch. On
+   * the resume that re-enters the SAME (stage, rung) before any results were folded,
+   * the coroutine resets the worktree to `tip_sha` — discarding ONLY the interrupted
+   * stage's work (prior completed stages live below it) — then re-spawns. A fresh
+   * spawn overwrites it; terminal writers (complete/drop) clear it. Absent = no spawn
+   * in flight (the steady state between stages).
+   *
+   * `stage` is the spawn-stage subset (tests|exec|verify) — preflight/ship never spawn.
+   * The literal duplicates driver/results' SPAWN_STAGES because core/state must not
+   * import the driver (dependency direction); a cross-check test in
+   * src/driver/coroutine.test.ts pins them equal (mirrors the `stage` field's pin).
+   */
+  spawn_in_flight: external_exports.object({
+    stage: external_exports.enum(["tests", "exec", "verify"]),
+    rung: external_exports.number().int().min(0),
+    tip_sha: external_exports.string().min(1)
+  }).optional(),
   // --- Lifecycle timestamps (ISO-8601) ---
   started_at: external_exports.string().optional(),
   ended_at: external_exports.string().optional()
@@ -6343,39 +6372,30 @@ function parseRunState(raw) {
 }
 
 // src/core/state/derive.ts
+function mkVerdict(passed, gate, from) {
+  return { passed, gate, __derived: true, from };
+}
 function deriveAllGatesVerdict(evidence) {
   const passed = evidence.length > 0 && evidence.every((e) => e.observed === true);
-  return {
-    passed,
-    gate: "all",
-    __derived: true,
-    from: [...evidence]
-  };
+  return mkVerdict(passed, "all", [...evidence]);
 }
 function derivePanelVerdict(reviewersOrTask) {
   const reviewers = Array.isArray(reviewersOrTask) ? reviewersOrTask : reviewersOrTask.reviewers;
   const passed = reviewers.length > 0 && reviewers.every((r) => r.verdict === "approve");
-  return {
+  return mkVerdict(
     passed,
-    gate: "panel",
-    __derived: true,
-    // The panel's "evidence" is each reviewer's verdict; expose it for audit.
-    from: reviewers.map((r) => ({
+    "panel",
+    reviewers.map((r) => ({
       gate: `panel:${r.reviewer}`,
       observed: r.verdict === "approve",
       detail: `verdict=${r.verdict} confirmed_blockers=${r.confirmed_blockers}`
     }))
-  };
+  );
 }
 function deriveFloorVerdict(task, gateEvidence) {
   const det = deriveAllGatesVerdict(gateEvidence);
   const panel = derivePanelVerdict(task);
-  return {
-    passed: det.passed && panel.passed,
-    gate: "floor",
-    __derived: true,
-    from: [...det.from, ...panel.from]
-  };
+  return mkVerdict(det.passed && panel.passed, "floor", [...det.from, ...panel.from]);
 }
 function floorBlockReason(reviewers, gateEvidence) {
   const parts = [];
@@ -7289,6 +7309,11 @@ var DefaultGitClient = class {
     await this.execOrThrow(["checkout", branch], opts);
     await this.execOrThrow(["merge", "--no-edit", ref], opts);
   }
+  async resetHardClean(ref, opts) {
+    log5.debug(`reset --hard ${ref} && clean -fd`);
+    await this.execOrThrow(["reset", "--hard", ref], opts);
+    await this.execOrThrow(["clean", "-fd"], opts);
+  }
 };
 
 // src/git/repo.ts
@@ -7880,7 +7905,7 @@ var MergeSerializer = class {
       ]);
       if (pr.state === "MERGED") {
         log11.info(`PR #${prNumber} already MERGED into ${this.staging} \u2014 ship resuming`);
-        await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
+        await this.deleteMergedHeadBestEffort(pr.headRefName);
         return { merged: true, via: "app-level", number: prNumber };
       }
       if (pr.mergeable === "CONFLICTING") {
@@ -7905,9 +7930,27 @@ var MergeSerializer = class {
       }
       await this.ghClient.prMergeSquash(prNumber, {});
       log11.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
-      await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
+      await this.deleteMergedHeadBestEffort(pr.headRefName);
       return { merged: true, via: "app-level", number: prNumber };
     });
+  }
+  /**
+   * Delete the merged PR's remote head ref — BEST EFFORT. The squash-merge has
+   * already landed, so a failed delete is cosmetic (a leaked remote branch): WARN
+   * and continue, never throw. A throw here would turn the merge success into an
+   * exception and, on the sanctioned `drive` retry, re-enter the MERGED branch and
+   * fail on the SAME delete again — a wedge. (Contrast the cancel `--cleanup` path,
+   * which surfaces this loudly: there the ref teardown IS the whole operation.)
+   */
+  async deleteMergedHeadBestEffort(headRefName) {
+    try {
+      await this.ghClient.deleteRemoteBranch(this.owner, this.repo, headRefName);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      log11.warn(
+        `post-merge cleanup: failed to delete remote head ref '${headRefName}' (merge already landed \u2014 leaked ref is cosmetic): ${detail}`
+      );
+    }
   }
 };
 
@@ -8464,7 +8507,13 @@ var SpawnAgentSchema = external_exports.object({
   /** Hard turn budget for the agent (positive integer). */
   max_turns: external_exports.number().int().positive(),
   /** Pointer to the prompt artifact, run-store relative (non-empty). */
-  prompt_ref: external_exports.string().min(1)
+  prompt_ref: external_exports.string().min(1),
+  /**
+   * Optional effort/reasoning level to spawn at (the `Agent` effort enum:
+   * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
+   * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
+   */
+  effort: external_exports.string().min(1).optional()
 });
 var SpawnManifestSchema = external_exports.object({
   /** Engine resumes here after the agents return. A per-task stage. */
@@ -9319,11 +9368,11 @@ function isNonNegativeFinite(value) {
   return Number.isFinite(value) && value >= 0;
 }
 function evaluate2(input, config, nowEpoch2) {
-  const { consecutiveFailures, pausedMinutes, startedAtIso } = input;
-  if (!isNonNegativeFinite(consecutiveFailures)) {
+  const { cumulativeFailures, pausedMinutes, startedAtIso } = input;
+  if (!isNonNegativeFinite(cumulativeFailures)) {
     return {
       tripped: true,
-      reason: `circuit breaker fail-closed: consecutiveFailures is not a non-negative finite number (got ${String(consecutiveFailures)})`
+      reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
     };
   }
   if (!isNonNegativeFinite(pausedMinutes)) {
@@ -9333,10 +9382,10 @@ function evaluate2(input, config, nowEpoch2) {
     };
   }
   const { maxConsecutiveFailures, maxRuntimeMinutes } = config;
-  if (consecutiveFailures >= maxConsecutiveFailures) {
+  if (cumulativeFailures >= maxConsecutiveFailures) {
     return {
       tripped: true,
-      reason: `max consecutive failures (${consecutiveFailures} >= ${maxConsecutiveFailures})`
+      reason: `max cumulative failures (${cumulativeFailures} >= ${maxConsecutiveFailures})`
     };
   }
   let startEpoch;
@@ -9555,7 +9604,7 @@ function buildRunSummary(run9, report, opts = {}) {
 
 // src/scoring/telemetry.ts
 var log19 = createLogger("telemetry");
-async function emitMetric(dataDir, runId, event, data, opts = {}) {
+async function writeMetric(dataDir, runId, event, data, opts) {
   const record = {
     ts: opts.now ?? nowIso(),
     run_id: runId,
@@ -9564,14 +9613,16 @@ async function emitMetric(dataDir, runId, event, data, opts = {}) {
   };
   try {
     await appendJsonl(runMetricsPath(dataDir, runId), record);
+    return { record, written: true };
   } catch (err) {
     log19.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+    return { record, written: false };
   }
-  return record;
 }
 async function recordRunFinalized(dataDir, report, opts = {}) {
   const now = opts.now ?? nowIso();
-  await emitMetric(
+  let dropped = 0;
+  const finalized = await writeMetric(
     dataDir,
     report.run_id,
     "run.finalized",
@@ -9583,14 +9634,22 @@ async function recordRunFinalized(dataDir, report, opts = {}) {
     },
     { now }
   );
+  if (!finalized.written) dropped++;
   for (const f of report.failures) {
-    await emitMetric(
+    const r = await writeMetric(
       dataDir,
       report.run_id,
       "task.dropped",
       { task_id: f.task_id, failure_class: f.failure_class },
       { now }
     );
+    if (!r.written) dropped++;
+  }
+  if (dropped > 0) {
+    log19.warn(
+      `telemetry: ${dropped} metric write(s) dropped this run (${report.run_id}); the metrics stream is incomplete`
+    );
+    await writeMetric(dataDir, report.run_id, "telemetry.writes_dropped", { dropped }, { now });
   }
 }
 
@@ -9614,30 +9673,30 @@ function parseProducerStatus(raw) {
 }
 
 // src/producer/model-dial.ts
-var TIER_LADDER = ["low", "medium", "high"];
-function escalateTier(tier) {
-  const idx = TIER_LADDER.indexOf(tier);
-  const next = TIER_LADDER[Math.min(idx + 1, TIER_LADDER.length - 1)];
-  return next ?? tier;
-}
+var EFFORT_LADDER = ["xhigh", "max"];
 function dialForRung(riskTier, rung, config) {
   if (rung < 0 || !Number.isInteger(rung)) {
     throw new Error(`dialForRung: rung must be a non-negative integer, got ${rung}`);
   }
   const baseModel = selectProducerModel(riskTier, config);
   if (rung <= 1) {
-    return {
-      model: baseModel,
-      rung,
-      injectsPriorFailure: false
-    };
+    return { model: baseModel, rung, injectsPriorFailure: false };
   }
-  const escalatedTier = escalateTier(riskTier);
-  const escalatedModel = selectProducerModel(escalatedTier, config);
+  const ceilingModel = selectProducerModel("high", config);
+  const effortSteps = EFFORT_LADDER.map((effort) => ({
+    model: ceilingModel,
+    effort
+  }));
+  const steps = baseModel === ceilingModel ? effortSteps : [{ model: ceilingModel }, ...effortSteps];
+  const step = steps[Math.min(rung - 2, steps.length - 1)];
+  if (step === void 0) {
+    throw new Error(`dialForRung: no escalation step for rung ${rung}`);
+  }
   return {
-    model: escalatedModel,
+    model: step.model,
     rung,
-    injectsPriorFailure: true
+    injectsPriorFailure: true,
+    ...step.effort !== void 0 ? { effort: step.effort } : {}
   };
 }
 
@@ -9713,7 +9772,7 @@ function classifyFailure(signal) {
 }
 
 // src/producer/escalation.ts
-var ESCALATION_CAP = 2;
+var ESCALATION_CAP = 4;
 
 // src/verifier/deterministic/gate-id.ts
 var GATE_IDS = [
@@ -11153,7 +11212,9 @@ async function completeTask(deps, runId, taskId) {
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "done",
-    ended_at: t.ended_at ?? nowIso()
+    ended_at: t.ended_at ?? nowIso(),
+    spawn_in_flight: void 0
+    // WS2 hygiene: no spawn is in flight past a terminal task
   }));
   return { done: true, outcome: { outcome: "done" } };
 }
@@ -11164,7 +11225,9 @@ async function dropTask(deps, runId, taskId, failureClass, reason) {
     status: "dropped",
     failure_class: failureClass,
     failure_reason: reason,
-    ended_at: t.ended_at ?? nowIso()
+    ended_at: t.ended_at ?? nowIso(),
+    spawn_in_flight: void 0
+    // WS2 hygiene: no spawn is in flight past a terminal task
   }));
 }
 async function dropStep(deps, runId, taskId, failureClass, reason) {
@@ -11295,7 +11358,11 @@ function makeStageHandlers(deps) {
           // No executor-specific turn budget exists; both producer roles share the
           // test-writer cap (documented WS10 decision).
           max_turns: deps.config.testWriter.maxTurns,
-          prompt_ref: promptRef
+          prompt_ref: promptRef,
+          // Effort is set ONLY once the dial has climbed the model to its ceiling
+          // (rung ≥ 3 for sub-ceiling tasks, ≥ 2 for high-tier). Omitted ⇒ the agent
+          // inherits the spawn default — never pass `effort: undefined`.
+          ...dial.effort !== void 0 ? { effort: dial.effort } : {}
         }
       ]
     });
@@ -11409,28 +11476,21 @@ function makeStageHandlers(deps) {
       );
     },
     /**
-     * ship (CLI single-step reporter): open the task PR into staging IDEMPOTENTLY
-     * (look up by head first — Δ P), then mark the task done. Merge is loop-owned
-     * (MergeSerializer) and not performed here; `pr_number` recording is the
-     * driver's job (the reporter cannot write state).
+     * ship — NOT served from this reporter. The coroutine runs the stateful
+     * {@link import("./ship.js").shipTask} directly (PR pointer writes + the live
+     * MergeSerializer), since a reporter can neither write state nor merge; the
+     * coroutine intercepts `ship` before {@link import("./engine.js").runStage} can
+     * ever dispatch it here.
      *
-     * NOTE: this reporter is superseded on the live path by `shipTask` in
-     * `src/driver/ship.ts` (coroutine routes `ship` there directly). Kept
-     * consistent with the per-run branch so it does not become a latent trap once
-     * the shared staging branch is removed.
+     * This method exists ONLY to keep {@link StageHandlers} TOTAL — the engine's
+     * exhaustive per-task stage switch (engine.ts) requires a handler for every
+     * `TaskStage`. Its body is a LOUD throw: routing `ship` through `runStage` is a
+     * programming error (it would re-open the PR with none of shipTask's state
+     * writes), so it fails fast rather than silently drifting from the live path.
+     * (`shipBody` / `specTaskOf` remain exported below — `ship.ts` is their caller.)
      */
-    async ship(ctx) {
-      const task = requireTask3(ctx, "ship");
-      const specTask = specTaskOf(deps.spec, task.task_id);
-      const branch = runScopedBranch(ctx.run.run_id, task.task_id);
-      await createTaskPrIdempotent({
-        ghClient: deps.gh,
-        branch,
-        title: specTask.title,
-        body: shipBody(ctx.run.run_id, specTask),
-        base: resolveStagingBranch(ctx.run.run_id, ctx.run.staging_branch)
-      });
-      return taskDone();
+    ship(_ctx) {
+      throw new Error("ship is routed to shipTask; runStage must never dispatch ship");
     },
     /**
      * finalize (run-level, terminal-by-construction): the pure {@link decideFinalize}
@@ -11563,7 +11623,8 @@ async function buildWorktreeSource(worktree, reviews) {
     try {
       const text = await readFile11(join14(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
-    } catch {
+    } catch (err) {
+      if (err?.code !== "ENOENT") throw err;
       lines.set(file, null);
     }
   }
@@ -11937,6 +11998,18 @@ async function stepTask(deps, runId, taskId, results) {
         const base_ref = `origin/${resolveStagingBranch(runId, run9.staging_branch)}`;
         const sidecar = spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : void 0;
         const fold_key = { stage: spawnStage, rung: task.escalation_rung };
+        if (await deps.git.worktreeExists(worktree)) {
+          const inFlight = task.spawn_in_flight;
+          if (inFlight !== void 0 && inFlight.stage === spawnStage && inFlight.rung === task.escalation_rung) {
+            await deps.git.resetHardClean(inFlight.tip_sha, { cwd: worktree });
+          } else {
+            const tip_sha = await deps.git.revParse("HEAD", { cwd: worktree });
+            await deps.state.updateTask(runId, taskId, (t) => ({
+              ...t,
+              spawn_in_flight: { stage: spawnStage, rung: t.escalation_rung, tip_sha }
+            }));
+          }
+        }
         return {
           kind: "spawn",
           run_id: runId,
@@ -12031,7 +12104,7 @@ async function applyCircuitBreaker(deps, runId) {
   ).length;
   const startedAtIso = run9.mode === "workflow" ? run9.started_at : epochToIso(now);
   const verdict = evaluate2(
-    { startedAtIso, consecutiveFailures: capabilityFailures, pausedMinutes: 0 },
+    { startedAtIso, cumulativeFailures: capabilityFailures, pausedMinutes: 0 },
     deps.config,
     now
   );
@@ -13239,7 +13312,7 @@ Usage:
 this step only; omit to honor the persisted value (the seam default, never no-merge).
 
 Emits ONE JSON envelope to stdout:
-  { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, fold_key, worktree }
+  { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, fold_key, worktree, base_ref }
   { kind:"terminal", run_id, task_id, outcome }
   { kind:"quota-blocked", run_id, task_id, scope, reason, resets_at_epoch? }
 

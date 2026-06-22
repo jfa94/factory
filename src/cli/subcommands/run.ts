@@ -20,7 +20,7 @@
  * self, cyclic, and duplicate dependency edges are caught LOUDLY at seed time rather
  * than surfacing later as a driver deadlock.
  */
-import { EXIT, type ExitCode } from "../exit-codes.js";
+import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
@@ -48,7 +48,7 @@ import {
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { requireAutonomousMode } from "../../autonomy/mode.js";
 import { createLogger } from "../../shared/index.js";
-import type { Subcommand } from "../main.js";
+import type { Subcommand } from "../registry-types.js";
 
 const log = createLogger("run");
 

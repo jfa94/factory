@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { rescueCommand, runScan } from "./rescue.js";
-import { EXIT } from "../exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 import { StateManager } from "../../core/state/index.js";
 import { FakeGitClient } from "../../git/index.js";
 import type { SpecPointer, TaskState } from "../../types/index.js";

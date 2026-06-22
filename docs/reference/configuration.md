@@ -152,10 +152,10 @@ Branch and protection contract.
 
 ## Root keys
 
-| Key                      | Type   | Default | Meaning                                          |
-| ------------------------ | ------ | ------- | ------------------------------------------------ |
-| `maxConsecutiveFailures` | int >0 | `3`     | Consecutive task failures before the run aborts. |
-| `maxRuntimeMinutes`      | int >0 | `480`   | Hard wall-clock cap for a whole run (minutes).   |
+| Key                      | Type   | Default | Meaning                                                                                                                                                                                                               |
+| ------------------------ | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxConsecutiveFailures` | int >0 | `3`     | Cumulative genuine `capability-budget` task failures before the run aborts (cascade/wedge drops excluded). The signal is run-cumulative, not strictly consecutive; the key keeps its historical name for back-compat. |
+| `maxRuntimeMinutes`      | int >0 | `480`   | Hard wall-clock cap for a whole run (minutes).                                                                                                                                                                        |
 
 ## Retired keys
 

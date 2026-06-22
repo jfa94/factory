@@ -9,17 +9,23 @@
  * curve does not count against the runtime budget.
  *
  * It trips on:
- *   - `consecutiveFailures >= maxConsecutiveFailures` (default 3), and
+ *   - `cumulativeFailures >= maxConsecutiveFailures` (default 3), and
  *   - effective runtime `(wallMinutes - pausedMinutes) >= maxRuntimeMinutes`
  *     (default 480).
  *
+ * The failure signal is run-CUMULATIVE, not strictly consecutive: it is the running
+ * count of GENUINE capability-budget drops (the gate excludes cascade/wedge drops —
+ * see `circuit-breaker-gate.ts`). The threshold keeps its public config name
+ * `maxConsecutiveFailures` for back-compat even though the signal it bounds is
+ * cumulative — the INPUT field is named honestly (`cumulativeFailures`).
+ *
  * Fail-closed (Decision: H12-class — a corrupt/absent input must TRIP, never leave
- * the breaker disarmed): a non-finite or negative `consecutiveFailures` /
+ * the breaker disarmed): a non-finite or negative `cumulativeFailures` /
  * `pausedMinutes`, or an unparseable `startedAtIso`, trips.
  *
- * The consecutive-failure COUNTER lives in WS8/WS10 state (the frozen RunState has
- * no breaker field); this module is the PURE predicate over values the driver
- * threads in.
+ * The cumulative-failure count is DERIVED by the driver gate (capability-budget
+ * drops) — the frozen RunState has no breaker field; this module is the PURE
+ * predicate over values the driver threads in.
  */
 import type { Config } from "../config/schema.js";
 import { parseIso8601ToEpoch } from "../shared/time.js";
@@ -28,8 +34,8 @@ import { parseIso8601ToEpoch } from "../shared/time.js";
 export interface CircuitBreakerInput {
   /** ISO-8601 run start time. */
   startedAtIso: string;
-  /** Consecutive task failures so far (non-negative integer). */
-  consecutiveFailures: number;
+  /** Cumulative genuine capability-budget task failures so far (non-negative integer). */
+  cumulativeFailures: number;
   /** Total minutes the run has spent PAUSED on quota (deducted from wall time). */
   pausedMinutes: number;
 }
@@ -50,12 +56,12 @@ export function evaluate(
   config: Config,
   nowEpoch: number,
 ): CircuitBreakerResult {
-  const { consecutiveFailures, pausedMinutes, startedAtIso } = input;
+  const { cumulativeFailures, pausedMinutes, startedAtIso } = input;
 
-  if (!isNonNegativeFinite(consecutiveFailures)) {
+  if (!isNonNegativeFinite(cumulativeFailures)) {
     return {
       tripped: true,
-      reason: `circuit breaker fail-closed: consecutiveFailures is not a non-negative finite number (got ${String(consecutiveFailures)})`,
+      reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`,
     };
   }
   if (!isNonNegativeFinite(pausedMinutes)) {
@@ -67,10 +73,10 @@ export function evaluate(
 
   const { maxConsecutiveFailures, maxRuntimeMinutes } = config;
 
-  if (consecutiveFailures >= maxConsecutiveFailures) {
+  if (cumulativeFailures >= maxConsecutiveFailures) {
     return {
       tripped: true,
-      reason: `max consecutive failures (${consecutiveFailures} >= ${maxConsecutiveFailures})`,
+      reason: `max cumulative failures (${cumulativeFailures} >= ${maxConsecutiveFailures})`,
     };
   }
 

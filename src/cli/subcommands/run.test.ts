@@ -28,7 +28,7 @@ import {
   type SpecSelector,
   type CreateRunOptions,
 } from "./run.js";
-import { EXIT } from "../exit-codes.js";
+import { EXIT } from "../../shared/exit-codes.js";
 import { NotAutonomousError } from "../../autonomy/mode.js";
 import { StateManager } from "../../core/state/manager.js";
 import { SpecStore, parseSpecManifest, type SpecManifest } from "../../spec/index.js";

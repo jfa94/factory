@@ -335,6 +335,40 @@ export async function stepTask(
         const sidecar =
           spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : undefined;
         const fold_key: FoldKey = { stage: spawnStage, rung: task.escalation_rung };
+        // WS2 idempotent re-spawn. Producers commit to the SHARED task worktree, so a
+        // stop in the post-spawn / pre-fold window strands the abandoned producer's
+        // partial commits + uncommitted edits on the task branch. On the resume that
+        // re-enters this SAME (stage, rung) before any results were folded,
+        // `spawn_in_flight` still names THIS spawn → reset the worktree to the tip we
+        // captured at the original emit (prior completed stages live BELOW that tip and
+        // survive), discarding only the interrupted stage's work, then re-spawn clean.
+        // A fresh spawn instead CAPTURES the current tip. A stale checkpoint can never
+        // match because every forward edge changes (stage, rung): advance moves the
+        // stage, escalate bumps the rung, and the ship→exec re-sync lands on exec while
+        // the checkpoint still names verify. Verify spawns read-only reviewers in their
+        // own isolated worktrees, so HEAD never moved and the reset is a no-op. Terminal
+        // writers (complete/drop) clear it; folding need not (the (stage, rung) change
+        // already shields it), so this stays the lone live read of the field.
+        // Gated on the worktree existing: past preflight every producer/verify spawn
+        // has one, so this is true in any real run. When it is ABSENT (a degenerate
+        // pre-preflight state) no producer has committed, so there is nothing to
+        // checkpoint or reset — skip rather than shell out to git against a missing dir.
+        if (await deps.git.worktreeExists(worktree)) {
+          const inFlight = task.spawn_in_flight;
+          if (
+            inFlight !== undefined &&
+            inFlight.stage === spawnStage &&
+            inFlight.rung === task.escalation_rung
+          ) {
+            await deps.git.resetHardClean(inFlight.tip_sha, { cwd: worktree });
+          } else {
+            const tip_sha = await deps.git.revParse("HEAD", { cwd: worktree });
+            await deps.state.updateTask(runId, taskId, (t) => ({
+              ...t,
+              spawn_in_flight: { stage: spawnStage, rung: t.escalation_rung, tip_sha },
+            }));
+          }
+        }
         return {
           kind: "spawn",
           run_id: runId,

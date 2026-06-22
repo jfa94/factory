@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MergeSerializer } from "./serial-writer.js";
 import { FakeGhClient } from "./fakes.js";
 import type { PullRequest } from "./gh-client.js";
+import { captureStream } from "../cli/test-helpers.js";
 
 function openPr(number: number, head: string, overrides: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -156,5 +157,56 @@ describe("Δ L — serial writer (#1)", () => {
     expect(out).toEqual({ merged: true, via: "app-level", number: 320 });
     expect(gh.merges).toHaveLength(0); // never re-merged
     expect(gh.deletedBranches).toEqual(["factory/run-1/t1"]);
+  });
+
+  // -- WS7: post-merge remote-ref cleanup is BEST-EFFORT --------------------
+  // The squash-merge has already landed; a failed head-ref delete is cosmetic
+  // (a leaked branch), so it must be WARNED, never thrown — a throw here would
+  // turn the success into an exception and, on retry, re-enter the MERGED path
+  // and throw on the same delete again (a wedge). Distinct from the cancel
+  // `--cleanup` path, where surfacing the failure loudly is the whole point.
+
+  async function captureStderr<T>(fn: () => Promise<T>): Promise<{ result: T; stderr: string }> {
+    const saved = process.env["FACTORY_LOG_LEVEL"];
+    process.env["FACTORY_LOG_LEVEL"] = "info"; // force warn-level through
+    const cap = captureStream(process.stderr);
+    try {
+      const result = await fn();
+      return { result, stderr: cap.read() };
+    } finally {
+      cap.restore();
+      if (saved === undefined) delete process.env["FACTORY_LOG_LEVEL"];
+      else process.env["FACTORY_LOG_LEVEL"] = saved;
+    }
+  }
+
+  it("a failed post-merge ref cleanup does NOT sink a fresh app-level merge (warns, returns merged)", async () => {
+    const gh = new FakeGhClient({ prs: [openPr(330, "factory/run-1/t1")] });
+    gh.failDeleteRemoteBranch = new Error("HTTP 500: server error");
+
+    const { result, stderr } = await captureStderr(() => serializer(gh).merge(330));
+
+    // The squash SUCCEEDED; a cosmetic leaked head ref must not turn it into a failure.
+    expect(result).toEqual({ merged: true, via: "app-level", number: 330 });
+    expect(gh.merges).toEqual([{ number: 330, auto: false, deleteBranch: false }]);
+    expect(gh.deletedBranches).toHaveLength(0); // delete threw → nothing recorded
+    // LOUD, not silent: warned with the branch name so a leaked ref is detectable.
+    expect(stderr).toMatch(/\[WARN\]/);
+    expect(stderr).toContain("factory/run-1/t1");
+  });
+
+  it("a failed ref cleanup does NOT sink the idempotent-resume MERGED success (warns)", async () => {
+    const gh = new FakeGhClient({
+      prs: [openPr(331, "factory/run-1/t2", { state: "MERGED" })],
+    });
+    gh.failDeleteRemoteBranch = new Error("HTTP 500: server error");
+
+    const { result, stderr } = await captureStderr(() => serializer(gh).merge(331));
+
+    expect(result).toEqual({ merged: true, via: "app-level", number: 331 });
+    expect(gh.merges).toHaveLength(0); // never re-merged
+    expect(gh.deletedBranches).toHaveLength(0);
+    expect(stderr).toMatch(/\[WARN\]/);
+    expect(stderr).toContain("factory/run-1/t2");
   });
 });

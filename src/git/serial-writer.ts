@@ -140,7 +140,7 @@ export class MergeSerializer {
       // the interrupted attempt may have skipped.
       if (pr.state === "MERGED") {
         log.info(`PR #${prNumber} already MERGED into ${this.staging} — ship resuming`);
-        await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
+        await this.deleteMergedHeadBestEffort(pr.headRefName);
         return { merged: true, via: "app-level", number: prNumber };
       }
 
@@ -181,8 +181,28 @@ export class MergeSerializer {
       // the local branch/worktree are ephemeral data-dir state torn down with the run.
       await this.ghClient.prMergeSquash(prNumber, {});
       log.info(`PR #${prNumber} squash-merged into ${this.staging} (app-level serial)`);
-      await this.ghClient.deleteRemoteBranch(this.owner, this.repo, pr.headRefName);
+      await this.deleteMergedHeadBestEffort(pr.headRefName);
       return { merged: true, via: "app-level", number: prNumber };
     });
+  }
+
+  /**
+   * Delete the merged PR's remote head ref — BEST EFFORT. The squash-merge has
+   * already landed, so a failed delete is cosmetic (a leaked remote branch): WARN
+   * and continue, never throw. A throw here would turn the merge success into an
+   * exception and, on the sanctioned `drive` retry, re-enter the MERGED branch and
+   * fail on the SAME delete again — a wedge. (Contrast the cancel `--cleanup` path,
+   * which surfaces this loudly: there the ref teardown IS the whole operation.)
+   */
+  private async deleteMergedHeadBestEffort(headRefName: string): Promise<void> {
+    try {
+      await this.ghClient.deleteRemoteBranch(this.owner, this.repo, headRefName);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      log.warn(
+        `post-merge cleanup: failed to delete remote head ref '${headRefName}' ` +
+          `(merge already landed — leaked ref is cosmetic): ${detail}`,
+      );
+    }
   }
 }

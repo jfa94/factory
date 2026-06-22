@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runStage, nextStageFor, decideFinalize, StageEngine } from "./engine.js";
+import { runStage, nextStageFor, decideFinalize } from "./engine.js";
 import {
   advance,
   spawn,
@@ -166,16 +166,6 @@ describe("nextStageFor", () => {
     expect(nextStageFor(taskDone())).toBeNull();
     expect(nextStageFor(finalizeTerminal("failed"))).toBeNull();
     expect(nextStageFor(waitRetry("ship", "x", 1, 3))).toBeNull();
-  });
-});
-
-describe("StageEngine class wrapper", () => {
-  it("binds handlers and delegates to runStage / nextStageFor", async () => {
-    const h = fakeHandlers();
-    const engine = new StageEngine(h);
-    const r = await engine.run("preflight", ctx);
-    expect(r).toEqual(advance("tests"));
-    expect(engine.nextStageFor(r)).toBe("tests");
   });
 });
 

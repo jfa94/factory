@@ -148,7 +148,9 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 1. Read the persisted context: `$CLAUDE_PLUGIN_DATA/runs/<run_id>/<agents[0].prompt_ref>`
    (a ProducerContext JSON).
 2. Spawn the producer — `subagent_type` per the matrix, model mapped, `maxTurns` from
-   the manifest, **isolation OMITTED**. Build the prompt from the ProducerContext +
+   the manifest, **isolation OMITTED**, plus the manifest agent's `effort` as the
+   spawn's `effort` opt **when present** (the dial sets it only on high escalation
+   rungs; omit it otherwise to inherit the default). Build the prompt from the ProducerContext +
    _"Your working tree is `<tenv.worktree>` (already checked out on the task branch). `cd` there; make ALL commits there."_
    The test-writer commits failing tests first (TDD); the executor commits the
    minimal implementation. They follow `agents/test-writer.md` / `agents/task-executor.md`.
@@ -195,7 +197,9 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 | spec-generator / spec-reviewer       | `spec-generator` / `spec-reviewer` | `"worktree"`                               |
 
 Model alias mapping: manifest model id contains `haiku` → `haiku`; `sonnet` →
-`sonnet`; otherwise → `opus`.
+`sonnet`; otherwise → `opus`. The manifest `effort` (when present) is passed to the
+spawn **verbatim** — its values (`xhigh`/`max`) already match the spawn `effort` enum,
+so no aliasing applies; it appears only on producer spawns, never reviewers.
 
 ## Phase 4 — Report
 
@@ -204,7 +208,7 @@ Model alias mapping: manifest model id contains `haiku` → `haiku`; `sonnet` �
   clears a recovered checkpoint, then THE LOOP).
 - After `run finalize`: `factory score --run <run_id>` (add `--dead-surface` for the
   unreferenced-exports report) + `factory state <run_id> --summary`. Surface the run
-  status (`completed | partial | failed`), the rollup PR, filed issues, and every
+  status (`completed | failed`), the rollup PR, filed issues, and every
   drop with its class — plainly, never papered over.
 - If the shipped work changed the target repo's behavior and it keeps `/docs`,
   spawn `scribe` to update it.

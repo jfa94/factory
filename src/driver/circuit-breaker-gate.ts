@@ -70,7 +70,7 @@ export async function applyCircuitBreaker(
   const startedAtIso = run.mode === "workflow" ? run.started_at : epochToIso(now);
 
   const verdict = evaluate(
-    { startedAtIso, consecutiveFailures: capabilityFailures, pausedMinutes: 0 },
+    { startedAtIso, cumulativeFailures: capabilityFailures, pausedMinutes: 0 },
     deps.config,
     now,
   );

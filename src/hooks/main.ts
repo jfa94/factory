@@ -12,7 +12,8 @@
  *
  * The thin entry `src/bin/factory-hook.ts` is the only `process.exit` site.
  */
-import { EXIT, type ExitCode } from "../cli/exit-codes.js";
+import { EXIT, type ExitCode } from "../shared/exit-codes.js";
+import type { Hook } from "./registry-types.js";
 import { runBranchProtection } from "./branch-protection.js";
 import { runWriteProtection } from "./write-protection.js";
 import { runHoldoutGuard } from "./holdout-guard.js";
@@ -20,14 +21,6 @@ import { runSecretGuard } from "./secret-guard.js";
 import { runPipelineGuards } from "./pipeline-guards.js";
 import { runSubagentStop } from "./subagent-stop.js";
 import { runStopGate } from "./stop-gate.js";
-
-/** A single hook entry. `run` returns (or resolves to) an {@link ExitCode}. */
-export interface Hook {
-  /** One-line description shown in `--help`. */
-  describe: string;
-  /** Execute the hook with its remaining argv (after the hook name). */
-  run: (argv: string[]) => Promise<ExitCode> | ExitCode;
-}
 
 /** The mutable hook registry. WS9 registers the real guards here. */
 export const hookRegistry: Record<string, Hook> = {

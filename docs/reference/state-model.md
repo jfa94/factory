@@ -108,22 +108,23 @@ one.
 
 ## `TaskState`
 
-| Field                     | Type                       | Meaning                                                        |
-| ------------------------- | -------------------------- | -------------------------------------------------------------- |
-| `task_id`                 | string                     | —                                                              |
-| `status`                  | TaskStatus                 | See below.                                                     |
-| `depends_on`              | string[]                   | Task ids this task depends on (the vertical-slice DAG).        |
-| `risk_tier`               | `low \| medium \| high`    | The single producer dial, set at spec time, never re-assessed. |
-| `escalation_rung`         | int ≥0                     | Current rung on the producer escalation ladder (0 = starting). |
-| `producer_role`           | `test-writer \| executor`? | Which producer role is/last ran.                               |
-| `reviewers`               | ReviewerResult[]           | Per-reviewer panel results (the floor is derived from these).  |
-| `branch`                  | string?                    | Run-scoped branch `factory/<run_id>/<task_id>`.                |
-| `pr_number`               | int >0?                    | PR number once created.                                        |
-| `failure_class`           | FailureClass?              | Set _iff_ `status === "dropped"`.                              |
-| `failure_reason`          | string?                    | Human-facing drop reason; set _iff_ dropped.                   |
-| `stage`                   | TaskStage?                 | The drive coroutine's resume cursor (see below).               |
-| `merge_resyncs`           | int ≥0 (default 0)         | Ship live-merge re-sync count (see below).                     |
-| `started_at` / `ended_at` | string?                    | ISO-8601.                                                      |
+| Field                     | Type                       | Meaning                                                         |
+| ------------------------- | -------------------------- | --------------------------------------------------------------- |
+| `task_id`                 | string                     | —                                                               |
+| `status`                  | TaskStatus                 | See below.                                                      |
+| `depends_on`              | string[]                   | Task ids this task depends on (the vertical-slice DAG).         |
+| `risk_tier`               | `low \| medium \| high`    | The single producer dial, set at spec time, never re-assessed.  |
+| `escalation_rung`         | int ≥0                     | Current rung on the producer escalation ladder (0 = starting).  |
+| `producer_role`           | `test-writer \| executor`? | Which producer role is/last ran.                                |
+| `reviewers`               | ReviewerResult[]           | Per-reviewer panel results (the floor is derived from these).   |
+| `branch`                  | string?                    | Run-scoped branch `factory/<run_id>/<task_id>`.                 |
+| `pr_number`               | int >0?                    | PR number once created.                                         |
+| `failure_class`           | FailureClass?              | Set _iff_ `status === "dropped"`.                               |
+| `failure_reason`          | string?                    | Human-facing drop reason; set _iff_ dropped.                    |
+| `stage`                   | TaskStage?                 | The drive coroutine's resume cursor (see below).                |
+| `merge_resyncs`           | int ≥0 (default 0)         | Ship live-merge re-sync count (see below).                      |
+| `spawn_in_flight`         | object?                    | Spawn-in-flight checkpoint for idempotent re-spawn (see below). |
+| `started_at` / `ended_at` | string?                    | ISO-8601.                                                       |
 
 ### `TaskStatus`
 
@@ -174,6 +175,30 @@ equal.)
 merge and re-routed back through `exec` to re-sync. The drive coroutine enforces the cap
 (`MERGE_RESYNC_CAP`) and persists the count so the budget survives process
 boundaries; exhausting it drops the task as `blocked-environmental`.
+
+### `spawn_in_flight` — idempotent re-spawn checkpoint
+
+`{ stage: "tests"|"exec"|"verify", rung: int ≥0, tip_sha: string }` (optional). The
+checkpoint that makes a stop-mid-spawn plus `factory resume` idempotent. Producers
+commit to the **shared** task worktree, so a stop in the post-spawn / pre-fold
+window leaves the abandoned producer's partial commits (and uncommitted edits) on
+the task branch.
+
+- **Set on a fresh spawn.** When the coroutine emits a spawn for `(stage, rung)`, it
+  records the task-branch `tip_sha` at emit time.
+- **Reset on a matching re-spawn.** When a resume re-enters the **same** `(stage,
+rung)` before any results were folded, the coroutine resets the worktree to
+  `tip_sha` — discarding **only** the interrupted stage's work (prior completed
+  stages live below that tip and survive) — then re-spawns clean.
+- **Cleared on a terminal write.** `complete` / `drop` clear it; a fold need not,
+  because every forward edge changes `(stage, rung)` (advance moves the stage,
+  escalate bumps the rung), so a stale checkpoint can never match.
+- **Scope.** `stage` is the spawn-stage subset (`tests | exec | verify`) — preflight
+  and ship never spawn. A `verify` re-spawn's reset is a no-op (the panel reviewers
+  run in their own isolated worktrees, so the shared worktree HEAD never moved).
+
+(The `stage` literals duplicate the driver's spawn-stage set deliberately, so
+`src/core/state` need not import the driver; a cross-check test keeps them equal.)
 
 ## `QuotaCheckpoint`
 

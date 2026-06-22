@@ -86,6 +86,7 @@ export async function completeTask(
     ...t,
     status: "done",
     ended_at: t.ended_at ?? nowIso(),
+    spawn_in_flight: undefined, // WS2 hygiene: no spawn is in flight past a terminal task
   }));
   return { done: true, outcome: { outcome: "done" } };
 }
@@ -109,6 +110,7 @@ export async function dropTask(
     failure_class: failureClass,
     failure_reason: reason,
     ended_at: t.ended_at ?? nowIso(),
+    spawn_in_flight: undefined, // WS2 hygiene: no spawn is in flight past a terminal task
   }));
 }
 
