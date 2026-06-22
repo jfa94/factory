@@ -7250,6 +7250,11 @@ var QuotaCheckpointSchema = external_exports.object({
   /** Which window forced the last pause/suspend, if any. */
   binding_window: external_exports.enum(["5h", "7d"]).optional()
 });
+var DocsStageSchema = external_exports.object({
+  status: external_exports.enum(["done", "failed"]),
+  reason: external_exports.string().optional(),
+  ended_at: external_exports.string()
+});
 var DriverEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
@@ -7291,6 +7296,8 @@ var RunStateSchema = external_exports.object({
   tasks: external_exports.record(external_exports.string(), TaskStateChecked).default({}),
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
+  /** Documentation stage marker; absent until the docs stage runs (engine docs stage). */
+  docs: DocsStageSchema.optional(),
   /** Lifecycle timestamps (ISO-8601). */
   started_at: external_exports.string(),
   updated_at: external_exports.string(),
