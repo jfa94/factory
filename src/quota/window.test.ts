@@ -9,7 +9,7 @@ import {
 } from "./window.js";
 
 const HOURLY = [20, 40, 60, 80, 90];
-const DAILY = [14, 29, 43, 57, 71, 86, 95];
+const DAILY = [20, 40, 60, 80, 95, 95, 95];
 
 describe("D24 window math — computeWindowHour parity with bash compute_window_hour", () => {
   // window_start = resets - 18000; hour = floor((now - window_start)/3600)+1 clamped [1,5].
@@ -102,7 +102,7 @@ describe("D24 threshold curves — index by position with clamped bounds", () =>
   it("out-of-range positions clamp to the nearest curve endpoint", () => {
     expect(hourlyThresholdFor(0, HOURLY)).toBe(20);
     expect(hourlyThresholdFor(99, HOURLY)).toBe(90);
-    expect(dailyThresholdFor(-3, DAILY)).toBe(14);
+    expect(dailyThresholdFor(-3, DAILY)).toBe(20);
     expect(dailyThresholdFor(99, DAILY)).toBe(95);
   });
 

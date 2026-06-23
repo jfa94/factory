@@ -55,6 +55,11 @@ export function planResume(
     return { kind: "not-resumable", status: run.status };
   }
 
+  // --ignore-quota: skip the live pacer check and force a clear unconditionally.
+  if (run.ignore_quota) {
+    return { kind: "resume", clear: clearCheckpoint() };
+  }
+
   const decision = evaluatePacer(reading, config, nowEpoch);
   if (decision.kind === "proceed") {
     return { kind: "resume", clear: clearCheckpoint() };

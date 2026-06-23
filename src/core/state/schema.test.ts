@@ -314,6 +314,22 @@ describe("RunStateSchema default()", () => {
   });
 });
 
+describe("ignore_quota field", () => {
+  it("defaults to false when absent (legacy runs unaffected)", () => {
+    const run = parseRunState(minimalRun());
+    expect(run.ignore_quota).toBe(false);
+  });
+
+  it("round-trips true", () => {
+    const run = parseRunState(minimalRun({ ignore_quota: true }));
+    expect(run.ignore_quota).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    expect(() => parseRunState(minimalRun({ ignore_quota: "yes" }))).toThrow();
+  });
+});
+
 describe("docs stage marker", () => {
   it("absent by default → undefined", () => {
     expect(parseRunState(minimalRun()).docs).toBeUndefined();

@@ -6431,8 +6431,8 @@ var QuotaSchema = external_exports.object({
   wallBudgetMin: external_exports.number().int().positive().default(75),
   /** 5h-window utilization checkpoints by hour 1..5 (% caps). */
   hourlyThresholds: external_exports.array(external_exports.number()).length(5).default([20, 40, 60, 80, 90]),
-  /** 7d-window utilization checkpoints by day 1..7 (% caps). */
-  dailyThresholds: external_exports.array(external_exports.number()).length(7).default([14, 29, 43, 57, 71, 86, 95]),
+  /** 7d-window utilization checkpoints by day 1..7 (% caps). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
+  dailyThresholds: external_exports.array(external_exports.number()).length(7).default([20, 40, 60, 80, 95, 95, 95]),
   /**
    * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
    * renamed model-router, narrowed) selects the producer model for a task from
@@ -7316,6 +7316,14 @@ var RunStateSchema = external_exports.object({
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
   tasks: external_exports.record(external_exports.string(), TaskStateChecked).default({}),
+  /**
+   * When true, the quota gate skips pacing and returns null unconditionally. Set once at
+   * `run create` from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`.
+   * Persisted so both coroutines and both drivers skip the gate without per-call flag
+   * threading — mirrors the `mode==="workflow"` skip. Default false: legacy runs (no field)
+   * are unaffected.
+   */
+  ignore_quota: external_exports.boolean().default(false),
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
   /** Documentation stage marker; absent until the docs stage runs (engine docs stage). */

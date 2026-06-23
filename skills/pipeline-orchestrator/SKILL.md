@@ -67,12 +67,12 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--supersede | --resume] [--workflow] [--no-ship] --session-id "$CLAUDE_CODE_SESSION_ID"
+factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] --session-id "$CLAUDE_CODE_SESSION_ID"
 ```
 
 `--repo` is OPTIONAL — auto-derived from the `origin` remote of the current checkout (pass it only
 to override; an explicit value that disagrees with the remote fails loud). Forward the invoking
-command's `--workflow`/`--no-ship` flags verbatim (defaults — no flag: session + live); the resolved
+command's `--workflow`/`--no-ship`/`--ignore-quota` flags verbatim (defaults — no flag: session + live); the resolved
 `mode` and `ship_mode` persist on the run. `mode` tells the quota gate whether to pace (Decision 24:
 `workflow` disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow driver +
 resume + finalize, so it is never re-marshaled. Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` — this stamps THIS
@@ -84,13 +84,17 @@ read `run_id` from `.run.run_id` (not a bare RunState). Seed failures (duplicate
 are spec defects — surface them.
 
 **No silent reuse (Decision 35).** `run create` never adopts an existing run. If an active run already
-exists for the spec, it exits `3` and emits `{kind:"exists", existing:{run_id, status}}`. Resolve it:
+exists for the spec, it exits `3`. Two distinct envelopes — check `kind` first:
 
-- If the invoking command forwarded `--supersede` or `--resume`, `run create` already acted on it
-  (superseded the old run + created fresh, or the command will hand off to resume) — no prompt.
-- Otherwise surface the conflict to `/factory:run`, which prompts the user (`AskUserQuestion`:
-  resume / supersede / cancel) and re-invokes with the chosen flag. Do NOT re-run bare `create` in a
-  loop hoping it sticks, and do NOT hand-pick the existing run — the flag is the only sanctioned escape.
+- `{kind:"quota-blocked", scope:"7d", run_id, status, reason, resets_at_epoch?}` — the existing run
+  is parked on the weekly quota window. **Hard stop: do NOT prompt, do NOT supersede.** Surface the
+  reason + reset time and tell the user to `/factory:resume` after the window resets. The only override
+  is `--ignore-quota` (user must pass it explicitly to this command, which forwards it to `run create`).
+- `{kind:"exists", existing:{run_id, status}}` — generic active-run conflict. If the invoking command
+  forwarded `--supersede` or `--resume`, `run create` already acted on it — no prompt. Otherwise
+  surface the conflict to `/factory:run`, which prompts the user (`AskUserQuestion`: resume / supersede /
+  cancel) and re-invokes with the chosen flag. Do NOT re-run bare `create` in a loop hoping it sticks,
+  and do NOT hand-pick the existing run — the flag is the only sanctioned escape.
 
 Pass `--new` (or an explicit `--run-id`) to force an unconditional fresh run with a distinct id.
 

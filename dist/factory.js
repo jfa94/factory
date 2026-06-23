@@ -5830,8 +5830,8 @@ var QuotaSchema = external_exports.object({
   wallBudgetMin: external_exports.number().int().positive().default(75),
   /** 5h-window utilization checkpoints by hour 1..5 (% caps). */
   hourlyThresholds: external_exports.array(external_exports.number()).length(5).default([20, 40, 60, 80, 90]),
-  /** 7d-window utilization checkpoints by day 1..7 (% caps). */
-  dailyThresholds: external_exports.array(external_exports.number()).length(7).default([14, 29, 43, 57, 71, 86, 95]),
+  /** 7d-window utilization checkpoints by day 1..7 (% caps). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
+  dailyThresholds: external_exports.array(external_exports.number()).length(7).default([20, 40, 60, 80, 95, 95, 95]),
   /**
    * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
    * renamed model-router, narrowed) selects the producer model for a task from
@@ -6361,6 +6361,14 @@ var RunStateSchema = external_exports.object({
   spec: SpecPointerSchema,
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
   tasks: external_exports.record(external_exports.string(), TaskStateChecked).default({}),
+  /**
+   * When true, the quota gate skips pacing and returns null unconditionally. Set once at
+   * `run create` from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`.
+   * Persisted so both coroutines and both drivers skip the gate without per-call flag
+   * threading — mirrors the `mode==="workflow"` skip. Default false: legacy runs (no field)
+   * are unaffected.
+   */
+  ignore_quota: external_exports.boolean().default(false),
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
   /** Documentation stage marker; absent until the docs stage runs (engine docs stage). */
@@ -9457,6 +9465,9 @@ function planResume(run9, reading, config, nowEpoch2) {
   if (run9.status !== "paused" && run9.status !== "suspended") {
     return { kind: "not-resumable", status: run9.status };
   }
+  if (run9.ignore_quota) {
+    return { kind: "resume", clear: clearCheckpoint() };
+  }
   const decision = evaluate(reading, config, nowEpoch2);
   if (decision.kind === "proceed") {
     return { kind: "resume", clear: clearCheckpoint() };
@@ -11805,8 +11816,8 @@ function isSpawnStage(stage) {
 
 // src/driver/quota-gate.ts
 var log25 = createLogger("quota-gate");
-async function applyQuotaGate(deps, runId, mode = "session") {
-  if (mode === "workflow") return null;
+async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false) {
+  if (mode === "workflow" || ignoreQuota) return null;
   const reading = await deps.usage.read();
   const decision = evaluate(reading, deps.config, deps.now());
   if (decision.kind === "proceed") {
@@ -11987,7 +11998,7 @@ async function stepTask(deps, runId, taskId, results) {
   if (isTerminalTaskStatus(task.status)) {
     return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
-  const stop = await applyQuotaGate(deps, runId, run9.mode);
+  const stop = await applyQuotaGate(deps, runId, run9.mode, run9.ignore_quota);
   if (stop !== null) {
     return {
       kind: "quota-blocked",
@@ -12165,7 +12176,7 @@ async function stepRun(deps, runId) {
   if (allTerminal && !needsDocs) {
     return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
   }
-  const stop = await applyQuotaGate(deps, runId, run9.mode);
+  const stop = await applyQuotaGate(deps, runId, run9.mode, run9.ignore_quota);
   if (stop !== null) {
     return {
       ...ctx(),
@@ -12613,7 +12624,8 @@ async function createRunFromManifest(state, specStore, manifest, opts, stagingDe
     driver: "sequential",
     ...opts.mode !== void 0 ? { mode: opts.mode } : {},
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
-    ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {}
+    ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {},
+    ...opts.ignoreQuota === true ? { ignore_quota: true } : {}
   });
   const run9 = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
   if (stagingDeps !== void 0) {
@@ -12652,6 +12664,10 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
+      const weeklyParked = existing.status === "suspended" && existing.quota?.binding_window === "7d";
+      if (weeklyParked && !opts.ignoreQuota && opts.intent !== "resume") {
+        return { kind: "quota-blocked", existing };
+      }
       if (opts.intent === "supersede") {
         if (stagingDeps === void 0) {
           throw new UsageError("run create --supersede requires the CLI gh deps");
@@ -12717,7 +12733,9 @@ function resolveOwnerSession(flag, env = process.env) {
   return optionalString(flag) ?? optionalString(env.CLAUDE_CODE_SESSION_ID);
 }
 async function runCreate(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship", "supersede", "resume"] });
+  const args = parseArgs(argv, {
+    booleans: ["new", "workflow", "no-ship", "supersede", "resume", "ignore-quota"]
+  });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -12763,6 +12781,7 @@ async function runCreate(argv, overrides = {}) {
     throw new UsageError("run create: pass at most one of --new / --supersede / --resume");
   }
   const intent = picked[0] ?? "default";
+  const ignoreQuota = args.flag("ignore-quota") === true;
   const dataDir = resolveDataDir(
     overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {}
   );
@@ -12789,10 +12808,27 @@ async function runCreate(argv, overrides = {}) {
       mode,
       shipMode,
       ...ownerSession !== void 0 ? { ownerSession } : {},
+      ...ignoreQuota ? { ignoreQuota } : {},
       intent
     },
     stagingDeps
   );
+  if (result.kind === "quota-blocked") {
+    const r = result.existing;
+    const resets = r.quota?.resets_at_epoch;
+    emitJson({
+      kind: "quota-blocked",
+      scope: "7d",
+      run_id: r.run_id,
+      status: r.status,
+      reason: `weekly quota window has not reset; run '${r.run_id}' is parked until the 7d window resets`,
+      ...resets !== void 0 ? { resets_at_epoch: resets } : {}
+    });
+    emitError(
+      `run create: run '${r.run_id}' is parked on a weekly quota (7d) \u2014 resume after the window resets with /factory:resume, or pass --ignore-quota to override`
+    );
+    return EXIT.CONFLICT;
+  }
   if (result.kind === "exists") {
     emitJson({
       kind: "exists",
@@ -12811,7 +12847,7 @@ async function runCreate(argv, overrides = {}) {
   return EXIT.OK;
 }
 async function runResume(argv) {
-  const args = parseArgs(argv, { booleans: ["workflow", "no-ship"] });
+  const args = parseArgs(argv, { booleans: ["workflow", "no-ship", "ignore-quota"] });
   if (args.flag("help") === true) {
     emitLine(RESUME_HELP);
     return EXIT.OK;
@@ -12826,6 +12862,9 @@ async function runResume(argv) {
   const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "resume");
+  if (args.flag("ignore-quota") === true) {
+    await state.update(runId, (s) => ({ ...s, ignore_quota: true }));
+  }
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
   const envelope = await applyResume(state, runId, reading, config, nowEpoch());
   emitJson(envelope);

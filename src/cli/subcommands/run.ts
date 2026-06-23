@@ -304,6 +304,8 @@ export type CreateRunOptions = SpecSelector &
      * when the launching session id could not be resolved (best-effort).
      */
     readonly ownerSession?: RunState["owner_session"];
+    /** When true, persist `ignore_quota: true` on the run (from `--ignore-quota`). */
+    readonly ignoreQuota?: boolean;
   };
 
 /**
@@ -367,6 +369,7 @@ async function createRunFromManifest(
     ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
     ...(opts.ownerSession !== undefined ? { owner_session: opts.ownerSession } : {}),
+    ...(opts.ignoreQuota === true ? { ignore_quota: true } : {}),
   });
   const run = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 
@@ -426,7 +429,14 @@ export async function createRun(
 export type ResolveOrCreateResult =
   | { readonly kind: "created"; readonly run: RunState }
   | { readonly kind: "exists"; readonly existing: RunState }
-  | { readonly kind: "superseded"; readonly run: RunState; readonly supersededId: string };
+  | { readonly kind: "superseded"; readonly run: RunState; readonly supersededId: string }
+  /**
+   * A weekly-quota (7d) park is active and `--ignore-quota` was not passed. Creating
+   * or superseding is blocked until the window resets or `--ignore-quota` overrides.
+   * The `--resume` intent is never blocked here (it falls through to the live-gated
+   * `/factory:resume` path, which re-checks the window on the fresh session).
+   */
+  | { readonly kind: "quota-blocked"; readonly existing: RunState };
 
 /**
  * Supersede an active run (Decision 35): tear down its protection (GitHub blocks
@@ -491,6 +501,18 @@ export async function resolveOrCreateRun(
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
+      // Weekly quota is a hard wall: a 7d-parked run can't be created-fresh or
+      // superseded without --ignore-quota. The `binding_window === "7d"` guard
+      // targets only the weekly park — NOT the `unavailable-halt` suspend (quota:
+      // undefined) or a 5h pause. The `--resume` intent falls through to the
+      // `kind:"exists"` caller path, which hands off to `factory resume` (that
+      // re-checks the LIVE window on the fresh session).
+      const weeklyParked =
+        existing.status === "suspended" && existing.quota?.binding_window === "7d";
+      if (weeklyParked && !opts.ignoreQuota && opts.intent !== "resume") {
+        return { kind: "quota-blocked", existing };
+      }
+
       if (opts.intent === "supersede") {
         if (stagingDeps === undefined) {
           throw new UsageError("run create --supersede requires the CLI gh deps");
@@ -636,7 +658,9 @@ export async function runCreate(
   argv: string[],
   overrides: RunCreateOverrides = {},
 ): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["new", "workflow", "no-ship", "supersede", "resume"] });
+  const args = parseArgs(argv, {
+    booleans: ["new", "workflow", "no-ship", "supersede", "resume", "ignore-quota"],
+  });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
     return EXIT.OK;
@@ -707,6 +731,7 @@ export async function runCreate(
     throw new UsageError("run create: pass at most one of --new / --supersede / --resume");
   }
   const intent: NonNullable<RunIntent["intent"]> = picked[0] ?? "default";
+  const ignoreQuota = args.flag("ignore-quota") === true;
 
   const dataDir = resolveDataDir(
     overrides.dataDir !== undefined ? { dataDir: overrides.dataDir } : {},
@@ -736,10 +761,28 @@ export async function runCreate(
       mode,
       shipMode,
       ...(ownerSession !== undefined ? { ownerSession } : {}),
+      ...(ignoreQuota ? { ignoreQuota } : {}),
       intent,
     },
     stagingDeps,
   );
+  if (result.kind === "quota-blocked") {
+    const r = result.existing;
+    const resets = r.quota?.resets_at_epoch;
+    emitJson({
+      kind: "quota-blocked",
+      scope: "7d",
+      run_id: r.run_id,
+      status: r.status,
+      reason: `weekly quota window has not reset; run '${r.run_id}' is parked until the 7d window resets`,
+      ...(resets !== undefined ? { resets_at_epoch: resets } : {}),
+    });
+    emitError(
+      `run create: run '${r.run_id}' is parked on a weekly quota (7d) — ` +
+        `resume after the window resets with /factory:resume, or pass --ignore-quota to override`,
+    );
+    return EXIT.CONFLICT;
+  }
   if (result.kind === "exists") {
     emitJson({
       kind: "exists",
@@ -761,7 +804,7 @@ export async function runCreate(
 }
 
 async function runResume(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["workflow", "no-ship"] });
+  const args = parseArgs(argv, { booleans: ["workflow", "no-ship", "ignore-quota"] });
   if (args.flag("help") === true) {
     emitLine(RESUME_HELP);
     return EXIT.OK;
@@ -784,6 +827,13 @@ async function runResume(argv: string[]): Promise<ExitCode> {
   const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "resume");
+
+  // --ignore-quota: persist on the run BEFORE applyResume so planResume short-circuits
+  // to resume regardless of the live reading. Persisting also prevents re-suspension on
+  // subsequent steps (both coroutines read run.ignore_quota via the gate).
+  if (args.flag("ignore-quota") === true) {
+    await state.update(runId, (s) => ({ ...s, ignore_quota: true }));
+  }
 
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
   const envelope = await applyResume(state, runId, reading, config, nowEpoch());

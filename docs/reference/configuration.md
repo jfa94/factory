@@ -85,17 +85,17 @@ Quality-gate thresholds.
 
 The two-window quota pacer.
 
-| Key                     | Type      | Default                  | Meaning                                                     |
-| ----------------------- | --------- | ------------------------ | ----------------------------------------------------------- |
-| `sleepCapSec`           | int >0    | `540`                    | Max single sleep chunk per gate call (seconds).             |
-| `maxWaitCycles`         | int >0    | `60`                     | Max wait cycles before the gate ends a wait.                |
-| `maxStaleCycles`        | int >0    | `6`                      | Max consecutive stale-cache cycles before graceful end.     |
-| `wallBudgetMin`         | int >0    | `75`                     | Accumulated wall-clock wait budget across cycles (minutes). |
-| `hourlyThresholds`      | number[5] | `[20,40,60,80,90]`       | 5h-window utilization caps by hour 1..5 (%).                |
-| `dailyThresholds`       | number[7] | `[14,29,43,57,71,86,95]` | 7d-window utilization caps by day 1..7 (%).                 |
-| `producerModels.low`    | string    | `claude-sonnet-4-5`      | Producer model for low risk tier.                           |
-| `producerModels.medium` | string    | `claude-sonnet-4-5`      | Producer model for medium risk tier.                        |
-| `producerModels.high`   | string    | `claude-opus-4-6`        | Producer model for high risk tier.                          |
+| Key                     | Type      | Default                  | Meaning                                                                                                                                                                                                                                                 |
+| ----------------------- | --------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sleepCapSec`           | int >0    | `540`                    | Max single sleep chunk per gate call (seconds).                                                                                                                                                                                                         |
+| `maxWaitCycles`         | int >0    | `60`                     | Max wait cycles before the gate ends a wait.                                                                                                                                                                                                            |
+| `maxStaleCycles`        | int >0    | `6`                      | Max consecutive stale-cache cycles before graceful end.                                                                                                                                                                                                 |
+| `wallBudgetMin`         | int >0    | `75`                     | Accumulated wall-clock wait budget across cycles (minutes).                                                                                                                                                                                             |
+| `hourlyThresholds`      | number[5] | `[20,40,60,80,90]`       | 5h-window utilization caps by hour 1..5 (%).                                                                                                                                                                                                            |
+| `dailyThresholds`       | number[7] | `[20,40,60,80,95,95,95]` | 7d-window utilization caps by day 1..7 (%). Ramps to 95% by window-day 5 (a 5-workday spend pattern) then plateaus through days 6–7, leaving a 5% end-of-window reserve. "Window-day N" is a position in the rolling 7d window, not a calendar weekday. |
+| `producerModels.low`    | string    | `claude-sonnet-4-5`      | Producer model for low risk tier.                                                                                                                                                                                                                       |
+| `producerModels.medium` | string    | `claude-sonnet-4-5`      | Producer model for medium risk tier.                                                                                                                                                                                                                    |
+| `producerModels.high`   | string    | `claude-opus-4-6`        | Producer model for high risk tier.                                                                                                                                                                                                                      |
 
 The review panel is risk-_invariant_ (Decision 26), so there is no review-depth
 dial here. `producerModels` is the only dial the quota router carries.

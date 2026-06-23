@@ -66,9 +66,11 @@ export const QualitySchema = z
   .default({});
 
 /**
- * Two-window quota pacer config (WS4 owns). Defaults lifted verbatim from
- * `bin/pipeline-lib.sh`. `hourlyThresholds` is the 5h curve (per window-hour),
- * `dailyThresholds` the 7d curve (per window-day).
+ * Two-window quota pacer config (WS4 owns). `hourlyThresholds` is the 5h curve
+ * (per window-hour); `dailyThresholds` the 7d curve (per window-day). The 7d window
+ * is rolling (not calendar-aligned): "window-day N" is a position in the rolling
+ * window, not a weekday. The default ramps to 95% by day 5 then plateaus, giving a
+ * 5-workday spend pattern with a 5% end-of-window reserve.
  */
 export const QuotaSchema = z
   .object({
@@ -82,8 +84,8 @@ export const QuotaSchema = z
     wallBudgetMin: z.number().int().positive().default(75),
     /** 5h-window utilization checkpoints by hour 1..5 (% caps). */
     hourlyThresholds: z.array(z.number()).length(5).default([20, 40, 60, 80, 90]),
-    /** 7d-window utilization checkpoints by day 1..7 (% caps). */
-    dailyThresholds: z.array(z.number()).length(7).default([14, 29, 43, 57, 71, 86, 95]),
+    /** 7d-window utilization checkpoints by day 1..7 (% caps). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
+    dailyThresholds: z.array(z.number()).length(7).default([20, 40, 60, 80, 95, 95, 95]),
     /**
      * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
      * renamed model-router, narrowed) selects the producer model for a task from

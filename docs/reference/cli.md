@@ -118,21 +118,23 @@ loudly at seed time.
 
 ```
 factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
-                   [--new] [--supersede | --resume] [--workflow] [--no-ship] [--session-id <id>]
+                   [--new] [--supersede | --resume] [--workflow] [--no-ship] [--ignore-quota]
+                   [--session-id <id>]
 ```
 
-| Flag                  | Notes                                                                                                                                                                                                                                                             |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--repo <owner/name>` | **Optional.** Repo identity (the first key of the spec store). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with the remote fails loud.                                                                                   |
-| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`.                                                                                                                                                                                           |
-| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                                                                                                             |
-| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                                                                                                            |
-| `--new`               | Force a fresh run, bypassing the active-run conflict scan.                                                                                                                                                                                                        |
-| `--supersede`         | If an active run exists for this spec, mark it `superseded`, delete its `staging-<run-id>` branch (auto-closing its task PRs), then create a fresh run. Emits `{kind:"superseded", run, supersededId}`. Mutually exclusive with `--resume`.                       |
-| `--resume`            | If an active run exists, do not create — return the conflict (exit `3`) so the caller hands off to [`resume`](#resume). Mutually exclusive with `--supersede`.                                                                                                    |
-| `--workflow`          | Run the parallel background Workflow driver. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                                              |
-| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging-<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow driver + resume + finalize read it without re-passing. |
-| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`; absent ⇒ owner-unknown (gate runs unscoped).                                                                                                               |
+| Flag                  | Notes                                                                                                                                                                                                                                                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <owner/name>` | **Optional.** Repo identity (the first key of the spec store). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with the remote fails loud.                                                                                                                                   |
+| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`.                                                                                                                                                                                                                                           |
+| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                                                                                                                                                             |
+| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                                                                                                                                                            |
+| `--new`               | Force a fresh run, bypassing the active-run conflict scan.                                                                                                                                                                                                                                                        |
+| `--supersede`         | If an active run exists for this spec, mark it `superseded`, delete its `staging-<run-id>` branch (auto-closing its task PRs), then create a fresh run. Emits `{kind:"superseded", run, supersededId}`. Mutually exclusive with `--resume`.                                                                       |
+| `--resume`            | If an active run exists, do not create — return the conflict (exit `3`) so the caller hands off to [`resume`](#resume). Mutually exclusive with `--supersede`.                                                                                                                                                    |
+| `--workflow`          | Run the parallel background Workflow driver. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                                                                                              |
+| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging-<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow driver + resume + finalize read it without re-passing.                                                 |
+| `--ignore-quota`      | Bypass the weekly-quota hard stop **and** the per-step quota pacer for this run. Persisted as `ignore_quota: true` so both coroutines + drivers skip the gate without re-passing. Lets create/supersede proceed even when the existing run is 7d-parked. Operator override for a mistaken suspend / manual reset. |
+| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`; absent ⇒ owner-unknown (gate runs unscoped).                                                                                                                                                               |
 
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
 exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
@@ -165,6 +167,19 @@ it does **not** validate the create-time `--workflow`/`--no-ship` flags against 
 run — flag-compatibility belongs to the resume hand-off, not a premature gate here, so a
 resumed run keeps its own persisted dials regardless. Emits `{kind:"created", run}` on
 the fresh-create path.
+
+**Weekly-quota hard stop (distinct from the generic conflict).** When the existing run
+is **weekly-parked** — `status === "suspended"` _and_ `quota.binding_window === "7d"` —
+`run create` blocks **every** new-run attempt for the spec (the default path, `--new`,
+and `--supersede` alike), not just a bare re-create. It exits `3` (CONFLICT) and emits a
+distinct envelope: `{kind:"quota-blocked", scope:"7d", run_id, status, reason,
+resets_at_epoch?}`. The caller must treat this as a hard stop — report the reason and
+reset horizon and tell the operator to `factory resume` after the window resets, NOT offer
+the supersede/resume choice. Three carve-outs: a **5h pause** and an **`unavailable`
+suspend** (no `binding_window`) are never blocked; the **`--resume` intent** falls through
+to the ordinary `kind:"exists"` conflict (the `resume` door re-checks the live window); and
+**`--ignore-quota`** overrides the block, letting create/supersede proceed. See
+[Quota pacing — the weekly-quota hard stop](../explanation/quota-pacing.md#the-weekly-quota-hard-stop-on-run-create).
 
 ### `run resume`
 
@@ -259,11 +274,18 @@ run is a loud error (nothing to resume). `factory run resume` is a thin alias of
 command.
 
 ```
-factory resume [--run <id>]
+factory resume [--run <id>] [--ignore-quota]
 ```
 
 Subject to the same mandatory autonomy gate as `run create` (halts loud unless
 `FACTORY_AUTONOMOUS_MODE=1`).
+
+`--ignore-quota` persists `ignore_quota: true` on the run **before** the resume plan
+runs, so `planResume` force-clears the checkpoint regardless of the live window reading,
+and subsequent steps stay un-paced. It is a `boolean` operator override (a mistaken
+suspend / manual reset), NOT a mode/ship flag — unlike `--workflow`/`--no-ship` (rejected
+loud on resume), it combines freely. See
+[Quota pacing — `--ignore-quota`](../explanation/quota-pacing.md#--ignore-quota--the-per-run-pacing-override).
 
 `--run` defaults to **this repo's current run** — resolved from the caller's
 checkout (`origin` remote → `<dataDir>/current/<repoKey>`), falling back to the

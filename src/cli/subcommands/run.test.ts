@@ -876,6 +876,82 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect(fresh?.mode).toBe("workflow");
     expect(fresh?.status).toBe("running");
   });
+
+  // -------------------------------------------------------------------------
+  // kind: "quota-blocked" — 7d-parked run blocks create/supersede, not resume
+  // -------------------------------------------------------------------------
+
+  /** Seed run-old as suspended with a 7d quota checkpoint. */
+  async function seedWeeklyParked(): Promise<void> {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+    await state.update("run-old", (s) => ({
+      ...s,
+      status: "suspended",
+      quota: { binding_window: "7d" as const, resets_at_epoch: 9_999_999_999 },
+    }));
+  }
+
+  it("7d-parked run + default intent → quota-blocked", async () => {
+    await seedWeeklyParked();
+    const r = await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-new" });
+    expect(r.kind).toBe("quota-blocked");
+  });
+
+  it("7d-parked run + supersede intent (no --ignore-quota) → quota-blocked", async () => {
+    await seedWeeklyParked();
+    const r = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-new",
+      intent: "supersede",
+    });
+    expect(r.kind).toBe("quota-blocked");
+  });
+
+  it("7d-parked run + ignoreQuota=true → falls through (supersede or exists)", async () => {
+    await seedWeeklyParked();
+    const r = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-new",
+      ignoreQuota: true,
+    });
+    // Not quota-blocked — falls through to exists (no stagingDeps to supersede).
+    expect(r.kind).toBe("exists");
+  });
+
+  it("7d-parked run + resume intent → falls through to exists (resume re-checks the live window)", async () => {
+    await seedWeeklyParked();
+    const r = await resolveOrCreateRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-new",
+      intent: "resume",
+    });
+    expect(r.kind).toBe("exists");
+  });
+
+  it("5h-paused run (quota.binding_window:'5h') → NOT quota-blocked", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+    await state.update("run-old", (s) => ({
+      ...s,
+      status: "paused",
+      quota: { binding_window: "5h" as const, resets_at_epoch: 9_999_999_999 },
+    }));
+    const r = await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-new" });
+    expect(r.kind).toBe("exists");
+  });
+
+  it("unavailable-halt suspend (quota: undefined) → NOT quota-blocked", async () => {
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+    await state.update("run-old", (s) => ({
+      ...s,
+      status: "suspended",
+      quota: undefined,
+    }));
+    const r = await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-new" });
+    expect(r.kind).toBe("exists");
+  });
 });
 
 // ---------------------------------------------------------------------------

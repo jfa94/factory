@@ -129,8 +129,8 @@ export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextE
   }
 
   // 3. Quota gate — a breach persists the checkpoint and stops cleanly. Workflow
-  //    mode skips pacing (Decision 24); the gate reads run.mode to decide.
-  const stop = await applyQuotaGate(deps, runId, run.mode);
+  //    mode and --ignore-quota skip pacing (Decision 24).
+  const stop = await applyQuotaGate(deps, runId, run.mode, run.ignore_quota);
   if (stop !== null) {
     return {
       ...ctx(),

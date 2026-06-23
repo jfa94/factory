@@ -104,6 +104,35 @@ describe("Δ F resume from checkpoint — still-over reading stays blocked (fail
   });
 });
 
+describe("Δ F resume — ignore_quota short-circuits the live pacer check", () => {
+  it("a 7d-parked run with ignore_quota=true resumes regardless of a still-over reading", () => {
+    const run = parseRunState({ ...suspendedRun(), ignore_quota: true });
+    const plan = planResume(run, stillOver7dReading(), CONFIG, NOW);
+    expect(plan.kind).toBe("resume");
+    if (plan.kind === "resume") {
+      expect(plan.clear).toEqual({ status: "running", quota: undefined });
+    }
+  });
+
+  it("a 7d-parked run with ignore_quota=true resumes even when usage is unavailable", () => {
+    const run = parseRunState({ ...suspendedRun(), ignore_quota: true });
+    const plan = planResume(
+      run,
+      { kind: "unavailable", reason: "usage-cache-missing" },
+      CONFIG,
+      NOW,
+    );
+    expect(plan.kind).toBe("resume");
+  });
+
+  it("ignore_quota=false (default) still fails-closed on a still-over reading", () => {
+    // Belt-and-suspenders: the default field value must not accidentally bypass the gate.
+    const run = parseRunState({ ...suspendedRun(), ignore_quota: false });
+    const plan = planResume(run, stillOver7dReading(), CONFIG, NOW);
+    expect(plan.kind).toBe("still-blocked");
+  });
+});
+
 describe("Δ F resume — non-resumable run states are reported, not resumed", () => {
   it("a running run is not resumable", () => {
     const running = parseRunState({ ...suspendedRun(), status: "running", quota: undefined });

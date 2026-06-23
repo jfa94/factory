@@ -6,7 +6,7 @@ import type { UsageReading } from "./usage-source.js";
 
 const CONFIG = defaultConfig();
 const HOURLY = CONFIG.quota.hourlyThresholds; // [20,40,60,80,90]
-const DAILY = CONFIG.quota.dailyThresholds; // [14,29,43,57,71,86,95]
+const DAILY = CONFIG.quota.dailyThresholds; // [20,40,60,80,95,95,95]
 
 const NOW = 1_700_000_000;
 
@@ -96,7 +96,7 @@ describe("D24 7d graceful stop — over the daily curve suspends (not pause, not
 
 describe("D24 binding-window rule — 7d dominates 5h when both breach", () => {
   it("both windows over curve → suspend-7d, never pause-5h", () => {
-    // hour 1 cap 20, day 1 cap 14: push both over.
+    // hour 1 cap 20, day 1 cap 20: push both over.
     const r: UsageReading = {
       kind: "available",
       fiveHour: { utilizationPct: 95, resetsAtEpoch: NOW + FIVE_HOUR_WINDOW_SECONDS },

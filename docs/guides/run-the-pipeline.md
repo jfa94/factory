@@ -44,6 +44,7 @@ an active run already exists for the spec.
 | `--no-ship`           | no       | Open the PRs but never merge. Omit for the default **live** — auto-merge tasks→staging, rollup→develop. |
 | `--supersede`         | no       | If an active run already exists, replace it (see below). Mutually exclusive with `--resume`.            |
 | `--resume`            | no       | If an active run already exists, hand off to `/factory:resume` instead of starting fresh.               |
+| `--ignore-quota`      | no       | Override the weekly-quota hard stop **and** disable per-step quota pacing for this run (see below).     |
 
 `--workflow` selects the driver. Both step the same `factory next` / `factory drive`
 seam and enforce the identical engine gates; they differ only in where the loop
@@ -84,6 +85,14 @@ exists for the spec, `factory run create` exits `3` and emits
 Pass `--resume` or `--supersede` up front to skip the prompt. To repair a run that
 resume cannot untangle (tasks stuck mid-stage, or git/GitHub drift), use
 [`/factory:rescue`](./rescue-a-stalled-run.md) instead.
+
+If the existing run is **weekly-parked** (suspended on the 7d quota window), `run
+create` instead emits `{kind:"quota-blocked", scope:"7d", …}` and exits `3` — a hard
+stop, not the prompt above. This blocks the default path, `--supersede`, and `--new`
+alike. Wait for the window to reset and run `/factory:resume`, or pass `--ignore-quota`
+to override the wall and proceed. `--ignore-quota` also disables per-step quota pacing
+for the run (it persists on the run, like the `--workflow` no-pacing mode) — use it only
+to override a mistaken suspend or after a manual quota reset.
 
 ## 3. What happens (the four phases)
 
@@ -147,11 +156,14 @@ A run that hits a quota window does **not** finalize — it has unfinished work.
 Re-enter it once the window resets:
 
 ```
-/factory:resume [--run <id>]
+/factory:resume [--run <id>] [--ignore-quota]
 ```
 
 On `{kind:"still-blocked", …}` the orchestrator reports the reason +
 `resets_at_epoch` and stops; on `{kind:"resumed", run}` it continues the run loop.
+Pass `--ignore-quota` to force a resume regardless of the live window reading (it
+persists `ignore_quota` on the run, so the gate stays skipped on every later step) —
+use it only to override a mistaken suspend or after a manual quota reset.
 
 ## 6. If the run gets stuck mid-stage
 

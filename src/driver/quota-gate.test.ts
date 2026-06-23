@@ -41,7 +41,7 @@ function reading(opts: {
 
 const PROCEED = reading({ five: 0, seven: 0 });
 const PAUSE_5H = reading({ five: 21, seven: 0 }); // hour-1 cap 20, 21 > 20 → pause
-const SUSPEND_7D = reading({ five: 0, seven: 15 }); // day-1 cap 14, 15 > 14 → suspend
+const SUSPEND_7D = reading({ five: 0, seven: 21 }); // day-1 cap 20, 21 > 20 → suspend
 const UNAVAILABLE: UsageReading = { kind: "unavailable", reason: "usage-cache-missing" };
 
 // ---------------------------------------------------------------------------
@@ -162,5 +162,22 @@ describe("applyQuotaGate", () => {
     const stop = await applyQuotaGate(makeDeps(UNAVAILABLE), RUN_ID, "session");
     expect(stop?.scope).toBe("unavailable");
     expect(stop?.run.status).toBe("suspended");
+  });
+
+  it("ignoreQuota=true → proceeds (null) without reading usage or touching state", async () => {
+    const read = vi.fn(async (): Promise<UsageReading> => UNAVAILABLE);
+    const deps: QuotaGateDeps = {
+      state,
+      usage: { read },
+      config: defaultConfig(),
+      now: () => NOW,
+    };
+    // Even a would-be suspension reading returns null when ignoreQuota is set.
+    const stop = await applyQuotaGate(deps, RUN_ID, "session", true);
+    expect(stop).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("running");
+    expect(run.quota).toBeUndefined();
   });
 });

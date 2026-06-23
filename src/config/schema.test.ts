@@ -16,7 +16,7 @@ describe("ConfigSchema", () => {
     expect(cfg.quota.maxStaleCycles).toBe(6);
     expect(cfg.quota.wallBudgetMin).toBe(75);
     expect(cfg.quota.hourlyThresholds).toEqual([20, 40, 60, 80, 90]);
-    expect(cfg.quota.dailyThresholds).toEqual([14, 29, 43, 57, 71, 86, 95]);
+    expect(cfg.quota.dailyThresholds).toEqual([20, 40, 60, 80, 95, 95, 95]);
     // Top-level.
     expect(cfg.maxConsecutiveFailures).toBe(3);
     expect(cfg.maxRuntimeMinutes).toBe(480);

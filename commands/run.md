@@ -1,6 +1,6 @@
 ---
 description: "Start a fresh factory autonomous coding pipeline run (PRD issue → task PRs → staging → develop)"
-argument-hint: "(--issue <N> | --spec-id <id>) [--repo <owner/name>] [--workflow] [--no-ship] [--supersede | --resume]"
+argument-hint: "(--issue <N> | --spec-id <id>) [--repo <owner/name>] [--workflow] [--no-ship] [--supersede | --resume] [--ignore-quota]"
 arguments:
   - name: "--repo"
     description: "Target GitHub repo as <owner>/<name> (OPTIONAL — auto-derived from the origin remote; pass to override)"
@@ -22,6 +22,9 @@ arguments:
     required: false
   - name: "--resume"
     description: "If an active run already exists, hand off to `/factory:resume` instead of starting fresh — skips the conflict prompt. Continues the run in its PERSISTED mode/ship; never pass --workflow/--no-ship alongside it"
+    required: false
+  - name: "--ignore-quota"
+    description: "Bypass the weekly-quota hard stop: allows creating or superseding a run even when the existing run is 7d-parked. Persisted on the run so subsequent steps skip the quota gate too. Use only to override a mistaken suspend or after a manual quota reset."
     required: false
 ---
 
@@ -45,7 +48,7 @@ overrides: `--workflow` (run the background Workflow driver instead of session) 
 Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run create
 [--workflow] [--no-ship] [--supersede | --resume] --session-id "$CLAUDE_CODE_SESSION_ID"`;
 read `run_id` from the emitted `{kind:"created"|"superseded", run}` envelope). Forward THIS
-command's `--workflow`/`--no-ship`/`--supersede`/`--resume` flags verbatim to Phase 2's `run
+command's `--workflow`/`--no-ship`/`--supersede`/`--resume`/`--ignore-quota` flags verbatim to Phase 2's `run
 create` so the resolved mode + ship intent persist on the run — the quota gate paces in
 `session` and hard-stops without pacing in `workflow` (Decision 24), and `ship_mode` is read
 back by the workflow driver + resume + finalize (never re-passed). `--workflow`/`--no-ship`
@@ -63,11 +66,40 @@ Skill(pipeline-orchestrator)
 
 ## Active-run conflict (Decision 35 — no silent reuse)
 
-If an active run already exists for this spec, Phase 2's `run create` does **not** reuse it:
-it exits `3` and emits `{kind:"exists", existing:{run_id, status}}`. The orchestrator skill
-surfaces this back to the command; unless the user already passed `--supersede`/`--resume`
-(which the skill forwards, skipping the prompt), ask with one `AskUserQuestion` before doing
-anything destructive:
+If an active run already exists for this spec, Phase 2's `run create` exits `3`. There are
+two distinct conflict envelopes — **handle `kind` first**:
+
+### `kind:"quota-blocked"` — weekly quota hard stop
+
+```json
+{
+  "kind": "quota-blocked",
+  "scope": "7d",
+  "run_id": "…",
+  "status": "suspended",
+  "reason": "…",
+  "resets_at_epoch": 1234567890
+}
+```
+
+The existing run is parked on the weekly quota window. This is a **hard stop** — do NOT
+offer the supersede/resume prompt. Report the `reason` and `resets_at_epoch` (convert to a
+human-readable date), tell the user to run `/factory:resume` after the window resets, and
+**STOP**. The only override is `--ignore-quota`, which the user must pass explicitly:
+
+```
+run re-blocked on the 7d quota window (resets ~<date>).
+Run /factory:resume after it resets, or re-run with --ignore-quota to override.
+```
+
+### `kind:"exists"` — generic active-run conflict
+
+```json
+{ "kind": "exists", "existing": { "run_id": "…", "status": "running" } }
+```
+
+Unless the user already passed `--supersede`/`--resume` (forwarded by the skill, skipping
+the prompt), ask with one `AskUserQuestion` before doing anything destructive:
 
 - **Continue (resume)** → run `/factory:resume --run <existing.run_id>` — re-enter the
   existing run where it left off (its staging branch + merged work are intact). The driver is

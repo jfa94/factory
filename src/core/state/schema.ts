@@ -489,6 +489,15 @@ export const RunStateSchema = z.object({
   /** Per-task state, keyed by task_id (cross-field checks applied per task). */
   tasks: z.record(z.string(), TaskStateChecked).default({}),
 
+  /**
+   * When true, the quota gate skips pacing and returns null unconditionally. Set once at
+   * `run create` from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`.
+   * Persisted so both coroutines and both drivers skip the gate without per-call flag
+   * threading — mirrors the `mode==="workflow"` skip. Default false: legacy runs (no field)
+   * are unaffected.
+   */
+  ignore_quota: z.boolean().default(false),
+
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
 

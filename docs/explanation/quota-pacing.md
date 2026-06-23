@@ -15,8 +15,10 @@ budget is spent cautiously and late budget freely:
 
 - **5h curve** (`quota.hourlyThresholds`, default `[20, 40, 60, 80, 90]`) — the
   utilization cap (%) for each of the 5 window-hours.
-- **7d curve** (`quota.dailyThresholds`, default `[14, 29, 43, 57, 71, 86, 95]`)
-  — the cap for each of the 7 window-days.
+- **7d curve** (`quota.dailyThresholds`, default `[20, 40, 60, 80, 95, 95, 95]`)
+  — the cap for each of the 7 window-days. It ramps to 95% by window-day 5 — a
+  5-workday spend pattern — then plateaus through days 6–7, leaving a 5%
+  end-of-window reserve.
 
 The window position is **session-anchored, not UTC-clock**: it is derived from
 each window's reset horizon, not the wall-clock hour. A reading is breached when
@@ -101,6 +103,48 @@ needs no usage signal. The two safety nets therefore divide cleanly by mode:
 | Circuit-breaker failures | ✅      | ✅       | no                 |
 | Circuit-breaker runtime  | —       | ✅       | no                 |
 
+## `--ignore-quota` — the per-run pacing override
+
+`mode === "workflow"` is one way `applyQuotaGate` short-circuits to `proceed`; a
+per-run **`ignore_quota`** flag is the other. When `ignore_quota` is true the gate
+returns `null` unconditionally — it neither reads the usage signal nor writes state,
+exactly like workflow mode. The flag is persisted on the run (`RunState.ignore_quota`,
+default `false`) so **both coroutines** (`factory next`/`factory drive`) and **both
+drivers** read it straight from state — no per-call flag threading. A legacy run with
+no field reads as `false` and is unaffected.
+
+Two entry points set it:
+
+- **`factory run create --ignore-quota`** persists `ignore_quota: true` on the new run.
+- **`factory resume --ignore-quota`** persists `ignore_quota: true` _before_ `applyResume`
+  runs, so `planResume` (`src/quota/resume.ts`) force-clears the checkpoint regardless of
+  the fresh live reading, and subsequent steps stay un-paced.
+
+It is an operator escape hatch for a mistaken suspend or a manual quota reset — it trades
+the pacer's runaway protection for forward progress, so use it deliberately. (The
+state-based circuit breaker still applies; only usage pacing is bypassed.)
+
+## The weekly-quota hard stop on `run create`
+
+A 7d breach suspends the run cleanly to be resumed later (Decision 1). To stop a parked
+run from being silently abandoned and replaced while its window is still exhausted,
+`resolveOrCreateRun` (`src/cli/subcommands/run.ts`) treats an active **weekly-parked**
+run — `status === "suspended"` _and_ `quota.binding_window === "7d"` — as a hard wall:
+it returns a `kind:"quota-blocked"` result and `run create` exits `CONFLICT` (3),
+emitting `{kind:"quota-blocked", scope:"7d", run_id, status, reason, resets_at_epoch?}`.
+This blocks **all** new-run attempts for the spec — the default conflict path, `--new`,
+and `--supersede` alike.
+
+The guard is narrow by design:
+
+- A **5h pause** and an **`unavailable` suspend** (`quota: undefined`, no `binding_window`)
+  are NOT blocked — only the weekly park is.
+- The **`--resume` intent** falls through to the ordinary `kind:"exists"` conflict, because
+  the `factory resume` door it hands off to already re-checks the LIVE 7d window on the
+  fresh session — a hard stop here would be redundant.
+- **`--ignore-quota`** overrides the block, letting create/supersede proceed against a
+  weekly-parked run.
+
 ## Resumption
 
 A suspended (or paused) run resumes via `factory resume`, which calls
@@ -108,6 +152,8 @@ A suspended (or paused) run resumes via `factory resume`, which calls
 
 1. Pulls a **fresh** usage reading — it does not trust the persisted reset horizon
    alone, because a persisted horizon is not proof the window actually recovered.
+   (When the run carries `ignore_quota`, this step is skipped entirely and the
+   checkpoint is force-cleared — see [`--ignore-quota`](#--ignore-quota--the-per-run-pacing-override).)
 2. Re-runs the pacer against that fresh reading. A fresh `proceed` clears the
    quota checkpoint and returns the run to `running`; any non-proceed decision (or
    an unobservable reading) leaves the run `still-blocked` and tells the operator
