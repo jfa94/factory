@@ -101,25 +101,63 @@ producer write issued via `Bash`) does not weaken enforcement.
 ## secret-guard
 
 `secret-guard` fires on every `Bash` (autonomous **and** human sessions). It
-detects `git commit` / `git push` (including fused-override forms), resolves the
-target repo, scans the staged (`git diff --cached`) or unpushed (`git log -p`) diff
-for known secret shapes, and denies on a match.
+detects `git commit` / `git push`, resolves the target repo, scans the staged
+(`git diff --cached`) or unpushed (`git log -p`) diff for known secret shapes, and
+denies on a match.
+
+#### Token-aware commit/push detection
+
+Detection is **token-aware and per-segment**, not a substring match. The command
+is split into coarse shell segments and each is parsed with the canonical
+`parseGitInvocation` parser (`src/hooks/git-args.ts`); a segment counts as
+commit/push **only when that is its real git subcommand**. This avoids the false
+positives an earlier substring regex produced — the word `commit`/`push` appearing
+inside an `echo` argument, a path, or across a `&&` no longer trips the guard
+(e.g. `… && echo "commit needed"` is treated as read-only), while a real commit or
+push in a **later** chained segment (`git status && git commit`) is still caught.
+
+The segment splitter is **detection-only** and fails **closed**: over-splitting is
+harmless (a fragment still re-parses to its subcommand), and under-splitting is the
+only failure that would matter. It therefore breaks on every boundary a hidden
+`git commit`/`push` could sit behind:
+
+- sequencing / pipe operators: `&&`, `||`, `;`, a lone `&` (background), `|`,
+  newline;
+- command-substitution and backtick boundaries: `$(`, `` ` ``, `)`.
+
+So a `git commit`/`push` hidden inside `$(…)`, inside backticks, or after a
+background `&` is parsed in its own segment rather than being concealed by the
+surrounding command.
+
+A **fail-closed backstop** covers the case where a value-taking pre-subcommand
+global makes the parser misread the value as the subcommand (e.g.
+`git --namespace x commit`, where `x` is read as the subcommand): a segment that
+carries a `git` binary plus a later bare `commit`/`push` token the parser could not
+classify is still treated as that op. Over-detection here is acceptable; a missed
+detection would be a guard bypass.
 
 Before it scans, it denies — **fail-closed** — the redirection bypasses that would
 decouple the index/repo it scans from the one actually committed, so a staged
 secret could otherwise slip past:
 
-| Deny reason                          | Triggered by                                                                                                                                                                                           |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `git_dir_override_denied`            | A `--git-dir` or `--work-tree` flag on the git command.                                                                                                                                                |
-| `git_redirect_env_denied`            | A `VAR=` env-prefix in the index/repo-redirection family: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE`. |
-| `non_git_target`                     | The resolved target directory is not a git repository.                                                                                                                                                 |
-| `git_diff_failed` / `git_log_failed` | The staged-diff / unpushed-log scan could not be produced.                                                                                                                                             |
+| Deny reason                          | Triggered by                                                                                                                                                                                                                                                                              |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git_dir_override_denied`            | A `--git-dir` or `--work-tree` flag on the git command.                                                                                                                                                                                                                                   |
+| `git_redirect_env_denied`            | A `VAR=` env-prefix in the index/repo-redirection family: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE`. Scanned across the **whole command**, not just the committing segment (see below). |
+| `non_git_target`                     | The resolved target directory is not a git repository.                                                                                                                                                                                                                                    |
+| `git_diff_failed` / `git_log_failed` | The staged-diff / unpushed-log scan could not be produced.                                                                                                                                                                                                                                |
 
 The env-prefix deny is **not** a blanket `GIT_*` block: benign overrides
 (`GIT_SSH_COMMAND`, `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, `GIT_EDITOR`, `GIT_PAGER`, …)
 are explicitly allowed, so a human's `GIT_SSH_COMMAND=… git push` is not a false
 positive. Only the listed family redirects the index/object store and is denied.
+
+Unlike target-repo resolution (which uses the parse of the matched commit/push
+segment), the redirect-env deny scans the **whole command**, because a redirect var
+exported in a **prior** chained segment is still in scope for the later git
+process. So `export GIT_INDEX_FILE=… && git commit` is denied even though the
+`export` and the `git commit` land in different segments — scoping the scan to the
+committing segment alone would fail **open**.
 
 Target-repo resolution honors `git -C <dir>` with **last-wins** semantics (via the
 canonical `parseGitInvocation` parser), so a `git -C <clean> -C <secret> commit`
