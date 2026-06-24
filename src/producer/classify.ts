@@ -31,7 +31,7 @@ import type { FailureClass } from "../types/index.js";
  *     the producer can plausibly fix).
  *   - `environmental`     — an external blocker (CI infra, network, a missing
  *     dependency the task cannot itself provision). Always immediate drop.
- *   - `floor-blocked`     — the verifier floor is blocked by CONFIRMED blockers
+ *   - `merge-gate-blocked`     — the merge gate is blocked by CONFIRMED blockers
  *     with no other terminal signal — the producer should fix-forward / retry
  *     (capability), unless the rung budget is exhausted (the ladder, not this
  *     classifier, decides the cap).
@@ -50,7 +50,7 @@ export type FailureSignal =
       readonly reason: string;
     }
   | { readonly kind: "environmental"; readonly reason: string }
-  | { readonly kind: "floor-blocked"; readonly reason: string };
+  | { readonly kind: "merge-gate-blocked"; readonly reason: string };
 
 /**
  * The classification result. CLOSED:
@@ -80,7 +80,7 @@ function exhaustive(x: never): never {
  *   - producer `needs-context` / `error`    → capability
  *   - gate-failure (fixable)                → capability
  *   - verifier-error (LOUD, re-run verify)  → capability
- *   - floor-blocked (fix-forward)           → capability
+ *   - merge-gate-blocked (fix-forward)           → capability
  */
 export function classifyFailure(signal: FailureSignal): ClassifyDecision {
   switch (signal.kind) {
@@ -119,7 +119,7 @@ export function classifyFailure(signal: FailureSignal): ClassifyDecision {
       // bounded verify (the ladder/verify-retry budget bounds it).
       return { action: "retry", reason: `verifier error (unresolved): ${signal.reason}` };
     }
-    case "floor-blocked": {
+    case "merge-gate-blocked": {
       // Confirmed blockers remain — fix-forward / retry.
       return { action: "retry", reason: signal.reason };
     }

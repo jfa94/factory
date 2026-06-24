@@ -16,7 +16,7 @@
  * and the DRIVER bumps the rung on a classified retry. There is no `runLadder`
  * call here — v1 re-expresses only the OUTER ladder via the persisted rung.
  *
- * VERIFY + SHIP. The `verify` reporter here derives the floor from the
+ * VERIFY + SHIP. The `verify` reporter here derives the merge gate from the
  * already-recorded reviewers + gate evidence; it does NOT itself spawn the panel or
  * the holdout-validator (a handler cannot spawn). The coroutine emits those agents out of
  * band — the panel as the verify spawn manifest, the holdout-validator as a sidecar —
@@ -29,8 +29,8 @@ import {
   advance,
   spawn,
   waitRetry,
-  deriveFloorVerdict,
-  floorBlockReason,
+  deriveMergeGateVerdict,
+  mergeGateBlockReason,
   createTaskWorktree,
   provisionWorktree,
   resolveStagingBranch,
@@ -109,7 +109,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
     const prior = Math.max(0, rung - 1);
     return {
       rung: prior,
-      summary: `prior attempt at rung ${prior} did not clear the verifier floor`,
+      summary: `prior attempt at rung ${prior} did not clear the merge gate`,
     };
   }
 
@@ -231,7 +231,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
 
     /**
      * verify reporter: run the deterministic gates, then either spawn the
-     * risk-invariant panel (no reviewers yet) or DERIVE the floor from the
+     * risk-invariant panel (no reviewers yet) or DERIVE the merge gate from the
      * already-recorded reviewers + gate evidence. Holdout evidence is folded
      * separately by the coroutine (the holdout-validator runs as an out-of-band sidecar);
      * this reporter never spawns.
@@ -283,13 +283,13 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
         }
       }
 
-      const floor = deriveFloorVerdict({ reviewers: task.reviewers }, gate.evidence);
-      if (floor.passed) {
+      const mergeGate = deriveMergeGateVerdict({ reviewers: task.reviewers }, gate.evidence);
+      if (mergeGate.passed) {
         return advance("ship");
       }
       return waitRetry(
         "verify",
-        floorBlockReason(task.reviewers, gate.evidence),
+        mergeGateBlockReason(task.reviewers, gate.evidence),
         ctx.attempt ?? 1,
         ESCALATION_CAP + 1,
       );

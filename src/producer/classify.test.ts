@@ -59,8 +59,8 @@ describe("classify-before-retry (Δ D) — capability failures are RETRYABLE", (
     expect(d.action).toBe("retry");
   });
 
-  it("floor-blocked (confirmed blockers remain) → retry (fix-forward)", () => {
-    expect(classifyFailure({ kind: "floor-blocked", reason: "blocked by security" }).action).toBe(
+  it("merge-gate-blocked (confirmed blockers remain) → retry (fix-forward)", () => {
+    expect(classifyFailure({ kind: "merge-gate-blocked", reason: "blocked by security" }).action).toBe(
       "retry",
     );
   });

@@ -45,7 +45,7 @@ cross-field invariants (e.g. `failure_class` is set _iff_ a task is dropped; a
 quota checkpoint exists _iff_ the run is paused/suspended). `manager.ts` is the
 `StateManager` — the _only_ sanctioned read/write path (atomic + lock-protected).
 `paths.ts` defines the two-store filesystem layout. `derive.ts` computes gate /
-panel / floor verdicts from evidence (never stored). See
+panel / merge-gate verdicts from evidence (never stored). See
 [reference/state-model.md](../reference/state-model.md).
 
 ## Stage machine (`src/core/stage-machine`)

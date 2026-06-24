@@ -7186,8 +7186,8 @@ var TaskStateSchema = external_exports.object({
   escalation_rung: EscalationRungSchema.default(0),
   /** Which producer role is/last ran. */
   producer_role: ProducerRoleEnum.optional(),
-  // --- Verifier floor (Decision 26/27) ---
-  /** Per-reviewer panel results (derive.ts computes the floor verdict from these). */
+  // --- Merge gate (Decision 26/27) ---
+  /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
   // --- Git / PR pointers (WS3 populates; schema reserves the shape) ---
   /** Run-scoped branch `factory/<run_id>/<task_id>` (Δ M). */

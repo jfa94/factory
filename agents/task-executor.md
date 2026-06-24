@@ -101,7 +101,7 @@ Violating the letter of these rules violates the spirit. No exceptions.
 - Do NOT write fallback code that silently degrades functionality.
 - Tests must stay independent — no shared mutable state.
 
-> After you return, the deterministic verifier floor runs OUTSIDE your context: the CLI runs
+> After you return, the deterministic merge gate runs OUTSIDE your context: the CLI runs
 > the gates (tests, TDD order, coverage, mutation, SAST, types, lint, build, holdout) and the
 > orchestrator spawns the risk-invariant review panel. You don't run those yourself; just make
 > the tests green and commit cleanly.

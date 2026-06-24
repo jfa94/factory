@@ -21,7 +21,7 @@ For each enabled gate, the runner runs its strategy. A strategy returns one of:
   `GateEvidence`). The runner feeds this into the conjunction.
 - **skip** — the gate is not applicable (no `package.json`, no script configured,
   no mutable changes). A skip is **neither pass nor fail**: it is excluded from the
-  conjunction (so it cannot default-open the floor) but recorded loudly with a
+  conjunction (so it cannot default-open the merge gate) but recorded loudly with a
   reason.
 
 The verdict is the conjunction of the gates that ran. An **all-skipped /
@@ -140,10 +140,10 @@ The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modifi
 
 ## Beyond the deterministic gates
 
-The deterministic gates are only the first layer of the verifier floor. The floor
+The deterministic gates are only the first layer of the merge gate. The merge gate
 also folds in **holdout validation** (a withheld answer-key, validated
 independently) and the **risk-invariant review panel** (six reviewers, unanimous
 approval required, with verify-then-fix confirmation of each blocking finding). The
-overall floor is the subject of
+overall merge gate is the subject of
 [../explanation/verifier.md](../explanation/verifier.md).
 </content>

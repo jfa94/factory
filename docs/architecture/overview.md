@@ -59,7 +59,7 @@ graph TD
 **The CLI is the brain, and it owns ALL control flow.** `factory <subcommand>`
 owns _all_ run-state writes, the spec gates, the deterministic verifier gates,
 failure classification, the producer escalation ladder, the risk-invariant review
-floor, PR creation — and the pipeline loop itself, exposed through ONE seam, the
+merge gate, PR creation — and the pipeline loop itself, exposed through ONE seam, the
 **coroutine** (`factory next` + `factory drive`). It is deterministic and tested. It
 **never spawns an agent**.
 
@@ -150,8 +150,8 @@ preflight → tests → exec → verify → ship
 - **preflight** — set up the task worktree/branch; report-only.
 - **tests** — producer stage: the `test-writer` commits failing tests first (TDD).
 - **exec** — producer stage: the `task-executor` commits the minimal implementation.
-- **verify** — the verifier floor: deterministic gates + holdout validation + the
-  six-reviewer panel + verify-then-fix. Derives the floor verdict.
+- **verify** — the merge gate: deterministic gates + holdout validation + the
+  six-reviewer panel + verify-then-fix. Derives the merge gate verdict.
 - **ship** — opens the task PR idempotently; in `live` mode serial-merges into the
   run's `staging-<run-id>` branch. The one stage that writes the terminal task status.
   It probes for a native GitHub merge queue and, when present, enqueues via

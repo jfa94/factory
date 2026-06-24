@@ -35,8 +35,8 @@ export {
   TaskStatusEnum,
   derivePanelVerdict,
   deriveAllGatesVerdict,
-  deriveFloorVerdict,
-  floorBlockReason,
+  deriveMergeGateVerdict,
+  mergeGateBlockReason,
   StateManager,
 } from "../types/index.js";
 export type {
@@ -164,7 +164,7 @@ export type {
   JudgmentConfig,
 } from "../verifier/judgment/index.js";
 
-// --- holdout floor (src/verifier/holdout) — Δ Y ------------------------------
+// --- holdout gate (src/verifier/holdout) — Δ Y ------------------------------
 export {
   splitHoldout,
   makeHoldoutRecord,

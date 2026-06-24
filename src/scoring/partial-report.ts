@@ -14,7 +14,7 @@
  * back from a stored "report" blob. The builder takes an explicit `now` so a test
  * pins `generated_at` deterministically.
  *
- * Honesty over guesswork: a `dropped` task never cleared the verifier floor, so it
+ * Honesty over guesswork: a `dropped` task never cleared the merge gate, so it
  * met NONE of its acceptance criteria. The report lists the task's FULL acceptance
  * criteria as `unmet_criteria` rather than fabricating per-criterion satisfaction
  * the runtime never recorded.
@@ -41,7 +41,7 @@ export interface FailureLine {
   failure_reason: string;
   /**
    * The dropped task's FULL acceptance criteria — all unmet, because a drop never
-   * cleared the floor. Sourced from the durable spec, not fabricated.
+   * cleared the merge gate. Sourced from the durable spec, not fabricated.
    */
   unmet_criteria: string[];
   branch?: string;
@@ -176,7 +176,7 @@ export function failureCommentMarker(runId: string): string {
  * issues are PRDs, drops are run-internal, and the authoritative per-task status
  * already lives in the run state. Drops-only content — each block names the failure
  * class, the human reason, and the task's FULL acceptance criteria (all unmet,
- * because a drop never cleared the floor). The leading marker makes a re-finalize
+ * because a drop never cleared the merge gate). The leading marker makes a re-finalize
  * idempotent (see {@link failureCommentMarker}).
  */
 export function renderFailureComment(report: PartialRunReport): string {

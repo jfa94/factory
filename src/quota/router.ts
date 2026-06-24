@@ -4,7 +4,7 @@
  * Per Decision 25/26 the review panel is risk-INVARIANT: the old `--tier`
  * routine/feature/security review-round caps are DELETED. This router therefore
  * carries the SINGLE producer dial — it selects a producer MODEL from the task's
- * {@link RiskTier} — and exposes NO review-depth/round output. The verifier floor
+ * {@link RiskTier} — and exposes NO review-depth/round output. The merge gate
  * is untouched by this module.
  *
  * Pacing (the two-window gate) lives in `pacer`; the driver's `applyQuotaGate`

@@ -60,8 +60,8 @@ export {
   deriveGateVerdict,
   deriveAllGatesVerdict,
   derivePanelVerdict,
-  deriveFloorVerdict,
-  floorBlockReason,
+  deriveMergeGateVerdict,
+  mergeGateBlockReason,
 } from "./derive.js";
 export type { GateEvidence, GateVerdict } from "./derive.js";
 

@@ -4,7 +4,7 @@
  * THE LOAD-BEARING PROPERTY: panel membership, model, and turn budget are
  * CONSTANT for every task regardless of its `risk_tier`. The producer dial
  * (risk_tier) sizes the PRODUCER ladder (Decision 25); it does NOT size the
- * verifier — the floor is risk-invariant (Decision 26). To make that property
+ * verifier — the merge gate is risk-invariant (Decision 26). To make that property
  * structurally true rather than merely tested, {@link buildPanelManifest} has NO
  * RiskTier parameter at all: there is nowhere to branch on the tier, so two tasks
  * of different tiers necessarily get a deep-equal manifest.

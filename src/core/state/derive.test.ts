@@ -3,8 +3,8 @@ import {
   deriveGateVerdict,
   deriveAllGatesVerdict,
   derivePanelVerdict,
-  deriveFloorVerdict,
-  floorBlockReason,
+  deriveMergeGateVerdict,
+  mergeGateBlockReason,
   type GateEvidence,
 } from "./derive.js";
 import type { ReviewerResult } from "./schema.js";
@@ -53,12 +53,12 @@ describe("derive-don't-store: verdicts are computed from ground truth (Δ V)", (
   });
 });
 
-describe("panel floor is conjunctive/unanimous (Decision 26)", () => {
+describe("panel verdict is conjunctive/unanimous (Decision 26)", () => {
   it("passes only on unanimous approve", () => {
     expect(derivePanelVerdict([approve("impl"), approve("security")]).passed).toBe(true);
   });
 
-  it("a single blocked fails the floor", () => {
+  it("a single blocked fails the panel", () => {
     expect(
       derivePanelVerdict([
         approve("impl"),
@@ -85,30 +85,30 @@ describe("panel floor is conjunctive/unanimous (Decision 26)", () => {
   });
 });
 
-describe("combined floor verdict requires BOTH layers", () => {
+describe("combined merge-gate verdict requires BOTH layers", () => {
   const task = { reviewers: [approve("impl"), approve("security")] };
 
   it("passes when gates AND panel pass", () => {
-    expect(deriveFloorVerdict(task, [{ gate: "test", observed: true }]).passed).toBe(true);
+    expect(deriveMergeGateVerdict(task, [{ gate: "test", observed: true }]).passed).toBe(true);
   });
 
   it("fails when gates fail even if the panel approves", () => {
-    expect(deriveFloorVerdict(task, [{ gate: "test", observed: false }]).passed).toBe(false);
+    expect(deriveMergeGateVerdict(task, [{ gate: "test", observed: false }]).passed).toBe(false);
   });
 
   it("fails when the panel blocks even if gates pass", () => {
     const blocked = {
       reviewers: [{ reviewer: "x", verdict: "blocked" as const, confirmed_blockers: 1 }],
     };
-    expect(deriveFloorVerdict(blocked, [{ gate: "test", observed: true }]).passed).toBe(false);
+    expect(deriveMergeGateVerdict(blocked, [{ gate: "test", observed: true }]).passed).toBe(false);
   });
 
   it("fails with no gate evidence even if the panel approves", () => {
-    expect(deriveFloorVerdict(task, []).passed).toBe(false);
+    expect(deriveMergeGateVerdict(task, []).passed).toBe(false);
   });
 });
 
-describe("floorBlockReason — the single shared diagnostic for a blocked floor", () => {
+describe("mergeGateBlockReason — the single shared diagnostic for a blocked merge gate", () => {
   const blockedReviewer = (reviewer: string): ReviewerResult => ({
     reviewer,
     verdict: "blocked",
@@ -121,17 +121,17 @@ describe("floorBlockReason — the single shared diagnostic for a blocked floor"
   });
 
   it("names a failing deterministic gate WITH its detail (not the generic fallback)", () => {
-    const reason = floorBlockReason(
+    const reason = mergeGateBlockReason(
       [approve("impl")],
       [{ gate: "type", observed: false, detail: "tsc exit=1" }],
     );
     expect(reason).toContain("type");
     expect(reason).toContain("tsc exit=1");
-    expect(reason).not.toBe("floor not unanimous");
+    expect(reason).not.toBe("merge gate not unanimous");
   });
 
   it("names a failing gate without a detail by its id alone", () => {
-    const reason = floorBlockReason([approve("impl")], [{ gate: "lint", observed: false }]);
+    const reason = mergeGateBlockReason([approve("impl")], [{ gate: "lint", observed: false }]);
     expect(reason).toContain("lint");
     expect(reason).not.toContain("(");
   });
@@ -140,13 +140,13 @@ describe("floorBlockReason — the single shared diagnostic for a blocked floor"
     // deriveAllGatesVerdict fails an empty set, but with no failing-gate AND a
     // unanimous panel the old reason fell through to the generic string, hiding
     // that NO deterministic gate ran. The shared helper must name that cause.
-    const reason = floorBlockReason([approve("impl")], []);
+    const reason = mergeGateBlockReason([approve("impl")], []);
     expect(reason).toContain("no deterministic gate evidence");
-    expect(reason).not.toBe("floor not unanimous");
+    expect(reason).not.toBe("merge gate not unanimous");
   });
 
   it("names blocked and errored reviewers", () => {
-    const reason = floorBlockReason(
+    const reason = mergeGateBlockReason(
       [blockedReviewer("security"), erroredReviewer("quality")],
       [{ gate: "test", observed: true }],
     );
@@ -155,7 +155,7 @@ describe("floorBlockReason — the single shared diagnostic for a blocked floor"
   });
 
   it("combines a failing gate AND a blocked reviewer in one reason", () => {
-    const reason = floorBlockReason(
+    const reason = mergeGateBlockReason(
       [blockedReviewer("security")],
       [{ gate: "type", observed: false, detail: "tsc exit=1" }],
     );
@@ -166,8 +166,8 @@ describe("floorBlockReason — the single shared diagnostic for a blocked floor"
   it("falls back to the generic reason only when nothing specific is identifiable", () => {
     // Gates present + observed; reviewers all approve — the only way control
     // reaches here in practice is a derivation the caller already deemed blocked.
-    expect(floorBlockReason([approve("impl")], [{ gate: "test", observed: true }])).toBe(
-      "floor not unanimous",
+    expect(mergeGateBlockReason([approve("impl")], [{ gate: "test", observed: true }])).toBe(
+      "merge gate not unanimous",
     );
   });
 });

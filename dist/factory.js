@@ -6207,8 +6207,8 @@ var TaskStateSchema = external_exports.object({
   escalation_rung: EscalationRungSchema.default(0),
   /** Which producer role is/last ran. */
   producer_role: ProducerRoleEnum.optional(),
-  // --- Verifier floor (Decision 26/27) ---
-  /** Per-reviewer panel results (derive.ts computes the floor verdict from these). */
+  // --- Merge gate (Decision 26/27) ---
+  /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
   // --- Git / PR pointers (WS3 populates; schema reserves the shape) ---
   /** Run-scoped branch `factory/<run_id>/<task_id>` (Δ M). */
@@ -6414,12 +6414,12 @@ function derivePanelVerdict(reviewersOrTask) {
     }))
   );
 }
-function deriveFloorVerdict(task, gateEvidence) {
+function deriveMergeGateVerdict(task, gateEvidence) {
   const det = deriveAllGatesVerdict(gateEvidence);
   const panel = derivePanelVerdict(task);
-  return mkVerdict(det.passed && panel.passed, "floor", [...det.from, ...panel.from]);
+  return mkVerdict(det.passed && panel.passed, "merge-gate", [...det.from, ...panel.from]);
 }
-function floorBlockReason(reviewers, gateEvidence) {
+function mergeGateBlockReason(reviewers, gateEvidence) {
   const parts = [];
   if (gateEvidence.length === 0) {
     parts.push("no deterministic gate evidence");
@@ -6434,7 +6434,7 @@ function floorBlockReason(reviewers, gateEvidence) {
   const errored = reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
   if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
   if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
-  return parts.length > 0 ? parts.join("; ") : "floor not unanimous";
+  return parts.length > 0 ? parts.join("; ") : "merge gate not unanimous";
 }
 
 // src/core/state/manager.ts
@@ -9822,7 +9822,7 @@ function classifyFailure(signal) {
     case "verifier-error": {
       return { action: "retry", reason: `verifier error (unresolved): ${signal.reason}` };
     }
-    case "floor-blocked": {
+    case "merge-gate-blocked": {
       return { action: "retry", reason: signal.reason };
     }
     default:
@@ -10761,7 +10761,7 @@ var FindingSchema = external_exports.object({
   reviewer: external_exports.string().min(1),
   /** Closed severity. */
   severity: FindingSeverityEnum,
-  /** True iff this finding, if upheld, BLOCKS the floor. */
+  /** True iff this finding, if upheld, BLOCKS the merge gate. */
   blocking: external_exports.boolean(),
   /** Cited file path (run-tree relative). Absent ⇒ uncitable. */
   file: external_exports.string().min(1).optional(),
@@ -10933,15 +10933,15 @@ async function runPanel(input) {
     adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
   }
   const reviewerResults = adjudicated.map(reviewerResultOf);
-  const floor = deriveFloorVerdict({ reviewers: reviewerResults }, input.gateEvidence);
-  const result = floor.passed ? advance(nextOrSelf(input.stage)) : waitRetry(
+  const mergeGate = deriveMergeGateVerdict({ reviewers: reviewerResults }, input.gateEvidence);
+  const result = mergeGate.passed ? advance(nextOrSelf(input.stage)) : waitRetry(
     input.stage,
-    floorBlockReason(reviewerResults, input.gateEvidence),
+    mergeGateBlockReason(reviewerResults, input.gateEvidence),
     input.attempt ?? 1,
     input.maxAttempts ?? 1
   );
   const crossVendorAbsence = input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : void 0;
-  return crossVendorAbsence === void 0 ? { adjudicated, reviewerResults, floor, result } : { adjudicated, reviewerResults, floor, result, crossVendorAbsence };
+  return crossVendorAbsence === void 0 ? { adjudicated, reviewerResults, mergeGate, result } : { adjudicated, reviewerResults, mergeGate, result, crossVendorAbsence };
 }
 function nextOrSelf(stage) {
   return stage === "verify" ? "ship" : stage;
@@ -11307,7 +11307,7 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
       runId,
       taskId,
       "capability-budget",
-      `producer escalation cap (${ESCALATION_CAP}) reached without clearing the floor: ${decision.reason}`
+      `producer escalation cap (${ESCALATION_CAP}) reached without clearing the merge gate: ${decision.reason}`
     );
   }
   const nextRung = task.escalation_rung + 1;
@@ -11386,7 +11386,7 @@ function makeStageHandlers(deps) {
     const prior = Math.max(0, rung - 1);
     return {
       rung: prior,
-      summary: `prior attempt at rung ${prior} did not clear the verifier floor`
+      summary: `prior attempt at rung ${prior} did not clear the merge gate`
     };
   }
   async function producerSpawn(role, specTask, runId, rung, stageAfter) {
@@ -11481,7 +11481,7 @@ function makeStageHandlers(deps) {
     },
     /**
      * verify reporter: run the deterministic gates, then either spawn the
-     * risk-invariant panel (no reviewers yet) or DERIVE the floor from the
+     * risk-invariant panel (no reviewers yet) or DERIVE the merge gate from the
      * already-recorded reviewers + gate evidence. Holdout evidence is folded
      * separately by the coroutine (the holdout-validator runs as an out-of-band sidecar);
      * this reporter never spawns.
@@ -11522,13 +11522,13 @@ function makeStageHandlers(deps) {
           );
         }
       }
-      const floor = deriveFloorVerdict({ reviewers: task.reviewers }, gate.evidence);
-      if (floor.passed) {
+      const mergeGate = deriveMergeGateVerdict({ reviewers: task.reviewers }, gate.evidence);
+      if (mergeGate.passed) {
         return advance("ship");
       }
       return waitRetry(
         "verify",
-        floorBlockReason(task.reviewers, gate.evidence),
+        mergeGateBlockReason(task.reviewers, gate.evidence),
         ctx.attempt ?? 1,
         ESCALATION_CAP + 1
       );
@@ -11775,7 +11775,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
       deps,
       runId,
       taskId,
-      classifyFailure({ kind: "floor-blocked", reason: panel.result.reason }),
+      classifyFailure({ kind: "merge-gate-blocked", reason: panel.result.reason }),
       "exec"
     );
     await persistStepCursor(deps, runId, taskId, step);
@@ -11787,7 +11787,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     task_id: taskId,
     step,
     reviewers: panel.reviewerResults,
-    floor: panel.floor,
+    mergeGate: panel.mergeGate,
     ...panel.crossVendorAbsence !== void 0 ? { crossVendorAbsence: panel.crossVendorAbsence } : {}
   };
 }
@@ -12134,7 +12134,7 @@ async function stepTask(deps, runId, taskId, results) {
           deps,
           runId,
           taskId,
-          classifyFailure({ kind: "floor-blocked", reason: result.reason }),
+          classifyFailure({ kind: "merge-gate-blocked", reason: result.reason }),
           "exec"
         );
         if (step.done) {

@@ -90,7 +90,7 @@ same list; no cycles, no dangling references (the seeder rejects violations at `
 ### 8. Tier each task (the single producer dial)
 
 `risk_tier` ∈ `low | medium | high` is the **one** spec-time dial that sizes the producer
-ladder (Decision 25) — there is no separate review-depth axis (the verifier floor is
+ladder (Decision 25) — there is no separate review-depth axis (the merge gate is
 risk-invariant). Judge it from **difficulty × stakes**, not a blanket default:
 
 - **high** — security-sensitive, data-loss-prone, cross-cutting, or hard-to-reverse work.

@@ -60,7 +60,7 @@ export {
   type VerifierEvidence,
 } from "./finding-verifier.js";
 
-// end-to-end verify pass (derive-don't-store floor)
+// end-to-end verify pass (derive-don't-store merge gate)
 export {
   runPanel,
   spawnPanel,

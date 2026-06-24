@@ -79,7 +79,7 @@ export function isTerminalRunStatus(s: RunStatus): s is (typeof TERMINAL_RUN_STA
  * Task-level status. Closed set; human-gate statuses are gone.
  *   - `pending`    — not yet started (or blocked on an unsatisfied dependency).
  *   - `executing`  — a producer (test-writer / executor) stage is in flight.
- *   - `reviewing`  — the verifier floor (gates + panel) is in flight.
+ *   - `reviewing`  — the merge gate (gates + panel) is in flight.
  *   - `shipping`   — verified; PR open / merging into staging.
  *   - `done`       — merged into staging (TERMINAL, success).
  *   - `dropped`    — the producer escalation ladder was exhausted; this task is a
@@ -126,7 +126,7 @@ export type FailureClass = z.infer<typeof FailureClassEnum>;
 /**
  * Risk tier — the SINGLE producer dial (Decision 25). It folds difficulty ×
  * stakes into one spec-time judgment and sets the STARTING rung of the producer
- * escalation ladder. It does NOT size the verifier (the floor is risk-invariant,
+ * escalation ladder. It does NOT size the verifier (the merge gate is risk-invariant,
  * Decision 26) and there is no separate review-depth axis.
  */
 export const RiskTierEnum = z.enum(["low", "medium", "high"]);
@@ -144,7 +144,7 @@ export const EscalationRungSchema = z.number().int().min(0);
 
 /**
  * Panel verdict — one independent reviewer's outcome (Decision 26/27). The panel
- * floor is conjunctive: the task clears only on unanimous `approve`. `blocked`
+ * verdict is conjunctive: the task clears only on unanimous `approve`. `blocked`
  * carries findings that — after the verify-then-fix confirmation (Decision 27) —
  * return the task to the producer. `error` is a reviewer that failed to produce a
  * usable verdict (LOUD, never silently treated as approve).
@@ -191,7 +191,7 @@ export type SpecPointer = z.infer<typeof SpecPointerSchema>;
  * post-verify-then-fix verdict, NOT a trusted "this gate passed" boolean for any
  * DETERMINISTIC gate (those are derived, Δ V). A panel verdict is itself the
  * ground truth of a judgment reviewer's opinion, so it is stored; the DERIVED
- * thing is the *floor* verdict (unanimity), computed in derive.ts.
+ * thing is the *merge-gate* verdict (unanimity), computed in derive.ts.
  */
 export const ReviewerResultSchema = z.object({
   /** Reviewer identity (e.g. "implementation", "security", "silent-failure"). */
@@ -233,8 +233,8 @@ export const TaskStateSchema = z.object({
   /** Which producer role is/last ran. */
   producer_role: ProducerRoleEnum.optional(),
 
-  // --- Verifier floor (Decision 26/27) ---
-  /** Per-reviewer panel results (derive.ts computes the floor verdict from these). */
+  // --- Merge gate (Decision 26/27) ---
+  /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: z.array(ReviewerResultSchema).default([]),
 
   // --- Git / PR pointers (WS3 populates; schema reserves the shape) ---

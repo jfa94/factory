@@ -29,7 +29,7 @@ seam, two thin drivers**:
   is a deterministic, tested TypeScript engine. It owns every piece of
   bookkeeping: all run-state writes, the spec gates, the deterministic verifier
   gates, failure classification, the producer escalation ladder, the
-  risk-invariant review floor, PR creation — _and the pipeline loop itself_. It is
+  risk-invariant merge gate, PR creation — _and the pipeline loop itself_. It is
   the _only_ thing that writes state. **It never spawns an agent** — it has no
   `Agent` tool.
 - **The CLI exposes exactly ONE seam — the coroutine.** `factory next` is the

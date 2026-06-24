@@ -41,7 +41,7 @@ describe("prompt-context — rung-2 prior-failure injection is the changed varia
       visibleCriteria: ["c"],
       files: ["f"],
       rung: 2,
-      priorFailures: [{ rung: 1, summary: "floor blocked by security" }],
+      priorFailures: [{ rung: 1, summary: "merge gate blocked by security" }],
     });
     expect(ctx.injectedPriorFailure).toBe(true);
     expect(ctx.priorFailures[0]?.summary).toContain("security");

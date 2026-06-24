@@ -7,7 +7,7 @@ Requirements Document) issue into merged pull requests, autonomously, through a
 quality-first, TDD-enforced stage machine. A person writes the requirements and
 walks away; the factory generates a spec, decomposes it into a dependency graph
 of tasks, drives each task test-first through implementation and an adversarial
-review floor, and ships the result up a per-run `staging-<run-id> → develop`
+merge gate, and ships the result up a per-run `staging-<run-id> → develop`
 integration branch — only once the whole PRD is delivered, never touching `main`.
 
 ## What problem it solves
@@ -17,7 +17,7 @@ followed its instructions roughly 70% of the time. The Dark Factory's answer is
 to push every decision that _can_ be deterministic out of the agent and into
 code, leaving the agents to do only what requires judgment (generate a spec,
 write code, review code). The result is a pipeline where stage transitions,
-failure classification, the retry ladder, quality gates, and the review floor are
+failure classification, the retry ladder, quality gates, and the merge gate are
 all enforced by a tested TypeScript engine — not by prose an agent may ignore.
 
 ## Design philosophy
@@ -28,7 +28,7 @@ with a hard seam between them:
 - A **deterministic engine**: one Node + TypeScript CLI, `factory <subcommand>`,
   that owns _all_ run-state writes, the spec gates, the deterministic verifier
   gates, failure classification, the producer escalation ladder, the
-  risk-invariant review floor, PR creation — and the pipeline loop itself, exposed
+  risk-invariant merge gate, PR creation — and the pipeline loop itself, exposed
   through ONE seam, the **coroutine** (`factory next` + `factory drive`). It is pure,
   tested, and **never spawns an agent**.
 - A thin **driver**: it steps the seam — spawning exactly the `Agent()`s the
@@ -114,7 +114,7 @@ contract.
 ### Explanation
 
 - [Model A: the deterministic/LLM split](./explanation/model-a.md) — why the brain/hands seam, and what it buys.
-- [The verifier and the risk-invariant floor](./explanation/verifier.md) — the two-layer verifier, the panel, verify-then-fix.
+- [The verifier and the risk-invariant merge gate](./explanation/verifier.md) — the two-layer verifier, the panel, verify-then-fix.
 - [The producer escalation ladder](./explanation/producer-ladder.md) — nuke-and-retry, change-a-variable, classify-before-retry.
 - [Quota pacing and resumption](./explanation/quota-pacing.md) — the two-window pacer; pause vs suspend vs halt.
 - [Derive, don't store](./explanation/derive-dont-store.md) — why no gate verdict is ever persisted.

@@ -43,7 +43,7 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 - `skills/pipeline-orchestrator/SKILL.md` — full orchestrator protocol (the `--mode session` driver loop)
 - `skills/test-driven-development/SKILL.md` — TDD discipline for subagents
 - `skills/prd-to-spec/SKILL.md` — converts PRD issues to spec + tasks.json
-- `skills/review-protocol/SKILL.md` — the RawReview JSON output contract every risk-invariant-panel reviewer emits (CLI citation-verifies + folds it into the floor)
+- `skills/review-protocol/SKILL.md` — the RawReview JSON output contract every risk-invariant-panel reviewer emits (CLI citation-verifies + folds it into the merge gate)
 - `skills/rescue-protocol/SKILL.md` — recover a stalled run (`factory rescue scan|apply` → resume)
 
 ## Known gaps (deliberate)

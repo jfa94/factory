@@ -1,6 +1,6 @@
 # The Producer Escalation Ladder
 
-When a producer's output fails the floor, the factory does not blindly retry. It
+When a producer's output fails the merge gate, the factory does not blindly retry. It
 runs a bounded, structured escalation — the **ladder** — governed by three rules:
 classify before retry, change a variable each rung, and cap the retries before a
 loud classified drop. The ladder is not one module: the cap lives in
@@ -17,7 +17,7 @@ The ladder is two nested loops:
 graph TD
   Start[producer attempt] --> Classify{classify failure}
   Classify -->|spec-defect / environmental| Drop[classified loud drop<br/>no rung burned]
-  Classify -->|capability| Verify[run verify floor]
+  Classify -->|capability| Verify[run verify merge gate]
   Verify -->|clear| Adv[advance → ship]
   Verify -->|confirmed misses| Fix[inner: fix-forward patch<br/>bounded by patchBudget]
   Fix -->|budget/progress spent| Esc[outer: nuke + escalate rung]
@@ -27,7 +27,7 @@ graph TD
 
 - **Outer loop** — the bounded nuke-and-retry over rungs `0..CAP` (CAP = 4 extra
   attempts ⇒ 5 total). Each rung is a fresh start that changes a variable.
-- **Inner loop** — fix-forward: after a `done` producer spawn, the floor runs; on
+- **Inner loop** — fix-forward: after a `done` producer spawn, the merge gate runs; on
   confirmed misses the producer is re-spawned to _patch the specific remaining
   blockers_ (not nuked), bounded by a patch budget and by making progress.
 
@@ -74,7 +74,7 @@ The ceiling model comes from the same `quota.producerModels` config map — no n
 literal, no new knob — so a config override flows through every rung; the effort
 ladder is a hardcoded constant, consistent with the hardcoded `ESCALATION_CAP`. The
 dial is the only place the `risk_tier` value acts — it sets the producer's starting
-model and thus how many rungs separate it from the ceiling. (The verifier floor is
+model and thus how many rungs separate it from the ceiling. (The merge gate is
 risk-invariant; see [verifier.md](./verifier.md).)
 
 ## Rule 3 — Cap, then drop loud
@@ -83,7 +83,7 @@ The retries are capped (CAP = 4 past the starting rung, i.e. 5 attempts total �
 raised from 2 so a hard task gets the full model→effort climb before a drop; see
 `jfa94/outsidey#231`). The cap is SHARED across producer failures and reviewer
 send-backs — one `escalation_rung` counter spans both. When the cap is exhausted with
-the floor still blocked, the task is dropped with `capability-budget` and a reason — a
+the merge gate still blocked, the task is dropped with `capability-budget` and a reason — a
 sixth attempt never spawns. Every terminal path of the ladder is loud and classified:
 success is an `advance`, every failure is a `taskDropped`. There is no silent return.
 

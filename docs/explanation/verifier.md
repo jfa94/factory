@@ -1,9 +1,9 @@
-# The Verifier and the Risk-Invariant Floor
+# The Verifier and the Risk-Invariant Merge Gate
 
 The verifier is the gate between a producer's output and a shipped PR. It is a
-**two-layer floor**: a deterministic machine-checkable layer and a judgment layer.
+**two-layer merge gate**: a deterministic machine-checkable layer and a judgment layer.
 A task ships only when the conjunction of both clears. This document explains the
-shape of the floor and the two design choices that distinguish it — the
+shape of the merge gate and the two design choices that distinguish it — the
 risk-invariant panel and verify-then-fix.
 
 ## Two layers
@@ -13,27 +13,27 @@ graph TD
   W[Task worktree] --> Gates[Deterministic gates<br/>test·tdd·coverage·mutation·sast·type·lint·build]
   W --> Holdout[Holdout validation<br/>withheld answer-key]
   W --> Panel[Judgment panel<br/>6 reviewers]
-  Gates --> Floor{Floor verdict<br/>conjunctive}
-  Holdout --> Floor
+  Gates --> MergeGate{Merge-gate verdict<br/>conjunctive}
+  Holdout --> MergeGate
   Panel --> VtF[Verify-then-fix<br/>confirm each blocker]
-  VtF --> Floor
-  Floor -->|clear| Ship[advance → ship]
-  Floor -->|blocked| Ladder[wait-retry → escalate the producer]
+  VtF --> MergeGate
+  MergeGate -->|clear| Ship[advance → ship]
+  MergeGate -->|blocked| Ladder[wait-retry → escalate the producer]
 ```
 
 - **Deterministic layer** (`src/verifier/deterministic`) — the `GateRunner` runs
   each enabled strategy, collects evidence, and derives a conjunctive verdict. See
   [../reference/quality-gates.md](../reference/quality-gates.md). It is folded into
-  the floor as gate evidence.
+  the merge gate as gate evidence.
 - **Holdout** (`src/verifier/holdout`) — a subset of the acceptance criteria is
   withheld from the producer and validated independently after the fact, guarding
-  against work tailored to the visible target. Folded into the floor as a
+  against work tailored to the visible target. Folded into the merge gate as a
   `holdout` gate evidence entry.
 - **Judgment layer** (`src/verifier/judgment`) — a panel of reviewers, each
   applying a current best-practice lens, whose confirmed blockers contribute to the
-  floor.
+  merge gate.
 
-The floor is **conjunctive**: every gate that ran must pass, the holdout must
+The merge gate is **conjunctive**: every gate that ran must pass, the holdout must
 clear, and the panel must be unanimous. An empty-evidence (all-skipped) sweep
 fails — "nothing ran" is never "passed".
 
@@ -41,7 +41,7 @@ fails — "nothing ran" is never "passed".
 
 A natural-seeming design would size the review panel to the work's risk — a light
 panel for a copy tweak, a heavy one for an auth change. The factory deliberately
-does **not** do this for the floor. Every reviewer runs on every task:
+does **not** do this for the merge gate. Every reviewer runs on every task:
 
 - `implementation-reviewer` — spec alignment: does the code address the spec, not
   just pass the tests?
@@ -56,7 +56,7 @@ escalation budget_ (see [producer-ladder.md](./producer-ladder.md)). The single
 
 Why invariant? Because under-scrutiny is the expensive failure mode for an
 unattended pipeline. A misclassified high-risk change reviewed by a narrow panel
-ships a real defect silently. Making the floor risk-invariant removes
+ships a real defect silently. Making the merge gate risk-invariant removes
 classification error from the verifier's blast radius: the panel is the panel,
 regardless of how the task was tiered. The reviewer model is fixed (not
 quota-routed) for the same reason — review quality must not degrade under quota
@@ -108,40 +108,40 @@ task:
 
 Only confirmed blockers reach the producer. This is why the driver must run a
 finding-verifier for each blocking + citable finding and feed its verdict back: a
-kept citable blocker with no recorded verdict makes the floor **fail closed** (the
+kept citable blocker with no recorded verdict makes the merge gate **fail closed** (the
 verify fold inside `factory drive --results` rejects it) — independence is
 preserved by construction, never by trust.
 
 A reviewer that fails to produce a usable verdict is an `error`, not a silent
 `approve` — an unresolved verifier error never auto-ships.
 
-## How a blocked floor feeds back
+## How a blocked merge gate feeds back
 
-When the floor blocks, the verify fold returns a bounded `wait-retry`. The coroutine
-(not the driver) classifies it as `floor-blocked` and escalates the producer
+When the merge gate blocks, the verify fold returns a bounded `wait-retry`. The coroutine
+(not the driver) classifies it as `merge-gate-blocked` and escalates the producer
 ladder: the rung is bumped, the reviewers are cleared, and a fresh panel runs after
 the producer re-attempts. A structurally-unfixable gate or an environmental blocker
 is classified-before-retry and drops immediately without burning a rung. See
 [producer-ladder.md](./producer-ladder.md).
 
 The human-facing block reason names what actually failed. A single shared helper
-(`floorBlockReason`, `src/core/state/derive.ts`) is the source of truth for both
+(`mergeGateBlockReason`, `src/core/state/derive.ts`) is the source of truth for both
 live verify paths — the fresh-review path (`runPanel` in `panel-run.ts`) and the
 resume / merge-resync re-entry path (`handlers.ts`) — so the two cannot drift apart.
-It inspects both halves of the floor: failing deterministic gates are named with
+It inspects both halves of the merge gate: failing deterministic gates are named with
 their detail (e.g. `failed gates: type (tsc exit=1)`), an empty gate-evidence set is
 called out explicitly (`no deterministic gate evidence`) rather than masked, and
 blocked or errored reviewers are listed. Only when nothing specific is identifiable
-does it fall back to the generic `floor not unanimous`. This is what surfaces a
+does it fall back to the generic `merge gate not unanimous`. This is what surfaces a
 fail-closed gate (a missing local tool bin, or a gate sweep that produced no
 evidence) instead of hiding it behind unanimity wording.
 
 ## Derive, don't store
 
-No floor verdict, panel verdict (as a floor), or gate verdict is persisted. The
-floor is re-derived from evidence every time it is needed — including inside the
+No merge gate verdict, panel verdict (as a merge gate), or gate verdict is persisted. The
+merge gate is re-derived from evidence every time it is needed — including inside the
 `pipeline-guards` hook that gates `gh pr create`/`merge`. The one stored judgment
 is each individual reviewer's panel verdict (that opinion is itself ground truth);
-the floor (unanimity) is computed from those. See
+the merge gate (unanimity) is computed from those. See
 [derive-dont-store.md](./derive-dont-store.md).
 </content>

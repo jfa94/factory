@@ -172,7 +172,7 @@ future scheduler would fire the same `planResume`.
 The quota router (`src/quota/router.ts`) carries the _only_ risk-tier dial in the
 system: `selectProducerModel` picks a producer model from `quota.producerModels` by
 the task's risk tier (low / medium / high). It exposes no review-depth axis — the
-verifier floor is risk-invariant (see [verifier.md](./verifier.md)). It is a **pure
+merge gate is risk-invariant (see [verifier.md](./verifier.md)). It is a **pure
 dial**: throttling lives upstream in `applyQuotaGate`, which stops the run on a
 non-proceed decision _before_ the coroutine ever selects a model — a throttled run
 never reaches the producer.

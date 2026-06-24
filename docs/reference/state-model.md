@@ -58,10 +58,10 @@ lock-protected (`proper-lockfile`).
 ## No stored verdicts (derive-don't-store)
 
 The schema deliberately has **no field** holding a gate pass/fail boolean. Every
-gate / panel / floor verdict is re-derived from ground truth at the moment it is
+gate / panel / merge gate verdict is re-derived from ground truth at the moment it is
 needed (`derive.ts`), so there is structurally nothing in state to forge. The one
 stored judgment is each reviewer's panel verdict (the reviewer's opinion is itself
-ground truth); the _floor_ (unanimity) is derived from those. See
+ground truth); the _merge gate_ (unanimity) is derived from those. See
 [../explanation/derive-dont-store.md](../explanation/derive-dont-store.md).
 
 ## `RunState`
@@ -117,7 +117,7 @@ one.
 | `depends_on`              | string[]                   | Task ids this task depends on (the vertical-slice DAG). A deliberate denormalization: copied from the `SpecTask` at seed time and then frozen, so DAG-traversal readers (ready-task selection, rescue drift-scan) read edges off run state without coupling to the spec store. |
 | `escalation_rung`         | int ≥0                     | Current rung on the producer escalation ladder (0 = starting).                                                                                                                                                                                                                 |
 | `producer_role`           | `test-writer \| executor`? | Which producer role is/last ran.                                                                                                                                                                                                                                               |
-| `reviewers`               | ReviewerResult[]           | Per-reviewer panel results (the floor is derived from these).                                                                                                                                                                                                                  |
+| `reviewers`               | ReviewerResult[]           | Per-reviewer panel results (the merge gate is derived from these).                                                                                                                                                                                                                  |
 | `branch`                  | string?                    | Run-scoped branch `factory/<run_id>/<task_id>`.                                                                                                                                                                                                                                |
 | `pr_number`               | int >0?                    | PR number once created.                                                                                                                                                                                                                                                        |
 | `failure_class`           | FailureClass?              | Set _iff_ `status === "dropped"`.                                                                                                                                                                                                                                              |
@@ -139,7 +139,7 @@ strips the now-unknown key, and `schema_version` is unchanged.
 | ----------- | --------- | ---------------------------------------------------------------------- |
 | `pending`   | no        | Not started, or blocked on an unsatisfied dependency.                  |
 | `executing` | no        | A producer stage (test-writer / executor) is in flight.                |
-| `reviewing` | no        | The verifier floor (gates + panel) is in flight.                       |
+| `reviewing` | no        | The merge gate (gates + panel) is in flight.                       |
 | `shipping`  | no        | Verified; PR open / merging into the run's `staging-<run-id>` branch.  |
 | `done`      | yes       | Merged into `staging-<run-id>` (success).                              |
 | `dropped`   | yes       | Ladder exhausted; a classified loud drop (pairs with `failure_class`). |

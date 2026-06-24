@@ -68,7 +68,7 @@ export function nextStage(s: TaskStage): TaskStage | null {
  *   - `preflight` → `pending`   (not yet producing)
  *   - `tests`     → `executing` (producer: test-writer)
  *   - `exec`      → `executing` (producer: executor)
- *   - `verify`    → `reviewing` (verifier floor in flight)
+ *   - `verify`    → `reviewing` (merge gate in flight)
  *   - `ship`      → `shipping`  (PR open / merging)
  *
  * Note these are IN-FLIGHT statuses; terminal statuses (`done`/`dropped`) come

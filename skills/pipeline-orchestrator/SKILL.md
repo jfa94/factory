@@ -7,7 +7,7 @@ auto-invoke: false
 # Pipeline Orchestrator — the session driver
 
 The `factory` CLI owns every decision: stages, gates, classification, the escalation
-ladder, the review floor, holdout ordering, quota, cascade-drops, deadlock detection,
+ladder, the merge gate, holdout ordering, quota, cascade-drops, deadlock detection,
 PR creation, and merging. You own exactly three verbs: **call the CLI, spawn what an
 envelope names, feed the raw results back.**
 

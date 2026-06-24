@@ -1,9 +1,9 @@
 /**
- * `src/verifier/holdout` — the Δ Y holdout floor (Decision 5). The ONE addressable
+ * `src/verifier/holdout` — the Δ Y holdout gate (Decision 5). The ONE addressable
  * import surface for WS10 (the driver) and any downstream consumer.
  *
  * Split (pure) → answer-key store (confined) → agent validation + deterministic
- * score → a {@link GateEvidence} folded into the risk-invariant floor. Deep-
+ * score → a {@link GateEvidence} folded into the risk-invariant merge gate. Deep-
  * importing `src/verifier/holdout/*` is a smell; import here.
  */
 

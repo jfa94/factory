@@ -154,7 +154,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - A Task ships only with unanimous approval; if any reviewer asks for changes, the work returns to the Implementer, who must account for every raised blocker before re-review.
   - The panel is risk-invariant — the same reviewers judge every Task at the same depth; scrutiny is never narrowed for work deemed low-risk.
 - **examples**:
-  - A copy tweak and an authentication change face the same full panel — the floor never narrows.
+  - A copy tweak and an authentication change face the same full panel — the merge gate never narrows.
   - Counter-example: skipping the security reviewer on a "routine" Task — the panel does not shrink with perceived risk.
 - **relationships**: gates a Task's ship; panel is risk-invariant (Risk Tier dials the producer, not Review); complements Quality Gates and Holdout Validation.
 - **synonyms**: —
@@ -214,7 +214,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **definition**: A classification of how demanding a piece of work is — judged from its difficulty and stakes at Spec time — that dials how much production capability is spent on it. It is how the domain spends production effort in proportion to risk; verification scrutiny stays uniform regardless of tier.
 - **invariants**:
   - Every Task carries exactly one Risk Tier.
-  - The tier dials the producer (the capability attempting the work), never the verification floor — Review and Quality Gates are identical across tiers.
+  - The tier dials the producer (the capability attempting the work), never the merge gate — Review and Quality Gates are identical across tiers.
 - **examples**:
   - A change to authentication is classified high-risk and is attempted with the strongest producer; a copy tweak is routine.
   - Counter-example: a demanding change classified routine — a misclassification that under-resources its production.

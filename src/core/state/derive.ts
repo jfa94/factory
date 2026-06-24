@@ -17,7 +17,7 @@
  *   3. The functions are pure: same inputs → same verdict, no I/O, no state read.
  *
  * Determinism-first (Decision 26): a deterministic gate's verdict is a function
- * of machine-checkable evidence; the panel (judgment) floor is the conjunction
+ * of machine-checkable evidence; the panel (judgment) verdict is the conjunction
  * (unanimity) over reviewer results — itself derived, never stored.
  */
 import type { EvidenceGate } from "../../verifier/deterministic/gate-id.js";
@@ -112,15 +112,15 @@ export function deriveAllGatesVerdict(evidence: readonly GateEvidence[]): GateVe
 }
 
 /**
- * Derive the JUDGMENT-floor verdict (Decision 26/27): the panel is conjunctive
+ * Derive the JUDGMENT-panel verdict (Decision 26/27): the panel is conjunctive
  * (unanimous `approve`). Derived from the reviewer-result array — which holds
- * each reviewer's opinion (ground truth of a judgment), not a stored floor
+ * each reviewer's opinion (ground truth of a judgment), not a stored panel
  * boolean. Passes IFF there is ≥1 reviewer AND every reviewer verdict is
- * `approve`. A single `blocked` or `error` fails the floor LOUDLY (an `error`
+ * `approve`. A single `blocked` or `error` fails the panel LOUDLY (an `error`
  * reviewer is never silently counted as approve).
  *
  * Takes the reviewer array (or a TaskState, from which it reads `reviewers`) and
- * NOTHING that could be a stored floor verdict.
+ * NOTHING that could be a stored panel verdict.
  */
 export function derivePanelVerdict(
   reviewersOrTask: readonly ReviewerResult[] | Pick<TaskState, "reviewers">,
@@ -145,29 +145,29 @@ export function derivePanelVerdict(
 }
 
 /**
- * The combined verifier-floor verdict for a task (Decision 26): BOTH the
+ * The combined merge-gate verdict for a task (Decision 26): BOTH the
  * deterministic gates AND the judgment panel must pass. Conjunctive across both
  * layers. Pure; derived entirely from the supplied evidence + the task's reviewer
- * array — never from a stored floor boolean.
+ * array — never from a stored merge-gate boolean.
  */
-export function deriveFloorVerdict(
+export function deriveMergeGateVerdict(
   task: Pick<TaskState, "reviewers">,
   gateEvidence: readonly GateEvidence[],
 ): GateVerdict {
   const det = deriveAllGatesVerdict(gateEvidence);
   const panel = derivePanelVerdict(task);
-  return mkVerdict(det.passed && panel.passed, "floor", [...det.from, ...panel.from]);
+  return mkVerdict(det.passed && panel.passed, "merge-gate", [...det.from, ...panel.from]);
 }
 
 /**
- * The human-facing reason a {@link deriveFloorVerdict} came back blocked — the
+ * The human-facing reason a {@link deriveMergeGateVerdict} came back blocked — the
  * SINGLE source of truth shared by every live verify path (the fresh-review path
  * in `panel-run.ts` ← `runPanel`, and the resume / merge-resync re-entry path in
- * `handlers.ts`). Kept here, beside the floor derivation it explains, so the two
+ * `handlers.ts`). Kept here, beside the merge-gate derivation it explains, so the two
  * drivers cannot drift apart again (they previously held divergent copies — one
  * dropped the gate `detail`, one used different wording).
  *
- * Inspects BOTH halves of the floor (Decision 26):
+ * Inspects BOTH halves of the merge gate (Decision 26):
  *   - Deterministic gates. An EMPTY evidence set is named EXPLICITLY ("no
  *     deterministic gate evidence"): `deriveAllGatesVerdict` fails an empty set
  *     ("nothing ran" is never a pass), yet an empty set surfaces no failing gate
@@ -177,7 +177,7 @@ export function deriveFloorVerdict(
  *   - The reviewer panel. Blocked and errored reviewers are named.
  * Only when nothing specific is identifiable does the generic fallback remain.
  */
-export function floorBlockReason(
+export function mergeGateBlockReason(
   reviewers: readonly ReviewerResult[],
   gateEvidence: readonly GateEvidence[],
 ): string {
@@ -195,5 +195,5 @@ export function floorBlockReason(
   const errored = reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
   if (blocked.length > 0) parts.push(`blocked by: ${blocked.join(", ")}`);
   if (errored.length > 0) parts.push(`unresolved (verifier error): ${errored.join(", ")}`);
-  return parts.length > 0 ? parts.join("; ") : "floor not unanimous";
+  return parts.length > 0 ? parts.join("; ") : "merge gate not unanimous";
 }

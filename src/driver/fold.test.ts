@@ -312,14 +312,14 @@ describe("applyRecordReviews fold", () => {
 
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
-    expect(env.floor.passed).toBe(true);
+    expect(env.mergeGate.passed).toBe(true);
     expect(env.step).toEqual({ done: false, stage: "ship" });
     const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
     expect(task.reviewers.map((r) => r.verdict)).toEqual(["approve", "approve"]);
     expect(task.status).toBe("shipping"); // markInFlight(ship)
   });
 
-  it("a confirmed blocker blocks the floor → escalate (clear reviewers, resume at exec)", async () => {
+  it("a confirmed blocker blocks the merge gate → escalate (clear reviewers, resume at exec)", async () => {
     await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
     const deps = makeDeps();
     const input: RecordReviewsInput = {
@@ -352,7 +352,7 @@ describe("applyRecordReviews fold", () => {
 
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
-    expect(env.floor.passed).toBe(false);
+    expect(env.mergeGate.passed).toBe(false);
     expect(env.step).toEqual({ done: false, stage: "exec" });
     // The round's reviewers are reported on the envelope (audit)…
     const quality = env.reviewers.find((r) => r.reviewer === "quality")!;
@@ -391,13 +391,13 @@ describe("applyRecordReviews fold", () => {
 
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
-    expect(env.floor.passed).toBe(false);
+    expect(env.mergeGate.passed).toBe(false);
     expect(env.step).toEqual({ done: false, stage: "exec" });
     // The missing verdict surfaces as a LOUD verifier error, not an auto-confirm/refute.
     expect(env.reviewers.find((r) => r.reviewer === "quality")!.verdict).toBe("error");
   });
 
-  it("a failing holdout blocks the floor even with an approving panel + green gates", async () => {
+  it("a failing holdout blocks the merge gate even with an approving panel + green gates", async () => {
     await holdout.put(RUN_ID, makeHoldoutRecord(TASK_ID, ["d", "e"], 5));
     // Persisted verdicts that DO NOT satisfy the withheld criteria → holdout fails.
     await verdictStore.put(RUN_ID, TASK_ID, [
@@ -409,10 +409,10 @@ describe("applyRecordReviews fold", () => {
 
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
-    expect(env.floor.passed).toBe(false);
+    expect(env.mergeGate.passed).toBe(false);
     expect(env.step).toEqual({ done: false, stage: "exec" });
-    // The holdout gate evidence is part of the derived floor.
-    expect(env.floor.from.some((e) => e.gate === "holdout" && e.observed === false)).toBe(true);
+    // The holdout gate evidence is part of the derived merge gate.
+    expect(env.mergeGate.from.some((e) => e.gate === "holdout" && e.observed === false)).toBe(true);
   });
 
   it("a satisfied holdout + approving panel + green gates advances to ship", async () => {
@@ -426,9 +426,9 @@ describe("applyRecordReviews fold", () => {
 
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
-    expect(env.floor.passed).toBe(true);
+    expect(env.mergeGate.passed).toBe(true);
     expect(env.step).toEqual({ done: false, stage: "ship" });
-    expect(env.floor.from.some((e) => e.gate === "holdout" && e.observed === true)).toBe(true);
+    expect(env.mergeGate.from.some((e) => e.gate === "holdout" && e.observed === true)).toBe(true);
   });
 
   it("is LOUD on a missing task", async () => {
@@ -439,9 +439,9 @@ describe("applyRecordReviews fold", () => {
   });
 
   it("fail-closed: escalate path does NOT persist reviewers; approve path persists reviewers+stage atomically", async () => {
-    // ESCALATE branch: confirmed blocker → floor fails → escalateOrDrop path.
+    // ESCALATE branch: confirmed blocker → merge gate fails → escalateOrDrop path.
     // Simulating the crash window: if reviewers were written before the panel result
-    // was acted on, a no-results re-invoke at verify could derive a floor pass without
+    // was acted on, a no-results re-invoke at verify could derive a merge gate pass without
     // holdout evidence.  With the fix, reviewers must be EMPTY after the escalate fold.
     await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
     const depsEscalate = makeDeps();
@@ -478,7 +478,7 @@ describe("applyRecordReviews fold", () => {
       verdictStore,
       escalateInput,
     );
-    expect(escalateEnv.floor.passed).toBe(false);
+    expect(escalateEnv.mergeGate.passed).toBe(false);
     // After escalate fold: task.reviewers must be empty (fail-closed — no phantom persist).
     const taskAfterEscalate = (await state.read(RUN_ID)).tasks[TASK_ID]!;
     expect(taskAfterEscalate.reviewers).toEqual([]);
@@ -509,7 +509,7 @@ describe("applyRecordReviews fold", () => {
       verdictStore,
       approveInput,
     );
-    expect(approveEnv.floor.passed).toBe(true);
+    expect(approveEnv.mergeGate.passed).toBe(true);
     expect(approveEnv.step).toEqual({ done: false, stage: "ship" });
     // After advance fold: reviewers persisted + stage advanced atomically.
     const taskAfterApprove = (await state.read(RUN_ID)).tasks[TASK_ID]!;
@@ -577,8 +577,8 @@ describe("applyRecordReviews fold", () => {
     expect(env.crossVendorAbsence).toEqual({
       reason: "single-vendor v1 (no second vendor configured)",
     });
-    // The floor is unaffected — a second vendor is a STRENGTH signal, never a gate.
-    expect(env.floor.passed).toBe(true);
+    // The merge gate is unaffected — a second vendor is a STRENGTH signal, never a gate.
+    expect(env.mergeGate.passed).toBe(true);
     expect(env.step).toEqual({ done: false, stage: "ship" });
     // LOUD: a warn line names the absence so it can never be silently swallowed.
     expect(stderr).toMatch(/cross-vendor/i);
@@ -603,7 +603,7 @@ describe("applyRecordReviews fold", () => {
   it("gate baseRef is per-run staging/<run-id>, not shared staging (Decision 33)", async () => {
     // Probe seeded with ONLY origin/staging/<run-id>. If the fold still passes
     // deps.config.git.stagingBranch ("staging") as baseRef, the TDD strategy will
-    // look up origin/staging (missing) → gate fails → floor blocks → step !== ship.
+    // look up origin/staging (missing) → gate fails → merge gate blocks → step !== ship.
     // After the fix (runStagingBranch(runId)), the probe resolves origin/staging-run-1
     // and the green gate + approve panel advance to ship.
     const perRunProbe = new FakeGitProbe({
@@ -635,8 +635,8 @@ describe("applyRecordReviews fold", () => {
 
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
-    // Gate must be GREEN (per-run ref resolved) and floor must pass → advance to ship.
-    expect(env.floor.passed).toBe(true);
+    // Gate must be GREEN (per-run ref resolved) and merge gate must pass → advance to ship.
+    expect(env.mergeGate.passed).toBe(true);
     expect(env.step).toEqual({ done: false, stage: "ship" });
   });
 });

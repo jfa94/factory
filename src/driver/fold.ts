@@ -171,7 +171,7 @@ export interface RecordHoldoutInput {
 export interface RecordHoldoutEnvelope {
   readonly run_id: string;
   readonly task_id: string;
-  /** The DERIVED holdout gate evidence (folded into the floor by record-reviews). */
+  /** The DERIVED holdout gate evidence (folded into the merge gate by record-reviews). */
   readonly evidence: GateEvidence;
   /** The scored detail (audit). */
   readonly check: HoldoutCheckResult;
@@ -250,14 +250,14 @@ export interface RecordReviewsInput {
 export interface RecordReviewsEnvelope extends TransitionEnvelope {
   /** The per-reviewer results this round derived (audit; state may clear them on retry). */
   readonly reviewers: readonly ReviewerResult[];
-  /** The DERIVED floor verdict (never stored; recomputed here). */
-  readonly floor: GateVerdict;
+  /** The DERIVED merge gate verdict (never stored; recomputed here). */
+  readonly mergeGate: GateVerdict;
   /**
    * Δ U — a SECOND-VENDOR ABSENCE surfaced from {@link runPanel}. Present (with a
    * reason) IFF this verify pass ran WITHOUT an independent cross-vendor reviewer;
    * the fold also emits a LOUD `log.warn` so the absence is never silently swallowed
    * (runPanel records it on the panel result, but the fold is the last hop that can
-   * drop it). An audit/strength signal only — it NEVER gates the floor. Left absent
+   * drop it). An audit/strength signal only — it NEVER gates the merge gate. Left absent
    * when a second vendor was present.
    */
   readonly crossVendorAbsence?: { readonly reason: string };
@@ -271,7 +271,7 @@ export interface RecordReviewsEnvelope extends TransitionEnvelope {
  * `null` (its citations are then unverifiable and dropped). Any OTHER read error
  * (EACCES, EISDIR, an I/O fault) is a REAL failure and RETHROWS: demoting it to
  * "missing" would silently drop a citation that may back a real blocker, turning a
- * read fault into a false floor-pass. Fail loud instead.
+ * read fault into a false merge-gate-pass. Fail loud instead.
  */
 export async function buildWorktreeSource(
   worktree: string,
@@ -301,7 +301,7 @@ export async function buildWorktreeSource(
  * whose `confirm` returns the orchestrator's pre-recorded verdict for that finding
  * (matched by `file:line`, FIFO among duplicates) instead of spawning. A kept finding
  * with NO recorded verdict REJECTS — `confirmBlocker` turns that into a LOUD `error`
- * (fail-closed: the floor blocks, never a silent pass).
+ * (fail-closed: the merge gate blocks, never a silent pass).
  */
 export function makeReplayRunnerFactory(
   input: RecordReviewsInput,
@@ -339,7 +339,7 @@ export function makeReplayRunnerFactory(
 }
 
 /**
- * Fold the panel + verify-then-fix verdicts into the floor and return the next-step
+ * Fold the panel + verify-then-fix verdicts into the merge gate and return the next-step
  * envelope. `verdictStore` is the holdout-verdict source `applyRecordHoldout` persisted.
  */
 export async function applyRecordReviews(
@@ -387,7 +387,7 @@ export async function applyRecordReviews(
     );
   }
 
-  // 4. derive the floor (citation-verify + replay-confirm + conjunctive floor).
+  // 4. derive the merge gate (citation-verify + replay-confirm + conjunctive merge gate).
   const panel = await runPanel({
     reviews,
     source,
@@ -404,7 +404,7 @@ export async function applyRecordReviews(
   // Δ U: a second-vendor absence must be LOUD, never silently dropped. runPanel
   // records it on the result; this fold (the last hop) surfaces it as a warn line
   // AND threads it onto the envelope below. It is a strength signal — it does NOT
-  // gate the floor.
+  // gate the merge gate.
   if (panel.crossVendorAbsence !== undefined) {
     log.warn(
       `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` +
@@ -440,7 +440,7 @@ export async function applyRecordReviews(
       deps,
       runId,
       taskId,
-      classifyFailure({ kind: "floor-blocked", reason: panel.result.reason }),
+      classifyFailure({ kind: "merge-gate-blocked", reason: panel.result.reason }),
       "exec",
     );
     await persistStepCursor(deps, runId, taskId, step);
@@ -453,7 +453,7 @@ export async function applyRecordReviews(
     task_id: taskId,
     step,
     reviewers: panel.reviewerResults,
-    floor: panel.floor,
+    mergeGate: panel.mergeGate,
     ...(panel.crossVendorAbsence !== undefined
       ? { crossVendorAbsence: panel.crossVendorAbsence }
       : {}),

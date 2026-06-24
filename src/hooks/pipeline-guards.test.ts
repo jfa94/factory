@@ -103,9 +103,9 @@ describe("pipeline-guards — ship guard is agent-deny while a run is active", (
     if (isDeny(d)) expect(d.reason).toBe("ship_agent_denied");
   });
 
-  it("denies even when the task looks fully shippable (pure agent boundary, not floor-derived)", async () => {
+  it("denies even when the task looks fully shippable (pure agent boundary, not merge-gate-derived)", async () => {
     // Unanimous approvals + a recorded pr_number — STILL denied: the hook no longer
-    // derives a floor, agents simply never ship.
+    // derives a merge gate, agents simply never ship.
     const run = activeRun({ t1: task({ reviewers: [APPROVE], pr_number: 42 }) });
     const d = await decidePipelineGuards(bash("gh pr create --fill"), { loadRun: withRun(run) });
     expect(isDeny(d)).toBe(true);

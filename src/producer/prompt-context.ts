@@ -39,7 +39,7 @@ export interface FixInstruction {
 export interface PriorFailureNote {
   /** Which rung the failure occurred on. */
   readonly rung: number;
-  /** A short summary of WHAT failed (e.g. "floor blocked by: security"). */
+  /** A short summary of WHAT failed (e.g. "merge gate blocked by: security"). */
   readonly summary: string;
 }
 

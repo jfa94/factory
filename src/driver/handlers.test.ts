@@ -374,8 +374,8 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     expect(result.reason).toMatch(/lint/);
   });
 
-  it("verify (resume path) names the failing gate WITH its detail, via the shared floorBlockReason", async () => {
-    // The handlers verify reporter used to hold a TWIN floorBlockReason that named
+  it("verify (resume path) names the failing gate WITH its detail, via the shared mergeGateBlockReason", async () => {
+    // The handlers verify reporter used to hold a TWIN mergeGateBlockReason that named
     // gates by id ALONE ("gates failed: lint") — dropping the `detail`. After
     // unifying on the shared helper, the resume / merge-resync path must surface
     // the same gate detail (e.g. "eslint exit=1") the fresh-review path does.

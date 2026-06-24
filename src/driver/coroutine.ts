@@ -235,7 +235,7 @@ async function foldResults(
   }
   // Holdout-required guard: if a withheld answer key exists but no holdout results
   // were delivered, reject LOUD. Silently reusing the previous rung's verdict would
-  // bypass the holdout floor for the current escalation cycle.
+  // bypass the holdout gate for the current escalation cycle.
   if ((await deps.holdout.has(runId, taskId)) && results.holdout === undefined) {
     throw new Error(
       `drive: task '${taskId}' has a withheld holdout answer key — verify results must ` +
@@ -444,12 +444,12 @@ export async function stepTask(
           cursorPersisted = true; // exec cursor written ATOMICALLY with the bump above
           continue;
         }
-        // verify floor blocked on a crash-resume replay → same classify path as the fold.
+        // verify merge gate blocked on a crash-resume replay → same classify path as the fold.
         const step = await escalateOrDrop(
           deps,
           runId,
           taskId,
-          classifyFailure({ kind: "floor-blocked", reason: result.reason }),
+          classifyFailure({ kind: "merge-gate-blocked", reason: result.reason }),
           "exec",
         );
         if (step.done) {

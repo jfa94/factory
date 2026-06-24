@@ -6,7 +6,7 @@
  * `src/driver/transitions.ts`), capped at this constant. Each rung "changes a
  * variable" — the combined model→effort dial (`src/producer/model-dial.ts`) climbs
  * the model to its ceiling then climbs effort, and rung ≥1 injects fresh /
- * prior-failure context. When the cap is reached with the floor still blocked, the
+ * prior-failure context. When the cap is reached with the merge gate still blocked, the
  * task is a LOUD classified drop (`capability-budget`).
  *
  * Cap = 4 ⇒ 5 total attempts per task (rung 0 + 4 escalating retries). This budget

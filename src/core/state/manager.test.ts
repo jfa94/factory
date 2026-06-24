@@ -7,7 +7,7 @@ import { StateManager } from "./manager.js";
 import { runStatePath, runsRoot, specDir } from "./paths.js";
 import { parseRunState, type SpecPointer } from "./schema.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
-import { deriveFloorVerdict } from "./derive.js";
+import { deriveMergeGateVerdict } from "./derive.js";
 
 let dataDir: string;
 const spec: SpecPointer = { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 };
@@ -191,14 +191,14 @@ describe("derive-don't-store survives a forged on-disk verdict (Δ V, end-to-end
     }));
 
     // Attacker bypasses the StateManager and forges a stored PASS directly on disk:
-    // a `quality_gate: true` / `floor_passed: true` boolean meant to wave the task
+    // a `quality_gate: true` / `merge_gate_passed: true` boolean meant to wave the task
     // through. This is exactly the TCB-write-gap the bash code was vulnerable to.
     const path = runStatePath(dataDir, "run-1");
     const onDisk = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
     const tasks = onDisk.tasks as Record<string, Record<string, unknown>>;
     const forged = tasks.t1!;
     forged.quality_gate = true;
-    forged.floor_passed = true;
+    forged.merge_gate_passed = true;
     forged.mutation_gate = true;
     await atomicWriteFile(path, JSON.stringify(onDisk));
 
@@ -206,12 +206,12 @@ describe("derive-don't-store survives a forged on-disk verdict (Δ V, end-to-end
     const reread = await m.read("run-1");
     const t = reread.tasks.t1 as unknown as Record<string, unknown>;
     expect(t.quality_gate).toBeUndefined();
-    expect(t.floor_passed).toBeUndefined();
+    expect(t.merge_gate_passed).toBeUndefined();
     expect(t.mutation_gate).toBeUndefined();
 
-    // 2) The floor verdict is re-derived from ground truth (the blocked panel +
+    // 2) The merge gate verdict is re-derived from ground truth (the blocked panel +
     //    real gate evidence) and IGNORES the forgery — it FAILS, as it must.
-    const verdict = deriveFloorVerdict(reread.tasks.t1!, [{ gate: "test", observed: true }]);
+    const verdict = deriveMergeGateVerdict(reread.tasks.t1!, [{ gate: "test", observed: true }]);
     expect(verdict.passed).toBe(false);
     expect(verdict.__derived).toBe(true);
   });

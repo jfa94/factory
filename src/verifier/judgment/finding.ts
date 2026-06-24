@@ -24,7 +24,7 @@ const log = createLogger("finding");
 
 /**
  * Closed severity vocabulary. A value outside the set is a LOUD parse error.
- * Only `blocking === true` findings gate the floor; severity is retained for the
+ * Only `blocking === true` findings gate the merge gate; severity is retained for the
  * audit trail and human report.
  */
 export const FindingSeverityEnum = z.enum(["info", "warning", "error", "critical"]);
@@ -42,7 +42,7 @@ export const FindingSchema = z.object({
   reviewer: z.string().min(1),
   /** Closed severity. */
   severity: FindingSeverityEnum,
-  /** True iff this finding, if upheld, BLOCKS the floor. */
+  /** True iff this finding, if upheld, BLOCKS the merge gate. */
   blocking: z.boolean(),
   /** Cited file path (run-tree relative). Absent ⇒ uncitable. */
   file: z.string().min(1).optional(),

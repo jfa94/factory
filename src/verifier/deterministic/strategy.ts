@@ -33,7 +33,7 @@ export interface GateRan {
 /**
  * The gate is NOT APPLICABLE on this task (no package.json, no script configured,
  * no mutable changes, …). A skip is NEITHER a pass NOR a fail: it is excluded from
- * the conjunction so it cannot default-open the floor, but it is recorded LOUDLY
+ * the conjunction so it cannot default-open the merge gate, but it is recorded LOUDLY
  * with a reason for the audit trail.
  */
 export interface GateSkip {

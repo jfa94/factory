@@ -52,7 +52,7 @@ allowed. The `pipeline-guards` ship arm is a categorical boundary — PRs are op
 and merged ONLY by the engine (a `child_process` `gh` call inside `factory drive`
 that never transits this Bash-tool hook), so any `gh pr create`/`gh pr merge`
 reaching the hook is an agent-initiated attempt and is unconditionally denied while
-a run is active. The verifier floor that actually gates shipping is derived from
+a run is active. The merge gate that actually gates shipping is derived from
 fresh ground truth _inside the engine_ (derive-don't-store) — there is structurally
 no stored `*_gate` boolean to forge (see
 [../explanation/derive-dont-store.md](../explanation/derive-dont-store.md)).

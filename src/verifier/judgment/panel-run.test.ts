@@ -20,7 +20,7 @@ const SRC: Record<string, readonly string[]> = {
 };
 const source: SourceReader = { readLines: (f) => SRC[f] ?? null };
 
-// A passing deterministic gate so the floor's deterministic layer is satisfied;
+// A passing deterministic gate so the merge gate's deterministic layer is satisfied;
 // the panel layer is what these tests exercise.
 const PASSING_GATES: readonly GateEvidence[] = [{ gate: "test", observed: true }];
 
@@ -54,7 +54,7 @@ function blockedWith(reviewer: string, line: number, quote: string): RawReview {
 }
 
 describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
-  it("D26 floor: unanimous approve → floor passes and advances to ship", async () => {
+  it("D26 merge gate: unanimous approve → merge gate passes and advances to ship", async () => {
     const res = await runPanel({
       reviews: [approve("implementation-reviewer"), approve("quality-reviewer")],
       source,
@@ -62,12 +62,12 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       gateEvidence: PASSING_GATES,
       stage: "verify",
     });
-    expect(res.floor.passed).toBe(true);
+    expect(res.mergeGate.passed).toBe(true);
     expect(res.result.kind).toBe("advance");
     if (res.result.kind === "advance") expect(res.result.to).toBe("ship");
   });
 
-  it("D27: a confirmed blocker fails the floor → wait-retry, WS1 coherence holds (blocked⇒≥1)", async () => {
+  it("D27: a confirmed blocker fails the merge gate → wait-retry, WS1 coherence holds (blocked⇒≥1)", async () => {
     const res = await runPanel({
       reviews: [
         approve("implementation-reviewer"),
@@ -78,7 +78,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       gateEvidence: PASSING_GATES,
       stage: "verify",
     });
-    expect(res.floor.passed).toBe(false);
+    expect(res.mergeGate.passed).toBe(false);
     expect(res.result.kind).toBe("wait-retry");
     const sec = res.reviewerResults.find((r) => r.reviewer === "security-reviewer");
     expect(sec?.verdict).toBe("blocked");
@@ -95,7 +95,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
     ).not.toThrow();
   });
 
-  it("Δ K: a hallucinated finding never reaches confirmation → floor passes", async () => {
+  it("Δ K: a hallucinated finding never reaches confirmation → merge gate passes", async () => {
     // Quote nowhere near the cited line (real text is on line 2, cited at 4 → 2 away
     // is OK; use a wholly absent quote instead).
     const res = await runPanel({
@@ -105,18 +105,18 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       ],
       source,
       // If the dropped finding HAD reached confirmation, confirmAll(true) would
-      // have confirmed it and failed the floor. It passes → it never got there.
+      // have confirmed it and failed the merge gate. It passes → it never got there.
       makeRunner: confirmAll(true),
       gateEvidence: PASSING_GATES,
       stage: "verify",
     });
-    expect(res.floor.passed).toBe(true);
+    expect(res.mergeGate.passed).toBe(true);
     const sec = res.reviewerResults.find((r) => r.reviewer === "security-reviewer");
     expect(sec?.verdict).toBe("approve");
     expect(sec?.confirmed_blockers).toBe(0);
   });
 
-  it("D27: a refuted blocker does not count → floor passes", async () => {
+  it("D27: a refuted blocker does not count → merge gate passes", async () => {
     const res = await runPanel({
       reviews: [blockedWith("security-reviewer", 2, "const value = process(input)")],
       source,
@@ -124,10 +124,10 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       gateEvidence: PASSING_GATES,
       stage: "verify",
     });
-    expect(res.floor.passed).toBe(true);
+    expect(res.mergeGate.passed).toBe(true);
   });
 
-  it("D26 (loud error): an `error` reviewer fails the floor — never counted as approve", async () => {
+  it("D26 (loud error): an `error` reviewer fails the merge gate — never counted as approve", async () => {
     const errored = parseRawReview({
       reviewer: "quality-reviewer",
       verdict: "error",
@@ -140,12 +140,12 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       gateEvidence: PASSING_GATES,
       stage: "verify",
     });
-    expect(res.floor.passed).toBe(false);
+    expect(res.mergeGate.passed).toBe(false);
     const q = res.reviewerResults.find((r) => r.reviewer === "quality-reviewer");
     expect(q?.verdict).toBe("error");
   });
 
-  it("D27 (loud error): a verifier error on a blocker yields an `error` reviewer (unresolved, fails floor)", async () => {
+  it("D27 (loud error): a verifier error on a blocker yields an `error` reviewer (unresolved, fails merge gate)", async () => {
     const res = await runPanel({
       reviews: [blockedWith("security-reviewer", 2, "const value = process(input)")],
       source,
@@ -158,12 +158,12 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       gateEvidence: PASSING_GATES,
       stage: "verify",
     });
-    expect(res.floor.passed).toBe(false);
+    expect(res.mergeGate.passed).toBe(false);
     const sec = res.reviewerResults.find((r) => r.reviewer === "security-reviewer");
     expect(sec?.verdict).toBe("error");
   });
 
-  it("Δ V: the floor is DERIVED from the reviewer results, never a stored boolean", async () => {
+  it("Δ V: the merge gate is DERIVED from the reviewer results, never a stored boolean", async () => {
     const res = await runPanel({
       reviews: [approve("implementation-reviewer"), approve("quality-reviewer")],
       source,
@@ -174,10 +174,10 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
     // Re-derive independently from the assembled results: must match runPanel's.
     const reDerived = derivePanelVerdict(res.reviewerResults);
     expect(reDerived.passed).toBe(true);
-    expect(res.floor.__derived).toBe(true);
+    expect(res.mergeGate.__derived).toBe(true);
   });
 
-  it("D26: a failing deterministic gate fails the floor even with a unanimous panel", async () => {
+  it("D26: a failing deterministic gate fails the merge gate even with a unanimous panel", async () => {
     const res = await runPanel({
       reviews: [approve("implementation-reviewer")],
       source,
@@ -185,10 +185,10 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       gateEvidence: [{ gate: "test", observed: false }],
       stage: "verify",
     });
-    expect(res.floor.passed).toBe(false);
+    expect(res.mergeGate.passed).toBe(false);
   });
 
-  it("NAMES the failing deterministic gate in the wait-retry reason (not the generic 'floor not unanimous')", async () => {
+  it("NAMES the failing deterministic gate in the wait-retry reason (not the generic 'merge gate not unanimous')", async () => {
     const res = await runPanel({
       reviews: [approve("implementation-reviewer")],
       source,
@@ -196,14 +196,14 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       gateEvidence: [{ gate: "type", observed: false, detail: "tsc exit=1" }],
       stage: "verify",
     });
-    expect(res.floor.passed).toBe(false);
+    expect(res.mergeGate.passed).toBe(false);
     expect(res.result.kind).toBe("wait-retry");
     if (res.result.kind === "wait-retry") {
-      // The masking bug returned "floor not unanimous" when a GATE (not a reviewer)
+      // The masking bug returned "merge gate not unanimous" when a GATE (not a reviewer)
       // failed — hiding the real cause. The reason must name the gate + its detail.
       expect(res.result.reason).toContain("type");
       expect(res.result.reason).toContain("tsc exit=1");
-      expect(res.result.reason).not.toBe("floor not unanimous");
+      expect(res.result.reason).not.toBe("merge gate not unanimous");
     }
   });
 });
@@ -220,8 +220,8 @@ describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", (
     });
     expect(res.crossVendorAbsence).toBeDefined();
     expect(res.crossVendorAbsence?.reason).toContain("codex");
-    // The absence must not silently change floor semantics.
-    expect(res.floor.passed).toBe(true);
+    // The absence must not silently change merge gate semantics.
+    expect(res.mergeGate.passed).toBe(true);
   });
 
   it("a `present` cross-vendor resolution leaves crossVendorAbsence undefined", async () => {

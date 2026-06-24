@@ -17,7 +17,7 @@
  *     mirroring the bash `pipeline-holdout-validate check` intent.
  *   - {@link holdoutEvidence} maps the result to a {@link GateEvidence} the loop
  *     appends to the deterministic gate evidence, so the holdout result is folded
- *     into the risk-invariant floor via the existing `deriveFloorVerdict`.
+ *     into the risk-invariant merge gate via the existing `deriveMergeGateVerdict`.
  */
 import type { GateEvidence } from "../../types/index.js";
 import type { HoldoutRecord } from "./store.js";
@@ -211,7 +211,7 @@ export function checkHoldout(
   };
 }
 
-/** Map a holdout result to the {@link GateEvidence} the loop folds into the floor. */
+/** Map a holdout result to the {@link GateEvidence} the loop folds into the merge gate. */
 export function holdoutEvidence(result: HoldoutCheckResult): GateEvidence {
   return {
     gate: "holdout",

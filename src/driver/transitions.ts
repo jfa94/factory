@@ -159,7 +159,7 @@ export async function escalateOrDrop(
       runId,
       taskId,
       "capability-budget",
-      `producer escalation cap (${ESCALATION_CAP}) reached without clearing the floor: ${decision.reason}`,
+      `producer escalation cap (${ESCALATION_CAP}) reached without clearing the merge gate: ${decision.reason}`,
     );
   }
   const nextRung = task.escalation_rung + 1;

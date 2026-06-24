@@ -16,10 +16,10 @@
  *       denied while a run is active. The factory ENGINE opens and merges PRs
  *       deterministically from inside `factory drive` (a child_process `gh` call
  *       that never transits this Bash-tool hook — src/driver/ship.ts), and the
- *       verifier floor that actually gates shipping is derived THERE
+ *       merge gate that actually gates shipping is derived THERE
  *       (derive-don't-store). So any ship command reaching this hook is an
  *       agent-initiated attempt, which the boundary simply refuses — there is no
- *       floor to re-derive here.
+ *       merge gate to re-derive here.
  *
  * A dangling runs/current symlink fails CLOSED (deny) — corruption is never
  * silently allowed. No active run → pass through.
@@ -194,7 +194,7 @@ export async function decidePipelineGuards(
   // Bash-tool hook — src/driver/ship.ts), so any `gh pr create`/`gh pr merge` that
   // DOES reach this hook is an agent-initiated ship attempt while a run is active.
   // That is categorically denied: PRs are opened and merged ONLY by the engine,
-  // whose verifier floor gates shipping (derive-don't-store) — there is nothing to
+  // whose merge gate gates shipping (derive-don't-store) — there is nothing to
   // re-derive here, just a security boundary to hold.
   if (tool === "Bash" && (isGhPrCreate(cmd) || isGhPrMerge(cmd))) {
     const op = isGhPrCreate(cmd) ? "gh pr create" : "gh pr merge";

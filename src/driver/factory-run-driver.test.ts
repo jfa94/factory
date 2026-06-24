@@ -180,7 +180,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       findings,
     });
 
-    it("throws loud when fewer reviewers return than the manifest names (no silent floor-pass)", async () => {
+    it("throws loud when fewer reviewers return than the manifest names (no silent merge-gate-pass)", async () => {
       // 2 agents, but the second slot dies → filter(Boolean) yields 1 ≠ 2.
       const { agent } = makeAgent([review("r0"), null]);
       await expect(build(agent)("T1", panelEnv(2))).rejects.toThrow(/reviewer\(s\) died/);

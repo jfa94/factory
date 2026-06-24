@@ -454,7 +454,7 @@ pre-fold window) — the coroutine first resets the shared task worktree to the
 checkpoint's `tip_sha`, discarding the abandoned producer's partial commits before
 re-spawning clean ([state model](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)).
 The `reviews` fold runs the
-full verify floor internally — re-runs the deterministic gates, re-derives the
+full verify merge gate internally — re-runs the deterministic gates, re-derives the
 persisted holdout evidence, citation-verifies the reviews against the worktree,
 and confirms each surviving blocker via the supplied `verifications` (a kept
 citable blocker with no recorded verdict fails closed). Holdout is folded **before**

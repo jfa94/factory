@@ -7,24 +7,24 @@
  *      does not substring-match real source at file:line ±2.
  *   3. For every surviving BLOCKING finding, run the INDEPENDENT finding-verifier
  *      (D27) exactly once; only CONFIRMED blockers count. A verifier `error` is
- *      LOUD and UNRESOLVED — it fails the floor, never an auto-approve.
+ *      LOUD and UNRESOLVED — it fails the merge gate, never an auto-approve.
  *   4. Assemble the per-reviewer WS1 {@link ReviewerResult}[] with coherent
- *      counts (approve ⇒ 0 confirmed blockers; blocked ⇒ ≥1), and DERIVE the floor
- *      verdict via the frozen {@link deriveFloorVerdict} — NEVER stored.
+ *      counts (approve ⇒ 0 confirmed blockers; blocked ⇒ ≥1), and DERIVE the merge gate
+ *      verdict via the frozen {@link deriveMergeGateVerdict} — NEVER stored.
  *   5. Map the derived outcome onto a {@link StageResult}: the panel SPAWN manifest
- *      when reviewers must still run; otherwise `advance` (floor passed) or
- *      `wait-retry` (floor blocked — bounded re-review/re-fix). State writes are
+ *      when reviewers must still run; otherwise `advance` (merge gate passed) or
+ *      `wait-retry` (merge gate blocked — bounded re-review/re-fix). State writes are
  *      the driver's job; this module never touches the StateManager.
  *
  * The fold ends at the independent finding-verifier (D27 verify-then-fix): a
- * confirmed blocker fails the floor. There is no producer-rebuttal stage — runPanel
+ * confirmed blocker fails the merge gate. There is no producer-rebuttal stage — runPanel
  * exposes the confirmed blockers and the driver routes a bounded fix-forward
  * re-spawn; runPanel does not loop a debate.
  */
 import {
   advance,
-  deriveFloorVerdict,
-  floorBlockReason,
+  deriveMergeGateVerdict,
+  mergeGateBlockReason,
   spawn,
   waitRetry,
   type GateEvidence,
@@ -43,7 +43,7 @@ import type { CrossVendorResolution } from "./vendor.js";
 export interface AdjudicatedReviewer {
   /** Reviewer identity (role string). */
   readonly reviewer: string;
-  /** The reviewer's raw self-reported verdict (before the floor is derived). */
+  /** The reviewer's raw self-reported verdict (before the merge gate is derived). */
   readonly rawVerdict: RawReview["verdict"];
   /** Blocking findings that survived citation-verify AND were CONFIRMED. */
   readonly confirmedBlockers: readonly Finding[];
@@ -57,8 +57,8 @@ export interface PanelRunResult {
   readonly adjudicated: readonly AdjudicatedReviewer[];
   /** The WS1 ReviewerResult[] to persist (coherent counts). */
   readonly reviewerResults: readonly ReviewerResult[];
-  /** The DERIVED floor verdict (never stored; recomputed here). */
-  readonly floor: GateVerdict;
+  /** The DERIVED merge gate verdict (never stored; recomputed here). */
+  readonly mergeGate: GateVerdict;
   /** The StageResult the driver acts on. */
   readonly result: StageResult;
   /**
@@ -75,7 +75,7 @@ export interface PanelRunResult {
 
 /**
  * Map ONE raw reviewer through citation-verify + confirmation. A reviewer's
- * `error` self-verdict is preserved (it fails the floor); its blocking findings
+ * `error` self-verdict is preserved (it fails the merge gate); its blocking findings
  * are still citation-verified + confirmed for the audit trail.
  */
 async function adjudicateReviewer(
@@ -151,7 +151,7 @@ export interface RunPanelInput {
   readonly stage: TaskStage;
   /** Redact retained finding text (Δ K). Defaults to true. */
   readonly redact?: boolean;
-  /** Bounded re-review attempt accounting for the wait-retry on a blocked floor. */
+  /** Bounded re-review attempt accounting for the wait-retry on a blocked merge gate. */
   readonly attempt?: number;
   readonly maxAttempts?: number;
   /**
@@ -159,7 +159,7 @@ export interface RunPanelInput {
    * status is `absent`, runPanel records the absence LOUDLY on
    * {@link PanelRunResult.crossVendorAbsence}; when `present` (or omitted) no
    * absence is recorded. The caller resolves it (runPanel stays free of the
-   * probe) and hands the resolution in — minimal wiring, no change to floor /
+   * probe) and hands the resolution in — minimal wiring, no change to merge gate /
    * citation / confirm semantics.
    */
   readonly crossVendor?: CrossVendorResolution;
@@ -177,7 +177,7 @@ export function spawnPanel(manifest: SpawnManifest): StageResult {
 
 /**
  * Run the full verify pass over already-collected raw reviews and DERIVE the
- * floor. Never stores the verdict; recomputes it via {@link deriveFloorVerdict}.
+ * merge gate. Never stores the verdict; recomputes it via {@link deriveMergeGateVerdict}.
  */
 export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
   const redact = input.redact ?? true;
@@ -189,15 +189,15 @@ export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
 
   const reviewerResults = adjudicated.map(reviewerResultOf);
 
-  // DERIVE the floor (Δ V / D26): both the deterministic gates and the judgment
+  // DERIVE the merge gate (Δ V / D26): both the deterministic gates and the judgment
   // panel must pass; an `error` reviewer fails it LOUDLY. Never read from storage.
-  const floor = deriveFloorVerdict({ reviewers: reviewerResults }, input.gateEvidence);
+  const mergeGate = deriveMergeGateVerdict({ reviewers: reviewerResults }, input.gateEvidence);
 
-  const result: StageResult = floor.passed
+  const result: StageResult = mergeGate.passed
     ? advance(nextOrSelf(input.stage))
     : waitRetry(
         input.stage,
-        floorBlockReason(reviewerResults, input.gateEvidence),
+        mergeGateBlockReason(reviewerResults, input.gateEvidence),
         input.attempt ?? 1,
         input.maxAttempts ?? 1,
       );
@@ -210,12 +210,12 @@ export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
     input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : undefined;
 
   return crossVendorAbsence === undefined
-    ? { adjudicated, reviewerResults, floor, result }
-    : { adjudicated, reviewerResults, floor, result, crossVendorAbsence };
+    ? { adjudicated, reviewerResults, mergeGate, result }
+    : { adjudicated, reviewerResults, mergeGate, result, crossVendorAbsence };
 }
 
 /**
- * The stage to advance to when the floor passes. The verify stage's success
+ * The stage to advance to when the merge gate passes. The verify stage's success
  * advances to the next per-task stage; if `verify` is the configured stage we
  * advance to `ship`. We keep this local rather than importing nextStage to avoid
  * coupling the orchestration to the stage-order walk — but the seam's order is the

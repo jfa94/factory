@@ -578,7 +578,7 @@ describe("stepTask", () => {
     }
   });
 
-  it("a blocked floor escalates and resumes at exec", async () => {
+  it("a blocked merge gate escalates and resumes at exec", async () => {
     const { deps, runId, dataDir, cleanup } = await makeCoroutineDeps();
     try {
       await driveToVerify(deps, runId, "T1");

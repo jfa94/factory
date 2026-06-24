@@ -190,7 +190,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
       escalation_rung: 0,
       reviewers: [{ reviewer: "quality-reviewer", verdict: "blocked", confirmed_blockers: 1 }],
     });
-    const decision: ClassifyDecision = { action: "retry", reason: "floor blocked" };
+    const decision: ClassifyDecision = { action: "retry", reason: "merge gate blocked" };
     const step = await escalateOrDrop(deps, RUN_ID, "t1", decision, "exec");
 
     expect(step).toEqual({ done: false, stage: "exec" });

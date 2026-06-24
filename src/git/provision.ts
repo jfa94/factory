@@ -6,7 +6,7 @@
  * `npx vitest` / `npx tsc` / `npm run build` with `cwd=<worktree>` and have no
  * applicability guard, so an empty `node_modules` makes them FAIL CLOSED. (lint /
  * mutation probe for their binary and skip; test/type/build do not — and must not,
- * since silently skipping the test gate would degrade the quality floor.)
+ * since silently skipping the test gate would degrade the merge gate.)
  *
  * This module makes the worktree a runnable environment BEFORE the gates run:
  * resolve a setup command (operator-configured `quality.setupCommand`, else the

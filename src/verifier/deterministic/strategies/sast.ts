@@ -109,7 +109,7 @@ export const sastStrategy: GateStrategy<GateTools> = {
     }
     if (ctx.config.quality.securityAllowFailures) {
       // Non-blocking: findings recorded but do not fail the conjunction (bash exit 0
-      // with allow_failures, ok=false recorded). We mark observed:true so the floor
+      // with allow_failures, ok=false recorded). We mark observed:true so the merge gate
       // is not blocked, and name the non-blocking decision in the detail.
       return ran(
         "sast",

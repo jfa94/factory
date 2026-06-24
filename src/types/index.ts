@@ -53,8 +53,8 @@ export {
   deriveGateVerdict,
   deriveAllGatesVerdict,
   derivePanelVerdict,
-  deriveFloorVerdict,
-  floorBlockReason,
+  deriveMergeGateVerdict,
+  mergeGateBlockReason,
 } from "../core/state/index.js";
 
 export type {
