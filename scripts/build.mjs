@@ -17,7 +17,7 @@
 // All un-minified so the checked-in generated artifacts stay diff-reviewable.
 // Exits non-zero on any build failure so `npm run verify` / CI catches it.
 import { build } from "esbuild";
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -47,6 +47,16 @@ const common = {
   minify: false,
 };
 
+// pnpm stores deps under node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>/...
+// npm uses a flat layout: node_modules/<pkg>/...
+// esbuild embeds these paths as comments + __commonJS keys, making the bundle
+// non-deterministic across package managers. Strip the virtual-store segment so
+// the output is identical regardless of which PM populated node_modules.
+// ponytail: regex strip over the whole bundle text; upgrade to an esbuild plugin if
+// more fine-grained path control is ever needed.
+const PNPM_PATH = /node_modules\/\.pnpm\/[^/]+\/node_modules\//g;
+const normalize = (s) => s.replace(PNPM_PATH, "node_modules/");
+
 const targets = [
   { entry: "src/bin/factory.ts", out: "dist/factory.js" },
   { entry: "src/bin/factory-hook.ts", out: "dist/factory-hook.js" },
@@ -73,15 +83,18 @@ export function shardTemplateBuildOptions() {
 async function main() {
   mkdirSync(distDir, { recursive: true });
   for (const t of targets) {
-    await build({
+    const result = await build({
       ...common,
       entryPoints: [resolve(repoRoot, t.entry)],
       outfile: resolve(repoRoot, t.out),
+      write: false,
     });
+    writeFileSync(resolve(repoRoot, t.out), normalize(result.outputFiles[0].text));
     chmodSync(resolve(repoRoot, t.out), 0o755);
     process.stdout.write(`built ${t.out}\n`);
   }
-  await build(shardTemplateBuildOptions());
+  const shardResult = await build({ ...shardTemplateBuildOptions(), write: false });
+  writeFileSync(resolve(repoRoot, SHARD_TEMPLATE.out), normalize(shardResult.outputFiles[0].text));
   process.stdout.write(`built ${SHARD_TEMPLATE.out}\n`);
 }
 
