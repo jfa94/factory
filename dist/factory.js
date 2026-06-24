@@ -6690,6 +6690,7 @@ var StateManager = class {
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
       ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
+      ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -12852,7 +12853,7 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -12870,6 +12871,9 @@ Usage:
                 each task into staging and merge the staging\u2192develop rollup into develop.
                 Persisted on the run so the workflow driver + resume + finalize read it
                 without re-passing.
+  --ignore-quota Bypass the weekly-quota hard stop AND the per-step quota pacer for this run.
+                Persisted as ignore_quota:true so both coroutines + drivers skip the gate
+                without re-passing \u2014 lets create/--supersede proceed past a 7d-parked run.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; absent \u21D2 owner-unknown (Stop gate unscoped).
 

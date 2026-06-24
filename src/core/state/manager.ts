@@ -80,6 +80,8 @@ export interface CreateRunArgs {
   owner_session?: RunState["owner_session"];
   /** The per-run staging branch to PIN on the row (Decision 33); recomputed if absent. */
   staging_branch?: RunState["staging_branch"];
+  /** Quota-gate bypass from `--ignore-quota`; persisted so both coroutines skip the gate. */
+  ignore_quota?: RunState["ignore_quota"];
 }
 
 export class StateManager {
@@ -194,6 +196,7 @@ export class StateManager {
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...(args.owner_session !== undefined ? { owner_session: args.owner_session } : {}),
       ...(args.staging_branch !== undefined ? { staging_branch: args.staging_branch } : {}),
+      ...(args.ignore_quota !== undefined ? { ignore_quota: args.ignore_quota } : {}),
       spec: args.spec,
       tasks: {},
       started_at: now,

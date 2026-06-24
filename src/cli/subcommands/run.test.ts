@@ -915,6 +915,18 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect(fresh?.status).toBe("running");
   });
 
+  it("runCreate: --ignore-quota → fresh run is born with ignore_quota:true (persistence guard)", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const code = await runCreate(
+      ["--issue", "42", "--run-id", "run-iq", "--ignore-quota", "--workflow"],
+      { gitClient: git, ghClient: gh, cwd: "/x", dataDir },
+    );
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-iq")).ignore_quota).toBe(true);
+  });
+
   // -------------------------------------------------------------------------
   // kind: "quota-blocked" — 7d-parked run blocks create/supersede, not resume
   // -------------------------------------------------------------------------

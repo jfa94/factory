@@ -79,7 +79,7 @@ Actions:
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -97,6 +97,9 @@ Usage:
                 each task into staging and merge the staging→develop rollup into develop.
                 Persisted on the run so the workflow driver + resume + finalize read it
                 without re-passing.
+  --ignore-quota Bypass the weekly-quota hard stop AND the per-step quota pacer for this run.
+                Persisted as ignore_quota:true so both coroutines + drivers skip the gate
+                without re-passing — lets create/--supersede proceed past a 7d-parked run.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; absent ⇒ owner-unknown (Stop gate unscoped).
 

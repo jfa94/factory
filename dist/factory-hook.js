@@ -7534,6 +7534,7 @@ var StateManager = class {
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
       ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
+      ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,
