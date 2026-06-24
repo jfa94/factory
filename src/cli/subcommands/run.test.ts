@@ -45,14 +45,22 @@ const REPO = "acme/widgets";
 // `run create`/`run resume` now HALT unless the session is autonomous. Every
 // existing create/resume test exercises the happy path, so make the whole file
 // run as if launched autonomously; the dedicated suite below covers the negative.
+// Also stamp a session id: session-mode run create now requires one (so the Stop
+// hook can resolve finalize-on-stop via findActiveByOwner); the dedicated test
+// below covers the no-session-id rejection.
 let priorAutonomous: string | undefined;
+let priorSessionId: string | undefined;
 beforeEach(() => {
   priorAutonomous = process.env.FACTORY_AUTONOMOUS_MODE;
   process.env.FACTORY_AUTONOMOUS_MODE = "1";
+  priorSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = "test-session";
 });
 afterEach(() => {
   if (priorAutonomous === undefined) delete process.env.FACTORY_AUTONOMOUS_MODE;
   else process.env.FACTORY_AUTONOMOUS_MODE = priorAutonomous;
+  if (priorSessionId === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = priorSessionId;
 });
 
 /** Build one durable spec task with overridable fields. */
@@ -806,6 +814,36 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect((emitted.existing as Record<string, unknown>).run_id).toBe("run-a");
   });
 
+  it("runCreate: session-mode without session id → UsageError (Stop hook needs an owner)", async () => {
+    // The file-level beforeEach sets CLAUDE_CODE_SESSION_ID; delete it to simulate a
+    // bare invocation with no owner available.
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    await expect(
+      runCreate(["--issue", "42"], { gitClient: git, ghClient: gh, cwd: "/x", dataDir }),
+    ).rejects.toMatchObject({
+      isUsageError: true,
+      message: expect.stringMatching(/session-mode runs require an owning session id/),
+    });
+  });
+
+  it("runCreate: workflow-mode without session id → allowed (Workflow driver owns finalization)", async () => {
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const code = await runCreate(["--issue", "42", "--run-id", "run-wf-anon", "--workflow"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/x",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-wf-anon")).owner_session).toBeUndefined();
+  });
+
   it("runCreate: --supersede + --resume together → UsageError (at most one)", async () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
@@ -1098,7 +1136,7 @@ describe("resolveOwnerSession", () => {
     expect(resolveOwnerSession(undefined, { CLAUDE_CODE_SESSION_ID: "sess-env" })).toBe("sess-env");
   });
 
-  it("returns undefined when neither flag nor env is set (owner-unknown is supported)", () => {
+  it("returns undefined when neither flag nor env is set (resolver is lenient; runCreate guards session-mode)", () => {
     expect(resolveOwnerSession(undefined, {})).toBeUndefined();
   });
 

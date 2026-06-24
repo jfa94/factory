@@ -12766,6 +12766,11 @@ async function runCreate(argv, overrides = {}) {
   const mode = args.flag("workflow") === true ? "workflow" : "session";
   const shipMode = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
+  if (ownerSession === void 0 && mode === "session") {
+    throw new UsageError(
+      "run create: session-mode runs require an owning session id (pass --session-id <id> or set CLAUDE_CODE_SESSION_ID). Workflow-mode runs are exempt (the Workflow driver owns finalization)."
+    );
+  }
   const fresh = args.flag("new") === true || explicitRunId !== void 0;
   const supersede = args.flag("supersede") === true;
   const resume = args.flag("resume") === true;

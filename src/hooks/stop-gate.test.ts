@@ -283,7 +283,7 @@ describe("runStopGate — I/O wiring", () => {
     const code = await runStopGate([], {
       manager,
       emit,
-      readRaw: async () => JSON.stringify({ session_id: "intruder-9", hook_event_name: "Stop" }),
+      readRaw: stdin("intruder-9"),
     });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]); // allow: a different session must not touch this run
@@ -304,7 +304,7 @@ describe("runStopGate — I/O wiring", () => {
     const code = await runStopGate([], {
       manager,
       emit,
-      readRaw: async () => JSON.stringify({ session_id: "owner-1", hook_event_name: "Stop" }),
+      readRaw: stdin("owner-1"),
     });
     expect(code).toBe(EXIT.OK);
     expect(finalize).toHaveBeenCalledWith("run-x", "completed");
@@ -325,7 +325,7 @@ describe("runStopGate — I/O wiring", () => {
     const code = await runStopGate([], {
       manager,
       emit,
-      readRaw: async () => JSON.stringify({ session_id: "owner-1", hook_event_name: "Stop" }),
+      readRaw: stdin("owner-1"),
     });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]);
@@ -354,7 +354,7 @@ describe("runStopGate — I/O wiring", () => {
     const code = await runStopGate([], {
       manager,
       emit,
-      readRaw: async () => JSON.stringify({ session_id: "sess-A", hook_event_name: "Stop" }),
+      readRaw: stdin("sess-A"),
     });
     expect(code).toBe(EXIT.OK);
     expect(finalize).toHaveBeenCalledWith("run-A", "completed"); // NOT run-B

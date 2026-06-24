@@ -119,6 +119,12 @@ export function toolNameOf(input: HookInput | null): string {
   return input?.tool_name ?? "";
 }
 
+/** Extract the session id from a hook input (undefined when absent or empty-string). */
+export function sessionIdOf(input: HookInput | null): string | undefined {
+  const v = input?.session_id;
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
 /**
  * Collect every file-path target from a tool input (Edit/Write `.file_path` plus
  * MultiEdit `.edits[].file_path`). De-duplicated, empties dropped. Used by the

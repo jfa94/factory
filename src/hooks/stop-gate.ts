@@ -53,14 +53,14 @@ import {
 } from "../core/state/index.js";
 import { decideFinalize } from "../core/stage-machine/engine.js";
 import type { DataDirOptions } from "../config/load.js";
-import { deny, emitBlockDecision, parseHookInput, readStdin } from "./hook-io.js";
+import { deny, emitBlockDecision, parseHookInput, readStdin, sessionIdOf } from "./hook-io.js";
 
 const log = createLogger("hook:stop-gate");
 
 /**
  * The pure stop decision (separated from I/O so it is trivially unit-testable). With
  * the pending-work block removed, the hook only ever ALLOWS or FINALIZES; the two
- * remaining corruption blocks (unreadable state, finalize failure) are emitted
+ * remaining corruption blocks (inaccessible data directory, finalize failure) are emitted
  * directly by {@link runStopGate}, not modelled here.
  */
 export type StopAction =
@@ -98,9 +98,10 @@ export function decideStop(run: RunState | null, stoppingSession?: string): Stop
   if (run.mode === "workflow") return ALLOW;
 
   // (b) SESSION-OWNERSHIP — when the owning session is KNOWN and a DIFFERENT session is
-  // stopping, that run is unrelated to this session: pass through. (An unknown owner or
-  // unknown stopper falls through; with no block arm left, the only consequence is
-  // finalizing one's own all-terminal run, which is safe.)
+  // stopping, that run is unrelated to this session: pass through.
+  // (Session-mode run create now requires an owner, so un-owned session-mode runs don't
+  // arise in normal operation. In workflow mode this check is irrelevant — workflow is
+  // already returned above. The guard is belt-and-suspenders for unusual paths.)
   if (
     run.owner_session !== undefined &&
     stoppingSession !== undefined &&
@@ -154,27 +155,31 @@ export async function runStopGate(
   let stoppingSession: string | undefined;
   try {
     const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
-    const input = parseHookInput(raw);
-    stoppingSession =
-      typeof input?.session_id === "string" && input.session_id.length > 0
-        ? input.session_id
-        : undefined;
+    stoppingSession = sessionIdOf(parseHookInput(raw));
   } catch (err) {
     // A corrupt stdin is non-fatal here — we just lose session-scoping (degraded:
     // unknown stopper → null → allow). Never block the stop on this.
-    log.warn(`Stop hook stdin unparseable (session-scoping skipped): ${(err as Error).message}`);
+    log.error(`Stop hook stdin unparseable (session-scoping skipped): ${(err as Error).message}`);
     stoppingSession = undefined;
   }
 
   let run: RunState | null;
   try {
     run = stoppingSession !== undefined ? await manager.findActiveByOwner(stoppingSession) : null;
+    if (run === null && stoppingSession !== undefined) {
+      // No single owned run found: either no active run, or session owns ≥2 (ambiguous).
+      // Either way, nothing to finalize — allow the stop.
+      log.warn(
+        `Stop: session '${stoppingSession}' has no single attributed active run; passing through.`,
+      );
+    }
   } catch (err) {
     // A failure here means our own data directory is inaccessible (listRuns → readdir
     // failed with a non-ENOENT error). Foreign runs' unreadable state.json files are
     // silently skipped by listRuns — they never surface here.
+    const rawMsg = (err as Error).message.replace(/[\x00-\x1f]/g, " ").slice(0, 200);
     const reason =
-      `could not enumerate run state: ${(err as Error).message}. ` +
+      `could not enumerate run state: ${rawMsg}. ` +
       `Investigate the factory data directory before stopping.`;
     log.error(reason);
     emitBlockDecision(deny(reason), emit);

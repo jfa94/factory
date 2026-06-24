@@ -44,7 +44,7 @@ import { createLogger } from "../shared/logging.js";
 import { StateManager, PanelVerdictEnum } from "../core/state/index.js";
 import type { DataDirOptions } from "../config/load.js";
 import type { PanelVerdict } from "../types/index.js";
-import { parseHookInput, type HookInput } from "./hook-io.js";
+import { parseHookInput, readStdin, sessionIdOf, type HookInput } from "./hook-io.js";
 
 const log = createLogger("hook:subagent-stop");
 
@@ -122,13 +122,12 @@ export async function handleSubagentStop(
   if (reviewer === null) return null;
 
   const manager = deps.manager ?? new StateManager(deps);
-  const sessionId =
-    typeof input.session_id === "string" && input.session_id.length > 0
-      ? input.session_id
-      : undefined;
+  const sessionId = sessionIdOf(input);
   const run = sessionId !== undefined ? await manager.findActiveByOwner(sessionId) : null;
   if (run === null) {
-    log.warn(`no active run for this session — reviewer '${reviewer}' result skipped`);
+    if (sessionId !== undefined) {
+      log.warn(`no active run for session '${sessionId}' — reviewer '${reviewer}' result skipped`);
+    }
     return null;
   }
 
@@ -192,7 +191,7 @@ export async function runSubagentStop(
 ): Promise<ExitCode> {
   let input: HookInput | null;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch (err) {
     log.error(`malformed SubagentStop input: ${(err as Error).message}`);
@@ -206,13 +205,4 @@ export async function runSubagentStop(
     log.error(`SubagentStop handler error: ${(err as Error).message}`);
   }
   return EXIT.OK;
-}
-
-/** Read all of process.stdin as utf-8. */
-async function readAllStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }

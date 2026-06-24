@@ -6,7 +6,6 @@
  * fold is the single writer). Tests assert:
  *   - reviewerNameOf / parseVerdict / taskIdFromHeader pure helpers behave correctly
  *   - handleSubagentStop resolves reviewer+task and returns null (no state write)
- *   - The injected manager's updateTask is NEVER called for any input
  *   - Non-reviewer roles are skipped immediately (no manager call)
  *   - All exit paths return OK (fully observational — never blocks a subagent stop)
  *
@@ -52,14 +51,10 @@ function run(tasks: Record<string, TaskState>): RunState {
   } as RunState;
 }
 
-/**
- * A fake manager: findActiveByOwner returns the supplied run regardless of session;
- * updateTask is a spy so tests can assert it is NEVER called (the hook is observational).
- */
+/** A fake manager: findActiveByOwner returns the supplied run regardless of session. */
 function fakeManager(initial: RunState) {
   return {
     findActiveByOwner: async (_s: string) => initial,
-    updateTask: vi.fn(async () => initial),
   };
 }
 
@@ -125,7 +120,7 @@ describe("taskIdFromHeader", () => {
 describe("handleSubagentStop — observational (NO state write)", () => {
   // All inputs include session_id so handleSubagentStop can resolve the run via
   // findActiveByOwner. fakeManager returns the run for any session.
-  it("reviewer input resolves verdict + returns null — updateTask NOT called", async () => {
+  it("reviewer input resolves verdict + returns null (observational — no state write)", async () => {
     const manager = fakeManager(run({ t1: task() }));
     const result = await handleSubagentStop(
       input({
@@ -136,7 +131,6 @@ describe("handleSubagentStop — observational (NO state write)", () => {
       { manager, explicitTaskId: "t1" },
     );
     expect(result).toBeNull();
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
   it("blocked reviewer input → null, no state write", async () => {
@@ -150,7 +144,6 @@ describe("handleSubagentStop — observational (NO state write)", () => {
       { manager, explicitTaskId: "t1" },
     );
     expect(result).toBeNull();
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
   it("resolves task_id from the transcript [task:] header — no write", async () => {
@@ -167,7 +160,6 @@ describe("handleSubagentStop — observational (NO state write)", () => {
     );
     expect(readTranscript).toHaveBeenCalledWith("/tmp/transcript.jsonl");
     expect(result).toBeNull();
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
   it("falls back to the single reviewing task — no write", async () => {
@@ -186,7 +178,6 @@ describe("handleSubagentStop — observational (NO state write)", () => {
       { manager },
     );
     expect(result).toBeNull();
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
   it("non-reviewer role → null, no manager call at all", async () => {
@@ -196,7 +187,6 @@ describe("handleSubagentStop — observational (NO state write)", () => {
       { manager, explicitTaskId: "t1" },
     );
     expect(result).toBeNull();
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
   it("unresolved task_id (ambiguous, no header) → null, no write", async () => {
@@ -210,7 +200,6 @@ describe("handleSubagentStop — observational (NO state write)", () => {
       { manager },
     );
     expect(result).toBeNull();
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
   it("resolved task_id absent from run → null, no write", async () => {
@@ -224,11 +213,10 @@ describe("handleSubagentStop — observational (NO state write)", () => {
       { manager, explicitTaskId: "ghost" },
     );
     expect(result).toBeNull();
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
   it("no active run → null, no write", async () => {
-    const manager = { findActiveByOwner: async () => null, updateTask: vi.fn() };
+    const manager = { findActiveByOwner: async () => null };
     const result = await handleSubagentStop(
       input({
         session_id: "test-session",
@@ -238,7 +226,6 @@ describe("handleSubagentStop — observational (NO state write)", () => {
       { manager, explicitTaskId: "t1" },
     );
     expect(result).toBeNull();
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 
   it("no session_id in input → null, no write (unattributable subagent stop)", async () => {
@@ -249,7 +236,6 @@ describe("handleSubagentStop — observational (NO state write)", () => {
       { manager, explicitTaskId: "t1" },
     );
     expect(result).toBeNull();
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 });
 
@@ -291,7 +277,6 @@ describe("runSubagentStop — exit codes (fully observational)", () => {
       findActiveByOwner: async () => {
         throw new Error("disk full");
       },
-      updateTask: vi.fn(),
     };
     const code = await runSubagentStop([], {
       manager,
@@ -304,6 +289,5 @@ describe("runSubagentStop — exit codes (fully observational)", () => {
         }),
     });
     expect(code).toBe(EXIT.OK);
-    expect(manager.updateTask).not.toHaveBeenCalled();
   });
 });

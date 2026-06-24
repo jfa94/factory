@@ -631,8 +631,9 @@ function parseIssue(raw: string | boolean | undefined): number | undefined {
  * session-scoped Stop gate). Precedence: an explicit `--session-id` flag (the
  * orchestrator/command can pass it deterministically) over the `CLAUDE_CODE_SESSION_ID`
  * env var that Claude Code sets for Bash-tool invocations. Returns `undefined` when
- * neither is available — owner-unknown is a supported (degraded-but-safe) state in
- * which the Stop gate falls back to its unscoped behavior.
+ * neither is available. Session-mode `run create` rejects an undefined result (the Stop
+ * hook resolves finalize-on-stop via `findActiveByOwner`, which requires an owner);
+ * workflow-mode creates are exempt.
  */
 export function resolveOwnerSession(
   flag: string | boolean | undefined,
@@ -703,6 +704,16 @@ export async function runCreate(
   const mode: RunState["mode"] = args.flag("workflow") === true ? "workflow" : "session";
   const shipMode: RunState["ship_mode"] = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
+  // Session-mode runs must be owned: the Stop hook resolves finalize-on-stop via
+  // findActiveByOwner, which never matches an ownerless run. Workflow-mode runs are
+  // exempt — the Workflow driver owns finalization, not the interactive session.
+  if (ownerSession === undefined && mode === "session") {
+    throw new UsageError(
+      "run create: session-mode runs require an owning session id " +
+        "(pass --session-id <id> or set CLAUDE_CODE_SESSION_ID). " +
+        "Workflow-mode runs are exempt (the Workflow driver owns finalization).",
+    );
+  }
   // Exactly-one-of the lifecycle flags → the typed intent. --new and an explicit
   // --run-id both mean "fresh" (a named id is an address — determinism/tests — not a
   // reuse request, so it never silently resolves to a different run). On an ACTIVE run,

@@ -2169,6 +2169,10 @@ function commandOf(input) {
 function toolNameOf(input) {
   return input?.tool_name ?? "";
 }
+function sessionIdOf(input) {
+  const v = input?.session_id;
+  return typeof v === "string" && v.length > 0 ? v : void 0;
+}
 function filePathsOf(input) {
   const ti = input?.tool_input;
   if (!ti) return [];
@@ -8059,10 +8063,12 @@ async function handleSubagentStop(input, deps = {}) {
   const reviewer = reviewerNameOf(agentType);
   if (reviewer === null) return null;
   const manager = deps.manager ?? new StateManager(deps);
-  const sessionId = typeof input.session_id === "string" && input.session_id.length > 0 ? input.session_id : void 0;
+  const sessionId = sessionIdOf(input);
   const run = sessionId !== void 0 ? await manager.findActiveByOwner(sessionId) : null;
   if (run === null) {
-    log7.warn(`no active run for this session \u2014 reviewer '${reviewer}' result skipped`);
+    if (sessionId !== void 0) {
+      log7.warn(`no active run for session '${sessionId}' \u2014 reviewer '${reviewer}' result skipped`);
+    }
     return null;
   }
   let taskId = deps.explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
@@ -8104,7 +8110,7 @@ async function handleSubagentStop(input, deps = {}) {
 async function runSubagentStop(_argv = [], deps = {}) {
   let input;
   try {
-    const raw = deps.readRaw ? await deps.readRaw() : await readAllStdin6();
+    const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
     input = parseHookInput(raw);
   } catch (err) {
     log7.error(`malformed SubagentStop input: ${err.message}`);
@@ -8116,13 +8122,6 @@ async function runSubagentStop(_argv = [], deps = {}) {
     log7.error(`SubagentStop handler error: ${err.message}`);
   }
   return EXIT.OK;
-}
-async function readAllStdin6() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 // src/hooks/stop-gate.ts
@@ -8147,17 +8146,22 @@ async function runStopGate(_argv = [], deps = {}) {
   let stoppingSession;
   try {
     const raw = deps.readRaw ? await deps.readRaw() : await readStdin();
-    const input = parseHookInput(raw);
-    stoppingSession = typeof input?.session_id === "string" && input.session_id.length > 0 ? input.session_id : void 0;
+    stoppingSession = sessionIdOf(parseHookInput(raw));
   } catch (err) {
-    log8.warn(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
+    log8.error(`Stop hook stdin unparseable (session-scoping skipped): ${err.message}`);
     stoppingSession = void 0;
   }
   let run;
   try {
     run = stoppingSession !== void 0 ? await manager.findActiveByOwner(stoppingSession) : null;
+    if (run === null && stoppingSession !== void 0) {
+      log8.warn(
+        `Stop: session '${stoppingSession}' has no single attributed active run; passing through.`
+      );
+    }
   } catch (err) {
-    const reason = `could not enumerate run state: ${err.message}. Investigate the factory data directory before stopping.`;
+    const rawMsg = err.message.replace(/[\x00-\x1f]/g, " ").slice(0, 200);
+    const reason = `could not enumerate run state: ${rawMsg}. Investigate the factory data directory before stopping.`;
     log8.error(reason);
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;
