@@ -62,12 +62,15 @@ literal (`applyGateEnvDetection`, `src/ci/detect-gate-env.ts`) and **gap-fills**
 never overwritten; a detected value that differs is reported as a conflict). It is
 **mutually exclusive** with `--get`/`--set`/`--unset` (combining them is a usage error),
 writes the overlay only when there are new keys, and prints a `DetectReport`:
-`{ detected, written, skipped, conflicts, skippedExpressionRefs, droppedSecrets, warnings,
-sources, gateEnv }`. Three filters drop a value first: a `${{ }}` expression ref, a value
-the secret scanner flags, and anything inside a `run: |` block scalar. Detection is biased
-to MISS (block-style space-indented YAML only — exotic YAML is skipped, never mangled); the
-escape hatch for a miss is `--set quality.gateEnv.<KEY>=<value>`. `scaffold` runs the same
-detection automatically (see [`scaffold`](#scaffold)).
+`{ detected, written, skipped, conflicts, skippedExpressionRefs, droppedSecrets, droppedKeys,
+warnings, sources, gateEnv }`. Entries are dropped — never silently — for: a `${{ }}` expression
+ref (`skippedExpressionRefs`), a secret-shaped value (`droppedSecrets`), a reserved loader/path-injection
+KEY (`PATH`, `NODE_PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`) or a non-POSIX KEY name
+(`droppedKeys`, with `reason: "reserved"` / `"invalid-name"`), and anything inside a `run: |` block
+scalar. Detection is biased to MISS (block-style space-indented YAML only — an _unquoted_ exotic-YAML
+value is skipped, never mangled; a _quoted_ look-alike is kept); the escape hatch for a miss is
+`--set quality.gateEnv.<KEY>=<value>`. `scaffold` runs the same detection automatically (see
+[`scaffold`](#scaffold)).
 
 ## `scaffold`
 
@@ -79,11 +82,17 @@ base) — **refusing loudly** when `develop` is not protected, unless `--provisi
 set. Per-run `staging-<run-id>` branches are minted at [`run create`](#run-create);
 scaffold no longer creates or protects a shared `staging` branch.
 
-Before copying any template, scaffold **auto-detects the repo's CI build env** (the same
+Before writing any template, scaffold **auto-detects the repo's CI build env** (the same
 detection as [`configure --detect-gate-env`](#configure)) and gap-fills `quality.gateEnv`.
 This runs FIRST by design: `quality-gate.yml` is a managed template scaffold overwrites, so
 detecting first captures the repo author's CI env into the durable config overlay before the
-managed file clobbers the author's workflow.
+managed file clobbers the author's workflow. The resolved `quality.gateEnv` is then **rendered
+back into the managed `quality-gate.yml`** scaffold writes — `injectGateEnvIntoWorkflow`
+(`src/ci/inject-gate-env.ts`) replaces the template's `# factory:gate-env` marker with a real
+`env:` block — so one config drives both the local merge gate and this repo's GitHub CI. Drift
+is measured against the _rendered_ template, so an injected managed file stays byte-identical
+across re-runs. An unparseable workflow is surfaced loudly (`log.warn` + a `warnings` entry),
+never swallowed.
 
 ```
 factory scaffold [--repo <owner/name>] [--provision]
@@ -97,8 +106,10 @@ factory scaffold [--repo <owner/name>] [--provision]
 Emits a `ScaffoldReport`: `{ repo, files_created, files_present, files_updated,
 protection, settings, gateEnv? }`. SEED gate configs are scaffold-once / project-owned — an
 existing one is reported under `files_present`, never flagged (no `files_outdated`). The
-optional `gateEnv` field is the CI build-env detection `DetectReport`; it is **omitted** when
-nothing was detected (no workflows / no literal env), so a brand-new repo's report is unchanged.
+optional `gateEnv` field is the CI build-env detection `DetectReport`; it is included whenever a
+key was detected **or any anomaly surfaced** (a parse `warnings` entry, or an expression-ref /
+secret / key drop), so a malformed workflow is never silently swallowed. It is **omitted** only
+for a clean brand-new repo (no workflows, nothing to report), keeping that report unchanged.
 
 ## `spec <resolve|gate|store>`
 

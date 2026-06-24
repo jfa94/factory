@@ -93,8 +93,8 @@ This scans `.github/workflows/*.yml` for every step/job-level `env:` literal and
 into `quality.gateEnv`. It is **standalone and mutually exclusive** with `--get`/`--set`/`--unset`
 (combining them is a usage error). It writes immediately (only when there are new keys) and
 prints a `DetectReport` JSON: `detected`, `written`, `skipped`, `conflicts`,
-`skippedExpressionRefs`, `droppedSecrets`, `warnings`, `sources` (provenance per key), and the
-resolved `gateEnv`.
+`skippedExpressionRefs`, `droppedSecrets`, `droppedKeys`, `warnings`, `sources` (provenance per
+key), and the resolved `gateEnv`.
 
 **Gap-fill — the operator always wins.** Detection only fills keys you have not set:
 
@@ -103,19 +103,26 @@ resolved `gateEnv`.
 - key present and different → reported as a **conflict** (your value is preserved, never
   overwritten).
 
-**Three filters drop a value before it can reach `gateEnv`:**
+**Filters drop an entry before it can reach `gateEnv`:**
 
 1. any value containing `${{` (a GitHub expression ref like `${{ secrets.* }}` — unusable and
    unsafe at gate time) → `skippedExpressionRefs`;
 2. any value the secret scanner flags (defense-in-depth — gateEnv is placeholders, not a secret
    store) → `droppedSecrets`;
-3. structurally, anything inside a `run: |` block scalar is never read as env.
+3. any reserved loader/path-injection **key** (`PATH`, `NODE_PATH`, `LD_PRELOAD`,
+   `LD_LIBRARY_PATH`, `DYLD_*`) or a non-POSIX key name → `droppedKeys` (reason `reserved` /
+   `invalid-name`). A reserved key would hijack the gate subprocess (gateEnv merges over
+   `process.env`); `NODE_OPTIONS` and `GIT_*` are legit build vars and are **kept**;
+4. structurally, anything inside a `run: |` block scalar is never read as env.
 
 Detection is **biased to miss, never to mis-detect**: it reads block-style YAML with space
-indentation only — a var hidden in anchors, aliases, merge-keys, or flow-mappings is silently
-skipped (and the file reported under `warnings`), never mangled. For any var detection misses,
-fall back to `--set quality.gateEnv.<KEY>=<value>`. `factory scaffold` runs this same detection
-automatically (see [/factory:scaffold](./scaffold.md)).
+indentation only. An UNQUOTED value opening with exotic YAML (an anchor `&`, alias `*`, tag `!`,
+or flow collection `{`/`[`) is skipped rather than emitted mangled; a quoted look-alike like
+`"[draft]"` is a plain string and IS kept. A file it cannot structurally parse at all (e.g. tab
+indentation) is skipped wholesale and listed under `warnings`. For any var detection misses, fall
+back to `--set quality.gateEnv.<KEY>=<value>`. `factory scaffold` runs this same detection
+automatically and **injects the resolved `gateEnv` into the managed `quality-gate.yml`** so one
+config feeds both the local gate and CI (see [/factory:scaffold](./scaffold.md)).
 
 ### Spec apex gate (`spec.*`)
 
@@ -142,8 +149,8 @@ automatically (see [/factory:scaffold](./scaffold.md)).
 ### Quota pacer (`quota.*`)
 
 `sleepCapSec` (540), `maxWaitCycles` (60), `maxStaleCycles` (6), `wallBudgetMin` (75),
-`hourlyThresholds` ([20,40,60,80,90]), `dailyThresholds` ([14,29,43,57,71,86,95]), and the
-producer dial `quota.producerModels.{low,medium,high}` (haiku/sonnet/opus by risk tier).
+`hourlyThresholds` ([20,40,60,80,90]), `dailyThresholds` ([20,40,60,80,95,95,95]), and the
+producer dial `quota.producerModels.{low,medium,high}` (sonnet/sonnet/opus by risk tier).
 
 ### Git / serial-writer (`git.*`)
 
@@ -157,10 +164,8 @@ producer dial `quota.producerModels.{low,medium,high}` (haiku/sonnet/opus by ris
 
 ### Other roots
 
-`testWriter.maxTurns` (30), `scribe.maxTurns` (20), `codex.model` (—),
-`observability.auditLog` (true) / `observability.metricsRetentionDays` (30),
-`dependencies.pollInterval` (30) / `dependencies.prMergeTimeout` (1800),
-`maxConsecutiveFailures` (3), `maxRuntimeMinutes` (480).
+`testWriter.maxTurns` (30), `codex.model` (—), `maxConsecutiveFailures` (3),
+`maxRuntimeMinutes` (480).
 
 > Retired (locked decision 5 — human gates removed): `humanReviewLevel`,
 > `review.routineRounds/featureRounds/securityRounds`, `review.preferCodex`,

@@ -108,13 +108,28 @@ the repo's own workflow — so a freshly scaffolded repo already has its CI env 
 
 The merge is **gap-fill — the operator always wins**: a key absent from the overlay is _written_;
 present-and-equal is _skipped_ (idempotent); present-and-different is reported as a _conflict_ and
-left untouched. Three filters drop a value before it reaches `gateEnv`: any value containing `${{`
-(a GitHub expression ref — `${{ secrets.* }}`, unusable + unsafe), any value the secret scanner
-flags (defense-in-depth — placeholders, not secrets), and structurally anything inside a `run: |`
-block scalar. Detection is **biased to miss, never to mis-detect**: it reads block-style YAML with
-space indentation only; a var in anchors/aliases/merge-keys/flow-mappings is silently skipped and
-the file reported under `warnings`, never mangled. The escape hatch for a miss is the manual
-`--set` below.
+left untouched. Detection drops an entry — never silently — before it reaches `gateEnv`:
+
+- **value `${{ … }}`** — a GitHub expression ref (`${{ secrets.* }}`, `${{ matrix.* }}`, unusable
+  - unsafe at gate time) → reported under `skippedExpressionRefs`;
+- **secret-shaped value** — anything the secret scanner flags (defense-in-depth: placeholders, not
+  secrets) → reported under `droppedSecrets`;
+- **reserved KEY** — a loader / path-injection name (`PATH`, `NODE_PATH`, `LD_PRELOAD`,
+  `LD_LIBRARY_PATH`, `DYLD_*`) that would hijack the gate subprocess, since gateEnv merges _over_
+  `process.env` → reported under `droppedKeys` with `reason: "reserved"`. The denylist is
+  deliberately narrow: `NODE_OPTIONS` and `GIT_*` are legitimate build/identity vars and are **not**
+  denied;
+- **non-POSIX KEY** — a name that is not a valid POSIX env var (`^[A-Za-z_][A-Za-z0-9_]*$`) → reported
+  under `droppedKeys` with `reason: "invalid-name"`. The schema enforces the same regex on the
+  config key, so a hand-set non-POSIX key is rejected at the `--set` boundary too;
+- **`run: |` block scalar** — anything structurally inside a block scalar is never read as env.
+
+Detection is **biased to miss, never to mis-detect**: it reads block-style YAML with space
+indentation only. An _unquoted_ value opening with exotic YAML — an anchor `&`, alias `*`, tag `!`,
+or flow collection `{`/`[` — is skipped rather than emitted mangled (`isUndetectableScalar`); a
+_quoted_ look-alike (`"[draft]"`, `'!important'`) is a plain string and **is** kept. A workflow file
+that cannot be parsed at all is skipped and reported under `warnings` (and logged loudly), never
+partial-emitted. The escape hatch for any miss is the manual `--set` below.
 
 **Manual escape hatch.** Set each leaf individually:
 
@@ -123,12 +138,21 @@ factory configure --set quality.gateEnv.NEXT_PUBLIC_SUPABASE_URL=http://localhos
 factory configure --set quality.gateEnv.NEXT_PUBLIC_SUPABASE_KEY=ci-placeholder
 ```
 
-The schema (`z.record(z.string(), z.string())`) requires **string** values — an explicit
-"set this var". A purely numeric value is JSON-coerced to a number at the `--set` boundary
+The schema requires **string** values whose keys are valid POSIX env names
+(`z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string())`) — an explicit "set this var"
+with a usable name. A purely numeric value is JSON-coerced to a number at the `--set` boundary
 and rejected, so quote it as JSON: `--set quality.gateEnv.PORT='"54321"'`.
 
+**One config, both gates.** `quality.gateEnv` is the single source of truth for build-env parity in
+**both** directions: the local merge gate merges it over `process.env` for every gate command, and
+`factory scaffold` renders it into the managed `quality-gate.yml` it writes — `injectGateEnvIntoWorkflow`
+(`src/ci/inject-gate-env.ts`) replaces the `# factory:gate-env` marker in the template's `pnpm build`
+step with a real `env:` block built from the resolved map. So editing `quality.gateEnv` (then
+re-scaffolding) keeps the local gate and the repo's GitHub CI in lockstep; an empty map leaves the
+marker untouched, and a re-scaffold is byte-identical (idempotent).
+
 This is **CI parity, not secrets**: these placeholders sit in the sparse config overlay in
-plaintext. Never put a real credential here — they exist only so the verifier floor
+plaintext. Never put a real credential here — they exist only so the merge gate
 exercises the same build CI does.
 
 ## `quota`

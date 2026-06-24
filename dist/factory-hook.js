@@ -6449,7 +6449,7 @@ var QualitySchema = external_exports.object({
    * NOT a secret store. Values are required strings (an explicit "set this var");
    * a numeric-looking value must be quoted as JSON at the `--set` boundary.
    */
-  gateEnv: external_exports.record(external_exports.string(), external_exports.string()).default({})
+  gateEnv: external_exports.record(external_exports.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "valid POSIX env name"), external_exports.string()).default({})
 }).default({});
 var QuotaSchema = external_exports.object({
   /** Max single sleep chunk per gate call, seconds. */

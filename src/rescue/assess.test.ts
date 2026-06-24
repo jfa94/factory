@@ -10,7 +10,7 @@
  *   - a pinned `staging_branch` is honored over the recomputed name.
  */
 import { describe, it, expect, vi } from "vitest";
-import { assessWork, type WorkProbe } from "./assess.js";
+import { assessWork, type WorkProbe, type TaskWork } from "./assess.js";
 import { parseRunState } from "../core/state/index.js";
 import type { RunState, RunStatus, TaskState } from "../types/index.js";
 
@@ -121,6 +121,14 @@ describe("assessWork", () => {
 
     expect(out.tasks.map((t) => t.task_id)).toEqual(["stuck"]);
     expect(out.tasks[0]!.commits_ahead).toBe(2);
+  });
+
+  it("makes the illegal {branch_exists:false, commits_ahead:number} state unrepresentable", () => {
+    // A deleted branch carries no commit count; the discriminated union pins the
+    // false arm's commits_ahead to null, so this object is a compile error.
+    // @ts-expect-error — branch_exists:false forbids a numeric commits_ahead.
+    const illegal: TaskWork = { task_id: "x", branch: "b", branch_exists: false, commits_ahead: 5 };
+    expect(illegal.branch_exists).toBe(false);
   });
 
   it("honors the pinned staging_branch over the recomputed name", async () => {

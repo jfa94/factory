@@ -60,7 +60,7 @@ jobs:
           BASE_REF: \${{ github.base_ref }}
         run: |
           git fetch origin "$BASE_REF" --depth=50
-          NEXT_PUBLIC_SUPABASE_URL: not-an-env-line
+          LEAK_ME: not-an-env-line
 `;
 
 describe("detectGateEnv — goodbyespy golden case", () => {
@@ -87,9 +87,11 @@ describe("detectGateEnv — goodbyespy golden case", () => {
   });
 
   it("does NOT harvest a `KEY: value` line inside a `run: |` block scalar", () => {
-    // The mutation-scope run body contains a literal `NEXT_PUBLIC_SUPABASE_URL:` line;
-    // it must come ONLY from the build step's env, not the block scalar.
-    expect(r.detected.filter((d) => d.key === "NEXT_PUBLIC_SUPABASE_URL")).toHaveLength(1);
+    // The mutation-scope run body contains a literal `LEAK_ME:` line — a UNIQUE key so
+    // a real leak can't hide behind a key the build step legitimately sets (the prior
+    // version reused NEXT_PUBLIC_SUPABASE_URL and only asserted a count of 1).
+    expect(r.gateEnv).not.toHaveProperty("LEAK_ME");
+    expect(r.detected.some((d) => d.key === "LEAK_ME")).toBe(false);
   });
 });
 
@@ -348,5 +350,108 @@ describe("applyGateEnvDetection — detect → persist → report", () => {
     expect(report.written).toEqual([]);
     expect(report.gateEnv).toEqual({});
     expect(existsSync(join(dataDir, "config.json"))).toBe(false);
+  });
+});
+
+/** Build a one-step workflow whose `env:` block is the given indented lines. */
+const envWorkflow = (envLines: string): WorkflowSource =>
+  fakeSource({
+    "w.yml": `jobs:\n  j:\n    steps:\n      - run: x\n        env:\n${envLines}\n`,
+  });
+
+describe("detectGateEnv — key policy (reserved denylist + POSIX names)", () => {
+  it("drops reserved loader/path-injection keys → droppedKeys reason:reserved, never gateEnv", () => {
+    const r = detectGateEnv(
+      envWorkflow(
+        [
+          "          PATH: /evil/bin",
+          "          NODE_PATH: /evil/lib",
+          "          LD_PRELOAD: ./x.so",
+          "          LD_LIBRARY_PATH: /evil",
+          "          DYLD_INSERT_LIBRARIES: ./y.dylib",
+          "          SAFE: placeholder",
+        ].join("\n"),
+      ),
+    );
+    expect(r.gateEnv).toEqual({ SAFE: "placeholder" });
+    expect(
+      r.droppedKeys
+        .filter((d) => d.reason === "reserved")
+        .map((d) => d.key)
+        .sort(),
+    ).toEqual(["DYLD_INSERT_LIBRARIES", "LD_LIBRARY_PATH", "LD_PRELOAD", "NODE_PATH", "PATH"]);
+  });
+
+  it("KEEPS NODE_OPTIONS and GIT_* — legit build/identity vars, deliberately NOT denied", () => {
+    const r = detectGateEnv(
+      envWorkflow(
+        [
+          "          NODE_OPTIONS: --max-old-space-size=4096",
+          "          GIT_AUTHOR_NAME: CI Bot",
+        ].join("\n"),
+      ),
+    );
+    expect(r.gateEnv).toEqual({
+      NODE_OPTIONS: "--max-old-space-size=4096",
+      GIT_AUTHOR_NAME: "CI Bot",
+    });
+    expect(r.droppedKeys).toEqual([]);
+  });
+
+  it("drops non-POSIX key names → droppedKeys reason:invalid-name", () => {
+    const r = detectGateEnv(
+      envWorkflow(
+        ["          foo.bar: 1", "          APP-NAME: x", "          OK_NAME: y"].join("\n"),
+      ),
+    );
+    expect(r.gateEnv).toEqual({ OK_NAME: "y" });
+    expect(
+      r.droppedKeys
+        .filter((d) => d.reason === "invalid-name")
+        .map((d) => d.key)
+        .sort(),
+    ).toEqual(["APP-NAME", "foo.bar"]);
+  });
+});
+
+describe("detectGateEnv — exotic scalars (miss, never mangle)", () => {
+  it("skips an UNQUOTED value opening with & * ! { [ (anchor/alias/tag/flow)", () => {
+    const r = detectGateEnv(
+      envWorkflow(
+        [
+          "          ANCHOR: &base http://x",
+          "          ALIAS: *base",
+          "          TAG: !!str hello",
+          "          FLOWMAP: {a: 1}",
+          "          FLOWSEQ: [a, b]",
+          "          PLAIN: keep-me",
+        ].join("\n"),
+      ),
+    );
+    expect(r.gateEnv).toEqual({ PLAIN: "keep-me" });
+  });
+
+  it("KEEPS quoted look-alikes — they are plain strings, not exotic YAML", () => {
+    const r = detectGateEnv(
+      envWorkflow(
+        [
+          '          DRAFT: "[draft]"',
+          "          BANG: '!important'",
+          '          GLOB: "*.example.com"',
+        ].join("\n"),
+      ),
+    );
+    expect(r.gateEnv).toEqual({
+      DRAFT: "[draft]",
+      BANG: "!important",
+      GLOB: "*.example.com",
+    });
+  });
+
+  it("never harvests a full-line `# KEY: value` comment inside an env block", () => {
+    const r = detectGateEnv(
+      envWorkflow(["          REAL: yes", "          # FAKE: nope"].join("\n")),
+    );
+    expect(r.gateEnv).toEqual({ REAL: "yes" });
   });
 });

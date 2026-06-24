@@ -390,6 +390,74 @@ describe("runScaffold", () => {
     expect(report).not.toHaveProperty("gateEnv");
     expect(existsSync(join(dataDir, "config.json"))).toBe(false);
   });
+
+  const baseArgs = () => ({
+    targetRoot: root,
+    templatesDir,
+    owner: "acme",
+    repo: "widgets",
+    config: cfg,
+    dataDirRules: DATA_DIR_RULES,
+    dataDir,
+    ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
+    provision: false,
+  });
+
+  const writeRepoWorkflow = async (text: string) => {
+    const wfDir = join(root, ".github", "workflows");
+    await mkdir(wfDir, { recursive: true });
+    await writeFile(join(wfDir, "quality-gate.yml"), text, "utf8");
+  };
+
+  const GATEENV_WF = `jobs:
+  quality:
+    steps:
+      - run: pnpm build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+`;
+
+  it("injects the resolved gateEnv into the WRITTEN managed quality-gate.yml (CI parity)", async () => {
+    await writeRepoWorkflow(GATEENV_WF);
+    const report = await runScaffold(baseArgs());
+
+    const written = await readFile(join(root, ".github", "workflows", "quality-gate.yml"), "utf8");
+    // The marker became a real env: block carrying the detected placeholder (quoted).
+    expect(written).not.toContain("# factory:gate-env");
+    expect(written).toContain('          NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321"');
+    expect(report.gateEnv?.gateEnv.NEXT_PUBLIC_SUPABASE_URL).toBe("http://localhost:54321");
+  });
+
+  it("leaves the gate-env marker in place when there is no detectable build env", async () => {
+    await runScaffold(baseArgs());
+    const written = await readFile(join(root, ".github", "workflows", "quality-gate.yml"), "utf8");
+    // No injection happened — the marker survives for a future scaffold to fill.
+    expect(written).toContain("# factory:gate-env");
+  });
+
+  it("re-scaffold re-injects a byte-identical file (idempotent round-trip, no spurious update)", async () => {
+    await writeRepoWorkflow(GATEENV_WF);
+    await runScaffold(baseArgs()); // detect + overwrite + inject
+    const wf = join(root, ".github", "workflows", "quality-gate.yml");
+    const first = await readFile(wf, "utf8");
+
+    const second = await runScaffold(baseArgs()); // re-detect injected env (skipped) + re-inject
+    expect(await readFile(wf, "utf8")).toBe(first);
+    expect(second.files_updated).not.toContain(".github/workflows/quality-gate.yml");
+  });
+
+  it("surfaces an unparseable workflow in the report (warnings) instead of swallowing it", async () => {
+    // Tab indentation → MalformedWorkflow → the file is skipped with a warning. The
+    // report MUST still carry the gateEnv field so the parse failure isn't silent (the
+    // CRITICAL omission-gate fix), even though nothing was detected.
+    const wfDir = join(root, ".github", "workflows");
+    await mkdir(wfDir, { recursive: true });
+    await writeFile(join(wfDir, "bad.yml"), "jobs:\n\tj:\n\t\tsteps:\n", "utf8");
+
+    const report = await runScaffold(baseArgs());
+    expect(report.gateEnv).toBeDefined();
+    expect(report.gateEnv?.warnings.map((w) => w.workflow)).toContain("bad.yml");
+  });
 });
 
 describe("scaffoldCommand.run", () => {

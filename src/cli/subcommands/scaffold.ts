@@ -19,7 +19,7 @@
  * dir). The bash-era progress files + init.sh are dropped — the new code does not
  * read them; partial-run reporting lands in WS12.
  */
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -41,7 +41,11 @@ import {
   type GhClient,
 } from "../../git/index.js";
 import { loadConfig, resolveDataDir, type Config } from "../../config/index.js";
-import { applyGateEnvDetection, type DetectReport } from "../../ci/index.js";
+import {
+  applyGateEnvDetection,
+  injectGateEnvIntoWorkflow,
+  type DetectReport,
+} from "../../ci/index.js";
 import {
   ensureTargetSettings,
   buildTargetDataDirRules,
@@ -224,8 +228,11 @@ interface TemplateEntry {
  * cost-aware shard helper are MANAGED (plugin-authored, auto-updated); the gate
  * configs are SEED (a starting point the project then owns + tunes).
  */
+/** The managed CI workflow — also the gateEnv injection target (the only transformed file). */
+const QUALITY_GATE_REL = ".github/workflows/quality-gate.yml";
+
 const TEMPLATE_MANIFEST: readonly TemplateEntry[] = [
-  { rel: ".github/workflows/quality-gate.yml", policy: "managed" },
+  { rel: QUALITY_GATE_REL, policy: "managed" },
   { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
   { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
   { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
@@ -241,15 +248,21 @@ interface FileLists {
 
 /**
  * Apply one {@link TemplateEntry}, landing it in exactly one bucket:
- *   - absent           → copy the template in (`created`)
+ *   - absent           → write the rendered template in (`created`)
  *   - present + seed    → project-owned: report `present`, never read/compare/overwrite
  *   - present + managed → refresh on drift (`updated`), else `present`
+ *
+ * `transform` renders the template text before write/compare (managed files only,
+ * e.g. injecting the resolved gateEnv into `quality-gate.yml`). Because drift is
+ * measured against the RENDERED template, an injected managed file stays
+ * byte-identical across re-runs — no spurious `updated` flag.
  */
 async function applyTemplate(
   entry: TemplateEntry,
   templatesDir: string,
   targetRoot: string,
   lists: FileLists,
+  transform?: (text: string) => string,
 ): Promise<void> {
   const segs = entry.rel.split("/");
   const src = join(templatesDir, ...segs);
@@ -258,9 +271,13 @@ async function applyTemplate(
     log.warn(`template missing, skipping: ${src}`);
     return;
   }
+  const render = async (): Promise<string> => {
+    const text = await readFile(src, "utf8");
+    return transform ? transform(text) : text;
+  };
   if (!existsSync(dest)) {
     await mkdir(dirname(dest), { recursive: true });
-    await copyFile(src, dest);
+    await writeFile(dest, await render(), "utf8");
     lists.created.push(entry.rel);
     return;
   }
@@ -279,14 +296,15 @@ async function applyTemplate(
     lists.present.push(entry.rel);
     return;
   }
-  // MANAGED: the plugin is the sole author — refresh the target when it drifts so a
-  // template fix propagates to already-scaffolded repos. Git is the safety net.
-  const [srcText, destText] = await Promise.all([readFile(src, "utf8"), readFile(dest, "utf8")]);
-  if (srcText === destText) {
+  // MANAGED: the plugin is the sole author — refresh the target when it drifts from
+  // the rendered template so a template fix propagates to already-scaffolded repos.
+  // Git is the safety net.
+  const [rendered, destText] = await Promise.all([render(), readFile(dest, "utf8")]);
+  if (rendered === destText) {
     lists.present.push(entry.rel);
     return;
   }
-  await copyFile(src, dest);
+  await writeFile(dest, rendered, "utf8");
   lists.updated.push(entry.rel);
 }
 
@@ -330,14 +348,29 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
   if (gateEnv.written.length > 0) {
     log.info(`detected ${gateEnv.written.length} CI build-env var(s) → quality.gateEnv`);
   }
+  // Surface unparseable workflows LOUDLY and independent of the report's JSON shape —
+  // a silently-swallowed parse failure here means the managed template overwrites the
+  // repo's workflow with zero signal (the CRITICAL silent-failure this guards).
+  if (gateEnv.warnings.length > 0) {
+    log.warn(
+      `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` +
+        gateEnv.warnings.map((w) => w.workflow).join(", "),
+    );
+  }
 
   // 1+2. Committed template artifacts (Δ Z). MANAGED files (the CI net + its shard
   //       helper) auto-update on drift; SEED gate configs are copy-once + user-owned.
-  //       The `nodeOnly` SEED configs apply only to a Node-package target.
+  //       The `nodeOnly` SEED configs apply only to a Node-package target. The managed
+  //       quality-gate.yml is rendered with the resolved gateEnv injected into its
+  //       build step (single source of truth for the local gate AND this repo's CI).
   const isNodePackage = existsSync(join(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
-    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists);
+    const transform =
+      entry.rel === QUALITY_GATE_REL
+        ? (text: string) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv)
+        : undefined;
+    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
   }
   // Surface auto-updated plugin-managed files (e.g. the CI workflow refreshed in a
   // previously-scaffolded repo) — these are the propagation path, worth a loud line.
@@ -403,10 +436,16 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
       provisioned,
     },
     settings: { created: settings.created, changed: settings.changed },
-    // Omit an all-empty detection so a brand-new repo's report stays unchanged.
-    ...(gateEnv.written.length > 0 ||
-    gateEnv.conflicts.length > 0 ||
-    Object.keys(gateEnv.detected).length > 0
+    // Include the detection report whenever a key was detected OR any anomaly
+    // surfaced (a parse warning, an expression-ref/secret/key drop) — so a malformed
+    // workflow's `warnings` are never silently swallowed. `written`/`conflicts` each
+    // imply a detected key, so they're subsumed by the detected-key check. Omitted
+    // only for a clean brand-new repo (no workflows, nothing to report).
+    ...(Object.keys(gateEnv.detected).length > 0 ||
+    gateEnv.warnings.length > 0 ||
+    gateEnv.skippedExpressionRefs.length > 0 ||
+    gateEnv.droppedSecrets.length > 0 ||
+    gateEnv.droppedKeys.length > 0
       ? { gateEnv }
       : {}),
   };

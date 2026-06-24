@@ -52,6 +52,15 @@ describe("ConfigSchema", () => {
     expect(() => ConfigSchema.parse({ quality: { gateEnv: { PORT: 54321 } } })).toThrow();
   });
 
+  it("quality.gateEnv rejects a non-POSIX key name (the --set boundary guard)", () => {
+    expect(() => ConfigSchema.parse({ quality: { gateEnv: { "bad-key": "x" } } })).toThrow();
+    expect(() => ConfigSchema.parse({ quality: { gateEnv: { "foo.bar": "x" } } })).toThrow();
+    // A valid POSIX name still round-trips.
+    expect(ConfigSchema.parse({ quality: { gateEnv: { OK_NAME: "x" } } }).quality.gateEnv).toEqual({
+      OK_NAME: "x",
+    });
+  });
+
   it("merges partial overrides while defaulting the rest", () => {
     const cfg = ConfigSchema.parse({ quality: { holdoutPercent: 35 } });
     expect(cfg.quality.holdoutPercent).toBe(35);

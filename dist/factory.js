@@ -582,8 +582,8 @@ var require_graceful_fs = __commonJS({
       }
       var fs$copyFile = fs2.copyFile;
       if (fs$copyFile)
-        fs2.copyFile = copyFile2;
-      function copyFile2(src, dest, flags, cb) {
+        fs2.copyFile = copyFile;
+      function copyFile(src, dest, flags, cb) {
         if (typeof flags === "function") {
           cb = flags;
           flags = 0;
@@ -5826,7 +5826,7 @@ var QualitySchema = external_exports.object({
    * NOT a secret store. Values are required strings (an explicit "set this var");
    * a numeric-looking value must be quoted as JSON at the `--set` boundary.
    */
-  gateEnv: external_exports.record(external_exports.string(), external_exports.string()).default({})
+  gateEnv: external_exports.record(external_exports.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "valid POSIX env name"), external_exports.string()).default({})
 }).default({});
 var QuotaSchema = external_exports.object({
   /** Max single sleep chunk per gate call, seconds. */
@@ -7164,6 +7164,15 @@ function parseScalar(raw) {
 }
 var KEY_LINE = /^([A-Za-z_][A-Za-z0-9_.-]*):(?:\s+(.*))?$/;
 var isBlockScalar = (v) => v === "|" || v === ">" || /^[|>][+-]?$/.test(v ?? "");
+var RESERVED_ENV_KEYS = /* @__PURE__ */ new Set(["PATH", "NODE_PATH", "LD_PRELOAD", "LD_LIBRARY_PATH"]);
+var isReservedEnvKey = (key) => RESERVED_ENV_KEYS.has(key) || key.startsWith("DYLD_");
+var POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function isUndetectableScalar(rawValue) {
+  const s = rawValue.trim();
+  if (s.startsWith('"') || s.startsWith("'")) return false;
+  const first = s[0];
+  return first !== void 0 && "&*!{[".includes(first);
+}
 var MalformedWorkflow = class extends Error {
 };
 function processKey(s, c, ind) {
@@ -7237,7 +7246,7 @@ function scanWorkflow(text) {
             s.blockIndent = indent;
             continue;
           }
-          if (inlineVal !== void 0 && inlineVal.trim() !== "") {
+          if (inlineVal !== void 0 && inlineVal.trim() !== "" && !isUndetectableScalar(inlineVal)) {
             entries.push({
               key: km[1],
               value: parseScalar(inlineVal),
@@ -7273,6 +7282,7 @@ function detectGateEnv(source) {
   const detected = [];
   const skippedExpressionRefs = [];
   const droppedSecrets = [];
+  const droppedKeys = [];
   const warnings = [];
   for (const workflow of source.listWorkflows()) {
     let raw;
@@ -7297,6 +7307,14 @@ function detectGateEnv(source) {
         droppedSecrets.push({ ...ref, match: hits.join(", ") });
         continue;
       }
+      if (isReservedEnvKey(e.key)) {
+        droppedKeys.push({ ...ref, reason: "reserved" });
+        continue;
+      }
+      if (!POSIX_ENV_NAME.test(e.key)) {
+        droppedKeys.push({ ...ref, reason: "invalid-name" });
+        continue;
+      }
       const dv = { ...ref, value: e.value, scope: e.scope };
       detected.push(dv);
       kept.push(dv);
@@ -7305,7 +7323,7 @@ function detectGateEnv(source) {
       gateEnv[dv.key] = dv.value;
     }
   }
-  return { gateEnv, detected, skippedExpressionRefs, droppedSecrets, warnings };
+  return { gateEnv, detected, skippedExpressionRefs, droppedSecrets, droppedKeys, warnings };
 }
 function mergeDetectedGateEnv(raw, current, detected, sources) {
   let next = raw;
@@ -7353,10 +7371,32 @@ async function applyGateEnvDetection(root, dataOpts = {}) {
       source: provenance(r),
       match: r.match
     })),
+    droppedKeys: result.droppedKeys.map((r) => ({
+      key: r.key,
+      source: provenance(r),
+      reason: r.reason
+    })),
     warnings: [...result.warnings],
     sources,
     gateEnv
   };
+}
+
+// src/ci/inject-gate-env.ts
+var SENTINEL = "# factory:gate-env";
+function injectGateEnvIntoWorkflow(text, gateEnv) {
+  const keys = Object.keys(gateEnv).sort();
+  if (keys.length === 0) return text;
+  const lines = text.split("\n");
+  const idx = lines.findIndex((l) => l.trim() === SENTINEL);
+  if (idx === -1) return text;
+  const indent = lines[idx].match(/^[ \t]*/)[0];
+  const block = [
+    `${indent}env:`,
+    ...keys.map((k) => `${indent}  ${k}: ${JSON.stringify(gateEnv[k])}`)
+  ];
+  lines.splice(idx, 1, ...block);
+  return lines.join("\n");
 }
 
 // src/cli/subcommands/configure.ts
@@ -8491,7 +8531,7 @@ var stateCommand = {
 };
 
 // src/cli/subcommands/scaffold.ts
-import { copyFile, mkdir as mkdir7, readFile as readFile4, writeFile } from "node:fs/promises";
+import { mkdir as mkdir7, readFile as readFile4, writeFile } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { dirname as dirname5, join as join8, relative } from "node:path";
@@ -8651,14 +8691,15 @@ function resolveTemplatesDir() {
   }
   throw new Error("scaffold: could not locate the plugin templates/ directory");
 }
+var QUALITY_GATE_REL = ".github/workflows/quality-gate.yml";
 var TEMPLATE_MANIFEST = [
-  { rel: ".github/workflows/quality-gate.yml", policy: "managed" },
+  { rel: QUALITY_GATE_REL, policy: "managed" },
   { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
   { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
   { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
   { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true }
 ];
-async function applyTemplate(entry, templatesDir, targetRoot, lists) {
+async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
   const src = join8(templatesDir, ...segs);
   const dest = join8(targetRoot, ...segs);
@@ -8666,9 +8707,13 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists) {
     log15.warn(`template missing, skipping: ${src}`);
     return;
   }
+  const render = async () => {
+    const text = await readFile4(src, "utf8");
+    return transform ? transform(text) : text;
+  };
   if (!existsSync7(dest)) {
     await mkdir7(dirname5(dest), { recursive: true });
-    await copyFile(src, dest);
+    await writeFile(dest, await render(), "utf8");
     lists.created.push(entry.rel);
     return;
   }
@@ -8676,12 +8721,12 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists) {
     lists.present.push(entry.rel);
     return;
   }
-  const [srcText, destText] = await Promise.all([readFile4(src, "utf8"), readFile4(dest, "utf8")]);
-  if (srcText === destText) {
+  const [rendered, destText] = await Promise.all([render(), readFile4(dest, "utf8")]);
+  if (rendered === destText) {
     lists.present.push(entry.rel);
     return;
   }
-  await copyFile(src, dest);
+  await writeFile(dest, rendered, "utf8");
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
@@ -8708,10 +8753,16 @@ async function runScaffold(opts) {
   if (gateEnv.written.length > 0) {
     log15.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
   }
+  if (gateEnv.warnings.length > 0) {
+    log15.warn(
+      `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
+    );
+  }
   const isNodePackage = existsSync7(join8(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
-    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists);
+    const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
+    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
   }
   if (lists.updated.length > 0) {
     log15.info(
@@ -8759,8 +8810,12 @@ async function runScaffold(opts) {
       provisioned
     },
     settings: { created: settings.created, changed: settings.changed },
-    // Omit an all-empty detection so a brand-new repo's report stays unchanged.
-    ...gateEnv.written.length > 0 || gateEnv.conflicts.length > 0 || Object.keys(gateEnv.detected).length > 0 ? { gateEnv } : {}
+    // Include the detection report whenever a key was detected OR any anomaly
+    // surfaced (a parse warning, an expression-ref/secret/key drop) — so a malformed
+    // workflow's `warnings` are never silently swallowed. `written`/`conflicts` each
+    // imply a detected key, so they're subsumed by the detected-key check. Omitted
+    // only for a clean brand-new repo (no workflows, nothing to report).
+    ...Object.keys(gateEnv.detected).length > 0 || gateEnv.warnings.length > 0 || gateEnv.skippedExpressionRefs.length > 0 || gateEnv.droppedSecrets.length > 0 || gateEnv.droppedKeys.length > 0 ? { gateEnv } : {}
   };
 }
 async function resolveScaffoldRepo(args, overrides = {}) {
@@ -13637,14 +13692,25 @@ async function assessWork(run9, probe) {
     if (t.status === "done") continue;
     if (t.branch === void 0) continue;
     const branchExists = await probe.refExists(t.branch);
-    const commitsAhead = baseResolved && branchExists ? await probe.commitsAhead(baseRef, t.branch) : null;
-    tasks.push({
-      task_id: t.task_id,
-      branch: t.branch,
-      branch_exists: branchExists,
-      commits_ahead: commitsAhead,
-      ...t.pr_number !== void 0 ? { pr_number: t.pr_number } : {}
-    });
+    const pr = t.pr_number !== void 0 ? { pr_number: t.pr_number } : {};
+    if (branchExists) {
+      const commitsAhead = baseResolved ? await probe.commitsAhead(baseRef, t.branch) : null;
+      tasks.push({
+        task_id: t.task_id,
+        branch: t.branch,
+        branch_exists: true,
+        commits_ahead: commitsAhead,
+        ...pr
+      });
+    } else {
+      tasks.push({
+        task_id: t.task_id,
+        branch: t.branch,
+        branch_exists: false,
+        commits_ahead: null,
+        ...pr
+      });
+    }
   }
   return { base_ref: baseRef, base_resolved: baseResolved, tasks };
 }

@@ -4,23 +4,28 @@
  * parity instead of crashing on a missing-env build (the false-negative floor
  * this whole feature exists to remove).
  *
- * Source of truth: `.github/workflows/*.yml` step `env:` blocks — the ONLY place
- * a repo declares build env NAMES *and* safe placeholder VALUES together. We never
- * read `.env`/`.env.local` (real secrets), only literal values committed in
- * plaintext to a workflow.
+ * Source of truth: `.github/workflows/*.yml` step- and job-level `env:` blocks —
+ * the place a repo declares build env NAMES *and* safe placeholder VALUES together
+ * (step env wins on a key collision). We never read `.env`/`.env.local` (real
+ * secrets), only literal values committed in plaintext to a workflow.
  *
  * Parser: a hand-rolled line scanner (NO yaml dependency — the dist bundles inline
  * every dep and the surface we need is narrow). Its safety property is **bias to
- * MISS, never MIS-DETECT**: a var in exotic YAML (anchors/aliases/merge-keys/flow
- * mappings) is silently skipped, never mangled. The escape hatch for a miss is
+ * MISS, never MIS-DETECT**: an UNQUOTED value opening with exotic YAML (an anchor
+ * `&`, alias `*`, tag `!`, or flow collection `{`/`[`) is skipped, not emitted
+ * mangled (see `isUndetectableScalar`); a QUOTED look-alike like `"[draft]"` is a
+ * plain string and IS kept. The escape hatch for a miss is
  * `factory configure --set quality.gateEnv.X=…`.
  *
- * Three policy filters drop a value before it can reach `gateEnv`:
+ * Policy filters drop an entry before it can reach `gateEnv`:
  *   1. any value containing `${{` (a GitHub expression ref — `${{ secrets.* }}`,
  *      `${{ matrix.* }}` — unusable and unsafe at gate time);
  *   2. any value `detectSecrets()` flags (defense-in-depth: gateEnv is documented
  *      "placeholders only — not a secret store");
- *   3. (structural) anything inside a `run: |` block scalar is never read as env.
+ *   3. any reserved loader/path-injection KEY (`PATH`, `LD_PRELOAD`, `DYLD_*`, …) or
+ *      a non-POSIX key name — reported under `droppedKeys`, never silent. A reserved
+ *      key would hijack the gate subprocess (gateEnv merges OVER `process.env`);
+ *   4. (structural) anything inside a `run: |` block scalar is never read as env.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -83,6 +88,9 @@ interface DroppedRef {
   readonly step: string;
 }
 
+/** Why a var was dropped on a KEY check (not a value check). */
+export type DroppedKeyReason = "reserved" | "invalid-name";
+
 export interface DetectResult {
   /** The merged map ready to feed `quality.gateEnv` (step-over-job, later-file-wins). */
   readonly gateEnv: Record<string, string>;
@@ -92,6 +100,12 @@ export interface DetectResult {
   readonly skippedExpressionRefs: readonly DroppedRef[];
   /** Vars dropped because the literal value looked like a real secret. */
   readonly droppedSecrets: readonly (DroppedRef & { match: string })[];
+  /**
+   * Vars dropped on a KEY check: a reserved loader/path-injection name (would
+   * hijack the gate subprocess via `exec`'s gateEnv-over-process.env merge) or a
+   * non-POSIX name (unusable as an env var). Reported, never silent.
+   */
+  readonly droppedKeys: readonly (DroppedRef & { reason: DroppedKeyReason })[];
   /** Workflow files skipped because they couldn't be parsed (never partial-emitted). */
   readonly warnings: readonly { workflow: string; message: string }[];
 }
@@ -151,6 +165,38 @@ function parseScalar(raw: string): string {
 const KEY_LINE = /^([A-Za-z_][A-Za-z0-9_.-]*):(?:\s+(.*))?$/;
 const isBlockScalar = (v: string | undefined): boolean =>
   v === "|" || v === ">" || /^[|>][+-]?$/.test(v ?? "");
+
+/**
+ * Loader / path-injection env names that must NEVER be sourced from a workflow:
+ * `exec` merges gateEnv OVER `process.env` (src/shared/exec.ts), so one of these
+ * would hijack the binary resolution / dynamic linker of every gate subprocess.
+ * Deliberately NARROW — these have no legitimate build-placeholder use, so the
+ * drop is pure safety. NODE_OPTIONS (`--max-old-space-size`) and GIT_* are legit
+ * build/identity vars and are NOT denied (denylisting them re-introduces a
+ * false-negative gate; see the over-acceptance finding).
+ */
+const RESERVED_ENV_KEYS = new Set(["PATH", "NODE_PATH", "LD_PRELOAD", "LD_LIBRARY_PATH"]);
+const isReservedEnvKey = (key: string): boolean =>
+  RESERVED_ENV_KEYS.has(key) || key.startsWith("DYLD_");
+
+/** A portable POSIX env-var name — anything else is unusable as a gate env var. */
+const POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * A RAW (pre-`parseScalar`) env value whose first char opens exotic YAML the line
+ * scanner can't safely resolve — an anchor `&`, alias `*`, tag `!`, or flow
+ * collection `{`/`[`. Emitting the verbatim text would MANGLE it, violating the
+ * "bias to miss, never mis-detect" property, so the entry is skipped (a deliberate
+ * miss). Checked on the RAW value BEFORE quote-stripping: a QUOTED look-alike
+ * (`"[draft]"`, `'!important'`, `"*.example.com"`) is a plain string `parseScalar`
+ * resolves fine, so only UNQUOTED values are skipped.
+ */
+function isUndetectableScalar(rawValue: string): boolean {
+  const s = rawValue.trim();
+  if (s.startsWith('"') || s.startsWith("'")) return false;
+  const first = s[0];
+  return first !== undefined && "&*!{[".includes(first);
+}
 
 /**
  * Structurally extract every step/job-level `env:` entry from one workflow's text.
@@ -254,7 +300,11 @@ function scanWorkflow(text: string): RawEnvEntry[] {
             s.blockIndent = indent; // multi-line env value — skip its body, drop the entry
             continue;
           }
-          if (inlineVal !== undefined && inlineVal.trim() !== "") {
+          if (
+            inlineVal !== undefined &&
+            inlineVal.trim() !== "" &&
+            !isUndetectableScalar(inlineVal)
+          ) {
             entries.push({
               key: km[1]!,
               value: parseScalar(inlineVal),
@@ -301,6 +351,7 @@ export function detectGateEnv(source: WorkflowSource): DetectResult {
   const detected: DetectedVar[] = [];
   const skippedExpressionRefs: DroppedRef[] = [];
   const droppedSecrets: (DroppedRef & { match: string })[] = [];
+  const droppedKeys: (DroppedRef & { reason: DroppedKeyReason })[] = [];
   const warnings: { workflow: string; message: string }[] = [];
 
   for (const workflow of source.listWorkflows()) {
@@ -326,6 +377,16 @@ export function detectGateEnv(source: WorkflowSource): DetectResult {
         droppedSecrets.push({ ...ref, match: hits.join(", ") });
         continue;
       }
+      // Key checks (after the value checks): a reserved loader/path-injection name
+      // would hijack the gate subprocess; a non-POSIX name is unusable as an env var.
+      if (isReservedEnvKey(e.key)) {
+        droppedKeys.push({ ...ref, reason: "reserved" });
+        continue;
+      }
+      if (!POSIX_ENV_NAME.test(e.key)) {
+        droppedKeys.push({ ...ref, reason: "invalid-name" });
+        continue;
+      }
       const dv: DetectedVar = { ...ref, value: e.value, scope: e.scope };
       detected.push(dv);
       kept.push(dv);
@@ -336,7 +397,7 @@ export function detectGateEnv(source: WorkflowSource): DetectResult {
       gateEnv[dv.key] = dv.value;
     }
   }
-  return { gateEnv, detected, skippedExpressionRefs, droppedSecrets, warnings };
+  return { gateEnv, detected, skippedExpressionRefs, droppedSecrets, droppedKeys, warnings };
 }
 
 // ── merge into the config overlay (gap-fill, operator wins) ───────────────────
@@ -402,6 +463,7 @@ export interface DetectReport {
   readonly conflicts: GateEnvConflict[];
   readonly skippedExpressionRefs: { key: string; source: string }[];
   readonly droppedSecrets: { key: string; source: string; match: string }[];
+  readonly droppedKeys: { key: string; source: string; reason: DroppedKeyReason }[];
   readonly warnings: { workflow: string; message: string }[];
   /** Provenance per detected key: `workflow › job › step`. */
   readonly sources: Record<string, string>;
@@ -444,6 +506,11 @@ export async function applyGateEnvDetection(
       key: r.key,
       source: provenance(r),
       match: r.match,
+    })),
+    droppedKeys: result.droppedKeys.map((r) => ({
+      key: r.key,
+      source: provenance(r),
+      reason: r.reason,
     })),
     warnings: [...result.warnings],
     sources,

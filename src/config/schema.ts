@@ -70,7 +70,9 @@ export const QualitySchema = z
      * NOT a secret store. Values are required strings (an explicit "set this var");
      * a numeric-looking value must be quoted as JSON at the `--set` boundary.
      */
-    gateEnv: z.record(z.string(), z.string()).default({}),
+    gateEnv: z
+      .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "valid POSIX env name"), z.string())
+      .default({}),
   })
   .default({});
 

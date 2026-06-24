@@ -26,13 +26,18 @@ This is idempotent. It:
 
 - **auto-detects the repo's CI build env** (the same scan as
   [`configure --detect-gate-env`](../reference/cli.md#configure)) and gap-fills
-  `quality.gateEnv`. This runs **before** copying the managed `quality-gate.yml`
+  `quality.gateEnv`. This runs **before** writing the managed `quality-gate.yml`
   template, so the repo author's CI env is captured into the durable config overlay
-  while that workflow file is still theirs; gap-fill never overwrites a value you set;
-- copies the plugin-managed CI net (`.github/workflows/quality-gate.yml` and its
+  while that workflow file is still theirs; gap-fill never overwrites a value you set.
+  An unparseable workflow is surfaced loudly, never silently skipped;
+- writes the plugin-managed CI net (`.github/workflows/quality-gate.yml` and its
   `.github/scripts/shard-mutation-scope.mjs` helper), and — when the target is a
   Node package — the seed gate configs `.stryker.config.json`,
-  `.dependency-cruiser.cjs`, and `eslint.config.mjs`;
+  `.dependency-cruiser.cjs`, and `eslint.config.mjs`. The managed `quality-gate.yml`
+  is **rendered with the resolved `quality.gateEnv` injected** into its `pnpm build`
+  step, so that one config drives both the factory's local merge gate and this repo's
+  GitHub CI. An empty `gateEnv` leaves the build step's marker untouched, and a
+  re-scaffold is byte-identical (drift is measured against the rendered template);
 - guarantees the `.gitignore` entries that keep factory state un-committed;
 - emits / idempotently merges the target `.claude/settings.json` (factory allow-list
   - `permissions.additionalDirectories` plus `Read|Write|Edit(<data-dir>/**)` allow

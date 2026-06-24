@@ -11,8 +11,10 @@ export {
   type WorkflowSource,
   type EnvScope,
   type DetectedVar,
+  type DroppedKeyReason,
   type DetectResult,
   type GateEnvConflict,
   type GateEnvMerge,
   type DetectReport,
 } from "./detect-gate-env.js";
+export { injectGateEnvIntoWorkflow } from "./inject-gate-env.js";

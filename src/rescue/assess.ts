@@ -33,21 +33,24 @@ export interface WorkProbe {
   commitsAhead(base: string, branch: string): Promise<number>;
 }
 
-/** One non-shipped task's recoverable-work assessment. */
-export interface TaskWork {
+/**
+ * One non-shipped task's recoverable-work assessment. A discriminated union on
+ * `branch_exists` so the illegal `{ branch_exists: false, commits_ahead: 5 }` state
+ * is UNREPRESENTABLE: a deleted branch has nothing to count, so `commits_ahead` is
+ * pinned to `null` on the false arm. The JSON shape is unchanged (both arms carry
+ * the same keys), so consumers + the rescue-diagnostic agent see the same payload.
+ * On the `true` arm `commits_ahead` stays `number | null` — `null` when the staging
+ * BASE is unresolvable (a WorkAssessment-level condition), a number otherwise.
+ */
+export type TaskWork = {
   task_id: string;
   /** The local task branch (`factory/<run>/<task>`). */
   branch: string;
-  /** True iff the branch ref still resolves (a `--cleanup` may have deleted it). */
-  branch_exists: boolean;
-  /**
-   * Commits on the branch above the run's staging base — the size of the
-   * recoverable work. `null` when the base or the branch is unresolvable (nothing
-   * to count against), NOT zero (which means "branch exists but adds nothing").
-   */
-  commits_ahead: number | null;
   pr_number?: number;
-}
+} & (
+  | { branch_exists: true; commits_ahead: number | null }
+  | { branch_exists: false; commits_ahead: null }
+);
 
 /** The read-only recoverable-work survey appended to a {@link scanRun} report. */
 export interface WorkAssessment {
@@ -81,15 +84,27 @@ export async function assessWork(run: RunState, probe: WorkProbe): Promise<WorkA
     if (t.status === "done") continue;
     if (t.branch === undefined) continue;
     const branchExists = await probe.refExists(t.branch);
-    const commitsAhead =
-      baseResolved && branchExists ? await probe.commitsAhead(baseRef, t.branch) : null;
-    tasks.push({
-      task_id: t.task_id,
-      branch: t.branch,
-      branch_exists: branchExists,
-      commits_ahead: commitsAhead,
-      ...(t.pr_number !== undefined ? { pr_number: t.pr_number } : {}),
-    });
+    const pr = t.pr_number !== undefined ? { pr_number: t.pr_number } : {};
+    // A `boolean` can't narrow an object literal to one union arm, so branch on it:
+    // the false arm pins `commits_ahead` to `null` (a deleted branch counts nothing).
+    if (branchExists) {
+      const commitsAhead = baseResolved ? await probe.commitsAhead(baseRef, t.branch) : null;
+      tasks.push({
+        task_id: t.task_id,
+        branch: t.branch,
+        branch_exists: true,
+        commits_ahead: commitsAhead,
+        ...pr,
+      });
+    } else {
+      tasks.push({
+        task_id: t.task_id,
+        branch: t.branch,
+        branch_exists: false,
+        commits_ahead: null,
+        ...pr,
+      });
+    }
   }
 
   return { base_ref: baseRef, base_resolved: baseResolved, tasks };
