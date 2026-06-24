@@ -43,6 +43,11 @@ factory scaffold        # --repo is auto-derived from origin; pass --repo <owner
 
 This is idempotent. It:
 
+- **auto-detects the repo's CI build env** (the same scan as
+  `factory configure --detect-gate-env`) and gap-fills `quality.gateEnv` — run **first**, before
+  the managed `quality-gate.yml` template overwrites the repo's own workflow, so the repo author's
+  CI env is captured into the durable config overlay while that file is still theirs. Gap-fill
+  never clobbers an operator-set value;
 - copies `.github/workflows/quality-gate.yml` (the CI net), and — when the target is a Node
   package — `.stryker.config.json` + `.dependency-cruiser.cjs` (gate configs);
 - guarantees the `.gitignore` entries that keep factory state un-committed;
@@ -58,7 +63,9 @@ This is idempotent. It:
   `staging/<run-id>` are minted at `run create`, not here.)
 
 Print the emitted `ScaffoldReport` JSON: `files_created`, `files_present`, and
-`protection`.
+`protection`. When CI build-env detection found anything, the report also carries an optional
+`gateEnv` field (the `DetectReport` — `detected`, `written`, `conflicts`, …); it is omitted on a
+repo with no detectable env so a brand-new repo's report is unchanged.
 
 ## Step 3 — Handle a protection refusal
 

@@ -62,6 +62,15 @@ export const QualitySchema = z
      * lockfile is a no-op. Set this for non-JS repos or custom setups. Optional.
      */
     setupCommand: z.string().optional(),
+    /**
+     * Env vars injected into EVERY deterministic gate command (build/test/type/
+     * lint/security), merged over `process.env`. Mirror the repo's CI build-step
+     * env (e.g. the placeholders a Next.js static prerender needs) so the verifier
+     * floor measures the code, not a missing-env build crash. Placeholders only —
+     * NOT a secret store. Values are required strings (an explicit "set this var");
+     * a numeric-looking value must be quoted as JSON at the `--set` boundary.
+     */
+    gateEnv: z.record(z.string(), z.string()).default({}),
   })
   .default({});
 

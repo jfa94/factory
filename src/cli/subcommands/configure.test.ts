@@ -4,7 +4,7 @@
  * touching the host's config.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,6 +68,30 @@ describe("factory configure", () => {
     expect(overlay.git.stagingBranch).toBe("staging"); // bare string
   });
 
+  it("--set creates a nested gateEnv record leaf and round-trips it", async () => {
+    const code = await configureCommand.run([
+      "--set",
+      "quality.gateEnv.NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321",
+      "--set",
+      "quality.gateEnv.NEXT_PUBLIC_SUPABASE_KEY=ci-placeholder",
+    ]);
+    expect(code).toBe(EXIT.OK);
+    expect(out().quality.gateEnv).toEqual({
+      NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321",
+      NEXT_PUBLIC_SUPABASE_KEY: "ci-placeholder",
+    });
+    // Sparse overlay holds only the nested leaves.
+    const overlay = JSON.parse(await readFile(join(dataDir, "config.json"), "utf8"));
+    expect(overlay).toEqual({
+      quality: {
+        gateEnv: {
+          NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321",
+          NEXT_PUBLIC_SUPABASE_KEY: "ci-placeholder",
+        },
+      },
+    });
+  });
+
   it("--get prints a single resolved value", async () => {
     await configureCommand.run(["--set", "maxConsecutiveFailures=7"]);
     stdout.length = 0;
@@ -118,5 +142,73 @@ describe("factory configure", () => {
   it("--help returns OK", async () => {
     expect(await configureCommand.run(["--help"])).toBe(EXIT.OK);
     expect(stdout.join("")).toMatch(/factory configure/);
+  });
+
+  describe("--detect-gate-env", () => {
+    const WORKFLOW = `jobs:
+  quality:
+    steps:
+      - run: pnpm build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+          API_TOKEN: \${{ secrets.API_TOKEN }}
+`;
+    let repoRoot: string;
+    let prevCwd: string;
+
+    const enterRepo = async (withWorkflow: boolean) => {
+      repoRoot = await mkdtemp(join(tmpdir(), "factory-configure-repo-"));
+      if (withWorkflow) {
+        const dir = join(repoRoot, ".github", "workflows");
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, "quality-gate.yml"), WORKFLOW, "utf8");
+      }
+      prevCwd = process.cwd();
+      process.chdir(repoRoot);
+    };
+
+    afterEach(async () => {
+      if (prevCwd) process.chdir(prevCwd);
+      if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
+    });
+
+    it("detects into an empty config, writing the literal var and dropping the secret ref", async () => {
+      await enterRepo(true);
+      const code = await configureCommand.run(["--detect-gate-env"]);
+      expect(code).toBe(EXIT.OK);
+      const report = out();
+      expect(report.written).toEqual(["NEXT_PUBLIC_SUPABASE_URL"]);
+      expect(report.skippedExpressionRefs.map((r: any) => r.key)).toEqual(["API_TOKEN"]);
+      // Sparse overlay holds only the detected literal.
+      const overlay = JSON.parse(await readFile(join(dataDir, "config.json"), "utf8"));
+      expect(overlay).toEqual({
+        quality: { gateEnv: { NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321" } },
+      });
+    });
+
+    it("re-running is idempotent (written empty, overlay unchanged)", async () => {
+      await enterRepo(true);
+      await configureCommand.run(["--detect-gate-env"]);
+      const overlay = await readFile(join(dataDir, "config.json"), "utf8");
+      stdout.length = 0;
+      await configureCommand.run(["--detect-gate-env"]);
+      expect(out().written).toEqual([]);
+      expect(await readFile(join(dataDir, "config.json"), "utf8")).toBe(overlay);
+    });
+
+    it("writes nothing when there is no workflow dir", async () => {
+      await enterRepo(false);
+      const code = await configureCommand.run(["--detect-gate-env"]);
+      expect(code).toBe(EXIT.OK);
+      expect(out().written).toEqual([]);
+      expect(existsSync(join(dataDir, "config.json"))).toBe(false);
+    });
+
+    it("--detect-gate-env combined with --set is a USAGE error", async () => {
+      await enterRepo(true);
+      const code = await configureCommand.run(["--detect-gate-env", "--set", "x=1"]);
+      expect(code).toBe(EXIT.USAGE);
+      expect(stderr.join("")).toMatch(/cannot be combined/);
+    });
   });
 });

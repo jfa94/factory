@@ -42,14 +42,19 @@ const PROTECTED: ProtectionApiResult = {
 
 let root: string;
 let templatesDir: string;
+let dataDir: string;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "factory-scaffold-"));
+  // Isolated config-overlay dir so CI build-env detection's gateEnv write (and the
+  // no-op read when nothing is detected) never touches the host data dir.
+  dataDir = await mkdtemp(join(tmpdir(), "factory-scaffold-data-"));
   templatesDir = resolveTemplatesDir();
 });
 
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true });
 });
 
 describe("runScaffold", () => {
@@ -61,6 +66,7 @@ describe("runScaffold", () => {
       repo: "widgets",
       config: cfg,
       dataDirRules: DATA_DIR_RULES,
+      dataDir,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
@@ -115,6 +121,7 @@ describe("runScaffold", () => {
       repo: "widgets",
       config: cfg,
       dataDirRules: DATA_DIR_RULES,
+      dataDir,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
@@ -139,6 +146,7 @@ describe("runScaffold", () => {
       repo: "widgets",
       config: cfg,
       dataDirRules: DATA_DIR_RULES,
+      dataDir,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
@@ -155,6 +163,7 @@ describe("runScaffold", () => {
       repo: "widgets",
       config: cfg,
       dataDirRules: DATA_DIR_RULES,
+      dataDir,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     });
@@ -171,6 +180,7 @@ describe("runScaffold", () => {
       repo: "widgets",
       config: cfg,
       dataDirRules: DATA_DIR_RULES,
+      dataDir,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
@@ -190,6 +200,7 @@ describe("runScaffold", () => {
       repo: "widgets",
       config: cfg,
       dataDirRules: DATA_DIR_RULES,
+      dataDir,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
@@ -218,6 +229,7 @@ describe("runScaffold", () => {
       repo: "widgets",
       config: cfg,
       dataDirRules: DATA_DIR_RULES,
+      dataDir,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
@@ -249,6 +261,7 @@ describe("runScaffold", () => {
       repo: "widgets",
       config: cfg,
       dataDirRules: DATA_DIR_RULES,
+      dataDir,
       ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
       provision: false,
     };
@@ -288,6 +301,7 @@ describe("runScaffold", () => {
         repo: "widgets",
         config: cfg,
         dataDirRules: DATA_DIR_RULES,
+        dataDir,
         ghClient: new FakeGhClient(), // no protection seeded → disabled
         provision: false,
       }),
@@ -303,6 +317,7 @@ describe("runScaffold", () => {
       repo: "widgets",
       config: cfg,
       dataDirRules: DATA_DIR_RULES,
+      dataDir,
       ghClient: gh,
       provision: true,
     });
@@ -310,6 +325,70 @@ describe("runScaffold", () => {
     expect(report.protection.strict_up_to_date).toBe(true);
     // The PUT was issued against develop (the integration base), not a shared staging branch.
     expect(gh.calls).toContain(`api PUT protection ${BASE}`);
+  });
+
+  it("auto-detects the repo's CI build env into quality.gateEnv BEFORE the managed template overwrites it", async () => {
+    // The repo ships its OWN quality-gate.yml carrying build placeholders. scaffold
+    // MANAGES (overwrites) that file — so detection must capture the env into the
+    // durable config overlay first. Mirror goodbyespy: a literal build env + a
+    // `${{ secrets.* }}` ref that must be dropped.
+    const wfDir = join(root, ".github", "workflows");
+    await mkdir(wfDir, { recursive: true });
+    await writeFile(
+      join(wfDir, "quality-gate.yml"),
+      `jobs:
+  quality:
+    steps:
+      - run: pnpm build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+          DEPLOY_TOKEN: \${{ secrets.DEPLOY_TOKEN }}
+`,
+      "utf8",
+    );
+
+    const report = await runScaffold({
+      targetRoot: root,
+      templatesDir,
+      owner: "acme",
+      repo: "widgets",
+      config: cfg,
+      dataDirRules: DATA_DIR_RULES,
+      dataDir,
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
+      provision: false,
+    });
+
+    // The literal placeholder was captured; the secret ref was dropped.
+    expect(report.gateEnv?.gateEnv.NEXT_PUBLIC_SUPABASE_URL).toBe("http://localhost:54321");
+    expect(report.gateEnv?.written).toEqual(["NEXT_PUBLIC_SUPABASE_URL"]);
+    expect(report.gateEnv?.skippedExpressionRefs.map((r) => r.key)).toEqual(["DEPLOY_TOKEN"]);
+
+    // It landed in the durable overlay (the same one the rest of the factory reads).
+    const overlay = JSON.parse(await readFile(join(dataDir, "config.json"), "utf8"));
+    expect(overlay.quality.gateEnv).toEqual({
+      NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321",
+    });
+
+    // The managed template DID overwrite the repo's workflow afterward — proving the
+    // ordering: detect first, then clobber.
+    expect(report.files_updated).toContain(".github/workflows/quality-gate.yml");
+  });
+
+  it("omits the gateEnv report field when the repo has no detectable build env", async () => {
+    const report = await runScaffold({
+      targetRoot: root,
+      templatesDir,
+      owner: "acme",
+      repo: "widgets",
+      config: cfg,
+      dataDirRules: DATA_DIR_RULES,
+      dataDir,
+      ghClient: new FakeGhClient({ protection: { [BASE]: PROTECTED } }),
+      provision: false,
+    });
+    expect(report).not.toHaveProperty("gateEnv");
+    expect(existsSync(join(dataDir, "config.json"))).toBe(false);
   });
 });
 

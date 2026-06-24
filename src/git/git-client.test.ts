@@ -50,6 +50,33 @@ describe("DefaultGitClient over an injectable runner (no real git)", () => {
     await expect(absent.lsRemoteHeads("origin", "nope")).resolves.toBeNull();
   });
 
+  it("refExists treats code 0 as YES, code 1 as a normal NO, code > 1 as an error", async () => {
+    const yes = new DefaultGitClient(async (args) => {
+      expect(args).toEqual(["rev-parse", "--verify", "--quiet", "origin/staging-run-1"]);
+      return result({ code: 0, stdout: "deadbeef\n" });
+    });
+    await expect(yes.refExists("origin/staging-run-1")).resolves.toBe(true);
+    const no = new DefaultGitClient(async () => result({ code: 1 }));
+    await expect(no.refExists("origin/gone")).resolves.toBe(false);
+    const bad = new DefaultGitClient(async () => result({ code: 128, stderr: "not a repo" }));
+    await expect(bad.refExists("x")).rejects.toThrow(/rev-parse/);
+  });
+
+  it("commitsAhead runs rev-list --count <base>..<branch> and parses the int", async () => {
+    const git = new DefaultGitClient(async (args) => {
+      expect(args).toEqual(["rev-list", "--count", "origin/staging-run-1..factory/run-1/task-a"]);
+      return result({ stdout: "3\n" });
+    });
+    await expect(git.commitsAhead("origin/staging-run-1", "factory/run-1/task-a")).resolves.toBe(3);
+  });
+
+  it("commitsAhead is fatal on non-zero and on non-numeric output", async () => {
+    const failing = new DefaultGitClient(async () => result({ code: 128, stderr: "bad rev" }));
+    await expect(failing.commitsAhead("base", "branch")).rejects.toThrow(/command failed/);
+    const garbage = new DefaultGitClient(async () => result({ stdout: "not-a-number\n" }));
+    await expect(garbage.commitsAhead("base", "branch")).rejects.toThrow(/non-numeric/);
+  });
+
   it("the public GitClient surface exposes no force-push method", () => {
     const git = new DefaultGitClient(async () => result({ code: 0 }));
     expect((git as unknown as Record<string, unknown>).forcePush).toBeUndefined();

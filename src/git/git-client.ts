@@ -42,6 +42,21 @@ export interface GitClient {
   /** True iff `git show-ref --verify <ref>` succeeds (a miss is a normal NO). */
   branchExists(ref: string, opts?: GitOpts): Promise<boolean>;
   /**
+   * True iff `ref` resolves to a commit (`git rev-parse --verify --quiet <ref>`).
+   * Generic over heads, remote-tracking refs, tags, and raw shas (unlike
+   * {@link branchExists}, which is `refs/heads/`-scoped). A non-zero exit is the
+   * ANSWER (ref absent); only a deeper failure throws. Used by rescue's read-only
+   * recoverable-work probe to test a maybe-deleted base/branch before counting.
+   */
+  refExists(ref: string, opts?: GitOpts): Promise<boolean>;
+  /**
+   * Count commits reachable from `branch` but not `base`
+   * (`git rev-list --count <base>..<branch>`). Both refs must resolve — guard with
+   * {@link refExists}; fatal otherwise. Read-only; used by rescue to report how much
+   * committed work a non-shipped task branch carries above the run's staging base.
+   */
+  commitsAhead(base: string, branch: string, opts?: GitOpts): Promise<number>;
+  /**
    * `git checkout -B <branch> <startPoint>` — the D12 idempotent re-point.
    * Creates-or-resets `branch` onto `startPoint`. Fatal on failure.
    */
@@ -130,6 +145,26 @@ export class DefaultGitClient implements GitClient {
     if (r.code === 0) return true;
     if (r.code === 1) return false;
     throw new Error(`git show-ref failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
+
+  async refExists(ref: string, opts?: GitOpts): Promise<boolean> {
+    // rev-parse --verify --quiet prints the sha & exits 0 when `ref` resolves,
+    // else exits 1 with no output — that 1 is the ANSWER (absent), not an error.
+    const r = await this.exec(["rev-parse", "--verify", "--quiet", ref], opts);
+    if (r.code === 0) return true;
+    if (r.code === 1) return false;
+    throw new Error(`git rev-parse failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
+
+  async commitsAhead(base: string, branch: string, opts?: GitOpts): Promise<number> {
+    const r = await this.execOrThrow(["rev-list", "--count", `${base}..${branch}`], opts);
+    const n = Number.parseInt(r.stdout.trim(), 10);
+    if (!Number.isFinite(n)) {
+      throw new Error(
+        `git rev-list --count returned non-numeric output: ${JSON.stringify(r.stdout)}`,
+      );
+    }
+    return n;
   }
 
   async checkoutB(branch: string, startPoint: string, opts?: GitOpts): Promise<void> {

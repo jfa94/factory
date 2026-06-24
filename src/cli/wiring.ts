@@ -105,7 +105,7 @@ export async function loadCliDeps(opts: LoadCliDepsOptions): Promise<CliDeps> {
     spec,
     git: new DefaultGitClient(),
     gh: new DefaultGhClient(),
-    tools: defaultGateTools(),
+    tools: defaultGateTools(config.quality.gateEnv),
     artifacts: new FsArtifactStore(dataDir),
     holdout: new FsHoldoutStore(dataDir),
     dataDir,

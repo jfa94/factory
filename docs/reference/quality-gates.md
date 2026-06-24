@@ -63,6 +63,20 @@ Evidence is memoized by the worktree's git tree-SHA, so an identical-content
 re-run skips re-executing the tool — but the verdict is still re-derived, so a
 cache hit never bypasses re-derivation.
 
+## CI-parity gate env (`quality.gateEnv`)
+
+Every gate command (`build`, `test`, `type`, `lint`, `mutation`, `security`) runs in a
+**fresh task worktree** with no `.env.local`. The `quality.gateEnv` name→value map is
+merged over `process.env` into each gate's spawn env (`defaultGateTools(gateEnv)`,
+wired from config in `src/cli/wiring.ts`). Use it to mirror the repo's CI build-step env
+so the gate measures the code, not a missing-env crash — e.g. a Next.js static prerender
+that needs `NEXT_PUBLIC_*` defined would otherwise fail the `build` gate on a missing-env
+crash unrelated to task quality. It is **CI-parity placeholders, not a secret store**.
+Populate it by auto-detecting the repo's CI workflow env
+(`factory configure --detect-gate-env`, also run automatically by `factory scaffold`) with
+manual `--set` as the escape hatch. See
+[configuration.md](./configuration.md#gateenv--ci-parity-placeholders).
+
 ## The gates
 
 | Gate       | Checks                                                                                                                      | Fail-closed when                                                                                                                          |

@@ -41,6 +41,7 @@ import {
   type GhClient,
 } from "../../git/index.js";
 import { loadConfig, resolveDataDir, type Config } from "../../config/index.js";
+import { applyGateEnvDetection, type DetectReport } from "../../ci/index.js";
 import {
   ensureTargetSettings,
   buildTargetDataDirRules,
@@ -59,6 +60,9 @@ Copies the committed CI + gate-config templates and probes branch protection on
 develop (the integration base). Without --provision a repo whose develop branch is
 not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
 Per-run staging branches are minted at run create — scaffold no longer touches them.
+Also auto-detects the repo's CI build env and gap-fills quality.gateEnv (the same
+detection as 'factory configure --detect-gate-env'), captured BEFORE the managed
+quality-gate.yml template overwrites the repo's own workflow.
 
 Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
@@ -128,6 +132,13 @@ export interface ScaffoldOptions {
    * emitted rules never carry the broken `${CLAUDE_PLUGIN_DATA}` placeholder.
    */
   readonly dataDirRules: TargetDataDirRules;
+  /**
+   * The CLI-resolved factory data dir (where the config overlay lives). Threaded
+   * into CI build-env detection so the gateEnv gap-fill writes the SAME overlay
+   * the rest of the factory reads — and so the injectable scaffold core stays pure
+   * of the ambient `$CLAUDE_PLUGIN_DATA` (units inject a temp dir).
+   */
+  readonly dataDir: string;
   /** --provision: write protection when missing instead of refusing. */
   readonly provision: boolean;
 }
@@ -155,6 +166,14 @@ export interface ScaffoldReport {
    * per-call permission prompts for interactive `/factory:run` in this repo.
    */
   readonly settings: { readonly created: boolean; readonly changed: boolean };
+  /**
+   * CI build-env auto-detection: the gateEnv gap-fill run BEFORE the managed
+   * `quality-gate.yml` template overwrites the repo's own workflow, capturing the
+   * repo author's build env into the durable config overlay. Omitted when nothing
+   * was detected (no workflows / no literal env), so a brand-new repo's report is
+   * unchanged.
+   */
+  readonly gateEnv?: DetectReport;
 }
 
 /**
@@ -303,6 +322,15 @@ async function ensureGitignore(root: string, lists: FileLists): Promise<void> {
 export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport> {
   const lists: FileLists = { created: [], present: [], updated: [] };
 
+  // 0. Auto-detect CI build env → gap-fill quality.gateEnv, BEFORE the managed
+  //    quality-gate.yml template (step 1) overwrites the repo's own workflow. This
+  //    captures the repo author's build env into the durable config overlay while
+  //    that file is still the author's; gap-fill never clobbers an operator value.
+  const gateEnv = await applyGateEnvDetection(opts.targetRoot, { dataDir: opts.dataDir });
+  if (gateEnv.written.length > 0) {
+    log.info(`detected ${gateEnv.written.length} CI build-env var(s) → quality.gateEnv`);
+  }
+
   // 1+2. Committed template artifacts (Δ Z). MANAGED files (the CI net + its shard
   //       helper) auto-update on drift; SEED gate configs are copy-once + user-owned.
   //       The `nodeOnly` SEED configs apply only to a Node-package target.
@@ -375,6 +403,12 @@ export async function runScaffold(opts: ScaffoldOptions): Promise<ScaffoldReport
       provisioned,
     },
     settings: { created: settings.created, changed: settings.changed },
+    // Omit an all-empty detection so a brand-new repo's report stays unchanged.
+    ...(gateEnv.written.length > 0 ||
+    gateEnv.conflicts.length > 0 ||
+    Object.keys(gateEnv.detected).length > 0
+      ? { gateEnv }
+      : {}),
   };
 }
 
@@ -413,6 +447,10 @@ async function run(argv: string[]): Promise<ExitCode> {
   }
 
   const { owner, repo } = await resolveScaffoldRepo(args);
+  // Resolve the CANONICAL data dir ONCE at the command boundary (corrects the
+  // foreign-plugin env-var leak). resolveDataDir() throwing on an unresolvable dir
+  // is the correct loud failure — there is deliberately no placeholder fallback.
+  const dataDir = resolveDataDir();
   const report = await runScaffold({
     targetRoot: process.cwd(),
     templatesDir: resolveTemplatesDir(),
@@ -420,11 +458,10 @@ async function run(argv: string[]): Promise<ExitCode> {
     repo,
     config: loadConfig(),
     ghClient: new DefaultGhClient(),
-    // Resolve the CANONICAL data dir at the command boundary (corrects the
-    // foreign-plugin env-var leak) and bake it into the target permission rules.
-    // resolveDataDir() throwing on an unresolvable dir is the correct loud
-    // failure — there is deliberately no placeholder fallback.
-    dataDirRules: buildTargetDataDirRules({ dataDir: resolveDataDir(), home: homedir() }),
+    // Bake the resolved data dir into the target permission rules, and thread it
+    // into CI build-env detection's config write.
+    dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir() }),
+    dataDir,
     provision: args.flag("provision") === true,
   });
   emitJson(report);

@@ -16,7 +16,8 @@ import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { StateManager } from "../../core/state/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
-import { scanRun, applyRescue } from "../../rescue/index.js";
+import { scanRun, applyRescue, assessWork, type WorkProbe } from "../../rescue/index.js";
+import { DefaultGitClient } from "../../git/index.js";
 import type { Subcommand } from "../registry-types.js";
 
 const RESCUE_HELP = `factory rescue — scan or recover a stalled run
@@ -90,7 +91,18 @@ export async function runScan(
   const state = new StateManager();
   const runId = await resolveRunId(state, args, "scan", overrides);
   const run = await state.read(runId);
-  emitJson(scanRun(run));
+
+  // Read-only recoverable-work survey, appended additively. Reuse the same git
+  // client resolved for current-run lookup; it runs in the target-repo cwd (where
+  // the local `factory/...` branches + `origin/staging-<run-id>` ref live).
+  const git = overrides.gitClient ?? new DefaultGitClient();
+  const probe: WorkProbe = {
+    refExists: (ref) => git.refExists(ref),
+    commitsAhead: (base, branch) => git.commitsAhead(base, branch),
+  };
+  const work = await assessWork(run, probe);
+
+  emitJson({ ...scanRun(run), work });
   return EXIT.OK;
 }
 

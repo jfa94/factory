@@ -41,6 +41,15 @@ Key fields: `resettable` (= `stuck ∪ recoverable`), `dead_ends`, `needs_rescue
 and `would_deadlock` (true iff a re-drive would throw). If `needs_rescue` is false,
 there is nothing to do.
 
+The scan also carries a read-only `work` field — a git-grounded survey of how much
+committed work each non-shipped task branch (`factory/<run>/<task>`) carries above the
+run's staging base (`commits_ahead`, measured against `origin/staging-<run-id>`). Use it
+to see whether a dropped task got far before failing vs carried nothing. It is **diagnostic
+only**: it changes nothing, and resume still re-cuts a reset task's branch from staging and
+redoes the work. The `/factory:rescue` command passes each dead-end's `work` line through to
+the `rescue-diagnostic` agent as corroborating evidence (never a `reset` trigger on its own).
+See [reference/cli.md](../reference/cli.md#rescue-scan).
+
 ## 2. Apply the default safe reset
 
 Reset the stuck + recoverable tasks and reopen a terminal run:

@@ -5817,7 +5817,16 @@ var QualitySchema = external_exports.object({
    * `npm ci`, `pnpm-lock.yaml`/`yarn.lock` → frozen install); a repo with no
    * lockfile is a no-op. Set this for non-JS repos or custom setups. Optional.
    */
-  setupCommand: external_exports.string().optional()
+  setupCommand: external_exports.string().optional(),
+  /**
+   * Env vars injected into EVERY deterministic gate command (build/test/type/
+   * lint/security), merged over `process.env`. Mirror the repo's CI build-step
+   * env (e.g. the placeholders a Next.js static prerender needs) so the verifier
+   * floor measures the code, not a missing-env build crash. Placeholders only —
+   * NOT a secret store. Values are required strings (an explicit "set this var");
+   * a numeric-looking value must be quoted as JSON at the `--set` boundary.
+   */
+  gateEnv: external_exports.record(external_exports.string(), external_exports.string()).default({})
 }).default({});
 var QuotaSchema = external_exports.object({
   /** Max single sleep chunk per gate call, seconds. */
@@ -7028,6 +7037,328 @@ function emitError(line) {
   process.stderr.write(line + "\n");
 }
 
+// src/ci/detect-gate-env.ts
+import { existsSync as existsSync5, readFileSync as readFileSync3, readdirSync } from "node:fs";
+import { join as join5 } from "node:path";
+
+// src/shared/secret-patterns.ts
+var SECRET_CONTENT_PATTERNS = [
+  { name: "aws-access-key-id", source: "AKIA[0-9A-Z]{16}" },
+  { name: "github-pat-classic", source: "ghp_[A-Za-z0-9]{36}" },
+  { name: "github-server-token", source: "ghs_[A-Za-z0-9]{36}" },
+  { name: "github-oauth-token", source: "gho_[A-Za-z0-9]{36}" },
+  { name: "github-refresh-token", source: "ghr_[A-Za-z0-9]{36}" },
+  { name: "anthropic-api-key", source: "sk-ant-(api03-)?[A-Za-z0-9_-]{20,}" },
+  { name: "openai-style-key", source: "sk-[A-Za-z0-9]{20,}" },
+  { name: "slack-token", source: "xox[bpars]-[A-Za-z0-9-]{10,}" },
+  { name: "google-api-key", source: "AIza[A-Za-z0-9_-]{35}" },
+  { name: "stripe-live-secret", source: "sk_live_[A-Za-z0-9]{20,}" },
+  { name: "stripe-live-restricted", source: "rk_live_[A-Za-z0-9]{20,}" },
+  {
+    name: "jwt",
+    source: "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+"
+  },
+  {
+    name: "aws-secret-access-key",
+    source: "aws_secret_access_key\\s*=\\s*[A-Za-z0-9/+=]{40}"
+  },
+  // Quote-anchored detector — EXCLUDED from redaction (see header note).
+  { name: "json-private-key", source: '"private_key"\\s*:\\s*"-----BEGIN' },
+  { name: "pem-private-key", source: "-----BEGIN ([A-Z]+ )?PRIVATE KEY-----" },
+  { name: "github-pat-fine-grained", source: "github_pat_[A-Za-z0-9_]{60,}" },
+  { name: "openai-project-key", source: "sk-proj-[A-Za-z0-9_-]{40,}" },
+  { name: "nvidia-api-key", source: "nvapi-[A-Za-z0-9_-]{40,}" },
+  { name: "xai-api-key", source: "xai-[A-Za-z0-9]{40,}" }
+];
+function hasLiteralQuote(p) {
+  return p.source.includes('"');
+}
+var SECRET_REDACTION_PATTERNS = SECRET_CONTENT_PATTERNS.filter(
+  (p) => !hasLiteralQuote(p)
+);
+var REDACTION_TOKEN = "[REDACTED]";
+function redactSecrets(text) {
+  if (SECRET_REDACTION_PATTERNS.length === 0) return text;
+  const combined = SECRET_REDACTION_PATTERNS.map((p) => p.source).join("|");
+  const re = new RegExp(combined, "g");
+  return text.replace(re, REDACTION_TOKEN);
+}
+var _KNOWN_PUBLIC_TOKEN_PARTS = [
+  // anon role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9",
+    "CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+  ],
+  // service_role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0",
+    "EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
+  ]
+];
+var KNOWN_PUBLIC_TOKENS = _KNOWN_PUBLIC_TOKEN_PARTS.map(
+  (p) => p.join(".")
+);
+function detectSecrets(text) {
+  const scrubbed = KNOWN_PUBLIC_TOKENS.reduce((t, tok) => t.split(tok).join(""), text);
+  const hits = [];
+  for (const p of SECRET_CONTENT_PATTERNS) {
+    if (new RegExp(p.source).test(scrubbed)) hits.push(p.name);
+  }
+  return hits;
+}
+
+// src/ci/detect-gate-env.ts
+var DefaultWorkflowSource = class {
+  constructor(root) {
+    this.root = root;
+  }
+  dir() {
+    return join5(this.root, ".github", "workflows");
+  }
+  listWorkflows() {
+    const d = this.dir();
+    if (!existsSync5(d)) return [];
+    return readdirSync(d).filter((f) => f.endsWith(".yml") || f.endsWith(".yaml")).sort();
+  }
+  readWorkflow(name) {
+    return readFileSync3(join5(this.dir(), name), "utf8");
+  }
+};
+function parseScalar(raw) {
+  const s = raw.trim();
+  if (s.startsWith('"')) {
+    let out = "";
+    for (let i = 1; i < s.length; i++) {
+      const c = s[i];
+      if (c === "\\" && i + 1 < s.length) {
+        const n = s[i + 1];
+        out += n === "n" ? "\n" : n === "t" ? "	" : n;
+        i++;
+        continue;
+      }
+      if (c === '"') return out;
+      out += c;
+    }
+    return out;
+  }
+  if (s.startsWith("'")) {
+    let out = "";
+    for (let i = 1; i < s.length; i++) {
+      const c = s[i];
+      if (c === "'") {
+        if (s[i + 1] === "'") {
+          out += "'";
+          i++;
+          continue;
+        }
+        return out;
+      }
+      out += c;
+    }
+    return out;
+  }
+  const m = s.match(/\s#/);
+  return (m ? s.slice(0, m.index) : s).trim();
+}
+var KEY_LINE = /^([A-Za-z_][A-Za-z0-9_.-]*):(?:\s+(.*))?$/;
+var isBlockScalar = (v) => v === "|" || v === ">" || /^[|>][+-]?$/.test(v ?? "");
+var MalformedWorkflow = class extends Error {
+};
+function processKey(s, c, ind) {
+  const m = c.match(KEY_LINE);
+  if (!m) return;
+  const key = m[1];
+  const val = m[2];
+  const empty = val === void 0 || val.trim() === "";
+  if (s.jobsIndent === null && key === "jobs" && empty) {
+    s.jobsIndent = ind;
+    return;
+  }
+  if (s.jobsIndent !== null && ind > s.jobsIndent && empty) {
+    if (s.jobKeyIndent === null) s.jobKeyIndent = ind;
+    if (ind === s.jobKeyIndent) {
+      s.currentJob = key;
+      s.currentStep = "";
+      s.stepKeyIndent = null;
+    }
+  }
+  const inStep = s.stepKeyIndent !== null && ind === s.stepKeyIndent;
+  if (key === "name" && inStep) {
+    if (val !== void 0) {
+      s.currentStep = parseScalar(val);
+      s.stepLabelFromName = true;
+    }
+    return;
+  }
+  if (key === "run" && inStep) {
+    if (isBlockScalar(val)) s.blockIndent = ind;
+    else if (!s.stepLabelFromName && val !== void 0) s.currentStep = parseScalar(val);
+    return;
+  }
+  if (key === "env" && empty) {
+    s.envIndent = ind;
+    s.envScope = inStep ? "step" : "job";
+    return;
+  }
+  if (isBlockScalar(val)) s.blockIndent = ind;
+}
+function scanWorkflow(text) {
+  const entries = [];
+  const s = {
+    jobsIndent: null,
+    jobKeyIndent: null,
+    currentJob: "",
+    currentStep: "",
+    stepKeyIndent: null,
+    stepLabelFromName: false,
+    blockIndent: null,
+    envIndent: null,
+    envScope: "step"
+  };
+  for (const rawLine of text.split("\n")) {
+    if (rawLine.trim() === "") continue;
+    const lead = rawLine.match(/^[ \t]*/)[0];
+    if (lead.includes("	")) throw new MalformedWorkflow("tab in indentation");
+    const indent = lead.length;
+    const content = rawLine.slice(indent);
+    if (content.startsWith("#")) continue;
+    if (s.blockIndent !== null) {
+      if (indent > s.blockIndent) continue;
+      s.blockIndent = null;
+    }
+    if (s.envIndent !== null) {
+      if (indent > s.envIndent) {
+        const km = content.match(KEY_LINE);
+        if (km) {
+          const inlineVal = km[2];
+          if (isBlockScalar(inlineVal)) {
+            s.blockIndent = indent;
+            continue;
+          }
+          if (inlineVal !== void 0 && inlineVal.trim() !== "") {
+            entries.push({
+              key: km[1],
+              value: parseScalar(inlineVal),
+              job: s.currentJob,
+              step: s.currentStep,
+              scope: s.envScope
+            });
+          }
+        }
+        continue;
+      }
+      s.envIndent = null;
+    }
+    const listM = content.match(/^-\s+(.*)$/);
+    if (listM) {
+      const rest = listM[1];
+      if (KEY_LINE.test(rest)) {
+        s.stepKeyIndent = indent + 2;
+        s.currentStep = "";
+        s.stepLabelFromName = false;
+        processKey(s, rest, indent + 2);
+      }
+      continue;
+    }
+    processKey(s, content, indent);
+  }
+  return entries;
+}
+var provenance = (v) => `${v.workflow}${v.job ? ` \u203A ${v.job}` : ""}${v.step ? ` \u203A ${v.step}` : ""}`;
+var scopeRank = (s) => s === "job" ? 0 : 1;
+function detectGateEnv(source) {
+  const gateEnv = {};
+  const detected = [];
+  const skippedExpressionRefs = [];
+  const droppedSecrets = [];
+  const warnings = [];
+  for (const workflow of source.listWorkflows()) {
+    let raw;
+    try {
+      raw = scanWorkflow(source.readWorkflow(workflow));
+    } catch (err) {
+      if (err instanceof MalformedWorkflow) {
+        warnings.push({ workflow, message: err.message });
+        continue;
+      }
+      throw err;
+    }
+    const kept = [];
+    for (const e of raw) {
+      const ref = { key: e.key, workflow, job: e.job, step: e.step };
+      if (e.value.includes("${{")) {
+        skippedExpressionRefs.push(ref);
+        continue;
+      }
+      const hits = detectSecrets(e.value);
+      if (hits.length > 0) {
+        droppedSecrets.push({ ...ref, match: hits.join(", ") });
+        continue;
+      }
+      const dv = { ...ref, value: e.value, scope: e.scope };
+      detected.push(dv);
+      kept.push(dv);
+    }
+    for (const dv of [...kept].sort((a, b) => scopeRank(a.scope) - scopeRank(b.scope))) {
+      gateEnv[dv.key] = dv.value;
+    }
+  }
+  return { gateEnv, detected, skippedExpressionRefs, droppedSecrets, warnings };
+}
+function mergeDetectedGateEnv(raw, current, detected, sources) {
+  let next = raw;
+  const written = [];
+  const skipped = [];
+  const conflicts = [];
+  for (const key of Object.keys(detected).sort()) {
+    const value = detected[key];
+    if (!(key in current)) {
+      next = setAtPath(next, ["quality", "gateEnv", key], value);
+      written.push(key);
+    } else if (current[key] === value) {
+      skipped.push(key);
+    } else {
+      conflicts.push({
+        key,
+        configured: current[key],
+        detected: value,
+        source: sources[key] ?? ""
+      });
+    }
+  }
+  return { raw: next, written, skipped, conflicts };
+}
+async function applyGateEnvDetection(root, dataOpts = {}) {
+  const result = detectGateEnv(new DefaultWorkflowSource(root));
+  const sources = {};
+  for (const v of result.detected) sources[v.key] = provenance(v);
+  const current = loadConfig(dataOpts).quality.gateEnv;
+  const merge = mergeDetectedGateEnv(readRawConfig(dataOpts), current, result.gateEnv, sources);
+  if (merge.written.length > 0) await saveRawConfig(merge.raw, dataOpts);
+  const gateEnv = { ...current };
+  for (const key of merge.written) gateEnv[key] = result.gateEnv[key];
+  return {
+    detected: result.gateEnv,
+    written: merge.written,
+    skipped: merge.skipped,
+    conflicts: merge.conflicts,
+    skippedExpressionRefs: result.skippedExpressionRefs.map((r) => ({
+      key: r.key,
+      source: provenance(r)
+    })),
+    droppedSecrets: result.droppedSecrets.map((r) => ({
+      key: r.key,
+      source: provenance(r),
+      match: r.match
+    })),
+    warnings: [...result.warnings],
+    sources,
+    gateEnv
+  };
+}
+
 // src/cli/subcommands/configure.ts
 var HELP = `factory configure \u2014 inspect or edit the config overlay
 
@@ -7036,6 +7367,7 @@ Usage:
   factory configure --get <key.path>        Print one resolved value as JSON
   factory configure --set <key.path=value>  Set a value (repeatable), persist, print result
   factory configure --unset <key.path>      Revert a key to its default (repeatable)
+  factory configure --detect-gate-env       Detect CI build env \u2192 gap-fill quality.gateEnv
 
 Values parse as JSON when possible (numbers, booleans, arrays); otherwise as a
 bare string. Examples:
@@ -7051,6 +7383,13 @@ async function run(argv) {
   const sets = args.all("set");
   const unsets = args.all("unset");
   const getKey = args.flag("get");
+  if (args.flag("detect-gate-env") === true) {
+    if (sets.length > 0 || unsets.length > 0 || typeof getKey === "string") {
+      throw new UsageError("--detect-gate-env cannot be combined with --get/--set/--unset");
+    }
+    emitJson(await applyGateEnvDetection(process.cwd()));
+    return EXIT.OK;
+  }
   if (typeof getKey === "string") {
     if (sets.length > 0 || unsets.length > 0) {
       throw new UsageError("--get cannot be combined with --set/--unset");
@@ -7187,66 +7526,6 @@ async function appendJsonl(path4, record) {
   await appendFile(path4, JSON.stringify(record) + "\n", "utf8");
 }
 
-// src/shared/secret-patterns.ts
-var SECRET_CONTENT_PATTERNS = [
-  { name: "aws-access-key-id", source: "AKIA[0-9A-Z]{16}" },
-  { name: "github-pat-classic", source: "ghp_[A-Za-z0-9]{36}" },
-  { name: "github-server-token", source: "ghs_[A-Za-z0-9]{36}" },
-  { name: "github-oauth-token", source: "gho_[A-Za-z0-9]{36}" },
-  { name: "github-refresh-token", source: "ghr_[A-Za-z0-9]{36}" },
-  { name: "anthropic-api-key", source: "sk-ant-(api03-)?[A-Za-z0-9_-]{20,}" },
-  { name: "openai-style-key", source: "sk-[A-Za-z0-9]{20,}" },
-  { name: "slack-token", source: "xox[bpars]-[A-Za-z0-9-]{10,}" },
-  { name: "google-api-key", source: "AIza[A-Za-z0-9_-]{35}" },
-  { name: "stripe-live-secret", source: "sk_live_[A-Za-z0-9]{20,}" },
-  { name: "stripe-live-restricted", source: "rk_live_[A-Za-z0-9]{20,}" },
-  {
-    name: "jwt",
-    source: "eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+"
-  },
-  {
-    name: "aws-secret-access-key",
-    source: "aws_secret_access_key\\s*=\\s*[A-Za-z0-9/+=]{40}"
-  },
-  // Quote-anchored detector — EXCLUDED from redaction (see header note).
-  { name: "json-private-key", source: '"private_key"\\s*:\\s*"-----BEGIN' },
-  { name: "pem-private-key", source: "-----BEGIN ([A-Z]+ )?PRIVATE KEY-----" },
-  { name: "github-pat-fine-grained", source: "github_pat_[A-Za-z0-9_]{60,}" },
-  { name: "openai-project-key", source: "sk-proj-[A-Za-z0-9_-]{40,}" },
-  { name: "nvidia-api-key", source: "nvapi-[A-Za-z0-9_-]{40,}" },
-  { name: "xai-api-key", source: "xai-[A-Za-z0-9]{40,}" }
-];
-function hasLiteralQuote(p) {
-  return p.source.includes('"');
-}
-var SECRET_REDACTION_PATTERNS = SECRET_CONTENT_PATTERNS.filter(
-  (p) => !hasLiteralQuote(p)
-);
-var REDACTION_TOKEN = "[REDACTED]";
-function redactSecrets(text) {
-  if (SECRET_REDACTION_PATTERNS.length === 0) return text;
-  const combined = SECRET_REDACTION_PATTERNS.map((p) => p.source).join("|");
-  const re = new RegExp(combined, "g");
-  return text.replace(re, REDACTION_TOKEN);
-}
-var _KNOWN_PUBLIC_TOKEN_PARTS = [
-  // anon role
-  [
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
-    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9",
-    "CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
-  ],
-  // service_role
-  [
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
-    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0",
-    "EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
-  ]
-];
-var KNOWN_PUBLIC_TOKENS = _KNOWN_PUBLIC_TOKEN_PARTS.map(
-  (p) => p.join(".")
-);
-
 // src/shared/paths.ts
 function tildeShorten(absPath, home) {
   if (home.length === 0) return absPath;
@@ -7300,6 +7579,22 @@ var DefaultGitClient = class {
     if (r.code === 0) return true;
     if (r.code === 1) return false;
     throw new Error(`git show-ref failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
+  async refExists(ref, opts) {
+    const r = await this.exec(["rev-parse", "--verify", "--quiet", ref], opts);
+    if (r.code === 0) return true;
+    if (r.code === 1) return false;
+    throw new Error(`git rev-parse failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+  }
+  async commitsAhead(base, branch, opts) {
+    const r = await this.execOrThrow(["rev-list", "--count", `${base}..${branch}`], opts);
+    const n = Number.parseInt(r.stdout.trim(), 10);
+    if (!Number.isFinite(n)) {
+      throw new Error(
+        `git rev-list --count returned non-numeric output: ${JSON.stringify(r.stdout)}`
+      );
+    }
+    return n;
   }
   async checkoutB(branch, startPoint, opts) {
     log5.debug(`checkout -B ${branch} ${startPoint}`);
@@ -7871,7 +8166,7 @@ async function createTaskPrIdempotent(args) {
 }
 
 // src/git/serial-writer.ts
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 var log11 = createLogger("git");
 var GIT_DEFAULTS4 = GitSchema.parse({});
 var MERGE_LOCK_DEFAULTS = {
@@ -7899,13 +8194,13 @@ var MergeSerializer = class {
     this.tuning = { ...MERGE_LOCK_DEFAULTS, ...opts.lock ?? {} };
   }
   lockfilePath() {
-    return join5(this.dataDir, "locks", `merge-${this.lockScope}.lock`);
+    return join6(this.dataDir, "locks", `merge-${this.lockScope}.lock`);
   }
   /** Run `fn` while holding the app-level merge lock (the serial section). */
   async withMergeLock(fn) {
     return withFileLock(
       {
-        dir: join5(this.dataDir, "locks"),
+        dir: join6(this.dataDir, "locks"),
         lockfile: this.lockfilePath(),
         label: `merge '${this.lockScope}'`,
         dirPolicy: "create",
@@ -8197,15 +8492,15 @@ var stateCommand = {
 
 // src/cli/subcommands/scaffold.ts
 import { copyFile, mkdir as mkdir7, readFile as readFile4, writeFile } from "node:fs/promises";
-import { existsSync as existsSync6 } from "node:fs";
+import { existsSync as existsSync7 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname5, join as join7, relative } from "node:path";
+import { dirname as dirname5, join as join8, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli/subcommands/target-settings.ts
 import { mkdir as mkdir6, readFile as readFile3 } from "node:fs/promises";
-import { existsSync as existsSync5 } from "node:fs";
-import { join as join6 } from "node:path";
+import { existsSync as existsSync6 } from "node:fs";
+import { join as join7 } from "node:path";
 var log14 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
@@ -8274,9 +8569,9 @@ function mergeTargetSettings(existing, dataDirRules) {
   return { settings, changed };
 }
 async function ensureTargetSettings(opts) {
-  const dir = join6(opts.targetRoot, ".claude");
-  const path4 = join6(dir, "settings.json");
-  const created = !existsSync5(path4);
+  const dir = join7(opts.targetRoot, ".claude");
+  const path4 = join7(dir, "settings.json");
+  const created = !existsSync6(path4);
   let existing = {};
   if (!created) {
     const raw = await readFile3(path4, "utf8");
@@ -8308,6 +8603,9 @@ Copies the committed CI + gate-config templates and probes branch protection on
 develop (the integration base). Without --provision a repo whose develop branch is
 not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
 Per-run staging branches are minted at run create \u2014 scaffold no longer touches them.
+Also auto-detects the repo's CI build env and gap-fills quality.gateEnv (the same
+detection as 'factory configure --detect-gate-env'), captured BEFORE the managed
+quality-gate.yml template overwrites the repo's own workflow.
 
 Options:
   --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
@@ -8343,8 +8641,8 @@ var GITIGNORE_ENTRIES = [
 function resolveTemplatesDir() {
   let dir = dirname5(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
-    const candidate = join7(dir, "templates");
-    if (existsSync6(join7(candidate, ".github", "workflows", "quality-gate.yml"))) {
+    const candidate = join8(dir, "templates");
+    if (existsSync7(join8(candidate, ".github", "workflows", "quality-gate.yml"))) {
       return candidate;
     }
     const parent = dirname5(dir);
@@ -8362,13 +8660,13 @@ var TEMPLATE_MANIFEST = [
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists) {
   const segs = entry.rel.split("/");
-  const src = join7(templatesDir, ...segs);
-  const dest = join7(targetRoot, ...segs);
-  if (!existsSync6(src)) {
+  const src = join8(templatesDir, ...segs);
+  const dest = join8(targetRoot, ...segs);
+  if (!existsSync7(src)) {
     log15.warn(`template missing, skipping: ${src}`);
     return;
   }
-  if (!existsSync6(dest)) {
+  if (!existsSync7(dest)) {
     await mkdir7(dirname5(dest), { recursive: true });
     await copyFile(src, dest);
     lists.created.push(entry.rel);
@@ -8387,9 +8685,9 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists) {
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path4 = join7(root, ".gitignore");
+  const path4 = join8(root, ".gitignore");
   const rel = relative(root, path4);
-  if (!existsSync6(path4)) {
+  if (!existsSync7(path4)) {
     await writeFile(path4, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
@@ -8406,7 +8704,11 @@ async function ensureGitignore(root, lists) {
 }
 async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
-  const isNodePackage = existsSync6(join7(opts.targetRoot, "package.json"));
+  const gateEnv = await applyGateEnvDetection(opts.targetRoot, { dataDir: opts.dataDir });
+  if (gateEnv.written.length > 0) {
+    log15.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
+  }
+  const isNodePackage = existsSync7(join8(opts.targetRoot, "package.json"));
   for (const entry of TEMPLATE_MANIFEST) {
     if (entry.nodeOnly && !isNodePackage) continue;
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists);
@@ -8456,7 +8758,9 @@ async function runScaffold(opts) {
       required_status_checks: state.requiredStatusChecks,
       provisioned
     },
-    settings: { created: settings.created, changed: settings.changed }
+    settings: { created: settings.created, changed: settings.changed },
+    // Omit an all-empty detection so a brand-new repo's report stays unchanged.
+    ...gateEnv.written.length > 0 || gateEnv.conflicts.length > 0 || Object.keys(gateEnv.detected).length > 0 ? { gateEnv } : {}
   };
 }
 async function resolveScaffoldRepo(args, overrides = {}) {
@@ -8474,6 +8778,7 @@ async function run2(argv) {
     return EXIT.OK;
   }
   const { owner, repo } = await resolveScaffoldRepo(args);
+  const dataDir = resolveDataDir();
   const report = await runScaffold({
     targetRoot: process.cwd(),
     templatesDir: resolveTemplatesDir(),
@@ -8481,11 +8786,10 @@ async function run2(argv) {
     repo,
     config: loadConfig(),
     ghClient: new DefaultGhClient(),
-    // Resolve the CANONICAL data dir at the command boundary (corrects the
-    // foreign-plugin env-var leak) and bake it into the target permission rules.
-    // resolveDataDir() throwing on an unresolvable dir is the correct loud
-    // failure — there is deliberately no placeholder fallback.
-    dataDirRules: buildTargetDataDirRules({ dataDir: resolveDataDir(), home: homedir2() }),
+    // Bake the resolved data dir into the target permission rules, and thread it
+    // into CI build-env detection's config write.
+    dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir2() }),
+    dataDir,
     provision: args.flag("provision") === true
   });
   emitJson(report);
@@ -8817,7 +9121,7 @@ var RealGhClient = class {
 
 // src/spec/store.ts
 import { readFile as readFile5, readdir as readdir2 } from "node:fs/promises";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 var log17 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
@@ -8844,7 +9148,7 @@ var SpecStore = class {
   docsRoot;
   constructor(opts = {}) {
     this.dataDir = resolveDataDir(opts);
-    this.docsRoot = opts.docsRoot ?? join8(process.cwd(), "docs");
+    this.docsRoot = opts.docsRoot ?? join9(process.cwd(), "docs");
   }
   /**
    * Resolve an existing spec for `(repo, issueNumber)` — Δ X reuse. Scans the
@@ -8861,7 +9165,7 @@ var SpecStore = class {
         `resolveByIssue: issue number must be a positive integer, got ${issueNumber}`
       );
     }
-    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join9(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
@@ -8883,8 +9187,8 @@ var SpecStore = class {
   /** Read + validate the manifest for a known `(repo, spec_id)`. */
   async read(repo, specId) {
     const dir = specDir(this.dataDir, repo, specId);
-    const tasksRaw = await readFile5(join8(dir, TASKS_FILE), "utf8");
-    const tasks = parseSpecTasks(parseJson(tasksRaw, join8(dir, TASKS_FILE)));
+    const tasksRaw = await readFile5(join9(dir, TASKS_FILE), "utf8");
+    const tasks = parseSpecTasks(parseJson(tasksRaw, join9(dir, TASKS_FILE)));
     const meta = await this.readMeta(dir);
     return parseSpecManifest({
       spec_id: specId,
@@ -8910,10 +9214,10 @@ var SpecStore = class {
     const parsed = parseSpecManifest(manifest);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
-    await atomicWriteFile(join8(dir, SPEC_MD_FILE), specMd);
-    await atomicWriteFile(join8(dir, TASKS_FILE), tasksJson);
+    await atomicWriteFile(join9(dir, SPEC_MD_FILE), specMd);
+    await atomicWriteFile(join9(dir, TASKS_FILE), tasksJson);
     await atomicWriteFile(
-      join8(dir, META_FILE),
+      join9(dir, META_FILE),
       stringifyJson({
         issue_number: parsed.issue_number,
         slug: parsed.slug,
@@ -8924,8 +9228,8 @@ var SpecStore = class {
     const reviewDir = docsFactoryDir(this.docsRoot, parsed.spec_id);
     let mirrored = true;
     try {
-      await atomicWriteFile(join8(reviewDir, SPEC_MD_FILE), specMd);
-      await atomicWriteFile(join8(reviewDir, TASKS_FILE), tasksJson);
+      await atomicWriteFile(join9(reviewDir, SPEC_MD_FILE), specMd);
+      await atomicWriteFile(join9(reviewDir, TASKS_FILE), tasksJson);
     } catch (err) {
       mirrored = false;
       log17.warn(
@@ -8946,10 +9250,10 @@ var SpecStore = class {
     };
   }
   async readMeta(dir) {
-    const raw = await readFile5(join8(dir, META_FILE), "utf8");
+    const raw = await readFile5(join9(dir, META_FILE), "utf8");
     const meta = parseJson(
       raw,
-      join8(dir, META_FILE)
+      join9(dir, META_FILE)
     );
     const issueNumber = typeof meta.issue_number === "number" ? meta.issue_number : 0;
     const generatedAt = typeof meta.generated_at === "string" ? meta.generated_at : "";
@@ -9233,8 +9537,8 @@ function buildManifest(repo, issueNumber, generated) {
 }
 
 // src/quota/usage-source.ts
-import { existsSync as existsSync7, readFileSync as readFileSync3 } from "node:fs";
-import { join as join9 } from "node:path";
+import { existsSync as existsSync8, readFileSync as readFileSync4 } from "node:fs";
+import { join as join10 } from "node:path";
 var log18 = createLogger("quota:usage");
 var STALE_CEILING_SECONDS = 3600;
 var STALE_WARN_SECONDS = 120;
@@ -9292,7 +9596,7 @@ function readingFromCache(raw, nowEpoch2) {
   };
 }
 function usageCachePath(dataDir) {
-  return join9(dataDir, "usage-cache.json");
+  return join10(dataDir, "usage-cache.json");
 }
 var StatuslineUsageSignal = class {
   opts;
@@ -9308,13 +9612,13 @@ var StatuslineUsageSignal = class {
       return unavailable("usage-cache-missing");
     }
     const file = usageCachePath(dataDir);
-    if (!existsSync7(file)) {
+    if (!existsSync8(file)) {
       log18.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-missing");
     }
     let raw;
     try {
-      raw = parseJson(readFileSync3(file, "utf8"), file);
+      raw = parseJson(readFileSync4(file, "utf8"), file);
     } catch {
       log18.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
       return unavailable("usage-cache-malformed");
@@ -10459,59 +10763,71 @@ function missingBinResult(tool, cwd) {
     truncated: false
   };
 }
-async function runTool(resolve2, tool, toolArgs, opts) {
+async function runTool(resolve2, tool, toolArgs, opts, env = {}) {
   const localBin = await resolve2(tool, opts);
   if (localBin === null) return missingBinResult(tool, opts.cwd);
-  return exec(localBin, [...toolArgs], { cwd: opts.cwd });
+  return exec(localBin, [...toolArgs], { cwd: opts.cwd, env });
 }
 var DefaultVitestTool = class {
-  constructor(resolve2 = defaultLocalBinResolver) {
+  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
     this.resolve = resolve2;
+    this.env = env;
   }
   async run(files, opts) {
     const args = ["run", "--coverage.enabled=false", ...files];
-    return toProc(await runTool(this.resolve, "vitest", args, opts));
+    return toProc(await runTool(this.resolve, "vitest", args, opts, this.env));
   }
 };
 var DefaultTscTool = class {
-  constructor(resolve2 = defaultLocalBinResolver) {
+  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
     this.resolve = resolve2;
+    this.env = env;
   }
   async typecheck(opts) {
-    return toProc(await runTool(this.resolve, "tsc", ["--noEmit"], opts));
+    return toProc(await runTool(this.resolve, "tsc", ["--noEmit"], opts, this.env));
   }
 };
 var DefaultEslintTool = class {
-  constructor(resolve2 = defaultLocalBinResolver) {
+  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
     this.resolve = resolve2;
+    this.env = env;
   }
   async lint(opts) {
-    return toProc(await runTool(this.resolve, "eslint", ["."], opts));
+    return toProc(await runTool(this.resolve, "eslint", ["."], opts, this.env));
   }
 };
 var DefaultBuildTool = class {
+  constructor(env = {}) {
+    this.env = env;
+  }
   async build(opts) {
-    return toProc(await exec("npm", ["run", "build"], { cwd: opts.cwd }));
+    return toProc(await exec("npm", ["run", "build"], { cwd: opts.cwd, env: this.env }));
   }
 };
 var DefaultSemgrepTool = class {
+  constructor(env = {}) {
+    this.env = env;
+  }
   async run(command, opts) {
     const [bin, ...rest] = command;
     if (bin === void 0) {
       throw new Error("DefaultSemgrepTool: empty command");
     }
-    return toProc(await exec(bin, rest, { cwd: opts.cwd }));
+    return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
   }
 };
 var DefaultStrykerTool = class _DefaultStrykerTool {
-  constructor(resolve2 = defaultLocalBinResolver) {
+  constructor(resolve2 = defaultLocalBinResolver, env = {}) {
     this.resolve = resolve2;
+    this.env = env;
   }
   /** Report path relative to the worktree (stryker html/json reporter default). */
   static REPORT_PATH = "reports/mutation/mutation.json";
   async run(mutate, opts) {
     const csv = mutate.join(",");
-    const proc2 = toProc(await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts));
+    const proc2 = toProc(
+      await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, this.env)
+    );
     const reportPath = path3.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
@@ -10704,15 +11020,15 @@ var DefaultGitProbe = class {
 function splitLines(s) {
   return s.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
 }
-function defaultGateTools() {
+function defaultGateTools(gateEnv = {}) {
   return {
     git: new DefaultGitProbe(),
-    vitest: new DefaultVitestTool(),
-    tsc: new DefaultTscTool(),
-    eslint: new DefaultEslintTool(),
-    build: new DefaultBuildTool(),
-    semgrep: new DefaultSemgrepTool(),
-    stryker: new DefaultStrykerTool(),
+    vitest: new DefaultVitestTool(defaultLocalBinResolver, gateEnv),
+    tsc: new DefaultTscTool(defaultLocalBinResolver, gateEnv),
+    eslint: new DefaultEslintTool(defaultLocalBinResolver, gateEnv),
+    build: new DefaultBuildTool(gateEnv),
+    semgrep: new DefaultSemgrepTool(gateEnv),
+    stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
     coverage: new DefaultCoverageReader(),
     fs: new DefaultFsProbe()
   };
@@ -10984,7 +11300,7 @@ function splitHoldout(criteria, percent, seed) {
 
 // src/verifier/holdout/store.ts
 import { mkdir as mkdir8, readFile as readFile8 } from "node:fs/promises";
-import { dirname as dirname6, join as join10 } from "node:path";
+import { dirname as dirname6, join as join11 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -11015,7 +11331,7 @@ var FsHoldoutStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
+    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
     const path4 = this.path(runId, record.task_id);
@@ -11137,7 +11453,7 @@ function holdoutEvidence(result) {
 
 // src/verifier/holdout/verdict-store.ts
 import { mkdir as mkdir9, readFile as readFile9 } from "node:fs/promises";
-import { dirname as dirname7, join as join11 } from "node:path";
+import { dirname as dirname7, join as join12 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -11150,7 +11466,7 @@ var FsHoldoutVerdictStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
+    return join12(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
     const path4 = this.path(runId, taskId);
@@ -11352,11 +11668,11 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
 }
 
 // src/driver/paths.ts
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join12(worktreesRoot(dataDir), runId, taskId);
+  return join13(worktreesRoot(dataDir), runId, taskId);
 }
 
 // src/driver/exempt.ts
@@ -11582,7 +11898,7 @@ function shipBody(runId, specTask) {
 
 // src/driver/artifacts.ts
 import { mkdir as mkdir10, readFile as readFile10 } from "node:fs/promises";
-import { dirname as dirname8, join as join13 } from "node:path";
+import { dirname as dirname8, join as join14 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
 }
@@ -11591,7 +11907,7 @@ var FsArtifactStore = class {
     this.dataDir = dataDir;
   }
   absPath(runId, ref) {
-    return join13(runDir(this.dataDir, runId), ref);
+    return join14(runDir(this.dataDir, runId), ref);
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
@@ -11609,7 +11925,7 @@ var FsArtifactStore = class {
 
 // src/driver/fold.ts
 import { readFile as readFile11 } from "node:fs/promises";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 var log24 = createLogger("fold");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
@@ -11679,7 +11995,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile11(join14(worktree, file), "utf8");
+      const text = await readFile11(join15(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
       if (err?.code !== "ENOENT") throw err;
@@ -12281,11 +12597,11 @@ async function stepRun(deps, runId) {
 }
 
 // src/driver/docs.ts
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 function docsWorktreePath(dataDir, runId) {
-  return join15(dataDir, "runs", runId, "docs-worktree");
+  return join16(dataDir, "runs", runId, "docs-worktree");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -12347,7 +12663,7 @@ async function runDocsFold(deps, runId, results) {
 
 // src/driver/docs-applicable.ts
 import { readFile as readFile12, stat } from "node:fs/promises";
-import { join as join16 } from "node:path";
+import { join as join17 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
@@ -12367,12 +12683,12 @@ function docsEnabled(packageJson) {
 }
 async function isDocsApplicable(repoRoot) {
   try {
-    const s = await stat(join16(repoRoot, "docs"));
+    const s = await stat(join17(repoRoot, "docs"));
     if (!s.isDirectory()) return false;
   } catch {
     return false;
   }
-  return docsEnabled(await readJsonOrNull2(join16(repoRoot, "package.json")));
+  return docsEnabled(await readJsonOrNull2(join17(repoRoot, "package.json")));
 }
 
 // src/cli/wiring.ts
@@ -12407,7 +12723,7 @@ async function loadCliDeps(opts) {
     spec,
     git: new DefaultGitClient(),
     gh: new DefaultGhClient(),
-    tools: defaultGateTools(),
+    tools: defaultGateTools(config.quality.gateEnv),
     artifacts: new FsArtifactStore(dataDir),
     holdout: new FsHoldoutStore(dataDir),
     dataDir,
@@ -13081,7 +13397,7 @@ var resumeCommand = {
 };
 
 // src/cli/subcommands/spec.ts
-import { join as join17 } from "node:path";
+import { join as join18 } from "node:path";
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
@@ -13106,9 +13422,9 @@ var VERDICT_FILE = "verdict.json";
 function scratchPaths(dataDir, repo, issue) {
   const dir = specBuildDir(dataDir, repo, issue);
   return {
-    prdPath: join17(dir, PRD_FILE),
-    generatedPath: join17(dir, GENERATED_FILE),
-    verdictPath: join17(dir, VERDICT_FILE)
+    prdPath: join18(dir, PRD_FILE),
+    generatedPath: join18(dir, GENERATED_FILE),
+    verdictPath: join18(dir, VERDICT_FILE)
   };
 }
 async function resolveSpec2(deps, repo, issue) {
@@ -13312,6 +13628,27 @@ function summarize2(status, resettable, deadEnds, wouldDeadlock) {
   return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}`;
 }
 
+// src/rescue/assess.ts
+async function assessWork(run9, probe) {
+  const baseRef = `origin/${resolveStagingBranch(run9.run_id, run9.staging_branch)}`;
+  const baseResolved = await probe.refExists(baseRef);
+  const tasks = [];
+  for (const t of Object.values(run9.tasks)) {
+    if (t.status === "done") continue;
+    if (t.branch === void 0) continue;
+    const branchExists = await probe.refExists(t.branch);
+    const commitsAhead = baseResolved && branchExists ? await probe.commitsAhead(baseRef, t.branch) : null;
+    tasks.push({
+      task_id: t.task_id,
+      branch: t.branch,
+      branch_exists: branchExists,
+      commits_ahead: commitsAhead,
+      ...t.pr_number !== void 0 ? { pr_number: t.pr_number } : {}
+    });
+  }
+  return { base_ref: baseRef, base_resolved: baseResolved, tasks };
+}
+
 // src/rescue/apply.ts
 function resetTaskRow(task) {
   const {
@@ -13444,7 +13781,13 @@ async function runScan(argv, overrides = {}) {
   const state = new StateManager();
   const runId = await resolveRunId2(state, args, "scan", overrides);
   const run9 = await state.read(runId);
-  emitJson(scanRun(run9));
+  const git = overrides.gitClient ?? new DefaultGitClient();
+  const probe = {
+    refExists: (ref) => git.refExists(ref),
+    commitsAhead: (base, branch) => git.commitsAhead(base, branch)
+  };
+  const work = await assessWork(run9, probe);
+  emitJson({ ...scanRun(run9), work });
   return EXIT.OK;
 }
 async function runApply(argv, overrides = {}) {
@@ -13775,9 +14118,9 @@ var statuslineCommand = {
 };
 
 // src/cli/subcommands/autonomy.ts
-import { existsSync as existsSync8 } from "node:fs";
+import { existsSync as existsSync9 } from "node:fs";
 import { readFile as readFile13 } from "node:fs/promises";
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log30 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -13815,7 +14158,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join18(dataDir, "merged-settings.json");
+  return join19(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -13891,8 +14234,8 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path4 = join18(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync8(path4)) return void 0;
+  const path4 = join19(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync9(path4)) return void 0;
   try {
     const parsed = JSON.parse(await readFile13(path4, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
@@ -13904,10 +14247,10 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join18(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join19(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
-  if (existsSync8(userSettingsPath)) {
+  if (existsSync9(userSettingsPath)) {
     try {
       const parsed = JSON.parse(await readFile13(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
@@ -13916,7 +14259,7 @@ async function runAutonomyEnsure(opts = {}) {
       log30.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join18(pluginRoot, "templates", "settings.autonomous.json");
+  const templatePath = join19(pluginRoot, "templates", "settings.autonomous.json");
   const template = await readFile13(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
@@ -13953,7 +14296,7 @@ async function runAutonomyStatus(opts = {}) {
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path4.length > 0 && existsSync8(path4),
+    mergedSettingsPresent: path4.length > 0 && existsSync9(path4),
     mergedSettingsPath: path4
   };
   if (opts.json === true) {
@@ -13977,7 +14320,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path4}` : "absen
   return status.autonomous ? EXIT.OK : EXIT.ERROR;
 }
 async function readOnDiskVersion(path4) {
-  if (!existsSync8(path4)) return void 0;
+  if (!existsSync9(path4)) return void 0;
   try {
     const parsed = JSON.parse(await readFile13(path4, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
@@ -14020,7 +14363,7 @@ async function runAutonomyPreflight(opts = {}) {
   } catch {
   }
   const path4 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path4.length > 0 && existsSync8(path4);
+  const mergedSettingsPresent = path4.length > 0 && existsSync9(path4);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
   const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path4) : void 0;
   const decision = decideAutonomyPreflight({

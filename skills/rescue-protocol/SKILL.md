@@ -65,9 +65,20 @@ dry-run=<bool>`:
      "resettable": ["<task-id>", ...],   // stuck ∪ recoverable — default apply resets these
      "dead_ends":  ["<task-id>", ...],   // reset only on explicit assertion
      "needs_rescue", "would_deadlock", "summary",
-     "tasks": [ { "task_id", "status", "disposition", "failure_class?", "failure_reason?", "branch?", "pr_number?" }, ... ]
+     "tasks": [ { "task_id", "status", "disposition", "failure_class?", "failure_reason?", "branch?", "pr_number?" }, ... ],
+     // Read-only recoverable-work survey (git-grounded; EVIDENCE, never an action). One
+     // entry per non-shipped branched task, measured against origin/staging-<run-id>.
+     "work": {
+       "base_ref", "base_resolved",
+       "tasks": [ { "task_id", "branch", "branch_exists", "commits_ahead", "pr_number?" }, ... ]
+     }
    }
    ```
+
+   `work` is diagnostic only: it tells you which dropped tasks carry committed work (high
+   `commits_ahead`) vs none. It changes nothing — `apply`/resume still re-cut a reset task's
+   branch from staging and redo it. Pass each dead-end's `work` line through to the
+   `rescue-diagnostic` agent (step 5) as corroborating evidence.
 
 3. **Short-circuit if clean.** If `needs_rescue` is `false` AND `would_deadlock` is `false`,
    there is nothing for rescue to reset. Skip to step 7 (resume) if the run is non-terminal;
@@ -95,9 +106,10 @@ dry-run=<bool>`:
 5. **Decide on dead-ends (only if any).** For each id in `scan.dead_ends`, decide whether the
    root cause has cleared. Two paths:
    - **Diagnostic-gated (autonomous).** Spawn the read-only `rescue-diagnostic` agent — one
-     `Agent()` per dead-end, in a single message — passing each task's scan line + the ground
-     truth you can gather (`worktree_path`, `review_files`, `ci_logs_path`, the durable
-     `spec_path`). See `reference/diagnostic-agent-contract.md`. Harvest each agent's final
+     `Agent()` per dead-end, in a single message — passing each task's scan line + its matching
+     `work` entry (`work.tasks[task_id]`) + the ground truth you can gather (`worktree_path`,
+     `review_files`, `ci_logs_path`, the durable `spec_path`). See
+     `reference/diagnostic-agent-contract.md`. Harvest each agent's final
      message (its decision JSON). For every `decision: "reset"`, reset that one:
 
      ```
@@ -124,7 +136,7 @@ dry-run=<bool>`:
    disagree with it (`rescue scan`/`apply` touch RUN STATE only). Re-run `factory rescue scan`
    for the fresh post-apply picture, then spawn the **`rescue-reconciler`** agent (one
    `Agent()`) passing the run id, that scan JSON, and the repo context — `target_root`,
-   `owner`, `name`, `staging_branch: staging/<run-id>`, and `base_branch` (`config.git.baseBranch`).
+   `owner`, `name`, `staging_branch: staging-<run-id>`, and `base_branch` (`config.git.baseBranch`).
    The agent is forward-only: it autonomously fetches, forward-merges `origin/<base>` into the
    run branch, and re-pushes a missing branch, but it NEVER force-pushes, deletes, or discards.
    Harvest its verdict JSON (`{ reconciled, actions, needs_prompt, blocked, evidence }`):

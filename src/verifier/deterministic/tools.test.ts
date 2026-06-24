@@ -19,11 +19,14 @@ vi.mock("../../shared/index.js", async (importOriginal) => {
 
 import { exec, type ExecResult } from "../../shared/index.js";
 import {
+  DefaultBuildTool,
   DefaultEslintTool,
   DefaultGitProbe,
+  DefaultSemgrepTool,
   DefaultStrykerTool,
   DefaultTscTool,
   DefaultVitestTool,
+  defaultGateTools,
   defaultLocalBinResolver,
   extractMutationScore,
   parseCoverageSummary,
@@ -293,6 +296,62 @@ describe("Default command tools: local-bin resolution + test-gate coverage", () 
     const strykerCall = execMock.mock.calls.find((c) => String(c[0]).endsWith("stryker"))!;
     expect(strykerCall[0]).toBe("/wt/node_modules/.bin/stryker");
     expect(strykerCall[1]).toEqual(["run", "--mutate", "a.ts,b.ts"]);
+  });
+});
+
+describe("gate env injection (CI parity — quality.gateEnv)", () => {
+  beforeEach(() => {
+    execMock.mockReset();
+  });
+
+  const found =
+    (bin: string): LocalBinResolver =>
+    async () =>
+      bin;
+  const lastOpts = (): Record<string, unknown> => {
+    const call = execMock.mock.calls[execMock.mock.calls.length - 1]!;
+    return (call[2] ?? {}) as Record<string, unknown>;
+  };
+
+  const GATE_ENV = { NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321" };
+
+  it("a runTool-backed tool (vitest) spawns with the injected env merged", async () => {
+    execMock.mockResolvedValue(res(""));
+    await new DefaultVitestTool(found("/wt/node_modules/.bin/vitest"), GATE_ENV).run([], {
+      cwd: "/wt",
+    });
+    expect(lastOpts()).toEqual({ cwd: "/wt", env: GATE_ENV });
+  });
+
+  it("DefaultBuildTool spawns `npm run build` with the injected env", async () => {
+    execMock.mockResolvedValue(res(""));
+    await new DefaultBuildTool(GATE_ENV).build({ cwd: "/wt" });
+    const [cmd, args] = [execMock.mock.calls[0]![0], execMock.mock.calls[0]![1]];
+    expect(cmd).toBe("npm");
+    expect(args).toEqual(["run", "build"]);
+    expect(lastOpts()).toEqual({ cwd: "/wt", env: GATE_ENV });
+  });
+
+  it("DefaultSemgrepTool spawns the security command with the injected env", async () => {
+    execMock.mockResolvedValue(res(""));
+    await new DefaultSemgrepTool(GATE_ENV).run(["semgrep", "--config", "auto"], { cwd: "/wt" });
+    const [cmd, args] = [execMock.mock.calls[0]![0], execMock.mock.calls[0]![1]];
+    expect(cmd).toBe("semgrep");
+    expect(args).toEqual(["--config", "auto"]);
+    expect(lastOpts()).toEqual({ cwd: "/wt", env: GATE_ENV });
+  });
+
+  it("defaultGateTools(env) bakes the env into every spawning tool (build proof)", async () => {
+    execMock.mockResolvedValue(res(""));
+    const tools = defaultGateTools(GATE_ENV);
+    await tools.build.build({ cwd: "/wt" });
+    expect(lastOpts()).toEqual({ cwd: "/wt", env: GATE_ENV });
+  });
+
+  it("defaults to an empty env when none is configured (no surprise vars)", async () => {
+    execMock.mockResolvedValue(res(""));
+    await new DefaultBuildTool().build({ cwd: "/wt" });
+    expect(lastOpts()).toEqual({ cwd: "/wt", env: {} });
   });
 });
 

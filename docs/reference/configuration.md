@@ -69,17 +69,67 @@ your shell profile, or launch through `merged-settings.json` (which pins it for 
 
 Quality-gate thresholds.
 
-| Key                              | Type              | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------------------------------- | ----------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `holdoutPercent`                 | number 0–100      | `20`    | Percent of acceptance criteria withheld as an unreadable answer-key.                                                                                                                                                                                                                                                                                                                                                          |
-| `holdoutPassRate`                | number 0–100      | `80`    | Min pass-rate (%) on the holdout set to clear the gate.                                                                                                                                                                                                                                                                                                                                                                       |
-| `mutationScoreTarget`            | number 0–100      | `80`    | Target mutation score (%) for the mutation gate.                                                                                                                                                                                                                                                                                                                                                                              |
-| `coverageRegressionTolerancePct` | number ≥0         | `0.5`   | Allowed coverage regression (percentage points) before the gate fails.                                                                                                                                                                                                                                                                                                                                                        |
-| `securityCommand`                | string (optional) | —       | Custom SAST/security command; else the built-in semgrep run.                                                                                                                                                                                                                                                                                                                                                                  |
-| `securityAllowFailures`          | boolean           | `false` | Treat security findings as non-blocking.                                                                                                                                                                                                                                                                                                                                                                                      |
-| `securityRedactFindings`         | boolean           | `true`  | Redact secrets from the persisted findings artifact.                                                                                                                                                                                                                                                                                                                                                                          |
-| `redTestCommand`                 | string (optional) | —       | Custom red-test verification command for exotic runners (Go, Ruby, Deno…), so TDD enforcement need not be bypassed.                                                                                                                                                                                                                                                                                                           |
-| `setupCommand`                   | string (optional) | —       | Per-worktree env-prep command run once in the new task worktree, BEFORE the test/type/build gates. When unset, a lockfile is auto-detected (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`, `yarn.lock` → `yarn install --frozen-lockfile`, `package-lock.json`/`npm-shrinkwrap.json` → `npm ci`); no lockfile is a no-op. Set this for non-JS repos or custom setups. Fails the run LOUD at preflight on non-zero exit. |
+| Key                              | Type                  | Default | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------------------- | --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `holdoutPercent`                 | number 0–100          | `20`    | Percent of acceptance criteria withheld as an unreadable answer-key.                                                                                                                                                                                                                                                                                                                                                          |
+| `holdoutPassRate`                | number 0–100          | `80`    | Min pass-rate (%) on the holdout set to clear the gate.                                                                                                                                                                                                                                                                                                                                                                       |
+| `mutationScoreTarget`            | number 0–100          | `80`    | Target mutation score (%) for the mutation gate.                                                                                                                                                                                                                                                                                                                                                                              |
+| `coverageRegressionTolerancePct` | number ≥0             | `0.5`   | Allowed coverage regression (percentage points) before the gate fails.                                                                                                                                                                                                                                                                                                                                                        |
+| `securityCommand`                | string (optional)     | —       | Custom SAST/security command; else the built-in semgrep run.                                                                                                                                                                                                                                                                                                                                                                  |
+| `securityAllowFailures`          | boolean               | `false` | Treat security findings as non-blocking.                                                                                                                                                                                                                                                                                                                                                                                      |
+| `securityRedactFindings`         | boolean               | `true`  | Redact secrets from the persisted findings artifact.                                                                                                                                                                                                                                                                                                                                                                          |
+| `redTestCommand`                 | string (optional)     | —       | Custom red-test verification command for exotic runners (Go, Ruby, Deno…), so TDD enforcement need not be bypassed.                                                                                                                                                                                                                                                                                                           |
+| `setupCommand`                   | string (optional)     | —       | Per-worktree env-prep command run once in the new task worktree, BEFORE the test/type/build gates. When unset, a lockfile is auto-detected (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`, `yarn.lock` → `yarn install --frozen-lockfile`, `package-lock.json`/`npm-shrinkwrap.json` → `npm ci`); no lockfile is a no-op. Set this for non-JS repos or custom setups. Fails the run LOUD at preflight on non-zero exit. |
+| `gateEnv`                        | record<string,string> | `{}`    | Name→value env vars injected into **every** deterministic gate command (`build`/`test`/`type`/`lint`/`mutation`/`security`), merged over `process.env`. Mirrors the repo's CI build-step env so the gate measures the code, not a missing-env crash. **Placeholders only — not a secret store.** See [the gate-env note](#gateenv--ci-parity-placeholders) below.                                                             |
+
+### `gateEnv` — CI-parity placeholders
+
+The deterministic gates run in a **fresh task worktree** with no `.env.local` and no
+build-time env injection. A repo whose CI supplies placeholder env vars for the same
+build step — e.g. a Next.js static prerender that needs `NEXT_PUBLIC_*` defined — would
+otherwise fail the `build` gate on a missing-env crash, a **false-negative floor**
+unrelated to task quality. `quality.gateEnv` closes that gap: its name→value map is
+merged over `process.env` into the spawn env of every gate command
+(`defaultGateTools(gateEnv)`, `src/verifier/deterministic/tools.ts`, wired from config in
+`src/cli/wiring.ts`).
+
+**Preferred: auto-detect from CI.** Rather than transcribing each var by hand, let factory read
+your CI workflow and gap-fill the placeholders:
+
+```bash
+factory configure --detect-gate-env
+```
+
+This scans `.github/workflows/*.yml` for every step/job-level `env:` literal and merges them into
+`quality.gateEnv` (`applyGateEnvDetection`, `src/ci/detect-gate-env.ts`). `factory scaffold` runs
+the **same** detection automatically — before the managed `quality-gate.yml` template overwrites
+the repo's own workflow — so a freshly scaffolded repo already has its CI env captured. See
+[`configure --detect-gate-env`](./cli.md#configure) for the flag contract and `DetectReport` shape.
+
+The merge is **gap-fill — the operator always wins**: a key absent from the overlay is _written_;
+present-and-equal is _skipped_ (idempotent); present-and-different is reported as a _conflict_ and
+left untouched. Three filters drop a value before it reaches `gateEnv`: any value containing `${{`
+(a GitHub expression ref — `${{ secrets.* }}`, unusable + unsafe), any value the secret scanner
+flags (defense-in-depth — placeholders, not secrets), and structurally anything inside a `run: |`
+block scalar. Detection is **biased to miss, never to mis-detect**: it reads block-style YAML with
+space indentation only; a var in anchors/aliases/merge-keys/flow-mappings is silently skipped and
+the file reported under `warnings`, never mangled. The escape hatch for a miss is the manual
+`--set` below.
+
+**Manual escape hatch.** Set each leaf individually:
+
+```bash
+factory configure --set quality.gateEnv.NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321
+factory configure --set quality.gateEnv.NEXT_PUBLIC_SUPABASE_KEY=ci-placeholder
+```
+
+The schema (`z.record(z.string(), z.string())`) requires **string** values — an explicit
+"set this var". A purely numeric value is JSON-coerced to a number at the `--set` boundary
+and rejected, so quote it as JSON: `--set quality.gateEnv.PORT='"54321"'`.
+
+This is **CI parity, not secrets**: these placeholders sit in the sparse config overlay in
+plaintext. Never put a real credential here — they exist only so the verifier floor
+exercises the same build CI does.
 
 ## `quota`
 

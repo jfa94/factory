@@ -137,6 +137,27 @@ export class FakeGitClient implements GitClient {
     return this.localBranches.has(name);
   }
 
+  /** branch → commits-ahead count returned by {@link commitsAhead} (test-seeded). */
+  readonly commitsAheadByBranch = new Map<string, number>();
+
+  /** Test helper: program the commit count {@link commitsAhead} reports for a branch. */
+  setCommitsAhead(branch: string, n: number): void {
+    this.commitsAheadByBranch.set(branch, n);
+  }
+
+  async refExists(ref: string, _opts?: GitOpts): Promise<boolean> {
+    // Resolve like revParse, but a miss is a normal NO (no throw): remote-tracking
+    // `origin/<b>`, HEAD, or a local branch.
+    const remoteMatch = ref.match(/^origin\/(.+)$/);
+    if (remoteMatch) return this.remotes.get("origin")?.has(remoteMatch[1]!) ?? false;
+    if (ref === "HEAD") return this.localBranches.has(this.head);
+    return this.localBranches.has(ref);
+  }
+
+  async commitsAhead(_base: string, branch: string, _opts?: GitOpts): Promise<number> {
+    return this.commitsAheadByBranch.get(branch) ?? 0;
+  }
+
   async checkoutB(branch: string, startPoint: string, _opts?: GitOpts): Promise<void> {
     this.calls.push(`checkout -B ${branch} ${startPoint}`);
     const startSha = await this.revParse(startPoint).catch(() => this.nextSha());

@@ -26,10 +26,16 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
-          NEXT_PUBLIC_SUPABASE_KEY: ci-placeholder
-          NEXT_SECRET_SUPABASE_KEY: ci-placeholder
+        # If your build needs build-time env (e.g. a Next.js static prerender that
+        # reads NEXT_PUBLIC_* vars at build time), declare CI placeholders here.
+        # `factory scaffold` and `factory configure --detect-gate-env` auto-detect
+        # this block into quality.gateEnv, so the factory's local merge gate builds
+        # with the same env parity as this CI. Placeholders only — never real
+        # secrets (put those in repo/environment secrets via ${{ secrets.* }},
+        # which detection deliberately skips).
+        # env:
+        #   NEXT_PUBLIC_EXAMPLE_URL: http://localhost:54321
+        #   NEXT_PUBLIC_EXAMPLE_KEY: ci-placeholder
       - run: pnpm deps:validate
       - name: pnpm audit (non-blocking; npm legacy endpoint 410, Snyk covers vulns)
         run: pnpm audit --audit-level=high

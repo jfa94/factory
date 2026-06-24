@@ -59,6 +59,11 @@ pointers it gathered. Treat any field as possibly absent:
     "failure_reason": "<string>",
     "branch": "<branch-or-absent>",
     "pr_number": 42, // or absent
+    "work": {
+      // From `rescue scan`'s git-grounded survey. Read-only EVIDENCE, never an action.
+      "branch_exists": true, // the task branch still resolves
+      "commits_ahead": 4, // commits above the run's staging base, or null if uncountable
+    },
   },
   "context": {
     "worktree_path": "<abs-path-or-null>",
@@ -94,6 +99,13 @@ required):
 `leave-dropped` and `no-action` both leave the task dropped; the difference is whether you
 _confirmed_ a genuine dead-end (`leave-dropped`) or simply _could not tell_ (`no-action`).
 Only `reset` causes a state change, and only via an explicit `--task` the orchestrator issues.
+
+**On `work.commits_ahead`:** a large count means the task got far before dropping — useful
+context that strengthens `reset` when the cause was an environmental blocker that has since
+cleared. It is NEVER alone sufficient for `reset` on a determined `spec-defect` /
+`capability-budget`: those commits are exactly the work a reviewer rejected, and a reset
+discards them and redoes the task (resume re-cuts the branch from staging). Weigh the root
+cause first; treat `commits_ahead` as corroboration, not a trigger.
 
 ## Checklist
 

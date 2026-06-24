@@ -32,6 +32,26 @@ describe("ConfigSchema", () => {
     expect(cfg.quality.setupCommand).toBe("pnpm install --frozen-lockfile");
   });
 
+  it("quality.gateEnv defaults to {} and round-trips a string map", () => {
+    expect(ConfigSchema.parse({}).quality.gateEnv).toEqual({});
+    const cfg = ConfigSchema.parse({
+      quality: {
+        gateEnv: {
+          NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321",
+          NEXT_PUBLIC_SUPABASE_KEY: "ci-placeholder",
+        },
+      },
+    });
+    expect(cfg.quality.gateEnv).toEqual({
+      NEXT_PUBLIC_SUPABASE_URL: "http://localhost:54321",
+      NEXT_PUBLIC_SUPABASE_KEY: "ci-placeholder",
+    });
+  });
+
+  it("quality.gateEnv rejects a non-string value (loud, not silently coerced)", () => {
+    expect(() => ConfigSchema.parse({ quality: { gateEnv: { PORT: 54321 } } })).toThrow();
+  });
+
   it("merges partial overrides while defaulting the rest", () => {
     const cfg = ConfigSchema.parse({ quality: { holdoutPercent: 35 } });
     expect(cfg.quality.holdoutPercent).toBe(35);

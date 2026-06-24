@@ -310,15 +310,19 @@ async function runTool(
   tool: GateTool,
   toolArgs: readonly string[],
   opts: ToolRunOpts,
+  env: Record<string, string> = {},
 ): Promise<ExecResult> {
   const localBin = await resolve(tool, opts);
   if (localBin === null) return missingBinResult(tool, opts.cwd);
-  return exec(localBin, [...toolArgs], { cwd: opts.cwd });
+  return exec(localBin, [...toolArgs], { cwd: opts.cwd, env });
 }
 
 /** Default VitestTool: local `vitest run [files...]`, coverage DISABLED. */
 export class DefaultVitestTool implements VitestTool {
-  constructor(private readonly resolve: LocalBinResolver = defaultLocalBinResolver) {}
+  constructor(
+    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+    private readonly env: Record<string, string> = {},
+  ) {}
 
   async run(files: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
     // Coverage is DISABLED here on purpose. The test gate is a PASS/FAIL gate and
@@ -328,43 +332,53 @@ export class DefaultVitestTool implements VitestTool {
     // negative unrelated to whether the tests pass. Coverage is the coverage
     // gate's job (before/after summaries), never this gate's.
     const args = ["run", "--coverage.enabled=false", ...files];
-    return toProc(await runTool(this.resolve, "vitest", args, opts));
+    return toProc(await runTool(this.resolve, "vitest", args, opts, this.env));
   }
 }
 
 /** Default TscTool: local `tsc --noEmit`. */
 export class DefaultTscTool implements TscTool {
-  constructor(private readonly resolve: LocalBinResolver = defaultLocalBinResolver) {}
+  constructor(
+    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+    private readonly env: Record<string, string> = {},
+  ) {}
 
   async typecheck(opts: ToolRunOpts): Promise<ProcResult> {
-    return toProc(await runTool(this.resolve, "tsc", ["--noEmit"], opts));
+    return toProc(await runTool(this.resolve, "tsc", ["--noEmit"], opts, this.env));
   }
 }
 
 /** Default EslintTool: local `eslint .`. */
 export class DefaultEslintTool implements EslintTool {
-  constructor(private readonly resolve: LocalBinResolver = defaultLocalBinResolver) {}
+  constructor(
+    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+    private readonly env: Record<string, string> = {},
+  ) {}
 
   async lint(opts: ToolRunOpts): Promise<ProcResult> {
-    return toProc(await runTool(this.resolve, "eslint", ["."], opts));
+    return toProc(await runTool(this.resolve, "eslint", ["."], opts, this.env));
   }
 }
 
 /** Default BuildTool: `npm run build`. */
 export class DefaultBuildTool implements BuildTool {
+  constructor(private readonly env: Record<string, string> = {}) {}
+
   async build(opts: ToolRunOpts): Promise<ProcResult> {
-    return toProc(await exec("npm", ["run", "build"], { cwd: opts.cwd }));
+    return toProc(await exec("npm", ["run", "build"], { cwd: opts.cwd, env: this.env }));
   }
 }
 
 /** Default SemgrepTool: run the already-validated argv directly. */
 export class DefaultSemgrepTool implements SemgrepTool {
+  constructor(private readonly env: Record<string, string> = {}) {}
+
   async run(command: readonly string[], opts: ToolRunOpts): Promise<ProcResult> {
     const [bin, ...rest] = command;
     if (bin === undefined) {
       throw new Error("DefaultSemgrepTool: empty command");
     }
-    return toProc(await exec(bin, rest, { cwd: opts.cwd }));
+    return toProc(await exec(bin, rest, { cwd: opts.cwd, env: this.env }));
   }
 }
 
@@ -373,11 +387,16 @@ export class DefaultStrykerTool implements StrykerTool {
   /** Report path relative to the worktree (stryker html/json reporter default). */
   static readonly REPORT_PATH = "reports/mutation/mutation.json";
 
-  constructor(private readonly resolve: LocalBinResolver = defaultLocalBinResolver) {}
+  constructor(
+    private readonly resolve: LocalBinResolver = defaultLocalBinResolver,
+    private readonly env: Record<string, string> = {},
+  ) {}
 
   async run(mutate: readonly string[], opts: ToolRunOpts): Promise<StrykerResult> {
     const csv = mutate.join(",");
-    const proc = toProc(await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts));
+    const proc = toProc(
+      await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, this.env),
+    );
     // A non-zero stryker exit is a legitimate ANSWER (stryker-failed) — the
     // strategy branches on proc.code; we still attempt to read a report.
     const reportPath = path.join(opts.cwd, DefaultStrykerTool.REPORT_PATH);
@@ -656,15 +675,15 @@ function splitLines(s: string): string[] {
  * (and any non-test driver) constructs once and threads into the GateRunner; unit
  * tests use {@link import("./fakes.js").makeFakeTools} instead.
  */
-export function defaultGateTools(): GateTools {
+export function defaultGateTools(gateEnv: Record<string, string> = {}): GateTools {
   return {
     git: new DefaultGitProbe(),
-    vitest: new DefaultVitestTool(),
-    tsc: new DefaultTscTool(),
-    eslint: new DefaultEslintTool(),
-    build: new DefaultBuildTool(),
-    semgrep: new DefaultSemgrepTool(),
-    stryker: new DefaultStrykerTool(),
+    vitest: new DefaultVitestTool(defaultLocalBinResolver, gateEnv),
+    tsc: new DefaultTscTool(defaultLocalBinResolver, gateEnv),
+    eslint: new DefaultEslintTool(defaultLocalBinResolver, gateEnv),
+    build: new DefaultBuildTool(gateEnv),
+    semgrep: new DefaultSemgrepTool(gateEnv),
+    stryker: new DefaultStrykerTool(defaultLocalBinResolver, gateEnv),
     coverage: new DefaultCoverageReader(),
     fs: new DefaultFsProbe(),
   };

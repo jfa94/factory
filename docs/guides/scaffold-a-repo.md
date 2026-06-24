@@ -24,6 +24,11 @@ fails loud.
 
 This is idempotent. It:
 
+- **auto-detects the repo's CI build env** (the same scan as
+  [`configure --detect-gate-env`](../reference/cli.md#configure)) and gap-fills
+  `quality.gateEnv`. This runs **before** copying the managed `quality-gate.yml`
+  template, so the repo author's CI env is captured into the durable config overlay
+  while that workflow file is still theirs; gap-fill never overwrites a value you set;
 - copies the plugin-managed CI net (`.github/workflows/quality-gate.yml` and its
   `.github/scripts/shard-mutation-scope.mjs` helper), and — when the target is a
   Node package — the seed gate configs `.stryker.config.json`,
@@ -49,7 +54,8 @@ own private `staging-<run-id>` integration branch from `develop` at
 
 It prints a `ScaffoldReport`: `files_created`, `files_present`, `files_updated`
 (plugin-managed files refreshed on drift), `protection` (enabled / strict-up-to-date
-/ required checks / provisioned), and `settings` (created / changed). SEED gate
+/ required checks / provisioned), `settings` (created / changed), and — only when CI
+build-env detection found anything — an optional `gateEnv` `DetectReport`. SEED gate
 configs are project-owned after first write — an existing one (even a richer
 superset of the shipped baseline) is reported under `files_present`, never as drift.
 

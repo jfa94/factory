@@ -100,6 +100,32 @@ describe("rescue scan/apply happy paths", () => {
     expect(run.tasks.a!.status).toBe("executing");
   });
 
+  it("scan appends an additive recoverable-work survey from git (work field)", async () => {
+    // Give the stuck task a branch carrying committed work above the run's staging base.
+    await new StateManager({ dataDir }).update("run-c", (s) => ({
+      ...s,
+      tasks: { ...s.tasks, a: { ...s.tasks.a!, branch: "factory/run-c/a" } },
+    }));
+    const git = new FakeGitClient({
+      remoteHeads: { "staging-run-c": "sha-base" },
+      localBranches: { "factory/run-c/a": { sha: "sha-a" } },
+    });
+    git.setCommitsAhead("factory/run-c/a", 4);
+
+    const code = await runScan(["--run", "run-c"], { gitClient: git });
+    expect(code).toBe(EXIT.OK);
+    const scan = out();
+    // The base scan shape is unchanged (work is purely additive).
+    expect(scan.run_id).toBe("run-c");
+    expect(scan.resettable).toEqual(["a", "b"]);
+    const work = scan.work as { base_ref: string; base_resolved: boolean; tasks: unknown[] };
+    expect(work.base_ref).toBe("origin/staging-run-c");
+    expect(work.base_resolved).toBe(true);
+    expect(work.tasks).toEqual([
+      { task_id: "a", branch: "factory/run-c/a", branch_exists: true, commits_ahead: 4 },
+    ]);
+  });
+
   it("apply (default) resets stuck+recoverable, leaving the dead-end", async () => {
     const code = await rescueCommand.run(["apply", "--run", "run-c"]);
     expect(code).toBe(EXIT.OK);

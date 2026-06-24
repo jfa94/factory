@@ -11,6 +11,9 @@ arguments:
   - name: "--unset"
     description: "Revert a key to its default (repeatable)"
     required: false
+  - name: "--detect-gate-env"
+    description: "Auto-detect CI build env → gap-fill quality.gateEnv (standalone)"
+    required: false
 ---
 
 # /factory:configure
@@ -61,6 +64,58 @@ These are the keys the schema actually reads. Run `factory configure` to see liv
 | `securityAllowFailures`          | false   | Treat security findings as non-blocking                |
 | `securityRedactFindings`         | true    | Redact secrets from the persisted findings artifact    |
 | `redTestCommand`                 | —       | Custom red-test command for exotic runners (Go/Ruby/…) |
+| `gateEnv`                        | {}      | Env vars injected into every gate command (CI parity)  |
+
+> **`quality.gateEnv`** mirrors your CI build step's env so the verifier floor measures the
+> code, not a missing-env build crash. The gates run `build`/`test`/`type`/`lint`/`security`
+> in a fresh worktree with no `.env.local`; if your CI injects placeholders for the same
+> build (e.g. a Next.js static prerender that needs `NEXT_PUBLIC_*`), set them here as a
+> name→value map. **Placeholders only — not a secret store.** Set each leaf individually:
+>
+> ```bash
+> factory configure --set quality.gateEnv.NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321
+> factory configure --set quality.gateEnv.NEXT_PUBLIC_SUPABASE_KEY=ci-placeholder
+> ```
+>
+> A purely numeric value is JSON-coerced to a number (rejected by the string-only schema) —
+> quote it: `--set quality.gateEnv.PORT='"54321"'`.
+
+#### Auto-detecting `gateEnv` from CI
+
+`--set` is the escape hatch; the **preferred** way to populate `quality.gateEnv` is to let
+factory read your CI workflow and gap-fill the placeholders for you:
+
+```bash
+factory configure --detect-gate-env
+```
+
+This scans `.github/workflows/*.yml` for every step/job-level `env:` literal and merges them
+into `quality.gateEnv`. It is **standalone and mutually exclusive** with `--get`/`--set`/`--unset`
+(combining them is a usage error). It writes immediately (only when there are new keys) and
+prints a `DetectReport` JSON: `detected`, `written`, `skipped`, `conflicts`,
+`skippedExpressionRefs`, `droppedSecrets`, `warnings`, `sources` (provenance per key), and the
+resolved `gateEnv`.
+
+**Gap-fill — the operator always wins.** Detection only fills keys you have not set:
+
+- key absent from your overlay → **written**;
+- key present and equal → **skipped** (idempotent re-run);
+- key present and different → reported as a **conflict** (your value is preserved, never
+  overwritten).
+
+**Three filters drop a value before it can reach `gateEnv`:**
+
+1. any value containing `${{` (a GitHub expression ref like `${{ secrets.* }}` — unusable and
+   unsafe at gate time) → `skippedExpressionRefs`;
+2. any value the secret scanner flags (defense-in-depth — gateEnv is placeholders, not a secret
+   store) → `droppedSecrets`;
+3. structurally, anything inside a `run: |` block scalar is never read as env.
+
+Detection is **biased to miss, never to mis-detect**: it reads block-style YAML with space
+indentation only — a var hidden in anchors, aliases, merge-keys, or flow-mappings is silently
+skipped (and the file reported under `warnings`), never mangled. For any var detection misses,
+fall back to `--set quality.gateEnv.<KEY>=<value>`. `factory scaffold` runs this same detection
+automatically (see [/factory:scaffold](./scaffold.md)).
 
 ### Spec apex gate (`spec.*`)
 

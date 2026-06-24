@@ -48,12 +48,26 @@ factory configure                          # print the resolved config
 factory configure --get <key.path>         # print one resolved value
 factory configure --set <key.path=value>   # set (repeatable), validate, persist
 factory configure --unset <key.path>       # revert a key to its default (repeatable)
+factory configure --detect-gate-env        # auto-detect CI build env → gap-fill quality.gateEnv
 ```
 
 Values parse as JSON when possible (numbers, booleans, arrays), else as a bare
 string. `--get` cannot be combined with `--set`/`--unset`. Example:
 `factory configure --set quality.holdoutPercent=25`. Keys are in
 [configuration.md](./configuration.md).
+
+`--detect-gate-env` scans `.github/workflows/*.yml` for every step/job-level `env:`
+literal (`applyGateEnvDetection`, `src/ci/detect-gate-env.ts`) and **gap-fills**
+`quality.gateEnv` from `process.cwd()` — the operator always wins (an existing key is
+never overwritten; a detected value that differs is reported as a conflict). It is
+**mutually exclusive** with `--get`/`--set`/`--unset` (combining them is a usage error),
+writes the overlay only when there are new keys, and prints a `DetectReport`:
+`{ detected, written, skipped, conflicts, skippedExpressionRefs, droppedSecrets, warnings,
+sources, gateEnv }`. Three filters drop a value first: a `${{ }}` expression ref, a value
+the secret scanner flags, and anything inside a `run: |` block scalar. Detection is biased
+to MISS (block-style space-indented YAML only — exotic YAML is skipped, never mangled); the
+escape hatch for a miss is `--set quality.gateEnv.<KEY>=<value>`. `scaffold` runs the same
+detection automatically (see [`scaffold`](#scaffold)).
 
 ## `scaffold`
 
@@ -65,6 +79,12 @@ base) — **refusing loudly** when `develop` is not protected, unless `--provisi
 set. Per-run `staging-<run-id>` branches are minted at [`run create`](#run-create);
 scaffold no longer creates or protects a shared `staging` branch.
 
+Before copying any template, scaffold **auto-detects the repo's CI build env** (the same
+detection as [`configure --detect-gate-env`](#configure)) and gap-fills `quality.gateEnv`.
+This runs FIRST by design: `quality-gate.yml` is a managed template scaffold overwrites, so
+detecting first captures the repo author's CI env into the durable config overlay before the
+managed file clobbers the author's workflow.
+
 ```
 factory scaffold [--repo <owner/name>] [--provision]
 ```
@@ -75,8 +95,10 @@ factory scaffold [--repo <owner/name>] [--provision]
 | `--provision`         | no       | Write branch protection if missing (default: refuse).                                                                                                        |
 
 Emits a `ScaffoldReport`: `{ repo, files_created, files_present, files_updated,
-protection, settings }`. SEED gate configs are scaffold-once / project-owned — an
-existing one is reported under `files_present`, never flagged (no `files_outdated`).
+protection, settings, gateEnv? }`. SEED gate configs are scaffold-once / project-owned — an
+existing one is reported under `files_present`, never flagged (no `files_outdated`). The
+optional `gateEnv` field is the CI build-env detection `DetectReport`; it is **omitted** when
+nothing was detected (no workflows / no literal env), so a brand-new repo's report is unchanged.
 
 ## `spec <resolve|gate|store>`
 
@@ -493,6 +515,29 @@ needs_rescue, would_deadlock, summary, tasks }`. Dispositions: `shipped`,
 `runnable`, `stuck` (crashed in-flight), `recoverable` (`blocked-environmental`
 drop), `dead-end` (`spec-defect`/`capability-budget` drop). Default-resettable =
 `stuck ∪ recoverable`.
+
+The scan also appends a read-only `work` field — a git-grounded recoverable-work survey
+(`assessWork`, `src/rescue/assess.ts`):
+
+```
+"work": {
+  "base_ref": "origin/staging-<run-id>",
+  "base_resolved": true,
+  "tasks": [
+    { "task_id", "branch", "branch_exists", "commits_ahead", "pr_number?" }
+  ]
+}
+```
+
+One entry per **non-shipped branched** task (`done` and branchless tasks are skipped),
+in `run.tasks` order. `commits_ahead` counts the commits the local `factory/<run>/<task>`
+branch carries above the run's staging base (`origin/staging-<run-id>`), so a dropped task
+that got far before failing shows a high count vs an empty one. `commits_ahead` is `null`
+(not `0`) when the base or branch is unresolvable — `0` means "branch exists but adds
+nothing"; `null` means "nothing to count against". `base_resolved: false` (a deleted
+staging branch) nulls every count. This is **evidence only** — nothing here reuses or
+deletes a commit; resume still re-cuts a reset branch from staging and redoes the work.
+Backed by new `GitClient.refExists`/`commitsAhead` (`src/git/git-client.ts`).
 
 ### `rescue apply`
 
