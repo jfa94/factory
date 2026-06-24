@@ -271,3 +271,127 @@ describe("secret-guard — nested shell denied (autonomous)", () => {
     expect(isDeny(d)).toBe(true);
   });
 });
+
+describe("secret-guard — token-aware commit/push detection", () => {
+  const secretDiff = "+key=ghp_" + "a".repeat(36);
+
+  // The reported false positive: `commit` is a bare WORD inside an echo string
+  // after `&&`, never a git subcommand. Must NOT scan (the fake returns a secret,
+  // so a wrongful scan would deny).
+  it("allows merge-base diagnostic with the word 'commit' in an echo string", async () => {
+    const d = await decideSecretGuard(
+      bashInput('git merge-base --is-ancestor main HEAD && echo "...merge commit needed"'),
+      { exec: fakeExec(secretDiff), cwd: "/repo" },
+    );
+    expect(isDeny(d)).toBe(false);
+  });
+
+  it("allows echo strings naming push/commit with no git subcommand", async () => {
+    for (const cmd of ['echo "push this later"', 'echo "commit message"']) {
+      const d = await decideSecretGuard(bashInput(cmd), {
+        exec: fakeExec(secretDiff),
+        cwd: "/repo",
+      });
+      expect(isDeny(d)).toBe(false);
+    }
+  });
+
+  // Anti-regression: a real `git commit` in a LATER chained segment must still be
+  // caught — the fix must not open this bypass.
+  it("denies a chained `git status && git commit` staging a secret", async () => {
+    const d = await decideSecretGuard(bashInput("git status && git commit -m x"), {
+      exec: fakeExec(secretDiff),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true);
+  });
+
+  // `git -c <name=value> commit`: the config value must not be mistaken for the
+  // subcommand (parser -c value-consume gap).
+  it("denies `git -c <cfg> commit` staging a secret", async () => {
+    const d = await decideSecretGuard(bashInput("git -c commit.gpgsign=false commit -m x"), {
+      exec: fakeExec(secretDiff),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true);
+  });
+
+  // Regression: a lone `&` (background) is a real sequencing operator git honors,
+  // so `git status & git commit` runs the commit — must be detected, not evaded.
+  it("denies a backgrounded `git status & git commit` staging a secret", async () => {
+    const d = await decideSecretGuard(bashInput("git status & git commit -m x"), {
+      exec: fakeExec(secretDiff),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true);
+  });
+
+  // Command-substitution executes the inner `git commit`, so a staged secret is
+  // committed — the detector must see inside `$(…)` and backticks.
+  it("denies command-substitution `$(git commit)` / backtick forms staging a secret", async () => {
+    for (const cmd of ["$(git commit -m x)", "`git commit -m x`"]) {
+      const d = await decideSecretGuard(bashInput(cmd), {
+        exec: fakeExec(secretDiff),
+        cwd: "/repo",
+      });
+      expect(isDeny(d)).toBe(true);
+    }
+  });
+
+  // Value-taking global (`--namespace <name>`) makes the parser read the value as
+  // the subcommand; a `git` token followed by a later bare `commit`/`push` must
+  // still fail closed.
+  it("denies `git --namespace <n> commit` whose value-global hides the subcommand", async () => {
+    const d = await decideSecretGuard(bashInput("git --namespace test commit -m x"), {
+      exec: fakeExec(secretDiff),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true);
+  });
+
+  // A redirect-env exported in a PRIOR segment is still in scope for the chained
+  // git process, so the commit reads a different index than the scan — deny.
+  it("denies `export GIT_INDEX_FILE=… && git commit` (redirect env in a prior segment)", async () => {
+    const d = await decideSecretGuard(bashInput("export GIT_INDEX_FILE=/evil && git commit -m x"), {
+      exec: fakeExec("+clean"),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true);
+  });
+
+  // The splitter handles every sequencing operator + the push branch, not just
+  // `&&`+commit — pin a secret-staging push in a later segment across separators.
+  it("denies a secret-staging push in a later segment across each separator", async () => {
+    for (const cmd of [
+      "git status || git push origin x",
+      "git status ; git push origin x",
+      "echo done | git push origin x",
+      "git status\ngit push origin x",
+    ]) {
+      const d = await decideSecretGuard(bashInput(cmd), {
+        exec: fakeExec(secretDiff),
+        cwd: "/repo",
+      });
+      expect(isDeny(d)).toBe(true);
+    }
+  });
+
+  // The scan must target the committing segment's repo, not the first git's.
+  it("routes the scan to the committing segment's -C dir", async () => {
+    const dirAwareExec: ExecFn = async (_cmd, args = []) => {
+      const a = args.join(" ");
+      if (a.includes("rev-parse --git-dir")) return ok(".git");
+      if (a.includes("--name-only")) return ok("src/x.ts");
+      const scansCommitRepo = a.includes("-C /b");
+      if (a.includes("diff") || a.includes("log")) {
+        return ok(scansCommitRepo ? secretDiff : "+const x = 1");
+      }
+      return ok();
+    };
+    const d = await decideSecretGuard(bashInput("git -C /a status && git -C /b commit -m x"), {
+      exec: dirAwareExec,
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true); // scanned /b (the commit repo), caught the secret
+  });
+});

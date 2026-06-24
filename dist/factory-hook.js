@@ -1991,6 +1991,10 @@ function parseGitInvocation(command) {
       i += 2;
       continue;
     }
+    if (tok === "-c") {
+      i += 2;
+      continue;
+    }
     if (tok.startsWith("--git-dir=")) {
       result.gitDir = tok.slice("--git-dir=".length);
       i++;
@@ -6960,9 +6964,21 @@ var PATH_BLOCKLIST = [
   /^wrangler\.toml$/,
   /\.(gpg|asc|ppk)$/
 ];
-var GIT_COMMIT_RE = /(^|[\s&;])git(\s+-[^\s]+\s+[^\s]+)*\s+commit(\s|$)/;
-var GIT_PUSH_RE = /(^|[\s&;])git(\s+-[^\s]+\s+[^\s]+)*\s+push(\s|$)/;
-var GIT_SUBCMD_LOOSE_RE = /(^|[\s&;])git(\s+[^\s]+)*\s+(commit|push)(\s|$)/;
+function findGitCommitOrPush(command) {
+  for (const seg of command.split(/&&|\|\||;|&|\||\n|\$\(|`|\)/)) {
+    const inv = parseGitInvocation(seg);
+    if (inv.subcommand === "commit") return { isCommit: true, inv };
+    if (inv.subcommand === "push") return { isCommit: false, inv };
+    const tokens = seg.split(/\s+/).filter((t) => t.length > 0);
+    const gitAt = tokens.findIndex((t) => (t.split("/").pop() ?? t) === "git");
+    if (gitAt >= 0) {
+      const rest = tokens.slice(gitAt + 1);
+      if (rest.includes("commit")) return { isCommit: true, inv };
+      if (rest.includes("push")) return { isCommit: false, inv };
+    }
+  }
+  return null;
+}
 var GIT_DIR_FLAG_RE = /(^|\s)--git-dir(=|\s)/;
 var WORK_TREE_FLAG_RE = /(^|\s)--work-tree(=|\s)/;
 var REDIRECT_ENV = /* @__PURE__ */ new Set([
@@ -6998,16 +7014,13 @@ async function decideSecretGuard(input, deps = {}) {
       `nested-shell or hook-bypass not allowed in autonomous mode: ${command}`
     );
   }
-  const isCommit = GIT_COMMIT_RE.test(command);
-  const isPush = GIT_PUSH_RE.test(command);
-  if (!isCommit && !isPush) {
-    if (!GIT_SUBCMD_LOOSE_RE.test(command)) return allow();
-  }
-  const inv = parseGitInvocation(command);
+  const match = findGitCommitOrPush(command);
+  if (!match) return allow();
+  const { isCommit, inv } = match;
   if (GIT_DIR_FLAG_RE.test(command) || WORK_TREE_FLAG_RE.test(command)) {
     return deny("git_dir_override_denied", `git-dir/work-tree override blocked: ${command}`);
   }
-  const redirectEnv = inv.envNames.filter((name) => REDIRECT_ENV.has(name));
+  const redirectEnv = parseGitInvocation(command).envNames.filter((name) => REDIRECT_ENV.has(name));
   if (redirectEnv.length > 0) {
     return deny(
       "git_redirect_env_denied",

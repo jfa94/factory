@@ -118,6 +118,12 @@ export function parseGitInvocation(command: string): GitInvocation {
       i += 2;
       continue;
     }
+    // `-c <name=value>`: the value is a separate token, NOT the subcommand.
+    // Without this it parses `git -c x=y commit` as subcommand `x=y`.
+    if (tok === "-c") {
+      i += 2;
+      continue;
+    }
     if (tok.startsWith("--git-dir=")) {
       result.gitDir = tok.slice("--git-dir=".length);
       i++;

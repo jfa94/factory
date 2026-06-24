@@ -26,7 +26,7 @@ import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { exec as defaultExec, type ExecResult } from "../shared/exec.js";
 import { detectSecrets } from "../shared/secret-patterns.js";
 import { isNestedShellOrHookBypass } from "./shell-bypass.js";
-import { parseGitInvocation } from "./git-args.js";
+import { parseGitInvocation, type GitInvocation } from "./git-args.js";
 import {
   allow,
   commandOf,
@@ -80,11 +80,49 @@ export interface SecretGuardDeps {
   autonomousMode?: boolean;
 }
 
-/** Word-anchored `git … commit` detector (paired global flags tolerated). */
-const GIT_COMMIT_RE = /(^|[\s&;])git(\s+-[^\s]+\s+[^\s]+)*\s+commit(\s|$)/;
-const GIT_PUSH_RE = /(^|[\s&;])git(\s+-[^\s]+\s+[^\s]+)*\s+push(\s|$)/;
-/** Looser detector (any flags) used to catch fused-override commit/push. */
-const GIT_SUBCMD_LOOSE_RE = /(^|[\s&;])git(\s+[^\s]+)*\s+(commit|push)(\s|$)/;
+/**
+ * Token-aware commit/push detection. Substring regexes mis-fired on the word
+ * `commit`/`push` anywhere in the string (even inside an `echo` arg or across a
+ * `&&`), so a read-only `… && echo "commit needed"` was scanned as a push. We
+ * instead split into coarse segments and parse each with {@link parseGitInvocation}:
+ * a segment counts as commit/push only when that is its real git subcommand. This
+ * keeps detection of a commit/push in a LATER chained segment (`git status && git
+ * commit`) that a whole-command first-git parse would miss.
+ *
+ * The splitter breaks on sequencing operators (`&&`, `||`, `;`, lone `&`, `|`,
+ * newline) AND command-substitution/backtick boundaries (`$(`, `` ` ``, `)`), so a
+ * `git commit` hidden in `$(…)`, after a background `&`, or inside backticks lands
+ * in its own segment. Segments are DETECTION-ONLY and never semantically
+ * authoritative: over-splitting is fine (a fragment still re-parses to its
+ * subcommand), under-splitting is the only failure that matters — so it fails
+ * CLOSED. The redirect/flag denies below additionally scan the whole `command`.
+ *
+ * A value-taking global (`git --namespace x commit`) makes the parser read the
+ * value as the subcommand, so a per-segment backstop also treats a segment as
+ * commit/push when it carries a `git` binary plus a later bare `commit`/`push`
+ * token the parser could not classify. Over-detection there is acceptable; a miss
+ * is a guard bypass.
+ */
+function findGitCommitOrPush(command: string): { isCommit: boolean; inv: GitInvocation } | null {
+  for (const seg of command.split(/&&|\|\||;|&|\||\n|\$\(|`|\)/)) {
+    const inv = parseGitInvocation(seg);
+    // ponytail: `subcommand` is an open string, so a typo in these "commit"/"push"
+    // literals would fail OPEN. Left as-is: subcommand can be any git verb (no closed
+    // union to narrow to) and a shared const wouldn't make a typo a compile error;
+    // the literals are covered by the deny tests, and the backstop below + the
+    // whole-command redirect denies fail closed around it.
+    if (inv.subcommand === "commit") return { isCommit: true, inv };
+    if (inv.subcommand === "push") return { isCommit: false, inv };
+    const tokens = seg.split(/\s+/).filter((t) => t.length > 0);
+    const gitAt = tokens.findIndex((t) => (t.split("/").pop() ?? t) === "git");
+    if (gitAt >= 0) {
+      const rest = tokens.slice(gitAt + 1);
+      if (rest.includes("commit")) return { isCommit: true, inv };
+      if (rest.includes("push")) return { isCommit: false, inv };
+    }
+  }
+  return null;
+}
 
 /** git-dir / work-tree override FLAG detectors (fail-closed deny). */
 const GIT_DIR_FLAG_RE = /(^|\s)--git-dir(=|\s)/;
@@ -160,16 +198,15 @@ export async function decideSecretGuard(
     );
   }
 
-  const isCommit = GIT_COMMIT_RE.test(command);
-  const isPush = GIT_PUSH_RE.test(command);
-
-  // Neither commit nor push under the strict detector: only proceed if a fused
-  // override form names commit/push (so we can deny the bypass), else allow.
-  if (!isCommit && !isPush) {
-    if (!GIT_SUBCMD_LOOSE_RE.test(command)) return allow();
-  }
-
-  const inv = parseGitInvocation(command);
+  const match = findGitCommitOrPush(command);
+  if (!match) return allow();
+  // `inv` is the parse of the MATCHED commit/push segment, so the work-dir
+  // resolution below reflects the segment git actually operates on, not a
+  // whole-command first-git scan. The redirect-env deny (b), by contrast, scans
+  // the WHOLE command: a redirect var exported in a PRIOR segment
+  // (`export GIT_INDEX_FILE=… && git commit`) is still in scope for the chained
+  // git process, so segment-scoping it would fail OPEN.
+  const { isCommit, inv } = match;
 
   // --- Deny redirection bypasses (fail-closed) ---
   // (a) --git-dir / --work-tree FLAGS. Kept as loose regexes: the parser captures a
@@ -180,7 +217,7 @@ export async function decideSecretGuard(
   // (b) ENV-prefix overrides in the index/repo-redirection family (GIT_INDEX_FILE,
   //     GIT_DIR, …). These point the commit at a different index/store than the
   //     scan reads. Benign GIT_* are intentionally NOT denied (see REDIRECT_ENV).
-  const redirectEnv = inv.envNames.filter((name) => REDIRECT_ENV.has(name));
+  const redirectEnv = parseGitInvocation(command).envNames.filter((name) => REDIRECT_ENV.has(name));
   if (redirectEnv.length > 0) {
     return deny(
       "git_redirect_env_denied",
