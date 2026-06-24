@@ -91,7 +91,7 @@ export function taskIdFromHeader(transcriptText: string | undefined): string | n
 /** Options for {@link runSubagentStop} (injectable). */
 export interface SubagentStopDeps extends DataDirOptions {
   /** Override the StateManager (tests — read-only path only). */
-  manager?: Pick<StateManager, "readCurrent">;
+  manager?: Pick<StateManager, "findActiveByOwner">;
   /** Read the transcript file at a path (tests inject; prod reads fs). */
   readTranscript?: (path: string) => Promise<string>;
   /** Explicit task id (e.g. from FACTORY_TASK_ID); else parsed from header. */
@@ -122,9 +122,13 @@ export async function handleSubagentStop(
   if (reviewer === null) return null;
 
   const manager = deps.manager ?? new StateManager(deps);
-  const run = await manager.readCurrent();
+  const sessionId =
+    typeof input.session_id === "string" && input.session_id.length > 0
+      ? input.session_id
+      : undefined;
+  const run = sessionId !== undefined ? await manager.findActiveByOwner(sessionId) : null;
   if (run === null) {
-    log.warn(`no active run (runs/current absent) — reviewer '${reviewer}' result skipped`);
+    log.warn(`no active run for this session — reviewer '${reviewer}' result skipped`);
     return null;
   }
 

@@ -53,12 +53,12 @@ function run(tasks: Record<string, TaskState>): RunState {
 }
 
 /**
- * A fake manager: readCurrent returns the supplied run; updateTask is a spy so
- * tests can assert it is NEVER called (the hook is observational).
+ * A fake manager: findActiveByOwner returns the supplied run regardless of session;
+ * updateTask is a spy so tests can assert it is NEVER called (the hook is observational).
  */
 function fakeManager(initial: RunState) {
   return {
-    readCurrent: async () => initial,
+    findActiveByOwner: async (_s: string) => initial,
     updateTask: vi.fn(async () => initial),
   };
 }
@@ -123,10 +123,13 @@ describe("taskIdFromHeader", () => {
 });
 
 describe("handleSubagentStop — observational (NO state write)", () => {
+  // All inputs include session_id so handleSubagentStop can resolve the run via
+  // findActiveByOwner. fakeManager returns the run for any session.
   it("reviewer input resolves verdict + returns null — updateTask NOT called", async () => {
     const manager = fakeManager(run({ t1: task() }));
     const result = await handleSubagentStop(
       input({
+        session_id: "test-session",
         agent_type: "quality-reviewer",
         last_assistant_message: "STATUS: DONE",
       }),
@@ -139,7 +142,11 @@ describe("handleSubagentStop — observational (NO state write)", () => {
   it("blocked reviewer input → null, no state write", async () => {
     const manager = fakeManager(run({ t1: task() }));
     const result = await handleSubagentStop(
-      input({ agent_type: "security-reviewer", last_assistant_message: "STATUS: BLOCKED" }),
+      input({
+        session_id: "test-session",
+        agent_type: "security-reviewer",
+        last_assistant_message: "STATUS: BLOCKED",
+      }),
       { manager, explicitTaskId: "t1" },
     );
     expect(result).toBeNull();
@@ -151,6 +158,7 @@ describe("handleSubagentStop — observational (NO state write)", () => {
     const readTranscript = vi.fn(async () => "[task:t1] reviewer transcript\nSTATUS: DONE");
     const result = await handleSubagentStop(
       input({
+        session_id: "test-session",
         agent_type: "implementation-reviewer",
         agent_transcript_path: "/tmp/transcript.jsonl",
         last_assistant_message: "STATUS: DONE",
@@ -170,7 +178,11 @@ describe("handleSubagentStop — observational (NO state write)", () => {
       }),
     );
     const result = await handleSubagentStop(
-      input({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
+      input({
+        session_id: "test-session",
+        agent_type: "quality-reviewer",
+        last_assistant_message: "STATUS: DONE",
+      }),
       { manager },
     );
     expect(result).toBeNull();
@@ -190,7 +202,11 @@ describe("handleSubagentStop — observational (NO state write)", () => {
   it("unresolved task_id (ambiguous, no header) → null, no write", async () => {
     const manager = fakeManager(run({ t1: task({ task_id: "t1" }), t2: task({ task_id: "t2" }) }));
     const result = await handleSubagentStop(
-      input({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
+      input({
+        session_id: "test-session",
+        agent_type: "quality-reviewer",
+        last_assistant_message: "STATUS: DONE",
+      }),
       { manager },
     );
     expect(result).toBeNull();
@@ -200,7 +216,11 @@ describe("handleSubagentStop — observational (NO state write)", () => {
   it("resolved task_id absent from run → null, no write", async () => {
     const manager = fakeManager(run({ t1: task() }));
     const result = await handleSubagentStop(
-      input({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
+      input({
+        session_id: "test-session",
+        agent_type: "quality-reviewer",
+        last_assistant_message: "STATUS: DONE",
+      }),
       { manager, explicitTaskId: "ghost" },
     );
     expect(result).toBeNull();
@@ -208,7 +228,22 @@ describe("handleSubagentStop — observational (NO state write)", () => {
   });
 
   it("no active run → null, no write", async () => {
-    const manager = { readCurrent: async () => null, updateTask: vi.fn() };
+    const manager = { findActiveByOwner: async () => null, updateTask: vi.fn() };
+    const result = await handleSubagentStop(
+      input({
+        session_id: "test-session",
+        agent_type: "quality-reviewer",
+        last_assistant_message: "STATUS: DONE",
+      }),
+      { manager, explicitTaskId: "t1" },
+    );
+    expect(result).toBeNull();
+    expect(manager.updateTask).not.toHaveBeenCalled();
+  });
+
+  it("no session_id in input → null, no write (unattributable subagent stop)", async () => {
+    // Without a session_id the hook cannot resolve a run and skips logging.
+    const manager = fakeManager(run({ t1: task() }));
     const result = await handleSubagentStop(
       input({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
       { manager, explicitTaskId: "t1" },
@@ -230,7 +265,11 @@ describe("runSubagentStop — exit codes (fully observational)", () => {
       manager,
       explicitTaskId: "t1",
       readRaw: async () =>
-        JSON.stringify({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
+        JSON.stringify({
+          session_id: "test-session",
+          agent_type: "quality-reviewer",
+          last_assistant_message: "STATUS: DONE",
+        }),
     });
     expect(code).toBe(EXIT.OK);
   });
@@ -245,9 +284,11 @@ describe("runSubagentStop — exit codes (fully observational)", () => {
     expect(code).toBe(EXIT.OK);
   });
 
-  it("readCurrent failure → OK (observational; log is the signal, never blocks stop)", async () => {
+  it("run-state read failure → OK (observational; log is the signal, never blocks stop)", async () => {
+    // findActiveByOwner throws (e.g. the data dir is inaccessible): runSubagentStop
+    // catches and swallows the error so the subagent is never blocked.
     const manager = {
-      readCurrent: async () => {
+      findActiveByOwner: async () => {
         throw new Error("disk full");
       },
       updateTask: vi.fn(),
@@ -256,7 +297,11 @@ describe("runSubagentStop — exit codes (fully observational)", () => {
       manager,
       explicitTaskId: "t1",
       readRaw: async () =>
-        JSON.stringify({ agent_type: "quality-reviewer", last_assistant_message: "STATUS: DONE" }),
+        JSON.stringify({
+          session_id: "test-session",
+          agent_type: "quality-reviewer",
+          last_assistant_message: "STATUS: DONE",
+        }),
     });
     expect(code).toBe(EXIT.OK);
     expect(manager.updateTask).not.toHaveBeenCalled();

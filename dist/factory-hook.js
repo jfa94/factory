@@ -8059,9 +8059,10 @@ async function handleSubagentStop(input, deps = {}) {
   const reviewer = reviewerNameOf(agentType);
   if (reviewer === null) return null;
   const manager = deps.manager ?? new StateManager(deps);
-  const run = await manager.readCurrent();
+  const sessionId = typeof input.session_id === "string" && input.session_id.length > 0 ? input.session_id : void 0;
+  const run = sessionId !== void 0 ? await manager.findActiveByOwner(sessionId) : null;
   if (run === null) {
-    log7.warn(`no active run (runs/current absent) \u2014 reviewer '${reviewer}' result skipped`);
+    log7.warn(`no active run for this session \u2014 reviewer '${reviewer}' result skipped`);
     return null;
   }
   let taskId = deps.explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
@@ -8140,13 +8141,6 @@ function decideStop(run, stoppingSession) {
   if (pending) return ALLOW;
   return { kind: "finalize", status: decideFinalize(run).run_status };
 }
-async function resolveStopRun(manager, stoppingSession) {
-  if (stoppingSession === void 0) return manager.readCurrent();
-  const owned = await manager.findActiveByOwner(stoppingSession);
-  if (owned !== null) return owned;
-  const current = await manager.readCurrent();
-  return current !== null && current.owner_session === void 0 ? current : null;
-}
 async function runStopGate(_argv = [], deps = {}) {
   const emit2 = deps.emit ?? ((s) => process.stdout.write(s));
   const manager = deps.manager ?? new StateManager(deps);
@@ -8161,9 +8155,9 @@ async function runStopGate(_argv = [], deps = {}) {
   }
   let run;
   try {
-    run = await resolveStopRun(manager, stoppingSession);
+    run = stoppingSession !== void 0 ? await manager.findActiveByOwner(stoppingSession) : null;
   } catch (err) {
-    const reason = `pipeline state unreadable: ${err.message}. Repair runs/current \u2192 state.json (or clear runs/current) before stopping.`;
+    const reason = `could not enumerate run state: ${err.message}. Investigate the factory data directory before stopping.`;
     log8.error(reason);
     emitBlockDecision(deny(reason), emit2);
     return EXIT.OK;

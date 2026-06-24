@@ -36,8 +36,9 @@
  * Non-`running` statuses pass through untouched: `paused` self-heals in-session,
  * `suspended` is a clean quota exit, and terminal runs are done. A finalize FAILURE
  * blocks the stop (M9 — surface the inconsistency, never silently accept a corrupt-state
- * stop); likewise an unreadable current `state.json` blocks. These two are the hook's
- * ONLY remaining blocks, and both signal genuine state CORRUPTION — not lack of progress.
+ * stop); likewise an inaccessible data directory blocks. These two are the hook's ONLY
+ * remaining blocks, both local filesystem errors — a foreign run's unreadable state.json
+ * never surfaces here (listRuns skips unreadable runs silently).
  *
  * Output contract (Stop hook): a block (corruption only) is `{decision:"block",reason}`
  * on STDOUT with exit 0 (the JSON is the block signal). Allow = no output, exit 0.
@@ -124,7 +125,7 @@ export function decideStop(run: RunState | null, stoppingSession?: string): Stop
 /** Options for {@link runStopGate} (injectable for tests). */
 export interface StopGateDeps extends DataDirOptions {
   /** Override the StateManager (tests). */
-  manager?: Pick<StateManager, "readCurrent" | "finalize" | "findActiveByOwner">;
+  manager?: Pick<StateManager, "finalize" | "findActiveByOwner">;
   /** stdout writer (tests capture the block JSON). */
   emit?: (s: string) => void;
   /** Read the raw Stop-hook stdin (tests inject; prod reads process.stdin). */
@@ -132,40 +133,14 @@ export interface StopGateDeps extends DataDirOptions {
 }
 
 /**
- * Resolve the run this Stop event should gate — the run the STOPPING SESSION OWNS,
- * NOT whatever `runs/current` happens to point at. This closes a latent clobber bug:
- * a 2nd `run create` repoints the global pointer, so a session reading `current`
- * could finalize/ignore another session's run and leave its OWN run dangling.
- *
- * Precedence:
- *   1. unknown stopper (no stdin)            → global `runs/current` (degraded-safe,
- *      today's behavior — we cannot attribute by owner).
- *   2. known stopper owning a live run       → THAT run (clobber-immune).
- *   3. known stopper owning no STAMPED run   → adopt `runs/current` ONLY if it is
- *      itself un-stamped (owner unknown) — so the stopper still finalizes a legacy
- *      un-owned all-terminal run — but NEVER adopt a run owned by a DIFFERENT known
- *      session (that one isn't ours → pass through).
- */
-async function resolveStopRun(
-  manager: Pick<StateManager, "readCurrent" | "findActiveByOwner">,
-  stoppingSession: string | undefined,
-): Promise<RunState | null> {
-  if (stoppingSession === undefined) return manager.readCurrent();
-  const owned = await manager.findActiveByOwner(stoppingSession);
-  if (owned !== null) return owned;
-  const current = await manager.readCurrent();
-  return current !== null && current.owner_session === undefined ? current : null;
-}
-
-/**
  * Run the Stop hook end-to-end. Reads the Stop event stdin to extract the STOPPING
- * session id (`session_id`) so the gate can session-scope its finalize (Prompt J), then
- * resolves the run THAT session owns ({@link resolveStopRun}). Always returns {@link EXIT.OK} — the block JSON on stdout
- * (not the exit code) is the signal Claude Code acts on, and a Stop hook must not crash
- * the session with a non-zero exit. The ONLY blocks are the two corruption cases
- * (unreadable state, finalize failure); a live run with pending work passes through. A
- * malformed/empty stdin yields an UNKNOWN stopping session (degraded-safe: resolution
- * falls back to `runs/current`).
+ * session id (`session_id`) so the gate can session-scope its finalize. Resolves only
+ * the run the stopping session OWNS via {@link StateManager.findActiveByOwner} — never
+ * the global `runs/current` pointer. Always returns {@link EXIT.OK} — the block JSON on
+ * stdout (not the exit code) is the signal Claude Code acts on, and a Stop hook must not
+ * crash the session with a non-zero exit. The ONLY blocks are the two corruption cases
+ * (data-dir unreadable, finalize failure); a live run with pending work or an unknown
+ * stopping session passes through.
  */
 export async function runStopGate(
   _argv: string[] = [],
@@ -185,21 +160,22 @@ export async function runStopGate(
         ? input.session_id
         : undefined;
   } catch (err) {
-    // A corrupt stdin is non-fatal here — we just lose session-scoping (degraded but
-    // safe: the owner-or-unknown block still applies). Never block the stop on this.
+    // A corrupt stdin is non-fatal here — we just lose session-scoping (degraded:
+    // unknown stopper → null → allow). Never block the stop on this.
     log.warn(`Stop hook stdin unparseable (session-scoping skipped): ${(err as Error).message}`);
     stoppingSession = undefined;
   }
 
   let run: RunState | null;
   try {
-    run = await resolveStopRun(manager, stoppingSession);
+    run = stoppingSession !== undefined ? await manager.findActiveByOwner(stoppingSession) : null;
   } catch (err) {
-    // Corrupt/unreadable current state.json: block so a human notices (the
-    // alternative — silently stopping on corrupt state — is the bug Δ M9 fixed).
+    // A failure here means our own data directory is inaccessible (listRuns → readdir
+    // failed with a non-ENOENT error). Foreign runs' unreadable state.json files are
+    // silently skipped by listRuns — they never surface here.
     const reason =
-      `pipeline state unreadable: ${(err as Error).message}. ` +
-      `Repair runs/current → state.json (or clear runs/current) before stopping.`;
+      `could not enumerate run state: ${(err as Error).message}. ` +
+      `Investigate the factory data directory before stopping.`;
     log.error(reason);
     emitBlockDecision(deny(reason), emit);
     return EXIT.OK;
