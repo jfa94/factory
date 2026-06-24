@@ -98,14 +98,51 @@ export function redactSecrets(text: string): string {
 }
 
 /**
+ * Published, PUBLIC tokens that are secret-shaped but documented non-secrets.
+ * Stripped from the input before detection so they don't false-positive. A
+ * garbled/wrong entry simply fails CLOSED (still blocks), never open.
+ *
+ * Stored as [header, payload, signature] tuples and assembled at runtime —
+ * same pattern as the test file — so this source file carries no JWT-shaped
+ * string that would trip the guard on commit. Verify components against
+ * `supabase status` or https://supabase.com/docs/guides/local-development
+ *
+ * Supabase CLI local-dev tokens (signed with the published default JWT secret
+ * "super-secret-jwt-token-with-at-least-32-characters-long"; iss:supabase-demo).
+ */
+// prettier-ignore
+const _KNOWN_PUBLIC_TOKEN_PARTS: readonly [string, string, string][] = [
+  // anon role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9",
+    "CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0",
+  ],
+  // service_role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0",
+    "EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU",
+  ],
+];
+export const KNOWN_PUBLIC_TOKENS: readonly string[] = _KNOWN_PUBLIC_TOKEN_PARTS.map((p) =>
+  p.join("."),
+);
+
+/**
  * Return the names of every pattern that matches anywhere in `text` (detection,
  * NOT redaction — includes quote-anchored patterns). Useful for a secret-commit
  * guard that needs to report WHAT was found, not just redact it.
+ *
+ * Known public tokens (e.g. published Supabase local-dev JWTs) are stripped
+ * before scanning so they don't false-positive. A real (non-default) JWT of the
+ * same shape still triggers the `jwt` pattern.
  */
 export function detectSecrets(text: string): string[] {
+  const scrubbed = KNOWN_PUBLIC_TOKENS.reduce((t, tok) => t.split(tok).join(""), text);
   const hits: string[] = [];
   for (const p of SECRET_CONTENT_PATTERNS) {
-    if (new RegExp(p.source).test(text)) hits.push(p.name);
+    if (new RegExp(p.source).test(scrubbed)) hits.push(p.name);
   }
   return hits;
 }

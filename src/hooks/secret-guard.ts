@@ -38,6 +38,14 @@ import {
   type HookInput,
 } from "./hook-io.js";
 
+/**
+ * Env files that are committed by convention (placeholders / public dev config).
+ * Skipped by the PATH blocklist; their CONTENT is still scanned, so a real
+ * provider key inside one is still blocked.
+ * ponytail: fixed safe set; add suffixes here if a project needs more.
+ */
+const ENV_COMMITTABLE = /^\.env\.(example|sample|template|test)$/;
+
 /** Path-name blocklist (basenames/globs that must never be committed). */
 const PATH_BLOCKLIST: ReadonlyArray<RegExp> = [
   /^\.env$/,
@@ -252,6 +260,9 @@ export async function decideSecretGuard(
     const fpath = raw.trim();
     if (fpath.length === 0) continue;
     const base = fpath.split("/").pop() ?? fpath;
+    // Conventionally-committed env files (.env.example/.test/etc.) are skipped
+    // by the path blocklist; their content is still scanned below.
+    if (ENV_COMMITTABLE.test(base)) continue;
     for (const glob of PATH_BLOCKLIST) {
       if (glob.test(base) || glob.test(fpath)) {
         blocks.push(`path:${fpath}`);

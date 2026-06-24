@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import { decideSecretGuard, type ExecFn } from "./secret-guard.js";
 import { parseHookInput, isDeny } from "./hook-io.js";
 import type { ExecResult } from "../shared/exec.js";
+import { KNOWN_PUBLIC_TOKENS } from "../shared/secret-patterns.js";
 
 function ok(stdout = ""): ExecResult {
   return { stdout, stderr: "", code: 0, signal: null, truncated: false };
@@ -63,6 +64,58 @@ describe("secret-guard — provider secrets block (Δ B)", () => {
   it("blocks a blocklisted path even with no content secret", async () => {
     const d = await decideSecretGuard(bashInput("git commit -m env"), {
       exec: fakeExec("+SOME=value", ".env"),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true);
+  });
+});
+
+describe("secret-guard — committable env files (ENV_COMMITTABLE)", () => {
+  it("allows .env.example with benign content (path skip)", async () => {
+    const d = await decideSecretGuard(bashInput("git commit -m ex"), {
+      exec: fakeExec("+SUPABASE_URL=http://localhost:54321", ".env.example"),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(false);
+  });
+
+  it("allows .env.test with benign content (path skip)", async () => {
+    const d = await decideSecretGuard(bashInput("git commit -m test"), {
+      exec: fakeExec("+FOO=bar", ".env.test"),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(false);
+  });
+
+  it("allows .env.test containing published Supabase local-dev JWTs", async () => {
+    const tok = KNOWN_PUBLIC_TOKENS[0]!;
+    const d = await decideSecretGuard(bashInput("git commit -m t5"), {
+      exec: fakeExec(`+ANON_KEY=${tok}`, ".env.test"),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(false);
+  });
+
+  it("still blocks .env.test containing a real provider key (content scan survives)", async () => {
+    const d = await decideSecretGuard(bashInput("git commit -m t5"), {
+      exec: fakeExec("+AWS_KEY=AKIA" + "IOSFODNN7EXAMPLE", ".env.test"),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true);
+  });
+
+  // Regression: plain .env and env-with-environment-suffix remain path-blocked.
+  it("still blocks plain .env", async () => {
+    const d = await decideSecretGuard(bashInput("git commit -m env"), {
+      exec: fakeExec("+FOO=bar", ".env"),
+      cwd: "/repo",
+    });
+    expect(isDeny(d)).toBe(true);
+  });
+
+  it("still blocks .env.local", async () => {
+    const d = await decideSecretGuard(bashInput("git commit -m env"), {
+      exec: fakeExec("+FOO=bar", ".env.local"),
       cwd: "/repo",
     });
     expect(isDeny(d)).toBe(true);
