@@ -77,10 +77,21 @@ across different repos run concurrently without cross-contamination:
   equals `CLAUDE_CODE_SESSION_ID`. No owning run → pass through; env id absent →
   retain prior behavior (these arms are lower-stakes — the nested-shell arm is a
   rail, the ship arm is dormant in production).
-- **`stop-gate`**: resolves the run owned by the **stopping session** rather than
-  the global pointer, so a clobber can't make it finalize the wrong run; unknown
-  session → allow (no run attributed, no action taken).
+- **`stop-gate`**: resolves the run owned by the **stopping session**
+  (`findActiveByOwner`) rather than the global pointer, so a clobber can't make it
+  finalize the wrong run. When the stopping session owns no single active run —
+  no active run, an unknown session, or an ambiguous ≥2-owned set — it passes
+  through (allow), logging the pass-through; nothing is finalized.
+- **`subagent-stop`**: attributes a stopping reviewer's verdict to the run owned
+  by its own session (`findActiveByOwner`); no owned run → the result is skipped
+  (it is observational, never authoritative).
 - **`holdout-guard`**: run-independent (reads only `dataDir`) — correctly global.
+
+Because session-mode `factory run create` now **requires** an owning session id
+(`--session-id` or `CLAUDE_CODE_SESSION_ID`; workflow-mode runs are exempt — the
+Workflow driver owns finalization), an ownerless session-mode run never arises in
+normal operation. The stop-gate's owner check is therefore belt-and-suspenders for
+unusual paths rather than a routine code path.
 
 The write-scope arm is a **rail**, not the boundary: the authoritative TDD
 enforcement is the deterministic commit-order gate on the task branch
@@ -114,4 +125,33 @@ Target-repo resolution honors `git -C <dir>` with **last-wins** semantics (via t
 canonical `parseGitInvocation` parser), so a `git -C <clean> -C <secret> commit`
 that points the scan at one directory and the commit at another cannot evade the
 guard — the scan tracks the same directory the commit uses.
+
+### What the path blocklist blocks (and what it allows)
+
+The guard blocks committing files whose **basename** matches a path blocklist
+(e.g. `.env`, key/credential file shapes). Two carve-outs prevent false
+positives on files that are committed by convention:
+
+- **Conventionally-committed env files** — basenames matching
+  `^\.env\.(example|sample|template|test)$` are skipped by the path blocklist.
+  These are placeholders / public dev config that projects commit on purpose.
+  Their **content is still scanned**, so a real provider key pasted into a
+  `.env.example` is still blocked. The safe set is a fixed regex in
+  `src/hooks/secret-guard.ts`; widen it there if a project needs more suffixes.
+
+### Known public tokens (false-positive suppression)
+
+Some published tokens are secret-shaped but are documented, public non-secrets —
+most notably the Supabase CLI **local-dev JWTs** (`anon` and `service_role`),
+which are signed with the published default JWT secret and carry
+`iss: supabase-demo`. Committing these is legitimate.
+
+Before content scanning, `detectSecrets` (`src/shared/secret-patterns.ts`)
+**strips every known public token** (`KNOWN_PUBLIC_TOKENS`) from the input, so
+they never trip the `jwt` pattern. A real, non-default JWT of the same shape is
+left intact and still triggers detection. The known-token list is assembled at
+runtime from `[header, payload, signature]` tuples so the source file itself
+carries no committed JWT-shaped string. A garbled entry fails **closed** — it
+simply stops matching, so the token is scanned like any other and still blocks;
+it can never open a hole.
 </content>
