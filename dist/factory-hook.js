@@ -1856,10 +1856,28 @@ function hasLiteralQuote(p) {
 var SECRET_REDACTION_PATTERNS = SECRET_CONTENT_PATTERNS.filter(
   (p) => !hasLiteralQuote(p)
 );
+var _KNOWN_PUBLIC_TOKEN_PARTS = [
+  // anon role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9",
+    "CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+  ],
+  // service_role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0",
+    "EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
+  ]
+];
+var KNOWN_PUBLIC_TOKENS = _KNOWN_PUBLIC_TOKEN_PARTS.map(
+  (p) => p.join(".")
+);
 function detectSecrets(text) {
+  const scrubbed = KNOWN_PUBLIC_TOKENS.reduce((t, tok) => t.split(tok).join(""), text);
   const hits = [];
   for (const p of SECRET_CONTENT_PATTERNS) {
-    if (new RegExp(p.source).test(text)) hits.push(p.name);
+    if (new RegExp(p.source).test(scrubbed)) hits.push(p.name);
   }
   return hits;
 }
@@ -6914,6 +6932,7 @@ async function readAllStdin3() {
 }
 
 // src/hooks/secret-guard.ts
+var ENV_COMMITTABLE = /^\.env\.(example|sample|template|test)$/;
 var PATH_BLOCKLIST = [
   /^\.env$/,
   /^\.env\..+$/,
@@ -7044,6 +7063,7 @@ async function decideSecretGuard(input, deps = {}) {
     const fpath = raw.trim();
     if (fpath.length === 0) continue;
     const base = fpath.split("/").pop() ?? fpath;
+    if (ENV_COMMITTABLE.test(base)) continue;
     for (const glob of PATH_BLOCKLIST) {
       if (glob.test(base) || glob.test(fpath)) {
         blocks.push(`path:${fpath}`);

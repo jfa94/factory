@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   redactSecrets,
   detectSecrets,
+  KNOWN_PUBLIC_TOKENS,
   SECRET_CONTENT_PATTERNS,
   SECRET_REDACTION_PATTERNS,
   REDACTION_TOKEN,
@@ -122,6 +123,24 @@ describe("table-driven coverage — every pattern detects, every redactable one 
       }
     });
   }
+});
+
+describe("KNOWN_PUBLIC_TOKENS — published dev keys are not flagged", () => {
+  it("detectSecrets returns [] for each public token", () => {
+    for (const tok of KNOWN_PUBLIC_TOKENS) {
+      expect(detectSecrets(tok)).toEqual([]);
+    }
+  });
+
+  it("a generic JWT (not in the public list) still detects as jwt", () => {
+    const genericJwt = "eyJ" + "A".repeat(10) + ".eyJ" + "A".repeat(10) + "." + "A".repeat(5);
+    expect(detectSecrets(genericJwt)).toContain("jwt");
+  });
+
+  it("redactSecrets still redacts a public token (detection-only exclusion)", () => {
+    const out = redactSecrets(KNOWN_PUBLIC_TOKENS[0]!);
+    expect(out).toContain(REDACTION_TOKEN);
+  });
 });
 
 describe("quantifier near-misses do NOT match (length floors are load-bearing)", () => {

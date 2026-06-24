@@ -7229,6 +7229,23 @@ function redactSecrets(text) {
   const re = new RegExp(combined, "g");
   return text.replace(re, REDACTION_TOKEN);
 }
+var _KNOWN_PUBLIC_TOKEN_PARTS = [
+  // anon role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9",
+    "CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+  ],
+  // service_role
+  [
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0",
+    "EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
+  ]
+];
+var KNOWN_PUBLIC_TOKENS = _KNOWN_PUBLIC_TOKEN_PARTS.map(
+  (p) => p.join(".")
+);
 
 // src/shared/paths.ts
 function tildeShorten(absPath, home) {
