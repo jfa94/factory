@@ -53,15 +53,16 @@ Violating the letter of this rule violates the spirit. No exceptions.
 
 ## Red Flags — STOP and re-read this prompt
 
-| Thought                                                     | Reality                                                                           |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| "Just one peek at the impl to know the return shape"        | Forbidden. Use the type signature / JSDoc. If unclear, BLOCK for a clarification. |
-| "I'll start with `toBeDefined` and tighten later"           | Tighten now. Presence-only as a sole assertion is forbidden.                      |
-| "Computing the expected value is easier if I read the impl" | That produces a tautological test. Derive from the criteria / example tables.     |
-| "This existing test duplicates mine — I'll modify it"       | Don't edit existing tests. Remove your duplicate or add a distinct case.          |
-| "The test passes on first run — it must be good"            | A test that passes with no impl is testing nothing. Rewrite it to fail correctly. |
-| "I'll wrap the call in try/catch to keep the suite green"   | Forbidden. Let exceptions propagate as test failures.                             |
-| "I'll commit from wherever I am"                            | Commit in the task worktree on the task branch, or the work is lost.              |
+| Thought                                                        | Reality                                                                                                  |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| "Just one peek at the impl to know the return shape"           | Forbidden. Use the type signature / JSDoc. If unclear, BLOCK for a clarification.                        |
+| "I'll start with `toBeDefined` and tighten later"              | Tighten now. Presence-only as a sole assertion is forbidden.                                             |
+| "Computing the expected value is easier if I read the impl"    | That produces a tautological test. Derive from the criteria / example tables.                            |
+| "This existing test duplicates mine — I'll modify it"          | Don't edit existing tests. Remove your duplicate or add a distinct case.                                 |
+| "The test passes on first run — it must be good"               | A test that passes with no impl is testing nothing. Rewrite it to fail correctly.                        |
+| "I'll wrap the call in try/catch to keep the suite green"      | Forbidden. Let exceptions propagate as test failures.                                                    |
+| "I'll commit from wherever I am"                               | Commit in the task worktree on the task branch, or the work is lost.                                     |
+| "The tests pass logic, eslint style is the executor's problem" | The executor can't touch your tests. Run `eslint --fix` before committing or a green task drops on lint. |
 
 ## Process
 
@@ -85,7 +86,14 @@ Violating the letter of this rule violates the spirit. No exceptions.
 5. **Confirm RED.** Run the test command and confirm every new test FAILS for the right
    reason (missing implementation), not from a typo or import error. A test that passes now
    tests nothing — rewrite it.
-6. **Commit (tests only)** in the task worktree on the task branch:
+6. **Lint-clean the tests you wrote.** If the repo opts into eslint (an eslint config plus
+   `node_modules/.bin/eslint` resolve in the worktree), run `eslint --fix` on the test files
+   you authored this run, then re-run the test command to confirm every new test still FAILS
+   for the right reason. `--fix` only touches auto-fixable style (curly, quotes, semicolons)
+   — it must not change any assertion. If the repo has no eslint setup, skip this step. The
+   lint gate runs `eslint .` over the whole worktree later and the executor cannot edit your
+   tests, so style you leave dirty here can drop an otherwise-green task.
+7. **Commit (tests only)** in the task worktree on the task branch:
    `test(<scope>): failing tests for <taskId> [<taskId>]`.
 
 ## Assertion quality (strongest → weakest)
@@ -103,6 +111,7 @@ Violating the letter of this rule violates the spirit. No exceptions.
 - [ ] Did NOT modify any existing test; did NOT write implementation
 - [ ] No try/catch swallowing failures; no shared mutable state between tests
 - [ ] Ran the suite and observed every new test FAIL for the correct reason
+- [ ] If the repo lints, ran `eslint --fix` on the authored test files and re-confirmed RED (no assertion changed)
 - [ ] Committed the tests in the task worktree on the task branch
 
 ## Final status (REQUIRED)
