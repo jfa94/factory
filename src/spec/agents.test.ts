@@ -101,7 +101,8 @@ describe("buildReviseSpawn — feeds the prior spec + blockers back for an incre
     expect(s.context.issue_number).toBe(123);
     expect(s.context.title).toBe("Checkout");
     expect(s.context.body).toBe(prd.body);
-    // labels ride along through the spread, and the prior_* keys do not clobber any PRD field.
+    // labels ride along through the spread (the prior_* keys are disjoint, so the type forbids
+    // any clobber — this just asserts the PRD fields are forwarded, not dropped).
     expect(s.context.labels).toEqual(prd.labels);
     expect(s.context.labels).not.toBe(undefined);
   });

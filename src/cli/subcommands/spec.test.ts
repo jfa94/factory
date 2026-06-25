@@ -214,6 +214,7 @@ describe("storeSpec", () => {
     // Same as the gate path: the prior spec + reviewer blockers ride along for a patch.
     expect(env.spawn.role).toBe("spec-generator");
     expect(env.spawn.context.prior_spec_md).toBe(PASS_GENERATED.specMd);
+    expect(env.spawn.context.prior_tasks).toEqual(PASS_GENERATED.tasks);
     expect(env.spawn.context.review_feedback).toEqual(env.blockers);
   });
 
