@@ -9343,6 +9343,18 @@ function buildGenerateSpawn(prd) {
     }
   };
 }
+function buildReviseSpawn(prd, prior, feedback) {
+  const base = buildGenerateSpawn(prd);
+  return {
+    ...base,
+    context: {
+      ...base.context,
+      prior_spec_md: prior.specMd,
+      prior_tasks: prior.tasks,
+      review_feedback: feedback
+    }
+  };
+}
 function buildReviewSpawn(prd, generated) {
   return {
     role: "spec-reviewer",
@@ -13517,6 +13529,7 @@ async function gateSpec(deps, repo, issue) {
       source: "gate",
       reason: "deterministic spec gates blocked the spec",
       blockers: gates.blockers,
+      spawn: buildReviseSpawn(prd, generated, gates.blockers),
       generated_path: generatedPath
     };
   }
@@ -13530,7 +13543,7 @@ async function gateSpec(deps, repo, issue) {
   };
 }
 async function storeSpec(deps, repo, issue) {
-  const { generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
+  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
   const generated = parseGenerateResult(await readJsonInput(generatedPath));
   const verdict = parseReviewVerdict(await readJsonInput(verdictPath));
   const decision = decideSpecReview(verdict, {
@@ -13538,13 +13551,16 @@ async function storeSpec(deps, repo, issue) {
     dimensionFloor: deps.config.spec.dimensionFloor
   });
   if (decision.decision === "NEEDS_REVISION") {
+    const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
+    const prd = await readJsonInput(prdPath);
     return {
       kind: "revise",
       repo,
       issue,
       source: "review",
       reason: decision.reason,
-      blockers: verdict.blockers.length > 0 ? verdict.blockers : [decision.reason],
+      blockers,
+      spawn: buildReviseSpawn(prd, generated, blockers),
       generated_path: generatedPath
     };
   }

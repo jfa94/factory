@@ -129,14 +129,26 @@ factory spec store   --repo <owner/name> --issue <n>
   else fetch the PRD and emit the generate spawn (`{kind:"generate", spawn,
 prd_path, generated_path, max_iterations}`).
 - **gate** — run the deterministic spec gates over the generator output; emit
-  `{kind:"revise", source:"gate", blockers, …}` on a block, else the review spawn
+  `{kind:"revise", source:"gate", blockers, spawn, …}` on a block, else the review spawn
   (`{kind:"review", spawn, verdict_path, …}`).
 - **store** — adjudicate the review (single 56/60 threshold + any-dimension floor);
-  emit `{kind:"revise", source:"review", …}` on NEEDS_REVISION, else persist and
-  emit `{kind:"stored", pointer}`.
+  emit `{kind:"revise", source:"review", blockers, spawn, …}` on NEEDS_REVISION, else
+  persist and emit `{kind:"stored", pointer}`.
 
 The orchestrator loops generate ⇄ review (bounded by `max_iterations`) until
 `reuse` or `stored`.
+
+**Revise carries the prior spec — incremental patch, not a re-author.** A `revise`
+envelope is symmetric with `generate`/`review`: it carries its own apex-pinned `spawn`
+manifest (`buildReviseSpawn`, `src/spec/agents.ts`) whose `context` embeds the PRIOR
+spec (`prior_spec_md` + `prior_tasks`) alongside the `review_feedback` blockers to clear.
+The orchestrator spawns the generator straight from `env.spawn.context` — it does **not**
+hand-assemble context at the prompt layer. The generator applies the minimal edits needed
+to clear the blockers and re-emits the full `GenerateResult`, preserving everything else.
+This closes a regression where the re-spawned generator, given only the PRD + blocker
+strings in a fresh context, re-authored from scratch and dropped previously-satisfied
+requirements and traceability lines. `store`'s revise reads `prd.json` from the scratch
+dir (durable across the loop) to rebuild that context.
 
 ## `run <create|resume|finalize|cancel>`
 

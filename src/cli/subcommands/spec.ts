@@ -45,6 +45,7 @@ import {
   parseGenerateResult,
   buildGenerateSpawn,
   buildReviewSpawn,
+  buildReviseSpawn,
   buildManifest,
   type GhClient,
   type Prd,
@@ -108,13 +109,18 @@ export type SpecBuildEnvelope =
       readonly verdict_path: string;
     }
   | {
-      /** The spec needs revision (gate blockers OR a sub-threshold review) — regenerate. */
+      /** The spec needs revision (gate blockers OR a sub-threshold review) — patch + re-gate. */
       readonly kind: "revise";
       readonly repo: string;
       readonly issue: number;
       readonly source: "gate" | "review";
       readonly reason: string;
       readonly blockers: string[];
+      /**
+       * The generator re-spawn, carrying the PRIOR spec + blockers so the agent patches
+       * it rather than re-authoring from the PRD (symmetric with `generate`/`review`).
+       */
+      readonly spawn: SpecSpawnSpec;
       readonly generated_path: string;
     }
   | {
@@ -212,6 +218,7 @@ export async function gateSpec(
       source: "gate",
       reason: "deterministic spec gates blocked the spec",
       blockers: gates.blockers,
+      spawn: buildReviseSpawn(prd, generated, gates.blockers),
       generated_path: generatedPath,
     };
   }
@@ -241,7 +248,7 @@ export async function storeSpec(
   repo: string,
   issue: number,
 ): Promise<SpecBuildEnvelope> {
-  const { generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
+  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
   const generated = parseGenerateResult(await readJsonInput<unknown>(generatedPath));
   const verdict = parseReviewVerdict(await readJsonInput<unknown>(verdictPath));
 
@@ -250,13 +257,18 @@ export async function storeSpec(
     dimensionFloor: deps.config.spec.dimensionFloor,
   });
   if (decision.decision === "NEEDS_REVISION") {
+    const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
+    // The revise spawn embeds the PRD (written by `resolve`, durable for the loop) so the
+    // generator patches the prior spec against the reviewer's blockers, not re-derives it.
+    const prd = await readJsonInput<Prd>(prdPath);
     return {
       kind: "revise",
       repo,
       issue,
       source: "review",
       reason: decision.reason,
-      blockers: verdict.blockers.length > 0 ? verdict.blockers : [decision.reason],
+      blockers,
+      spawn: buildReviseSpawn(prd, generated, blockers),
       generated_path: generatedPath,
     };
   }

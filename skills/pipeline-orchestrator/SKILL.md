@@ -47,13 +47,14 @@ override. Run the bounded generate ⇄ review loop until `reuse` or `stored`:
 env = factory spec resolve [--repo <o/n>] --issue <n>
 loop on env.kind:
   reuse | stored → done (env.pointer); go to Phase 2
-  generate → remember env.spawn.context + env.max_iterations (the loop bound)
+  generate → remember env.max_iterations (the loop bound)
       spawn spec-generator (worktree, opus) with env.spawn.context embedded
       write its GenerateResult JSON verbatim to env.generated_path
       env = factory spec gate [--repo <o/n>] --issue <n>
   revise → (count iterations; > the remembered max_iterations → STOP LOUD, spec-defect)
-      re-spawn spec-generator (worktree, opus) with the remembered spawn.context
-      PLUS env.reason and env.blockers appended ("fix these blockers first")
+      spawn spec-generator (worktree, opus) with env.spawn.context embedded
+      (env.spawn.context already carries the prior spec + the blockers to fix — the
+       agent PATCHES it; it does NOT re-author from scratch. Do not hand-assemble context.)
       write its GenerateResult JSON verbatim to env.generated_path
       env = factory spec gate [--repo <o/n>] --issue <n>
   review → spawn spec-reviewer (worktree, opus) with env.spawn.context embedded

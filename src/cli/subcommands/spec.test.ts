@@ -165,6 +165,14 @@ describe("gateSpec", () => {
     if (env.kind !== "revise") throw new Error("unreachable");
     expect(env.source).toBe("gate");
     expect(env.blockers.length).toBeGreaterThan(0);
+
+    // The revise envelope re-spawns the generator with the PRIOR spec + blockers
+    // embedded, so the agent patches it instead of re-authoring from the PRD.
+    expect(env.spawn.role).toBe("spec-generator");
+    expect(env.spawn.model).toBe(SPEC_DEFAULTS.specModel);
+    expect(env.spawn.context.prior_spec_md).toBe(FAIL_GENERATED.specMd);
+    expect(env.spawn.context.prior_tasks).toEqual(FAIL_GENERATED.tasks);
+    expect(env.spawn.context.review_feedback).toEqual(env.blockers);
   });
 
   it("emits the apex-pinned review spawn when gates pass", async () => {
@@ -192,6 +200,7 @@ describe("gateSpec", () => {
 
 describe("storeSpec", () => {
   it("emits revise(source=review) when the verdict trips the dimension floor", async () => {
+    await resolveSpec(deps(), REPO, ISSUE); // writes prd.json (the revise spawn embeds the PRD)
     await writeScratch("generated.json", PASS_GENERATED);
     await writeScratch("verdict.json", FAIL_VERDICT);
 
@@ -201,6 +210,11 @@ describe("storeSpec", () => {
     expect(env.source).toBe("review");
     expect(env.reason).toMatch(/floor/);
     expect(env.blockers).toContain("granularity too coarse");
+
+    // Same as the gate path: the prior spec + reviewer blockers ride along for a patch.
+    expect(env.spawn.role).toBe("spec-generator");
+    expect(env.spawn.context.prior_spec_md).toBe(PASS_GENERATED.specMd);
+    expect(env.spawn.context.review_feedback).toEqual(env.blockers);
   });
 
   it("persists the spec on PASS and returns a reusable pointer", async () => {

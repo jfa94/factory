@@ -38,6 +38,7 @@ export { SpecStore, makeSpecId } from "./store.js";
 export {
   buildGenerateSpawn,
   buildReviewSpawn,
+  buildReviseSpawn,
   GenerateResultSchema,
   parseGenerateResult,
   type SpecAgentRunner,

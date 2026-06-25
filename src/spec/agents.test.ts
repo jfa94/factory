@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildGenerateSpawn, buildReviewSpawn, type GenerateResult } from "./agents.js";
+import {
+  buildGenerateSpawn,
+  buildReviewSpawn,
+  buildReviseSpawn,
+  type GenerateResult,
+} from "./agents.js";
 import { SPEC_DEFAULTS } from "../config/index.js";
 import type { Prd } from "./gh.js";
 import type { SpecTask } from "./schema.js";
@@ -73,5 +78,35 @@ describe("D21 apex pin — spec generate spawn is UNCONDITIONALLY opus/max", () 
     const s = buildGenerateSpawn(prd);
     expect(s.context.issue_number).toBe(123);
     expect(s.context.title).toBe("Checkout");
+  });
+});
+
+describe("buildReviseSpawn — feeds the prior spec + blockers back for an incremental patch", () => {
+  const blockers = [
+    "testability: criterion X has no covering test",
+    "traceability: req Y uncovered",
+  ];
+
+  it("keeps the apex pin + spec-generator role (it is a re-spawn of the generator)", () => {
+    const s = buildReviseSpawn(prd, generated, blockers);
+    expect(s.role).toBe("spec-generator");
+    expect(s.model).toBe("opus");
+    expect(s.effort).toBe("max");
+    expect(s.model).toBe(SPEC_DEFAULTS.specModel);
+    expect(s.effort).toBe(SPEC_DEFAULTS.specEffort);
+  });
+
+  it("forwards the original PRD context (the axiom is preserved across revisions)", () => {
+    const s = buildReviseSpawn(prd, generated, blockers);
+    expect(s.context.issue_number).toBe(123);
+    expect(s.context.title).toBe("Checkout");
+    expect(s.context.body).toBe(prd.body);
+  });
+
+  it("embeds the prior spec + the blockers so the agent patches instead of re-deriving", () => {
+    const s = buildReviseSpawn(prd, generated, blockers);
+    expect(s.context.prior_spec_md).toBe(generated.specMd);
+    expect(s.context.prior_tasks).toEqual(generated.tasks);
+    expect(s.context.review_feedback).toEqual(blockers);
   });
 });

@@ -84,9 +84,12 @@ adjustments:
    thin end-to-end path (tracer bullet), not a horizontal layer of "all the types".
 5. **Tier each task.** Judge `risk_tier` from difficulty × stakes; write a one-line
    `risk_rationale`. Security-sensitive, data-loss-prone, or cross-cutting work skews high.
-6. If the PRD feedback loop re-invokes you, a `REVIEW_FEEDBACK` block (gate blockers or
-   sub-threshold reviewer findings) will be embedded — address every item and regenerate the
-   full spec.
+6. **Revision (the feedback loop re-invokes you).** Your prompt context carries the prior
+   spec (`prior_spec_md` + `prior_tasks`) and a `review_feedback` list of blockers (gate
+   blockers or sub-threshold reviewer findings). Apply the MINIMAL edits that clear every
+   blocker; preserve all other tasks, criteria, and traceability lines from the prior spec
+   verbatim. Do NOT re-derive the spec from the PRD — that regresses already-satisfied
+   requirements. Re-emit the full `GenerateResult` (the complete patched spec), not a diff.
 
 ## Output contract (REQUIRED)
 

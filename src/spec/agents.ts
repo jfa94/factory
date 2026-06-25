@@ -96,6 +96,31 @@ export function buildGenerateSpawn(prd: Prd): SpecSpawnSpec {
   };
 }
 
+/**
+ * Build the apex-pinned RE-spawn for a revise round. Unlike a fresh generate, this
+ * carries the PRIOR spec (`prior_spec_md` + `prior_tasks`) and the `review_feedback`
+ * blockers to clear, so the generator PATCHES the spec already on disk instead of
+ * re-deriving it from the PRD (a fresh context with PRD-only would regress
+ * previously-satisfied requirements). Inherits the PRD context + Decision-21 pin from
+ * {@link buildGenerateSpawn}; role stays `spec-generator`.
+ */
+export function buildReviseSpawn(
+  prd: Prd,
+  prior: GenerateResult,
+  feedback: string[],
+): SpecSpawnSpec {
+  const base = buildGenerateSpawn(prd);
+  return {
+    ...base,
+    context: {
+      ...base.context,
+      prior_spec_md: prior.specMd,
+      prior_tasks: prior.tasks,
+      review_feedback: feedback,
+    },
+  };
+}
+
 /** Build the apex-pinned spawn spec for the spec REVIEWER (Decision 21). */
 export function buildReviewSpawn(prd: Prd, generated: GenerateResult): SpecSpawnSpec {
   return {
