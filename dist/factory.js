@@ -13529,6 +13529,7 @@ async function gateSpec(deps, repo, issue) {
       source: "gate",
       reason: "deterministic spec gates blocked the spec",
       blockers: gates.blockers,
+      // review_feedback derives from these same blockers — single source, no divergence.
       spawn: buildReviseSpawn(prd, generated, gates.blockers),
       generated_path: generatedPath
     };

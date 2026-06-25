@@ -150,6 +150,15 @@ strings in a fresh context, re-authored from scratch and dropped previously-sati
 requirements and traceability lines. `store`'s revise reads `prd.json` from the scratch
 dir (durable across the loop) to rebuild that context.
 
+The three spawn `context` shapes are typed in `src/spec/agents.ts` (`GenerateContext`,
+`ReviseContext extends GenerateContext`, `ReviewContext`) so the builders return precise
+`SpecSpawnSpec<C>` types and a missing/typo'd revise-context key is a compile error. The
+emitted envelope JSON is unchanged. The revise envelope's `blockers` is `readonly`; the
+invariant is that `spawn.context.review_feedback` is derived from `blockers` at the single
+construction site. The prior-spec fields are also untrusted: because `prior_spec_md` /
+`prior_tasks` derive from the untrusted PRD, the `spec-generator`'s Untrusted Input Contract
+treats them and `review_feedback` as data to patch, never directives to obey.
+
 ## `run <create|resume|finalize|cancel>`
 
 ### `run create`

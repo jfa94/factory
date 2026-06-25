@@ -50,6 +50,9 @@ import {
   type GhClient,
   type Prd,
   type SpecSpawnSpec,
+  type GenerateContext,
+  type ReviseContext,
+  type ReviewContext,
 } from "../../spec/index.js";
 import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
 import type { Config, SpecPointer } from "../../types/index.js";
@@ -93,7 +96,7 @@ export type SpecBuildEnvelope =
       readonly kind: "generate";
       readonly repo: string;
       readonly issue: number;
-      readonly spawn: SpecSpawnSpec;
+      readonly spawn: SpecSpawnSpec<GenerateContext>;
       readonly prd_path: string;
       readonly generated_path: string;
       /** The orchestrator's bound on the generate/review loop (config.spec.maxRegenIterations). */
@@ -104,7 +107,7 @@ export type SpecBuildEnvelope =
       readonly kind: "review";
       readonly repo: string;
       readonly issue: number;
-      readonly spawn: SpecSpawnSpec;
+      readonly spawn: SpecSpawnSpec<ReviewContext>;
       readonly generated_path: string;
       readonly verdict_path: string;
     }
@@ -115,12 +118,14 @@ export type SpecBuildEnvelope =
       readonly issue: number;
       readonly source: "gate" | "review";
       readonly reason: string;
-      readonly blockers: string[];
+      readonly blockers: readonly string[];
       /**
        * The generator re-spawn, carrying the PRIOR spec + blockers so the agent patches
        * it rather than re-authoring from the PRD (symmetric with `generate`/`review`).
+       * Invariant: `spawn.context.review_feedback` is built from `blockers` at the single
+       * construction site below — the two never diverge.
        */
-      readonly spawn: SpecSpawnSpec;
+      readonly spawn: SpecSpawnSpec<ReviseContext>;
       readonly generated_path: string;
     }
   | {
@@ -218,6 +223,7 @@ export async function gateSpec(
       source: "gate",
       reason: "deterministic spec gates blocked the spec",
       blockers: gates.blockers,
+      // review_feedback derives from these same blockers — single source, no divergence.
       spawn: buildReviseSpawn(prd, generated, gates.blockers),
       generated_path: generatedPath,
     };

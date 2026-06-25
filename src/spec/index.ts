@@ -44,6 +44,9 @@ export {
   type SpecAgentRunner,
   type SpecAgentRole,
   type SpecSpawnSpec,
+  type GenerateContext,
+  type ReviseContext,
+  type ReviewContext,
   type GenerateResult,
 } from "./agents.js";
 

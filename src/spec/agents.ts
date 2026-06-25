@@ -22,18 +22,54 @@ import { SPEC_DEFAULTS } from "../config/index.js";
 /** The two spec-agent roles. */
 export type SpecAgentRole = "spec-generator" | "spec-reviewer";
 
+/** PRD context every generator spawn carries (fresh generate AND revise). */
+export interface GenerateContext {
+  issue_number: number;
+  title: string;
+  body: string;
+  labels: string[];
+}
+
+/**
+ * Revise-round context: the PRD fields PLUS the prior spec + blockers the
+ * generator must patch (not re-derive). The three added keys are REQUIRED, so a
+ * dropped or mistyped key is a compile error at the builder — that is the whole
+ * point: it closes the regression where a PRD-only re-spawn re-authored the spec
+ * from scratch and dropped previously-satisfied requirements.
+ */
+export interface ReviseContext extends GenerateContext {
+  prior_spec_md: string;
+  prior_tasks: SpecTask[];
+  review_feedback: readonly string[];
+}
+
+/** Reviewer spawn context: the PRD + the generated spec under review. */
+export interface ReviewContext {
+  issue_number: number;
+  prd_body: string;
+  spec_md: string;
+  tasks: SpecTask[];
+}
+
 /**
  * A spawn spec the WS10 driver consumes to launch the agent. `model` and
  * `effort` are the Decision-21 apex pin and are constants here.
+ *
+ * `context` is generic so each builder pins its exact shape ({@link GenerateContext} /
+ * {@link ReviseContext} / {@link ReviewContext}); it defaults to
+ * `Record<string, unknown>` so the envelope + {@link SpecAgentRunner} that hold a
+ * spawn opaquely need no type churn. NOTE the static guarantee reaches the builders
+ * and their tests ONLY — `context` is serialized to JSON and read by the markdown
+ * agent by string key, the same boundary every prompt context crosses.
  */
-export interface SpecSpawnSpec {
+export interface SpecSpawnSpec<C = Record<string, unknown>> {
   role: SpecAgentRole;
   /** Apex pin (Decision 21) — always `SPEC_DEFAULTS.specModel`. */
   model: string;
   /** Apex pin (Decision 21) — always `SPEC_DEFAULTS.specEffort`. */
   effort: string;
   /** Structured context handed to the agent prompt. */
-  context: Record<string, unknown>;
+  context: C;
 }
 
 /** Result of a generate pass: the markdown + the structured task list. */
@@ -82,7 +118,7 @@ export interface SpecAgentRunner {
 }
 
 /** Build the apex-pinned spawn spec for the spec GENERATOR (Decision 21). */
-export function buildGenerateSpawn(prd: Prd): SpecSpawnSpec {
+export function buildGenerateSpawn(prd: Prd): SpecSpawnSpec<GenerateContext> {
   return {
     role: "spec-generator",
     model: SPEC_DEFAULTS.specModel,
@@ -107,8 +143,8 @@ export function buildGenerateSpawn(prd: Prd): SpecSpawnSpec {
 export function buildReviseSpawn(
   prd: Prd,
   prior: GenerateResult,
-  feedback: string[],
-): SpecSpawnSpec {
+  feedback: readonly string[],
+): SpecSpawnSpec<ReviseContext> {
   const base = buildGenerateSpawn(prd);
   return {
     ...base,
@@ -122,7 +158,10 @@ export function buildReviseSpawn(
 }
 
 /** Build the apex-pinned spawn spec for the spec REVIEWER (Decision 21). */
-export function buildReviewSpawn(prd: Prd, generated: GenerateResult): SpecSpawnSpec {
+export function buildReviewSpawn(
+  prd: Prd,
+  generated: GenerateResult,
+): SpecSpawnSpec<ReviewContext> {
   return {
     role: "spec-reviewer",
     model: SPEC_DEFAULTS.specModel,

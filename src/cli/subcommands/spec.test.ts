@@ -217,6 +217,32 @@ describe("storeSpec", () => {
     expect(env.spawn.context.review_feedback).toEqual(env.blockers);
   });
 
+  it("throws LOUD when the revise path needs prd.json but resolve never wrote it", async () => {
+    // This diff makes storeSpec's revise branch depend on prd.json for the FIRST time
+    // (resolve writes it; the doc calls it durable across the loop). With no prd.json on
+    // disk the read must fail attributably, not silently degrade the patch context.
+    await writeScratch("generated.json", PASS_GENERATED);
+    await writeScratch("verdict.json", FAIL_VERDICT); // NEEDS_REVISION → reads prd.json
+    // NOTE: no resolveSpec(), so prd.json is absent.
+    await expect(storeSpec(deps(), REPO, ISSUE)).rejects.toThrow(/prd\.json|ENOENT/);
+  });
+
+  it("synthesizes [decision.reason] into review_feedback when the reviewer lists no blockers", async () => {
+    await resolveSpec(deps(), REPO, ISSUE); // writes prd.json
+    await writeScratch("generated.json", PASS_GENERATED);
+    // The dimension floor (granularity 5 ≤ 5) trips NEEDS_REVISION even with an empty
+    // blockers array — exercising the `[decision.reason]` fallback the truthy-branch test misses.
+    await writeScratch("verdict.json", { ...FAIL_VERDICT, blockers: [] });
+
+    const env = await storeSpec(deps(), REPO, ISSUE);
+    expect(env.kind).toBe("revise");
+    if (env.kind !== "revise") throw new Error("unreachable");
+    expect(env.reason).toMatch(/floor/);
+    // The fallback reason (not an empty array) is what rides into the patch spawn's feedback.
+    expect(env.blockers).toEqual([env.reason]);
+    expect(env.spawn.context.review_feedback).toEqual(env.blockers);
+  });
+
   it("persists the spec on PASS and returns a reusable pointer", async () => {
     await writeScratch("generated.json", PASS_GENERATED);
     await writeScratch("verdict.json", PASS_VERDICT);
