@@ -183,6 +183,12 @@ export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecis
         status: "blocked-escalate",
         reason: outcome.reason,
       });
+    case "test-defective":
+      return classifyFailure({
+        kind: "producer-status",
+        status: "test-defective",
+        reason: outcome.reason,
+      });
     case "needs-context":
       return classifyFailure({
         kind: "producer-status",
@@ -201,8 +207,11 @@ export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecis
 /**
  * Record a completed producer spawn into state (the producer-result logic the orchestrator's
  * `applyRecordProducer` record core calls). On `done`: record `producer_role` and
- * advance to `resumePhase`. On any failure status: classify (Δ D) →
- * {@link escalateOrFail}, resuming at the SAME producer `phase`.
+ * advance to `resumePhase` (clearing any pending test-revision feedback on a
+ * test-writer done). On `test-defective` (implementer only): persist the defect
+ * feedback and recover by resuming at the `tests` phase so the test-writer
+ * regenerates. On any other failure status: classify (Δ D) → {@link escalateOrFail},
+ * resuming at the SAME producer `phase`.
  *
  * The caller is responsible for the actual spawn (the runner's Agent spawn,
  * collected out-of-band) — this only records the resulting {@link ProducerOutcome}
@@ -216,8 +225,29 @@ export async function applyProducerOutcome(
   outcome: ProducerOutcome,
 ): Promise<TaskStep> {
   if (outcome.status === "done") {
-    await deps.state.updateTask(runId, taskId, (t) => ({ ...t, producer_role: opts.role }));
+    await deps.state.updateTask(runId, taskId, (t) => ({
+      ...t,
+      producer_role: opts.role,
+      // A completed test-writer re-run resolves any pending defect feedback — clear
+      // it so a stale note never leaks into a later rung's regeneration.
+      ...(opts.role === "test-writer" ? { test_revision_feedback: undefined } : {}),
+    }));
     return { done: false, phase: opts.resumePhase };
+  }
+  // A `test-defective` escalation (only the implementer raises it) recovers by
+  // RE-RUNNING THE TEST-WRITER: persist the defect feedback and resume at `tests`
+  // (not the implementer's own `exec` phase). The escalation cap still bounds it.
+  if (outcome.status === "test-defective") {
+    if (opts.phase !== "exec") {
+      throw new Error(
+        `transitions: 'test-defective' raised from non-exec phase '${opts.phase}' (only the implementer may report a defective RED test)`,
+      );
+    }
+    await deps.state.updateTask(runId, taskId, (t) => ({
+      ...t,
+      test_revision_feedback: outcome.reason,
+    }));
+    return escalateOrFail(deps, runId, taskId, classifyProducerFailure(outcome), "tests");
   }
   return escalateOrFail(deps, runId, taskId, classifyProducerFailure(outcome), opts.phase);
 }

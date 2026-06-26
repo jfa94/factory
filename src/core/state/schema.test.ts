@@ -377,3 +377,25 @@ describe("TaskState.phase cursor", () => {
     expect(() => parseTaskState(minimalTask({ merge_resyncs: 1.5 }))).toThrow();
   });
 });
+
+describe("TaskState.test_revision_feedback (defective-RED-test recovery)", () => {
+  it("is optional (absent by default) and round-trips a stamped value", () => {
+    expect(parseTaskState(minimalTask()).test_revision_feedback).toBeUndefined();
+    const fb = "pins user_id = auth.uid() — assert behavior, not source literal";
+    expect(parseTaskState(minimalTask({ test_revision_feedback: fb })).test_revision_feedback).toBe(
+      fb,
+    );
+  });
+
+  it("is allowed on a failed row (transient feedback, not a failure-cluster field)", () => {
+    const t = parseTaskState(
+      minimalTask({
+        status: "failed",
+        failure_class: "capability-budget",
+        failure_reason: "exhausted the rung budget re-pinning the RED test",
+        test_revision_feedback: "still defective",
+      }),
+    );
+    expect(t.test_revision_feedback).toBe("still defective");
+  });
+});

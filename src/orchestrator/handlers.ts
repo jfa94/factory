@@ -125,6 +125,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
     runId: string,
     rung: number,
     resumePhase: TaskPhase,
+    extraPriorFailures: readonly PriorFailureNote[] = [],
   ): Promise<PhaseResult> {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const split = splitFor(deps.config, runId, specTask);
@@ -135,7 +136,13 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
       visibleCriteria: split.visible,
       files: specTask.files,
       rung,
-      priorFailures: dial.injectsPriorFailure ? [priorFailureNote(rung)] : [],
+      // `extraPriorFailures` (e.g. a test-revision note) is injected regardless of
+      // the rung dial — a defective RED test must be steered away from on the very
+      // first regeneration (rung 1), where the generic dial note is still off.
+      priorFailures: [
+        ...extraPriorFailures,
+        ...(dial.injectsPriorFailure ? [priorFailureNote(rung)] : []),
+      ],
     });
     const promptRef = await deps.artifacts.putProducerContext(
       runId,
@@ -215,7 +222,30 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
       if (specTask.tdd_exempt === true) {
         return advance("exec");
       }
-      return producerSpawn("test-writer", specTask, ctx.run.run_id, task.escalation_rung, "exec");
+      // On a test-revision recovery, the implementer's defect feedback is carried on
+      // the task row — inject it so the regenerated test-writer does not re-pin the
+      // same wrong literal (it writes a BEHAVIORAL test instead).
+      const revisionNote: PriorFailureNote[] =
+        task.test_revision_feedback !== undefined
+          ? [
+              {
+                rung: task.escalation_rung,
+                summary:
+                  `Your PRIOR test for this task was rejected as INCORRECT by the implementer ` +
+                  `and reviewers: ${task.test_revision_feedback}. Write a BEHAVIORAL test derived ` +
+                  `from the acceptance criteria — do NOT pin an implementation source literal ` +
+                  `(no toContain("<source string>")).`,
+              },
+            ]
+          : [];
+      return producerSpawn(
+        "test-writer",
+        specTask,
+        ctx.run.run_id,
+        task.escalation_rung,
+        "exec",
+        revisionNote,
+      );
     },
 
     /**

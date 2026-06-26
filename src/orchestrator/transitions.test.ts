@@ -67,6 +67,7 @@ describe("orchestrator transitions (shared loop + CLI ladder/fail logic)", () =>
           ...(t.started_at ? { started_at: t.started_at } : {}),
           ...(t.ended_at ? { ended_at: t.ended_at } : {}),
           ...(t.producer_role ? { producer_role: t.producer_role } : {}),
+          ...(t.test_revision_feedback ? { test_revision_feedback: t.test_revision_feedback } : {}),
           ...(t.spawn_in_flight ? { spawn_in_flight: t.spawn_in_flight } : {}),
         },
       },
@@ -235,6 +236,12 @@ describe("orchestrator transitions (shared loop + CLI ladder/fail logic)", () =>
     expect(classifyProducerFailure({ status: "error", reason: "r2" }).action).toBe("retry");
   });
 
+  it("classifyProducerFailure: test-defective → retry (regenerate the RED test)", () => {
+    expect(classifyProducerFailure({ status: "test-defective", reason: "wrong pin" }).action).toBe(
+      "retry",
+    );
+  });
+
   it("classifyProducerFailure throws if handed a done outcome", () => {
     expect(() => classifyProducerFailure({ status: "done" } as ProducerOutcome)).toThrow(/done/i);
   });
@@ -289,6 +296,78 @@ describe("orchestrator transitions (shared loop + CLI ladder/fail logic)", () =>
     if (step.outcome.outcome !== "failed") throw new Error("unreachable");
     expect(step.outcome.failure_class).toBe("spec-defect");
     expect((await readTask("t1")).escalation_rung).toBe(0);
+  });
+
+  // -- applyProducerOutcome: test-defective recovery (Δ D) ------------------
+
+  it("applyProducerOutcome on test-defective resumes at TESTS (not exec), persists feedback, bumps rung", async () => {
+    await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
+    const outcome: ProducerOutcome = {
+      status: "test-defective",
+      reason: "RED test pins user_id = auth.uid()",
+    };
+    const step = await applyProducerOutcome(
+      deps,
+      RUN_ID,
+      "t1",
+      { role: "implementer", phase: "exec", resumePhase: "verify" },
+      outcome,
+    );
+
+    // Recovers by regenerating the test: resume at `tests`, NOT the implementer's exec.
+    expect(step).toEqual({ done: false, phase: "tests" });
+    const task = await readTask("t1");
+    expect(task.escalation_rung).toBe(1); // bounded by the cap
+    expect(task.test_revision_feedback).toContain("auth.uid()");
+  });
+
+  it("applyProducerOutcome throws loud on a test-defective raised from a non-exec phase", async () => {
+    await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
+    const outcome: ProducerOutcome = { status: "test-defective", reason: "x" };
+    await expect(
+      applyProducerOutcome(
+        deps,
+        RUN_ID,
+        "t1",
+        { role: "test-writer", phase: "tests", resumePhase: "exec" },
+        outcome,
+      ),
+    ).rejects.toThrow(/non-exec phase/i);
+  });
+
+  it("a completed test-writer clears any pending test_revision_feedback (no stale leak)", async () => {
+    await seedTask({
+      task_id: "t1",
+      status: "executing",
+      escalation_rung: 1,
+      test_revision_feedback: "prior test pinned a wrong literal",
+    });
+    const step = await applyProducerOutcome(
+      deps,
+      RUN_ID,
+      "t1",
+      { role: "test-writer", phase: "tests", resumePhase: "exec" },
+      { status: "done" },
+    );
+
+    expect(step).toEqual({ done: false, phase: "exec" });
+    expect((await readTask("t1")).test_revision_feedback).toBeUndefined();
+  });
+
+  it("test-defective at the cap fails capability-budget (bounded recovery, no infinite loop)", async () => {
+    await seedTask({ task_id: "t1", status: "executing", escalation_rung: ESCALATION_CAP });
+    const step = await applyProducerOutcome(
+      deps,
+      RUN_ID,
+      "t1",
+      { role: "implementer", phase: "exec", resumePhase: "verify" },
+      { status: "test-defective", reason: "still pinning the wrong literal" },
+    );
+
+    expect(step.done).toBe(true);
+    if (!step.done) throw new Error("unreachable");
+    if (step.outcome.outcome !== "failed") throw new Error("unreachable");
+    expect(step.outcome.failure_class).toBe("capability-budget");
   });
 
   // -- markInFlight phase cursor persistence --------------------------------

@@ -44,6 +44,22 @@ out of context — re-executes. This is why fails carry a closed failure class
 (`capability-budget`, `spec-defect`, `blocked-environmental`): the class tells the
 human what to do, and tells the ladder whether to retry.
 
+The producer's own terminal STATUS line (`agents/implementer.md`) parses into a
+closed outcome union (`src/producer/agents.ts`) that `classifyFailure` reads:
+
+| Producer outcome   | STATUS line                                                   | Classifies as                                  |
+| ------------------ | ------------------------------------------------------------- | ---------------------------------------------- |
+| `done`             | `STATUS: DONE`                                                | success — advance                              |
+| `blocked-escalate` | `STATUS: BLOCKED — escalate: <reason>`                        | terminal `spec-defect`                         |
+| `test-defective`   | `STATUS: BLOCKED — escalate: test requires revision <reason>` | `capability` — retry (regenerate the RED test) |
+| `needs-context`    | `STATUS: NEEDS_CONTEXT — <question>`                          | `capability` — retry                           |
+| `error`            | unparseable / empty                                           | `capability` — retry                           |
+
+`test-defective` is split out of `blocked-escalate` by a single, deliberately
+**contiguous** uppercased substring — `TEST REQUIRES REVISION`. A genuine spec
+contradiction that merely _mentions_ "the criterion the test verifies" stays
+`blocked-escalate` (terminal). See [the recovery path](#the-test-defective-recovery-path).
+
 ## Rule 2 — Change a variable each rung
 
 A blind re-roll (re-running the same producer on the same model with the same
@@ -96,6 +112,48 @@ re-verifies, and repeats — bounded by the patch budget and by the requirement 
 each pass reduce the blocker count. When the budget or progress is spent, the outer
 loop nukes and escalates the model. This keeps cheap, targeted fixes cheap and
 reserves the expensive model escalation for genuine capability shortfalls.
+
+## The `test-defective` recovery path
+
+The ladder normally re-runs whichever producer just failed at the **same** phase. The
+`test-defective` outcome is the one exception: it is raised by the **implementer**
+(the `exec` phase) but recovers by re-running the **test-writer** (the `tests` phase).
+
+It exists because the implementer may never edit a test (Iron Law). When the
+pre-committed RED test is itself wrong — most often a **source-presence pin**
+(`toContain("<impl literal>")` over a source/migration file) that locked the first
+implementation guess in as "the contract" — no correct implementation can make it
+green, and the immutable test makes the task unfixable from the `exec` side. Rather
+than dead-end as a terminal spec-defect, the implementer reports
+`STATUS: BLOCKED — escalate: test requires revision <reason>` and the task recovers:
+
+```mermaid
+sequenceDiagram
+  participant TW as test-writer (tests)
+  participant IMPL as implementer (exec)
+  participant ORCH as orchestrator
+  TW->>IMPL: commits RED test (wrong: pins a source literal)
+  IMPL->>ORCH: STATUS: BLOCKED — escalate: test requires revision <reason>
+  Note over ORCH: persist test_revision_feedback<br/>resume at `tests` (not `exec`)
+  ORCH->>TW: re-spawn with the defect note in priorFailures
+  TW->>IMPL: commits a fresh BEHAVIORAL RED test
+  IMPL->>ORCH: STATUS: DONE
+```
+
+- **Phase guard.** `applyProducerOutcome` (`src/orchestrator/transitions.ts`)
+  LOUD-throws if `test-defective` arrives from any phase other than `exec` — only the
+  implementer may judge a test defective.
+- **Feedback carry.** The implementer's reason is persisted on the transient task
+  field `test_revision_feedback`, then injected into the regenerating test-writer's
+  `priorFailures` so it writes a behavioral test instead of re-pinning the same
+  literal. The note is **gated on the field, not the rung dial** (`handlers.tests`),
+  so it lands even at rung 1 where the generic prior-failure note is still off. It is
+  cleared once the test-writer returns `done` (and on rescue's `resetTaskRow`).
+- **Same budget, no infinite loop.** The recovery burns the shared `escalation_rung`
+  (Rule 3) — a persistent re-pin climbs to `ESCALATION_CAP` and then fails
+  `capability-budget`, a clean dead-end rather than an endless test↔impl bounce.
+
+This path was added by [Decision 38](./decisions.md#decision-38--defective-red-test-recovery-the-implementer-reports-it-the-test-writer-regenerates-it).
 
 ## What a fail becomes
 

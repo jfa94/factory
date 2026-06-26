@@ -75,6 +75,7 @@ function resetTaskRow(task: TaskState): TaskState {
     failure_class: _failureClass,
     failure_reason: _failureReason,
     producer_role: _producerRole,
+    test_revision_feedback: _testRevisionFeedback,
     started_at: _startedAt,
     ended_at: _endedAt,
     phase: _phase,

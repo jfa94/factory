@@ -7208,6 +7208,15 @@ var TaskStateSchema = external_exports.object({
   escalation_rung: EscalationRungSchema.default(0),
   /** Which producer role is/last ran. */
   producer_role: ProducerRoleEnum.optional(),
+  /**
+   * Defect feedback carried from the implementer's `test-defective` escalation into
+   * the NEXT test-writer re-run (the test-revision recovery, Δ D). Set when the
+   * implementer reports the RED test is wrong; injected into the regenerated
+   * test-writer's prior-failure context (handlers.tests) so it does not re-pin the
+   * same wrong literal; cleared once the test-writer returns `done`. Absent
+   * otherwise. Transient — not a failure field (allowed on any status).
+   */
+  test_revision_feedback: external_exports.string().optional(),
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),

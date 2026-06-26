@@ -6216,6 +6216,15 @@ var TaskStateSchema = external_exports.object({
   escalation_rung: EscalationRungSchema.default(0),
   /** Which producer role is/last ran. */
   producer_role: ProducerRoleEnum.optional(),
+  /**
+   * Defect feedback carried from the implementer's `test-defective` escalation into
+   * the NEXT test-writer re-run (the test-revision recovery, Δ D). Set when the
+   * implementer reports the RED test is wrong; injected into the regenerated
+   * test-writer's prior-failure context (handlers.tests) so it does not re-pin the
+   * same wrong literal; cleared once the test-writer returns `done`. Absent
+   * otherwise. Transient — not a failure field (allowed on any status).
+   */
+  test_revision_feedback: external_exports.string().optional(),
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
@@ -10089,6 +10098,9 @@ function parseProducerStatus(raw) {
   const line = raw.trim();
   const upper = line.toUpperCase();
   if (upper.includes("BLOCKED") && upper.includes("ESCALATE")) {
+    if (upper.includes("TEST REQUIRES REVISION")) {
+      return { status: "test-defective", reason: line };
+    }
     return { status: "blocked-escalate", reason: line };
   }
   if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {
@@ -10171,6 +10183,9 @@ function classifyFailure(signal) {
           failureClass: "spec-defect",
           reason: `producer reported the task unworkable as specified: ${signal.reason}`
         };
+      }
+      if (signal.status === "test-defective") {
+        return { action: "retry", reason: `RED test reported defective: ${signal.reason}` };
       }
       return { action: "retry", reason: signal.reason };
     }
@@ -11713,6 +11728,12 @@ function classifyProducerFailure(outcome) {
         status: "blocked-escalate",
         reason: outcome.reason
       });
+    case "test-defective":
+      return classifyFailure({
+        kind: "producer-status",
+        status: "test-defective",
+        reason: outcome.reason
+      });
     case "needs-context":
       return classifyFailure({
         kind: "producer-status",
@@ -11729,8 +11750,26 @@ function classifyProducerFailure(outcome) {
 }
 async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
   if (outcome.status === "done") {
-    await deps.state.updateTask(runId, taskId, (t) => ({ ...t, producer_role: opts.role }));
+    await deps.state.updateTask(runId, taskId, (t) => ({
+      ...t,
+      producer_role: opts.role,
+      // A completed test-writer re-run resolves any pending defect feedback — clear
+      // it so a stale note never leaks into a later rung's regeneration.
+      ...opts.role === "test-writer" ? { test_revision_feedback: void 0 } : {}
+    }));
     return { done: false, phase: opts.resumePhase };
+  }
+  if (outcome.status === "test-defective") {
+    if (opts.phase !== "exec") {
+      throw new Error(
+        `transitions: 'test-defective' raised from non-exec phase '${opts.phase}' (only the implementer may report a defective RED test)`
+      );
+    }
+    await deps.state.updateTask(runId, taskId, (t) => ({
+      ...t,
+      test_revision_feedback: outcome.reason
+    }));
+    return escalateOrFail(deps, runId, taskId, classifyProducerFailure(outcome), "tests");
   }
   return escalateOrFail(deps, runId, taskId, classifyProducerFailure(outcome), opts.phase);
 }
@@ -11773,7 +11812,7 @@ function makePhaseHandlers(deps) {
       summary: `prior attempt at rung ${prior} did not clear the merge gate`
     };
   }
-  async function producerSpawn(role, specTask, runId, rung, resumePhase) {
+  async function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = []) {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const split = splitFor(deps.config, runId, specTask);
     const context = buildProducerContext({
@@ -11783,7 +11822,13 @@ function makePhaseHandlers(deps) {
       visibleCriteria: split.visible,
       files: specTask.files,
       rung,
-      priorFailures: dial.injectsPriorFailure ? [priorFailureNote(rung)] : []
+      // `extraPriorFailures` (e.g. a test-revision note) is injected regardless of
+      // the rung dial — a defective RED test must be steered away from on the very
+      // first regeneration (rung 1), where the generic dial note is still off.
+      priorFailures: [
+        ...extraPriorFailures,
+        ...dial.injectsPriorFailure ? [priorFailureNote(rung)] : []
+      ]
     });
     const promptRef = await deps.artifacts.putProducerContext(
       runId,
@@ -11851,7 +11896,20 @@ function makePhaseHandlers(deps) {
       if (specTask.tdd_exempt === true) {
         return advance("exec");
       }
-      return producerSpawn("test-writer", specTask, ctx.run.run_id, task.escalation_rung, "exec");
+      const revisionNote = task.test_revision_feedback !== void 0 ? [
+        {
+          rung: task.escalation_rung,
+          summary: `Your PRIOR test for this task was rejected as INCORRECT by the implementer and reviewers: ${task.test_revision_feedback}. Write a BEHAVIORAL test derived from the acceptance criteria \u2014 do NOT pin an implementation source literal (no toContain("<source string>")).`
+        }
+      ] : [];
+      return producerSpawn(
+        "test-writer",
+        specTask,
+        ctx.run.run_id,
+        task.escalation_rung,
+        "exec",
+        revisionNote
+      );
     },
     /**
      * exec: spawn the implementer for the current rung against the holdout-stripped
@@ -13742,6 +13800,7 @@ function resetTaskRow(task) {
     failure_class: _failureClass,
     failure_reason: _failureReason,
     producer_role: _producerRole,
+    test_revision_feedback: _testRevisionFeedback,
     started_at: _startedAt,
     ended_at: _endedAt,
     phase: _phase,

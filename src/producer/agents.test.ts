@@ -12,6 +12,30 @@ describe("parseProducerStatus — closed outcome from the terminal STATUS line",
     if (o.status === "blocked-escalate") expect(o.reason).toContain("escalate");
   });
 
+  it("STATUS: BLOCKED — escalate: test requires revision → test-defective (recoverable, Δ D)", () => {
+    const o = parseProducerStatus(
+      "STATUS: BLOCKED — escalate: test requires revision — pins user_id = auth.uid()",
+    );
+    expect(o.status).toBe("test-defective");
+    if (o.status === "test-defective") expect(o.reason).toContain("test requires revision");
+  });
+
+  it("test-defective takes precedence over plain blocked-escalate (more specific wins)", () => {
+    // Both keywords present; the contiguous 'test requires revision' phrase routes to recovery.
+    expect(parseProducerStatus("STATUS: BLOCKED — escalate: TEST REQUIRES REVISION").status).toBe(
+      "test-defective",
+    );
+  });
+
+  it("a BLOCKED — escalate line WITHOUT the contiguous phrase stays blocked-escalate (spec-defect)", () => {
+    // Non-contiguous mention ("the criterion for the test requires revision") must NOT
+    // be mistaken for a defective-test signal — it is a genuine spec contradiction.
+    expect(
+      parseProducerStatus("STATUS: BLOCKED — escalate: the criterion the test verifies is wrong")
+        .status,
+    ).toBe("blocked-escalate");
+  });
+
   it("STATUS: NEEDS_CONTEXT → needs-context (retry signal, not a fail)", () => {
     expect(parseProducerStatus("STATUS: NEEDS_CONTEXT").status).toBe("needs-context");
   });

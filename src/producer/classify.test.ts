@@ -49,6 +49,16 @@ describe("classify-before-retry (Δ D) — capability failures are RETRYABLE", (
     );
   });
 
+  it("producer 'test-defective' → retry (regenerate the RED test, NOT a terminal spec-defect)", () => {
+    const d = classifyFailure({
+      kind: "producer-status",
+      status: "test-defective",
+      reason: "RED test pins a wrong literal",
+    });
+    expect(d.action).toBe("retry");
+    expect(d.reason).toContain("defective");
+  });
+
   it("a fixable deterministic gate (failing tests/coverage/type/lint) → retry", () => {
     const d = classifyFailure({
       kind: "gate-failure",
@@ -60,9 +70,9 @@ describe("classify-before-retry (Δ D) — capability failures are RETRYABLE", (
   });
 
   it("merge-gate-blocked (confirmed blockers remain) → retry (fix-forward)", () => {
-    expect(classifyFailure({ kind: "merge-gate-blocked", reason: "blocked by security" }).action).toBe(
-      "retry",
-    );
+    expect(
+      classifyFailure({ kind: "merge-gate-blocked", reason: "blocked by security" }).action,
+    ).toBe("retry");
   });
 
   it("verifier-error is LOUD but retryable (re-run verify) — never an auto-advance, never a silent fail (D27)", () => {

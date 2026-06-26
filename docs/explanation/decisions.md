@@ -487,7 +487,7 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 | -------------------------- | --------------------------- | ------- |
 | Spec (generation + review) | Opus                        | **Max** |
 | Verifier (reviewers)       | Opus                        | Default |
-| Producer (implementer)        | **Adaptive** (by task risk) | Default |
+| Producer (implementer)     | **Adaptive** (by task risk) | Default |
 
 **Why:**
 
@@ -848,6 +848,63 @@ staging-rooted worktree → record publishes the docs commit onto staging). Beca
 fire while docs pend. A docs failure suspends the run (one attempt; resumable via
 `/factory:resume`), never shipping half-documented. Whole-PRD diff
 (`origin/<baseBranch>..HEAD`); ships inside the one rollup PR (Decision 34).
+
+---
+
+## Decision 38 — Defective-RED-Test Recovery: the Implementer Reports It, the Test-Writer Regenerates It
+
+A workflow run dead-ended on a DB-migration task that had **no executable RED test**:
+the test-writer, unable to assert behavior against a SQL migration with no RED-time
+runner, fell back to a **source-presence pin** — `toContain("<impl literal>")` over
+the migration file — which locked the _first_ implementation guess in as "the
+contract." When reviewers later found that guess wrong, the immutable test (the
+implementer may never edit a test, Iron Law) made it unfixable. The implementer's
+only exit was `BLOCKED — escalate`, which classifies as a **terminal `spec-defect`**
+(Decision 25, Rule 1) — and stateless [rescue](../guides/rescue-a-stalled-run.md)
+regenerated the same pin. There was no path for a wrong _test_ (as opposed to a wrong
+_spec_) to self-heal.
+
+**Choice:** add a recoverable producer outcome, `test-defective`, that resumes the
+task **at the `tests` phase** so the **test-writer** regenerates the RED test — the
+implementer never touches it.
+
+- **Signal.** The implementer raises `STATUS: BLOCKED — escalate: test requires
+revision <reason>`. `parseProducerStatus` (`src/producer/agents.ts`) promotes a
+  `BLOCKED — escalate` line to the `test-defective` outcome **only** when it carries
+  the _contiguous_ uppercased substring `TEST REQUIRES REVISION`; otherwise the line
+  stays `blocked-escalate` (terminal spec-defect). Contiguity is deliberate — a
+  genuine spec contradiction that merely mentions "the criterion the test verifies"
+  must stay terminal.
+- **Classification.** `test-defective` classifies as `{action:"retry"}` →
+  `capability` (`src/producer/classify.ts`), **not** the terminal `spec-defect` that
+  `blocked-escalate` maps to. `classify.ts` stays phase-agnostic.
+- **Routing.** `applyProducerOutcome` (`src/orchestrator/transitions.ts`) LOUD-guards
+  that the outcome came from the `exec` phase (only the implementer may raise it),
+  persists the defect reason on the transient task field `test_revision_feedback`,
+  then `escalateOrFail(..., "tests")` — resuming at `tests`, not the implementer's own
+  `exec` phase.
+- **Feedback.** The `tests` handler (`src/orchestrator/handlers.ts`) injects a
+  specific revision note into the regenerating test-writer's `priorFailures` whenever
+  `test_revision_feedback` is set — **gated on the field, not the rung dial**, so it
+  reaches the test-writer even at rung 1 (where the generic prior-failure note is
+  still off). The field is cleared once the test-writer returns `done`, and
+  `resetTaskRow` clears it on rescue.
+- **Bounding.** The recovery shares the single `escalation_rung` budget (Decision 25,
+  Rule 3); a persistent re-pin climbs to `ESCALATION_CAP` then fails
+  `capability-budget` — a clean dead-end, never an infinite test↔impl loop.
+
+**Prevention (markdown surface).** `agents/test-writer.md` now forbids source-presence
+pins outright (Iron Law 6) and steers a non-executable artifact (e.g. a SQL migration
+with no RED-time runner) to a behavior probe or a `STATUS: NEEDS_CONTEXT` defer —
+`tdd_exempt` / `.quality.redTestCommand` remain the sanctioned escapes for exotic or
+deferred runners, never a text pin. `agents/implementer.md` promotes `test requires
+revision` into its sanctioned Final-status menu as the recoverable signal, distinct
+from the terminal `BLOCKED — escalate`.
+
+**Trade-off:** one more outcome on the closed producer union and one more transient
+task field — the cost of converting a class of dead-ends (wrong test, not wrong spec)
+into a self-healing path instead of a loud fail. See
+[producer-ladder.md](./producer-ladder.md#the-test-defective-recovery-path).
 
 ---
 

@@ -14,10 +14,12 @@
  * The {@link ProducerOutcome} is a CLOSED discriminated union parsed from the
  * implementer's terminal STATUS line (agents/implementer.md): `done`,
  * `blocked-escalate` (a spec-defect signal the producer itself raises),
- * `needs-context` (the implementer wants more context — a fix-forward / retry
- * signal, NOT a failure), and `error` (the spawn itself failed). Classify-before-
- * retry (classify.ts) reads this union to decide whether a failure burns a rung
- * or fails immediately (Δ D).
+ * `test-defective` (the implementer reports the RED test ITSELF is wrong — a
+ * RECOVERABLE signal that regenerates the test, not a spec defect), `needs-context`
+ * (the implementer wants more context — a fix-forward / retry signal, NOT a
+ * failure), and `error` (the spawn itself failed). Classify-before-retry
+ * (classify.ts) reads this union to decide whether a failure burns a rung or fails
+ * immediately (Δ D).
  */
 import type { ProducerRole } from "../types/index.js";
 import type { ProducerContext } from "./prompt-context.js";
@@ -53,6 +55,13 @@ export interface ProducerSpawn {
  *                          untestable / contradictory criterion). A SPEC-DEFECT
  *                          signal — classify.ts routes it straight to a failure,
  *                          NEVER a re-exec (Δ D).
+ *   - `test-defective`   — the implementer reports the pre-committed RED test is
+ *                          ITSELF wrong (it pins a wrong literal / can't be made
+ *                          green without breaking a confirmed-correct fix). A
+ *                          RECOVERABLE signal — classify.ts routes it to a retry
+ *                          that regenerates the test (resumed at the `tests` phase),
+ *                          bounded by the escalation cap. The implementer NEVER edits
+ *                          the test; only the test-writer re-run replaces it.
  *   - `needs-context`    — the implementer could not finish but the task is workable
  *                          with more context / a stronger model. A RETRY signal
  *                          (the ladder may bump a rung), not a failure.
@@ -63,6 +72,7 @@ export interface ProducerSpawn {
 export type ProducerOutcome =
   | { readonly status: "done" }
   | { readonly status: "blocked-escalate"; readonly reason: string }
+  | { readonly status: "test-defective"; readonly reason: string }
   | { readonly status: "needs-context"; readonly reason: string }
   | { readonly status: "error"; readonly reason: string };
 
@@ -79,10 +89,11 @@ export interface ProducerAgentRunner {
 /**
  * Parse an implementer's terminal STATUS line into a {@link ProducerOutcome}
  * (agents/implementer.md). LOUD-ish but tolerant of trailing detail:
- *   - `STATUS: DONE`               → `done`
- *   - `STATUS: BLOCKED — escalate` → `blocked-escalate` (spec-defect signal)
- *   - `STATUS: NEEDS_CONTEXT`      → `needs-context`
- *   - anything else / empty        → `error` (no parseable verdict)
+ *   - `STATUS: DONE`                                  → `done`
+ *   - `STATUS: BLOCKED — escalate: test requires revision` → `test-defective`
+ *   - `STATUS: BLOCKED — escalate`                    → `blocked-escalate` (spec-defect)
+ *   - `STATUS: NEEDS_CONTEXT`                         → `needs-context`
+ *   - anything else / empty                           → `error` (no parseable verdict)
  *
  * The match is on the FIRST recognised keyword so cosmetic punctuation/casing
  * around it does not change the verdict. An unrecognised line is `error`, never
@@ -95,6 +106,13 @@ export function parseProducerStatus(raw: string): ProducerOutcome {
   // BLOCKED must be checked before DONE: a "BLOCKED — escalate" line could
   // otherwise be mis-read if the keywords co-occur. The escalate signal wins.
   if (upper.includes("BLOCKED") && upper.includes("ESCALATE")) {
+    // The CONTIGUOUS phrase "test requires revision" distinguishes a wrong RED
+    // test (recoverable — regenerate the test) from a genuine spec contradiction
+    // (terminal spec-defect). Contiguity is deliberate: a non-contiguous mention
+    // like "the criterion for the test requires revision" stays a spec-defect.
+    if (upper.includes("TEST REQUIRES REVISION")) {
+      return { status: "test-defective", reason: line };
+    }
     return { status: "blocked-escalate", reason: line };
   }
   if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {

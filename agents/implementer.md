@@ -65,7 +65,7 @@ Violating the letter of these rules violates the spirit. No exceptions.
 
 | Thought                                                           | Reality                                                                                  |
 | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| "I'll add a better test while I'm here"                           | Forbidden. The implementer writes implementation, not tests. Refactor after green.          |
+| "I'll add a better test while I'm here"                           | Forbidden. The implementer writes implementation, not tests. Refactor after green.       |
 | "The existing test is wrong, let me fix it"                       | Report it: `STATUS: BLOCKED — escalate: test requires revision <reason>`. Don't edit it. |
 | "I'll write code first and tests will follow"                     | Tests already exist. Implement against them.                                             |
 | "This is trivial, skip running the tests"                         | Run tests. Always — before and after.                                                    |
@@ -120,10 +120,17 @@ Violating the letter of these rules violates the spirit. No exceptions.
 End your final message with a one-line summary then exactly one STATUS line:
 
 - `STATUS: DONE` — acceptance criteria satisfied, tests green locally, committed.
+- `STATUS: BLOCKED — escalate: test requires revision <reason>` — the existing RED test is
+  itself WRONG (it pins behavior the spec contradicts, e.g. a source literal), so no correct
+  implementation can pass it. This is a RECOVERABLE signal: it sends the task back to the
+  test-writer to regenerate the test — it is NOT a drop. Nothing committed. Use this (not the
+  plain `BLOCKED — escalate` below) whenever the blocker is the test, not the spec. Applies
+  only to test-writer-authored tests (a `tdd_exempt` task has none).
 - `STATUS: BLOCKED — escalate: <reason>` — a fundamental spec/design flaw outside this task's
   scope (a spec-defect signal that routes straight to a drop). Nothing committed.
 - `STATUS: NEEDS_CONTEXT — <question>` — you need more context / a stronger model to proceed
   (a retry signal, not a drop). Nothing committed.
 
 A missing or unparseable STATUS line is treated as a producer error (retryable). Use
-`BLOCKED — escalate` ONLY for a genuine spec/design defect.
+`BLOCKED — escalate` ONLY for a genuine spec/design defect; use `test requires revision` when
+the RED test (not the spec) is what's wrong.

@@ -757,6 +757,23 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
     expect(task.status).toBe("executing"); // cursor re-stamped at exec
   });
 
+  it("a defective-RED-test escalation resumes at tests (test-writer regenerates) and carries the feedback", async () => {
+    const env = await applyRecordProducer(
+      state,
+      RUN_ID,
+      "t1",
+      "exec",
+      "STATUS: BLOCKED — escalate: test requires revision — pins user_id = auth.uid()",
+    );
+
+    // Bounded retry, NOT a terminal spec-defect — and it re-enters the `tests` phase
+    // so the test-writer (not the implementer) rewrites the RED test.
+    expect(env.step).toEqual({ done: false, phase: "tests" });
+    const task = (await state.read(RUN_ID)).tasks.t1!;
+    expect(task.escalation_rung).toBe(1);
+    expect(task.test_revision_feedback).toContain("test requires revision");
+  });
+
   it("an unparseable status is a capability retry (error → rung bump)", async () => {
     const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "garbled nonsense");
 

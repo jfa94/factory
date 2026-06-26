@@ -138,6 +138,9 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
       escalation_rung: task.escalation_rung ?? 0,
       reviewers: task.reviewers ?? [],
       merge_resyncs: task.merge_resyncs ?? 0,
+      ...(task.test_revision_feedback
+        ? { test_revision_feedback: task.test_revision_feedback }
+        : {}),
     };
     await state.update(RUN_ID, (s) => ({ ...s, tasks: { ...s.tasks, [full.task_id]: full } }));
     const run = await state.read(RUN_ID);
@@ -301,6 +304,27 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref);
     expect(persisted.injectedPriorFailure).toBe(true);
     expect(persisted.priorFailures.length).toBeGreaterThan(0);
+  });
+
+  it("tests injects the test-revision note even at rung 1 (gated on the persisted field, not the dial)", async () => {
+    const deps = makeDeps();
+    const handlers = makePhaseHandlers(deps);
+    // Rung 1 dial does NOT inject a prior-failure note — but a defective-test
+    // revision must still reach the regenerating test-writer.
+    const ctx = await ctxFor({
+      task_id: "t-multi",
+      escalation_rung: 1,
+      test_revision_feedback: "pins user_id = auth.uid() — must assert behavior, not source",
+    });
+    const result = await handlers.tests(ctx);
+
+    expect(result.kind).toBe("spawn-agents");
+    if (result.kind !== "spawn-agents") throw new Error("unreachable");
+    const agent = result.request.agents[0]!;
+    expect(dialForRung("medium", 1, deps.config).injectsPriorFailure).toBe(false);
+    const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref);
+    expect(persisted.injectedPriorFailure).toBe(true);
+    expect(persisted.priorFailures[0]!.summary).toContain("auth.uid()");
   });
 
   it("tests threads the dialed effort into the request once the model has hit its ceiling (rung 3 = ceiling+xhigh)", async () => {
