@@ -86,7 +86,7 @@ Input (in the prompt):
     "status": "dropped",
     "disposition": "dead-end",
     "failure_class": "capability-budget",
-    "failure_reason": "executor could not satisfy criterion 2: integration with T1's exporter (module absent)",
+    "failure_reason": "implementer could not satisfy criterion 2: integration with T1's exporter (module absent)",
     "branch": "factory/run-20260608-101500/T3"
   },
   "context": {

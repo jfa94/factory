@@ -45,7 +45,7 @@ const log = createLogger("cli:target-settings");
  *   - `Bash(git:*)` / `Bash(gh:*)` — preflight `git rev-parse`, reviewer
  *                                 `git -C <wt> diff`, scaffold's `gh repo view`,
  *                                 plus producers' commit/branch plumbing.
- *   - `Bash(npm:*)` / `Bash(npx:*)` — test-writer/task-executor run the project
+ *   - `Bash(npm:*)` / `Bash(npx:*)` — test-writer/implementer run the project
  *                                 test runner + the GateRunner's npm/npx tools.
  *   - `Read`/`Write`/`Edit`/`Grep`/`Glob`/`Agent` — the agent tools every
  *                                 producer + reviewer (and the orchestrator's

@@ -255,9 +255,9 @@ describe("isTestWriterPhase", () => {
     expect(isTestWriterPhase(active)).toBe(true);
   });
 
-  it("executing + executor role → false (GREEN phase, not test-writer)", () => {
+  it("executing + implementer role → false (GREEN phase, not test-writer)", () => {
     const active = resolveActiveTask(
-      run({ t1: task({ status: "executing", producer_role: "executor" }) }),
+      run({ t1: task({ status: "executing", producer_role: "implementer" }) }),
       "t1",
     );
     expect(isTestWriterPhase(active)).toBe(false);

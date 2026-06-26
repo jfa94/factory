@@ -1,5 +1,5 @@
 /**
- * WS9 — write-protection adversarial tests (Δ B/W/Y). An executor Edit/Write/
+ * WS9 — write-protection adversarial tests (Δ B/W/Y). An implementer Edit/Write/
  * MultiEdit against each TCB path is blocked; non-TCB passes; MultiEdit blocked
  * if ANY target is TCB.
  */

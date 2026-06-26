@@ -2,7 +2,7 @@
  * WS10 (holdout, Δ Y / Decision 5) — holdout VALIDATION: agent judgment + a
  * DETERMINISTIC score.
  *
- * After the executor commits (having seen only the visible criteria), a
+ * After the implementer commits (having seen only the visible criteria), a
  * holdout-validator agent independently checks the impl against the WITHHELD
  * criteria, one by one, returning a {@link HoldoutVerdict} per criterion. That
  * agent step is judgment (loop-owned — handlers cannot spawn); everything in this

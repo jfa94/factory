@@ -24,7 +24,7 @@ let shipMode;
 // workflow mode (the session driver honors it).
 const AGENT_TYPE = {
   "test-writer": "factory:test-writer",
-  executor: "factory:task-executor",
+  implementer: "factory:implementer",
   "implementation-reviewer": "factory:implementation-reviewer",
   "quality-reviewer": "factory:quality-reviewer",
   "architecture-reviewer": "factory:architecture-reviewer",

@@ -122,7 +122,7 @@ function producerPhaseInfo(phase: string): {
   after: TaskPhase;
 } {
   if (phase === "tests") return { role: "test-writer", phase: "tests", after: "exec" };
-  if (phase === "exec") return { role: "executor", phase: "exec", after: "verify" };
+  if (phase === "exec") return { role: "implementer", phase: "exec", after: "verify" };
   throw new UsageError(`phase must be a producer phase (tests | exec), got '${phase}'`);
 }
 

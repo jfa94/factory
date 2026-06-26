@@ -16,7 +16,7 @@ import type { SpawnRequest } from "./spawn.js";
 const request: SpawnRequest = {
   resume_phase: "exec",
   agents: [
-    { role: "executor", isolation: "worktree", model: "sonnet", max_turns: 60, prompt_ref: "p.md" },
+    { role: "implementer", isolation: "worktree", model: "sonnet", max_turns: 60, prompt_ref: "p.md" },
   ],
 };
 

@@ -3,30 +3,30 @@
  *
  * THE LOAD-BEARING KILL of the circular config bypass. The bash
  * `hooks/write-protection.sh` read its denylist from
- * `config.json[safety.writeBlockedPaths]` — an executor that can edit the
+ * `config.json[safety.writeBlockedPaths]` — an implementer that can edit the
  * config can therefore unprotect any path, including the config itself. This
  * module's denylist is COMPILED FROM LITERALS IN THIS FILE and is NEVER read
  * from `config.json` or the Config seam. There is deliberately no parameter,
  * import, or hook by which config can widen or narrow it.
  *
- * What is protected (the trust boundary the executor must never cross):
+ * What is protected (the trust boundary the implementer must never cross):
  *   - `.github/workflows/**`        — CI / quality-gate machinery (Δ W). An
- *                                     executor that edits the gate workflow can
+ *                                     implementer that edits the gate workflow can
  *                                     make every gate pass.
  *   - gate/CI config at the repo root — `.stryker.config.json` (mutation),
  *                                     `.dependency-cruiser.cjs` (arch), and the
  *                                     scaffold templates that seed them.
- *   - `hooks/**`                    — the guard hooks themselves (an executor
+ *   - `hooks/**`                    — the guard hooks themselves (an implementer
  *                                     that edits a hook disables the boundary).
  *   - the OUT-OF-REPO plugin data dir — `runs/**` (run state, holdouts,
  *                                     reviews) and `specs/**` (the durable spec
  *                                     store). The holdout answer-key lives under
  *                                     `runs/<run>/holdouts/**` (Δ Y) and must be
  *                                     neither writable nor (via holdout-guard)
- *                                     readable from an executor worktree.
+ *                                     readable from an implementer worktree.
  *   - `docs/factory/**`              — the IN-REPO reviewable spec copy
  *                                     (F-specloc). `tasks.json` carries the
- *                                     acceptance criteria; an executor that could
+ *                                     acceptance criteria; an implementer that could
  *                                     edit the in-repo mirror could weaken its own
  *                                     gate, exactly as it could via the dataDir
  *                                     spec store — so this subtree is denied too.
@@ -113,7 +113,7 @@ function baseName(absPath: string): string {
  * Both the Stryker AND the dependency-cruiser entries are the tools' FULL
  * discovery sets ({@link STRYKER_CONFIG_BASENAMES},
  * {@link DEPENDENCY_CRUISER_CONFIG_BASENAMES}) — not just the scaffolded
- * `.stryker.config.json` / `.dependency-cruiser.cjs` — so an executor cannot
+ * `.stryker.config.json` / `.dependency-cruiser.cjs` — so an implementer cannot
  * dodge a gate by creating an UNPROTECTED sibling config the tool would load
  * ahead of it; the `.js`/`.cjs`/`.mjs` variants additionally execute arbitrary
  * JS inside the gate process (jfa94/factory#11, same gap class). The
@@ -150,7 +150,7 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
   //     Anchored to the component pair so a benign `mydocs/factory` is not caught
   //     by accident and so it fires for both in-repo and absolute forms — exactly
   //     like the .github/workflows rule. Context-free: the in-repo mirror's
-  //     acceptance criteria are executor-immutable regardless of where the data
+  //     acceptance criteria are implementer-immutable regardless of where the data
   //     dir resolves.
   rules.push({
     category: "docs-factory",
@@ -159,7 +159,7 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
   });
 
   // 2. Gate/CI config files at the repo root (matched by basename so the rule is
-  //    location-tolerant; an executor cannot dodge it by passing an absolute
+  //    location-tolerant; an implementer cannot dodge it by passing an absolute
   //    path). The scaffold templates that seed these live under templates/.
   rules.push({
     category: "gate-config",
@@ -185,7 +185,7 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
   }
 
   // 4. Out-of-repo run store: `<dataDir>/runs/**` (run state, holdouts, reviews).
-  //    Holdouts (Δ Y) are the answer key — never writable from an executor tree.
+  //    Holdouts (Δ Y) are the answer key — never writable from an implementer tree.
   if (ctx.dataDir) {
     const runsDir = canonicalizeAnchor(resolve(ctx.dataDir, "runs"));
     const specsDir = canonicalizeAnchor(resolve(ctx.dataDir, "specs"));

@@ -2,7 +2,7 @@
  * WS6 — the per-gate STRATEGY seam (D26 deterministic layer).
  *
  * ONE GateRunner orchestrates a set of strategies, one per gate. Each strategy is
- * a pure-ish executor: it runs its machine-check (via an injectable tool wrapper
+ * a pure-ish implementer: it runs its machine-check (via an injectable tool wrapper
  * over shared/exec.ts) and reports a {@link GateOutcome}. It does NOT compute a
  * verdict — the runner derives the verdict from the collected GateEvidence via
  * src/core/state/derive.ts (derive-don't-store, Δ V).

@@ -28,7 +28,7 @@
  *
  * CONSOLIDATION (A2 — supersedes `hooks/subagent-stop-gate.sh`): the bash gate's
  * PRODUCER validation (STATUS-line enforcement, zero-commits block, persisted
- * 2-attempt retry budget for test-writer/executor) is deliberately NOT ported as
+ * 2-attempt retry budget for test-writer/implementer) is deliberately NOT ported as
  * a hook. In the new design those properties are achieved STRUCTURALLY and more
  * robustly downstream: a no-op producer (zero commits) leaves the task branch ==
  * base, so the WS6 deterministic gates (tests + TDD gate) fail → the task never

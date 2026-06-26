@@ -82,7 +82,7 @@ describe("reviewerNameOf", () => {
   });
 
   it("returns null for non-reviewer roles", () => {
-    expect(reviewerNameOf("task-executor")).toBeNull();
+    expect(reviewerNameOf("implementer")).toBeNull();
     expect(reviewerNameOf("test-writer")).toBeNull();
     expect(reviewerNameOf("")).toBeNull();
   });
@@ -183,7 +183,7 @@ describe("handleSubagentStop — observational (NO state write)", () => {
   it("non-reviewer role → null, no manager call at all", async () => {
     const manager = fakeManager(run({ t1: task() }));
     const result = await handleSubagentStop(
-      input({ agent_type: "task-executor", last_assistant_message: "STATUS: DONE" }),
+      input({ agent_type: "implementer", last_assistant_message: "STATUS: DONE" }),
       { manager, explicitTaskId: "t1" },
     );
     expect(result).toBeNull();
@@ -265,7 +265,7 @@ describe("runSubagentStop — exit codes (fully observational)", () => {
     const code = await runSubagentStop([], {
       manager,
       readRaw: async () =>
-        JSON.stringify({ agent_type: "task-executor", last_assistant_message: "STATUS: DONE" }),
+        JSON.stringify({ agent_type: "implementer", last_assistant_message: "STATUS: DONE" }),
     });
     expect(code).toBe(EXIT.OK);
   });

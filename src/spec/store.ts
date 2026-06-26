@@ -13,8 +13,8 @@
  * ALSO mirrors `spec.md` + `tasks.json` into the TARGET REPO's
  * `<docsRoot>/factory/<spec-id>/` (versioned, PR-reviewable). The holdout
  * (`spec.meta.json`, a dataDir reconstruction detail) is deliberately NOT copied.
- * The mirror is executor-immutable: the TCB write-deny covers `docs/factory/**`
- * (`src/hooks/tcb.ts`) so an executor cannot weaken its own acceptance criteria
+ * The mirror is implementer-immutable: the TCB write-deny covers `docs/factory/**`
+ * (`src/hooks/tcb.ts`) so an implementer cannot weaken its own acceptance criteria
  * via the in-repo copy. `docsRoot` defaults to `<cwd>/docs` — the factory CLI is
  * cwd-rooted in the target repo — but is injectable for tests.
  *

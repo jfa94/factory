@@ -322,7 +322,7 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
 
   // -- exec -----------------------------------------------------------------
 
-  it("exec spawns the executor and resumes at verify", async () => {
+  it("exec spawns the implementer and resumes at verify", async () => {
     const handlers = makePhaseHandlers(makeDeps());
     const ctx = await ctxFor({ task_id: "t-multi" });
     const result = await handlers.exec(ctx);
@@ -330,7 +330,7 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     expect(result.kind).toBe("spawn-agents");
     if (result.kind !== "spawn-agents") throw new Error("unreachable");
     expect(result.request.resume_phase).toBe("verify");
-    expect(result.request.agents[0]!.role).toBe("executor");
+    expect(result.request.agents[0]!.role).toBe("implementer");
   });
 
   // -- verify (CLI single-step reporter; NO holdout) ------------------------

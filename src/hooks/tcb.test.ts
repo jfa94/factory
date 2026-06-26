@@ -48,7 +48,7 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
   });
 
   // jfa94/factory#11 drift guard: EVERY Stryker-discoverable config basename must
-  // be write-protected, else an executor could create an unprotected sibling that
+  // be write-protected, else an implementer could create an unprotected sibling that
   // Stryker loads ahead of the scaffolded config (the .js/.mjs/.cjs variants are
   // executable JS run inside the gate). Behavioral — pins protection ⊇ discovery
   // set even if the wiring is later refactored.
@@ -90,9 +90,9 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     expect(isTcbProtected(p, ctx())?.rule.category).toBe("data-specs");
   });
 
-  it("F-specloc: ADVERSARIAL — an executor write to docs/factory/<spec-id>/tasks.json is DENIED", () => {
-    // The in-repo reviewable spec copy is executor-immutable, exactly like
-    // .github/workflows/** — an executor that could edit it would weaken its own
+  it("F-specloc: ADVERSARIAL — an implementer write to docs/factory/<spec-id>/tasks.json is DENIED", () => {
+    // The in-repo reviewable spec copy is implementer-immutable, exactly like
+    // .github/workflows/** — an implementer that could edit it would weaken its own
     // acceptance criteria. Mirrors the ci-workflows deny.
     const p = join(repoRoot, "docs", "factory", "1-x", "tasks.json");
     writeFileSync(p, "x");
@@ -108,7 +108,7 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
   });
 
   it("F-specloc: a non-factory docs path (e.g. docs/guide.md) is NOT protected", () => {
-    // Scoped, not 'all of docs/'. Only docs/factory/** is the executor-immutable
+    // Scoped, not 'all of docs/'. Only docs/factory/** is the implementer-immutable
     // spec artifact; ordinary in-repo docs stay writable.
     const p = join(repoRoot, "docs", "guide.md");
     mkdirSync(join(repoRoot, "docs"), { recursive: true });

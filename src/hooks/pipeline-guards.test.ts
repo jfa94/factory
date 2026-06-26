@@ -156,8 +156,8 @@ describe("pipeline-guards — test-writer phase write-scope (path-anchored, TDD)
     expect(isDeny(d)).toBe(false);
   });
 
-  it("allows an implementation write during the executor (GREEN) phase", async () => {
-    const run = runState({ t1: task({ status: "executing", producer_role: "executor" }) });
+  it("allows an implementation write during the implementer (GREEN) phase", async () => {
+    const run = runState({ t1: task({ status: "executing", producer_role: "implementer" }) });
     const d = await decidePipelineGuards(writeInWorktree("run-x", "t1", "src/feature.ts"), {
       ...DATA,
       loadRunById: withRunById(run),

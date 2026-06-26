@@ -67,7 +67,7 @@ export function nextPhase(s: TaskPhase): TaskPhase | null {
  *
  *   - `preflight` → `pending`   (not yet producing)
  *   - `tests`     → `executing` (producer: test-writer)
- *   - `exec`      → `executing` (producer: executor)
+ *   - `exec`      → `executing` (producer: implementer)
  *   - `verify`    → `reviewing` (merge gate in flight)
  *   - `ship`      → `shipping`  (PR open / merging)
  *

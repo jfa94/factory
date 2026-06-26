@@ -20,7 +20,7 @@ describe("parseSpawnRequest", () => {
   it("honours an explicit isolation override", () => {
     const m = parseSpawnRequest({
       resume_phase: "exec",
-      agents: [{ ...validAgent, role: "executor", isolation: "none" }],
+      agents: [{ ...validAgent, role: "implementer", isolation: "none" }],
     });
     expect(m.agents[0]?.isolation).toBe("none");
   });
@@ -55,7 +55,7 @@ describe("parseSpawnRequest", () => {
   it("accepts an optional effort and rejects an empty one (loud)", () => {
     const withEffort = parseSpawnRequest({
       resume_phase: "exec",
-      agents: [{ ...validAgent, role: "executor", effort: "xhigh" }],
+      agents: [{ ...validAgent, role: "implementer", effort: "xhigh" }],
     });
     expect(withEffort.agents[0]?.effort).toBe("xhigh");
     // Omitted ⇒ undefined (inherit the spawn default), never coerced to a value.

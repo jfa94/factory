@@ -78,7 +78,7 @@ describe("applyRescue", () => {
         task_id: "a",
         status: "shipping",
         escalation_rung: 2,
-        producer_role: "executor",
+        producer_role: "implementer",
         branch: "factory/run/a",
         pr_number: 9,
         reviewers: [{ reviewer: "security", verdict: "approve", confirmed_blockers: 0 }],

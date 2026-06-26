@@ -78,7 +78,7 @@ export function isTerminalRunStatus(s: RunStatus): s is (typeof TERMINAL_RUN_STA
 /**
  * Task-level status. Closed set; human-gate statuses are gone.
  *   - `pending`    — not yet started (or blocked on an unsatisfied dependency).
- *   - `executing`  — a producer (test-writer / executor) phase is in flight.
+ *   - `executing`  — a producer (test-writer / implementer) phase is in flight.
  *   - `reviewing`  — the merge gate (gates + panel) is in flight.
  *   - `shipping`   — verified; PR open / merging into staging.
  *   - `done`       — merged into staging (TERMINAL, success).
@@ -152,8 +152,8 @@ export const EscalationRungSchema = z.number().int().min(0);
 export const PanelVerdictEnum = z.enum(["approve", "blocked", "error"]);
 export type PanelVerdict = z.infer<typeof PanelVerdictEnum>;
 
-/** Producer sub-phase a task may be in (test-writer first, then executor). */
-export const ProducerRoleEnum = z.enum(["test-writer", "executor"]);
+/** Producer sub-phase a task may be in (test-writer first, then implementer). */
+export const ProducerRoleEnum = z.enum(["test-writer", "implementer"]);
 export type ProducerRole = z.infer<typeof ProducerRoleEnum>;
 
 // ---------------------------------------------------------------------------

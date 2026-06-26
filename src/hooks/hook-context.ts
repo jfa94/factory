@@ -133,7 +133,7 @@ export interface RunTaskRef {
  * when the path is not inside a per-task worktree.
  *
  * This is the run-isolation anchor for the test-writer write-scope guard: a
- * producer (test-writer/executor) writes into `<dataDir>/worktrees/<run_id>/<task_id>/…`
+ * producer (test-writer/implementer) writes into `<dataDir>/worktrees/<run_id>/<task_id>/…`
  * ({@link worktreesRoot}), so its Edit/Write `file_path` ALREADY encodes which run
  * and task own the write — no global pointer, no cwd, no session payload needed.
  * An unrelated session editing a checkout outside the worktree root resolves to

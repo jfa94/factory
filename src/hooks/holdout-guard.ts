@@ -3,9 +3,9 @@
  *
  * PreToolUse guard denying Read/Grep/Glob and ANY Bash command that references
  * the holdout answer-key store (`<dataDir>/runs/<run>/holdouts/**`), so the
- * holdout criteria are UNREADABLE from an executor worktree. Defense-in-depth:
+ * holdout criteria are UNREADABLE from an implementer worktree. Defense-in-depth:
  * the data dir already lives OUTSIDE the repo (WS1) so in-repo Read tools cannot
- * reach it, but an executor could shell at the absolute data-dir path — this guard
+ * reach it, but an implementer could shell at the absolute data-dir path — this guard
  * denies that, with absolute and `..`/symlink-traversal forms collapsing to the
  * same canonical deny. Bash denial is PATH-based (the holdouts path in argv), not a
  * reader-binary denylist: `python`/`node`/`dd`/`base64`/`cp` exfiltration is denied

@@ -3,7 +3,7 @@
  * intent). PURE data assembly — no I/O, no agent spawn, no holdout-store access.
  *
  * HOLDOUT INTEGRITY (Decision 5 / Δ Y): the producer context is built ONLY from
- * the acceptance criteria the executor is allowed to see. The holdout answer-key
+ * the acceptance criteria the implementer is allowed to see. The holdout answer-key
  * lives outside the worktree and is enforced unreadable by WS9 holdout
  * confinement (src/hooks/holdout-guard); this module additionally NEVER opens or
  * imports the holdout store, and {@link buildProducerContext} takes the
@@ -17,13 +17,13 @@
  *   - rung 2:   the base context PLUS the prior-failure "don't do this" summary,
  *     so the escalated model is steered away from the previous failure.
  *
- * FIX-FORWARD: when re-running the executor to PATCH (not nuke), the confirmed
+ * FIX-FORWARD: when re-running the implementer to PATCH (not nuke), the confirmed
  * blockers (PanelRunResult.confirmedBlockers) are recorded in as concrete fix
- * instructions, so the executor patches the specific verified misses.
+ * instructions, so the implementer patches the specific verified misses.
  */
 import type { Finding } from "../verifier/judgment/index.js";
 
-/** A single confirmed-blocker fix instruction for the executor's patch pass. */
+/** A single confirmed-blocker fix instruction for the implementer's patch pass. */
 export interface FixInstruction {
   /** The reviewer that raised it (audit). */
   readonly reviewer: string;

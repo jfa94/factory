@@ -48,7 +48,7 @@ function scriptedHandlers(outcome: "ship" | "drop"): PhaseHandlers {
     return {
       preflight: async () => advance("tests"),
       tests: async () => spawn(mkManifest("exec", "test-writer")),
-      exec: async () => spawn(mkManifest("verify", "executor")),
+      exec: async () => spawn(mkManifest("verify", "implementer")),
       verify: async () => spawn(mkManifest("ship", "implementation-reviewer")),
       ship: async () => taskDone(),
       finalize,
@@ -101,7 +101,7 @@ describe("golden transcript — fixed PhaseResult sequence", () => {
     expect(transcript).toEqual([
       advance("tests"),
       spawn(mkManifest("exec", "test-writer")),
-      spawn(mkManifest("verify", "executor")),
+      spawn(mkManifest("verify", "implementer")),
       spawn(mkManifest("ship", "implementation-reviewer")),
       taskDone(),
     ]);

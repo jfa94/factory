@@ -6,7 +6,7 @@
  * secret-guard, and pipeline-guards so the hook-bypass surface is ONE tested
  * unit (the bash code duplicated the function call across three hooks; here it
  * is a single seam). A nested shell, env-injection, hooksPath override, eval, or
- * heredoc/pipe-to-shell would let an executor run a sub-shell whose tool calls
+ * heredoc/pipe-to-shell would let an implementer run a sub-shell whose tool calls
  * never hit the PreToolUse guards — so while a run is active these are denied.
  *
  * The regexes are a faithful POSIX-ERE → JS translation of the bash bodies. Each

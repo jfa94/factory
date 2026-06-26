@@ -33,8 +33,8 @@ function contractFor(name: string, make: () => ArtifactStore) {
     it("round-trips a producer context by its prompt_ref", async () => {
       const store = make();
       const ctx = sampleContext();
-      const ref = await store.putProducerContext("run-1", "task-1", "executor-r0", ctx);
-      expect(ref).toBe("prompts/task-1/executor-r0.json");
+      const ref = await store.putProducerContext("run-1", "task-1", "implementer-r0", ctx);
+      expect(ref).toBe("prompts/task-1/implementer-r0.json");
       expect(await store.getProducerContext("run-1", ref)).toEqual(ctx);
     });
 
@@ -47,23 +47,23 @@ function contractFor(name: string, make: () => ArtifactStore) {
 
     it("isolates by run id (same ref, different run → absent)", async () => {
       const store = make();
-      const ref = await store.putProducerContext("run-A", "task-1", "executor-r0", sampleContext());
+      const ref = await store.putProducerContext("run-A", "task-1", "implementer-r0", sampleContext());
       await expect(store.getProducerContext("run-B", ref)).rejects.toThrow();
     });
 
     it("overwrites idempotently for the same (task, label) — a retried step is safe", async () => {
       const store = make();
       const first = sampleContext();
-      await store.putProducerContext("run-1", "task-1", "executor-r0", first);
+      await store.putProducerContext("run-1", "task-1", "implementer-r0", first);
       const second = { ...sampleContext(), title: "RETRIED widget" };
-      const ref = await store.putProducerContext("run-1", "task-1", "executor-r0", second);
+      const ref = await store.putProducerContext("run-1", "task-1", "implementer-r0", second);
       expect((await store.getProducerContext("run-1", ref)).title).toBe("RETRIED widget");
     });
 
     it("distinguishes labels so concurrent rungs/roles never collide", async () => {
       const store = make();
-      const r0 = await store.putProducerContext("run-1", "task-1", "executor-r0", sampleContext());
-      const r1 = await store.putProducerContext("run-1", "task-1", "executor-r1", {
+      const r0 = await store.putProducerContext("run-1", "task-1", "implementer-r0", sampleContext());
+      const r1 = await store.putProducerContext("run-1", "task-1", "implementer-r1", {
         ...sampleContext(),
         rung: 1,
       });
@@ -89,15 +89,15 @@ describe("FsArtifactStore", () => {
 
   it("returns a RUN-RELATIVE prompt_ref (not an absolute path)", async () => {
     const store = new FsArtifactStore(dataDir);
-    const ref = await store.putProducerContext("run-1", "task-1", "executor-r0", sampleContext());
+    const ref = await store.putProducerContext("run-1", "task-1", "implementer-r0", sampleContext());
     expect(isAbsolute(ref)).toBe(false);
-    expect(ref).toBe("prompts/task-1/executor-r0.json");
+    expect(ref).toBe("prompts/task-1/implementer-r0.json");
   });
 
   it("persists valid JSON under runs/<run>/prompts/<task>/<label>.json", async () => {
     const store = new FsArtifactStore(dataDir);
     const ctx = sampleContext();
-    const ref = await store.putProducerContext("run-1", "task-1", "executor-r0", ctx);
+    const ref = await store.putProducerContext("run-1", "task-1", "implementer-r0", ctx);
     const path = join(runDir(dataDir, "run-1"), ref);
     const onDisk = JSON.parse(await readFile(path, "utf8")) as ProducerContext;
     expect(onDisk).toEqual(ctx);

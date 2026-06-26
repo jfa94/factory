@@ -2,7 +2,7 @@
  * WS10 (holdout, Δ Y) — the ANSWER-KEY store.
  *
  * The withheld criteria (split.ts) are the answer key. They MUST live OUTSIDE the
- * executor worktree, under `runs/<run_id>/holdouts/<task_id>.json`, because that
+ * implementer worktree, under `runs/<run_id>/holdouts/<task_id>.json`, because that
  * is exactly the subtree the WS9 holdout-guard read-confines and the TCB
  * write-denies (Δ Y). Persisting here is what gives those guards something real to
  * protect — without it the confinement guards an empty directory.

@@ -21,14 +21,14 @@ import { EffortEnum } from "../../config/schema.js";
 
 /**
  * The reviewer/producer roles the engine may ask the driver to spawn. CLOSED set:
- * a role outside it is a loud parse error. Producers (`test-writer`/`executor`)
+ * a role outside it is a loud parse error. Producers (`test-writer`/`implementer`)
  * plus the verifier panel (Decision 26/27: implementation + quality always; the
  * risk-tier fan-out adds architecture/security; the CCR-pattern reviewers
  * silent-failure-hunter/type-design-reviewer) plus the run-level `scribe`.
  */
 export const SpawnRoleEnum = z.enum([
   "test-writer",
-  "executor",
+  "implementer",
   "implementation-reviewer",
   "quality-reviewer",
   "architecture-reviewer",

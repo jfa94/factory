@@ -67,7 +67,7 @@ import { FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
  * {@link import("./deps.js").ProducerRole} vocabulary; declared locally so the
  * request builder stays self-contained.
  */
-type ProducerSpawnRole = "test-writer" | "executor";
+type ProducerSpawnRole = "test-writer" | "implementer";
 
 /**
  * Build the {@link PhaseHandlers} bound to one reporter dependency bundle. Stateless
@@ -149,7 +149,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         {
           role,
           model: dial.model,
-          // No executor-specific turn budget exists; both producer roles share the
+          // No implementer-specific turn budget exists; both producer roles share the
           // test-writer cap (documented WS10 decision).
           max_turns: deps.config.testWriter.maxTurns,
           prompt_ref: promptRef,
@@ -219,14 +219,14 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
     },
 
     /**
-     * exec: spawn the executor for the current rung against the holdout-stripped
+     * exec: spawn the implementer for the current rung against the holdout-stripped
      * visible criteria (recomputed from the same seed — never re-persisted), resume
      * at verify.
      */
     async exec(ctx: PhaseContext): Promise<PhaseResult> {
       const task = requireTask(ctx, "exec");
       const specTask = specTaskOf(deps.spec, task.task_id);
-      return producerSpawn("executor", specTask, ctx.run.run_id, task.escalation_rung, "verify");
+      return producerSpawn("implementer", specTask, ctx.run.run_id, task.escalation_rung, "verify");
     },
 
     /**

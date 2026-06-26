@@ -68,7 +68,7 @@ export function deriveTddVerdict(commits: readonly CommitInfo[], exempt: boolean
       ok: false,
       exempt: false,
       violations: [],
-      note: "no commits in base..HEAD — fail-closed (executor produced nothing)",
+      note: "no commits in base..HEAD — fail-closed (implementer produced nothing)",
     };
   }
 

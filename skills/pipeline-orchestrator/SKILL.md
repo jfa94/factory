@@ -174,8 +174,8 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    spawn's `effort` opt **when present** (the dial sets it only on high escalation
    rungs; omit it otherwise to inherit the default). Build the prompt from the ProducerContext +
    _"Your working tree is `<tenv.worktree>` (already checked out on the task branch). `cd` there; make ALL commits there."_
-   The test-writer commits failing tests first (TDD); the executor commits the
-   minimal implementation. They follow `agents/test-writer.md` / `agents/task-executor.md`.
+   The test-writer commits failing tests first (TDD); the implementer commits the
+   minimal implementation. They follow `agents/test-writer.md` / `agents/implementer.md`.
 3. Capture its terminal STATUS line (`STATUS: DONE` | `STATUS: BLOCKED — escalate` |
    `STATUS: NEEDS_CONTEXT`).
 4. Results file: `{ "result_key": <tenv.result_key verbatim>, "producer": { "status": "<line>" } }`.
@@ -213,7 +213,7 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 | Agent                                | `subagent_type`                    | isolation                                  |
 | ------------------------------------ | ---------------------------------- | ------------------------------------------ |
 | test-writer                          | `test-writer`                      | **none** (omit) — works IN `tenv.worktree` |
-| executor                             | `task-executor`                    | **none** (omit) — works IN `tenv.worktree` |
+| implementer                          | `implementer`                      | **none** (omit) — works IN `tenv.worktree` |
 | 6 panel reviewers                    | the manifest `role`                | `"worktree"`                               |
 | holdout-validator / finding-verifier | `general-purpose`                  | `"worktree"`                               |
 | spec-generator / spec-reviewer       | `spec-generator` / `spec-reviewer` | `"worktree"`                               |

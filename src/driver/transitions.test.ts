@@ -247,13 +247,13 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
       deps,
       RUN_ID,
       "t1",
-      { role: "executor", phase: "exec", resumePhase: "verify" },
+      { role: "implementer", phase: "exec", resumePhase: "verify" },
       { status: "done" },
     );
 
     expect(step).toEqual({ done: false, phase: "verify" });
     const task = await readTask("t1");
-    expect(task.producer_role).toBe("executor");
+    expect(task.producer_role).toBe("implementer");
     expect(task.escalation_rung).toBe(0); // a success never bumps the rung
   });
 
@@ -264,7 +264,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
       deps,
       RUN_ID,
       "t1",
-      { role: "executor", phase: "exec", resumePhase: "verify" },
+      { role: "implementer", phase: "exec", resumePhase: "verify" },
       outcome,
     );
 

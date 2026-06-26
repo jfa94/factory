@@ -28,13 +28,13 @@ Two-phase debugging workflow:
 1. Dispatch in a single message: `architecture-reviewer`, `security-reviewer`, `quality-reviewer`, `implementation-reviewer` subagents (parallel) + Codex adversarial review in the background (when `codex` CLI is available + authenticated).
 2. Orchestrator performs its own exhaustive line-by-line review of the diff.
 3. Validate, dedupe, and classify every finding (`confirmed | dismissed | uncertain`) against the code AND the apparent intent of the diff (since `/factory:debug` has no spec).
-4. Build a remediation plan from confirmed + in-threshold findings; spawn `task-executor` to implement it.
+4. Build a remediation plan from confirmed + in-threshold findings; spawn `implementer` to implement it.
 
 **Phase 1 — Reviewer ⇄ Implementer loop (existing behavior).**
 
 5. Review the diff between `--base` (or HEAD~1, or root) and HEAD.
 6. Filter findings by `--fixSeverity`.
-7. If any remain, spawn `task-executor` to verify and fix them.
+7. If any remain, spawn `implementer` to verify and fix them.
 8. Repeat until clean, escalated, or `--limit` reached.
 
 **Autonomous mode required.** Like `/factory:run`, `/factory:debug` runs `factory autonomy preflight` at the top of Setup. Preflight auto-scaffolds `merged-settings.json` when the session is not autonomous or the settings are stale/missing/unstamped, then exits non-zero so the skill halts with the printed relaunch command (`claude --settings <merged-settings.json>`); it exits zero to proceed when already autonomous (including `FACTORY_AUTONOMOUS_MODE=1` for CI). The pre-launch quota gate runs only after this check clears — `usage-cache.json` is only kept fresh inside an autonomous session.

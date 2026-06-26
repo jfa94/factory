@@ -3,7 +3,7 @@
  *
  * All run/spec state lives OUTSIDE the target repo, under the plugin data dir
  * (`resolveDataDir()` from src/config). This is a hard requirement: the holdout
- * answer-key must be unreadable from an executor worktree (Decision 5 / Δ Y), so
+ * answer-key must be unreadable from an implementer worktree (Decision 5 / Δ Y), so
  * state cannot live in-repo.
  *
  * Two stores:
@@ -27,7 +27,7 @@ export const SPEC_BUILD_DIR = "spec-build";
  * Subdir under a target repo's `docs/` for the IN-REPO reviewable spec copy
  * (F-specloc). The durable spec's canonical home stays the out-of-repo dataDir
  * store ({@link specDir}); this is the versioned, PR-reviewable MIRROR written
- * alongside it. It is executor-immutable — the TCB write-deny protects
+ * alongside it. It is implementer-immutable — the TCB write-deny protects
  * `docs/factory/**` exactly as it does `.github/workflows/**`.
  */
 export const DOCS_FACTORY_DIR = "factory";
@@ -36,7 +36,7 @@ export const RUNS_DIR = "runs";
 /**
  * Subdir name for per-task worktrees. A worktree lives at
  * `<dataDir>/worktrees/<run-id>/<task-id>` — a SIBLING of the TCB-write-denied
- * `runs/`/`specs/` trees, so an executor CAN write inside its own worktree while
+ * `runs/`/`specs/` trees, so an implementer CAN write inside its own worktree while
  * the run/spec stores stay immutable to it (see {@link worktreesRoot}).
  */
 export const WORKTREES_DIR = "worktrees";
@@ -166,7 +166,7 @@ export function specDir(dataDir: string, repo: string, specId: string): string {
  *
  * This is a MIRROR for human/PR review; the canonical read-path is {@link specDir}
  * in the dataDir. The TCB write-deny protects this subtree (`docs/factory/**`) so
- * an executor cannot weaken its own acceptance criteria via the in-repo copy.
+ * an implementer cannot weaken its own acceptance criteria via the in-repo copy.
  */
 export function docsFactoryDir(docsRoot: string, specId: string): string {
   validateId(specId, "spec-id");

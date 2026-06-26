@@ -12,7 +12,7 @@
  *
  * The verdicts live in the SAME Δ Y confined subtree as the answer key
  * (`runs/<run_id>/holdouts/<task_id>.verdicts.json`): they reveal the withheld
- * criteria text, so they must stay out of an executor worktree's read reach too.
+ * criteria text, so they must stay out of an implementer worktree's read reach too.
  *
  * Two impls mirror {@link import("./store.js").HoldoutStore}:
  * {@link InMemoryHoldoutVerdictStore} (units) and {@link FsHoldoutVerdictStore} (the

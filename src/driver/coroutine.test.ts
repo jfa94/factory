@@ -319,7 +319,7 @@ describe("nextAction", () => {
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
       expect(env.phase).toBe("exec");
-      expect(env.request.agents[0]?.role).toBe("executor");
+      expect(env.request.agents[0]?.role).toBe("implementer");
     } finally {
       await cleanup();
     }
@@ -421,8 +421,8 @@ describe("nextAction", () => {
   });
 
   // Relocated from loop.test.ts ("tdd_exempt task skips the test-writer"): a
-  // tdd_exempt task has no tests phase — the FIRST producer spawn is the executor.
-  it("tdd_exempt task skips the tests spawn (executor is the first producer spawn)", async () => {
+  // tdd_exempt task has no tests phase — the FIRST producer spawn is the implementer.
+  it("tdd_exempt task skips the tests spawn (implementer is the first producer spawn)", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       tasks: [{ task_id: "T1", tdd_exempt: true }],
     });
@@ -431,7 +431,7 @@ describe("nextAction", () => {
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
       expect(env.phase).toBe("exec");
-      expect(env.request.agents[0]?.role).toBe("executor");
+      expect(env.request.agents[0]?.role).toBe("implementer");
     } finally {
       await cleanup();
     }

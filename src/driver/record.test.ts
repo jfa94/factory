@@ -695,12 +695,12 @@ describe("applyRecordProducer — DONE advances", () => {
     expect(task.status).toBe("executing"); // markInFlight(exec)
   });
 
-  it("exec/DONE records executor and advances to verify", async () => {
+  it("exec/DONE records implementer and advances to verify", async () => {
     const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "STATUS: DONE");
 
     expect(env.step).toEqual({ done: false, phase: "verify" });
     const task = (await state.read(RUN_ID)).tasks.t1!;
-    expect(task.producer_role).toBe("executor");
+    expect(task.producer_role).toBe("implementer");
     expect(task.status).toBe("reviewing"); // markInFlight(verify)
   });
 });

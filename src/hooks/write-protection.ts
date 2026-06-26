@@ -1,5 +1,5 @@
 /**
- * WS9 — PreToolUse Edit|Write|MultiEdit guard: the primary "executor cannot
+ * WS9 — PreToolUse Edit|Write|MultiEdit guard: the primary "implementer cannot
  * modify any TCB path" enforcer (Δ B/W/Y).
  *
  * Extracts every target file_path from the tool input (Edit/Write `.file_path`
@@ -7,7 +7,7 @@
  * a TCB-protected path ({@link isTcbProtected}). The denylist is HARDCODED in
  * tcb.ts and is NEVER consulted from config — the load-bearing kill of the
  * circular config bypass (Δ W). This is unconditional: it does not depend on a
- * run being active or on config state; an executor must never edit a TCB path.
+ * run being active or on config state; an implementer must never edit a TCB path.
  *
  * The data dir (so the out-of-repo `runs/**`/`specs/**` stores match at their
  * absolute paths) is resolved best-effort via the Config seam — PATH RESOLUTION

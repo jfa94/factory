@@ -3,7 +3,7 @@
  * import("../spec/agents.js").SpecAgentRunner} and WS7 FindingVerifierRunner).
  *
  * The producer is the two TDD-ordered roles: `test-writer` (commits the failing
- * tests first) and `executor` (commits the minimal implementation, or PATCHES
+ * tests first) and `implementer` (commits the minimal implementation, or PATCHES
  * forward over confirmed blockers). An agent cannot deterministically spawn a
  * real `Agent()` inside a unit, so — exactly like WS5/WS7 — this module owns the
  * CONTRACT and the parse of the agent's terminal STATUS line, while the WS10
@@ -12,9 +12,9 @@
  * logic is testable without an LLM, Codex, or any gate binary.
  *
  * The {@link ProducerOutcome} is a CLOSED discriminated union parsed from the
- * executor's terminal STATUS line (agents/task-executor.md): `done`,
+ * implementer's terminal STATUS line (agents/implementer.md): `done`,
  * `blocked-escalate` (a spec-defect signal the producer itself raises),
- * `needs-context` (the executor wants more context — a fix-forward / retry
+ * `needs-context` (the implementer wants more context — a fix-forward / retry
  * signal, NOT a drop), and `error` (the spawn itself failed). Classify-before-
  * retry (classify.ts) reads this union to decide whether a failure burns a rung
  * or drops immediately (Δ D).
@@ -31,7 +31,7 @@ export type { ProducerRole } from "../types/index.js";
  * carries the rung-2 prior-failure "don't do this" summary (empty on rung 0/1).
  */
 export interface ProducerSpawn {
-  /** Which producer role to spawn (test-writer first, then executor). */
+  /** Which producer role to spawn (test-writer first, then implementer). */
   readonly role: ProducerRole;
   /**
    * The model to spawn on — the WS5/WS4 dial output for the current rung
@@ -53,7 +53,7 @@ export interface ProducerSpawn {
  *                          untestable / contradictory criterion). A SPEC-DEFECT
  *                          signal — classify.ts routes it straight to a drop,
  *                          NEVER a re-exec (Δ D).
- *   - `needs-context`    — the executor could not finish but the task is workable
+ *   - `needs-context`    — the implementer could not finish but the task is workable
  *                          with more context / a stronger model. A RETRY signal
  *                          (the ladder may bump a rung), not a drop.
  *   - `error`            — the spawn itself failed (the agent crashed / produced
@@ -72,13 +72,13 @@ export type ProducerOutcome =
  * line via {@link parseProducerStatus}; units inject a fake.
  */
 export interface ProducerAgentRunner {
-  /** Run one producer spawn (test-writer or executor) and return its outcome. */
+  /** Run one producer spawn (test-writer or implementer) and return its outcome. */
   run(spawn: ProducerSpawn): Promise<ProducerOutcome>;
 }
 
 /**
- * Parse an executor's terminal STATUS line into a {@link ProducerOutcome}
- * (agents/task-executor.md). LOUD-ish but tolerant of trailing detail:
+ * Parse an implementer's terminal STATUS line into a {@link ProducerOutcome}
+ * (agents/implementer.md). LOUD-ish but tolerant of trailing detail:
  *   - `STATUS: DONE`               → `done`
  *   - `STATUS: BLOCKED — escalate` → `blocked-escalate` (spec-defect signal)
  *   - `STATUS: NEEDS_CONTEXT`      → `needs-context`

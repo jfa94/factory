@@ -6,7 +6,7 @@
  *
  * WHY ONE LIST (jfa94/factory#11): those two sets were hand-maintained and had
  * drifted — the TCB protected only 3 Stryker basenames while Stryker's own
- * discovery loads any of 16. An executor could therefore `Write` an UNPROTECTED
+ * discovery loads any of 16. An implementer could therefore `Write` an UNPROTECTED
  * sibling (e.g. `stryker.config.mjs`) that Stryker discovers and loads ahead of
  * the protected config. Because the `.js`/`.mjs`/`.cjs` variants are EXECUTABLE
  * JavaScript that Stryker imports and runs inside the trusted gate-of-record
