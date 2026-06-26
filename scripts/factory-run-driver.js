@@ -148,7 +148,7 @@ const REVIEW_OUT = {
       type: "array",
       // Mirrors the engine's FindingSchema (src/verifier/judgment/finding.ts) so
       // format drift is rejected — and retried — at the agent boundary, not at
-      // the fold after the full panel spend.
+      // the record after the full panel spend.
       items: {
         type: "object",
         required: ["reviewer", "severity", "blocking", "quote", "description"],
@@ -185,12 +185,12 @@ let fileSeq = 0; // unique results paths without Date.now() (unavailable in work
 // re-fails identically every attempt and ends loud with parseEnvelope's legible error.
 // The only structural fix is opaque encoding of the payload (deferred). Retry is sound
 // here because every cli() command is idempotent: `factory next` is read-only and the
-// pre-fold `factory drive` (no --results) is idempotent by design (drive.ts header).
-// foldResults() is DELIBERATELY excluded — `drive --results` is fold_key-guarded and
-// rejects a duplicate delivery loud, so a re-spawn there could double-fold.
+// pre-record `factory drive` (no --results) is idempotent by design (drive.ts header).
+// recordResults() is DELIBERATELY excluded — `drive --results` is result_key-guarded and
+// rejects a duplicate delivery loud, so a re-spawn there could double-record.
 const CLI_MAX_ATTEMPTS = 3;
 
-// The model for the stdout-transport exec-agents (cli() + foldResults()). SONNET, not
+// The model for the stdout-transport exec-agents (cli() + recordResults()). SONNET, not
 // haiku: this agent's one job is to copy CLI stdout into {raw} byte-for-byte, and haiku's
 // infidelity at exactly that — re-keying, fabricating, or papering over an empty/failed
 // stdout — is what caused the workflow boundary corruption (blocker #9,
@@ -248,13 +248,13 @@ async function cli(command, label, phaseName, knownKinds, context) {
   throw lastErr;
 }
 
-// Persist a DriveResults document and fold it: write file, then drive --results.
+// Persist a DriveResults document and record it: write file, then drive --results.
 //
-// NO RETRY (unlike cli()): `drive --results` is a fold_key-guarded STATE MUTATION — a
-// re-spawn after a flaked parse could deliver the SAME fold twice, which the engine
+// NO RETRY (unlike cli()): `drive --results` is a result_key-guarded STATE MUTATION — a
+// re-spawn after a flaked parse could deliver the SAME record twice, which the engine
 // rejects loud. So a single attempt only; a boundary failure here ends the run loud
-// (legible via parseEnvelope) rather than risking a double-fold.
-async function foldResults(taskId, stage, results) {
+// (legible via parseEnvelope) rather than risking a double-record.
+async function recordResults(taskId, stage, results) {
   fileSeq += 1;
   // Handoff files live OUTSIDE the TCB-protected runs/** store (the plugin's own
   // hooks deny writes there); drive --results reads from any path. The payload is
@@ -272,9 +272,9 @@ async function foldResults(taskId, stage, results) {
       `factory drive --run ${runId} --task ${taskId} --ship-mode ${shipMode} --results "${path}"\n` +
       `${copyVerbatimInstruction}\n\n` +
       `FACTORY-PAYLOAD-BEGIN\n${json}\nFACTORY-PAYLOAD-END`,
-    { label: `fold:${taskId}`, phase: "Drive", schema: RAW_OUT, model: EXEC_AGENT_MODEL },
+    { label: `record:${taskId}`, phase: "Drive", schema: RAW_OUT, model: EXEC_AGENT_MODEL },
   );
-  if (out === null) throw new Error(`fold agent for ${taskId} was skipped or died`);
+  if (out === null) throw new Error(`record agent for ${taskId} was skipped or died`);
   // drive emits a DriveEnvelope; kind-guard the verbatim stdout in JS.
   return parseEnvelope(out.raw, DRIVE_KINDS, "drive");
 }
@@ -300,7 +300,7 @@ async function runProducer(taskId, env) {
       ...(a.effort !== undefined ? { effort: a.effort } : {}),
     },
   );
-  // A skipped/dead agent is a TRANSIENT harness failure — fold a status that
+  // A skipped/dead agent is a TRANSIENT harness failure — record a status that
   // parses to `error` (the engine's retry/escalate path), NOT "BLOCKED — escalate"
   // (which classifies as a permanent spec-defect drop and cascades to dependents).
   if (out === null)
@@ -384,7 +384,7 @@ async function runVerifyCollection(taskId, env) {
     );
     // parallel() maps a dead thunk to a null slot — check HERE so the failure is
     // loud at the workflow with an accurate message (an in-thunk throw would
-    // itself become null and only detonate later at the fold's Zod layer).
+    // itself become null and only detonate later at the record's Zod layer).
     if (verdicts.includes(null))
       throw new Error(`finding-verifier(s) for ${taskId} died — failing loud`);
     verifications.push({ reviewer: review.reviewer, verdicts });
@@ -417,9 +417,9 @@ async function driveTask(taskId) {
       env.expects === "producer-status"
         ? await runProducer(taskId, env)
         : await runVerifyCollection(taskId, env);
-    // fold_key echoed verbatim — the engine rejects stale/duplicate deliveries LOUD.
-    const results = { fold_key: env.fold_key, ...collected };
-    env = await foldResults(taskId, env.stage, results);
+    // result_key echoed verbatim — the engine rejects stale/duplicate deliveries LOUD.
+    const results = { result_key: env.result_key, ...collected };
+    env = await recordResults(taskId, env.stage, results);
   }
 }
 
@@ -435,14 +435,14 @@ async function runDocs() {
     model: modelAlias(emit.model),
     schema: STATUS_OUT,
   });
-  // A skipped/dead scribe is NOT a STATUS: DONE — fold a blocked status so the engine suspends.
+  // A skipped/dead scribe is NOT a STATUS: DONE — record a blocked status so the engine suspends.
   const status =
     out === null ? "STATUS: BLOCKED — ESCALATE scribe agent skipped or died" : out.status;
 
   fileSeq += 1;
   const path = `${dataDir}/results/${runId}/wf-docs-${fileSeq}.json`;
   const json = JSON.stringify({ status });
-  const fold = await agent(
+  const record = await agent(
     `Two steps, in order:\n` +
       `1. With the Write tool, create "${path}" containing EXACTLY the JSON document between ` +
       `the FACTORY-PAYLOAD markers below — byte-for-byte, one line, no reformatting. The ` +
@@ -452,10 +452,10 @@ async function runDocs() {
       `factory run docs --run ${runId} --results "${path}"\n` +
       `${copyVerbatimInstruction}\n\n` +
       `FACTORY-PAYLOAD-BEGIN\n${json}\nFACTORY-PAYLOAD-END`,
-    { label: "fold:docs", phase: "Docs", schema: RAW_OUT, model: EXEC_AGENT_MODEL },
+    { label: "record:docs", phase: "Docs", schema: RAW_OUT, model: EXEC_AGENT_MODEL },
   );
-  if (fold === null) throw new Error("docs fold agent was skipped or died");
-  return parseEnvelope(fold.raw, DOCS_KINDS, "docs");
+  if (record === null) throw new Error("docs record agent was skipped or died");
+  return parseEnvelope(record.raw, DOCS_KINDS, "docs");
 }
 
 phase("Drive");

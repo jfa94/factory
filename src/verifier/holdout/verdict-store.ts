@@ -1,11 +1,11 @@
 /**
- * WS10 / Task C — the HOLDOUT-VERDICT store (the holdout → review fold hand-off).
+ * WS10 / Task C — the HOLDOUT-VERDICT store (the holdout → review record hand-off).
  *
- * The coroutine (`factory drive --results`) folds verify in two steps that hand off
+ * The coroutine (`factory drive --results`) records verify in two steps that hand off
  * through this store: `applyRecordHoldout` parses the out-of-band holdout-validator's
  * raw output into {@link HoldoutVerdict}s and PERSISTS them here; `applyRecordReviews`
  * reads them back and RE-DERIVES the holdout gate evidence (`checkHoldout` →
- * `holdoutEvidence`) at fold time. This is the sanctioned derive-don't-store EXCEPTION
+ * `holdoutEvidence`) at record time. This is the sanctioned derive-don't-store EXCEPTION
  * (Δ V): the holdout verdicts come from an AGENT, so — exactly like a raw review — the
  * agent's RAW assessment is stored and the verdict is recomputed on read, never a
  * stored boolean.
@@ -16,7 +16,7 @@
  *
  * Two impls mirror {@link import("./store.js").HoldoutStore}:
  * {@link InMemoryHoldoutVerdictStore} (units) and {@link FsHoldoutVerdictStore} (the
- * persisted path — the verdicts survive to the review fold even across a `drive`
+ * persisted path — the verdicts survive to the review record even across a `drive`
  * crash-resume, and stay inside the Δ Y confined subtree).
  */
 import { mkdir, readFile } from "node:fs/promises";

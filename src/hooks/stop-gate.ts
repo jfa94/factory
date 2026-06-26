@@ -13,7 +13,7 @@
  * always stop, and a run left `running` with pending work stays cleanly resumable via
  * `factory resume`. Re-entry is idempotent even when the stop landed mid-spawn: the
  * coroutine records a `spawn_in_flight` checkpoint at every spawn emit, so a resume that
- * re-enters the same (stage, rung) before results were folded resets the task worktree to
+ * re-enters the same (stage, rung) before results were recorded resets the task worktree to
  * the captured pre-spawn tip — discarding the abandoned producer's partial work — before
  * re-spawning (see `coroutine.ts` spawn-agents case + `applyResume`).
  *

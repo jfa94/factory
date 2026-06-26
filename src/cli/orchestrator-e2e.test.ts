@@ -14,7 +14,7 @@
  *
  * Three scenarios are proven:
  *   1. Happy path (no-merge): single task → `completed`, PR opened but NOT merged,
- *      holdout sidecar surfaced + folded, all six panel reviewers approved.
+ *      holdout sidecar surfaced + recorded, all six panel reviewers approved.
  *   2. Happy path (live): same chain → `completed`, PR merged.
  *   3. Drop path: two-task run; second task at escalation cap → drops as
  *      `capability-budget`; `finalizeRun` produces a `failed` run (Decision 34:
@@ -23,7 +23,7 @@
  * The holdout path (scenario 1/2 trait): the spec carries 5 acceptance criteria, so
  * the tests stage withholds ≥1 criterion, the verify spawn carries a holdout sidecar,
  * and the AnswerBook supplies `results.holdout` (validator verdicts) alongside the
- * panel reviews — the engine rejects the fold without it.
+ * panel reviews — the engine rejects the record without it.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -96,8 +96,8 @@ function approve(reviewer: string) {
  *   - `"producer-status"` → returns the STATUS line keyed by `env.task_id` from
  *     the pre-seeded producerStatuses map (default: "STATUS: DONE").
  *   - `"reviews"` → returns an all-approve panel; if `env.sidecar` is present,
- *     fetches the holdout record from the registered store and folds in all-pass
- *     validator verdicts.  `env.fold_key` is echoed verbatim so the engine's
+ *     fetches the holdout record from the registered store and records in all-pass
+ *     validator verdicts.  `env.result_key` is echoed verbatim so the engine's
  *     exactly-once gate always passes.
  *
  * Usage: `book.for(env)` — call once per spawn envelope in the driver loop.
@@ -119,7 +119,7 @@ class AnswerBook {
   }
 
   /**
-   * Build DriveResults for the given spawn envelope, echoing fold_key verbatim.
+   * Build DriveResults for the given spawn envelope, echoing result_key verbatim.
    * For `producer-status` expects: returns the canned STATUS line.
    * For `reviews` expects: returns all-approve panel + all-pass holdout (when sidecar).
    */
@@ -127,7 +127,7 @@ class AnswerBook {
     if (env.expects === "producer-status") {
       const statusLine = this.producerStatuses.get(env.task_id) ?? "STATUS: DONE";
       return {
-        fold_key: env.fold_key,
+        result_key: env.result_key,
         producer: { status: statusLine },
       };
     }
@@ -135,7 +135,7 @@ class AnswerBook {
     // expects === "reviews" (verify stage)
     const reviews = PANEL_ROLES.map((role) => approve(role));
     const base: DriveResults = {
-      fold_key: env.fold_key,
+      result_key: env.result_key,
       reviews: {
         reviews,
         verifications: [],
@@ -143,7 +143,7 @@ class AnswerBook {
       },
     };
 
-    // If the spawn carries a holdout sidecar, the fold requires holdout results.
+    // If the spawn carries a holdout sidecar, the record requires holdout results.
     if (env.sidecar !== undefined) {
       if (this.holdout === undefined) {
         throw new Error(
@@ -179,7 +179,7 @@ interface Answerer {
  * Drive a run to its terminal state, exactly as a real in-session or workflow
  * driver would.  This loop IS the documented driver contract:
  *
- *   stepRun → ready → stepTask (fold results) loop → terminal → repeat
+ *   stepRun → ready → stepTask (record results) loop → terminal → repeat
  *
  * Sequential: one task at a time (first ready task from stepRun).
  * Quota-blocked is treated as an unexpected error (the fake signal never blocks).
@@ -204,7 +204,7 @@ async function driveToTerminal(
     let results: DriveResults | undefined;
     for (;;) {
       const env = await stepTask(deps, runId, taskId, results);
-      // Clear after delivery: the fold_key gate rejects duplicate folds LOUD on the
+      // Clear after delivery: the result_key gate rejects duplicate records LOUD on the
       // next stepTask call, so passing results again would be a protocol violation.
       results = undefined;
       if (env.kind === "terminal") break;
@@ -277,7 +277,7 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
   // Scenario 1: Happy path (no-merge) — single task → completed, holdout path
   // -------------------------------------------------------------------------
 
-  it("drives a task PRD→shipped (no-merge), holdout sidecar folded, panel all-approve", async () => {
+  it("drives a task PRD→shipped (no-merge), holdout sidecar recorded, panel all-approve", async () => {
     const manifest = specManifestSingle();
     await specStore.write(manifest, "# checkout spec\n\nvertical slice.");
 

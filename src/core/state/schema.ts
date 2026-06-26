@@ -124,7 +124,7 @@ export const FailureClassEnum = z.enum([
 export type FailureClass = z.infer<typeof FailureClassEnum>;
 
 /**
- * Risk tier — the SINGLE producer dial (Decision 25). It folds difficulty ×
+ * Risk tier — the SINGLE producer dial (Decision 25). It records difficulty ×
  * stakes into one spec-time judgment and sets the STARTING rung of the producer
  * escalation ladder. It does NOT size the verifier (the merge gate is risk-invariant,
  * Decision 26) and there is no separate review-depth axis.
@@ -271,8 +271,8 @@ export const TaskStateSchema = z.object({
    * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the coroutine when it
    * EMITS a spawn for `stage` at `rung`, recording the task-branch `tip_sha` at emit
    * time. Producers commit to the SHARED task worktree, so a stop in the post-spawn /
-   * pre-fold window leaves the abandoned producer's partial commits on the branch. On
-   * the resume that re-enters the SAME (stage, rung) before any results were folded,
+   * pre-record window leaves the abandoned producer's partial commits on the branch. On
+   * the resume that re-enters the SAME (stage, rung) before any results were recorded,
    * the coroutine resets the worktree to `tip_sha` — discarding ONLY the interrupted
    * stage's work (prior completed stages live below it) — then re-spawns. A fresh
    * spawn overwrites it; terminal writers (complete/drop) clear it. Absent = no spawn

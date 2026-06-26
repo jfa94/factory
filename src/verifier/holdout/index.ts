@@ -3,7 +3,7 @@
  * import surface for WS10 (the driver) and any downstream consumer.
  *
  * Split (pure) → answer-key store (confined) → agent validation + deterministic
- * score → a {@link GateEvidence} folded into the risk-invariant merge gate. Deep-
+ * score → a {@link GateEvidence} recorded into the risk-invariant merge gate. Deep-
  * importing `src/verifier/holdout/*` is a smell; import here.
  */
 
@@ -34,7 +34,7 @@ export {
   type HoldoutValidatorRunner,
 } from "./validate.js";
 
-// The holdout-VERDICT store (the coroutine's holdout → review fold hand-off).
+// The holdout-VERDICT store (the coroutine's holdout → review record hand-off).
 export {
   InMemoryHoldoutVerdictStore,
   FsHoldoutVerdictStore,

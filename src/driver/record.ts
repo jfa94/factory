@@ -1,6 +1,6 @@
 /**
- * Fold cores — the per-task coroutine's deterministic kernels.  These are the
- * DETERMINISTIC, state-mutating functions that fold out-of-band agent results into
+ * Record cores — the per-task coroutine's deterministic kernels.  These are the
+ * DETERMINISTIC, state-mutating functions that record out-of-band agent results into
  * run state; they live here (driver/) so the coroutine imports them directly without a
  * cli→driver dependency inversion.
  *
@@ -16,10 +16,10 @@
  *
  * Signature adjustments from the move (only):
  *   - applyRecordReviews: was (deps: CliDeps, verdictStore, taskId, input);
- *     now (deps: FoldDeps, runId, taskId, verdictStore, input).  The body reads the
+ *     now (deps: RecordDeps, runId, taskId, verdictStore, input).  The body reads the
  *     task via deps.state.read(runId) instead of deps.run.
  *   - applyRecordHoldout: was (deps: CliDeps, verdictStore, taskId, raw);
- *     now (deps: FoldDeps, runId, taskId, verdictStore, raw).  The body reads runId
+ *     now (deps: RecordDeps, runId, taskId, verdictStore, raw).  The body reads runId
  *     from the explicit parameter instead of deps.run.run_id.
  */
 import { readFile } from "node:fs/promises";
@@ -63,17 +63,17 @@ import type { HandlerDeps } from "./types.js";
 import { resolveStagingBranch } from "./deps.js";
 import type { StateManager } from "./deps.js";
 
-const log = createLogger("fold");
+const log = createLogger("record");
 
 // ---------------------------------------------------------------------------
-// FoldDeps
+// RecordDeps
 // ---------------------------------------------------------------------------
 
 /**
- * What a fold needs: the reporter bundle ({@link HandlerDeps}) + the sanctioned
+ * What a record needs: the reporter bundle ({@link HandlerDeps}) + the sanctioned
  * state write path.  A strict subset of {@link import("./coroutine.js").CoroutineDeps}.
  */
-export interface FoldDeps extends HandlerDeps {
+export interface RecordDeps extends HandlerDeps {
   readonly state: StateManager;
 }
 
@@ -81,7 +81,7 @@ export interface FoldDeps extends HandlerDeps {
 // TransitionEnvelope + persistStepCursor + readJsonInput  (from transition.ts)
 // ---------------------------------------------------------------------------
 
-/** The envelope a fold core emits — the next loop step for run/task. */
+/** The envelope a record core emits — the next loop step for run/task. */
 export interface TransitionEnvelope {
   readonly run_id: string;
   readonly task_id: string;
@@ -92,7 +92,7 @@ export interface TransitionEnvelope {
 /**
  * Persist the in-flight stage cursor for a non-terminal step so the persisted task
  * status tracks the resume point. A terminal step (`done`/`dropped`) already wrote
- * its own status — nothing to mark. Used by the fold paths in this module.
+ * its own status — nothing to mark. Used by the record paths in this module.
  */
 async function persistStepCursor(
   deps: { readonly state: StateManager },
@@ -126,7 +126,7 @@ function producerStageInfo(stage: string): {
   throw new UsageError(`stage must be a producer stage (tests | exec), got '${stage}'`);
 }
 
-/** Fold the producer status into state and return the next-step envelope. */
+/** Record the producer status into state and return the next-step envelope. */
 export async function applyRecordProducer(
   state: StateManager,
   runId: string,
@@ -167,11 +167,11 @@ export interface RecordHoldoutInput {
   readonly raw: string;
 }
 
-/** The holdout-validation evidence document `applyRecordHoldout` folds. */
+/** The holdout-validation evidence document `applyRecordHoldout` records. */
 export interface RecordHoldoutEnvelope {
   readonly run_id: string;
   readonly task_id: string;
-  /** The DERIVED holdout gate evidence (folded into the merge gate by record-reviews). */
+  /** The DERIVED holdout gate evidence (recorded into the merge gate by record-reviews). */
   readonly evidence: GateEvidence;
   /** The scored detail (audit). */
   readonly check: HoldoutCheckResult;
@@ -192,9 +192,9 @@ function parseVerdictsFailClosed(raw: string): readonly HoldoutVerdict[] {
   }
 }
 
-/** Fold the holdout-validator output: persist raw verdicts + emit derived evidence. */
+/** Record the holdout-validator output: persist raw verdicts + emit derived evidence. */
 export async function applyRecordHoldout(
-  deps: FoldDeps,
+  deps: RecordDeps,
   runId: string,
   taskId: string,
   verdictStore: HoldoutVerdictStore,
@@ -203,7 +203,7 @@ export async function applyRecordHoldout(
   if (!(await deps.holdout.has(runId, taskId))) {
     throw new Error(
       `record-holdout: task '${taskId}' has no withheld answer key — nothing to validate ` +
-        `(applyRecordHoldout must only fold when the coroutine surfaced a holdout sidecar)`,
+        `(applyRecordHoldout must only record when the coroutine surfaced a holdout sidecar)`,
     );
   }
   const record = await deps.holdout.get(runId, taskId);
@@ -246,7 +246,7 @@ export interface RecordReviewsInput {
   readonly crossVendorAbsent?: { readonly reason: string };
 }
 
-/** The verify-fold envelope `applyRecordReviews` produces. */
+/** The verify-record envelope `applyRecordReviews` produces. */
 export interface RecordReviewsEnvelope extends TransitionEnvelope {
   /** The per-reviewer results this round derived (audit; state may clear them on retry). */
   readonly reviewers: readonly ReviewerResult[];
@@ -255,8 +255,8 @@ export interface RecordReviewsEnvelope extends TransitionEnvelope {
   /**
    * Δ U — a SECOND-VENDOR ABSENCE surfaced from {@link runPanel}. Present (with a
    * reason) IFF this verify pass ran WITHOUT an independent cross-vendor reviewer;
-   * the fold also emits a LOUD `log.warn` so the absence is never silently swallowed
-   * (runPanel records it on the panel result, but the fold is the last hop that can
+   * the record also emits a LOUD `log.warn` so the absence is never silently swallowed
+   * (runPanel records it on the panel result, but the record is the last hop that can
    * drop it). An audit/strength signal only — it NEVER gates the merge gate. Left absent
    * when a second vendor was present.
    */
@@ -339,11 +339,11 @@ export function makeReplayRunnerFactory(
 }
 
 /**
- * Fold the panel + verify-then-fix verdicts into the merge gate and return the next-step
+ * Record the panel + verify-then-fix verdicts into the merge gate and return the next-step
  * envelope. `verdictStore` is the holdout-verdict source `applyRecordHoldout` persisted.
  */
 export async function applyRecordReviews(
-  deps: FoldDeps,
+  deps: RecordDeps,
   runId: string,
   taskId: string,
   verdictStore: HoldoutVerdictStore,
@@ -378,7 +378,7 @@ export async function applyRecordReviews(
 
   // 3. holdout gate evidence — RE-DERIVED from the verdicts applyRecordHoldout persisted
   //    (derive-don't-store exception). A withheld key with no persisted verdicts is an
-  //    orchestration error (applyRecordHoldout must fold first) — LOUD, never a silent pass.
+  //    orchestration error (applyRecordHoldout must record first) — LOUD, never a silent pass.
   if (await deps.holdout.has(runId, taskId)) {
     const record = await deps.holdout.get(runId, taskId);
     const verdicts = await verdictStore.get(runId, taskId);
@@ -402,7 +402,7 @@ export async function applyRecordReviews(
   });
 
   // Δ U: a second-vendor absence must be LOUD, never silently dropped. runPanel
-  // records it on the result; this fold (the last hop) surfaces it as a warn line
+  // records it on the result; this record (the last hop) surfaces it as a warn line
   // AND threads it onto the envelope below. It is a strength signal — it does NOT
   // gate the merge gate.
   if (panel.crossVendorAbsence !== undefined) {

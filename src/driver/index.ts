@@ -3,7 +3,7 @@
  *
  * The Model-A driver engine: the deterministic SEAM the CLI/orchestrator drives —
  * the per-task coroutine ({@link stepTask}), the run-level coroutine ({@link stepRun}), the
- * fold cores, the quota gate, and the finalize coordinator — plus the reporter
+ * record cores, the quota gate, and the finalize coordinator — plus the reporter
  * dependency-bundle types those callers wire against. `deps.ts` stays INTERNAL (it
  * is the driver's own deep-import barrel); consumers import the frozen seams from
  * `src/types` and each domain barrel, and the driver-specific shapes from here.
@@ -32,13 +32,13 @@ export type { ShipMode, HandlerDeps } from "./types.js";
 export { InMemoryArtifactStore, FsArtifactStore } from "./artifacts.js";
 export type { ArtifactStore } from "./artifacts.js";
 
-// -- fold cores (the coroutine's deterministic result-fold kernels) ----------------
+// -- record cores (the coroutine's deterministic result-record kernels) ----------------
 export {
   readJsonInput,
   applyRecordProducer,
   applyRecordHoldout,
   applyRecordReviews,
-  type FoldDeps,
+  type RecordDeps,
   type TransitionEnvelope,
   type RecordHoldoutInput,
   type RecordHoldoutEnvelope,
@@ -46,7 +46,7 @@ export {
   type ReviewerVerifications,
   type RecordReviewsInput,
   type RecordReviewsEnvelope,
-} from "./fold.js";
+} from "./record.js";
 
 // -- drive results schema (factory drive --results input) --------------------
 export { DriveResultsSchema, parseDriveResults, type DriveResults } from "./results.js";
@@ -68,10 +68,10 @@ export {
 // -- run-level coroutine (factory next seam) --------------------------------------
 export { stepRun, type NextEnvelope } from "./next.js";
 
-// -- docs stage emit + fold coroutines (factory run docs seam) -----------------
+// -- docs stage emit + record coroutines (factory run docs seam) -----------------
 export {
   runDocsEmit,
-  runDocsFold,
+  runDocsRecord,
   docsWorktreePath,
   DocsResultsSchema,
   type DocsRunDeps,

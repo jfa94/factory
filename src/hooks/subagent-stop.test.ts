@@ -3,7 +3,7 @@
  *
  * The hook is now LOG-ONLY (observational). It parses reviewer verdicts, resolves
  * the task_id, and logs loudly — but never writes to task.reviewers[] (the driver
- * fold is the single writer). Tests assert:
+ * record is the single writer). Tests assert:
  *   - reviewerNameOf / parseVerdict / taskIdFromHeader pure helpers behave correctly
  *   - handleSubagentStop resolves reviewer+task and returns null (no state write)
  *   - Non-reviewer roles are skipped immediately (no manager call)

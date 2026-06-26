@@ -16,7 +16,7 @@
  *     criterion at that position; a missing/blank-evidence entry counts as a FAIL),
  *     mirroring the bash `pipeline-holdout-validate check` intent.
  *   - {@link holdoutEvidence} maps the result to a {@link GateEvidence} the loop
- *     appends to the deterministic gate evidence, so the holdout result is folded
+ *     appends to the deterministic gate evidence, so the holdout result is recorded
  *     into the risk-invariant merge gate via the existing `deriveMergeGateVerdict`.
  */
 import type { GateEvidence } from "../../types/index.js";
@@ -211,7 +211,7 @@ export function checkHoldout(
   };
 }
 
-/** Map a holdout result to the {@link GateEvidence} the loop folds into the merge gate. */
+/** Map a holdout result to the {@link GateEvidence} the loop records into the merge gate. */
 export function holdoutEvidence(result: HoldoutCheckResult): GateEvidence {
   return {
     gate: "holdout",

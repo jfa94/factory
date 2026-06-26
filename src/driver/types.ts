@@ -14,7 +14,7 @@
  *
  *   - The ENGINE acts on results. The per-task coroutine
  *     ({@link import("./coroutine.js").stepTask}) resumes at the persisted stage cursor,
- *     folds the previous spawn's agent results into state, and runs the
+ *     records the previous spawn's agent results into state, and runs the
  *     deterministic stage machine until it needs agents (it RETURNS the spawn
  *     manifest to the caller) or the task is terminal. The in-session orchestrator
  *     (or the workflow driver) owns every Agent() spawn; the engine owns every

@@ -24,7 +24,7 @@ describe("drive arg/usage edges", () => {
     try {
       const code = await driveCommand.run(["--help"]);
       expect(code).toBe(EXIT.OK);
-      expect(stdout.read()).toMatch(/fold_key/);
+      expect(stdout.read()).toMatch(/result_key/);
     } finally {
       stdout.restore();
     }
@@ -99,7 +99,7 @@ describe("drive --results parse errors", () => {
       const code = await driveCommand.run(["--run", "run-1", "--task", "T1", "--results", bad]);
       expect(code).toBe(EXIT.USAGE);
       expect(stderr.read()).toContain(bad);
-      expect(stderr.read()).toContain("fold_key");
+      expect(stderr.read()).toContain("result_key");
     } finally {
       stderr.restore();
     }
@@ -191,7 +191,7 @@ describe("drive happy path", () => {
         kind: "spawn",
         run_id: runId,
         task_id: "T1",
-        fold_key: { stage: "tests", rung: 0 },
+        result_key: { stage: "tests", rung: 0 },
         expects: "producer-status",
       });
       expect(envelope.manifest).toBeDefined();

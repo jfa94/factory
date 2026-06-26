@@ -526,7 +526,7 @@ describe("docs ordering invariant", () => {
       // Before docs: the gate withholds all-terminal.
       expect((await stepRun(deps, runId)).kind).toBe("docs-ready");
 
-      // Simulate the fold marking docs done (Task 5's done path).
+      // Simulate the record marking docs done (Task 5's done path).
       await state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: DONE_AT } }));
 
       // Now finalize is reachable.

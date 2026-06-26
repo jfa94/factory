@@ -9,7 +9,7 @@
  * source, and reconstruct it in isolation via `new Function(...freeVars)` with fake
  * `agent`/`parallel`/`log` injected. Any edit that breaks these safety contracts —
  * dead-agent → ERROR (not BLOCKED), loud-throw on a short panel or a dead verifier,
- * cli() retry vs foldResults() exactly-once, effort passthrough — fails HERE.
+ * cli() retry vs recordResults() exactly-once, effort passthrough — fails HERE.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -76,7 +76,7 @@ const SLICES = {
   runVerifyCollection: () =>
     sliceFn("async function runVerifyCollection(", "\n\n// Step one task to terminal"),
   cli: () => sliceFn("async function cli(", "\n\n// Persist a DriveResults document"),
-  foldResults: () => sliceFn("async function foldResults(", "\n\nasync function runProducer("),
+  recordResults: () => sliceFn("async function recordResults(", "\n\nasync function runProducer("),
 };
 
 describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
@@ -111,7 +111,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       worktree: "/wt",
     });
 
-    it("a dead producer (out===null) folds to STATUS: ERROR, never BLOCKED (no spec-defect cascade)", async () => {
+    it("a dead producer (out===null) records to STATUS: ERROR, never BLOCKED (no spec-defect cascade)", async () => {
       const { agent } = makeAgent([null]);
       const out = await build(agent)("T1", env());
       expect(out.producer.status).toMatch(/^STATUS: ERROR/);
@@ -211,8 +211,8 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
     });
   });
 
-  // ── cli (bounded retry) vs foldResults (exactly-once) ───────────────────────
-  describe("cli retry vs foldResults exactly-once", () => {
+  // ── cli (bounded retry) vs recordResults (exactly-once) ───────────────────────
+  describe("cli retry vs recordResults exactly-once", () => {
     type Cli = (
       command: string,
       label: string,
@@ -220,7 +220,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       knownKinds: unknown,
       context: string,
     ) => Promise<unknown>;
-    type Fold = (taskId: string, stage: string, results: unknown) => Promise<unknown>;
+    type Record = (taskId: string, stage: string, results: unknown) => Promise<unknown>;
 
     const buildCli = (agent: unknown, parseEnvelope: unknown) =>
       buildFn<Cli>(SLICES.cli(), {
@@ -234,7 +234,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       });
 
     const buildFold = (agent: unknown, parseEnvelope: unknown) =>
-      buildFn<Fold>(SLICES.foldResults(), {
+      buildFn<Record>(SLICES.recordResults(), {
         fileSeq: 0,
         dataDir: "/data",
         runId: "run-1",
@@ -291,30 +291,30 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       expect(parsed).toBe(false); // parse never attempted on a dead agent
     });
 
-    it("foldResults calls the exec-agent EXACTLY ONCE — no retry on a parse failure (fold_key-guarded mutation)", async () => {
+    it("recordResults calls the exec-agent EXACTLY ONCE — no retry on a parse failure (result_key-guarded mutation)", async () => {
       const { agent, calls } = makeAgent([{ raw: "x" }]);
       const parseEnvelope = () => {
-        throw new Error("fold boundary parse flake");
+        throw new Error("record boundary parse flake");
       };
-      await expect(buildFold(agent, parseEnvelope)("T1", "exec", { fold_key: {} })).rejects.toThrow(
-        /fold boundary parse flake/,
+      await expect(buildFold(agent, parseEnvelope)("T1", "exec", { result_key: {} })).rejects.toThrow(
+        /record boundary parse flake/,
       );
-      // Exactly-once fold atop at-least-once delivery: a re-spawn could double-fold, so NONE.
+      // Exactly-once record atop at-least-once delivery: a re-spawn could double-record, so NONE.
       expect(calls).toHaveLength(1);
     });
 
-    it("foldResults returns the parsed DriveEnvelope on the happy path (single agent call)", async () => {
+    it("recordResults returns the parsed DriveEnvelope on the happy path (single agent call)", async () => {
       const { agent, calls } = makeAgent([{ raw: "x" }]);
       const parseEnvelope = () => ({ kind: "terminal" });
-      const out = await buildFold(agent, parseEnvelope)("T1", "exec", { fold_key: {} });
+      const out = await buildFold(agent, parseEnvelope)("T1", "exec", { result_key: {} });
       expect(out).toEqual({ kind: "terminal" });
       expect(calls).toHaveLength(1);
     });
 
-    it("foldResults throws loud on a skipped/dead fold agent (out===null)", async () => {
+    it("recordResults throws loud on a skipped/dead record agent (out===null)", async () => {
       const { agent } = makeAgent([null]);
       const parseEnvelope = () => ({ kind: "terminal" });
-      await expect(buildFold(agent, parseEnvelope)("T1", "exec", { fold_key: {} })).rejects.toThrow(
+      await expect(buildFold(agent, parseEnvelope)("T1", "exec", { result_key: {} })).rejects.toThrow(
         /skipped or died/,
       );
     });

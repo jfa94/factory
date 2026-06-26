@@ -9,11 +9,11 @@
  *
  * This hook is now LOG-ONLY (observational). When a REVIEWER subagent stops it
  * parses the verdict and logs it loudly, but does NOT write to task.reviewers[].
- * The driver delivers panel results through the `factory drive` fold
- * ({@link applyRecordReviews} in src/driver/fold.ts) — that is the single
+ * The driver delivers panel results through the `factory drive` record
+ * ({@link applyRecordReviews} in src/driver/record.ts) — that is the single
  * sanctioned writer of task.reviewers[]. A hook-side write would create a second
  * writer that can poison crash-resume replay: if the hook writes reviewers[] after
- * the panel but before the `drive --results` fold runs, a subsequent resume hits the verify
+ * the panel but before the `drive --results` record runs, a subsequent resume hits the verify
  * handler's derive branch ({@link src/driver/handlers.ts} verify) with no holdout
  * evidence and no verify-then-fix → false advance to ship.
  *
@@ -102,7 +102,7 @@ export interface SubagentStopDeps extends DataDirOptions {
  * Core handler: given parsed input, resolve the reviewer + task and LOG the parsed
  * verdict loudly. Returns null (observational — no state write).
  *
- * The driver delivers panel results through the `factory drive` fold
+ * The driver delivers panel results through the `factory drive` record
  * (applyRecordReviews) — that is the single sanctioned writer of task.reviewers[].
  * A hook-side write here would poison crash-resume replay via the verify handler's
  * derive branch.
@@ -158,7 +158,7 @@ export async function handleSubagentStop(
   if (taskId.length === 0) {
     log.error(
       `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); ` +
-        `verdict NOT persisted — driver fold is the single writer`,
+        `verdict NOT persisted — driver record is the single writer`,
     );
     return null;
   }
@@ -171,10 +171,10 @@ export async function handleSubagentStop(
   }
 
   const verdict = parseVerdict(input.last_assistant_message);
-  // Observational log only — no state write. The driver fold (`drive --results`) is
+  // Observational log only — no state write. The driver record (`drive --results`) is
   // the single writer of task.reviewers[].
   log.info(
-    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational — driver folds reviews via the drive --results fold)`,
+    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational — driver records reviews via the drive --results record)`,
   );
   return null;
 }

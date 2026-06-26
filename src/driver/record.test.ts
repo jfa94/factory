@@ -1,11 +1,11 @@
 /**
- * Fold-core semantics — moved verbatim from:
+ * Record-core semantics — moved verbatim from:
  *   - src/cli/subcommands/record-holdout.test.ts  (applyRecordHoldout describe block)
  *   - src/cli/subcommands/record-reviews.test.ts  (applyRecordReviews describe block)
  *   - src/cli/subcommands/record-producer.test.ts (applyRecordProducer describe blocks)
  *
- * Imports now point to ./fold.js; fixtures + assertions are IDENTICAL — only the
- * call sites carry the new runId argument (FoldDeps signature adjustment).
+ * Imports now point to ./record.js; fixtures + assertions are IDENTICAL — only the
+ * call sites carry the new runId argument (RecordDeps signature adjustment).
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -18,8 +18,8 @@ import {
   applyRecordProducer,
   buildWorktreeSource,
   type RecordReviewsInput,
-  type FoldDeps,
-} from "./fold.js";
+  type RecordDeps,
+} from "./record.js";
 import type { RawReview } from "../verifier/judgment/index.js";
 import { taskWorktreePath } from "./paths.js";
 import { defaultConfig } from "../config/schema.js";
@@ -41,7 +41,7 @@ const RUN_ID = "run-1";
 const TASK_ID = "t1";
 
 // ---------------------------------------------------------------------------
-// applyRecordHoldout fold
+// applyRecordHoldout record
 // ---------------------------------------------------------------------------
 
 function holdoutSpec() {
@@ -78,15 +78,15 @@ function validatorJson(entries: ReadonlyArray<[string, boolean, string]>): strin
   });
 }
 
-describe("applyRecordHoldout fold", () => {
+describe("applyRecordHoldout record", () => {
   let dataDir: string;
   let state: StateManager;
   let holdout: InMemoryHoldoutStore;
   let verdictStore: InMemoryHoldoutVerdictStore;
-  let deps: FoldDeps;
+  let deps: RecordDeps;
 
   beforeEach(async () => {
-    dataDir = await mkdtemp(join(tmpdir(), "factory-fold-holdout-"));
+    dataDir = await mkdtemp(join(tmpdir(), "factory-record-holdout-"));
     state = new StateManager({
       dataDir,
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
@@ -172,7 +172,7 @@ describe("applyRecordHoldout fold", () => {
 });
 
 // ---------------------------------------------------------------------------
-// applyRecordReviews fold
+// applyRecordReviews record
 // ---------------------------------------------------------------------------
 
 /** A git probe whose full default gate sweep is GREEN (TDD test→impl history). */
@@ -217,14 +217,14 @@ function approve(reviewer: string) {
   return { reviewer, verdict: "approve" as const, findings: [] };
 }
 
-describe("applyRecordReviews fold", () => {
+describe("applyRecordReviews record", () => {
   let dataDir: string;
   let state: StateManager;
   let holdout: InMemoryHoldoutStore;
   let verdictStore: InMemoryHoldoutVerdictStore;
 
   beforeEach(async () => {
-    dataDir = await mkdtemp(join(tmpdir(), "factory-fold-reviews-"));
+    dataDir = await mkdtemp(join(tmpdir(), "factory-record-reviews-"));
     state = new StateManager({
       dataDir,
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
@@ -255,8 +255,8 @@ describe("applyRecordReviews fold", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  /** Build a FoldDeps over the seeded run with a GREEN gate sweep. */
-  function makeDeps(): FoldDeps {
+  /** Build a RecordDeps over the seeded run with a GREEN gate sweep. */
+  function makeDeps(): RecordDeps {
     return {
       config: defaultConfig(),
       spec: reviewsSpec(),
@@ -442,7 +442,7 @@ describe("applyRecordReviews fold", () => {
     // ESCALATE branch: confirmed blocker → merge gate fails → escalateOrDrop path.
     // Simulating the crash window: if reviewers were written before the panel result
     // was acted on, a no-results re-invoke at verify could derive a merge gate pass without
-    // holdout evidence.  With the fix, reviewers must be EMPTY after the escalate fold.
+    // holdout evidence.  With the fix, reviewers must be EMPTY after the escalate record.
     await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
     const depsEscalate = makeDeps();
     const escalateInput: RecordReviewsInput = {
@@ -479,7 +479,7 @@ describe("applyRecordReviews fold", () => {
       escalateInput,
     );
     expect(escalateEnv.mergeGate.passed).toBe(false);
-    // After escalate fold: task.reviewers must be empty (fail-closed — no phantom persist).
+    // After escalate record: task.reviewers must be empty (fail-closed — no phantom persist).
     const taskAfterEscalate = (await state.read(RUN_ID)).tasks[TASK_ID]!;
     expect(taskAfterEscalate.reviewers).toEqual([]);
 
@@ -511,7 +511,7 @@ describe("applyRecordReviews fold", () => {
     );
     expect(approveEnv.mergeGate.passed).toBe(true);
     expect(approveEnv.step).toEqual({ done: false, stage: "ship" });
-    // After advance fold: reviewers persisted + stage advanced atomically.
+    // After advance record: reviewers persisted + stage advanced atomically.
     const taskAfterApprove = (await state.read(RUN_ID)).tasks[TASK_ID]!;
     expect(taskAfterApprove.reviewers.map((r) => r.verdict)).toEqual(["approve", "approve"]);
     expect(taskAfterApprove.stage).toBe("ship");
@@ -535,7 +535,7 @@ describe("applyRecordReviews fold", () => {
       commits: baseProbe.commits.bind(baseProbe),
     });
 
-    const deps: FoldDeps = {
+    const deps: RecordDeps = {
       config: defaultConfig(),
       spec: reviewsSpec(),
       git: new FakeGitClient({ remoteHeads: { staging: "sha-staging" } }),
@@ -601,7 +601,7 @@ describe("applyRecordReviews fold", () => {
   });
 
   it("gate baseRef is per-run staging/<run-id>, not shared staging (Decision 33)", async () => {
-    // Probe seeded with ONLY origin/staging/<run-id>. If the fold still passes
+    // Probe seeded with ONLY origin/staging/<run-id>. If the record still passes
     // deps.config.git.stagingBranch ("staging") as baseRef, the TDD strategy will
     // look up origin/staging (missing) → gate fails → merge gate blocks → step !== ship.
     // After the fix (runStagingBranch(runId)), the probe resolves origin/staging-run-1
@@ -614,7 +614,7 @@ describe("applyRecordReviews fold", () => {
         commit({ sha: "c2", files: ["src/x.ts"], tagged: true }),
       ],
     });
-    const deps: FoldDeps = {
+    const deps: RecordDeps = {
       config: defaultConfig(),
       spec: reviewsSpec(),
       git: new FakeGitClient({ remoteHeads: { "staging-run-1": "sha-staging" } }),
@@ -642,13 +642,13 @@ describe("applyRecordReviews fold", () => {
 });
 
 // ---------------------------------------------------------------------------
-// applyRecordProducer fold  (moved from src/cli/subcommands/record-producer.test.ts)
+// applyRecordProducer record  (moved from src/cli/subcommands/record-producer.test.ts)
 // ---------------------------------------------------------------------------
 
 async function seededProducerState(
   task: Partial<TaskState> = {},
 ): Promise<{ dataDir: string; state: StateManager }> {
-  const dataDir = await mkdtemp(join(tmpdir(), "factory-fold-producer-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "factory-record-producer-"));
   const state = new StateManager({
     dataDir,
     lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
@@ -807,7 +807,7 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
 describe("buildWorktreeSource — ENOENT-only swallow (citation source loader)", () => {
   let wt: string;
   beforeEach(async () => {
-    wt = await mkdtemp(join(tmpdir(), "factory-fold-source-"));
+    wt = await mkdtemp(join(tmpdir(), "factory-record-source-"));
   });
   afterEach(async () => {
     await rm(wt, { recursive: true, force: true });

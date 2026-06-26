@@ -2,7 +2,7 @@
  * `factory score [--run <id>]` — the run-outcome REPORTER (WS12, Decision 22, Δ S).
  *
  * Model A: a read-only reporter. It resolves the run + its durable spec, derives the
- * deterministic partial-run report, and folds it into the compact {@link RunSummary}
+ * deterministic partial-run report, and records it into the compact {@link RunSummary}
  * the orchestrator surfaces. Nothing here writes state.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";

@@ -1,5 +1,5 @@
 /**
- * WS10 / Task C — the holdout-VERDICT store (the coroutine's holdout → review fold seam).
+ * WS10 / Task C — the holdout-VERDICT store (the coroutine's holdout → review record seam).
  *
  * Both impls must satisfy the same contract: `put` is idempotent, `get` is LOUD on
  * an absent key, and `has` is a non-throwing presence probe. The Fs impl ADDITIONALLY

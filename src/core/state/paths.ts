@@ -13,7 +13,7 @@
  *       state.json + audit.jsonl + metrics.jsonl + holdouts/ + reviews/.
  *
  * `<repo-key>` is a sanitized path segment derived from a "owner/name" repo id
- * (the slash and any unsafe char folded to '-') so the spec store is one flat,
+ * (the slash and any unsafe char recorded to '-') so the spec store is one flat,
  * inspectable directory level per repo.
  */
 import { join } from "node:path";
@@ -62,7 +62,7 @@ export const REPORT_FILE = "report.md";
 
 /**
  * Sanitize a repo id (e.g. "owner/name") into a single safe path segment.
- * Folds `/` and any char outside [a-zA-Z0-9._-] to '-', collapses runs, trims.
+ * Records `/` and any char outside [a-zA-Z0-9._-] to '-', collapses runs, trims.
  * Distinct from `slugify` (which lowercases + caps at 50 and is for human slugs):
  * a repo key must be reversible-ish and case-preserving for addressability, so it
  * keeps case and dots and does not truncate.
@@ -134,7 +134,7 @@ export function currentRepoRoot(dataDir: string): string {
 
 /**
  * `<dataDir>/current/<repo-key>` — the PER-REPO current pointer (L2.7). The repo id
- * ("owner/name") is folded to one safe segment via {@link repoKey} (which rejects a
+ * ("owner/name") is recorded to one safe segment via {@link repoKey} (which rejects a
  * pure-dot traversal segment), so a hostile repo id cannot escape the pointer tree.
  */
 export function currentRepoLinkPath(dataDir: string, repo: string): string {

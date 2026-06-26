@@ -22,15 +22,15 @@ Usage:
 this step only; omit to honor the persisted value (the seam default, never no-merge).
 
 Emits ONE JSON envelope to stdout:
-  { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, fold_key, worktree, base_ref }
+  { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, result_key, worktree, base_ref }
   { kind:"terminal", run_id, task_id, outcome }
   { kind:"quota-blocked", run_id, task_id, scope, reason, resets_at_epoch? }
 
 --results feeds back what the previous spawn envelope asked for. It MUST echo the
-envelope's fold_key verbatim; a stale/duplicate key rejects LOUD (re-invoke without
+envelope's result_key verbatim; a stale/duplicate key rejects LOUD (re-invoke without
 --results to get the current envelope):
-  expects=producer-status → { "fold_key": {…}, "producer": { "status": "<STATUS line>" } }
-  expects=reviews         → { "fold_key": {…}, "holdout"?: {"raw": "<validator output>"},
+  expects=producer-status → { "result_key": {…}, "producer": { "status": "<STATUS line>" } }
+  expects=reviews         → { "result_key": {…}, "holdout"?: {"raw": "<validator output>"},
                               "reviews": { reviews, verifications, crossVendorAbsent? } }
 Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
 

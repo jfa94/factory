@@ -3,7 +3,7 @@
  *
  * This module does NOT introduce defaults — that is the `src/config` seam's job
  * (the "all defaults live in one Zod schema" contract). It only READS already-
- * defined `ConfigSchema` fields and folds them into a small, intention-revealing
+ * defined `ConfigSchema` fields and records them into a small, intention-revealing
  * shape the rest of WS7 consumes, so no other WS7 module reaches into the raw
  * `Config` and re-derives the same thing differently.
  *
@@ -60,7 +60,7 @@ export function resolveReviewModel(config: Config): string {
 }
 
 /**
- * Fold the frozen {@link Config} into the {@link JudgmentConfig} WS7 consumes.
+ * Record the frozen {@link Config} into the {@link JudgmentConfig} WS7 consumes.
  * Pure; reads only existing seam fields.
  */
 export function resolveJudgmentConfig(config: Config): JudgmentConfig {

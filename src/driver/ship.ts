@@ -3,7 +3,7 @@
  *
  * Ship is the one task stage with NO agent→record cycle: it is fully deterministic
  * git/PR I/O, so the per-task coroutine ({@link import("./coroutine.js").stepTask}) runs this
- * logic directly rather than routing it through a reporter + a separate fold.
+ * logic directly rather than routing it through a reporter + a separate record.
  *
  * Unlike the pure {@link import("./handlers.js").makeStageHandlers} `ship` reporter
  * (which opens the PR but cannot write state or merge), {@link shipTask} DOES write
@@ -11,7 +11,7 @@
  * MergeSerializer — it needs the {@link StateManager}, so it lives here next to the
  * other shared state-writers ({@link import("./transitions.js")}) rather than in a
  * reporter. It still does NOT write the terminal `done` status: it returns a
- * `task-terminal` {@link StageResult} the coroutine folds via completeTask, keeping
+ * `task-terminal` {@link StageResult} the coroutine records via completeTask, keeping
  * "write done" in one place.
  */
 import {

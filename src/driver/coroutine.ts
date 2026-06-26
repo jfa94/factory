@@ -11,19 +11,19 @@
  *   - WITHOUT results: idempotent — the same spawn envelope re-derives from
  *     persisted state. Safe to retry after any crash.
  *   - WITH results: at-least-once delivery, exactly-once application. The
- *     fold_key echoed from the spawn envelope is validated against the current
+ *     result_key echoed from the spawn envelope is validated against the current
  *     cursor stage and escalation_rung before any mutation; stale or duplicate
- *     result delivery is rejected LOUD (never double-folded). Caveat: the
- *     fold_key is (stage, rung) not a nonce — a rescue cycle can reissue an
+ *     result delivery is rejected LOUD (never double-recorded). Caveat: the
+ *     result_key is (stage, rung) not a nonce — a rescue cycle can reissue an
  *     identical key, so exactly-once holds under the realistic crash model (the
  *     driver replays only the last unacknowledged delivery), not against
  *     arbitrarily delayed redelivery.
  *
  * Spawn-boundary inversion: instead of awaiting an injected agent runner in
  * process, the coroutine RETURNS the spawn manifest to the caller (the orchestrator)
- * and resumes on the next invocation by folding the collected results.
+ * and resumes on the next invocation by recording the collected results.
  * Holdout-before-reviews — an Iron Law the old skill enforced by prose — is here
- * mere code ordering inside foldResults.
+ * mere code ordering inside recordResults.
  */
 import {
   classifyFailure,
@@ -52,8 +52,8 @@ import {
   applyRecordProducer,
   applyRecordHoldout,
   applyRecordReviews,
-  type FoldDeps,
-} from "./fold.js";
+  type RecordDeps,
+} from "./record.js";
 import { makeStageHandlers } from "./handlers.js";
 import { resolveStagingBranch } from "./deps.js";
 import { shipTask } from "./ship.js";
@@ -62,7 +62,7 @@ import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
 import { resolveReviewModel } from "../verifier/judgment/index.js";
 import { buildHoldoutPrompt, FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
 import { isSpawnStage } from "./results.js";
-import type { DriveResults, FoldKey, SpawnStage } from "./results.js";
+import type { DriveResults, ResultKey, SpawnStage } from "./results.js";
 import type { HandlerDeps } from "./types.js";
 import { createLogger } from "../shared/index.js";
 
@@ -92,7 +92,7 @@ export type DriveEnvelope =
       readonly run_id: string;
       readonly task_id: string;
       readonly stage: SpawnStage;
-      readonly fold_key: FoldKey;
+      readonly result_key: ResultKey;
       readonly manifest: SpawnManifest;
       readonly sidecar?: HoldoutSidecar;
       readonly expects: DriveExpects;
@@ -194,8 +194,8 @@ export async function holdoutSidecar(
   };
 }
 
-/** Fold the previous spawn's results into state via the shared writers. */
-async function foldResults(
+/** Record the previous spawn's results into state via the shared writers. */
+async function recordResults(
   deps: CoroutineDeps,
   runId: string,
   taskId: string,
@@ -203,19 +203,19 @@ async function foldResults(
   task: TaskState,
   results: DriveResults,
 ): Promise<TaskStep> {
-  // Validate fold_key BEFORE any mutation: stale or duplicate results reject LOUD.
-  const { fold_key } = results;
+  // Validate result_key BEFORE any mutation: stale or duplicate results reject LOUD.
+  const { result_key } = results;
   if (!isSpawnStage(stage)) {
     throw new Error(`drive: results given but stage '${stage}' spawns no agents`);
   }
   const spawnStage = stage;
-  if (fold_key.stage !== spawnStage || fold_key.rung !== task.escalation_rung) {
+  if (result_key.stage !== spawnStage || result_key.rung !== task.escalation_rung) {
     throw new Error(
-      `drive: stale or duplicate results (fold_key ${fold_key.stage}/${fold_key.rung} vs cursor ${spawnStage}/${task.escalation_rung}) — re-invoke without results to get the current envelope`,
+      `drive: stale or duplicate results (result_key ${result_key.stage}/${result_key.rung} vs cursor ${spawnStage}/${task.escalation_rung}) — re-invoke without results to get the current envelope`,
     );
   }
 
-  const fold: FoldDeps = deps;
+  const record: RecordDeps = deps;
   if (stage === "tests" || stage === "exec") {
     if (results.producer === undefined) {
       throw new Error(`drive: stage '${stage}' expects producer-status results`);
@@ -243,16 +243,16 @@ async function foldResults(
     );
   }
   const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
-  // Holdout BEFORE reviews — the fold ordering the old skill enforced by prose.
+  // Holdout BEFORE reviews — the record ordering the old skill enforced by prose.
   if (results.holdout !== undefined) {
-    await applyRecordHoldout(fold, runId, taskId, verdictStore, results.holdout.raw);
+    await applyRecordHoldout(record, runId, taskId, verdictStore, results.holdout.raw);
   }
-  const env = await applyRecordReviews(fold, runId, taskId, verdictStore, results.reviews);
+  const env = await applyRecordReviews(record, runId, taskId, verdictStore, results.reviews);
   return env.step;
 }
 
 /**
- * Step one task: fold results (if given), then run deterministic stages until a
+ * Step one task: record results (if given), then run deterministic stages until a
  * spawn is needed or the task is terminal. See the module doc for the contract.
  */
 export async function stepTask(
@@ -288,24 +288,24 @@ export async function stepTask(
   let stage: TaskStage = task.stage ?? "preflight";
 
   // Tracks whether the cursor for `stage` is ALREADY persisted, so the loop's
-  // markInFlight is skipped when a fold (below) just wrote the identical cursor —
-  // avoiding a duplicate locked RMW + fsync per fold. An advance/re-route inside
+  // markInFlight is skipped when a record (below) just wrote the identical cursor —
+  // avoiding a duplicate locked RMW + fsync per record. An advance/re-route inside
   // the loop sets it back to false (the new stage's cursor is not yet written).
   let cursorPersisted = false;
 
-  // 3. Fold the previous spawn's results (validated against the cursor's stage + rung).
+  // 3. Record the previous spawn's results (validated against the cursor's stage + rung).
   if (results !== undefined) {
-    const step = await foldResults(deps, runId, taskId, stage, task, results);
+    const step = await recordResults(deps, runId, taskId, stage, task, results);
     if (step.done) {
       return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
     }
     stage = step.stage;
-    // foldResults persists the resume cursor for a non-terminal step (via
+    // recordResults persists the resume cursor for a non-terminal step (via
     // persistStepCursor or applyRecordReviews' advance-write), so it is current.
     cursorPersisted = true;
   }
 
-  // 4. The deterministic stage loop — run a handler, fold its result, advance the
+  // 4. The deterministic stage loop — run a handler, record its result, advance the
   //    cursor; the only break is a spawn (boundary inverted: return the manifest).
   const handlers = makeStageHandlers(deps);
   for (;;) {
@@ -336,11 +336,11 @@ export async function stepTask(
         const base_ref = `origin/${resolveStagingBranch(runId, run.staging_branch)}`;
         const sidecar =
           spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : undefined;
-        const fold_key: FoldKey = { stage: spawnStage, rung: task.escalation_rung };
+        const result_key: ResultKey = { stage: spawnStage, rung: task.escalation_rung };
         // WS2 idempotent re-spawn. Producers commit to the SHARED task worktree, so a
-        // stop in the post-spawn / pre-fold window strands the abandoned producer's
+        // stop in the post-spawn / pre-record window strands the abandoned producer's
         // partial commits + uncommitted edits on the task branch. On the resume that
-        // re-enters this SAME (stage, rung) before any results were folded,
+        // re-enters this SAME (stage, rung) before any results were recorded,
         // `spawn_in_flight` still names THIS spawn → reset the worktree to the tip we
         // captured at the original emit (prior completed stages live BELOW that tip and
         // survive), discarding only the interrupted stage's work, then re-spawn clean.
@@ -349,7 +349,7 @@ export async function stepTask(
         // stage, escalate bumps the rung, and the ship→exec re-sync lands on exec while
         // the checkpoint still names verify. Verify spawns read-only reviewers in their
         // own isolated worktrees, so HEAD never moved and the reset is a no-op. Terminal
-        // writers (complete/drop) clear it; folding need not (the (stage, rung) change
+        // writers (complete/drop) clear it; recording need not (the (stage, rung) change
         // already shields it), so this stays the lone live read of the field.
         // Gated on the worktree existing: past preflight every producer/verify spawn
         // has one, so this is true in any real run. When it is ABSENT (a degenerate
@@ -376,7 +376,7 @@ export async function stepTask(
           run_id: runId,
           task_id: taskId,
           stage: spawnStage,
-          fold_key,
+          result_key,
           manifest: result.manifest,
           ...(sidecar !== undefined ? { sidecar } : {}),
           expects,
@@ -444,7 +444,7 @@ export async function stepTask(
           cursorPersisted = true; // exec cursor written ATOMICALLY with the bump above
           continue;
         }
-        // verify merge gate blocked on a crash-resume replay → same classify path as the fold.
+        // verify merge gate blocked on a crash-resume replay → same classify path as the record.
         const step = await escalateOrDrop(
           deps,
           runId,

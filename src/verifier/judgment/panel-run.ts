@@ -16,7 +16,7 @@
  *      `wait-retry` (merge gate blocked — bounded re-review/re-fix). State writes are
  *      the driver's job; this module never touches the StateManager.
  *
- * The fold ends at the independent finding-verifier (D27 verify-then-fix): a
+ * The record ends at the independent finding-verifier (D27 verify-then-fix): a
  * confirmed blocker fails the merge gate. There is no producer-rebuttal stage — runPanel
  * exposes the confirmed blockers and the driver routes a bounded fix-forward
  * re-spawn; runPanel does not loop a debate.

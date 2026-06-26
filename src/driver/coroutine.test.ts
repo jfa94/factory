@@ -5,13 +5,13 @@
  * seeds the run and task state and returns deps + run-id.
  *
  * Helpers:
- *   - driveToVerify: step twice (fold DONE twice) to reach the verify spawn;
+ *   - driveToVerify: step twice (record DONE twice) to reach the verify spawn;
  *     returns the verify spawn envelope (LOUD if not reached)
  *   - approvingReviewsResults: a DriveResults with 6 approving reviews + holdout pass
  *   - blockingReviewsResults: a DriveResults with one confirmed blocker
  *
- * fold_key discipline: every helper that builds a DriveResults accepts the prior
- * spawn envelope and copies fold_key verbatim — the natural driver behavior.
+ * result_key discipline: every helper that builds a DriveResults accepts the prior
+ * spawn envelope and copies result_key verbatim — the natural driver behavior.
  */
 import { describe, expect, it } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -20,7 +20,7 @@ import { dirname, join } from "node:path";
 import { stepTask, MERGE_RESYNC_CAP, type DriveEnvelope } from "./coroutine.js";
 import { TASK_STAGE_ORDER } from "../types/index.js";
 import { TaskStateSchema } from "../core/state/index.js";
-import type { DriveResults, FoldKey } from "./results.js";
+import type { DriveResults, ResultKey } from "./results.js";
 import { SPAWN_STAGES } from "./results.js";
 
 import { makeHoldoutRecord, FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
@@ -38,9 +38,9 @@ import { runScopedBranch, runStagingBranch } from "../git/index.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Drive T1 through tests+exec (fold DONE twice) to land at the verify spawn.
+ * Drive T1 through tests+exec (record DONE twice) to land at the verify spawn.
  * Returns the verify spawn envelope (LOUD assertion — never returns non-spawn).
- * fold_key is echoed from each prior envelope, matching natural driver behavior.
+ * result_key is echoed from each prior envelope, matching natural driver behavior.
  */
 async function driveToVerify(
   deps: CoroutineDeps,
@@ -53,18 +53,18 @@ async function driveToVerify(
   if (env1.kind !== "spawn") throw new Error("expected spawn at tests");
   expect(env1.stage).toBe("tests");
 
-  // 2. Fold DONE for tests → exec spawn (echo fold_key from env1)
+  // 2. Record DONE for tests → exec spawn (echo result_key from env1)
   const env2 = await stepTask(deps, runId, taskId, {
-    fold_key: env1.fold_key,
+    result_key: env1.result_key,
     producer: { status: "STATUS: DONE" },
   });
   expect(env2.kind).toBe("spawn");
   if (env2.kind !== "spawn") throw new Error("expected spawn at exec");
   expect(env2.stage).toBe("exec");
 
-  // 3. Fold DONE for exec → verify spawn (echo fold_key from env2)
+  // 3. Record DONE for exec → verify spawn (echo result_key from env2)
   const env3 = await stepTask(deps, runId, taskId, {
-    fold_key: env2.fold_key,
+    result_key: env2.result_key,
     producer: { status: "STATUS: DONE" },
   });
   // Must be a verify spawn — LOUD assertion, never silently skip.
@@ -76,7 +76,7 @@ async function driveToVerify(
 
 /**
  * Build a DriveResults with 6 approving reviews (all PANEL_ROLES) + holdout pass.
- * fold_key is echoed from the prior spawn envelope.
+ * result_key is echoed from the prior spawn envelope.
  */
 function approvingReviewsResults(
   priorEnvelope: DriveEnvelope & { kind: "spawn" },
@@ -88,7 +88,7 @@ function approvingReviewsResults(
     findings: [],
   }));
   const result: DriveResults = {
-    fold_key: priorEnvelope.fold_key,
+    result_key: priorEnvelope.result_key,
     reviews: {
       reviews,
       verifications: [],
@@ -106,7 +106,7 @@ function approvingReviewsResults(
 
 /**
  * Build a DriveResults with one confirmed blocker from the first panel reviewer.
- * fold_key is echoed from the prior spawn envelope.
+ * result_key is echoed from the prior spawn envelope.
  */
 function blockingReviewsResults(priorEnvelope: DriveEnvelope & { kind: "spawn" }): DriveResults {
   // Use the first PANEL_ROLES entry as the blocking reviewer (e.g. "implementation-reviewer")
@@ -130,7 +130,7 @@ function blockingReviewsResults(priorEnvelope: DriveEnvelope & { kind: "spawn" }
         : [],
   }));
   return {
-    fold_key: priorEnvelope.fold_key,
+    result_key: priorEnvelope.result_key,
     reviews: {
       reviews,
       verifications: [
@@ -180,7 +180,7 @@ describe("stepTask", () => {
       expect(env.stage).toBe("tests");
       expect(env.expects).toBe("producer-status");
       expect(env.manifest.agents[0]?.role).toBe("test-writer");
-      expect(env.fold_key).toEqual({ stage: "tests", rung: 0 });
+      expect(env.result_key).toEqual({ stage: "tests", rung: 0 });
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.stage).toBe("tests"); // cursor persisted
     } finally {
@@ -219,7 +219,7 @@ describe("stepTask", () => {
 
   // -- WS2: stop-mid-spawn idempotent re-spawn --------------------------------
   // Producers commit to the SHARED task worktree (isolation omitted), so a stop in
-  // the post-spawn / pre-fold window leaves the abandoned producer's partial commits
+  // the post-spawn / pre-record window leaves the abandoned producer's partial commits
   // on the task branch. The coroutine captures the pre-spawn tip at emit and, on a
   // resume that re-enters the SAME (stage, rung), resets the worktree to it.
 
@@ -260,7 +260,7 @@ describe("stepTask", () => {
       expect(preSpawnTip).toBeDefined();
 
       // 2. Simulate the test-writer committing partial work to the shared task worktree,
-      //    then a STOP before any results were folded (advance the task-branch tip).
+      //    then a STOP before any results were recorded (advance the task-branch tip).
       git.localBranches.set(taskBranch, "sha-abandoned-partial");
 
       // 3. Resume WITHOUT results → re-emit the SAME spawn AND discard the partial work
@@ -285,11 +285,11 @@ describe("stepTask", () => {
       const env1 = await stepTask(deps, runId, "T1"); // tests spawn → checkpoint {tests,0}
       if (env1.kind !== "spawn") throw new Error("expected tests spawn");
 
-      // Fold tests DONE → exec spawn. The advance changes the stage, so this is a FRESH
+      // Record tests DONE → exec spawn. The advance changes the stage, so this is a FRESH
       // spawn that OVERWRITES the checkpoint (never a reset against the stale tests entry).
       const callsBefore = git.calls.length;
       const env2 = await stepTask(deps, runId, "T1", {
-        fold_key: env1.fold_key,
+        result_key: env1.result_key,
         producer: { status: "STATUS: DONE" },
       });
       if (env2.kind !== "spawn") throw new Error("expected exec spawn");
@@ -306,14 +306,14 @@ describe("stepTask", () => {
     }
   });
 
-  it("folds a producer DONE and advances to the exec spawn", async () => {
+  it("records a producer DONE and advances to the exec spawn", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
       const env1 = await stepTask(deps, runId, "T1"); // → tests spawn
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") return;
       const env = await stepTask(deps, runId, "T1", {
-        fold_key: env1.fold_key,
+        result_key: env1.result_key,
         producer: { status: "STATUS: DONE" },
       });
       expect(env.kind).toBe("spawn");
@@ -325,12 +325,12 @@ describe("stepTask", () => {
     }
   });
 
-  // De-duplication pin (Task 4.1 Step 2b): one fold cycle that resumes at a stage
-  // must write that stage's cursor EXACTLY ONCE. Before the fix the fold's
+  // De-duplication pin (Task 4.1 Step 2b): one record cycle that resumes at a stage
+  // must write that stage's cursor EXACTLY ONCE. Before the fix the record's
   // persistStepCursor wrote the cursor and the coroutine loop's first markInFlight wrote
-  // the IDENTICAL cursor again (2 locked RMW + fsync per fold). A counting wrapper
+  // the IDENTICAL cursor again (2 locked RMW + fsync per record). A counting wrapper
   // over updateTask tallies writes that set the resumed cursor (stage "exec").
-  it("folding a producer DONE writes the resumed exec cursor exactly once (no duplicate RMW)", async () => {
+  it("recording a producer DONE writes the resumed exec cursor exactly once (no duplicate RMW)", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
       const env1 = await stepTask(deps, runId, "T1"); // → tests spawn
@@ -360,7 +360,7 @@ describe("stepTask", () => {
         });
 
       const env = await stepTask(deps, runId, "T1", {
-        fold_key: env1.fold_key,
+        result_key: env1.result_key,
         producer: { status: "STATUS: DONE" },
       });
       expect(env.kind).toBe("spawn");
@@ -381,7 +381,7 @@ describe("stepTask", () => {
       if (env1.kind !== "spawn") return;
       // NEEDS_CONTEXT → capability retry → rung bump (not a spec-defect drop)
       const env = await stepTask(deps, runId, "T1", {
-        fold_key: env1.fold_key,
+        result_key: env1.result_key,
         producer: { status: "STATUS: NEEDS_CONTEXT" },
       });
       expect(env.kind).toBe("spawn");
@@ -399,14 +399,14 @@ describe("stepTask", () => {
   // spec-defect signal the producer itself raises — it drops on the FIRST spawn
   // without bumping the rung (classify-before-retry, Δ D), distinct from the
   // NEEDS_CONTEXT capability retry above.
-  it("a producer blocked-escalate folds to an immediate spec-defect drop (no rung burn)", async () => {
+  it("a producer blocked-escalate records to an immediate spec-defect drop (no rung burn)", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
       const env1 = await stepTask(deps, runId, "T1"); // tests spawn, rung 0
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") return;
       const env = await stepTask(deps, runId, "T1", {
-        fold_key: env1.fold_key,
+        result_key: env1.result_key,
         producer: { status: "STATUS: BLOCKED — escalate" },
       });
       expect(env).toMatchObject({
@@ -517,7 +517,7 @@ describe("stepTask", () => {
     }
   });
 
-  it("folding approving reviews (+holdout pass) steps through ship to terminal done (no-merge)", async () => {
+  it("recording approving reviews (+holdout pass) steps through ship to terminal done (no-merge)", async () => {
     // Use ≥2 criteria so the tests stage persists a holdout record (holdoutCount(2,20)=1).
     const { deps, runId, dataDir, cleanup } = await makeCoroutineDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["criterion-a", "criterion-b"] }],
@@ -532,14 +532,14 @@ describe("stepTask", () => {
       const panelEnv = await stepTask(deps, runId, "T1"); // emit panel + holdout sidecar
       expect(panelEnv.kind).toBe("spawn");
       if (panelEnv.kind !== "spawn") return;
-      // Fold approving reviews AND holdout pass (withheld criteria → all satisfied).
+      // Record approving reviews AND holdout pass (withheld criteria → all satisfied).
       const env = await stepTask(deps, runId, "T1", approvingReviewsResults(panelEnv, withheld));
       expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.status).toBe("done");
       expect(run.tasks["T1"]?.pr_number).toBeTypeOf("number");
 
-      // Assert the holdout fold path actually fired: verdict store has entries for T1.
+      // Assert the holdout record path actually fired: verdict store has entries for T1.
       const verdictStore = new FsHoldoutVerdictStore(dataDir);
       const verdicts = await verdictStore.get(runId, "T1");
       expect(verdicts.length).toBeGreaterThan(0);
@@ -609,7 +609,7 @@ describe("stepTask", () => {
       if (env1.kind !== "spawn") return;
       // NEEDS_CONTEXT → capability retry → rung already at cap → drops capability-budget
       const env = await stepTask(deps, runId, "T1", {
-        fold_key: env1.fold_key,
+        result_key: env1.result_key,
         producer: { status: "STATUS: NEEDS_CONTEXT" },
       });
       expect(env).toMatchObject({
@@ -664,7 +664,7 @@ describe("stepTask", () => {
   // then lands on the next attempt"): the live serial-writer refusal is NOT a
   // capability failure — it re-routes to an exec re-sync (bumping merge_resyncs),
   // and once the branch is up to date the merge lands. In the coroutine model the
-  // re-sync surfaces as a fresh exec spawn the caller folds DONE.
+  // re-sync surfaces as a fresh exec spawn the caller records DONE.
   it("live-merge BEHIND-once re-routes to an exec re-sync, then lands on the next attempt", async () => {
     // A gh client that reports BEHIND on the FIRST prView, CLEAN thereafter.
     class BehindOnceGh extends FakeGhClient {
@@ -684,7 +684,7 @@ describe("stepTask", () => {
     try {
       const panelEnv = await driveToVerify(deps, runId, "T1");
       const withheld = (await deps.holdout.get(runId, "T1")).withheld_criteria;
-      // Fold approving reviews (+holdout pass) → the coroutine runs ship; the first
+      // Record approving reviews (+holdout pass) → the coroutine runs ship; the first
       // prView is BEHIND, so it re-routes to an exec re-sync (a fresh exec spawn),
       // bumping merge_resyncs.
       const resyncEnv = await stepTask(
@@ -699,9 +699,9 @@ describe("stepTask", () => {
       const midRun = await deps.state.read(runId);
       expect(midRun.tasks["T1"]?.merge_resyncs).toBe(1);
 
-      // Fold DONE for the re-sync exec → ship runs again; prView is now CLEAN → merge lands.
+      // Record DONE for the re-sync exec → ship runs again; prView is now CLEAN → merge lands.
       const env = await stepTask(deps, runId, "T1", {
-        fold_key: resyncEnv.fold_key,
+        result_key: resyncEnv.result_key,
         producer: { status: "STATUS: DONE" },
       });
       expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
@@ -749,7 +749,7 @@ describe("stepTask", () => {
           return next;
         });
 
-      // Fold approving reviews (+holdout pass) → ship runs, refuses (BEHIND) → re-sync.
+      // Record approving reviews (+holdout pass) → ship runs, refuses (BEHIND) → re-sync.
       const env = await stepTask(deps, runId, "T1", approvingReviewsResults(panelEnv, withheld));
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") throw new Error("expected an exec re-sync spawn");
@@ -778,7 +778,7 @@ describe("stepTask", () => {
       // T1 is pending → stage is implicitly preflight (no cursor yet)
       await expect(
         stepTask(deps, runId, "T1", {
-          fold_key: { stage: "tests", rung: 0 },
+          result_key: { stage: "tests", rung: 0 },
           producer: { status: "STATUS: DONE" },
         }),
       ).rejects.toThrow(/spawns no agents|preflight/i);
@@ -796,7 +796,7 @@ describe("stepTask", () => {
       if (panelEnv.kind !== "spawn") return;
       await expect(
         stepTask(deps, runId, "T1", {
-          fold_key: panelEnv.fold_key,
+          result_key: panelEnv.result_key,
           producer: { status: "STATUS: DONE" },
         }),
       ).rejects.toThrow(/expects reviews/i);
@@ -838,40 +838,40 @@ describe("stepTask", () => {
     }
   });
 
-  it("stale results (fold_key tests/0) reject LOUD after DONE advances tests→exec", async () => {
+  it("stale results (result_key tests/0) reject LOUD after DONE advances tests→exec", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
-      const env1 = await stepTask(deps, runId, "T1"); // tests spawn, fold_key tests/0
+      const env1 = await stepTask(deps, runId, "T1"); // tests spawn, result_key tests/0
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") throw new Error("expected spawn");
       const testsResults: DriveResults = {
-        fold_key: env1.fold_key, // { stage: "tests", rung: 0 }
+        result_key: env1.result_key, // { stage: "tests", rung: 0 }
         producer: { status: "STATUS: DONE" },
       };
-      // Fold DONE: advances cursor to exec.
+      // Record DONE: advances cursor to exec.
       const env2 = await stepTask(deps, runId, "T1", testsResults);
       expect(env2.kind).toBe("spawn");
       if (env2.kind !== "spawn") throw new Error("expected exec spawn");
       expect(env2.stage).toBe("exec");
 
-      // Re-deliver the SAME results (fold_key tests/0) after cursor moved to exec/0.
+      // Re-deliver the SAME results (result_key tests/0) after cursor moved to exec/0.
       await expect(stepTask(deps, runId, "T1", testsResults)).rejects.toThrow(/stale or duplicate/);
     } finally {
       await cleanup();
     }
   });
 
-  it("duplicate NEEDS_CONTEXT results (fold_key tests/0) reject LOUD and do not double-bump escalation_rung", async () => {
+  it("duplicate NEEDS_CONTEXT results (result_key tests/0) reject LOUD and do not double-bump escalation_rung", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
-      const env1 = await stepTask(deps, runId, "T1"); // tests spawn, fold_key tests/0
+      const env1 = await stepTask(deps, runId, "T1"); // tests spawn, result_key tests/0
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") throw new Error("expected spawn");
       const needsContextResults: DriveResults = {
-        fold_key: env1.fold_key, // { stage: "tests", rung: 0 }
+        result_key: env1.result_key, // { stage: "tests", rung: 0 }
         producer: { status: "STATUS: NEEDS_CONTEXT" },
       };
-      // First fold: bumps escalation_rung to 1.
+      // First record: bumps escalation_rung to 1.
       const env2 = await stepTask(deps, runId, "T1", needsContextResults);
       expect(env2.kind).toBe("spawn");
       if (env2.kind !== "spawn") throw new Error("expected spawn after escalation");
@@ -879,7 +879,7 @@ describe("stepTask", () => {
       const runAfter = await deps.state.read(runId);
       expect(runAfter.tasks["T1"]?.escalation_rung).toBe(1);
 
-      // Re-deliver the SAME results (fold_key tests/0) — rung is now 1, mismatch.
+      // Re-deliver the SAME results (result_key tests/0) — rung is now 1, mismatch.
       await expect(stepTask(deps, runId, "T1", needsContextResults)).rejects.toThrow(
         /stale or duplicate/,
       );
@@ -891,7 +891,7 @@ describe("stepTask", () => {
     }
   });
 
-  it("spawn envelope carries fold_key that matches cursor stage and rung", async () => {
+  it("spawn envelope carries result_key that matches cursor stage and rung", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       taskStateOverrides: { task_id: "T1", escalation_rung: 2 },
     });
@@ -899,7 +899,7 @@ describe("stepTask", () => {
       const env = await stepTask(deps, runId, "T1");
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
-      expect(env.fold_key).toEqual({ stage: env.stage, rung: 2 });
+      expect(env.result_key).toEqual({ stage: env.stage, rung: 2 });
     } finally {
       await cleanup();
     }
@@ -961,7 +961,7 @@ describe("handlers.verify fail-closed re-spawn (crash-resume guard)", () => {
     try {
       // Seed a holdout answer key (so holdout.has returns true) but do NOT write verdicts.
       await holdout.put(runId, makeHoldoutRecord("T1", ["c"], 3));
-      // No verdict store entry — simulates the crash-between-hook-write-and-fold scenario.
+      // No verdict store entry — simulates the crash-between-hook-write-and-record scenario.
 
       const env = await stepTask(deps, runId, "T1");
       // Must re-spawn the verify panel, NOT advance to ship.
@@ -975,10 +975,10 @@ describe("handlers.verify fail-closed re-spawn (crash-resume guard)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Fix 3: foldResults requires holdout results when answer key is withheld
+// Fix 3: recordResults requires holdout results when answer key is withheld
 // ---------------------------------------------------------------------------
 
-describe("foldResults holdout-required guard", () => {
+describe("recordResults holdout-required guard", () => {
   it("holdout-bearing task at verify with reviews but no holdout → rejects with /withheld holdout answer key/", async () => {
     // 5 criteria at holdoutPercent=20% → holdoutCount(5,20)=1 — guarantees a withheld key.
     const { deps, runId, dataDir, cleanup } = await makeCoroutineDeps({
@@ -1011,36 +1011,36 @@ describe("foldResults holdout-required guard", () => {
 });
 
 // ---------------------------------------------------------------------------
-// fold_key schema rejection (schema-level, not coroutine-level)
+// result_key schema rejection (schema-level, not coroutine-level)
 // ---------------------------------------------------------------------------
 
-describe("fold_key validation (Important 1 — schema gate)", () => {
-  it("fold_key mismatch on stage rejects with /stale or duplicate/", async () => {
+describe("result_key validation (Important 1 — schema gate)", () => {
+  it("result_key mismatch on stage rejects with /stale or duplicate/", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
       const env1 = await stepTask(deps, runId, "T1");
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") return;
-      // Lie: claim fold_key.stage is "exec" but cursor is "tests"
-      const wrongKey: FoldKey = { stage: "exec", rung: 0 };
+      // Lie: claim result_key.stage is "exec" but cursor is "tests"
+      const wrongKey: ResultKey = { stage: "exec", rung: 0 };
       await expect(
-        stepTask(deps, runId, "T1", { fold_key: wrongKey, producer: { status: "STATUS: DONE" } }),
+        stepTask(deps, runId, "T1", { result_key: wrongKey, producer: { status: "STATUS: DONE" } }),
       ).rejects.toThrow(/stale or duplicate/);
     } finally {
       await cleanup();
     }
   });
 
-  it("fold_key mismatch on rung rejects with /stale or duplicate/", async () => {
+  it("result_key mismatch on rung rejects with /stale or duplicate/", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
       const env1 = await stepTask(deps, runId, "T1");
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") return;
       // Lie: claim rung 99 but actual is 0
-      const wrongKey: FoldKey = { stage: "tests", rung: 99 };
+      const wrongKey: ResultKey = { stage: "tests", rung: 99 };
       await expect(
-        stepTask(deps, runId, "T1", { fold_key: wrongKey, producer: { status: "STATUS: DONE" } }),
+        stepTask(deps, runId, "T1", { result_key: wrongKey, producer: { status: "STATUS: DONE" } }),
       ).rejects.toThrow(/stale or duplicate/);
     } finally {
       await cleanup();

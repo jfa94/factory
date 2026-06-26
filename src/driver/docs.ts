@@ -41,7 +41,7 @@ function buildScribePrompt(worktree: string, baseRef: string): string {
     `1. cd into your worktree: ${worktree} (already checked out on the docs branch off the staging tip).`,
     `2. Determine the whole-PRD change set with: git diff ${baseRef}..HEAD`,
     "3. Update /docs (Diátaxis) to reflect those changes, per agents/scribe.md.",
-    "4. COMMIT your changes IN this worktree. Do NOT push (the engine pushes on fold).",
+    "4. COMMIT your changes IN this worktree. Do NOT push (the engine pushes on record).",
     "5. If nothing material changed, make no commit.",
     'Finish with your terminal STATUS line and return it as {"status": "<line>"}.',
   ].join("\n");
@@ -80,8 +80,8 @@ export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<Doc
 export const DocsResultsSchema = z.object({ status: z.string().min(1) }).strict();
 export type DocsResults = z.infer<typeof DocsResultsSchema>;
 
-/** Fold a scribe result: publish the docs commit + mark done, or suspend the run. */
-export async function runDocsFold(
+/** Record a scribe result: publish the docs commit + mark done, or suspend the run. */
+export async function runDocsRecord(
   deps: DocsRunDeps,
   runId: string,
   results: DocsResults,

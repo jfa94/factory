@@ -20,7 +20,7 @@
  * already-recorded reviewers + gate evidence; it does NOT itself spawn the panel or
  * the holdout-validator (a handler cannot spawn). The coroutine emits those agents out of
  * band — the panel as the verify spawn manifest, the holdout-validator as a sidecar —
- * and folds their results via the fold cores. `ship` is NOT served from this reporter
+ * and records their results via the record cores. `ship` is NOT served from this reporter
  * at all: the coroutine runs the stateful {@link import("./ship.js").shipTask} (PR pointer
  * writes + the live MergeSerializer) directly, since a reporter cannot write state or
  * merge.
@@ -116,7 +116,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
   /**
    * Assemble + PERSIST a producer prompt-context for `(role, rung)` and return the
    * one-agent spawn manifest that resumes at `stageAfter`. The context is built from
-   * the holdout-stripped `visibleCriteria` only; the prior-failure note is folded in
+   * the holdout-stripped `visibleCriteria` only; the prior-failure note is recorded in
    * IFF the dial injects it (rung ≥ 2).
    */
   async function producerSpawn(
@@ -232,7 +232,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
     /**
      * verify reporter: run the deterministic gates, then either spawn the
      * risk-invariant panel (no reviewers yet) or DERIVE the merge gate from the
-     * already-recorded reviewers + gate evidence. Holdout evidence is folded
+     * already-recorded reviewers + gate evidence. Holdout evidence is recorded
      * separately by the coroutine (the holdout-validator runs as an out-of-band sidecar);
      * this reporter never spawns.
      */
@@ -261,9 +261,9 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
       }
 
       // Fail-closed crash-resume guard: reviewers>0 here is the LEGITIMATE merge-resync
-      // fast-path (reviewers persisted by the advance fold; ship wait-retry re-enters via
+      // fast-path (reviewers persisted by the advance record; ship wait-retry re-enters via
       // exec→verify without clearing them). On every sanctioned route, holdout verdicts
-      // already exist on disk before reviewers are persisted (the advance fold reads them
+      // already exist on disk before reviewers are persisted (the advance record reads them
       // LOUDLY). So for holdout tasks, missing verdicts imply an UNSANCTIONED write
       // (crash-window or rogue hook) — re-spawn the panel instead of deriving without
       // holdout evidence (fail-closed). Caveat: the store is task-keyed, not rung-keyed,

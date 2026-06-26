@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { StateManager } from "../core/state/manager.js";
 import { defaultConfig } from "../config/schema.js";
 import { FakeGitClient } from "../git/fakes.js";
-import { runDocsEmit, runDocsFold, type DocsRunDeps } from "./docs.js";
+import { runDocsEmit, runDocsRecord, type DocsRunDeps } from "./docs.js";
 
 const RUN_ID = "run-1";
 let dataDir: string;
@@ -29,10 +29,10 @@ afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-describe("runDocsFold", () => {
+describe("runDocsRecord", () => {
   it("DONE → ff-merges docs into staging, pushes, removes worktree, marks docs done", async () => {
     await runDocsEmit(deps(), RUN_ID); // create the worktree first
-    const env = await runDocsFold(deps(), RUN_ID, { status: "STATUS: DONE" });
+    const env = await runDocsRecord(deps(), RUN_ID, { status: "STATUS: DONE" });
     expect(env.kind).toBe("done");
     // FakeGitClient: mergeFfOrCommit(staging, docsBranch) → mergesInto[staging] = [docsBranch]
     expect(git.mergesInto[`staging-${RUN_ID}`]).toContain(`docs-${RUN_ID}`);
@@ -48,7 +48,7 @@ describe("runDocsFold", () => {
 
   it("non-DONE → suspends the run, records the failure reason, never pushes", async () => {
     await runDocsEmit(deps(), RUN_ID);
-    const env = await runDocsFold(deps(), RUN_ID, {
+    const env = await runDocsRecord(deps(), RUN_ID, {
       status: "STATUS: BLOCKED — ESCALATE missing context",
     });
     expect(env.kind).toBe("blocked");

@@ -3,10 +3,10 @@
  *
  * This is the one home for the per-task escalation ladder + drop/complete logic
  * the engine builds on: the per-task coroutine ({@link import("./coroutine.js").stepTask})
- * acts on a live stage result through these, and the fold cores
- * ({@link import("./fold.js")}) fold an out-of-band agent result through the same
+ * acts on a live stage result through these, and the record cores
+ * ({@link import("./record.js")}) record an out-of-band agent result through the same
  * functions. Keeping the ladder here (not duplicated across the spawn path and the
- * fold path) guarantees a crash-resume fold and a live step can never diverge.
+ * record path) guarantees a crash-resume record and a live step can never diverge.
  *
  * Both must apply the IDENTICAL escalation ladder (Δ D / Decision 25): a classified
  * retry bumps `escalation_rung` and clears the stale reviewers (so the next verify
@@ -53,7 +53,7 @@ export type TaskStep =
 /**
  * Persist the in-flight {@link import("./deps.js").TaskStatus} for `stage`,
  * stamping `started_at` on first entry. The coroutine calls this when it needs the
- * cursor written for a stage it is about to run; the fold paths call it (via
+ * cursor written for a stage it is about to run; the record paths call it (via
  * persistStepCursor) after a transition that resumes at a stage, so the persisted
  * status tracks the resume point.
  *
@@ -135,7 +135,7 @@ export async function dropStep(
  *
  * Note: this persists only the DOMAIN state (rung + reviewers); the in-flight
  * status for `resumeStage` is the caller's concern (the coroutine re-marks it via
- * {@link markInFlight} next iteration; the fold path stamps it via
+ * {@link markInFlight} next iteration; the record path stamps it via
  * persistStepCursor).
  */
 export async function escalateOrDrop(
@@ -199,13 +199,13 @@ export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecis
 }
 
 /**
- * Fold a completed producer spawn into state (the producer-result logic the coroutine's
- * `applyRecordProducer` fold core calls). On `done`: record `producer_role` and
+ * Record a completed producer spawn into state (the producer-result logic the coroutine's
+ * `applyRecordProducer` record core calls). On `done`: record `producer_role` and
  * advance to `stageAfter`. On any failure status: classify (Δ D) →
  * {@link escalateOrDrop}, resuming at the SAME producer `stage`.
  *
  * The caller is responsible for the actual spawn (the orchestrator's Agent spawn,
- * collected out-of-band) — this only folds the resulting {@link ProducerOutcome}
+ * collected out-of-band) — this only records the resulting {@link ProducerOutcome}
  * into state + the next step.
  */
 export async function applyProducerOutcome(

@@ -13,7 +13,7 @@ import {
 } from "./paths.js";
 
 describe("repoKey — repo id to one safe path segment", () => {
-  it("folds the owner/name slash to a dash", () => {
+  it("records the owner/name slash to a dash", () => {
     expect(repoKey("acme/widgets")).toBe("acme-widgets");
   });
   it("preserves case and dots (addressability)", () => {
@@ -26,7 +26,7 @@ describe("repoKey — repo id to one safe path segment", () => {
     expect(() => repoKey("///")).toThrow();
   });
   it("rejects a pure-dot key that would traverse out of the store (S1)", () => {
-    // No slash to fold ⇒ key stays "."/".."; both are path-traversal segments.
+    // No slash to record ⇒ key stays "."/".."; both are path-traversal segments.
     expect(() => repoKey("..")).toThrow(/traversal/);
     expect(() => repoKey(".")).toThrow(/traversal/);
     // And via the spec-store path builder: a "../" repo cannot escape.
@@ -59,7 +59,7 @@ describe("two-store layout", () => {
     // NOT under runs/ — that would pollute the runDir enumeration.
     expect(currentRepoRoot(data)).not.toBe(join(data, "runs", "current"));
   });
-  it("per-repo current pointer folds the repo id to one safe segment", () => {
+  it("per-repo current pointer records the repo id to one safe segment", () => {
     expect(currentRepoLinkPath(data, "acme/widgets")).toBe(join(data, "current", "acme-widgets"));
   });
   it("per-repo current pointer rejects a path-traversal repo id", () => {

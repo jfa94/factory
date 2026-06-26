@@ -36,7 +36,7 @@ import type { Config, RunState, RunStatus, TaskState } from "../../types/index.j
 import {
   finalizeRun,
   runDocsEmit,
-  runDocsFold,
+  runDocsRecord,
   DocsResultsSchema,
   readJsonInput,
 } from "../../driver/index.js";
@@ -73,7 +73,7 @@ Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
-  docs       Emit the documentation-stage spawn manifest, or (with --results) fold a scribe result.
+  docs       Emit the documentation-stage spawn manifest, or (with --results) record a scribe result.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
@@ -336,7 +336,7 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
 
 /**
  * Create the run from an already-resolved manifest and seed its tasks — the
- * imperative core. Creates the run (status `running`), then folds in the seeded
+ * imperative core. Creates the run (status `running`), then records in the seeded
  * task rows via the one sanctioned write path; returns the seeded {@link RunState}.
  *
  * When `stagingDeps` is supplied (always from `runCreate`; absent on the bare
@@ -908,7 +908,7 @@ async function runFinalize(argv: string[]): Promise<ExitCode> {
 
 const DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
 
-Emit the documentation-stage spawn manifest, or (with --results) fold a scribe
+Emit the documentation-stage spawn manifest, or (with --results) record a scribe
 result: publish the docs commit onto staging and mark the stage done, or suspend
 the run on failure. The CLI never spawns scribe — a driver does.`;
 
@@ -933,7 +933,7 @@ async function runDocs(argv: string[]): Promise<ExitCode> {
         `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    emitJson(await runDocsFold(deps, runId, results));
+    emitJson(await runDocsRecord(deps, runId, results));
   } else if (resultsPath !== undefined) {
     throw new UsageError("--results requires a file path");
   } else {

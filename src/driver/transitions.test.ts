@@ -1,7 +1,7 @@
 /**
  * WS10 / Task C — unit tests for the SHARED deterministic transition logic
  * ({@link transitions.ts}). These are the per-task ladder + drop/complete writes
- * that the coroutine folds through (`fold.ts` / `coroutine.ts`), so they are tested here ONCE,
+ * that the coroutine records through (`record.ts` / `coroutine.ts`), so they are tested here ONCE,
  * against a real {@link StateManager} (temp dir). The coroutine suite (`coroutine.test.ts`) is
  * the end-to-end regression guard; this suite pins
  * the units in isolation (every branch of escalateOrDrop / applyProducerOutcome /

@@ -123,7 +123,7 @@ export function decideHoldoutGuard(
   // denylist — that let any other binary that opens a file (python -c open().read(),
   // node -e readFileSync, dd if=, base64, cp, tar, …) exfiltrate the answer key
   // untouched. Instead scan EVERY path token of ANY command and deny if it reaches
-  // the holdouts subtree. The reader list survives only as an OPTIONAL signal folded
+  // the holdouts subtree. The reader list survives only as an OPTIONAL signal recorded
   // into the deny reason (a recognized reader is a stronger exfiltration tell).
   if (tool === "Bash") {
     const cmd = commandOf(input);

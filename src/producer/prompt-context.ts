@@ -18,7 +18,7 @@
  *     so the escalated model is steered away from the previous failure.
  *
  * FIX-FORWARD: when re-running the executor to PATCH (not nuke), the confirmed
- * blockers (PanelRunResult.confirmedBlockers) are folded in as concrete fix
+ * blockers (PanelRunResult.confirmedBlockers) are recorded in as concrete fix
  * instructions, so the executor patches the specific verified misses.
  */
 import type { Finding } from "../verifier/judgment/index.js";
@@ -62,7 +62,7 @@ export interface BuildProducerContextInput {
   /** The escalation rung this context is for (0 = starting). */
   readonly rung: number;
   /**
-   * Confirmed blockers to fold in as fix instructions for a PATCH (fix-forward)
+   * Confirmed blockers to record in as fix instructions for a PATCH (fix-forward)
    * pass. Empty on a fresh attempt. Only CONFIRMED blockers (post WS7
    * verify-then-fix) belong here — never raw reviewer findings.
    */
@@ -77,7 +77,7 @@ export interface BuildProducerContextInput {
 /**
  * The assembled, redaction-safe producer prompt context. A flat structured
  * record the WS10 driver hands to the agent prompt. Deliberately holds NO holdout
- * field. `injectedPriorFailure` is true IFF prior-failure notes were folded in —
+ * field. `injectedPriorFailure` is true IFF prior-failure notes were recorded in —
  * the machine-checkable proof the rung-2 context changed.
  */
 export interface ProducerContext {
