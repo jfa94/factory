@@ -2,7 +2,7 @@
  * Shared test fixtures for the per-task coroutine (coroutine.test.ts) and the run-level
  * coroutine (next.test.ts). Extracted verbatim from coroutine.test.ts with one additive
  * extension: `runStatusOverride` seeds the run with a non-"running" status after
- * creation (needed for stepRun paused/terminal scenarios).
+ * creation (needed for nextTask paused/terminal scenarios).
  *
  * Zero behavior change to the original fixture — all existing options behave
  * identically. New option is additive-only.
@@ -114,12 +114,12 @@ export interface MakeCoroutineDepsOpts {
   ghClient?: FakeGhClient;
   /**
    * Override the run status after creation (additive — not present in original).
-   * Useful for stepRun tests that need a paused/completed run at seed time.
+   * Useful for nextTask tests that need a paused/completed run at seed time.
    */
   runStatusOverride?: RunStatus;
   /**
    * Override the run mode at creation (additive). Workflow mode makes the quota
-   * gate skip pacing, so stepRun/stepTask proceed regardless of the usage signal.
+   * gate skip pacing, so nextTask/nextAction proceed regardless of the usage signal.
    */
   modeOverride?: RunState["mode"];
   /** Docs-applicability gate result (default false → existing all-terminal tests unaffected). */
@@ -176,7 +176,7 @@ export async function makeCoroutineDeps(
         merge_resyncs: override.merge_resyncs ?? 0,
         ...(override.failure_class ? { failure_class: override.failure_class } : {}),
         ...(override.failure_reason ? { failure_reason: override.failure_reason } : {}),
-        ...(override.stage ? { stage: override.stage } : {}),
+        ...(override.phase ? { phase: override.phase } : {}),
         ...(override.pr_number ? { pr_number: override.pr_number } : {}),
         ...(override.branch ? { branch: override.branch } : {}),
       };

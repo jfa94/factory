@@ -61,7 +61,7 @@ export interface RescueApplyResult {
 
 /**
  * Reset one task row to a clean `pending` state. Drops the stale producer dial
- * position, panel results, drop classification, lifecycle timestamps, stage cursor,
+ * position, panel results, drop classification, lifecycle timestamps, phase cursor,
  * and merge re-sync budget; PRESERVES identity, the dependency edges, the spec-time
  * risk dial, and the git/PR pointers (so an existing branch/PR is reused on the next
  * attempt — idempotent-create, Δ P).
@@ -77,7 +77,7 @@ function resetTaskRow(task: TaskState): TaskState {
     producer_role: _producerRole,
     started_at: _startedAt,
     ended_at: _endedAt,
-    stage: _stage,
+    phase: _phase,
     ...rest
   } = task;
   return {

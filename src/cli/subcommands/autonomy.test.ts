@@ -249,7 +249,7 @@ describe("runAutonomyEnsure", () => {
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "factory-autonomy-data-"));
     pluginRoot = await mkdtemp(join(tmpdir(), "factory-autonomy-root-"));
-    // Stage a minimal template under the fake plugin root.
+    // Phase a minimal template under the fake plugin root.
     await mkdir(join(pluginRoot, "templates"), { recursive: true });
     await writeFile(join(pluginRoot, "templates", "settings.autonomous.json"), TEMPLATE, "utf8");
     out.length = 0;
@@ -423,7 +423,7 @@ describe("runAutonomyPreflight", () => {
   /** Path of the merged settings under the current temp data dir. */
   const settingsPath = (): string => mergedSettingsPath(dataDir);
 
-  /** Stage `.claude-plugin/plugin.json` with the given version under the fake root. */
+  /** Phase `.claude-plugin/plugin.json` with the given version under the fake root. */
   async function stagePluginVersion(version: string): Promise<void> {
     await mkdir(join(pluginRoot, ".claude-plugin"), { recursive: true });
     await writeFile(

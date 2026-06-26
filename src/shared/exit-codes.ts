@@ -7,10 +7,10 @@
  *    surfaces as {@link ExitCode.ERROR} from the CLI plus a structured report —
  *    never a special "ask a human" exit status.
  *  - Unknown / unhandled results must FAIL LOUD (throw) at the call site rather
- *    than mapping to a silent success. The stage machine (WS2) maps its
- *    StageResult union onto these codes; an unmapped variant throws.
+ *    than mapping to a silent success. The phase machine (WS2) maps its
+ *    PhaseResult union onto these codes; an unmapped variant throws.
  *
- * Downstream (WS2 stage-machine, WS10 drivers) import this and only this for
+ * Downstream (WS2 phase-machine, WS10 drivers) import this and only this for
  * process exit semantics. Do not add codes without updating that mapping.
  */
 export const EXIT = {

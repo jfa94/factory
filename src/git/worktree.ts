@@ -46,8 +46,8 @@ export interface TaskWorktree {
  * tip, then `git worktree add -b <branch> <path> origin/<base>`. Asserts the base
  * is the staging tip (invariant #4) before returning.
  *
- * REPLAY-SAFE: the preflight stage persists its cursor BEFORE running, so a crash
- * after the worktree is created but before the stage advances (e.g. dependency
+ * REPLAY-SAFE: the preflight phase persists its cursor BEFORE running, so a crash
+ * after the worktree is created but before the phase advances (e.g. dependency
  * provisioning or the base-tip assert throwing) leaves the worktree on disk. A
  * resume re-enters preflight — so if the worktree already exists we REUSE it by
  * re-pointing its branch onto the current staging tip (the D12 idempotent

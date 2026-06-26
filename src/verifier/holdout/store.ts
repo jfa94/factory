@@ -9,8 +9,8 @@
  *
  * Two impls mirror artifacts.ts: {@link InMemoryHoldoutStore} (units) and
  * {@link FsHoldoutStore} (the persisted path, so a later `factory drive` process
- * resuming at the verify stage reads the same answer key the split wrote at the
- * exec stage).
+ * resuming at the verify phase reads the same answer key the split wrote at the
+ * exec phase).
  */
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";

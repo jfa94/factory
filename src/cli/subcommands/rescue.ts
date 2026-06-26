@@ -1,7 +1,7 @@
 /**
  * `factory rescue <scan|apply>` — recover a run that `factory run resume` cannot
  * untangle (Decision 22, Δ S). Resume only clears the quota gate; it never touches
- * task state. When a crashed/suspended session left tasks STUCK mid-stage (so a
+ * task state. When a crashed/suspended session left tasks STUCK mid-phase (so a
  * re-drive would deadlock), rescue is the seam that resets them.
  *
  * Model A: this CLI is a REPORTER (`scan`) + a WRITER (`apply`), never an agent

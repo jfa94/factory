@@ -83,7 +83,7 @@ describe("next --run resolution falls back to runs/current", () => {
       run_id: "run-current",
       spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
     });
-    // Seed one pending task so stepRun schedules it.
+    // Seed one pending task so nextTask schedules it.
     await state.update("run-current", (s) => ({
       ...s,
       tasks: {

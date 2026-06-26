@@ -6,7 +6,7 @@ import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadCoroutineDeps } from "../wiring.js";
-import { stepRun } from "../../driver/index.js";
+import { nextTask } from "../../driver/index.js";
 import { StateManager, RunModeEnum } from "../../core/state/index.js";
 import type { RunState } from "../../core/state/index.js";
 import { resolveDataDir } from "../../config/index.js";
@@ -113,7 +113,7 @@ async function run(argv: string[]): Promise<ExitCode> {
   }
 
   const deps = await loadCoroutineDeps({ runId });
-  emitJson(await stepRun(deps, runId));
+  emitJson(await nextTask(deps, runId));
   return EXIT.OK;
 }
 

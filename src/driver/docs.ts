@@ -29,15 +29,15 @@ export type DocsEnvelope =
 const DOCS_MODEL = "opus";
 const DOCS_MAX_TURNS = 60;
 
-/** The docs-stage worktree path for a run (under the run store). */
+/** The docs-phase worktree path for a run (under the run store). */
 export function docsWorktreePath(dataDir: string, runId: string): string {
   return join(dataDir, "runs", runId, "docs-worktree");
 }
 
-/** Build the scribe prompt for the docs stage. @internal */
+/** Build the scribe prompt for the docs phase. @internal */
 function buildScribePrompt(worktree: string, baseRef: string): string {
   return [
-    "You are the factory scribe running the pipeline's documentation stage.",
+    "You are the factory scribe running the pipeline's documentation phase.",
     `1. cd into your worktree: ${worktree} (already checked out on the docs branch off the staging tip).`,
     `2. Determine the whole-PRD change set with: git diff ${baseRef}..HEAD`,
     "3. Update /docs (Diátaxis) to reflect those changes, per agents/scribe.md.",
@@ -102,7 +102,7 @@ export async function runDocsRecord(
   }
 
   // One attempt: suspend (resumable). Keep the staging branch + worktree for retry on resume.
-  const reason = "reason" in outcome ? outcome.reason : "docs stage failed";
+  const reason = "reason" in outcome ? outcome.reason : "docs phase failed";
   await deps.state.update(runId, (s) => ({
     ...s,
     status: "suspended",

@@ -115,7 +115,7 @@ describe("drive happy path", () => {
   });
 
   it("emits a terminal envelope as JSON for a task already done", async () => {
-    // Seed T1 as "done" so stepTask returns terminal immediately — before preflight
+    // Seed T1 as "done" so nextAction returns terminal immediately — before preflight
     // touches git. This validates JSON passthrough without requiring a real git remote.
     const {
       deps,
@@ -149,16 +149,16 @@ describe("drive happy path", () => {
     }
   });
 
-  it("emits a spawn envelope for a task with stage cursor at 'tests'", async () => {
-    // Seed T1 with stage cursor "tests" (non-terminal) + zero-usage cache so the quota
-    // gate passes. stepTask skips preflight (stage cursor starts at "tests"), the tests
+  it("emits a spawn envelope for a task with phase cursor at 'tests'", async () => {
+    // Seed T1 with phase cursor "tests" (non-terminal) + zero-usage cache so the quota
+    // gate passes. nextAction skips preflight (phase cursor starts at "tests"), the tests
     // handler calls producerSpawn → spawn-agents → spawn envelope emitted. No git needed.
     const {
       deps,
       runId,
       cleanup: c,
     } = await makeCoroutineDeps({
-      taskStateOverrides: { task_id: "T1", stage: "tests" },
+      taskStateOverrides: { task_id: "T1", phase: "tests" },
     });
     cleanup = c;
 
@@ -191,7 +191,7 @@ describe("drive happy path", () => {
         kind: "spawn",
         run_id: runId,
         task_id: "T1",
-        result_key: { stage: "tests", rung: 0 },
+        result_key: { phase: "tests", rung: 0 },
         expects: "producer-status",
       });
       expect(envelope.manifest).toBeDefined();

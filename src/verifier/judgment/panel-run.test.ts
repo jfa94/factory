@@ -60,7 +60,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       source,
       makeRunner: confirmAll(true),
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(true);
     expect(res.result.kind).toBe("advance");
@@ -76,7 +76,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       source,
       makeRunner: confirmAll(true),
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(false);
     expect(res.result.kind).toBe("wait-retry");
@@ -108,7 +108,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       // have confirmed it and failed the merge gate. It passes → it never got there.
       makeRunner: confirmAll(true),
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(true);
     const sec = res.reviewerResults.find((r) => r.reviewer === "security-reviewer");
@@ -122,7 +122,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       source,
       makeRunner: confirmAll(false), // verifier refutes
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(true);
   });
@@ -138,7 +138,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       source,
       makeRunner: confirmAll(true),
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(false);
     const q = res.reviewerResults.find((r) => r.reviewer === "quality-reviewer");
@@ -156,7 +156,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
         },
       }),
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(false);
     const sec = res.reviewerResults.find((r) => r.reviewer === "security-reviewer");
@@ -169,7 +169,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       source,
       makeRunner: confirmAll(true),
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
     });
     // Re-derive independently from the assembled results: must match runPanel's.
     const reDerived = derivePanelVerdict(res.reviewerResults);
@@ -183,7 +183,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       source,
       makeRunner: confirmAll(true),
       gateEvidence: [{ gate: "test", observed: false }],
-      stage: "verify",
+      phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(false);
   });
@@ -194,7 +194,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       source,
       makeRunner: confirmAll(true),
       gateEvidence: [{ gate: "type", observed: false, detail: "tsc exit=1" }],
-      stage: "verify",
+      phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(false);
     expect(res.result.kind).toBe("wait-retry");
@@ -215,7 +215,7 @@ describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", (
       source,
       makeRunner: confirmAll(true),
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
       crossVendor: { status: "absent", reason: "cross-vendor executor 'codex' is not available" },
     });
     expect(res.crossVendorAbsence).toBeDefined();
@@ -230,7 +230,7 @@ describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", (
       source,
       makeRunner: confirmAll(true),
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
       crossVendor: { status: "present", slot: { vendor: "codex", model: "gpt-x" } },
     });
     expect(res.crossVendorAbsence).toBeUndefined();
@@ -242,7 +242,7 @@ describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", (
       source,
       makeRunner: confirmAll(true),
       gateEvidence: PASSING_GATES,
-      stage: "verify",
+      phase: "verify",
     });
     expect(res.crossVendorAbsence).toBeUndefined();
   });

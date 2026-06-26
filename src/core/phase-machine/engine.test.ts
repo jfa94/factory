@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runStage, nextStageFor, decideFinalize } from "./engine.js";
+import { runPhase, nextPhaseFor, decideFinalize } from "./engine.js";
 import {
   advance,
   spawn,
@@ -7,12 +7,12 @@ import {
   waitRetry,
   taskDone,
   finalizeTerminal,
-  type StageResult,
+  type PhaseResult,
 } from "./result.js";
-import type { StageContext, StageHandlers } from "./handlers.js";
+import type { PhaseContext, PhaseHandlers } from "./handlers.js";
 import { parseRunState, type RunState } from "../state/index.js";
 
-const ctx: StageContext = {
+const ctx: PhaseContext = {
   run: parseRunState({
     run_id: "run-20260604-000000",
     spec: { repo: "o/r", spec_id: "1-x", issue_number: 1 },
@@ -23,7 +23,7 @@ const ctx: StageContext = {
 };
 
 /** A handler set where every method records its call and returns a canned result. */
-function fakeHandlers(overrides: Partial<StageHandlers> = {}): StageHandlers {
+function fakeHandlers(overrides: Partial<PhaseHandlers> = {}): PhaseHandlers {
   return {
     preflight: vi.fn(async () => advance("tests")),
     tests: vi.fn(async () => advance("exec")),
@@ -35,14 +35,14 @@ function fakeHandlers(overrides: Partial<StageHandlers> = {}): StageHandlers {
   };
 }
 
-describe("runStage dispatch", () => {
-  it("calls the matching handler for each per-task stage", async () => {
+describe("runPhase dispatch", () => {
+  it("calls the matching handler for each per-task phase", async () => {
     const h = fakeHandlers();
-    await runStage("preflight", ctx, h);
-    await runStage("tests", ctx, h);
-    await runStage("exec", ctx, h);
-    await runStage("verify", ctx, h);
-    await runStage("ship", ctx, h);
+    await runPhase("preflight", ctx, h);
+    await runPhase("tests", ctx, h);
+    await runPhase("exec", ctx, h);
+    await runPhase("verify", ctx, h);
+    await runPhase("ship", ctx, h);
     expect(h.preflight).toHaveBeenCalledTimes(1);
     expect(h.tests).toHaveBeenCalledTimes(1);
     expect(h.exec).toHaveBeenCalledTimes(1);
@@ -51,109 +51,109 @@ describe("runStage dispatch", () => {
     expect(h.finalize).not.toHaveBeenCalled();
   });
 
-  it("routes the run-level finalize stage to the finalize handler", async () => {
+  it("routes the run-level finalize phase to the finalize handler", async () => {
     const h = fakeHandlers();
-    const r = await runStage("finalize", ctx, h);
+    const r = await runPhase("finalize", ctx, h);
     expect(h.finalize).toHaveBeenCalledTimes(1);
     expect(r).toEqual(finalizeTerminal("completed"));
   });
 
-  it("throws on an unknown stage value", async () => {
+  it("throws on an unknown phase value", async () => {
     const h = fakeHandlers();
-    await expect(runStage("bogus" as never, ctx, h)).rejects.toThrow(/unknown stage/);
+    await expect(runPhase("bogus" as never, ctx, h)).rejects.toThrow(/unknown phase/);
   });
 });
 
-describe("invariant #1 — unknown StageResult.kind THROWS, never advances", () => {
+describe("invariant #1 — unknown PhaseResult.kind THROWS, never advances", () => {
   it("a handler returning an unhandled kind makes the engine throw", async () => {
     const h = fakeHandlers({
-      tests: async () => ({ kind: "bogus" }) as unknown as StageResult,
+      tests: async () => ({ kind: "bogus" }) as unknown as PhaseResult,
     });
-    await expect(runStage("tests", ctx, h)).rejects.toThrow(/unhandled value/);
+    await expect(runPhase("tests", ctx, h)).rejects.toThrow(/unhandled value/);
   });
 });
 
 describe("invariant #2 — bounded wait-retry", () => {
   it("attempt within bound is returned", async () => {
     const h = fakeHandlers({ ship: async () => waitRetry("ship", "ci", 2, 3) });
-    const r = await runStage("ship", ctx, h);
+    const r = await runPhase("ship", ctx, h);
     expect(r.kind).toBe("wait-retry");
   });
 
   it("attempt === max_attempts is the last legal retry (boundary, not a throw)", async () => {
     const h = fakeHandlers({ ship: async () => waitRetry("ship", "ci", 3, 3) });
-    const r = await runStage("ship", ctx, h);
+    const r = await runPhase("ship", ctx, h);
     expect(r).toEqual(waitRetry("ship", "ci", 3, 3));
   });
 
   it("attempt > max_attempts THROWS (never spins)", async () => {
     const h = fakeHandlers({ ship: async () => waitRetry("ship", "ci", 4, 3) });
-    await expect(runStage("ship", ctx, h)).rejects.toThrow(/exceeded max_attempts/);
+    await expect(runPhase("ship", ctx, h)).rejects.toThrow(/exceeded max_attempts/);
   });
 
   it("a wait-retry from finalize is rejected (finalize must never spin)", async () => {
     const h = fakeHandlers({ finalize: async () => waitRetry("ship", "x", 1, 3) });
-    await expect(runStage("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
+    await expect(runPhase("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
   });
 });
 
-describe("graceful-stop is accepted from a per-task stage (quota breach, never a drop)", () => {
-  it("a per-task stage returning graceful-stop is surfaced unchanged", async () => {
+describe("graceful-stop is accepted from a per-task phase (quota breach, never a drop)", () => {
+  it("a per-task phase returning graceful-stop is surfaced unchanged", async () => {
     const h = fakeHandlers({ exec: async () => gracefulStop("5h", "5h window breached") });
-    const r = await runStage("exec", ctx, h);
+    const r = await runPhase("exec", ctx, h);
     expect(r).toEqual(gracefulStop("5h", "5h window breached"));
-    expect(nextStageFor(r)).toBeNull();
+    expect(nextPhaseFor(r)).toBeNull();
   });
 
   it("graceful-stop from finalize is rejected (finalize returns only finalize-terminal)", async () => {
     const h = fakeHandlers({ finalize: async () => gracefulStop("7d", "7d window breached") });
-    await expect(runStage("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
+    await expect(runPhase("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
   });
 });
 
 describe("invariant #3 — finalize is terminal-by-construction at the seam", () => {
   it("finalize returning advance is rejected (only finalize-terminal is legal)", async () => {
     const h = fakeHandlers({ finalize: async () => advance("ship") });
-    await expect(runStage("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
+    await expect(runPhase("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
   });
 
   it("finalize returning spawn-agents is rejected", async () => {
     const h = fakeHandlers({
       finalize: async () =>
         spawn({
-          stage_after: "exec",
+          resume_phase: "exec",
           agents: [
             { role: "executor", isolation: "worktree", model: "s", max_turns: 1, prompt_ref: "p" },
           ],
         }),
     });
-    await expect(runStage("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
+    await expect(runPhase("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
   });
 
   it("finalize returning task-terminal is rejected", async () => {
     const h = fakeHandlers({ finalize: async () => taskDone() });
-    await expect(runStage("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
+    await expect(runPhase("finalize", ctx, h)).rejects.toThrow(/finalize is terminal/);
   });
 
   it("finalize returning finalize-terminal is accepted", async () => {
     const h = fakeHandlers({ finalize: async () => finalizeTerminal("failed") });
-    const r = await runStage("finalize", ctx, h);
+    const r = await runPhase("finalize", ctx, h);
     expect(r).toEqual(finalizeTerminal("failed"));
   });
 
-  it("a per-task stage returning finalize-terminal is rejected (reserved for finalize)", async () => {
+  it("a per-task phase returning finalize-terminal is rejected (reserved for finalize)", async () => {
     const h = fakeHandlers({ ship: async () => finalizeTerminal("completed") });
-    await expect(runStage("ship", ctx, h)).rejects.toThrow(/reserved for the run-level finalize/);
+    await expect(runPhase("ship", ctx, h)).rejects.toThrow(/reserved for the run-level finalize/);
   });
 });
 
-describe("nextStageFor", () => {
-  it("advance resumes at .to; spawn-agents resumes at manifest.stage_after", () => {
-    expect(nextStageFor(advance("verify"))).toBe("verify");
+describe("nextPhaseFor", () => {
+  it("advance resumes at .to; spawn-agents resumes at manifest.resume_phase", () => {
+    expect(nextPhaseFor(advance("verify"))).toBe("verify");
     expect(
-      nextStageFor(
+      nextPhaseFor(
         spawn({
-          stage_after: "exec",
+          resume_phase: "exec",
           agents: [
             { role: "executor", isolation: "worktree", model: "s", max_turns: 1, prompt_ref: "p" },
           ],
@@ -162,10 +162,10 @@ describe("nextStageFor", () => {
     ).toBe("exec");
   });
 
-  it("terminals / wait-retry / graceful-stop imply no resume stage", () => {
-    expect(nextStageFor(taskDone())).toBeNull();
-    expect(nextStageFor(finalizeTerminal("failed"))).toBeNull();
-    expect(nextStageFor(waitRetry("ship", "x", 1, 3))).toBeNull();
+  it("terminals / wait-retry / graceful-stop imply no resume phase", () => {
+    expect(nextPhaseFor(taskDone())).toBeNull();
+    expect(nextPhaseFor(finalizeTerminal("failed"))).toBeNull();
+    expect(nextPhaseFor(waitRetry("ship", "x", 1, 3))).toBeNull();
   });
 });
 

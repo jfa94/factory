@@ -2,9 +2,9 @@
  * The per-task COROUTINE — the engine half of the `factory drive` seam.
  *
  * One invocation = "run every deterministic step you can, then stop": the coroutine
- * resumes at the persisted stage cursor, optionally FOLDS the previous spawn's
+ * resumes at the persisted phase cursor, optionally FOLDS the previous spawn's
  * agent results (producer status / holdout raw / panel reviews — the internalized
- * record-* writers), then loops the stage machine until it either needs agents
+ * record-* writers), then loops the phase machine until it either needs agents
  * (emit ONE spawn envelope and return) or the task is terminal.
  *
  * Re-invocation contract:
@@ -12,9 +12,9 @@
  *     persisted state. Safe to retry after any crash.
  *   - WITH results: at-least-once delivery, exactly-once application. The
  *     result_key echoed from the spawn envelope is validated against the current
- *     cursor stage and escalation_rung before any mutation; stale or duplicate
+ *     cursor phase and escalation_rung before any mutation; stale or duplicate
  *     result delivery is rejected LOUD (never double-recorded). Caveat: the
- *     result_key is (stage, rung) not a nonce — a rescue cycle can reissue an
+ *     result_key is (phase, rung) not a nonce — a rescue cycle can reissue an
  *     identical key, so exactly-once holds under the realistic crash model (the
  *     driver replays only the last unacknowledged delivery), not against
  *     arbitrarily delayed redelivery.
@@ -28,14 +28,14 @@
 import {
   classifyFailure,
   isTerminalTaskStatus,
-  runStage,
-  stageToInFlightStatus,
+  runPhase,
+  phaseToInFlightStatus,
   assertNever,
-  type StageContext,
-  type StageResult,
+  type PhaseContext,
+  type PhaseResult,
   type SpawnManifest,
   type StateManager,
-  type TaskStage,
+  type TaskPhase,
   type TaskState,
   type RunState,
 } from "./deps.js";
@@ -54,21 +54,21 @@ import {
   applyRecordReviews,
   type RecordDeps,
 } from "./record.js";
-import { makeStageHandlers } from "./handlers.js";
+import { makePhaseHandlers } from "./handlers.js";
 import { resolveStagingBranch } from "./deps.js";
 import { shipTask } from "./ship.js";
 import { taskWorktreePath } from "./paths.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
 import { resolveReviewModel } from "../verifier/judgment/index.js";
 import { buildHoldoutPrompt, FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
-import { isSpawnStage } from "./results.js";
-import type { DriveResults, ResultKey, SpawnStage } from "./results.js";
+import { isSpawnPhase } from "./results.js";
+import type { DriveResults, ResultKey, SpawnPhase } from "./results.js";
 import type { HandlerDeps } from "./types.js";
 import { createLogger } from "../shared/index.js";
 
 const log = createLogger("coroutine");
 
-export type { SpawnStage };
+export type { SpawnPhase };
 
 /** Ship live-merge re-sync budget per task (persisted in TaskState.merge_resyncs). */
 export const MERGE_RESYNC_CAP = 8;
@@ -91,7 +91,7 @@ export type DriveEnvelope =
       readonly kind: "spawn";
       readonly run_id: string;
       readonly task_id: string;
-      readonly stage: SpawnStage;
+      readonly phase: SpawnPhase;
       readonly result_key: ResultKey;
       readonly manifest: SpawnManifest;
       readonly sidecar?: HoldoutSidecar;
@@ -125,7 +125,7 @@ export interface CoroutineDeps extends HandlerDeps {
   readonly usage: UsageSignal;
   /** Epoch SECONDS. */
   readonly now: () => number;
-  /** True iff the target repo keeps /docs and docs are not opted out (docs stage gate). */
+  /** True iff the target repo keeps /docs and docs are not opted out (docs phase gate). */
   readonly docsApplicable: () => Promise<boolean>;
 }
 
@@ -159,16 +159,16 @@ function terminalOutcome(task: TaskState): TaskOutcome {
 }
 
 /**
- * Assert that a TaskStage is a SpawnStage (tests|exec|verify). Preflight and
+ * Assert that a TaskPhase is a SpawnPhase (tests|exec|verify). Preflight and
  * ship never emit spawn envelopes — this throw is structurally unreachable but
  * documents the invariant explicitly.
  */
-function asSpawnStage(stage: TaskStage): SpawnStage {
-  if (isSpawnStage(stage)) {
-    return stage;
+function asSpawnPhase(phase: TaskPhase): SpawnPhase {
+  if (isSpawnPhase(phase)) {
+    return phase;
   }
   throw new Error(
-    `coroutine: stage '${stage}' cannot spawn agents (only tests|exec|verify can) — unreachable`,
+    `coroutine: phase '${phase}' cannot spawn agents (only tests|exec|verify can) — unreachable`,
   );
 }
 
@@ -199,39 +199,39 @@ async function recordResults(
   deps: CoroutineDeps,
   runId: string,
   taskId: string,
-  stage: TaskStage,
+  phase: TaskPhase,
   task: TaskState,
   results: DriveResults,
 ): Promise<TaskStep> {
   // Validate result_key BEFORE any mutation: stale or duplicate results reject LOUD.
   const { result_key } = results;
-  if (!isSpawnStage(stage)) {
-    throw new Error(`drive: results given but stage '${stage}' spawns no agents`);
+  if (!isSpawnPhase(phase)) {
+    throw new Error(`drive: results given but phase '${phase}' spawns no agents`);
   }
-  const spawnStage = stage;
-  if (result_key.stage !== spawnStage || result_key.rung !== task.escalation_rung) {
+  const spawnPhase = phase;
+  if (result_key.phase !== spawnPhase || result_key.rung !== task.escalation_rung) {
     throw new Error(
-      `drive: stale or duplicate results (result_key ${result_key.stage}/${result_key.rung} vs cursor ${spawnStage}/${task.escalation_rung}) — re-invoke without results to get the current envelope`,
+      `drive: stale or duplicate results (result_key ${result_key.phase}/${result_key.rung} vs cursor ${spawnPhase}/${task.escalation_rung}) — re-invoke without results to get the current envelope`,
     );
   }
 
   const record: RecordDeps = deps;
-  if (stage === "tests" || stage === "exec") {
+  if (phase === "tests" || phase === "exec") {
     if (results.producer === undefined) {
-      throw new Error(`drive: stage '${stage}' expects producer-status results`);
+      throw new Error(`drive: phase '${phase}' expects producer-status results`);
     }
     const env = await applyRecordProducer(
       deps.state,
       runId,
       taskId,
-      stage,
+      phase,
       results.producer.status,
     );
     return env.step;
   }
-  // stage === "verify" (checked above via isSpawnStage)
+  // phase === "verify" (checked above via isSpawnPhase)
   if (results.reviews === undefined) {
-    throw new Error("drive: stage 'verify' expects reviews results");
+    throw new Error("drive: phase 'verify' expects reviews results");
   }
   // Holdout-required guard: if a withheld answer key exists but no holdout results
   // were delivered, reject LOUD. Silently reusing the previous rung's verdict would
@@ -252,10 +252,10 @@ async function recordResults(
 }
 
 /**
- * Step one task: record results (if given), then run deterministic stages until a
+ * Step one task: record results (if given), then run deterministic phases until a
  * spawn is needed or the task is terminal. See the module doc for the contract.
  */
-export async function stepTask(
+export async function nextAction(
   deps: CoroutineDeps,
   runId: string,
   taskId: string,
@@ -285,71 +285,71 @@ export async function stepTask(
     };
   }
 
-  let stage: TaskStage = task.stage ?? "preflight";
+  let phase: TaskPhase = task.phase ?? "preflight";
 
-  // Tracks whether the cursor for `stage` is ALREADY persisted, so the loop's
+  // Tracks whether the cursor for `phase` is ALREADY persisted, so the loop's
   // markInFlight is skipped when a record (below) just wrote the identical cursor —
   // avoiding a duplicate locked RMW + fsync per record. An advance/re-route inside
-  // the loop sets it back to false (the new stage's cursor is not yet written).
+  // the loop sets it back to false (the new phase's cursor is not yet written).
   let cursorPersisted = false;
 
-  // 3. Record the previous spawn's results (validated against the cursor's stage + rung).
+  // 3. Record the previous spawn's results (validated against the cursor's phase + rung).
   if (results !== undefined) {
-    const step = await recordResults(deps, runId, taskId, stage, task, results);
+    const step = await recordResults(deps, runId, taskId, phase, task, results);
     if (step.done) {
       return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
     }
-    stage = step.stage;
+    phase = step.phase;
     // recordResults persists the resume cursor for a non-terminal step (via
     // persistStepCursor or applyRecordReviews' advance-write), so it is current.
     cursorPersisted = true;
   }
 
-  // 4. The deterministic stage loop — run a handler, record its result, advance the
+  // 4. The deterministic phase loop — run a handler, record its result, advance the
   //    cursor; the only break is a spawn (boundary inverted: return the manifest).
-  const handlers = makeStageHandlers(deps);
+  const handlers = makePhaseHandlers(deps);
   for (;;) {
     // Write the cursor only when it is not already current; either way obtain the
     // fresh RunState (markInFlight returns it; otherwise a lock-free read).
     run = cursorPersisted
       ? await deps.state.read(runId)
-      : await markInFlight(deps, runId, taskId, stage);
+      : await markInFlight(deps, runId, taskId, phase);
     cursorPersisted = true;
     task = requireTask(run, taskId);
-    const ctx: StageContext = { run, task, attempt: task.escalation_rung + 1 };
+    const ctx: PhaseContext = { run, task, attempt: task.escalation_rung + 1 };
 
-    const result: StageResult =
-      stage === "ship" ? await shipTask(deps, ctx) : await runStage(stage, ctx, handlers);
+    const result: PhaseResult =
+      phase === "ship" ? await shipTask(deps, ctx) : await runPhase(phase, ctx, handlers);
 
     switch (result.kind) {
       case "advance": {
-        stage = result.to;
-        cursorPersisted = false; // new stage's cursor not yet written
+        phase = result.to;
+        cursorPersisted = false; // new phase's cursor not yet written
         continue;
       }
       case "spawn-agents": {
-        const spawnStage = asSpawnStage(stage);
-        const expects: DriveExpects = spawnStage === "verify" ? "reviews" : "producer-status";
+        const spawnPhase = asSpawnPhase(phase);
+        const expects: DriveExpects = spawnPhase === "verify" ? "reviews" : "producer-status";
         const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
         // The base ref the worktree forked from — plumbed into every spawn so
         // reviewers/holdout diff the per-run staging branch, not a bare `origin/staging`.
         const base_ref = `origin/${resolveStagingBranch(runId, run.staging_branch)}`;
         const sidecar =
-          spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : undefined;
-        const result_key: ResultKey = { stage: spawnStage, rung: task.escalation_rung };
+          spawnPhase === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : undefined;
+        const result_key: ResultKey = { phase: spawnPhase, rung: task.escalation_rung };
         // WS2 idempotent re-spawn. Producers commit to the SHARED task worktree, so a
         // stop in the post-spawn / pre-record window strands the abandoned producer's
         // partial commits + uncommitted edits on the task branch. On the resume that
-        // re-enters this SAME (stage, rung) before any results were recorded,
+        // re-enters this SAME (phase, rung) before any results were recorded,
         // `spawn_in_flight` still names THIS spawn → reset the worktree to the tip we
-        // captured at the original emit (prior completed stages live BELOW that tip and
-        // survive), discarding only the interrupted stage's work, then re-spawn clean.
+        // captured at the original emit (prior completed phases live BELOW that tip and
+        // survive), discarding only the interrupted phase's work, then re-spawn clean.
         // A fresh spawn instead CAPTURES the current tip. A stale checkpoint can never
-        // match because every forward edge changes (stage, rung): advance moves the
-        // stage, escalate bumps the rung, and the ship→exec re-sync lands on exec while
+        // match because every forward edge changes (phase, rung): advance moves the
+        // phase, escalate bumps the rung, and the ship→exec re-sync lands on exec while
         // the checkpoint still names verify. Verify spawns read-only reviewers in their
         // own isolated worktrees, so HEAD never moved and the reset is a no-op. Terminal
-        // writers (complete/drop) clear it; recording need not (the (stage, rung) change
+        // writers (complete/drop) clear it; recording need not (the (phase, rung) change
         // already shields it), so this stays the lone live read of the field.
         // Gated on the worktree existing: past preflight every producer/verify spawn
         // has one, so this is true in any real run. When it is ABSENT (a degenerate
@@ -359,7 +359,7 @@ export async function stepTask(
           const inFlight = task.spawn_in_flight;
           if (
             inFlight !== undefined &&
-            inFlight.stage === spawnStage &&
+            inFlight.phase === spawnPhase &&
             inFlight.rung === task.escalation_rung
           ) {
             await deps.git.resetHardClean(inFlight.tip_sha, { cwd: worktree });
@@ -367,7 +367,7 @@ export async function stepTask(
             const tip_sha = await deps.git.revParse("HEAD", { cwd: worktree });
             await deps.state.updateTask(runId, taskId, (t) => ({
               ...t,
-              spawn_in_flight: { stage: spawnStage, rung: t.escalation_rung, tip_sha },
+              spawn_in_flight: { phase: spawnPhase, rung: t.escalation_rung, tip_sha },
             }));
           }
         }
@@ -375,7 +375,7 @@ export async function stepTask(
           kind: "spawn",
           run_id: runId,
           task_id: taskId,
-          stage: spawnStage,
+          phase: spawnPhase,
           result_key,
           manifest: result.manifest,
           ...(sidecar !== undefined ? { sidecar } : {}),
@@ -401,11 +401,11 @@ export async function stepTask(
         return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
       }
       case "wait-retry": {
-        if (result.stage === "ship") {
+        if (result.phase === "ship") {
           // Live-merge refusal → bounded re-sync through exec (persisted budget).
           // Bump merge_resyncs AND move the cursor to exec in ONE atomic write, so a
           // crash between the bump and the next markInFlight cannot double-spend the
-          // budget (old code committed the bump under stage "ship", then markInFlight
+          // budget (old code committed the bump under phase "ship", then markInFlight
           // separately wrote the exec cursor — a crash in that window replayed ship
           // and re-bumped). The capped check runs inside the mutator against the
           // committed value, never a stale pre-read. Over-cap is a terminal drop and
@@ -421,8 +421,8 @@ export async function stepTask(
             return {
               ...t,
               merge_resyncs: newResyncs,
-              stage: "exec",
-              status: stageToInFlightStatus("exec"),
+              phase: "exec",
+              status: phaseToInFlightStatus("exec"),
             };
           });
           if (overCap) {
@@ -440,7 +440,7 @@ export async function stepTask(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync ` +
               `(attempt ${newResyncs}/${MERGE_RESYNC_CAP})`,
           );
-          stage = "exec";
+          phase = "exec";
           cursorPersisted = true; // exec cursor written ATOMICALLY with the bump above
           continue;
         }
@@ -455,7 +455,7 @@ export async function stepTask(
         if (step.done) {
           return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
-        stage = step.stage;
+        phase = step.phase;
         cursorPersisted = false; // escalateOrDrop wrote rung+reviewers, not the cursor
         continue;
       }

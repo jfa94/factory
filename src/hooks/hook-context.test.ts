@@ -2,7 +2,7 @@
  * WS9 — active-run resolution tests. The three runs/current cases the bash hooks
  * got right are preserved: NO symlink → null (pass through), DANGLING symlink →
  * BrokenRunStateError (fail closed), VALID symlink → parsed run. Plus the pure
- * task/stage resolution (persisted stage cursor preferred; status derivation is
+ * task/phase resolution (persisted phase cursor preferred; status derivation is
  * the legacy fallback). Uses a real on-disk run store so the symlink walk is
  * genuinely exercised.
  */
@@ -136,29 +136,29 @@ function run(tasks: Record<string, TaskState>): RunState {
   } as RunState;
 }
 
-describe("resolveActiveTask — status-derived stage (legacy fallback, no cursor persisted)", () => {
+describe("resolveActiveTask — status-derived phase (legacy fallback, no cursor persisted)", () => {
   const origTaskId = process.env.FACTORY_TASK_ID;
   afterEach(() => {
     if (origTaskId === undefined) delete process.env.FACTORY_TASK_ID;
     else process.env.FACTORY_TASK_ID = origTaskId;
   });
 
-  it("single executing task → stage tests", () => {
+  it("single executing task → phase tests", () => {
     delete process.env.FACTORY_TASK_ID;
     const active = resolveActiveTask(run({ t1: task({ status: "executing" }) }));
-    expect(active?.stage).toBe("tests");
+    expect(active?.phase).toBe("tests");
   });
 
-  it("single reviewing task → stage verify", () => {
+  it("single reviewing task → phase verify", () => {
     delete process.env.FACTORY_TASK_ID;
     const active = resolveActiveTask(run({ t1: task({ status: "reviewing" }) }));
-    expect(active?.stage).toBe("verify");
+    expect(active?.phase).toBe("verify");
   });
 
-  it("single shipping task → stage ship", () => {
+  it("single shipping task → phase ship", () => {
     delete process.env.FACTORY_TASK_ID;
     const active = resolveActiveTask(run({ t1: task({ status: "shipping" }) }));
-    expect(active?.stage).toBe("ship");
+    expect(active?.phase).toBe("ship");
   });
 
   it("ambiguous (two in-flight, no explicit id) → null", () => {
@@ -182,7 +182,7 @@ describe("resolveActiveTask — status-derived stage (legacy fallback, no cursor
       "t2",
     );
     expect(active?.task.task_id).toBe("t2");
-    expect(active?.stage).toBe("verify");
+    expect(active?.phase).toBe("verify");
   });
 
   it("explicit id absent from run → null (no fabrication)", () => {
@@ -196,44 +196,44 @@ describe("resolveActiveTask — status-derived stage (legacy fallback, no cursor
   });
 });
 
-describe("resolveActiveTask stage source", () => {
+describe("resolveActiveTask phase source", () => {
   const origTaskId = process.env.FACTORY_TASK_ID;
   afterEach(() => {
     if (origTaskId === undefined) delete process.env.FACTORY_TASK_ID;
     else process.env.FACTORY_TASK_ID = origTaskId;
   });
 
-  it("prefers the persisted stage cursor over status derivation (exec window)", () => {
+  it("prefers the persisted phase cursor over status derivation (exec window)", () => {
     // status "executing" derives `tests`, but the cursor says `exec` —
     // the cursor wins, so the test-writer guard must NOT fire.
     const active = resolveActiveTask(
-      run({ t1: task({ status: "executing", stage: "exec", producer_role: "test-writer" }) }),
+      run({ t1: task({ status: "executing", phase: "exec", producer_role: "test-writer" }) }),
       "t1",
     );
-    expect(active?.stage).toBe("exec");
+    expect(active?.phase).toBe("exec");
     expect(isTestWriterPhase(active)).toBe(false);
   });
 
   it("falls back to status derivation when no cursor is persisted (legacy state)", () => {
     const active = resolveActiveTask(run({ t1: task({ status: "executing" }) }), "t1");
-    expect(active?.stage).toBe("tests");
+    expect(active?.phase).toBe("tests");
   });
 
   it("terminal/pending stays null even with a stale cursor on the row", () => {
-    // terminal rows keep the LAST in-flight stage as history — never an active stage.
+    // terminal rows keep the LAST in-flight phase as history — never an active phase.
     delete process.env.FACTORY_TASK_ID;
-    expect(resolveActiveTask(run({ t1: task({ status: "done", stage: "ship" }) }))).toBeNull();
+    expect(resolveActiveTask(run({ t1: task({ status: "done", phase: "ship" }) }))).toBeNull();
   });
 
-  it("explicit id on a terminal row → stage null despite the stale cursor", () => {
-    const active = resolveActiveTask(run({ t1: task({ status: "done", stage: "ship" }) }), "t1");
+  it("explicit id on a terminal row → phase null despite the stale cursor", () => {
+    const active = resolveActiveTask(run({ t1: task({ status: "done", phase: "ship" }) }), "t1");
     expect(active).not.toBeNull();
-    expect(active?.stage).toBeNull();
+    expect(active?.phase).toBeNull();
   });
 
-  it("tests-stage cursor keeps the test-writer guard active", () => {
+  it("tests-phase cursor keeps the test-writer guard active", () => {
     const active = resolveActiveTask(
-      run({ t1: task({ status: "executing", stage: "tests", producer_role: "test-writer" }) }),
+      run({ t1: task({ status: "executing", phase: "tests", producer_role: "test-writer" }) }),
       "t1",
     );
     expect(isTestWriterPhase(active)).toBe(true);
@@ -241,7 +241,7 @@ describe("resolveActiveTask stage source", () => {
 
   it("pending row with a preflight cursor resolves null (the coroutine writes pending+preflight at entry)", () => {
     delete process.env.FACTORY_TASK_ID;
-    const r = run({ t1: task({ status: "pending", stage: "preflight" }) });
+    const r = run({ t1: task({ status: "pending", phase: "preflight" }) });
     expect(resolveActiveTask(r)).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 /**
  * WS1 — Typed `RunState` / `TaskState` schema (Zod). THE FROZEN STATE SEAM.
  *
- * Downstream workstreams (WS2 stage-machine, WS3 git, WS4 quota, WS5 spec,
+ * Downstream workstreams (WS2 phase-machine, WS3 git, WS4 quota, WS5 spec,
  * WS6/7 verifier, WS8 producer, WS9 hooks, WS10 drivers, WS12 scoring) import
  * these types and enums and MUST NOT redefine them. Every enum here is a CLOSED
  * set: a value outside the set is a LOUD parse error, never a silent pass — this
@@ -78,7 +78,7 @@ export function isTerminalRunStatus(s: RunStatus): s is (typeof TERMINAL_RUN_STA
 /**
  * Task-level status. Closed set; human-gate statuses are gone.
  *   - `pending`    — not yet started (or blocked on an unsatisfied dependency).
- *   - `executing`  — a producer (test-writer / executor) stage is in flight.
+ *   - `executing`  — a producer (test-writer / executor) phase is in flight.
  *   - `reviewing`  — the merge gate (gates + panel) is in flight.
  *   - `shipping`   — verified; PR open / merging into staging.
  *   - `done`       — merged into staging (TERMINAL, success).
@@ -152,7 +152,7 @@ export const EscalationRungSchema = z.number().int().min(0);
 export const PanelVerdictEnum = z.enum(["approve", "blocked", "error"]);
 export type PanelVerdict = z.infer<typeof PanelVerdictEnum>;
 
-/** Producer sub-stage a task may be in (test-writer first, then executor). */
+/** Producer sub-phase a task may be in (test-writer first, then executor). */
 export const ProducerRoleEnum = z.enum(["test-writer", "executor"]);
 export type ProducerRole = z.infer<typeof ProducerRoleEnum>;
 
@@ -250,42 +250,42 @@ export const TaskStateSchema = z.object({
   failure_reason: z.string().optional(),
 
   /**
-   * The precise resume cursor for the drive coroutine — which TaskStage the task is
+   * The precise resume cursor for the drive coroutine — which TaskPhase the task is
    * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
-   * summary; `stage` is the machine cursor. Absent = not started (preflight).
-   * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
+   * summary; `phase` is the machine cursor. Absent = not started (preflight).
+   * NOTE: on terminal rows (done/dropped), `phase` is the last in-flight phase,
    * not a resume point — terminal writers do not clear it.
-   * NOTE: these literals DUPLICATE stage-machine's TASK_STAGE_ORDER because
-   * core/state must not import stage-machine (dependency direction, enforced by
+   * NOTE: these literals DUPLICATE phase-machine's TASK_PHASE_ORDER because
+   * core/state must not import phase-machine (dependency direction, enforced by
    * `madge --circular` in verify). The duplication is kept honest by a LOAD-BEARING
-   * cross-check test — "TaskState.stage enum equals TASK_STAGE_ORDER (cross-module
+   * cross-check test — "TaskState.phase enum equals TASK_PHASE_ORDER (cross-module
    * pin)" in src/driver/coroutine.test.ts — which fails the instant the two drift.
    * Do NOT delete that test: it is the only thing tying this hand-copied list to its
    * source of truth.
    */
-  stage: z.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
+  phase: z.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
   /** Ship live-merge re-sync count (cap enforced by the coroutine; persisted so the cap survives process boundaries). */
   merge_resyncs: z.number().int().min(0).default(0),
 
   /**
    * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the coroutine when it
-   * EMITS a spawn for `stage` at `rung`, recording the task-branch `tip_sha` at emit
+   * EMITS a spawn for `phase` at `rung`, recording the task-branch `tip_sha` at emit
    * time. Producers commit to the SHARED task worktree, so a stop in the post-spawn /
    * pre-record window leaves the abandoned producer's partial commits on the branch. On
-   * the resume that re-enters the SAME (stage, rung) before any results were recorded,
+   * the resume that re-enters the SAME (phase, rung) before any results were recorded,
    * the coroutine resets the worktree to `tip_sha` — discarding ONLY the interrupted
-   * stage's work (prior completed stages live below it) — then re-spawns. A fresh
+   * phase's work (prior completed phases live below it) — then re-spawns. A fresh
    * spawn overwrites it; terminal writers (complete/drop) clear it. Absent = no spawn
-   * in flight (the steady state between stages).
+   * in flight (the steady state between phases).
    *
-   * `stage` is the spawn-stage subset (tests|exec|verify) — preflight/ship never spawn.
-   * The literal duplicates driver/results' SPAWN_STAGES because core/state must not
+   * `phase` is the spawn-phase subset (tests|exec|verify) — preflight/ship never spawn.
+   * The literal duplicates driver/results' SPAWN_PHASES because core/state must not
    * import the driver (dependency direction); a cross-check test in
-   * src/driver/coroutine.test.ts pins them equal (mirrors the `stage` field's pin).
+   * src/driver/coroutine.test.ts pins them equal (mirrors the `phase` field's pin).
    */
   spawn_in_flight: z
     .object({
-      stage: z.enum(["tests", "exec", "verify"]),
+      phase: z.enum(["tests", "exec", "verify"]),
       rung: z.number().int().min(0),
       tip_sha: z.string().min(1),
     })
@@ -385,22 +385,22 @@ export const QuotaCheckpointSchema = z.object({
 export type QuotaCheckpoint = z.infer<typeof QuotaCheckpointSchema>;
 
 // ---------------------------------------------------------------------------
-// Docs stage marker (engine-owned documentation stage)
+// Docs phase marker (engine-owned documentation phase)
 // ---------------------------------------------------------------------------
 
 /**
- * Run-level documentation stage marker (engine-owned docs stage). `done` once
+ * Run-level documentation phase marker (engine-owned docs phase). `done` once
  * scribe's output is committed onto staging (or a no-op pass); `failed` records a
  * one-attempt failure while the run sits `suspended` (resumable via /factory:resume).
- * Absent until the stage runs. Not applicable (no /docs, opted out) leaves it absent —
+ * Absent until the phase runs. Not applicable (no /docs, opted out) leaves it absent —
  * `next` decides applicability read-only, so there is no `skipped` value.
  */
-export const DocsStageSchema = z.object({
+export const DocsPhaseSchema = z.object({
   status: z.enum(["done", "failed"]),
   reason: z.string().optional(),
   ended_at: z.string(),
 });
-export type DocsStage = z.infer<typeof DocsStageSchema>;
+export type DocsPhase = z.infer<typeof DocsPhaseSchema>;
 
 // ---------------------------------------------------------------------------
 // RunState
@@ -501,8 +501,8 @@ export const RunStateSchema = z.object({
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
 
-  /** Documentation stage marker; absent until the docs stage runs (engine docs stage). */
-  docs: DocsStageSchema.optional(),
+  /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
+  docs: DocsPhaseSchema.optional(),
 
   /** Lifecycle timestamps (ISO-8601). */
   started_at: z.string(),

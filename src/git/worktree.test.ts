@@ -42,7 +42,7 @@ describe("D12 — worktree base semantics + fallback", () => {
     expect(git.worktrees.has("/tmp/wt-replay")).toBe(true);
     const addsBefore = git.calls.filter((c) => c.startsWith("worktree add")).length;
 
-    // Simulate a resume re-entering preflight after a mid-stage failure: a bare
+    // Simulate a resume re-entering preflight after a mid-phase failure: a bare
     // `worktree add -b` would FATAL on the existing path. The re-create must REUSE
     // the worktree (checkout -B onto the staging tip) instead of wedging.
     const wt = await createTaskWorktree(args);

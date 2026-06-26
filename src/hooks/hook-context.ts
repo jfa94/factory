@@ -24,7 +24,7 @@ import { StateManager } from "../core/state/index.js";
 import { currentLinkPath, worktreesRoot } from "../core/state/index.js";
 import { isValidId } from "../shared/ids.js";
 import { canonicalizePath } from "./tcb.js";
-import { TaskStageEnum, type TaskStage } from "../core/stage-machine/index.js";
+import { TaskPhaseEnum, type TaskPhase } from "../core/phase-machine/index.js";
 import type { RunState, TaskState } from "../types/index.js";
 
 /** Thrown when `runs/current` is a dangling symlink (corrupt run state). */
@@ -163,37 +163,37 @@ export function runTaskForPath(dataDir: string, absPath: string): RunTaskRef | n
 }
 
 /**
- * The currently-relevant task + its in-flight stage, if it can be resolved.
+ * The currently-relevant task + its in-flight phase, if it can be resolved.
  *
  * `taskId` resolution order mirrors the bash guard: explicit env
- * (`FACTORY_TASK_ID`), else the single in-flight task. Stage comes from the
- * persisted `TaskState.stage` cursor (written by the coroutine in lockstep with
- * status on every record); status derivation (`statusToStage`) is kept only as
+ * (`FACTORY_TASK_ID`), else the single in-flight task. Phase comes from the
+ * persisted `TaskState.phase` cursor (written by the coroutine in lockstep with
+ * status on every record); status derivation (`statusToPhase`) is kept only as
  * the legacy fallback for states that predate the cursor.
  */
 export interface ActiveTask {
   readonly task: TaskState;
-  /** The active in-flight stage (persisted cursor, status-derived fallback), or null if terminal/idle. */
-  readonly stage: TaskStage | null;
+  /** The active in-flight phase (persisted cursor, status-derived fallback), or null if terminal/idle. */
+  readonly phase: TaskPhase | null;
 }
 
 /**
- * LEGACY FALLBACK: map an in-flight task status back to the stage it implies
- * (best-effort). Only consulted when the task has no persisted stage cursor;
+ * LEGACY FALLBACK: map an in-flight task status back to the phase it implies
+ * (best-effort). Only consulted when the task has no persisted phase cursor;
  * status alone cannot tell `tests` from `exec` (both map to `executing` —
  * `producer_role` cannot disambiguate either, it lags the exec spawn), so the
  * cursor is the authoritative source.
  */
-function statusToStage(status: TaskState["status"]): TaskStage | null {
+function statusToPhase(status: TaskState["status"]): TaskPhase | null {
   switch (status) {
     case "executing":
       // `tests` and `exec` both map to `executing`; without a cursor we assume
-      // the FIRST executing sub-stage (the stricter, test-writer-scoped one).
-      return TaskStageEnum.enum.tests;
+      // the FIRST executing sub-phase (the stricter, test-writer-scoped one).
+      return TaskPhaseEnum.enum.tests;
     case "reviewing":
-      return TaskStageEnum.enum.verify;
+      return TaskPhaseEnum.enum.verify;
     case "shipping":
-      return TaskStageEnum.enum.ship;
+      return TaskPhaseEnum.enum.ship;
     case "pending":
     case "done":
     case "dropped":
@@ -202,14 +202,14 @@ function statusToStage(status: TaskState["status"]): TaskStage | null {
 }
 
 /**
- * The active stage for guard scoping: null when the task is not in-flight;
- * else the persisted stage cursor (written by the coroutine in lockstep with
+ * The active phase for guard scoping: null when the task is not in-flight;
+ * else the persisted phase cursor (written by the coroutine in lockstep with
  * status on every record), falling back to status derivation for legacy
  * states that predate the cursor.
  */
-function activeStageOf(task: TaskState): TaskStage | null {
-  if (statusToStage(task.status) === null) return null; // terminal/pending — cursor is history, not an active stage
-  return task.stage ?? statusToStage(task.status);
+function activePhaseOf(task: TaskState): TaskPhase | null {
+  if (statusToPhase(task.status) === null) return null; // terminal/pending — cursor is history, not an active phase
+  return task.phase ?? statusToPhase(task.status);
 }
 
 /**
@@ -223,25 +223,25 @@ export function resolveActiveTask(run: RunState, explicitTaskId?: string): Activ
   if (taskId.length > 0) {
     const task = run.tasks[taskId];
     if (!task) return null;
-    return { task, stage: activeStageOf(task) };
+    return { task, phase: activePhaseOf(task) };
   }
   const inFlight = Object.values(run.tasks).filter(
     (t) => t.status === "executing" || t.status === "reviewing" || t.status === "shipping",
   );
   if (inFlight.length !== 1) return null;
   const task = inFlight[0]!;
-  return { task, stage: activeStageOf(task) };
+  return { task, phase: activePhaseOf(task) };
 }
 
 /**
- * Whether the active task is in the TEST-WRITER phase (active stage `tests` AND
+ * Whether the active task is in the TEST-WRITER phase (active phase `tests` AND
  * producer_role test-writer). The path-scope guard (pipeline-guards) uses this:
- * the test-writer may write only test paths. The stage comes from the resolved
+ * the test-writer may write only test paths. The phase comes from the resolved
  * ActiveTask (persisted cursor, status-derived fallback).
  */
 export function isTestWriterPhase(active: ActiveTask | null): boolean {
   if (!active) return false;
-  if (active.stage !== TaskStageEnum.enum.tests) return false;
+  if (active.phase !== TaskPhaseEnum.enum.tests) return false;
   // producer_role is optional; when set it must be test-writer for the phase.
   return active.task.producer_role === undefined || active.task.producer_role === "test-writer";
 }

@@ -1,9 +1,9 @@
 /**
- * WS10 — unit tests for the STAGE HANDLERS (Model-A reporters).
+ * WS10 — unit tests for the PHASE HANDLERS (Model-A reporters).
  *
  * These exercise each reporter in ISOLATION (no driver loop): a handler reads a
- * frozen StageContext, does deterministic work via injected clients, and RETURNS a
- * StageResult — it never writes run state and never spawns. We drive the handlers
+ * frozen PhaseContext, does deterministic work via injected clients, and RETURNS a
+ * PhaseResult — it never writes run state and never spawns. We drive the handlers
  * with the exported domain fakes (git/gh/gate/holdout) + a real StateManager (temp
  * dir) used ONLY to mint schema-valid RunState/TaskState contexts.
  */
@@ -12,7 +12,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { makeStageHandlers, specTaskOf, shipBody } from "./handlers.js";
+import { makePhaseHandlers, specTaskOf, shipBody } from "./handlers.js";
 import { taskWorktreePath } from "./paths.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
 import type { HandlerDeps, ShipMode } from "./types.js";
@@ -32,7 +32,7 @@ import {
 import { InMemoryHoldoutStore } from "../verifier/holdout/index.js";
 import { dialForRung } from "../producer/index.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
-import type { ReviewerResult, StageContext, TaskState } from "../types/index.js";
+import type { ReviewerResult, PhaseContext, TaskState } from "../types/index.js";
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -101,7 +101,7 @@ function greenProbe(): FakeGitProbe {
   });
 }
 
-describe("makeStageHandlers (Model-A reporters)", () => {
+describe("makePhaseHandlers (Model-A reporters)", () => {
   let dataDir: string;
   let state: StateManager;
   let holdout: InMemoryHoldoutStore;
@@ -129,8 +129,8 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  /** Seed a single task and return the frozen StageContext the engine would hand a reporter. */
-  async function ctxFor(task: Partial<TaskState> & { task_id: string }): Promise<StageContext> {
+  /** Seed a single task and return the frozen PhaseContext the engine would hand a reporter. */
+  async function ctxFor(task: Partial<TaskState> & { task_id: string }): Promise<PhaseContext> {
     const full: TaskState = {
       task_id: task.task_id,
       status: task.status ?? "pending",
@@ -165,7 +165,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
   // -- preflight ------------------------------------------------------------
 
   it("preflight creates the per-task worktree forked off staging and advances to tests", async () => {
-    const handlers = makeStageHandlers(makeDeps());
+    const handlers = makePhaseHandlers(makeDeps());
     const ctx = await ctxFor({ task_id: "t-multi" });
     const result = await handlers.preflight(ctx);
 
@@ -177,7 +177,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
   it("preflight forks the worktree from the per-run staging branch (staging/<run-id>)", async () => {
     // Seed the per-run staging branch so revParse("origin/staging-run-1") succeeds.
     const perRunGit = new FakeGitClient({ remoteHeads: { "staging-run-1": "sha-run-staging" } });
-    const handlers = makeStageHandlers(makeDeps({ git: perRunGit }));
+    const handlers = makePhaseHandlers(makeDeps({ git: perRunGit }));
     const ctx = await ctxFor({ task_id: "t-multi" });
     await handlers.preflight(ctx);
 
@@ -197,7 +197,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
         calls.push({ path: args.path, setupCommand: args.setupCommand });
       },
     });
-    const handlers = makeStageHandlers(deps);
+    const handlers = makePhaseHandlers(deps);
     const ctx = await ctxFor({ task_id: "t-prov" });
 
     const result = await handlers.preflight(ctx);
@@ -216,11 +216,11 @@ describe("makeStageHandlers (Model-A reporters)", () => {
         if (provisionCalls === 1) throw new Error("npm ci failed (simulated network blip)");
       },
     });
-    const handlers = makeStageHandlers(deps);
+    const handlers = makePhaseHandlers(deps);
     const ctx = await ctxFor({ task_id: "t-multi" });
 
     // First preflight: the worktree is created, provisioning throws → the task cursor
-    // stays at preflight (the stage never advanced) with the worktree on disk.
+    // stays at preflight (the phase never advanced) with the worktree on disk.
     await expect(handlers.preflight(ctx)).rejects.toThrow(/npm ci failed/);
     const wtPath = taskWorktreePath(dataDir, RUN_ID, "t-multi");
     expect(git.worktrees.has(wtPath)).toBe(true);
@@ -236,7 +236,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
 
   it("tests persists the holdout answer-key and spawns the test-writer (rung 0)", async () => {
     const deps = makeDeps();
-    const handlers = makeStageHandlers(deps);
+    const handlers = makePhaseHandlers(deps);
     const ctx = await ctxFor({ task_id: "t-multi", escalation_rung: 0 });
     const result = await handlers.tests(ctx);
 
@@ -248,7 +248,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
 
     expect(result.kind).toBe("spawn-agents");
     if (result.kind !== "spawn-agents") throw new Error("unreachable");
-    expect(result.manifest.stage_after).toBe("exec");
+    expect(result.manifest.resume_phase).toBe("exec");
     expect(result.manifest.agents).toHaveLength(1);
     const agent = result.manifest.agents[0]!;
     expect(agent.role).toBe("test-writer");
@@ -264,7 +264,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
   });
 
   it("tests on a single-criterion task withholds nothing (no answer-key) but still spawns", async () => {
-    const handlers = makeStageHandlers(makeDeps());
+    const handlers = makePhaseHandlers(makeDeps());
     const ctx = await ctxFor({ task_id: "t-single" });
     const result = await handlers.tests(ctx);
 
@@ -273,7 +273,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
   });
 
   it("tests skips the test-writer for a tdd_exempt task (advance straight to exec)", async () => {
-    const handlers = makeStageHandlers(makeDeps());
+    const handlers = makePhaseHandlers(makeDeps());
     const ctx = await ctxFor({ task_id: "t-exempt" });
     const result = await handlers.tests(ctx);
 
@@ -284,7 +284,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
 
   it("tests re-expresses the escalated dial off the persisted rung (rung 2 injects prior-failure)", async () => {
     const deps = makeDeps();
-    const handlers = makeStageHandlers(deps);
+    const handlers = makePhaseHandlers(deps);
     const ctx = await ctxFor({ task_id: "t-multi", escalation_rung: 2 });
     const result = await handlers.tests(ctx);
 
@@ -305,7 +305,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
 
   it("tests threads the dialed effort into the manifest once the model has hit its ceiling (rung 3 = ceiling+xhigh)", async () => {
     const deps = makeDeps();
-    const handlers = makeStageHandlers(deps);
+    const handlers = makePhaseHandlers(deps);
     const ctx = await ctxFor({ task_id: "t-multi", escalation_rung: 3 });
     const result = await handlers.tests(ctx);
 
@@ -323,20 +323,20 @@ describe("makeStageHandlers (Model-A reporters)", () => {
   // -- exec -----------------------------------------------------------------
 
   it("exec spawns the executor and resumes at verify", async () => {
-    const handlers = makeStageHandlers(makeDeps());
+    const handlers = makePhaseHandlers(makeDeps());
     const ctx = await ctxFor({ task_id: "t-multi" });
     const result = await handlers.exec(ctx);
 
     expect(result.kind).toBe("spawn-agents");
     if (result.kind !== "spawn-agents") throw new Error("unreachable");
-    expect(result.manifest.stage_after).toBe("verify");
+    expect(result.manifest.resume_phase).toBe("verify");
     expect(result.manifest.agents[0]!.role).toBe("executor");
   });
 
   // -- verify (CLI single-step reporter; NO holdout) ------------------------
 
   it("verify with no reviewers yet spawns the full risk-invariant panel", async () => {
-    const handlers = makeStageHandlers(makeDeps());
+    const handlers = makePhaseHandlers(makeDeps());
     const ctx = await ctxFor({ task_id: "t-multi", reviewers: [] });
     const result = await handlers.verify(ctx);
 
@@ -346,7 +346,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
   });
 
   it("verify advances to ship when gates are green and reviewers unanimously approve", async () => {
-    const handlers = makeStageHandlers(makeDeps());
+    const handlers = makePhaseHandlers(makeDeps());
     const reviewers: ReviewerResult[] = [
       { reviewer: "implementation-reviewer", verdict: "approve", confirmed_blockers: 0 },
       { reviewer: "security-reviewer", verdict: "approve", confirmed_blockers: 0 },
@@ -361,7 +361,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     const deps = makeDeps({
       tools: makeFakeTools({ git: greenProbe(), eslint: new FakeEslint(proc(1)) }),
     });
-    const handlers = makeStageHandlers(deps);
+    const handlers = makePhaseHandlers(deps);
     const reviewers: ReviewerResult[] = [
       { reviewer: "implementation-reviewer", verdict: "approve", confirmed_blockers: 0 },
     ];
@@ -370,7 +370,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
 
     expect(result.kind).toBe("wait-retry");
     if (result.kind !== "wait-retry") throw new Error("unreachable");
-    expect(result.stage).toBe("verify");
+    expect(result.phase).toBe("verify");
     expect(result.reason).toMatch(/lint/);
   });
 
@@ -382,7 +382,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
     const deps = makeDeps({
       tools: makeFakeTools({ git: greenProbe(), eslint: new FakeEslint(proc(1)) }),
     });
-    const handlers = makeStageHandlers(deps);
+    const handlers = makePhaseHandlers(deps);
     const reviewers: ReviewerResult[] = [
       { reviewer: "implementation-reviewer", verdict: "approve", confirmed_blockers: 0 },
     ];
@@ -408,7 +408,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
       ],
     });
     const deps = makeDeps({ tools: makeFakeTools({ git: perRunProbe }) });
-    const handlers = makeStageHandlers(deps);
+    const handlers = makePhaseHandlers(deps);
     const reviewers: ReviewerResult[] = [
       { reviewer: "implementation-reviewer", verdict: "approve", confirmed_blockers: 0 },
       { reviewer: "security-reviewer", verdict: "approve", confirmed_blockers: 0 },
@@ -423,12 +423,12 @@ describe("makeStageHandlers (Model-A reporters)", () => {
 
   // -- ship (stubbed: routed to shipTask on the live path) ------------------
 
-  it("ship is a loud throw-stub — runStage must never dispatch it (routed to shipTask)", async () => {
-    const handlers = makeStageHandlers(makeDeps());
+  it("ship is a loud throw-stub — runPhase must never dispatch it (routed to shipTask)", async () => {
+    const handlers = makePhaseHandlers(makeDeps());
     const ctx = await ctxFor({ task_id: "t-multi" });
 
     // The coroutine runs the stateful shipTask (src/driver/ship.ts) directly; this
-    // reporter exists ONLY to keep StageHandlers total. Invoking it is a programming
+    // reporter exists ONLY to keep PhaseHandlers total. Invoking it is a programming
     // error → synchronous loud throw, with no PR opened as a side effect.
     expect(() => handlers.ship(ctx)).toThrow(/ship is routed to shipTask/);
     expect(gh.created).toHaveLength(0);
@@ -437,7 +437,7 @@ describe("makeStageHandlers (Model-A reporters)", () => {
   // -- finalize -------------------------------------------------------------
 
   it("finalize over an all-done run yields a finalize-terminal completed result", async () => {
-    const handlers = makeStageHandlers(makeDeps());
+    const handlers = makePhaseHandlers(makeDeps());
     await state.update(RUN_ID, (s) => ({
       ...s,
       tasks: {

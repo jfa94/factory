@@ -11,13 +11,13 @@
  *   4. Assemble the per-reviewer WS1 {@link ReviewerResult}[] with coherent
  *      counts (approve ⇒ 0 confirmed blockers; blocked ⇒ ≥1), and DERIVE the merge gate
  *      verdict via the frozen {@link deriveMergeGateVerdict} — NEVER stored.
- *   5. Map the derived outcome onto a {@link StageResult}: the panel SPAWN manifest
+ *   5. Map the derived outcome onto a {@link PhaseResult}: the panel SPAWN manifest
  *      when reviewers must still run; otherwise `advance` (merge gate passed) or
  *      `wait-retry` (merge gate blocked — bounded re-review/re-fix). State writes are
  *      the driver's job; this module never touches the StateManager.
  *
  * The record ends at the independent finding-verifier (D27 verify-then-fix): a
- * confirmed blocker fails the merge gate. There is no producer-rebuttal stage — runPanel
+ * confirmed blocker fails the merge gate. There is no producer-rebuttal phase — runPanel
  * exposes the confirmed blockers and the driver routes a bounded fix-forward
  * re-spawn; runPanel does not loop a debate.
  */
@@ -31,8 +31,8 @@ import {
   type GateVerdict,
   type ReviewerResult,
   type SpawnManifest,
-  type StageResult,
-  type TaskStage,
+  type PhaseResult,
+  type TaskPhase,
 } from "../../types/index.js";
 import { isCitable, type Finding, type RawReview } from "./finding.js";
 import { verifyCitations, type SourceReader } from "./citation-verify.js";
@@ -59,8 +59,8 @@ export interface PanelRunResult {
   readonly reviewerResults: readonly ReviewerResult[];
   /** The DERIVED merge gate verdict (never stored; recomputed here). */
   readonly mergeGate: GateVerdict;
-  /** The StageResult the driver acts on. */
-  readonly result: StageResult;
+  /** The PhaseResult the driver acts on. */
+  readonly result: PhaseResult;
   /**
    * Δ U — the LOUD record of a SECOND-VENDOR ABSENCE. Present (with a reason)
    * IFF the caller supplied a {@link RunPanelInput.crossVendor} resolution whose
@@ -147,8 +147,8 @@ export interface RunPanelInput {
   readonly makeRunner: (review: RawReview) => FindingVerifierRunner;
   /** Deterministic-gate evidence to combine with the panel (WS6 supplies it). */
   readonly gateEvidence: readonly GateEvidence[];
-  /** The stage to advance/retry at (the verify stage). */
-  readonly stage: TaskStage;
+  /** The phase to advance/retry at (the verify phase). */
+  readonly phase: TaskPhase;
   /** Redact retained finding text (Δ K). Defaults to true. */
   readonly redact?: boolean;
   /** Bounded re-review attempt accounting for the wait-retry on a blocked merge gate. */
@@ -171,7 +171,7 @@ export interface RunPanelInput {
  * module. The manifest is built by {@link import("./panel.js").buildPanelManifest}
  * and passed in.
  */
-export function spawnPanel(manifest: SpawnManifest): StageResult {
+export function spawnPanel(manifest: SpawnManifest): PhaseResult {
   return spawn(manifest);
 }
 
@@ -193,10 +193,10 @@ export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
   // panel must pass; an `error` reviewer fails it LOUDLY. Never read from storage.
   const mergeGate = deriveMergeGateVerdict({ reviewers: reviewerResults }, input.gateEvidence);
 
-  const result: StageResult = mergeGate.passed
-    ? advance(nextOrSelf(input.stage))
+  const result: PhaseResult = mergeGate.passed
+    ? advance(nextOrSelf(input.phase))
     : waitRetry(
-        input.stage,
+        input.phase,
         mergeGateBlockReason(reviewerResults, input.gateEvidence),
         input.attempt ?? 1,
         input.maxAttempts ?? 1,
@@ -215,12 +215,12 @@ export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
 }
 
 /**
- * The stage to advance to when the merge gate passes. The verify stage's success
- * advances to the next per-task stage; if `verify` is the configured stage we
- * advance to `ship`. We keep this local rather than importing nextStage to avoid
- * coupling the orchestration to the stage-order walk — but the seam's order is the
+ * The phase to advance to when the merge gate passes. The verify phase's success
+ * advances to the next per-task phase; if `verify` is the configured phase we
+ * advance to `ship`. We keep this local rather than importing nextPhase to avoid
+ * coupling the orchestration to the phase-order walk — but the seam's order is the
  * source of truth, so we mirror only the verify→ship edge WS7 owns.
  */
-function nextOrSelf(stage: TaskStage): TaskStage {
-  return stage === "verify" ? "ship" : stage;
+function nextOrSelf(phase: TaskPhase): TaskPhase {
+  return phase === "verify" ? "ship" : phase;
 }

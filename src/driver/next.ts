@@ -14,7 +14,7 @@
  * warns) with the full wedged set in the reason.
  *
  * Ordering invariant: terminal-run check BEFORE the quota gate — a terminal probe
- * must not write a pause checkpoint (same discipline as stepTask in coroutine.ts).
+ * must not write a pause checkpoint (same discipline as nextAction in coroutine.ts).
  *
  * Clearing a stale paused/suspended checkpoint on recovery is THIS CALLER's job
  * (the quota gate doc is explicit: "on proceed the gate never writes state;
@@ -92,7 +92,7 @@ function isUnsatisfiableDep(run: RunState, depId: string): boolean {
 }
 
 /**
- * True iff a fully-terminal run still needs its docs stage: prospective status
+ * True iff a fully-terminal run still needs its docs phase: prospective status
  * `completed`, docs not already `done`, and docs applicable to the target repo.
  * The caller MUST guarantee all tasks are terminal — decideFinalize throws otherwise.
  */
@@ -102,7 +102,7 @@ async function wantsDocs(deps: CoroutineDeps, run: RunState): Promise<boolean> {
   return deps.docsApplicable();
 }
 
-export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextEnvelope> {
+export async function nextTask(deps: CoroutineDeps, runId: string): Promise<NextEnvelope> {
   let run = await deps.state.read(runId);
 
   // Self-resolved run context stamped onto EVERY envelope variant (so the workflow
@@ -112,14 +112,14 @@ export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextE
   const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run.ship_mode });
 
   // 1. Terminal run check BEFORE the quota gate — a finished run must never
-  //    write a pause checkpoint (mirrors stepTask in coroutine.ts).
+  //    write a pause checkpoint (mirrors nextAction in coroutine.ts).
   if (isTerminalRunStatus(run.status)) {
     return { ...ctx(), kind: "run-terminal", run_status: run.status };
   }
 
   // 2. All-tasks-terminal check BEFORE the quota gate. A GENUINELY finished run
   //    early-returns here (a finished run must never write a pause checkpoint). But a
-  //    run whose tasks are all terminal yet whose docs stage is still pending is NOT
+  //    run whose tasks are all terminal yet whose docs phase is still pending is NOT
   //    finished: it falls through to the quota gate + checkpoint clear so a
   //    docs-suspended run resumes cleanly, then returns `docs-ready` after step 4.
   const allTerminal = Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status));
@@ -153,7 +153,7 @@ export async function stepRun(deps: CoroutineDeps, runId: string): Promise<NextE
     }));
   }
 
-  // Docs gate: a completed run with a pending, applicable docs stage. Reached only
+  // Docs gate: a completed run with a pending, applicable docs phase. Reached only
   // when `needsDocs` (all tasks terminal), and AFTER the checkpoint clear so a
   // docs-suspended run is back to `running` first. `needsDocs` was computed from the
   // entry snapshot; the checkpoint clear changes only status/quota, never tasks/docs.

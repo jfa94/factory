@@ -3,7 +3,7 @@
  * addressable WS8 import surface for WS10 (the in-session driver) and any other
  * downstream consumer. Deep-importing `src/producer/*` is a smell; import here.
  *
- * WS8 imports the frozen seams FROM `src/types` (StageResult constructors,
+ * WS8 imports the frozen seams FROM `src/types` (PhaseResult constructors,
  * enums, Config), the WS4 dial (selectProducerModel via src/quota), and the WS7
  * judgment surface (Finding); it adds NOTHING to those barrels.
  */

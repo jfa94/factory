@@ -5,7 +5,7 @@
  * Each arm derives its OWNING run from its own inputs — no arm reads a single
  * global pointer, so the guard fires only for the run a given tool call belongs to
  * (enabling concurrent cross-repo runs). Three invariants:
- *   (a) TEST-WRITER PHASE scope: while the owning task's stage is `tests`, an
+ *   (a) TEST-WRITER PHASE scope: while the owning task's phase is `tests`, an
  *       Edit/Write/MultiEdit to a NON-test path is blocked (the test-writer may
  *       commit only failing tests first — TDD). The owning run+task is derived from
  *       the TARGET PATH (the per-task worktree the producer writes into), so an
@@ -27,7 +27,7 @@
 import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { isTestPath } from "../verifier/deterministic/scope.js";
 import { StateManager } from "../core/state/index.js";
-import { TaskStageEnum } from "../core/stage-machine/index.js";
+import { TaskPhaseEnum } from "../core/phase-machine/index.js";
 import {
   loadOwnerScopedRun,
   resolveActiveTask,
@@ -242,8 +242,8 @@ export async function runPipelineGuards(
   return decisionToExitCode(decision);
 }
 
-/** Re-export for stage identification in callers/tests. */
-export { TaskStageEnum };
+/** Re-export for phase identification in callers/tests. */
+export { TaskPhaseEnum };
 
 /** Read all of process.stdin as utf-8. */
 async function readAllStdin(): Promise<string> {

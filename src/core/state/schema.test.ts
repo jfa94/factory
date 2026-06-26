@@ -330,7 +330,7 @@ describe("ignore_quota field", () => {
   });
 });
 
-describe("docs stage marker", () => {
+describe("docs phase marker", () => {
   it("absent by default → undefined", () => {
     expect(parseRunState(minimalRun()).docs).toBeUndefined();
   });
@@ -357,17 +357,17 @@ describe("docs stage marker", () => {
   });
 });
 
-describe("TaskState.stage cursor", () => {
-  it("accepts the five task stages and defaults to absent", () => {
+describe("TaskState.phase cursor", () => {
+  it("accepts the five task phases and defaults to absent", () => {
     const base = parseTaskState(minimalTask());
-    expect(base.stage).toBeUndefined();
+    expect(base.phase).toBeUndefined();
     for (const s of ["preflight", "tests", "exec", "verify", "ship"]) {
-      expect(parseTaskState(minimalTask({ stage: s })).stage).toBe(s);
+      expect(parseTaskState(minimalTask({ phase: s })).phase).toBe(s);
     }
   });
 
-  it("rejects an unknown stage", () => {
-    expect(() => parseTaskState(minimalTask({ stage: "deploy" }))).toThrow();
+  it("rejects an unknown phase", () => {
+    expect(() => parseTaskState(minimalTask({ phase: "deploy" }))).toThrow();
   });
 
   it("merge_resyncs defaults to 0 and rejects negatives and non-integers", () => {

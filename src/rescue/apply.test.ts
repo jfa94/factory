@@ -235,12 +235,12 @@ describe("applyRescue", () => {
     });
   });
 
-  it("reset clears the stage cursor and merge_resyncs", async () => {
+  it("reset clears the phase cursor and merge_resyncs", async () => {
     await seed([
       {
         task_id: "c",
         status: "executing",
-        stage: "verify",
+        phase: "verify",
         merge_resyncs: 3,
         escalation_rung: 1,
       },
@@ -250,7 +250,7 @@ describe("applyRescue", () => {
 
     const run = await state.read(RUN_ID);
     const c = run.tasks.c!;
-    expect(c.stage).toBeUndefined();
+    expect(c.phase).toBeUndefined();
     expect(c.merge_resyncs).toBe(0);
   });
 });

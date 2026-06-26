@@ -254,13 +254,13 @@ async function cli(command, label, phaseName, knownKinds, context) {
 // re-spawn after a flaked parse could deliver the SAME record twice, which the engine
 // rejects loud. So a single attempt only; a boundary failure here ends the run loud
 // (legible via parseEnvelope) rather than risking a double-record.
-async function recordResults(taskId, stage, results) {
+async function recordResults(taskId, phase, results) {
   fileSeq += 1;
   // Handoff files live OUTSIDE the TCB-protected runs/** store (the plugin's own
   // hooks deny writes there); drive --results reads from any path. The payload is
   // written with the Write tool — no shell layer ever parses the JSON (review
   // findings carry arbitrary verbatim code quotes).
-  const path = `${dataDir}/results/${runId}/wf-${taskId}-${stage}-${fileSeq}.json`;
+  const path = `${dataDir}/results/${runId}/wf-${taskId}-${phase}-${fileSeq}.json`;
   const json = JSON.stringify(results);
   const out = await agent(
     `Two steps, in order:\n` +
@@ -419,7 +419,7 @@ async function driveTask(taskId) {
         : await runVerifyCollection(taskId, env);
     // result_key echoed verbatim — the engine rejects stale/duplicate deliveries LOUD.
     const results = { result_key: env.result_key, ...collected };
-    env = await recordResults(taskId, env.stage, results);
+    env = await recordResults(taskId, env.phase, results);
   }
 }
 

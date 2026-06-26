@@ -1,20 +1,20 @@
 /**
- * `src/core/stage-machine` — the FROZEN WS2 seam. The PURE per-task stage engine,
- * its discriminated-union result contract, the Zod spawn manifest, the stage
+ * `src/core/phase-machine` — the FROZEN WS2 seam. The PURE per-task phase engine,
+ * its discriminated-union result contract, the Zod spawn manifest, the phase
  * vocabulary, and the injectable handler interface. Re-exported via `src/types`.
  *
  * Imports the WS1 state seam (RunState/TaskState/enums) — never redefines it.
  */
 
-// --- Stage vocabulary ---
+// --- Phase vocabulary ---
 export {
-  TaskStageEnum,
-  RunStageEnum,
-  TASK_STAGE_ORDER,
-  nextStage,
-  stageToInFlightStatus,
-} from "./stages.js";
-export type { TaskStage, RunStage } from "./stages.js";
+  TaskPhaseEnum,
+  RunPhaseEnum,
+  TASK_PHASE_ORDER,
+  nextPhase,
+  phaseToInFlightStatus,
+} from "./phases.js";
+export type { TaskPhase, RunPhase } from "./phases.js";
 
 // --- Spawn manifest (Zod) ---
 export {
@@ -25,7 +25,7 @@ export {
 } from "./manifest.js";
 export type { SpawnRole, SpawnAgent, SpawnManifest } from "./manifest.js";
 
-// --- StageResult union + constructors + primitives ---
+// --- PhaseResult union + constructors + primitives ---
 export {
   assertNever,
   isTerminalResult,
@@ -38,7 +38,7 @@ export {
   finalizeTerminal,
 } from "./result.js";
 export type {
-  StageResult,
+  PhaseResult,
   AdvanceResult,
   SpawnAgentsResult,
   GracefulStopResult,
@@ -48,8 +48,8 @@ export type {
 } from "./result.js";
 
 // --- Handler contract (the fakeable seam) ---
-export type { StageContext, StageHandlers } from "./handlers.js";
+export type { PhaseContext, PhaseHandlers } from "./handlers.js";
 
 // --- The engine ---
-export { runStage, nextStageFor, decideFinalize } from "./engine.js";
-export type { EngineStage } from "./engine.js";
+export { runPhase, nextPhaseFor, decideFinalize } from "./engine.js";
+export type { EnginePhase } from "./engine.js";

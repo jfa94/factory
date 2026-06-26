@@ -4,7 +4,7 @@
  * Mirrors the {@link import("./quota-gate.js").applyQuotaGate} DI shape: a narrow
  * deps subset, evaluated over fresh state by `runId`, returning a structured verdict
  * or null to proceed. Never writes state — turning a trip into drops is the CALLER's
- * job (`stepRun`), exactly as the quota gate leaves recovery to its caller.
+ * job (`nextTask`), exactly as the quota gate leaves recovery to its caller.
  *
  * A tripped verdict is a HARD run abort, DISTINCT from the recoverable quota pause:
  * the caller drops every remaining non-terminal task (loud, classified) and falls

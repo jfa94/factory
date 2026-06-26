@@ -313,7 +313,7 @@ describe("applyRecordReviews record", () => {
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
     expect(env.mergeGate.passed).toBe(true);
-    expect(env.step).toEqual({ done: false, stage: "ship" });
+    expect(env.step).toEqual({ done: false, phase: "ship" });
     const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
     expect(task.reviewers.map((r) => r.verdict)).toEqual(["approve", "approve"]);
     expect(task.status).toBe("shipping"); // markInFlight(ship)
@@ -353,7 +353,7 @@ describe("applyRecordReviews record", () => {
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
     expect(env.mergeGate.passed).toBe(false);
-    expect(env.step).toEqual({ done: false, stage: "exec" });
+    expect(env.step).toEqual({ done: false, phase: "exec" });
     // The round's reviewers are reported on the envelope (audit)…
     const quality = env.reviewers.find((r) => r.reviewer === "quality")!;
     expect(quality.verdict).toBe("blocked");
@@ -392,7 +392,7 @@ describe("applyRecordReviews record", () => {
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
     expect(env.mergeGate.passed).toBe(false);
-    expect(env.step).toEqual({ done: false, stage: "exec" });
+    expect(env.step).toEqual({ done: false, phase: "exec" });
     // The missing verdict surfaces as a LOUD verifier error, not an auto-confirm/refute.
     expect(env.reviewers.find((r) => r.reviewer === "quality")!.verdict).toBe("error");
   });
@@ -410,7 +410,7 @@ describe("applyRecordReviews record", () => {
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
     expect(env.mergeGate.passed).toBe(false);
-    expect(env.step).toEqual({ done: false, stage: "exec" });
+    expect(env.step).toEqual({ done: false, phase: "exec" });
     // The holdout gate evidence is part of the derived merge gate.
     expect(env.mergeGate.from.some((e) => e.gate === "holdout" && e.observed === false)).toBe(true);
   });
@@ -427,7 +427,7 @@ describe("applyRecordReviews record", () => {
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
     expect(env.mergeGate.passed).toBe(true);
-    expect(env.step).toEqual({ done: false, stage: "ship" });
+    expect(env.step).toEqual({ done: false, phase: "ship" });
     expect(env.mergeGate.from.some((e) => e.gate === "holdout" && e.observed === true)).toBe(true);
   });
 
@@ -438,7 +438,7 @@ describe("applyRecordReviews record", () => {
     ).rejects.toThrow(/no task 'ghost'/);
   });
 
-  it("fail-closed: escalate path does NOT persist reviewers; approve path persists reviewers+stage atomically", async () => {
+  it("fail-closed: escalate path does NOT persist reviewers; approve path persists reviewers+phase atomically", async () => {
     // ESCALATE branch: confirmed blocker → merge gate fails → escalateOrDrop path.
     // Simulating the crash window: if reviewers were written before the panel result
     // was acted on, a no-results re-invoke at verify could derive a merge gate pass without
@@ -483,7 +483,7 @@ describe("applyRecordReviews record", () => {
     const taskAfterEscalate = (await state.read(RUN_ID)).tasks[TASK_ID]!;
     expect(taskAfterEscalate.reviewers).toEqual([]);
 
-    // ADVANCE branch: unanimous approve → reviewers + stage cursor land in one write.
+    // ADVANCE branch: unanimous approve → reviewers + phase cursor land in one write.
     // Reset rung so we can run the approve case on the same seeded run.
     await state.update(RUN_ID, (s) => ({
       ...s,
@@ -491,7 +491,7 @@ describe("applyRecordReviews record", () => {
         [TASK_ID]: {
           ...s.tasks[TASK_ID]!,
           status: "reviewing" as const,
-          stage: "verify" as const,
+          phase: "verify" as const,
           escalation_rung: 0,
           reviewers: [],
         },
@@ -510,11 +510,11 @@ describe("applyRecordReviews record", () => {
       approveInput,
     );
     expect(approveEnv.mergeGate.passed).toBe(true);
-    expect(approveEnv.step).toEqual({ done: false, stage: "ship" });
-    // After advance record: reviewers persisted + stage advanced atomically.
+    expect(approveEnv.step).toEqual({ done: false, phase: "ship" });
+    // After advance record: reviewers persisted + phase advanced atomically.
     const taskAfterApprove = (await state.read(RUN_ID)).tasks[TASK_ID]!;
     expect(taskAfterApprove.reviewers.map((r) => r.verdict)).toEqual(["approve", "approve"]);
-    expect(taskAfterApprove.stage).toBe("ship");
+    expect(taskAfterApprove.phase).toBe("ship");
     expect(taskAfterApprove.status).toBe("shipping");
   });
 
@@ -579,7 +579,7 @@ describe("applyRecordReviews record", () => {
     });
     // The merge gate is unaffected — a second vendor is a STRENGTH signal, never a gate.
     expect(env.mergeGate.passed).toBe(true);
-    expect(env.step).toEqual({ done: false, stage: "ship" });
+    expect(env.step).toEqual({ done: false, phase: "ship" });
     // LOUD: a warn line names the absence so it can never be silently swallowed.
     expect(stderr).toMatch(/cross-vendor/i);
     expect(stderr).toContain("single-vendor v1 (no second vendor configured)");
@@ -637,7 +637,7 @@ describe("applyRecordReviews record", () => {
 
     // Gate must be GREEN (per-run ref resolved) and merge gate must pass → advance to ship.
     expect(env.mergeGate.passed).toBe(true);
-    expect(env.step).toEqual({ done: false, stage: "ship" });
+    expect(env.step).toEqual({ done: false, phase: "ship" });
   });
 });
 
@@ -689,7 +689,7 @@ describe("applyRecordProducer — DONE advances", () => {
   it("tests/DONE records test-writer and advances to exec", async () => {
     const env = await applyRecordProducer(state, RUN_ID, "t1", "tests", "STATUS: DONE");
 
-    expect(env.step).toEqual({ done: false, stage: "exec" });
+    expect(env.step).toEqual({ done: false, phase: "exec" });
     const task = (await state.read(RUN_ID)).tasks.t1!;
     expect(task.producer_role).toBe("test-writer");
     expect(task.status).toBe("executing"); // markInFlight(exec)
@@ -698,7 +698,7 @@ describe("applyRecordProducer — DONE advances", () => {
   it("exec/DONE records executor and advances to verify", async () => {
     const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "STATUS: DONE");
 
-    expect(env.step).toEqual({ done: false, stage: "verify" });
+    expect(env.step).toEqual({ done: false, phase: "verify" });
     const task = (await state.read(RUN_ID)).tasks.t1!;
     expect(task.producer_role).toBe("executor");
     expect(task.status).toBe("reviewing"); // markInFlight(verify)
@@ -736,7 +736,7 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
     expect(task.escalation_rung).toBe(0); // a drop never burns a rung
   });
 
-  it("NEEDS_CONTEXT escalates a rung, clears reviewers, resumes at the same stage", async () => {
+  it("NEEDS_CONTEXT escalates a rung, clears reviewers, resumes at the same phase", async () => {
     // Seed a stale reviewer the escalation should clear.
     await state.update(RUN_ID, (s) => ({
       ...s,
@@ -750,7 +750,7 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
     }));
     const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "STATUS: NEEDS_CONTEXT");
 
-    expect(env.step).toEqual({ done: false, stage: "exec" });
+    expect(env.step).toEqual({ done: false, phase: "exec" });
     const task = (await state.read(RUN_ID)).tasks.t1!;
     expect(task.escalation_rung).toBe(1);
     expect(task.reviewers).toEqual([]); // stale reviewers cleared on escalation
@@ -760,7 +760,7 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
   it("an unparseable status is a capability retry (error → rung bump)", async () => {
     const env = await applyRecordProducer(state, RUN_ID, "t1", "exec", "garbled nonsense");
 
-    expect(env.step).toEqual({ done: false, stage: "exec" });
+    expect(env.step).toEqual({ done: false, phase: "exec" });
     expect((await state.read(RUN_ID)).tasks.t1!.escalation_rung).toBe(1);
   });
 
@@ -790,11 +790,11 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
   });
 
   // Relocated from src/cli/subcommands/record-producer.test.ts (CLI shell deleted):
-  // a non-producer stage must be rejected LOUD before any state read.
-  it("rejects a non-producer stage (verify) LOUD", async () => {
+  // a non-producer phase must be rejected LOUD before any state read.
+  it("rejects a non-producer phase (verify) LOUD", async () => {
     await expect(
       applyRecordProducer(state, RUN_ID, "t1", "verify", "STATUS: DONE"),
-    ).rejects.toThrow(/producer stage \(tests \| exec\)/);
+    ).rejects.toThrow(/producer phase \(tests \| exec\)/);
   });
 });
 

@@ -5,7 +5,7 @@
  * workstreams don't churn import paths later. WS0 seeds only what it owns;
  * later workstreams ADD to this barrel:
  *   - WS1 adds `RunState` / `TaskState` (re-exported from src/core/state). [done]
- *   - WS2 adds `StageResult` / `SpawnManifest` (from src/core/stage-machine).
+ *   - WS2 adds `PhaseResult` / `SpawnManifest` (from src/core/phase-machine).
  *
  * Keep this a thin re-export barrel — type definitions live in their owning
  * module; this file just makes the seam addressable from one place.
@@ -74,21 +74,21 @@ export type {
   GateVerdict,
 } from "../core/state/index.js";
 
-// WS2 — stage-machine seam. A COMPLETE mirror of src/core/stage-machine: the PURE
-// per-task stage engine (runStage / nextStageFor / decideFinalize),
-// its result contract (StageResult union + constructors + assertNever), the Zod
-// SpawnManifest, the stage vocabulary + helpers, and the fakeable StageHandlers
+// WS2 — phase-machine seam. A COMPLETE mirror of src/core/phase-machine: the PURE
+// per-task phase engine (runPhase / nextPhaseFor / decideFinalize),
+// its result contract (PhaseResult union + constructors + assertNever), the Zod
+// SpawnManifest, the phase vocabulary + helpers, and the fakeable PhaseHandlers
 // interface. The WS10 session driver and v2 Workflow driver import the engine
 // entry points from HERE — keep this barrel a full mirror so no caller must
 // deep-import (the "addressable from one place" contract, mirrors the WS1
 // StateManager precedent above).
 export {
-  // stage vocabulary
-  TaskStageEnum,
-  RunStageEnum,
-  TASK_STAGE_ORDER,
-  nextStage,
-  stageToInFlightStatus,
+  // phase vocabulary
+  TaskPhaseEnum,
+  RunPhaseEnum,
+  TASK_PHASE_ORDER,
+  nextPhase,
+  phaseToInFlightStatus,
   // spawn manifest (Zod)
   SpawnRoleEnum,
   SpawnAgentSchema,
@@ -105,25 +105,25 @@ export {
   taskDropped,
   finalizeTerminal,
   // the engine
-  runStage,
-  nextStageFor,
+  runPhase,
+  nextPhaseFor,
   decideFinalize,
-} from "../core/stage-machine/index.js";
+} from "../core/phase-machine/index.js";
 
 export type {
-  TaskStage,
-  RunStage,
+  TaskPhase,
+  RunPhase,
   SpawnRole,
   SpawnAgent,
   SpawnManifest,
-  StageResult,
+  PhaseResult,
   AdvanceResult,
   SpawnAgentsResult,
   GracefulStopResult,
   WaitRetryResult,
   TaskTerminalResult,
   FinalizeTerminalResult,
-  StageContext,
-  StageHandlers,
-  EngineStage,
-} from "../core/stage-machine/index.js";
+  PhaseContext,
+  PhaseHandlers,
+  EnginePhase,
+} from "../core/phase-machine/index.js";

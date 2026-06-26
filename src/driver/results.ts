@@ -8,25 +8,25 @@
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
-// SpawnStage + ResultKey
+// SpawnPhase + ResultKey
 // ---------------------------------------------------------------------------
 
 /**
- * The only stages that can appear in a spawn envelope (preflight only advances;
+ * The only phases that can appear in a spawn envelope (preflight only advances;
  * ship never spawns). Defined here so results.ts does not import coroutine.ts.
  */
-export const SPAWN_STAGES = ["tests", "exec", "verify"] as const;
-export type SpawnStage = (typeof SPAWN_STAGES)[number];
+export const SPAWN_PHASES = ["tests", "exec", "verify"] as const;
+export type SpawnPhase = (typeof SPAWN_PHASES)[number];
 
 /**
  * Echo token emitted by the spawn envelope and mirrored verbatim in DriveResults.
- * The record gate validates stage === cursor stage AND rung === task.escalation_rung
+ * The record gate validates phase === cursor phase AND rung === task.escalation_rung
  * before applying any mutation, making at-least-once delivery exactly-once at
  * the record site (stale or duplicate results are rejected LOUD instead of
  * double-recording).
  */
 export const ResultKeySchema = z
-  .object({ stage: z.enum(SPAWN_STAGES), rung: z.number().int().min(0) })
+  .object({ phase: z.enum(SPAWN_PHASES), rung: z.number().int().min(0) })
   .strict();
 
 export type ResultKey = z.infer<typeof ResultKeySchema>;
@@ -83,9 +83,9 @@ export function parseDriveResults(raw: unknown): DriveResults {
 }
 
 /**
- * Type guard: true iff `stage` is one of the three spawn-capable stages.
- * Co-located with SPAWN_STAGES so the constant and the guard cannot drift.
+ * Type guard: true iff `phase` is one of the three spawn-capable phases.
+ * Co-located with SPAWN_PHASES so the constant and the guard cannot drift.
  */
-export function isSpawnStage(stage: string): stage is SpawnStage {
-  return (SPAWN_STAGES as readonly string[]).includes(stage);
+export function isSpawnPhase(phase: string): phase is SpawnPhase {
+  return (SPAWN_PHASES as readonly string[]).includes(phase);
 }

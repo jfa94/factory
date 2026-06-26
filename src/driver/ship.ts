@@ -1,17 +1,17 @@
 /**
  * WS10 — the SHARED stateful ship pass.
  *
- * Ship is the one task stage with NO agent→record cycle: it is fully deterministic
- * git/PR I/O, so the per-task coroutine ({@link import("./coroutine.js").stepTask}) runs this
+ * Ship is the one task phase with NO agent→record cycle: it is fully deterministic
+ * git/PR I/O, so the per-task coroutine ({@link import("./coroutine.js").nextAction}) runs this
  * logic directly rather than routing it through a reporter + a separate record.
  *
- * Unlike the pure {@link import("./handlers.js").makeStageHandlers} `ship` reporter
+ * Unlike the pure {@link import("./handlers.js").makePhaseHandlers} `ship` reporter
  * (which opens the PR but cannot write state or merge), {@link shipTask} DOES write
  * the `branch`/`pr_number` pointers and (in `live` mode) drives the app-level serial
  * MergeSerializer — it needs the {@link StateManager}, so it lives here next to the
  * other shared state-writers ({@link import("./transitions.js")}) rather than in a
  * reporter. It still does NOT write the terminal `done` status: it returns a
- * `task-terminal` {@link StageResult} the coroutine records via completeTask, keeping
+ * `task-terminal` {@link PhaseResult} the coroutine records via completeTask, keeping
  * "write done" in one place.
  */
 import {
@@ -22,8 +22,8 @@ import {
   createTaskPrIdempotent,
   MergeSerializer,
   type MergeOutcome,
-  type StageContext,
-  type StageResult,
+  type PhaseContext,
+  type PhaseResult,
   type StateManager,
   type TaskState,
 } from "./deps.js";
@@ -40,9 +40,9 @@ export interface ShipDeps extends HandlerDeps {
 }
 
 /** The task a ship acts on; absent only for the run-level finalize. */
-function requireTask(ctx: StageContext): TaskState {
+function requireTask(ctx: PhaseContext): TaskState {
   if (ctx.task === undefined) {
-    throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
+    throw new Error("ship: phase 'ship' requires a task but ctx.task is absent");
   }
   return ctx.task;
 }
@@ -55,7 +55,7 @@ function requireTask(ctx: StageContext): TaskState {
  * `ship` wait-retry the caller re-routes for a re-sync. Never writes the terminal
  * `done` status — that is the caller's `completeTask`.
  */
-export async function shipTask(deps: ShipDeps, ctx: StageContext): Promise<StageResult> {
+export async function shipTask(deps: ShipDeps, ctx: PhaseContext): Promise<PhaseResult> {
   const task = requireTask(ctx);
   const runId = ctx.run.run_id;
   const specTask = specTaskOf(deps.spec, task.task_id);

@@ -139,7 +139,7 @@ describe("scanRun — resettable / dead_ends / needs_rescue", () => {
 
 describe("scanRun — would_deadlock (the driver's guard, mirrored)", () => {
   it("is true when a stuck task blocks the only dependent pending task", () => {
-    // A crashed mid-stage (executing); B waits on A → neither is actionable.
+    // A crashed mid-phase (executing); B waits on A → neither is actionable.
     const scan = scanRun(
       mkRun([
         { task_id: "a", status: "executing" },

@@ -55,8 +55,8 @@ function promptRefFor(role: SpawnRole): string {
 /**
  * Build the risk-INVARIANT panel {@link SpawnManifest}.
  *
- * @param stageAfter the per-task stage the engine resumes at once the panel
- *   returns (the verify stage).
+ * @param resumePhase the per-task phase the engine resumes at once the panel
+ *   returns (the verify phase).
  * @param model the FIXED reviewer model — a SINGLE value used for ALL six
  *   reviewers (resolve via {@link resolveReviewModel}). Deliberately not a
  *   per-role map: every reviewer runs the same model (Δ T).
@@ -68,7 +68,7 @@ function promptRefFor(role: SpawnRole): string {
  * RiskTier because no tier is in scope.
  */
 export function buildPanelManifest(
-  stageAfter: SpawnManifest["stage_after"],
+  resumePhase: SpawnManifest["resume_phase"],
   model: string,
   maxTurns: number,
 ): SpawnManifest {
@@ -79,5 +79,5 @@ export function buildPanelManifest(
     max_turns: maxTurns,
     prompt_ref: promptRefFor(role),
   }));
-  return parseSpawnManifest({ stage_after: stageAfter, agents });
+  return parseSpawnManifest({ resume_phase: resumePhase, agents });
 }

@@ -2,8 +2,8 @@
  * WS10 — the SHARED deterministic task-transition logic.
  *
  * This is the one home for the per-task escalation ladder + drop/complete logic
- * the engine builds on: the per-task coroutine ({@link import("./coroutine.js").stepTask})
- * acts on a live stage result through these, and the record cores
+ * the engine builds on: the per-task coroutine ({@link import("./coroutine.js").nextAction})
+ * acts on a live phase result through these, and the record cores
  * ({@link import("./record.js")}) record an out-of-band agent result through the same
  * functions. Keeping the ladder here (not duplicated across the spawn path and the
  * record path) guarantees a crash-resume record and a live step can never diverge.
@@ -21,7 +21,7 @@
 import {
   classifyFailure,
   ESCALATION_CAP,
-  stageToInFlightStatus,
+  phaseToInFlightStatus,
   assertNever,
   type ClassifyDecision,
   type FailureClass,
@@ -29,7 +29,7 @@ import {
   type ProducerRole,
   type RunState,
   type StateManager,
-  type TaskStage,
+  type TaskPhase,
 } from "./deps.js";
 import { nowIso, createLogger } from "../shared/index.js";
 
@@ -45,16 +45,16 @@ export type TaskOutcome =
   | { readonly outcome: "done" }
   | { readonly outcome: "dropped"; readonly failure_class: FailureClass; readonly reason: string };
 
-/** One step of the per-task loop: keep going at `stage`, or stop with an outcome. */
+/** One step of the per-task loop: keep going at `phase`, or stop with an outcome. */
 export type TaskStep =
-  | { readonly done: false; readonly stage: TaskStage }
+  | { readonly done: false; readonly phase: TaskPhase }
   | { readonly done: true; readonly outcome: TaskOutcome };
 
 /**
- * Persist the in-flight {@link import("./deps.js").TaskStatus} for `stage`,
+ * Persist the in-flight {@link import("./deps.js").TaskStatus} for `phase`,
  * stamping `started_at` on first entry. The coroutine calls this when it needs the
- * cursor written for a stage it is about to run; the record paths call it (via
- * persistStepCursor) after a transition that resumes at a stage, so the persisted
+ * cursor written for a phase it is about to run; the record paths call it (via
+ * persistStepCursor) after a transition that resumes at a phase, so the persisted
  * status tracks the resume point.
  *
  * RETURNS the updated {@link RunState} (from the single locked `updateTask` write)
@@ -65,13 +65,13 @@ export function markInFlight(
   deps: TransitionDeps,
   runId: string,
   taskId: string,
-  stage: TaskStage,
+  phase: TaskPhase,
 ): Promise<RunState> {
-  const status = stageToInFlightStatus(stage);
+  const status = phaseToInFlightStatus(phase);
   return deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status,
-    stage,
+    phase,
     started_at: t.started_at ?? nowIso(),
   }));
 }
@@ -129,12 +129,12 @@ export async function dropStep(
 /**
  * Apply a classified retry-or-drop decision (Δ D). A `drop` is an immediate
  * classified loud drop. A `retry` bumps the escalation rung (clearing the stale
- * reviewers so the next verify re-derives fresh) and resumes at `resumeStage` —
+ * reviewers so the next verify re-derives fresh) and resumes at `resumePhase` —
  * UNLESS the rung budget is exhausted, in which case it drops `capability-budget`
  * (the ladder, not the classifier, owns the cap).
  *
  * Note: this persists only the DOMAIN state (rung + reviewers); the in-flight
- * status for `resumeStage` is the caller's concern (the coroutine re-marks it via
+ * status for `resumePhase` is the caller's concern (the coroutine re-marks it via
  * {@link markInFlight} next iteration; the record path stamps it via
  * persistStepCursor).
  */
@@ -143,7 +143,7 @@ export async function escalateOrDrop(
   runId: string,
   taskId: string,
   decision: ClassifyDecision,
-  resumeStage: TaskStage,
+  resumePhase: TaskPhase,
 ): Promise<TaskStep> {
   if (decision.action === "drop") {
     return dropStep(deps, runId, taskId, decision.failureClass, decision.reason);
@@ -169,9 +169,9 @@ export async function escalateOrDrop(
     reviewers: [],
   }));
   log.info(
-    `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`,
+    `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`,
   );
-  return { done: false, stage: resumeStage };
+  return { done: false, phase: resumePhase };
 }
 
 /** Map a non-`done` {@link ProducerOutcome} to a classify decision (Δ D). */
@@ -201,8 +201,8 @@ export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecis
 /**
  * Record a completed producer spawn into state (the producer-result logic the coroutine's
  * `applyRecordProducer` record core calls). On `done`: record `producer_role` and
- * advance to `stageAfter`. On any failure status: classify (Δ D) →
- * {@link escalateOrDrop}, resuming at the SAME producer `stage`.
+ * advance to `resumePhase`. On any failure status: classify (Δ D) →
+ * {@link escalateOrDrop}, resuming at the SAME producer `phase`.
  *
  * The caller is responsible for the actual spawn (the orchestrator's Agent spawn,
  * collected out-of-band) — this only records the resulting {@link ProducerOutcome}
@@ -212,12 +212,12 @@ export async function applyProducerOutcome(
   deps: TransitionDeps,
   runId: string,
   taskId: string,
-  opts: { readonly role: ProducerRole; readonly stage: TaskStage; readonly stageAfter: TaskStage },
+  opts: { readonly role: ProducerRole; readonly phase: TaskPhase; readonly resumePhase: TaskPhase },
   outcome: ProducerOutcome,
 ): Promise<TaskStep> {
   if (outcome.status === "done") {
     await deps.state.updateTask(runId, taskId, (t) => ({ ...t, producer_role: opts.role }));
-    return { done: false, stage: opts.stageAfter };
+    return { done: false, phase: opts.resumePhase };
   }
-  return escalateOrDrop(deps, runId, taskId, classifyProducerFailure(outcome), opts.stage);
+  return escalateOrDrop(deps, runId, taskId, classifyProducerFailure(outcome), opts.phase);
 }

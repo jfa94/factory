@@ -9,19 +9,19 @@ import {
   finalizeTerminal,
   assertNever,
   isTerminalResult,
-  type StageResult,
+  type PhaseResult,
 } from "./result.js";
 import type { SpawnManifest } from "./manifest.js";
 
 const manifest: SpawnManifest = {
-  stage_after: "exec",
+  resume_phase: "exec",
   agents: [
     { role: "executor", isolation: "worktree", model: "sonnet", max_turns: 60, prompt_ref: "p.md" },
   ],
 };
 
-describe("StageResult constructors build correct discriminants", () => {
-  it("advance carries the target stage", () => {
+describe("PhaseResult constructors build correct discriminants", () => {
+  it("advance carries the target phase", () => {
     expect(advance("verify")).toEqual({ kind: "advance", to: "verify" });
   });
 
@@ -46,7 +46,7 @@ describe("StageResult constructors build correct discriminants", () => {
   it("waitRetry carries the bound fields", () => {
     expect(waitRetry("ship", "ci flaky", 2, 3)).toEqual({
       kind: "wait-retry",
-      stage: "ship",
+      phase: "ship",
       reason: "ci flaky",
       attempt: 2,
       max_attempts: 3,
@@ -79,13 +79,13 @@ describe("assertNever", () => {
 
 describe("isTerminalResult", () => {
   it("classifies each kind correctly", () => {
-    const terminal: StageResult[] = [
+    const terminal: PhaseResult[] = [
       taskDone(),
       taskDropped("spec-defect", "bad spec"),
       finalizeTerminal("completed"),
       gracefulStop("7d", "quota"),
     ];
-    const continuation: StageResult[] = [
+    const continuation: PhaseResult[] = [
       advance("tests"),
       spawn(manifest),
       waitRetry("ship", "wait", 1, 3),
@@ -95,7 +95,7 @@ describe("isTerminalResult", () => {
   });
 
   it("throws on an unknown kind (never silently classifies)", () => {
-    expect(() => isTerminalResult({ kind: "made-up" } as unknown as StageResult)).toThrow(
+    expect(() => isTerminalResult({ kind: "made-up" } as unknown as PhaseResult)).toThrow(
       /unhandled value/,
     );
   });

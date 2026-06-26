@@ -4,7 +4,7 @@
  *
  * The new schema dropped the ~12 ad-hoc per-task fields the bash hook wrote
  * (worktree, executor_status, reviewer_status, prior_branch, …). On the new
- * design the subagent→driver hand-off is the structured StageResult/SpawnManifest
+ * design the subagent→driver hand-off is the structured PhaseResult/SpawnManifest
  * (group0-seams §3).
  *
  * This hook is now LOG-ONLY (observational). When a REVIEWER subagent stops it
@@ -37,7 +37,7 @@
  * {@link parseVerdict} (absent STATUS ⇒ blocked, never a silent approve). The
  * warn-only artifact checks (missing spec.md/tasks.json/review files) move to the
  * WS12 telemetry sink. Net: one SubagentStop hook (this file) with one observational
- * job, instead of two bash hooks duplicating the stage machine.
+ * job, instead of two bash hooks duplicating the phase machine.
  */
 import { EXIT, type ExitCode } from "../shared/exit-codes.js";
 import { createLogger } from "../shared/logging.js";
@@ -118,7 +118,7 @@ export async function handleSubagentStop(
 
   const reviewer = reviewerNameOf(agentType);
   // Only reviewer roles carry a verdict to log; other roles' hand-off is the
-  // structured StageResult — nothing observable here.
+  // structured PhaseResult — nothing observable here.
   if (reviewer === null) return null;
 
   const manager = deps.manager ?? new StateManager(deps);

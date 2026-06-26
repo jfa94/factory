@@ -1,14 +1,14 @@
 /**
  * WS2 — {@link SpawnManifest} Zod schema: the structured spawn payload the engine
- * hands the driver when a stage needs subagents.
+ * hands the driver when a phase needs subagents.
  *
  * Pure validation; NO I/O. This is the v2-Workflow-friendly replacement for the
- * bash `_emit_manifest` JSON (`bin/pipeline-run-task-stages.sh`, exit-10 stdout).
+ * bash `_emit_manifest` JSON (`bin/pipeline-run-task-phases.sh`, exit-10 stdout).
  * Field renames from that shape (detail-only reference, never ported verbatim):
  *   - `subagent_type` → `role`
  *   - `prompt_file`   → `prompt_ref` (a run-store-relative pointer, not a path)
  *   - `maxTurns`      → `max_turns`
- *   - the `action:"spawn_agents"` tag is DROPPED — the `StageResult.kind`
+ *   - the `action:"spawn_agents"` tag is DROPPED — the `PhaseResult.kind`
  *     (`"spawn-agents"`) carries that now (result.ts).
  *
  * Validated as Zod so the v2 driver consumes it as STRUCTURED OUTPUT: no exit
@@ -16,7 +16,7 @@
  * LOUD validating entry (mirrors WS1 `parseRunState`).
  */
 import { z } from "zod";
-import { TaskStageEnum } from "./stages.js";
+import { TaskPhaseEnum } from "./phases.js";
 import { EffortEnum } from "../../config/schema.js";
 
 /**
@@ -65,12 +65,12 @@ export const SpawnAgentSchema = z.object({
 export type SpawnAgent = z.infer<typeof SpawnAgentSchema>;
 
 /**
- * The full manifest: the stage the engine RESUMES at once the listed agents have
+ * The full manifest: the phase the engine RESUMES at once the listed agents have
  * returned, plus a non-empty list of agents to spawn (in parallel).
  */
 export const SpawnManifestSchema = z.object({
-  /** Engine resumes here after the agents return. A per-task stage. */
-  stage_after: TaskStageEnum,
+  /** Engine resumes here after the agents return. A per-task phase. */
+  resume_phase: TaskPhaseEnum,
   /** Agents to spawn; at least one (an empty manifest is a programming error). */
   agents: z.array(SpawnAgentSchema).min(1),
 });
@@ -78,7 +78,7 @@ export type SpawnManifest = z.infer<typeof SpawnManifestSchema>;
 
 /**
  * Parse + validate an unknown value as a {@link SpawnManifest}. LOUD (ZodError) on
- * an unknown role, a bad `stage_after`, an empty `agents` array, or any bad field.
+ * an unknown role, a bad `resume_phase`, an empty `agents` array, or any bad field.
  * Applies the `isolation` default. Mirrors WS1 `parseRunState` — the sanctioned
  * validating entry point.
  */

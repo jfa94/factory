@@ -6,7 +6,7 @@
  *
  * Moved verbatim from the (since-deleted) CLI single-step subcommands:
  *   - src/cli/transition.ts      → TransitionEnvelope, persistStepCursor, readJsonInput
- *   - src/cli/subcommands/record-producer.ts → producerStageInfo, applyRecordProducer
+ *   - src/cli/subcommands/record-producer.ts → producerPhaseInfo, applyRecordProducer
  *   - src/cli/subcommands/record-holdout.ts  → RecordHoldoutInput, RecordHoldoutEnvelope,
  *                                               applyRecordHoldout
  *   - src/cli/subcommands/record-reviews.ts  → VerifierVerdictInput, ReviewerVerifications,
@@ -34,7 +34,7 @@ import {
 import { taskWorktreePath } from "./paths.js";
 import { taskExemptReader } from "./exempt.js";
 import { classifyFailure, ESCALATION_CAP, parseProducerStatus } from "../producer/index.js";
-import { nextStage, stageToInFlightStatus } from "../types/index.js";
+import { nextPhase, phaseToInFlightStatus } from "../types/index.js";
 import { GateRunner, type GateContext } from "../verifier/deterministic/index.js";
 import {
   runPanel,
@@ -57,7 +57,7 @@ import type {
   GateVerdict,
   ReviewerResult,
   ProducerRole,
-  TaskStage,
+  TaskPhase,
 } from "../types/index.js";
 import type { HandlerDeps } from "./types.js";
 import { resolveStagingBranch } from "./deps.js";
@@ -85,12 +85,12 @@ export interface RecordDeps extends HandlerDeps {
 export interface TransitionEnvelope {
   readonly run_id: string;
   readonly task_id: string;
-  /** Keep going at `step.stage`, or stop with `step.outcome` (done/dropped). */
+  /** Keep going at `step.phase`, or stop with `step.outcome` (done/dropped). */
   readonly step: TaskStep;
 }
 
 /**
- * Persist the in-flight stage cursor for a non-terminal step so the persisted task
+ * Persist the in-flight phase cursor for a non-terminal step so the persisted task
  * status tracks the resume point. A terminal step (`done`/`dropped`) already wrote
  * its own status — nothing to mark. Used by the record paths in this module.
  */
@@ -101,7 +101,7 @@ async function persistStepCursor(
   step: TaskStep,
 ): Promise<void> {
   if (!step.done) {
-    await markInFlight(deps, runId, taskId, step.stage);
+    await markInFlight(deps, runId, taskId, step.phase);
   }
 }
 
@@ -115,15 +115,15 @@ export async function readJsonInput<T>(path: string): Promise<T> {
 // applyRecordProducer  (from record-producer.ts)
 // ---------------------------------------------------------------------------
 
-/** The producer role + resume target for a producer stage (LOUD on a non-producer stage). */
-function producerStageInfo(stage: string): {
+/** The producer role + resume target for a producer phase (LOUD on a non-producer phase). */
+function producerPhaseInfo(phase: string): {
   role: ProducerRole;
-  stage: TaskStage;
-  after: TaskStage;
+  phase: TaskPhase;
+  after: TaskPhase;
 } {
-  if (stage === "tests") return { role: "test-writer", stage: "tests", after: "exec" };
-  if (stage === "exec") return { role: "executor", stage: "exec", after: "verify" };
-  throw new UsageError(`stage must be a producer stage (tests | exec), got '${stage}'`);
+  if (phase === "tests") return { role: "test-writer", phase: "tests", after: "exec" };
+  if (phase === "exec") return { role: "executor", phase: "exec", after: "verify" };
+  throw new UsageError(`phase must be a producer phase (tests | exec), got '${phase}'`);
 }
 
 /** Record the producer status into state and return the next-step envelope. */
@@ -131,15 +131,15 @@ export async function applyRecordProducer(
   state: StateManager,
   runId: string,
   taskId: string,
-  stage: string,
+  phase: string,
   statusLine: string,
 ): Promise<TransitionEnvelope> {
-  const info = producerStageInfo(stage);
-  // Defensive: nextStage(stage) must equal the hardcoded resume target — keeps the
-  // mapping honest if the stage order ever changes (LOUD on drift, never silent).
-  if (nextStage(info.stage) !== info.after) {
+  const info = producerPhaseInfo(phase);
+  // Defensive: nextPhase(phase) must equal the hardcoded resume target — keeps the
+  // mapping honest if the phase order ever changes (LOUD on drift, never silent).
+  if (nextPhase(info.phase) !== info.after) {
     throw new Error(
-      `record-producer: stage order drift — nextStage('${info.stage}') !== '${info.after}'`,
+      `record-producer: phase order drift — nextPhase('${info.phase}') !== '${info.after}'`,
     );
   }
   const run = await state.read(runId);
@@ -151,7 +151,7 @@ export async function applyRecordProducer(
     { state },
     runId,
     taskId,
-    { role: info.role, stage: info.stage, stageAfter: info.after },
+    { role: info.role, phase: info.phase, resumePhase: info.after },
     outcome,
   );
   await persistStepCursor({ state }, runId, taskId, step);
@@ -393,7 +393,7 @@ export async function applyRecordReviews(
     source,
     makeRunner,
     gateEvidence,
-    stage: "verify",
+    phase: "verify",
     attempt: task.escalation_rung + 1,
     maxAttempts: ESCALATION_CAP + 1,
     ...(input.crossVendorAbsent !== undefined
@@ -424,16 +424,16 @@ export async function applyRecordReviews(
   let step: TaskStep;
   if (panel.result.kind === "advance") {
     // Persist reviewers + stamp the cursor in ONE locked write (advance branch only).
-    // stageToInFlightStatus is the same mapping markInFlight would apply.
-    const nextStageVal = panel.result.to;
-    const nextStatus = stageToInFlightStatus(nextStageVal);
+    // phaseToInFlightStatus is the same mapping markInFlight would apply.
+    const nextPhaseVal = panel.result.to;
+    const nextStatus = phaseToInFlightStatus(nextPhaseVal);
     await deps.state.updateTask(runId, taskId, (t) => ({
       ...t,
       reviewers: [...panel.reviewerResults],
-      stage: nextStageVal,
+      phase: nextPhaseVal,
       status: nextStatus,
     }));
-    step = { done: false, stage: nextStageVal };
+    step = { done: false, phase: nextPhaseVal };
   } else if (panel.result.kind === "wait-retry") {
     // escalateOrDrop does its own state write; do NOT persist reviewers here.
     step = await escalateOrDrop(

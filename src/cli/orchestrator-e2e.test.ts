@@ -4,8 +4,8 @@
  * Replaces the old `run-task`/`record-*`/`advance` CLI-subcommand driving loop with
  * the canonical coroutine seam:
  *
- *   stepRun  → tasks-ready | all-terminal | run-terminal | quota-blocked
- *   stepTask → spawn | terminal | quota-blocked
+ *   nextTask  → tasks-ready | all-terminal | run-terminal | quota-blocked
+ *   nextAction → spawn | terminal | quota-blocked
  *
  * The `driveToTerminal` helper below IS the documented driver contract: it is the
  * thinnest possible loop a real orchestrator (session or workflow) runs.  The test's
@@ -21,7 +21,7 @@
  *      develop receives only complete PRDs) and posts one PRD-issue failure comment.
  *
  * The holdout path (scenario 1/2 trait): the spec carries 5 acceptance criteria, so
- * the tests stage withholds ≥1 criterion, the verify spawn carries a holdout sidecar,
+ * the tests phase withholds ≥1 criterion, the verify spawn carries a holdout sidecar,
  * and the AnswerBook supplies `results.holdout` (validator verdicts) alongside the
  * panel reviews — the engine rejects the record without it.
  */
@@ -45,8 +45,8 @@ import { ESCALATION_CAP } from "../producer/index.js";
 import type { RunState } from "../types/index.js";
 
 import {
-  stepRun,
-  stepTask,
+  nextTask,
+  nextAction,
   finalizeRun,
   type CoroutineDeps,
   type DriveEnvelope,
@@ -132,7 +132,7 @@ class AnswerBook {
       };
     }
 
-    // expects === "reviews" (verify stage)
+    // expects === "reviews" (verify phase)
     const reviews = PANEL_ROLES.map((role) => approve(role));
     const base: DriveResults = {
       result_key: env.result_key,
@@ -179,9 +179,9 @@ interface Answerer {
  * Drive a run to its terminal state, exactly as a real in-session or workflow
  * driver would.  This loop IS the documented driver contract:
  *
- *   stepRun → ready → stepTask (record results) loop → terminal → repeat
+ *   nextTask → ready → nextAction (record results) loop → terminal → repeat
  *
- * Sequential: one task at a time (first ready task from stepRun).
+ * Sequential: one task at a time (first ready task from nextTask).
  * Quota-blocked is treated as an unexpected error (the fake signal never blocks).
  */
 
@@ -191,7 +191,7 @@ async function driveToTerminal(
   answer: Answerer,
 ): Promise<RunState> {
   for (;;) {
-    const next = await stepRun(deps, runId);
+    const next = await nextTask(deps, runId);
     if (next.kind === "run-terminal") return deps.state.read(runId);
     if (next.kind === "all-terminal") {
       await finalizeRun(deps, runId);
@@ -203,9 +203,9 @@ async function driveToTerminal(
     const taskId = next.ready[0]!; // sequential driver: first ready task
     let results: DriveResults | undefined;
     for (;;) {
-      const env = await stepTask(deps, runId, taskId, results);
+      const env = await nextAction(deps, runId, taskId, results);
       // Clear after delivery: the result_key gate rejects duplicate records LOUD on the
-      // next stepTask call, so passing results again would be a protocol violation.
+      // next nextAction call, so passing results again would be a protocol violation.
       results = undefined;
       if (env.kind === "terminal") break;
       if (env.kind === "quota-blocked") {

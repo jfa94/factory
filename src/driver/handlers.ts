@@ -1,17 +1,17 @@
 /**
- * WS10 — the STAGE HANDLERS (Model A REPORTERS).
+ * WS10 — the PHASE HANDLERS (Model A REPORTERS).
  *
- * {@link makeStageHandlers} builds the {@link StageHandlers} the WS2 engine
+ * {@link makePhaseHandlers} builds the {@link PhaseHandlers} the WS2 engine
  * dispatches. Per the Model-A split (types.ts), a handler is a pure-ish REPORTER:
- * it reads the frozen {@link StageContext}, does DETERMINISTIC work (shell out via
+ * it reads the frozen {@link PhaseContext}, does DETERMINISTIC work (shell out via
  * the injected git/gate clients, persist a holdout answer-key or a producer
- * prompt-context artifact), and RETURNS a {@link StageResult}. A handler NEVER
+ * prompt-context artifact), and RETURNS a {@link PhaseResult}. A handler NEVER
  * writes run state (the driver owns the StateManager), NEVER spawns an agent (it
  * reports a `spawn-agents` manifest the driver acts on), and NEVER decides a
- * transition beyond naming the stage it advances/resumes at.
+ * transition beyond naming the phase it advances/resumes at.
  *
  * The producer escalation ladder is re-expressed PER INVOCATION off the persisted
- * `escalation_rung`: every producer-spawning stage reads `task.escalation_rung`,
+ * `escalation_rung`: every producer-spawning phase reads `task.escalation_rung`,
  * dials the model + prior-failure injection for that rung ({@link dialForRung}),
  * and the DRIVER bumps the rung on a classified retry. There is no `runLadder`
  * call here — v1 re-expresses only the OUTER ladder via the persisted rung.
@@ -51,10 +51,10 @@ import {
   type SpawnManifest,
   type SpecManifest,
   type SpecTask,
-  type StageContext,
-  type StageHandlers,
-  type StageResult,
-  type TaskStage,
+  type PhaseContext,
+  type PhaseHandlers,
+  type PhaseResult,
+  type TaskPhase,
   type TaskState,
 } from "./deps.js";
 import type { HandlerDeps } from "./types.js";
@@ -70,24 +70,24 @@ import { FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
 type ProducerSpawnRole = "test-writer" | "executor";
 
 /**
- * Build the {@link StageHandlers} bound to one reporter dependency bundle. Stateless
+ * Build the {@link PhaseHandlers} bound to one reporter dependency bundle. Stateless
  * apart from the closure over `deps`; every method is idempotent given identical
  * frozen state + identical tool outputs.
  */
-export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
+export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
   // -- shared reporter helpers ---------------------------------------------
 
   /** The task the engine is acting on; absent only for the run-level finalize. */
-  function requireTask(ctx: StageContext, stage: string): TaskState {
+  function requireTask(ctx: PhaseContext, phase: string): TaskState {
     if (ctx.task === undefined) {
-      throw new Error(`handlers: stage '${stage}' requires a task but ctx.task is absent`);
+      throw new Error(`handlers: phase '${phase}' requires a task but ctx.task is absent`);
     }
     return ctx.task;
   }
 
   /**
    * The deterministic holdout split for a task. Seeded with `${runId}:${taskId}` so
-   * the tests stage (which PERSISTS the answer key) and the exec stage (which only
+   * the tests phase (which PERSISTS the answer key) and the exec phase (which only
    * RECOMPUTES the visible remainder) independently derive the SAME partition.
    */
   function splitFor(config: Config, runId: string, specTask: SpecTask) {
@@ -115,7 +115,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
 
   /**
    * Assemble + PERSIST a producer prompt-context for `(role, rung)` and return the
-   * one-agent spawn manifest that resumes at `stageAfter`. The context is built from
+   * one-agent spawn manifest that resumes at `resumePhase`. The context is built from
    * the holdout-stripped `visibleCriteria` only; the prior-failure note is recorded in
    * IFF the dial injects it (rung ≥ 2).
    */
@@ -124,8 +124,8 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
     specTask: SpecTask,
     runId: string,
     rung: number,
-    stageAfter: TaskStage,
-  ): Promise<StageResult> {
+    resumePhase: TaskPhase,
+  ): Promise<PhaseResult> {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const split = splitFor(deps.config, runId, specTask);
     const context: ProducerContext = buildProducerContext({
@@ -144,7 +144,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
       context,
     );
     const manifest: SpawnManifest = parseSpawnManifest({
-      stage_after: stageAfter,
+      resume_phase: resumePhase,
       agents: [
         {
           role,
@@ -163,16 +163,16 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
     return spawn(manifest);
   }
 
-  // -- stage reporters -----------------------------------------------------
+  // -- phase reporters -----------------------------------------------------
 
   return {
     /**
      * preflight: create the per-task worktree forked off the staging tip (D12
      * base-is-staging-tip assertion lives inside createTaskWorktree), then advance
-     * to the tests stage. The run-scoped branch is deterministic from (run, task),
+     * to the tests phase. The run-scoped branch is deterministic from (run, task),
      * so it is not threaded through state here — ship recomputes it.
      */
-    async preflight(ctx: StageContext): Promise<StageResult> {
+    async preflight(ctx: PhaseContext): Promise<PhaseResult> {
       const task = requireTask(ctx, "preflight");
       const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
       await createTaskWorktree({
@@ -193,11 +193,11 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
     },
 
     /**
-     * tests: PERSIST the holdout answer-key (the only stage that does — exec merely
+     * tests: PERSIST the holdout answer-key (the only phase that does — exec merely
      * recomputes the split), then either skip the test-writer (tdd_exempt → advance
      * to exec) or spawn the test-writer for the current rung (resume at exec).
      */
-    async tests(ctx: StageContext): Promise<StageResult> {
+    async tests(ctx: PhaseContext): Promise<PhaseResult> {
       const task = requireTask(ctx, "tests");
       const specTask = specTaskOf(deps.spec, task.task_id);
 
@@ -223,7 +223,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
      * visible criteria (recomputed from the same seed — never re-persisted), resume
      * at verify.
      */
-    async exec(ctx: StageContext): Promise<StageResult> {
+    async exec(ctx: PhaseContext): Promise<PhaseResult> {
       const task = requireTask(ctx, "exec");
       const specTask = specTaskOf(deps.spec, task.task_id);
       return producerSpawn("executor", specTask, ctx.run.run_id, task.escalation_rung, "verify");
@@ -236,7 +236,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
      * separately by the coroutine (the holdout-validator runs as an out-of-band sidecar);
      * this reporter never spawns.
      */
-    async verify(ctx: StageContext): Promise<StageResult> {
+    async verify(ctx: PhaseContext): Promise<PhaseResult> {
       const task = requireTask(ctx, "verify");
       const worktree = taskWorktreePath(deps.dataDir, ctx.run.run_id, task.task_id);
       const gateCtx: GateContext = {
@@ -299,18 +299,18 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
      * ship — NOT served from this reporter. The coroutine runs the stateful
      * {@link import("./ship.js").shipTask} directly (PR pointer writes + the live
      * MergeSerializer), since a reporter can neither write state nor merge; the
-     * coroutine intercepts `ship` before {@link import("./engine.js").runStage} can
+     * coroutine intercepts `ship` before {@link import("./engine.js").runPhase} can
      * ever dispatch it here.
      *
-     * This method exists ONLY to keep {@link StageHandlers} TOTAL — the engine's
-     * exhaustive per-task stage switch (engine.ts) requires a handler for every
-     * `TaskStage`. Its body is a LOUD throw: routing `ship` through `runStage` is a
+     * This method exists ONLY to keep {@link PhaseHandlers} TOTAL — the engine's
+     * exhaustive per-task phase switch (engine.ts) requires a handler for every
+     * `TaskPhase`. Its body is a LOUD throw: routing `ship` through `runPhase` is a
      * programming error (it would re-open the PR with none of shipTask's state
      * writes), so it fails fast rather than silently drifting from the live path.
      * (`shipBody` / `specTaskOf` remain exported below — `ship.ts` is their caller.)
      */
-    ship(_ctx: StageContext): Promise<StageResult> {
-      throw new Error("ship is routed to shipTask; runStage must never dispatch ship");
+    ship(_ctx: PhaseContext): Promise<PhaseResult> {
+      throw new Error("ship is routed to shipTask; runPhase must never dispatch ship");
     },
 
     /**
@@ -318,7 +318,7 @@ export function makeStageHandlers(deps: HandlerDeps): StageHandlers {
      * over the run's task-status map. Throws if any task is non-terminal (it must
      * never be called with in-flight work) — never spins.
      */
-    finalize(ctx: StageContext): Promise<StageResult> {
+    finalize(ctx: PhaseContext): Promise<PhaseResult> {
       return Promise.resolve(decideFinalize(ctx.run));
     },
   };

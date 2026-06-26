@@ -220,7 +220,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       knownKinds: unknown,
       context: string,
     ) => Promise<unknown>;
-    type Record = (taskId: string, stage: string, results: unknown) => Promise<unknown>;
+    type Record = (taskId: string, phase: string, results: unknown) => Promise<unknown>;
 
     const buildCli = (agent: unknown, parseEnvelope: unknown) =>
       buildFn<Cli>(SLICES.cli(), {

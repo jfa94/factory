@@ -1,5 +1,5 @@
 /**
- * Unit tests for stepRun — the run-level coroutine.
+ * Unit tests for nextTask — the run-level coroutine.
  *
  * Each test uses makeCoroutineDeps from coroutine-fixtures.ts. MakeCoroutineDepsOpts supports:
  *   - tasks: multi-task DAGs with depends_on
@@ -12,19 +12,19 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { stepRun } from "./next.js";
+import { nextTask } from "./next.js";
 import { makeCoroutineDeps, PAUSE_5H } from "./coroutine-fixtures.js";
 import type { UsageReading } from "../quota/usage-source.js";
 
 const UNAVAILABLE: UsageReading = { kind: "unavailable", reason: "usage-cache-missing" };
 
-describe("stepRun", () => {
+describe("nextTask", () => {
   it("terminal run → run-terminal", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       runStatusOverride: "completed",
     });
     try {
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "run-terminal", run_status: "completed" });
     } finally {
       await cleanup();
@@ -34,7 +34,7 @@ describe("stepRun", () => {
   it("quota breach → quota-blocked with persisted checkpoint", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({ usage: PAUSE_5H });
     try {
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "quota-blocked", scope: "5h" });
       const run = await deps.state.read(runId);
       expect(run.status).toBe("paused");
@@ -49,7 +49,7 @@ describe("stepRun", () => {
       usage: UNAVAILABLE,
     });
     try {
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env.kind).toBe("tasks-ready");
       expect((await deps.state.read(runId)).status).toBe("running");
     } finally {
@@ -60,7 +60,7 @@ describe("stepRun", () => {
   it("session mode (default) fail-closes on the same unobservable signal", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({ usage: UNAVAILABLE });
     try {
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "quota-blocked", scope: "unavailable" });
       expect((await deps.state.read(runId)).status).toBe("suspended");
     } finally {
@@ -80,7 +80,7 @@ describe("stepRun", () => {
         status: "paused" as const,
         quota: { binding_window: "5h" as const, resets_at_epoch: 1_700_018_000 },
       }));
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env.kind).toBe("tasks-ready");
       const run = await deps.state.read(runId);
       expect(run.status).toBe("running");
@@ -110,7 +110,7 @@ describe("stepRun", () => {
         failure_reason: "test seed",
       }));
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env.kind).toBe("tasks-ready");
       if (env.kind !== "tasks-ready") return;
       expect(env.cascade_dropped.slice().sort()).toEqual(["T2", "T3"]);
@@ -123,7 +123,7 @@ describe("stepRun", () => {
   });
 
   it("ready excludes tasks with un-done deps and orders in-flight (crash-resume) first", async () => {
-    // T1 done; T2 pending depends_on [T1]; T3 status reviewing (in-flight, stage verify); T4 pending depends_on [T2]
+    // T1 done; T2 pending depends_on [T1]; T3 status reviewing (in-flight, phase verify); T4 pending depends_on [T2]
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
@@ -138,10 +138,10 @@ describe("stepRun", () => {
       await deps.state.updateTask(runId, "T3", (t) => ({
         ...t,
         status: "reviewing",
-        stage: "verify",
+        phase: "verify",
       }));
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "tasks-ready", ready: ["T3", "T2"] });
       if (env.kind !== "tasks-ready") return;
       // T4 not ready (T2 not done), T1 terminal
@@ -169,7 +169,7 @@ describe("stepRun", () => {
         failure_reason: "test seed",
       }));
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "all-terminal" });
     } finally {
       await cleanup();
@@ -205,7 +205,7 @@ describe("stepRun", () => {
         },
       }));
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env.kind).toBe("all-terminal");
       if (env.kind !== "all-terminal") return;
       expect(env.cascade_dropped.slice().sort()).toEqual(["T1", "T2"]);
@@ -226,7 +226,7 @@ describe("stepRun", () => {
       runStatusOverride: "completed",
     });
     try {
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "run-terminal", run_status: "completed" });
       // Gate never ran — no checkpoint written
       const run = await deps.state.read(runId);
@@ -247,7 +247,7 @@ describe("stepRun", () => {
       // Seed T1 as done so the run is effectively finished
       await deps.state.updateTask(runId, "T1", (t) => ({ ...t, status: "done" }));
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: [] });
       // The quota gate must NOT have run — run stays running with no checkpoint
       const run = await deps.state.read(runId);
@@ -275,7 +275,7 @@ describe("stepRun", () => {
         failure_reason: "test seed",
       }));
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: ["T2"] });
     } finally {
       await cleanup();
@@ -293,7 +293,7 @@ describe("stepRun", () => {
         status: "suspended" as const,
         quota: { binding_window: "7d" as const, resets_at_epoch: 1_700_018_000 },
       }));
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env.kind).toBe("tasks-ready");
       const run = await deps.state.read(runId);
       expect(run.status).toBe("running");
@@ -310,7 +310,7 @@ describe("stepRun", () => {
       // Clear the default T1 so the run has zero tasks
       await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: [] });
     } finally {
       await cleanup();
@@ -325,7 +325,7 @@ describe("stepRun", () => {
     try {
       await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: [] });
       const run = await deps.state.read(runId);
       expect(run.status).toBe("running");
@@ -348,7 +348,7 @@ describe("stepRun", () => {
         depends_on: ["T1"],
       }));
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env.kind).toBe("all-terminal");
       if (env.kind !== "all-terminal") return;
       expect(env.cascade_dropped).toContain("T1");
@@ -382,7 +382,7 @@ describe("stepRun", () => {
         }));
       }
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env.kind).toBe("all-terminal");
       if (env.kind !== "all-terminal") return;
       expect(env.cascade_dropped).toContain("T4");
@@ -416,7 +416,7 @@ describe("stepRun", () => {
         }));
       }
 
-      const env = await stepRun(deps, runId);
+      const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "tasks-ready", ready: ["T3"] });
     } finally {
       await cleanup();
@@ -434,7 +434,7 @@ describe("docs-ready gate", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
-      expect((await stepRun(deps, runId)).kind).toBe("docs-ready");
+      expect((await nextTask(deps, runId)).kind).toBe("docs-ready");
     } finally {
       await cleanup();
     }
@@ -447,7 +447,7 @@ describe("docs-ready gate", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
-      expect((await stepRun(deps, runId)).kind).toBe("all-terminal");
+      expect((await nextTask(deps, runId)).kind).toBe("all-terminal");
     } finally {
       await cleanup();
     }
@@ -461,7 +461,7 @@ describe("docs-ready gate", () => {
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
       await state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: DONE_AT } }));
-      expect((await stepRun(deps, runId)).kind).toBe("all-terminal");
+      expect((await nextTask(deps, runId)).kind).toBe("all-terminal");
     } finally {
       await cleanup();
     }
@@ -480,7 +480,7 @@ describe("docs-ready gate", () => {
         failure_reason: "x",
         ended_at: DONE_AT,
       }));
-      expect((await stepRun(deps, runId)).kind).toBe("all-terminal");
+      expect((await nextTask(deps, runId)).kind).toBe("all-terminal");
     } finally {
       await cleanup();
     }
@@ -501,7 +501,7 @@ describe("docs-ready gate", () => {
         quota: { binding_window: "5h" as const, resets_at_epoch: 1_700_018_000 },
         docs: { status: "failed", reason: "prior", ended_at: DONE_AT },
       }));
-      expect((await stepRun(deps, runId)).kind).toBe("docs-ready");
+      expect((await nextTask(deps, runId)).kind).toBe("docs-ready");
       const resumed = await state.read(runId);
       expect(resumed.status).toBe("running");
       // the checkpoint clear that returned the run to running must also drop quota
@@ -524,13 +524,13 @@ describe("docs ordering invariant", () => {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
 
       // Before docs: the gate withholds all-terminal.
-      expect((await stepRun(deps, runId)).kind).toBe("docs-ready");
+      expect((await nextTask(deps, runId)).kind).toBe("docs-ready");
 
       // Simulate the record marking docs done (Task 5's done path).
       await state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: DONE_AT } }));
 
       // Now finalize is reachable.
-      expect((await stepRun(deps, runId)).kind).toBe("all-terminal");
+      expect((await nextTask(deps, runId)).kind).toBe("all-terminal");
     } finally {
       await cleanup();
     }

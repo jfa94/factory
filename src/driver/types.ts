@@ -5,17 +5,17 @@
  * ARCHITECTURE (settled, Model A — see docs/rewrite/group0-seams.md §3.5/§4 and
  * the design-intent transcript):
  *
- *   - HANDLERS are pure-ish REPORTERS. {@link import("./handlers.js").makeStageHandlers}
- *     builds a {@link StageHandlers} whose methods read the frozen
- *     {@link StageContext} (run + task), do DETERMINISTIC work (shell out via
- *     injected git/gate clients), and RETURN a {@link StageResult}. When a stage
+ *   - HANDLERS are pure-ish REPORTERS. {@link import("./handlers.js").makePhaseHandlers}
+ *     builds a {@link PhaseHandlers} whose methods read the frozen
+ *     {@link PhaseContext} (run + task), do DETERMINISTIC work (shell out via
+ *     injected git/gate clients), and RETURN a {@link PhaseResult}. When a phase
  *     needs agent work they return a `spawn-agents` manifest. They NEVER write
- *     state and NEVER decide transitions (nextStageFor does).
+ *     state and NEVER decide transitions (nextPhaseFor does).
  *
  *   - The ENGINE acts on results. The per-task coroutine
- *     ({@link import("./coroutine.js").stepTask}) resumes at the persisted stage cursor,
+ *     ({@link import("./coroutine.js").nextAction}) resumes at the persisted phase cursor,
  *     records the previous spawn's agent results into state, and runs the
- *     deterministic stage machine until it needs agents (it RETURNS the spawn
+ *     deterministic phase machine until it needs agents (it RETURNS the spawn
  *     manifest to the caller) or the task is terminal. The in-session orchestrator
  *     (or the workflow driver) owns every Agent() spawn; the engine owns every
  *     StateManager write.
@@ -52,7 +52,7 @@ export type { ShipMode };
 /**
  * The read-only inputs a REPORTER (handler) needs. Deliberately carries NO agent
  * runner — a handler reports a spawn manifest; the orchestrator performs the
- * spawn. The spec MANIFEST is injected (the frozen StageContext carries only the
+ * spawn. The spec MANIFEST is injected (the frozen PhaseContext carries only the
  * run + a lean TaskState, not the per-task spec fields the producer/verify
  * reporters need — title/description/criteria/files live in the durable spec,
  * addressed by the run's spec pointer and loaded once by the engine).
@@ -66,7 +66,7 @@ export interface HandlerDeps {
   /**
    * Injectable worktree provisioner (installs deps after worktree create, before
    * the command-gates). Optional — defaults to the real {@link import("../git/index.js").provisionWorktree}
-   * in {@link import("./handlers.js").makeStageHandlers}; tests inject a spy.
+   * in {@link import("./handlers.js").makePhaseHandlers}; tests inject a spy.
    */
   readonly provision?: ProvisionWorktreeFn;
   /** Injectable gh client (idempotent PR create in ship). */
@@ -78,7 +78,7 @@ export interface HandlerDeps {
   /**
    * The Δ Y answer-key store. The tests/exec reporters split the spec criteria
    * (deterministic) and persist the WITHHELD set here — the confined answer key
-   * the holdout-validator checks against at the verify stage.
+   * the holdout-validator checks against at the verify phase.
    */
   readonly holdout: HoldoutStore;
   /** Plugin data dir — roots the run store + per-task worktree paths. */

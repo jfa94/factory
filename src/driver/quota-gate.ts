@@ -6,8 +6,8 @@
  * (`suspended`, scope "unavailable", no horizon).
  *
  * On a proceed (null return) the gate never writes state; clearing a stale
- * paused/suspended checkpoint on recovery is the CALLER's job (see stepTask in
- * coroutine.ts and stepRun in next.ts).
+ * paused/suspended checkpoint on recovery is the CALLER's job (see nextAction in
+ * coroutine.ts and nextTask in next.ts).
  */
 import { evaluateQuota, buildCheckpoint, assertNever } from "./deps.js";
 import type { Config, RunState, StateManager, UsageSignal } from "./deps.js";

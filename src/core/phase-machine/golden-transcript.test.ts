@@ -1,6 +1,6 @@
 /**
  * WS2 — THE acceptance harness. A canned 2-task run (one ships, one drops) driven
- * through the engine by FULLY-FAKE handlers, asserting a FIXED StageResult
+ * through the engine by FULLY-FAKE handlers, asserting a FIXED PhaseResult
  * SEQUENCE. This is the golden contract: if the engine's dispatch or a result
  * shape drifts, the recorded transcript diverges.
  *
@@ -13,19 +13,19 @@
  *   - finalize THROWS on a leftover non-terminal task (anti-spin).
  */
 import { describe, expect, it } from "vitest";
-import { runStage, nextStageFor, decideFinalize, type EngineStage } from "./engine.js";
-import { advance, spawn, taskDone, taskDropped, type StageResult } from "./result.js";
-import type { StageContext, StageHandlers } from "./handlers.js";
+import { runPhase, nextPhaseFor, decideFinalize, type EnginePhase } from "./engine.js";
+import { advance, spawn, taskDone, taskDropped, type PhaseResult } from "./result.js";
+import type { PhaseContext, PhaseHandlers } from "./handlers.js";
 import type { SpawnManifest } from "./manifest.js";
 import { parseRunState, type RunState } from "../state/index.js";
 
 // --- canned spec: two tasks ---------------------------------------------------
 
 const mkManifest = (
-  stage_after: SpawnManifest["stage_after"],
+  resume_phase: SpawnManifest["resume_phase"],
   role: SpawnManifest["agents"][number]["role"],
 ): SpawnManifest => ({
-  stage_after,
+  resume_phase,
   agents: [
     {
       role,
@@ -40,10 +40,10 @@ const mkManifest = (
 /**
  * Fake handlers that drive a task to a desired outcome via a fixed script. The
  * "happy" task spawns at tests/exec/verify then ships to done. The "drop" task
- * spawns at tests then the exec stage classifies a capability-budget drop.
+ * spawns at tests then the exec phase classifies a capability-budget drop.
  */
-function scriptedHandlers(outcome: "ship" | "drop"): StageHandlers {
-  const finalize: StageHandlers["finalize"] = async (ctx) => decideFinalize(ctx.run);
+function scriptedHandlers(outcome: "ship" | "drop"): PhaseHandlers {
+  const finalize: PhaseHandlers["finalize"] = async (ctx) => decideFinalize(ctx.run);
   if (outcome === "ship") {
     return {
       preflight: async () => advance("tests"),
@@ -66,18 +66,18 @@ function scriptedHandlers(outcome: "ship" | "drop"): StageHandlers {
 
 /**
  * Drive ONE task from preflight to a terminal result, recording each
- * StageResult. Uses the engine's own nextStageFor to compute the resume stage —
+ * PhaseResult. Uses the engine's own nextPhaseFor to compute the resume phase —
  * so the transcript also asserts the shared transition logic.
  */
-async function driveTask(handlers: StageHandlers, ctx: StageContext): Promise<StageResult[]> {
-  const transcript: StageResult[] = [];
-  let stage: EngineStage | null = "preflight";
-  while (stage !== null) {
-    const r: StageResult = await runStage(stage, ctx, handlers);
+async function driveTask(handlers: PhaseHandlers, ctx: PhaseContext): Promise<PhaseResult[]> {
+  const transcript: PhaseResult[] = [];
+  let phase: EnginePhase | null = "preflight";
+  while (phase !== null) {
+    const r: PhaseResult = await runPhase(phase, ctx, handlers);
     transcript.push(r);
     if (r.kind === "task-terminal") break;
-    const next = nextStageFor(r); // advance.to or manifest.stage_after
-    stage = next;
+    const next = nextPhaseFor(r); // advance.to or manifest.resume_phase
+    phase = next;
   }
   return transcript;
 }
@@ -91,9 +91,9 @@ const baseRun = (tasks: Record<string, unknown>): RunState =>
     tasks,
   });
 
-describe("golden transcript — fixed StageResult sequence", () => {
+describe("golden transcript — fixed PhaseResult sequence", () => {
   it("the happy task walks preflight→tests→exec→verify→ship to task-terminal(done)", async () => {
-    const ctx: StageContext = {
+    const ctx: PhaseContext = {
       run: baseRun({ a: { task_id: "a", status: "pending", risk_tier: "low" } }),
     };
     const transcript = await driveTask(scriptedHandlers("ship"), ctx);
@@ -108,7 +108,7 @@ describe("golden transcript — fixed StageResult sequence", () => {
   });
 
   it("the drop task reaches task-terminal(dropped, capability-budget)", async () => {
-    const ctx: StageContext = {
+    const ctx: PhaseContext = {
       run: baseRun({ b: { task_id: "b", status: "pending", risk_tier: "low" } }),
     };
     const transcript = await driveTask(scriptedHandlers("drop"), ctx);
@@ -123,7 +123,7 @@ describe("golden transcript — fixed StageResult sequence", () => {
   it("the run-level finalize over {done, dropped} is finalize-terminal(failed), never wait-retry (Decision 34)", async () => {
     // Both tasks now terminal: a shipped, b dropped.
     // Decision 34: develop receives only complete PRDs — mixed done+dropped is 'failed'.
-    const ctx: StageContext = {
+    const ctx: PhaseContext = {
       run: baseRun({
         a: { task_id: "a", status: "done", risk_tier: "low" },
         b: {
@@ -135,19 +135,19 @@ describe("golden transcript — fixed StageResult sequence", () => {
         },
       }),
     };
-    const r = await runStage("finalize", ctx, scriptedHandlers("ship"));
+    const r = await runPhase("finalize", ctx, scriptedHandlers("ship"));
     expect(r).toEqual({ kind: "finalize-terminal", run_status: "failed" });
     expect(r.kind).not.toBe("wait-retry");
   });
 
   it("finalize over an incomplete (non-terminal) run THROWS, never spins", async () => {
-    const ctx: StageContext = {
+    const ctx: PhaseContext = {
       run: baseRun({
         a: { task_id: "a", status: "done", risk_tier: "low" },
         b: { task_id: "b", status: "executing", risk_tier: "low" },
       }),
     };
-    await expect(runStage("finalize", ctx, scriptedHandlers("ship"))).rejects.toThrow(
+    await expect(runPhase("finalize", ctx, scriptedHandlers("ship"))).rejects.toThrow(
       /non-terminal task/,
     );
   });

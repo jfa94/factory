@@ -1,7 +1,7 @@
 /**
  * WS10 — unit tests for shipTask.
  *
- * shipTask is the fully-deterministic ship stage: it pushes the task branch,
+ * shipTask is the fully-deterministic ship phase: it pushes the task branch,
  * opens (or looks up) the PR idempotently, records branch + pr_number into
  * state, and (in `live` mode) serial-merges via MergeSerializer. All I/O is
  * injectable (FakeGitClient + FakeGhClient + real StateManager in a tmpdir).
@@ -21,7 +21,7 @@ import { FakeGitClient, FakeGhClient } from "../git/fakes.js";
 import { makeFakeTools } from "../verifier/deterministic/fakes.js";
 import { InMemoryHoldoutStore } from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
-import type { StageContext, TaskState } from "../types/index.js";
+import type { PhaseContext, TaskState } from "../types/index.js";
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -56,7 +56,7 @@ interface ShipFixture {
   gh: FakeGhClient;
   git: FakeGitClient;
   dataDir: string;
-  ctx: StageContext;
+  ctx: PhaseContext;
 }
 
 async function makeShipFixture(opts: {
@@ -96,7 +96,7 @@ async function makeShipFixture(opts: {
 
   const run = await state.read(opts.runId);
   const task = run.tasks["t-1"] as TaskState;
-  const ctx: StageContext = { run, task, attempt: 1 };
+  const ctx: PhaseContext = { run, task, attempt: 1 };
 
   const deps: ShipDeps = {
     config: defaultConfig(),
@@ -166,7 +166,7 @@ describe("shipTask", () => {
     // merge the PR against the WRONG branch; seeding a divergent pin makes the
     // assertion fail unless the pin is honored (the recompute-equal fixtures can't).
     const pinned = "staging-LEGACY-run-D";
-    const pinnedCtx: StageContext = { ...ctx, run: { ...ctx.run, staging_branch: pinned } };
+    const pinnedCtx: PhaseContext = { ...ctx, run: { ...ctx.run, staging_branch: pinned } };
 
     const result = await shipTask(deps, pinnedCtx);
 

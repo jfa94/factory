@@ -2,7 +2,7 @@
  * WS10 — the driver's PUBLIC barrel.
  *
  * The Model-A driver engine: the deterministic SEAM the CLI/orchestrator drives —
- * the per-task coroutine ({@link stepTask}), the run-level coroutine ({@link stepRun}), the
+ * the per-task coroutine ({@link nextAction}), the run-level coroutine ({@link nextTask}), the
  * record cores, the quota gate, and the finalize coordinator — plus the reporter
  * dependency-bundle types those callers wire against. `deps.ts` stays INTERNAL (it
  * is the driver's own deep-import barrel); consumers import the frozen seams from
@@ -56,7 +56,7 @@ export { applyQuotaGate, type QuotaGateDeps, type QuotaStop } from "./quota-gate
 
 // -- per-task coroutine (factory drive seam) ----------------------------
 export {
-  stepTask,
+  nextAction,
   holdoutSidecar,
   MERGE_RESYNC_CAP,
   type CoroutineDeps,
@@ -66,9 +66,9 @@ export {
 } from "./coroutine.js";
 
 // -- run-level coroutine (factory next seam) --------------------------------------
-export { stepRun, type NextEnvelope } from "./next.js";
+export { nextTask, type NextEnvelope } from "./next.js";
 
-// -- docs stage emit + record coroutines (factory run docs seam) -----------------
+// -- docs phase emit + record coroutines (factory run docs seam) -----------------
 export {
   runDocsEmit,
   runDocsRecord,

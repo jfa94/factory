@@ -1,7 +1,7 @@
 /**
  * WS10 — the driver's INTERNAL import barrel.
  *
- * The driver is the integration capstone: it wires SEVEN domains (state, stage-
+ * The driver is the integration capstone: it wires SEVEN domains (state, phase-
  * machine, git, quota, spec, deterministic + judgment verifiers, producer). Rather
  * than scatter deep imports across handlers.ts / coroutine.ts / record.ts, this
  * one module re-exports exactly the symbols the driver consumes, each FROM its
@@ -21,12 +21,12 @@ export {
   finalizeTerminal,
   assertNever,
   isTerminalResult,
-  runStage,
-  nextStageFor,
+  runPhase,
+  nextPhaseFor,
   decideFinalize,
-  nextStage,
-  stageToInFlightStatus,
-  TASK_STAGE_ORDER,
+  nextPhase,
+  phaseToInFlightStatus,
+  TASK_PHASE_ORDER,
   parseSpawnManifest,
   TERMINAL_RUN_STATUSES,
   isTerminalTaskStatus,
@@ -52,13 +52,13 @@ export type {
   SpecPointer,
   GateEvidence,
   GateVerdict,
-  StageResult,
-  StageContext,
-  StageHandlers,
+  PhaseResult,
+  PhaseContext,
+  PhaseHandlers,
   SpawnManifest,
   SpawnAgent,
   SpawnRole,
-  TaskStage,
+  TaskPhase,
 } from "../types/index.js";
 
 // --- git / PR I/O (src/git) -------------------------------------------------

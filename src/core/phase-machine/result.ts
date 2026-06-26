@@ -1,5 +1,5 @@
 /**
- * WS2 — {@link StageResult}: the engine↔orchestrator seam, a discriminated union
+ * WS2 — {@link PhaseResult}: the engine↔orchestrator seam, a discriminated union
  * on the literal field `kind`.
  *
  * THE LOAD-BEARING PROPERTY: an unknown/unhandled `kind` is BOTH a compile-time
@@ -20,18 +20,18 @@
  * shape. The driver (WS10), not the engine, ACTS on a result; the engine only
  * surfaces it after one structural exhaustiveness check (engine.ts).
  */
-import type { TaskStage } from "./stages.js";
+import type { TaskPhase } from "./phases.js";
 import type { SpawnManifest } from "./manifest.js";
 import type { FailureClass } from "../state/index.js";
 
-/** Handler finished a stage with no spawn; advance to stage `to`. */
+/** Handler finished a phase with no spawn; advance to phase `to`. */
 export interface AdvanceResult {
   kind: "advance";
-  /** The stage the task advances TO (the resumed-at stage). */
-  to: TaskStage;
+  /** The phase the task advances TO (the resumed-at phase). */
+  to: TaskPhase;
 }
 
-/** Handler needs subagents; spawn them and resume at `manifest.stage_after`. */
+/** Handler needs subagents; spawn them and resume at `manifest.resume_phase`. */
 export interface SpawnAgentsResult {
   kind: "spawn-agents";
   manifest: SpawnManifest;
@@ -50,13 +50,13 @@ export interface GracefulStopResult {
 }
 
 /**
- * Transient, BOUNDED retry: re-invoke the SAME stage. The engine throws if
+ * Transient, BOUNDED retry: re-invoke the SAME phase. The engine throws if
  * `attempt > max_attempts` (engine.ts) — this can never spin. The task stays in
  * its current in-flight status.
  */
 export interface WaitRetryResult {
   kind: "wait-retry";
-  stage: TaskStage;
+  phase: TaskPhase;
   reason: string;
   attempt: number;
   max_attempts: number;
@@ -85,8 +85,8 @@ export interface FinalizeTerminalResult {
   run_status: "completed" | "failed";
 }
 
-/** The closed StageResult discriminated union (literal `kind`). */
-export type StageResult =
+/** The closed PhaseResult discriminated union (literal `kind`). */
+export type PhaseResult =
   | AdvanceResult
   | SpawnAgentsResult
   | GracefulStopResult
@@ -107,7 +107,7 @@ export type StageResult =
  */
 export function assertNever(x: never): never {
   throw new Error(
-    `assertNever: unhandled value ${JSON.stringify(x)} — a StageResult.kind was not handled`,
+    `assertNever: unhandled value ${JSON.stringify(x)} — a PhaseResult.kind was not handled`,
   );
 }
 
@@ -115,7 +115,7 @@ export function assertNever(x: never): never {
 // Constructors (so handlers/fakes build well-formed results without shape drift)
 // ---------------------------------------------------------------------------
 
-export function advance(to: TaskStage): AdvanceResult {
+export function advance(to: TaskPhase): AdvanceResult {
   return { kind: "advance", to };
 }
 
@@ -134,12 +134,12 @@ export function gracefulStop(
 }
 
 export function waitRetry(
-  stage: TaskStage,
+  phase: TaskPhase,
   reason: string,
   attempt: number,
   max_attempts: number,
 ): WaitRetryResult {
-  return { kind: "wait-retry", stage, reason, attempt, max_attempts };
+  return { kind: "wait-retry", phase, reason, attempt, max_attempts };
 }
 
 export function taskDone(): TaskTerminalResult {
@@ -169,7 +169,7 @@ export function finalizeTerminal(
  * gracefully on quota (`graceful-stop`). `advance`/`spawn-agents`/`wait-retry`
  * are continuations, not terminals.
  */
-export function isTerminalResult(r: StageResult): boolean {
+export function isTerminalResult(r: PhaseResult): boolean {
   switch (r.kind) {
     case "task-terminal":
     case "finalize-terminal":

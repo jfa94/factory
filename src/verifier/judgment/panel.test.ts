@@ -49,7 +49,7 @@ describe("WS7 risk-invariant panel (D26 / Δ T)", () => {
   it("WS2 coherence: the manifest validates through the frozen parseSpawnManifest", () => {
     const m = buildPanelManifest("verify", "opus", 40);
     expect(() => parseSpawnManifest(m)).not.toThrow();
-    expect(m.stage_after).toBe("verify");
+    expect(m.resume_phase).toBe("verify");
   });
 
   it("Δ T: a blank model fails LOUD at the seam (no malformed manifest)", () => {

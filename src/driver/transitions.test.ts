@@ -25,7 +25,7 @@ import {
 import { StateManager } from "../core/state/manager.js";
 import { ESCALATION_CAP } from "../producer/index.js";
 import type { ClassifyDecision, ProducerOutcome } from "../producer/index.js";
-import type { TaskState, TaskStage } from "../types/index.js";
+import type { TaskState, TaskPhase } from "../types/index.js";
 
 const RUN_ID = "run-1";
 
@@ -82,9 +82,9 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
 
   // -- markInFlight ---------------------------------------------------------
 
-  it("markInFlight maps each stage to its in-flight status and stamps started_at once", async () => {
+  it("markInFlight maps each phase to its in-flight status and stamps started_at once", async () => {
     await seedTask({ task_id: "t1" });
-    const cases: ReadonlyArray<[TaskStage, TaskState["status"]]> = [
+    const cases: ReadonlyArray<[TaskPhase, TaskState["status"]]> = [
       ["preflight", "pending"],
       ["tests", "executing"],
       ["exec", "executing"],
@@ -92,8 +92,8 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
       ["ship", "shipping"],
     ];
     let firstStamp: string | undefined;
-    for (const [stage, status] of cases) {
-      await markInFlight(deps, RUN_ID, "t1", stage);
+    for (const [phase, status] of cases) {
+      await markInFlight(deps, RUN_ID, "t1", phase);
       const task = await readTask("t1");
       expect(task.status).toBe(status);
       expect(task.started_at).toBeDefined();
@@ -126,7 +126,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     await seedTask({
       task_id: "t1",
       status: "shipping",
-      spawn_in_flight: { stage: "verify", rung: 0, tip_sha: "sha-tip" },
+      spawn_in_flight: { phase: "verify", rung: 0, tip_sha: "sha-tip" },
     });
     await completeTask(deps, RUN_ID, "t1");
     expect((await readTask("t1")).spawn_in_flight).toBeUndefined();
@@ -149,7 +149,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     await seedTask({
       task_id: "t1",
       status: "executing",
-      spawn_in_flight: { stage: "exec", rung: 2, tip_sha: "sha-tip" },
+      spawn_in_flight: { phase: "exec", rung: 2, tip_sha: "sha-tip" },
     });
     await dropTask(deps, RUN_ID, "t1", "capability-budget", "cap reached");
     expect((await readTask("t1")).spawn_in_flight).toBeUndefined();
@@ -183,7 +183,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     expect(task.escalation_rung).toBe(0); // never escalated
   });
 
-  it("escalateOrDrop on a retry below the cap bumps the rung, clears reviewers, resumes at the stage", async () => {
+  it("escalateOrDrop on a retry below the cap bumps the rung, clears reviewers, resumes at the phase", async () => {
     await seedTask({
       task_id: "t1",
       status: "reviewing",
@@ -193,7 +193,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     const decision: ClassifyDecision = { action: "retry", reason: "merge gate blocked" };
     const step = await escalateOrDrop(deps, RUN_ID, "t1", decision, "exec");
 
-    expect(step).toEqual({ done: false, stage: "exec" });
+    expect(step).toEqual({ done: false, phase: "exec" });
     const task = await readTask("t1");
     expect(task.escalation_rung).toBe(1);
     expect(task.reviewers).toEqual([]); // stale reviewers cleared so verify re-derives
@@ -241,35 +241,35 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
 
   // -- applyProducerOutcome -------------------------------------------------
 
-  it("applyProducerOutcome on done records producer_role and advances to stageAfter", async () => {
+  it("applyProducerOutcome on done records producer_role and advances to resumePhase", async () => {
     await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
     const step = await applyProducerOutcome(
       deps,
       RUN_ID,
       "t1",
-      { role: "executor", stage: "exec", stageAfter: "verify" },
+      { role: "executor", phase: "exec", resumePhase: "verify" },
       { status: "done" },
     );
 
-    expect(step).toEqual({ done: false, stage: "verify" });
+    expect(step).toEqual({ done: false, phase: "verify" });
     const task = await readTask("t1");
     expect(task.producer_role).toBe("executor");
     expect(task.escalation_rung).toBe(0); // a success never bumps the rung
   });
 
-  it("applyProducerOutcome on a failure status escalates at the SAME producer stage", async () => {
+  it("applyProducerOutcome on a failure status escalates at the SAME producer phase", async () => {
     await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
     const outcome: ProducerOutcome = { status: "error", reason: "tool crashed" };
     const step = await applyProducerOutcome(
       deps,
       RUN_ID,
       "t1",
-      { role: "executor", stage: "exec", stageAfter: "verify" },
+      { role: "executor", phase: "exec", resumePhase: "verify" },
       outcome,
     );
 
-    // error → retry → resumes at the producer stage (exec), rung bumped.
-    expect(step).toEqual({ done: false, stage: "exec" });
+    // error → retry → resumes at the producer phase (exec), rung bumped.
+    expect(step).toEqual({ done: false, phase: "exec" });
     expect((await readTask("t1")).escalation_rung).toBe(1);
   });
 
@@ -280,7 +280,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
       deps,
       RUN_ID,
       "t1",
-      { role: "test-writer", stage: "tests", stageAfter: "exec" },
+      { role: "test-writer", phase: "tests", resumePhase: "exec" },
       outcome,
     );
 
@@ -291,13 +291,13 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     expect((await readTask("t1")).escalation_rung).toBe(0);
   });
 
-  // -- markInFlight stage cursor persistence --------------------------------
+  // -- markInFlight phase cursor persistence --------------------------------
 
-  it("markInFlight persists the precise stage cursor", async () => {
+  it("markInFlight persists the precise phase cursor", async () => {
     await seedTask({ task_id: "t1" });
     await markInFlight({ state }, RUN_ID, "t1", "exec");
     const run = await state.read(RUN_ID);
     expect(run.tasks["t1"]?.status).toBe("executing");
-    expect(run.tasks["t1"]?.stage).toBe("exec");
+    expect(run.tasks["t1"]?.phase).toBe("exec");
   });
 });

@@ -5,17 +5,17 @@ import { parseDriveResults } from "./results.js";
 describe("parseDriveResults", () => {
   it("parses a producer result", () => {
     const r = parseDriveResults({
-      result_key: { stage: "tests", rung: 0 },
+      result_key: { phase: "tests", rung: 0 },
       producer: { status: "STATUS: DONE" },
     });
     expect(r.producer?.status).toBe("STATUS: DONE");
     expect(r.reviews).toBeUndefined();
-    expect(r.result_key).toEqual({ stage: "tests", rung: 0 });
+    expect(r.result_key).toEqual({ phase: "tests", rung: 0 });
   });
 
   it("parses a verify result with holdout + reviews + crossVendorAbsent", () => {
     const r = parseDriveResults({
-      result_key: { stage: "verify", rung: 1 },
+      result_key: { phase: "verify", rung: 1 },
       holdout: { raw: '{"criteria":[]}' },
       reviews: {
         reviews: [{ reviewer: "quality-reviewer", verdict: "approve", findings: [] }],
@@ -30,7 +30,7 @@ describe("parseDriveResults", () => {
     });
     expect(r.reviews?.reviews).toHaveLength(1);
     expect(r.holdout?.raw).toContain("criteria");
-    expect(r.result_key).toEqual({ stage: "verify", rung: 1 });
+    expect(r.result_key).toEqual({ phase: "verify", rung: 1 });
   });
 
   it("rejects missing result_key on an empty object", () => {
@@ -38,7 +38,7 @@ describe("parseDriveResults", () => {
   });
 
   it("rejects an object with result_key but neither producer nor reviews", () => {
-    expect(() => parseDriveResults({ result_key: { stage: "tests", rung: 0 } })).toThrow(
+    expect(() => parseDriveResults({ result_key: { phase: "tests", rung: 0 } })).toThrow(
       /producer|reviews/,
     );
   });
@@ -46,7 +46,7 @@ describe("parseDriveResults", () => {
   it("rejects unknown keys loudly", () => {
     expect(() =>
       parseDriveResults({
-        result_key: { stage: "tests", rung: 0 },
+        result_key: { phase: "tests", rung: 0 },
         producer: { status: "STATUS: DONE" },
         extra: 1,
       }),
@@ -56,7 +56,7 @@ describe("parseDriveResults", () => {
   it("rejects producer and reviews together", () => {
     expect(() =>
       parseDriveResults({
-        result_key: { stage: "tests", rung: 0 },
+        result_key: { phase: "tests", rung: 0 },
         producer: { status: "STATUS: DONE" },
         reviews: { reviews: [{}], verifications: [] },
       }),
@@ -66,7 +66,7 @@ describe("parseDriveResults", () => {
   it("rejects holdout without reviews", () => {
     expect(() =>
       parseDriveResults({
-        result_key: { stage: "tests", rung: 0 },
+        result_key: { phase: "tests", rung: 0 },
         producer: { status: "STATUS: DONE" },
         holdout: { raw: "x" },
       }),
@@ -76,7 +76,7 @@ describe("parseDriveResults", () => {
   it("rejects unknown key inside verifications[0].verdicts[0]", () => {
     expect(() =>
       parseDriveResults({
-        result_key: { stage: "verify", rung: 0 },
+        result_key: { phase: "verify", rung: 0 },
         reviews: {
           reviews: [{ reviewer: "quality-reviewer", verdict: "approve", findings: [] }],
           verifications: [
@@ -93,7 +93,7 @@ describe("parseDriveResults", () => {
   it("rejects reviews.reviews: [] (min 1)", () => {
     expect(() =>
       parseDriveResults({
-        result_key: { stage: "verify", rung: 0 },
+        result_key: { phase: "verify", rung: 0 },
         reviews: { reviews: [], verifications: [] },
       }),
     ).toThrow();
@@ -103,19 +103,19 @@ describe("parseDriveResults", () => {
     expect(() => parseDriveResults({ producer: { status: "STATUS: DONE" } })).toThrow();
   });
 
-  it("rejects result_key with stage 'preflight'", () => {
+  it("rejects result_key with phase 'preflight'", () => {
     expect(() =>
       parseDriveResults({
-        result_key: { stage: "preflight", rung: 0 },
+        result_key: { phase: "preflight", rung: 0 },
         producer: { status: "STATUS: DONE" },
       }),
     ).toThrow();
   });
 
-  it("rejects result_key with stage 'ship'", () => {
+  it("rejects result_key with phase 'ship'", () => {
     expect(() =>
       parseDriveResults({
-        result_key: { stage: "ship", rung: 0 },
+        result_key: { phase: "ship", rung: 0 },
         producer: { status: "STATUS: DONE" },
       }),
     ).toThrow();
@@ -124,7 +124,7 @@ describe("parseDriveResults", () => {
   it("rejects result_key with negative rung", () => {
     expect(() =>
       parseDriveResults({
-        result_key: { stage: "tests", rung: -1 },
+        result_key: { phase: "tests", rung: -1 },
         producer: { status: "STATUS: DONE" },
       }),
     ).toThrow();
@@ -133,7 +133,7 @@ describe("parseDriveResults", () => {
   it("rejects result_key with non-integer rung", () => {
     expect(() =>
       parseDriveResults({
-        result_key: { stage: "tests", rung: 1.5 },
+        result_key: { phase: "tests", rung: 1.5 },
         producer: { status: "STATUS: DONE" },
       }),
     ).toThrow();
