@@ -7867,6 +7867,7 @@ var SpawnRoleEnum = external_exports.enum([
   "security-reviewer",
   "silent-failure-hunter",
   "type-design-reviewer",
+  "systemic-failure-reviewer",
   "scribe"
 ]);
 var AgentSpecSchema = external_exports.object({
@@ -8140,6 +8141,8 @@ function reviewerNameOf(agentType) {
       return "silent-failure";
     case "type-design-reviewer":
       return "type-design";
+    case "systemic-failure-reviewer":
+      return "systemic-failure";
     default:
       return null;
   }

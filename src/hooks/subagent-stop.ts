@@ -20,7 +20,8 @@
  * Reviewer subagent role → ReviewerResult.reviewer name:
  *   implementation-reviewer → "implementation"; quality-reviewer → "quality";
  *   architecture-reviewer → "architecture"; security-reviewer → "security";
- *   silent-failure-hunter → "silent-failure"; type-design-reviewer → "type-design".
+ *   silent-failure-hunter → "silent-failure"; type-design-reviewer → "type-design";
+ *   systemic-failure-reviewer → "systemic-failure".
  *
  * The reviewer's verdict is parsed from the last assistant message's STATUS line
  * (DONE → approve; BLOCKED / anything else → blocked). A missing/unresolved
@@ -64,6 +65,8 @@ export function reviewerNameOf(agentType: string): string | null {
       return "silent-failure";
     case "type-design-reviewer":
       return "type-design";
+    case "systemic-failure-reviewer":
+      return "systemic-failure";
     default:
       return null;
   }

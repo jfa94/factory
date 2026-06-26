@@ -10,9 +10,9 @@
  * of different tiers necessarily get a deep-equal request.
  *
  * The panel is the full CCR-pattern set (Δ K): the four classic reviewers
- * (implementation / quality / architecture / security) PLUS silent-failure-hunter
- * and type-design-reviewer. All six roles already exist in the frozen
- * {@link SpawnRoleEnum} — no new role is invented here.
+ * (implementation / quality / architecture / security) PLUS silent-failure-hunter,
+ * type-design-reviewer, and systemic-failure-reviewer. All seven roles already exist
+ * in the frozen {@link SpawnRoleEnum} — no new role is invented here.
  *
  * Every reviewer runs on the SAME fixed model (Δ T) and the SAME turn budget
  * (D26 fixed depth). The request is validated through the frozen
@@ -21,7 +21,7 @@
 import { parseSpawnRequest, type SpawnRequest, type SpawnRole } from "../../types/index.js";
 
 /**
- * The six fixed panel roles, in a stable order. CLOSED: this list IS the panel
+ * The seven fixed panel roles, in a stable order. CLOSED: this list IS the panel
  * membership invariant. Each entry is a {@link SpawnRole} from the frozen enum.
  * Exported so the acceptance test asserts the exact set.
  */
@@ -32,6 +32,7 @@ export const PANEL_ROLES: readonly SpawnRole[] = [
   "security-reviewer",
   "silent-failure-hunter",
   "type-design-reviewer",
+  "systemic-failure-reviewer",
 ] as const;
 
 /**

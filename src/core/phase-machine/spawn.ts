@@ -35,6 +35,7 @@ export const SpawnRoleEnum = z.enum([
   "security-reviewer",
   "silent-failure-hunter",
   "type-design-reviewer",
+  "systemic-failure-reviewer",
   "scribe",
 ]);
 export type SpawnRole = z.infer<typeof SpawnRoleEnum>;

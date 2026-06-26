@@ -79,6 +79,7 @@ describe("reviewerNameOf", () => {
     expect(reviewerNameOf("security-reviewer")).toBe("security");
     expect(reviewerNameOf("silent-failure-hunter")).toBe("silent-failure");
     expect(reviewerNameOf("type-design-reviewer")).toBe("type-design");
+    expect(reviewerNameOf("systemic-failure-reviewer")).toBe("systemic-failure");
   });
 
   it("returns null for non-reviewer roles", () => {

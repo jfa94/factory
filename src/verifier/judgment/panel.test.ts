@@ -5,7 +5,7 @@ import { PANEL_ROLES, buildPanelManifest } from "./panel.js";
 const ALL_TIERS: readonly RiskTier[] = RiskTierEnum.options;
 
 describe("WS7 risk-invariant panel (D26 / Δ T)", () => {
-  it("Δ K: panel is EXACTLY the 6 fixed CCR-pattern roles", () => {
+  it("Δ K: panel is EXACTLY the 7 fixed CCR-pattern roles", () => {
     expect([...PANEL_ROLES].sort()).toEqual(
       [
         "architecture-reviewer",
@@ -13,10 +13,11 @@ describe("WS7 risk-invariant panel (D26 / Δ T)", () => {
         "quality-reviewer",
         "security-reviewer",
         "silent-failure-hunter",
+        "systemic-failure-reviewer",
         "type-design-reviewer",
       ].sort(),
     );
-    expect(PANEL_ROLES.length).toBe(6);
+    expect(PANEL_ROLES.length).toBe(7);
   });
 
   it("D26 / Δ T: membership, model, and max_turns are IDENTICAL across all risk tiers", () => {

@@ -8951,6 +8951,7 @@ var SpawnRoleEnum = external_exports.enum([
   "security-reviewer",
   "silent-failure-hunter",
   "type-design-reviewer",
+  "systemic-failure-reviewer",
   "scribe"
 ]);
 var AgentSpecSchema = external_exports.object({
@@ -11169,7 +11170,8 @@ var PANEL_ROLES = [
   "architecture-reviewer",
   "security-reviewer",
   "silent-failure-hunter",
-  "type-design-reviewer"
+  "type-design-reviewer",
+  "systemic-failure-reviewer"
 ];
 function promptRefFor(role) {
   return `reviews/prompts/${role}.md`;
