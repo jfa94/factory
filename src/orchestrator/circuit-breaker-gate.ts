@@ -31,8 +31,9 @@
  *    an un-deducted wall clock would falsely trip the ceiling on every resume of a run
  *    older than the cap, breaking suspend/resume. Session mode's time/quota budget is
  *    owned by the usage pacer instead, so we DISARM the runtime ceiling there by
- *    feeding `now` as the start (0 wall minutes → cannot trip). `pausedMinutes` is
- *    therefore always 0: workflow has no pauses to deduct, session has the arm off.
+ *    feeding `now` as the start (0 wall minutes → cannot trip). `run.paused_minutes`
+ *    (accumulated on resume / rescue-reopen) is deducted so a rescued workflow run
+ *    does not falsely trip on the idle time it spent waiting for the rescue.
  */
 import { evaluate, type CircuitBreakerResult } from "../quota/circuit-breaker.js";
 import { epochToIso } from "../shared/time.js";
@@ -70,7 +71,11 @@ export async function applyCircuitBreaker(
   const startedAtIso = run.mode === "workflow" ? run.started_at : epochToIso(now);
 
   const verdict = evaluate(
-    { startedAtIso, cumulativeFailures: capabilityFailures, pausedMinutes: 0 },
+    {
+      startedAtIso,
+      cumulativeFailures: capabilityFailures,
+      pausedMinutes: run.paused_minutes ?? 0,
+    },
     deps.config,
     now,
   );

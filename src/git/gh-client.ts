@@ -485,8 +485,10 @@ export class DefaultGhClient implements GhClient {
     try {
       const rules = parseJson<Array<{ type?: string }>>(r.stdout, path);
       return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
-    } catch {
-      return false;
+    } catch (err) {
+      // Unparseable JSON in a 200 body means "couldn't tell" — throw rather than
+      // silently return false and mask a real native merge queue (mirrors comment above).
+      throw err;
     }
   }
 }

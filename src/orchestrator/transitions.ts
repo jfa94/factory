@@ -22,7 +22,6 @@ import {
   classifyFailure,
   ESCALATION_CAP,
   phaseToInFlightStatus,
-  assertNever,
   type ClassifyDecision,
   type FailureClass,
   type ProducerOutcome,
@@ -176,42 +175,26 @@ export async function escalateOrFail(
 
 /** Map a non-`done` {@link ProducerOutcome} to a classify decision (Δ D). */
 export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecision {
-  switch (outcome.status) {
-    case "blocked-escalate":
-      return classifyFailure({
-        kind: "producer-status",
-        status: "blocked-escalate",
-        reason: outcome.reason,
-      });
-    case "test-defective":
-      return classifyFailure({
-        kind: "producer-status",
-        status: "test-defective",
-        reason: outcome.reason,
-      });
-    case "needs-context":
-      return classifyFailure({
-        kind: "producer-status",
-        status: "needs-context",
-        reason: outcome.reason,
-      });
-    case "error":
-      return classifyFailure({ kind: "producer-status", status: "error", reason: outcome.reason });
-    case "done":
-      throw new Error("transitions: classifyProducerFailure called on a 'done' outcome");
-    default:
-      return assertNever(outcome);
+  if (outcome.status === "done") {
+    throw new Error("transitions: classifyProducerFailure called on a 'done' outcome");
   }
+  return classifyFailure({
+    kind: "producer-status",
+    status: outcome.status,
+    reason: outcome.reason,
+  });
 }
 
 /**
  * Record a completed producer spawn into state (the producer-result logic the orchestrator's
  * `applyRecordProducer` record core calls). On `done`: record `producer_role` and
  * advance to `resumePhase` (clearing any pending test-revision feedback on a
- * test-writer done). On `test-defective` (implementer only): persist the defect
- * feedback and recover by resuming at the `tests` phase so the test-writer
- * regenerates. On any other failure status: classify (Δ D) → {@link escalateOrFail},
- * resuming at the SAME producer `phase`.
+ * test-writer done). On `test-defective` from the implementer (`exec` phase): persist
+ * the defect feedback and recover by resuming at the `tests` phase so the test-writer
+ * regenerates. A `test-defective` from any other role is nonsensical (the parser is
+ * role-blind) — classify as a producer `error` so the ladder records and caps it
+ * instead of escaping `next-action`'s catch. On any other failure status: classify
+ * (Δ D) → {@link escalateOrFail}, resuming at the SAME producer `phase`.
  *
  * The caller is responsible for the actual spawn (the runner's Agent spawn,
  * collected out-of-band) — this only records the resulting {@link ProducerOutcome}
@@ -239,8 +222,19 @@ export async function applyProducerOutcome(
   // (not the implementer's own `exec` phase). The escalation cap still bounds it.
   if (outcome.status === "test-defective") {
     if (opts.phase !== "exec") {
-      throw new Error(
-        `transitions: 'test-defective' raised from non-exec phase '${opts.phase}' (only the implementer may report a defective RED test)`,
+      // The parser is role-blind, so a non-exec role can emit 'test-defective'.
+      // That signal is nonsensical for the role: classify as a producer error so
+      // the ladder records + caps it instead of escaping next-action's catch.
+      return escalateOrFail(
+        deps,
+        runId,
+        taskId,
+        classifyFailure({
+          kind: "producer-status",
+          status: "error",
+          reason: `'test-defective' from non-exec role '${opts.role}': ${outcome.reason}`,
+        }),
+        opts.phase,
       );
     }
     await deps.state.updateTask(runId, taskId, (t) => ({

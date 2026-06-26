@@ -69,13 +69,16 @@ breaker counter is persisted** — the gate derives both signals from run state:
   they are consequences of a failure, not independent failures, so one real failure
   that cascades to two dependents can never masquerade as three counted failures
   and abort still-runnable work.
-- **Runtime arm (workflow mode only)** — wall-time since `run.started_at`. It is exact
-  only in workflow mode, which never pauses on quota (Decision 24), so wall-time _is_
-  the effective runtime and `pausedMinutes` is structurally 0. Session mode pauses and
-  suspends, `started_at` is never reset, and paused minutes are not tracked — so the
-  gate **disarms** the runtime ceiling there (a stale wall clock would otherwise
-  falsely trip on resume) and lets the usage pacer own session time/quota. Either way,
-  a quota pause can **never** trip the breaker.
+- **Runtime arm (workflow mode only)** — effective runtime `(wall − paused)` since
+  `run.started_at`, where `wall` is the elapsed time and `paused` is the run's
+  accumulated `paused_minutes`. It is exact only in workflow mode, which never pauses on
+  quota (Decision 24). `run.paused_minutes` accumulates the idle gap on each resume /
+  rescue-reopen and is **deducted** (`pausedMinutes: run.paused_minutes ?? 0`) so a
+  rescued workflow run does not falsely trip on the time it spent waiting for the
+  rescue. Session mode pauses and suspends and `started_at` is never reset, so the gate
+  **disarms** the runtime ceiling there (it feeds `now` as the start → 0 wall minutes →
+  cannot trip) and lets the usage pacer own session time/quota. Either way, a quota
+  pause can **never** trip the breaker.
 
 ## Decision 3 — Fail closed; absence is never permission
 

@@ -1936,6 +1936,15 @@ async function withFileLock(opts, fn) {
   }
 }
 
+// src/shared/usage-error.ts
+var UsageError = class extends Error {
+  isUsageError = true;
+  constructor(message) {
+    super(message);
+    this.name = "UsageError";
+  }
+};
+
 // src/hooks/git-args.ts
 function unquote(tok) {
   let t = tok;
@@ -6761,6 +6770,12 @@ function buildTcbRules(ctx = {}) {
       describe: "<dataDir>/specs/** (durable spec store)",
       test: (p) => isAtOrUnder(p, specsDir)
     });
+    const configFile = canonicalizeAnchor(resolve2(ctx.dataDir, "config.json"));
+    rules.push({
+      category: "data-config",
+      describe: "<dataDir>/config.json (operator config \u2014 writing it enables arbitrary shell via setupCommand)",
+      test: (p) => p === configFile
+    });
   } else {
     rules.push({
       category: "data-runs",
@@ -7330,6 +7345,8 @@ var QuotaCheckpointSchema = external_exports.object({
 var DocsPhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]),
   reason: external_exports.string().optional(),
+  /** Cumulative attempt count (1-indexed). Absent on legacy records — treat as 1. */
+  attempts: external_exports.number().int().nonnegative().optional(),
   ended_at: external_exports.string()
 });
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
@@ -7383,6 +7400,13 @@ var RunStateSchema = external_exports.object({
   quota: QuotaCheckpointSchema.optional(),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
+  /**
+   * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
+   * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
+   * real pause time from wall-time, preventing a false trip on a long-paused run. Default
+   * 0 — absent on legacy runs (pre-Group-2-E records) → treated as 0 (no regression).
+   */
+  paused_minutes: external_exports.number().nonnegative().default(0),
   /** Lifecycle timestamps (ISO-8601). */
   started_at: external_exports.string(),
   updated_at: external_exports.string(),
@@ -7396,6 +7420,15 @@ function refineRunCrossFields(run, ctx) {
       path: ["quota"],
       message: `run '${run.run_id}' carries a quota checkpoint but status is '${run.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
+  }
+  for (const [k, value] of Object.entries(run.tasks)) {
+    if (k !== value.task_id) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["tasks", k, "task_id"],
+        message: `tasks map key '${k}' does not match row task_id '${value.task_id}'`
+      });
+    }
   }
 }
 var RunStateChecked = RunStateSchema.superRefine(refineRunCrossFields);
@@ -7459,7 +7492,7 @@ function specDir(dataDir, repo, specId) {
 // src/core/state/manager.ts
 var log6 = createLogger("state");
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
-var StateManager = class {
+var StateManager = class _StateManager {
   dataDir;
   lockTuning;
   constructor(opts = {}) {
@@ -7472,6 +7505,21 @@ var StateManager = class {
   }
   lockfilePath(runId) {
     return join4(runDir(this.dataDir, runId), "state.lock");
+  }
+  /**
+   * F3: reject pre-v2 state files with a clear UsageError instead of a raw ZodError.
+   * `schema_version` absent or === 2 → pass through to parseRunState normally.
+   * Any other value → the file predates the current schema; ephemeral runs can't be
+   * migrated, so the user gets a clear "start a fresh run" message.
+   */
+  static guardedParse(raw, context) {
+    const v = raw?.schema_version;
+    if (v !== void 0 && v !== 2) {
+      throw new UsageError(
+        `run state at '${context}' uses schema v${String(v)}; only v2 is supported \u2014 start a fresh run`
+      );
+    }
+    return parseRunState(raw);
   }
   specLockfilePath(repo, specId) {
     return join4(specDir(this.dataDir, repo, specId), "create.lock");
@@ -7570,7 +7618,7 @@ var StateManager = class {
   async read(runId) {
     const path = this.statePath(runId);
     const raw = await readFile(path, "utf8");
-    return parseRunState(parseJson(raw, path));
+    return _StateManager.guardedParse(parseJson(raw, path), path);
   }
   /**
    * Read the run currently pointed at by `runs/current`, or null if there is no
@@ -7616,7 +7664,7 @@ var StateManager = class {
       if (err.code === "ENOENT") return null;
       throw err;
     }
-    return parseRunState(parseJson(raw, statePath));
+    return _StateManager.guardedParse(parseJson(raw, statePath), statePath);
   }
   // ---- enumerate (lock-free) ---------------------------------------------
   /**

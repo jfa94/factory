@@ -407,6 +407,8 @@ export type QuotaCheckpoint = z.infer<typeof QuotaCheckpointSchema>;
 export const DocsPhaseSchema = z.object({
   status: z.enum(["done", "failed"]),
   reason: z.string().optional(),
+  /** Cumulative attempt count (1-indexed). Absent on legacy records — treat as 1. */
+  attempts: z.number().int().nonnegative().optional(),
   ended_at: z.string(),
 });
 export type DocsPhase = z.infer<typeof DocsPhaseSchema>;
@@ -513,6 +515,14 @@ export const RunStateSchema = z.object({
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
 
+  /**
+   * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
+   * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
+   * real pause time from wall-time, preventing a false trip on a long-paused run. Default
+   * 0 — absent on legacy runs (pre-Group-2-E records) → treated as 0 (no regression).
+   */
+  paused_minutes: z.number().nonnegative().default(0),
+
   /** Lifecycle timestamps (ISO-8601). */
   started_at: z.string(),
   updated_at: z.string(),
@@ -534,6 +544,18 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
       path: ["quota"],
       message: `run '${run.run_id}' carries a quota checkpoint but status is '${run.status}' (a quota checkpoint is valid only while paused|suspended)`,
     });
+  }
+
+  // F2: tasks map key must equal the row's task_id so DAG traversal and keyed lookups
+  // always agree. A key/id mismatch is a serialization bug — reject at parse time.
+  for (const [k, value] of Object.entries(run.tasks)) {
+    if (k !== value.task_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tasks", k, "task_id"],
+        message: `tasks map key '${k}' does not match row task_id '${value.task_id}'`,
+      });
+    }
   }
 }
 

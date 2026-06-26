@@ -141,8 +141,11 @@ sequenceDiagram
 ```
 
 - **Phase guard.** `applyProducerOutcome` (`src/orchestrator/transitions.ts`)
-  LOUD-throws if `test-defective` arrives from any phase other than `exec` — only the
-  implementer may judge a test defective.
+  accepts `test-defective` **only** from the `exec` phase — only the implementer may
+  judge a test defective. Because the status parser is role-blind, a non-exec role can
+  still emit the signal; rather than throwing (which would escape `next-action`'s catch),
+  the outcome is reclassified as a producer **error** and routed through `escalateOrFail`,
+  so the ladder records and caps it like any other failure.
 - **Feedback carry.** The implementer's reason is persisted on the transient task
   field `test_revision_feedback`, then injected into the regenerating test-writer's
   `priorFailures` so it writes a behavioral test instead of re-pinning the same

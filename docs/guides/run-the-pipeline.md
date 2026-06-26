@@ -107,14 +107,14 @@ resolve|gate|store`), spawning `spec-generator` / `spec-reviewer`, until the
    seeded.
 4. **Drive** — the runner steps the seam. `factory next-task` returns the ready task;
    `factory next-action` advances it through the per-task phase machine (`preflight →
-tests → exec → verify → ship`), emitting a spawn manifest whenever it needs
-   agents. The runner spawns the producers and the review panel the manifest
+tests → exec → verify → ship`), emitting a spawn request whenever it needs
+   agents. The runner spawns the producers and the review panel the request
    names, then records their raw output back with `factory next-action --results` (one
    state step). The engine — not the runner — decides every transition.
 5. **Docs** — once all tasks are terminal and the PRD would be `completed`,
    `factory next-task` returns `document` (not yet `finalize`) if the repo keeps a
    `/docs` directory and docs aren't opted out. The runner runs `factory run docs`,
-   which emits a scribe manifest; the runner spawns the `scribe` agent and records the
+   which emits a scribe spawn request; the runner spawns the `scribe` agent and records the
    docs commit onto the `staging-<run-id>` branch. Only after that record does `next-task`
    emit `finalize`. A docs failure suspends the run (resumable via
    `/factory:resume`). On a `failed` run, or when docs are opted out, this phase is

@@ -29,6 +29,14 @@ export type DocsAction =
 const DOCS_MODEL = "opus";
 const DOCS_MAX_TURNS = 60;
 
+/**
+ * Maximum docs-phase attempts before the run treats docs as best-effort and finalizes
+ * `completed` without a docs commit. Prevents an infinite suspend-loop when the scribe
+ * agent repeatedly fails (e.g. a broken /docs path or a persistent git error).
+ */
+// ponytail: 2 is enough; a third retry rarely fixes a structural failure
+export const MAX_DOCS_ATTEMPTS = 2;
+
 /** The docs-phase worktree path for a run (under the run store). */
 export function docsWorktreePath(dataDir: string, runId: string): string {
   return join(dataDir, "runs", runId, "docs-worktree");
@@ -101,12 +109,22 @@ export async function runDocsRecord(
     return { kind: "done", run_id: runId };
   }
 
-  // One attempt: suspend (resumable). Keep the staging branch + worktree for retry on resume.
+  // Failure: track attempts and suspend for a retry. Once the cap is hit, treat docs as
+  // best-effort — finalize `done` so the run completes instead of looping infinitely.
   const reason = "reason" in outcome ? outcome.reason : "docs phase failed";
+  const attempts = (run.docs?.attempts ?? 0) + 1;
+  const docsRecord = { status: "failed" as const, reason, attempts, ended_at: nowIso() };
+
+  if (attempts >= MAX_DOCS_ATTEMPTS) {
+    // ponytail: cap hit — docs best-effort; runner proceeds to finalize instead of suspend
+    await deps.state.update(runId, (s) => ({ ...s, docs: docsRecord }));
+    return { kind: "done", run_id: runId };
+  }
+
   await deps.state.update(runId, (s) => ({
     ...s,
     status: "suspended",
-    docs: { status: "failed", reason, ended_at: nowIso() },
+    docs: docsRecord,
   }));
   return { kind: "suspend", run_id: runId, reason };
 }

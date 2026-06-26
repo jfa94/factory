@@ -42,16 +42,16 @@ graph TD
   end
 
   subgraph Engine["Deterministic engine (TypeScript)"]
-    CLI[factory CLI<br/>dist/factory.js<br/>orchestrator: next + drive]
+    CLI[factory CLI<br/>dist/factory.js<br/>orchestrator: next-task + next-action]
     Hook[factory-hook<br/>dist/factory-hook.js]
   end
 
   Runner["Runner (session loop | --workflow script)"] -->|loads| Skill
-  Runner -->|steps: next / drive| CLI
-  CLI -->|envelope: spawn manifest / next step| Runner
+  Runner -->|steps: next-task / next-action| CLI
+  CLI -->|envelope: spawn request / next step| Runner
   Runner -->|Agent spawns| Producers[test-writer / implementer]
   Runner -->|Agent spawns| Panel[6-reviewer panel + holdout + verifiers]
-  Runner -->|drive --results: records outcomes| CLI
+  Runner -->|next-action --results: records outcomes| CLI
   CLI -->|reads/writes| State[(run/spec state)]
   Hook -->|deny/allow at tool-use| Runner
 ```
@@ -64,7 +64,7 @@ merge gate, PR creation — and the pipeline loop itself, exposed through ONE se
 **never spawns an agent**.
 
 **A runner is the hands.** A thin runner steps the seam: it performs every
-`Agent()` spawn the orchestrator's manifest names, collects the agents' raw output, and
+`Agent()` spawn the orchestrator's request names, collects the agents' raw output, and
 feeds it back via `factory next-action --results`. It never decides a transition,
 re-runs a gate, classifies a failure, or writes state by prose. Two interchangeable
 runners exist (selected by `--workflow` on `/factory:run`): the in-session runner
@@ -73,7 +73,7 @@ loop (session, the default) and the plugin-shipped Workflow script (`--workflow`
 The CLI is a **reporter + orchestrator + writer**, not a runner:
 
 - **The orchestrator** — `next-task` (run-level: the ready set) and `next-action` (task-level: run a
-  task's deterministic phases, emit a spawn manifest, and via `--results` record the
+  task's deterministic phases, emit a spawn request, and via `--results` record the
   agents' output into ONE state step). This is the only control-flow seam.
 - **Reporter** subcommands (`spec`, `score`, `rescue scan`, `state`) emit one JSON
   envelope and write nothing.
@@ -119,15 +119,15 @@ sequenceDiagram
     CLI-->>O: NextTask (work | document | finalize | pause)
     loop advance the ready task: preflight→tests→exec→verify→ship
       O->>CLI: factory next-action --task <t> [--results <prev>]
-      CLI-->>O: NextAction (spawn manifest | done | pause)
-      O->>A: spawn the agents the manifest names
+      CLI-->>O: NextAction (spawn request | done | pause)
+      O->>A: spawn the agents the request names
       A-->>O: STATUS line / raw reviews
     end
   end
 
   Note over O,CLI: Phase 3b — Docs (when all tasks completed and /docs is applicable)
   O->>CLI: factory run docs
-  CLI-->>O: DocsAction (scribe manifest on staging-rooted worktree)
+  CLI-->>O: DocsAction (scribe spawn request on staging-rooted worktree)
   O->>A: spawn scribe
   A-->>O: docs commit on staging
   O->>CLI: factory run docs --results <output>
@@ -166,11 +166,13 @@ When all tasks are terminal and the PRD would be `completed`, `factory next-task
 returns `document` instead of `finalize` — provided the repo keeps a `/docs`
 directory and docs are not opted out (`package.json` `factory.docs.enabled !== false`)
 and the run's docs phase isn't already `done`. The runner then runs `factory run docs`,
-which emits a scribe manifest for a staging-rooted worktree; the runner spawns the
+which emits a scribe spawn request for a staging-rooted worktree; the runner spawns the
 `scribe` agent, then records the docs commit back via `factory run docs --results`. The
 record merges/pushes the docs commit onto the staging branch. Only once docs are `done`
-does `factory next-task` emit `finalize`. A docs failure suspends the run (one attempt;
-resumable via `/factory:resume`). On a `failed` run, or when docs are opted out, the
+does `factory next-task` emit `finalize`. A docs failure suspends the run for a retry
+(resumable via `/factory:resume`), bounded by `MAX_DOCS_ATTEMPTS` (2) — once the cap is
+hit, docs are treated as best-effort and the run finalizes `completed` without a docs
+commit instead of suspend-looping. On a `failed` run, or when docs are opted out, the
 docs phase is skipped and `finalize` fires immediately (Decision 37).
 
 The run-level **finalize** step is a _separate_ phase that runs once, after every

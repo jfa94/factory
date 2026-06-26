@@ -6338,6 +6338,8 @@ var QuotaCheckpointSchema = external_exports.object({
 var DocsPhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]),
   reason: external_exports.string().optional(),
+  /** Cumulative attempt count (1-indexed). Absent on legacy records — treat as 1. */
+  attempts: external_exports.number().int().nonnegative().optional(),
   ended_at: external_exports.string()
 });
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
@@ -6391,6 +6393,13 @@ var RunStateSchema = external_exports.object({
   quota: QuotaCheckpointSchema.optional(),
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
+  /**
+   * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
+   * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
+   * real pause time from wall-time, preventing a false trip on a long-paused run. Default
+   * 0 — absent on legacy runs (pre-Group-2-E records) → treated as 0 (no regression).
+   */
+  paused_minutes: external_exports.number().nonnegative().default(0),
   /** Lifecycle timestamps (ISO-8601). */
   started_at: external_exports.string(),
   updated_at: external_exports.string(),
@@ -6404,6 +6413,15 @@ function refineRunCrossFields(run9, ctx) {
       path: ["quota"],
       message: `run '${run9.run_id}' carries a quota checkpoint but status is '${run9.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
+  }
+  for (const [k, value] of Object.entries(run9.tasks)) {
+    if (k !== value.task_id) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["tasks", k, "task_id"],
+        message: `tasks map key '${k}' does not match row task_id '${value.task_id}'`
+      });
+    }
   }
 }
 var RunStateChecked = RunStateSchema.superRefine(refineRunCrossFields);
@@ -6615,7 +6633,7 @@ function specBuildDir(dataDir, repo, issueNumber) {
 // src/core/state/manager.ts
 var log4 = createLogger("state");
 var DEFAULT_LOCK_TUNING = DEFAULT_FILE_LOCK_TUNING;
-var StateManager = class {
+var StateManager = class _StateManager {
   dataDir;
   lockTuning;
   constructor(opts = {}) {
@@ -6628,6 +6646,21 @@ var StateManager = class {
   }
   lockfilePath(runId) {
     return join4(runDir(this.dataDir, runId), "state.lock");
+  }
+  /**
+   * F3: reject pre-v2 state files with a clear UsageError instead of a raw ZodError.
+   * `schema_version` absent or === 2 → pass through to parseRunState normally.
+   * Any other value → the file predates the current schema; ephemeral runs can't be
+   * migrated, so the user gets a clear "start a fresh run" message.
+   */
+  static guardedParse(raw, context) {
+    const v = raw?.schema_version;
+    if (v !== void 0 && v !== 2) {
+      throw new UsageError(
+        `run state at '${context}' uses schema v${String(v)}; only v2 is supported \u2014 start a fresh run`
+      );
+    }
+    return parseRunState(raw);
   }
   specLockfilePath(repo, specId) {
     return join4(specDir(this.dataDir, repo, specId), "create.lock");
@@ -6726,7 +6759,7 @@ var StateManager = class {
   async read(runId) {
     const path4 = this.statePath(runId);
     const raw = await readFile(path4, "utf8");
-    return parseRunState(parseJson(raw, path4));
+    return _StateManager.guardedParse(parseJson(raw, path4), path4);
   }
   /**
    * Read the run currently pointed at by `runs/current`, or null if there is no
@@ -6772,7 +6805,7 @@ var StateManager = class {
       if (err.code === "ENOENT") return null;
       throw err;
     }
-    return parseRunState(parseJson(raw, statePath));
+    return _StateManager.guardedParse(parseJson(raw, statePath), statePath);
   }
   // ---- enumerate (lock-free) ---------------------------------------------
   /**
@@ -7998,8 +8031,8 @@ var DefaultGhClient = class {
     try {
       const rules = parseJson(r.stdout, path4);
       return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
-    } catch {
-      return false;
+    } catch (err) {
+      throw err;
     }
   }
 };
@@ -10106,7 +10139,7 @@ function parseProducerStatus(raw) {
   if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {
     return { status: "needs-context", reason: line };
   }
-  if (upper.includes("DONE")) {
+  if (/^(?:STATUS\s*:\s*)?DONE\b/.test(upper)) {
     return { status: "done" };
   }
   return {
@@ -11721,32 +11754,14 @@ async function escalateOrFail(deps, runId, taskId, decision, resumePhase) {
   return { done: false, phase: resumePhase };
 }
 function classifyProducerFailure(outcome) {
-  switch (outcome.status) {
-    case "blocked-escalate":
-      return classifyFailure({
-        kind: "producer-status",
-        status: "blocked-escalate",
-        reason: outcome.reason
-      });
-    case "test-defective":
-      return classifyFailure({
-        kind: "producer-status",
-        status: "test-defective",
-        reason: outcome.reason
-      });
-    case "needs-context":
-      return classifyFailure({
-        kind: "producer-status",
-        status: "needs-context",
-        reason: outcome.reason
-      });
-    case "error":
-      return classifyFailure({ kind: "producer-status", status: "error", reason: outcome.reason });
-    case "done":
-      throw new Error("transitions: classifyProducerFailure called on a 'done' outcome");
-    default:
-      return assertNever(outcome);
+  if (outcome.status === "done") {
+    throw new Error("transitions: classifyProducerFailure called on a 'done' outcome");
   }
+  return classifyFailure({
+    kind: "producer-status",
+    status: outcome.status,
+    reason: outcome.reason
+  });
 }
 async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
   if (outcome.status === "done") {
@@ -11761,8 +11776,16 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
   }
   if (outcome.status === "test-defective") {
     if (opts.phase !== "exec") {
-      throw new Error(
-        `transitions: 'test-defective' raised from non-exec phase '${opts.phase}' (only the implementer may report a defective RED test)`
+      return escalateOrFail(
+        deps,
+        runId,
+        taskId,
+        classifyFailure({
+          kind: "producer-status",
+          status: "error",
+          reason: `'test-defective' from non-exec role '${opts.role}': ${outcome.reason}`
+        }),
+        opts.phase
       );
     }
     await deps.state.updateTask(runId, taskId, (t) => ({
@@ -12595,6 +12618,78 @@ async function nextAction(deps, runId, taskId, results) {
   }
 }
 
+// src/orchestrator/docs.ts
+import { join as join16 } from "node:path";
+var DOCS_MODEL = "opus";
+var DOCS_MAX_TURNS = 60;
+var MAX_DOCS_ATTEMPTS = 2;
+function docsWorktreePath(dataDir, runId) {
+  return join16(dataDir, "runs", runId, "docs-worktree");
+}
+function buildScribePrompt(worktree, baseRef) {
+  return [
+    "You are the factory scribe running the pipeline's documentation phase.",
+    `1. cd into your worktree: ${worktree} (already checked out on the docs branch off the staging tip).`,
+    `2. Determine the whole-PRD change set with: git diff ${baseRef}..HEAD`,
+    "3. Update /docs (Di\xE1taxis) to reflect those changes, per agents/scribe.md.",
+    "4. COMMIT your changes IN this worktree. Do NOT push (the engine pushes on record).",
+    "5. If nothing material changed, make no commit.",
+    'Finish with your terminal STATUS line and return it as {"status": "<line>"}.'
+  ].join("\n");
+}
+async function runDocsEmit(deps, runId) {
+  const run9 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const base = deps.config.git.baseBranch;
+  const docsBranch = `docs-${runId}`;
+  const worktree = docsWorktreePath(deps.dataDir, runId);
+  const baseRef = `origin/${base}`;
+  await deps.git.fetch("origin", staging);
+  await deps.git.fetch("origin", base);
+  if (!await deps.git.worktreeExists(worktree)) {
+    await deps.git.worktreeAdd(["-b", docsBranch, worktree, `origin/${staging}`]);
+  }
+  return {
+    kind: "spawn",
+    run_id: runId,
+    worktree,
+    base_ref: baseRef,
+    staging_branch: staging,
+    docs_branch: docsBranch,
+    model: DOCS_MODEL,
+    max_turns: DOCS_MAX_TURNS,
+    prompt: buildScribePrompt(worktree, baseRef)
+  };
+}
+var DocsResultsSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
+async function runDocsRecord(deps, runId, results) {
+  const run9 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const docsBranch = `docs-${runId}`;
+  const worktree = docsWorktreePath(deps.dataDir, runId);
+  const outcome = parseProducerStatus(results.status);
+  if (outcome.status === "done") {
+    await deps.git.mergeFfOrCommit(staging, docsBranch);
+    await deps.git.push("origin", staging);
+    await deps.git.worktreeRemove([worktree, "--force"]);
+    await deps.state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: nowIso() } }));
+    return { kind: "done", run_id: runId };
+  }
+  const reason = "reason" in outcome ? outcome.reason : "docs phase failed";
+  const attempts = (run9.docs?.attempts ?? 0) + 1;
+  const docsRecord = { status: "failed", reason, attempts, ended_at: nowIso() };
+  if (attempts >= MAX_DOCS_ATTEMPTS) {
+    await deps.state.update(runId, (s) => ({ ...s, docs: docsRecord }));
+    return { kind: "done", run_id: runId };
+  }
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    status: "suspended",
+    docs: docsRecord
+  }));
+  return { kind: "suspend", run_id: runId, reason };
+}
+
 // src/orchestrator/circuit-breaker-gate.ts
 async function applyCircuitBreaker(deps, runId) {
   const run9 = await deps.state.read(runId);
@@ -12604,7 +12699,11 @@ async function applyCircuitBreaker(deps, runId) {
   ).length;
   const startedAtIso = run9.mode === "workflow" ? run9.started_at : epochToIso(now);
   const verdict = evaluate2(
-    { startedAtIso, cumulativeFailures: capabilityFailures, pausedMinutes: 0 },
+    {
+      startedAtIso,
+      cumulativeFailures: capabilityFailures,
+      pausedMinutes: run9.paused_minutes ?? 0
+    },
     deps.config,
     now
   );
@@ -12621,6 +12720,7 @@ function isUnsatisfiableDep(run9, depId) {
 }
 async function wantsDocs(deps, run9) {
   if (run9.docs?.status === "done") return false;
+  if ((run9.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false;
   if (decideFinalize(run9).run_status !== "completed") return false;
   return deps.docsApplicable();
 }
@@ -12720,71 +12820,6 @@ async function nextTask(deps, runId) {
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
   return { ...ctx(), kind: "work", ready: ordered, cascade_failed: cascadeFailed };
-}
-
-// src/orchestrator/docs.ts
-import { join as join16 } from "node:path";
-var DOCS_MODEL = "opus";
-var DOCS_MAX_TURNS = 60;
-function docsWorktreePath(dataDir, runId) {
-  return join16(dataDir, "runs", runId, "docs-worktree");
-}
-function buildScribePrompt(worktree, baseRef) {
-  return [
-    "You are the factory scribe running the pipeline's documentation phase.",
-    `1. cd into your worktree: ${worktree} (already checked out on the docs branch off the staging tip).`,
-    `2. Determine the whole-PRD change set with: git diff ${baseRef}..HEAD`,
-    "3. Update /docs (Di\xE1taxis) to reflect those changes, per agents/scribe.md.",
-    "4. COMMIT your changes IN this worktree. Do NOT push (the engine pushes on record).",
-    "5. If nothing material changed, make no commit.",
-    'Finish with your terminal STATUS line and return it as {"status": "<line>"}.'
-  ].join("\n");
-}
-async function runDocsEmit(deps, runId) {
-  const run9 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run9.staging_branch);
-  const base = deps.config.git.baseBranch;
-  const docsBranch = `docs-${runId}`;
-  const worktree = docsWorktreePath(deps.dataDir, runId);
-  const baseRef = `origin/${base}`;
-  await deps.git.fetch("origin", staging);
-  await deps.git.fetch("origin", base);
-  if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-b", docsBranch, worktree, `origin/${staging}`]);
-  }
-  return {
-    kind: "spawn",
-    run_id: runId,
-    worktree,
-    base_ref: baseRef,
-    staging_branch: staging,
-    docs_branch: docsBranch,
-    model: DOCS_MODEL,
-    max_turns: DOCS_MAX_TURNS,
-    prompt: buildScribePrompt(worktree, baseRef)
-  };
-}
-var DocsResultsSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
-async function runDocsRecord(deps, runId, results) {
-  const run9 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run9.staging_branch);
-  const docsBranch = `docs-${runId}`;
-  const worktree = docsWorktreePath(deps.dataDir, runId);
-  const outcome = parseProducerStatus(results.status);
-  if (outcome.status === "done") {
-    await deps.git.mergeFfOrCommit(staging, docsBranch);
-    await deps.git.push("origin", staging);
-    await deps.git.worktreeRemove([worktree, "--force"]);
-    await deps.state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: nowIso() } }));
-    return { kind: "done", run_id: runId };
-  }
-  const reason = "reason" in outcome ? outcome.reason : "docs phase failed";
-  await deps.state.update(runId, (s) => ({
-    ...s,
-    status: "suspended",
-    docs: { status: "failed", reason, ended_at: nowIso() }
-  }));
-  return { kind: "suspend", run_id: runId, reason };
 }
 
 // src/orchestrator/docs-applicable.ts
@@ -13160,10 +13195,15 @@ async function applyResume(state, runId, reading, config, nowEpochSec) {
     case "not-resumable":
       return { kind: "resumed", run: run9 };
     case "resume": {
+      const idleMinutes = Math.max(
+        0,
+        Math.floor((nowEpochSec - parseIso8601ToEpoch(run9.updated_at)) / 60)
+      );
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
-        quota: plan.clear.quota
+        quota: plan.clear.quota,
+        paused_minutes: (s.paused_minutes ?? 0) + idleMinutes
       }));
       return { kind: "resumed", run: updated };
     }
@@ -13843,6 +13883,7 @@ function selectTargets(run9, opts) {
 }
 async function applyRescue(state, runId, opts = {}) {
   let result = null;
+  const now = nowEpoch();
   const updated = await state.update(runId, (run9) => {
     const { targets, skipped } = selectTargets(run9, opts);
     const wasTerminal = isTerminalRunStatus(run9.status);
@@ -13866,7 +13907,12 @@ async function applyRescue(state, runId, opts = {}) {
       tasks: nextTasks,
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
-      ...reopen ? { status: "running", ended_at: null } : {}
+      // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.
+      ...reopen ? {
+        status: "running",
+        ended_at: null,
+        paused_minutes: (run9.paused_minutes ?? 0) + Math.max(0, Math.floor((now - parseIso8601ToEpoch(run9.updated_at)) / 60))
+      } : {}
     };
   });
   return { ...result, run_status: updated.status };

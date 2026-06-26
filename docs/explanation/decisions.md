@@ -633,9 +633,9 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 **Choice:** The deterministic `factory` CLI owns **all** pipeline control flow — including the loop itself — and exposes exactly **one** seam, the **orchestrator**, in two halves:
 
 - `factory next-task` — the **run-level** orchestrator (`src/orchestrator/next.ts`, `nextTask`): emits a `NextTask` of ready tasks (or terminal / pause).
-- `factory next-action` — the **task-level** orchestrator (`src/orchestrator/orchestrator.ts`, `nextAction`): emits a `NextAction` spawn manifest; re-invoked with `--results` it records the spawned agents' raw output into exactly **one** state step (record cores in `src/orchestrator/record.ts`).
+- `factory next-action` — the **task-level** orchestrator (`src/orchestrator/orchestrator.ts`, `nextAction`): emits a `NextAction` spawn request; re-invoked with `--results` it records the spawned agents' raw output into exactly **one** state step (record cores in `src/orchestrator/record.ts`).
 
-A **runner** carries no pipeline logic of its own — it only calls the orchestrator, spawns the `Agent()`s the `NextAction` manifest names, and feeds their output back via `next-action --results`. Two interchangeable runners step the same seam, selected by `--workflow` on `/factory:run` (Decision 32):
+A **runner** carries no pipeline logic of its own — it only calls the orchestrator, spawns the `Agent()`s the `NextAction` request names, and feeds their output back via `next-action --results`. Two interchangeable runners step the same seam, selected by `--workflow` on `/factory:run` (Decision 32):
 
 - session (default, no flag) — the in-session LLM runner loop (`skills/pipeline-runner/SKILL.md`), which can spawn `Agent()`s directly.
 - `--workflow` — the plugin-shipped Workflow script (`scripts/factory-run-runner.js`), which wraps every CLI call in a small exec agent (Workflow JS cannot shell out).
@@ -645,10 +645,10 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 **Why:**
 
 - **One implementation of the loop, by construction.** The earlier design had the loop expressed twice — an in-process runner (`src/orchestrator/loop.ts`, `driveTask` / `driveRun`) used in tests, and the runner skill mirroring it by prose — kept in agreement only by discipline. Collapsing both onto the orchestrator makes the loop a single tested kernel both runners inherit verbatim; two runners cannot diverge on a transition because neither owns one.
-- **Idempotent, exactly-once records.** `next-action` without `--results` re-derives the same spawn envelope from persisted state (safe to retry after any crash); `next-action --results` validates the echoed `result_key` (`{phase, rung}`) against the live cursor before any mutation, so a stale or duplicate delivery is rejected loud instead of double-folded. The resume cursor is the new `TaskState.phase` field.
-- **The seam is runner-agnostic.** Because the orchestrator emits a manifest and the runner merely spawns it, adding a runner (e.g. a future out-of-session scheduler) is a new thin loop over the unchanged seam — not a re-implementation of pipeline logic.
+- **Idempotent, exactly-once records.** `next-action` without `--results` re-derives the same spawn envelope from persisted state (safe to retry after any crash); `next-action --results` validates the echoed `result_key` (`{phase, rung}`) against the live cursor before any mutation, so a stale or duplicate delivery is rejected loud instead of double-recorded. The resume cursor is the new `TaskState.phase` field.
+- **The seam is runner-agnostic.** Because the orchestrator emits a spawn request and the runner merely spawns it, adding a runner (e.g. a future out-of-session scheduler) is a new thin loop over the unchanged seam — not a re-implementation of pipeline logic.
 
-**What this retired:** the six single-step CLI writers — `run-task`, `advance`, `fail`, `record-producer`, `record-holdout`, `record-reviews` — collapsed into the orchestrator; their record logic now runs inside `next-action --results` (`src/orchestrator/record.ts`). `src/orchestrator/loop.ts` and `src/orchestrator/agent-runner.ts` (the in-process `driveTask` / `driveRun` loop) were deleted. The surviving non-orchestrator writers are `spec`, `rescue`, `scaffold`, `configure`, `state`; the current `factory` subcommand registry is `config-defaults, configure, run, spec, rescue, score, state, scaffold, drive, next, statusline, autonomy`.
+**What this retired:** the six single-step CLI writers — `run-task`, `advance`, `fail`, `record-producer`, `record-holdout`, `record-reviews` — collapsed into the orchestrator; their record logic now runs inside `next-action --results` (`src/orchestrator/record.ts`). `src/orchestrator/loop.ts` and `src/orchestrator/agent-runner.ts` (the in-process `driveTask` / `driveRun` loop) were deleted. The surviving non-orchestrator writers are `spec`, `rescue`, `scaffold`, `configure`, `state`; the current `factory` subcommand registry is `autonomy, config-defaults, configure, next-action, next-task, rescue, resume, run, scaffold, score, spec, state, statusline`.
 
 **Trade-off:** A runner re-invokes the CLI per step (one process spawn per orchestrator call) rather than running the loop in-process, and must persist/relay the per-spawn results file between `next-action` calls. Accepted: the spawn boundary is where an `Agent()` call is unavoidable anyway, and per-call idempotency is what makes crash-resume and the two-runner story sound.
 
@@ -842,11 +842,13 @@ merged and the PRD issue closed, leaving doc updates uncommitted. It is now a
 deterministic, blocking, resumable engine phase: `factory next-task` returns
 `document` when the prospective status is `completed`, the repo keeps `/docs`,
 docs are not opted out (`package.json` `factory.docs.enabled`), and the docs
-phase isn't `done`. A runner runs `factory run docs` (emit a scribe manifest on a
+phase isn't `done`. A runner runs `factory run docs` (emit a scribe spawn request on a
 staging-rooted worktree → record publishes the docs commit onto staging). Because
 `next-task` withholds `finalize` until docs are `done`, the rollup/PRD-close cannot
-fire while docs pend. A docs failure suspends the run (one attempt; resumable via
-`/factory:resume`), never shipping half-documented. Whole-PRD diff
+fire while docs pend. A docs failure suspends the run for a retry (resumable via
+`/factory:resume`), bounded by `MAX_DOCS_ATTEMPTS` (2) — once the cap is hit docs become
+best-effort and the run finalizes `completed` without a docs commit rather than
+suspend-looping — never shipping half-documented. Whole-PRD diff
 (`origin/<baseBranch>..HEAD`); ships inside the one rollup PR (Decision 34).
 
 ---
@@ -878,11 +880,13 @@ revision <reason>`. `parseProducerStatus` (`src/producer/agents.ts`) promotes a
 - **Classification.** `test-defective` classifies as `{action:"retry"}` →
   `capability` (`src/producer/classify.ts`), **not** the terminal `spec-defect` that
   `blocked-escalate` maps to. `classify.ts` stays phase-agnostic.
-- **Routing.** `applyProducerOutcome` (`src/orchestrator/transitions.ts`) LOUD-guards
-  that the outcome came from the `exec` phase (only the implementer may raise it),
-  persists the defect reason on the transient task field `test_revision_feedback`,
-  then `escalateOrFail(..., "tests")` — resuming at `tests`, not the implementer's own
-  `exec` phase.
+- **Routing.** `applyProducerOutcome` (`src/orchestrator/transitions.ts`) accepts the
+  outcome only from the `exec` phase (only the implementer may raise it), persists the
+  defect reason on the transient task field `test_revision_feedback`, then
+  `escalateOrFail(..., "tests")` — resuming at `tests`, not the implementer's own
+  `exec` phase. A `test-defective` from a non-exec role (the parser is role-blind) is
+  reclassified as a producer **error** and escalated/capped rather than thrown, so it
+  never escapes `next-action`'s catch.
 - **Feedback.** The `tests` handler (`src/orchestrator/handlers.ts`) injects a
   specific revision note into the regenerating test-writer's `priorFailures` whenever
   `test_revision_feedback` is set — **gated on the field, not the rung dial**, so it

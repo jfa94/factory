@@ -90,6 +90,21 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     expect(isTcbProtected(p, ctx())?.rule.category).toBe("data-specs");
   });
 
+  it("SecA: matches <dataDir>/config.json (operator config — protects setupCommand shell vector)", () => {
+    // An implementer that can write config.json could inject a quality.setupCommand
+    // that runs arbitrary shell at provision time. This closes the Edit/Write vector;
+    // the Bash-redirect residual is tracked in the executor-confinement epic.
+    const p = join(dataDir, "config.json");
+    writeFileSync(p, "{}");
+    expect(isTcbProtected(p, ctx())?.rule.category).toBe("data-config");
+  });
+
+  it("SecA: a non-config file at dataDir root is NOT protected (scoped exactly to config.json)", () => {
+    const p = join(dataDir, "other.json");
+    writeFileSync(p, "{}");
+    expect(isTcbProtected(p, ctx())).toBeNull();
+  });
+
   it("F-specloc: ADVERSARIAL — an implementer write to docs/factory/<spec-id>/tasks.json is DENIED", () => {
     // The in-repo reviewable spec copy is implementer-immutable, exactly like
     // .github/workflows/** — an implementer that could edit it would weaken its own
@@ -163,6 +178,7 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     expect(categories).toContain("hooks");
     expect(categories).toContain("data-runs");
     expect(categories).toContain("data-specs");
+    expect(categories).toContain("data-config");
     expect(categories).toContain("docs-factory");
   });
 

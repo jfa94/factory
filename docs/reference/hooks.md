@@ -18,7 +18,7 @@ exits `2`.
 | `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating (categorical agent-deny of `gh pr create`/`gh pr merge`). Each arm derives its owning run from its own inputs — never the global pointer (see [Run ownership](#run-ownership)). |
 | `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                                                    |
 | `write-protection`  | PreToolUse `Edit\|Write\|MultiEdit`         | Deny writes to hardcoded TCB (trusted-computing-base) paths.                                                                                                                                                                                                                                   |
-| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                         |
+| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                       |
 | `stop-gate`         | Stop                                        | Finalize-on-stop an owned, all-terminal run so it never dangles `running`; block ONLY on inaccessible data directory or finalize failure. Does NOT block a session end with pending work — the run stays resumable via `factory resume`.                                                       |
 
 ## `hooks.json` wiring
@@ -97,6 +97,28 @@ The write-scope arm is a **rail**, not the boundary: the authoritative TDD
 enforcement is the deterministic commit-order gate on the task branch
 (`src/verifier/deterministic/strategies/tdd.ts`), so a path-anchor miss (e.g. a
 producer write issued via `Bash`) does not weaken enforcement.
+
+## write-protection (TCB)
+
+`write-protection` denies `Edit`/`Write`/`MultiEdit` to the **trusted-computing-base**
+(TCB) — the paths whose contents control the boundary itself. The category enum
+(`TcbCategory`, `src/types/tcb.ts`) is **closed**; adding one is a deliberate design
+change. The protected set:
+
+| Category       | Path                                              | Why                                                                              |
+| -------------- | ------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `ci-workflows` | `.github/workflows/**`                            | CI / quality-gate machinery.                                                     |
+| `docs-factory` | `docs/factory/**`                                 | In-repo reviewable spec copy — implementer-immutable acceptance criteria.        |
+| `gate-config`  | `.stryker.config.json`, `.dependency-cruiser.cjs` | Gate/CI config (matched by basename, location-tolerant).                         |
+| `hooks`        | `hooks/**`                                        | The guard hooks themselves — editing one disables the boundary.                  |
+| `data-runs`    | `<dataDir>/runs/**`                               | Out-of-repo run store: run state, holdout answer keys, reviews.                  |
+| `data-specs`   | `<dataDir>/specs/**`                              | Durable spec store.                                                              |
+| `data-config`  | `<dataDir>/config.json`                           | Operator config — writing it enables arbitrary shell via `quality.setupCommand`. |
+
+When the data dir is unresolved, the out-of-repo rules fall back to component-anchored
+matching (`runs`/`holdouts`/`reviews`) as defense-in-depth. TCB write-protection is
+the guard layer; the engine's own `factory` CLI writes bypass it (the hook guards
+`Edit`/`Write` tools, not the engine's fs writes — the CLI is the sanctioned writer).
 
 ## secret-guard
 

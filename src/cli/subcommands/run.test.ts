@@ -39,6 +39,7 @@ import {
   SEVEN_DAY_WINDOW_SECONDS,
   type UsageReading,
 } from "../../quota/index.js";
+import { runDocsEmit, runDocsRecord, type DocsRunDeps } from "../../orchestrator/docs.js";
 
 const REPO = "acme/widgets";
 
@@ -1497,9 +1498,7 @@ describe("applyResume", () => {
     if (env.kind !== "resumed") throw new Error(`expected resumed, got ${env.kind}`);
     return env;
   }
-  function asBlocked(
-    env: ResumeResult,
-  ): Extract<ResumeResult, { kind: "pause" }> {
+  function asBlocked(env: ResumeResult): Extract<ResumeResult, { kind: "pause" }> {
     if (env.kind !== "pause") throw new Error(`expected still-blocked, got ${env.kind}`);
     return env;
   }
@@ -1564,6 +1563,37 @@ describe("applyResume", () => {
       );
     },
   );
+
+  // Group-2-E: paused_minutes accumulates the idle gap so the runtime breaker can
+  // deduct real pause time from the wall-clock ceiling.
+  it("E: accumulates idle gap into paused_minutes on resume", async () => {
+    await createBareRun("r1");
+    await setStatus("r1", "paused", "5h");
+    // 2 hours after the last update → the idle gap should be ≥119 minutes (floor math,
+    // minus at most 1 second of test latency between setStatus and this call).
+    const futureNow = Math.floor(Date.now() / 1000) + 7200;
+    const env = asResumed(await applyResume(state, "r1", underCurve(), defaultConfig(), futureNow));
+    expect(env.run.paused_minutes).toBeGreaterThanOrEqual(119);
+    // Verify the value is persisted, not just in-memory.
+    const reread = await state.read("r1");
+    expect(reread.paused_minutes).toBeGreaterThanOrEqual(119);
+  });
+
+  it("E: paused_minutes accumulates across multiple resumes (additive, not reset)", async () => {
+    await createBareRun("r1");
+    // First suspend + resume: accumulate ~60 minutes
+    await setStatus("r1", "paused", "5h");
+    const after1h = Math.floor(Date.now() / 1000) + 3600;
+    await applyResume(state, "r1", underCurve(), defaultConfig(), after1h);
+    const afterFirst = (await state.read("r1")).paused_minutes ?? 0;
+    expect(afterFirst).toBeGreaterThanOrEqual(59);
+    // Second suspend + resume: same gap again → cumulative should be ≥118
+    await setStatus("r1", "paused", "5h");
+    const after2h = Math.floor(Date.now() / 1000) + 7200;
+    await applyResume(state, "r1", underCurve(), defaultConfig(), after2h);
+    const afterSecond = (await state.read("r1")).paused_minutes ?? 0;
+    expect(afterSecond).toBeGreaterThanOrEqual(afterFirst + 59);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1652,5 +1682,53 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
     // No new checkoutB calls after the first create (branch was not cut for the rejected run).
     const newCalls = git.calls.slice(callsAfterFirst.length);
     expect(newCalls.filter((c) => c.startsWith("checkout -B staging-"))).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T: CLI-level runDocs cross-check (Group-2-D cap integration)
+// ---------------------------------------------------------------------------
+
+describe("runDocs — CLI-level integration (T)", () => {
+  // Mirrors the docs.test.ts suite but runs within the run.test.ts harness to
+  // confirm the docs plumbing integrates with the run lifecycle infrastructure.
+  it("T: DONE result commits + marks docs done without suspending the run", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "run-docs-cli-"));
+    const state = new StateManager({ dataDir });
+    const runId = "run-docs-cli-1";
+    await state.create({ run_id: runId, spec: { repo: REPO, spec_id: "9-x", issue_number: 9 } });
+    const git = new FakeGitClient({ remoteHeads: { [`staging-${runId}`]: "sha-staging" } });
+    const deps: DocsRunDeps = { state, git, config: defaultConfig(), dataDir };
+
+    await runDocsEmit(deps, runId);
+    const env = await runDocsRecord(deps, runId, { status: "STATUS: DONE" });
+    expect(env.kind).toBe("done");
+    const run = await state.read(runId);
+    expect(run.docs?.status).toBe("done");
+    expect(run.status).not.toBe("suspended");
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it("T: repeated failure hits the cap and finalizes done (not suspended) — run continues", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "run-docs-cli-cap-"));
+    const state = new StateManager({ dataDir });
+    const runId = "run-docs-cli-cap-1";
+    await state.create({ run_id: runId, spec: { repo: REPO, spec_id: "9-x", issue_number: 9 } });
+    const git = new FakeGitClient({ remoteHeads: { [`staging-${runId}`]: "sha-staging" } });
+    const deps: DocsRunDeps = { state, git, config: defaultConfig(), dataDir };
+
+    await runDocsEmit(deps, runId);
+    // First failure → suspend, attempts: 1
+    const first = await runDocsRecord(deps, runId, { status: "garbage — not done" });
+    expect(first.kind).toBe("suspend");
+    // Simulate resume re-entering the docs phase
+    await state.update(runId, (s) => ({ ...s, status: "running" as const }));
+    // Second failure → cap → kind "done" (run finalizes, not stuck in suspend loop)
+    const second = await runDocsRecord(deps, runId, { status: "garbage again" });
+    expect(second.kind).toBe("done");
+    const run = await state.read(runId);
+    expect(run.status).not.toBe("suspended");
+    expect(run.docs?.attempts).toBe(2);
+    await rm(dataDir, { recursive: true, force: true });
   });
 });

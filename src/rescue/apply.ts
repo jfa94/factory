@@ -24,6 +24,7 @@
  * writer cannot race the scan against the write.
  */
 import { scanRun } from "./scan.js";
+import { nowEpoch, parseIso8601ToEpoch } from "../shared/time.js";
 import type { StateManager } from "../core/state/index.js";
 import { isTerminalRunStatus } from "../types/index.js";
 import type { RunState, RunStatus, TaskState } from "../types/index.js";
@@ -143,6 +144,9 @@ export async function applyRescue(
   opts: RescueApplyOptions = {},
 ): Promise<RescueApplyResult> {
   let result: RescueApplyResult | null = null;
+  // Snapshot now before the update so the idle gap (now - updated_at) is stable
+  // even if the mutator is retried internally by the state manager.
+  const now = nowEpoch();
 
   const updated = await state.update(runId, (run) => {
     const { targets, skipped } = selectTargets(run, opts);
@@ -172,7 +176,16 @@ export async function applyRescue(
       tasks: nextTasks,
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
-      ...(reopen ? { status: "running" as const, ended_at: null } : {}),
+      // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.
+      ...(reopen
+        ? {
+            status: "running" as const,
+            ended_at: null,
+            paused_minutes:
+              (run.paused_minutes ?? 0) +
+              Math.max(0, Math.floor((now - parseIso8601ToEpoch(run.updated_at)) / 60)),
+          }
+        : {}),
     };
   });
 

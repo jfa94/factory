@@ -29,7 +29,7 @@ import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { StateManager } from "../../core/state/index.js";
 import { SpecStore, type SpecManifest } from "../../spec/index.js";
 import { makeRunId, validateId } from "../../shared/ids.js";
-import { nowEpoch } from "../../shared/time.js";
+import { nowEpoch, parseIso8601ToEpoch } from "../../shared/time.js";
 import { planResume, StatuslineUsageSignal, type UsageReading } from "../../quota/index.js";
 import { isTerminalRunStatus } from "../../types/index.js";
 import type { Config, RunState, RunStatus, TaskState } from "../../types/index.js";
@@ -584,10 +584,17 @@ export async function applyResume(
       // Non-terminal but not paused/suspended ⇒ already running: idempotent re-entry.
       return { kind: "resumed", run };
     case "resume": {
+      // Accumulate the idle gap into paused_minutes so the runtime breaker deducts
+      // real suspend/pause time from the wall-clock ceiling on the next evaluation.
+      const idleMinutes = Math.max(
+        0,
+        Math.floor((nowEpochSec - parseIso8601ToEpoch(run.updated_at)) / 60),
+      );
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
         quota: plan.clear.quota,
+        paused_minutes: (s.paused_minutes ?? 0) + idleMinutes,
       }));
       return { kind: "resumed", run: updated };
     }

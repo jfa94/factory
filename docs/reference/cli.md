@@ -11,7 +11,7 @@ records nothing; `next-action --results` records an agent spawn's output into ON
 step; `run docs --results` records a scribe spawn's output likewise), or **writers** (one
 state mutation). `run create`, `run finalize`, `run cancel`, `scaffold`, and the
 orchestrators' (`next-action` ship / `run docs` record) side effects perform actions (state and/or
-GitHub side effects). The orchestrator seams spawn nothing themselves — they emit a manifest
+GitHub side effects). The orchestrator seams spawn nothing themselves — they emit a spawn request
 the runner spawns from (see [Model A](../explanation/model-a.md)).
 
 Run/spec state is read from and written to `$CLAUDE_PLUGIN_DATA`.
@@ -140,7 +140,7 @@ The runner loops generate ⇄ review (bounded by `max_iterations`) until
 
 **Revise carries the prior spec — incremental patch, not a re-author.** A `revise`
 envelope is symmetric with `generate`/`review`: it carries its own apex-pinned `spawn`
-manifest (`buildReviseSpawn`, `src/spec/agents.ts`) whose `context` embeds the PRIOR
+request (`buildReviseSpawn`, `src/spec/agents.ts`) whose `context` embeds the PRIOR
 spec (`prior_spec_md` + `prior_tasks`) alongside the `review_feedback` blockers to clear.
 The runner spawns the generator straight from `env.spawn.context` — it does **not**
 hand-assemble context at the prompt layer. The generator applies the minimal edits needed
@@ -188,7 +188,7 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 | `--resume`            | If an active run exists, do not create — return the conflict (exit `3`) so the caller hands off to [`resume`](#resume). Mutually exclusive with `--supersede`.                                                                                                                                                                                                                 |
 | `--workflow`          | Run the parallel background Workflow runner. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                                                                                                                                                           |
 | `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging-<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow runner + resume + finalize read it without re-passing.                                                                                                              |
-| `--ignore-quota`      | Bypass the weekly-quota hard stop **and** the per-step quota pacer for this run. Persisted as `ignore_quota: true` so both orchestrators + runners skip the gate without re-passing. Lets create/supersede proceed even when the existing run is 7d-parked. Operator override for a mistaken suspend / manual reset.                                                              |
+| `--ignore-quota`      | Bypass the weekly-quota hard stop **and** the per-step quota pacer for this run. Persisted as `ignore_quota: true` so both orchestrators + runners skip the gate without re-passing. Lets create/supersede proceed even when the existing run is 7d-parked. Operator override for a mistaken suspend / manual reset.                                                           |
 | `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`. **Required for session-mode creates** — an ownerless session-mode run is rejected as a usage error (the Stop hook finalizes via `findActiveByOwner`, which can never match an ownerless run). Workflow-mode creates are exempt (the Workflow runner owns finalization). |
 
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
@@ -279,18 +279,21 @@ factory run docs [--run <id>] [--results <path>]
 ```
 
 - **Emit** (no `--results`): prepares a docs worktree on a `docs-<run-id>` branch off
-  the run's `staging-<run-id>` tip and returns a `DocsAction` spawn manifest
+  the run's `staging-<run-id>` tip and returns a `DocsAction` spawn request
   `{kind:"spawn", run_id, worktree, base_ref, staging_branch, docs_branch, model, max_turns, prompt}`.
   `base_ref` is `origin/<baseBranch>` (the whole-PRD diff base); the prompt directs
   scribe to `cd` into the worktree, diff `base_ref..HEAD`, update `/docs`, and commit
   **in the worktree without pushing**. Idempotent on resume — an existing worktree from
   a prior failed attempt is reused, not re-created.
-- **Fold** (`--results <path>`): reads a `{status:"<scribe STATUS line>"}` JSON file. On
+- **Record** (`--results <path>`): reads a `{status:"<scribe STATUS line>"}` JSON file. On
   `STATUS: DONE`, fast-forward/merges `docs-<run-id>` into `staging-<run-id>`, pushes the
   staging branch (scribe's commit, if any, rides along), removes the worktree, marks the
   `docs` phase `done`, and returns `{kind:"done", run_id}`. On any non-`DONE` status,
-  records a one-attempt `failed` docs marker, transitions the run to **suspended** (the
-  staging branch + worktree are kept for retry), and returns `{kind:"blocked", run_id, reason}`.
+  increments the `docs.attempts` counter and writes a `failed` docs marker. While
+  `attempts < MAX_DOCS_ATTEMPTS` (2) it transitions the run to **suspended** (the staging
+  branch + worktree are kept for retry) and returns `{kind:"suspend", run_id, reason}`;
+  once the cap is hit it treats docs as best-effort and returns `{kind:"done", run_id}`
+  so the run finalizes `completed` without a docs commit rather than suspend-looping.
 
 The runner runs `run docs` only when [`next-task`](#next-task) emits `document`. `next-task`
 withholds `finalize` until the `docs` phase is `done`, so `run finalize` never
@@ -392,7 +395,7 @@ orchestrator (which task is ready); `next-action` is the **task-level** orchestr
 deterministic steps until it needs agents). A runner — the in-session runner
 loop or the Workflow script (see [Run the pipeline](../guides/run-the-pipeline.md))
 — alternates them: `next-task` to pick a task, `next-action` to advance it, spawn the agents
-the manifest names, then `next-action --results` to record their output back. Neither orchestrator
+the request names, then `next-action --results` to record their output back. Neither orchestrator
 spawns anything itself.
 
 The six retired single-step writers — `run-task`, `advance`, `fail`,
@@ -441,7 +444,7 @@ Emits one of:
   new), then pending in spec order.
 - `{ kind:"document", run_id, data_dir, ship_mode }` — all tasks are terminal
   and the run will complete, but `/docs` needs updating first. The runner runs
-  `factory run docs`, which emits a scribe manifest; the runner spawns the scribe
+  `factory run docs`, which emits a scribe spawn request; the runner spawns the scribe
   agent and records the docs commit onto the staging branch. `next-task` emits
   `finalize` only after that record.
 - `{ kind:"finalize", run_id, cascade_failed:[...] }` — nothing left to
@@ -466,15 +469,15 @@ factory next-action --run <id> --task <id> [--results <file>] [--ship-mode <mode
 machine-side; omit it to honor the run's persisted `ship_mode` (users never type it —
 the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one of:
 
-- `{ kind:"spawn", run_id, task_id, phase, result_key, manifest, sidecar?, expects, worktree, base_ref }`
-  — the agents to run (`manifest.agents`) and what to feed back. Each agent carries
+- `{ kind:"spawn", run_id, task_id, phase, result_key, request, holdout?, expects, worktree, base_ref }`
+  — the agents to run (`request.agents`) and what to feed back. Each agent carries
   `{ role, model, max_turns, prompt_ref, isolation, effort? }`; `effort` (the `Agent`
   reasoning level) appears only on a high producer-escalation rung once the model
   dial has climbed to its ceiling (see [producer-ladder](../explanation/producer-ladder.md))
   and is omitted otherwise so the agent inherits the spawn default. `phase` is one of
   `tests | exec | verify` (preflight only advances; ship never spawns). `expects`
   is `producer-status` (tests/exec — one producer agent) or `reviews` (verify —
-  the six-reviewer panel); a `sidecar` accompanies `verify` when a holdout answer
+  the six-reviewer panel); a `holdout` accompanies `verify` when a holdout answer
   key was withheld. `worktree` is the task working tree the agents commit in.
   `base_ref` is the per-run staging base that worktree forked from
   (`origin/staging-<run-id>`); the panel and holdout validator diff against THIS, never
@@ -500,11 +503,11 @@ expects=reviews         → { "result_key": {…}, "holdout"?: { "raw": "<valida
 
 The record is **at-least-once delivery, exactly-once application**: the `result_key`
 (`{phase, rung}`) is validated against the live cursor before any mutation, so a
-stale or duplicate delivery is rejected LOUD rather than double-folded. On a
+stale or duplicate delivery is rejected LOUD rather than double-recorded. On a
 rejection, re-invoke **without** `--results` to re-derive the current spawn
 envelope (re-invoking without results is idempotent). When that re-derived spawn
 matches a recorded `spawn_in_flight` checkpoint — i.e. a previous spawn for the
-same `(phase, rung)` was emitted but never folded (a stop in the post-spawn /
+same `(phase, rung)` was emitted but never recorded (a stop in the post-spawn /
 pre-record window) — the orchestrator first resets the shared task worktree to the
 checkpoint's `tip_sha`, discarding the abandoned producer's partial commits before
 re-spawning clean ([state model](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)).
@@ -512,7 +515,7 @@ The `reviews` record runs the
 full verify merge gate internally — re-runs the deterministic gates, re-derives the
 persisted holdout evidence, citation-verifies the reviews against the worktree,
 and confirms each surviving blocker via the supplied `verifications` (a kept
-citable blocker with no recorded verdict fails closed). Holdout is folded **before**
+citable blocker with no recorded verdict fails closed). Holdout is recorded **before**
 reviews. A refused live merge re-routes the task through `exec` to re-sync, bounded
 by a persisted per-task budget (`merge_resyncs`).
 

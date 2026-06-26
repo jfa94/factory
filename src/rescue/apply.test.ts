@@ -235,6 +235,27 @@ describe("applyRescue", () => {
     });
   });
 
+  // Group-2-E: rescue-reopen accumulates idle time into paused_minutes so the
+  // runtime circuit-breaker deducts the rescue gap from the wall-clock ceiling.
+  it("E: reopen accumulates paused_minutes (additive — does not reset prior balance)", async () => {
+    // Seed terminal run with a prior paused_minutes balance + a stuck task to reset.
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      status: "failed" as const,
+      paused_minutes: 30,
+      tasks: {
+        a: task({ task_id: "a", status: "failed", failure_class: "blocked-environmental" }),
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID);
+    expect(result.reopened).toBe(true);
+
+    const run = await state.read(RUN_ID);
+    // Must not reset to 0: prior 30 + idle gap (≥0) = ≥30.
+    expect(run.paused_minutes).toBeGreaterThanOrEqual(30);
+  });
+
   it("reset clears the phase cursor and merge_resyncs", async () => {
     await seed([
       {

@@ -118,7 +118,11 @@ export function parseProducerStatus(raw: string): ProducerOutcome {
   if (upper.includes("NEEDS_CONTEXT") || upper.includes("NEEDS CONTEXT")) {
     return { status: "needs-context", reason: line };
   }
-  if (upper.includes("DONE")) {
+  // Leading-keyword anchor: must start with (optional "STATUS:") then "DONE" as a
+  // whole word. A bare includes("DONE") silently matches "NOT DONE" and "ABANDONED"
+  // (contains "done" in "aban-DONE-d"). The strict direction is correct: a false-
+  // negative is a loud producer error retry; a false-positive is a silent wrong success.
+  if (/^(?:STATUS\s*:\s*)?DONE\b/.test(upper)) {
     return { status: "done" };
   }
   return {

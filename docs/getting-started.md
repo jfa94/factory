@@ -94,8 +94,8 @@ That is the Model-A split. Read these two files in order:
 As you read, map each prose step to a CLI call. The CLI owns the loop behind ONE
 seam — the orchestrator. The runner's inner per-task loop runs `factory next-action --run <id>
 --task <id>`, reads the JSON `NextAction`, spawns exactly the agents its
-`manifest` names, then records their raw output back with `factory next-action --results`
-(the run-level `factory next-task` picks which task to drive). The orchestrator tells the runner
+`request` names, then records their raw output back with `factory next-action --results`
+(the run-level `factory next-task` picks which task to advance). The orchestrator tells the runner
 the next step; the runner never invents it.
 
 ## 7. Run the unit tests for one module

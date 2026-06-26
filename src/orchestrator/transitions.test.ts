@@ -321,18 +321,25 @@ describe("orchestrator transitions (shared loop + CLI ladder/fail logic)", () =>
     expect(task.test_revision_feedback).toContain("auth.uid()");
   });
 
-  it("applyProducerOutcome throws loud on a test-defective raised from a non-exec phase", async () => {
+  it("applyProducerOutcome on a non-exec test-defective escalates as a producer error (does not throw)", async () => {
     await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
     const outcome: ProducerOutcome = { status: "test-defective", reason: "x" };
-    await expect(
-      applyProducerOutcome(
-        deps,
-        RUN_ID,
-        "t1",
-        { role: "test-writer", phase: "tests", resumePhase: "exec" },
-        outcome,
-      ),
-    ).rejects.toThrow(/non-exec phase/i);
+    // The parser is role-blind, so a test-writer can emit 'test-defective'.
+    // That signal is nonsensical for the role: classify as a producer error so
+    // the ladder records + caps it instead of escaping next-action's catch.
+    const step = await applyProducerOutcome(
+      deps,
+      RUN_ID,
+      "t1",
+      { role: "test-writer", phase: "tests", resumePhase: "exec" },
+      outcome,
+    );
+    // error → retry → resumes at the SAME phase (tests), rung bumped.
+    expect(step).toEqual({ done: false, phase: "tests" });
+    const task = await readTask("t1");
+    expect(task.escalation_rung).toBe(1);
+    // test_revision_feedback is NOT set — only the exec path sets it.
+    expect(task.test_revision_feedback).toBeUndefined();
   });
 
   it("a completed test-writer clears any pending test_revision_feedback (no stale leak)", async () => {

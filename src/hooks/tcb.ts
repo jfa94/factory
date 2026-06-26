@@ -19,8 +19,13 @@
  *   - `hooks/**`                    — the guard hooks themselves (an implementer
  *                                     that edits a hook disables the boundary).
  *   - the OUT-OF-REPO plugin data dir — `runs/**` (run state, holdouts,
- *                                     reviews) and `specs/**` (the durable spec
- *                                     store). The holdout answer-key lives under
+ *                                     reviews), `specs/**` (the durable spec
+ *                                     store), and `config.json` (the operator
+ *                                     config — protecting it closes the vector
+ *                                     where an implementer could write a
+ *                                     `quality.setupCommand` that runs arbitrary
+ *                                     shell code at provision time). The holdout
+ *                                     answer-key lives under
  *                                     `runs/<run>/holdouts/**` (Δ Y) and must be
  *                                     neither writable nor (via holdout-guard)
  *                                     readable from an implementer worktree.
@@ -198,6 +203,13 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
       category: "data-specs",
       describe: "<dataDir>/specs/** (durable spec store)",
       test: (p) => isAtOrUnder(p, specsDir),
+    });
+    const configFile = canonicalizeAnchor(resolve(ctx.dataDir, "config.json"));
+    rules.push({
+      category: "data-config",
+      describe:
+        "<dataDir>/config.json (operator config — writing it enables arbitrary shell via setupCommand)",
+      test: (p) => p === configFile,
     });
   } else {
     // No data dir resolved: still protect by the canonical store component pair

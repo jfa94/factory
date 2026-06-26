@@ -34,12 +34,12 @@ seam, two thin runners**:
   `Agent` tool.
 - **The CLI exposes exactly ONE seam — the orchestrator.** `factory next-task` is the
   run-level orchestrator (which task is ready); `factory next-action` is the task-level orchestrator (run
-  one task's deterministic steps until it needs agents, emitting a spawn manifest).
+  one task's deterministic steps until it needs agents, emitting a spawn request).
   Invoked again as `factory next-action --results`, the orchestrator records the agents' raw output
   back into exactly ONE state step. Every transition decision lives behind this
   seam, in code.
 - **A runner is the hands — and nothing more.** A runner steps the seam: call
-  `next-task`, spawn exactly the `Agent()`s the resulting `next-action` manifest names, feed
+  `next-task`, spawn exactly the `Agent()`s the resulting `next-action` request names, feed
   their raw output back via `next-action --results`, repeat. A runner carries **no
   pipeline logic of its own** — it never decides a transition, re-runs a gate,
   classifies a failure, or writes state by prose. It is a dumb loop around the
@@ -56,7 +56,7 @@ Two interchangeable runners step the same seam, selected by `--workflow` on
   wraps every `factory` CLI call in a small exec agent (sonnet).
 
 Both are **subscription-only** — there is no headless `claude -p` / API-token path
-anywhere. The runner's entire job is the glue: step → spawn what the manifest names
+anywhere. The runner's entire job is the glue: step → spawn what the request names
 → feed the raw results back → follow the step the orchestrator returned.
 
 ## Why this particular boundary
@@ -101,7 +101,7 @@ CLI's JSON contract.
 ## The cost
 
 The two runners must each faithfully obey the orchestrator's envelopes — spawn exactly
-what a manifest names and feed results back verbatim — but they share no pipeline
+what a request names and feed results back verbatim — but they share no pipeline
 logic, so they cannot _diverge_ on a transition: there is one loop, in code, and
 the runners only step it. The discipline that remains is at the spawn boundary
 (the runner skill's Iron Laws), not in a duplicated loop. This is the

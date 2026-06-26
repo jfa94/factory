@@ -85,8 +85,8 @@ for every "inspect the diff" instruction. (Same root cause as the worktree-base
 invariant — see [decisions.md Decision 12](./decisions.md#decision-12-staging-branch-as-integration-point).)
 
 A reviewer's lens is **not** delivered as a per-run prompt file. The spawn
-manifest carries a `prompt_ref` of `reviews/prompts/<role>.md` for each reviewer
-purely to satisfy the manifest schema's non-empty constraint — no runner reads it
+request carries a `prompt_ref` of `reviews/prompts/<role>.md` for each reviewer
+purely to satisfy the request schema's non-empty constraint — no runner reads it
 and nothing writes it. Both runners build the reviewer prompt **inline** from the
 reviewer's `agents/<role>.md` definition plus the shared
 `skills/review-protocol/SKILL.md` contract. Only a **producer's** `prompt_ref`

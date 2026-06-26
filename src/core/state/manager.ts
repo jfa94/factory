@@ -53,6 +53,7 @@ import {
   type TaskState,
   isTerminalRunStatus,
 } from "./schema.js";
+import { UsageError } from "../../shared/usage-error.js";
 
 const log = createLogger("state");
 
@@ -103,6 +104,22 @@ export class StateManager {
     // Dedicated lockfile under the run dir; NOT state.json (so the atomic
     // rename of state.json never collides with the lock).
     return join(runDir(this.dataDir, runId), "state.lock");
+  }
+
+  /**
+   * F3: reject pre-v2 state files with a clear UsageError instead of a raw ZodError.
+   * `schema_version` absent or === 2 → pass through to parseRunState normally.
+   * Any other value → the file predates the current schema; ephemeral runs can't be
+   * migrated, so the user gets a clear "start a fresh run" message.
+   */
+  private static guardedParse(raw: unknown, context: string): RunState {
+    const v = (raw as Record<string, unknown> | null)?.schema_version;
+    if (v !== undefined && v !== 2) {
+      throw new UsageError(
+        `run state at '${context}' uses schema v${String(v)}; only v2 is supported — start a fresh run`,
+      );
+    }
+    return parseRunState(raw);
   }
 
   private specLockfilePath(repo: string, specId: string): string {
@@ -232,7 +249,7 @@ export class StateManager {
   async read(runId: string): Promise<RunState> {
     const path = this.statePath(runId);
     const raw = await readFile(path, "utf8");
-    return parseRunState(parseJson<unknown>(raw, path));
+    return StateManager.guardedParse(parseJson<unknown>(raw, path), path);
   }
 
   /**
@@ -282,7 +299,7 @@ export class StateManager {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw err;
     }
-    return parseRunState(parseJson<unknown>(raw, statePath));
+    return StateManager.guardedParse(parseJson<unknown>(raw, statePath), statePath);
   }
 
   // ---- enumerate (lock-free) ---------------------------------------------

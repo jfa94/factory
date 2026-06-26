@@ -38,6 +38,7 @@ import {
   type TaskState,
 } from "./deps.js";
 import { failTask } from "./transitions.js";
+import { MAX_DOCS_ATTEMPTS } from "./docs.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
 import { applyCircuitBreaker } from "./circuit-breaker-gate.js";
 import type { OrchestratorDeps } from "./orchestrator.js";
@@ -98,6 +99,7 @@ function isUnsatisfiableDep(run: RunState, depId: string): boolean {
  */
 async function wantsDocs(deps: OrchestratorDeps, run: RunState): Promise<boolean> {
   if (run.docs?.status === "done") return false;
+  if ((run.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false; // cap: treat docs as done
   if (decideFinalize(run).run_status !== "completed") return false;
   return deps.docsApplicable();
 }

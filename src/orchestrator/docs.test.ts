@@ -63,6 +63,32 @@ describe("runDocsRecord", () => {
     expect(run.docs?.ended_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(git.calls.some((c) => c.startsWith("push"))).toBe(false);
   });
+
+  // Group-2-D: attempts cap prevents an infinite suspend-loop on persistent docs failure.
+  it("D: attempts counter increments on first failure (attempts: 1, still suspend)", async () => {
+    await runDocsEmit(deps(), RUN_ID);
+    const env = await runDocsRecord(deps(), RUN_ID, { status: "STATUS: ERROR" });
+    expect(env.kind).toBe("suspend");
+    const run = await state.read(RUN_ID);
+    expect(run.docs?.attempts).toBe(1);
+  });
+
+  it("D: at cap (2nd failure) returns done instead of suspending — docs best-effort", async () => {
+    await runDocsEmit(deps(), RUN_ID);
+    // First failure → suspend, attempts: 1
+    const first = await runDocsRecord(deps(), RUN_ID, { status: "STATUS: ERROR" });
+    expect(first.kind).toBe("suspend");
+    // Simulate resume: run returns to running for the second attempt
+    await state.update(RUN_ID, (s) => ({ ...s, status: "running" as const }));
+    // Second failure → cap hit → done (not suspended)
+    const second = await runDocsRecord(deps(), RUN_ID, { status: "STATUS: ERROR again" });
+    expect(second.kind).toBe("done");
+    const run = await state.read(RUN_ID);
+    // Status is NOT suspended — the caller (runner) will finalize normally.
+    expect(run.status).not.toBe("suspended");
+    expect(run.docs?.status).toBe("failed");
+    expect(run.docs?.attempts).toBe(2);
+  });
 });
 
 describe("runDocsEmit", () => {

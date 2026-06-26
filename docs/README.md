@@ -1,4 +1,4 @@
-<!-- last-documented: e9b888659ffdc9f5c7bfd6861076e3786238b52c -->
+<!-- last-documented: e661eb2bf37677078730f7be62fb1f04b2e1407f -->
 
 # Dark Factory Plugin
 
@@ -32,7 +32,7 @@ with a hard seam between them:
   through ONE seam, the **orchestrator** (`factory next-task` + `factory next-action`). It is pure,
   tested, and **never spawns an agent**.
 - A thin **runner**: it steps the seam — spawning exactly the `Agent()`s the
-  orchestrator's manifest names and feeding their raw output back via `factory next-action
+  orchestrator's spawn request names and feeding their raw output back via `factory next-action
 --results`. It carries no pipeline logic and never decides a transition by prose.
   Two interchangeable runners (chosen by `--workflow` on `/factory:run`): the in-session
   runner loop (`skills/pipeline-runner/SKILL.md`, default) and the

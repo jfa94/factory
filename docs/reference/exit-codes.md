@@ -5,11 +5,11 @@ exit-code enum (`src/shared/exit-codes.ts`). The thin entry points
 (`src/bin/factory.ts`, `src/bin/factory-hook.ts`) are the only places
 `process.exit` is called.
 
-| Code | Name       | Meaning                                                                                                                                                                                                                                                                                                                    |
-| ---- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | `OK`       | Success.                                                                                                                                                                                                                                                                                                                   |
-| `1`  | `ERROR`    | Generic failure: an uncaught error, a classified fail, a gate/verify failure.                                                                                                                                                                                                                                              |
-| `2`  | `USAGE`    | Usage error: unknown subcommand/hook, bad flags, a missing required argument.                                                                                                                                                                                                                                              |
+| Code | Name       | Meaning                                                                                                                                                                                                                                                                                                            |
+| ---- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0`  | `OK`       | Success.                                                                                                                                                                                                                                                                                                           |
+| `1`  | `ERROR`    | Generic failure: an uncaught error, a classified fail, a gate/verify failure.                                                                                                                                                                                                                                      |
+| `2`  | `USAGE`    | Usage error: unknown subcommand/hook, bad flags, a missing required argument.                                                                                                                                                                                                                                      |
 | `3`  | `CONFLICT` | An active run already exists and no resolution was selected — `factory run` refuses to silently reuse or clobber it (Decision 35: resume / supersede / cancel). Also the **weekly-quota hard stop** (`kind:"pause"`): a 7d-parked run blocks every new-run attempt for its spec unless `--ignore-quota` is passed. |
 
 ## Design rules
@@ -20,7 +20,7 @@ exit-code enum (`src/shared/exit-codes.ts`). The thin entry points
   never a special "ask a human" exit status.
 - **Fail loud, never silently succeed.** An unknown or unhandled result throws at
   the call site rather than mapping to a silent `OK`. The phase machine maps its
-  `StageResult` union onto these codes; an unmapped variant throws.
+  `PhaseResult` union onto these codes; an unmapped variant throws.
 - **Adding a code is a design change.** The mapping in the phase machine and the
   runners must be updated in lockstep.
 

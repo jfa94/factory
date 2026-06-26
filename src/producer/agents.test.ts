@@ -50,4 +50,21 @@ describe("parseProducerStatus — closed outcome from the terminal STATUS line",
       "blocked-escalate",
     );
   });
+
+  // SF-D: leading-keyword anchor — substring match silently promoted "NOT DONE" and
+  // "ABANDONED" (contains "DONE") to done. The fix anchors to the status keyword.
+  it("SF-D: 'NOT DONE' is NOT done — substring match regression guard", () => {
+    expect(parseProducerStatus("STATUS: NOT DONE").status).toBe("error");
+    expect(parseProducerStatus("NOT DONE").status).toBe("error");
+  });
+
+  it("SF-D: 'ABANDONED' is NOT done (contains 'ABAN-DONE-D' substring)", () => {
+    expect(parseProducerStatus("STATUS: ABANDONED").status).toBe("error");
+    expect(parseProducerStatus("ABANDONED").status).toBe("error");
+  });
+
+  it("SF-D: DONE with trailing detail is still done (tolerates cosmetic suffix)", () => {
+    expect(parseProducerStatus("STATUS: DONE — all tests green").status).toBe("done");
+    expect(parseProducerStatus("DONE. shipped.").status).toBe("done");
+  });
 });

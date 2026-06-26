@@ -6,13 +6,13 @@ For the system-level picture see [overview.md](./overview.md).
 
 ```mermaid
 graph TD
-  CLI[src/cli<br/>subcommand registry] --> Runner[src/runner<br/>transition logic]
+  CLI[src/cli<br/>subcommand registry] --> Orch[src/orchestrator<br/>transition logic]
   CLI --> State[src/core/state<br/>StateManager + schema]
-  Runner --> Phase[src/core/phase-machine<br/>phase order + engine]
-  Runner --> Producer[src/producer<br/>escalation ladder]
-  Runner --> Verifier[src/verifier<br/>deterministic + judgment + holdout]
-  Runner --> Git[src/git<br/>PR / staging / rollup]
-  Runner --> Quota[src/quota<br/>two-window pacer]
+  Orch --> Phase[src/core/phase-machine<br/>phase order + engine]
+  Orch --> Producer[src/producer<br/>escalation ladder]
+  Orch --> Verifier[src/verifier<br/>deterministic + judgment + holdout]
+  Orch --> Git[src/git<br/>PR / staging / rollup]
+  Orch --> Quota[src/quota<br/>two-window pacer]
   CLI --> Spec[src/spec<br/>spec-build pipeline]
   CLI --> Scoring[src/scoring<br/>summary + report + telemetry]
   CLI --> Config[src/config<br/>schema + load/save]
@@ -32,7 +32,7 @@ the `dispatch()` function; `src/bin/factory.ts` is the only place `process.exit`
 is called. Each subcommand lives in `src/cli/subcommands/` and is a thin wrapper:
 parse args, wire production dependencies, call a testable core function, emit one
 JSON envelope, return an `ExitCode`. The `next-task` and `next-action` subcommands are thin
-shells over the orchestrator (`src/runner`); the record logic of the retired `record-*`
+shells over the orchestrator (`src/orchestrator`); the record logic of the retired `record-*`
 writers now lives there too. Shared helpers: `args.ts` (flag parsing), `io.ts`
 (envelope emission), `wiring.ts` (`loadCliDeps` / `loadOrchestratorDeps`). The complete
 surface is in [reference/cli.md](../reference/cli.md).
@@ -52,41 +52,41 @@ panel / merge-gate verdicts from evidence (never stored). See
 
 The closed phase vocabulary (`preflight → tests → exec → verify → ship`, plus the
 separate run-level `finalize`) and the pure engine that maps a phase to a
-`StageResult`. `nextStage()` walks the canonical order; `stageToInFlightStatus()`
+`PhaseResult`. `nextPhase()` walks the canonical order; `phaseToInFlightStatus()`
 keeps the persisted task status in lockstep. The engine never writes state — it
 reports; the runner acts.
 
-## Runner (`src/runner`)
+## Orchestrator (`src/orchestrator`)
 
-The Model-A engine half of the **orchestrator** seam — the loop, plus the transition logic
-that turns a `StageResult` into state effects. This is the unit-test target for
-control flow and is shared verbatim by both runners (the session loop and the
-Workflow script).
+The deterministic **orchestrator** — the transition logic that turns a
+`PhaseResult` into state effects. This is the unit-test target for control flow
+and is stepped verbatim by both runners (the session loop and the Workflow
+script).
 
 - `next.ts` (`nextTask`) — the **run-level** orchestrator: terminal/quota checks,
   cascade-fail, and the ready set, emitted as a `NextTask`.
 - `orchestrator.ts` (`nextAction`) — the **task-level** orchestrator: resume at the persisted phase
   cursor, optionally record the previous spawn's results, then run the phase machine
-  until a spawn is needed (emit a `NextAction` manifest) or the task is
+  until a spawn is needed (emit a `NextAction` spawn request) or the task is
   terminal. It also owns the **spawn-in-flight checkpoint** (`TaskState.spawn_in_flight`):
   on a fresh spawn it captures the task-branch tip; on a resume that re-enters the
   same `(phase, rung)` before any results were recorded, it resets the shared worktree
   to that tip — discarding only the abandoned producer's partial work — before
   re-spawning, so a stop-mid-spawn plus `factory resume` is idempotent.
 - `handlers.ts` — the phase **reporters** (`preflight`/`tests`/`exec`/`verify`),
-  built by `makeStageHandlers`. Each reads the frozen `StageContext` and returns a
-  `StageResult`; none writes state or spawns. The `producerSpawn` helper dials the
+  built by `makePhaseHandlers`. Each reads the frozen `PhaseContext` and returns a
+  `PhaseResult`; none writes state or spawns. The `producerSpawn` helper dials the
   model **and effort** for the current rung (`dialForRung`) and threads an optional
   `effort` into the spawn agent. The `ship` and `finalize` entries complete the
-  `StageHandlers` interface: `finalize` calls the pure `decideFinalize`, while
+  `PhaseHandlers` interface: `finalize` calls the pure `decideFinalize`, while
   `ship` is a deliberate **throw-stub** — `ship` is routed through `shipTask`, never
-  dispatched via `runStage`, so the stub fails loud if that invariant is ever broken.
+  dispatched via `runPhase`, so the stub fails loud if that invariant is ever broken.
 - `record.ts` — the record cores `nextAction --results` calls: `applyRecordProducer`,
   `applyRecordHoldout`, `applyRecordReviews` (merged in from the retired
   `record-*` CLI writers, so the spawn-path record and a crash-resume record run
   identical code).
 - `transitions.ts` — the shared step primitives (`markInFlight`, `completeTask`,
-  `dropStep`, `escalateOrFail`, `applyProducerOutcome`) the orchestrator and the record cores
+  `failStep`, `escalateOrFail`, `applyProducerOutcome`) the orchestrator and the record cores
   both call, so a live step and a crash-resume record can never diverge.
 - `ship.ts` (`shipTask`) opens the PR + serial-merges; `finalize.ts` is the
   run-completion coordinator (report → PRD-issue fails comment → rollup → flip
@@ -163,7 +163,7 @@ the holdout key, deny an agent-initiated `gh pr create`/`merge`). See
 ## Shared (`src/shared`, `src/types`)
 
 `src/types` re-exports the closed enums, the phase/state types, and the
-`StageResult` union — the vocabulary every module shares. `src/shared` holds the
+`PhaseResult` union — the vocabulary every module shares. `src/shared` holds the
 cross-cutting primitives: the dependency-free `exit-codes.ts` leaf (the frozen
 CLI/hook exit enum, imported by ~every entry point — see
 [reference/exit-codes.md](../reference/exit-codes.md)), atomic file write, the exec

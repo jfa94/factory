@@ -67,15 +67,18 @@ ground truth); the _merge gate_ (unanimity) is derived from those. See
 ## `RunState`
 
 `runs/<run-id>/state.json`. Schema in `src/core/state/schema.ts`. Validate
-untrusted input with `parseRunState` (it layers the run-level cross-field check),
-never `RunStateSchema.parse` directly.
+untrusted input with `parseRunState` (it layers the run-level cross-field check
+`refineRunCrossFields`), never `RunStateSchema.parse` directly. The cross-field
+check enforces that each entry in the `tasks` map is keyed by its own `task_id`
+(a key/`task_id` mismatch is a loud parse error), so DAG traversal and keyed
+lookups never read a misfiled row.
 
 | Field                       | Type                       | Meaning                                                                                                                                                                                                                                                                                                                                                                           |
 | --------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema_version`            | `1`                        | State-schema version (forward-migration marker).                                                                                                                                                                                                                                                                                                                                  |
+| `schema_version`            | `2`                        | State-schema version (forward-migration marker). `StateManager.guardedParse` rejects any value other than `2` with a clear `UsageError` ("start a fresh run") rather than a raw `ZodError`; absent or `2` parses normally.                                                                                                                                                        |
 | `run_id`                    | string                     | `run-YYYYMMDD-HHMMSS`.                                                                                                                                                                                                                                                                                                                                                            |
 | `status`                    | RunStatus                  | See below.                                                                                                                                                                                                                                                                                                                                                                        |
-| `runner`                    | `sequential \| balanced`   | The runner preset that produced this run.                                                                                                                                                                                                                                                                                                                                         |
+| `execution_mode`            | `sequential \| balanced`   | The task-scheduling preset (`ExecutionModeEnum`, default `sequential`) the orchestrator reads when choosing how many tasks to advance at once. NOT the runner.                                                                                                                                                                                                                    |
 | `mode`                      | `session \| workflow`      | Execution mode (default `session`). Persisted at create; selects which runner steps the seam and gates quota pacing (workflow = no pacing).                                                                                                                                                                                                                                       |
 | `ship_mode`                 | `no-merge \| live`         | Ship mode (default `live` — auto-merge; `--no-ship` opts into `no-merge`). Persisted at create so the workflow runner / `resume` / `finalize` read it without re-passing.                                                                                                                                                                                                         |
 | `owner_session`             | string?                    | Owning Claude Code session id. Scopes the Stop / SubagentStop gates (resolved via `findActiveByOwner`). **Required for session-mode runs** (an ownerless session-mode `run create` is rejected); only workflow-mode runs may persist it absent. An absent owner means no run is attributed to a stopping session, so the gate passes through (allow).                             |
@@ -84,7 +87,8 @@ never `RunStateSchema.parse` directly.
 | `tasks`                     | record<task_id, TaskState> | Per-task state.                                                                                                                                                                                                                                                                                                                                                                   |
 | `ignore_quota`              | boolean                    | When `true`, the quota gate is skipped unconditionally for this run — both orchestrators + runners read it from state (no per-call threading), mirroring the `mode==="workflow"` skip. Set at create from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`. Default `false`; a legacy run without the field reads as `false`.                                 |
 | `quota`                     | QuotaCheckpoint?           | Resume checkpoint; present _iff_ paused/suspended.                                                                                                                                                                                                                                                                                                                                |
-| `docs`                      | DocsStage?                 | Documentation-phase marker; absent until the engine docs phase runs ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-phase-before-finalize)).                                                                                                                                                                                                   |
+| `docs`                      | DocsPhase?                 | Documentation-phase marker; absent until the engine docs phase runs ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-phase-before-finalize)).                                                                                                                                                                                                   |
+| `paused_minutes`            | number (default 0)         | Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen, accumulated on each resume or rescue-reopen. The runtime circuit-breaker deducts it from wall-time so a long-paused run does not falsely trip. Absent on legacy runs → `0`.                                                                                                                 |
 | `started_at` / `updated_at` | string                     | ISO-8601.                                                                                                                                                                                                                                                                                                                                                                         |
 | `ended_at`                  | string \| null             | ISO-8601, null until terminal.                                                                                                                                                                                                                                                                                                                                                    |
 
@@ -123,7 +127,7 @@ one.
 | `pr_number`               | int >0?                       | PR number once created.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `failure_class`           | FailureClass?                 | Set _iff_ `status === "failed"`.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `failure_reason`          | string?                       | Human-facing fail reason; set _iff_ failed.                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `phase`                   | TaskStage?                    | The drive orchestrator's resume cursor (see below).                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `phase`                   | TaskPhase?                    | The `next-action` orchestrator's resume cursor (see below).                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `merge_resyncs`           | int ≥0 (default 0)            | Ship live-merge re-sync count (see below).                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `spawn_in_flight`         | object?                       | Spawn-in-flight checkpoint for idempotent re-spawn (see below).                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `started_at` / `ended_at` | string?                       | ISO-8601.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -161,11 +165,11 @@ A closed set (adding one is a design change):
 Cross-field coherence is enforced: `approve ⇒ 0` confirmed blockers; `blocked ⇒
 ≥1`; `error` is unconstrained.
 
-### `phase` — the drive orchestrator's resume cursor
+### `phase` — the `next-action` orchestrator's resume cursor
 
 `"preflight" | "tests" | "exec" | "verify" | "ship"` (optional). The precise
 machine cursor for `factory next-action`: which phase the task is at, or resuming at.
-The drive orchestrator reads it to resume after a crash; it is written by `markInFlight`.
+The `next-action` orchestrator reads it to resume after a crash; it is written by `markInFlight`.
 
 - The lossy `status` (executing / reviewing / shipping …) stays the **human-facing**
   summary; `phase` is the **machine cursor**.
@@ -180,7 +184,7 @@ equal.)
 ### `merge_resyncs` — ship live-merge re-sync budget
 
 `int ≥0` (default `0`). The number of times the task's `ship` phase refused a live
-merge and re-routed back through `exec` to re-sync. The drive orchestrator enforces the cap
+merge and re-routed back through `exec` to re-sync. The `next-action` orchestrator enforces the cap
 (`MERGE_RESYNC_CAP`) and persists the count so the budget survives process
 boundaries; exhausting it fails the task as `blocked-environmental`.
 
@@ -195,7 +199,7 @@ the task branch.
 - **Set on a fresh spawn.** When the orchestrator emits a spawn for `(phase, rung)`, it
   records the task-branch `tip_sha` at emit time.
 - **Reset on a matching re-spawn.** When a resume re-enters the **same** `(phase,
-rung)` before any results were folded, the orchestrator resets the worktree to
+rung)` before any results were recorded, the orchestrator resets the worktree to
   `tip_sha` — discarding **only** the interrupted phase's work (prior completed
   phases live below that tip and survive) — then re-spawns clean.
 - **Cleared on a terminal write.** `complete` / `fail` clear it; a record need not,
@@ -205,8 +209,8 @@ rung)` before any results were folded, the orchestrator resets the worktree to
   and ship never spawn. A `verify` re-spawn's reset is a no-op (the panel reviewers
   run in their own isolated worktrees, so the shared worktree HEAD never moved).
 
-(The `phase` literals duplicate the runner's spawn-phase set deliberately, so
-`src/core/state` need not import the runner; a cross-check test keeps them equal.)
+(The `phase` literals duplicate the orchestrator's spawn-phase set deliberately, so
+`src/core/state` need not import the orchestrator; a cross-check test keeps them equal.)
 
 ## `QuotaCheckpoint`
 
@@ -214,13 +218,16 @@ rung)` before any results were folded, the orchestrator resets the worktree to
 run persists. Present _iff_ the run is `paused` or `suspended`; resume must clear
 it before returning to `running`.
 
-## `DocsStage`
+## `DocsPhase`
 
-`{ status: "done" | "failed", reason?, ended_at }` — the engine-owned documentation
+`{ status: "done" | "failed", reason?, attempts?, ended_at }` — the engine-owned documentation
 phase marker ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-phase-before-finalize)).
 Absent until the phase runs. `done` once scribe's output is committed onto the
-`staging-<run-id>` branch (or a no-op pass); `failed` (with a `reason`) records the
-one-attempt failure while the run sits `suspended`, resumable via `/factory:resume`.
+`staging-<run-id>` branch (or a no-op pass); `failed` (with a `reason`) records a
+failed attempt. `attempts` is the cumulative 1-indexed attempt count (absent on legacy
+records → treat as 1). While `attempts < MAX_DOCS_ATTEMPTS` (2) the run sits `suspended`,
+resumable via `/factory:resume`; once the cap is hit docs become best-effort and the run
+finalizes `completed` without a docs commit.
 There is no `skipped` value — when docs are not applicable (no `/docs` directory or
 `package.json` `factory.docs.enabled: false`), `factory next-task` decides applicability
 read-only and the marker simply stays absent.

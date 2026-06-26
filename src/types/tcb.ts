@@ -21,6 +21,7 @@ export type TcbCategory =
   | "hooks"
   | "data-runs"
   | "data-specs"
+  | "data-config"
   | "docs-factory";
 
 /** One compiled denylist rule. `test(absPath)` decides membership. */
