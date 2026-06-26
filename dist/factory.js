@@ -6165,9 +6165,9 @@ var TaskStatusEnum = external_exports.enum([
   "reviewing",
   "shipping",
   "done",
-  "dropped"
+  "failed"
 ]);
-var TERMINAL_TASK_STATUSES = ["done", "dropped"];
+var TERMINAL_TASK_STATUSES = ["done", "failed"];
 function isTerminalTaskStatus(s) {
   return TERMINAL_TASK_STATUSES.includes(s);
 }
@@ -6179,7 +6179,7 @@ var FailureClassEnum = external_exports.enum([
 var RiskTierEnum = external_exports.enum(["low", "medium", "high"]);
 var EscalationRungSchema = external_exports.number().int().min(0);
 var PanelVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
-var ProducerRoleEnum = external_exports.enum(["test-writer", "executor"]);
+var ProducerRoleEnum = external_exports.enum(["test-writer", "implementer"]);
 var SpecPointerSchema = external_exports.object({
   /** Repo identity, e.g. "owner/name". The first key of (repo, spec-id). */
   repo: external_exports.string().min(1),
@@ -6224,46 +6224,46 @@ var TaskStateSchema = external_exports.object({
   branch: external_exports.string().optional(),
   /** PR number once created (idempotent-create keyed off branch, Δ P). */
   pr_number: external_exports.number().int().positive().optional(),
-  // --- Drop classification (Decision 22, Δ D) ---
-  /** Set IFF status === "dropped": the closed-enum cause. */
+  // --- Failure classification (Decision 22, Δ D) ---
+  /** Set IFF status === "failed": the closed-enum cause. */
   failure_class: FailureClassEnum.optional(),
-  /** Human-facing reason string accompanying a drop. */
+  /** Human-facing reason string accompanying a fail. */
   failure_reason: external_exports.string().optional(),
   /**
-   * The precise resume cursor for the drive coroutine — which TaskStage the task is
+   * The precise resume cursor for the drive orchestrator — which TaskPhase the task is
    * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
-   * summary; `stage` is the machine cursor. Absent = not started (preflight).
-   * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
+   * summary; `phase` is the machine cursor. Absent = not started (preflight).
+   * NOTE: on terminal rows (done/failed), `phase` is the last in-flight phase,
    * not a resume point — terminal writers do not clear it.
-   * NOTE: these literals DUPLICATE stage-machine's TASK_STAGE_ORDER because
-   * core/state must not import stage-machine (dependency direction, enforced by
+   * NOTE: these literals DUPLICATE phase-machine's TASK_PHASE_ORDER because
+   * core/state must not import phase-machine (dependency direction, enforced by
    * `madge --circular` in verify). The duplication is kept honest by a LOAD-BEARING
-   * cross-check test — "TaskState.stage enum equals TASK_STAGE_ORDER (cross-module
-   * pin)" in src/driver/coroutine.test.ts — which fails the instant the two drift.
+   * cross-check test — "TaskState.phase enum equals TASK_PHASE_ORDER (cross-module
+   * pin)" in src/orchestrator/orchestrator.test.ts — which fails the instant the two drift.
    * Do NOT delete that test: it is the only thing tying this hand-copied list to its
    * source of truth.
    */
-  stage: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
-  /** Ship live-merge re-sync count (cap enforced by the coroutine; persisted so the cap survives process boundaries). */
+  phase: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
+  /** Ship live-merge re-sync count (cap enforced by the orchestrator; persisted so the cap survives process boundaries). */
   merge_resyncs: external_exports.number().int().min(0).default(0),
   /**
-   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the coroutine when it
-   * EMITS a spawn for `stage` at `rung`, recording the task-branch `tip_sha` at emit
+   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the orchestrator when it
+   * EMITS a spawn for `phase` at `rung`, recording the task-branch `tip_sha` at emit
    * time. Producers commit to the SHARED task worktree, so a stop in the post-spawn /
-   * pre-fold window leaves the abandoned producer's partial commits on the branch. On
-   * the resume that re-enters the SAME (stage, rung) before any results were folded,
-   * the coroutine resets the worktree to `tip_sha` — discarding ONLY the interrupted
-   * stage's work (prior completed stages live below it) — then re-spawns. A fresh
-   * spawn overwrites it; terminal writers (complete/drop) clear it. Absent = no spawn
-   * in flight (the steady state between stages).
+   * pre-record window leaves the abandoned producer's partial commits on the branch. On
+   * the resume that re-enters the SAME (phase, rung) before any results were recorded,
+   * the orchestrator resets the worktree to `tip_sha` — discarding ONLY the interrupted
+   * phase's work (prior completed phases live below it) — then re-spawns. A fresh
+   * spawn overwrites it; terminal writers (complete/fail) clear it. Absent = no spawn
+   * in flight (the steady state between phases).
    *
-   * `stage` is the spawn-stage subset (tests|exec|verify) — preflight/ship never spawn.
-   * The literal duplicates driver/results' SPAWN_STAGES because core/state must not
-   * import the driver (dependency direction); a cross-check test in
-   * src/driver/coroutine.test.ts pins them equal (mirrors the `stage` field's pin).
+   * `phase` is the spawn-phase subset (tests|exec|verify) — preflight/ship never spawn.
+   * The literal duplicates orchestrator/results' SPAWN_PHASES because core/state must not
+   * import the orchestrator (dependency direction); a cross-check test in
+   * src/orchestrator/orchestrator.test.ts pins them equal (mirrors the `phase` field's pin).
    */
   spawn_in_flight: external_exports.object({
-    stage: external_exports.enum(["tests", "exec", "verify"]),
+    phase: external_exports.enum(["tests", "exec", "verify"]),
     rung: external_exports.number().int().min(0),
     tip_sha: external_exports.string().min(1)
   }).optional(),
@@ -6272,34 +6272,34 @@ var TaskStateSchema = external_exports.object({
   ended_at: external_exports.string().optional()
 });
 function refineTaskCrossFields(task, ctx) {
-  const isDropped = task.status === "dropped";
-  if (isDropped && task.failure_class == null) {
+  const isFailed = task.status === "failed";
+  if (isFailed && task.failure_class == null) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["failure_class"],
-      message: `task '${task.task_id}' is 'dropped' but has no failure_class (a drop must be classified)`
+      message: `task '${task.task_id}' is 'failed' but has no failure_class (a fail must be classified)`
     });
   }
-  if (!isDropped && task.failure_class != null) {
+  if (!isFailed && task.failure_class != null) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["failure_class"],
-      message: `task '${task.task_id}' has failure_class '${task.failure_class}' but status is '${task.status}' (failure_class is set IFF dropped)`
+      message: `task '${task.task_id}' has failure_class '${task.failure_class}' but status is '${task.status}' (failure_class is set IFF failed)`
     });
   }
   const hasReason = task.failure_reason != null && task.failure_reason.length > 0;
-  if (isDropped && !hasReason) {
+  if (isFailed && !hasReason) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["failure_reason"],
-      message: `task '${task.task_id}' is 'dropped' but has no failure_reason (a drop must carry a human-facing reason)`
+      message: `task '${task.task_id}' is 'failed' but has no failure_reason (a fail must carry a human-facing reason)`
     });
   }
-  if (!isDropped && task.failure_reason != null) {
+  if (!isFailed && task.failure_reason != null) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["failure_reason"],
-      message: `task '${task.task_id}' has a failure_reason but status is '${task.status}' (failure_reason is set IFF dropped)`
+      message: `task '${task.task_id}' has a failure_reason but status is '${task.status}' (failure_reason is set IFF failed)`
     });
   }
   task.reviewers.forEach((r, i) => {
@@ -6326,27 +6326,27 @@ var QuotaCheckpointSchema = external_exports.object({
   /** Which window forced the last pause/suspend, if any. */
   binding_window: external_exports.enum(["5h", "7d"]).optional()
 });
-var DocsStageSchema = external_exports.object({
+var DocsPhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]),
   reason: external_exports.string().optional(),
   ended_at: external_exports.string()
 });
-var DriverEnum = external_exports.enum(["sequential", "balanced"]);
+var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
-  schema_version: external_exports.literal(1).default(1),
+  schema_version: external_exports.literal(2).default(2),
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
-  driver: DriverEnum.default("sequential"),
+  execution_mode: ExecutionModeEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
   ship_mode: ShipModeEnum.default("live"),
   /**
    * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
    * gate). Stamped ONCE at `run create` from the launching session's
-   * `CLAUDE_CODE_SESSION_ID` (the orchestrator/Bash env), so the Stop hook can
+   * `CLAUDE_CODE_SESSION_ID` (the runner/Bash env), so the Stop hook can
    * session-scope its block: only the OWNING session is gated; an unrelated session
    * stopping while this run is live passes through. Optional — best-effort: when the
    * env var is absent (owner unknown), the Stop gate falls back to the unscoped
@@ -6373,15 +6373,15 @@ var RunStateSchema = external_exports.object({
   /**
    * When true, the quota gate skips pacing and returns null unconditionally. Set once at
    * `run create` from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`.
-   * Persisted so both coroutines and both drivers skip the gate without per-call flag
+   * Persisted so both orchestrators and both runners skip the gate without per-call flag
    * threading — mirrors the `mode==="workflow"` skip. Default false: legacy runs (no field)
    * are unaffected.
    */
   ignore_quota: external_exports.boolean().default(false),
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
-  /** Documentation stage marker; absent until the docs stage runs (engine docs stage). */
-  docs: DocsStageSchema.optional(),
+  /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
+  docs: DocsPhaseSchema.optional(),
   /** Lifecycle timestamps (ISO-8601). */
   started_at: external_exports.string(),
   updated_at: external_exports.string(),
@@ -6683,7 +6683,7 @@ var StateManager = class {
     const state = parseRunState({
       run_id: args.run_id,
       status: "running",
-      driver: args.driver ?? "sequential",
+      execution_mode: args.execution_mode ?? "sequential",
       mode: args.mode ?? "session",
       ship_mode: args.ship_mode ?? "live",
       // Stamp the owning session only when known (best-effort) — an absent owner
@@ -8479,7 +8479,7 @@ Usage:
 Exit OK with {"current": null} when there is no current run.`;
 function summarize(run9) {
   const lines = [
-    `run ${run9.run_id}  status=${run9.status}  driver=${run9.driver}`,
+    `run ${run9.run_id}  status=${run9.status}  execution_mode=`,
     `spec ${run9.spec.repo}#${run9.spec.issue_number} (${run9.spec.spec_id})`,
     `tasks (${Object.keys(run9.tasks).length}):`
   ];
@@ -8866,25 +8866,25 @@ var scaffoldCommand = {
   }
 };
 
-// src/core/stage-machine/stages.ts
-var TaskStageEnum = external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]);
-var RunStageEnum = external_exports.enum(["finalize"]);
-var TASK_STAGE_ORDER = [
+// src/core/phase-machine/phases.ts
+var TaskPhaseEnum = external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]);
+var RunPhaseEnum = external_exports.enum(["finalize"]);
+var TASK_PHASE_ORDER = [
   "preflight",
   "tests",
   "exec",
   "verify",
   "ship"
 ];
-function nextStage(s) {
-  const i = TASK_STAGE_ORDER.indexOf(s);
+function nextPhase(s) {
+  const i = TASK_PHASE_ORDER.indexOf(s);
   if (i < 0) {
-    throw new Error(`nextStage: '${s}' is not a known task stage`);
+    throw new Error(`nextPhase: '${s}' is not a known task phase`);
   }
-  const next = TASK_STAGE_ORDER[i + 1];
+  const next = TASK_PHASE_ORDER[i + 1];
   return next ?? null;
 }
-function stageToInFlightStatus(s) {
+function phaseToInFlightStatus(s) {
   switch (s) {
     case "preflight":
       return TaskStatusEnum.enum.pending;
@@ -8899,10 +8899,10 @@ function stageToInFlightStatus(s) {
   }
 }
 
-// src/core/stage-machine/manifest.ts
+// src/core/phase-machine/spawn.ts
 var SpawnRoleEnum = external_exports.enum([
   "test-writer",
-  "executor",
+  "implementer",
   "implementation-reviewer",
   "quality-reviewer",
   "architecture-reviewer",
@@ -8911,7 +8911,7 @@ var SpawnRoleEnum = external_exports.enum([
   "type-design-reviewer",
   "scribe"
 ]);
-var SpawnAgentSchema = external_exports.object({
+var AgentSpecSchema = external_exports.object({
   /** The reviewer/producer role (closed set). */
   role: SpawnRoleEnum,
   /** Worktree isolation. Defaults to "worktree". */
@@ -8929,30 +8929,30 @@ var SpawnAgentSchema = external_exports.object({
    */
   effort: EffortEnum.optional()
 });
-var SpawnManifestSchema = external_exports.object({
-  /** Engine resumes here after the agents return. A per-task stage. */
-  stage_after: TaskStageEnum,
-  /** Agents to spawn; at least one (an empty manifest is a programming error). */
-  agents: external_exports.array(SpawnAgentSchema).min(1)
+var SpawnRequestSchema = external_exports.object({
+  /** Engine resumes here after the agents return. A per-task phase. */
+  resume_phase: TaskPhaseEnum,
+  /** Agents to spawn; at least one (an empty request is a programming error). */
+  agents: external_exports.array(AgentSpecSchema).min(1)
 });
-function parseSpawnManifest(raw) {
-  return SpawnManifestSchema.parse(raw);
+function parseSpawnRequest(raw) {
+  return SpawnRequestSchema.parse(raw);
 }
 
-// src/core/stage-machine/result.ts
+// src/core/phase-machine/result.ts
 function assertNever(x) {
   throw new Error(
-    `assertNever: unhandled value ${JSON.stringify(x)} \u2014 a StageResult.kind was not handled`
+    `assertNever: unhandled value ${JSON.stringify(x)} \u2014 a PhaseResult.kind was not handled`
   );
 }
 function advance(to) {
   return { kind: "advance", to };
 }
-function spawn2(manifest) {
-  return { kind: "spawn-agents", manifest };
+function spawn2(request) {
+  return { kind: "spawn-agents", request };
 }
-function waitRetry(stage, reason, attempt, max_attempts) {
-  return { kind: "wait-retry", stage, reason, attempt, max_attempts };
+function waitRetry(phase, reason, attempt, max_attempts) {
+  return { kind: "wait-retry", phase, reason, attempt, max_attempts };
 }
 function taskDone() {
   return { kind: "task-terminal", outcome: { outcome: "done" } };
@@ -8961,28 +8961,28 @@ function finalizeTerminal(run_status) {
   return { kind: "finalize-terminal", run_status };
 }
 
-// src/core/stage-machine/engine.ts
-async function runStage(stage, ctx, handlers) {
-  const result = await dispatch(stage, ctx, handlers);
-  return checkResult(stage, result);
+// src/core/phase-machine/engine.ts
+async function runPhase(phase, ctx, handlers) {
+  const result = await dispatch(phase, ctx, handlers);
+  return checkResult(phase, result);
 }
-async function dispatch(stage, ctx, handlers) {
-  const runParsed = RunStageEnum.safeParse(stage);
+async function dispatch(phase, ctx, handlers) {
+  const runParsed = RunPhaseEnum.safeParse(phase);
   if (runParsed.success) {
-    const runStageName = runParsed.data;
-    switch (runStageName) {
+    const runPhaseName = runParsed.data;
+    switch (runPhaseName) {
       case "finalize":
         return handlers.finalize(ctx);
       default:
-        return assertNever(runStageName);
+        return assertNever(runPhaseName);
     }
   }
-  const parsed = TaskStageEnum.safeParse(stage);
+  const parsed = TaskPhaseEnum.safeParse(phase);
   if (!parsed.success) {
-    throw new Error(`runStage: unknown stage '${String(stage)}'`);
+    throw new Error(`runPhase: unknown phase '${String(phase)}'`);
   }
-  const taskStage = parsed.data;
-  switch (taskStage) {
+  const taskPhase = parsed.data;
+  switch (taskPhase) {
     case "preflight":
       return handlers.preflight(ctx);
     case "tests":
@@ -8994,14 +8994,14 @@ async function dispatch(stage, ctx, handlers) {
     case "ship":
       return handlers.ship(ctx);
     default:
-      return assertNever(taskStage);
+      return assertNever(taskPhase);
   }
 }
-function checkResult(stage, result) {
-  if (RunStageEnum.safeParse(stage).success) {
+function checkResult(phase, result) {
+  if (RunPhaseEnum.safeParse(phase).success) {
     if (result.kind !== "finalize-terminal") {
       throw new Error(
-        `runStage: run-level stage '${String(stage)}' returned '${result.kind}' \u2014 finalize is terminal and must return only 'finalize-terminal' (it must never spin)`
+        `runPhase: run-level phase '${String(phase)}' returned '${result.kind}' \u2014 finalize is terminal and must return only 'finalize-terminal' (it must never spin)`
       );
     }
     return result;
@@ -9015,14 +9015,14 @@ function checkResult(stage, result) {
     case "wait-retry": {
       if (result.attempt > result.max_attempts) {
         throw new Error(
-          `runStage: wait-retry for stage '${result.stage}' exceeded max_attempts (${result.attempt} > ${result.max_attempts}); caller must classify a drop (reason: ${result.reason})`
+          `runPhase: wait-retry for phase '${result.phase}' exceeded max_attempts (${result.attempt} > ${result.max_attempts}); caller must classify a fail (reason: ${result.reason})`
         );
       }
       return result;
     }
     case "finalize-terminal":
       throw new Error(
-        `runStage: per-task stage '${String(stage)}' returned 'finalize-terminal' \u2014 that result is reserved for the run-level finalize stage`
+        `runPhase: per-task phase '${String(phase)}' returned 'finalize-terminal' \u2014 that result is reserved for the run-level finalize phase`
       );
     default:
       return assertNever(result);
@@ -9209,10 +9209,10 @@ var SpecStore = class {
   /**
    * Resolve an existing spec for `(repo, issueNumber)` — Δ X reuse. Scans the
    * repo's spec dir for a `spec_id` starting with `<issue>-` and returns its
-   * parsed manifest, else null. The issue number (not the slug) is the lookup
+   * parsed request, else null. The issue number (not the slug) is the lookup
    * key, so a rerun reuses the spec even if the slug would differ on regen.
    *
-   * @throws if a matching dir exists but its manifest/tasks are unreadable or
+   * @throws if a matching dir exists but its request/tasks are unreadable or
    *         invalid (a corrupt durable spec is loud, never silently a miss).
    */
   async resolveByIssue(repo, issueNumber) {
@@ -9240,7 +9240,7 @@ var SpecStore = class {
     const specId = matches[0];
     return this.read(repo, specId);
   }
-  /** Read + validate the manifest for a known `(repo, spec_id)`. */
+  /** Read + validate the request for a known `(repo, spec_id)`. */
   async read(repo, specId) {
     const dir = specDir(this.dataDir, repo, specId);
     const tasksRaw = await readFile5(join9(dir, TASKS_FILE), "utf8");
@@ -9256,18 +9256,18 @@ var SpecStore = class {
     });
   }
   /**
-   * Durably write a spec: `spec.md` + the bare `tasks.json` array. The manifest
-   * header is persisted as a sidecar so {@link read} can reconstruct
+   * Durably write a spec: `spec.md` + the bare `tasks.json` array. The request
+   * header is persisted as a holdout so {@link read} can reconstruct
    * `generated_at` without re-running the generator.
    *
    * F-specloc — also mirrors `spec.md` + the bare `tasks.json` into the in-repo
    * reviewable copy (`<docsRoot>/factory/<spec-id>/`). The mirror is a strict
-   * subset (no `spec.meta.json` sidecar): the sidecar is a dataDir reconstruction
+   * subset (no `spec.meta.json` holdout): the holdout is a dataDir reconstruction
    * detail, and the canonical read-path never consults the mirror. Reruns still
    * resolve by issue number against the dataDir store (unchanged).
    */
-  async write(manifest, specMd) {
-    const parsed = parseSpecManifest(manifest);
+  async write(request, specMd) {
+    const parsed = parseSpecManifest(request);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
     await atomicWriteFile(join9(dir, SPEC_MD_FILE), specMd);
@@ -9297,12 +9297,12 @@ var SpecStore = class {
     );
     return this.toPointer(parsed);
   }
-  /** Build the run-facing {@link SpecPointer} from a manifest. */
-  toPointer(manifest) {
+  /** Build the run-facing {@link SpecPointer} from a request. */
+  toPointer(request) {
     return {
-      repo: manifest.repo,
-      spec_id: manifest.spec_id,
-      issue_number: manifest.issue_number
+      repo: request.repo,
+      spec_id: request.spec_id,
+      issue_number: request.issue_number
     };
   }
   async readMeta(dir) {
@@ -9861,13 +9861,13 @@ function planResume(run9, reading, config, nowEpoch2) {
   if (decision.kind === "proceed") {
     return { kind: "resume", clear: clearCheckpoint() };
   }
-  return { kind: "still-blocked", decision };
+  return { kind: "pause", decision };
 }
 
 // src/scoring/partial-report.ts
-function buildPartialReport(run9, manifest, opts = {}) {
-  const specById = new Map(manifest.tasks.map((t) => [t.task_id, t]));
-  const orderOf = new Map(manifest.tasks.map((t, i) => [t.task_id, i]));
+function buildPartialReport(run9, request, opts = {}) {
+  const specById = new Map(request.tasks.map((t) => [t.task_id, t]));
+  const orderOf = new Map(request.tasks.map((t, i) => [t.task_id, i]));
   const shipped = [];
   const failures = [];
   const incomplete = [];
@@ -9875,7 +9875,7 @@ function buildPartialReport(run9, manifest, opts = {}) {
     const spec = specById.get(task.task_id);
     if (spec === void 0) {
       throw new Error(
-        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run9.run_id})`
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${request.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run9.run_id})`
       );
     }
     if (task.status === "done") {
@@ -9885,7 +9885,7 @@ function buildPartialReport(run9, manifest, opts = {}) {
         branch: task.branch,
         pr_number: task.pr_number
       });
-    } else if (task.status === "dropped") {
+    } else if (task.status === "failed") {
       failures.push({
         task_id: task.task_id,
         title: spec.title,
@@ -9927,7 +9927,7 @@ function failureCommentMarker(runId) {
 function renderFailureComment(report) {
   const lines = [
     failureCommentMarker(report.run_id),
-    `Factory run \`${report.run_id}\` failed \u2014 ${report.failures.length} task(s) dropped. PRD left open for rescue/resume.`
+    `Factory run \`${report.run_id}\` failed \u2014 ${report.failures.length} task(s) failed. PRD left open for rescue/resume.`
   ];
   for (const failure of report.failures) {
     lines.push("", `### \`${failure.task_id}\` \u2014 ${failure.title}`);
@@ -10016,7 +10016,7 @@ function buildRunSummary(run9, report, opts = {}) {
   return {
     run_id: run9.run_id,
     run_status: run9.status,
-    driver: run9.driver,
+    execution_mode: run9.execution_mode,
     spec_id: run9.spec.spec_id,
     issue_number: run9.spec.issue_number,
     repo: run9.spec.repo,
@@ -10167,7 +10167,7 @@ function classifyFailure(signal) {
     case "producer-status": {
       if (signal.status === "blocked-escalate") {
         return {
-          action: "drop",
+          action: "fail",
           failureClass: "spec-defect",
           reason: `producer reported the task unworkable as specified: ${signal.reason}`
         };
@@ -10177,7 +10177,7 @@ function classifyFailure(signal) {
     case "gate-failure": {
       if (signal.structurallyUnfixable) {
         return {
-          action: "drop",
+          action: "fail",
           failureClass: "spec-defect",
           reason: `deterministic gate '${signal.gate}' is structurally unfixable by the producer: ${signal.reason}`
         };
@@ -10186,7 +10186,7 @@ function classifyFailure(signal) {
     }
     case "environmental": {
       return {
-        action: "drop",
+        action: "fail",
         failureClass: "blocked-environmental",
         reason: `environmental blocker: ${signal.reason}`
       };
@@ -10333,7 +10333,7 @@ function deriveTddVerdict(commits, exempt) {
       ok: false,
       exempt: false,
       violations: [],
-      note: "no commits in base..HEAD \u2014 fail-closed (executor produced nothing)"
+      note: "no commits in base..HEAD \u2014 fail-closed (implementer produced nothing)"
     };
   }
   const classed = commits.map((c) => ({
@@ -11126,7 +11126,7 @@ var PANEL_ROLES = [
 function promptRefFor(role) {
   return `reviews/prompts/${role}.md`;
 }
-function buildPanelManifest(stageAfter, model, maxTurns) {
+function buildPanelManifest(resumePhase, model, maxTurns) {
   const agents = PANEL_ROLES.map((role) => ({
     role,
     isolation: "worktree",
@@ -11134,7 +11134,7 @@ function buildPanelManifest(stageAfter, model, maxTurns) {
     max_turns: maxTurns,
     prompt_ref: promptRefFor(role)
   }));
-  return parseSpawnManifest({ stage_after: stageAfter, agents });
+  return parseSpawnRequest({ resume_phase: resumePhase, agents });
 }
 
 // src/verifier/judgment/finding.ts
@@ -11318,8 +11318,8 @@ async function runPanel(input) {
   }
   const reviewerResults = adjudicated.map(reviewerResultOf);
   const mergeGate = deriveMergeGateVerdict({ reviewers: reviewerResults }, input.gateEvidence);
-  const result = mergeGate.passed ? advance(nextOrSelf(input.stage)) : waitRetry(
-    input.stage,
+  const result = mergeGate.passed ? advance(nextOrSelf(input.phase)) : waitRetry(
+    input.phase,
     mergeGateBlockReason(reviewerResults, input.gateEvidence),
     input.attempt ?? 1,
     input.maxAttempts ?? 1
@@ -11327,8 +11327,8 @@ async function runPanel(input) {
   const crossVendorAbsence = input.crossVendor?.status === "absent" ? { reason: input.crossVendor.reason } : void 0;
   return crossVendorAbsence === void 0 ? { adjudicated, reviewerResults, mergeGate, result } : { adjudicated, reviewerResults, mergeGate, result, crossVendorAbsence };
 }
-function nextOrSelf(stage) {
-  return stage === "verify" ? "ship" : stage;
+function nextOrSelf(phase) {
+  return phase === "verify" ? "ship" : phase;
 }
 
 // src/verifier/holdout/split.ts
@@ -11556,7 +11556,7 @@ var FsHoldoutVerdictStore = class {
   }
 };
 
-// src/driver/finalize.ts
+// src/orchestrator/finalize.ts
 var log22 = createLogger("finalize");
 function prdDoneComment(report, rollupResult) {
   const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`;
@@ -11639,14 +11639,14 @@ async function finalizeRun(deps, runId) {
   };
 }
 
-// src/driver/transitions.ts
+// src/orchestrator/transitions.ts
 var log23 = createLogger("transitions");
-function markInFlight(deps, runId, taskId, stage) {
-  const status = stageToInFlightStatus(stage);
+function markInFlight(deps, runId, taskId, phase) {
+  const status = phaseToInFlightStatus(phase);
   return deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status,
-    stage,
+    phase,
     started_at: t.started_at ?? nowIso()
   }));
 }
@@ -11660,11 +11660,11 @@ async function completeTask(deps, runId, taskId) {
   }));
   return { done: true, outcome: { outcome: "done" } };
 }
-async function dropTask(deps, runId, taskId, failureClass, reason) {
-  log23.warn(`task '${taskId}' dropped (${failureClass}): ${reason}`);
+async function failTask(deps, runId, taskId, failureClass, reason) {
+  log23.warn(`task '${taskId}' failed (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
-    status: "dropped",
+    status: "failed",
     failure_class: failureClass,
     failure_reason: reason,
     ended_at: t.ended_at ?? nowIso(),
@@ -11672,13 +11672,13 @@ async function dropTask(deps, runId, taskId, failureClass, reason) {
     // WS2 hygiene: no spawn is in flight past a terminal task
   }));
 }
-async function dropStep(deps, runId, taskId, failureClass, reason) {
-  await dropTask(deps, runId, taskId, failureClass, reason);
-  return { done: true, outcome: { outcome: "dropped", failure_class: failureClass, reason } };
+async function failStep(deps, runId, taskId, failureClass, reason) {
+  await failTask(deps, runId, taskId, failureClass, reason);
+  return { done: true, outcome: { outcome: "failed", failure_class: failureClass, reason } };
 }
-async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
-  if (decision.action === "drop") {
-    return dropStep(deps, runId, taskId, decision.failureClass, decision.reason);
+async function escalateOrFail(deps, runId, taskId, decision, resumePhase) {
+  if (decision.action === "fail") {
+    return failStep(deps, runId, taskId, decision.failureClass, decision.reason);
   }
   const run9 = await deps.state.read(runId);
   const task = run9.tasks[taskId];
@@ -11686,7 +11686,7 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
     throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
   }
   if (task.escalation_rung >= ESCALATION_CAP) {
-    return dropStep(
+    return failStep(
       deps,
       runId,
       taskId,
@@ -11701,9 +11701,9 @@ async function escalateOrDrop(deps, runId, taskId, decision, resumeStage) {
     reviewers: []
   }));
   log23.info(
-    `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumeStage}' (${decision.reason})`
+    `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`
   );
-  return { done: false, stage: resumeStage };
+  return { done: false, phase: resumePhase };
 }
 function classifyProducerFailure(outcome) {
   switch (outcome.status) {
@@ -11730,12 +11730,12 @@ function classifyProducerFailure(outcome) {
 async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
   if (outcome.status === "done") {
     await deps.state.updateTask(runId, taskId, (t) => ({ ...t, producer_role: opts.role }));
-    return { done: false, stage: opts.stageAfter };
+    return { done: false, phase: opts.resumePhase };
   }
-  return escalateOrDrop(deps, runId, taskId, classifyProducerFailure(outcome), opts.stage);
+  return escalateOrFail(deps, runId, taskId, classifyProducerFailure(outcome), opts.phase);
 }
 
-// src/driver/paths.ts
+// src/orchestrator/paths.ts
 import { join as join13 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
@@ -11743,7 +11743,7 @@ function taskWorktreePath(dataDir, runId, taskId) {
   return join13(worktreesRoot(dataDir), runId, taskId);
 }
 
-// src/driver/exempt.ts
+// src/orchestrator/exempt.ts
 function taskExemptReader(deps, worktree) {
   return new DefaultExemptReader({
     specDir: specDir(deps.dataDir, deps.spec.repo, deps.spec.spec_id),
@@ -11751,11 +11751,11 @@ function taskExemptReader(deps, worktree) {
   });
 }
 
-// src/driver/handlers.ts
-function makeStageHandlers(deps) {
-  function requireTask3(ctx, stage) {
+// src/orchestrator/handlers.ts
+function makePhaseHandlers(deps) {
+  function requireTask3(ctx, phase) {
     if (ctx.task === void 0) {
-      throw new Error(`handlers: stage '${stage}' requires a task but ctx.task is absent`);
+      throw new Error(`handlers: phase '${phase}' requires a task but ctx.task is absent`);
     }
     return ctx.task;
   }
@@ -11773,7 +11773,7 @@ function makeStageHandlers(deps) {
       summary: `prior attempt at rung ${prior} did not clear the merge gate`
     };
   }
-  async function producerSpawn(role, specTask, runId, rung, stageAfter) {
+  async function producerSpawn(role, specTask, runId, rung, resumePhase) {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const split = splitFor(deps.config, runId, specTask);
     const context = buildProducerContext({
@@ -11791,13 +11791,13 @@ function makeStageHandlers(deps) {
       `${role}-r${rung}`,
       context
     );
-    const manifest = parseSpawnManifest({
-      stage_after: stageAfter,
+    const request = parseSpawnRequest({
+      resume_phase: resumePhase,
       agents: [
         {
           role,
           model: dial.model,
-          // No executor-specific turn budget exists; both producer roles share the
+          // No implementer-specific turn budget exists; both producer roles share the
           // test-writer cap (documented WS10 decision).
           max_turns: deps.config.testWriter.maxTurns,
           prompt_ref: promptRef,
@@ -11808,13 +11808,13 @@ function makeStageHandlers(deps) {
         }
       ]
     });
-    return spawn2(manifest);
+    return spawn2(request);
   }
   return {
     /**
      * preflight: create the per-task worktree forked off the staging tip (D12
      * base-is-staging-tip assertion lives inside createTaskWorktree), then advance
-     * to the tests stage. The run-scoped branch is deterministic from (run, task),
+     * to the tests phase. The run-scoped branch is deterministic from (run, task),
      * so it is not threaded through state here — ship recomputes it.
      */
     async preflight(ctx) {
@@ -11834,7 +11834,7 @@ function makeStageHandlers(deps) {
       return advance("tests");
     },
     /**
-     * tests: PERSIST the holdout answer-key (the only stage that does — exec merely
+     * tests: PERSIST the holdout answer-key (the only phase that does — exec merely
      * recomputes the split), then either skip the test-writer (tdd_exempt → advance
      * to exec) or spawn the test-writer for the current rung (resume at exec).
      */
@@ -11854,20 +11854,20 @@ function makeStageHandlers(deps) {
       return producerSpawn("test-writer", specTask, ctx.run.run_id, task.escalation_rung, "exec");
     },
     /**
-     * exec: spawn the executor for the current rung against the holdout-stripped
+     * exec: spawn the implementer for the current rung against the holdout-stripped
      * visible criteria (recomputed from the same seed — never re-persisted), resume
      * at verify.
      */
     async exec(ctx) {
       const task = requireTask3(ctx, "exec");
       const specTask = specTaskOf(deps.spec, task.task_id);
-      return producerSpawn("executor", specTask, ctx.run.run_id, task.escalation_rung, "verify");
+      return producerSpawn("implementer", specTask, ctx.run.run_id, task.escalation_rung, "verify");
     },
     /**
      * verify reporter: run the deterministic gates, then either spawn the
      * risk-invariant panel (no reviewers yet) or DERIVE the merge gate from the
-     * already-recorded reviewers + gate evidence. Holdout evidence is folded
-     * separately by the coroutine (the holdout-validator runs as an out-of-band sidecar);
+     * already-recorded reviewers + gate evidence. Holdout evidence is recorded
+     * separately by the orchestrator (the holdout-validator runs as an out-of-band holdout);
      * this reporter never spawns.
      */
     async verify(ctx) {
@@ -11918,21 +11918,21 @@ function makeStageHandlers(deps) {
       );
     },
     /**
-     * ship — NOT served from this reporter. The coroutine runs the stateful
+     * ship — NOT served from this reporter. The orchestrator runs the stateful
      * {@link import("./ship.js").shipTask} directly (PR pointer writes + the live
      * MergeSerializer), since a reporter can neither write state nor merge; the
-     * coroutine intercepts `ship` before {@link import("./engine.js").runStage} can
+     * orchestrator intercepts `ship` before {@link import("./engine.js").runPhase} can
      * ever dispatch it here.
      *
-     * This method exists ONLY to keep {@link StageHandlers} TOTAL — the engine's
-     * exhaustive per-task stage switch (engine.ts) requires a handler for every
-     * `TaskStage`. Its body is a LOUD throw: routing `ship` through `runStage` is a
+     * This method exists ONLY to keep {@link PhaseHandlers} TOTAL — the engine's
+     * exhaustive per-task phase switch (engine.ts) requires a handler for every
+     * `TaskPhase`. Its body is a LOUD throw: routing `ship` through `runPhase` is a
      * programming error (it would re-open the PR with none of shipTask's state
      * writes), so it fails fast rather than silently drifting from the live path.
      * (`shipBody` / `specTaskOf` remain exported below — `ship.ts` is their caller.)
      */
     ship(_ctx) {
-      throw new Error("ship is routed to shipTask; runStage must never dispatch ship");
+      throw new Error("ship is routed to shipTask; runPhase must never dispatch ship");
     },
     /**
      * finalize (run-level, terminal-by-construction): the pure {@link decideFinalize}
@@ -11964,7 +11964,7 @@ function shipBody(runId, specTask) {
   ].join("\n");
 }
 
-// src/driver/artifacts.ts
+// src/orchestrator/artifacts.ts
 import { mkdir as mkdir10, readFile as readFile10 } from "node:fs/promises";
 import { dirname as dirname8, join as join14 } from "node:path";
 function producerRef(taskId, label) {
@@ -11991,29 +11991,29 @@ var FsArtifactStore = class {
   }
 };
 
-// src/driver/fold.ts
+// src/orchestrator/record.ts
 import { readFile as readFile11 } from "node:fs/promises";
 import { join as join15 } from "node:path";
-var log24 = createLogger("fold");
+var log24 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
-    await markInFlight(deps, runId, taskId, step.stage);
+    await markInFlight(deps, runId, taskId, step.phase);
   }
 }
 async function readJsonInput(path4) {
   const raw = await readFile11(path4, "utf8");
   return parseJson(raw, path4);
 }
-function producerStageInfo(stage) {
-  if (stage === "tests") return { role: "test-writer", stage: "tests", after: "exec" };
-  if (stage === "exec") return { role: "executor", stage: "exec", after: "verify" };
-  throw new UsageError(`stage must be a producer stage (tests | exec), got '${stage}'`);
+function producerPhaseInfo(phase) {
+  if (phase === "tests") return { role: "test-writer", phase: "tests", after: "exec" };
+  if (phase === "exec") return { role: "implementer", phase: "exec", after: "verify" };
+  throw new UsageError(`phase must be a producer phase (tests | exec), got '${phase}'`);
 }
-async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
-  const info = producerStageInfo(stage);
-  if (nextStage(info.stage) !== info.after) {
+async function applyRecordProducer(state, runId, taskId, phase, statusLine) {
+  const info = producerPhaseInfo(phase);
+  if (nextPhase(info.phase) !== info.after) {
     throw new Error(
-      `record-producer: stage order drift \u2014 nextStage('${info.stage}') !== '${info.after}'`
+      `record-producer: phase order drift \u2014 nextPhase('${info.phase}') !== '${info.after}'`
     );
   }
   const run9 = await state.read(runId);
@@ -12025,7 +12025,7 @@ async function applyRecordProducer(state, runId, taskId, stage, statusLine) {
     { state },
     runId,
     taskId,
-    { role: info.role, stage: info.stage, stageAfter: info.after },
+    { role: info.role, phase: info.phase, resumePhase: info.after },
     outcome
   );
   await persistStepCursor({ state }, runId, taskId, step);
@@ -12043,7 +12043,7 @@ function parseVerdictsFailClosed(raw) {
 async function applyRecordHoldout(deps, runId, taskId, verdictStore, raw) {
   if (!await deps.holdout.has(runId, taskId)) {
     throw new Error(
-      `record-holdout: task '${taskId}' has no withheld answer key \u2014 nothing to validate (applyRecordHoldout must only fold when the coroutine surfaced a holdout sidecar)`
+      `record-holdout: task '${taskId}' has no withheld answer key \u2014 nothing to validate (applyRecordHoldout must only record when the orchestrator surfaced a holdout holdout)`
     );
   }
   const record = await deps.holdout.get(runId, taskId);
@@ -12052,7 +12052,7 @@ async function applyRecordHoldout(deps, runId, taskId, verdictStore, raw) {
   const check = checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate);
   return { run_id: runId, task_id: taskId, evidence: holdoutEvidence(check), check };
 }
-var REPLAY_IDENTITY = "orchestrator-replay";
+var REPLAY_IDENTITY = "runner-replay";
 async function buildWorktreeSource(worktree, reviews) {
   const files = /* @__PURE__ */ new Set();
   for (const review of reviews) {
@@ -12091,7 +12091,7 @@ function makeReplayRunnerFactory(input) {
         if (next === void 0) {
           return Promise.reject(
             new Error(
-              `record-reviews: no pre-recorded finding-verifier verdict for reviewer '${review.reviewer}' finding at ${key} \u2014 every citation-verified blocking finding must carry an orchestrator-collected verdict`
+              `record-reviews: no pre-recorded finding-verifier verdict for reviewer '${review.reviewer}' finding at ${key} \u2014 every citation-verified blocking finding must carry an runner-collected verdict`
             )
           );
         }
@@ -12133,7 +12133,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     source,
     makeRunner: makeRunner2,
     gateEvidence,
-    stage: "verify",
+    phase: "verify",
     attempt: task.escalation_rung + 1,
     maxAttempts: ESCALATION_CAP + 1,
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
@@ -12145,17 +12145,17 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   }
   let step;
   if (panel.result.kind === "advance") {
-    const nextStageVal = panel.result.to;
-    const nextStatus = stageToInFlightStatus(nextStageVal);
+    const nextPhaseVal = panel.result.to;
+    const nextStatus = phaseToInFlightStatus(nextPhaseVal);
     await deps.state.updateTask(runId, taskId, (t) => ({
       ...t,
       reviewers: [...panel.reviewerResults],
-      stage: nextStageVal,
+      phase: nextPhaseVal,
       status: nextStatus
     }));
-    step = { done: false, stage: nextStageVal };
+    step = { done: false, phase: nextPhaseVal };
   } else if (panel.result.kind === "wait-retry") {
-    step = await escalateOrDrop(
+    step = await escalateOrFail(
       deps,
       runId,
       taskId,
@@ -12176,9 +12176,9 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   };
 }
 
-// src/driver/results.ts
-var SPAWN_STAGES = ["tests", "exec", "verify"];
-var FoldKeySchema = external_exports.object({ stage: external_exports.enum(SPAWN_STAGES), rung: external_exports.number().int().min(0) }).strict();
+// src/orchestrator/results.ts
+var SPAWN_PHASES = ["tests", "exec", "verify"];
+var ResultKeySchema = external_exports.object({ phase: external_exports.enum(SPAWN_PHASES), rung: external_exports.number().int().min(0) }).strict();
 var ProducerResultSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
 var HoldoutResultSchema = external_exports.object({ raw: external_exports.string().min(1) }).strict();
 var ReviewsResultSchema = external_exports.object({
@@ -12199,7 +12199,7 @@ var ReviewsResultSchema = external_exports.object({
   crossVendorAbsent: external_exports.object({ reason: external_exports.string().min(1) }).strict().optional()
 }).strict();
 var DriveResultsSchema = external_exports.object({
-  fold_key: FoldKeySchema,
+  result_key: ResultKeySchema,
   producer: ProducerResultSchema.optional(),
   holdout: HoldoutResultSchema.optional(),
   reviews: ReviewsResultSchema.optional()
@@ -12211,11 +12211,11 @@ var DriveResultsSchema = external_exports.object({
 function parseDriveResults(raw) {
   return DriveResultsSchema.parse(raw);
 }
-function isSpawnStage(stage) {
-  return SPAWN_STAGES.includes(stage);
+function isSpawnPhase(phase) {
+  return SPAWN_PHASES.includes(phase);
 }
 
-// src/driver/quota-gate.ts
+// src/orchestrator/quota-gate.ts
 var log25 = createLogger("quota-gate");
 async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false) {
   if (mode === "workflow" || ignoreQuota) return null;
@@ -12255,11 +12255,11 @@ async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false
   }
 }
 
-// src/driver/ship.ts
+// src/orchestrator/ship.ts
 var log26 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
-    throw new Error("ship: stage 'ship' requires a task but ctx.task is absent");
+    throw new Error("ship: phase 'ship' requires a task but ctx.task is absent");
   }
   return ctx.task;
 }
@@ -12302,13 +12302,13 @@ async function shipTask(deps, ctx) {
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
-// src/driver/coroutine.ts
-var log27 = createLogger("coroutine");
+// src/orchestrator/orchestrator.ts
+var log27 = createLogger("orchestrator");
 var MERGE_RESYNC_CAP = 8;
 function requireTask2(run9, taskId) {
   const task = run9.tasks[taskId];
   if (task === void 0) {
-    throw new Error(`coroutine: run '${run9.run_id}' has no task '${taskId}'`);
+    throw new Error(`orchestrator: run '${run9.run_id}' has no task '${taskId}'`);
   }
   return task;
 }
@@ -12316,26 +12316,26 @@ function terminalOutcome(task) {
   if (task.status === "done") return { outcome: "done" };
   if (task.failure_class === void 0) {
     throw new Error(
-      `coroutine: terminal task '${task.task_id}' has no failure_class \u2014 schema invariant violated`
+      `orchestrator: terminal task '${task.task_id}' has no failure_class \u2014 schema invariant violated`
     );
   }
   if (task.failure_reason === void 0) {
     throw new Error(
-      `coroutine: terminal task '${task.task_id}' has no failure_reason \u2014 schema invariant violated`
+      `orchestrator: terminal task '${task.task_id}' has no failure_reason \u2014 schema invariant violated`
     );
   }
   return {
-    outcome: "dropped",
+    outcome: "failed",
     failure_class: task.failure_class,
     reason: task.failure_reason
   };
 }
-function asSpawnStage(stage) {
-  if (isSpawnStage(stage)) {
-    return stage;
+function asSpawnPhase(phase) {
+  if (isSpawnPhase(phase)) {
+    return phase;
   }
   throw new Error(
-    `coroutine: stage '${stage}' cannot spawn agents (only tests|exec|verify can) \u2014 unreachable`
+    `orchestrator: phase '${phase}' cannot spawn agents (only tests|exec|verify can) \u2014 unreachable`
   );
 }
 async function holdoutSidecar(deps, runId, taskId, baseRef) {
@@ -12353,33 +12353,33 @@ async function holdoutSidecar(deps, runId, taskId, baseRef) {
     prompt: buildHoldoutPrompt(record, worktree, baseRef)
   };
 }
-async function foldResults(deps, runId, taskId, stage, task, results) {
-  const { fold_key } = results;
-  if (!isSpawnStage(stage)) {
-    throw new Error(`drive: results given but stage '${stage}' spawns no agents`);
+async function recordResults(deps, runId, taskId, phase, task, results) {
+  const { result_key } = results;
+  if (!isSpawnPhase(phase)) {
+    throw new Error(`drive: results given but phase '${phase}' spawns no agents`);
   }
-  const spawnStage = stage;
-  if (fold_key.stage !== spawnStage || fold_key.rung !== task.escalation_rung) {
+  const spawnPhase = phase;
+  if (result_key.phase !== spawnPhase || result_key.rung !== task.escalation_rung) {
     throw new Error(
-      `drive: stale or duplicate results (fold_key ${fold_key.stage}/${fold_key.rung} vs cursor ${spawnStage}/${task.escalation_rung}) \u2014 re-invoke without results to get the current envelope`
+      `drive: stale or duplicate results (result_key ${result_key.phase}/${result_key.rung} vs cursor ${spawnPhase}/${task.escalation_rung}) \u2014 re-invoke without results to get the current envelope`
     );
   }
-  const fold = deps;
-  if (stage === "tests" || stage === "exec") {
+  const record = deps;
+  if (phase === "tests" || phase === "exec") {
     if (results.producer === void 0) {
-      throw new Error(`drive: stage '${stage}' expects producer-status results`);
+      throw new Error(`drive: phase '${phase}' expects producer-status results`);
     }
     const env2 = await applyRecordProducer(
       deps.state,
       runId,
       taskId,
-      stage,
+      phase,
       results.producer.status
     );
     return env2.step;
   }
   if (results.reviews === void 0) {
-    throw new Error("drive: stage 'verify' expects reviews results");
+    throw new Error("drive: phase 'verify' expects reviews results");
   }
   if (await deps.holdout.has(runId, taskId) && results.holdout === void 0) {
     throw new Error(
@@ -12388,21 +12388,21 @@ async function foldResults(deps, runId, taskId, stage, task, results) {
   }
   const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
   if (results.holdout !== void 0) {
-    await applyRecordHoldout(fold, runId, taskId, verdictStore, results.holdout.raw);
+    await applyRecordHoldout(record, runId, taskId, verdictStore, results.holdout.raw);
   }
-  const env = await applyRecordReviews(fold, runId, taskId, verdictStore, results.reviews);
+  const env = await applyRecordReviews(record, runId, taskId, verdictStore, results.reviews);
   return env.step;
 }
-async function stepTask(deps, runId, taskId, results) {
+async function nextAction(deps, runId, taskId, results) {
   let run9 = await deps.state.read(runId);
   let task = requireTask2(run9, taskId);
   if (isTerminalTaskStatus(task.status)) {
-    return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
+    return { kind: "done", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
   const stop = await applyQuotaGate(deps, runId, run9.mode, run9.ignore_quota);
   if (stop !== null) {
     return {
-      kind: "quota-blocked",
+      kind: "pause",
       run_id: runId,
       task_id: taskId,
       scope: stop.scope,
@@ -12410,45 +12410,45 @@ async function stepTask(deps, runId, taskId, results) {
       ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
     };
   }
-  let stage = task.stage ?? "preflight";
+  let phase = task.phase ?? "preflight";
   let cursorPersisted = false;
   if (results !== void 0) {
-    const step = await foldResults(deps, runId, taskId, stage, task, results);
+    const step = await recordResults(deps, runId, taskId, phase, task, results);
     if (step.done) {
-      return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+      return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
     }
-    stage = step.stage;
+    phase = step.phase;
     cursorPersisted = true;
   }
-  const handlers = makeStageHandlers(deps);
+  const handlers = makePhaseHandlers(deps);
   for (; ; ) {
-    run9 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, stage);
+    run9 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, phase);
     cursorPersisted = true;
     task = requireTask2(run9, taskId);
     const ctx = { run: run9, task, attempt: task.escalation_rung + 1 };
-    const result = stage === "ship" ? await shipTask(deps, ctx) : await runStage(stage, ctx, handlers);
+    const result = phase === "ship" ? await shipTask(deps, ctx) : await runPhase(phase, ctx, handlers);
     switch (result.kind) {
       case "advance": {
-        stage = result.to;
+        phase = result.to;
         cursorPersisted = false;
         continue;
       }
       case "spawn-agents": {
-        const spawnStage = asSpawnStage(stage);
-        const expects = spawnStage === "verify" ? "reviews" : "producer-status";
+        const spawnPhase = asSpawnPhase(phase);
+        const expects = spawnPhase === "verify" ? "reviews" : "producer-status";
         const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
         const base_ref = `origin/${resolveStagingBranch(runId, run9.staging_branch)}`;
-        const sidecar = spawnStage === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : void 0;
-        const fold_key = { stage: spawnStage, rung: task.escalation_rung };
+        const holdout = spawnPhase === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : void 0;
+        const result_key = { phase: spawnPhase, rung: task.escalation_rung };
         if (await deps.git.worktreeExists(worktree)) {
           const inFlight = task.spawn_in_flight;
-          if (inFlight !== void 0 && inFlight.stage === spawnStage && inFlight.rung === task.escalation_rung) {
+          if (inFlight !== void 0 && inFlight.phase === spawnPhase && inFlight.rung === task.escalation_rung) {
             await deps.git.resetHardClean(inFlight.tip_sha, { cwd: worktree });
           } else {
             const tip_sha = await deps.git.revParse("HEAD", { cwd: worktree });
             await deps.state.updateTask(runId, taskId, (t) => ({
               ...t,
-              spawn_in_flight: { stage: spawnStage, rung: t.escalation_rung, tip_sha }
+              spawn_in_flight: { phase: spawnPhase, rung: t.escalation_rung, tip_sha }
             }));
           }
         }
@@ -12456,10 +12456,10 @@ async function stepTask(deps, runId, taskId, results) {
           kind: "spawn",
           run_id: runId,
           task_id: taskId,
-          stage: spawnStage,
-          fold_key,
-          manifest: result.manifest,
-          ...sidecar !== void 0 ? { sidecar } : {},
+          phase: spawnPhase,
+          result_key,
+          request: result.request,
+          ...holdout !== void 0 ? { holdout } : {},
           expects,
           worktree,
           base_ref
@@ -12468,21 +12468,21 @@ async function stepTask(deps, runId, taskId, results) {
       case "task-terminal": {
         if (result.outcome.outcome === "done") {
           const step2 = await completeTask(deps, runId, taskId);
-          if (!step2.done) throw new Error("coroutine: completeTask returned non-terminal step");
-          return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
+          if (!step2.done) throw new Error("orchestrator: completeTask returned non-terminal step");
+          return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
         }
-        const step = await dropStep(
+        const step = await failStep(
           deps,
           runId,
           taskId,
           result.outcome.failure_class,
           result.outcome.reason
         );
-        if (!step.done) throw new Error("coroutine: dropStep returned non-terminal step");
-        return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+        if (!step.done) throw new Error("orchestrator: failStep returned non-terminal step");
+        return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
       }
       case "wait-retry": {
-        if (result.stage === "ship") {
+        if (result.phase === "ship") {
           let newResyncs = 0;
           let overCap = false;
           await deps.state.updateTask(runId, taskId, (t) => {
@@ -12492,29 +12492,29 @@ async function stepTask(deps, runId, taskId, results) {
             return {
               ...t,
               merge_resyncs: newResyncs,
-              stage: "exec",
-              status: stageToInFlightStatus("exec")
+              phase: "exec",
+              status: phaseToInFlightStatus("exec")
             };
           });
           if (overCap) {
-            const step2 = await dropStep(
+            const step2 = await failStep(
               deps,
               runId,
               taskId,
               "blocked-environmental",
               `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`
             );
-            if (!step2.done) throw new Error("coroutine: dropStep returned non-terminal step");
-            return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step2.outcome };
+            if (!step2.done) throw new Error("orchestrator: failStep returned non-terminal step");
+            return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
           log27.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
           );
-          stage = "exec";
+          phase = "exec";
           cursorPersisted = true;
           continue;
         }
-        const step = await escalateOrDrop(
+        const step = await escalateOrFail(
           deps,
           runId,
           taskId,
@@ -12522,27 +12522,27 @@ async function stepTask(deps, runId, taskId, results) {
           "exec"
         );
         if (step.done) {
-          return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+          return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
-        stage = step.stage;
+        phase = step.phase;
         cursorPersisted = false;
         continue;
       }
       case "graceful-stop":
       case "finalize-terminal":
-        throw new Error(`coroutine: run-scope result '${result.kind}' surfaced at task scope`);
+        throw new Error(`orchestrator: run-scope result '${result.kind}' surfaced at task scope`);
       default:
         return assertNever(result);
     }
   }
 }
 
-// src/driver/circuit-breaker-gate.ts
+// src/orchestrator/circuit-breaker-gate.ts
 async function applyCircuitBreaker(deps, runId) {
   const run9 = await deps.state.read(runId);
   const now = deps.now();
   const capabilityFailures = Object.values(run9.tasks).filter(
-    (t) => t.status === "dropped" && t.failure_class === "capability-budget"
+    (t) => t.status === "failed" && t.failure_class === "capability-budget"
   ).length;
   const startedAtIso = run9.mode === "workflow" ? run9.started_at : epochToIso(now);
   const verdict = evaluate2(
@@ -12553,35 +12553,35 @@ async function applyCircuitBreaker(deps, runId) {
   return verdict.tripped ? verdict : null;
 }
 
-// src/driver/next.ts
+// src/orchestrator/next.ts
 function depsSatisfied(run9, task) {
   return task.depends_on.every((d) => run9.tasks[d]?.status === "done");
 }
 function isUnsatisfiableDep(run9, depId) {
   const dep = run9.tasks[depId];
-  return dep === void 0 || dep.status === "dropped";
+  return dep === void 0 || dep.status === "failed";
 }
 async function wantsDocs(deps, run9) {
   if (run9.docs?.status === "done") return false;
   if (decideFinalize(run9).run_status !== "completed") return false;
   return deps.docsApplicable();
 }
-async function stepRun(deps, runId) {
+async function nextTask(deps, runId) {
   let run9 = await deps.state.read(runId);
   const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run9.ship_mode });
   if (isTerminalRunStatus(run9.status)) {
-    return { ...ctx(), kind: "run-terminal", run_status: run9.status };
+    return { ...ctx(), kind: "done", run_status: run9.status };
   }
   const allTerminal = Object.values(run9.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsDocs = allTerminal && await wantsDocs(deps, run9);
   if (allTerminal && !needsDocs) {
-    return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
+    return { ...ctx(), kind: "finalize", cascade_failed: [] };
   }
   const stop = await applyQuotaGate(deps, runId, run9.mode, run9.ignore_quota);
   if (stop !== null) {
     return {
       ...ctx(),
-      kind: "quota-blocked",
+      kind: "pause",
       scope: stop.scope,
       reason: stop.reason,
       ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
@@ -12596,9 +12596,9 @@ async function stepRun(deps, runId) {
     }));
   }
   if (needsDocs) {
-    return { ...ctx(), kind: "docs-ready" };
+    return { ...ctx(), kind: "document" };
   }
-  const cascadeDropped = [];
+  const cascadeFailed = [];
   for (; ; ) {
     run9 = await deps.state.read(runId);
     const blocked = Object.values(run9.tasks).filter(
@@ -12612,34 +12612,34 @@ async function stepRun(deps, runId) {
           `next: task '${t.task_id}' classified blocked but no unsatisfiable dep found \u2014 unreachable`
         );
       }
-      await dropTask(
+      await failTask(
         deps,
         runId,
         t.task_id,
         "blocked-environmental",
-        `dependency '${unsatisfied}' did not complete (dropped or missing)`
+        `dependency '${unsatisfied}' did not complete (failed or missing)`
       );
-      cascadeDropped.push(t.task_id);
+      cascadeFailed.push(t.task_id);
     }
   }
   const tasks = Object.values(run9.tasks);
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
-    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
   const breaker = await applyCircuitBreaker(deps, runId);
   if (breaker !== null) {
     for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
-      await dropTask(
+      await failTask(
         deps,
         runId,
         t.task_id,
         "capability-budget",
         `circuit breaker tripped: ${breaker.reason}`
       );
-      cascadeDropped.push(t.task_id);
+      cascadeFailed.push(t.task_id);
     }
     run9 = await deps.state.read(runId);
-    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
   const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run9, t));
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
@@ -12649,22 +12649,22 @@ async function stepRun(deps, runId) {
     const wedged = tasks.filter((t) => !isTerminalTaskStatus(t.status));
     const detail = wedged.map((t) => `${t.task_id}=${t.status}`).join(", ");
     for (const t of wedged) {
-      await dropTask(
+      await failTask(
         deps,
         runId,
         t.task_id,
         "spec-defect",
         `unrunnable: no ready task and no satisfiable path (dependency cycle/deadlock) \u2014 wedged set [${detail}]`
       );
-      cascadeDropped.push(t.task_id);
+      cascadeFailed.push(t.task_id);
     }
     run9 = await deps.state.read(runId);
-    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
-  return { ...ctx(), kind: "tasks-ready", ready: ordered, cascade_dropped: cascadeDropped };
+  return { ...ctx(), kind: "work", ready: ordered, cascade_failed: cascadeFailed };
 }
 
-// src/driver/docs.ts
+// src/orchestrator/docs.ts
 import { join as join16 } from "node:path";
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
@@ -12673,11 +12673,11 @@ function docsWorktreePath(dataDir, runId) {
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
-    "You are the factory scribe running the pipeline's documentation stage.",
+    "You are the factory scribe running the pipeline's documentation phase.",
     `1. cd into your worktree: ${worktree} (already checked out on the docs branch off the staging tip).`,
     `2. Determine the whole-PRD change set with: git diff ${baseRef}..HEAD`,
     "3. Update /docs (Di\xE1taxis) to reflect those changes, per agents/scribe.md.",
-    "4. COMMIT your changes IN this worktree. Do NOT push (the engine pushes on fold).",
+    "4. COMMIT your changes IN this worktree. Do NOT push (the engine pushes on record).",
     "5. If nothing material changed, make no commit.",
     'Finish with your terminal STATUS line and return it as {"status": "<line>"}.'
   ].join("\n");
@@ -12707,7 +12707,7 @@ async function runDocsEmit(deps, runId) {
   };
 }
 var DocsResultsSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
-async function runDocsFold(deps, runId, results) {
+async function runDocsRecord(deps, runId, results) {
   const run9 = await deps.state.read(runId);
   const staging = resolveStagingBranch(runId, run9.staging_branch);
   const docsBranch = `docs-${runId}`;
@@ -12720,16 +12720,16 @@ async function runDocsFold(deps, runId, results) {
     await deps.state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: nowIso() } }));
     return { kind: "done", run_id: runId };
   }
-  const reason = "reason" in outcome ? outcome.reason : "docs stage failed";
+  const reason = "reason" in outcome ? outcome.reason : "docs phase failed";
   await deps.state.update(runId, (s) => ({
     ...s,
     status: "suspended",
     docs: { status: "failed", reason, ended_at: nowIso() }
   }));
-  return { kind: "blocked", run_id: runId, reason };
+  return { kind: "suspend", run_id: runId, reason };
 }
 
-// src/driver/docs-applicable.ts
+// src/orchestrator/docs-applicable.ts
 import { readFile as readFile12, stat } from "node:fs/promises";
 import { join as join17 } from "node:path";
 async function readJsonOrNull2(file) {
@@ -12769,7 +12769,7 @@ function splitRepo(slug) {
   const parts = slug.split("/");
   return { owner: parts[0], repo: parts[1] };
 }
-async function loadCoroutineDeps(opts) {
+async function loadOrchestratorDeps(opts) {
   const deps = await loadCliDeps(opts);
   return {
     ...deps,
@@ -12859,8 +12859,8 @@ Usage:
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
-  finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
-  docs       Emit the documentation-stage spawn manifest, or (with --results) fold a scribe result.
+  finalize   Build the run report, file per-failure issues, ship the rollup only when completed, flip terminal.
+  docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
@@ -12877,14 +12877,14 @@ Usage:
   --new         Force a fresh run even if a live one already exists for this spec.
   --supersede   Terminate the active run for this spec, then create a fresh one.
   --resume      Continue the active run for this spec (full hand-off: forthcoming).
-  --workflow    Run the parallel background Workflow driver. Default (no flag): session \u2014
-                the in-session, quota-paced orchestrator loop.
+  --workflow    Run the parallel background Workflow runner. Default (no flag): session \u2014
+                the in-session, quota-paced runner loop.
   --no-ship     Open the rollup PR but never merge. Default (no flag): live \u2014 auto-merge
                 each task into staging and merge the staging\u2192develop rollup into develop.
-                Persisted on the run so the workflow driver + resume + finalize read it
+                Persisted on the run so the workflow runner + resume + finalize read it
                 without re-passing.
   --ignore-quota Bypass the weekly-quota hard stop AND the per-step quota pacer for this run.
-                Persisted as ignore_quota:true so both coroutines + drivers skip the gate
+                Persisted as ignore_quota:true so both orchestrators + orchestrators skip the gate
                 without re-passing \u2014 lets create/--supersede proceed past a 7d-parked run.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; absent \u21D2 owner-unknown (Stop gate unscoped).
@@ -12903,7 +12903,7 @@ Usage:
 
 Emits ONE JSON envelope:
   { kind:"resumed", run }                              \u2014 window recovered (or already running)
-  { kind:"still-blocked", run_id, status, reason, \u2026 }  \u2014 window has not recovered (state untouched)
+  { kind:"pause", run_id, status, reason, \u2026 }  \u2014 window has not recovered (state untouched)
 
 A terminal run is a loud error (nothing to resume).`;
 var FINALIZE_HELP = `factory run finalize \u2014 turn an all-terminal run into its shipped outcome
@@ -12917,7 +12917,7 @@ Usage:
               merges the staging\u2192develop rollup; no-merge opens it only).
 
 Builds the deterministic partial-run report (report.md), emits run.finalized
-telemetry, on a failed run comments the dropped tasks on the PRD issue (deduped),
+telemetry, on a failed run comments the failed tasks on the PRD issue (deduped),
 opens + CI-gates + (when shipping live) squash-merges the staging\u2192develop rollup,
 then flips the run terminal \u2014 in that resume-safe order. LOUD if any task is still
 non-terminal.
@@ -12944,23 +12944,23 @@ session end and leaves the run resumable; cancel is for deliberately discarding 
 
 Emits ONE JSON envelope:
   { kind:"cancelled", run, cleaned_up }`;
-function seedTasksFromSpec(manifest) {
-  const ids = new Set(manifest.tasks.map((t) => t.task_id));
+function seedTasksFromSpec(request) {
+  const ids = new Set(request.tasks.map((t) => t.task_id));
   const tasks = {};
-  for (const t of manifest.tasks) {
+  for (const t of request.tasks) {
     validateId(t.task_id, "task-id");
     if (tasks[t.task_id] !== void 0) {
-      throw new Error(`run create: duplicate task id '${t.task_id}' in spec ${manifest.spec_id}`);
+      throw new Error(`run create: duplicate task id '${t.task_id}' in spec ${request.spec_id}`);
     }
     for (const dep of t.depends_on) {
       if (dep === t.task_id) {
         throw new Error(
-          `run create: task '${t.task_id}' depends on itself in spec ${manifest.spec_id}`
+          `run create: task '${t.task_id}' depends on itself in spec ${request.spec_id}`
         );
       }
       if (!ids.has(dep)) {
         throw new Error(
-          `run create: task '${t.task_id}' depends on unknown task '${dep}' in spec ${manifest.spec_id}`
+          `run create: task '${t.task_id}' depends on unknown task '${dep}' in spec ${request.spec_id}`
         );
       }
     }
@@ -12977,7 +12977,7 @@ function seedTasksFromSpec(manifest) {
       merge_resyncs: 0
     };
   }
-  assertAcyclic(tasks, manifest.spec_id);
+  assertAcyclic(tasks, request.spec_id);
   return tasks;
 }
 function assertAcyclic(tasks, specId) {
@@ -13012,20 +13012,20 @@ async function resolveSpec(specStore, opts) {
   }
   return resolved;
 }
-async function createRunFromManifest(state, specStore, manifest, opts, stagingDeps) {
+async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
   if (opts.mode === "workflow") {
     log28.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
     );
   }
-  const seeded = seedTasksFromSpec(manifest);
+  const seeded = seedTasksFromSpec(request);
   const branch = runStagingBranch(opts.runId);
   await state.create({
     run_id: opts.runId,
-    spec: specStore.toPointer(manifest),
+    spec: specStore.toPointer(request),
     staging_branch: branch,
-    // v1 coroutine seam drives tasks strictly one at a time — the driver dial is fixed.
-    driver: "sequential",
+    // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
+    execution_mode: "sequential",
     ...opts.mode !== void 0 ? { mode: opts.mode } : {},
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
     ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {},
@@ -13057,20 +13057,20 @@ async function supersedeRun(state, existing, stagingDeps) {
   await state.finalize(existing.run_id, "superseded");
 }
 async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
-  const manifest = await resolveSpec(specStore, opts);
+  const request = await resolveSpec(specStore, opts);
   if (opts.intent === "fresh") {
     return {
       kind: "created",
-      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps)
+      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps)
     };
   }
-  const pointer = specStore.toPointer(manifest);
+  const pointer = specStore.toPointer(request);
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
       const weeklyParked = existing.status === "suspended" && existing.quota?.binding_window === "7d";
       if (weeklyParked && !opts.ignoreQuota && opts.intent !== "resume") {
-        return { kind: "quota-blocked", existing };
+        return { kind: "pause", existing };
       }
       if (opts.intent === "supersede") {
         if (stagingDeps === void 0) {
@@ -13080,7 +13080,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
         await supersedeRun(state, existing, stagingDeps);
         return {
           kind: "superseded",
-          run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+          run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
           supersededId
         };
       }
@@ -13088,7 +13088,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
     }
     return {
       kind: "created",
-      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps)
+      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps)
     };
   });
 }
@@ -13109,13 +13109,13 @@ async function applyResume(state, runId, reading, config, nowEpochSec) {
       }));
       return { kind: "resumed", run: updated };
     }
-    case "still-blocked": {
+    case "pause": {
       const d = plan.decision;
       if (d.kind === "proceed") {
         return { kind: "resumed", run: run9 };
       }
       const base = {
-        kind: "still-blocked",
+        kind: "pause",
         run_id: runId,
         status: run9.status,
         reason: d.reason
@@ -13172,7 +13172,7 @@ async function runCreate(argv, overrides = {}) {
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
   if (ownerSession === void 0 && mode === "session") {
     throw new UsageError(
-      "run create: session-mode runs require an owning session id (pass --session-id <id> or set CLAUDE_CODE_SESSION_ID). Workflow-mode runs are exempt (the Workflow driver owns finalization)."
+      "run create: session-mode runs require an owning session id (pass --session-id <id> or set CLAUDE_CODE_SESSION_ID). Workflow-mode runs are exempt (the Workflow runner owns finalization)."
     );
   }
   const fresh = args.flag("new") === true || explicitRunId !== void 0;
@@ -13222,11 +13222,11 @@ async function runCreate(argv, overrides = {}) {
     },
     stagingDeps
   );
-  if (result.kind === "quota-blocked") {
+  if (result.kind === "pause") {
     const r = result.existing;
     const resets = r.quota?.resets_at_epoch;
     emitJson({
-      kind: "quota-blocked",
+      kind: "pause",
       scope: "7d",
       run_id: r.run_id,
       status: r.status,
@@ -13315,9 +13315,9 @@ async function runFinalize(argv) {
 }
 var DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
 
-Emit the documentation-stage spawn manifest, or (with --results) fold a scribe
-result: publish the docs commit onto staging and mark the stage done, or suspend
-the run on failure. The CLI never spawns scribe \u2014 a driver does.`;
+Emit the documentation-phase spawn request, or (with --results) record a scribe
+result: publish the docs commit onto staging and mark the phase done, or suspend
+the run on failure. The CLI never spawns scribe \u2014 a orchestrator does.`;
 async function runDocs(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
@@ -13338,7 +13338,7 @@ async function runDocs(argv) {
         `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
-    emitJson(await runDocsFold(deps, runId, results));
+    emitJson(await runDocsRecord(deps, runId, results));
   } else if (resultsPath !== void 0) {
     throw new UsageError("--results requires a file path");
   } else {
@@ -13479,7 +13479,7 @@ Usage:
 --repo is OPTIONAL: auto-derived from the 'origin' remote when omitted; an explicit
 value that disagrees with the remote fails loud.
 
-The in-session orchestrator drives the agent spawns + the bounded regen loop; each
+The in-session runner drives the agent spawns + the bounded regen loop; each
 action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
 through <dataDir>/spec-build/<repo>/<issue>/{prd,generated,verdict}.json.
 
@@ -13565,8 +13565,8 @@ async function storeSpec(deps, repo, issue) {
       generated_path: generatedPath
     };
   }
-  const manifest = buildManifest(repo, issue, generated);
-  const pointer = await deps.store.write(manifest, generated.specMd);
+  const request = buildManifest(repo, issue, generated);
+  const pointer = await deps.store.write(request, generated.specMd);
   return { kind: "stored", repo, issue, pointer };
 }
 function parseIssue2(raw) {
@@ -13620,7 +13620,7 @@ async function run4(argv) {
   return EXIT.OK;
 }
 var specCommand = {
-  describe: "Build a durable spec (resolve \u2192 gate \u2192 store; orchestrator drives the agent spawns)",
+  describe: "Build a durable spec (resolve \u2192 gate \u2192 store; runner drives the agent spawns)",
   run: async (argv) => {
     try {
       return await run4(argv);
@@ -13638,7 +13638,7 @@ var specCommand = {
 function dispositionOf(status, failureClass) {
   if (status === "done") return "shipped";
   if (status === "pending") return "runnable";
-  if (status === "dropped") {
+  if (status === "failed") {
     return failureClass === "blocked-environmental" ? "recoverable" : "dead-end";
   }
   return "stuck";
@@ -13649,7 +13649,7 @@ function depsSatisfied2(run9, depends) {
 function hasUnsatisfiableDep(run9, depends) {
   return depends.some((d) => {
     const dep = run9.tasks[d];
-    return dep === void 0 || dep.status === "dropped";
+    return dep === void 0 || dep.status === "failed";
   });
 }
 function scanRun(run9) {
@@ -13696,7 +13696,7 @@ function scanRun(run9) {
 }
 function summarize2(status, resettable, deadEnds, wouldDeadlock) {
   if (resettable === 0) {
-    const tail = deadEnds > 0 ? ` (${deadEnds} dead-end drop(s) \u2014 need a fix + --include-dead-ends)` : "";
+    const tail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
     return `run '${status}': no rescue needed${tail}`;
   }
   const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
@@ -13744,7 +13744,7 @@ function resetTaskRow(task) {
     producer_role: _producerRole,
     started_at: _startedAt,
     ended_at: _endedAt,
-    stage: _stage,
+    phase: _phase,
     ...rest
   } = task;
   return {
@@ -13841,11 +13841,11 @@ Usage:
   --task               Reset exactly this task (repeatable). Overrides the default
                        resettable set; a 'done' task is a loud error, a 'pending'
                        one is skipped. An explicitly-named dead-end IS reset.
-  --include-dead-ends  Also reset dead-end drops (spec-defect / capability-budget).
+  --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
                        Use only after the root cause is actually fixed.
 
 Default (no --task): resets stuck (crashed in-flight) + recoverable
-(blocked-environmental) tasks, leaving dead-ends dropped. Reopens a terminal run
+(blocked-environmental) tasks, leaving dead-ends failed. Reopens a terminal run
 to 'running' when it reset work. Idempotent.
 
 Emits ONE JSON document:
@@ -13949,8 +13949,8 @@ async function runScore(argv, overrides = {}) {
     throw new UsageError("score: no --run given and no current run");
   }
   const specStore = new SpecStore({ dataDir });
-  const manifest = await specStore.read(runState2.spec.repo, runState2.spec.spec_id);
-  const report = buildPartialReport(runState2, manifest);
+  const request = await specStore.read(runState2.spec.repo, runState2.spec.spec_id);
+  const report = buildPartialReport(runState2, request);
   const summary = buildRunSummary(runState2, report);
   emitJson({ kind: "score", summary });
   return EXIT.OK;
@@ -13971,24 +13971,24 @@ var scoreCommand = {
 };
 
 // src/cli/subcommands/drive.ts
-var HELP5 = `factory drive \u2014 step one task until it needs agents or is terminal
+var HELP5 = `factory next-action \u2014 step one task until it needs agents or is terminal
 
 Usage:
-  factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
+  factory next-action --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
 
 --ship-mode (optional): no-merge | live \u2014 overrides the run's persisted ship_mode for
 this step only; omit to honor the persisted value (the seam default, never no-merge).
 
 Emits ONE JSON envelope to stdout:
-  { kind:"spawn", run_id, task_id, stage, manifest, sidecar?, expects, fold_key, worktree, base_ref }
-  { kind:"terminal", run_id, task_id, outcome }
-  { kind:"quota-blocked", run_id, task_id, scope, reason, resets_at_epoch? }
+  { kind:"spawn", run_id, task_id, phase, request, holdout?, expects, result_key, worktree, base_ref }
+  { kind:"done", run_id, task_id, outcome }
+  { kind:"pause", run_id, task_id, scope, reason, resets_at_epoch? }
 
 --results feeds back what the previous spawn envelope asked for. It MUST echo the
-envelope's fold_key verbatim; a stale/duplicate key rejects LOUD (re-invoke without
+envelope's result_key verbatim; a stale/duplicate key rejects LOUD (re-invoke without
 --results to get the current envelope):
-  expects=producer-status \u2192 { "fold_key": {\u2026}, "producer": { "status": "<STATUS line>" } }
-  expects=reviews         \u2192 { "fold_key": {\u2026}, "holdout"?: {"raw": "<validator output>"},
+  expects=producer-status \u2192 { "result_key": {\u2026}, "producer": { "status": "<STATUS line>" } }
+  expects=reviews         \u2192 { "result_key": {\u2026}, "holdout"?: {"raw": "<validator output>"},
                               "reviews": { reviews, verifications, crossVendorAbsent? } }
 Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
 async function run6(argv) {
@@ -14013,8 +14013,8 @@ async function run6(argv) {
   } else if (resultsPath !== void 0) {
     throw new UsageError("--results requires a file path");
   }
-  const deps = await loadCoroutineDeps({ runId, ...shipMode !== void 0 ? { shipMode } : {} });
-  const envelope = await stepTask(deps, runId, taskId, results);
+  const deps = await loadOrchestratorDeps({ runId, ...shipMode !== void 0 ? { shipMode } : {} });
+  const envelope = await nextAction(deps, runId, taskId, results);
   emitJson(envelope);
   return EXIT.OK;
 }
@@ -14025,7 +14025,7 @@ var driveCommand = {
       return await run6(argv);
     } catch (err) {
       if (isUsageError(err)) {
-        emitError(`drive: ${err.message}`);
+        emitError(`next-action: ${err.message}`);
         return EXIT.USAGE;
       }
       throw err;
@@ -14034,21 +14034,21 @@ var driveCommand = {
 };
 
 // src/cli/subcommands/next.ts
-var HELP6 = `factory next \u2014 one run-loop step: quota gate, cascade-drop, ready set
+var HELP6 = `factory next-task \u2014 one run-loop step: quota gate, cascade-fail, ready set
 
 Usage:
-  factory next [--run <id>]      (defaults to runs/current)
+  factory next-task [--run <id>]      (defaults to runs/current)
 
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
-context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the workflow driver
-adopts them from the first \`next\` instead of via Workflow args:
-  { kind:"tasks-ready", run_id, data_dir, ship_mode, ready:[...], cascade_dropped:[...] }
-  { kind:"all-terminal", run_id, data_dir, ship_mode, cascade_dropped:[...] }  \u2192 call \`factory run finalize\`
-  { kind:"run-terminal", run_id, data_dir, ship_mode, run_status }
-  { kind:"quota-blocked", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
+context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the workflow runner
+adopts them from the first \`next-task\` instead of via Workflow args:
+  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...] }
+  { kind:"finalize", run_id, data_dir, ship_mode, cascade_failed:[...] }  \u2192 call \`factory run finalize\`
+  { kind:"done", run_id, data_dir, ship_mode, run_status }
+  { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
-  factory next --assert-owner <session>          (loud-assert runs/current ownership)
-  factory next --expect-mode <session|workflow>  (loud-assert runs/current mode)
+  factory next-task --assert-owner <session>          (loud-assert runs/current ownership)
+  factory next-task --expect-mode <session|workflow>  (loud-assert runs/current mode)
 
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
 Throws LOUD on a dependency deadlock.`;
@@ -14059,7 +14059,7 @@ function assertCurrentOwner(current, assertOwner) {
   if (actual === void 0) return;
   if (actual !== expected) {
     throw new Error(
-      `next: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Relaunch via /factory:run --workflow, or pass --run <id> explicitly.`
+      `next-task: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Relaunch via /factory:run --workflow, or pass --run <id> explicitly.`
     );
   }
 }
@@ -14073,7 +14073,7 @@ function assertExpectedMode(current, expectMode) {
   }
   if (current.mode !== parsed.data) {
     throw new Error(
-      `next: runs/current points at run '${current.run_id}' in mode '${current.mode}', but --expect-mode expected '${parsed.data}' \u2014 a concurrent 'run create' moved runs/current onto a run of a different mode. Relaunch via /factory:run --workflow, or pass --run <id> explicitly.`
+      `next-task: runs/current points at run '${current.run_id}' in mode '${current.mode}', but --expect-mode expected '${parsed.data}' \u2014 a concurrent 'run create' moved runs/current onto a run of a different mode. Relaunch via /factory:run --workflow, or pass --run <id> explicitly.`
     );
   }
 }
@@ -14095,18 +14095,18 @@ async function run7(argv) {
     assertExpectedMode(current, args.flag("expect-mode"));
     runId = current.run_id;
   }
-  const deps = await loadCoroutineDeps({ runId });
-  emitJson(await stepRun(deps, runId));
+  const deps = await loadOrchestratorDeps({ runId });
+  emitJson(await nextTask(deps, runId));
   return EXIT.OK;
 }
 var nextCommand = {
-  describe: "One run-loop step: quota gate, cascade-drop, emit the ready set",
+  describe: "One run-loop step: quota gate, cascade-fail, emit the ready set",
   run: async (argv) => {
     try {
       return await run7(argv);
     } catch (err) {
       if (isUsageError(err)) {
-        emitError(`next: ${err.message}`);
+        emitError(`next-task: ${err.message}`);
         return EXIT.USAGE;
       }
       throw err;
@@ -14543,8 +14543,8 @@ var cliRegistry = {
   score: scoreCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,
-  drive: driveCommand,
-  next: nextCommand,
+  "next-action": driveCommand,
+  "next-task": nextCommand,
   statusline: statuslineCommand,
   autonomy: autonomyCommand
 };

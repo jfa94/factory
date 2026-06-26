@@ -7157,9 +7157,9 @@ var TaskStatusEnum = external_exports.enum([
   "reviewing",
   "shipping",
   "done",
-  "dropped"
+  "failed"
 ]);
-var TERMINAL_TASK_STATUSES = ["done", "dropped"];
+var TERMINAL_TASK_STATUSES = ["done", "failed"];
 function isTerminalTaskStatus(s) {
   return TERMINAL_TASK_STATUSES.includes(s);
 }
@@ -7171,7 +7171,7 @@ var FailureClassEnum = external_exports.enum([
 var RiskTierEnum = external_exports.enum(["low", "medium", "high"]);
 var EscalationRungSchema = external_exports.number().int().min(0);
 var PanelVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
-var ProducerRoleEnum = external_exports.enum(["test-writer", "executor"]);
+var ProducerRoleEnum = external_exports.enum(["test-writer", "implementer"]);
 var SpecPointerSchema = external_exports.object({
   /** Repo identity, e.g. "owner/name". The first key of (repo, spec-id). */
   repo: external_exports.string().min(1),
@@ -7216,46 +7216,46 @@ var TaskStateSchema = external_exports.object({
   branch: external_exports.string().optional(),
   /** PR number once created (idempotent-create keyed off branch, Δ P). */
   pr_number: external_exports.number().int().positive().optional(),
-  // --- Drop classification (Decision 22, Δ D) ---
-  /** Set IFF status === "dropped": the closed-enum cause. */
+  // --- Failure classification (Decision 22, Δ D) ---
+  /** Set IFF status === "failed": the closed-enum cause. */
   failure_class: FailureClassEnum.optional(),
-  /** Human-facing reason string accompanying a drop. */
+  /** Human-facing reason string accompanying a fail. */
   failure_reason: external_exports.string().optional(),
   /**
-   * The precise resume cursor for the drive coroutine — which TaskStage the task is
+   * The precise resume cursor for the drive orchestrator — which TaskPhase the task is
    * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
-   * summary; `stage` is the machine cursor. Absent = not started (preflight).
-   * NOTE: on terminal rows (done/dropped), `stage` is the last in-flight stage,
+   * summary; `phase` is the machine cursor. Absent = not started (preflight).
+   * NOTE: on terminal rows (done/failed), `phase` is the last in-flight phase,
    * not a resume point — terminal writers do not clear it.
-   * NOTE: these literals DUPLICATE stage-machine's TASK_STAGE_ORDER because
-   * core/state must not import stage-machine (dependency direction, enforced by
+   * NOTE: these literals DUPLICATE phase-machine's TASK_PHASE_ORDER because
+   * core/state must not import phase-machine (dependency direction, enforced by
    * `madge --circular` in verify). The duplication is kept honest by a LOAD-BEARING
-   * cross-check test — "TaskState.stage enum equals TASK_STAGE_ORDER (cross-module
-   * pin)" in src/driver/coroutine.test.ts — which fails the instant the two drift.
+   * cross-check test — "TaskState.phase enum equals TASK_PHASE_ORDER (cross-module
+   * pin)" in src/orchestrator/orchestrator.test.ts — which fails the instant the two drift.
    * Do NOT delete that test: it is the only thing tying this hand-copied list to its
    * source of truth.
    */
-  stage: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
-  /** Ship live-merge re-sync count (cap enforced by the coroutine; persisted so the cap survives process boundaries). */
+  phase: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
+  /** Ship live-merge re-sync count (cap enforced by the orchestrator; persisted so the cap survives process boundaries). */
   merge_resyncs: external_exports.number().int().min(0).default(0),
   /**
-   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the coroutine when it
-   * EMITS a spawn for `stage` at `rung`, recording the task-branch `tip_sha` at emit
+   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the orchestrator when it
+   * EMITS a spawn for `phase` at `rung`, recording the task-branch `tip_sha` at emit
    * time. Producers commit to the SHARED task worktree, so a stop in the post-spawn /
-   * pre-fold window leaves the abandoned producer's partial commits on the branch. On
-   * the resume that re-enters the SAME (stage, rung) before any results were folded,
-   * the coroutine resets the worktree to `tip_sha` — discarding ONLY the interrupted
-   * stage's work (prior completed stages live below it) — then re-spawns. A fresh
-   * spawn overwrites it; terminal writers (complete/drop) clear it. Absent = no spawn
-   * in flight (the steady state between stages).
+   * pre-record window leaves the abandoned producer's partial commits on the branch. On
+   * the resume that re-enters the SAME (phase, rung) before any results were recorded,
+   * the orchestrator resets the worktree to `tip_sha` — discarding ONLY the interrupted
+   * phase's work (prior completed phases live below it) — then re-spawns. A fresh
+   * spawn overwrites it; terminal writers (complete/fail) clear it. Absent = no spawn
+   * in flight (the steady state between phases).
    *
-   * `stage` is the spawn-stage subset (tests|exec|verify) — preflight/ship never spawn.
-   * The literal duplicates driver/results' SPAWN_STAGES because core/state must not
-   * import the driver (dependency direction); a cross-check test in
-   * src/driver/coroutine.test.ts pins them equal (mirrors the `stage` field's pin).
+   * `phase` is the spawn-phase subset (tests|exec|verify) — preflight/ship never spawn.
+   * The literal duplicates orchestrator/results' SPAWN_PHASES because core/state must not
+   * import the orchestrator (dependency direction); a cross-check test in
+   * src/orchestrator/orchestrator.test.ts pins them equal (mirrors the `phase` field's pin).
    */
   spawn_in_flight: external_exports.object({
-    stage: external_exports.enum(["tests", "exec", "verify"]),
+    phase: external_exports.enum(["tests", "exec", "verify"]),
     rung: external_exports.number().int().min(0),
     tip_sha: external_exports.string().min(1)
   }).optional(),
@@ -7264,34 +7264,34 @@ var TaskStateSchema = external_exports.object({
   ended_at: external_exports.string().optional()
 });
 function refineTaskCrossFields(task, ctx) {
-  const isDropped = task.status === "dropped";
-  if (isDropped && task.failure_class == null) {
+  const isFailed = task.status === "failed";
+  if (isFailed && task.failure_class == null) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["failure_class"],
-      message: `task '${task.task_id}' is 'dropped' but has no failure_class (a drop must be classified)`
+      message: `task '${task.task_id}' is 'failed' but has no failure_class (a fail must be classified)`
     });
   }
-  if (!isDropped && task.failure_class != null) {
+  if (!isFailed && task.failure_class != null) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["failure_class"],
-      message: `task '${task.task_id}' has failure_class '${task.failure_class}' but status is '${task.status}' (failure_class is set IFF dropped)`
+      message: `task '${task.task_id}' has failure_class '${task.failure_class}' but status is '${task.status}' (failure_class is set IFF failed)`
     });
   }
   const hasReason = task.failure_reason != null && task.failure_reason.length > 0;
-  if (isDropped && !hasReason) {
+  if (isFailed && !hasReason) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["failure_reason"],
-      message: `task '${task.task_id}' is 'dropped' but has no failure_reason (a drop must carry a human-facing reason)`
+      message: `task '${task.task_id}' is 'failed' but has no failure_reason (a fail must carry a human-facing reason)`
     });
   }
-  if (!isDropped && task.failure_reason != null) {
+  if (!isFailed && task.failure_reason != null) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["failure_reason"],
-      message: `task '${task.task_id}' has a failure_reason but status is '${task.status}' (failure_reason is set IFF dropped)`
+      message: `task '${task.task_id}' has a failure_reason but status is '${task.status}' (failure_reason is set IFF failed)`
     });
   }
   task.reviewers.forEach((r, i) => {
@@ -7318,27 +7318,27 @@ var QuotaCheckpointSchema = external_exports.object({
   /** Which window forced the last pause/suspend, if any. */
   binding_window: external_exports.enum(["5h", "7d"]).optional()
 });
-var DocsStageSchema = external_exports.object({
+var DocsPhaseSchema = external_exports.object({
   status: external_exports.enum(["done", "failed"]),
   reason: external_exports.string().optional(),
   ended_at: external_exports.string()
 });
-var DriverEnum = external_exports.enum(["sequential", "balanced"]);
+var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
 var RunStateSchema = external_exports.object({
   /** State-schema version (independent of plugin version). */
-  schema_version: external_exports.literal(1).default(1),
+  schema_version: external_exports.literal(2).default(2),
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: external_exports.string().min(1),
   status: RunStatusEnum.default("running"),
-  driver: DriverEnum.default("sequential"),
+  execution_mode: ExecutionModeEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
   ship_mode: ShipModeEnum.default("live"),
   /**
    * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
    * gate). Stamped ONCE at `run create` from the launching session's
-   * `CLAUDE_CODE_SESSION_ID` (the orchestrator/Bash env), so the Stop hook can
+   * `CLAUDE_CODE_SESSION_ID` (the runner/Bash env), so the Stop hook can
    * session-scope its block: only the OWNING session is gated; an unrelated session
    * stopping while this run is live passes through. Optional — best-effort: when the
    * env var is absent (owner unknown), the Stop gate falls back to the unscoped
@@ -7365,15 +7365,15 @@ var RunStateSchema = external_exports.object({
   /**
    * When true, the quota gate skips pacing and returns null unconditionally. Set once at
    * `run create` from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`.
-   * Persisted so both coroutines and both drivers skip the gate without per-call flag
+   * Persisted so both orchestrators and both runners skip the gate without per-call flag
    * threading — mirrors the `mode==="workflow"` skip. Default false: legacy runs (no field)
    * are unaffected.
    */
   ignore_quota: external_exports.boolean().default(false),
   /** Quota resume checkpoint (Decision 24); absent until a pause/suspend. */
   quota: QuotaCheckpointSchema.optional(),
-  /** Documentation stage marker; absent until the docs stage runs (engine docs stage). */
-  docs: DocsStageSchema.optional(),
+  /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
+  docs: DocsPhaseSchema.optional(),
   /** Lifecycle timestamps (ISO-8601). */
   started_at: external_exports.string(),
   updated_at: external_exports.string(),
@@ -7527,7 +7527,7 @@ var StateManager = class {
     const state = parseRunState({
       run_id: args.run_id,
       status: "running",
-      driver: args.driver ?? "sequential",
+      execution_mode: args.execution_mode ?? "sequential",
       mode: args.mode ?? "session",
       ship_mode: args.ship_mode ?? "live",
       // Stamp the owning session only when known (best-effort) — an absent owner
@@ -7796,14 +7796,14 @@ var StateManager = class {
   }
 };
 
-// src/core/stage-machine/stages.ts
-var TaskStageEnum = external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]);
-var RunStageEnum = external_exports.enum(["finalize"]);
+// src/core/phase-machine/phases.ts
+var TaskPhaseEnum = external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]);
+var RunPhaseEnum = external_exports.enum(["finalize"]);
 
-// src/core/stage-machine/manifest.ts
+// src/core/phase-machine/spawn.ts
 var SpawnRoleEnum = external_exports.enum([
   "test-writer",
-  "executor",
+  "implementer",
   "implementation-reviewer",
   "quality-reviewer",
   "architecture-reviewer",
@@ -7812,7 +7812,7 @@ var SpawnRoleEnum = external_exports.enum([
   "type-design-reviewer",
   "scribe"
 ]);
-var SpawnAgentSchema = external_exports.object({
+var AgentSpecSchema = external_exports.object({
   /** The reviewer/producer role (closed set). */
   role: SpawnRoleEnum,
   /** Worktree isolation. Defaults to "worktree". */
@@ -7830,19 +7830,19 @@ var SpawnAgentSchema = external_exports.object({
    */
   effort: EffortEnum.optional()
 });
-var SpawnManifestSchema = external_exports.object({
-  /** Engine resumes here after the agents return. A per-task stage. */
-  stage_after: TaskStageEnum,
-  /** Agents to spawn; at least one (an empty manifest is a programming error). */
-  agents: external_exports.array(SpawnAgentSchema).min(1)
+var SpawnRequestSchema = external_exports.object({
+  /** Engine resumes here after the agents return. A per-task phase. */
+  resume_phase: TaskPhaseEnum,
+  /** Agents to spawn; at least one (an empty request is a programming error). */
+  agents: external_exports.array(AgentSpecSchema).min(1)
 });
 
-// src/core/stage-machine/result.ts
+// src/core/phase-machine/result.ts
 function finalizeTerminal(run_status) {
   return { kind: "finalize-terminal", run_status };
 }
 
-// src/core/stage-machine/engine.ts
+// src/core/phase-machine/engine.ts
 function decideFinalize(run) {
   const tasks = Object.values(run.tasks);
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
@@ -7927,41 +7927,41 @@ function runTaskForPath(dataDir, absPath) {
   if (!isValidId(run_id) || !isValidId(task_id)) return null;
   return { run_id, task_id };
 }
-function statusToStage(status) {
+function statusToPhase(status) {
   switch (status) {
     case "executing":
-      return TaskStageEnum.enum.tests;
+      return TaskPhaseEnum.enum.tests;
     case "reviewing":
-      return TaskStageEnum.enum.verify;
+      return TaskPhaseEnum.enum.verify;
     case "shipping":
-      return TaskStageEnum.enum.ship;
+      return TaskPhaseEnum.enum.ship;
     case "pending":
     case "done":
-    case "dropped":
+    case "failed":
       return null;
   }
 }
-function activeStageOf(task) {
-  if (statusToStage(task.status) === null) return null;
-  return task.stage ?? statusToStage(task.status);
+function activePhaseOf(task) {
+  if (statusToPhase(task.status) === null) return null;
+  return task.phase ?? statusToPhase(task.status);
 }
 function resolveActiveTask(run, explicitTaskId) {
   const taskId = explicitTaskId ?? process.env.FACTORY_TASK_ID ?? "";
   if (taskId.length > 0) {
     const task2 = run.tasks[taskId];
     if (!task2) return null;
-    return { task: task2, stage: activeStageOf(task2) };
+    return { task: task2, phase: activePhaseOf(task2) };
   }
   const inFlight = Object.values(run.tasks).filter(
     (t) => t.status === "executing" || t.status === "reviewing" || t.status === "shipping"
   );
   if (inFlight.length !== 1) return null;
   const task = inFlight[0];
-  return { task, stage: activeStageOf(task) };
+  return { task, phase: activePhaseOf(task) };
 }
 function isTestWriterPhase(active) {
   if (!active) return false;
-  if (active.stage !== TaskStageEnum.enum.tests) return false;
+  if (active.phase !== TaskPhaseEnum.enum.tests) return false;
   return active.task.producer_role === void 0 || active.task.producer_role === "test-writer";
 }
 
@@ -8134,7 +8134,7 @@ async function handleSubagentStop(input, deps = {}) {
   }
   if (taskId.length === 0) {
     log7.error(
-      `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 driver fold is the single writer`
+      `could not resolve task_id for reviewer '${reviewer}' (run ${run.run_id}); verdict NOT persisted \u2014 orchestrator record is the single writer`
     );
     return null;
   }
@@ -8146,7 +8146,7 @@ async function handleSubagentStop(input, deps = {}) {
   }
   const verdict = parseVerdict(input.last_assistant_message);
   log7.info(
-    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 driver folds reviews via the drive --results fold)`
+    `reviewer '${reviewer}' on task '${taskId}': ${verdict} (observational \u2014 orchestrator records reviews via the drive --results record)`
   );
   return null;
 }
@@ -8250,7 +8250,7 @@ var hookRegistry = {
     run: (argv) => runPipelineGuards(argv)
   },
   "subagent-stop": {
-    describe: "SubagentStop: log a stopping reviewer's parsed verdict (observational \u2014 the driver fold is the single writer of task.reviewers[])",
+    describe: "SubagentStop: log a stopping reviewer's parsed verdict (observational \u2014 the orchestrator record is the single writer of task.reviewers[])",
     run: (argv) => runSubagentStop(argv)
   },
   "stop-gate": {
