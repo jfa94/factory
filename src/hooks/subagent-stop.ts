@@ -4,7 +4,7 @@
  *
  * The new schema dropped the ~12 ad-hoc per-task fields the bash hook wrote
  * (worktree, executor_status, reviewer_status, prior_branch, …). On the new
- * design the subagent→driver hand-off is the structured PhaseResult/SpawnManifest
+ * design the subagent→driver hand-off is the structured PhaseResult/SpawnRequest
  * (group0-seams §3).
  *
  * This hook is now LOG-ONLY (observational). When a REVIEWER subagent stops it

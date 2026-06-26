@@ -142,7 +142,7 @@ function checkResult(phase: EnginePhase, result: PhaseResult): PhaseResult {
 
 /**
  * Given an `advance` or `spawn-agents` result, the phase the engine RESUMES at.
- * For `advance` it is `result.to`; for `spawn-agents` it is `manifest.resume_phase`.
+ * For `advance` it is `result.to`; for `spawn-agents` it is `request.resume_phase`.
  * Returns `null` for any result that does not imply a resume phase (terminals,
  * graceful-stop, wait-retry — wait-retry re-runs its OWN `phase`, surfaced by the
  * caller directly). Shared by both drivers so transition logic lives in one place.
@@ -152,7 +152,7 @@ export function nextPhaseFor(result: PhaseResult): TaskPhase | null {
     case "advance":
       return result.to;
     case "spawn-agents":
-      return result.manifest.resume_phase;
+      return result.request.resume_phase;
     case "wait-retry":
     case "graceful-stop":
     case "task-terminal":

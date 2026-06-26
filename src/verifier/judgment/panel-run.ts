@@ -11,7 +11,7 @@
  *   4. Assemble the per-reviewer WS1 {@link ReviewerResult}[] with coherent
  *      counts (approve ⇒ 0 confirmed blockers; blocked ⇒ ≥1), and DERIVE the merge gate
  *      verdict via the frozen {@link deriveMergeGateVerdict} — NEVER stored.
- *   5. Map the derived outcome onto a {@link PhaseResult}: the panel SPAWN manifest
+ *   5. Map the derived outcome onto a {@link PhaseResult}: the panel SPAWN request
  *      when reviewers must still run; otherwise `advance` (merge gate passed) or
  *      `wait-retry` (merge gate blocked — bounded re-review/re-fix). State writes are
  *      the driver's job; this module never touches the StateManager.
@@ -30,7 +30,7 @@ import {
   type GateEvidence,
   type GateVerdict,
   type ReviewerResult,
-  type SpawnManifest,
+  type SpawnRequest,
   type PhaseResult,
   type TaskPhase,
 } from "../../types/index.js";
@@ -168,11 +168,11 @@ export interface RunPanelInput {
 /**
  * Build the panel SPAWN result — emitted when reviewers must still run (the
  * caller has no raw reviews yet). Kept here so the spawn↔derive paths share one
- * module. The manifest is built by {@link import("./panel.js").buildPanelManifest}
+ * module. The request is built by {@link import("./panel.js").buildPanelManifest}
  * and passed in.
  */
-export function spawnPanel(manifest: SpawnManifest): PhaseResult {
-  return spawn(manifest);
+export function spawnPanel(request: SpawnRequest): PhaseResult {
+  return spawn(request);
 }
 
 /**

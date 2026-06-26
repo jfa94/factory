@@ -25,7 +25,7 @@ describe("nextTask", () => {
     });
     try {
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "run-terminal", run_status: "completed" });
+      expect(env).toMatchObject({ kind: "done", run_status: "completed" });
     } finally {
       await cleanup();
     }
@@ -35,7 +35,7 @@ describe("nextTask", () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({ usage: PAUSE_5H });
     try {
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "quota-blocked", scope: "5h" });
+      expect(env).toMatchObject({ kind: "pause", scope: "5h" });
       const run = await deps.state.read(runId);
       expect(run.status).toBe("paused");
     } finally {
@@ -50,7 +50,7 @@ describe("nextTask", () => {
     });
     try {
       const env = await nextTask(deps, runId);
-      expect(env.kind).toBe("tasks-ready");
+      expect(env.kind).toBe("work");
       expect((await deps.state.read(runId)).status).toBe("running");
     } finally {
       await cleanup();
@@ -61,7 +61,7 @@ describe("nextTask", () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({ usage: UNAVAILABLE });
     try {
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "quota-blocked", scope: "unavailable" });
+      expect(env).toMatchObject({ kind: "pause", scope: "unavailable" });
       expect((await deps.state.read(runId)).status).toBe("suspended");
     } finally {
       await cleanup();
@@ -81,7 +81,7 @@ describe("nextTask", () => {
         quota: { binding_window: "5h" as const, resets_at_epoch: 1_700_018_000 },
       }));
       const env = await nextTask(deps, runId);
-      expect(env.kind).toBe("tasks-ready");
+      expect(env.kind).toBe("work");
       const run = await deps.state.read(runId);
       expect(run.status).toBe("running");
       // quota checkpoint must be cleared (the clearCheckpoint block)
@@ -111,8 +111,8 @@ describe("nextTask", () => {
       }));
 
       const env = await nextTask(deps, runId);
-      expect(env.kind).toBe("tasks-ready");
-      if (env.kind !== "tasks-ready") return;
+      expect(env.kind).toBe("work");
+      if (env.kind !== "work") return;
       expect(env.cascade_dropped.slice().sort()).toEqual(["T2", "T3"]);
       expect(env.ready).toEqual(["T4"]);
       const run = await deps.state.read(runId);
@@ -142,8 +142,8 @@ describe("nextTask", () => {
       }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "tasks-ready", ready: ["T3", "T2"] });
-      if (env.kind !== "tasks-ready") return;
+      expect(env).toMatchObject({ kind: "work", ready: ["T3", "T2"] });
+      if (env.kind !== "work") return;
       // T4 not ready (T2 not done), T1 terminal
       expect(env.ready).not.toContain("T1");
       expect(env.ready).not.toContain("T4");
@@ -170,7 +170,7 @@ describe("nextTask", () => {
       }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "all-terminal" });
+      expect(env).toMatchObject({ kind: "finalize" });
     } finally {
       await cleanup();
     }
@@ -206,8 +206,8 @@ describe("nextTask", () => {
       }));
 
       const env = await nextTask(deps, runId);
-      expect(env.kind).toBe("all-terminal");
-      if (env.kind !== "all-terminal") return;
+      expect(env.kind).toBe("finalize");
+      if (env.kind !== "finalize") return;
       expect(env.cascade_dropped.slice().sort()).toEqual(["T1", "T2"]);
 
       const run = await deps.state.read(runId);
@@ -227,7 +227,7 @@ describe("nextTask", () => {
     });
     try {
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "run-terminal", run_status: "completed" });
+      expect(env).toMatchObject({ kind: "done", run_status: "completed" });
       // Gate never ran — no checkpoint written
       const run = await deps.state.read(runId);
       expect(run.quota).toBeUndefined();
@@ -248,7 +248,7 @@ describe("nextTask", () => {
       await deps.state.updateTask(runId, "T1", (t) => ({ ...t, status: "done" }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: [] });
+      expect(env).toMatchObject({ kind: "finalize", cascade_dropped: [] });
       // The quota gate must NOT have run — run stays running with no checkpoint
       const run = await deps.state.read(runId);
       expect(run.status).toBe("running");
@@ -276,7 +276,7 @@ describe("nextTask", () => {
       }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: ["T2"] });
+      expect(env).toMatchObject({ kind: "finalize", cascade_dropped: ["T2"] });
     } finally {
       await cleanup();
     }
@@ -294,7 +294,7 @@ describe("nextTask", () => {
         quota: { binding_window: "7d" as const, resets_at_epoch: 1_700_018_000 },
       }));
       const env = await nextTask(deps, runId);
-      expect(env.kind).toBe("tasks-ready");
+      expect(env.kind).toBe("work");
       const run = await deps.state.read(runId);
       expect(run.status).toBe("running");
       expect(run.quota).toBeUndefined();
@@ -311,7 +311,7 @@ describe("nextTask", () => {
       await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: [] });
+      expect(env).toMatchObject({ kind: "finalize", cascade_dropped: [] });
     } finally {
       await cleanup();
     }
@@ -326,7 +326,7 @@ describe("nextTask", () => {
       await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "all-terminal", cascade_dropped: [] });
+      expect(env).toMatchObject({ kind: "finalize", cascade_dropped: [] });
       const run = await deps.state.read(runId);
       expect(run.status).toBe("running");
       expect(run.quota).toBeUndefined();
@@ -349,8 +349,8 @@ describe("nextTask", () => {
       }));
 
       const env = await nextTask(deps, runId);
-      expect(env.kind).toBe("all-terminal");
-      if (env.kind !== "all-terminal") return;
+      expect(env.kind).toBe("finalize");
+      if (env.kind !== "finalize") return;
       expect(env.cascade_dropped).toContain("T1");
 
       const run = await deps.state.read(runId);
@@ -383,8 +383,8 @@ describe("nextTask", () => {
       }
 
       const env = await nextTask(deps, runId);
-      expect(env.kind).toBe("all-terminal");
-      if (env.kind !== "all-terminal") return;
+      expect(env.kind).toBe("finalize");
+      if (env.kind !== "finalize") return;
       expect(env.cascade_dropped).toContain("T4");
 
       const run = await deps.state.read(runId);
@@ -417,7 +417,7 @@ describe("nextTask", () => {
       }
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "tasks-ready", ready: ["T3"] });
+      expect(env).toMatchObject({ kind: "work", ready: ["T3"] });
     } finally {
       await cleanup();
     }
@@ -434,7 +434,7 @@ describe("docs-ready gate", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
-      expect((await nextTask(deps, runId)).kind).toBe("docs-ready");
+      expect((await nextTask(deps, runId)).kind).toBe("document");
     } finally {
       await cleanup();
     }
@@ -447,7 +447,7 @@ describe("docs-ready gate", () => {
     });
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
-      expect((await nextTask(deps, runId)).kind).toBe("all-terminal");
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
     } finally {
       await cleanup();
     }
@@ -461,7 +461,7 @@ describe("docs-ready gate", () => {
     try {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
       await state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: DONE_AT } }));
-      expect((await nextTask(deps, runId)).kind).toBe("all-terminal");
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
     } finally {
       await cleanup();
     }
@@ -480,7 +480,7 @@ describe("docs-ready gate", () => {
         failure_reason: "x",
         ended_at: DONE_AT,
       }));
-      expect((await nextTask(deps, runId)).kind).toBe("all-terminal");
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
     } finally {
       await cleanup();
     }
@@ -501,7 +501,7 @@ describe("docs-ready gate", () => {
         quota: { binding_window: "5h" as const, resets_at_epoch: 1_700_018_000 },
         docs: { status: "failed", reason: "prior", ended_at: DONE_AT },
       }));
-      expect((await nextTask(deps, runId)).kind).toBe("docs-ready");
+      expect((await nextTask(deps, runId)).kind).toBe("document");
       const resumed = await state.read(runId);
       expect(resumed.status).toBe("running");
       // the checkpoint clear that returned the run to running must also drop quota
@@ -524,13 +524,13 @@ describe("docs ordering invariant", () => {
       await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
 
       // Before docs: the gate withholds all-terminal.
-      expect((await nextTask(deps, runId)).kind).toBe("docs-ready");
+      expect((await nextTask(deps, runId)).kind).toBe("document");
 
       // Simulate the record marking docs done (Task 5's done path).
       await state.update(runId, (s) => ({ ...s, docs: { status: "done", ended_at: DONE_AT } }));
 
       // Now finalize is reachable.
-      expect((await nextTask(deps, runId)).kind).toBe("all-terminal");
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
     } finally {
       await cleanup();
     }

@@ -2,7 +2,7 @@
  * `factory drive --run <id> --task <id> [--results <file>] [--ship-mode <m>]` —
  * the per-task coroutine (the engine seam both drivers share).
  *
- * Runs every deterministic step it can and emits ONE JSON DriveEnvelope:
+ * Runs every deterministic step it can and emits ONE JSON NextAction:
  * `spawn` (the agents to run + what to feed back), `terminal`, or
  * `quota-blocked`. Re-invoking without --results is idempotent.
  */
@@ -22,9 +22,9 @@ Usage:
 this step only; omit to honor the persisted value (the seam default, never no-merge).
 
 Emits ONE JSON envelope to stdout:
-  { kind:"spawn", run_id, task_id, phase, manifest, sidecar?, expects, result_key, worktree, base_ref }
-  { kind:"terminal", run_id, task_id, outcome }
-  { kind:"quota-blocked", run_id, task_id, scope, reason, resets_at_epoch? }
+  { kind:"spawn", run_id, task_id, phase, request, holdout?, expects, result_key, worktree, base_ref }
+  { kind:"done", run_id, task_id, outcome }
+  { kind:"pause", run_id, task_id, scope, reason, resets_at_epoch? }
 
 --results feeds back what the previous spawn envelope asked for. It MUST echo the
 envelope's result_key verbatim; a stale/duplicate key rejects LOUD (re-invoke without

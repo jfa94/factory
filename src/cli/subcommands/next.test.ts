@@ -28,9 +28,9 @@ describe("next arg/usage edges", () => {
       const code = await nextCommand.run(["--help"]);
       expect(code).toBe(EXIT.OK);
       const help = stdout.read();
-      // Both the tasks-ready and all-terminal lines must mention cascade_dropped.
-      expect(help).toMatch(/tasks-ready.*cascade_dropped/);
-      expect(help).toMatch(/all-terminal.*cascade_dropped/);
+      // Both the work and finalize lines must mention cascade_dropped.
+      expect(help).toMatch(/work.*cascade_dropped/);
+      expect(help).toMatch(/finalize.*cascade_dropped/);
     } finally {
       stdout.restore();
     }
@@ -122,7 +122,7 @@ describe("next --run resolution falls back to runs/current", () => {
       // (run_id from runs/current, the canonical data_dir, and the persisted ship_mode
       // default — now `live`) — so nothing rides Workflow args.
       expect(envelope).toMatchObject({
-        kind: "tasks-ready",
+        kind: "work",
         run_id: "run-current",
         data_dir: dir,
         ship_mode: "live",
@@ -203,7 +203,7 @@ describe("next runs/current guards (--assert-owner + --expect-mode)", () => {
       const code = await nextCommand.run(["--assert-owner", "sess-A"]);
       expect(code).toBe(EXIT.OK);
       expect(JSON.parse(stdout.read())).toMatchObject({
-        kind: "tasks-ready",
+        kind: "work",
         run_id: "run-current",
       });
     } finally {
@@ -257,7 +257,7 @@ describe("next runs/current guards (--assert-owner + --expect-mode)", () => {
     try {
       expect(await nextCommand.run(["--expect-mode", "workflow"])).toBe(EXIT.OK);
       expect(JSON.parse(stdout.read())).toMatchObject({
-        kind: "tasks-ready",
+        kind: "work",
         run_id: "run-current",
       });
     } finally {
@@ -308,7 +308,7 @@ describe("next happy path", () => {
     cleanup = undefined;
   });
 
-  it("emits a tasks-ready envelope as JSON for a fresh pending task", async () => {
+  it("emits a work envelope as JSON for a fresh pending task", async () => {
     const { deps, runId, cleanup: c } = await makeCoroutineDeps();
     cleanup = c;
 
@@ -340,7 +340,7 @@ describe("next happy path", () => {
       const out = stdout.read();
       expect(out.length).toBeGreaterThan(0);
       const envelope = JSON.parse(out);
-      expect(envelope).toMatchObject({ kind: "tasks-ready", run_id: runId });
+      expect(envelope).toMatchObject({ kind: "work", run_id: runId });
       expect(envelope.ready).toContain("T1");
     } finally {
       stdout.restore();
@@ -374,7 +374,7 @@ describe("next happy path", () => {
       const code = await nextCommand.run(["--run", runId]);
       expect(code).toBe(EXIT.OK);
       const envelope = JSON.parse(stdout.read());
-      expect(envelope).toMatchObject({ kind: "run-terminal", run_id: runId });
+      expect(envelope).toMatchObject({ kind: "done", run_id: runId });
     } finally {
       stdout.restore();
       if (saved === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];

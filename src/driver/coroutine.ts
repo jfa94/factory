@@ -20,7 +20,7 @@
  *     arbitrarily delayed redelivery.
  *
  * Spawn-boundary inversion: instead of awaiting an injected agent runner in
- * process, the coroutine RETURNS the spawn manifest to the caller (the orchestrator)
+ * process, the coroutine RETURNS the spawn request to the caller (the orchestrator)
  * and resumes on the next invocation by recording the collected results.
  * Holdout-before-reviews — an Iron Law the old skill enforced by prose — is here
  * mere code ordering inside recordResults.
@@ -33,7 +33,7 @@ import {
   assertNever,
   type PhaseContext,
   type PhaseResult,
-  type SpawnManifest,
+  type SpawnRequest,
   type StateManager,
   type TaskPhase,
   type TaskState,
@@ -73,11 +73,11 @@ export type { SpawnPhase };
 /** Ship live-merge re-sync budget per task (persisted in TaskState.merge_resyncs). */
 export const MERGE_RESYNC_CAP = 8;
 
-/** What the driver must collect for the emitted manifest. */
+/** What the driver must collect for the emitted request. */
 export type DriveExpects = "producer-status" | "reviews";
 
 /** The out-of-band holdout-validator spawn run alongside the panel (verify only). */
-export interface HoldoutSidecar {
+export interface HoldoutSpawn {
   readonly kind: "holdout-validate";
   readonly task_id: string;
   readonly worktree: string;
@@ -86,32 +86,32 @@ export interface HoldoutSidecar {
   readonly prompt: string;
 }
 
-export type DriveEnvelope =
+export type NextAction =
   | {
       readonly kind: "spawn";
       readonly run_id: string;
       readonly task_id: string;
       readonly phase: SpawnPhase;
       readonly result_key: ResultKey;
-      readonly manifest: SpawnManifest;
-      readonly sidecar?: HoldoutSidecar;
+      readonly request: SpawnRequest;
+      readonly holdout?: HoldoutSpawn;
       readonly expects: DriveExpects;
       readonly worktree: string;
       /**
        * The per-run base ref the worktree forked from (`origin/staging-<run-id>`).
-       * Reviewers + the holdout sidecar diff against THIS — never a bare
+       * Reviewers + the holdout holdout diff against THIS — never a bare
        * `origin/staging`, which namespace-collides after a repo branch rename.
        */
       readonly base_ref: string;
     }
   | {
-      readonly kind: "terminal";
+      readonly kind: "done";
       readonly run_id: string;
       readonly task_id: string;
       readonly outcome: TaskOutcome;
     }
   | {
-      readonly kind: "quota-blocked";
+      readonly kind: "pause";
       readonly run_id: string;
       readonly task_id: string;
       readonly scope: QuotaStop["scope"];
@@ -172,13 +172,13 @@ function asSpawnPhase(phase: TaskPhase): SpawnPhase {
   );
 }
 
-/** Build the holdout-validate sidecar IFF an answer key was withheld for this task. */
+/** Build the holdout-validate holdout IFF an answer key was withheld for this task. */
 export async function holdoutSidecar(
   deps: CoroutineDeps,
   runId: string,
   taskId: string,
   baseRef: string,
-): Promise<HoldoutSidecar | undefined> {
+): Promise<HoldoutSpawn | undefined> {
   if (!(await deps.holdout.has(runId, taskId))) {
     return undefined;
   }
@@ -260,14 +260,14 @@ export async function nextAction(
   runId: string,
   taskId: string,
   results?: DriveResults,
-): Promise<DriveEnvelope> {
+): Promise<NextAction> {
   // 1. Read state + terminal check BEFORE the quota gate — a terminal task needs no
   //    agent spend and must not write a pause checkpoint (quota gate is a state write).
   let run = await deps.state.read(runId);
   let task = requireTask(run, taskId);
 
   if (isTerminalTaskStatus(task.status)) {
-    return { kind: "terminal", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
+    return { kind: "done", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
 
   // 2. Quota gate — a breach persists the checkpoint and stops cleanly. Only reached
@@ -276,7 +276,7 @@ export async function nextAction(
   const stop = await applyQuotaGate(deps, runId, run.mode, run.ignore_quota);
   if (stop !== null) {
     return {
-      kind: "quota-blocked",
+      kind: "pause",
       run_id: runId,
       task_id: taskId,
       scope: stop.scope,
@@ -297,7 +297,7 @@ export async function nextAction(
   if (results !== undefined) {
     const step = await recordResults(deps, runId, taskId, phase, task, results);
     if (step.done) {
-      return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+      return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
     }
     phase = step.phase;
     // recordResults persists the resume cursor for a non-terminal step (via
@@ -306,7 +306,7 @@ export async function nextAction(
   }
 
   // 4. The deterministic phase loop — run a handler, record its result, advance the
-  //    cursor; the only break is a spawn (boundary inverted: return the manifest).
+  //    cursor; the only break is a spawn (boundary inverted: return the request).
   const handlers = makePhaseHandlers(deps);
   for (;;) {
     // Write the cursor only when it is not already current; either way obtain the
@@ -334,7 +334,7 @@ export async function nextAction(
         // The base ref the worktree forked from — plumbed into every spawn so
         // reviewers/holdout diff the per-run staging branch, not a bare `origin/staging`.
         const base_ref = `origin/${resolveStagingBranch(runId, run.staging_branch)}`;
-        const sidecar =
+        const holdout =
           spawnPhase === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : undefined;
         const result_key: ResultKey = { phase: spawnPhase, rung: task.escalation_rung };
         // WS2 idempotent re-spawn. Producers commit to the SHARED task worktree, so a
@@ -377,8 +377,8 @@ export async function nextAction(
           task_id: taskId,
           phase: spawnPhase,
           result_key,
-          manifest: result.manifest,
-          ...(sidecar !== undefined ? { sidecar } : {}),
+          request: result.request,
+          ...(holdout !== undefined ? { holdout } : {}),
           expects,
           worktree,
           base_ref,
@@ -388,7 +388,7 @@ export async function nextAction(
         if (result.outcome.outcome === "done") {
           const step = await completeTask(deps, runId, taskId);
           if (!step.done) throw new Error("coroutine: completeTask returned non-terminal step");
-          return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+          return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
         const step = await dropStep(
           deps,
@@ -398,7 +398,7 @@ export async function nextAction(
           result.outcome.reason,
         );
         if (!step.done) throw new Error("coroutine: dropStep returned non-terminal step");
-        return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+        return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
       }
       case "wait-retry": {
         if (result.phase === "ship") {
@@ -434,7 +434,7 @@ export async function nextAction(
               `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`,
             );
             if (!step.done) throw new Error("coroutine: dropStep returned non-terminal step");
-            return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+            return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
           }
           log.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync ` +
@@ -453,7 +453,7 @@ export async function nextAction(
           "exec",
         );
         if (step.done) {
-          return { kind: "terminal", run_id: runId, task_id: taskId, outcome: step.outcome };
+          return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
         phase = step.phase;
         cursorPersisted = false; // escalateOrDrop wrote rung+reviewers, not the cursor

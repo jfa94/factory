@@ -60,13 +60,13 @@ export {
   holdoutSidecar,
   MERGE_RESYNC_CAP,
   type CoroutineDeps,
-  type DriveEnvelope,
-  type HoldoutSidecar,
+  type NextAction,
+  type HoldoutSpawn,
   type DriveExpects,
 } from "./coroutine.js";
 
 // -- run-level coroutine (factory next seam) --------------------------------------
-export { nextTask, type NextEnvelope } from "./next.js";
+export { nextTask, type NextTask } from "./next.js";
 
 // -- docs phase emit + record coroutines (factory run docs seam) -----------------
 export {
@@ -75,6 +75,6 @@ export {
   docsWorktreePath,
   DocsResultsSchema,
   type DocsRunDeps,
-  type DocsEnvelope,
+  type DocsAction,
   type DocsResults,
 } from "./docs.js";

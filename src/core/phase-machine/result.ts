@@ -21,7 +21,7 @@
  * surfaces it after one structural exhaustiveness check (engine.ts).
  */
 import type { TaskPhase } from "./phases.js";
-import type { SpawnManifest } from "./manifest.js";
+import type { SpawnRequest } from "./spawn.js";
 import type { FailureClass } from "../state/index.js";
 
 /** Handler finished a phase with no spawn; advance to phase `to`. */
@@ -31,10 +31,10 @@ export interface AdvanceResult {
   to: TaskPhase;
 }
 
-/** Handler needs subagents; spawn them and resume at `manifest.resume_phase`. */
+/** Handler needs subagents; spawn them and resume at `request.resume_phase`. */
 export interface SpawnAgentsResult {
   kind: "spawn-agents";
-  manifest: SpawnManifest;
+  request: SpawnRequest;
 }
 
 /**
@@ -119,8 +119,8 @@ export function advance(to: TaskPhase): AdvanceResult {
   return { kind: "advance", to };
 }
 
-export function spawn(manifest: SpawnManifest): SpawnAgentsResult {
-  return { kind: "spawn-agents", manifest };
+export function spawn(request: SpawnRequest): SpawnAgentsResult {
+  return { kind: "spawn-agents", request };
 }
 
 export function gracefulStop(

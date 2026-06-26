@@ -73,7 +73,7 @@ Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
-  docs       Emit the documentation-phase spawn manifest, or (with --results) record a scribe result.
+  docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
@@ -118,7 +118,7 @@ Usage:
 
 Emits ONE JSON envelope:
   { kind:"resumed", run }                              — window recovered (or already running)
-  { kind:"still-blocked", run_id, status, reason, … }  — window has not recovered (state untouched)
+  { kind:"pause", run_id, status, reason, … }  — window has not recovered (state untouched)
 
 A terminal run is a loud error (nothing to resume).`;
 
@@ -174,24 +174,24 @@ Emits ONE JSON envelope:
  * a dangling dependency, or a dependency cycle — all are spec-integrity defects
  * that would otherwise deadlock the driver.
  */
-export function seedTasksFromSpec(manifest: SpecManifest): Record<string, TaskState> {
-  const ids = new Set(manifest.tasks.map((t) => t.task_id));
+export function seedTasksFromSpec(request: SpecManifest): Record<string, TaskState> {
+  const ids = new Set(request.tasks.map((t) => t.task_id));
   const tasks: Record<string, TaskState> = {};
 
-  for (const t of manifest.tasks) {
+  for (const t of request.tasks) {
     validateId(t.task_id, "task-id");
     if (tasks[t.task_id] !== undefined) {
-      throw new Error(`run create: duplicate task id '${t.task_id}' in spec ${manifest.spec_id}`);
+      throw new Error(`run create: duplicate task id '${t.task_id}' in spec ${request.spec_id}`);
     }
     for (const dep of t.depends_on) {
       if (dep === t.task_id) {
         throw new Error(
-          `run create: task '${t.task_id}' depends on itself in spec ${manifest.spec_id}`,
+          `run create: task '${t.task_id}' depends on itself in spec ${request.spec_id}`,
         );
       }
       if (!ids.has(dep)) {
         throw new Error(
-          `run create: task '${t.task_id}' depends on unknown task '${dep}' in spec ${manifest.spec_id}`,
+          `run create: task '${t.task_id}' depends on unknown task '${dep}' in spec ${request.spec_id}`,
         );
       }
     }
@@ -209,7 +209,7 @@ export function seedTasksFromSpec(manifest: SpecManifest): Record<string, TaskSt
     };
   }
 
-  assertAcyclic(tasks, manifest.spec_id);
+  assertAcyclic(tasks, request.spec_id);
   return tasks;
 }
 
@@ -335,7 +335,7 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
 }
 
 /**
- * Create the run from an already-resolved manifest and seed its tasks — the
+ * Create the run from an already-resolved request and seed its tasks — the
  * imperative core. Creates the run (status `running`), then records in the seeded
  * task rows via the one sanctioned write path; returns the seeded {@link RunState}.
  *
@@ -347,7 +347,7 @@ async function resolveSpec(specStore: SpecStore, opts: CreateRunOptions): Promis
 async function createRunFromManifest(
   state: StateManager,
   specStore: SpecStore,
-  manifest: SpecManifest,
+  request: SpecManifest,
   opts: CreateRunOptions,
   stagingDeps?: RunStagingDeps,
 ): Promise<RunState> {
@@ -358,14 +358,14 @@ async function createRunFromManifest(
       "workflow mode: quota pacing disabled — relying on hard rate-limit errors; long runs may exhaust limits",
     );
   }
-  const seeded = seedTasksFromSpec(manifest);
+  const seeded = seedTasksFromSpec(request);
   // Decision 33 hardening: compute the per-run staging branch ONCE and PIN it on the
   // row, so every later base-ref resolution reads this exact name (never a recompute
   // that a mid-run naming-scheme change could desync). Reused below for the actual cut.
   const branch = runStagingBranch(opts.runId);
   await state.create({
     run_id: opts.runId,
-    spec: specStore.toPointer(manifest),
+    spec: specStore.toPointer(request),
     staging_branch: branch,
     // v1 coroutine seam drives tasks strictly one at a time — the driver dial is fixed.
     driver: "sequential",
@@ -439,7 +439,7 @@ export type ResolveOrCreateResult =
    * The `--resume` intent is never blocked here (it falls through to the live-gated
    * `/factory:resume` path, which re-checks the window on the fresh session).
    */
-  | { readonly kind: "quota-blocked"; readonly existing: RunState };
+  | { readonly kind: "pause"; readonly existing: RunState };
 
 /**
  * Supersede an active run (Decision 35): tear down its protection (GitHub blocks
@@ -493,14 +493,14 @@ export async function resolveOrCreateRun(
   stagingDeps?: RunStagingDeps,
 ): Promise<ResolveOrCreateResult> {
   // Resolve first (LOUD if no spec) — also yields the (repo, spec_id) scan key.
-  const manifest = await resolveSpec(specStore, opts);
+  const request = await resolveSpec(specStore, opts);
   if (opts.intent === "fresh") {
     return {
       kind: "created",
-      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
     };
   }
-  const pointer = specStore.toPointer(manifest);
+  const pointer = specStore.toPointer(request);
   return state.withSpecLock(pointer.repo, pointer.spec_id, async () => {
     const existing = await state.findActiveBySpec(pointer.repo, pointer.spec_id);
     if (existing !== null) {
@@ -513,7 +513,7 @@ export async function resolveOrCreateRun(
       const weeklyParked =
         existing.status === "suspended" && existing.quota?.binding_window === "7d";
       if (weeklyParked && !opts.ignoreQuota && opts.intent !== "resume") {
-        return { kind: "quota-blocked", existing };
+        return { kind: "pause", existing };
       }
 
       if (opts.intent === "supersede") {
@@ -524,7 +524,7 @@ export async function resolveOrCreateRun(
         await supersedeRun(state, existing, stagingDeps);
         return {
           kind: "superseded",
-          run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+          run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
           supersededId,
         };
       }
@@ -535,7 +535,7 @@ export async function resolveOrCreateRun(
     }
     return {
       kind: "created",
-      run: await createRunFromManifest(state, specStore, manifest, opts, stagingDeps),
+      run: await createRunFromManifest(state, specStore, request, opts, stagingDeps),
     };
   });
 }
@@ -545,10 +545,10 @@ export async function resolveOrCreateRun(
 // ---------------------------------------------------------------------------
 
 /** The single JSON document `factory run resume` emits — the orchestrator's contract. */
-export type RunResumeEnvelope =
+export type ResumeResult =
   | { readonly kind: "resumed"; readonly run: RunState }
   | {
-      readonly kind: "still-blocked";
+      readonly kind: "pause";
       readonly run_id: string;
       readonly status: RunStatus;
       readonly reason: string;
@@ -572,7 +572,7 @@ export async function applyResume(
   reading: UsageReading,
   config: Config,
   nowEpochSec: number,
-): Promise<RunResumeEnvelope> {
+): Promise<ResumeResult> {
   const run = await state.read(runId);
   if (isTerminalRunStatus(run.status)) {
     throw new Error(`run resume: run '${runId}' is terminal (${run.status}); nothing to resume`);
@@ -591,7 +591,7 @@ export async function applyResume(
       }));
       return { kind: "resumed", run: updated };
     }
-    case "still-blocked": {
+    case "pause": {
       const d = plan.decision;
       // NB: two distinct `.kind` unions are in play here — the OUTER `plan.kind`
       // (ResumePlan: not-resumable | resume | still-blocked, switched above) and this
@@ -604,7 +604,7 @@ export async function applyResume(
         return { kind: "resumed", run };
       }
       const base = {
-        kind: "still-blocked",
+        kind: "pause",
         run_id: runId,
         status: run.status,
         reason: d.reason,
@@ -780,11 +780,11 @@ export async function runCreate(
     },
     stagingDeps,
   );
-  if (result.kind === "quota-blocked") {
+  if (result.kind === "pause") {
     const r = result.existing;
     const resets = r.quota?.resets_at_epoch;
     emitJson({
-      kind: "quota-blocked",
+      kind: "pause",
       scope: "7d",
       run_id: r.run_id,
       status: r.status,
@@ -908,7 +908,7 @@ async function runFinalize(argv: string[]): Promise<ExitCode> {
 
 const DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
 
-Emit the documentation-phase spawn manifest, or (with --results) record a scribe
+Emit the documentation-phase spawn request, or (with --results) record a scribe
 result: publish the docs commit onto staging and mark the phase done, or suspend
 the run on failure. The CLI never spawns scribe — a driver does.`;
 

@@ -35,7 +35,7 @@ import { clearCheckpoint, type ClearCheckpointPatch } from "./checkpoint.js";
  */
 export type ResumePlan =
   | { kind: "resume"; clear: ClearCheckpointPatch }
-  | { kind: "still-blocked"; decision: QuotaDecision }
+  | { kind: "pause"; decision: QuotaDecision }
   | { kind: "not-resumable"; status: RunState["status"] };
 
 /**
@@ -64,5 +64,5 @@ export function planResume(
   if (decision.kind === "proceed") {
     return { kind: "resume", clear: clearCheckpoint() };
   }
-  return { kind: "still-blocked", decision };
+  return { kind: "pause", decision };
 }

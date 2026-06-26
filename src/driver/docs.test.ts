@@ -51,8 +51,8 @@ describe("runDocsRecord", () => {
     const env = await runDocsRecord(deps(), RUN_ID, {
       status: "STATUS: BLOCKED — ESCALATE missing context",
     });
-    expect(env.kind).toBe("blocked");
-    if (env.kind !== "blocked") throw new Error("expected blocked");
+    expect(env.kind).toBe("suspend");
+    if (env.kind !== "suspend") throw new Error("expected blocked");
     expect(env.reason).toContain("BLOCKED");
     const run = await state.read(RUN_ID);
     expect(run.status).toBe("suspended");
@@ -89,7 +89,7 @@ describe("runDocsEmit", () => {
     expect(second.kind).toBe("spawn");
     const addsAfter = git.calls.slice(callsAfterFirst).filter((c) => c.startsWith("worktree add"));
     expect(addsAfter).toHaveLength(0);
-    // resume returns an identical spawn manifest, not merely *a* spawn envelope.
+    // resume returns an identical spawn request, not merely *a* spawn envelope.
     if (first.kind !== "spawn" || second.kind !== "spawn") throw new Error("expected spawn");
     expect(second.staging_branch).toBe(first.staging_branch);
     expect(second.docs_branch).toBe(first.docs_branch);

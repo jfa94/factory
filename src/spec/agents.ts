@@ -5,7 +5,7 @@
  * UNCONDITIONALLY at the apex model + effort. {@link buildGenerateSpawn} /
  * {@link buildReviewSpawn} hard-code that pin from {@link SPEC_DEFAULTS}; they do
  * NOT read it from a risk tier, task count, or any per-input config — the pin is
- * the whole point. WS5 owns spawn-manifest CONSTRUCTION + verdict parsing; the
+ * the whole point. WS5 owns spawn-request CONSTRUCTION + verdict parsing; the
  * WS10 in-session driver performs the live `Agent()` spawn (an agent cannot
  * deterministically spawn an agent inside a unit), mirroring how WS2 handlers
  * report and the driver acts.

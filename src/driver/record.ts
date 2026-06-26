@@ -203,7 +203,7 @@ export async function applyRecordHoldout(
   if (!(await deps.holdout.has(runId, taskId))) {
     throw new Error(
       `record-holdout: task '${taskId}' has no withheld answer key — nothing to validate ` +
-        `(applyRecordHoldout must only record when the coroutine surfaced a holdout sidecar)`,
+        `(applyRecordHoldout must only record when the coroutine surfaced a holdout holdout)`,
     );
   }
   const record = await deps.holdout.get(runId, taskId);

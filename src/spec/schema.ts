@@ -62,7 +62,7 @@ export type SpecTask = z.infer<typeof SpecTaskSchema>;
 export const SpecTasksSchema = z.array(SpecTaskSchema).min(1);
 
 /**
- * The durable spec manifest. Mirrors the on-disk pairing of `spec.md` (free-form
+ * The durable spec request. Mirrors the on-disk pairing of `spec.md` (free-form
  * markdown, stored separately) with the structured `tasks.json`. `spec_id =
  * "<issue>-<slug>"` (Δ X) — `issue_number` is the stable rerun lookup key.
  */

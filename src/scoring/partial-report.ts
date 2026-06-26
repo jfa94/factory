@@ -56,7 +56,7 @@ export interface IncompleteLine {
   status: RunState["tasks"][string]["status"];
 }
 
-/** The structured partial-run report. Deterministic given (run, manifest, now). */
+/** The structured partial-run report. Deterministic given (run, request, now). */
 export interface PartialRunReport {
   run_id: string;
   run_status: RunStatus;
@@ -84,21 +84,21 @@ export interface BuildPartialReportOptions {
  * Build the deterministic partial-run report from the run state + the spec it was
  * seeded from.
  *
- * Every task in the run MUST exist in the manifest — they were seeded from it. A
+ * Every task in the run MUST exist in the request — they were seeded from it. A
  * run task absent from the spec is a (repo, spec-id) mismatch (the wrong spec was
  * paired with the run), which is a real integrity defect, so it throws LOUD rather
  * than silently omitting the task or fabricating empty criteria.
  *
- * Output lists are ordered by the task's position in `manifest.tasks` (stable,
+ * Output lists are ordered by the task's position in `request.tasks` (stable,
  * human-meaningful), not by the unordered `run.tasks` record.
  */
 export function buildPartialReport(
   run: RunState,
-  manifest: SpecManifest,
+  request: SpecManifest,
   opts: BuildPartialReportOptions = {},
 ): PartialRunReport {
-  const specById = new Map<string, SpecTask>(manifest.tasks.map((t) => [t.task_id, t]));
-  const orderOf = new Map<string, number>(manifest.tasks.map((t, i) => [t.task_id, i]));
+  const specById = new Map<string, SpecTask>(request.tasks.map((t) => [t.task_id, t]));
+  const orderOf = new Map<string, number>(request.tasks.map((t, i) => [t.task_id, i]));
 
   const shipped: ShippedLine[] = [];
   const failures: FailureLine[] = [];
@@ -108,7 +108,7 @@ export function buildPartialReport(
     const spec = specById.get(task.task_id);
     if (spec === undefined) {
       throw new Error(
-        `buildPartialReport: run task '${task.task_id}' is absent from spec '${manifest.spec_id}' ` +
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${request.spec_id}' ` +
           `— run/spec mismatch (wrong spec paired with run ${run.run_id})`,
       );
     }

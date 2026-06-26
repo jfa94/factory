@@ -11,7 +11,7 @@ export interface DocsRunDeps {
   readonly dataDir: string;
 }
 
-export type DocsEnvelope =
+export type DocsAction =
   | {
       readonly kind: "spawn";
       readonly run_id: string;
@@ -24,7 +24,7 @@ export type DocsEnvelope =
       readonly prompt: string;
     }
   | { readonly kind: "done"; readonly run_id: string }
-  | { readonly kind: "blocked"; readonly run_id: string; readonly reason: string };
+  | { readonly kind: "suspend"; readonly run_id: string; readonly reason: string };
 
 const DOCS_MODEL = "opus";
 const DOCS_MAX_TURNS = 60;
@@ -47,8 +47,8 @@ function buildScribePrompt(worktree: string, baseRef: string): string {
   ].join("\n");
 }
 
-/** Emit the docs spawn manifest: prepare the staging-rooted worktree, name scribe. */
-export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<DocsEnvelope> {
+/** Emit the docs spawn request: prepare the staging-rooted worktree, name scribe. */
+export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<DocsAction> {
   const run = await deps.state.read(runId);
   const staging = resolveStagingBranch(runId, run.staging_branch);
   const base = deps.config.git.baseBranch;
@@ -85,7 +85,7 @@ export async function runDocsRecord(
   deps: DocsRunDeps,
   runId: string,
   results: DocsResults,
-): Promise<Extract<DocsEnvelope, { kind: "done" | "blocked" }>> {
+): Promise<Extract<DocsAction, { kind: "done" | "suspend" }>> {
   const run = await deps.state.read(runId);
   const staging = resolveStagingBranch(runId, run.staging_branch);
   const docsBranch = `docs-${runId}`;
@@ -108,5 +108,5 @@ export async function runDocsRecord(
     status: "suspended",
     docs: { status: "failed", reason, ended_at: nowIso() },
   }));
-  return { kind: "blocked", run_id: runId, reason };
+  return { kind: "suspend", run_id: runId, reason };
 }

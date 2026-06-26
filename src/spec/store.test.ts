@@ -26,7 +26,7 @@ function newStore(): SpecStore {
   return new SpecStore({ dataDir, docsRoot });
 }
 
-function manifest(over: Partial<SpecManifest> = {}): SpecManifest {
+function request(over: Partial<SpecManifest> = {}): SpecManifest {
   return parseSpecManifest({
     spec_id: "123-checkout",
     issue_number: 123,
@@ -65,7 +65,7 @@ describe("makeSpecId — issue is the stable key, slug via shared slugify", () =
 describe("SpecStore.write — durable bare-array tasks.json + pointer", () => {
   it("writes spec.md + a BARE tasks.json array and returns a SpecPointer", async () => {
     const store = newStore();
-    const m = manifest();
+    const m = request();
     const pointer = await store.write(m, "# Checkout spec");
 
     const dir = specDir(dataDir, m.repo, m.spec_id);
@@ -88,7 +88,7 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
     const docsRoot = await mkdtemp(join(tmpdir(), "ws5-docs-"));
     try {
       const store = new SpecStore({ dataDir, docsRoot });
-      const m = manifest();
+      const m = request();
       await store.write(m, "# Checkout spec");
 
       const reviewDir = join(docsRoot, "factory", m.spec_id);
@@ -105,7 +105,7 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
     const docsRoot = await mkdtemp(join(tmpdir(), "ws5-docs-"));
     try {
       const store = new SpecStore({ dataDir, docsRoot });
-      const m = manifest();
+      const m = request();
       await store.write(m, "# spec");
       // Blow away the in-repo copy: the canonical read still resolves from dataDir.
       await rm(join(docsRoot, "factory"), { recursive: true, force: true });
@@ -128,7 +128,7 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
     await writeFile(docsFile, "i am a file, not a dir");
 
     const store = new SpecStore({ dataDir, docsRoot: docsFile });
-    const m = manifest();
+    const m = request();
 
     // write() must RESOLVE — the mirror failure is swallowed-but-warned, not fatal.
     const pointer = await store.write(m, "# Checkout spec");
@@ -158,16 +158,16 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
     ).rejects.toThrow();
   });
 
-  it("does NOT leak run/spec internals into docs/: no spec.meta.json sidecar in the copy", async () => {
+  it("does NOT leak run/spec internals into docs/: no spec.meta.json holdout in the copy", async () => {
     const docsRoot = await mkdtemp(join(tmpdir(), "ws5-docs-"));
     try {
       const store = new SpecStore({ dataDir, docsRoot });
-      const m = manifest();
+      const m = request();
       await store.write(m, "# spec");
       const reviewDir = join(docsRoot, "factory", m.spec_id);
       // Sidecar is a dataDir reconstruction detail — keep it out of the repo copy.
       await expect(readFile(join(reviewDir, "spec.meta.json"), "utf8")).rejects.toThrow();
-      // The dataDir copy DOES carry the sidecar (canonical reconstruction).
+      // The dataDir copy DOES carry the holdout (canonical reconstruction).
       const canonicalDir = specDir(dataDir, m.repo, m.spec_id);
       expect(await readFile(join(canonicalDir, "spec.meta.json"), "utf8")).toContain(
         "generated_at",
@@ -179,9 +179,9 @@ describe("SpecStore.write — F-specloc: in-repo reviewable copy under docs/fact
 });
 
 describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
-  it("Δ X: returns an existing manifest for a known issue number", async () => {
+  it("Δ X: returns an existing request for a known issue number", async () => {
     const store = newStore();
-    await store.write(manifest(), "# spec");
+    await store.write(request(), "# spec");
 
     const found = await store.resolveByIssue("owner/name", 123);
     expect(found).not.toBeNull();
@@ -192,7 +192,7 @@ describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
   it("Δ X: looks up by ISSUE NUMBER even when the slug would differ", async () => {
     const store = newStore();
     // Stored slug is "checkout"; a rerun would never re-derive it — issue is the key.
-    await store.write(manifest({ spec_id: "123-checkout", slug: "checkout" }), "# spec");
+    await store.write(request({ spec_id: "123-checkout", slug: "checkout" }), "# spec");
     const found = await store.resolveByIssue("owner/name", 123);
     expect(found!.spec_id).toBe("123-checkout");
   });
@@ -209,14 +209,14 @@ describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
 
   it("does not confuse issue 12 with issue 123 (exact issue match)", async () => {
     const store = newStore();
-    await store.write(manifest({ spec_id: "123-checkout", issue_number: 123 }), "# spec");
+    await store.write(request({ spec_id: "123-checkout", issue_number: 123 }), "# spec");
     expect(await store.resolveByIssue("owner/name", 12)).toBeNull();
   });
 
   it("throws loudly on two dirs for the same issue (store-integrity defect)", async () => {
     const store = newStore();
-    await store.write(manifest({ spec_id: "123-checkout" }), "# spec");
-    await store.write(manifest({ spec_id: "123-checkout-v2", slug: "checkout-v2" }), "# spec");
+    await store.write(request({ spec_id: "123-checkout" }), "# spec");
+    await store.write(request({ spec_id: "123-checkout-v2", slug: "checkout-v2" }), "# spec");
     await expect(store.resolveByIssue("owner/name", 123)).rejects.toThrow(/multiple specs/);
   });
 
@@ -227,9 +227,9 @@ describe("SpecStore.resolveByIssue — Δ X reuse-by-issue-number", () => {
 });
 
 describe("SpecStore.read — round-trips through the durable store", () => {
-  it("reconstructs the manifest from the on-disk bare array + sidecar", async () => {
+  it("reconstructs the request from the on-disk bare array + holdout", async () => {
     const store = newStore();
-    const m = manifest();
+    const m = request();
     await store.write(m, "# spec");
     const read = await store.read("owner/name", "123-checkout");
     expect(read.issue_number).toBe(123);
@@ -242,7 +242,7 @@ describe("SpecStore.read — round-trips through the durable store", () => {
     const store = newStore();
     const dir = specDir(dataDir, "owner/name", "123-broken");
     await mkdir(dir, { recursive: true });
-    // Write an invalid tasks.json (legacy risk value) + a sidecar.
+    // Write an invalid tasks.json (legacy risk value) + a holdout.
     await writeFile(
       join(dir, "tasks.json"),
       JSON.stringify([{ task_id: "x", risk_tier: "security" }]),

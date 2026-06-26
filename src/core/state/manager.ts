@@ -106,7 +106,7 @@ export class StateManager {
   }
 
   private specLockfilePath(repo: string, specId: string): string {
-    // Dedicated lockfile under the durable spec dir, NOT the spec manifest, so a
+    // Dedicated lockfile under the durable spec dir, NOT the spec request, so a
     // scan→create critical section serializes per (repo, spec_id) without
     // colliding with spec writes.
     return join(specDir(this.dataDir, repo, specId), "create.lock");

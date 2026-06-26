@@ -9,14 +9,14 @@
  *     builds a {@link PhaseHandlers} whose methods read the frozen
  *     {@link PhaseContext} (run + task), do DETERMINISTIC work (shell out via
  *     injected git/gate clients), and RETURN a {@link PhaseResult}. When a phase
- *     needs agent work they return a `spawn-agents` manifest. They NEVER write
+ *     needs agent work they return a `spawn-agents` request. They NEVER write
  *     state and NEVER decide transitions (nextPhaseFor does).
  *
  *   - The ENGINE acts on results. The per-task coroutine
  *     ({@link import("./coroutine.js").nextAction}) resumes at the persisted phase cursor,
  *     records the previous spawn's agent results into state, and runs the
  *     deterministic phase machine until it needs agents (it RETURNS the spawn
- *     manifest to the caller) or the task is terminal. The in-session orchestrator
+ *     request to the caller) or the task is terminal. The in-session orchestrator
  *     (or the workflow driver) owns every Agent() spawn; the engine owns every
  *     StateManager write.
  *
@@ -51,7 +51,7 @@ export type { ShipMode };
 
 /**
  * The read-only inputs a REPORTER (handler) needs. Deliberately carries NO agent
- * runner — a handler reports a spawn manifest; the orchestrator performs the
+ * runner — a handler reports a spawn request; the orchestrator performs the
  * spawn. The spec MANIFEST is injected (the frozen PhaseContext carries only the
  * run + a lean TaskState, not the per-task spec fields the producer/verify
  * reporters need — title/description/criteria/files live in the durable spec,

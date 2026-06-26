@@ -16,15 +16,15 @@ import { describe, expect, it } from "vitest";
 import { runPhase, nextPhaseFor, decideFinalize, type EnginePhase } from "./engine.js";
 import { advance, spawn, taskDone, taskDropped, type PhaseResult } from "./result.js";
 import type { PhaseContext, PhaseHandlers } from "./handlers.js";
-import type { SpawnManifest } from "./manifest.js";
+import type { SpawnRequest } from "./spawn.js";
 import { parseRunState, type RunState } from "../state/index.js";
 
 // --- canned spec: two tasks ---------------------------------------------------
 
 const mkManifest = (
-  resume_phase: SpawnManifest["resume_phase"],
-  role: SpawnManifest["agents"][number]["role"],
-): SpawnManifest => ({
+  resume_phase: SpawnRequest["resume_phase"],
+  role: SpawnRequest["agents"][number]["role"],
+): SpawnRequest => ({
   resume_phase,
   agents: [
     {
@@ -76,7 +76,7 @@ async function driveTask(handlers: PhaseHandlers, ctx: PhaseContext): Promise<Ph
     const r: PhaseResult = await runPhase(phase, ctx, handlers);
     transcript.push(r);
     if (r.kind === "task-terminal") break;
-    const next = nextPhaseFor(r); // advance.to or manifest.resume_phase
+    const next = nextPhaseFor(r); // advance.to or request.resume_phase
     phase = next;
   }
   return transcript;

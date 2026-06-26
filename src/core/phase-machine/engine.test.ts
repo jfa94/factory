@@ -148,7 +148,7 @@ describe("invariant #3 — finalize is terminal-by-construction at the seam", ()
 });
 
 describe("nextPhaseFor", () => {
-  it("advance resumes at .to; spawn-agents resumes at manifest.resume_phase", () => {
+  it("advance resumes at .to; spawn-agents resumes at request.resume_phase", () => {
     expect(nextPhaseFor(advance("verify"))).toBe("verify");
     expect(
       nextPhaseFor(

@@ -11,7 +11,7 @@
  *
  * F-specloc — the in-repo reviewable copy. On {@link SpecStore.write}, the store
  * ALSO mirrors `spec.md` + `tasks.json` into the TARGET REPO's
- * `<docsRoot>/factory/<spec-id>/` (versioned, PR-reviewable). The sidecar
+ * `<docsRoot>/factory/<spec-id>/` (versioned, PR-reviewable). The holdout
  * (`spec.meta.json`, a dataDir reconstruction detail) is deliberately NOT copied.
  * The mirror is executor-immutable: the TCB write-deny covers `docs/factory/**`
  * (`src/hooks/tcb.ts`) so an executor cannot weaken its own acceptance criteria
@@ -91,10 +91,10 @@ export class SpecStore {
   /**
    * Resolve an existing spec for `(repo, issueNumber)` — Δ X reuse. Scans the
    * repo's spec dir for a `spec_id` starting with `<issue>-` and returns its
-   * parsed manifest, else null. The issue number (not the slug) is the lookup
+   * parsed request, else null. The issue number (not the slug) is the lookup
    * key, so a rerun reuses the spec even if the slug would differ on regen.
    *
-   * @throws if a matching dir exists but its manifest/tasks are unreadable or
+   * @throws if a matching dir exists but its request/tasks are unreadable or
    *         invalid (a corrupt durable spec is loud, never silently a miss).
    */
   async resolveByIssue(repo: string, issueNumber: number): Promise<SpecManifest | null> {
@@ -128,13 +128,13 @@ export class SpecStore {
     return this.read(repo, specId);
   }
 
-  /** Read + validate the manifest for a known `(repo, spec_id)`. */
+  /** Read + validate the request for a known `(repo, spec_id)`. */
   async read(repo: string, specId: string): Promise<SpecManifest> {
     const dir = specDir(this.dataDir, repo, specId);
     const tasksRaw = await readFile(join(dir, TASKS_FILE), "utf8");
     const tasks = parseSpecTasks(parseJson<unknown>(tasksRaw, join(dir, TASKS_FILE)));
 
-    // The manifest header is reconstructed from the durable on-disk facts: the
+    // The request header is reconstructed from the durable on-disk facts: the
     // tasks.json is the bare task array (the canonical consumer contract), and
     // the header fields are intrinsic to the dir identity. This keeps tasks.json
     // a single source of truth rather than duplicating tasks in a separate file.
@@ -150,18 +150,18 @@ export class SpecStore {
   }
 
   /**
-   * Durably write a spec: `spec.md` + the bare `tasks.json` array. The manifest
-   * header is persisted as a sidecar so {@link read} can reconstruct
+   * Durably write a spec: `spec.md` + the bare `tasks.json` array. The request
+   * header is persisted as a holdout so {@link read} can reconstruct
    * `generated_at` without re-running the generator.
    *
    * F-specloc — also mirrors `spec.md` + the bare `tasks.json` into the in-repo
    * reviewable copy (`<docsRoot>/factory/<spec-id>/`). The mirror is a strict
-   * subset (no `spec.meta.json` sidecar): the sidecar is a dataDir reconstruction
+   * subset (no `spec.meta.json` holdout): the holdout is a dataDir reconstruction
    * detail, and the canonical read-path never consults the mirror. Reruns still
    * resolve by issue number against the dataDir store (unchanged).
    */
-  async write(manifest: SpecManifest, specMd: string): Promise<SpecPointer> {
-    const parsed = parseSpecManifest(manifest);
+  async write(request: SpecManifest, specMd: string): Promise<SpecPointer> {
+    const parsed = parseSpecManifest(request);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
 
@@ -215,12 +215,12 @@ export class SpecStore {
     return this.toPointer(parsed);
   }
 
-  /** Build the run-facing {@link SpecPointer} from a manifest. */
-  toPointer(manifest: SpecManifest): SpecPointer {
+  /** Build the run-facing {@link SpecPointer} from a request. */
+  toPointer(request: SpecManifest): SpecPointer {
     return {
-      repo: manifest.repo,
-      spec_id: manifest.spec_id,
-      issue_number: manifest.issue_number,
+      repo: request.repo,
+      spec_id: request.spec_id,
+      issue_number: request.issue_number,
     };
   }
 

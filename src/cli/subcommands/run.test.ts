@@ -23,7 +23,7 @@ import {
   resolveOrCreateRun,
   applyResume,
   resolveOwnerSession,
-  type RunResumeEnvelope,
+  type ResumeResult,
   type RunCancelOverrides,
   type SpecSelector,
   type CreateRunOptions,
@@ -83,8 +83,8 @@ function task(
   };
 }
 
-/** A durable spec manifest (issue 42 → spec_id "42-checkout") over the given tasks. */
-function manifest(tasks: ReadonlyArray<Record<string, unknown>>): SpecManifest {
+/** A durable spec request (issue 42 → spec_id "42-checkout") over the given tasks. */
+function request(tasks: ReadonlyArray<Record<string, unknown>>): SpecManifest {
   return parseSpecManifest({
     spec_id: "42-checkout",
     issue_number: 42,
@@ -221,7 +221,7 @@ describe("run arg/usage edges", () => {
 describe("seedTasksFromSpec", () => {
   it("maps each spec task to a pending TaskState carrying only the dial + deps", () => {
     const seeded = seedTasksFromSpec(
-      manifest([
+      request([
         task("t1", [], { risk_tier: "low" }),
         task("t2", ["t1"], { risk_tier: "medium", tdd_exempt: true }),
         task("t3", ["t1", "t2"], { risk_tier: "high" }),
@@ -242,28 +242,28 @@ describe("seedTasksFromSpec", () => {
   });
 
   it("does NOT carry tdd_exempt into run state (it is read from the spec at runtime)", () => {
-    const seeded = seedTasksFromSpec(manifest([task("t1", [], { tdd_exempt: true })]));
+    const seeded = seedTasksFromSpec(request([task("t1", [], { tdd_exempt: true })]));
     expect("tdd_exempt" in seeded.t1!).toBe(false);
   });
 
   it("is LOUD on a dangling dependency", () => {
-    expect(() => seedTasksFromSpec(manifest([task("t1", ["ghost"])]))).toThrow(
+    expect(() => seedTasksFromSpec(request([task("t1", ["ghost"])]))).toThrow(
       /unknown task 'ghost'/,
     );
   });
 
   it("is LOUD on a self dependency", () => {
-    expect(() => seedTasksFromSpec(manifest([task("t1", ["t1"])]))).toThrow(/depends on itself/);
+    expect(() => seedTasksFromSpec(request([task("t1", ["t1"])]))).toThrow(/depends on itself/);
   });
 
   it("is LOUD on a dependency cycle", () => {
-    expect(() => seedTasksFromSpec(manifest([task("t1", ["t2"]), task("t2", ["t1"])]))).toThrow(
+    expect(() => seedTasksFromSpec(request([task("t1", ["t2"]), task("t2", ["t1"])]))).toThrow(
       /dependency cycle/,
     );
   });
 
   it("is LOUD on a duplicate task id", () => {
-    expect(() => seedTasksFromSpec(manifest([task("t1"), task("t1")]))).toThrow(
+    expect(() => seedTasksFromSpec(request([task("t1"), task("t1")]))).toThrow(
       /duplicate task id 't1'/,
     );
   });
@@ -285,7 +285,7 @@ describe("createRun", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(manifest([task("t1", []), task("t2", ["t1"])]), "# spec\n");
+    await store.write(request([task("t1", []), task("t2", ["t1"])]), "# spec\n");
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
@@ -417,7 +417,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(manifest([task("t1", []), task("t2", ["t1"])]), "# spec\n");
+    await store.write(request([task("t1", []), task("t2", ["t1"])]), "# spec\n");
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
@@ -928,7 +928,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
   });
 
   // -------------------------------------------------------------------------
-  // kind: "quota-blocked" — 7d-parked run blocks create/supersede, not resume
+  // kind: "pause" — 7d-parked run blocks create/supersede, not resume
   // -------------------------------------------------------------------------
 
   /** Seed run-old as suspended with a 7d quota checkpoint. */
@@ -944,7 +944,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
   it("7d-parked run + default intent → quota-blocked", async () => {
     await seedWeeklyParked();
     const r = await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-new" });
-    expect(r.kind).toBe("quota-blocked");
+    expect(r.kind).toBe("pause");
   });
 
   it("7d-parked run + supersede intent (no --ignore-quota) → quota-blocked", async () => {
@@ -955,7 +955,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       runId: "run-new",
       intent: "supersede",
     });
-    expect(r.kind).toBe("quota-blocked");
+    expect(r.kind).toBe("pause");
   });
 
   it("7d-parked run + ignoreQuota=true → falls through (supersede or exists)", async () => {
@@ -1025,7 +1025,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "factory-run-derive-"));
     const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(manifest([task("t1", [])]), "# spec\n");
+    await store.write(request([task("t1", [])]), "# spec\n");
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
@@ -1181,7 +1181,7 @@ describe("runCancel (abandon a live run, Decision 35)", () => {
       lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
     });
     store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(manifest([task("t1", []), task("t2", ["t1"])]), "# spec\n");
+    await store.write(request([task("t1", []), task("t2", ["t1"])]), "# spec\n");
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 
@@ -1493,14 +1493,14 @@ describe("applyResume", () => {
     }));
   }
 
-  function asResumed(env: RunResumeEnvelope): Extract<RunResumeEnvelope, { kind: "resumed" }> {
+  function asResumed(env: ResumeResult): Extract<ResumeResult, { kind: "resumed" }> {
     if (env.kind !== "resumed") throw new Error(`expected resumed, got ${env.kind}`);
     return env;
   }
   function asBlocked(
-    env: RunResumeEnvelope,
-  ): Extract<RunResumeEnvelope, { kind: "still-blocked" }> {
-    if (env.kind !== "still-blocked") throw new Error(`expected still-blocked, got ${env.kind}`);
+    env: ResumeResult,
+  ): Extract<ResumeResult, { kind: "pause" }> {
+    if (env.kind !== "pause") throw new Error(`expected still-blocked, got ${env.kind}`);
     return env;
   }
 
@@ -1583,7 +1583,7 @@ describe("run create cuts and protects staging/<run-id> from develop", () => {
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "factory-run-staging-"));
     const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
-    await store.write(manifest([task("t1", [])]), "# spec\n");
+    await store.write(request([task("t1", [])]), "# spec\n");
   });
   afterEach(async () => await rm(dataDir, { recursive: true, force: true }));
 

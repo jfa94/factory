@@ -14,14 +14,14 @@
  *
  * Three scenarios are proven:
  *   1. Happy path (no-merge): single task → `completed`, PR opened but NOT merged,
- *      holdout sidecar surfaced + recorded, all six panel reviewers approved.
+ *      holdout holdout surfaced + recorded, all six panel reviewers approved.
  *   2. Happy path (live): same chain → `completed`, PR merged.
  *   3. Drop path: two-task run; second task at escalation cap → drops as
  *      `capability-budget`; `finalizeRun` produces a `failed` run (Decision 34:
  *      develop receives only complete PRDs) and posts one PRD-issue failure comment.
  *
  * The holdout path (scenario 1/2 trait): the spec carries 5 acceptance criteria, so
- * the tests phase withholds ≥1 criterion, the verify spawn carries a holdout sidecar,
+ * the tests phase withholds ≥1 criterion, the verify spawn carries a holdout holdout,
  * and the AnswerBook supplies `results.holdout` (validator verdicts) alongside the
  * panel reviews — the engine rejects the record without it.
  */
@@ -49,7 +49,7 @@ import {
   nextAction,
   finalizeRun,
   type CoroutineDeps,
-  type DriveEnvelope,
+  type NextAction,
   type DriveResults,
 } from "../driver/index.js";
 
@@ -95,7 +95,7 @@ function approve(reviewer: string) {
  * Canned answer store for spawn envelopes.  Dispatches on `env.expects`:
  *   - `"producer-status"` → returns the STATUS line keyed by `env.task_id` from
  *     the pre-seeded producerStatuses map (default: "STATUS: DONE").
- *   - `"reviews"` → returns an all-approve panel; if `env.sidecar` is present,
+ *   - `"reviews"` → returns an all-approve panel; if `env.holdout` is present,
  *     fetches the holdout record from the registered store and records in all-pass
  *     validator verdicts.  `env.result_key` is echoed verbatim so the engine's
  *     exactly-once gate always passes.
@@ -121,9 +121,9 @@ class AnswerBook {
   /**
    * Build DriveResults for the given spawn envelope, echoing result_key verbatim.
    * For `producer-status` expects: returns the canned STATUS line.
-   * For `reviews` expects: returns all-approve panel + all-pass holdout (when sidecar).
+   * For `reviews` expects: returns all-approve panel + all-pass holdout (when holdout).
    */
-  async for(env: DriveEnvelope & { kind: "spawn" }): Promise<DriveResults> {
+  async for(env: NextAction & { kind: "spawn" }): Promise<DriveResults> {
     if (env.expects === "producer-status") {
       const statusLine = this.producerStatuses.get(env.task_id) ?? "STATUS: DONE";
       return {
@@ -143,11 +143,11 @@ class AnswerBook {
       },
     };
 
-    // If the spawn carries a holdout sidecar, the record requires holdout results.
-    if (env.sidecar !== undefined) {
+    // If the spawn carries a holdout holdout, the record requires holdout results.
+    if (env.holdout !== undefined) {
       if (this.holdout === undefined) {
         throw new Error(
-          `AnswerBook: spawn for task '${env.task_id}' carries a holdout sidecar but no ` +
+          `AnswerBook: spawn for task '${env.task_id}' carries a holdout holdout but no ` +
             `holdout store was registered for run '${env.run_id}'`,
         );
       }
@@ -172,7 +172,7 @@ class AnswerBook {
 
 /** Minimal interface driveToTerminal needs — satisfied by AnswerBook and plain spy objects. */
 interface Answerer {
-  for(env: DriveEnvelope & { kind: "spawn" }): Promise<DriveResults>;
+  for(env: NextAction & { kind: "spawn" }): Promise<DriveResults>;
 }
 
 /**
@@ -192,13 +192,13 @@ async function driveToTerminal(
 ): Promise<RunState> {
   for (;;) {
     const next = await nextTask(deps, runId);
-    if (next.kind === "run-terminal") return deps.state.read(runId);
-    if (next.kind === "all-terminal") {
+    if (next.kind === "done") return deps.state.read(runId);
+    if (next.kind === "finalize") {
       await finalizeRun(deps, runId);
       return deps.state.read(runId);
     }
-    if (next.kind === "quota-blocked") throw new Error(`unexpected quota stop: ${next.reason}`);
-    if (next.kind === "docs-ready") throw new Error("unexpected docs-ready in E2E helper");
+    if (next.kind === "pause") throw new Error(`unexpected quota stop: ${next.reason}`);
+    if (next.kind === "document") throw new Error("unexpected docs-ready in E2E helper");
 
     const taskId = next.ready[0]!; // sequential driver: first ready task
     let results: DriveResults | undefined;
@@ -207,8 +207,8 @@ async function driveToTerminal(
       // Clear after delivery: the result_key gate rejects duplicate records LOUD on the
       // next nextAction call, so passing results again would be a protocol violation.
       results = undefined;
-      if (env.kind === "terminal") break;
-      if (env.kind === "quota-blocked") {
+      if (env.kind === "done") break;
+      if (env.kind === "pause") {
         throw new Error(`unexpected quota stop for task ${taskId}: ${env.reason}`);
       }
       // env.kind === "spawn" — the only remaining case in the discriminated union.
@@ -248,10 +248,10 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
   });
 
   /** Build CoroutineDeps directly (no CLI loading — keeps the E2E free of fs config). */
-  function makeDeps(manifest: SpecManifest, shipMode: ShipMode): CoroutineDeps {
+  function makeDeps(request: SpecManifest, shipMode: ShipMode): CoroutineDeps {
     return {
       config: defaultConfig(),
-      spec: manifest,
+      spec: request,
       git,
       gh,
       tools: makeFakeTools({ git: greenProbe() }),
@@ -277,9 +277,9 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
   // Scenario 1: Happy path (no-merge) — single task → completed, holdout path
   // -------------------------------------------------------------------------
 
-  it("drives a task PRD→shipped (no-merge), holdout sidecar recorded, panel all-approve", async () => {
-    const manifest = specManifestSingle();
-    await specStore.write(manifest, "# checkout spec\n\nvertical slice.");
+  it("drives a task PRD→shipped (no-merge), holdout holdout recorded, panel all-approve", async () => {
+    const request = specManifestSingle();
+    await specStore.write(request, "# checkout spec\n\nvertical slice.");
 
     const run = await createRun(state, specStore, {
       repo: REPO,
@@ -290,16 +290,16 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
     expect(Object.keys(run.tasks)).toEqual([TASK_ID]);
     expect(run.tasks[TASK_ID]!.status).toBe("pending");
 
-    const deps = makeDeps(manifest, "no-merge");
+    const deps = makeDeps(request, "no-merge");
     const answer = new AnswerBook({ holdout: { runId: RUN_ID, store: holdout } });
 
-    // Track whether the verify spawn carried a holdout sidecar (proves Δ Y path).
+    // Track whether the verify spawn carried a holdout holdout (proves Δ Y path).
     // The spy wraps answer.for and is passed directly to driveToTerminal.
-    let sawHoldoutSidecar = false;
-    // spyAnswer: plain object delegating to answer.for, recording sidecar presence.
+    let sawHoldout = false;
+    // spyAnswer: plain object delegating to answer.for, recording holdout presence.
     const spyAnswer = {
-      for: async (env: DriveEnvelope & { kind: "spawn" }) => {
-        if (env.sidecar !== undefined) sawHoldoutSidecar = true;
+      for: async (env: NextAction & { kind: "spawn" }) => {
+        if (env.holdout !== undefined) sawHoldout = true;
         return answer.for(env);
       },
     };
@@ -322,8 +322,8 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
     expect(gh.created).toHaveLength(2); // task PR + finalize rollup PR
     expect(gh.merges).toHaveLength(0);
 
-    // The holdout path: 5-criteria spec withholds ≥1 → verify emits a sidecar.
-    expect(sawHoldoutSidecar).toBe(true);
+    // The holdout path: 5-criteria spec withholds ≥1 → verify emits a holdout.
+    expect(sawHoldout).toBe(true);
 
     // The risk-invariant panel: all six roles ran and the task reviewers were recorded.
     expect(task.reviewers).toHaveLength(PANEL_ROLES.length);
@@ -335,8 +335,8 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
   // -------------------------------------------------------------------------
 
   it("serial-merges the task PR in live ship mode (same chain)", async () => {
-    const manifest = specManifestSingle();
-    await specStore.write(manifest, "# checkout spec\n\nvertical slice.");
+    const request = specManifestSingle();
+    await specStore.write(request, "# checkout spec\n\nvertical slice.");
 
     await createRun(state, specStore, {
       repo: REPO,
@@ -344,7 +344,7 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
       runId: RUN_ID,
     });
 
-    const deps = makeDeps(manifest, "live");
+    const deps = makeDeps(request, "live");
     const answer = new AnswerBook({ holdout: { runId: RUN_ID, store: holdout } });
     const finalRun = await driveToTerminal(deps, RUN_ID, answer);
 
@@ -366,8 +366,8 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
   // -------------------------------------------------------------------------
 
   it("drops a task at escalation cap → capability-budget → finalizeRun produces failed (Decision 34)", async () => {
-    const manifest = specManifestTwo();
-    await specStore.write(manifest, "# checkout spec\n\nvertical slice.");
+    const request = specManifestTwo();
+    await specStore.write(request, "# checkout spec\n\nvertical slice.");
 
     await createRun(state, specStore, {
       repo: REPO,
@@ -378,7 +378,7 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
     // Seed t2 at ESCALATION_CAP so the first producer failure drops it.
     await state.updateTask(RUN_ID, TASK_ID_2, (t) => ({ ...t, escalation_rung: ESCALATION_CAP }));
 
-    const deps = makeDeps(manifest, "no-merge");
+    const deps = makeDeps(request, "no-merge");
 
     // t1: DONE normally. t2: deliberately unparseable producer status (no ESCALATE keyword)
     // exercises the unparseable-producer-status path; at cap → capability-budget drop.

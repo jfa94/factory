@@ -7,7 +7,7 @@
  * verifier — the merge gate is risk-invariant (Decision 26). To make that property
  * structurally true rather than merely tested, {@link buildPanelManifest} has NO
  * RiskTier parameter at all: there is nowhere to branch on the tier, so two tasks
- * of different tiers necessarily get a deep-equal manifest.
+ * of different tiers necessarily get a deep-equal request.
  *
  * The panel is the full CCR-pattern set (Δ K): the four classic reviewers
  * (implementation / quality / architecture / security) PLUS silent-failure-hunter
@@ -15,10 +15,10 @@
  * {@link SpawnRoleEnum} — no new role is invented here.
  *
  * Every reviewer runs on the SAME fixed model (Δ T) and the SAME turn budget
- * (D26 fixed depth). The manifest is validated through the frozen
- * {@link parseSpawnManifest} so it can never drift from the WS2 shape.
+ * (D26 fixed depth). The request is validated through the frozen
+ * {@link parseSpawnRequest} so it can never drift from the WS2 shape.
  */
-import { parseSpawnManifest, type SpawnManifest, type SpawnRole } from "../../types/index.js";
+import { parseSpawnRequest, type SpawnRequest, type SpawnRole } from "../../types/index.js";
 
 /**
  * The six fixed panel roles, in a stable order. CLOSED: this list IS the panel
@@ -35,7 +35,7 @@ export const PANEL_ROLES: readonly SpawnRole[] = [
 ] as const;
 
 /**
- * The `prompt_ref` placeholder for a panel reviewer. The WS2 SpawnAgentSchema
+ * The `prompt_ref` placeholder for a panel reviewer. The WS2 AgentSpecSchema
  * requires a non-empty `prompt_ref` on EVERY agent, but — UNLIKE producers, whose
  * `prompt_ref` points at a real per-run ProducerContext artifact the driver Reads
  * (handlers.ts `producerSpawn` → `putProducerContext`) — NO driver reads this value
@@ -53,7 +53,7 @@ function promptRefFor(role: SpawnRole): string {
 }
 
 /**
- * Build the risk-INVARIANT panel {@link SpawnManifest}.
+ * Build the risk-INVARIANT panel {@link SpawnRequest}.
  *
  * @param resumePhase the per-task phase the engine resumes at once the panel
  *   returns (the verify phase).
@@ -62,16 +62,16 @@ function promptRefFor(role: SpawnRole): string {
  *   per-role map: every reviewer runs the same model (Δ T).
  * @param maxTurns the FIXED deep-review turn budget for ALL reviewers (D26).
  *
- * The output is validated through {@link parseSpawnManifest}; an empty/blank
+ * The output is validated through {@link parseSpawnRequest}; an empty/blank
  * model or non-positive `maxTurns` therefore fails LOUDLY at the seam rather than
- * producing a malformed manifest. The result is provably independent of any
+ * producing a malformed request. The result is provably independent of any
  * RiskTier because no tier is in scope.
  */
 export function buildPanelManifest(
-  resumePhase: SpawnManifest["resume_phase"],
+  resumePhase: SpawnRequest["resume_phase"],
   model: string,
   maxTurns: number,
-): SpawnManifest {
+): SpawnRequest {
   const agents = PANEL_ROLES.map((role) => ({
     role,
     isolation: "worktree" as const,
@@ -79,5 +79,5 @@ export function buildPanelManifest(
     max_turns: maxTurns,
     prompt_ref: promptRefFor(role),
   }));
-  return parseSpawnManifest({ resume_phase: resumePhase, agents });
+  return parseSpawnRequest({ resume_phase: resumePhase, agents });
 }

@@ -5,13 +5,13 @@ export const meta = {
   whenToUse:
     "Internal only. Launched programmatically by /factory:run --mode workflow (after the spec phase + run create) via Workflow({ scriptPath }). Do NOT invoke directly — it skips preconditions/spec/run-create and fails.",
   phases: [
-    { title: "Drive", detail: "next/drive coroutine loop; producers + reviewers per manifest" },
+    { title: "Drive", detail: "next/drive coroutine loop; producers + reviewers per request" },
   ],
 };
 
 // NO Workflow `args`. The run context — runId, dataDir, shipMode — is self-resolved
 // from the FIRST `factory next` envelope below (the engine stamps run_id + data_dir
-// + ship_mode onto every NextEnvelope). A real object passed as `args` arrives in the
+// + ship_mode onto every NextTask). A real object passed as `args` arrives in the
 // body JSON-STRING-encoded, so a load-bearing arg would silently become `undefined`;
 // runId/dataDir are engine-internal already, and ship_mode is persisted on `run
 // create` (read back here) — nothing needs marshaling across the launch boundary.
@@ -20,7 +20,7 @@ let dataDir;
 let shipMode;
 
 // Manifest role → plugin agentType. KNOWN GAP: workflow agent() has no maxTurns
-// option, so the manifest's per-agent `max_turns` budget is unenforceable in
+// option, so the request's per-agent `max_turns` budget is unenforceable in
 // workflow mode (the session driver honors it).
 const AGENT_TYPE = {
   "test-writer": "factory:test-writer",
@@ -35,7 +35,7 @@ const AGENT_TYPE = {
 
 function agentTypeOf(role) {
   const t = AGENT_TYPE[role];
-  if (t === undefined) throw new Error(`no agentType mapping for manifest role '${role}'`);
+  if (t === undefined) throw new Error(`no agentType mapping for request role '${role}'`);
   return t;
 }
 
@@ -50,8 +50,8 @@ function agentTypeOf(role) {
 //
 // ROOT CAUSE this fixes: handing the exec-agent the TYPED envelope under a loose
 // schema + "return that JSON object verbatim as structured output" let the model
-// re-key it ({kind:"tasks-ready",ready:["T1","T2"]} → {kind:"factory-envelope",
-// kind_type:"tasks-ready", ready:"[\"T1\",\"T2\"]"}). The fix: the agent now copies
+// re-key it ({kind:"work",ready:["T1","T2"]} → {kind:"factory-envelope",
+// kind_type:"work", ready:"[\"T1\",\"T2\"]"}). The fix: the agent now copies
 // stdout into ONE opaque string ({raw}); the engine JSON.parses + kind-guards HERE.
 //
 // SOURCE OF TRUTH for these two sets is `NEXT_KINDS` / `DRIVE_KINDS` in
@@ -61,14 +61,14 @@ function agentTypeOf(role) {
 // here as plain arrays with NO compile-time guarantee — they MUST stay
 // byte-identical to the TS sets. A drift silently re-opens the boundary corruption.
 const NEXT_KINDS = new Set([
-  "tasks-ready",
-  "all-terminal",
-  "docs-ready",
-  "run-terminal",
-  "quota-blocked",
+  "work",
+  "finalize",
+  "document",
+  "done",
+  "pause",
 ]);
-const DRIVE_KINDS = new Set(["spawn", "terminal", "quota-blocked"]);
-const DOCS_KINDS = new Set(["spawn", "done", "blocked"]);
+const DRIVE_KINDS = new Set(["spawn", "done", "pause"]);
+const DOCS_KINDS = new Set(["spawn", "done", "suspend"]);
 
 function parseEnvelope(raw, knownKinds, context) {
   if (typeof raw !== "string") {
@@ -275,12 +275,12 @@ async function recordResults(taskId, phase, results) {
     { label: `record:${taskId}`, phase: "Drive", schema: RAW_OUT, model: EXEC_AGENT_MODEL },
   );
   if (out === null) throw new Error(`record agent for ${taskId} was skipped or died`);
-  // drive emits a DriveEnvelope; kind-guard the verbatim stdout in JS.
+  // drive emits a NextAction; kind-guard the verbatim stdout in JS.
   return parseEnvelope(out.raw, DRIVE_KINDS, "drive");
 }
 
 async function runProducer(taskId, env) {
-  const a = env.manifest.agents[0];
+  const a = env.request.agents[0];
   const out = await agent(
     `You are the factory ${a.role} for task ${taskId}.\n` +
       `1. Read your producer context JSON at: ${dataDir}/runs/${runId}/${a.prompt_ref} (Read tool).\n` +
@@ -309,16 +309,16 @@ async function runProducer(taskId, env) {
 }
 
 async function runVerifyCollection(taskId, env) {
-  // 1. Holdout sidecar FIRST (when present).
+  // 1. Holdout holdout FIRST (when present).
   let holdout;
-  if (env.sidecar) {
+  if (env.holdout) {
     const h = await agent(
-      env.sidecar.prompt + '\n\nReturn {"raw": "<your full JSON answer as a string>"}.',
+      env.holdout.prompt + '\n\nReturn {"raw": "<your full JSON answer as a string>"}.',
       {
         label: `holdout:${taskId}`,
         phase: "Drive",
         isolation: "worktree",
-        model: modelAlias(env.sidecar.model),
+        model: modelAlias(env.holdout.model),
         schema: RAW_OUT,
       },
     );
@@ -329,7 +329,7 @@ async function runVerifyCollection(taskId, env) {
   // 2. The 6-reviewer panel, concurrent.
   const reviews = (
     await parallel(
-      env.manifest.agents.map(
+      env.request.agents.map(
         (a) => () =>
           agent(
             `You are the factory ${a.role}. Review task ${taskId}.\n` +
@@ -350,9 +350,9 @@ async function runVerifyCollection(taskId, env) {
       ),
     )
   ).filter(Boolean);
-  if (reviews.length !== env.manifest.agents.length) {
+  if (reviews.length !== env.request.agents.length) {
     throw new Error(
-      `panel for ${taskId}: ${env.manifest.agents.length - reviews.length} reviewer(s) died — failing loud`,
+      `panel for ${taskId}: ${env.request.agents.length - reviews.length} reviewer(s) died — failing loud`,
     );
   }
 
@@ -410,7 +410,7 @@ async function driveTask(taskId) {
     "drive",
   );
   for (;;) {
-    if (env.kind === "terminal" || env.kind === "quota-blocked") return env;
+    if (env.kind === "done" || env.kind === "pause") return env;
     if (env.kind !== "spawn")
       throw new Error(`drive(${taskId}): unknown envelope kind '${env.kind}'`);
     const collected =
@@ -425,7 +425,7 @@ async function driveTask(taskId) {
 
 async function runDocs() {
   const emit = await cli(`factory run docs --run ${runId}`, "docs", "Docs", DOCS_KINDS, "docs");
-  if (emit.kind === "done" || emit.kind === "blocked") return emit; // idempotent / already failed
+  if (emit.kind === "done" || emit.kind === "suspend") return emit; // idempotent / already failed
   if (emit.kind !== "spawn") throw new Error(`run docs: unknown envelope kind '${emit.kind}'`);
 
   const out = await agent(emit.prompt, {
@@ -435,7 +435,7 @@ async function runDocs() {
     model: modelAlias(emit.model),
     schema: STATUS_OUT,
   });
-  // A skipped/dead scribe is NOT a STATUS: DONE — record a blocked status so the engine suspends.
+  // A skipped/dead scribe is NOT a STATUS: DONE — record a suspend status so the engine suspends.
   const status =
     out === null ? "STATUS: BLOCKED — ESCALATE scribe agent skipped or died" : out.status;
 
@@ -494,7 +494,7 @@ for (;;) {
         `and relaunch via /factory:run --mode workflow`,
     );
   }
-  if (next.kind === "quota-blocked") {
+  if (next.kind === "pause") {
     return {
       suspended: true,
       scope: next.scope,
@@ -503,14 +503,14 @@ for (;;) {
       outcomes,
     };
   }
-  if (next.kind === "docs-ready") {
+  if (next.kind === "document") {
     const d = await runDocs();
-    if (d.kind === "blocked") {
+    if (d.kind === "suspend") {
       return { suspended: true, scope: "docs", reason: d.reason, resets_at_epoch: null, outcomes };
     }
     continue; // docs done → loop back to `factory next` → all-terminal → finalize
   }
-  if (next.kind === "all-terminal" || next.kind === "run-terminal") {
+  if (next.kind === "finalize" || next.kind === "done") {
     // all-terminal carries cascade_dropped (this-invocation drops) — surface it, never swallow.
     return {
       suspended: false,
@@ -519,7 +519,7 @@ for (;;) {
       outcomes,
     };
   }
-  if (next.kind !== "tasks-ready") throw new Error(`next: unknown envelope kind '${next.kind}'`);
+  if (next.kind !== "work") throw new Error(`next: unknown envelope kind '${next.kind}'`);
   log(`${next.ready.length} task(s) ready: ${next.ready.join(", ")}`);
   const batch = await parallel(next.ready.map((t) => () => driveTask(t)));
   // parallel() maps a thrown driveTask to null. Filtering nulls here would
@@ -533,7 +533,7 @@ for (;;) {
     );
   }
   outcomes.push(...batch);
-  const quota = batch.find((r) => r.kind === "quota-blocked");
+  const quota = batch.find((r) => r.kind === "pause");
   if (quota !== undefined) {
     return {
       suspended: true,

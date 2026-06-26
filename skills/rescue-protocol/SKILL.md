@@ -164,7 +164,7 @@ dry-run=<bool>`:
 
    - `{ kind: "resumed", run }` → continue the Phase 3 run loop; the driver now picks up the
      reset (and reopened) tasks.
-   - `{ kind: "still-blocked", run_id, status, reason, resets_at_epoch? }` → the quota window
+   - `{ kind: "pause", run_id, status, reason, resets_at_epoch? }` → the quota window
      has not recovered. Report `reason` (+ `resets_at_epoch` if present) and stop; the reset
      state is durable and a later resume continues from it.
 

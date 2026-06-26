@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { RiskTierEnum, parseSpawnManifest, type RiskTier } from "../../types/index.js";
+import { RiskTierEnum, parseSpawnRequest, type RiskTier } from "../../types/index.js";
 import { PANEL_ROLES, buildPanelManifest } from "./panel.js";
 
 const ALL_TIERS: readonly RiskTier[] = RiskTierEnum.options;
@@ -21,7 +21,7 @@ describe("WS7 risk-invariant panel (D26 / Δ T)", () => {
 
   it("D26 / Δ T: membership, model, and max_turns are IDENTICAL across all risk tiers", () => {
     // The function has no RiskTier parameter — invariance is structural. We prove
-    // it by building one manifest per tier (membership is the SAME regardless) and
+    // it by building one request per tier (membership is the SAME regardless) and
     // asserting deep equality. Exhaustive over the closed RiskTier set (= property
     // test over the finite domain; fast-check is not a dep here).
     const manifests = ALL_TIERS.map(() => buildPanelManifest("verify", "opus", 40));
@@ -39,20 +39,20 @@ describe("WS7 risk-invariant panel (D26 / Δ T)", () => {
     expect([...turns][0]!).toBe(40);
   });
 
-  it("D26: every panel role appears exactly once in the manifest", () => {
+  it("D26: every panel role appears exactly once in the request", () => {
     const m = buildPanelManifest("verify", "opus", 40);
     const roles = m.agents.map((a) => a.role).sort();
     expect(roles).toEqual([...PANEL_ROLES].sort());
     expect(new Set(roles).size).toBe(roles.length);
   });
 
-  it("WS2 coherence: the manifest validates through the frozen parseSpawnManifest", () => {
+  it("WS2 coherence: the request validates through the frozen parseSpawnRequest", () => {
     const m = buildPanelManifest("verify", "opus", 40);
-    expect(() => parseSpawnManifest(m)).not.toThrow();
+    expect(() => parseSpawnRequest(m)).not.toThrow();
     expect(m.resume_phase).toBe("verify");
   });
 
-  it("Δ T: a blank model fails LOUD at the seam (no malformed manifest)", () => {
+  it("Δ T: a blank model fails LOUD at the seam (no malformed request)", () => {
     expect(() => buildPanelManifest("verify", "", 40)).toThrow();
   });
 

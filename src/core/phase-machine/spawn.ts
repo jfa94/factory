@@ -1,5 +1,5 @@
 /**
- * WS2 — {@link SpawnManifest} Zod schema: the structured spawn payload the engine
+ * WS2 — {@link SpawnRequest} Zod schema: the structured spawn payload the engine
  * hands the driver when a phase needs subagents.
  *
  * Pure validation; NO I/O. This is the v2-Workflow-friendly replacement for the
@@ -12,7 +12,7 @@
  *     (`"spawn-agents"`) carries that now (result.ts).
  *
  * Validated as Zod so the v2 driver consumes it as STRUCTURED OUTPUT: no exit
- * codes, no reading state.json for control flow. {@link parseSpawnManifest} is the
+ * codes, no reading state.json for control flow. {@link parseSpawnRequest} is the
  * LOUD validating entry (mirrors WS1 `parseRunState`).
  */
 import { z } from "zod";
@@ -44,7 +44,7 @@ export type SpawnRole = z.infer<typeof SpawnRoleEnum>;
  * subagent gets its own worktree branched off staging HEAD per the worktree
  * invariant); `"none"` reuses the caller's tree (offline/test paths).
  */
-export const SpawnAgentSchema = z.object({
+export const AgentSpecSchema = z.object({
   /** The reviewer/producer role (closed set). */
   role: SpawnRoleEnum,
   /** Worktree isolation. Defaults to "worktree". */
@@ -62,26 +62,26 @@ export const SpawnAgentSchema = z.object({
    */
   effort: EffortEnum.optional(),
 });
-export type SpawnAgent = z.infer<typeof SpawnAgentSchema>;
+export type AgentSpec = z.infer<typeof AgentSpecSchema>;
 
 /**
- * The full manifest: the phase the engine RESUMES at once the listed agents have
+ * The full request: the phase the engine RESUMES at once the listed agents have
  * returned, plus a non-empty list of agents to spawn (in parallel).
  */
-export const SpawnManifestSchema = z.object({
+export const SpawnRequestSchema = z.object({
   /** Engine resumes here after the agents return. A per-task phase. */
   resume_phase: TaskPhaseEnum,
-  /** Agents to spawn; at least one (an empty manifest is a programming error). */
-  agents: z.array(SpawnAgentSchema).min(1),
+  /** Agents to spawn; at least one (an empty request is a programming error). */
+  agents: z.array(AgentSpecSchema).min(1),
 });
-export type SpawnManifest = z.infer<typeof SpawnManifestSchema>;
+export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
 
 /**
- * Parse + validate an unknown value as a {@link SpawnManifest}. LOUD (ZodError) on
+ * Parse + validate an unknown value as a {@link SpawnRequest}. LOUD (ZodError) on
  * an unknown role, a bad `resume_phase`, an empty `agents` array, or any bad field.
  * Applies the `isolation` default. Mirrors WS1 `parseRunState` — the sanctioned
  * validating entry point.
  */
-export function parseSpawnManifest(raw: unknown): SpawnManifest {
-  return SpawnManifestSchema.parse(raw);
+export function parseSpawnRequest(raw: unknown): SpawnRequest {
+  return SpawnRequestSchema.parse(raw);
 }

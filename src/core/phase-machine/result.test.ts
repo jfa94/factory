@@ -11,9 +11,9 @@ import {
   isTerminalResult,
   type PhaseResult,
 } from "./result.js";
-import type { SpawnManifest } from "./manifest.js";
+import type { SpawnRequest } from "./spawn.js";
 
-const manifest: SpawnManifest = {
+const request: SpawnRequest = {
   resume_phase: "exec",
   agents: [
     { role: "executor", isolation: "worktree", model: "sonnet", max_turns: 60, prompt_ref: "p.md" },
@@ -25,8 +25,8 @@ describe("PhaseResult constructors build correct discriminants", () => {
     expect(advance("verify")).toEqual({ kind: "advance", to: "verify" });
   });
 
-  it("spawn wraps a manifest", () => {
-    expect(spawn(manifest)).toEqual({ kind: "spawn-agents", manifest });
+  it("spawn wraps a request", () => {
+    expect(spawn(request)).toEqual({ kind: "spawn-agents", request });
   });
 
   it("gracefulStop omits resets_at_epoch when undefined", () => {
@@ -87,7 +87,7 @@ describe("isTerminalResult", () => {
     ];
     const continuation: PhaseResult[] = [
       advance("tests"),
-      spawn(manifest),
+      spawn(request),
       waitRetry("ship", "wait", 1, 3),
     ];
     for (const r of terminal) expect(isTerminalResult(r)).toBe(true);

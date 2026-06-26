@@ -87,7 +87,7 @@ are spec defects — surface them.
 **No silent reuse (Decision 35).** `run create` never adopts an existing run. If an active run already
 exists for the spec, it exits `3`. Two distinct envelopes — check `kind` first:
 
-- `{kind:"quota-blocked", scope:"7d", run_id, status, reason, resets_at_epoch?}` — the existing run
+- `{kind:"pause", scope:"7d", run_id, status, reason, resets_at_epoch?}` — the existing run
   is parked on the weekly quota window. **Hard stop: do NOT prompt, do NOT supersede.** Surface the
   reason + reset time and tell the user to `/factory:resume` after the window resets. The only override
   is `--ignore-quota` (user must pass it explicitly to this command, which forwards it to `run create`).
@@ -124,21 +124,21 @@ read it from state — never re-pass it and never choose it yourself.
 loop:
   env = factory next --run <run_id>
   case env.kind:
-    "run-terminal"  → go to Phase 4 (report)
-    "all-terminal"  → factory run finalize --run <run_id>; go to Phase 4
-    "docs-ready"    → run the DOCS STAGE (below); on done, loop; on blocked,
+    "done"  → go to Phase 4 (report)
+    "finalize"  → factory run finalize --run <run_id>; go to Phase 4
+    "document"    → run the DOCS STAGE (below); on done, loop; on suspend,
                       report the reason + STOP (run is suspended — /factory:resume retries)
-    "quota-blocked" → report scope/reason/resets_at_epoch; tell the user to re-run
+    "pause" → report scope/reason/resets_at_epoch; tell the user to re-run
                       `/factory:resume` after the window resets; STOP.
-    "tasks-ready"   → step env.ready[0] (sequential driver: ONE task at a time), then loop
+    "work"   → step env.ready[0] (sequential driver: ONE task at a time), then loop
 
 step(task):
   results_file = (none)
   loop:
     tenv = factory drive --run <run_id> --task <task> [--results <results_file>]
     case tenv.kind:
-      "terminal"      → report tenv.outcome (a drop is loud + classified); return
-      "quota-blocked" → as above; STOP
+      "done"      → report tenv.outcome (a drop is loud + classified); return
+      "pause" → as above; STOP
       "spawn"         → collect (below) into a fresh results file; loop with --results
 ```
 
@@ -149,14 +149,14 @@ docs stage:
   denv = factory run docs --run <run_id>
   case denv.kind:
     "done"    → loop                      # idempotent: already published
-    "blocked" → report denv.reason; STOP  # run suspended; /factory:resume retries
+    "suspend" → report denv.reason; STOP  # run suspended; /factory:resume retries
     "spawn"   → spawn scribe (subagent_type `scribe`, model per denv.model,
                 isolation OMITTED — it works IN denv.worktree), prompt = denv.prompt VERBATIM.
                 Capture its terminal STATUS line.
                 Write {"status":"<line>"} to a results file under
                 $CLAUDE_PLUGIN_DATA/results/<run_id>/.
                 denv2 = factory run docs --run <run_id> --results <file>
-                case denv2.kind: "done" → loop; "blocked" → report + STOP
+                case denv2.kind: "done" → loop; "suspend" → report + STOP
 ```
 
 **Abandoning a run.** If the user asks to abort/cancel/abandon this run mid-loop, run `factory run cancel --run <run_id>` (defaults to the run THIS session owns, then `runs/current`). It marks the run `failed` via the engine's own writer — so it works even with a task still executing. A cancelled run is terminal and NOT resumable (start a fresh `/factory:run` instead). Add `--cleanup` to also tear down the staging branch + its task PRs (omit it to keep them for manual handling). Cancel is for deliberately DISCARDING a run — you no longer need it merely to stop: the Stop hook lets a session end and leaves the run resumable via `factory resume`. Never edit `state.json` by hand — `run cancel` is the sanctioned abandon verb.
@@ -225,7 +225,7 @@ so no aliasing applies; it appears only on producer spawns, never reviewers.
 
 ## Phase 4 — Report
 
-- A `quota-blocked` stop is NOT a quality outcome — never finalize it; report the
+- A `pause` stop is NOT a quality outcome — never finalize it; report the
   reset horizon and stop (resume re-enters Phase 3 via `factory resume`, which
   clears a recovered checkpoint, then THE LOOP).
 - After `run finalize`: `factory score --run <run_id>` (add `--dead-surface` for the

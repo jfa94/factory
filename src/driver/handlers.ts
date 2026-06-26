@@ -7,7 +7,7 @@
  * the injected git/gate clients, persist a holdout answer-key or a producer
  * prompt-context artifact), and RETURNS a {@link PhaseResult}. A handler NEVER
  * writes run state (the driver owns the StateManager), NEVER spawns an agent (it
- * reports a `spawn-agents` manifest the driver acts on), and NEVER decides a
+ * reports a `spawn-agents` request the driver acts on), and NEVER decides a
  * transition beyond naming the phase it advances/resumes at.
  *
  * The producer escalation ladder is re-expressed PER INVOCATION off the persisted
@@ -19,7 +19,7 @@
  * VERIFY + SHIP. The `verify` reporter here derives the merge gate from the
  * already-recorded reviewers + gate evidence; it does NOT itself spawn the panel or
  * the holdout-validator (a handler cannot spawn). The coroutine emits those agents out of
- * band — the panel as the verify spawn manifest, the holdout-validator as a sidecar —
+ * band — the panel as the verify spawn request, the holdout-validator as a holdout —
  * and records their results via the record cores. `ship` is NOT served from this reporter
  * at all: the coroutine runs the stateful {@link import("./ship.js").shipTask} (PR pointer
  * writes + the live MergeSerializer) directly, since a reporter cannot write state or
@@ -42,13 +42,13 @@ import {
   ESCALATION_CAP,
   splitHoldout,
   makeHoldoutRecord,
-  parseSpawnManifest,
+  parseSpawnRequest,
   decideFinalize,
   type Config,
   type GateContext,
   type PriorFailureNote,
   type ProducerContext,
-  type SpawnManifest,
+  type SpawnRequest,
   type SpecManifest,
   type SpecTask,
   type PhaseContext,
@@ -65,7 +65,7 @@ import { FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
 /**
  * A producer role the tests/exec reporters spawn. Mirrors the WS8
  * {@link import("./deps.js").ProducerRole} vocabulary; declared locally so the
- * manifest builder stays self-contained.
+ * request builder stays self-contained.
  */
 type ProducerSpawnRole = "test-writer" | "executor";
 
@@ -115,7 +115,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
 
   /**
    * Assemble + PERSIST a producer prompt-context for `(role, rung)` and return the
-   * one-agent spawn manifest that resumes at `resumePhase`. The context is built from
+   * one-agent spawn request that resumes at `resumePhase`. The context is built from
    * the holdout-stripped `visibleCriteria` only; the prior-failure note is recorded in
    * IFF the dial injects it (rung ≥ 2).
    */
@@ -143,7 +143,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
       `${role}-r${rung}`,
       context,
     );
-    const manifest: SpawnManifest = parseSpawnManifest({
+    const request: SpawnRequest = parseSpawnRequest({
       resume_phase: resumePhase,
       agents: [
         {
@@ -160,7 +160,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         },
       ],
     });
-    return spawn(manifest);
+    return spawn(request);
   }
 
   // -- phase reporters -----------------------------------------------------
@@ -233,7 +233,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
      * verify reporter: run the deterministic gates, then either spawn the
      * risk-invariant panel (no reviewers yet) or DERIVE the merge gate from the
      * already-recorded reviewers + gate evidence. Holdout evidence is recorded
-     * separately by the coroutine (the holdout-validator runs as an out-of-band sidecar);
+     * separately by the coroutine (the holdout-validator runs as an out-of-band holdout);
      * this reporter never spawns.
      */
     async verify(ctx: PhaseContext): Promise<PhaseResult> {

@@ -63,7 +63,7 @@ describe("Δ granularity — files 1..3 invariant", () => {
 });
 
 describe("SpecManifest", () => {
-  it("parses a valid manifest and defaults depends_on", () => {
+  it("parses a valid request and defaults depends_on", () => {
     const m = parseSpecManifest({
       spec_id: "42-checkout",
       issue_number: 42,
@@ -75,7 +75,7 @@ describe("SpecManifest", () => {
     expect(m.tasks[0]!.depends_on).toEqual([]);
   });
 
-  it("rejects a manifest with a non-positive issue number", () => {
+  it("rejects a request with a non-positive issue number", () => {
     expect(() =>
       parseSpecManifest({
         spec_id: "0-x",

@@ -84,8 +84,8 @@ describe("Δ F resume from checkpoint — under-curve reading resumes from the l
 describe("Δ F resume from checkpoint — still-over reading stays blocked (fail-closed)", () => {
   it("a still-over 7d reading → still-blocked carrying the suspend decision", () => {
     const plan = planResume(suspendedRun(), stillOver7dReading(), CONFIG, NOW);
-    expect(plan.kind).toBe("still-blocked");
-    if (plan.kind === "still-blocked") {
+    expect(plan.kind).toBe("pause");
+    if (plan.kind === "pause") {
       expect(plan.decision.kind).toBe("suspend-7d");
     }
   });
@@ -97,8 +97,8 @@ describe("Δ F resume from checkpoint — still-over reading stays blocked (fail
       CONFIG,
       NOW,
     );
-    expect(plan.kind).toBe("still-blocked");
-    if (plan.kind === "still-blocked") {
+    expect(plan.kind).toBe("pause");
+    if (plan.kind === "pause") {
       expect(plan.decision.kind).toBe("unavailable-halt");
     }
   });
@@ -129,7 +129,7 @@ describe("Δ F resume — ignore_quota short-circuits the live pacer check", () 
     // Belt-and-suspenders: the default field value must not accidentally bypass the gate.
     const run = parseRunState({ ...suspendedRun(), ignore_quota: false });
     const plan = planResume(run, stillOver7dReading(), CONFIG, NOW);
-    expect(plan.kind).toBe("still-blocked");
+    expect(plan.kind).toBe("pause");
   });
 });
 

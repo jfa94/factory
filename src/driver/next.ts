@@ -55,26 +55,26 @@ type NextContext = {
   readonly ship_mode: RunState["ship_mode"];
 };
 
-export type NextEnvelope =
+export type NextTask =
   | (NextContext & {
-      readonly kind: "tasks-ready";
+      readonly kind: "work";
       readonly ready: readonly string[];
       readonly cascade_dropped: readonly string[];
     })
   | (NextContext & {
-      readonly kind: "all-terminal";
+      readonly kind: "finalize";
       /** Tasks dropped by the cascade loop in THIS invocation (not cumulative). */
       readonly cascade_dropped: readonly string[];
     })
   | (NextContext & {
-      readonly kind: "docs-ready";
+      readonly kind: "document";
     })
   | (NextContext & {
-      readonly kind: "run-terminal";
+      readonly kind: "done";
       readonly run_status: (typeof TERMINAL_RUN_STATUSES)[number];
     })
   | (NextContext & {
-      readonly kind: "quota-blocked";
+      readonly kind: "pause";
       readonly scope: QuotaStop["scope"];
       readonly reason: string;
       readonly resets_at_epoch?: number;
@@ -102,7 +102,7 @@ async function wantsDocs(deps: CoroutineDeps, run: RunState): Promise<boolean> {
   return deps.docsApplicable();
 }
 
-export async function nextTask(deps: CoroutineDeps, runId: string): Promise<NextEnvelope> {
+export async function nextTask(deps: CoroutineDeps, runId: string): Promise<NextTask> {
   let run = await deps.state.read(runId);
 
   // Self-resolved run context stamped onto EVERY envelope variant (so the workflow
@@ -114,7 +114,7 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
   // 1. Terminal run check BEFORE the quota gate — a finished run must never
   //    write a pause checkpoint (mirrors nextAction in coroutine.ts).
   if (isTerminalRunStatus(run.status)) {
-    return { ...ctx(), kind: "run-terminal", run_status: run.status };
+    return { ...ctx(), kind: "done", run_status: run.status };
   }
 
   // 2. All-tasks-terminal check BEFORE the quota gate. A GENUINELY finished run
@@ -125,7 +125,7 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
   const allTerminal = Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsDocs = allTerminal && (await wantsDocs(deps, run));
   if (allTerminal && !needsDocs) {
-    return { ...ctx(), kind: "all-terminal", cascade_dropped: [] };
+    return { ...ctx(), kind: "finalize", cascade_dropped: [] };
   }
 
   // 3. Quota gate — a breach persists the checkpoint and stops cleanly. Workflow
@@ -134,7 +134,7 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
   if (stop !== null) {
     return {
       ...ctx(),
-      kind: "quota-blocked",
+      kind: "pause",
       scope: stop.scope,
       reason: stop.reason,
       ...(stop.resets_at_epoch !== undefined ? { resets_at_epoch: stop.resets_at_epoch } : {}),
@@ -158,7 +158,7 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
   // docs-suspended run is back to `running` first. `needsDocs` was computed from the
   // entry snapshot; the checkpoint clear changes only status/quota, never tasks/docs.
   if (needsDocs) {
-    return { ...ctx(), kind: "docs-ready" };
+    return { ...ctx(), kind: "document" };
   }
 
   // 5. Cascade-drop until stable. Pending tasks with an unsatisfiable dep are
@@ -193,7 +193,7 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
   const tasks = Object.values(run.tasks);
 
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
-    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "finalize", cascade_dropped: cascadeDropped };
   }
 
   // 6b. Run-level circuit breaker (WS4) — a HARD run-abort guard, distinct from both
@@ -219,7 +219,7 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
       cascadeDropped.push(t.task_id);
     }
     run = await deps.state.read(runId);
-    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "finalize", cascade_dropped: cascadeDropped };
   }
 
   // 7. Build the ready set: non-terminal tasks whose deps are all done.
@@ -249,8 +249,8 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
       cascadeDropped.push(t.task_id);
     }
     run = await deps.state.read(runId);
-    return { ...ctx(), kind: "all-terminal", cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "finalize", cascade_dropped: cascadeDropped };
   }
 
-  return { ...ctx(), kind: "tasks-ready", ready: ordered, cascade_dropped: cascadeDropped };
+  return { ...ctx(), kind: "work", ready: ordered, cascade_dropped: cascadeDropped };
 }

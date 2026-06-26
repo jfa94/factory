@@ -91,7 +91,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
   describe("runProducer", () => {
     type RunProducer = (
       taskId: string,
-      env: { manifest: { agents: Array<Record<string, unknown>> }; worktree: string },
+      env: { request: { agents: Array<Record<string, unknown>> }; worktree: string },
     ) => Promise<{ producer: { status: string } }>;
 
     const build = (agent: unknown) =>
@@ -105,7 +105,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       });
 
     const env = (extra: Record<string, unknown> = {}) => ({
-      manifest: {
+      request: {
         agents: [{ role: "test-writer", model: "sonnet", prompt_ref: "p.json", ...extra }],
       },
       worktree: "/wt",
@@ -167,7 +167,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       });
 
     const panelEnv = (n: number) => ({
-      manifest: {
+      request: {
         agents: Array.from({ length: n }, (_, i) => ({ role: `r${i}`, model: "sonnet" })),
       },
       worktree: "/wt",
@@ -180,7 +180,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       findings,
     });
 
-    it("throws loud when fewer reviewers return than the manifest names (no silent merge-gate-pass)", async () => {
+    it("throws loud when fewer reviewers return than the request names (no silent merge-gate-pass)", async () => {
       // 2 agents, but the second slot dies → filter(Boolean) yields 1 ≠ 2.
       const { agent } = makeAgent([review("r0"), null]);
       await expect(build(agent)("T1", panelEnv(2))).rejects.toThrow(/reviewer\(s\) died/);
@@ -244,7 +244,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
         copyVerbatimInstruction: "copy",
         RAW_OUT: {},
         EXEC_AGENT_MODEL: "sonnet",
-        DRIVE_KINDS: new Set(["spawn", "terminal", "quota-blocked"]),
+        DRIVE_KINDS: new Set(["spawn", "done", "pause"]),
       });
 
     it("cli retries the exec-agent up to CLI_MAX_ATTEMPTS on a parse flake, then succeeds", async () => {
@@ -303,17 +303,17 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       expect(calls).toHaveLength(1);
     });
 
-    it("recordResults returns the parsed DriveEnvelope on the happy path (single agent call)", async () => {
+    it("recordResults returns the parsed NextAction on the happy path (single agent call)", async () => {
       const { agent, calls } = makeAgent([{ raw: "x" }]);
-      const parseEnvelope = () => ({ kind: "terminal" });
+      const parseEnvelope = () => ({ kind: "done" });
       const out = await buildFold(agent, parseEnvelope)("T1", "exec", { result_key: {} });
-      expect(out).toEqual({ kind: "terminal" });
+      expect(out).toEqual({ kind: "done" });
       expect(calls).toHaveLength(1);
     });
 
     it("recordResults throws loud on a skipped/dead record agent (out===null)", async () => {
       const { agent } = makeAgent([null]);
-      const parseEnvelope = () => ({ kind: "terminal" });
+      const parseEnvelope = () => ({ kind: "done" });
       await expect(buildFold(agent, parseEnvelope)("T1", "exec", { result_key: {} })).rejects.toThrow(
         /skipped or died/,
       );

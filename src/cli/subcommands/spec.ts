@@ -24,7 +24,7 @@
  *           → stored(pointer) → DONE (go to `run create`)
  *
  * Mirrors {@link import("../../spec/pipeline.js").runSpecPipeline} exactly (same
- * gates, same 56/60+floor adjudication, same manifest construction) — the only
+ * gates, same 56/60+floor adjudication, same request construction) — the only
  * difference is WHO drives the agent spawns and the loop.
  */
 import { join } from "node:path";
@@ -246,7 +246,7 @@ export async function gateSpec(
 /**
  * Adjudicate the reviewer verdict (single 56/60 threshold + any-dimension floor,
  * Δ I) against the generator output. On NEEDS_REVISION emit `revise`; on PASS build
- * the durable manifest and persist it, returning the run-facing pointer. Both
+ * the durable request and persist it, returning the run-facing pointer. Both
  * `generated.json` and `verdict.json` are UNTRUSTED agent output → parsed loudly.
  */
 export async function storeSpec(
@@ -279,8 +279,8 @@ export async function storeSpec(
     };
   }
 
-  const manifest = buildManifest(repo, issue, generated);
-  const pointer = await deps.store.write(manifest, generated.specMd);
+  const request = buildManifest(repo, issue, generated);
+  const pointer = await deps.store.write(request, generated.specMd);
   return { kind: "stored", repo, issue, pointer };
 }
 

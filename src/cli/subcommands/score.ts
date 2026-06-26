@@ -48,8 +48,8 @@ export async function runScore(
   }
 
   const specStore = new SpecStore({ dataDir });
-  const manifest = await specStore.read(runState.spec.repo, runState.spec.spec_id);
-  const report = buildPartialReport(runState, manifest);
+  const request = await specStore.read(runState.spec.repo, runState.spec.spec_id);
+  const report = buildPartialReport(runState, request);
   const summary = buildRunSummary(runState, report);
 
   emitJson({ kind: "score", summary });

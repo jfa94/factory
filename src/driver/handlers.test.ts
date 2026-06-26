@@ -248,9 +248,9 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
 
     expect(result.kind).toBe("spawn-agents");
     if (result.kind !== "spawn-agents") throw new Error("unreachable");
-    expect(result.manifest.resume_phase).toBe("exec");
-    expect(result.manifest.agents).toHaveLength(1);
-    const agent = result.manifest.agents[0]!;
+    expect(result.request.resume_phase).toBe("exec");
+    expect(result.request.agents).toHaveLength(1);
+    const agent = result.request.agents[0]!;
     expect(agent.role).toBe("test-writer");
 
     // The persisted context is built off the holdout-stripped visible criteria,
@@ -290,11 +290,11 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
 
     expect(result.kind).toBe("spawn-agents");
     if (result.kind !== "spawn-agents") throw new Error("unreachable");
-    const agent = result.manifest.agents[0]!;
+    const agent = result.request.agents[0]!;
     const dial = dialForRung("medium", 2, deps.config);
     expect(agent.model).toBe(dial.model);
     // Rung 2 for a sub-ceiling tier JUMPS to the ceiling model but has NOT begun the
-    // effort climb, so the dialed effort is still undefined — and the manifest omits it.
+    // effort climb, so the dialed effort is still undefined — and the request omits it.
     expect(agent.effort).toBe(dial.effort);
     expect(agent.effort).toBeUndefined();
     expect(dial.injectsPriorFailure).toBe(true);
@@ -303,7 +303,7 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     expect(persisted.priorFailures.length).toBeGreaterThan(0);
   });
 
-  it("tests threads the dialed effort into the manifest once the model has hit its ceiling (rung 3 = ceiling+xhigh)", async () => {
+  it("tests threads the dialed effort into the request once the model has hit its ceiling (rung 3 = ceiling+xhigh)", async () => {
     const deps = makeDeps();
     const handlers = makePhaseHandlers(deps);
     const ctx = await ctxFor({ task_id: "t-multi", escalation_rung: 3 });
@@ -311,9 +311,9 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
 
     expect(result.kind).toBe("spawn-agents");
     if (result.kind !== "spawn-agents") throw new Error("unreachable");
-    const agent = result.manifest.agents[0]!;
+    const agent = result.request.agents[0]!;
     const dial = dialForRung("medium", 3, deps.config);
-    // The effort climb is now live: the manifest must carry the dialed effort verbatim.
+    // The effort climb is now live: the request must carry the dialed effort verbatim.
     expect(dial.effort).toBe("xhigh");
     expect(agent.effort).toBe("xhigh");
     expect(agent.effort).toBe(dial.effort);
@@ -329,8 +329,8 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
 
     expect(result.kind).toBe("spawn-agents");
     if (result.kind !== "spawn-agents") throw new Error("unreachable");
-    expect(result.manifest.resume_phase).toBe("verify");
-    expect(result.manifest.agents[0]!.role).toBe("executor");
+    expect(result.request.resume_phase).toBe("verify");
+    expect(result.request.agents[0]!.role).toBe("executor");
   });
 
   // -- verify (CLI single-step reporter; NO holdout) ------------------------
@@ -342,7 +342,7 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
 
     expect(result.kind).toBe("spawn-agents");
     if (result.kind !== "spawn-agents") throw new Error("unreachable");
-    expect(result.manifest.agents).toHaveLength(PANEL_ROLES.length);
+    expect(result.request.agents).toHaveLength(PANEL_ROLES.length);
   });
 
   it("verify advances to ship when gates are green and reviewers unanimously approve", async () => {

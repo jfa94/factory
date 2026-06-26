@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { nextAction, MERGE_RESYNC_CAP, type DriveEnvelope } from "./coroutine.js";
+import { nextAction, MERGE_RESYNC_CAP, type NextAction } from "./coroutine.js";
 import { TASK_PHASE_ORDER } from "../types/index.js";
 import { TaskStateSchema } from "../core/state/index.js";
 import type { DriveResults, ResultKey } from "./results.js";
@@ -46,7 +46,7 @@ async function driveToVerify(
   deps: CoroutineDeps,
   runId: string,
   taskId: string,
-): Promise<DriveEnvelope & { kind: "spawn" }> {
+): Promise<NextAction & { kind: "spawn" }> {
   // 1. First step → tests spawn
   const env1 = await nextAction(deps, runId, taskId);
   expect(env1.kind).toBe("spawn");
@@ -79,7 +79,7 @@ async function driveToVerify(
  * result_key is echoed from the prior spawn envelope.
  */
 function approvingReviewsResults(
-  priorEnvelope: DriveEnvelope & { kind: "spawn" },
+  priorEnvelope: NextAction & { kind: "spawn" },
   withheldCriteria?: readonly string[],
 ): DriveResults {
   const reviews = PANEL_ROLES.map((role) => ({
@@ -108,7 +108,7 @@ function approvingReviewsResults(
  * Build a DriveResults with one confirmed blocker from the first panel reviewer.
  * result_key is echoed from the prior spawn envelope.
  */
-function blockingReviewsResults(priorEnvelope: DriveEnvelope & { kind: "spawn" }): DriveResults {
+function blockingReviewsResults(priorEnvelope: NextAction & { kind: "spawn" }): DriveResults {
   // Use the first PANEL_ROLES entry as the blocking reviewer (e.g. "implementation-reviewer")
   const blockerRole = PANEL_ROLES[0]!;
   const reviews = PANEL_ROLES.map((role) => ({
@@ -179,7 +179,7 @@ describe("nextAction", () => {
       if (env.kind !== "spawn") return;
       expect(env.phase).toBe("tests");
       expect(env.expects).toBe("producer-status");
-      expect(env.manifest.agents[0]?.role).toBe("test-writer");
+      expect(env.request.agents[0]?.role).toBe("test-writer");
       expect(env.result_key).toEqual({ phase: "tests", rung: 0 });
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.phase).toBe("tests"); // cursor persisted
@@ -319,7 +319,7 @@ describe("nextAction", () => {
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
       expect(env.phase).toBe("exec");
-      expect(env.manifest.agents[0]?.role).toBe("executor");
+      expect(env.request.agents[0]?.role).toBe("executor");
     } finally {
       await cleanup();
     }
@@ -410,7 +410,7 @@ describe("nextAction", () => {
         producer: { status: "STATUS: BLOCKED — escalate" },
       });
       expect(env).toMatchObject({
-        kind: "terminal",
+        kind: "done",
         outcome: { outcome: "dropped", failure_class: "spec-defect" },
       });
       const run = await deps.state.read(runId);
@@ -431,7 +431,7 @@ describe("nextAction", () => {
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
       expect(env.phase).toBe("exec");
-      expect(env.manifest.agents[0]?.role).toBe("executor");
+      expect(env.request.agents[0]?.role).toBe("executor");
     } finally {
       await cleanup();
     }
@@ -442,7 +442,7 @@ describe("nextAction", () => {
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
     });
     try {
-      // Seed a holdout record so the sidecar is emitted
+      // Seed a holdout record so the holdout is emitted
       await holdout.put(runId, makeHoldoutRecord("T1", ["d", "e"], 5));
       await driveToVerify(deps, runId, "T1");
       const env = await nextAction(deps, runId, "T1");
@@ -450,8 +450,8 @@ describe("nextAction", () => {
       if (env.kind !== "spawn") return;
       expect(env.phase).toBe("verify");
       expect(env.expects).toBe("reviews");
-      expect(env.manifest.agents).toHaveLength(PANEL_ROLES.length);
-      expect(env.sidecar?.kind).toBe("holdout-validate");
+      expect(env.request.agents).toHaveLength(PANEL_ROLES.length);
+      expect(env.holdout?.kind).toBe("holdout-validate");
       expect(env.worktree).toContain("T1");
     } finally {
       await cleanup();
@@ -469,12 +469,12 @@ describe("nextAction", () => {
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
       // The worktree forks from origin/staging-<run-id>; reviewers + the holdout
-      // sidecar MUST diff against THAT ref, never the namespace-colliding bare
+      // holdout MUST diff against THAT ref, never the namespace-colliding bare
       // `origin/staging` (root cause #2 of the PRD-2d stall).
       expect(env.base_ref).toBe(`origin/${runStagingBranch(runId)}`);
       expect(env.base_ref).toBe("origin/staging-run-1");
-      expect(env.sidecar?.prompt).toContain("git -C");
-      expect(env.sidecar?.prompt).toContain("diff origin/staging-run-1");
+      expect(env.holdout?.prompt).toContain("git -C");
+      expect(env.holdout?.prompt).toContain("diff origin/staging-run-1");
     } finally {
       await cleanup();
     }
@@ -494,15 +494,15 @@ describe("nextAction", () => {
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
       expect(env.base_ref).toBe("origin/staging-PINNED");
-      expect(env.sidecar?.prompt).toContain("diff origin/staging-PINNED");
+      expect(env.holdout?.prompt).toContain("diff origin/staging-PINNED");
     } finally {
       await cleanup();
     }
   });
 
   // Relocated from src/cli/subcommands/run-task.test.ts (CLI shell deleted):
-  // verify must surface the holdout sidecar ONLY when an answer key was withheld.
-  it("verify emits NO holdout sidecar when nothing was withheld", async () => {
+  // verify must surface the holdout holdout ONLY when an answer key was withheld.
+  it("verify emits NO holdout holdout when nothing was withheld", async () => {
     // Default fixture: single criterion → degenerate split, no key persisted.
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
@@ -511,7 +511,7 @@ describe("nextAction", () => {
       expect(env.kind).toBe("spawn");
       if (env.kind !== "spawn") return;
       expect(env.phase).toBe("verify");
-      expect(env.sidecar).toBeUndefined();
+      expect(env.holdout).toBeUndefined();
     } finally {
       await cleanup();
     }
@@ -529,12 +529,12 @@ describe("nextAction", () => {
       const withheld = holdoutRecord.withheld_criteria;
       expect(withheld.length).toBeGreaterThan(0); // sanity: split actually withheld something
 
-      const panelEnv = await nextAction(deps, runId, "T1"); // emit panel + holdout sidecar
+      const panelEnv = await nextAction(deps, runId, "T1"); // emit panel + holdout holdout
       expect(panelEnv.kind).toBe("spawn");
       if (panelEnv.kind !== "spawn") return;
       // Record approving reviews AND holdout pass (withheld criteria → all satisfied).
       const env = await nextAction(deps, runId, "T1", approvingReviewsResults(panelEnv, withheld));
-      expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
+      expect(env).toMatchObject({ kind: "done", outcome: { outcome: "done" } });
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.status).toBe("done");
       expect(run.tasks["T1"]?.pr_number).toBeTypeOf("number");
@@ -564,7 +564,7 @@ describe("nextAction", () => {
       expect(panelEnv.kind).toBe("spawn");
       if (panelEnv.kind !== "spawn") return;
       const env = await nextAction(deps, runId, "T1", approvingReviewsResults(panelEnv, withheld));
-      expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
+      expect(env).toMatchObject({ kind: "done", outcome: { outcome: "done" } });
 
       const branch = runScopedBranch(runId, "T1");
       // The run-scoped head branch was pushed to origin during ship.
@@ -613,7 +613,7 @@ describe("nextAction", () => {
         producer: { status: "STATUS: NEEDS_CONTEXT" },
       });
       expect(env).toMatchObject({
-        kind: "terminal",
+        kind: "done",
         outcome: { outcome: "dropped", failure_class: "capability-budget" },
       });
     } finally {
@@ -652,7 +652,7 @@ describe("nextAction", () => {
     try {
       const env = await nextAction(deps, runId, "T1");
       expect(env).toMatchObject({
-        kind: "terminal",
+        kind: "done",
         outcome: { outcome: "dropped", failure_class: "blocked-environmental" },
       });
     } finally {
@@ -704,7 +704,7 @@ describe("nextAction", () => {
         result_key: resyncEnv.result_key,
         producer: { status: "STATUS: DONE" },
       });
-      expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
+      expect(env).toMatchObject({ kind: "done", outcome: { outcome: "done" } });
       expect(gh.created).toHaveLength(1); // PR created once (idempotent on re-ship)
       expect(gh.merges).toHaveLength(1); // merged once (the 2nd attempt)
       const run = await deps.state.read(runId);
@@ -809,7 +809,7 @@ describe("nextAction", () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({ usage: PAUSE_5H });
     try {
       const env = await nextAction(deps, runId, "T1");
-      expect(env).toMatchObject({ kind: "quota-blocked", scope: "5h" });
+      expect(env).toMatchObject({ kind: "pause", scope: "5h" });
       // No phase cursor was written — the coroutine bailed before any phase work.
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.phase).toBeUndefined();
@@ -832,7 +832,7 @@ describe("nextAction", () => {
         },
       }));
       const env = await nextAction(deps, runId, "T1");
-      expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
+      expect(env).toMatchObject({ kind: "done", outcome: { outcome: "done" } });
     } finally {
       await cleanup();
     }
@@ -922,7 +922,7 @@ describe("terminal-before-quota ordering", () => {
       }));
       const env = await nextAction(deps, runId, "T1");
       // Must be terminal, NOT quota-blocked.
-      expect(env).toMatchObject({ kind: "terminal", outcome: { outcome: "done" } });
+      expect(env).toMatchObject({ kind: "done", outcome: { outcome: "done" } });
       // No quota checkpoint was written (applyQuotaGate never ran).
       // The gate writes run.status (→ "paused") and run.quota; both must be untouched.
       const run = await deps.state.read(runId);
@@ -989,7 +989,7 @@ describe("recordResults holdout-required guard", () => {
       const panelEnv = await nextAction(deps, runId, "T1");
       expect(panelEnv.kind).toBe("spawn");
       if (panelEnv.kind !== "spawn") throw new Error("expected panel spawn");
-      expect(panelEnv.sidecar?.kind).toBe("holdout-validate"); // sanity: holdout was withheld
+      expect(panelEnv.holdout?.kind).toBe("holdout-validate"); // sanity: holdout was withheld
 
       // Seed prior-rung verdicts on disk: without the guard, applyRecordReviews would read
       // these successfully (no ENOENT) and NOT throw — so the test only fails without the guard.

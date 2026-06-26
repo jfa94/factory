@@ -5,7 +5,7 @@
  * workstreams don't churn import paths later. WS0 seeds only what it owns;
  * later workstreams ADD to this barrel:
  *   - WS1 adds `RunState` / `TaskState` (re-exported from src/core/state). [done]
- *   - WS2 adds `PhaseResult` / `SpawnManifest` (from src/core/phase-machine).
+ *   - WS2 adds `PhaseResult` / `SpawnRequest` (from src/core/phase-machine).
  *
  * Keep this a thin re-export barrel — type definitions live in their owning
  * module; this file just makes the seam addressable from one place.
@@ -77,7 +77,7 @@ export type {
 // WS2 — phase-machine seam. A COMPLETE mirror of src/core/phase-machine: the PURE
 // per-task phase engine (runPhase / nextPhaseFor / decideFinalize),
 // its result contract (PhaseResult union + constructors + assertNever), the Zod
-// SpawnManifest, the phase vocabulary + helpers, and the fakeable PhaseHandlers
+// SpawnRequest, the phase vocabulary + helpers, and the fakeable PhaseHandlers
 // interface. The WS10 session driver and v2 Workflow driver import the engine
 // entry points from HERE — keep this barrel a full mirror so no caller must
 // deep-import (the "addressable from one place" contract, mirrors the WS1
@@ -89,11 +89,11 @@ export {
   TASK_PHASE_ORDER,
   nextPhase,
   phaseToInFlightStatus,
-  // spawn manifest (Zod)
+  // spawn request (Zod)
   SpawnRoleEnum,
-  SpawnAgentSchema,
-  SpawnManifestSchema,
-  parseSpawnManifest,
+  AgentSpecSchema,
+  SpawnRequestSchema,
+  parseSpawnRequest,
   // result union: exhaustiveness primitive + constructors
   assertNever,
   isTerminalResult,
@@ -114,8 +114,8 @@ export type {
   TaskPhase,
   RunPhase,
   SpawnRole,
-  SpawnAgent,
-  SpawnManifest,
+  AgentSpec,
+  SpawnRequest,
   PhaseResult,
   AdvanceResult,
   SpawnAgentsResult,

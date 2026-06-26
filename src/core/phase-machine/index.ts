@@ -1,6 +1,6 @@
 /**
  * `src/core/phase-machine` — the FROZEN WS2 seam. The PURE per-task phase engine,
- * its discriminated-union result contract, the Zod spawn manifest, the phase
+ * its discriminated-union result contract, the Zod spawn request, the phase
  * vocabulary, and the injectable handler interface. Re-exported via `src/types`.
  *
  * Imports the WS1 state seam (RunState/TaskState/enums) — never redefines it.
@@ -16,14 +16,14 @@ export {
 } from "./phases.js";
 export type { TaskPhase, RunPhase } from "./phases.js";
 
-// --- Spawn manifest (Zod) ---
+// --- Spawn request (Zod) ---
 export {
   SpawnRoleEnum,
-  SpawnAgentSchema,
-  SpawnManifestSchema,
-  parseSpawnManifest,
-} from "./manifest.js";
-export type { SpawnRole, SpawnAgent, SpawnManifest } from "./manifest.js";
+  AgentSpecSchema,
+  SpawnRequestSchema,
+  parseSpawnRequest,
+} from "./spawn.js";
+export type { SpawnRole, AgentSpec, SpawnRequest } from "./spawn.js";
 
 // --- PhaseResult union + constructors + primitives ---
 export {

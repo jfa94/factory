@@ -7,25 +7,25 @@ import { DRIVE_KINDS, NEXT_KINDS, parseEnvelope, type EnvelopeKind } from "./wor
 
 describe("NEXT_KINDS / DRIVE_KINDS (engine-derived)", () => {
   // The authoritative discriminants, copied from the engine unions:
-  //   NextEnvelope  (src/driver/next.ts)      = tasks-ready | all-terminal | docs-ready | run-terminal | quota-blocked
-  //   DriveEnvelope (src/driver/coroutine.ts) = spawn | terminal | quota-blocked
+  //   NextTask  (src/driver/next.ts)      = work | finalize | document | done | pause
+  //   NextAction (src/driver/coroutine.ts) = spawn | terminal | quota-blocked
   // The sets themselves are derived from a `Record<Union["kind"], true>` mirror,
   // so omitting a kind is a compile error; this test pins the runtime values to
   // the same authoritative lists (catching an accidental EXTRA kind in the mirror).
   const NEXT_AUTHORITATIVE = [
-    "tasks-ready",
-    "all-terminal",
-    "docs-ready",
-    "run-terminal",
-    "quota-blocked",
+    "work",
+    "finalize",
+    "document",
+    "done",
+    "pause",
   ];
-  const DRIVE_AUTHORITATIVE = ["spawn", "terminal", "quota-blocked"];
+  const DRIVE_AUTHORITATIVE = ["spawn", "done", "pause"];
 
-  it("NEXT_KINDS is exactly the NextEnvelope discriminants", () => {
+  it("NEXT_KINDS is exactly the NextTask discriminants", () => {
     expect([...NEXT_KINDS].sort()).toEqual([...NEXT_AUTHORITATIVE].sort());
   });
 
-  it("DRIVE_KINDS is exactly the DriveEnvelope discriminants", () => {
+  it("DRIVE_KINDS is exactly the NextAction discriminants", () => {
     expect([...DRIVE_KINDS].sort()).toEqual([...DRIVE_AUTHORITATIVE].sort());
   });
 
@@ -36,9 +36,9 @@ describe("NEXT_KINDS / DRIVE_KINDS (engine-derived)", () => {
 });
 
 describe("parseEnvelope — happy path", () => {
-  it("parses a verbatim NextEnvelope and preserves every field", () => {
+  it("parses a verbatim NextTask and preserves every field", () => {
     const raw = JSON.stringify({
-      kind: "tasks-ready",
+      kind: "work",
       run_id: "run-1",
       data_dir: "/d",
       ship_mode: "pr",
@@ -46,11 +46,11 @@ describe("parseEnvelope — happy path", () => {
       cascade_dropped: [],
     });
     const env = parseEnvelope(raw, NEXT_KINDS, "next");
-    expect(env.kind).toBe("tasks-ready");
+    expect(env.kind).toBe("work");
     // Switching on the discriminant narrows to the per-variant payload type — the
     // C2 improvement (no bare `{ [field]: unknown }`). Inside this arm `env.ready`
     // and `env.cascade_dropped` are statically typed string[] / drop[].
-    if (env.kind !== "tasks-ready") throw new Error("expected tasks-ready");
+    if (env.kind !== "work") throw new Error("expected work");
     // Bind to the concrete per-variant types — this is the type-level regression
     // guard: if C2 regressed to `{ [field]: unknown }` these annotations would be
     // `unknown`-source assignments and FAIL the build (not just pass at runtime).
@@ -62,14 +62,14 @@ describe("parseEnvelope — happy path", () => {
     expect(env.run_id).toBe("run-1");
   });
 
-  it("parses each known NextEnvelope kind", () => {
+  it("parses each known NextTask kind", () => {
     for (const kind of NEXT_KINDS) {
       const env = parseEnvelope(JSON.stringify({ kind }), NEXT_KINDS, "next");
       expect(env.kind).toBe(kind);
     }
   });
 
-  it("parses a verbatim DriveEnvelope spawn", () => {
+  it("parses a verbatim NextAction spawn", () => {
     const raw = JSON.stringify({ kind: "spawn", run_id: "r", task_id: "T1", expects: "reviews" });
     const env = parseEnvelope(raw, DRIVE_KINDS, "drive");
     expect(env.kind).toBe("spawn");
@@ -86,7 +86,7 @@ describe("parseEnvelope — corrupt kind (the re-key failure)", () => {
     // The exact corruption seen in run-20260616-134715.
     const raw = JSON.stringify({
       kind: "factory-envelope",
-      kind_type: "tasks-ready",
+      kind_type: "work",
       ready: '["T1","T2"]',
       cascade_dropped: "[]",
     });
@@ -96,7 +96,7 @@ describe("parseEnvelope — corrupt kind (the re-key failure)", () => {
   it("throws naming the context (next) and the allowed kinds", () => {
     const raw = JSON.stringify({ kind: "factory-envelope" });
     expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow(/next/);
-    expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow(/tasks-ready/);
+    expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow(/work/);
   });
 
   it("rejects a valid Drive kind handed to a Next call site (wrong set)", () => {
@@ -141,11 +141,11 @@ describe("parseEnvelope — garbage / non-JSON", () => {
   });
 
   it("throws on a JSON primitive (string) — not an object", () => {
-    expect(() => parseEnvelope(JSON.stringify("tasks-ready"), NEXT_KINDS, "next")).toThrow();
+    expect(() => parseEnvelope(JSON.stringify("work"), NEXT_KINDS, "next")).toThrow();
   });
 
   it("throws on a JSON array — not an object", () => {
-    expect(() => parseEnvelope(JSON.stringify(["tasks-ready"]), NEXT_KINDS, "next")).toThrow();
+    expect(() => parseEnvelope(JSON.stringify(["work"]), NEXT_KINDS, "next")).toThrow();
   });
 
   it("throws on JSON null", () => {
@@ -164,23 +164,23 @@ describe("parseEnvelope — markdown-fence tolerance (blocker #9 backstop)", () 
   // the "no fences" instruction. The deterministic guard strips a FULLY-WRAPPING fence
   // so the most common LLM-output flake doesn't fail the run — defense-in-depth behind
   // the sonnet model upgrade.
-  const json = JSON.stringify({ kind: "tasks-ready", ready: ["T1", "T2"], cascade_dropped: [] });
+  const json = JSON.stringify({ kind: "work", ready: ["T1", "T2"], cascade_dropped: [] });
 
   it("strips a ```json fence and parses the inner envelope", () => {
     const env = parseEnvelope("```json\n" + json + "\n```", NEXT_KINDS, "next");
-    expect(env.kind).toBe("tasks-ready");
-    if (env.kind !== "tasks-ready") throw new Error("expected tasks-ready");
+    expect(env.kind).toBe("work");
+    if (env.kind !== "work") throw new Error("expected work");
     expect(env.ready).toEqual(["T1", "T2"]); // arrays survive, not stringified
   });
 
   it("strips a bare ``` fence (no language tag)", () => {
     const env = parseEnvelope("```\n" + json + "\n```", NEXT_KINDS, "next");
-    expect(env.kind).toBe("tasks-ready");
+    expect(env.kind).toBe("work");
   });
 
   it("tolerates surrounding whitespace/newlines around a fenced payload", () => {
     const env = parseEnvelope("  \n```json\n" + json + "\n```\n  ", NEXT_KINDS, "next");
-    expect(env.kind).toBe("tasks-ready");
+    expect(env.kind).toBe("work");
   });
 
   it("does NOT mangle an unfenced envelope whose string VALUE contains a ``` run", () => {
@@ -202,7 +202,7 @@ describe("parseEnvelope — markdown-fence tolerance (blocker #9 backstop)", () 
     // regex hard-coded `(?:json)?` and left every other tag fenced-then-failing.
     for (const tag of ["js", "javascript", "text", "sh", "python"]) {
       const env = parseEnvelope("```" + tag + "\n" + json + "\n```", NEXT_KINDS, "next");
-      expect(env.kind, `tag=${tag}`).toBe("tasks-ready");
+      expect(env.kind, `tag=${tag}`).toBe("work");
     }
   });
 
@@ -279,15 +279,15 @@ describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => 
   const PROBES: Probe[] = [
     {
       name: "valid tasks-ready",
-      raw: JSON.stringify({ kind: "tasks-ready", ready: ["T1"], cascade_dropped: [] }),
+      raw: JSON.stringify({ kind: "work", ready: ["T1"], cascade_dropped: [] }),
       set: "next",
     },
-    { name: "valid run-terminal", raw: JSON.stringify({ kind: "run-terminal" }), set: "next" },
+    { name: "valid run-terminal", raw: JSON.stringify({ kind: "done" }), set: "next" },
     { name: "valid spawn", raw: JSON.stringify({ kind: "spawn", task_id: "T1" }), set: "drive" },
-    { name: "valid terminal", raw: JSON.stringify({ kind: "terminal" }), set: "drive" },
+    { name: "valid terminal", raw: JSON.stringify({ kind: "done" }), set: "drive" },
     {
       name: "shared quota-blocked (next)",
-      raw: JSON.stringify({ kind: "quota-blocked" }),
+      raw: JSON.stringify({ kind: "pause" }),
       set: "next",
     },
     { name: "non-string raw", raw: 42, set: "next" },
@@ -295,7 +295,7 @@ describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => 
     { name: "empty string", raw: "", set: "next" },
     { name: "array top-level", raw: "[1,2,3]", set: "next" },
     { name: "json null", raw: "null", set: "next" },
-    { name: "json primitive string", raw: JSON.stringify("tasks-ready"), set: "next" },
+    { name: "json primitive string", raw: JSON.stringify("work"), set: "next" },
     { name: "missing kind", raw: JSON.stringify({ run_id: "r" }), set: "next" },
     { name: "non-string kind", raw: JSON.stringify({ kind: 7 }), set: "next" },
     {
@@ -304,7 +304,7 @@ describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => 
       set: "next",
     },
     { name: "drive kind to next set", raw: JSON.stringify({ kind: "spawn" }), set: "next" },
-    { name: "next kind to drive set", raw: JSON.stringify({ kind: "tasks-ready" }), set: "drive" },
+    { name: "next kind to drive set", raw: JSON.stringify({ kind: "work" }), set: "drive" },
     {
       name: "long payload (preview truncation branch)",
       raw: JSON.stringify({ kind: "z".repeat(300) }),
@@ -312,7 +312,7 @@ describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => 
     },
     {
       name: "fenced ```json wrapper (strip branch)",
-      raw: "```json\n" + JSON.stringify({ kind: "tasks-ready", ready: ["T1"] }) + "\n```",
+      raw: "```json\n" + JSON.stringify({ kind: "work", ready: ["T1"] }) + "\n```",
       set: "next",
     },
     {
@@ -323,7 +323,7 @@ describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => 
     { name: "fenced non-json (strip then fail)", raw: "```json\nnot json\n```", set: "next" },
     {
       name: "internal ``` in value (anchor must NOT fire)",
-      raw: JSON.stringify({ kind: "terminal", note: "fence ``` here" }),
+      raw: JSON.stringify({ kind: "done", note: "fence ``` here" }),
       set: "drive",
     },
     {
@@ -333,7 +333,7 @@ describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => 
     },
     {
       name: "whitespace-padded fence (trim branch)",
-      raw: "  \n```json\n" + JSON.stringify({ kind: "tasks-ready", ready: ["T1"] }) + "\n```\n  ",
+      raw: "  \n```json\n" + JSON.stringify({ kind: "work", ready: ["T1"] }) + "\n```\n  ",
       set: "next",
     },
   ];

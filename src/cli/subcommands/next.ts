@@ -1,6 +1,6 @@
 /**
  * `factory next [--run <id>]` — the run-level coroutine: quota gate, checkpoint
- * recovery, cascade-drop, and the ready set. Emits ONE JSON NextEnvelope.
+ * recovery, cascade-drop, and the ready set. Emits ONE JSON NextTask.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
@@ -20,10 +20,10 @@ Usage:
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
 context — run_id, data_dir (canonical), ship_mode — so the workflow driver
 adopts them from the first \`next\` instead of via Workflow args:
-  { kind:"tasks-ready", run_id, data_dir, ship_mode, ready:[...], cascade_dropped:[...] }
-  { kind:"all-terminal", run_id, data_dir, ship_mode, cascade_dropped:[...] }  → call \`factory run finalize\`
-  { kind:"run-terminal", run_id, data_dir, ship_mode, run_status }
-  { kind:"quota-blocked", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
+  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_dropped:[...] }
+  { kind:"finalize", run_id, data_dir, ship_mode, cascade_dropped:[...] }  → call \`factory run finalize\`
+  { kind:"done", run_id, data_dir, ship_mode, run_status }
+  { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
   factory next --assert-owner <session>          (loud-assert runs/current ownership)
   factory next --expect-mode <session|workflow>  (loud-assert runs/current mode)

@@ -25,7 +25,7 @@ import { z } from "zod";
 /**
  * The closed Agent effort/reasoning domain (weakest→strongest). THE one home for
  * the effort enum: the Decision-21 apex pin ({@link SpecSchema}'s `specEffort`),
- * the spawn manifest (`SpawnAgentSchema.effort`), and the producer dial's effort
+ * the spawn request (`AgentSpecSchema.effort`), and the producer dial's effort
  * ladder (`model-dial.ts`) all reuse it, so an out-of-domain effort is rejected at
  * the boundary instead of flowing through as an open string. Mirrors `RiskTierEnum`.
  */

@@ -140,7 +140,7 @@ describe("drive happy path", () => {
       const out = stdout.read();
       expect(out.length).toBeGreaterThan(0);
       const envelope = JSON.parse(out);
-      expect(envelope).toMatchObject({ kind: "terminal", run_id: runId, task_id: "T1" });
+      expect(envelope).toMatchObject({ kind: "done", run_id: runId, task_id: "T1" });
       expect(envelope.outcome).toMatchObject({ outcome: "done" });
     } finally {
       stdout.restore();
@@ -194,7 +194,7 @@ describe("drive happy path", () => {
         result_key: { phase: "tests", rung: 0 },
         expects: "producer-status",
       });
-      expect(envelope.manifest).toBeDefined();
+      expect(envelope.request).toBeDefined();
     } finally {
       stdout.restore();
       if (saved === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];

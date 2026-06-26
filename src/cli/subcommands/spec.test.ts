@@ -254,12 +254,12 @@ describe("storeSpec", () => {
     expect(env.pointer.spec_id).toBe(`${ISSUE}-email-login`);
 
     // The durable spec is now readable + a subsequent resolve reuses it.
-    const manifest = await new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }).read(
+    const request = await new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") }).read(
       REPO,
       env.pointer.spec_id,
     );
-    expect(manifest.tasks).toHaveLength(1);
-    expect(manifest.tasks[0]!.task_id).toBe("T1");
+    expect(request.tasks).toHaveLength(1);
+    expect(request.tasks[0]!.task_id).toBe("T1");
 
     const reResolve = await resolveSpec(deps(), REPO, ISSUE);
     expect(reResolve.kind).toBe("reuse");

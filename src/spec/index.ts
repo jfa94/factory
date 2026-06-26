@@ -7,7 +7,7 @@
  * injectable GhClient (interface + real impl + typed errors), the SpecStore, the
  * apex-pinned SpecAgentRunner boundary + spawn builders, the three deterministic
  * gates, the review adjudication (single 56/60 threshold + floor), and the shared
- * durable-manifest builder.
+ * durable-request builder.
  */
 
 // Durable on-disk spec artifact.
@@ -76,7 +76,7 @@ export {
   type DecideOptions,
 } from "./review.js";
 
-// Durable spec-manifest builder (shared by the `spec store` CLI seam).
+// Durable spec-request builder (shared by the `spec store` CLI seam).
 export { buildManifest } from "./pipeline.js";
 
 // Spec-pipeline defaults now live in the canonical config schema (src/config).

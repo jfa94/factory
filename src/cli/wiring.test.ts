@@ -19,7 +19,7 @@ import { parseSpecManifest, type SpecManifest } from "../spec/index.js";
 
 const RUN_ID = "run-1";
 
-/** A minimal valid manifest for `repo`/`specId`/`issue`. */
+/** A minimal valid request for `repo`/`specId`/`issue`. */
 function makeManifest(repo: string, specId: string, issue: number): SpecManifest {
   return parseSpecManifest({
     spec_id: specId,

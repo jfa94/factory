@@ -11,8 +11,8 @@
  *   the TYPED envelope under a loose schema (`additionalProperties:true`,
  *   `required:["kind"]`) and asked it to "return that JSON object verbatim as your
  *   structured output." Re-emitting a typed object invited the model to re-key it:
- *     {kind:"tasks-ready", ready:["T1","T2"], …}
- *       →  {kind:"factory-envelope", kind_type:"tasks-ready",
+ *     {kind:"work", ready:["T1","T2"], …}
+ *       →  {kind:"factory-envelope", kind_type:"work",
  *           ready:"[\"T1\",\"T2\"]" (stringified), cascade_dropped:"[]"}
  *   The loose schema caught none of it; the run mis-drove and died at the JS kind
  *   guard with `unknown envelope kind 'factory-envelope'`.
@@ -30,14 +30,14 @@
  *   of truth; the workflow's inline copy carries a comment pointing back here.
  *   Keep the two in lockstep — a drift is a silent re-introduction of the bug.
  */
-import type { NextEnvelope } from "./next.js";
-import type { DriveEnvelope } from "./coroutine.js";
+import type { NextTask } from "./next.js";
+import type { NextAction } from "./coroutine.js";
 
 /**
  * The authoritative kind sets, DERIVED from the engine's envelope unions so they
  * cannot silently drift. Each set's membership is the key set of a
  * `Record<Union["kind"], true>` — the typechecker forces EVERY union member to be
- * a key, so OMITTING a kind (e.g. adding a new {@link NextEnvelope} variant and
+ * a key, so OMITTING a kind (e.g. adding a new {@link NextTask} variant and
  * forgetting to list it) is a compile error (TS2741, "missing property"). The
  * runtime values come from `Object.keys` of that record, so the engine union is
  * the single source of truth for both the type AND the runtime set.
@@ -46,30 +46,30 @@ import type { DriveEnvelope } from "./coroutine.js";
  * assignable, NOT exhaustiveness: a bogus kind erred, but a missing one stayed
  * green. The `Record` mirror closes that hole.)
  */
-const NEXT_KIND_MIRROR: Record<NextEnvelope["kind"], true> = {
-  "tasks-ready": true,
-  "all-terminal": true,
-  "docs-ready": true,
-  "run-terminal": true,
-  "quota-blocked": true,
+const NEXT_KIND_MIRROR: Record<NextTask["kind"], true> = {
+  "work": true,
+  "finalize": true,
+  "document": true,
+  "done": true,
+  "pause": true,
 };
-const DRIVE_KIND_MIRROR: Record<DriveEnvelope["kind"], true> = {
+const DRIVE_KIND_MIRROR: Record<NextAction["kind"], true> = {
   spawn: true,
-  terminal: true,
-  "quota-blocked": true,
+  done: true,
+  "pause": true,
 };
 
-export const NEXT_KINDS: ReadonlySet<NextEnvelope["kind"]> = new Set(
-  Object.keys(NEXT_KIND_MIRROR) as NextEnvelope["kind"][],
+export const NEXT_KINDS: ReadonlySet<NextTask["kind"]> = new Set(
+  Object.keys(NEXT_KIND_MIRROR) as NextTask["kind"][],
 );
-export const DRIVE_KINDS: ReadonlySet<DriveEnvelope["kind"]> = new Set(
-  Object.keys(DRIVE_KIND_MIRROR) as DriveEnvelope["kind"][],
+export const DRIVE_KINDS: ReadonlySet<NextAction["kind"]> = new Set(
+  Object.keys(DRIVE_KIND_MIRROR) as NextAction["kind"][],
 );
 
-export type EnvelopeKind = NextEnvelope["kind"] | DriveEnvelope["kind"];
+export type EnvelopeKind = NextTask["kind"] | NextAction["kind"];
 
 /** Every engine envelope variant — the typed contract the engine serializes. */
-export type EngineEnvelope = NextEnvelope | DriveEnvelope;
+export type EngineEnvelope = NextTask | NextAction;
 
 /**
  * Parse one verbatim-copied CLI stdout string and assert its `kind` discriminant
@@ -78,7 +78,7 @@ export type EngineEnvelope = NextEnvelope | DriveEnvelope;
  * top level, a missing or non-string `kind`, or a `kind` outside `knownKinds`.
  *
  * Generic over the kind set: passing {@link NEXT_KINDS} narrows the return to the
- * `NextEnvelope` variants, {@link DRIVE_KINDS} to the `DriveEnvelope` variants, so
+ * `NextTask` variants, {@link DRIVE_KINDS} to the `NextAction` variants, so
  * a caller can `switch (env.kind)` and get the right per-variant PAYLOAD type
  * instead of a bare `{ [field]: unknown }`. The narrowing is a single documented
  * cast at the `return` (see there): the engine is the TRUSTED producer of a
@@ -86,7 +86,7 @@ export type EngineEnvelope = NextEnvelope | DriveEnvelope;
  * field the exec-agent re-keys — is re-validated at this boundary; the payload
  * shape is the engine's typed contract, not re-checked here.
  *
- * Over-wideness caveat: `"quota-blocked"` is the ONE kind shared by both unions,
+ * Over-wideness caveat: `"pause"` is the ONE kind shared by both unions,
  * so for that single variant `Extract` returns BOTH the Next and Drive payload
  * shapes (a `NEXT_KINDS` call could surface the Drive quota-blocked member). Every
  * non-shared kind narrows to its exact variant. This is harmless — the cast still
