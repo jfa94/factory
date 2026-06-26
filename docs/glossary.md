@@ -90,7 +90,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **examples**:
   - "Add the password-reset endpoint" depending on "Create the users table" — the endpoint Task waits for the table Task to merge.
   - Counter-example: two Tasks that each claim to merge the same pull request — a Task owns one and only one.
-- **relationships**: belongs to a Run; depends on other Tasks; carries a Risk Tier; subject to Quality Gates, Holdout Validation, and Review.
+- **relationships**: belongs to a Run; depends on other Tasks; carries a Risk Tier; subject to Automated Gates, Holdout Validation, and Review.
 - **synonyms**: —
 - **code anchor**: `src/core/state/schema.ts:TaskState`
 
@@ -156,11 +156,11 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **examples**:
   - A copy tweak and an authentication change face the same full panel — the merge gate never narrows.
   - Counter-example: skipping the security reviewer on a "routine" Task — the panel does not shrink with perceived risk.
-- **relationships**: gates a Task's ship; panel is risk-invariant (Risk Tier dials the producer, not Review); complements Quality Gates and Holdout Validation.
+- **relationships**: gates a Task's ship; panel is risk-invariant (Risk Tier dials the producer, not Review); complements Automated Gates and Holdout Validation.
 - **synonyms**: —
 - **code anchor**: `src/verifier/judgment/panel-run.ts`
 
-### Quality Gate
+### Automated Gate
 
 - **type**: Policy
 - **status**: accepted
@@ -171,7 +171,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **examples**:
   - Test coverage below the configured floor blocks the Task; a gate that errors internally still blocks.
   - Counter-example: a gate reporting success because it failed to run — that contradicts what a gate is for.
-- **relationships**: applies to a Task; objective counterpart to Review; the TDD Gate is one specific Quality Gate.
+- **relationships**: applies to a Task; objective counterpart to Review; the TDD Gate is one specific Automated Gate.
 - **synonyms**: —
 - **code anchor**: `src/verifier/deterministic/gate-runner.ts`
 
@@ -179,14 +179,14 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 
 - **type**: Policy
 - **status**: accepted
-- **definition**: The rule that the tests defining a Task's behavior must exist, and must fail, before any implementation is written — making "tests first" impossible to bypass. It is the enforcement of the boundary between Test Writer and Implementer.
+- **definition**: The rule that the tests defining a Task's behavior must exist, must fail, and must be **committed before** any implementation is committed — making "tests first" impossible to bypass. Enforcement is by commit-ordering on the Task's own branch, not by inspecting the final diff. It is the enforcement of the boundary between Test Writer and Implementer.
 - **invariants**:
-  - For a Task, failing tests must precede implementation; implementation that lands before a failing test blocks the Task.
+  - For a Task, the failing-test commit must precede the implementation commit; an implementation that lands before a failing test blocks the Task.
   - The rule is waived only by an explicit per-task exemption or a configured custom red-test command — never silently.
 - **examples**:
   - An implementation commit with no preceding failing-test commit is blocked.
   - Counter-example: a task explicitly marked exempt in the Spec legitimately skips the gate.
-- **relationships**: a specific Quality Gate; enforces the Test Writer → Implementer ordering.
+- **relationships**: a specific Automated Gate; enforces the Test Writer → Implementer ordering.
 - **synonyms**: —
 - **code anchor**: `src/verifier/deterministic/strategies/tdd.ts`
 
@@ -214,11 +214,11 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **definition**: A classification of how demanding a piece of work is — judged from its difficulty and stakes at Spec time — that dials how much production capability is spent on it. It is how the domain spends production effort in proportion to risk; verification scrutiny stays uniform regardless of tier.
 - **invariants**:
   - Every Task carries exactly one Risk Tier.
-  - The tier dials the producer (the capability attempting the work), never the merge gate — Review and Quality Gates are identical across tiers.
+  - The tier dials the producer (the capability attempting the work), never the merge gate — Review and Automated Gates are identical across tiers.
 - **examples**:
   - A change to authentication is classified high-risk and is attempted with the strongest producer; a copy tweak is routine.
   - Counter-example: a demanding change classified routine — a misclassification that under-resources its production.
-- **relationships**: carried by a Task; dials the producer; never alters Review or Quality Gates.
+- **relationships**: carried by a Task; dials the producer; never alters Review or Automated Gates.
 - **synonyms**: known in the codebase as "risk_tier".
 - **code anchor**: `src/spec/schema.ts`
 
@@ -245,16 +245,16 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 
 - **type**: Role
 - **status**: accepted
-- **definition**: The single actor that drives a Run from start to finish — choosing which Task to advance next, walking each Task through its quality obligations, and taking responsibility when something happens off the expected path (for example, when an automatic merge cannot complete and someone must understand why and resolve it). It coordinates; it does not write tests, write implementation, or judge quality itself.
+- **definition**: The single actor that decides how a Run proceeds from start to finish — choosing which Task to advance next, walking each Task through its quality obligations, and deciding what must happen when something lands off the expected path (for example, when an automatic merge cannot complete and someone must understand why and resolve it). It decides and emits the work to be done; a thin **runner** merely carries those decisions out, spawning the agents each one names. The Orchestrator coordinates; it does not write tests, write implementation, or judge quality itself.
 - **invariants**:
-  - Exactly one Orchestrator drives a given Run.
-  - The Orchestrator never authors Task work or quality judgments — those belong to other Roles.
+  - Exactly one Orchestrator decides a given Run.
+  - The Orchestrator never authors Task work or quality judgments — those belong to other Roles; the runner that executes its decisions holds no judgment of its own.
 - **examples**:
-  - An automatic merge stalls on an unexpected conflict; the Orchestrator investigates and resolves it so the Run can finish.
+  - An automatic merge stalls on an unexpected conflict; the Orchestrator determines the recovery and the runner carries it out so the Run can finish.
   - Counter-example: the Orchestrator deciding a Task's code is "good enough" and skipping Review — that judgment is not in its remit.
 - **relationships**: drives a Run; delegates to Test Writer and Implementer; submits work to Review.
 - **synonyms**: —
-- **code anchor**: `skills/pipeline-orchestrator/SKILL.md`
+- **code anchor**: `src/orchestrator/`
 
 ### Test Writer
 
@@ -283,5 +283,5 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Implements token-expiry checking until the Test Writer's failing tests go green.
   - Counter-example: adding new tests to cover behavior it just wrote — that belongs to the Test Writer.
 - **relationships**: serves a Task; consumes the Test Writer's failing tests; its output is subject to Review.
-- **synonyms**: known in the codebase as "task-executor".
-- **code anchor**: `agents/task-executor.md`
+- **synonyms**: —
+- **code anchor**: `agents/implementer.md`

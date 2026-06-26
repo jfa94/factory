@@ -233,7 +233,7 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
         EXEC_AGENT_MODEL: "sonnet",
       });
 
-    const buildFold = (agent: unknown, parseEnvelope: unknown) =>
+    const buildRecord = (agent: unknown, parseEnvelope: unknown) =>
       buildFn<Record>(SLICES.recordResults(), {
         fileSeq: 0,
         dataDir: "/data",
@@ -296,7 +296,7 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
       const parseEnvelope = () => {
         throw new Error("record boundary parse flake");
       };
-      await expect(buildFold(agent, parseEnvelope)("T1", "exec", { result_key: {} })).rejects.toThrow(
+      await expect(buildRecord(agent, parseEnvelope)("T1", "exec", { result_key: {} })).rejects.toThrow(
         /record boundary parse flake/,
       );
       // Exactly-once record atop at-least-once delivery: a re-spawn could double-record, so NONE.
@@ -306,7 +306,7 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
     it("recordResults returns the parsed NextAction on the happy path (single agent call)", async () => {
       const { agent, calls } = makeAgent([{ raw: "x" }]);
       const parseEnvelope = () => ({ kind: "done" });
-      const out = await buildFold(agent, parseEnvelope)("T1", "exec", { result_key: {} });
+      const out = await buildRecord(agent, parseEnvelope)("T1", "exec", { result_key: {} });
       expect(out).toEqual({ kind: "done" });
       expect(calls).toHaveLength(1);
     });
@@ -314,7 +314,7 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
     it("recordResults throws loud on a skipped/dead record agent (out===null)", async () => {
       const { agent } = makeAgent([null]);
       const parseEnvelope = () => ({ kind: "done" });
-      await expect(buildFold(agent, parseEnvelope)("T1", "exec", { result_key: {} })).rejects.toThrow(
+      await expect(buildRecord(agent, parseEnvelope)("T1", "exec", { result_key: {} })).rejects.toThrow(
         /skipped or died/,
       );
     });

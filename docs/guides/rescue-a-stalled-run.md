@@ -2,8 +2,8 @@
 
 Use rescue when `factory resume` cannot recover a run. Resume only re-checks the
 quota gate — it never touches task state. When a crashed or suspended session left
-tasks **stuck mid-stage** (so a re-drive would deadlock), or a terminal `failed`
-run has **recoverable** drops worth retrying, rescue resets the resettable tasks,
+tasks **stuck mid-phase** (so a re-drive would deadlock), or a terminal `failed`
+run has **recoverable** fails worth retrying, rescue resets the resettable tasks,
 reopens a terminal run, reconciles git/GitHub drift, then hands off to resume.
 
 **Rescue repairs run state, then git/GitHub drift.** `rescue scan`/`apply` repair
@@ -32,10 +32,10 @@ dispositions:
 | Disposition   | Task shape                                                            | Default rescue action       |
 | ------------- | --------------------------------------------------------------------- | --------------------------- |
 | `shipped`     | `done` (merged)                                                       | Never touched.              |
-| `runnable`    | `pending`                                                             | The driver will pick it up. |
-| `stuck`       | in-flight (`executing`/`reviewing`/`shipping`) — crashed mid-stage    | **Reset** to pending.       |
-| `recoverable` | `dropped` + `blocked-environmental` — the blocker may have cleared    | **Reset** to pending.       |
-| `dead-end`    | `dropped` + `spec-defect`/`capability-budget` — re-running repeats it | Left dropped.               |
+| `runnable`    | `pending`                                                             | The runner will pick it up. |
+| `stuck`       | in-flight (`executing`/`reviewing`/`shipping`) — crashed mid-phase    | **Reset** to pending.       |
+| `recoverable` | `failed` + `blocked-environmental` — the blocker may have cleared    | **Reset** to pending.       |
+| `dead-end`    | `failed` + `spec-defect`/`capability-budget` — re-running repeats it | Left failed.               |
 
 Key fields: `resettable` (= `stuck ∪ recoverable`), `dead_ends`, `needs_rescue`,
 and `would_deadlock` (true iff a re-drive would throw). If `needs_rescue` is false,
@@ -44,7 +44,7 @@ there is nothing to do.
 The scan also carries a read-only `work` field — a git-grounded survey of how much
 committed work each non-shipped task branch (`factory/<run>/<task>`) carries above the
 run's staging base (`commits_ahead`, measured against `origin/staging-<run-id>`). Use it
-to see whether a dropped task got far before failing vs carried nothing. It is **diagnostic
+to see whether a failed task got far before failing vs carried nothing. It is **diagnostic
 only**: it changes nothing, and resume still re-cuts a reset task's branch from staging and
 redoes the work. The `/factory:rescue` command passes each dead-end's `work` line through to
 the `rescue-diagnostic` agent as corroborating evidence (never a `reset` trigger on its own).
@@ -58,7 +58,7 @@ Reset the stuck + recoverable tasks and reopen a terminal run:
 factory rescue apply [--run <id>]
 ```
 
-This is idempotent and leaves dead-ends dropped. It emits `{ run_id, run_status,
+This is idempotent and leaves dead-ends failed. It emits `{ run_id, run_status,
 reset, reopened, skipped }`.
 
 ## 3. Reset specific tasks, including dead-ends

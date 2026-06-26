@@ -1,18 +1,18 @@
 # CLI Reference
 
 The `factory` CLI is the deterministic engine — it owns ALL pipeline control
-flow and exposes exactly ONE seam, the **coroutine** (`next` + `drive`). Every
+flow and exposes exactly ONE seam, the **orchestrator** (`next-task` + `next-action`). Every
 subcommand prints exactly one JSON document to stdout (or `--summary` human text
 for `state`); `--help` on any subcommand prints its contract. The binary is
 `dist/factory.js`, reached on `PATH` as `factory` via the `bin/factory` shim.
 
-Subcommands are **reporters** (read-only; emit an envelope), **the coroutine** (`next`
-folds nothing; `drive --results` folds an agent spawn's output into ONE state
-step; `run docs --results` folds a scribe spawn's output likewise), or **writers** (one
+Subcommands are **reporters** (read-only; emit an envelope), **the orchestrator** (`next-task`
+records nothing; `next-action --results` records an agent spawn's output into ONE state
+step; `run docs --results` records a scribe spawn's output likewise), or **writers** (one
 state mutation). `run create`, `run finalize`, `run cancel`, `scaffold`, and the
-coroutines' (`drive` ship / `run docs` fold) side effects perform actions (state and/or
-GitHub side effects). The coroutine seams spawn nothing themselves — they emit a manifest
-the driver spawns from (see [Model A](../explanation/model-a.md)).
+orchestrators' (`next-action` ship / `run docs` record) side effects perform actions (state and/or
+GitHub side effects). The orchestrator seams spawn nothing themselves — they emit a manifest
+the runner spawns from (see [Model A](../explanation/model-a.md)).
 
 Run/spec state is read from and written to `$CLAUDE_PLUGIN_DATA`.
 
@@ -63,7 +63,7 @@ never overwritten; a detected value that differs is reported as a conflict). It 
 **mutually exclusive** with `--get`/`--set`/`--unset` (combining them is a usage error),
 writes the overlay only when there are new keys, and prints a `DetectReport`:
 `{ detected, written, skipped, conflicts, skippedExpressionRefs, droppedSecrets, droppedKeys,
-warnings, sources, gateEnv }`. Entries are dropped — never silently — for: a `${{ }}` expression
+warnings, sources, gateEnv }`. Entries are failed — never silently — for: a `${{ }}` expression
 ref (`skippedExpressionRefs`), a secret-shaped value (`droppedSecrets`), a reserved loader/path-injection
 KEY (`PATH`, `NODE_PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`) or a non-POSIX KEY name
 (`droppedKeys`, with `reason: "reserved"` / `"invalid-name"`), and anything inside a `run: |` block
@@ -108,13 +108,13 @@ protection, settings, gateEnv? }`. SEED gate configs are scaffold-once / project
 existing one is reported under `files_present`, never flagged (no `files_outdated`). The
 optional `gateEnv` field is the CI build-env detection `DetectReport`; it is included whenever a
 key was detected **or any anomaly surfaced** (a parse `warnings` entry, or an expression-ref /
-secret / key drop), so a malformed workflow is never silently swallowed. It is **omitted** only
+secret / key fail), so a malformed workflow is never silently swallowed. It is **omitted** only
 for a clean brand-new repo (no workflows, nothing to report), keeping that report unchanged.
 
 ## `spec <resolve|gate|store>`
 
 Reporter. The deterministic spec-build seam. The spec pipeline needs two agent
-spawns (spec-generator + spec-reviewer), which the orchestrator owns; the CLI owns
+spawns (spec-generator + spec-reviewer), which the runner owns; the CLI owns
 the deterministic glue. State is threaded through a transient scratch dir
 (`spec-build/<repo>/<issue>/{prd,generated,verdict}.json`). Each action takes
 `--repo` + `--issue` and emits one envelope naming the next step.
@@ -135,18 +135,18 @@ prd_path, generated_path, max_iterations}`).
   emit `{kind:"revise", source:"review", blockers, spawn, …}` on NEEDS_REVISION, else
   persist and emit `{kind:"stored", pointer}`.
 
-The orchestrator loops generate ⇄ review (bounded by `max_iterations`) until
+The runner loops generate ⇄ review (bounded by `max_iterations`) until
 `reuse` or `stored`.
 
 **Revise carries the prior spec — incremental patch, not a re-author.** A `revise`
 envelope is symmetric with `generate`/`review`: it carries its own apex-pinned `spawn`
 manifest (`buildReviseSpawn`, `src/spec/agents.ts`) whose `context` embeds the PRIOR
 spec (`prior_spec_md` + `prior_tasks`) alongside the `review_feedback` blockers to clear.
-The orchestrator spawns the generator straight from `env.spawn.context` — it does **not**
+The runner spawns the generator straight from `env.spawn.context` — it does **not**
 hand-assemble context at the prompt layer. The generator applies the minimal edits needed
 to clear the blockers and re-emits the full `GenerateResult`, preserving everything else.
 This closes a regression where the re-spawned generator, given only the PRD + blocker
-strings in a fresh context, re-authored from scratch and dropped previously-satisfied
+strings in a fresh context, re-authored from scratch and failed previously-satisfied
 requirements and traceability lines. `store`'s revise reads `prd.json` from the scratch
 dir (durable across the loop) to rebuild that context.
 
@@ -186,10 +186,10 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 | `--new`               | Force a fresh run, bypassing the active-run conflict scan.                                                                                                                                                                                                                                                                                                                     |
 | `--supersede`         | If an active run exists for this spec, mark it `superseded`, delete its `staging-<run-id>` branch (auto-closing its task PRs), then create a fresh run. Emits `{kind:"superseded", run, supersededId}`. Mutually exclusive with `--resume`.                                                                                                                                    |
 | `--resume`            | If an active run exists, do not create — return the conflict (exit `3`) so the caller hands off to [`resume`](#resume). Mutually exclusive with `--supersede`.                                                                                                                                                                                                                 |
-| `--workflow`          | Run the parallel background Workflow driver. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                                                                                                                                                           |
-| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging-<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow driver + resume + finalize read it without re-passing.                                                                                                              |
-| `--ignore-quota`      | Bypass the weekly-quota hard stop **and** the per-step quota pacer for this run. Persisted as `ignore_quota: true` so both coroutines + drivers skip the gate without re-passing. Lets create/supersede proceed even when the existing run is 7d-parked. Operator override for a mistaken suspend / manual reset.                                                              |
-| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`. **Required for session-mode creates** — an ownerless session-mode run is rejected as a usage error (the Stop hook finalizes via `findActiveByOwner`, which can never match an ownerless run). Workflow-mode creates are exempt (the Workflow driver owns finalization). |
+| `--workflow`          | Run the parallel background Workflow runner. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                                                                                                                                                           |
+| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging-<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow runner + resume + finalize read it without re-passing.                                                                                                              |
+| `--ignore-quota`      | Bypass the weekly-quota hard stop **and** the per-step quota pacer for this run. Persisted as `ignore_quota: true` so both orchestrators + runners skip the gate without re-passing. Lets create/supersede proceed even when the existing run is 7d-parked. Operator override for a mistaken suspend / manual reset.                                                              |
+| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`. **Required for session-mode creates** — an ownerless session-mode run is rejected as a usage error (the Stop hook finalizes via `findActiveByOwner`, which can never match an ownerless run). Workflow-mode creates are exempt (the Workflow runner owns finalization). |
 
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
 exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
@@ -200,7 +200,7 @@ command when needed (`ensure`/`status` remain the manual primitives). See
 and [Decision 31](../explanation/decisions.md#decision-31-run-entry-preflight-auto-scaffolds-autonomous-settings).
 
 Loud error if no spec exists for the issue — generate one first. The seeded run's
-`driver` is fixed to `sequential`: the v1 coroutine seam drives tasks one at a time.
+`runner` is fixed to `sequential`: the v1 orchestrator seam drives tasks one at a time.
 The persisted `mode` (`session`|`workflow`) selects which _driver_ steps the seam;
 `/factory:run` forwards its own `--workflow` flag here (see
 [Run the pipeline](../guides/run-the-pipeline.md)).
@@ -227,7 +227,7 @@ the fresh-create path.
 is **weekly-parked** — `status === "suspended"` _and_ `quota.binding_window === "7d"` —
 `run create` blocks **every** new-run attempt for the spec (the default path, `--new`,
 and `--supersede` alike), not just a bare re-create. It exits `3` (CONFLICT) and emits a
-distinct envelope: `{kind:"quota-blocked", scope:"7d", run_id, status, reason,
+distinct envelope: `{kind:"pause", scope:"7d", run_id, status, reason,
 resets_at_epoch?}`. The caller must treat this as a hard stop — report the reason and
 reset horizon and tell the operator to `factory resume` after the window resets, NOT offer
 the supersede/resume choice. Three carve-outs: a **5h pause** and an **`unavailable`
@@ -249,7 +249,7 @@ factory run resume [--run <id>]
 
 Action. Turns an all-terminal run into its shipped outcome, in resume-safe order:
 build the report (`report.md`), emit telemetry, then — **when the run failed** —
-post ONE comment on the originating PRD issue listing every dropped task (deduped via
+post ONE comment on the originating PRD issue listing every failed task (deduped via
 a hidden run marker, Decision 36; the PRD stays open), or — **only when the run
 completed** (Decision 34: develop receives whole PRDs only) — forward-reconcile
 `develop` into the run branch (no force-push), open + CI-gate + (in `live` mode)
@@ -270,16 +270,16 @@ is needed. `--no-ship` overrides it to no-merge for THIS finalize only (opens th
 
 ### `run docs`
 
-Coroutine (emit + fold), symmetric with [`drive`](#drive): the engine-owned
-documentation stage ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-stage-before-finalize)).
-The CLI **never spawns scribe** — a driver does.
+Orchestrator (emit + record), symmetric with [`next-action`](#next-action): the engine-owned
+documentation phase ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-phase-before-finalize)).
+The CLI **never spawns scribe** — a runner does.
 
 ```
 factory run docs [--run <id>] [--results <path>]
 ```
 
 - **Emit** (no `--results`): prepares a docs worktree on a `docs-<run-id>` branch off
-  the run's `staging-<run-id>` tip and returns a `DocsEnvelope` spawn manifest
+  the run's `staging-<run-id>` tip and returns a `DocsAction` spawn manifest
   `{kind:"spawn", run_id, worktree, base_ref, staging_branch, docs_branch, model, max_turns, prompt}`.
   `base_ref` is `origin/<baseBranch>` (the whole-PRD diff base); the prompt directs
   scribe to `cd` into the worktree, diff `base_ref..HEAD`, update `/docs`, and commit
@@ -288,12 +288,12 @@ factory run docs [--run <id>] [--results <path>]
 - **Fold** (`--results <path>`): reads a `{status:"<scribe STATUS line>"}` JSON file. On
   `STATUS: DONE`, fast-forward/merges `docs-<run-id>` into `staging-<run-id>`, pushes the
   staging branch (scribe's commit, if any, rides along), removes the worktree, marks the
-  `docs` stage `done`, and returns `{kind:"done", run_id}`. On any non-`DONE` status,
+  `docs` phase `done`, and returns `{kind:"done", run_id}`. On any non-`DONE` status,
   records a one-attempt `failed` docs marker, transitions the run to **suspended** (the
   staging branch + worktree are kept for retry), and returns `{kind:"blocked", run_id, reason}`.
 
-The driver runs `run docs` only when [`next`](#next) emits `docs-ready`. `next`
-withholds `all-terminal` until the `docs` stage is `done`, so `run finalize` never
+The runner runs `run docs` only when [`next-task`](#next-task) emits `document`. `next-task`
+withholds `finalize` until the `docs` phase is `done`, so `run finalize` never
 ships a half-documented rollup.
 
 ### `run cancel`
@@ -348,7 +348,7 @@ legacy global pointer when the repo can't be derived (see
 [Per-repo current](#per-repo-current-run-resolution)). Emits one of:
 
 - `{kind:"resumed", run}` — window recovered (or the run was already running).
-- `{kind:"still-blocked", run_id, status, reason, resets_at_epoch?}` — not
+- `{kind:"pause", run_id, status, reason, resets_at_epoch?}` — not
   recovered; state untouched.
 
 ## `state`
@@ -378,49 +378,49 @@ in two different checkouts don't shadow each other:
 3. if the repo can't be derived (no `origin`), fall back to the legacy global
    `runs/current` (the repo-less "most recent") — degrade-safe, never an error.
 
-`--run <id>` always wins over this resolution; `drive` ignores it entirely
-(always requires `--run`). `next` is the one exception — it stays on the global
-`runs/current` + `--assert-owner` mechanism (see [`next`](#the-coroutine-next--drive)),
-because the drivers always pass `--run` to it explicitly. This is CLI ergonomics
+`--run <id>` always wins over this resolution; `next-action` ignores it entirely
+(always requires `--run`). `next-task` is the one exception — it stays on the global
+`runs/current` + `--assert-owner` mechanism (see [`next-task`](#the-orchestrator-next-task--next-action)),
+because the runners always pass `--run` to it explicitly. This is CLI ergonomics
 only: the hooks no longer read the global pointer at all (Decision 30), so
 concurrency-correctness does not depend on it.
 
-## The coroutine (`next` + `drive`)
+## The orchestrator (`next-task` + `next-action`)
 
-The coroutine is the engine's single control-flow seam. `next` is the **run-level**
-coroutine (which task is ready); `drive` is the **task-level** coroutine (run one task's
-deterministic steps until it needs agents). A driver — the in-session orchestrator
+The orchestrator is the engine's single control-flow seam. `next-task` is the **run-level**
+orchestrator (which task is ready); `next-action` is the **task-level** orchestrator (run one task's
+deterministic steps until it needs agents). A runner — the in-session runner
 loop or the Workflow script (see [Run the pipeline](../guides/run-the-pipeline.md))
-— alternates them: `next` to pick a task, `drive` to advance it, spawn the agents
-the manifest names, then `drive --results` to fold their output back. Neither coroutine
+— alternates them: `next-task` to pick a task, `next-action` to advance it, spawn the agents
+the manifest names, then `next-action --results` to record their output back. Neither orchestrator
 spawns anything itself.
 
-The six retired single-step writers — `run-task`, `advance`, `drop`,
-`record-producer`, `record-holdout`, `record-reviews` — collapsed into the coroutine.
-Their fold logic now runs inside `drive --results` (`src/driver/fold.ts`); the
-producer / holdout / reviews folds are no longer separate CLI calls.
+The six retired single-step writers — `run-task`, `advance`, `fail`,
+`record-producer`, `record-holdout`, `record-reviews` — collapsed into the orchestrator.
+Their record logic now runs inside `next-action --results` (`src/orchestrator/record.ts`); the
+producer / holdout / reviews records are no longer separate CLI calls.
 
-## `next`
+## `next-task`
 
-Reporter (run-level coroutine). One run-loop step: terminal check, quota gate
+Reporter (run-level orchestrator). One run-loop step: terminal check, quota gate
 (persisting a pause/suspend checkpoint on breach), stale-checkpoint clear on
-recovery, transitive cascade-drop of tasks blocked on an unsatisfiable dependency,
-then the ready set. Writes only on a quota breach or a cascade-drop; otherwise
+recovery, transitive cascade-fail of tasks blocked on an unsatisfiable dependency,
+then the ready set. Writes only on a quota breach or a cascade-fail; otherwise
 read-only. Throws LOUD on a dependency deadlock.
 
 ```
-factory next [--run <id>]                          # defaults to runs/current
-factory next --assert-owner <session>              # loud-assert runs/current ownership
-factory next --expect-mode <session|workflow>      # loud-assert runs/current mode
+factory next-task [--run <id>]                          # defaults to runs/current
+factory next-task --assert-owner <session>              # loud-assert runs/current ownership
+factory next-task --expect-mode <session|workflow>      # loud-assert runs/current mode
 ```
 
 `--assert-owner <session>` and `--expect-mode <mode>` are opt-in guards for the
-workflow driver's first `next` (which adopts `runs/current` rather than
+workflow runner's first `next-task` (which adopts `runs/current` rather than
 passing `--run`), defending against a concurrent `run create` having redirected
 `runs/current` onto a foreign run:
 
 - `--assert-owner <session>` throws loud if the resolved run's persisted
-  `owner_session` disagrees with `<session>`. The driver passes
+  `owner_session` disagrees with `<session>`. The runner passes
   `"$CLAUDE_CODE_SESSION_ID"`, which is session-scoped and inherited identically by
   the exec-agent, so it equals the stamped owner on the happy path. Degrades safe
   (no assertion) when either side is unknown.
@@ -428,87 +428,87 @@ passing `--run`), defending against a concurrent `run create` having redirected
   propagation-independent guard (no env assumptions) that catches a concurrent
   session-mode create redirecting the pointer. An invalid value is a usage error.
 
-Manual `factory next` never needs either. Both run only on the `runs/current` path;
+Manual `factory next-task` never needs either. Both run only on the `runs/current` path;
 the explicit `--run <id>` path bypasses them.
 
 Every envelope also carries the self-resolved run context (`run_id`, canonical
-`data_dir`, `ship_mode`) so the workflow driver adopts them from the first `next`.
+`data_dir`, `ship_mode`) so the workflow runner adopts them from the first `next-task`.
 
 Emits one of:
 
-- `{ kind:"tasks-ready", run_id, ready:[...], cascade_dropped:[...] }` — ready
+- `{ kind:"work", run_id, ready:[...], cascade_failed:[...] }` — ready
   tasks, **in-flight first** (crash-resume finishes started work before opening
   new), then pending in spec order.
-- `{ kind:"docs-ready", run_id, data_dir, ship_mode }` — all tasks are terminal
-  and the run will complete, but `/docs` needs updating first. The driver runs
-  `factory run docs`, which emits a scribe manifest; the driver spawns the scribe
-  agent and folds the docs commit onto the staging branch. `next` emits
-  `all-terminal` only after that fold.
-- `{ kind:"all-terminal", run_id, cascade_dropped:[...] }` — nothing left to
-  schedule and the docs stage (when applicable) is already `done`; the driver
-  calls `factory run finalize` next. `cascade_dropped` is this-invocation-only.
-- `{ kind:"run-terminal", run_id, run_status }` — the run is already terminal.
-- `{ kind:"quota-blocked", run_id, scope, reason, resets_at_epoch? }` — a quota
+- `{ kind:"document", run_id, data_dir, ship_mode }` — all tasks are terminal
+  and the run will complete, but `/docs` needs updating first. The runner runs
+  `factory run docs`, which emits a scribe manifest; the runner spawns the scribe
+  agent and records the docs commit onto the staging branch. `next-task` emits
+  `finalize` only after that record.
+- `{ kind:"finalize", run_id, cascade_failed:[...] }` — nothing left to
+  schedule and the docs phase (when applicable) is already `done`; the runner
+  calls `factory run finalize` next. `cascade_failed` is this-invocation-only.
+- `{ kind:"done", run_id, run_status }` — the run is already terminal.
+- `{ kind:"pause", run_id, scope, reason, resets_at_epoch? }` — a quota
   window blocked; the checkpoint is persisted.
 
-## `drive`
+## `next-action`
 
-The per-task coroutine (the engine seam both drivers share). Resumes at the task's
-persisted `stage` cursor, optionally folds the previous spawn's agent results
-(`--results`), then runs every deterministic stage it can until it needs agents or
-the task is terminal. Emits ONE JSON `DriveEnvelope`.
+The per-task orchestrator (the engine seam both runners share). Resumes at the task's
+persisted `phase` cursor, optionally records the previous spawn's agent results
+(`--results`), then runs every deterministic phase it can until it needs agents or
+the task is terminal. Emits ONE JSON `NextAction`.
 
 ```
-factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
+factory next-action --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
 ```
 
-`--ship-mode` (`no-merge` | `live`) is the internal-seam override the drivers pass
+`--ship-mode` (`no-merge` | `live`) is the internal-seam override the runners pass
 machine-side; omit it to honor the run's persisted `ship_mode` (users never type it —
 the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one of:
 
-- `{ kind:"spawn", run_id, task_id, stage, fold_key, manifest, sidecar?, expects, worktree, base_ref }`
+- `{ kind:"spawn", run_id, task_id, phase, result_key, manifest, sidecar?, expects, worktree, base_ref }`
   — the agents to run (`manifest.agents`) and what to feed back. Each agent carries
   `{ role, model, max_turns, prompt_ref, isolation, effort? }`; `effort` (the `Agent`
   reasoning level) appears only on a high producer-escalation rung once the model
   dial has climbed to its ceiling (see [producer-ladder](../explanation/producer-ladder.md))
-  and is omitted otherwise so the agent inherits the spawn default. `stage` is one of
+  and is omitted otherwise so the agent inherits the spawn default. `phase` is one of
   `tests | exec | verify` (preflight only advances; ship never spawns). `expects`
   is `producer-status` (tests/exec — one producer agent) or `reviews` (verify —
   the six-reviewer panel); a `sidecar` accompanies `verify` when a holdout answer
   key was withheld. `worktree` is the task working tree the agents commit in.
   `base_ref` is the per-run staging base that worktree forked from
-  (`origin/staging-<run-id>`); the panel and holdout sidecar diff against THIS, never
+  (`origin/staging-<run-id>`); the panel and holdout validator diff against THIS, never
   a bare `origin/staging` (which namespace-collides after a repo branch rename). Its
   branch is resolved via `resolveStagingBranch(run_id, run.staging_branch)` — the name
   pinned in `RunState` at create ([state model](./state-model.md#runstate)), not
   recomputed — so it stays fixed to the branch already pushed to origin even if the
   naming scheme changes mid-run.
-- `{ kind:"terminal", run_id, task_id, outcome }` — the task is `done` or a
-  classified `dropped`.
-- `{ kind:"quota-blocked", run_id, task_id, scope, reason, resets_at_epoch? }`.
+- `{ kind:"done", run_id, task_id, outcome }` — the task is `done` or a
+  classified `failed`.
+- `{ kind:"pause", run_id, task_id, scope, reason, resets_at_epoch? }`.
 
-**The `--results` fold.** `--results <file>` feeds back exactly what the previous
-spawn envelope's `expects` named, and folds it into ONE state step (advance, bump
-the producer rung, or terminal). The file MUST echo the envelope's `fold_key`
+**The `--results` record.** `--results <file>` feeds back exactly what the previous
+spawn envelope's `expects` named, and records it into ONE state step (advance, bump
+the producer rung, or terminal). The file MUST echo the envelope's `result_key`
 verbatim:
 
 ```
-expects=producer-status → { "fold_key": {…}, "producer": { "status": "<STATUS line>" } }
-expects=reviews         → { "fold_key": {…}, "holdout"?: { "raw": "<validator output>" },
+expects=producer-status → { "result_key": {…}, "producer": { "status": "<STATUS line>" } }
+expects=reviews         → { "result_key": {…}, "holdout"?: { "raw": "<validator output>" },
                             "reviews": { reviews, verifications, crossVendorAbsent? } }
 ```
 
-The fold is **at-least-once delivery, exactly-once application**: the `fold_key`
-(`{stage, rung}`) is validated against the live cursor before any mutation, so a
+The record is **at-least-once delivery, exactly-once application**: the `result_key`
+(`{phase, rung}`) is validated against the live cursor before any mutation, so a
 stale or duplicate delivery is rejected LOUD rather than double-folded. On a
 rejection, re-invoke **without** `--results` to re-derive the current spawn
 envelope (re-invoking without results is idempotent). When that re-derived spawn
 matches a recorded `spawn_in_flight` checkpoint — i.e. a previous spawn for the
-same `(stage, rung)` was emitted but never folded (a stop in the post-spawn /
-pre-fold window) — the coroutine first resets the shared task worktree to the
+same `(phase, rung)` was emitted but never folded (a stop in the post-spawn /
+pre-record window) — the orchestrator first resets the shared task worktree to the
 checkpoint's `tip_sha`, discarding the abandoned producer's partial commits before
 re-spawning clean ([state model](./state-model.md#spawn_in_flight--idempotent-re-spawn-checkpoint)).
-The `reviews` fold runs the
+The `reviews` record runs the
 full verify merge gate internally — re-runs the deterministic gates, re-derives the
 persisted holdout evidence, citation-verifies the reviews against the worktree,
 and confirms each surviving blocker via the supplied `verifications` (a kept
@@ -546,7 +546,7 @@ factory rescue scan [--run <id>]
 Emits a `RescueScan`: `{ run_id, run_status, counts, resettable, dead_ends,
 needs_rescue, would_deadlock, summary, tasks }`. Dispositions: `shipped`,
 `runnable`, `stuck` (crashed in-flight), `recoverable` (`blocked-environmental`
-drop), `dead-end` (`spec-defect`/`capability-budget` drop). Default-resettable =
+fail), `dead-end` (`spec-defect`/`capability-budget` fail). Default-resettable =
 `stuck ∪ recoverable`.
 
 The scan also appends a read-only `work` field — a git-grounded recoverable-work survey
@@ -564,7 +564,7 @@ The scan also appends a read-only `work` field — a git-grounded recoverable-wo
 
 One entry per **non-shipped branched** task (`done` and branchless tasks are skipped),
 in `run.tasks` order. `commits_ahead` counts the commits the local `factory/<run>/<task>`
-branch carries above the run's staging base (`origin/staging-<run-id>`), so a dropped task
+branch carries above the run's staging base (`origin/staging-<run-id>`), so a failed task
 that got far before failing shows a high count vs an empty one. `commits_ahead` is `null`
 (not `0`) when the base or branch is unresolvable — `0` means "branch exists but adds
 nothing"; `null` means "nothing to count against". `base_resolved: false` (a deleted
@@ -583,9 +583,9 @@ factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends]
 | Flag                  | Notes                                                                                                                                                  |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--task <id>`         | Reset exactly this task (repeatable). Overrides the default set; a `done` task is a loud error, a `pending` one is skipped; a named dead-end IS reset. |
-| `--include-dead-ends` | Also reset dead-end drops. Use only after the root cause is fixed.                                                                                     |
+| `--include-dead-ends` | Also reset dead-end fails. Use only after the root cause is fixed.                                                                                     |
 
-Default (no `--task`): resets `stuck` + `recoverable`, leaving dead-ends dropped;
+Default (no `--task`): resets `stuck` + `recoverable`, leaving dead-ends failed;
 reopens a terminal run to `running` when it reset work. Idempotent. Emits
 `{ run_id, run_status, reset, reopened, skipped }`.
 
@@ -603,7 +603,7 @@ user settings into `${CLAUDE_PLUGIN_DATA}/merged-settings.json`: placeholders
 baked, `permissions.allow` unioned (template wins on other keys), and the
 `statusLine` wired to `factory statusline`. If your own (non-factory) `statusLine`
 is present it is preserved by chaining it through `FACTORY_ORIGINAL_STATUSLINE`;
-a stale chain value is dropped. Then prints the relaunch command.
+a stale chain value is failed. Then prints the relaunch command.
 
 ```
 factory autonomy ensure [--user-settings <path>]

@@ -5,7 +5,7 @@
 > build against these types and MUST NOT redefine them. A change here is a
 > design change — open a decision, do not edit in place during a downstream WS.
 
-This is the contract Group 0 (WS0 substrate · WS1 state core · WS2 stage machine)
+This is the contract Group 0 (WS0 substrate · WS1 state core · WS2 phase machine)
 exports. It is the synthesis of the plan's Group-0 acceptance criteria
 (`/Users/Javier/.claude/plans/magical-hatching-deer.md`) after the freeze. Every
 downstream import resolves through the single barrel **`src/types`** — deep imports
@@ -18,10 +18,10 @@ confirmed:
 
 - the closed enums, `StateManager`, derive-don't-store accessors, and `(repo,
 spec-id)` keying (WS1);
-- the `StageResult` union, `SpawnManifest`, stage vocabulary, handler interface,
+- the `PhaseResult` union, `SpawnRequest`, phase vocabulary, handler interface,
   and pure engine (WS2);
 - and that `src/types` is a **complete, non-dangling mirror** of both owning
-  modules (37 stage-machine exports + the WS1 surface).
+  modules (37 phase-machine exports + the WS1 surface).
 
 All blockers found during verification are closed; `pnpm run typecheck`, the full
 vitest suite (158 tests), and `pnpm run build` (2 bundles) are green.
@@ -50,24 +50,24 @@ import {
   FailureClassEnum,
   RiskTierEnum,
   PanelVerdictEnum,
-  // WS2 stage machine
-  runStage,
-  nextStageFor,
+  // WS2 phase machine
+  runPhase,
+  nextPhaseFor,
   decideFinalize,
   advance,
   spawn,
   gracefulStop,
   waitRetry,
   taskDone,
-  taskDropped,
+  taskFailed,
   finalizeTerminal,
   assertNever,
   isTerminalResult,
   parseSpawnManifest,
-  TaskStageEnum,
-  RunStageEnum,
-  nextStage,
-  stageToInFlightStatus,
+  TaskPhaseEnum,
+  RunPhaseEnum,
+  nextPhase,
+  phaseToInFlightStatus,
 } from "../types/index.js";
 
 import type {
@@ -83,15 +83,15 @@ import type {
   QuotaCheckpoint,
   GateEvidence,
   GateVerdict,
-  StageResult,
-  SpawnManifest,
-  SpawnAgent,
+  PhaseResult,
+  SpawnRequest,
+  AgentSpec,
   SpawnRole,
-  TaskStage,
-  RunStage,
-  EngineStage,
-  StageContext,
-  StageHandlers,
+  TaskPhase,
+  RunPhase,
+  EnginePhase,
+  PhaseContext,
+  PhaseHandlers,
   AdvanceResult,
   SpawnAgentsResult,
   GracefulStopResult,
@@ -112,8 +112,8 @@ A value outside any set is a **loud parse error**, never a silent pass.
 | Enum           | Members                                                                    | Notes                                                                                                                                                                                                                                                  |
 | -------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `RunStatus`    | `running` · `completed` · `superseded` · `paused` · `suspended` · `failed` | terminal = {completed, failed, superseded}; `superseded` marks a run replaced by `--supersede` (Decision 35), `paused`/`suspended` are **quota** states (Δ E — kept distinct). `partial` was retired (Decision 34 — develop receives whole PRDs only). |
-| `TaskStatus`   | `pending` · `executing` · `reviewing` · `shipping` · `done` · `dropped`    | terminal = {done, dropped}. No human-gate statuses (Decision 5).                                                                                                                                                                                       |
-| `FailureClass` | `capability-budget` · `spec-defect` · `blocked-environmental`              | closed (Δ D); set **IFF** task is `dropped`.                                                                                                                                                                                                           |
+| `TaskStatus`   | `pending` · `executing` · `reviewing` · `shipping` · `done` · `failed`    | terminal = {done, failed}. No human-gate statuses (Decision 5).                                                                                                                                                                                       |
+| `FailureClass` | `capability-budget` · `spec-defect` · `blocked-environmental`              | closed (Δ D); set **IFF** task is `failed`.                                                                                                                                                                                                           |
 | `RiskTier`     | `low` · `medium` · `high`                                                  | the **single** producer dial (Decision 25); does not size the verifier.                                                                                                                                                                                |
 | `PanelVerdict` | `approve` · `blocked` · `error`                                            | floor is conjunctive (unanimous `approve`); `error` is never silently an approve.                                                                                                                                                                      |
 
@@ -123,8 +123,8 @@ Enforced by `superRefine` on internal `*Checked` schemas, applied by the parse
 functions. The exported `TaskStateSchema`/`RunStateSchema` stay plain `z.object`
 so downstream keeps `.shape`/`.extend`.
 
-- **`failure_class` set IFF `status === "dropped"`** — a drop must be classified;
-  a class on any non-dropped status is rejected.
+- **`failure_class` set IFF `status === "failed"`** — a fail must be classified;
+  a class on any non-failed status is rejected.
 - **`quota` checkpoint present only while `paused`|`suspended`** — resume must
   clear it before returning to `running`; a terminal run never carries one.
 
@@ -176,92 +176,92 @@ deriveFloorVerdict(task, gateEvidence): GateVerdict              // BOTH layers 
 
 ---
 
-## 3. WS2 — Stage machine
+## 3. WS2 — Phase machine
 
-### 3.1 Stage vocabulary (two separate closed enums)
+### 3.1 Phase vocabulary (two separate closed enums)
 
 ```ts
-TaskStage = "preflight" | "tests" | "exec" | "verify" | "ship"; // per-task order
-RunStage = "finalize"; // run-level, runs ONCE, terminal
-EngineStage = TaskStage | RunStage;
+TaskPhase = "preflight" | "tests" | "exec" | "verify" | "ship"; // per-task order
+RunPhase = "finalize"; // run-level, runs ONCE, terminal
+EnginePhase = TaskPhase | RunPhase;
 ```
 
-`finalize` is deliberately a **separate** enum so `nextStage` walking past `ship`
-can never reach it. Helpers: `nextStage(s)` (→ next or `null`), `stageToInFlightStatus(s)`
-(maps a running stage to the WS1 in-flight `TaskStatus` the driver should persist —
+`finalize` is deliberately a **separate** enum so `nextPhase` walking past `ship`
+can never reach it. Helpers: `nextPhase(s)` (→ next or `null`), `phaseToInFlightStatus(s)`
+(maps a running phase to the WS1 in-flight `TaskStatus` the runner should persist —
 the engine never writes state).
 
-### 3.2 `StageResult` — the engine↔driver seam (discriminated union on `kind`)
+### 3.2 `PhaseResult` — the engine↔runner seam (discriminated union on `kind`)
 
 | `kind`              | Payload                                                 | Meaning                                                                        |
 | ------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `advance`           | `to: TaskStage`                                         | stage done, no spawn; resume at `to`.                                          |
-| `spawn-agents`      | `manifest: SpawnManifest`                               | spawn agents, resume at `manifest.stage_after`.                                |
-| `graceful-stop`     | `scope: "5h"\|"7d"`, `reason`, `resets_at_epoch?`       | quota breach — pause (5h) / suspend (7d). Never a drop.                        |
-| `wait-retry`        | `stage`, `reason`, `attempt`, `max_attempts`            | re-invoke SAME stage; **bounded** (engine throws if `attempt > max_attempts`). |
-| `task-terminal`     | `outcome: {done}` or `{dropped, failure_class, reason}` | task reached terminal status.                                                  |
+| `advance`           | `to: TaskPhase`                                         | phase done, no spawn; resume at `to`.                                          |
+| `spawn-agents`      | `request: SpawnRequest`                               | spawn agents, resume at `request.resume_phase`.                                |
+| `graceful-stop`     | `scope: "5h"\|"7d"`, `reason`, `resets_at_epoch?`       | quota breach — pause (5h) / suspend (7d). Never a fail.                        |
+| `wait-retry`        | `phase`, `reason`, `attempt`, `max_attempts`            | re-invoke SAME phase; **bounded** (engine throws if `attempt > max_attempts`). |
+| `task-terminal`     | `outcome: {done}` or `{failed, failure_class, reason}` | task reached terminal status.                                                  |
 | `finalize-terminal` | `run_status: "completed"\|"failed"\|"superseded"`       | run finalized. Terminal by construction.                                       |
 
 Build results only via the constructors (`advance`, `spawn`, `gracefulStop`,
-`waitRetry`, `taskDone`, `taskDropped`, `finalizeTerminal`) so the shape never drifts.
+`waitRetry`, `taskDone`, `taskFailed`, `finalizeTerminal`) so the shape never drifts.
 
 ### 3.3 The four load-bearing invariants (verified)
 
 1. **Unknown `kind` THROWS — never silent-advance.** Every `switch` over `kind`
    ends in `default: assertNever(...)` (compile-time exhaustiveness + runtime throw).
-   Holds in `checkResult`, `nextStageFor`, `isTerminalResult`.
+   Holds in `checkResult`, `nextPhaseFor`, `isTerminalResult`.
 2. **`wait-retry` is bounded.** `attempt > max_attempts` throws — the engine cannot spin.
-3. **`finalize` is terminal-by-construction.** A run-level stage may return **only**
-   `finalize-terminal`; any other kind throws. Symmetrically a per-task stage may
+3. **`finalize` is terminal-by-construction.** A run-level phase may return **only**
+   `finalize-terminal`; any other kind throws. Symmetrically a per-task phase may
    **never** return `finalize-terminal`. `decideFinalize` throws on a non-terminal
    task (never returns `wait-retry`) — the structural fix for the bash exit-3
    finalize spin-bug. Rollup (Decision 34 — whole-PRD delivery only): all tasks
-   `done` → `completed`; any task not `done` (dropped, etc.) or 0 tasks → `failed`.
+   `done` → `completed`; any task not `done` (failed, etc.) or 0 tasks → `failed`.
 4. **derive-don't-store** (see §2.5) — defense-in-depth so a TCB write-gap is
    non-load-bearing.
 
-### 3.4 `SpawnManifest` (Zod) — structured spawn payload
+### 3.4 `SpawnRequest` (Zod) — structured spawn payload
 
 ```ts
-SpawnRole = "test-writer" | "executor"
+SpawnRole = "test-writer" | "implementer"
           | "implementation-reviewer" | "quality-reviewer"
           | "architecture-reviewer" | "security-reviewer"
           | "silent-failure-hunter" | "type-design-reviewer"
           | "scribe"
-SpawnAgent = { role: SpawnRole; isolation: "worktree"|"none"(=worktree); model: string; max_turns: number>0; prompt_ref: string }
-SpawnManifest = { stage_after: TaskStage; agents: SpawnAgent[] (min 1) }
-parseSpawnManifest(raw): SpawnManifest   // LOUD on unknown role / bad stage / empty agents
+AgentSpec = { role: SpawnRole; isolation: "worktree"|"none"(=worktree); model: string; max_turns: number>0; prompt_ref: string }
+SpawnRequest = { resume_phase: TaskPhase; agents: AgentSpec[] (min 1) }
+parseSpawnManifest(raw): SpawnRequest   // LOUD on unknown role / bad phase / empty agents
 ```
 
-Validated as Zod so the **v2 Workflow driver** consumes it as structured output —
+Validated as Zod so the **v2 Workflow runner** consumes it as structured output —
 no exit codes, no reading `state.json` for control flow.
 
 ### 3.5 The engine (pure) + handler seam
 
 ```ts
-interface StageContext  { readonly run: RunState; readonly task?: TaskState; readonly attempt?: number }
-interface StageHandlers { preflight/tests/exec/verify/ship/finalize(ctx): Promise<StageResult> }
+interface PhaseContext  { readonly run: RunState; readonly task?: TaskState; readonly attempt?: number }
+interface PhaseHandlers { preflight/tests/exec/verify/ship/finalize(ctx): Promise<PhaseResult> }
 
-runStage(stage, ctx, handlers): Promise<StageResult>   // dispatch → ONE exhaustiveness check
-nextStageFor(result): TaskStage | null                 // shared transition logic (advance→.to, spawn→.stage_after, else null)
+runPhase(phase, ctx, handlers): Promise<PhaseResult>   // dispatch → ONE exhaustiveness check
+nextPhaseFor(result): TaskPhase | null                 // shared transition logic (advance→.to, spawn→.resume_phase, else null)
 decideFinalize(run): FinalizeTerminalResult            // pure rollup; throws on non-terminal task
 ```
 
 The engine **does not** shell out, read/write state, sleep, or loop. Handlers
-(WS3/6/7/8) do the work; the **driver** (WS10) acts on the result. This is what
-makes the seam structured-output-expressible for the v2 driver.
+(WS3/6/7/8) do the work; the **runner** (WS10) acts on the result. This is what
+makes the seam structured-output-expressible for the v2 runner.
 
 ---
 
 ## 4. Boundaries Group-1 must respect
 
 - Import only from `src/types`. Do not deep-import `src/core/*`.
-- Do not add a `StageResult.kind`, a `SpawnRole`, or an enum member without a
+- Do not add a `PhaseResult.kind`, a `SpawnRole`, or an enum member without a
   decision — every consumer switches exhaustively and a new member is a deliberate
   compile-break across the codebase (that is the point).
-- Handlers are **pure-ish reporters**: read `StageContext`, return a `StageResult`.
-  They never write state (the driver owns the `StateManager` write) and never
-  decide transitions (`nextStageFor` does).
+- Handlers are **pure-ish reporters**: read `PhaseContext`, return a `PhaseResult`.
+  They never write state (the runner owns the `StateManager` write) and never
+  decide transitions (`nextPhaseFor` does).
 - Never obtain a gate verdict except through a `derive*` accessor. There is no
   stored boolean to read.
 - Validate any untrusted input with the `parse*` entry points, never bare `.parse`.

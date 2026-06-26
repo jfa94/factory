@@ -1,13 +1,13 @@
 ---
 name: pipeline-runner
-description: (internal) Drive the factory pipeline. The orchestrator is the `factory` CLI (`next-task` + `next-action` own ALL control flow); you are a dumb loop (the runner) that spawns the agents each envelope names and feeds their raw output back.
+description: (internal) Step the factory pipeline. The orchestrator is the `factory` CLI (`next-task` + `next-action` own ALL control flow); you are a dumb loop (the runner) that spawns the agents each envelope names and feeds their raw output back.
 auto-invoke: false
 ---
 
 # Pipeline Runner — the session runner
 
-The `factory` CLI owns every decision: stages, gates, classification, the escalation
-ladder, the merge gate, holdout ordering, quota, cascade-drops, deadlock detection,
+The `factory` CLI owns every decision: phases, gates, classification, the escalation
+ladder, the merge gate, holdout ordering, quota, cascade-fails, deadlock detection,
 PR creation, and merging. You own exactly three verbs: **call the CLI, spawn what an
 envelope names, feed the raw results back.**
 

@@ -4,7 +4,7 @@
 
 The Dark Factory is a Claude Code plugin that converts a GitHub PRD (Product
 Requirements Document) issue into merged pull requests, autonomously, through a
-quality-first, TDD-enforced stage machine. A person writes the requirements and
+quality-first, TDD-enforced phase machine. A person writes the requirements and
 walks away; the factory generates a spec, decomposes it into a dependency graph
 of tasks, drives each task test-first through implementation and an adversarial
 merge gate, and ships the result up a per-run `staging-<run-id> → develop`
@@ -16,37 +16,37 @@ Autonomous coding agents are unreliable narrators: an agent that says "done"
 followed its instructions roughly 70% of the time. The Dark Factory's answer is
 to push every decision that _can_ be deterministic out of the agent and into
 code, leaving the agents to do only what requires judgment (generate a spec,
-write code, review code). The result is a pipeline where stage transitions,
-failure classification, the retry ladder, quality gates, and the merge gate are
+write code, review code). The result is a pipeline where phase transitions,
+failure classification, the retry ladder, automated gates, and the merge gate are
 all enforced by a tested TypeScript engine — not by prose an agent may ignore.
 
 ## Design philosophy
 
-**Model A — one engine, one seam, two thin drivers.** The plugin is two halves
+**Model A — one engine, one seam, two thin runners.** The plugin is two halves
 with a hard seam between them:
 
 - A **deterministic engine**: one Node + TypeScript CLI, `factory <subcommand>`,
   that owns _all_ run-state writes, the spec gates, the deterministic verifier
   gates, failure classification, the producer escalation ladder, the
   risk-invariant merge gate, PR creation — and the pipeline loop itself, exposed
-  through ONE seam, the **coroutine** (`factory next` + `factory drive`). It is pure,
+  through ONE seam, the **orchestrator** (`factory next-task` + `factory next-action`). It is pure,
   tested, and **never spawns an agent**.
-- A thin **driver**: it steps the seam — spawning exactly the `Agent()`s the
-  coroutine's manifest names and feeding their raw output back via `factory drive
+- A thin **runner**: it steps the seam — spawning exactly the `Agent()`s the
+  orchestrator's manifest names and feeding their raw output back via `factory next-action
 --results`. It carries no pipeline logic and never decides a transition by prose.
-  Two interchangeable drivers (chosen by `--workflow` on `/factory:run`): the in-session
-  orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`, default) and the
-  plugin-shipped Workflow script (`scripts/factory-run-driver.js`).
+  Two interchangeable runners (chosen by `--workflow` on `/factory:run`): the in-session
+  runner loop (`skills/pipeline-runner/SKILL.md`, default) and the
+  plugin-shipped Workflow script (`scripts/factory-run-runner.js`).
 
 The CLI subcommands are **reporters** (read-only; emit one JSON envelope), the
-**coroutine** (`next` / `drive` — the control-flow seam), or **writers** (single-step
-state mutations). The CLI is the brain and owns the loop; a driver is just the
+**orchestrator** (`next-task` / `next-action` — the control-flow seam), or **writers** (single-step
+state mutations). The CLI is the brain and owns the loop; a runner is just the
 hands.
 
 **Quality over speed.** Every task is produced test-first (a `test-writer`
-commits failing tests, then a `task-executor` commits the minimal
+commits failing tests, then a `implementer` commits the minimal
 implementation — enforced by the TDD gate), passes a stack of deterministic
-quality gates (tests, coverage, mutation, SAST, type, lint, build, and the TDD
+automated gates (tests, coverage, mutation, SAST, type, lint, build, and the TDD
 gate itself), and clears a unanimous six-reviewer adversarial panel before it can
 ship. Reviewer findings are independently confirmed before they act
 (verify-then-fix).
@@ -56,20 +56,20 @@ Every verdict is re-derived from ground truth at the moment it is needed, so
 there is structurally nothing in state for an agent to forge.
 
 **Loud, classified failure.** Nothing fails silently. When a task cannot be made
-to meet the bar, it is _dropped_ with a closed-enum failure class and a
-human-facing reason. Because `develop` receives only whole PRDs, any drop makes
+to meet the bar, it is _failed_ with a closed-enum failure class and a
+human-facing reason. Because `develop` receives only whole PRDs, any fail makes
 the run `failed`: `develop` is left untouched, the PRD stays open, and one comment
-listing every dropped task is posted on the PRD issue. A `failed` run is a legible,
+listing every failed task is posted on the PRD issue. A `failed` run is a legible,
 classified outcome — never a quiet success.
 
 ## Architecture at a glance
 
-| Layer                | Lives in                                                            | Role                                        |
-| -------------------- | ------------------------------------------------------------------- | ------------------------------------------- |
-| Orchestrator surface | `commands/`, `agents/`, `skills/` (markdown)                        | LLM instructions + agent definitions        |
-| Deterministic CLI    | `src/` → `dist/factory.js` (via `bin/factory`)                      | The engine: coroutine + reporters + writers |
-| Hook guards          | `src/hooks/` → `dist/factory-hook.js` (wired in `hooks/hooks.json`) | Enforce invariants at tool-use time         |
-| Run / spec state     | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Lives **outside** the target repo           |
+| Layer             | Lives in                                                            | Role                                           |
+| ----------------- | ------------------------------------------------------------------- | ---------------------------------------------- |
+| Runner surface    | `commands/`, `agents/`, `skills/` (markdown)                        | LLM instructions + agent definitions           |
+| Deterministic CLI | `src/` → `dist/factory.js` (via `bin/factory`)                      | The engine: orchestrator + reporters + writers |
+| Hook guards       | `src/hooks/` → `dist/factory-hook.js` (wired in `hooks/hooks.json`) | Enforce invariants at tool-use time            |
+| Run / spec state  | `$CLAUDE_PLUGIN_DATA/{runs,specs}/`                                 | Lives **outside** the target repo              |
 
 See [architecture/overview.md](./architecture/overview.md) for the full picture.
 
@@ -92,7 +92,7 @@ contract.
 ### Architecture
 
 - [System Overview](./architecture/overview.md) — system context + container view: the Model-A split, the run lifecycle, data flow.
-- [Components](./architecture/components.md) — the major building blocks: CLI registry, state store, stage machine, verifier, producer, quota, git, scoring, hooks.
+- [Components](./architecture/components.md) — the major building blocks: CLI registry, state store, phase machine, verifier, producer, quota, git, scoring, hooks.
 
 ### How-to guides
 
@@ -104,11 +104,12 @@ contract.
 
 ### Reference
 
-- [CLI](./reference/cli.md) — every `factory` subcommand, its flags, and its JSON envelope.
+- [CLI](./reference/cli.md) — every `factory` subcommand, its flags, and its JSON result.
+- [Engine vocabulary](./reference/engine-vocabulary.md) — orchestrator vs runner, the `next-task`/`next-action` seam, and what each control-flow word means.
 - [Hooks](./reference/hooks.md) — the `factory-hook` guards and their `hooks.json` wiring.
 - [Configuration schema](./reference/configuration.md) — every config key, type, and default.
 - [State model](./reference/state-model.md) — the run/spec store layout and the `RunState`/`TaskState` schema.
-- [Quality gates](./reference/quality-gates.md) — the closed gate set and what each checks.
+- [Automated gates](./reference/automated-gates.md) — the closed gate set and what each checks.
 - [Exit codes](./reference/exit-codes.md) — the CLI/hook exit-code contract.
 
 ### Explanation

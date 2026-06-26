@@ -61,7 +61,7 @@ node dist/factory.js --help
 ```
 
 The subcommands are the engine's entire public surface. Each is a **reporter**
-(read-only; prints a JSON envelope), part of **the coroutine** (`next` / `drive` — the
+(read-only; prints a JSON envelope), part of **the orchestrator** (`next-task` / `next-action` — the
 single control-flow seam), or a **writer** (one state mutation). For the complete
 contract, see [reference/cli.md](./reference/cli.md).
 
@@ -81,22 +81,22 @@ contract are here. See [reference/configuration.md](./reference/configuration.md
 ## 6. Understand the run loop without running it
 
 You now have the engine. The control loop lives in the CLI behind one seam (the
-coroutine); what lives in markdown is the **driver** — the thin loop that spawns the
+orchestrator); what lives in markdown is the **runner** — the thin loop that spawns the
 agents each envelope names — because only a session can call the `Agent` tool.
 That is the Model-A split. Read these two files in order:
 
-1. `commands/run.md` — the `/factory:run` entry point (the spine; picks the driver
+1. `commands/run.md` — the `/factory:run` entry point (the spine; picks the runner
    via `--workflow` — session by default).
-2. `skills/pipeline-orchestrator/SKILL.md` — the session driver's full loop: the
-   Iron Laws, the coroutine surface (`next` / `drive`), the agent-spawn matrix, and the
+2. `skills/pipeline-runner/SKILL.md` — the session runner's full loop: the
+   Iron Laws, the orchestrator surface (`next-task` / `next-action`), the agent-spawn matrix, and the
    four phases (preconditions → spec → create → drive → completion).
 
 As you read, map each prose step to a CLI call. The CLI owns the loop behind ONE
-seam — the coroutine. The driver's inner per-task loop runs `factory drive --run <id>
---task <id>`, reads the JSON `DriveEnvelope`, spawns exactly the agents its
-`manifest` names, then folds their raw output back with `factory drive --results`
-(the run-level `factory next` picks which task to drive). The coroutine tells the driver
-the next step; the driver never invents it.
+seam — the orchestrator. The runner's inner per-task loop runs `factory next-action --run <id>
+--task <id>`, reads the JSON `NextAction`, spawns exactly the agents its
+`manifest` names, then records their raw output back with `factory next-action --results`
+(the run-level `factory next-task` picks which task to drive). The orchestrator tells the runner
+the next step; the runner never invents it.
 
 ## 7. Run the unit tests for one module
 

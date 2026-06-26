@@ -14,11 +14,11 @@ exits `2`.
 | Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                                                                   |
 | ------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches.                                                                                                                                                                                                                                               |
-| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that stages a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                                                                     |
+| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that phases a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                                                                     |
 | `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating (categorical agent-deny of `gh pr create`/`gh pr merge`). Each arm derives its owning run from its own inputs — never the global pointer (see [Run ownership](#run-ownership)). |
 | `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                                                    |
 | `write-protection`  | PreToolUse `Edit\|Write\|MultiEdit`         | Deny writes to hardcoded TCB (trusted-computing-base) paths.                                                                                                                                                                                                                                   |
-| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the driver fold is the single writer of `task.reviewers[]`).                                                                                                                                                                         |
+| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                         |
 | `stop-gate`         | Stop                                        | Finalize-on-stop an owned, all-terminal run so it never dangles `running`; block ONLY on inaccessible data directory or finalize failure. Does NOT block a session end with pending work — the run stays resumable via `factory resume`.                                                       |
 
 ## `hooks.json` wiring
@@ -49,7 +49,7 @@ Each entry carries a timeout (5–15s) and a status message. The full mapping is
 The guards fail **closed**: a write whose target sits inside a run worktree but
 whose run/task state is missing or broken is treated as deny, never silently
 allowed. The `pipeline-guards` ship arm is a categorical boundary — PRs are opened
-and merged ONLY by the engine (a `child_process` `gh` call inside `factory drive`
+and merged ONLY by the engine (a `child_process` `gh` call inside `factory next-action`
 that never transits this Bash-tool hook), so any `gh pr create`/`gh pr merge`
 reaching the hook is an agent-initiated attempt and is unconditionally denied while
 a run is active. The merge gate that actually gates shipping is derived from
@@ -89,7 +89,7 @@ across different repos run concurrently without cross-contamination:
 
 Because session-mode `factory run create` now **requires** an owning session id
 (`--session-id` or `CLAUDE_CODE_SESSION_ID`; workflow-mode runs are exempt — the
-Workflow driver owns finalization), an ownerless session-mode run never arises in
+Workflow runner owns finalization), an ownerless session-mode run never arises in
 normal operation. The stop-gate's owner check is therefore belt-and-suspenders for
 unusual paths rather than a routine code path.
 

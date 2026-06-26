@@ -23,7 +23,7 @@ graph TD
 
 - **Deterministic layer** (`src/verifier/deterministic`) — the `GateRunner` runs
   each enabled strategy, collects evidence, and derives a conjunctive verdict. See
-  [../reference/quality-gates.md](../reference/quality-gates.md). It is folded into
+  [../reference/automated-gates.md](../reference/automated-gates.md). It is folded into
   the merge gate as gate evidence.
 - **Holdout** (`src/verifier/holdout`) — a subset of the acceptance criteria is
   withheld from the producer and validated independently after the fact, guarding
@@ -45,7 +45,7 @@ does **not** do this for the merge gate. Every reviewer runs on every task:
 
 - `implementation-reviewer` — spec alignment: does the code address the spec, not
   just pass the tests?
-- `quality-reviewer` — adversarial code quality (Codex is the preferred executor
+- `quality-reviewer` — adversarial code quality (Codex is the preferred implementer
   when available).
 - `architecture-reviewer`, `security-reviewer`, `silent-failure-hunter`,
   `type-design-reviewer`.
@@ -86,11 +86,11 @@ invariant — see [decisions.md Decision 12](./decisions.md#decision-12-staging-
 
 A reviewer's lens is **not** delivered as a per-run prompt file. The spawn
 manifest carries a `prompt_ref` of `reviews/prompts/<role>.md` for each reviewer
-purely to satisfy the manifest schema's non-empty constraint — no driver reads it
-and nothing writes it. Both drivers build the reviewer prompt **inline** from the
+purely to satisfy the manifest schema's non-empty constraint — no runner reads it
+and nothing writes it. Both runners build the reviewer prompt **inline** from the
 reviewer's `agents/<role>.md` definition plus the shared
 `skills/review-protocol/SKILL.md` contract. Only a **producer's** `prompt_ref`
-points at a real per-run artifact a driver Reads (the `ProducerContext`).
+points at a real per-run artifact a runner Reads (the `ProducerContext`).
 
 ## Verify-then-fix (Decision 27)
 
@@ -101,15 +101,15 @@ task:
 
 1. **Citation-verify** — the finding's quoted code is checked against the actual
    worktree source. An uncitable finding (missing `file`/`line`, or a quote that
-   does not match) is dropped.
+   does not match) is failed.
 2. **Independent confirmation** — a separate finding-verifier, whose identity
    differs from every reviewer, adversarially tries to refute the finding against
    the code (`{ holds, note }`). A finding that does not hold is discarded.
 
-Only confirmed blockers reach the producer. This is why the driver must run a
+Only confirmed blockers reach the producer. This is why the runner must run a
 finding-verifier for each blocking + citable finding and feed its verdict back: a
 kept citable blocker with no recorded verdict makes the merge gate **fail closed** (the
-verify fold inside `factory drive --results` rejects it) — independence is
+verify record inside `factory next-action --results` rejects it) — independence is
 preserved by construction, never by trust.
 
 A reviewer that fails to produce a usable verdict is an `error`, not a silent
@@ -117,11 +117,11 @@ A reviewer that fails to produce a usable verdict is an `error`, not a silent
 
 ## How a blocked merge gate feeds back
 
-When the merge gate blocks, the verify fold returns a bounded `wait-retry`. The coroutine
-(not the driver) classifies it as `merge-gate-blocked` and escalates the producer
+When the merge gate blocks, the verify record returns a bounded `wait-retry`. The orchestrator
+(not the runner) classifies it as `merge-gate-blocked` and escalates the producer
 ladder: the rung is bumped, the reviewers are cleared, and a fresh panel runs after
 the producer re-attempts. A structurally-unfixable gate or an environmental blocker
-is classified-before-retry and drops immediately without burning a rung. See
+is classified-before-retry and fails immediately without burning a rung. See
 [producer-ladder.md](./producer-ladder.md).
 
 The human-facing block reason names what actually failed. A single shared helper

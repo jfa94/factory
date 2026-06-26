@@ -22,9 +22,9 @@ graph LR
 
 The three external dependencies are: the **GitHub repo** (the PRD source and the
 PR/issue target, reached via `gh`), the **Claude Code session** (which hosts the
-orchestrator and the `Agent` tool), and the **plugin data directory**
+runner and the `Agent` tool), and the **plugin data directory**
 (`$CLAUDE_PLUGIN_DATA`), where all run and spec state lives — deliberately
-outside the target repo so the holdout answer-key is unreadable from an executor
+outside the target repo so the holdout answer-key is unreadable from an implementer
 worktree.
 
 ## The Model-A split (container view)
@@ -34,54 +34,54 @@ most important structural fact about the system.
 
 ```mermaid
 graph TD
-  subgraph Surface["Driver surface (markdown + workflow)"]
+  subgraph Surface["Runner surface (markdown + workflow)"]
     Cmd[commands/*.md]
-    Skill[skills/pipeline-orchestrator/SKILL.md]
+    Skill[skills/pipeline-runner/SKILL.md]
     Agents[agents/*.md]
-    WF[scripts/factory-run-driver.js]
+    WF[scripts/factory-run-runner.js]
   end
 
   subgraph Engine["Deterministic engine (TypeScript)"]
-    CLI[factory CLI<br/>dist/factory.js<br/>coroutine: next + drive]
+    CLI[factory CLI<br/>dist/factory.js<br/>orchestrator: next + drive]
     Hook[factory-hook<br/>dist/factory-hook.js]
   end
 
-  Driver["Driver (session loop | --workflow script)"] -->|loads| Skill
-  Driver -->|steps: next / drive| CLI
-  CLI -->|envelope: spawn manifest / next step| Driver
-  Driver -->|Agent spawns| Producers[test-writer / executor]
-  Driver -->|Agent spawns| Panel[6-reviewer panel + holdout + verifiers]
-  Driver -->|drive --results: folds outcomes| CLI
+  Runner["Runner (session loop | --workflow script)"] -->|loads| Skill
+  Runner -->|steps: next / drive| CLI
+  CLI -->|envelope: spawn manifest / next step| Runner
+  Runner -->|Agent spawns| Producers[test-writer / implementer]
+  Runner -->|Agent spawns| Panel[6-reviewer panel + holdout + verifiers]
+  Runner -->|drive --results: records outcomes| CLI
   CLI -->|reads/writes| State[(run/spec state)]
-  Hook -->|deny/allow at tool-use| Driver
+  Hook -->|deny/allow at tool-use| Runner
 ```
 
 **The CLI is the brain, and it owns ALL control flow.** `factory <subcommand>`
 owns _all_ run-state writes, the spec gates, the deterministic verifier gates,
 failure classification, the producer escalation ladder, the risk-invariant review
 merge gate, PR creation — and the pipeline loop itself, exposed through ONE seam, the
-**coroutine** (`factory next` + `factory drive`). It is deterministic and tested. It
+**orchestrator** (`factory next-task` + `factory next-action`). It is deterministic and tested. It
 **never spawns an agent**.
 
-**A driver is the hands.** A thin driver steps the seam: it performs every
-`Agent()` spawn the coroutine's manifest names, collects the agents' raw output, and
-feeds it back via `factory drive --results`. It never decides a transition,
+**A runner is the hands.** A thin runner steps the seam: it performs every
+`Agent()` spawn the orchestrator's manifest names, collects the agents' raw output, and
+feeds it back via `factory next-action --results`. It never decides a transition,
 re-runs a gate, classifies a failure, or writes state by prose. Two interchangeable
-drivers exist (selected by `--workflow` on `/factory:run`): the in-session orchestrator
+runners exist (selected by `--workflow` on `/factory:run`): the in-session runner
 loop (session, the default) and the plugin-shipped Workflow script (`--workflow`).
 
-The CLI is a **reporter + coroutine + writer**, not a runner:
+The CLI is a **reporter + orchestrator + writer**, not a runner:
 
-- **The coroutine** — `next` (run-level: the ready set) and `drive` (task-level: run a
-  task's deterministic stages, emit a spawn manifest, and via `--results` fold the
+- **The orchestrator** — `next-task` (run-level: the ready set) and `next-action` (task-level: run a
+  task's deterministic phases, emit a spawn manifest, and via `--results` record the
   agents' output into ONE state step). This is the only control-flow seam.
 - **Reporter** subcommands (`spec`, `score`, `rescue scan`, `state`) emit one JSON
   envelope and write nothing.
 - **Writer** subcommands (`spec` store, `rescue apply`, `scaffold`, `configure`,
-  `run create`/`finalize`) fold a result or an operator decision into state.
+  `run create`/`finalize`) record a result or an operator decision into state.
 
-The six retired single-step writers (`run-task`, `advance`, `drop`,
-`record-producer`, `record-holdout`, `record-reviews`) collapsed into the coroutine.
+The six retired single-step writers (`run-task`, `advance`, `fail`,
+`record-producer`, `record-holdout`, `record-reviews`) collapsed into the orchestrator.
 
 Why this split exists, and what it buys, is the subject of
 [explanation/model-a.md](../explanation/model-a.md).
@@ -89,14 +89,14 @@ Why this split exists, and what it buys, is the subject of
 ## The run lifecycle
 
 A run proceeds through four phases. The CLI provides the deterministic glue — and
-the loop itself, behind the coroutine — at each phase; the driver owns only the agent
-spawns. The participant below is the driver (the in-session orchestrator loop by
+the loop itself, behind the orchestrator — at each phase; the runner owns only the agent
+spawns. The participant below is the runner (the in-session runner loop by
 default, or the Workflow script).
 
 ```mermaid
 sequenceDiagram
-  participant O as Driver
-  participant CLI as factory CLI (engine + coroutine)
+  participant O as Runner
+  participant CLI as factory CLI (engine + orchestrator)
   participant A as Agents
 
   Note over O,CLI: Phase 0 — Preconditions
@@ -113,13 +113,13 @@ sequenceDiagram
   O->>CLI: factory run create --repo o/n --issue n
   CLI-->>O: RunState (tasks seeded, status running)
 
-  Note over O,CLI: Phase 3 — Drive (run coroutine picks a task, task coroutine advances it)
-  loop until docs-ready or all-terminal
-    O->>CLI: factory next
-    CLI-->>O: NextEnvelope (tasks-ready | docs-ready | all-terminal | quota-blocked)
-    loop drive the ready task: preflight→tests→exec→verify→ship
-      O->>CLI: factory drive --task <t> [--results <prev>]
-      CLI-->>O: DriveEnvelope (spawn manifest | terminal | quota-blocked)
+  Note over O,CLI: Phase 3 — Advance (run orchestrator picks a task, task orchestrator advances it)
+  loop until document or finalize
+    O->>CLI: factory next-task
+    CLI-->>O: NextTask (work | document | finalize | pause)
+    loop advance the ready task: preflight→tests→exec→verify→ship
+      O->>CLI: factory next-action --task <t> [--results <prev>]
+      CLI-->>O: NextAction (spawn manifest | done | pause)
       O->>A: spawn the agents the manifest names
       A-->>O: STATUS line / raw reviews
     end
@@ -127,33 +127,33 @@ sequenceDiagram
 
   Note over O,CLI: Phase 3b — Docs (when all tasks completed and /docs is applicable)
   O->>CLI: factory run docs
-  CLI-->>O: DocsEnvelope (scribe manifest on staging-rooted worktree)
+  CLI-->>O: DocsAction (scribe manifest on staging-rooted worktree)
   O->>A: spawn scribe
   A-->>O: docs commit on staging
   O->>CLI: factory run docs --results <output>
-  CLI-->>O: all-terminal (docs marked done; fold merges commit onto staging)
+  CLI-->>O: finalize (docs marked done; record merges commit onto staging)
 
   Note over O,CLI: Phase 4 — Completion
   O->>CLI: factory run finalize
-  CLI-->>O: report + (on failed) PRD-issue drops comment + (on completed) staging-&lt;run-id&gt;→develop rollup (includes docs commit), then terminal
+  CLI-->>O: report + (on failed) PRD-issue fails comment + (on completed) staging-&lt;run-id&gt;→develop rollup (includes docs commit), then terminal
   O->>CLI: factory score / state --summary
 ```
 
-### Per-task stage machine
+### Per-task phase machine
 
-Each task moves through a closed, ordered set of stages:
+Each task moves through a closed, ordered set of phases:
 
 ```
 preflight → tests → exec → verify → ship
 ```
 
 - **preflight** — set up the task worktree/branch; report-only.
-- **tests** — producer stage: the `test-writer` commits failing tests first (TDD).
-- **exec** — producer stage: the `task-executor` commits the minimal implementation.
+- **tests** — producer phase: the `test-writer` commits failing tests first (TDD).
+- **exec** — producer phase: the `implementer` commits the minimal implementation.
 - **verify** — the merge gate: deterministic gates + holdout validation + the
   six-reviewer panel + verify-then-fix. Derives the merge gate verdict.
 - **ship** — opens the task PR idempotently; in `live` mode serial-merges into the
-  run's `staging-<run-id>` branch. The one stage that writes the terminal task status.
+  run's `staging-<run-id>` branch. The one phase that writes the terminal task status.
   It probes for a native GitHub merge queue and, when present, enqueues via
   `--auto`; otherwise it app-level squash-merges. The probe distinguishes a genuine
   "no merge queue" (a `404`) from a "couldn't tell" gh failure (auth, rate-limit,
@@ -162,20 +162,20 @@ preflight → tests → exec → verify → ship
   back to app-level squash — an observable, contained degrade (both paths squash;
   only `--auto` differs), never a crashed run.
 
-When all tasks are terminal and the PRD would be `completed`, `factory next`
-returns `docs-ready` instead of `all-terminal` — provided the repo keeps a `/docs`
+When all tasks are terminal and the PRD would be `completed`, `factory next-task`
+returns `document` instead of `finalize` — provided the repo keeps a `/docs`
 directory and docs are not opted out (`package.json` `factory.docs.enabled !== false`)
-and the run's docs stage isn't already `done`. The driver then runs `factory run docs`,
-which emits a scribe manifest for a staging-rooted worktree; the driver spawns the
-`scribe` agent, then folds the docs commit back via `factory run docs --results`. The
-fold merges/pushes the docs commit onto the staging branch. Only once docs are `done`
-does `factory next` emit `all-terminal`. A docs failure suspends the run (one attempt;
+and the run's docs phase isn't already `done`. The runner then runs `factory run docs`,
+which emits a scribe manifest for a staging-rooted worktree; the runner spawns the
+`scribe` agent, then records the docs commit back via `factory run docs --results`. The
+record merges/pushes the docs commit onto the staging branch. Only once docs are `done`
+does `factory next-task` emit `finalize`. A docs failure suspends the run (one attempt;
 resumable via `/factory:resume`). On a `failed` run, or when docs are opted out, the
-docs stage is skipped and `all-terminal` fires immediately (Decision 37).
+docs phase is skipped and `finalize` fires immediately (Decision 37).
 
-The run-level **finalize** step is a _separate_ stage that runs once, after every
-task is terminal and the docs stage (if applicable) is `done`: it builds the report,
-and — on a `failed` run — posts one comment on the PRD issue listing the dropped tasks
+The run-level **finalize** step is a _separate_ phase that runs once, after every
+task is terminal and the docs phase (if applicable) is `done`: it builds the report,
+and — on a `failed` run — posts one comment on the PRD issue listing the failed tasks
 (Decision 36), or — **only when the whole PRD completed** (Decision 34) — ships the
 `staging-<run-id> → develop` rollup (which now includes the docs commit, since it
 landed on staging before finalize) then closes the PRD issue and deletes the per-run

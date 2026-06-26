@@ -4,12 +4,12 @@ This guide drives a PRD issue to shipped pull requests. It assumes you have a
 GitHub repo with a PRD issue, the plugin installed in your Claude Code session,
 and competence with `gh`. For the deterministic detail of each step, see the
 [CLI reference](../reference/cli.md); for the full control loop, see
-`skills/pipeline-orchestrator/SKILL.md`.
+`skills/pipeline-runner/SKILL.md`.
 
 The `factory` CLI is the deterministic engine: it owns all control flow and
-exposes one seam, the **coroutine** (`factory next` + `factory drive`). A thin
-**driver** steps that seam and spawns the agents each envelope names. You pick the
-driver with `--workflow` (below); by default the loop runs **in your Claude Code
+exposes one seam, the **orchestrator** (`factory next-task` + `factory next-action`). A thin
+**runner** steps that seam and spawns the agents each envelope names. You pick the
+runner with `--workflow` (below); by default the loop runs **in your Claude Code
 session**.
 
 ## 1. Scaffold the target repo (once per repo)
@@ -40,21 +40,21 @@ an active run already exists for the spec.
 | `--repo <owner/name>` | no       | Target repo. Auto-derived from the `origin` remote when omitted.                                        |
 | `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                                 |
 | `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                                    |
-| `--workflow`          | no       | Run the background Workflow driver. Omit for the in-session loop (default) — see below.                 |
+| `--workflow`          | no       | Run the background Workflow runner. Omit for the in-session loop (default) — see below.                 |
 | `--no-ship`           | no       | Open the PRs but never merge. Omit for the default **live** — auto-merge tasks→staging, rollup→develop. |
 | `--supersede`         | no       | If an active run already exists, replace it (see below). Mutually exclusive with `--resume`.            |
 | `--resume`            | no       | If an active run already exists, hand off to `/factory:resume` instead of starting fresh.               |
 | `--ignore-quota`      | no       | Override the weekly-quota hard stop **and** disable per-step quota pacing for this run (see below).     |
 
-`--workflow` selects the driver. Both step the same `factory next` / `factory drive`
+`--workflow` selects the runner. Both step the same `factory next-task` / `factory next-action`
 seam and enforce the identical engine gates; they differ only in where the loop
 runs:
 
-- **Session mode** (default, no flag) — the in-session LLM orchestrator loop
-  (`skills/pipeline-orchestrator/SKILL.md`). It runs in your Claude Code session
+- **Session mode** (default, no flag) — the in-session LLM runner loop
+  (`skills/pipeline-runner/SKILL.md`). It runs in your Claude Code session
   and drives tasks one at a time.
 - **`--workflow`** — the plugin-shipped Workflow script
-  (`scripts/factory-run-driver.js`). It drives ready tasks in the background;
+  (`scripts/factory-run-runner.js`). It drives ready tasks in the background;
   because Workflow JS cannot shell out, it wraps every `factory` CLI call in a
   small exec agent. Note: workflow mode has no quota pacing (it cannot observe the
   usage signal) — it hard-stops when the allowance runs out.
@@ -64,7 +64,7 @@ auto-merges into the run's `staging-<run-id>` branch and the `staging-<run-id>` 
 develop rollup merges into develop (gated by branch protection + the review panel +
 TDD + the holdout), but **only when the whole PRD completed** (see [Read the
 outcome](#4-read-the-outcome)). Pass `--no-ship` to open the PRs but never merge.
-Ship mode **is persisted** on the run at create, so the workflow driver,
+Ship mode **is persisted** on the run at create, so the workflow runner,
 `/factory:resume`, and `finalize` read it back without re-passing. (`run finalize
 --no-ship` overrides the persisted value for that one finalize call.)
 
@@ -83,11 +83,11 @@ exists for the spec, `factory run create` exits `3` and emits
 - **Cancel** — leave the existing run untouched.
 
 Pass `--resume` or `--supersede` up front to skip the prompt. To repair a run that
-resume cannot untangle (tasks stuck mid-stage, or git/GitHub drift), use
+resume cannot untangle (tasks stuck mid-phase, or git/GitHub drift), use
 [`/factory:rescue`](./rescue-a-stalled-run.md) instead.
 
 If the existing run is **weekly-parked** (suspended on the 7d quota window), `run
-create` instead emits `{kind:"quota-blocked", scope:"7d", …}` and exits `3` — a hard
+create` instead emits `{kind:"pause", scope:"7d", …}` and exits `3` — a hard
 stop, not the prompt above. This blocks the default path, `--supersede`, and `--new`
 alike. Wait for the window to reset and run `/factory:resume`, or pass `--ignore-quota`
 to override the wall and proceed. `--ignore-quota` also disables per-step quota pacing
@@ -96,7 +96,7 @@ to override a mistaken suspend or after a manual quota reset.
 
 ## 3. What happens (the four phases)
 
-The driver follows `skills/pipeline-orchestrator/SKILL.md` (session mode) or runs
+The runner follows `skills/pipeline-runner/SKILL.md` (session mode) or runs
 the equivalent Workflow script (workflow mode):
 
 1. **Preconditions** — `factory scaffold` (idempotent re-check).
@@ -105,22 +105,22 @@ resolve|gate|store`), spawning `spec-generator` / `spec-reviewer`, until the
    spec is `reuse`d or `stored`.
 3. **Create** — `factory run create`; the `RunState` is emitted with the tasks
    seeded.
-4. **Drive** — the driver steps the seam. `factory next` returns the ready task;
-   `factory drive` advances it through the per-task stage machine (`preflight →
+4. **Drive** — the runner steps the seam. `factory next-task` returns the ready task;
+   `factory next-action` advances it through the per-task phase machine (`preflight →
 tests → exec → verify → ship`), emitting a spawn manifest whenever it needs
-   agents. The driver spawns the producers and the review panel the manifest
-   names, then folds their raw output back with `factory drive --results` (one
-   state step). The engine — not the driver — decides every transition.
+   agents. The runner spawns the producers and the review panel the manifest
+   names, then records their raw output back with `factory next-action --results` (one
+   state step). The engine — not the runner — decides every transition.
 5. **Docs** — once all tasks are terminal and the PRD would be `completed`,
-   `factory next` returns `docs-ready` (not yet `all-terminal`) if the repo keeps a
-   `/docs` directory and docs aren't opted out. The driver runs `factory run docs`,
-   which emits a scribe manifest; the driver spawns the `scribe` agent and folds the
-   docs commit onto the `staging-<run-id>` branch. Only after that fold does `next`
-   emit `all-terminal`. A docs failure suspends the run (resumable via
-   `/factory:resume`). On a `failed` run, or when docs are opted out, this stage is
+   `factory next-task` returns `document` (not yet `finalize`) if the repo keeps a
+   `/docs` directory and docs aren't opted out. The runner runs `factory run docs`,
+   which emits a scribe manifest; the runner spawns the `scribe` agent and records the
+   docs commit onto the `staging-<run-id>` branch. Only after that record does `next-task`
+   emit `finalize`. A docs failure suspends the run (resumable via
+   `/factory:resume`). On a `failed` run, or when docs are opted out, this phase is
    skipped.
 6. **Completion** — `factory run finalize` builds the report; on a `failed` run it
-   posts one comment on the PRD issue listing the dropped tasks; **only when the
+   posts one comment on the PRD issue listing the failed tasks; **only when the
    whole PRD completed** does it ship the `staging-<run-id> → develop` rollup (which
    includes the docs commit, since it landed on staging before finalize), comment on
    and close the originating PRD issue, and delete the per-run branch. Then
@@ -137,13 +137,13 @@ delivery. The run ends in one of two finalize statuses:
   exhausted, or the run could not start / wedged and tripped the circuit breaker).
   `develop` is left **untouched**, the PRD issue stays **open**, and the run **keeps
   its `staging-<run-id>` branch** banked for [rescue](./rescue-a-stalled-run.md). One
-  comment is posted on the PRD issue listing every dropped task with its failure class
+  comment is posted on the PRD issue listing every failed task with its failure class
   (`capability-budget`, `spec-defect`, or `blocked-environmental`).
 
 (A third terminal status, `superseded`, is set when a fresh run replaces this one —
 see [Start fresh vs. continue](#start-fresh-vs-continue-an-existing-run).)
 
-A `failed` run is a legible, classified outcome — read the PRD-issue drops comment
+A `failed` run is a legible, classified outcome — read the PRD-issue fails comment
 and the `report.md`. The rollup PR targets `develop`; `main` is never touched.
 
 ## 5. If the run pauses or suspends on quota
@@ -159,13 +159,13 @@ Re-enter it once the window resets:
 /factory:resume [--run <id>] [--ignore-quota]
 ```
 
-On `{kind:"still-blocked", …}` the orchestrator reports the reason +
+On `{kind:"pause", …}` the runner reports the reason +
 `resets_at_epoch` and stops; on `{kind:"resumed", run}` it continues the run loop.
 Pass `--ignore-quota` to force a resume regardless of the live window reading (it
 persists `ignore_quota` on the run, so the gate stays skipped on every later step) —
 use it only to override a mistaken suspend or after a manual quota reset.
 
-## 6. If the run gets stuck mid-stage
+## 6. If the run gets stuck mid-phase
 
 If a session crashed and left tasks stuck in flight (so a re-drive would
 deadlock), `resume` cannot help — use [Rescue a stalled run](./rescue-a-stalled-run.md).

@@ -47,7 +47,7 @@ and it is called at every point a verdict is needed — including inside the
 `pipeline-guards` hook that gates `gh pr create` and `gh ... merge`. The PR cannot
 be opened on a trusted state flag; it is opened only when the merge gate _re-derives_
 clear from the actual worktree, gate runs, and confirmed reviewer blockers. The
-hook and the driver share the same derivation, so the guard cannot disagree with
+hook and the runner share the same derivation, so the guard cannot disagree with
 the engine.
 
 ## The sanctioned exceptions
@@ -60,7 +60,7 @@ Two stored values look like exceptions but are not:
 - **Holdout verdicts** — stored in a verdict store because they come from an
   independent answer-key validation whose inputs are withheld from the producer;
   re-deriving them would mean re-running the validation, and the validation itself
-  is the ground truth. They fold into the same `deriveMergeGateVerdict`.
+  is the ground truth. They record into the same `deriveMergeGateVerdict`.
 
 Both are flagged in the source as deliberate, narrow carve-outs (Δ V), not drift.
 
@@ -71,7 +71,7 @@ Both are flagged in the source as deliberate, narrow carve-outs (Δ V), not drif
   actually clear.
 - **No stale verdicts** — a verdict computed from current ground truth cannot be
   out of date with respect to a later commit. A re-drive recomputes everything.
-- **A self-consistent guard** — the merge guard and the driver reach the same
+- **A self-consistent guard** — the merge guard and the runner reach the same
   conclusion because they run the same derivation over the same evidence.
 
 ## See also

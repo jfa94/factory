@@ -1,4 +1,4 @@
-# Quality Gates
+# Automated Gates
 
 The deterministic verifier runs a closed set of gates against a task's worktree
 and **derives** a conjunctive verdict from the evidence each gate produces. There
@@ -73,7 +73,7 @@ so the gate measures the code, not a missing-env crash — e.g. a Next.js static
 that needs `NEXT_PUBLIC_*` defined would otherwise fail the `build` gate on a missing-env
 crash unrelated to task quality. It is **CI-parity placeholders, not a secret store** — a narrow
 reserved-key denylist (`PATH`, `NODE_PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`) and
-secret-shaped values are dropped at detection, never persisted. Populate it by auto-detecting the
+secret-shaped values are failed at detection, never persisted. Populate it by auto-detecting the
 repo's CI workflow env (`factory configure --detect-gate-env`, also run automatically by
 `factory scaffold`) with manual `--set` as the escape hatch. The same map is the single source of
 truth in the other direction too: `factory scaffold` renders it into the managed `quality-gate.yml`
@@ -150,7 +150,7 @@ The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modifi
 - **The Stryker config is shadow-proof.** TCB write-protection covers **every**
   basename Stryker's discovery can load (the full `{'',.'} × {.conf,.config} ×
 {json,js,mjs,cjs}` set), not just the scaffolded `.stryker.config.json`. An
-  executor therefore cannot create an unprotected sibling (e.g. `stryker.config.mjs`
+  implementer therefore cannot create an unprotected sibling (e.g. `stryker.config.mjs`
   — executable JS that would run inside the gate process) to shadow or weaken the
   gate config. The protected set and the gate's applicability set are both derived
   from one list (`src/shared/gate-config-names.ts`) with a drift-guard test.
@@ -158,7 +158,7 @@ The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modifi
 ## Beyond the deterministic gates
 
 The deterministic gates are only the first layer of the merge gate. The merge gate
-also folds in **holdout validation** (a withheld answer-key, validated
+also records in **holdout validation** (a withheld answer-key, validated
 independently) and the **risk-invariant review panel** (six reviewers, unanimous
 approval required, with verify-then-fix confirmation of each blocking finding). The
 overall merge gate is the subject of

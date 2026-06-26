@@ -6,13 +6,13 @@ For the system-level picture see [overview.md](./overview.md).
 
 ```mermaid
 graph TD
-  CLI[src/cli<br/>subcommand registry] --> Driver[src/driver<br/>transition logic]
+  CLI[src/cli<br/>subcommand registry] --> Runner[src/runner<br/>transition logic]
   CLI --> State[src/core/state<br/>StateManager + schema]
-  Driver --> Stage[src/core/stage-machine<br/>stage order + engine]
-  Driver --> Producer[src/producer<br/>escalation ladder]
-  Driver --> Verifier[src/verifier<br/>deterministic + judgment + holdout]
-  Driver --> Git[src/git<br/>PR / staging / rollup]
-  Driver --> Quota[src/quota<br/>two-window pacer]
+  Runner --> Phase[src/core/phase-machine<br/>phase order + engine]
+  Runner --> Producer[src/producer<br/>escalation ladder]
+  Runner --> Verifier[src/verifier<br/>deterministic + judgment + holdout]
+  Runner --> Git[src/git<br/>PR / staging / rollup]
+  Runner --> Quota[src/quota<br/>two-window pacer]
   CLI --> Spec[src/spec<br/>spec-build pipeline]
   CLI --> Scoring[src/scoring<br/>summary + report + telemetry]
   CLI --> Config[src/config<br/>schema + load/save]
@@ -31,49 +31,49 @@ The public surface. `src/cli/main.ts` holds the frozen subcommand **registry** a
 the `dispatch()` function; `src/bin/factory.ts` is the only place `process.exit`
 is called. Each subcommand lives in `src/cli/subcommands/` and is a thin wrapper:
 parse args, wire production dependencies, call a testable core function, emit one
-JSON envelope, return an `ExitCode`. The `next` and `drive` subcommands are thin
-shells over the coroutine (`src/driver`); the fold logic of the retired `record-*`
+JSON envelope, return an `ExitCode`. The `next-task` and `next-action` subcommands are thin
+shells over the orchestrator (`src/runner`); the record logic of the retired `record-*`
 writers now lives there too. Shared helpers: `args.ts` (flag parsing), `io.ts`
-(envelope emission), `wiring.ts` (`loadCliDeps` / `loadCoroutineDeps`). The complete
+(envelope emission), `wiring.ts` (`loadCliDeps` / `loadOrchestratorDeps`). The complete
 surface is in [reference/cli.md](../reference/cli.md).
 
 ## State (`src/core/state`)
 
 The frozen state seam. `schema.ts` defines the Zod `RunState` / `TaskState`
 schemas with **closed enums** (an out-of-set value is a loud parse error) and
-cross-field invariants (e.g. `failure_class` is set _iff_ a task is dropped; a
+cross-field invariants (e.g. `failure_class` is set _iff_ a task is failed; a
 quota checkpoint exists _iff_ the run is paused/suspended). `manager.ts` is the
 `StateManager` — the _only_ sanctioned read/write path (atomic + lock-protected).
 `paths.ts` defines the two-store filesystem layout. `derive.ts` computes gate /
 panel / merge-gate verdicts from evidence (never stored). See
 [reference/state-model.md](../reference/state-model.md).
 
-## Stage machine (`src/core/stage-machine`)
+## Phase machine (`src/core/phase-machine`)
 
-The closed stage vocabulary (`preflight → tests → exec → verify → ship`, plus the
-separate run-level `finalize`) and the pure engine that maps a stage to a
+The closed phase vocabulary (`preflight → tests → exec → verify → ship`, plus the
+separate run-level `finalize`) and the pure engine that maps a phase to a
 `StageResult`. `nextStage()` walks the canonical order; `stageToInFlightStatus()`
 keeps the persisted task status in lockstep. The engine never writes state — it
-reports; the driver acts.
+reports; the runner acts.
 
-## Driver (`src/driver`)
+## Runner (`src/runner`)
 
-The Model-A engine half of the **coroutine** seam — the loop, plus the transition logic
+The Model-A engine half of the **orchestrator** seam — the loop, plus the transition logic
 that turns a `StageResult` into state effects. This is the unit-test target for
-control flow and is shared verbatim by both drivers (the session loop and the
+control flow and is shared verbatim by both runners (the session loop and the
 Workflow script).
 
-- `next.ts` (`stepRun`) — the **run-level** coroutine: terminal/quota checks,
-  cascade-drop, and the ready set, emitted as a `NextEnvelope`.
-- `coroutine.ts` (`stepTask`) — the **task-level** coroutine: resume at the persisted stage
-  cursor, optionally fold the previous spawn's results, then run the stage machine
-  until a spawn is needed (emit a `DriveEnvelope` manifest) or the task is
+- `next.ts` (`nextTask`) — the **run-level** orchestrator: terminal/quota checks,
+  cascade-fail, and the ready set, emitted as a `NextTask`.
+- `orchestrator.ts` (`nextAction`) — the **task-level** orchestrator: resume at the persisted phase
+  cursor, optionally record the previous spawn's results, then run the phase machine
+  until a spawn is needed (emit a `NextAction` manifest) or the task is
   terminal. It also owns the **spawn-in-flight checkpoint** (`TaskState.spawn_in_flight`):
   on a fresh spawn it captures the task-branch tip; on a resume that re-enters the
-  same `(stage, rung)` before any results were folded, it resets the shared worktree
+  same `(phase, rung)` before any results were recorded, it resets the shared worktree
   to that tip — discarding only the abandoned producer's partial work — before
   re-spawning, so a stop-mid-spawn plus `factory resume` is idempotent.
-- `handlers.ts` — the stage **reporters** (`preflight`/`tests`/`exec`/`verify`),
+- `handlers.ts` — the phase **reporters** (`preflight`/`tests`/`exec`/`verify`),
   built by `makeStageHandlers`. Each reads the frozen `StageContext` and returns a
   `StageResult`; none writes state or spawns. The `producerSpawn` helper dials the
   model **and effort** for the current rung (`dialForRung`) and threads an optional
@@ -81,15 +81,15 @@ Workflow script).
   `StageHandlers` interface: `finalize` calls the pure `decideFinalize`, while
   `ship` is a deliberate **throw-stub** — `ship` is routed through `shipTask`, never
   dispatched via `runStage`, so the stub fails loud if that invariant is ever broken.
-- `fold.ts` — the fold cores `stepTask --results` calls: `applyRecordProducer`,
-  `applyRecordHoldout`, `applyRecordReviews` (folded in from the retired
-  `record-*` CLI writers, so the spawn-path fold and a crash-resume fold run
+- `record.ts` — the record cores `nextAction --results` calls: `applyRecordProducer`,
+  `applyRecordHoldout`, `applyRecordReviews` (merged in from the retired
+  `record-*` CLI writers, so the spawn-path record and a crash-resume record run
   identical code).
 - `transitions.ts` — the shared step primitives (`markInFlight`, `completeTask`,
-  `dropStep`, `escalateOrDrop`, `applyProducerOutcome`) the coroutine and the fold cores
-  both call, so a live step and a crash-resume fold can never diverge.
+  `dropStep`, `escalateOrFail`, `applyProducerOutcome`) the orchestrator and the record cores
+  both call, so a live step and a crash-resume record can never diverge.
 - `ship.ts` (`shipTask`) opens the PR + serial-merges; `finalize.ts` is the
-  run-completion coordinator (report → PRD-issue drops comment → rollup → flip
+  run-completion coordinator (report → PRD-issue fails comment → rollup → flip
   terminal, in resume-safe order).
 
 ## Producer (`src/producer`)
@@ -97,10 +97,10 @@ Workflow script).
 The escalation cap (`escalation.ts` — `ESCALATION_CAP`), the combined model→effort
 dial (`model-dial.ts` — each rung changes a variable), failure classification
 (`classify.ts` — classify-before-retry), and the producer prompt-context builder
-(`prompt-context.ts`). The ladder's control flow is the driver's, not a producer
-module: the rung bump-or-drop is `escalateOrDrop` (`src/driver/transitions.ts`) and
-the inner fix-forward patch loop is the executor re-spawn the coroutine drives
-(`src/driver/handlers.ts`). See
+(`prompt-context.ts`). The ladder's control flow is the runner's, not a producer
+module: the rung bump-or-fail is `escalateOrFail` (`src/orchestrator/transitions.ts`) and
+the inner fix-forward patch loop is the implementer re-spawn the orchestrator drives
+(`src/orchestrator/handlers.ts`). See
 [explanation/producer-ladder.md](../explanation/producer-ladder.md).
 
 ## Verifier (`src/verifier`)
@@ -118,7 +118,7 @@ Three sub-layers:
   pass-rate check.
 
 See [explanation/verifier.md](../explanation/verifier.md) and
-[reference/quality-gates.md](../reference/quality-gates.md).
+[reference/automated-gates.md](../reference/automated-gates.md).
 
 ## Quota (`src/quota`)
 
@@ -162,7 +162,7 @@ the holdout key, deny an agent-initiated `gh pr create`/`merge`). See
 
 ## Shared (`src/shared`, `src/types`)
 
-`src/types` re-exports the closed enums, the stage/state types, and the
+`src/types` re-exports the closed enums, the phase/state types, and the
 `StageResult` union — the vocabulary every module shares. `src/shared` holds the
 cross-cutting primitives: the dependency-free `exit-codes.ts` leaf (the frozen
 CLI/hook exit enum, imported by ~every entry point — see

@@ -108,7 +108,7 @@ the repo's own workflow — so a freshly scaffolded repo already has its CI env 
 
 The merge is **gap-fill — the operator always wins**: a key absent from the overlay is _written_;
 present-and-equal is _skipped_ (idempotent); present-and-different is reported as a _conflict_ and
-left untouched. Detection drops an entry — never silently — before it reaches `gateEnv`:
+left untouched. Detection fails an entry — never silently — before it reaches `gateEnv`:
 
 - **value `${{ … }}`** — a GitHub expression ref (`${{ secrets.* }}`, `${{ matrix.* }}`, unusable
   - unsafe at gate time) → reported under `skippedExpressionRefs`;
@@ -210,7 +210,7 @@ The judgment panel.
 
 | Key     | Type              | Default | Meaning                            |
 | ------- | ----------------- | ------- | ---------------------------------- |
-| `model` | string (optional) | —       | Codex cross-vendor executor model. |
+| `model` | string (optional) | —       | Codex cross-vendor implementer model. |
 
 ## `git`
 
@@ -228,7 +228,7 @@ Branch and protection contract.
 
 | Key                      | Type   | Default | Meaning                                                                                                                                                                                                               |
 | ------------------------ | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxConsecutiveFailures` | int >0 | `3`     | Cumulative genuine `capability-budget` task failures before the run aborts (cascade/wedge drops excluded). The signal is run-cumulative, not strictly consecutive; the key keeps its historical name for back-compat. |
+| `maxConsecutiveFailures` | int >0 | `3`     | Cumulative genuine `capability-budget` task failures before the run aborts (cascade/wedge fails excluded). The signal is run-cumulative, not strictly consecutive; the key keeps its historical name for back-compat. |
 | `maxRuntimeMinutes`      | int >0 | `480`   | Hard wall-clock cap for a whole run (minutes).                                                                                                                                                                        |
 
 ## Retired keys

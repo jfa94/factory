@@ -3,10 +3,10 @@
 When a producer's output fails the merge gate, the factory does not blindly retry. It
 runs a bounded, structured escalation — the **ladder** — governed by three rules:
 classify before retry, change a variable each rung, and cap the retries before a
-loud classified drop. The ladder is not one module: the cap lives in
+loud classified fail. The ladder is not one module: the cap lives in
 `src/producer/escalation.ts` (`ESCALATION_CAP`), the per-rung model + effort dial in
-`src/producer/model-dial.ts` (`dialForRung`), and the rung-bump-or-drop decision in
-`src/driver/transitions.ts` (`escalateOrDrop`). This document explains why each rule
+`src/producer/model-dial.ts` (`dialForRung`), and the rung-bump-or-fail decision in
+`src/orchestrator/transitions.ts` (`escalateOrFail`). This document explains why each rule
 exists.
 
 ## The shape
@@ -16,13 +16,13 @@ The ladder is two nested loops:
 ```mermaid
 graph TD
   Start[producer attempt] --> Classify{classify failure}
-  Classify -->|spec-defect / environmental| Drop[classified loud drop<br/>no rung burned]
+  Classify -->|spec-defect / environmental| Drop[classified loud fail<br/>no rung burned]
   Classify -->|capability| Verify[run verify merge gate]
   Verify -->|clear| Adv[advance → ship]
   Verify -->|confirmed misses| Fix[inner: fix-forward patch<br/>bounded by patchBudget]
   Fix -->|budget/progress spent| Esc[outer: nuke + escalate rung]
   Esc -->|rung ≤ CAP| Start
-  Esc -->|CAP exhausted| DropCap[drop: capability-budget]
+  Esc -->|CAP exhausted| DropCap[fail: capability-budget]
 ```
 
 - **Outer loop** — the bounded nuke-and-retry over rungs `0..CAP` (CAP = 4 extra
@@ -36,11 +36,11 @@ graph TD
 Not every failure is worth retrying. Before any rung is burned, the failure is run
 through `classifyFailure`. A failure that is structural — a spec defect (e.g. an
 untestable acceptance criterion), a structurally-unfixable gate, or an
-environmental blocker — routes _straight_ to a classified loud drop. Retrying it
+environmental blocker — routes _straight_ to a classified loud fail. Retrying it
 only wastes the budget on a determined failure.
 
 Only a capability failure — a fixable miss, a verifier error, a producer that ran
-out of context — re-executes. This is why drops carry a closed failure class
+out of context — re-executes. This is why fails carry a closed failure class
 (`capability-budget`, `spec-defect`, `blocked-environmental`): the class tells the
 human what to do, and tells the ladder whether to retry.
 
@@ -77,13 +77,13 @@ dial is the only place the `risk_tier` value acts — it sets the producer's sta
 model and thus how many rungs separate it from the ceiling. (The merge gate is
 risk-invariant; see [verifier.md](./verifier.md).)
 
-## Rule 3 — Cap, then drop loud
+## Rule 3 — Cap, then fail loud
 
 The retries are capped (CAP = 4 past the starting rung, i.e. 5 attempts total —
-raised from 2 so a hard task gets the full model→effort climb before a drop; see
+raised from 2 so a hard task gets the full model→effort climb before a fail; see
 `jfa94/outsidey#231`). The cap is SHARED across producer failures and reviewer
 send-backs — one `escalation_rung` counter spans both. When the cap is exhausted with
-the merge gate still blocked, the task is dropped with `capability-budget` and a reason — a
+the merge gate still blocked, the task is failed with `capability-budget` and a reason — a
 sixth attempt never spawns. Every terminal path of the ladder is loud and classified:
 success is an `advance`, every failure is a `taskDropped`. There is no silent return.
 
@@ -97,13 +97,13 @@ each pass reduce the blocker count. When the budget or progress is spent, the ou
 loop nukes and escalates the model. This keeps cheap, targeted fixes cheap and
 reserves the expensive model escalation for genuine capability shortfalls.
 
-## What a drop becomes
+## What a fail becomes
 
-A dropped task is terminal. At run finalize, every drop is surfaced as a single
-deduped comment on the originating PRD issue, listing each dropped task with its
+A failed task is terminal. At run finalize, every fail is surfaced as a single
+deduped comment on the originating PRD issue, listing each failed task with its
 failure class, failure reason, and unmet acceptance criteria (Decision 36 retired
-the old per-drop GitHub issues), plus a line in the run report. Because `develop`
-receives only whole PRDs (Decision 34), any drop makes the run `failed`: `develop`
+the old per-fail GitHub issues), plus a line in the run report. Because `develop`
+receives only whole PRDs (Decision 34), any fail makes the run `failed`: `develop`
 is left untouched and the PRD stays open, with the run's `staging-<run-id>` branch
 banked for [rescue](../guides/rescue-a-stalled-run.md). Nothing is papered over. See
 [../guides/run-the-pipeline.md](../guides/run-the-pipeline.md).

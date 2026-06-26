@@ -30,15 +30,15 @@ This document explains key architectural choices and their rationale.
 
 ---
 
-## Decision 2: Orchestrator Runs in Main Session
+## Decision 2: Runner Runs in Main Session
 
-**Choice:** The orchestrator logic lives in `commands/run.md` and runs in the invoking Claude Code session. It is not a sub-agent.
+**Choice:** The runner logic lives in `commands/run.md` and runs in the invoking Claude Code session. It is not a sub-agent.
 
-**Why not orchestrator-as-sub-agent?**
+**Why not runner-as-sub-agent?**
 
-Claude Code only exposes the `Agent` tool to the top-level session. Sub-agents cannot themselves spawn further sub-agents. An orchestrator-as-agent therefore deadlocks the first time it needs to dispatch `spec-generator`, `task-executor`, or a reviewer.
+Claude Code only exposes the `Agent` tool to the top-level session. Sub-agents cannot themselves spawn further sub-agents. An runner-as-agent therefore deadlocks the first time it needs to dispatch `spec-generator`, `implementer`, or a reviewer.
 
-**Why not a pure script orchestrator?**
+**Why not a pure script runner?**
 
 Only agent sessions can invoke the `Agent` tool. A shell script cannot spawn sub-agents.
 
@@ -48,7 +48,7 @@ State management, circuit breakers, DAG traversal, and classification MUST be 10
 
 **Isolation:**
 
-The orchestrator creates a dedicated worktree at `.claude/worktrees/orchestrator-<run_id>/` (Step 6 of `skills/pipeline-orchestrator/SKILL.md`) and runs all git operations there. The user's primary checkout is never touched. Sub-agents (`spec-generator`, `task-executor`, reviewers, `scribe`) continue to run with `isolation: worktree`.
+The runner creates a dedicated worktree at `.claude/worktrees/orchestrator-<run_id>/` (Step 6 of `skills/pipeline-runner/SKILL.md`) and runs all git operations there. The user's primary checkout is never touched. Sub-agents (`spec-generator`, `implementer`, reviewers, `scribe`) continue to run with `isolation: worktree`.
 
 **Mitigations:**
 
@@ -80,7 +80,7 @@ The orchestrator creates a dedicated worktree at `.claude/worktrees/orchestrator
 **Why:**
 
 - `implementation-reviewer` adds acceptance-criteria validation
-- `implementation-reviewer` validates holdout criteria (criteria the executor never saw)
+- `implementation-reviewer` validates holdout criteria (criteria the implementer never saw)
 - `implementation-reviewer` outputs machine-parseable structured format
 - `implementation-reviewer` is round-aware (tracks review iteration)
 
@@ -113,11 +113,11 @@ The existing `quality-reviewer` is still used as a fallback when Codex is unavai
 
 **Why not just hooks + agents?**
 
-Hooks fire on specific events. They cannot be called on-demand by the orchestrator. Scripts fill the gap: on-demand deterministic logic.
+Hooks fire on specific events. They cannot be called on-demand by the runner. Scripts fill the gap: on-demand deterministic logic.
 
 **Why not just scripts + agents?**
 
-Hooks are un-bypassable. Even if the orchestrator ignores instructions, hooks still fire. Branch protection via hook blocks force-push regardless of agent behavior.
+Hooks are un-bypassable. Even if the runner ignores instructions, hooks still fire. Branch protection via hook blocks force-push regardless of agent behavior.
 
 ---
 
@@ -139,16 +139,16 @@ Hooks are un-bypassable. Even if the orchestrator ignores instructions, hooks st
 
 ## Decision 8: Worktree Isolation Replaces Directory Locking
 
-**Choice:** Each task-executor runs in its own git worktree.
+**Choice:** Each implementer runs in its own git worktree.
 
 **Why:**
 
-- True isolation: each executor has its own working directory and branch
+- True isolation: each implementer has its own working directory and branch
 - No possibility of git conflicts between concurrent tasks
 - No deadlocks from held locks
 - Native support via Claude Code's `isolation: "worktree"` frontmatter
 
-The lock (`pipeline-lock`) exists only to prevent two orchestrator instances from running simultaneously.
+The lock (`pipeline-lock`) exists only to prevent two runner instances from running simultaneously.
 
 ---
 
@@ -172,9 +172,9 @@ Detection is deterministic: `pipeline-detect-reviewer` checks Codex availability
 
 **Inverse-hallucination guards (fall through to fallback):**
 
-In addition to "codex unavailable" and "codex rc non-zero", the orchestrator treats two pathological codex outputs as faults and routes through the Claude Code fallback path (with a `task.review.codex_inverse_hallucination` metric logged):
+In addition to "codex unavailable" and "codex rc non-zero", the runner treats two pathological codex outputs as faults and routes through the Claude Code fallback path (with a `task.review.codex_inverse_hallucination` metric logged):
 
-1. `REQUEST_CHANGES` with zero verified findings — every finding's `verbatim_line` failed exact-line match against the diff, leaving the executor nothing to fix.
+1. `REQUEST_CHANGES` with zero verified findings — every finding's `verbatim_line` failed exact-line match against the diff, leaving the implementer nothing to fix.
 2. `APPROVE` / `APPROVED` with non-zero `blocking_count` — internal contradiction; the review cannot be trusted to gate the task.
 
 The fallback path is identical to a codex CLI failure: the bogus verdict file is discarded, agent reviewers are spawned, and the task continues. See `docs/reference/bin-scripts.md` (`pipeline-codex-review` and `pipeline-run-task`) for details.
@@ -236,19 +236,19 @@ Task B waits for Task A's PR to merge into `staging` before starting. Sequential
 
 **Enforcing the staging base deterministically (`worktree.baseRef: "head"`):**
 
-By default Claude Code's `worktree.baseRef` is `"fresh"` — every `Agent({isolation: "worktree"})` worktree branches from `origin/<default-branch>` (here `origin/main`), **ignoring the orchestrator's staging HEAD**. That left subagent worktrees on a stale `origin/main` base (the 2026-05-28 bootstrap defect: postexec quality gates failed because `origin/main` lacked pipeline scripts present on staging).
+By default Claude Code's `worktree.baseRef` is `"fresh"` — every `Agent({isolation: "worktree"})` worktree branches from `origin/<default-branch>` (here `origin/main`), **ignoring the runner's staging HEAD**. That left subagent worktrees on a stale `origin/main` base (the 2026-05-28 bootstrap defect: postexec automated gates failed because `origin/main` lacked pipeline scripts present on staging).
 
-`.claude/settings.json` sets `worktree.baseRef: "head"`, which makes subagent worktrees branch from the **invoking session's local HEAD**. The orchestrator fast-forwards (resume) or forks (fresh-create) its own worktree to `origin/staging` _before_ any subagent spawn (`skills/pipeline-orchestrator/SKILL.md` §6), so every subagent — test-writer, executor, reviewers, rescue — now births on the current staging tip with no per-agent bootstrap step.
+`.claude/settings.json` sets `worktree.baseRef: "head"`, which makes subagent worktrees branch from the **invoking session's local HEAD**. The runner fast-forwards (resume) or forks (fresh-create) its own worktree to `origin/staging` _before_ any subagent spawn (`skills/pipeline-runner/SKILL.md` §6), so every subagent — test-writer, implementer, reviewers, rescue — now births on the current staging tip with no per-agent bootstrap step.
 
-- **Defense in depth:** the test-writer/executor still run `git checkout -B <branch> origin/staging` (the `_stage_preflight` handler in `bin/pipeline-run-task-stages.sh`) as an _idempotent fallback_ — a no-op once the worktree already births on staging, and the safety net if the setting is absent/overridden. Do not remove it; dropping it would make correctness depend solely on a global setting.
+- **Defense in depth:** the test-writer/implementer still run `git checkout -B <branch> origin/staging` (the `_stage_preflight` handler in `bin/pipeline-run-task-phases.sh`) as an _idempotent fallback_ — a no-op once the worktree already births on staging, and the safety net if the setting is absent/overridden. Do not remove it; dropping it would make correctness depend solely on a global setting.
 - **Blast radius:** `worktree.baseRef` is project-wide. It also changes interactive human `--worktree` / `Agent({isolation:"worktree"})` use in this repo — worktrees carry local unpushed HEAD instead of a clean `origin/main`. For the pipeline this is strictly more correct; for ad-hoc human use it is a behavior change to be aware of. No per-spawn override exists.
 - **Activation:** the `worktree` settings block is read at **session start**, not mid-session — it takes effect on the next session/run after the setting lands (supported since Claude Code v2.1.133).
 
 **Update (2026-06-13):** Same root cause, downstream of this decision — the review panel and holdout-validator inspect a task with `git -C <taskWorktree> diff origin/staging`, **not** `diff staging`. The task worktree forks from the remote-tracking ref `origin/staging` (`createTaskWorktree`, `src/git/worktree.ts`) and never maintains a local `staging` branch, so a bare `diff staging` is stale-or-absent: it degraded silently in session mode and hard-errors in workflow mode. `origin/staging` is the fork point and the deterministic inspect base. See [verifier.md](./verifier.md#how-the-panel-and-holdout-inspect-a-task).
 
-**Update (2026-06-19) — per-run base ref, not a bare `origin/staging`.** Following Decision 33's per-run branch, the inspect base is no longer the single shared `origin/staging` but the run's own `origin/staging-<run-id>`. The coroutine computes it once from the run's PINNED branch (`base_ref = origin/${resolveStagingBranch(runId, run.staging_branch)}`, `src/driver/coroutine.ts`) and plumbs it through the spawn `DriveEnvelope` (`base_ref` field, [cli.md](../reference/cli.md#drive)) to every reviewer and the holdout sidecar; both drivers (`scripts/factory-run-driver.js`, `skills/pipeline-orchestrator/SKILL.md`) and all six `agents/*.md` + `skills/review-protocol/SKILL.md` now diff against `<baseRef>`/`${env.base_ref}`, never a hardcoded `origin/staging`. `buildHoldoutPrompt(record, worktree, baseRef)` (`src/verifier/holdout/validate.ts`) requires the base ref and throws if a worktree is supplied without one. A bare `origin/staging` namespace-collides after a repo branch rename and resolves to the wrong/no commit — diffing reviewers against the wrong base.
+**Update (2026-06-19) — per-run base ref, not a bare `origin/staging`.** Following Decision 33's per-run branch, the inspect base is no longer the single shared `origin/staging` but the run's own `origin/staging-<run-id>`. The orchestrator computes it once from the run's PINNED branch (`base_ref = origin/${resolveStagingBranch(runId, run.staging_branch)}`, `src/orchestrator/orchestrator.ts`) and plumbs it through the spawn `NextAction` (`base_ref` field, [cli.md](../reference/cli.md#next-action)) to every reviewer and the holdout validator; both runners (`scripts/factory-run-runner.js`, `skills/pipeline-runner/SKILL.md`) and all six `agents/*.md` + `skills/review-protocol/SKILL.md` now diff against `<baseRef>`/`${env.base_ref}`, never a hardcoded `origin/staging`. `buildHoldoutPrompt(record, worktree, baseRef)` (`src/verifier/holdout/validate.ts`) requires the base ref and throws if a worktree is supplied without one. A bare `origin/staging` namespace-collides after a repo branch rename and resolves to the wrong/no commit — diffing reviewers against the wrong base.
 
-**Update (2026-06-19) — worktree dependency provisioning at preflight.** `createTaskWorktree` only forks the git tree — it installs no dependencies, but the `test`/`type`/`build` gates run with `cwd=<worktree>` and have no skip-guard, so an empty `node_modules` made them fail closed (the root cause of a stalled run's gate-half never clearing). The preflight handler (`src/driver/handlers.ts`) now runs `provisionWorktree` (`src/git/provision.ts`) immediately after the worktree is created, before the command-gates: it runs the configured `quality.setupCommand` if set, else a lockfile-detected install (`pnpm`/`yarn` frozen install · `npm ci`), else a no-op (Go/Ruby/Deno repos rely on their own runner / `.quality.redTestCommand`). It FAILS LOUD on a non-zero exit, so a broken environment halts as a clear preflight error rather than an opaque downstream gate failure. Because preflight persists its cursor before running, a provisioning (or base-tip-assert) failure leaves the worktree on disk; `createTaskWorktree` is therefore REPLAY-SAFE — on resume it reuses an already-registered worktree (`git worktree list --porcelain` probe → D12 `checkout -B` re-point) instead of a bare `worktree add` that would fatal on the existing path and wedge the run. See [configuration.md](../reference/configuration.md#quality) (`quality.setupCommand`).
+**Update (2026-06-19) — worktree dependency provisioning at preflight.** `createTaskWorktree` only forks the git tree — it installs no dependencies, but the `test`/`type`/`build` gates run with `cwd=<worktree>` and have no skip-guard, so an empty `node_modules` made them fail closed (the root cause of a stalled run's gate-half never clearing). The preflight handler (`src/orchestrator/handlers.ts`) now runs `provisionWorktree` (`src/git/provision.ts`) immediately after the worktree is created, before the command-gates: it runs the configured `quality.setupCommand` if set, else a lockfile-detected install (`pnpm`/`yarn` frozen install · `npm ci`), else a no-op (Go/Ruby/Deno repos rely on their own runner / `.quality.redTestCommand`). It FAILS LOUD on a non-zero exit, so a broken environment halts as a clear preflight error rather than an opaque downstream gate failure. Because preflight persists its cursor before running, a provisioning (or base-tip-assert) failure leaves the worktree on disk; `createTaskWorktree` is therefore REPLAY-SAFE — on resume it reuses an already-registered worktree (`git worktree list --porcelain` probe → D12 `checkout -B` re-point) instead of a bare `worktree add` that would fatal on the existing path and wedge the run. See [configuration.md](../reference/configuration.md#quality) (`quality.setupCommand`).
 
 ---
 
@@ -270,7 +270,7 @@ The session must start with correct settings. Subagents inherit parent session s
 
 **CI failure retry limit (2):**
 
-CI failures from pipeline output should be rare (quality gates run first). Two attempts handle transient issues. Beyond that, human judgment is needed.
+CI failures from pipeline output should be rare (automated gates run first). Two attempts handle transient issues. Beyond that, human judgment is needed.
 
 **Rebase-once strategy:**
 
@@ -350,7 +350,7 @@ tier, not SEED.
 
 - Squashing the rollup PR severs staging↔develop ancestry. Next run's `staging-init` cannot FF-reconcile, replays already-shipped work, or aborts on conflict.
 - A merge commit on develop keeps staging tip as an ancestor of develop tip. `staging-init` fast-forwards in one step.
-- Per-task squash on staging is still desired: collapses the test-writer + task-executor commit pair into one logical commit on the integration branch.
+- Per-task squash on staging is still desired: collapses the test-writer + implementer commit pair into one logical commit on the integration branch.
 
 **Workflow gate:** `templates/.github/workflows/quality-gate.yml` checks `github.base_ref` to pick the strategy. Repo settings must permit merge commits on `develop`.
 
@@ -423,7 +423,7 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 - Review consistency outweighs quota economy. Two reviews of the same task that ran on different models can disagree, which inflates `request_changes` cycles and confuses reviewers' own retry logic.
 - The Actor–Critic discipline (see Decision 9) is strongest when the Critic is held constant; varying the Critic by quota tier collapses the value of repeat reviews.
-- Reviewer cost is small relative to executor cost; routing reviewers by tier would save little.
+- Reviewer cost is small relative to implementer cost; routing reviewers by tier would save little.
 
 **Why operator-configurable (added 2026-05-22):**
 
@@ -432,7 +432,7 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 **Trade-off:** Reviewers consume quota at the configured tier even on routine tasks. Accepted.
 
-**Scope:** Applies to `bin/pipeline-run-task` reviewer / test-writer / scribe / executor-respawn spawn manifests. The model router still governs initial executor spawn decisions. The frontmatter defaults inside `agents/<name>.md` remain authoritative outside the pipeline.
+**Scope:** Applies to `bin/pipeline-run-task` reviewer / test-writer / scribe / implementer-respawn spawn manifests. The model router still governs initial implementer spawn decisions. The frontmatter defaults inside `agents/<name>.md` remain authoritative outside the pipeline.
 
 ---
 
@@ -444,7 +444,7 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 **Why:**
 
-- Autonomy is a **fundamental condition** of the project — not a means to a quality end, nor an end that subordinates quality; both are the point (Decision 20). It is held as a hard _condition_ because it is binary-assurable ("did a human intervene?" is yes/no), whereas quality, lacking any objective yes/no, is the _maximand_. Quality gates, holdout validation, and review exist to _earn_ the trust to act unattended — not to route work to a human.
+- Autonomy is a **fundamental condition** of the project — not a means to a quality end, nor an end that subordinates quality; both are the point (Decision 20). It is held as a hard _condition_ because it is binary-assurable ("did a human intervene?" is yes/no), whereas quality, lacking any objective yes/no, is the _maximand_. Automated gates, holdout validation, and review exist to _earn_ the trust to act unattended — not to route work to a human.
 - A standing human valve would re-introduce the very dependency the domain exists to remove, and would let reliability gaps hide behind "escalate to a human" instead of being closed.
 - Treating escalation as a bug (not a feature) keeps pressure on the real fix: more reliable reviewers and more capable autonomous recovery.
 
@@ -469,11 +469,11 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 - **Autonomy is binary-assurable.** "Did a human intervene between the PRD and the `develop` rollup?" has an objective yes/no answer, so autonomy can be enforced as a hard condition — a predicate every run either satisfies or fails.
 - **Quality cannot be objectively guaranteed.** There is no binary certificate of "high quality." A property you cannot gate on, you can only push toward — so quality is the maximand: maximised, never proven complete. _If_ "high quality" were an objective yes/no, both quality and autonomy would be hard conditions; it is quality's non-verifiability — not a ranking of importance — that makes it the maximand instead.
 - **This is the root of the whole trust architecture.** Because quality has no ground-truth certificate, the verifier layer (Decision 21) is the system's best _synthetic_ approximation of one — the closest thing to a quality yes/no it can manufacture. "Quality is the maximand" and "the verifier is the merge gate" are the same fact seen twice.
-- **Downstream:** when quality and cost conflict, cost yields (within quota); when quality cannot be reached autonomously, the system drops loudly (Decision 22) rather than ship uncertain quality or call a human. Cost-flexes-with-quota makes throughput the shock absorber — under pressure the system slows or suspends, never lowers the bar.
+- **Downstream:** when quality and cost conflict, cost yields (within quota); when quality cannot be reached autonomously, the system fails loudly (Decision 22) rather than ship uncertain quality or call a human. Cost-flexes-with-quota makes throughput the shock absorber — under pressure the system slows or suspends, never lowers the bar.
 
 **Relationship to Decision 19:** Decision 19 (no human-escalation valve) stands — it is the operational consequence of the autonomy _condition_. Decision 19's body has been **aligned** with this framing: where it once called autonomy "the domain's primary reason-for-being, not a means to a quality end," it now states that autonomy and quality are both fundamental, split into condition vs maximand by **verifiability** rather than by importance.
 
-**Trade-off:** A run that cannot reach the quality bar autonomously gets no shortcut — it drops loudly (Decision 22), even at high cost or zero delivery. A confident-wrong merge is worse than a loud failure.
+**Trade-off:** A run that cannot reach the quality bar autonomously gets no shortcut — it fails loudly (Decision 22), even at high cost or zero delivery. A confident-wrong merge is worse than a loud failure.
 
 **Scope:** Autonomy is bounded by the subscription-quota envelope — quota is _environmental_, outside the autonomy domain; a quota-forced human relaunch (Decision 24) is mechanical, not a quality-escalation valve, so it does not violate this ranking.
 
@@ -487,7 +487,7 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 | -------------------------- | --------------------------- | ------- |
 | Spec (generation + review) | Opus                        | **Max** |
 | Verifier (reviewers)       | Opus                        | Default |
-| Producer (executor)        | **Adaptive** (by task risk) | Default |
+| Producer (implementer)        | **Adaptive** (by task risk) | Default |
 
 **Why:**
 
@@ -503,15 +503,15 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 ## Decision 22: Loud, Classified Drop with Partial Delivery
 
-**Choice:** When the system cannot complete a task to standard, it **drops** the task — and a drop is **loud and classified**:
+**Choice:** When the system cannot complete a task to standard, it **fails** the task — and a fail is **loud and classified**:
 
-- Any permanently dropped task ⇒ the **run is marked a failure** and the **PRD stays open**, even if every other task passed.
-- The drop is **classified** by cause — at least _capability/budget exhausted_, _spec defect_, _blocked/environmental_ — so the failure report tells the human what to do.
-- Completed work is **delivered**: the dependency-closed set of passed tasks (each a vertical slice, Decision 23) ships, loudly flagged as a partial result. A red **rollup full-CI gate** is likewise a run-level failure even when all tasks passed individually. The only forbidden outcome is **silent** absorption of a drop.
+- Any permanently failed task ⇒ the **run is marked a failure** and the **PRD stays open**, even if every other task passed.
+- The fail is **classified** by cause — at least _capability/budget exhausted_, _spec defect_, _blocked/environmental_ — so the failure report tells the human what to do.
+- Completed work is **delivered**: the dependency-closed set of passed tasks (each a vertical slice, Decision 23) ships, loudly flagged as a partial result. A red **rollup full-CI gate** is likewise a run-level failure even when all tasks passed individually. The only forbidden outcome is **silent** absorption of a fail.
 
 **Why:**
 
-- Under the autonomy constraint (Decisions 19/20) there is no human to escalate to mid-run; the loud, classified drop is the _boundary handback_ — it returns precisely the un-certifiable work to the human, with a reason, after the run.
+- Under the autonomy constraint (Decisions 19/20) there is no human to escalate to mid-run; the loud, classified fail is the _boundary handback_ — it returns precisely the un-certifiable work to the human, with a reason, after the run.
 - Silence is the one behavior incompatible with a quality objective: a quietly-closed PRD with a missing task is a confident-wrong outcome.
 - Partial delivery preserves verified high-quality work instead of discarding it to all-or-nothing; coherence is guaranteed by the vertical-slice contract plus the integration gate, not by hoping.
 
@@ -525,7 +525,7 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 **Why:**
 
-- It is the precondition that makes **partial delivery** (Decision 22) coherent: a dropped task then leaves a smaller-but-whole result, not a half-built feature.
+- It is the precondition that makes **partial delivery** (Decision 22) coherent: a failed task then leaves a smaller-but-whole result, not a half-built feature.
 - It bounds integration risk: slices compose along explicit dependencies rather than through hidden horizontal coupling.
 - It is good decomposition hygiene regardless of failure handling — vertical slices are independently reviewable, testable, and reversible.
 
@@ -535,7 +535,7 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 ## Decision 24: Quota Pacing and the Execution-Mode Caveat
 
-**Choice:** The pipeline bounds its own subscription-quota consumption by **proactive pacing**, not reactive backoff. Quota is **never a reason to drop work — only to pause it** (distinct from the Decision 22 retry-budget drop).
+**Choice:** The pipeline bounds its own subscription-quota consumption by **proactive pacing**, not reactive backoff. Quota is **never a reason to fail work — only to pause it** (distinct from the Decision 22 retry-budget fail).
 
 - **Two windows, paced linearly with a 10% reserve floor:**
   - **5-hour window** — burn ≤ 20%/hr; milestones at 80 / 60 / 40 / 20% remaining at hours 1 / 2 / 3 / 4; never below 10% remaining.
@@ -547,18 +547,18 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 **Execution-mode caveat:** pacing needs an observable usage signal, which only the **orchestrated-session** mode has.
 
 - **Session mode (default):** fully paced as above.
-- **Workflow mode** — the pipeline driven as a background multi-agent Workflow script — **cannot observe usage**, so there is **no pacing**. The user is **warned at opt-in**, and the run simply **hard-stops** when the allowance runs out. The pause-not-drop guarantee still holds: the stop lands on committed-task boundaries, so a relaunch resumes; only the in-flight task's uncommitted work is lost (same guarantee, weaker mechanism).
+- **Workflow mode** — the pipeline driven as a background multi-agent Workflow script — **cannot observe usage**, so there is **no pacing**. The user is **warned at opt-in**, and the run simply **hard-stops** when the allowance runs out. The pause-not-fail guarantee still holds: the stop lands on committed-task boundaries, so a relaunch resumes; only the in-flight task's uncommitted work is lost (same guarantee, weaker mechanism).
 
 **Why:**
 
 - Proactive pacing keeps the run under the subscription wall, so the 5h window never _exhausts_ — quota pressure becomes a pause, never a failure. This is what "cost flexes with quota" (Decision 20) operationally means.
 - The 5h / 7d split is about **recovery horizon**: a ≤ 5h pause is holdable in-process; a multi-day wait is not, so the long window forces a clean stop-and-resume instead.
 - Quota is **environmental**, outside the autonomy domain (Decisions 19/20) — like the host losing power. A quota-induced human relaunch is _mechanical_ (resource), not a _quality/judgment_ escalation valve, so it does not violate the autonomy condition; it **bounds** it: end-to-end autonomy holds within the paced quota envelope, and a mechanical relaunch continues a run that exceeds it.
-- Workflow mode trades pacing for the throughput of the Workflow runtime; the up-front warning plus task-boundary resumability keep cost bounded and the no-drop guarantee intact.
+- Workflow mode trades pacing for the throughput of the Workflow runtime; the up-front warning plus task-boundary resumability keep cost bounded and the no-fail guarantee intact.
 
 **Trade-off:** Proactive pacing can leave allowance unused (idling under-pace) rather than racing to the wall — deliberate, to respect subscription limits. The graceful-stop choice accepts a mechanical human touch-point on 7d-cap stops (vs the more-autonomous but more-complex auto-resume). Workflow mode accepts a hard, unpaced stop as the price of an unmonitorable runtime.
 
-**Scope:** The milestone percentages (80 / 60 / 40 / 20, the 10% floor, 14.29%/day) are tuning parameters, not load-bearing. The load-bearing choices are: proactive-pacing-over-backoff, quota-pauses-never-drops, the 5h-pause / 7d-stop split, and the session/workflow mode caveat.
+**Scope:** The milestone percentages (80 / 60 / 40 / 20, the 10% floor, 14.29%/day) are tuning parameters, not load-bearing. The load-bearing choices are: proactive-pacing-over-backoff, quota-pauses-never-fails, the 5h-pause / 7d-stop split, and the session/workflow mode caveat.
 
 ---
 
@@ -569,17 +569,17 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 - **Judgment, not heuristic.** Risk is assigned by the apex already reasoning over the whole PRD at max effort. Deterministic signals (auth/crypto/payment paths, blast radius, task type) and any human/PRD flags are _inputs_ to that judgment, not separate mechanisms.
 - **One unified dial — difficulty and stakes folded together.** The producer dial is a single judgment of _how much model strength the task warrants_, blending **difficulty** (likelihood the producer gets it wrong) and **stakes** (cost if it does) — risk as P(error) × impact. This **supersedes** the earlier two-axis model (`proposals/design-intent-and-redesign.md` §7), which split a count-based _complexity_ dial (→ producer model) from a path-based _risk_ dial (→ review depth): the review-depth axis is gone (the merge gate is now risk-invariant, Decision 26), and "risk tier" now denotes this single producer dial.
 - **Static tier = starting rung.** The risk tier fixes where on the producer-model ladder the task's first attempt begins (low-risk low; high-risk high).
-- **Escalation is the only dynamic.** Each nuke-and-retry (Decision 22) bumps the rung along a combined **model→effort** dial (`src/producer/model-dial.ts`): it climbs the model to its **ceiling first** (a sub-ceiling task jumps straight to Opus on the first escalation rung), **then** climbs the effort/reasoning level (`xhigh`→`max`), injecting prior-failure context from rung 2 on. **A drop is the top rung exhausted.** A high-risk task starts at the ceiling, so it begins climbing effort immediately and reaches the top in fewer retries.
-- **Cap = 4 extra attempts (5 total), shared.** The ladder is capped at `ESCALATION_CAP = 4` (`src/producer/escalation.ts`), enforced by `escalateOrDrop` (`src/driver/transitions.ts`). One `escalation_rung` counter is SHARED across producer failures and reviewer send-backs. Raised from 2 so a hard task gets the full model→effort climb before a `capability-budget` drop (see `jfa94/outsidey#231`); the cost is more spend per hard task (low-risk tasks now jump to Opus after two clean-slate fails) — the deliberate quality-over-cost tradeoff.
+- **Escalation is the only dynamic.** Each nuke-and-retry (Decision 22) bumps the rung along a combined **model→effort** dial (`src/producer/model-dial.ts`): it climbs the model to its **ceiling first** (a sub-ceiling task jumps straight to Opus on the first escalation rung), **then** climbs the effort/reasoning level (`xhigh`→`max`), injecting prior-failure context from rung 2 on. **A fail is the top rung exhausted.** A high-risk task starts at the ceiling, so it begins climbing effort immediately and reaches the top in fewer retries.
+- **Cap = 4 extra attempts (5 total), shared.** The ladder is capped at `ESCALATION_CAP = 4` (`src/producer/escalation.ts`), enforced by `escalateOrFail` (`src/orchestrator/transitions.ts`). One `escalation_rung` counter is SHARED across producer failures and reviewer send-backs. Raised from 2 so a hard task gets the full model→effort climb before a `capability-budget` fail (see `jfa94/outsidey#231`); the cost is more spend per hard task (low-risk tasks now jump to Opus after two clean-slate fails) — the deliberate quality-over-cost tradeoff.
 - **No mid-run re-assessment.** Under-estimation self-corrects for free: a task riskier than tagged simply fails review and escalates.
 
 **Why:**
 
-- **Risk-tiering is a performance optimization, not a safety control.** The dial sets only the **ceiling**; the verifier stays Opus regardless (Decision 21), so the **merge gate never moves**. A mis-classified task therefore **degrades gracefully** — a too-cheap producer fails review → more retries, or a loud drop — and **never ships bad code**. Because errors are safe, risk can be a judgment call rather than a brittle (if auditable) heuristic.
+- **Risk-tiering is a performance optimization, not a safety control.** The dial sets only the **ceiling**; the verifier stays Opus regardless (Decision 21), so the **merge gate never moves**. A mis-classified task therefore **degrades gracefully** — a too-cheap producer fails review → more retries, or a loud fail — and **never ships bad code**. Because errors are safe, risk can be a judgment call rather than a brittle (if auditable) heuristic.
 - **Spec-time is the right moment.** Risk is part of the operational definition of the task (the "target"), and the generator is already doing whole-PRD max-effort reasoning — the cheapest place to add the judgment, and the apex best positioned to make it.
 - **One judgment + one ladder is the minimal mechanism.** Because escalation absorbs under-estimation, a separate mid-run risk-reclassifier would be redundant machinery.
 
-**Trade-off:** A badly under-tagged high-risk task pays in wasted retries before it climbs to the tier it needed (or drops) — accepted, since the alternative (mid-run re-assessment) is more machinery for a failure mode the ladder already covers, and the merge gate guarantees the under-tagging never reaches `develop` as bad code.
+**Trade-off:** A badly under-tagged high-risk task pays in wasted retries before it climbs to the tier it needed (or fails) — accepted, since the alternative (mid-run re-assessment) is more machinery for a failure mode the ladder already covers, and the merge gate guarantees the under-tagging never reaches `develop` as bad code.
 
 **Relationship:** Refines Decision 21 (how the _adaptive_ producer dial is driven) and Decision 22 (its "nuke-and-retry outer bound" = the ladder's top rung; the risk tier = its starting rung).
 
@@ -602,11 +602,11 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 **Relationship:** Pairs with Decision 25 (ceiling moves / merge gate fixed), realises Decision 20 (verifier = merge gate + trust anchor), depends on Decision 21 (fixed verifier model/effort), and is the structure whose output Decision 27 governs.
 
-**Addendum (2026-06-20) — fail-closed command-gate tool resolution + a named block reason.** The deterministic command gates (`test`/`type`/`lint`/`mutation`) now resolve the worktree-local `node_modules/.bin/<tool>` (walk-up from cwd via `resolveLocalBin`, `src/verifier/deterministic/tools.ts`) and exec it directly instead of shelling out through `npx <tool>`. Root cause: under corepack + a `packageManager: pnpm@…` field (node ≥ 24) a bare `npx <tool>` bypasses the installed bin and resolves a REMOTE registry decoy (`npx tsc`/`npx vitest` exit 1), a false gate failure that the generic "merge gate not unanimous" reason then masked. When no local bin resolves, `runTool` FAILS CLOSED with a synthetic exit-127 result (`missingBinResult`) that names the tool — it never reintroduces the npx path. lint/mutation already skip on a missing bin; only the unconditional type/test gates reach the fail-closed path, where a missing tsc/vitest in a provisioned worktree is a genuine failure. The diff-scoped `test` gate also runs vitest with `--coverage.enabled=false` (a scoped run against a config with global per-file coverage thresholds was itself a false negative; coverage is the `coverage` gate's job). `resolveLocalBin` DELIBERATELY does not realpath-contain the resolved bin: a containment guard would reject pnpm's `.bin` symlinks (which point into the content-addressed `.pnpm` store outside the package dir — the very package manager whose npx decoy this dodges), and the gate layer already executes worktree-controlled code on the same trust boundary, so following a `.bin` symlink crosses no new privilege boundary. Finally, `mergeGateBlockReason` was consolidated into a single shared helper in `src/core/state/derive.ts` (replacing divergent private copies in `panel-run.ts` and the `handlers.ts` resume path); it names failing deterministic gates with their detail and reports an empty gate-evidence set explicitly, so a fail-closed gate surfaces instead of hiding behind unanimity wording. See [../reference/quality-gates.md](../reference/quality-gates.md) and [verifier.md](./verifier.md).
+**Addendum (2026-06-20) — fail-closed command-gate tool resolution + a named block reason.** The deterministic command gates (`test`/`type`/`lint`/`mutation`) now resolve the worktree-local `node_modules/.bin/<tool>` (walk-up from cwd via `resolveLocalBin`, `src/verifier/deterministic/tools.ts`) and exec it directly instead of shelling out through `npx <tool>`. Root cause: under corepack + a `packageManager: pnpm@…` field (node ≥ 24) a bare `npx <tool>` bypasses the installed bin and resolves a REMOTE registry decoy (`npx tsc`/`npx vitest` exit 1), a false gate failure that the generic "merge gate not unanimous" reason then masked. When no local bin resolves, `runTool` FAILS CLOSED with a synthetic exit-127 result (`missingBinResult`) that names the tool — it never reintroduces the npx path. lint/mutation already skip on a missing bin; only the unconditional type/test gates reach the fail-closed path, where a missing tsc/vitest in a provisioned worktree is a genuine failure. The diff-scoped `test` gate also runs vitest with `--coverage.enabled=false` (a scoped run against a config with global per-file coverage thresholds was itself a false negative; coverage is the `coverage` gate's job). `resolveLocalBin` DELIBERATELY does not realpath-contain the resolved bin: a containment guard would reject pnpm's `.bin` symlinks (which point into the content-addressed `.pnpm` store outside the package dir — the very package manager whose npx decoy this dodges), and the gate layer already executes worktree-controlled code on the same trust boundary, so following a `.bin` symlink crosses no new privilege boundary. Finally, `mergeGateBlockReason` was consolidated into a single shared helper in `src/core/state/derive.ts` (replacing divergent private copies in `panel-run.ts` and the `handlers.ts` resume path); it names failing deterministic gates with their detail and reports an empty gate-evidence set explicitly, so a fail-closed gate surfaces instead of hiding behind unanimity wording. See [../reference/automated-gates.md](../reference/automated-gates.md) and [verifier.md](./verifier.md).
 
-**Addendum (2026-06-24) — CI-parity gate env (`quality.gateEnv`).** The same fail-closed gates run in a **fresh task worktree** with no `.env.local` and no build-time env injection, so a repo whose CI supplies placeholder env for the same build step (e.g. a Next.js static prerender needing `NEXT_PUBLIC_*`) failed the `build` gate on a missing-env crash — a false-negative floor unrelated to task quality, the same class of bug the npx-decoy fix above addresses. Fix: a new `quality.gateEnv` config field (`z.record(z.string(), z.string()).default({})`, `src/config/schema.ts`) — a name→value map merged over `process.env` into every gate command's spawn env via `defaultGateTools(gateEnv)` (`src/verifier/deterministic/tools.ts`), wired from config in `src/cli/wiring.ts`. Operators set it with `factory configure --set quality.gateEnv.<KEY>=<value>`. It is **CI parity, NOT a secret store** — the values live in the plaintext config overlay; only placeholders belong there. The string-only schema makes each value an explicit "set this var" (a numeric-looking value must be quoted as JSON at the `--set` boundary). See [../reference/configuration.md](../reference/configuration.md#gateenv--ci-parity-placeholders) and [../reference/quality-gates.md](../reference/quality-gates.md#ci-parity-gate-env-qualitygateenv).
+**Addendum (2026-06-24) — CI-parity gate env (`quality.gateEnv`).** The same fail-closed gates run in a **fresh task worktree** with no `.env.local` and no build-time env injection, so a repo whose CI supplies placeholder env for the same build step (e.g. a Next.js static prerender needing `NEXT_PUBLIC_*`) failed the `build` gate on a missing-env crash — a false-negative floor unrelated to task quality, the same class of bug the npx-decoy fix above addresses. Fix: a new `quality.gateEnv` config field (`z.record(z.string(), z.string()).default({})`, `src/config/schema.ts`) — a name→value map merged over `process.env` into every gate command's spawn env via `defaultGateTools(gateEnv)` (`src/verifier/deterministic/tools.ts`), wired from config in `src/cli/wiring.ts`. Operators set it with `factory configure --set quality.gateEnv.<KEY>=<value>`. It is **CI parity, NOT a secret store** — the values live in the plaintext config overlay; only placeholders belong there. The string-only schema makes each value an explicit "set this var" (a numeric-looking value must be quoted as JSON at the `--set` boundary). See [../reference/configuration.md](../reference/configuration.md#gateenv--ci-parity-placeholders) and [../reference/automated-gates.md](../reference/automated-gates.md#ci-parity-gate-env-qualitygateenv).
 
-**Addendum (2026-06-24) — auto-detecting `quality.gateEnv` from CI.** Transcribing each placeholder by hand (the manual `--set` above) is the escape hatch; the preferred path now AUTO-DETECTS the CI build env from the repo's workflow YAML (`src/ci/detect-gate-env.ts`, `factory configure --detect-gate-env`). Three design choices: (1) **Hand-rolled YAML line-scanner, no `yaml` dependency** — the dist bundles inline every dep and the surface needed (step/job-level `env:` literals) is narrow; its safety property is **bias to MISS, never mis-detect** (block-style space-indented YAML only; a var in anchors/aliases/merge-keys/flow-mappings is silently skipped, never mangled — the miss's escape hatch is the manual `--set`). Three policy filters drop a value before it reaches gateEnv: a `${{ }}` GitHub-expression ref (unusable + unsafe), anything the secret scanner flags (defense-in-depth — gateEnv is placeholders, not a secret store), and structurally anything inside a `run: |` block scalar. (2) **Gap-fill, operator wins** — detection only fills keys the overlay does not already have; a detected value that differs from a configured one is reported as a CONFLICT (preserved, not overwritten), equal is skipped (idempotent), and the overlay is written only when there are new keys. (3) **Detect-before-managed-overwrite ordering** — `factory scaffold` runs detection FIRST, before its `quality-gate.yml` managed template clobbers the repo's own workflow, so the repo author's CI env is captured into the durable overlay while that file is still theirs. See [../reference/cli.md](../reference/cli.md#configure) and [../reference/configuration.md](../reference/configuration.md#gateenv--ci-parity-placeholders).
+**Addendum (2026-06-24) — auto-detecting `quality.gateEnv` from CI.** Transcribing each placeholder by hand (the manual `--set` above) is the escape hatch; the preferred path now AUTO-DETECTS the CI build env from the repo's workflow YAML (`src/ci/detect-gate-env.ts`, `factory configure --detect-gate-env`). Three design choices: (1) **Hand-rolled YAML line-scanner, no `yaml` dependency** — the dist bundles inline every dep and the surface needed (step/job-level `env:` literals) is narrow; its safety property is **bias to MISS, never mis-detect** (block-style space-indented YAML only; a var in anchors/aliases/merge-keys/flow-mappings is silently skipped, never mangled — the miss's escape hatch is the manual `--set`). Three policy filters fail a value before it reaches gateEnv: a `${{ }}` GitHub-expression ref (unusable + unsafe), anything the secret scanner flags (defense-in-depth — gateEnv is placeholders, not a secret store), and structurally anything inside a `run: |` block scalar. (2) **Gap-fill, operator wins** — detection only fills keys the overlay does not already have; a detected value that differs from a configured one is reported as a CONFLICT (preserved, not overwritten), equal is skipped (idempotent), and the overlay is written only when there are new keys. (3) **Detect-before-managed-overwrite ordering** — `factory scaffold` runs detection FIRST, before its `quality-gate.yml` managed template clobbers the repo's own workflow, so the repo author's CI env is captured into the durable overlay while that file is still theirs. See [../reference/cli.md](../reference/cli.md#configure) and [../reference/configuration.md](../reference/configuration.md#gateenv--ci-parity-placeholders).
 
 ---
 
@@ -628,31 +628,31 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 ---
 
-## Decision 28: One Engine, One Seam (the Coroutine), Two Thin Drivers
+## Decision 28: One Engine, One Seam (the Orchestrator), Two Thin Drivers
 
-**Choice:** The deterministic `factory` CLI owns **all** pipeline control flow — including the loop itself — and exposes exactly **one** seam, the **coroutine**, in two halves:
+**Choice:** The deterministic `factory` CLI owns **all** pipeline control flow — including the loop itself — and exposes exactly **one** seam, the **orchestrator**, in two halves:
 
-- `factory next` — the **run-level** coroutine (`src/driver/next.ts`, `stepRun`): emits a `NextEnvelope` of ready tasks (or terminal / quota-blocked).
-- `factory drive` — the **task-level** coroutine (`src/driver/coroutine.ts`, `stepTask`): emits a `DriveEnvelope` spawn manifest; re-invoked with `--results` it folds the spawned agents' raw output into exactly **one** state step (fold cores in `src/driver/fold.ts`).
+- `factory next-task` — the **run-level** orchestrator (`src/orchestrator/next.ts`, `nextTask`): emits a `NextTask` of ready tasks (or terminal / pause).
+- `factory next-action` — the **task-level** orchestrator (`src/orchestrator/orchestrator.ts`, `nextAction`): emits a `NextAction` spawn manifest; re-invoked with `--results` it records the spawned agents' raw output into exactly **one** state step (record cores in `src/orchestrator/record.ts`).
 
-A **driver** carries no pipeline logic of its own — it only calls the coroutine, spawns the `Agent()`s the `DriveEnvelope` manifest names, and feeds their output back via `drive --results`. Two interchangeable drivers step the same seam, selected by `--workflow` on `/factory:run` (Decision 32):
+A **runner** carries no pipeline logic of its own — it only calls the orchestrator, spawns the `Agent()`s the `NextAction` manifest names, and feeds their output back via `next-action --results`. Two interchangeable runners step the same seam, selected by `--workflow` on `/factory:run` (Decision 32):
 
-- session (default, no flag) — the in-session LLM orchestrator loop (`skills/pipeline-orchestrator/SKILL.md`), which can spawn `Agent()`s directly.
-- `--workflow` — the plugin-shipped Workflow script (`scripts/factory-run-driver.js`), which wraps every CLI call in a small exec agent (Workflow JS cannot shell out).
+- session (default, no flag) — the in-session LLM runner loop (`skills/pipeline-runner/SKILL.md`), which can spawn `Agent()`s directly.
+- `--workflow` — the plugin-shipped Workflow script (`scripts/factory-run-runner.js`), which wraps every CLI call in a small exec agent (Workflow JS cannot shell out).
 
 Both are subscription-only; there is no headless `claude -p` / API-token path.
 
 **Why:**
 
-- **One implementation of the loop, by construction.** The earlier design had the loop expressed twice — an in-process driver (`src/driver/loop.ts`, `driveTask` / `driveRun`) used in tests, and the orchestrator skill mirroring it by prose — kept in agreement only by discipline. Collapsing both onto the coroutine makes the loop a single tested kernel both drivers inherit verbatim; two drivers cannot diverge on a transition because neither owns one.
-- **Idempotent, exactly-once folds.** `drive` without `--results` re-derives the same spawn envelope from persisted state (safe to retry after any crash); `drive --results` validates the echoed `fold_key` (`{stage, rung}`) against the live cursor before any mutation, so a stale or duplicate delivery is rejected loud instead of double-folded. The resume cursor is the new `TaskState.stage` field.
-- **The seam is driver-agnostic.** Because the coroutine emits a manifest and the driver merely spawns it, adding a driver (e.g. a future out-of-session scheduler) is a new thin loop over the unchanged seam — not a re-implementation of pipeline logic.
+- **One implementation of the loop, by construction.** The earlier design had the loop expressed twice — an in-process runner (`src/orchestrator/loop.ts`, `driveTask` / `driveRun`) used in tests, and the runner skill mirroring it by prose — kept in agreement only by discipline. Collapsing both onto the orchestrator makes the loop a single tested kernel both runners inherit verbatim; two runners cannot diverge on a transition because neither owns one.
+- **Idempotent, exactly-once records.** `next-action` without `--results` re-derives the same spawn envelope from persisted state (safe to retry after any crash); `next-action --results` validates the echoed `result_key` (`{phase, rung}`) against the live cursor before any mutation, so a stale or duplicate delivery is rejected loud instead of double-folded. The resume cursor is the new `TaskState.phase` field.
+- **The seam is runner-agnostic.** Because the orchestrator emits a manifest and the runner merely spawns it, adding a runner (e.g. a future out-of-session scheduler) is a new thin loop over the unchanged seam — not a re-implementation of pipeline logic.
 
-**What this retired:** the six single-step CLI writers — `run-task`, `advance`, `drop`, `record-producer`, `record-holdout`, `record-reviews` — collapsed into the coroutine; their fold logic now runs inside `drive --results` (`src/driver/fold.ts`). `src/driver/loop.ts` and `src/driver/agent-runner.ts` (the in-process `driveTask` / `driveRun` loop) were deleted. The surviving non-coroutine writers are `spec`, `rescue`, `scaffold`, `configure`, `state`; the current `factory` subcommand registry is `config-defaults, configure, run, spec, rescue, score, state, scaffold, drive, next, statusline, autonomy`.
+**What this retired:** the six single-step CLI writers — `run-task`, `advance`, `fail`, `record-producer`, `record-holdout`, `record-reviews` — collapsed into the orchestrator; their record logic now runs inside `next-action --results` (`src/orchestrator/record.ts`). `src/orchestrator/loop.ts` and `src/orchestrator/agent-runner.ts` (the in-process `driveTask` / `driveRun` loop) were deleted. The surviving non-orchestrator writers are `spec`, `rescue`, `scaffold`, `configure`, `state`; the current `factory` subcommand registry is `config-defaults, configure, run, spec, rescue, score, state, scaffold, drive, next, statusline, autonomy`.
 
-**Trade-off:** A driver re-invokes the CLI per step (one process spawn per coroutine call) rather than running the loop in-process, and must persist/relay the per-spawn results file between `drive` calls. Accepted: the spawn boundary is where an `Agent()` call is unavoidable anyway, and per-call idempotency is what makes crash-resume and the two-driver story sound.
+**Trade-off:** A runner re-invokes the CLI per step (one process spawn per orchestrator call) rather than running the loop in-process, and must persist/relay the per-spawn results file between `next-action` calls. Accepted: the spawn boundary is where an `Agent()` call is unavoidable anyway, and per-call idempotency is what makes crash-resume and the two-runner story sound.
 
-**Relationship:** Realises the Model-A split (Decision 2) as a single seam rather than a reporter+writer fan-out; preserves derive-don't-store (Decision 1) and verify-then-fix (Decision 27) — both now fold through `drive --results`; the workflow driver is the unpaced mode of Decision 24.
+**Relationship:** Realises the Model-A split (Decision 2) as a single seam rather than a reporter+writer fan-out; preserves derive-don't-store (Decision 1) and verify-then-fix (Decision 27) — both now record through `next-action --results`; the workflow runner is the unpaced mode of Decision 24.
 
 ---
 
@@ -666,9 +666,9 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 - **Enforced in the deterministic engine, not the markdown surface.** The gate is a typed error in the CLI, so it cannot be skipped by editing a prompt or skill; it mirrors `ProtectionMissingError` (Decision 12's branch-protection refusal) as a hard start condition.
 - **Single predicate.** `isAutonomous` is the one source of truth, shared by this gate and the hook layer (branch-protection / pipeline guards), so the autonomous signal can never diverge between "may this run start" and "may this run merge."
 
-**Scope of the gate (deliberately narrow):** Only `create` + `resume` are gated — the two verbs that bring a run into existence or re-activate it, both of which execute in the **foreground orchestrator session** that definitively carries the env. Downstream verbs (`next`/`drive`/`finalize`) operate only on an already-autonomous run and stay ungated, so the workflow driver's background exec-agent CLI calls carry no env-propagation dependency. The shipping operations are independently autonomous-gated at the hook layer (`pipelineCanWrite`, Decision 12).
+**Scope of the gate (deliberately narrow):** Only `create` + `resume` are gated — the two verbs that bring a run into existence or re-activate it, both of which execute in the **foreground runner session** that definitively carries the env. Downstream verbs (`next-task`/`next-action`/`finalize`) operate only on an already-autonomous run and stay ungated, so the workflow runner's background exec-agent CLI calls carry no env-propagation dependency. The shipping operations are independently autonomous-gated at the hook layer (`pipelineCanWrite`, Decision 12).
 
-**Trade-off:** A hand-typed `factory drive --run X` in a non-autonomous shell against a pre-existing run is not caught (never something `/factory:run` does). Closeable later by stamping autonomy on the run record (no env dependency) if ever needed.
+**Trade-off:** A hand-typed `factory next-action --run X` in a non-autonomous shell against a pre-existing run is not caught (never something `/factory:run` does). Closeable later by stamping autonomy on the run record (no env dependency) if ever needed.
 
 **Relationship:** Operationalises the autonomy _condition_ of Decisions 19/20 as a runtime precondition; complements Decision 13 (how a session becomes autonomous) with the enforcement of _requiring_ it.
 
@@ -683,12 +683,12 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 - **Stop gate** resolves the run **owned by the stopping session** (`findActiveByOwner(stoppingSession)`) instead of `readCurrent()`, so a clobber can no longer make a stopping owner finalize the wrong run; unknown session → degrade to `readCurrent()`.
 - **`holdout-guard`** reads only `dataDir` — correctly global, untouched.
 
-**Per-repo `current` is CLI-only (not load-bearing for concurrency).** After the guards stop reading the global pointer, concurrency-correctness is already done. A separate `<dataDir>/current/<repoKey>` → `../runs/<run_id>` pointer tree (kept out of `runs/` so `listRuns` is untouched) only makes the human CLI (`state`/`score`/`rescue`/`run` resume with no `--run`) pick the right run for the caller's checkout (`readCurrentForCwd` resolves the repo from `origin`; unresolvable → global fallback). `run create` writes both the per-repo and legacy global pointers; `pointCurrentAt` **refuses loud** (pre-write) to repoint a repo whose current names a still-live run owned by a different known session — the new run's `state.json` already exists, so it stays addressable via `--run`. `next` is left on the global-pointer + `--assert-owner` mechanism untouched; `drive` still requires `--run`.
+**Per-repo `current` is CLI-only (not load-bearing for concurrency).** After the guards stop reading the global pointer, concurrency-correctness is already done. A separate `<dataDir>/current/<repoKey>` → `../runs/<run_id>` pointer tree (kept out of `runs/` so `listRuns` is untouched) only makes the human CLI (`state`/`score`/`rescue`/`run` resume with no `--run`) pick the right run for the caller's checkout (`readCurrentForCwd` resolves the repo from `origin`; unresolvable → global fallback). `run create` writes both the per-repo and legacy global pointers; `pointCurrentAt` **refuses loud** (pre-write) to repoint a repo whose current names a still-live run owned by a different known session — the new run's `state.json` already exists, so it stays addressable via `--run`. `next-task` is left on the global-pointer + `--assert-owner` mechanism untouched; `next-action` still requires `--run`.
 
 **Why:**
 
 - **Ownership is a property of the tool call, not of machine-global state.** The root cause of "runs can't coexist" was one design mistake: globally-installed hooks consulting a single shared mutable pointer instead of deriving ownership from the call. Each guard now reads ownership from inputs it already has — the write arm's target path, the Bash/Stop arms' session id — so enabling the plugin in an unrelated session can never leak a live run's scope into it.
-- **The critical arm needs no runtime spike.** Scoping by `session_id` payload or by `process.cwd()` both depend on unprovable-from-repo runtime facts (does a subagent's hook payload carry the orchestrator's id? `Edit`/`Write` honor no `cd`). The worktree target path is the signal the guard **already extracts** and is absolute by construction — verified-correct without a spike. The owner-session scope on the two lower-stakes Bash arms is the only place a runtime assumption survives, and it fails safe.
+- **The critical arm needs no runtime spike.** Scoping by `session_id` payload or by `process.cwd()` both depend on unprovable-from-repo runtime facts (does a subagent's hook payload carry the runner's id? `Edit`/`Write` honor no `cd`). The worktree target path is the signal the guard **already extracts** and is absolute by construction — verified-correct without a spike. The owner-session scope on the two lower-stakes Bash arms is the only place a runtime assumption survives, and it fails safe.
 - **Defense-in-depth, not a weakened boundary.** The write-scope arm is a rail; the authoritative TDD enforcement remains the deterministic commit-order gate on the task branch (`src/verifier/deterministic/strategies/tdd.ts`), which a path-anchor miss does not weaken.
 
 **Trade-off:** A producer write via `Bash` (rather than `Edit`/`Write`) still bypasses the path-anchored rail — already true and already documented; the commit-order gate is the real boundary. The Bash arms' owner-session scope degrades to prior (occasionally cross-session) behavior when `CLAUDE_CODE_SESSION_ID` is absent in the hook subprocess.
@@ -703,12 +703,12 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 
 **Why:**
 
-- **Restores a lost convenience, faithfully.** The old bash `pipeline-ensure-autonomy` auto-regenerated the merged settings on (missing OR version-changed) and halted with the relaunch command; the Node+TS port shipped `ensure`/`status` as clean primitives but dropped the detect-and-regenerate step and wired no caller. The convenience fell through the cutover — it was a gap, not a reasoned UX decision. Preflight re-composes the primitives into that run-entry behavior.
+- **Restores a lost convenience, faithfully.** The old bash `pipeline-ensure-autonomy` auto-regenerated the merged settings on (missing OR version-changed) and halted with the relaunch command; the Node+TS port shipped `ensure`/`status` as clean primitives but failed the detect-and-regenerate step and wired no caller. The convenience fell through the cutover — it was a gap, not a reasoned UX decision. Preflight re-composes the primitives into that run-entry behavior.
 - **Decision logic lives in the engine, not prose.** The verdict is a pure, total, IO-free function (Model A): testable in isolation, with the markdown surface reduced to "run preflight; on non-zero relay the printed command and stop." The CLI wrapper does IO only and delegates every write to the one `ensure` writer path (idempotency + statusLine chaining for free).
 - **The relaunch is irreducible.** Claude Code reads settings only at session launch, so a running session can never make _itself_ autonomous. Automation can cover the **scaffold**, never the relaunch — so preflight stops at printing the command. The hard invariant `regenerate ⟹ halt` encodes this: settings written mid-session can't load into the running session, so proceeding on a fresh regenerate would reintroduce false freshness.
 - **No lock needed.** `merged-settings.json` is a pure function of (template, user-settings, plugin version), so concurrent atomic writes from racing preflights converge to the same bytes.
 
-**Trade-off:** Preflight is a UX layer, not a correctness layer — a hand-typed `factory drive` in a non-autonomous shell still bypasses it. That is exactly why `requireAutonomousMode()` (Decision 29) remains the backstop in `create`/`resume`; preflight makes the common path friendly, the gate keeps the uncommon path safe.
+**Trade-off:** Preflight is a UX layer, not a correctness layer — a hand-typed `factory next-action` in a non-autonomous shell still bypasses it. That is exactly why `requireAutonomousMode()` (Decision 29) remains the backstop in `create`/`resume`; preflight makes the common path friendly, the gate keeps the uncommon path safe.
 
 **Relationship:** Sits in front of Decision 29 (the mandatory gate, untouched); operationalises Decision 13 (how a session becomes autonomous) as an automatic run-entry step.
 
@@ -716,22 +716,22 @@ Both are subscription-only; there is no headless `claude -p` / API-token path.
 
 ## Decision 32: Ship Live by Default; Boolean `--workflow` / `--no-ship` Run-Entry Flags
 
-**Choice:** A no-flag `/factory:run` resolves to **session mode + live ship**: the in-session orchestrator loop drives the run, each task auto-merges into staging, and the staging→develop rollup merges into develop. The two deviations from that default are terse booleans on the user-facing lifecycle verbs:
+**Choice:** A no-flag `/factory:run` resolves to **session mode + live ship**: the in-session runner loop drives the run, each task auto-merges into staging, and the staging→develop rollup merges into develop. The two deviations from that default are terse booleans on the user-facing lifecycle verbs:
 
-- `--workflow` → run the background Workflow driver instead of the in-session loop (persisted as `mode: "workflow"`).
+- `--workflow` → run the background Workflow runner instead of the in-session loop (persisted as `mode: "workflow"`).
 - `--no-ship` → open the task/rollup PRs but never merge (persisted as `ship_mode: "no-merge"`).
 
-The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs are **removed** from the user-facing verbs (`run create`, `run finalize`) — not kept as back-compat. `--ship-mode` survives only on the **internal coroutine seam** (`factory drive`, `factory next` via `--expect-mode`), where the drivers machine-generate it and a user never types it; omitting it there honors the run's persisted value. `live` is the single-source-of-truth default in the schema (`ShipModeEnum.default("live")`, `manager.ts`), so schema and CLI agree without a second hardcoded fallback.
+The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs are **removed** from the user-facing verbs (`run create`, `run finalize`) — not kept as back-compat. `--ship-mode` survives only on the **internal orchestrator seam** (`factory next-action`, `factory next-task` via `--expect-mode`), where the runners machine-generate it and a user never types it; omitting it there honors the run's persisted value. `live` is the single-source-of-truth default in the schema (`ShipModeEnum.default("live")`, `manager.ts`), so schema and CLI agree without a second hardcoded fallback.
 
 **Why:**
 
 - **Auto-merge is the pipeline's purpose, not an opt-in.** A quality-first, TDD-enforced run that ends with an un-merged PR has not shipped. The merge is already gated four ways — branch protection (Decision 12), the risk-invariant review panel (Decision 26), the TDD commit-ordering rail, and the holdout — so `live` is safe to make the default; `no-merge` is the cutover-safety exception, kept for staged rollouts and dry runs.
 - **Boolean flags match how operators think.** "Run it" / "run it in the background" / "run it but don't merge" maps to _nothing_ / `--workflow` / `--no-ship` — no value to remember, no enum to mistype. The verbose pairs added a second spelling of the same two dials for no benefit, so they were removed outright rather than carried as hidden aliases (a second accepted spelling is a maintenance and ambiguity cost with no user value once the boolean exists).
-- **Persisted-once, read-many.** `mode` and `ship_mode` persist on the run at `run create`; `next`/`drive`/`finalize` and the workflow driver + `resume` read them from state, so the orchestrator never re-marshals ship intent through Phase 3. `run finalize` defaults to the persisted `ship_mode`; its `--no-ship` overrides that one finalize call only.
+- **Persisted-once, read-many.** `mode` and `ship_mode` persist on the run at `run create`; `next-task`/`next-action`/`finalize` and the workflow runner + `resume` read them from state, so the runner never re-marshals ship intent through Phase 3. `run finalize` defaults to the persisted `ship_mode`; its `--no-ship` overrides that one finalize call only.
 
 **Trade-off:** Because the CLI now always resolves a concrete `mode`/`ship_mode` from the flags, the reuse-mismatch guard fires whenever a bare re-`create` resolves to a different intent than the run it would reuse — e.g. re-running a `--workflow`/`--no-ship` run without those flags now hard-fails (loud `UsageError`) instead of silently reusing. This is the desired safety (never drive a pre-existing run under a ship intent the operator did not ask for); the fix is to match the run's flags or pass `--new`. Direct-API callers that pass `mode`/`shipMode` as `undefined` still reuse without divergence (the guard compares only defined intent).
 
-**Relationship:** Inherits the two-driver seam of Decision 28 (`--workflow` is just the driver selector) and the unpaced-workflow contract of Decision 24; the live-by-default merge rides the shipping gates of Decisions 12/26; the reuse-mismatch guard composes with the per-`(repo, spec_id)` run isolation of Decision 30.
+**Relationship:** Inherits the two-runner seam of Decision 28 (`--workflow` is just the runner selector) and the unpaced-workflow contract of Decision 24; the live-by-default merge rides the shipping gates of Decisions 12/26; the reuse-mismatch guard composes with the per-`(repo, spec_id)` run isolation of Decision 30.
 
 ---
 
@@ -755,7 +755,7 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 **Amendment (2026-06-19) — flat `-` delimiter, not `/`.** The per-run branch is `staging-<run-id>`, not `staging/<run-id>`. Git stores refs as files (`refs/heads/…`), so a slashed `staging/<run-id>` requires `staging` to be a _directory_ — which collides with a target repo's long-lived `refs/heads/staging` release branch (the common `develop → staging → main` flow). That collision is config-unfixable (the prefix is hardcoded) and blocks every `run create` in such a repo. A flat `staging-<run-id>` shares no path segment with `refs/heads/staging`, so the two coexist regardless of the target repo's branch layout. `runStagingBranch(runId)` (`src/git/run-staging.ts`) builds the name construct-only — nothing parses it — so no callers changed. Runs created before this change live on the old slashed name; they are ephemeral, so supersede/restart rather than migrate.
 
-**Amendment (2026-06-19) — pin the branch name in `RunState`, don't recompute it.** The branch name is now **pinned once at `run create`** into `RunState.staging_branch` (`src/core/state/schema.ts`) and read everywhere through a new pure resolver `resolveStagingBranch(runId, pinned?)` (`src/git/run-staging.ts`): it returns the pinned name when present, else falls back to `runStagingBranch(runId)`. `run create` computes the name once and threads it through `state.create({…, staging_branch})`; every read site — preflight base, the verify gate `baseRef`, ship's PR base + `MergeSerializer` staging (`src/driver/handlers.ts`, `src/driver/ship.ts`), the spawn envelope's `base_ref` (`src/driver/coroutine.ts`), the holdout sidecar baseRef (`src/driver/fold.ts`), and the finalize rollup + branch GC (`src/driver/finalize.ts`) — resolves through it. _Why:_ recomputing the name on every read silently desyncs the gate base ref / worktree fork point from the branch already pushed to origin if the naming scheme changes mid-run (as the flat-delimiter amendment above just did) or the repo branch layout shifts. A pinned identity is the run's git provenance — an immutable fact about what was created, not a recomputed verdict — so storing it does **not** violate derive-don't-store, which governs only re-derivable quality verdicts (gate pass/fail, the merge gate). The resolver keeps a pure `(string, string?) => string` signature with no `RunState` import, so the git layer stays independent of `core/state`. Legacy runs created before the field fall back to the recomputed name, so nothing breaks.
+**Amendment (2026-06-19) — pin the branch name in `RunState`, don't recompute it.** The branch name is now **pinned once at `run create`** into `RunState.staging_branch` (`src/core/state/schema.ts`) and read everywhere through a new pure resolver `resolveStagingBranch(runId, pinned?)` (`src/git/run-staging.ts`): it returns the pinned name when present, else falls back to `runStagingBranch(runId)`. `run create` computes the name once and threads it through `state.create({…, staging_branch})`; every read site — preflight base, the verify gate `baseRef`, ship's PR base + `MergeSerializer` staging (`src/orchestrator/handlers.ts`, `src/orchestrator/ship.ts`), the spawn envelope's `base_ref` (`src/orchestrator/orchestrator.ts`), the holdout validator baseRef (`src/orchestrator/record.ts`), and the finalize rollup + branch GC (`src/orchestrator/finalize.ts`) — resolves through it. _Why:_ recomputing the name on every read silently desyncs the gate base ref / worktree fork point from the branch already pushed to origin if the naming scheme changes mid-run (as the flat-delimiter amendment above just did) or the repo branch layout shifts. A pinned identity is the run's git provenance — an immutable fact about what was created, not a recomputed verdict — so storing it does **not** violate derive-don't-store, which governs only re-derivable quality verdicts (gate pass/fail, the merge gate). The resolver keeps a pure `(string, string?) => string` signature with no `RunState` import, so the git layer stays independent of `core/state`. Legacy runs created before the field fall back to the recomputed name, so nothing breaks.
 
 **Trade-off:** Per-run branches diverge from develop over their lifetime, so a run that completes after another has merged to develop must reconcile forward before its rollup — integration work the single forward-only shared branch did not need. Accepted: the reconciliation is forward-only and bounded, and it buys the confinement that makes the whole recovery model safe.
 
@@ -779,7 +779,7 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 - `partial` is REMOVED. A run is `completed`, or it is unfinished/resumable.
 - A wedged run the circuit breaker gives up on goes terminal `failed` — develop clean, PRD left open. `failed` broadens from "could not start" to "delivered no work to develop" (couldn't-start OR gave-up after banking work on its private branch).
-- On `completed`, finalize CLOSES and COMMENTS the originating PRD issue — net-new behavior added via `issueClose`/`issueComment` (`src/git/gh-client.ts`). Closing the PRD is what guarantees `run` never re-touches a delivered PRD (Decision 35). On `failed`, finalize instead posts ONE comment on the open PRD listing the dropped tasks (Decision 36 — superseding the original per-task `issueCreate`/`issueList` surface, both since removed).
+- On `completed`, finalize CLOSES and COMMENTS the originating PRD issue — net-new behavior added via `issueClose`/`issueComment` (`src/git/gh-client.ts`). Closing the PRD is what guarantees `run` never re-touches a delivered PRD (Decision 35). On `failed`, finalize instead posts ONE comment on the open PRD listing the failed tasks (Decision 36 — superseding the original per-task `issueCreate`/`issueList` surface, both since removed).
 
 **Trade-off:** Loses "bank the N good tasks, hand off the failures" incremental value delivery — a run that cannot finish delivers nothing to develop, even if most tasks passed. Accepted deliberately: the banked work is not lost (it survives on the run's private branch for rescue/resume), and atomic per-PRD delivery is worth more than partial landings that complicate develop and recovery.
 
@@ -802,7 +802,7 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 **Why:**
 
 - **The verbs were conflated.** `run` both started AND silently reused (Decision 32), there was no first-class `resume`, and "continue" vs "repair" were undivided — operators hit the bug where `/factory:run` found an existing run and stopped instead of starting fresh. Separating the verbs maps each to one intent: start-over / continue / repair.
-- **Supersede-with-consent honors the never-drop-without-confirmation rule** while still letting an operator start fresh. The at-most-one-non-terminal-run-per-spec invariant it enforces keeps state unambiguous (no zombie parallel runs on one PRD).
+- **Supersede-with-consent honors the never-fail-without-confirmation rule** while still letting an operator start fresh. The at-most-one-non-terminal-run-per-spec invariant it enforces keeps state unambiguous (no zombie parallel runs on one PRD).
 - **Agent-driven reconciliation keeps the engine out of a brittle drift catalog.** The engine is good at detecting that progress is blocked; open-ended diagnosis and repair of git/GitHub state is exactly the agent layer's job under Model A.
 
 **Trade-off:** `run` is no longer a silent idempotent no-op on re-invocation — it stops to ask, costing an interaction in the (rare) re-run case. And agent-driven rescue is less predictable than a fixed reconciliation routine. Both accepted: the prompt prevents silent supersede of real work, and the recovery surface is too open-ended to enumerate safely in TS.
@@ -811,40 +811,40 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 **Addendum (2026-06-19) — `run cancel`, the in-session abandon verb.** A run with non-terminal tasks left the owning session unable to stop: the Stop gate (`src/hooks/stop-gate.ts`) blocks the session while a `running` run has pending work, and every other lever was unreachable mid-session — `state.json` is TCB-write-protected, `run finalize` refuses an in-flight task, and `FACTORY_ALLOW_STOP` is a launch-time-only env. The lifecycle had a start/continue/repair vocabulary but no _abandon_. `factory run cancel [--run <id>] [--cleanup] [--session-id <id>]` (`runCancel` in `src/cli/subcommands/run.ts`) fills the gap: it resolves the run via `--run` → owner-scan (`findAllActiveByOwner`, robust to a detached `runs/current`) → current pointer (explicit `--run` is a deliberate operator override with NO ownership check — the cross-session escape hatch a crashed owner's run needs, sound under the single-operator local trust model, exactly as `resume`/`finalize` honor `--run`; the owner-scan resolves the SINGLE owned run, failing LOUD and demanding `--run` when the session owns ≥2 live runs rather than guessing which to abandon, yet still falls through to the pointer when it owns none), then calls `state.finalize(runId, "failed")` **directly** — NOT `finalizeRun` (cancel must not attempt rollup CI / ship of a partial run). `finalize` validates only that the _target_ status is terminal — it never inspects task statuses — so a run with a task still `executing` is cancellable, the exact mechanism `--supersede` already uses. The CLI is the sanctioned state writer (it bypasses the TCB hook, which guards Edit/Write tools, not the engine's own fs writes), so this is not "routing around the guard." Design choices: reuse `failed` (no schema change; a user-abandon is a give-up-after-partial-work, which `failed` already means), so a cancelled run is terminal and NOT resumable; teardown of the staging branch + task PRs is opt-in via `--cleanup` (default leaves them for manual handling) and best-effort — a teardown failure is surfaced LOUD (a `cleanup_error` in the envelope plus a safe-retry hint on stderr) but never fails the abandon, since the run is already `failed` and the Stop gate already released; re-running `--cleanup` retries idempotently; and the verb omits the autonomy gate (Decision 29) because it is the documented _escape_ from the Stop gate and must work from any session. The Stop-gate block message now names `factory run cancel --run <id>` so a trapped session discovers it.
 
-**Addendum (2026-06-20) — supersede teardown is resume-safe-ordered.** `supersedeRun` (`src/cli/subcommands/run.ts`) now tears down the old run's protection + `staging-<run-id>` branch BEFORE flipping it `superseded`, the terminal write LAST — the resume-safe convention `finalizeRun` (`src/driver/finalize.ts`) already uses. Previously it finalized first, then tore down unguarded: a teardown throw (GitHub 401/403/5xx) propagated, so the fresh run was never created AND the old run was already terminal — excluded from `findActiveBySpec`, so no re-run ever re-attempted its teardown and the protected branch was orphaned permanently (rescue scopes out branch GC). With finalize last, a teardown failure leaves the old run non-terminal, so re-running `run --supersede` re-resolves it and retries the whole step idempotently (`deleteProtection`/`deleteRemoteBranch` tolerate already-gone), leaving NO orphan. This is the DELIBERATE inverse of `run cancel`'s finalize-first ordering: cancel's priority is releasing the Stop gate even if teardown fails (so the terminal write must win), whereas supersede has no gate and is an interactive pre-start moment, so a clean, recoverable replacement wins over forcing the fresh run through.
+**Addendum (2026-06-20) — supersede teardown is resume-safe-ordered.** `supersedeRun` (`src/cli/subcommands/run.ts`) now tears down the old run's protection + `staging-<run-id>` branch BEFORE flipping it `superseded`, the terminal write LAST — the resume-safe convention `finalizeRun` (`src/orchestrator/finalize.ts`) already uses. Previously it finalized first, then tore down unguarded: a teardown throw (GitHub 401/403/5xx) propagated, so the fresh run was never created AND the old run was already terminal — excluded from `findActiveBySpec`, so no re-run ever re-attempted its teardown and the protected branch was orphaned permanently (rescue scopes out branch GC). With finalize last, a teardown failure leaves the old run non-terminal, so re-running `run --supersede` re-resolves it and retries the whole step idempotently (`deleteProtection`/`deleteRemoteBranch` tolerate already-gone), leaving NO orphan. This is the DELIBERATE inverse of `run cancel`'s finalize-first ordering: cancel's priority is releasing the Stop gate even if teardown fails (so the terminal write must win), whereas supersede has no gate and is an interactive pre-start moment, so a clean, recoverable replacement wins over forcing the fresh run through.
 
-**Addendum (2026-06-21) — the Stop-gate pending-work block is removed (simplification Phase 2).** The Stop hook (`src/hooks/stop-gate.ts`) no longer emits `{decision:"block"}` while a `running` run has pending work, and the `FACTORY_ALLOW_STOP` escape hatch is gone. That block was the "session-hostage" behaviour — a session that could not progress was held open indefinitely — and it never functioned in `--workflow` mode (the strategic primary driver) anyway, since a workflow-mode run already passed through. A session may now always stop; a run left `running` with pending work stays cleanly resumable via `factory resume` (an idempotent re-entry — `applyResume`). The hook keeps finalize-on-stop (an owned, session-mode, all-terminal run is finalized so it never dangles) and its two CORRUPTION blocks (unreadable `state.json`, finalize failure — M9), which surface genuine inconsistency, not lack of progress. Consequence for `run cancel` (the 2026-06-19 addendum above): it is no longer the "escape from the Stop gate" — it is simply the explicit ABANDON verb (mark `failed`, optionally `--cleanup` teardown) for deliberately discarding a run you will not resume.
+**Addendum (2026-06-21) — the Stop-gate pending-work block is removed (simplification Phase 2).** The Stop hook (`src/hooks/stop-gate.ts`) no longer emits `{decision:"block"}` while a `running` run has pending work, and the `FACTORY_ALLOW_STOP` escape hatch is gone. That block was the "session-hostage" behaviour — a session that could not progress was held open indefinitely — and it never functioned in `--workflow` mode (the strategic primary runner) anyway, since a workflow-mode run already passed through. A session may now always stop; a run left `running` with pending work stays cleanly resumable via `factory resume` (an idempotent re-entry — `applyResume`). The hook keeps finalize-on-stop (an owned, session-mode, all-terminal run is finalized so it never dangles) and its two CORRUPTION blocks (unreadable `state.json`, finalize failure — M9), which surface genuine inconsistency, not lack of progress. Consequence for `run cancel` (the 2026-06-19 addendum above): it is no longer the "escape from the Stop gate" — it is simply the explicit ABANDON verb (mark `failed`, optionally `--cleanup` teardown) for deliberately discarding a run you will not resume.
 
 ---
 
 ## Decision 36: A Failed Run Comments the PRD Issue; Per-Task Failure Issues Are Retired
 
-**Status:** Implemented (2026-06-22). Removes the per-dropped-task GitHub-issue surface (`fileFailureIssues` + the gh-client `issueCreate`/`issueList` methods and their types) from `finalize`. On a `failed` run, finalize now posts ONE comment on the originating PRD issue listing every dropped task; the PRD stays open.
+**Status:** Implemented (2026-06-22). Removes the per-failed-task GitHub-issue surface (`fileFailureIssues` + the gh-client `issueCreate`/`issueList` methods and their types) from `finalize`. On a `failed` run, finalize now posts ONE comment on the originating PRD issue listing every failed task; the PRD stays open.
 
-**Choice:** GitHub issues represent **PRDs**, not run-internal task outcomes. A `failed` run's drops are surfaced as a single comment on the PRD issue (`commentFailuresOnPrd`, `src/driver/finalize.ts`, step 5) carrying drops-only content — for each dropped task: id, title, `failure_class`, `failure_reason`, and its full (all-unmet) acceptance criteria. The renderer (`renderFailureComment`, `src/scoring/partial-report.ts`) leads the body with a hidden marker `<!-- factory:run-failed:<run-id> -->`; finalize scans existing PRD comments (new `GhClient.listIssueComments`) for that marker and skips if present, so a resumed finalize (a crash before the terminal flip) never double-posts.
+**Choice:** GitHub issues represent **PRDs**, not run-internal task outcomes. A `failed` run's fails are surfaced as a single comment on the PRD issue (`commentFailuresOnPrd`, `src/orchestrator/finalize.ts`, step 5) carrying fails-only content — for each failed task: id, title, `failure_class`, `failure_reason`, and its full (all-unmet) acceptance criteria. The renderer (`renderFailureComment`, `src/scoring/partial-report.ts`) leads the body with a hidden marker `<!-- factory:run-failed:<run-id> -->`; finalize scans existing PRD comments (new `GhClient.listIssueComments`) for that marker and skips if present, so a resumed finalize (a crash before the terminal flip) never double-posts.
 
 **Why:**
 
-- **Issues = PRDs.** A previous run filed several `[factory] … dropped` issues, polluting the issue namespace with run-internal state. Per-task status is **already** authoritative locally — `RunState.tasks[id].status` (`done`/`dropped` + `failure_class` + `failure_reason`) plus the durable `report.md`. The fix replaces a redundant, namespace-polluting GitHub surface, not local tracking (which was never missing).
+- **Issues = PRDs.** A previous run filed several `[factory] … failed` issues, polluting the issue namespace with run-internal state. Per-task status is **already** authoritative locally — `RunState.tasks[id].status` (`done`/`failed` + `failure_class` + `failure_reason`) plus the durable `report.md`. The fix replaces a redundant, namespace-polluting GitHub surface, not local tracking (which was never missing).
 - **Symmetric with the success path.** A `completed` run already comments + closes the PRD (Decision 34); a `failed` run now comments + leaves it open. One PRD-comment surface for both outcomes, keyed off the same `report.issue_number`.
-- **One comment, not N issues.** A run that drops K tasks produces ONE consolidated comment, not K issues a human must triage and close. A later successful re-run simply adds its own comment and closes the PRD — no stale open issues to reap.
+- **One comment, not N issues.** A run that fails K tasks produces ONE consolidated comment, not K issues a human must triage and close. A later successful re-run simply adds its own comment and closes the PRD — no stale open issues to reap.
 
-**Trade-off:** Loses the per-task issue as an independently-assignable/closable work item. Accepted: the PRD is the unit of work in this model, the local run state is the authoritative per-task ledger, and the drops-only comment gives a human everything needed to decide rescue/resume/abandon without a parallel issue namespace to maintain. CLI consequence: the `finalized` envelope emits `failure_comment_posted: boolean` in place of `issues_filed: number`.
+**Trade-off:** Loses the per-task issue as an independently-assignable/closable work item. Accepted: the PRD is the unit of work in this model, the local run state is the authoritative per-task ledger, and the fails-only comment gives a human everything needed to decide rescue/resume/abandon without a parallel issue namespace to maintain. CLI consequence: the `finalized` envelope emits `failure_comment_posted: boolean` in place of `issues_filed: number`.
 
-**Relationship:** Refines Decision 34's failure path (which left the PRD open but said nothing about how drops were surfaced) and Decision 22's "loud, classified drop" (the comment IS the loud handback). Reuses the same `FailureLine[]` the partial report already derives.
+**Relationship:** Refines Decision 34's failure path (which left the PRD open but said nothing about how fails were surfaced) and Decision 22's "loud, classified fail" (the comment IS the loud handback). Reuses the same `FailureLine[]` the partial report already derives.
 
 ---
 
-## Decision 37 — Documentation Is an Engine Stage Before Finalize
+## Decision 37 — Documentation Is an Engine Phase Before Finalize
 
 Docs generation was a Phase-4 markdown conditional that ran AFTER the rollup PR
 merged and the PRD issue closed, leaving doc updates uncommitted. It is now a
-deterministic, blocking, resumable engine stage: `factory next` returns
-`docs-ready` when the prospective status is `completed`, the repo keeps `/docs`,
+deterministic, blocking, resumable engine phase: `factory next-task` returns
+`document` when the prospective status is `completed`, the repo keeps `/docs`,
 docs are not opted out (`package.json` `factory.docs.enabled`), and the docs
-stage isn't `done`. A driver runs `factory run docs` (emit a scribe manifest on a
-staging-rooted worktree → fold publishes the docs commit onto staging). Because
-`next` withholds `all-terminal` until docs are `done`, the rollup/PRD-close cannot
+phase isn't `done`. A runner runs `factory run docs` (emit a scribe manifest on a
+staging-rooted worktree → record publishes the docs commit onto staging). Because
+`next-task` withholds `finalize` until docs are `done`, the rollup/PRD-close cannot
 fire while docs pend. A docs failure suspends the run (one attempt; resumable via
 `/factory:resume`), never shipping half-documented. Whole-PRD diff
 (`origin/<baseBranch>..HEAD`); ships inside the one rollup PR (Decision 34).
@@ -867,11 +867,11 @@ Cannot set per-agent permissions (e.g., read-only for reviewers). Reviewer agent
 
 ### No Process Manager Primitive
 
-Solved by running the orchestrator in the main session. The command body IS the control loop.
+Solved by running the runner in the main session. The command body IS the control loop.
 
 ### Concurrent Agent Results
 
-The orchestrator (main session) emits multiple `Agent()` calls in one message. Claude Code invokes them in parallel natively. All results return in the same turn.
+The runner (main session) emits multiple `Agent()` calls in one message. Claude Code invokes them in parallel natively. All results return in the same turn.
 
 ---
 
