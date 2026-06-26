@@ -39,7 +39,7 @@ Skill(pipeline-orchestrator)   # then: factory resume [--run <id>] [--ignore-quo
   - `mode === "session"` → continue the skill's Phase 3 THE LOOP and Phase 4.
   - `mode === "workflow"` → re-launch the driver with
     `Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/scripts/factory-run-driver.js" })`, no `args` —
-    it self-resolves `run_id`/`data_dir`/`ship_mode` from the first `factory next` envelope
+    it self-resolves `run_id`/`data_dir`/`ship_mode` from the first `factory next-task` envelope
     (`mode`/`ship_mode` are persisted on the run, never re-passed).
 - `{ kind: "still-blocked", run_id, status, reason, resets_at_epoch? }` → the quota window
   has not recovered. Report `reason` (and `resets_at_epoch` if present) and STOP. The run

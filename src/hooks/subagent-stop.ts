@@ -9,7 +9,7 @@
  *
  * This hook is now LOG-ONLY (observational). When a REVIEWER subagent stops it
  * parses the verdict and logs it loudly, but does NOT write to task.reviewers[].
- * The driver delivers panel results through the `factory drive` record
+ * The driver delivers panel results through the `factory next-action` record
  * ({@link applyRecordReviews} in src/driver/record.ts) — that is the single
  * sanctioned writer of task.reviewers[]. A hook-side write would create a second
  * writer that can poison crash-resume replay: if the hook writes reviewers[] after
@@ -102,7 +102,7 @@ export interface SubagentStopDeps extends DataDirOptions {
  * Core handler: given parsed input, resolve the reviewer + task and LOG the parsed
  * verdict loudly. Returns null (observational — no state write).
  *
- * The driver delivers panel results through the `factory drive` record
+ * The driver delivers panel results through the `factory next-action` record
  * (applyRecordReviews) — that is the single sanctioned writer of task.reviewers[].
  * A hook-side write here would poison crash-resume replay via the verify handler's
  * derive branch.

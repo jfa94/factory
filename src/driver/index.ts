@@ -48,13 +48,13 @@ export {
   type RecordReviewsEnvelope,
 } from "./record.js";
 
-// -- drive results schema (factory drive --results input) --------------------
+// -- drive results schema (factory next-action --results input) --------------------
 export { DriveResultsSchema, parseDriveResults, type DriveResults } from "./results.js";
 
 // -- quota gate (shared by both coroutines) ----------------------------------------
 export { applyQuotaGate, type QuotaGateDeps, type QuotaStop } from "./quota-gate.js";
 
-// -- per-task coroutine (factory drive seam) ----------------------------
+// -- per-task coroutine (factory next-action seam) ----------------------------
 export {
   nextAction,
   holdoutSidecar,
@@ -65,7 +65,7 @@ export {
   type DriveExpects,
 } from "./coroutine.js";
 
-// -- run-level coroutine (factory next seam) --------------------------------------
+// -- run-level coroutine (factory next-task seam) --------------------------------------
 export { nextTask, type NextTask } from "./next.js";
 
 // -- docs phase emit + record coroutines (factory run docs seam) -----------------

@@ -4,7 +4,7 @@
  * The ONLY `proper-lockfile` import site in the engine. Both serial writers ride
  * it: WS1's StateManager (per-run + per-spec read-modify-write) and WS3's
  * MergeSerializer (one squash-merge into staging at a time). Cross-process
- * writers — concurrent `factory drive` processes in `--mode workflow` — can't be
+ * writers — concurrent `factory next-action` processes in `--mode workflow` — can't be
  * serialized by an in-memory mutex, so a robust file lock is the floor, not
  * gold-plating.
  *

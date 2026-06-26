@@ -1,5 +1,5 @@
 /**
- * `factory drive --run <id> --task <id> [--results <file>] [--ship-mode <m>]` —
+ * `factory next-task-action --run <id> --task <id> [--results <file>] [--ship-mode <m>]` —
  * the per-task coroutine (the engine seam both drivers share).
  *
  * Runs every deterministic step it can and emits ONE JSON NextAction:
@@ -13,10 +13,10 @@ import { loadCoroutineDeps } from "../wiring.js";
 import { nextAction, parseDriveResults, readJsonInput } from "../../driver/index.js";
 import type { Subcommand } from "../registry-types.js";
 
-const HELP = `factory drive — step one task until it needs agents or is terminal
+const HELP = `factory next-task-action — step one task until it needs agents or is terminal
 
 Usage:
-  factory drive --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
+  factory next-task-action --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
 
 --ship-mode (optional): no-merge | live — overrides the run's persisted ship_mode for
 this step only; omit to honor the persisted value (the seam default, never no-merge).
@@ -71,7 +71,7 @@ export const driveCommand: Subcommand = {
       return await run(argv);
     } catch (err) {
       if (isUsageError(err)) {
-        emitError(`drive: ${err.message}`);
+        emitError(`next-action: ${err.message}`);
         return EXIT.USAGE;
       }
       throw err;

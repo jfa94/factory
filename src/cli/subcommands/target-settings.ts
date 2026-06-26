@@ -41,7 +41,7 @@ const log = createLogger("cli:target-settings");
  * factory run needs in the TARGET repo. Each entry maps to a concrete pipeline
  * action:
  *
- *   - `Bash(factory:*)`        — the orchestrator shells `factory next/drive/…`.
+ *   - `Bash(factory:*)`        — the orchestrator shells `factory next-task/next-action/…`.
  *   - `Bash(git:*)` / `Bash(gh:*)` — preflight `git rev-parse`, reviewer
  *                                 `git -C <wt> diff`, scaffold's `gh repo view`,
  *                                 plus producers' commit/branch plumbing.

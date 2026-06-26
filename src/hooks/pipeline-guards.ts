@@ -14,7 +14,7 @@
  *       (owner-scoped via {@link loadOwnerScopedRun}; shared {@link isNestedShellOrHookBypass}).
  *   (c) SHIP guard (agent-deny): `gh pr create`/`gh pr merge` are categorically
  *       denied while a run is active. The factory ENGINE opens and merges PRs
- *       deterministically from inside `factory drive` (a child_process `gh` call
+ *       deterministically from inside `factory next-action` (a child_process `gh` call
  *       that never transits this Bash-tool hook — src/driver/ship.ts), and the
  *       merge gate that actually gates shipping is derived THERE
  *       (derive-don't-store). So any ship command reaching this hook is an
@@ -190,7 +190,7 @@ export async function decidePipelineGuards(
   }
 
   // (c) SHIP guard — agent-deny. The factory engine ships deterministically from
-  // INSIDE `factory drive` (a child_process `gh` call that never transits this
+  // INSIDE `factory next-action` (a child_process `gh` call that never transits this
   // Bash-tool hook — src/driver/ship.ts), so any `gh pr create`/`gh pr merge` that
   // DOES reach this hook is an agent-initiated ship attempt while a run is active.
   // That is categorically denied: PRs are opened and merged ONLY by the engine,

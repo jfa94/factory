@@ -1,6 +1,6 @@
 // src/driver/results.ts
 /**
- * The `factory drive --results <file>` input — what a driver collected from the
+ * The `factory next-action --results <file>` input — what a driver collected from the
  * agents the previous spawn envelope named. Exactly one of `producer` / `reviews`
  * is present (matching the envelope's `expects`); `holdout` may accompany
  * `reviews` when the envelope carried a holdout. Parsed LOUD (Zod strict).

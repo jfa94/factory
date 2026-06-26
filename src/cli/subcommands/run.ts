@@ -4,8 +4,8 @@
  * Model A: the CLI never spawns an agent. `run create` resolves a DURABLE spec (by
  * stable issue number or explicit spec-id), creates a fresh run, SEEDS its task
  * rows from the spec, and emits the {@link RunState}; the in-session orchestrator
- * reads `run_id` and drives the run through the coroutine seam (`factory next` +
- * `factory drive`).
+ * reads `run_id` and drives the run through the coroutine seam (`factory next-task` +
+ * `factory next-action`).
  *
  * `run resume` is the human-invoked resumable entrypoint (Decision 24, Δ F — v1 is
  * HUMAN relaunch only; the v2 scheduler would fire this same path). It re-reads the

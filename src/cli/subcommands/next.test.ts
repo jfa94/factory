@@ -1,5 +1,5 @@
 /**
- * `factory next` — unit tests for the run-level coroutine CLI shell.
+ * `factory next-task` — unit tests for the run-level coroutine CLI shell.
  *
  * Surfaces:
  *   1. arg/usage edges (short-circuit before wiring) via nextCommand;
@@ -45,8 +45,8 @@ describe("next arg/usage edges", () => {
     try {
       const code = await nextCommand.run([]);
       expect(code).toBe(EXIT.USAGE);
-      // wrapper prefixes "next: "; inner throw has no duplicate prefix
-      expect(stderr.read()).toMatch(/^next: no --run given/);
+      // wrapper prefixes "next-task: "; inner throw has no duplicate prefix
+      expect(stderr.read()).toMatch(/^next-task: no --run given/);
     } finally {
       stderr.restore();
       if (saved === undefined) delete process.env["CLAUDE_PLUGIN_DATA"];

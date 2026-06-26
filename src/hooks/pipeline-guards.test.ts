@@ -3,7 +3,7 @@
  *
  * The load-bearing property: while a run is active, ship commands
  * (`gh pr create`/`gh pr merge`) are categorically denied — the factory ENGINE
- * opens and merges PRs from inside `factory drive` (a child_process gh call that
+ * opens and merges PRs from inside `factory next-action` (a child_process gh call that
  * never transits this Bash-tool hook), so any ship command reaching the hook is an
  * agent-initiated attempt. Also covers: no active run → pass through; test-writer
  * phase write-scope; nested-shell denial while a run is active; dangling-symlink
@@ -83,7 +83,7 @@ describe("pipeline-guards — no active run passes through", () => {
 });
 
 describe("pipeline-guards — ship guard is agent-deny while a run is active", () => {
-  // The engine ships from inside `factory drive` (a child_process gh call that
+  // The engine ships from inside `factory next-action` (a child_process gh call that
   // never transits this Bash-tool hook — src/driver/ship.ts), so ANY ship command
   // reaching the hook is an agent-initiated attempt and is categorically denied,
   // independent of reviewers / pr_number / gate evidence.

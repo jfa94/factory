@@ -1,6 +1,6 @@
 ---
 name: pipeline-orchestrator
-description: (internal) Drive the factory pipeline. The engine is the `factory` CLI (`next` + `drive` coroutines own ALL control flow); you are a dumb loop that spawns the agents each envelope names and feeds their raw output back.
+description: (internal) Drive the factory pipeline. The engine is the `factory` CLI (`next-task` + `next-action` coroutines own ALL control flow); you are a dumb loop that spawns the agents each envelope names and feeds their raw output back.
 auto-invoke: false
 ---
 
@@ -117,12 +117,12 @@ never ambiguous and resume itself takes no mode flag.
 THE LOOP is the session-mode driver ONLY. In workflow mode you stopped after Phase 2 — the
 Workflow script (`scripts/factory-run-driver.js`) is the loop; do not run this phase.
 
-The ship mode is persisted on the run (Phase 2's `run create`); `next`, `drive`, and `finalize` all
+The ship mode is persisted on the run (Phase 2's `run create`); `next-task`, `next-action`, and `finalize` all
 read it from state — never re-pass it and never choose it yourself.
 
 ```
 loop:
-  env = factory next --run <run_id>
+  env = factory next-task --run <run_id>
   case env.kind:
     "done"  → go to Phase 4 (report)
     "finalize"  → factory run finalize --run <run_id>; go to Phase 4
@@ -135,14 +135,14 @@ loop:
 step(task):
   results_file = (none)
   loop:
-    tenv = factory drive --run <run_id> --task <task> [--results <results_file>]
+    tenv = factory next-action --run <run_id> --task <task> [--results <results_file>]
     case tenv.kind:
       "done"      → report tenv.outcome (a drop is loud + classified); return
       "pause" → as above; STOP
       "spawn"         → collect (below) into a fresh results file; loop with --results
 ```
 
-If `drive` rejects `--results` as stale/duplicate (fold_key mismatch), re-invoke WITHOUT `--results` to get the current envelope and continue — the ONE sanctioned retry (Iron Law 3 applies to everything else).
+If `next-action` rejects `--results` as stale/duplicate (result_key mismatch), re-invoke WITHOUT `--results` to get the current envelope and continue — the ONE sanctioned retry (Iron Law 3 applies to everything else).
 
 ```
 docs stage:
@@ -178,7 +178,7 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    minimal implementation. They follow `agents/test-writer.md` / `agents/task-executor.md`.
 3. Capture its terminal STATUS line (`STATUS: DONE` | `STATUS: BLOCKED — escalate` |
    `STATUS: NEEDS_CONTEXT`).
-4. Results file: `{ "fold_key": <tenv.fold_key verbatim>, "producer": { "status": "<line>" } }`.
+4. Results file: `{ "result_key": <tenv.result_key verbatim>, "producer": { "status": "<line>" } }`.
 
 **`expects: "reviews"`** (stage verify — the 6-reviewer panel, plus sidecar):
 
@@ -197,7 +197,7 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    `{ "holds": true|false, "note": "<why>" }`.
 4. Results file:
    ```json
-   { "fold_key": <tenv.fold_key verbatim>,
+   { "result_key": <tenv.result_key verbatim>,
      "holdout": { "raw": "<sidecar agent raw output>" },
      "reviews": {
        "reviews": [ <each RawReview JSON> ],

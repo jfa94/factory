@@ -256,11 +256,11 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
         return { kind: "spawn" };
       };
       const out = await buildCli(agent, parseEnvelope)(
-        "factory next",
-        "next",
+        "factory next-task",
+        "next-task",
         "Drive",
         new Set(),
-        "next",
+        "next-task",
       );
       expect(out).toEqual({ kind: "spawn" });
       expect(calls).toHaveLength(3); // re-spawned the idempotent read-only command twice
@@ -272,7 +272,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
         throw new Error("persistent boundary corruption");
       };
       await expect(
-        buildCli(agent, parseEnvelope)("factory next", "next", "Drive", new Set(), "next"),
+        buildCli(agent, parseEnvelope)("factory next-task", "next-task", "Drive", new Set(), "next-task"),
       ).rejects.toThrow(/persistent boundary corruption/);
       expect(calls).toHaveLength(3);
     });
@@ -285,7 +285,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
         return { kind: "spawn" };
       };
       await expect(
-        buildCli(agent, parseEnvelope)("factory next", "next", "Drive", new Set(), "next"),
+        buildCli(agent, parseEnvelope)("factory next-task", "next-task", "Drive", new Set(), "next-task"),
       ).rejects.toThrow(/skipped or died/);
       expect(calls).toHaveLength(1); // no retry
       expect(parsed).toBe(false); // parse never attempted on a dead agent

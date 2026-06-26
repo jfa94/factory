@@ -134,7 +134,7 @@ Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/scripts/factory-run-driver.js" })
 ```
 
 Pass **no `args`**. The script self-resolves its run context (`run_id`, `data_dir`, `ship_mode`)
-from the first `factory next` envelope — `ship_mode` was persisted by Phase 2's `run create`, and a
+from the first `factory next-task` envelope — `ship_mode` was persisted by Phase 2's `run create`, and a
 real object passed as `args` arrives JSON-string-encoded (so the script would see every field
 `undefined`). `${CLAUDE_PLUGIN_ROOT}` is expanded by the Workflow tool; nothing else needs
 substituting. It drives ready tasks in parallel (engine-enforced gates are identical; merges are

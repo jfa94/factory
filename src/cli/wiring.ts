@@ -1,7 +1,7 @@
 /**
  * CLI deps-wiring (C2) — construct the production reporter bundle from a run id.
  *
- * The coroutine subcommands (`factory next` / `factory drive`) and `run finalize` all
+ * The coroutine subcommands (`factory next-task` / `factory next-action`) and `run finalize` all
  * need the SAME bundle: the typed config, the durable spec for the run, real
  * git/gh clients, the deterministic gate tools, and the fs-backed artifact +
  * holdout stores — plus the {@link StateManager} (the only sanctioned write

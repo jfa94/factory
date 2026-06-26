@@ -1,5 +1,5 @@
 /**
- * The RUN-LEVEL COROUTINE — the engine half of the `factory next` seam.
+ * The RUN-LEVEL COROUTINE — the engine half of the `factory next-task` seam.
  *
  * One invocation = one run-loop iteration: terminal check → quota gate (persisting
  * pause/suspend) → checkpoint clear on recovery → cascade-drop (transitive,

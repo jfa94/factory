@@ -8,7 +8,7 @@
  * protect — without it the confinement guards an empty directory.
  *
  * Two impls mirror artifacts.ts: {@link InMemoryHoldoutStore} (units) and
- * {@link FsHoldoutStore} (the persisted path, so a later `factory drive` process
+ * {@link FsHoldoutStore} (the persisted path, so a later `factory next-action` process
  * resuming at the verify phase reads the same answer key the split wrote at the
  * exec phase).
  */

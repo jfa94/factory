@@ -214,7 +214,7 @@ describe("Δ L — serial writer (#1)", () => {
   it("merge-queue probe failure degrades to app-level squash (warns, does NOT crash)", async () => {
     // The honest probe THROWS on a "couldn't tell" gh failure (auth/rate-limit/5xx).
     // merge() must CONTAIN it: log and fall back to app-level squash, never let the
-    // throw escape — `factory drive` catches only UsageError, so a bare throw would
+    // throw escape — `factory next-action` catches only UsageError, so a bare throw would
     // WEDGE the run (results persisted but the phase re-throws on every retry).
     const gh = new FakeGhClient({ prs: [openPr(340, "factory/run-1/t1")] });
     gh.failMergeQueueProbe = new Error("HTTP 503: Service Unavailable");

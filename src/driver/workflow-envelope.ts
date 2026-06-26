@@ -1,7 +1,7 @@
 // src/driver/workflow-envelope.ts
 /**
  * The DETERMINISTIC parse + kind-guard that the workflow driver applies
- * to a `factory next` / `factory drive` envelope after it crosses the
+ * to a `factory next-task` / `factory next-action` envelope after it crosses the
  * exec-agent boundary back into Workflow JS.
  *
  * WHY THIS EXISTS — the workflow boundary corruption (root cause, run

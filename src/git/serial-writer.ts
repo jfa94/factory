@@ -164,7 +164,7 @@ export class MergeSerializer {
       // --auto and let GitHub serialize. Otherwise app-level squash-merge now. The
       // probe THROWS on a "couldn't tell" gh failure (auth/rate-limit/5xx); CONTAIN
       // it here — log and degrade to app-level squash rather than letting it crash
-      // `factory drive` (which catches only UsageError, so a bare throw would WEDGE
+      // `factory next-action` (which catches only UsageError, so a bare throw would WEDGE
       // the run). The degrade is benign: both paths squash-merge, only --auto differs.
       let hasMergeQueue = false;
       try {

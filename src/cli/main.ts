@@ -3,7 +3,7 @@
  *
  * The registry is a FROZEN seam: downstream workstreams register their
  * subcommands by importing {@link cliRegistry} and adding entries (e.g.
- * `factory next`, `factory state`, `factory drive`). `dispatch()`
+ * `factory next-task`, `factory state`, `factory next-action`). `dispatch()`
  * returns a numeric {@link ExitCode}; the thin entry `src/bin/factory.ts` is the
  * ONLY place that calls `process.exit` with it.
  *
@@ -49,8 +49,8 @@ export const cliRegistry: Record<string, Subcommand> = {
   score: scoreCommand,
   state: stateCommand,
   scaffold: scaffoldCommand,
-  drive: driveCommand,
-  next: nextCommand,
+  "next-action": driveCommand,
+  "next-task": nextCommand,
   statusline: statuslineCommand,
   autonomy: autonomyCommand,
 };

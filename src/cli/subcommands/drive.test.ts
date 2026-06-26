@@ -1,5 +1,5 @@
 /**
- * `factory drive` — unit tests for the per-task coroutine CLI shell.
+ * `factory next-action` — unit tests for the per-task coroutine CLI shell.
  *
  * Surfaces:
  *   1. arg/usage edges (short-circuit before wiring) via driveCommand;

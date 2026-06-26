@@ -1,5 +1,5 @@
 /**
- * The per-task COROUTINE — the engine half of the `factory drive` seam.
+ * The per-task COROUTINE — the engine half of the `factory next-action` seam.
  *
  * One invocation = "run every deterministic step you can, then stop": the coroutine
  * resumes at the persisted phase cursor, optionally FOLDS the previous spawn's
