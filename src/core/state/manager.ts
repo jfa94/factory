@@ -80,7 +80,7 @@ export interface CreateRunArgs {
   owner_session?: RunState["owner_session"];
   /** The per-run staging branch to PIN on the row (Decision 33); recomputed if absent. */
   staging_branch?: RunState["staging_branch"];
-  /** Quota-gate bypass from `--ignore-quota`; persisted so both coroutines skip the gate. */
+  /** Quota-gate bypass from `--ignore-quota`; persisted so both orchestrators skip the gate. */
   ignore_quota?: RunState["ignore_quota"];
 }
 

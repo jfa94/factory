@@ -159,10 +159,10 @@ dry-run=<bool>`:
    human round-trip):
 
    ```
-   Skill(pipeline-orchestrator)   # then run its resume entry: factory resume [--run <id>]
+   Skill(pipeline-runner)   # then run its resume entry: factory resume [--run <id>]
    ```
 
-   - `{ kind: "resumed", run }` → continue the Phase 3 run loop; the driver now picks up the
+   - `{ kind: "resumed", run }` → continue the Phase 3 run loop; the runner now picks up the
      reset (and reopened) tasks.
    - `{ kind: "pause", run_id, status, reason, resets_at_epoch? }` → the quota window
      has not recovered. Report `reason` (+ `resets_at_epoch` if present) and stop; the reset

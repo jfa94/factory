@@ -46,7 +46,7 @@ export const hookRegistry: Record<string, Hook> = {
   },
   "subagent-stop": {
     describe:
-      "SubagentStop: log a stopping reviewer's parsed verdict (observational — the driver record is the single writer of task.reviewers[])",
+      "SubagentStop: log a stopping reviewer's parsed verdict (observational — the orchestrator record is the single writer of task.reviewers[])",
     run: (argv) => runSubagentStop(argv),
   },
   "stop-gate": {

@@ -1,6 +1,6 @@
 /**
  * `src/verifier/holdout` — the Δ Y holdout gate (Decision 5). The ONE addressable
- * import surface for WS10 (the driver) and any downstream consumer.
+ * import surface for WS10 (the orchestrator) and any downstream consumer.
  *
  * Split (pure) → answer-key store (confined) → agent validation + deterministic
  * score → a {@link GateEvidence} recorded into the risk-invariant merge gate. Deep-
@@ -34,7 +34,7 @@ export {
   type HoldoutValidatorRunner,
 } from "./validate.js";
 
-// The holdout-VERDICT store (the coroutine's holdout → review record hand-off).
+// The holdout-VERDICT store (the orchestrator's holdout → review record hand-off).
 export {
   InMemoryHoldoutVerdictStore,
   FsHoldoutVerdictStore,

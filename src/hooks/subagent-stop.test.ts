@@ -2,7 +2,7 @@
  * WS9 — SubagentStop transcript→state seam tests.
  *
  * The hook is now LOG-ONLY (observational). It parses reviewer verdicts, resolves
- * the task_id, and logs loudly — but never writes to task.reviewers[] (the driver
+ * the task_id, and logs loudly — but never writes to task.reviewers[] (the orchestrator
  * record is the single writer). Tests assert:
  *   - reviewerNameOf / parseVerdict / taskIdFromHeader pure helpers behave correctly
  *   - handleSubagentStop resolves reviewer+task and returns null (no state write)

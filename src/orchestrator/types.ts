@@ -1,5 +1,5 @@
 /**
- * WS10 — driver-local shared types (the reporter dependency bundle the engine
+ * WS10 — orchestrator-local shared types (the reporter dependency bundle the engine
  * wires against).
  *
  * ARCHITECTURE (settled, Model A — see docs/rewrite/group0-seams.md §3.5/§4 and
@@ -12,17 +12,17 @@
  *     needs agent work they return a `spawn-agents` request. They NEVER write
  *     state and NEVER decide transitions (nextPhaseFor does).
  *
- *   - The ENGINE acts on results. The per-task coroutine
- *     ({@link import("./coroutine.js").nextAction}) resumes at the persisted phase cursor,
+ *   - The ENGINE acts on results. The per-task orchestrator
+ *     ({@link import("./orchestrator.js").nextAction}) resumes at the persisted phase cursor,
  *     records the previous spawn's agent results into state, and runs the
  *     deterministic phase machine until it needs agents (it RETURNS the spawn
- *     request to the caller) or the task is terminal. The in-session orchestrator
- *     (or the workflow driver) owns every Agent() spawn; the engine owns every
+ *     request to the caller) or the task is terminal. The in-session runner
+ *     (or the workflow runner) owns every Agent() spawn; the engine owns every
  *     StateManager write.
  *
  * {@link HandlerDeps} carries ONLY what a reporter needs — it has no agent runner,
  * because a reporter (and the CLI subprocess that hosts it) cannot spawn. The
- * coroutine's {@link import("./coroutine.js").CoroutineDeps} extends it with the state manager +
+ * orchestrator's {@link import("./orchestrator.js").OrchestratorDeps} extends it with the state manager +
  * the quota signal.
  */
 import type {
@@ -43,15 +43,15 @@ import type { ArtifactStore } from "./artifacts.js";
  * proven). It is NOT a human-in-the-loop feature.
  *
  * SINGLE SOURCE OF TRUTH: derived from {@link ShipModeEnum} (the persisted-state
- * Zod enum) and re-exported here so the driver/CLI layers keep their existing
- * `from "../driver/types.js"` import while the closed set is defined exactly once.
+ * Zod enum) and re-exported here so the orchestrator/CLI layers keep their existing
+ * `from "../orchestrator/types.js"` import while the closed set is defined exactly once.
  */
 import type { ShipMode } from "../core/state/index.js";
 export type { ShipMode };
 
 /**
  * The read-only inputs a REPORTER (handler) needs. Deliberately carries NO agent
- * runner — a handler reports a spawn request; the orchestrator performs the
+ * runner — a handler reports a spawn request; the runner performs the
  * spawn. The spec MANIFEST is injected (the frozen PhaseContext carries only the
  * run + a lean TaskState, not the per-task spec fields the producer/verify
  * reporters need — title/description/criteria/files live in the durable spec,

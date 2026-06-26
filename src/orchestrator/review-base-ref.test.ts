@@ -5,10 +5,10 @@
  * rename and resolves to the wrong (or no) commit, silently diffing reviewers against
  * the wrong base — root cause #2 of the PRD-2d stall.
  *
- * This scans the static review SURFACES (the reviewer system-prompts + both driver
+ * This scans the static review SURFACES (the reviewer system-prompts + both orchestrator
  * templates) because they are markdown/JS that the TS typechecker never sees: only a
  * grep-guard catches a reintroduced literal. The authoritative value is plumbed at
- * runtime via the spawn envelope's `base_ref` (asserted in coroutine.test.ts) and the
+ * runtime via the spawn envelope's `base_ref` (asserted in orchestrator.test.ts) and the
  * holdout prompt builder (validate.test.ts).
  */
 import { readFileSync } from "node:fs";
@@ -31,8 +31,8 @@ const PLACEHOLDER_SURFACES = [
   "agents/type-design-reviewer.md",
 ];
 
-/** The two driver templates that interpolate the envelope's per-run base ref. */
-const DRIVER_SURFACES = ["skills/pipeline-orchestrator/SKILL.md", "scripts/factory-run-driver.js"];
+/** The two orchestrator templates that interpolate the envelope's per-run base ref. */
+const DRIVER_SURFACES = ["skills/pipeline-runner/SKILL.md", "scripts/factory-run-runner.js"];
 
 describe("review base ref plumbing (Fix 2 regression guard)", () => {
   // `diff origin/staging` NOT followed by `-`/word char = the bare, namespace-colliding
@@ -54,12 +54,12 @@ describe("review base ref plumbing (Fix 2 regression guard)", () => {
     },
   );
 
-  it("the workflow driver interpolates env.base_ref into the reviewer + verifier prompts", () => {
-    const src = read("scripts/factory-run-driver.js");
+  it("the workflow runner interpolates env.base_ref into the reviewer + verifier prompts", () => {
+    const src = read("scripts/factory-run-runner.js");
     expect(src).toContain("diff ${env.base_ref}");
   });
 
-  it("the session orchestrator substitutes <tenv.base_ref> into the reviewer prompt", () => {
-    expect(read("skills/pipeline-orchestrator/SKILL.md")).toContain("diff <tenv.base_ref>");
+  it("the session runner substitutes <tenv.base_ref> into the reviewer prompt", () => {
+    expect(read("skills/pipeline-runner/SKILL.md")).toContain("diff <tenv.base_ref>");
   });
 });

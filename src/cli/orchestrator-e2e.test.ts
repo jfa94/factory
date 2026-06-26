@@ -1,16 +1,16 @@
 /**
- * Seam-contract E2E for the v1 execution model (orchestrator-as-driver, Model A).
+ * Seam-contract E2E for the v1 execution model (runner-as-orchestrator, Model A).
  *
  * Replaces the old `run-task`/`record-*`/`advance` CLI-subcommand driving loop with
- * the canonical coroutine seam:
+ * the canonical orchestrator seam:
  *
  *   nextTask  → tasks-ready | all-terminal | run-terminal | quota-blocked
  *   nextAction → spawn | terminal | quota-blocked
  *
- * The `driveToTerminal` helper below IS the documented driver contract: it is the
- * thinnest possible loop a real orchestrator (session or workflow) runs.  The test's
+ * The `driveToTerminal` helper below IS the documented orchestrator contract: it is the
+ * thinnest possible loop a real runner (session or workflow) runs.  The test's
  * job is to prove that CONTRACT produces the right run-state end-states — not to test
- * individual coroutine internals (those live in coroutine.test.ts / next.test.ts).
+ * individual orchestrator internals (those live in orchestrator.test.ts / next.test.ts).
  *
  * Three scenarios are proven:
  *   1. Happy path (no-merge): single task → `completed`, PR opened but NOT merged,
@@ -38,7 +38,7 @@ import { StateManager } from "../core/state/manager.js";
 import { FakeGitClient, FakeGhClient } from "../git/fakes.js";
 import { makeFakeTools } from "../verifier/deterministic/fakes.js";
 import { type HoldoutStore, InMemoryHoldoutStore } from "../verifier/holdout/index.js";
-import { InMemoryArtifactStore, type ShipMode } from "../driver/index.js";
+import { InMemoryArtifactStore, type ShipMode } from "../orchestrator/index.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
 import { fakeUsageSignal } from "../quota/index.js";
 import { ESCALATION_CAP } from "../producer/index.js";
@@ -48,12 +48,12 @@ import {
   nextTask,
   nextAction,
   finalizeRun,
-  type CoroutineDeps,
+  type OrchestratorDeps,
   type NextAction,
   type DriveResults,
-} from "../driver/index.js";
+} from "../orchestrator/index.js";
 
-import { greenProbe, makeSpec, NOW } from "../driver/coroutine-fixtures.js";
+import { greenProbe, makeSpec, NOW } from "../orchestrator/orchestrator-fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -82,7 +82,7 @@ function specManifestTwo(): SpecManifest {
   ]);
 }
 
-/** An approving RawReview-shaped object (the orchestrator's collected panel output). */
+/** An approving RawReview-shaped object (the runner's collected panel output). */
 function approve(reviewer: string) {
   return { reviewer, verdict: "approve" as const, findings: [] };
 }
@@ -100,7 +100,7 @@ function approve(reviewer: string) {
  *     validator verdicts.  `env.result_key` is echoed verbatim so the engine's
  *     exactly-once gate always passes.
  *
- * Usage: `book.for(env)` — call once per spawn envelope in the driver loop.
+ * Usage: `book.for(env)` — call once per spawn envelope in the runner loop.
  */
 class AnswerBook {
   private readonly producerStatuses: Map<string, string>;
@@ -167,7 +167,7 @@ class AnswerBook {
 }
 
 // ---------------------------------------------------------------------------
-// driveToTerminal — the canonical thin driver loop (IS the contract)
+// driveToTerminal — the canonical thin runner loop (IS the contract)
 // ---------------------------------------------------------------------------
 
 /** Minimal interface driveToTerminal needs — satisfied by AnswerBook and plain spy objects. */
@@ -177,7 +177,7 @@ interface Answerer {
 
 /**
  * Drive a run to its terminal state, exactly as a real in-session or workflow
- * driver would.  This loop IS the documented driver contract:
+ * orchestrator would.  This loop IS the documented orchestrator contract:
  *
  *   nextTask → ready → nextAction (record results) loop → terminal → repeat
  *
@@ -186,7 +186,7 @@ interface Answerer {
  */
 
 async function driveToTerminal(
-  deps: CoroutineDeps,
+  deps: OrchestratorDeps,
   runId: string,
   answer: Answerer,
 ): Promise<RunState> {
@@ -200,7 +200,7 @@ async function driveToTerminal(
     if (next.kind === "pause") throw new Error(`unexpected quota stop: ${next.reason}`);
     if (next.kind === "document") throw new Error("unexpected docs-ready in E2E helper");
 
-    const taskId = next.ready[0]!; // sequential driver: first ready task
+    const taskId = next.ready[0]!; // sequential orchestrator: first ready task
     let results: DriveResults | undefined;
     for (;;) {
       const env = await nextAction(deps, runId, taskId, results);
@@ -221,7 +221,7 @@ async function driveToTerminal(
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe("orchestrator coroutine seam — golden contract E2E", () => {
+describe("runner orchestrator seam — golden contract E2E", () => {
   let dataDir: string;
   let state: StateManager;
   let specStore: SpecStore;
@@ -247,8 +247,8 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  /** Build CoroutineDeps directly (no CLI loading — keeps the E2E free of fs config). */
-  function makeDeps(request: SpecManifest, shipMode: ShipMode): CoroutineDeps {
+  /** Build OrchestratorDeps directly (no CLI loading — keeps the E2E free of fs config). */
+  function makeDeps(request: SpecManifest, shipMode: ShipMode): OrchestratorDeps {
     return {
       config: defaultConfig(),
       spec: request,

@@ -1,7 +1,7 @@
 /**
  * WS10 — unit tests for the PHASE HANDLERS (Model-A reporters).
  *
- * These exercise each reporter in ISOLATION (no driver loop): a handler reads a
+ * These exercise each reporter in ISOLATION (no runner loop): a handler reads a
  * frozen PhaseContext, does deterministic work via injected clients, and RETURNS a
  * PhaseResult — it never writes run state and never spawns. We drive the handlers
  * with the exported domain fakes (git/gh/gate/holdout) + a real StateManager (temp
@@ -427,7 +427,7 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     const handlers = makePhaseHandlers(makeDeps());
     const ctx = await ctxFor({ task_id: "t-multi" });
 
-    // The coroutine runs the stateful shipTask (src/driver/ship.ts) directly; this
+    // The orchestrator runs the stateful shipTask (src/orchestrator/ship.ts) directly; this
     // reporter exists ONLY to keep PhaseHandlers total. Invoking it is a programming
     // error → synchronous loud throw, with no PR opened as a side effect.
     expect(() => handlers.ship(ctx)).toThrow(/ship is routed to shipTask/);

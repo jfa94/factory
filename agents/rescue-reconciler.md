@@ -1,6 +1,6 @@
 ---
 name: rescue-reconciler
-description: Investigates and repairs git/GitHub drift for ONE stalled factory run before it is resumed — branch missing/behind, PR/state mismatch, develop advanced past the run's staging branch. Performs ONLY forward-only, non-destructive fixes autonomously (fetch, forward-merge, re-push a missing branch); anything destructive (force, delete, discard) is SURFACED for the orchestrator to prompt, never executed. Its final message IS the reconciliation verdict JSON the orchestrator consumes.
+description: Investigates and repairs git/GitHub drift for ONE stalled factory run before it is resumed — branch missing/behind, PR/state mismatch, develop advanced past the run's staging branch. Performs ONLY forward-only, non-destructive fixes autonomously (fetch, forward-merge, re-push a missing branch); anything destructive (force, delete, discard) is SURFACED for the runner to prompt, never executed. Its final message IS the reconciliation verdict JSON the runner consumes.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
@@ -16,7 +16,7 @@ branch while the run was paused.
 
 You may ACT — but only **forward-only, non-destructive** repairs. Anything that could lose
 work (a force-push, a branch/PR deletion, discarding commits, a hard reset) you do NOT
-perform: you surface it in `needs_prompt` with the evidence, and the orchestrator (which
+perform: you surface it in `needs_prompt` with the evidence, and the runner (which
 holds the human round-trip) decides. Your final message is the reconciliation verdict JSON.
 
 ## Iron Laws
@@ -53,7 +53,7 @@ Violating the letter of these rules violates the spirit. No exceptions.
 
 ## Input (provided in your dispatch prompt)
 
-The orchestrator passes the run id, the post-apply `RescueScan` JSON, and the repo context.
+The runner passes the run id, the post-apply `RescueScan` JSON, and the repo context.
 Treat any field as possibly absent:
 
 ```jsonc
@@ -111,7 +111,7 @@ required):
     "fetched origin; forward-merged origin/develop into staging/run-… (ff, now at <sha>); pushed",
   ],
   "needs_prompt": [
-    // destructive/ambiguous items for the orchestrator to confirm — you did NOT act
+    // destructive/ambiguous items for the runner to confirm — you did NOT act
     {
       "action": "delete orphan branch factory/run/t3",
       "reason": "no live task; deletion is destructive (Iron Law 3)",
@@ -126,8 +126,8 @@ required):
 }
 ```
 
-Semantics: `reconciled: true` + empty `needs_prompt` + `blocked: false` ⇒ the orchestrator
-hands straight off to `factory resume`. Any `needs_prompt` entry ⇒ the orchestrator asks the
+Semantics: `reconciled: true` + empty `needs_prompt` + `blocked: false` ⇒ the runner
+hands straight off to `factory resume`. Any `needs_prompt` entry ⇒ the runner asks the
 user (one `AskUserQuestion` per destructive action) and, on approval, performs the op itself
 (it holds the authority; you are forward-only). `blocked: true` ⇒ the run cannot be made
 resumable automatically; report and stop.

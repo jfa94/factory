@@ -1,5 +1,5 @@
 /**
- * `factory next-task` — unit tests for the run-level coroutine CLI shell.
+ * `factory next-task` — unit tests for the run-level orchestrator CLI shell.
  *
  * Surfaces:
  *   1. arg/usage edges (short-circuit before wiring) via nextCommand;
@@ -16,7 +16,7 @@ import { writeFile } from "node:fs/promises";
 import { nextCommand } from "./next.js";
 import { EXIT } from "../../shared/exit-codes.js";
 import { captureStream } from "../test-helpers.js";
-import { makeCoroutineDeps, makeSpec } from "../../driver/coroutine-fixtures.js";
+import { makeOrchestratorDeps, makeSpec } from "../../orchestrator/orchestrator-fixtures.js";
 import { StateManager } from "../../core/state/manager.js";
 import { SpecStore } from "../../spec/index.js";
 import { usageCachePath } from "../../quota/index.js";
@@ -98,7 +98,7 @@ describe("next --run resolution falls back to runs/current", () => {
         },
       },
     }));
-    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadOrchestratorDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: dir, docsRoot: join(dir, "_docs") }).write(spec, "# spec");
 
@@ -118,7 +118,7 @@ describe("next --run resolution falls back to runs/current", () => {
       const code = await nextCommand.run([]); // no --run
       expect(code).toBe(EXIT.OK);
       const envelope = JSON.parse(stdout.read());
-      // The envelope self-carries the run context the workflow driver adopts
+      // The envelope self-carries the run context the workflow runner adopts
       // (run_id from runs/current, the canonical data_dir, and the persisted ship_mode
       // default — now `live`) — so nothing rides Workflow args.
       expect(envelope).toMatchObject({
@@ -309,10 +309,10 @@ describe("next happy path", () => {
   });
 
   it("emits a work envelope as JSON for a fresh pending task", async () => {
-    const { deps, runId, cleanup: c } = await makeCoroutineDeps();
+    const { deps, runId, cleanup: c } = await makeOrchestratorDeps();
     cleanup = c;
 
-    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadOrchestratorDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(
       spec,
@@ -354,12 +354,12 @@ describe("next happy path", () => {
       deps,
       runId,
       cleanup: c,
-    } = await makeCoroutineDeps({
+    } = await makeOrchestratorDeps({
       runStatusOverride: "completed",
     });
     cleanup = c;
 
-    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadOrchestratorDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(
       spec,

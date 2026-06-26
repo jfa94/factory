@@ -1,7 +1,7 @@
 /**
- * Unit tests for nextTask — the run-level coroutine.
+ * Unit tests for nextTask — the run-level orchestrator.
  *
- * Each test uses makeCoroutineDeps from coroutine-fixtures.ts. MakeCoroutineDepsOpts supports:
+ * Each test uses makeOrchestratorDeps from orchestrator-fixtures.ts. MakeOrchestratorDepsOpts supports:
  *   - tasks: multi-task DAGs with depends_on
  *   - taskStateOverrides: per-task status overrides
  *   - usage: quota reading
@@ -13,14 +13,14 @@
 import { describe, expect, it } from "vitest";
 
 import { nextTask } from "./next.js";
-import { makeCoroutineDeps, PAUSE_5H } from "./coroutine-fixtures.js";
+import { makeOrchestratorDeps, PAUSE_5H } from "./orchestrator-fixtures.js";
 import type { UsageReading } from "../quota/usage-source.js";
 
 const UNAVAILABLE: UsageReading = { kind: "unavailable", reason: "usage-cache-missing" };
 
 describe("nextTask", () => {
   it("terminal run → run-terminal", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       runStatusOverride: "completed",
     });
     try {
@@ -32,7 +32,7 @@ describe("nextTask", () => {
   });
 
   it("quota breach → quota-blocked with persisted checkpoint", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({ usage: PAUSE_5H });
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({ usage: PAUSE_5H });
     try {
       const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "pause", scope: "5h" });
@@ -44,7 +44,7 @@ describe("nextTask", () => {
   });
 
   it("workflow mode proceeds past the gate even with an unobservable usage signal", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       modeOverride: "workflow",
       usage: UNAVAILABLE,
     });
@@ -58,7 +58,7 @@ describe("nextTask", () => {
   });
 
   it("session mode (default) fail-closes on the same unobservable signal", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({ usage: UNAVAILABLE });
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({ usage: UNAVAILABLE });
     try {
       const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "pause", scope: "unavailable" });
@@ -69,7 +69,7 @@ describe("nextTask", () => {
   });
 
   it("recovered paused run is returned to running before reporting ready tasks", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
     });
     try {
@@ -93,7 +93,7 @@ describe("nextTask", () => {
 
   it("cascade-fails pending tasks whose dependency failed, transitively", async () => {
     // T1 failed; T2 depends_on [T1]; T3 depends_on [T2]; T4 independent pending
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
         { task_id: "T2", acceptance_criteria: ["only one"], depends_on: ["T1"] },
@@ -124,7 +124,7 @@ describe("nextTask", () => {
 
   it("ready excludes tasks with un-done deps and orders in-flight (crash-resume) first", async () => {
     // T1 done; T2 pending depends_on [T1]; T3 status reviewing (in-flight, phase verify); T4 pending depends_on [T2]
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
         { task_id: "T2", acceptance_criteria: ["only one"], depends_on: ["T1"] },
@@ -153,7 +153,7 @@ describe("nextTask", () => {
   });
 
   it("all tasks terminal → all-terminal", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
         { task_id: "T2", acceptance_criteria: ["only one"] },
@@ -181,7 +181,7 @@ describe("nextTask", () => {
   it("dependency cycle (T1↔T2) → all-terminal with both tasks spec-defect failed", async () => {
     // Pathological DAG: T1 executing with depends_on [T2], T2 pending depends_on [T1]
     // This bypasses seeding via direct state writes.
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
         { task_id: "T2", acceptance_criteria: ["only one"] },
@@ -221,7 +221,7 @@ describe("nextTask", () => {
   });
 
   it("terminal run + quota-breach → run-terminal (no checkpoint written)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       usage: PAUSE_5H,
       runStatusOverride: "completed",
     });
@@ -239,7 +239,7 @@ describe("nextTask", () => {
   // C1 pin: all tasks already terminal + 5h-breaching usage → all-terminal, no
   // checkpoint written (the pre-gate all-terminal check fires before applyQuotaGate).
   it("all-tasks-terminal + quota-breach → all-terminal with no checkpoint written", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
       usage: PAUSE_5H,
     });
@@ -261,7 +261,7 @@ describe("nextTask", () => {
   // I1 pin: cascade that resolves the run to all-terminal carries the failed ids.
   it("cascade resolving run to all-terminal → all-terminal with cascade_failed", async () => {
     // T1 failed; T2 pending depends_on [T1] — cascade fails T2, run is all-terminal.
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
         { task_id: "T2", acceptance_criteria: ["only one"], depends_on: ["T1"] },
@@ -284,7 +284,7 @@ describe("nextTask", () => {
 
   // Suspended recovery: a suspended run with a 7d checkpoint resumes cleanly.
   it("suspended run (7d checkpoint) is returned to running before reporting ready tasks", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
     });
     try {
@@ -305,7 +305,7 @@ describe("nextTask", () => {
 
   // Empty run (tasks: {}) → all-terminal with empty cascade_failed.
   it("empty run (no tasks) → all-terminal with cascade_failed []", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       // Clear the default T1 so the run has zero tasks
       await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
@@ -321,7 +321,7 @@ describe("nextTask", () => {
   // crash between state.create and task seeding). The gate must NOT run — the
   // step-2 and step-6 all-terminal semantics agree on tasks: {}.
   it("empty run + quota-breach → all-terminal with no checkpoint written", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({ usage: PAUSE_5H });
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({ usage: PAUSE_5H });
     try {
       await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
 
@@ -338,7 +338,7 @@ describe("nextTask", () => {
   // Decision 34: self-dependency (T1→T1) is also a wedged/cycle state — the circuit
   // breaker fails T1 as spec-defect and returns all-terminal.
   it("self-dependency (T1 depends_on T1) → all-terminal with T1 spec-defect failed", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
     });
     try {
@@ -364,7 +364,7 @@ describe("nextTask", () => {
   // WS4 run-level circuit breaker: capability-budget fails at the cap abort the run —
   // every remaining runnable task is failed and the run finalizes (all-terminal → failed).
   it("circuit breaker: capability-budget fails at the cap abort runnable work → all-terminal", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
         { task_id: "T2", acceptance_criteria: ["only one"] },
@@ -399,7 +399,7 @@ describe("nextTask", () => {
   // Below the cap the breaker stays silent — an independent ready task is still
   // scheduled (the breaker must not abort runnable work prematurely).
   it("circuit breaker: below the cap does not abort — ready task still scheduled", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
         { task_id: "T2", acceptance_criteria: ["only one"] },
@@ -428,7 +428,7 @@ describe("docs-ready gate", () => {
   const DONE_AT = "2026-01-01T00:00:00.000Z";
 
   it("completed + docs applicable + docs not done → docs-ready", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1" }],
       docsApplicable: true,
     });
@@ -441,7 +441,7 @@ describe("docs-ready gate", () => {
   });
 
   it("completed + docs NOT applicable → all-terminal", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1" }],
       docsApplicable: false,
     });
@@ -454,7 +454,7 @@ describe("docs-ready gate", () => {
   });
 
   it("completed + docs already done → all-terminal", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1" }],
       docsApplicable: true,
     });
@@ -468,7 +468,7 @@ describe("docs-ready gate", () => {
   });
 
   it("failed run (a failed task) → all-terminal, never docs-ready", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1" }],
       docsApplicable: true,
     });
@@ -487,7 +487,7 @@ describe("docs-ready gate", () => {
   });
 
   it("docs-suspended run resumes through the gate to docs-ready (status cleared to running)", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1" }],
       docsApplicable: true,
     });
@@ -516,7 +516,7 @@ describe("docs ordering invariant", () => {
   const DONE_AT = "2026-01-01T00:00:00.000Z";
 
   it("docs-ready precedes all-terminal; all-terminal only after docs done", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1" }],
       docsApplicable: true,
     });

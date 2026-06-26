@@ -1,5 +1,5 @@
 /**
- * WS10 (holdout) — exported fakes for the driver loop tests + downstream units.
+ * WS10 (holdout) — exported fakes for the runner loop tests + downstream units.
  * A deterministic holdout-validator boundary so the verify path is exercisable
  * without a real Agent() spawn.
  */

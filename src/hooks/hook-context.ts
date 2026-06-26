@@ -167,7 +167,7 @@ export function runTaskForPath(dataDir: string, absPath: string): RunTaskRef | n
  *
  * `taskId` resolution order mirrors the bash guard: explicit env
  * (`FACTORY_TASK_ID`), else the single in-flight task. Phase comes from the
- * persisted `TaskState.phase` cursor (written by the coroutine in lockstep with
+ * persisted `TaskState.phase` cursor (written by the orchestrator in lockstep with
  * status on every record); status derivation (`statusToPhase`) is kept only as
  * the legacy fallback for states that predate the cursor.
  */
@@ -203,7 +203,7 @@ function statusToPhase(status: TaskState["status"]): TaskPhase | null {
 
 /**
  * The active phase for guard scoping: null when the task is not in-flight;
- * else the persisted phase cursor (written by the coroutine in lockstep with
+ * else the persisted phase cursor (written by the orchestrator in lockstep with
  * status on every record), falling back to status derivation for legacy
  * states that predate the cursor.
  */

@@ -1,7 +1,7 @@
 /**
  * CLI deps-wiring (C2) — construct the production reporter bundle from a run id.
  *
- * The coroutine subcommands (`factory next-task` / `factory next-action`) and `run finalize` all
+ * The orchestrator subcommands (`factory next-task` / `factory next-action`) and `run finalize` all
  * need the SAME bundle: the typed config, the durable spec for the run, real
  * git/gh clients, the deterministic gate tools, and the fs-backed artifact +
  * holdout stores — plus the {@link StateManager} (the only sanctioned write
@@ -10,7 +10,7 @@
  *
  * It deliberately produces NO agent runners: a `factory` CLI subprocess has no
  * access to the Agent tool, so every step that needs a spawn is the in-session
- * orchestrator's job. The CLI carries only the deterministic before/after seam —
+ * runner's job. The CLI carries only the deterministic before/after seam —
  * exactly {@link HandlerDeps} + state.
  */
 import { loadConfig, resolveDataDir, type DataDirOptions } from "../config/index.js";
@@ -18,14 +18,14 @@ import { StateManager } from "../core/state/index.js";
 import { SpecStore } from "../spec/index.js";
 import { DefaultGitClient, DefaultGhClient, isValidRepoSlug } from "../git/index.js";
 import { defaultGateTools } from "../verifier/deterministic/index.js";
-import { FsArtifactStore } from "../driver/artifacts.js";
+import { FsArtifactStore } from "../orchestrator/artifacts.js";
 import { FsHoldoutStore } from "../verifier/holdout/index.js";
 import { StatuslineUsageSignal } from "../quota/index.js";
 import { nowEpoch } from "../shared/time.js";
-import { isDocsApplicable } from "../driver/docs-applicable.js";
-import type { HandlerDeps, ShipMode } from "../driver/types.js";
+import { isDocsApplicable } from "../orchestrator/docs-applicable.js";
+import type { HandlerDeps, ShipMode } from "../orchestrator/types.js";
 import type { RunState } from "../core/state/index.js";
-import type { CoroutineDeps } from "../driver/coroutine.js";
+import type { OrchestratorDeps } from "../orchestrator/orchestrator.js";
 
 /**
  * The full CLI reporter bundle: everything a reporter needs ({@link HandlerDeps})
@@ -70,10 +70,10 @@ function splitRepo(slug: string): { owner: string; repo: string } {
 }
 
 /**
- * Assemble a {@link CoroutineDeps} bundle — {@link loadCliDeps} plus the quota signal
- * and clock. The result satisfies the coroutine engine contract.
+ * Assemble a {@link OrchestratorDeps} bundle — {@link loadCliDeps} plus the quota signal
+ * and clock. The result satisfies the orchestrator engine contract.
  */
-export async function loadCoroutineDeps(opts: LoadCliDepsOptions): Promise<CoroutineDeps> {
+export async function loadOrchestratorDeps(opts: LoadCliDepsOptions): Promise<OrchestratorDeps> {
   const deps = await loadCliDeps(opts);
   return {
     ...deps,

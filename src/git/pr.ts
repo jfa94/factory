@@ -2,12 +2,12 @@
  * WS3 — idempotent PR create (Δ P).
  *
  * The resume-after-kill window: a run can die AFTER `gh pr create` succeeded but
- * BEFORE the driver recorded `pr_number` in state.json. On resume, blindly
+ * BEFORE the orchestrator recorded `pr_number` in state.json. On resume, blindly
  * creating a PR would open a DUPLICATE. The fix: ALWAYS look up by head branch
  * first (`gh pr list --head <branch>`); only create when no open PR exists.
  *
  * This module is PURE over GhClient — it never reads/writes StateManager (WS3 is
- * a reporter; the driver persists `{number}` via StateManager.updateTask). It
+ * a reporter; the orchestrator persists `{number}` via StateManager.updateTask). It
  * tests against the fake with zero network.
  */
 import { createLogger } from "../shared/index.js";

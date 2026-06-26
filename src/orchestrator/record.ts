@@ -1,8 +1,8 @@
 /**
- * Record cores — the per-task coroutine's deterministic kernels.  These are the
+ * Record cores — the per-task orchestrator's deterministic kernels.  These are the
  * DETERMINISTIC, state-mutating functions that record out-of-band agent results into
- * run state; they live here (driver/) so the coroutine imports them directly without a
- * cli→driver dependency inversion.
+ * run state; they live here (orchestrator/) so the orchestrator imports them directly without a
+ * cli→orchestrator dependency inversion.
  *
  * Moved verbatim from the (since-deleted) CLI single-step subcommands:
  *   - src/cli/transition.ts      → TransitionEnvelope, persistStepCursor, readJsonInput
@@ -71,7 +71,7 @@ const log = createLogger("record");
 
 /**
  * What a record needs: the reporter bundle ({@link HandlerDeps}) + the sanctioned
- * state write path.  A strict subset of {@link import("./coroutine.js").CoroutineDeps}.
+ * state write path.  A strict subset of {@link import("./orchestrator.js").OrchestratorDeps}.
  */
 export interface RecordDeps extends HandlerDeps {
   readonly state: StateManager;
@@ -105,7 +105,7 @@ async function persistStepCursor(
   }
 }
 
-/** Read + parse a JSON input file (the orchestrator's collected agent output). */
+/** Read + parse a JSON input file (the runner's collected agent output). */
 export async function readJsonInput<T>(path: string): Promise<T> {
   const raw = await readFile(path, "utf8");
   return parseJson<T>(raw, path);
@@ -203,7 +203,7 @@ export async function applyRecordHoldout(
   if (!(await deps.holdout.has(runId, taskId))) {
     throw new Error(
       `record-holdout: task '${taskId}' has no withheld answer key — nothing to validate ` +
-        `(applyRecordHoldout must only record when the coroutine surfaced a holdout holdout)`,
+        `(applyRecordHoldout must only record when the orchestrator surfaced a holdout holdout)`,
     );
   }
   const record = await deps.holdout.get(runId, taskId);
@@ -219,9 +219,9 @@ export async function applyRecordHoldout(
 // ---------------------------------------------------------------------------
 
 /** A fixed, reviewer-independent identity for the replay verifier (D27 independence). */
-export const REPLAY_IDENTITY = "orchestrator-replay";
+export const REPLAY_IDENTITY = "runner-replay";
 
-/** One pre-recorded finding-verifier verdict (orchestrator-collected, out-of-band). */
+/** One pre-recorded finding-verifier verdict (runner-collected, out-of-band). */
 export interface VerifierVerdictInput {
   readonly file: string;
   readonly line: number;
@@ -236,7 +236,7 @@ export interface ReviewerVerifications {
   readonly verdicts: readonly VerifierVerdictInput[];
 }
 
-/** The input file shape (orchestrator-collected panel + verify-then-fix output). */
+/** The input file shape (runner-collected panel + verify-then-fix output). */
 export interface RecordReviewsInput {
   /** The raw reviewer payloads (one per panel reviewer) — parsed LOUD. */
   readonly reviews: readonly unknown[];
@@ -298,7 +298,7 @@ export async function buildWorktreeSource(
 
 /**
  * Build the REPLAY {@link FindingVerifierRunner} factory: for each reviewer, a runner
- * whose `confirm` returns the orchestrator's pre-recorded verdict for that finding
+ * whose `confirm` returns the runner's pre-recorded verdict for that finding
  * (matched by `file:line`, FIFO among duplicates) instead of spawning. A kept finding
  * with NO recorded verdict REJECTS — `confirmBlocker` turns that into a LOUD `error`
  * (fail-closed: the merge gate blocks, never a silent pass).
@@ -328,7 +328,7 @@ export function makeReplayRunnerFactory(
             new Error(
               `record-reviews: no pre-recorded finding-verifier verdict for reviewer ` +
                 `'${review.reviewer}' finding at ${key} — every citation-verified blocking ` +
-                `finding must carry an orchestrator-collected verdict`,
+                `finding must carry an runner-collected verdict`,
             ),
           );
         }

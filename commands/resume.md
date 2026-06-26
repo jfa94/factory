@@ -22,23 +22,23 @@ resume. A `failed` run keeps its `staging/<run-id>` branch banked for `/factory:
 
 ## How it runs
 
-Invoke the orchestrator skill, then run its resume entry against the target run:
+Invoke the runner skill, then run its resume entry against the target run:
 
 ```
-Skill(pipeline-orchestrator)   # then: factory resume [--run <id>] [--ignore-quota]
+Skill(pipeline-runner)   # then: factory resume [--run <id>] [--ignore-quota]
 ```
 
 `factory resume [--run <id>]` emits one envelope:
 
 - `{ kind: "resumed", run }` → the quota window is open (or already running): re-enter the
-  run loop. **Pick the driver from `resumed.run.mode` verbatim — never from command flags.**
+  run loop. **Pick the runner from `resumed.run.mode` verbatim — never from command flags.**
   `mode` is immutable (set once at `run create`) and is therefore NEVER ambiguous; do not ask
   the user, and do not infer it from how `/factory:resume` was invoked. Resume itself takes
   **no** mode/ship flag (`factory resume --workflow`/`--no-ship` is rejected loud — a run keeps
   the `mode`/`ship_mode` it was created with):
   - `mode === "session"` → continue the skill's Phase 3 THE LOOP and Phase 4.
-  - `mode === "workflow"` → re-launch the driver with
-    `Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/scripts/factory-run-driver.js" })`, no `args` —
+  - `mode === "workflow"` → re-launch the runner with
+    `Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/scripts/factory-run-runner.js" })`, no `args` —
     it self-resolves `run_id`/`data_dir`/`ship_mode` from the first `factory next-task` envelope
     (`mode`/`ship_mode` are persisted on the run, never re-passed).
 - `{ kind: "still-blocked", run_id, status, reason, resets_at_epoch? }` → the quota window
@@ -48,6 +48,6 @@ Skill(pipeline-orchestrator)   # then: factory resume [--run <id>] [--ignore-quo
 ## Autonomous mode (MANDATORY)
 
 Like `factory run create`, `factory resume` **HALTS loud** (`NotAutonomousError`, non-zero
-exit) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The orchestrator skill's
+exit) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The runner skill's
 Phase 0 (`factory autonomy preflight`) runs first and prints the relaunch command when needed
 — see `/factory:run` for the full autonomy contract. Never retry blindly past the gate.

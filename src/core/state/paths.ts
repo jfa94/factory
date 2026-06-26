@@ -181,7 +181,7 @@ export function specBuildRoot(dataDir: string): string {
 /**
  * `<dataDir>/spec-build/<repo-key>/<issue>` — the TRANSIENT scratch dir for an
  * in-progress spec build. Holds the prd/generated/verdict JSON threaded between
- * the orchestrator-driven `factory spec resolve|gate|store` actions. Keyed by the
+ * the runner-driven `factory spec resolve|gate|store` actions. Keyed by the
  * stable PRD issue number (not a spec-id — no spec exists yet), and DISCARDABLE:
  * unlike {@link specDir} this is never reused across runs, just a handoff buffer
  * for one generate/review loop.

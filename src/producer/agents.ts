@@ -7,7 +7,7 @@
  * forward over confirmed blockers). An agent cannot deterministically spawn a
  * real `Agent()` inside a unit, so — exactly like WS5/WS7 — this module owns the
  * CONTRACT and the parse of the agent's terminal STATUS line, while the WS10
- * in-session driver performs the live spawn. Units inject a {@link
+ * in-session runner performs the live spawn. Units inject a {@link
  * ProducerAgentRunner} fake (see fakes.ts) so the ladder / fix-forward / classify
  * logic is testable without an LLM, Codex, or any gate binary.
  *
@@ -26,7 +26,7 @@ import type { ProducerContext } from "./prompt-context.js";
 export type { ProducerRole } from "../types/index.js";
 
 /**
- * A producer spawn request the WS10 driver consumes to launch the agent. `model`
+ * A producer spawn request the WS10 runner consumes to launch the agent. `model`
  * is the DIALED model (model-dial.ts) — never a literal here; `injectedContext`
  * carries the rung-2 prior-failure "don't do this" summary (empty on rung 0/1).
  */

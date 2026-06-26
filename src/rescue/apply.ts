@@ -4,7 +4,7 @@
  * `scanRun` (scan.ts) classifies a stalled run; `applyRescue` is the only mutation
  * that acts on that classification. It resets the resettable tasks back to `pending`
  * (clearing the stale producer/reviewer/failure state) and, if the run had already
- * finalized to a terminal status, REOPENS it to `running` so the driver picks the
+ * finalized to a terminal status, REOPENS it to `running` so the orchestrator picks the
  * reset work back up. After apply, a plain `factory run resume` (quota gate) +
  * re-drive carries the run forward — rescue is the missing seam between them.
  *

@@ -3,15 +3,15 @@
  *
  * A run can stop in a shape `factory run resume` cannot untangle: a crashed or
  * suspended session left tasks STUCK mid-phase (status `executing`/`reviewing`/
- * `shipping`) with no determination ever reached. The driver has no handler for a
- * stuck in-flight task — the run-level coroutine (`nextTask`) THROWS "dependency cycle or deadlock" the moment
+ * `shipping`) with no determination ever reached. The orchestrator has no handler for a
+ * stuck in-flight task — the run-level orchestrator (`nextTask`) THROWS "dependency cycle or deadlock" the moment
  * no task is actionable (no ready/cascade-failable `pending` task) yet non-terminal
  * work remains. Resume never touches task state (it only clears the quota gate), so
  * resume alone cannot recover such a run.
  *
  * Rescue fills exactly that gap. `scanRun` is the PURE, read-only survey: it
  * classifies every task by what rescue can do with it and reports whether a re-drive
- * would deadlock — the input the orchestrator (and, for ambiguous failures, the
+ * would deadlock — the input the runner (and, for ambiguous failures, the
  * rescue-diagnostic agent) reasons over before calling `rescue apply`.
  *
  * "Without repeating dead ends" (the WS12 acceptance) is encoded in the disposition:
@@ -35,7 +35,7 @@ import type { RunState, RunStatus, TaskStatus, FailureClass } from "../types/ind
 export type RescueDisposition =
   /** `done` — merged into staging; NEVER touched (resetting would un-ship). */
   | "shipped"
-  /** `pending` — already runnable; the driver will pick it up. */
+  /** `pending` — already runnable; the orchestrator will pick it up. */
   | "runnable"
   /** in-flight (`executing`/`reviewing`/`shipping`) — crashed mid-phase; resettable. */
   | "stuck"
@@ -75,7 +75,7 @@ export interface RescueScan {
   needs_rescue: boolean;
   /**
    * True iff a re-drive would THROW: non-terminal work remains but no task is
-   * actionable (none ready, none cascade-failable) — the driver's deadlock guard.
+   * actionable (none ready, none cascade-failable) — the orchestrator's deadlock guard.
    * A terminal `failed`/`completed`/`superseded` run is never "deadlocked" (it already finalized);
    * it may still be `needs_rescue` (recoverable failures to retry on reopen).
    */
@@ -101,8 +101,8 @@ function dispositionOf(
 }
 
 // The engine's readiness predicates, mirrored here so scan stays decoupled from the
-// run-level coroutine. These are DEFINITIONAL (the meaning of "ready" / "blocked") and stable;
-// the source of truth is src/driver/next.ts (depsSatisfied / isUnsatisfiableDep).
+// run-level orchestrator. These are DEFINITIONAL (the meaning of "ready" / "blocked") and stable;
+// the source of truth is src/orchestrator/next.ts (depsSatisfied / isUnsatisfiableDep).
 function depsSatisfied(run: RunState, depends: readonly string[]): boolean {
   return depends.every((d) => run.tasks[d]?.status === "done");
 }
@@ -115,7 +115,7 @@ function hasUnsatisfiableDep(run: RunState, depends: readonly string[]): boolean
 
 /**
  * Survey a run and classify every task for rescue. Pure + read-only — no state
- * writes, no gh, no agent spawns (the diagnostic LLM is the orchestrator's job;
+ * writes, no gh, no agent spawns (the diagnostic LLM is the runner's job;
  * this is its input). See the module header for the disposition contract.
  */
 export function scanRun(run: RunState): RescueScan {
@@ -139,7 +139,7 @@ export function scanRun(run: RunState): RescueScan {
   const dead_ends = deadEnd.map((t) => t.task_id);
 
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
-  // A pending task is "actionable" to the driver: it either runs (deps done) or is
+  // A pending task is "actionable" to the orchestrator: it either runs (deps done) or is
   // cascade-failed (a dep failed/missing). If no task is actionable yet non-terminal
   // work remains, a re-drive throws — that is `would_deadlock`.
   const actionablePending = all.some(

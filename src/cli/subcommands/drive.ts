@@ -1,6 +1,6 @@
 /**
  * `factory next-task-action --run <id> --task <id> [--results <file>] [--ship-mode <m>]` —
- * the per-task coroutine (the engine seam both drivers share).
+ * the per-task orchestrator (the engine seam both runners share).
  *
  * Runs every deterministic step it can and emits ONE JSON NextAction:
  * `spawn` (the agents to run + what to feed back), `terminal`, or
@@ -9,8 +9,8 @@
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, parseShipMode } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
-import { loadCoroutineDeps } from "../wiring.js";
-import { nextAction, parseDriveResults, readJsonInput } from "../../driver/index.js";
+import { loadOrchestratorDeps } from "../wiring.js";
+import { nextAction, parseDriveResults, readJsonInput } from "../../orchestrator/index.js";
 import type { Subcommand } from "../registry-types.js";
 
 const HELP = `factory next-task-action — step one task until it needs agents or is terminal
@@ -58,7 +58,7 @@ async function run(argv: string[]): Promise<ExitCode> {
     throw new UsageError("--results requires a file path");
   }
 
-  const deps = await loadCoroutineDeps({ runId, ...(shipMode !== undefined ? { shipMode } : {}) });
+  const deps = await loadOrchestratorDeps({ runId, ...(shipMode !== undefined ? { shipMode } : {}) });
   const envelope = await nextAction(deps, runId, taskId, results);
   emitJson(envelope);
   return EXIT.OK;

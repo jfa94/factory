@@ -103,7 +103,7 @@ Violating the letter of these rules violates the spirit. No exceptions.
 
 > After you return, the deterministic merge gate runs OUTSIDE your context: the CLI runs
 > the gates (tests, TDD order, coverage, mutation, SAST, types, lint, build, holdout) and the
-> orchestrator spawns the risk-invariant review panel. You don't run those yourself; just make
+> runner spawns the risk-invariant review panel. You don't run those yourself; just make
 > the tests green and commit cleanly.
 
 ## Verification checklist (MUST pass before STATUS: DONE)

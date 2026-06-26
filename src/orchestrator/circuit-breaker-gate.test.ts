@@ -1,5 +1,5 @@
 /**
- * Unit tests for applyCircuitBreaker — the driver-layer wiring of the pure breaker.
+ * Unit tests for applyCircuitBreaker — the orchestrator-layer wiring of the pure breaker.
  *
  * Focus: the DERIVATION the gate owns (the pure predicate's thresholds are already
  * covered in quota/circuit-breaker.test.ts). Namely:
@@ -7,19 +7,19 @@
  *     blocked-environmental cascades and spec-defect wedges;
  *   - the runtime arm is armed in workflow mode and disarmed in session mode.
  *
- * Uses makeCoroutineDeps (a real StateManager); `deps` is a plain object so `now`
+ * Uses makeOrchestratorDeps (a real StateManager); `deps` is a plain object so `now`
  * can be spread-overridden, and `started_at` is set via state.update.
  */
 import { describe, expect, it } from "vitest";
 
 import { applyCircuitBreaker } from "./circuit-breaker-gate.js";
-import { makeCoroutineDeps, NOW } from "./coroutine-fixtures.js";
+import { makeOrchestratorDeps, NOW } from "./orchestrator-fixtures.js";
 import { epochToIso } from "../shared/time.js";
 import type { FailureClass } from "../types/index.js";
 
 /** Seed `task_id` as a classified fail (mirrors the WS1 failed-task invariant). */
 async function failTask(
-  state: Awaited<ReturnType<typeof makeCoroutineDeps>>["state"],
+  state: Awaited<ReturnType<typeof makeOrchestratorDeps>>["state"],
   runId: string,
   taskId: string,
   failureClass: FailureClass,
@@ -41,7 +41,7 @@ const FOUR = [
 
 describe("applyCircuitBreaker — failure-count arm (capability-budget only)", () => {
   it("trips at the cap of capability-budget failures (session mode)", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({ tasks: FOUR });
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({ tasks: FOUR });
     try {
       await failTask(state, runId, "T1", "capability-budget");
       await failTask(state, runId, "T2", "capability-budget");
@@ -55,7 +55,7 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
   });
 
   it("trips at the cap of capability-budget failures (workflow mode)", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
       tasks: FOUR,
       modeOverride: "workflow",
     });
@@ -72,7 +72,7 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
   });
 
   it("does NOT count blocked-environmental cascades (dependency consequences)", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({ tasks: FOUR });
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({ tasks: FOUR });
     try {
       await failTask(state, runId, "T1", "blocked-environmental");
       await failTask(state, runId, "T2", "blocked-environmental");
@@ -85,7 +85,7 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
   });
 
   it("does NOT count spec-defect wedge failures", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({ tasks: FOUR });
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({ tasks: FOUR });
     try {
       await failTask(state, runId, "T1", "spec-defect");
       await failTask(state, runId, "T2", "spec-defect");
@@ -98,7 +98,7 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
 
   it("one real failure cascading to two dependents does NOT trip (2 < cap of 3 genuine)", async () => {
     // The exact false-trip this derivation prevents: 1 capability-budget + cascades.
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({ tasks: FOUR });
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({ tasks: FOUR });
     try {
       await failTask(state, runId, "T1", "capability-budget"); // the one real failure
       await failTask(state, runId, "T2", "blocked-environmental"); // cascade
@@ -112,7 +112,7 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
   });
 
   it("a healthy run does not trip", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       expect(await applyCircuitBreaker(deps, runId)).toBeNull();
     } finally {
@@ -123,7 +123,7 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
 
 describe("applyCircuitBreaker — runtime arm (workflow-armed, session-disarmed)", () => {
   it("trips in workflow mode when wall-time reaches the runtime cap", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
       modeOverride: "workflow",
     });
     try {
@@ -138,7 +138,7 @@ describe("applyCircuitBreaker — runtime arm (workflow-armed, session-disarmed)
   });
 
   it("does NOT trip in session mode at the same wall-time (runtime arm disarmed)", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps(); // session (default)
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps(); // session (default)
     try {
       await state.update(runId, (s) => ({ ...s, started_at: epochToIso(NOW - 480 * 60) }));
       expect(await applyCircuitBreaker(deps, runId)).toBeNull();
@@ -148,7 +148,7 @@ describe("applyCircuitBreaker — runtime arm (workflow-armed, session-disarmed)
   });
 
   it("does NOT trip in workflow mode just under the runtime cap", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
       modeOverride: "workflow",
     });
     try {

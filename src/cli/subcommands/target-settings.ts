@@ -41,14 +41,14 @@ const log = createLogger("cli:target-settings");
  * factory run needs in the TARGET repo. Each entry maps to a concrete pipeline
  * action:
  *
- *   - `Bash(factory:*)`        — the orchestrator shells `factory next-task/next-action/…`.
+ *   - `Bash(factory:*)`        — the runner shells `factory next-task/next-action/…`.
  *   - `Bash(git:*)` / `Bash(gh:*)` — preflight `git rev-parse`, reviewer
  *                                 `git -C <wt> diff`, scaffold's `gh repo view`,
  *                                 plus producers' commit/branch plumbing.
  *   - `Bash(npm:*)` / `Bash(npx:*)` — test-writer/implementer run the project
  *                                 test runner + the GateRunner's npm/npx tools.
  *   - `Read`/`Write`/`Edit`/`Grep`/`Glob`/`Agent` — the agent tools every
- *                                 producer + reviewer (and the orchestrator's
+ *                                 producer + reviewer (and the runner's
  *                                 Agent() spawns) use.
  *
  * The data-dir-SCOPED rules (`Read|Write|Edit(<data-dir>/**)`) are NOT here —

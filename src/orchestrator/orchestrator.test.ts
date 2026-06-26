@@ -1,7 +1,7 @@
 /**
- * Unit tests for nextAction — the per-task coroutine.
+ * Unit tests for nextAction — the per-task orchestrator.
  *
- * Each test gets a FRESH tmp dataDir (no shared mutable state). makeCoroutineDeps
+ * Each test gets a FRESH tmp dataDir (no shared mutable state). makeOrchestratorDeps
  * seeds the run and task state and returns deps + run-id.
  *
  * Helpers:
@@ -11,13 +11,13 @@
  *   - blockingReviewsResults: a DriveResults with one confirmed blocker
  *
  * result_key discipline: every helper that builds a DriveResults accepts the prior
- * spawn envelope and copies result_key verbatim — the natural driver behavior.
+ * spawn envelope and copies result_key verbatim — the natural orchestrator behavior.
  */
 import { describe, expect, it } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { nextAction, MERGE_RESYNC_CAP, type NextAction } from "./coroutine.js";
+import { nextAction, MERGE_RESYNC_CAP, type NextAction } from "./orchestrator.js";
 import { TASK_PHASE_ORDER } from "../types/index.js";
 import { TaskStateSchema } from "../core/state/index.js";
 import type { DriveResults, ResultKey } from "./results.js";
@@ -28,8 +28,8 @@ import { taskWorktreePath } from "./paths.js";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
 import { ESCALATION_CAP } from "../producer/index.js";
 
-import { makeCoroutineDeps, PAUSE_5H } from "./coroutine-fixtures.js";
-import type { CoroutineDeps } from "./coroutine.js";
+import { makeOrchestratorDeps, PAUSE_5H } from "./orchestrator-fixtures.js";
+import type { OrchestratorDeps } from "./orchestrator.js";
 import { FakeGhClient, FakeGitClient } from "../git/fakes.js";
 import { runScopedBranch, runStagingBranch } from "../git/index.js";
 
@@ -40,10 +40,10 @@ import { runScopedBranch, runStagingBranch } from "../git/index.js";
 /**
  * Drive T1 through tests+exec (record DONE twice) to land at the verify spawn.
  * Returns the verify spawn envelope (LOUD assertion — never returns non-spawn).
- * result_key is echoed from each prior envelope, matching natural driver behavior.
+ * result_key is echoed from each prior envelope, matching natural orchestrator behavior.
  */
 async function driveToVerify(
-  deps: CoroutineDeps,
+  deps: OrchestratorDeps,
   runId: string,
   taskId: string,
 ): Promise<NextAction & { kind: "spawn" }> {
@@ -158,8 +158,8 @@ describe("phase-cursor literals", () => {
 
   it("TaskState.spawn_in_flight.phase enum equals SPAWN_PHASES (cross-module pin)", () => {
     // The checkpoint's phase literal is duplicated in core/state (it must not import
-    // the driver), so pin it equal to driver/results' SPAWN_PHASES source of truth —
-    // a drift here would let the coroutine persist a checkpoint the schema rejects.
+    // the orchestrator), so pin it equal to orchestrator/results' SPAWN_PHASES source of truth —
+    // a drift here would let the orchestrator persist a checkpoint the schema rejects.
     const sif = TaskStateSchema.shape.spawn_in_flight;
     const phaseEnum = sif.unwrap().shape.phase; // z.object({...}).optional() → object → .phase
     expect(phaseEnum.options).toEqual([...SPAWN_PHASES]);
@@ -172,7 +172,7 @@ describe("phase-cursor literals", () => {
 
 describe("nextAction", () => {
   it("fresh task steps preflight deterministically and stops at the tests spawn", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const env = await nextAction(deps, runId, "T1");
       expect(env.kind).toBe("spawn");
@@ -189,7 +189,7 @@ describe("nextAction", () => {
   });
 
   it("re-invoking without results re-emits the same spawn envelope (idempotent)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const a = await nextAction(deps, runId, "T1");
       expect(a.kind).toBe("spawn");
@@ -201,7 +201,7 @@ describe("nextAction", () => {
   });
 
   it("re-invoking at verify without results re-emits the same verify spawn (idempotent)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
     });
     try {
@@ -220,11 +220,11 @@ describe("nextAction", () => {
   // -- WS2: stop-mid-spawn idempotent re-spawn --------------------------------
   // Producers commit to the SHARED task worktree (isolation omitted), so a stop in
   // the post-spawn / pre-record window leaves the abandoned producer's partial commits
-  // on the task branch. The coroutine captures the pre-spawn tip at emit and, on a
+  // on the task branch. The orchestrator captures the pre-spawn tip at emit and, on a
   // resume that re-enters the SAME (phase, rung), resets the worktree to it.
 
   it("captures the pre-spawn tip on a fresh spawn and does not reset the worktree (WS2)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const git = deps.git as FakeGitClient;
       const env1 = await nextAction(deps, runId, "T1"); // fresh tests spawn
@@ -247,12 +247,12 @@ describe("nextAction", () => {
   });
 
   it("resets the task worktree to the pre-spawn tip when re-emitting an abandoned spawn (WS2)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const git = deps.git as FakeGitClient;
       const taskBranch = runScopedBranch(runId, "T1");
 
-      // 1. First step → tests spawn; the coroutine captures the pre-spawn task-branch tip.
+      // 1. First step → tests spawn; the orchestrator captures the pre-spawn task-branch tip.
       const env1 = await nextAction(deps, runId, "T1");
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") return;
@@ -279,7 +279,7 @@ describe("nextAction", () => {
   });
 
   it("advancing phases overwrites the checkpoint so a stale prior-phase entry never resets (WS2)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const git = deps.git as FakeGitClient;
       const env1 = await nextAction(deps, runId, "T1"); // tests spawn → checkpoint {tests,0}
@@ -307,7 +307,7 @@ describe("nextAction", () => {
   });
 
   it("records a producer DONE and advances to the exec spawn", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const env1 = await nextAction(deps, runId, "T1"); // → tests spawn
       expect(env1.kind).toBe("spawn");
@@ -327,11 +327,11 @@ describe("nextAction", () => {
 
   // De-duplication pin (Task 4.1 Step 2b): one record cycle that resumes at a phase
   // must write that phase's cursor EXACTLY ONCE. Before the fix the record's
-  // persistStepCursor wrote the cursor and the coroutine loop's first markInFlight wrote
+  // persistStepCursor wrote the cursor and the orchestrator loop's first markInFlight wrote
   // the IDENTICAL cursor again (2 locked RMW + fsync per record). A counting wrapper
   // over updateTask tallies writes that set the resumed cursor (phase "exec").
   it("recording a producer DONE writes the resumed exec cursor exactly once (no duplicate RMW)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const env1 = await nextAction(deps, runId, "T1"); // → tests spawn
       expect(env1.kind).toBe("spawn");
@@ -374,7 +374,7 @@ describe("nextAction", () => {
   });
 
   it("a blocked producer escalates the rung and re-spawns the same phase", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const env1 = await nextAction(deps, runId, "T1");
       expect(env1.kind).toBe("spawn");
@@ -400,7 +400,7 @@ describe("nextAction", () => {
   // without bumping the rung (classify-before-retry, Δ D), distinct from the
   // NEEDS_CONTEXT capability retry above.
   it("a producer blocked-escalate records to an immediate spec-defect fail (no rung burn)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const env1 = await nextAction(deps, runId, "T1"); // tests spawn, rung 0
       expect(env1.kind).toBe("spawn");
@@ -423,7 +423,7 @@ describe("nextAction", () => {
   // Relocated from loop.test.ts ("tdd_exempt task skips the test-writer"): a
   // tdd_exempt task has no tests phase — the FIRST producer spawn is the implementer.
   it("tdd_exempt task skips the tests spawn (implementer is the first producer spawn)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", tdd_exempt: true }],
     });
     try {
@@ -438,7 +438,7 @@ describe("nextAction", () => {
   });
 
   it("verify emits the 6-reviewer panel, expects reviews", async () => {
-    const { deps, runId, holdout, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, holdout, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
     });
     try {
@@ -459,7 +459,7 @@ describe("nextAction", () => {
   });
 
   it("the verify spawn envelope carries the per-run base ref (origin/staging-<run-id>)", async () => {
-    const { deps, runId, holdout, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, holdout, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
     });
     try {
@@ -481,7 +481,7 @@ describe("nextAction", () => {
   });
 
   it("the verify base ref + holdout prompt honor a mid-run PINNED staging branch", async () => {
-    const { deps, runId, holdout, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, holdout, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
     });
     try {
@@ -504,7 +504,7 @@ describe("nextAction", () => {
   // verify must surface the holdout holdout ONLY when an answer key was withheld.
   it("verify emits NO holdout holdout when nothing was withheld", async () => {
     // Default fixture: single criterion → degenerate split, no key persisted.
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       await driveToVerify(deps, runId, "T1");
       const env = await nextAction(deps, runId, "T1");
@@ -519,7 +519,7 @@ describe("nextAction", () => {
 
   it("recording approving reviews (+holdout pass) steps through ship to terminal done (no-merge)", async () => {
     // Use ≥2 criteria so the tests phase persists a holdout record (holdoutCount(2,20)=1).
-    const { deps, runId, dataDir, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, dataDir, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["criterion-a", "criterion-b"] }],
     });
     try {
@@ -553,7 +553,7 @@ describe("nextAction", () => {
     // and the producers commit locally — nothing pushed it to origin, so the real
     // `gh pr create --head <branch>` failed with "Head ref must be a branch / No
     // commits between". Ship MUST push the head branch to origin first.
-    const { deps, runId, dataDir, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, dataDir, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["criterion-a", "criterion-b"] }],
     });
     const git = deps.git as FakeGitClient;
@@ -579,7 +579,7 @@ describe("nextAction", () => {
   });
 
   it("a blocked merge gate escalates and resumes at exec", async () => {
-    const { deps, runId, dataDir, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, dataDir, cleanup } = await makeOrchestratorDeps();
     try {
       await driveToVerify(deps, runId, "T1");
       // Write the cited file into the worktree so citation-verify can confirm it.
@@ -600,7 +600,7 @@ describe("nextAction", () => {
   });
 
   it("an exhausted ladder is a classified capability-budget failure", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       taskStateOverrides: { task_id: "T1", escalation_rung: ESCALATION_CAP },
     });
     try {
@@ -636,7 +636,7 @@ describe("nextAction", () => {
       mergeStateStatus: "BEHIND",
       url: "https://github.com/fake/repo/pull/500",
     });
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c"] }],
       shipMode: "live",
       ghClient: gh,
@@ -663,7 +663,7 @@ describe("nextAction", () => {
   // Relocated from loop.test.ts ("a BEHIND merge re-routes through exec to re-sync,
   // then lands on the next attempt"): the live serial-writer refusal is NOT a
   // capability failure — it re-routes to an exec re-sync (bumping merge_resyncs),
-  // and once the branch is up to date the merge lands. In the coroutine model the
+  // and once the branch is up to date the merge lands. In the orchestrator model the
   // re-sync surfaces as a fresh exec spawn the caller records DONE.
   it("live-merge BEHIND-once re-routes to an exec re-sync, then lands on the next attempt", async () => {
     // A gh client that reports BEHIND on the FIRST prView, CLEAN thereafter.
@@ -676,7 +676,7 @@ describe("nextAction", () => {
       }
     }
     const gh = new BehindOnceGh();
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c"] }],
       shipMode: "live",
       ghClient: gh,
@@ -684,7 +684,7 @@ describe("nextAction", () => {
     try {
       const panelEnv = await driveToVerify(deps, runId, "T1");
       const withheld = (await deps.holdout.get(runId, "T1")).withheld_criteria;
-      // Record approving reviews (+holdout pass) → the coroutine runs ship; the first
+      // Record approving reviews (+holdout pass) → the orchestrator runs ship; the first
       // prView is BEHIND, so it re-routes to an exec re-sync (a fresh exec spawn),
       // bumping merge_resyncs.
       const resyncEnv = await nextAction(
@@ -728,7 +728,7 @@ describe("nextAction", () => {
       }
     }
     const gh = new AlwaysBehindGh();
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c"] }],
       shipMode: "live",
       ghClient: gh,
@@ -773,7 +773,7 @@ describe("nextAction", () => {
   });
 
   it("results at a non-spawn phase (preflight) fail loud", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       // T1 is pending → phase is implicitly preflight (no cursor yet)
       await expect(
@@ -788,7 +788,7 @@ describe("nextAction", () => {
   });
 
   it("producer results at verify fail loud (expects mismatch)", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       await driveToVerify(deps, runId, "T1");
       const panelEnv = await nextAction(deps, runId, "T1"); // emit panel → phase cursor = "verify"
@@ -806,11 +806,11 @@ describe("nextAction", () => {
   });
 
   it("a quota breach short-circuits to quota-blocked before any phase work", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({ usage: PAUSE_5H });
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({ usage: PAUSE_5H });
     try {
       const env = await nextAction(deps, runId, "T1");
       expect(env).toMatchObject({ kind: "pause", scope: "5h" });
-      // No phase cursor was written — the coroutine bailed before any phase work.
+      // No phase cursor was written — the orchestrator bailed before any phase work.
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.phase).toBeUndefined();
     } finally {
@@ -819,7 +819,7 @@ describe("nextAction", () => {
   });
 
   it("a terminal task returns its terminal envelope idempotently", async () => {
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps();
     try {
       // Seed the task as done
       await state.update(runId, (s) => ({
@@ -839,7 +839,7 @@ describe("nextAction", () => {
   });
 
   it("stale results (result_key tests/0) reject LOUD after DONE advances tests→exec", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const env1 = await nextAction(deps, runId, "T1"); // tests spawn, result_key tests/0
       expect(env1.kind).toBe("spawn");
@@ -862,7 +862,7 @@ describe("nextAction", () => {
   });
 
   it("duplicate NEEDS_CONTEXT results (result_key tests/0) reject LOUD and do not double-bump escalation_rung", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const env1 = await nextAction(deps, runId, "T1"); // tests spawn, result_key tests/0
       expect(env1.kind).toBe("spawn");
@@ -892,7 +892,7 @@ describe("nextAction", () => {
   });
 
   it("spawn envelope carries result_key that matches cursor phase and rung", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, cleanup } = await makeOrchestratorDeps({
       taskStateOverrides: { task_id: "T1", escalation_rung: 2 },
     });
     try {
@@ -913,7 +913,7 @@ describe("nextAction", () => {
 describe("terminal-before-quota ordering", () => {
   it("terminal task + quota-breach → returns terminal envelope (no pause checkpoint)", async () => {
     // PAUSE_5H would normally trigger quota-blocked; terminal status must short-circuit first.
-    const { deps, runId, state, cleanup } = await makeCoroutineDeps({ usage: PAUSE_5H });
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({ usage: PAUSE_5H });
     try {
       // Seed the task as done (terminal).
       await state.update(runId, (s) => ({
@@ -940,11 +940,11 @@ describe("terminal-before-quota ordering", () => {
 
 describe("handlers.verify fail-closed re-spawn (crash-resume guard)", () => {
   it("task at verify with pre-persisted reviewers + holdout expected + no verdict → re-spawns panel", async () => {
-    // Simulate a rogue hook write: task arrives at the coroutine with reviewers[] already populated
+    // Simulate a rogue hook write: task arrives at the orchestrator with reviewers[] already populated
     // and phase=verify, but no holdout verdict has been recorded yet.
     // Expected: the verify handler detects missing holdout evidence and re-spawns the panel
     // (fail-closed), NOT derives from the persisted reviewers and advances to ship.
-    const { deps, runId, holdout, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, holdout, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c"] }],
       taskStateOverrides: {
         task_id: "T1",
@@ -981,7 +981,7 @@ describe("handlers.verify fail-closed re-spawn (crash-resume guard)", () => {
 describe("recordResults holdout-required guard", () => {
   it("holdout-bearing task at verify with reviews but no holdout → rejects with /withheld holdout answer key/", async () => {
     // 5 criteria at holdoutPercent=20% → holdoutCount(5,20)=1 — guarantees a withheld key.
-    const { deps, runId, dataDir, cleanup } = await makeCoroutineDeps({
+    const { deps, runId, dataDir, cleanup } = await makeOrchestratorDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["a", "b", "c", "d", "e"] }],
     });
     try {
@@ -1011,12 +1011,12 @@ describe("recordResults holdout-required guard", () => {
 });
 
 // ---------------------------------------------------------------------------
-// result_key schema rejection (schema-level, not coroutine-level)
+// result_key schema rejection (schema-level, not orchestrator-level)
 // ---------------------------------------------------------------------------
 
 describe("result_key validation (Important 1 — schema gate)", () => {
   it("result_key mismatch on phase rejects with /stale or duplicate/", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const env1 = await nextAction(deps, runId, "T1");
       expect(env1.kind).toBe("spawn");
@@ -1032,7 +1032,7 @@ describe("result_key validation (Important 1 — schema gate)", () => {
   });
 
   it("result_key mismatch on rung rejects with /stale or duplicate/", async () => {
-    const { deps, runId, cleanup } = await makeCoroutineDeps();
+    const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {
       const env1 = await nextAction(deps, runId, "T1");
       expect(env1.kind).toBe("spawn");

@@ -2,7 +2,7 @@
  * WS10 — the SHARED deterministic task-transition logic.
  *
  * This is the one home for the per-task escalation ladder + fail/complete logic
- * the engine builds on: the per-task coroutine ({@link import("./coroutine.js").nextAction})
+ * the engine builds on: the per-task orchestrator ({@link import("./orchestrator.js").nextAction})
  * acts on a live phase result through these, and the record cores
  * ({@link import("./record.js")}) record an out-of-band agent result through the same
  * functions. Keeping the ladder here (not duplicated across the spawn path and the
@@ -15,7 +15,7 @@
  *
  * SCOPE: these functions own ONLY run-state mutations + the resulting next-step
  * intent ({@link TaskStep}). They never spawn agents, never run gates, and never do
- * git I/O — that is the reporter's / coroutine's job. Each takes the narrow
+ * git I/O — that is the reporter's / orchestrator's job. Each takes the narrow
  * {@link TransitionDeps} (just the {@link StateManager}).
  */
 import {
@@ -52,13 +52,13 @@ export type TaskStep =
 
 /**
  * Persist the in-flight {@link import("./deps.js").TaskStatus} for `phase`,
- * stamping `started_at` on first entry. The coroutine calls this when it needs the
+ * stamping `started_at` on first entry. The orchestrator calls this when it needs the
  * cursor written for a phase it is about to run; the record paths call it (via
  * persistStepCursor) after a transition that resumes at a phase, so the persisted
  * status tracks the resume point.
  *
  * RETURNS the updated {@link RunState} (from the single locked `updateTask` write)
- * so the coroutine can consume it directly instead of issuing a redundant `state.read`
+ * so the orchestrator can consume it directly instead of issuing a redundant `state.read`
  * — discarding callers (persistStepCursor) ignore it safely.
  */
 export function markInFlight(
@@ -134,7 +134,7 @@ export async function failStep(
  * (the ladder, not the classifier, owns the cap).
  *
  * Note: this persists only the DOMAIN state (rung + reviewers); the in-flight
- * status for `resumePhase` is the caller's concern (the coroutine re-marks it via
+ * status for `resumePhase` is the caller's concern (the orchestrator re-marks it via
  * {@link markInFlight} next iteration; the record path stamps it via
  * persistStepCursor).
  */
@@ -199,12 +199,12 @@ export function classifyProducerFailure(outcome: ProducerOutcome): ClassifyDecis
 }
 
 /**
- * Record a completed producer spawn into state (the producer-result logic the coroutine's
+ * Record a completed producer spawn into state (the producer-result logic the orchestrator's
  * `applyRecordProducer` record core calls). On `done`: record `producer_role` and
  * advance to `resumePhase`. On any failure status: classify (Δ D) →
  * {@link escalateOrFail}, resuming at the SAME producer `phase`.
  *
- * The caller is responsible for the actual spawn (the orchestrator's Agent spawn,
+ * The caller is responsible for the actual spawn (the runner's Agent spawn,
  * collected out-of-band) — this only records the resulting {@link ProducerOutcome}
  * into state + the next step.
  */

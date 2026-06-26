@@ -126,7 +126,7 @@ export const QuotaSchema = z
  * (so the value has ONE home) but the apex boundary (`src/spec/agents.ts`) reads
  * the frozen {@link SPEC_DEFAULTS}, never a per-run override — the pin is invariant
  * by construction. The remaining keys (`passReviewThreshold`, `dimensionFloor`,
- * `maxRegenIterations`, `prdBodyMaxBytes`) ARE operator-tunable and the WS10 driver
+ * `maxRegenIterations`, `prdBodyMaxBytes`) ARE operator-tunable and the WS10 orchestrator
  * threads them off the resolved config into the spec pipeline.
  */
 export const SpecSchema = z
@@ -163,7 +163,7 @@ export type SpecConfig = z.infer<typeof SpecSchema>;
 /**
  * The frozen spec defaults. The single source the apex boundary
  * (`src/spec/agents.ts`) reads for the unconditional Decision-21 pin, and the
- * fallback the WS5 pipeline functions use when the driver passes no override.
+ * fallback the WS5 pipeline functions use when the orchestrator passes no override.
  */
 export const SPEC_DEFAULTS: Readonly<SpecConfig> = Object.freeze(SpecSchema.parse({}));
 

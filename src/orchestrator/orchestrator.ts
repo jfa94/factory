@@ -1,7 +1,7 @@
 /**
  * The per-task COROUTINE — the engine half of the `factory next-action` seam.
  *
- * One invocation = "run every deterministic step you can, then stop": the coroutine
+ * One invocation = "run every deterministic step you can, then stop": the orchestrator
  * resumes at the persisted phase cursor, optionally FOLDS the previous spawn's
  * agent results (producer status / holdout raw / panel reviews — the internalized
  * record-* writers), then loops the phase machine until it either needs agents
@@ -16,11 +16,11 @@
  *     result delivery is rejected LOUD (never double-recorded). Caveat: the
  *     result_key is (phase, rung) not a nonce — a rescue cycle can reissue an
  *     identical key, so exactly-once holds under the realistic crash model (the
- *     driver replays only the last unacknowledged delivery), not against
+ *     orchestrator replays only the last unacknowledged delivery), not against
  *     arbitrarily delayed redelivery.
  *
  * Spawn-boundary inversion: instead of awaiting an injected agent runner in
- * process, the coroutine RETURNS the spawn request to the caller (the orchestrator)
+ * process, the orchestrator RETURNS the spawn request to the caller (the runner)
  * and resumes on the next invocation by recording the collected results.
  * Holdout-before-reviews — an Iron Law the old skill enforced by prose — is here
  * mere code ordering inside recordResults.
@@ -66,14 +66,14 @@ import type { DriveResults, ResultKey, SpawnPhase } from "./results.js";
 import type { HandlerDeps } from "./types.js";
 import { createLogger } from "../shared/index.js";
 
-const log = createLogger("coroutine");
+const log = createLogger("orchestrator");
 
 export type { SpawnPhase };
 
 /** Ship live-merge re-sync budget per task (persisted in TaskState.merge_resyncs). */
 export const MERGE_RESYNC_CAP = 8;
 
-/** What the driver must collect for the emitted request. */
+/** What the orchestrator must collect for the emitted request. */
 export type DriveExpects = "producer-status" | "reviews";
 
 /** The out-of-band holdout-validator spawn run alongside the panel (verify only). */
@@ -119,8 +119,8 @@ export type NextAction =
       readonly resets_at_epoch?: number;
     };
 
-/** Everything the coroutines need: the reporter bundle + state + the quota signal. */
-export interface CoroutineDeps extends HandlerDeps {
+/** Everything the orchestrators need: the reporter bundle + state + the quota signal. */
+export interface OrchestratorDeps extends HandlerDeps {
   readonly state: StateManager;
   readonly usage: UsageSignal;
   /** Epoch SECONDS. */
@@ -133,7 +133,7 @@ export interface CoroutineDeps extends HandlerDeps {
 function requireTask(run: RunState, taskId: string): TaskState {
   const task = run.tasks[taskId];
   if (task === undefined) {
-    throw new Error(`coroutine: run '${run.run_id}' has no task '${taskId}'`);
+    throw new Error(`orchestrator: run '${run.run_id}' has no task '${taskId}'`);
   }
   return task;
 }
@@ -143,12 +143,12 @@ function terminalOutcome(task: TaskState): TaskOutcome {
   if (task.status === "done") return { outcome: "done" };
   if (task.failure_class === undefined) {
     throw new Error(
-      `coroutine: terminal task '${task.task_id}' has no failure_class — schema invariant violated`,
+      `orchestrator: terminal task '${task.task_id}' has no failure_class — schema invariant violated`,
     );
   }
   if (task.failure_reason === undefined) {
     throw new Error(
-      `coroutine: terminal task '${task.task_id}' has no failure_reason — schema invariant violated`,
+      `orchestrator: terminal task '${task.task_id}' has no failure_reason — schema invariant violated`,
     );
   }
   return {
@@ -168,13 +168,13 @@ function asSpawnPhase(phase: TaskPhase): SpawnPhase {
     return phase;
   }
   throw new Error(
-    `coroutine: phase '${phase}' cannot spawn agents (only tests|exec|verify can) — unreachable`,
+    `orchestrator: phase '${phase}' cannot spawn agents (only tests|exec|verify can) — unreachable`,
   );
 }
 
 /** Build the holdout-validate holdout IFF an answer key was withheld for this task. */
 export async function holdoutSidecar(
-  deps: CoroutineDeps,
+  deps: OrchestratorDeps,
   runId: string,
   taskId: string,
   baseRef: string,
@@ -196,7 +196,7 @@ export async function holdoutSidecar(
 
 /** Record the previous spawn's results into state via the shared writers. */
 async function recordResults(
-  deps: CoroutineDeps,
+  deps: OrchestratorDeps,
   runId: string,
   taskId: string,
   phase: TaskPhase,
@@ -256,7 +256,7 @@ async function recordResults(
  * spawn is needed or the task is terminal. See the module doc for the contract.
  */
 export async function nextAction(
-  deps: CoroutineDeps,
+  deps: OrchestratorDeps,
   runId: string,
   taskId: string,
   results?: DriveResults,
@@ -387,7 +387,7 @@ export async function nextAction(
       case "task-terminal": {
         if (result.outcome.outcome === "done") {
           const step = await completeTask(deps, runId, taskId);
-          if (!step.done) throw new Error("coroutine: completeTask returned non-terminal step");
+          if (!step.done) throw new Error("orchestrator: completeTask returned non-terminal step");
           return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
         const step = await failStep(
@@ -397,7 +397,7 @@ export async function nextAction(
           result.outcome.failure_class,
           result.outcome.reason,
         );
-        if (!step.done) throw new Error("coroutine: failStep returned non-terminal step");
+        if (!step.done) throw new Error("orchestrator: failStep returned non-terminal step");
         return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
       }
       case "wait-retry": {
@@ -433,7 +433,7 @@ export async function nextAction(
               "blocked-environmental",
               `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`,
             );
-            if (!step.done) throw new Error("coroutine: failStep returned non-terminal step");
+            if (!step.done) throw new Error("orchestrator: failStep returned non-terminal step");
             return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
           }
           log.info(
@@ -461,7 +461,7 @@ export async function nextAction(
       }
       case "graceful-stop":
       case "finalize-terminal":
-        throw new Error(`coroutine: run-scope result '${result.kind}' surfaced at task scope`);
+        throw new Error(`orchestrator: run-scope result '${result.kind}' surfaced at task scope`);
       default:
         return assertNever(result);
     }

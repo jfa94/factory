@@ -341,7 +341,7 @@ describe("applyRecordReviews record", () => {
           ],
         },
       ],
-      // The orchestrator's independent verifier CONFIRMED the blocker.
+      // The runner's independent verifier CONFIRMED the blocker.
       verifications: [
         {
           reviewer: "quality",

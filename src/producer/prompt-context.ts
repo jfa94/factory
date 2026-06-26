@@ -76,7 +76,7 @@ export interface BuildProducerContextInput {
 
 /**
  * The assembled, redaction-safe producer prompt context. A flat structured
- * record the WS10 driver hands to the agent prompt. Deliberately holds NO holdout
+ * record the WS10 runner hands to the agent prompt. Deliberately holds NO holdout
  * field. `injectedPriorFailure` is true IFF prior-failure notes were recorded in —
  * the machine-checkable proof the rung-2 context changed.
  */

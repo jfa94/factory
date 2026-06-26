@@ -10,7 +10,7 @@
  * PURE over {@link GhClient}: no StateManager, no report/issue knowledge. The
  * finalize coordinator builds the report, posts the PRD-issue failure comment on a
  * dropped run, and calls THIS for the git mechanics only — keeping the dependency
- * direction right (src/git is a lower layer than src/scoring / src/driver).
+ * direction right (src/git is a lower layer than src/scoring / src/orchestrator).
  *
  * Idempotent (resume-safe): a finalize that died mid-rollup re-enters here. A
  * single `pr list --state all` distinguishes (a) already-merged → short-circuit

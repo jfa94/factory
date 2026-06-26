@@ -4,7 +4,7 @@
  *
  * This is a HARD run-abort predicate, DISTINCT from the pacer: the pacer produces
  * pause/suspend (a recoverable quota event); the breaker produces a tripped/no
- * verdict the driver turns into a run-level finalize. A quota pause NEVER trips
+ * verdict the orchestrator turns into a run-level finalize. A quota pause NEVER trips
  * the breaker — paused minutes are deducted from wall time so waiting out a quota
  * curve does not count against the runtime budget.
  *
@@ -23,14 +23,14 @@
  * the breaker disarmed): a non-finite or negative `cumulativeFailures` /
  * `pausedMinutes`, or an unparseable `startedAtIso`, trips.
  *
- * The cumulative-failure count is DERIVED by the driver gate (capability-budget
+ * The cumulative-failure count is DERIVED by the orchestrator gate (capability-budget
  * failures) — the frozen RunState has no breaker field; this module is the PURE
- * predicate over values the driver threads in.
+ * predicate over values the orchestrator threads in.
  */
 import type { Config } from "../config/schema.js";
 import { parseIso8601ToEpoch } from "../shared/time.js";
 
-/** Inputs the driver threads into the breaker (counter + timings live in WS8/WS10). */
+/** Inputs the orchestrator threads into the breaker (counter + timings live in WS8/WS10). */
 export interface CircuitBreakerInput {
   /** ISO-8601 run start time. */
   startedAtIso: string;

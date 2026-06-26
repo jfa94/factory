@@ -6,7 +6,7 @@
  *
  * Model A: this CLI is a REPORTER (`scan`) + a WRITER (`apply`), never an agent
  * spawner. `scan` emits the pure {@link scanRun} classification — the input the
- * orchestrator (and, for ambiguous failures, the orchestrator-spawned rescue-diagnostic
+ * runner (and, for ambiguous failures, the runner-spawned rescue-diagnostic
  * agent) reasons over; the diagnostic then drives `apply --task …`. The CLI provides
  * scan (its input) + apply (the consumer of its decisions); it does NOT run the
  * diagnostic itself.

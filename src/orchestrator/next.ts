@@ -4,24 +4,24 @@
  * One invocation = one run-loop iteration: terminal check → quota gate (persisting
  * pause/suspend) → checkpoint clear on recovery → cascade-fail (transitive,
  * blocked-environmental) → the READY set. Ready = every NON-TERMINAL task whose
- * deps are all `done` — in-flight tasks come first so a crashed driver finishes
+ * deps are all `done` — in-flight tasks come first so a crashed runner finishes
  * what it started before opening new work.
  *
  * Circuit breaker (Decision 34): when no task is actionable yet non-terminal work
  * remains (dependency cycle / mutually-stuck graph), each wedged task is failed as
- * `spec-defect` and the envelope `all-terminal` is returned. The driver routes this
+ * `spec-defect` and the envelope `all-terminal` is returned. The orchestrator routes this
  * to finalize → `failed`, leaving `develop` clean. Every fail is LOUD (failTask
  * warns) with the full wedged set in the reason.
  *
  * Ordering invariant: terminal-run check BEFORE the quota gate — a terminal probe
- * must not write a pause checkpoint (same discipline as nextAction in coroutine.ts).
+ * must not write a pause checkpoint (same discipline as nextAction in orchestrator.ts).
  *
  * Clearing a stale paused/suspended checkpoint on recovery is THIS CALLER's job
  * (the quota gate doc is explicit: "on proceed the gate never writes state;
  * clearing a stale checkpoint on recovery is the CALLER's job").
  *
  * Single-writer assumption: lock-free snapshot reads are sound because v1 has
- * exactly one driver process writing state; subagents never write run state.
+ * exactly one orchestrator process writing state; subagents never write run state.
  *
  * `cascade_failed` on the `all-terminal` variant is THIS-INVOCATION-ONLY — it
  * lists tasks failed by the cascade loop in this call. Authoritative fail
@@ -40,12 +40,12 @@ import {
 import { failTask } from "./transitions.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
 import { applyCircuitBreaker } from "./circuit-breaker-gate.js";
-import type { CoroutineDeps } from "./coroutine.js";
+import type { OrchestratorDeps } from "./orchestrator.js";
 
 /**
  * Every variant carries the run's self-resolved context — `run_id`, the canonical
  * `data_dir` (from {@link resolveDataDir}), and the persisted `ship_mode`. The
- * workflow driver adopts these from the FIRST envelope instead of having
+ * workflow runner adopts these from the FIRST envelope instead of having
  * them marshaled through Workflow `args` (a real object passed as `args` arrives
  * JSON-string-encoded, so a load-bearing arg silently becomes `undefined`).
  */
@@ -96,23 +96,23 @@ function isUnsatisfiableDep(run: RunState, depId: string): boolean {
  * `completed`, docs not already `done`, and docs applicable to the target repo.
  * The caller MUST guarantee all tasks are terminal — decideFinalize throws otherwise.
  */
-async function wantsDocs(deps: CoroutineDeps, run: RunState): Promise<boolean> {
+async function wantsDocs(deps: OrchestratorDeps, run: RunState): Promise<boolean> {
   if (run.docs?.status === "done") return false;
   if (decideFinalize(run).run_status !== "completed") return false;
   return deps.docsApplicable();
 }
 
-export async function nextTask(deps: CoroutineDeps, runId: string): Promise<NextTask> {
+export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<NextTask> {
   let run = await deps.state.read(runId);
 
   // Self-resolved run context stamped onto EVERY envelope variant (so the workflow
-  // driver adopts run_id/data_dir/ship_mode from the first `next`, never from args).
+  // orchestrator adopts run_id/data_dir/ship_mode from the first `next`, never from args).
   // `data_dir`/`ship_mode` are immutable for the run; reading the current `run`
   // snapshot at call time is always correct even after the cascade re-reads `run`.
   const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run.ship_mode });
 
   // 1. Terminal run check BEFORE the quota gate — a finished run must never
-  //    write a pause checkpoint (mirrors nextAction in coroutine.ts).
+  //    write a pause checkpoint (mirrors nextAction in orchestrator.ts).
   if (isTerminalRunStatus(run.status)) {
     return { ...ctx(), kind: "done", run_status: run.status };
   }
@@ -205,7 +205,7 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
   //     above, so quota waiting never trips the breaker). On a trip, fail every
   //     remaining non-terminal task LOUD (capability-budget, breaker reason carried)
   //     and fall through to all-terminal → finalize → `failed`, reusing the wedge-fail
-  //     path — so no new envelope kind or driver change is needed.
+  //     path — so no new envelope kind or orchestrator change is needed.
   const breaker = await applyCircuitBreaker(deps, runId);
   if (breaker !== null) {
     for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {

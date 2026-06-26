@@ -2,7 +2,7 @@
  * WS4 — The resumable-entrypoint SEAM for human-invoked `factory run resume`
  * (Decision 24, Δ F). v1 = HUMAN relaunch only; this file deliberately contains
  * NO scheduler / scheduled-wake (v2 — a v2 wake would fire the SAME
- * {@link planResume}). The driver (WS10) supplies the persisted {@link RunState}
+ * {@link planResume}). The orchestrator (WS10) supplies the persisted {@link RunState}
  * and applies the returned patch via StateManager.
  *
  * {@link planResume} pulls a FRESH {@link UsageReading} (the relaunched session has
@@ -25,7 +25,7 @@ import { clearCheckpoint, type ClearCheckpointPatch } from "./checkpoint.js";
 /**
  * The plan a resume produces:
  *   - `resume`        — the binding window has recovered (usage observable + under
- *                       curve); `clear` is the checkpoint-clearing patch the driver
+ *                       curve); `clear` is the checkpoint-clearing patch the orchestrator
  *                       applies to return the run to `running`.
  *   - `still-blocked` — usage is still over curve (or unobservable); `decision`
  *                       carries the fresh pacer decision so the caller can report

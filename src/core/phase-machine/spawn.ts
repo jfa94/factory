@@ -1,6 +1,6 @@
 /**
  * WS2 — {@link SpawnRequest} Zod schema: the structured spawn payload the engine
- * hands the driver when a phase needs subagents.
+ * hands the orchestrator when a phase needs subagents.
  *
  * Pure validation; NO I/O. This is the v2-Workflow-friendly replacement for the
  * bash `_emit_manifest` JSON (`bin/pipeline-run-task-phases.sh`, exit-10 stdout).
@@ -11,7 +11,7 @@
  *   - the `action:"spawn_agents"` tag is DROPPED — the `PhaseResult.kind`
  *     (`"spawn-agents"`) carries that now (result.ts).
  *
- * Validated as Zod so the v2 driver consumes it as STRUCTURED OUTPUT: no exit
+ * Validated as Zod so the v2 orchestrator consumes it as STRUCTURED OUTPUT: no exit
  * codes, no reading state.json for control flow. {@link parseSpawnRequest} is the
  * LOUD validating entry (mirrors WS1 `parseRunState`).
  */
@@ -20,7 +20,7 @@ import { TaskPhaseEnum } from "./phases.js";
 import { EffortEnum } from "../../config/schema.js";
 
 /**
- * The reviewer/producer roles the engine may ask the driver to spawn. CLOSED set:
+ * The reviewer/producer roles the engine may ask the orchestrator to spawn. CLOSED set:
  * a role outside it is a loud parse error. Producers (`test-writer`/`implementer`)
  * plus the verifier panel (Decision 26/27: implementation + quality always; the
  * risk-tier fan-out adds architecture/security; the CCR-pattern reviewers

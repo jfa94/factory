@@ -9,7 +9,7 @@ issue-IDs, and no GitHub probing — the scan reasons only about `state.json`.
 | Disposition   | Task shape                                                             | What rescue does                                                                                                                                                                                        |
 | ------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `shipped`     | `status: done` (merged into staging)                                   | **Never touched.** Resetting would un-ship merged work. An explicit `--task` on it is a LOUD error.                                                                                                     |
-| `runnable`    | `status: pending`                                                      | Nothing — the driver already picks it up on the next re-drive.                                                                                                                                          |
+| `runnable`    | `status: pending`                                                      | Nothing — the runner already picks it up on the next re-drive.                                                                                                                                          |
 | `stuck`       | in-flight: `status: executing` / `reviewing` / `shipping`              | **Resettable.** A crashed/suspended session left it mid-stage with no determination. Default apply resets it to `pending`.                                                                              |
 | `recoverable` | `status: dropped` + `failure_class: blocked-environmental`             | **Resettable.** The blocker (flaky env, a dep that has since reset) may have cleared. Default apply re-attempts it.                                                                                     |
 | `dead-end`    | `status: dropped` + `failure_class: spec-defect` / `capability-budget` | **Left dropped by default.** Re-running repeats a determined failure. Reset ONLY via `--include-dead-ends` or an explicit `--task <id>` (each is a human/diagnostic assertion the root cause is fixed). |
@@ -20,7 +20,7 @@ Derived sets in the scan envelope:
 - `dead_ends` = the `dead-end` task ids — reset only on explicit assertion.
 - `needs_rescue` = `resettable.length > 0`.
 - `would_deadlock` = non-terminal work remains but **no** task is actionable (none ready,
-  none cascade-droppable). This is exactly the shape the driver throws on — the signal that
+  none cascade-droppable). This is exactly the shape the orchestrator throws on — the signal that
   `factory run resume` alone cannot recover the run and rescue is required first. A terminal
   `partial`/`failed` run is never `would_deadlock` (it already finalized) but may still be
   `needs_rescue` (recoverable drops to retry on reopen).
@@ -51,7 +51,7 @@ for the whole set, or `--task <id>` for one — and that assertion is exactly wh
    set. A `done` id is a LOUD error (would un-ship); a `pending` id is a no-op (`skipped`); a
    named dead-end **is** reset (naming it is the assertion, no `--include-dead-ends` needed).
 3. **Reopen:** if the run was terminal (`partial`/`failed`) and there was work to reset, flips
-   it back to `running` with `ended_at: null` so the driver re-drives it.
+   it back to `running` with `ended_at: null` so the runner re-drives it.
 
 A reset clears the stale producer/reviewer/drop state (`escalation_rung → 0`, `reviewers → []`,
 drops `failure_class`/`failure_reason`/`producer_role`/`started_at`/`ended_at`) but **preserves**

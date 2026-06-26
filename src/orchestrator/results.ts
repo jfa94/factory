@@ -1,6 +1,6 @@
-// src/driver/results.ts
+// src/orchestrator/results.ts
 /**
- * The `factory next-action --results <file>` input — what a driver collected from the
+ * The `factory next-action --results <file>` input — what a orchestrator collected from the
  * agents the previous spawn envelope named. Exactly one of `producer` / `reviews`
  * is present (matching the envelope's `expects`); `holdout` may accompany
  * `reviews` when the envelope carried a holdout. Parsed LOUD (Zod strict).
@@ -13,7 +13,7 @@ import { z } from "zod";
 
 /**
  * The only phases that can appear in a spawn envelope (preflight only advances;
- * ship never spawns). Defined here so results.ts does not import coroutine.ts.
+ * ship never spawns). Defined here so results.ts does not import orchestrator.ts.
  */
 export const SPAWN_PHASES = ["tests", "exec", "verify"] as const;
 export type SpawnPhase = (typeof SPAWN_PHASES)[number];

@@ -8,7 +8,7 @@
  *   - resettable = stuck ∪ recoverable; dead_ends = the dead-end failures;
  *   - needs_rescue iff anything is resettable;
  *   - would_deadlock iff non-terminal work remains but no pending task is actionable
- *     (the driver's deadlock guard) — distinct from needs_rescue;
+ *     (the orchestrator's deadlock guard) — distinct from needs_rescue;
  *   - per-task lines carry the failure/branch/PR passthrough;
  *   - the summary flags reopen (terminal run) + deadlock.
  */
@@ -137,7 +137,7 @@ describe("scanRun — resettable / dead_ends / needs_rescue", () => {
   });
 });
 
-describe("scanRun — would_deadlock (the driver's guard, mirrored)", () => {
+describe("scanRun — would_deadlock (the orchestrator's guard, mirrored)", () => {
   it("is true when a stuck task blocks the only dependent pending task", () => {
     // A crashed mid-phase (executing); B waits on A → neither is actionable.
     const scan = scanRun(
@@ -152,7 +152,7 @@ describe("scanRun — would_deadlock (the driver's guard, mirrored)", () => {
   });
 
   it("is false when a pending task is still actionable despite a stuck task", () => {
-    // A is stuck, but B is an independent ready task → the driver can make progress.
+    // A is stuck, but B is an independent ready task → the orchestrator can make progress.
     const scan = scanRun(
       mkRun([
         { task_id: "a", status: "executing" },
@@ -185,7 +185,7 @@ describe("scanRun — would_deadlock (the driver's guard, mirrored)", () => {
         { task_id: "b", status: "pending", depends_on: ["a"] },
       ]),
     );
-    // B's dep is failed → the driver cascade-fails B; not a deadlock.
+    // B's dep is failed → the orchestrator cascade-fails B; not a deadlock.
     expect(scan.would_deadlock).toBe(false);
   });
 });

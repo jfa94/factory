@@ -2,7 +2,7 @@
  * WS10 — the SHARED stateful ship pass.
  *
  * Ship is the one task phase with NO agent→record cycle: it is fully deterministic
- * git/PR I/O, so the per-task coroutine ({@link import("./coroutine.js").nextAction}) runs this
+ * git/PR I/O, so the per-task orchestrator ({@link import("./orchestrator.js").nextAction}) runs this
  * logic directly rather than routing it through a reporter + a separate record.
  *
  * Unlike the pure {@link import("./handlers.js").makePhaseHandlers} `ship` reporter
@@ -11,7 +11,7 @@
  * MergeSerializer — it needs the {@link StateManager}, so it lives here next to the
  * other shared state-writers ({@link import("./transitions.js")}) rather than in a
  * reporter. It still does NOT write the terminal `done` status: it returns a
- * `task-terminal` {@link PhaseResult} the coroutine records via completeTask, keeping
+ * `task-terminal` {@link PhaseResult} the orchestrator records via completeTask, keeping
  * "write done" in one place.
  */
 import {

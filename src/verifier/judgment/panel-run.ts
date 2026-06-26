@@ -14,11 +14,11 @@
  *   5. Map the derived outcome onto a {@link PhaseResult}: the panel SPAWN request
  *      when reviewers must still run; otherwise `advance` (merge gate passed) or
  *      `wait-retry` (merge gate blocked — bounded re-review/re-fix). State writes are
- *      the driver's job; this module never touches the StateManager.
+ *      the orchestrator's job; this module never touches the StateManager.
  *
  * The record ends at the independent finding-verifier (D27 verify-then-fix): a
  * confirmed blocker fails the merge gate. There is no producer-rebuttal phase — runPanel
- * exposes the confirmed blockers and the driver routes a bounded fix-forward
+ * exposes the confirmed blockers and the orchestrator routes a bounded fix-forward
  * re-spawn; runPanel does not loop a debate.
  */
 import {
@@ -59,7 +59,7 @@ export interface PanelRunResult {
   readonly reviewerResults: readonly ReviewerResult[];
   /** The DERIVED merge gate verdict (never stored; recomputed here). */
   readonly mergeGate: GateVerdict;
-  /** The PhaseResult the driver acts on. */
+  /** The PhaseResult the orchestrator acts on. */
   readonly result: PhaseResult;
   /**
    * Δ U — the LOUD record of a SECOND-VENDOR ABSENCE. Present (with a reason)

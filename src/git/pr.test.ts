@@ -49,7 +49,7 @@ describe("Δ P — idempotent PR create", () => {
     const first = await createTaskPrIdempotent({ ghClient: gh, ...baseArgs });
     expect(first.resumed).toBe(false);
 
-    // Driver died before persisting pr_number; resume calls again with only the
+    // Orchestrator died before persisting pr_number; resume calls again with only the
     // branch known. The lookup-by-head path must re-bind the SAME PR.
     const resumed = await createTaskPrIdempotent({ ghClient: gh, ...baseArgs });
     expect(resumed.resumed).toBe(true);

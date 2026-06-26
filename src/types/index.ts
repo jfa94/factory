@@ -78,7 +78,7 @@ export type {
 // per-task phase engine (runPhase / nextPhaseFor / decideFinalize),
 // its result contract (PhaseResult union + constructors + assertNever), the Zod
 // SpawnRequest, the phase vocabulary + helpers, and the fakeable PhaseHandlers
-// interface. The WS10 session driver and v2 Workflow driver import the engine
+// interface. The WS10 session runner and v2 Workflow runner import the engine
 // entry points from HERE — keep this barrel a full mirror so no caller must
 // deep-import (the "addressable from one place" contract, mirrors the WS1
 // StateManager precedent above).

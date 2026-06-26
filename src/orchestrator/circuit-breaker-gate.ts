@@ -1,6 +1,6 @@
 /**
- * The run-level CIRCUIT-BREAKER gate — the driver-layer wiring of the pure
- * {@link evaluate} predicate (`quota/circuit-breaker.ts`) into the run coroutine.
+ * The run-level CIRCUIT-BREAKER gate — the orchestrator-layer wiring of the pure
+ * {@link evaluate} predicate (`quota/circuit-breaker.ts`) into the run orchestrator.
  * Mirrors the {@link import("./quota-gate.js").applyQuotaGate} DI shape: a narrow
  * deps subset, evaluated over fresh state by `runId`, returning a structured verdict
  * or null to proceed. Never writes state — turning a trip into failures is the CALLER's
@@ -9,7 +9,7 @@
  * A tripped verdict is a HARD run abort, DISTINCT from the recoverable quota pause:
  * the caller fails every remaining non-terminal task (loud, classified) and falls
  * through to `all-terminal` → finalize → `failed`, reusing the proven Decision-34
- * wedge-fail path (so no new envelope kind / driver change is needed).
+ * wedge-fail path (so no new envelope kind / orchestrator change is needed).
  *
  * This gate supplies the pure breaker the two signals it cannot derive itself, each
  * derived honestly from run state (derive-don't-store — no breaker counter persisted):
@@ -41,7 +41,7 @@ import type { Config, StateManager } from "./deps.js";
 /** A tripped breaker verdict (the human reason) — the gate's only non-null return. */
 export type CircuitBreakerTrip = Extract<CircuitBreakerResult, { tripped: true }>;
 
-/** The narrow deps the breaker gate needs (a subset of {@link import("./coroutine.js").CoroutineDeps}). */
+/** The narrow deps the breaker gate needs (a subset of {@link import("./orchestrator.js").OrchestratorDeps}). */
 export interface CircuitBreakerGateDeps {
   readonly state: StateManager;
   readonly config: Config;

@@ -1,12 +1,12 @@
 /**
- * `factory next-task [--run <id>]` — the run-level coroutine: quota gate, checkpoint
+ * `factory next-task [--run <id>]` — the run-level orchestrator: quota gate, checkpoint
  * recovery, cascade-fail, and the ready set. Emits ONE JSON NextTask.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
-import { loadCoroutineDeps } from "../wiring.js";
-import { nextTask } from "../../driver/index.js";
+import { loadOrchestratorDeps } from "../wiring.js";
+import { nextTask } from "../../orchestrator/index.js";
 import { StateManager, RunModeEnum } from "../../core/state/index.js";
 import type { RunState } from "../../core/state/index.js";
 import { resolveDataDir } from "../../config/index.js";
@@ -18,7 +18,7 @@ Usage:
   factory next-task [--run <id>]      (defaults to runs/current)
 
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
-context — run_id, data_dir (canonical), ship_mode — so the workflow driver
+context — run_id, data_dir (canonical), ship_mode — so the workflow runner
 adopts them from the first \`next-task\` instead of via Workflow args:
   { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...] }
   { kind:"finalize", run_id, data_dir, ship_mode, cascade_failed:[...] }  → call \`factory run finalize\`
@@ -33,7 +33,7 @@ Throws LOUD on a dependency deadlock.`;
 
 /**
  * Loud-assert that the runs/current run is the one the caller expects, by owning
- * session. The workflow driver's FIRST `next-task` omits `--run` and adopts
+ * session. The workflow runner's FIRST `next-task` omits `--run` and adopts
  * runs/current — but `run create` overwrites that pointer (`pointCurrentAt`), so a
  * concurrent create in another session can redirect the workflow onto the WRONG
  * run (Codex CP3 finding); in live mode that opens/merges PRs for a foreign run.
@@ -46,7 +46,7 @@ Throws LOUD on a dependency deadlock.`;
  * This asserts identity, it does NOT spuriously fire: `CLAUDE_CODE_SESSION_ID` is
  * session-scoped and constant across the agent tree (verified — a sub-agent's Bash
  * sees the SAME value as the launching session), so a Workflow exec-agent's
- * `"$CLAUDE_CODE_SESSION_ID"` equals the orchestrator-stamped `owner_session` on the
+ * `"$CLAUDE_CODE_SESSION_ID"` equals the runner-stamped `owner_session` on the
  * happy path. A throw means runs/current genuinely points at a foreign run.
  */
 function assertCurrentOwner(current: RunState, assertOwner: string | boolean | undefined): void {
@@ -67,7 +67,7 @@ function assertCurrentOwner(current: RunState, assertOwner: string | boolean | u
 /**
  * Loud-assert that the runs/current run is in the mode the caller expects. A
  * PROPAGATION-INDEPENDENT companion to {@link assertCurrentOwner}: the workflow
- * driver passes `--expect-mode workflow`, so a concurrent `run create` that
+ * orchestrator passes `--expect-mode workflow`, so a concurrent `run create` that
  * redirected runs/current onto a run of a DIFFERENT mode (e.g. a session-mode run)
  * fails loud here regardless of session-id behavior. Necessary-not-sufficient (two
  * concurrent workflow-mode creates still need the owner assertion above), but it
@@ -112,7 +112,7 @@ async function run(argv: string[]): Promise<ExitCode> {
     runId = current.run_id;
   }
 
-  const deps = await loadCoroutineDeps({ runId });
+  const deps = await loadOrchestratorDeps({ runId });
   emitJson(await nextTask(deps, runId));
   return EXIT.OK;
 }

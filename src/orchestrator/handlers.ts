@@ -6,22 +6,22 @@
  * it reads the frozen {@link PhaseContext}, does DETERMINISTIC work (shell out via
  * the injected git/gate clients, persist a holdout answer-key or a producer
  * prompt-context artifact), and RETURNS a {@link PhaseResult}. A handler NEVER
- * writes run state (the driver owns the StateManager), NEVER spawns an agent (it
- * reports a `spawn-agents` request the driver acts on), and NEVER decides a
+ * writes run state (the orchestrator owns the StateManager), NEVER spawns an agent (it
+ * reports a `spawn-agents` request the orchestrator acts on), and NEVER decides a
  * transition beyond naming the phase it advances/resumes at.
  *
  * The producer escalation ladder is re-expressed PER INVOCATION off the persisted
  * `escalation_rung`: every producer-spawning phase reads `task.escalation_rung`,
  * dials the model + prior-failure injection for that rung ({@link dialForRung}),
- * and the DRIVER bumps the rung on a classified retry. There is no `runLadder`
+ * and the ORCHESTRATOR bumps the rung on a classified retry. There is no `runLadder`
  * call here — v1 re-expresses only the OUTER ladder via the persisted rung.
  *
  * VERIFY + SHIP. The `verify` reporter here derives the merge gate from the
  * already-recorded reviewers + gate evidence; it does NOT itself spawn the panel or
- * the holdout-validator (a handler cannot spawn). The coroutine emits those agents out of
+ * the holdout-validator (a handler cannot spawn). The orchestrator emits those agents out of
  * band — the panel as the verify spawn request, the holdout-validator as a holdout —
  * and records their results via the record cores. `ship` is NOT served from this reporter
- * at all: the coroutine runs the stateful {@link import("./ship.js").shipTask} (PR pointer
+ * at all: the orchestrator runs the stateful {@link import("./ship.js").shipTask} (PR pointer
  * writes + the live MergeSerializer) directly, since a reporter cannot write state or
  * merge.
  */
@@ -233,7 +233,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
      * verify reporter: run the deterministic gates, then either spawn the
      * risk-invariant panel (no reviewers yet) or DERIVE the merge gate from the
      * already-recorded reviewers + gate evidence. Holdout evidence is recorded
-     * separately by the coroutine (the holdout-validator runs as an out-of-band holdout);
+     * separately by the orchestrator (the holdout-validator runs as an out-of-band holdout);
      * this reporter never spawns.
      */
     async verify(ctx: PhaseContext): Promise<PhaseResult> {
@@ -296,10 +296,10 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
     },
 
     /**
-     * ship — NOT served from this reporter. The coroutine runs the stateful
+     * ship — NOT served from this reporter. The orchestrator runs the stateful
      * {@link import("./ship.js").shipTask} directly (PR pointer writes + the live
      * MergeSerializer), since a reporter can neither write state nor merge; the
-     * coroutine intercepts `ship` before {@link import("./engine.js").runPhase} can
+     * orchestrator intercepts `ship` before {@link import("./engine.js").runPhase} can
      * ever dispatch it here.
      *
      * This method exists ONLY to keep {@link PhaseHandlers} TOTAL — the engine's

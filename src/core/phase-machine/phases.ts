@@ -10,7 +10,7 @@
  *
  * GREENFIELD: the retired bash phase names (`preexec_tests`, `postexec`,
  * `postreview`, `finalize-run`) in `bin/pipeline-run-task-phases.sh` /
- * `skills/pipeline-orchestrator/reference/phase-taxonomy.md` are consulted for the
+ * `skills/pipeline-runner/reference/phase-taxonomy.md` are consulted for the
  * transition shape ONLY — they are RENAMED here (`tests`/`exec`/`verify`/`ship`/
  * `finalize`), never ported. Human-gate phases are gone (Decision 5).
  */
@@ -35,7 +35,7 @@ export type RunPhase = z.infer<typeof RunPhaseEnum>;
 
 /**
  * The canonical per-task phase order. `nextPhase` walks this; the engine and both
- * drivers (v1 session, v2 Workflow) share it so the transition logic has ONE home.
+ * runners (v1 session, v2 Workflow) share it so the transition logic has ONE home.
  */
 export const TASK_PHASE_ORDER: readonly TaskPhase[] = [
   "preflight",
@@ -62,7 +62,7 @@ export function nextPhase(s: TaskPhase): TaskPhase | null {
 
 /**
  * The WS1 {@link TaskStatus} a task is IN-FLIGHT under while a given phase runs.
- * The engine returns phases; the CALLER (driver) uses this to keep the persisted
+ * The engine returns phases; the CALLER (orchestrator) uses this to keep the persisted
  * WS1 status in lockstep — the engine never writes state.
  *
  *   - `preflight` → `pending`   (not yet producing)

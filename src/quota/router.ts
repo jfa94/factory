@@ -7,8 +7,8 @@
  * {@link RiskTier} — and exposes NO review-depth/round output. The merge gate
  * is untouched by this module.
  *
- * Pacing (the two-window gate) lives in `pacer`; the driver's `applyQuotaGate`
- * (src/driver/quota-gate.ts) runs it and acts on the decision. This module is the
+ * Pacing (the two-window gate) lives in `pacer`; the orchestrator's `applyQuotaGate`
+ * (src/orchestrator/quota-gate.ts) runs it and acts on the decision. This module is the
  * pure producer dial only.
  */
 import type { Config } from "../config/schema.js";

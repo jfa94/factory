@@ -1,9 +1,9 @@
 /**
- * CLI output helpers. The contract the in-session orchestrator relies on:
+ * CLI output helpers. The contract the in-session runner relies on:
  *   - A machine subcommand (drive, next, state, spec, …) emits EXACTLY ONE JSON
- *     document to stdout (via {@link emitJson}) — the orchestrator parses it.
+ *     document to stdout (via {@link emitJson}) — the runner parses it.
  *   - Human output (`--help`, `state --summary`) goes to stdout as plain lines
- *     (via {@link emitLine}); the orchestrator never invokes those forms.
+ *     (via {@link emitLine}); the runner never invokes those forms.
  *   - DIAGNOSTICS/logs go to stderr (via `createLogger`), never stdout.
  * A single invocation emits only ONE kind, so the parse stays unambiguous.
  */

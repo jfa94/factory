@@ -2,7 +2,7 @@
  * WS1 — Typed `RunState` / `TaskState` schema (Zod). THE FROZEN STATE SEAM.
  *
  * Downstream workstreams (WS2 phase-machine, WS3 git, WS4 quota, WS5 spec,
- * WS6/7 verifier, WS8 producer, WS9 hooks, WS10 drivers, WS12 scoring) import
+ * WS6/7 verifier, WS8 producer, WS9 hooks, WS10 orchestrators, WS12 scoring) import
  * these types and enums and MUST NOT redefine them. Every enum here is a CLOSED
  * set: a value outside the set is a LOUD parse error, never a silent pass — this
  * is the structural property the bash `_validate_task_field_value` guard tried to
@@ -136,7 +136,7 @@ export type RiskTier = z.infer<typeof RiskTierEnum>;
  * Escalation rung — where on the producer ladder the task currently sits
  * (Decision 25). Rung 0 = the starting rung implied by the risk tier; each
  * nuke-and-retry bumps it. The ladder cap (`ESCALATION_CAP` = 4 extra attempts) is
- * enforced by the driver (`src/driver/transitions.ts` escalateOrFail), not the
+ * enforced by the orchestrator (`src/orchestrator/transitions.ts` escalateOrFail), not the
  * schema; the schema only records the rung reached so a resume continues from the
  * right place. Non-negative integer.
  */
@@ -250,7 +250,7 @@ export const TaskStateSchema = z.object({
   failure_reason: z.string().optional(),
 
   /**
-   * The precise resume cursor for the drive coroutine — which TaskPhase the task is
+   * The precise resume cursor for the drive orchestrator — which TaskPhase the task is
    * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
    * summary; `phase` is the machine cursor. Absent = not started (preflight).
    * NOTE: on terminal rows (done/failed), `phase` is the last in-flight phase,
@@ -259,29 +259,29 @@ export const TaskStateSchema = z.object({
    * core/state must not import phase-machine (dependency direction, enforced by
    * `madge --circular` in verify). The duplication is kept honest by a LOAD-BEARING
    * cross-check test — "TaskState.phase enum equals TASK_PHASE_ORDER (cross-module
-   * pin)" in src/driver/coroutine.test.ts — which fails the instant the two drift.
+   * pin)" in src/orchestrator/orchestrator.test.ts — which fails the instant the two drift.
    * Do NOT delete that test: it is the only thing tying this hand-copied list to its
    * source of truth.
    */
   phase: z.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
-  /** Ship live-merge re-sync count (cap enforced by the coroutine; persisted so the cap survives process boundaries). */
+  /** Ship live-merge re-sync count (cap enforced by the orchestrator; persisted so the cap survives process boundaries). */
   merge_resyncs: z.number().int().min(0).default(0),
 
   /**
-   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the coroutine when it
+   * Spawn-in-flight checkpoint (idempotent re-spawn). Set by the orchestrator when it
    * EMITS a spawn for `phase` at `rung`, recording the task-branch `tip_sha` at emit
    * time. Producers commit to the SHARED task worktree, so a stop in the post-spawn /
    * pre-record window leaves the abandoned producer's partial commits on the branch. On
    * the resume that re-enters the SAME (phase, rung) before any results were recorded,
-   * the coroutine resets the worktree to `tip_sha` — discarding ONLY the interrupted
+   * the orchestrator resets the worktree to `tip_sha` — discarding ONLY the interrupted
    * phase's work (prior completed phases live below it) — then re-spawns. A fresh
    * spawn overwrites it; terminal writers (complete/fail) clear it. Absent = no spawn
    * in flight (the steady state between phases).
    *
    * `phase` is the spawn-phase subset (tests|exec|verify) — preflight/ship never spawn.
-   * The literal duplicates driver/results' SPAWN_PHASES because core/state must not
-   * import the driver (dependency direction); a cross-check test in
-   * src/driver/coroutine.test.ts pins them equal (mirrors the `phase` field's pin).
+   * The literal duplicates orchestrator/results' SPAWN_PHASES because core/state must not
+   * import the orchestrator (dependency direction); a cross-check test in
+   * src/orchestrator/orchestrator.test.ts pins them equal (mirrors the `phase` field's pin).
    */
   spawn_in_flight: z
     .object({
@@ -411,7 +411,7 @@ export const ExecutionModeEnum = z.enum(["sequential", "balanced"]);
 export type ExecutionMode = z.infer<typeof ExecutionModeEnum>;
 
 /**
- * Execution mode (Decision 24). `session` runs in the orchestrator's live
+ * Execution mode (Decision 24). `session` runs in the runner's live
  * session and can observe the usage cache → fully paced. `workflow` runs as a
  * background Workflow script that cannot observe usage → quota pacing is
  * disabled (the run hard-stops on rate-limit errors; the user is warned at
@@ -427,7 +427,7 @@ export type RunMode = z.infer<typeof RunModeEnum>;
  * gated by branch protection + the review panel + TDD + the holdout. `no-merge`
  * (the `--no-ship` opt-out) opens the rollup PR but never merges. An immutable run
  * property set once at `run create` (from the absence/presence of `--no-ship`) —
- * persisted so the workflow driver, `resume`, and `finalize` read it from the run
+ * persisted so the workflow runner, `resume`, and `finalize` read it from the run
  * (the source of truth) instead of re-marshaling it through fragile Workflow `args`
  * or re-prompting the user. Mirrors {@link RunModeEnum}: a stored property, never a
  * derived verdict.
@@ -461,7 +461,7 @@ export const RunStateSchema = z.object({
   /**
    * The Claude Code session id that OWNS this run (Prompt J — session-scoped Stop
    * gate). Stamped ONCE at `run create` from the launching session's
-   * `CLAUDE_CODE_SESSION_ID` (the orchestrator/Bash env), so the Stop hook can
+   * `CLAUDE_CODE_SESSION_ID` (the runner/Bash env), so the Stop hook can
    * session-scope its block: only the OWNING session is gated; an unrelated session
    * stopping while this run is live passes through. Optional — best-effort: when the
    * env var is absent (owner unknown), the Stop gate falls back to the unscoped
@@ -492,7 +492,7 @@ export const RunStateSchema = z.object({
   /**
    * When true, the quota gate skips pacing and returns null unconditionally. Set once at
    * `run create` from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`.
-   * Persisted so both coroutines and both drivers skip the gate without per-call flag
+   * Persisted so both orchestrators and both runners skip the gate without per-call flag
    * threading — mirrors the `mode==="workflow"` skip. Default false: legacy runs (no field)
    * are unaffected.
    */

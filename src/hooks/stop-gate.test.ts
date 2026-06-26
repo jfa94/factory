@@ -252,7 +252,7 @@ describe("runStopGate — I/O wiring", () => {
     expect(out[0]!).not.toContain("runs/current"); // must not blame a foreign pointer
   });
 
-  it("workflow-mode run → allow, emits nothing, no finalize (session is not the driver)", async () => {
+  it("workflow-mode run → allow, emits nothing, no finalize (session is not the orchestrator)", async () => {
     const { out, emit } = emitter();
     const finalize = vi.fn();
     const manager = {

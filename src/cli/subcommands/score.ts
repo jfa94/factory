@@ -3,7 +3,7 @@
  *
  * Model A: a read-only reporter. It resolves the run + its durable spec, derives the
  * deterministic partial-run report, and records it into the compact {@link RunSummary}
- * the orchestrator surfaces. Nothing here writes state.
+ * the runner surfaces. Nothing here writes state.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";

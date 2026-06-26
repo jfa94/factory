@@ -672,7 +672,7 @@ function splitLines(s: string): string[] {
 /**
  * Assemble the production {@link GateTools} bag over the real binaries (each
  * Default* impl shells out via shared/exec.ts). This is the seam the CLI wiring
- * (and any non-test driver) constructs once and threads into the GateRunner; unit
+ * (and any non-test orchestrator) constructs once and threads into the GateRunner; unit
  * tests use {@link import("./fakes.js").makeFakeTools} instead.
  */
 export function defaultGateTools(gateEnv: Record<string, string> = {}): GateTools {

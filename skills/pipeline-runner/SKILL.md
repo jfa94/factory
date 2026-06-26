@@ -1,10 +1,10 @@
 ---
-name: pipeline-orchestrator
-description: (internal) Drive the factory pipeline. The engine is the `factory` CLI (`next-task` + `next-action` coroutines own ALL control flow); you are a dumb loop that spawns the agents each envelope names and feeds their raw output back.
+name: pipeline-runner
+description: (internal) Drive the factory pipeline. The orchestrator is the `factory` CLI (`next-task` + `next-action` own ALL control flow); you are a dumb loop (the runner) that spawns the agents each envelope names and feeds their raw output back.
 auto-invoke: false
 ---
 
-# Pipeline Orchestrator — the session driver
+# Pipeline Runner — the session runner
 
 The `factory` CLI owns every decision: stages, gates, classification, the escalation
 ladder, the merge gate, holdout ordering, quota, cascade-drops, deadlock detection,
@@ -75,9 +75,9 @@ factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-i
 to override; an explicit value that disagrees with the remote fails loud). Forward the invoking
 command's `--workflow`/`--no-ship`/`--ignore-quota` flags verbatim (defaults — no flag: session + live); the resolved
 `mode` and `ship_mode` persist on the run. `mode` tells the quota gate whether to pace (Decision 24:
-`workflow` disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow driver +
+`workflow` disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow runner +
 resume + finalize, so it is never re-marshaled. Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` — this stamps THIS
-orchestrator session as the run's `owner_session`, so the Stop gate's finalize-on-stop is scoped to
+runner session as the run's `owner_session`, so the Stop gate's finalize-on-stop is scoped to
 the owning session and never finalizes a _different_ session's run (Prompt J). The shell expands
 the env var; if it is unset it expands to empty and the CLI degrades to owner-unknown (unscoped Stop
 gate) — never a bogus empty owner. On success `run create` emits `{kind:"created"|"superseded", run}` —
@@ -99,7 +99,7 @@ exists for the spec, it exits `3`. Two distinct envelopes — check `kind` first
 
 Pass `--new` (or an explicit `--run-id`) to force an unconditional fresh run with a distinct id.
 
-**Autonomy gate:** `run create` HALTS loud (`NotAutonomousError`, non-zero exit) if the orchestrator
+**Autonomy gate:** `run create` HALTS loud (`NotAutonomousError`, non-zero exit) if the runner
 session is not autonomous (`FACTORY_AUTONOMOUS_MODE=1`). This is the deterministic engine refusing to
 start an unattended pipeline in an interactive session — not a transient error. Surface the relaunch
 instruction (Phase 0 step 2); never retry blindly.
@@ -108,14 +108,14 @@ instruction (Phase 0 step 2); never retry blindly.
 which owns the Workflow launch (`commands/run.md`). Do NOT enter Phase 3. Read the mode from the
 run's **persisted** `mode` (the `created`/`resumed` envelope), which the forwarded `--workflow`
 flag set at create — NOT from the invoking flags directly. On a **resume** re-entry (`factory
-resume` → `{kind:"resumed", run}`), the driver is `resumed.run.mode` verbatim (`session` → Phase 3;
+resume` → `{kind:"resumed", run}`), the runner is `resumed.run.mode` verbatim (`session` → Phase 3;
 `workflow` → hand back to `/factory:resume` for the Workflow launch); `mode` is immutable, so it is
 never ambiguous and resume itself takes no mode flag.
 
 ## Phase 3 — THE LOOP
 
-THE LOOP is the session-mode driver ONLY. In workflow mode you stopped after Phase 2 — the
-Workflow script (`scripts/factory-run-driver.js`) is the loop; do not run this phase.
+THE LOOP is the session-mode runner ONLY. In workflow mode you stopped after Phase 2 — the
+Workflow script (`scripts/factory-run-runner.js`) is the loop; do not run this phase.
 
 The ship mode is persisted on the run (Phase 2's `run create`); `next-task`, `next-action`, and `finalize` all
 read it from state — never re-pass it and never choose it yourself.
@@ -130,7 +130,7 @@ loop:
                       report the reason + STOP (run is suspended — /factory:resume retries)
     "pause" → report scope/reason/resets_at_epoch; tell the user to re-run
                       `/factory:resume` after the window resets; STOP.
-    "work"   → step env.ready[0] (sequential driver: ONE task at a time), then loop
+    "work"   → step env.ready[0] (sequential runner: ONE task at a time), then loop
 
 step(task):
   results_file = (none)

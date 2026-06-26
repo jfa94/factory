@@ -67,7 +67,7 @@ function prdDoneComment(report: PartialRunReport, rollupResult: RollupResult): s
   );
 }
 
-/** The deps the finalize coordinator needs — a subset of {@link import("./coroutine.js").CoroutineDeps} + CLI deps. */
+/** The deps the finalize coordinator needs — a subset of {@link import("./orchestrator.js").OrchestratorDeps} + CLI deps. */
 export interface FinalizeRunDeps {
   /** The only sanctioned state read/write path. */
   readonly state: StateManager;
@@ -95,7 +95,7 @@ export interface FinalizeRunDeps {
   readonly shipMode: ShipMode;
   /**
    * ISO stamp for the report + telemetry (tests pin this). Defaults to nowIso().
-   * Named `nowIso` (not `now`) so {@link import("./coroutine.js").CoroutineDeps} — whose
+   * Named `nowIso` (not `now`) so {@link import("./orchestrator.js").OrchestratorDeps} — whose
    * `now: () => number` is the quota epoch-seconds clock — assigns structurally to
    * this deps subset.
    */

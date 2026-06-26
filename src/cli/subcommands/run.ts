@@ -3,8 +3,8 @@
  *
  * Model A: the CLI never spawns an agent. `run create` resolves a DURABLE spec (by
  * stable issue number or explicit spec-id), creates a fresh run, SEEDS its task
- * rows from the spec, and emits the {@link RunState}; the in-session orchestrator
- * reads `run_id` and drives the run through the coroutine seam (`factory next-task` +
+ * rows from the spec, and emits the {@link RunState}; the in-session runner
+ * reads `run_id` and drives the run through the orchestrator seam (`factory next-task` +
  * `factory next-action`).
  *
  * `run resume` is the human-invoked resumable entrypoint (Decision 24, Δ F — v1 is
@@ -20,7 +20,7 @@
  * and never `tdd_exempt` (read from `spec/tasks.json` at runtime, never from
  * `state.json`). Dangling,
  * self, cyclic, and duplicate dependency edges are caught LOUDLY at seed time rather
- * than surfacing later as a driver deadlock.
+ * than surfacing later as a orchestrator deadlock.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
@@ -39,7 +39,7 @@ import {
   runDocsRecord,
   DocsResultsSchema,
   readJsonInput,
-} from "../../driver/index.js";
+} from "../../orchestrator/index.js";
 import { loadCliDeps } from "../wiring.js";
 import {
   DefaultGitClient,
@@ -91,14 +91,14 @@ Usage:
   --new         Force a fresh run even if a live one already exists for this spec.
   --supersede   Terminate the active run for this spec, then create a fresh one.
   --resume      Continue the active run for this spec (full hand-off: forthcoming).
-  --workflow    Run the parallel background Workflow driver. Default (no flag): session —
-                the in-session, quota-paced orchestrator loop.
+  --workflow    Run the parallel background Workflow runner. Default (no flag): session —
+                the in-session, quota-paced runner loop.
   --no-ship     Open the rollup PR but never merge. Default (no flag): live — auto-merge
                 each task into staging and merge the staging→develop rollup into develop.
-                Persisted on the run so the workflow driver + resume + finalize read it
+                Persisted on the run so the workflow runner + resume + finalize read it
                 without re-passing.
   --ignore-quota Bypass the weekly-quota hard stop AND the per-step quota pacer for this run.
-                Persisted as ignore_quota:true so both coroutines + drivers skip the gate
+                Persisted as ignore_quota:true so both orchestrators + orchestrators skip the gate
                 without re-passing — lets create/--supersede proceed past a 7d-parked run.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; absent ⇒ owner-unknown (Stop gate unscoped).
@@ -172,7 +172,7 @@ Emits ONE JSON envelope:
  * deliberately NOT copied (it is read from the spec at runtime, never persisted to
  * run state). LOUD on a duplicate task id, an unsafe id charset, a self-dependency,
  * a dangling dependency, or a dependency cycle — all are spec-integrity defects
- * that would otherwise deadlock the driver.
+ * that would otherwise deadlock the orchestrator.
  */
 export function seedTasksFromSpec(request: SpecManifest): Record<string, TaskState> {
   const ids = new Set(request.tasks.map((t) => t.task_id));
@@ -214,7 +214,7 @@ export function seedTasksFromSpec(request: SpecManifest): Record<string, TaskSta
 }
 
 /**
- * LOUD-fail on a dependency cycle (DFS with a recursion stack). The driver would
+ * LOUD-fail on a dependency cycle (DFS with a recursion stack). The orchestrator would
  * otherwise reach a deadlock — no ready, no blocked, no terminal — and throw at
  * drive time; catching it at seed time names the offending task instead.
  */
@@ -367,7 +367,7 @@ async function createRunFromManifest(
     run_id: opts.runId,
     spec: specStore.toPointer(request),
     staging_branch: branch,
-    // v1 coroutine seam drives tasks strictly one at a time — the driver dial is fixed.
+    // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
     execution_mode: "sequential",
     ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
@@ -544,7 +544,7 @@ export async function resolveOrCreateRun(
 // resume
 // ---------------------------------------------------------------------------
 
-/** The single JSON document `factory run resume` emits — the orchestrator's contract. */
+/** The single JSON document `factory run resume` emits — the runner's contract. */
 export type ResumeResult =
   | { readonly kind: "resumed"; readonly run: RunState }
   | {
@@ -632,7 +632,7 @@ function parseIssue(raw: string | boolean | undefined): number | undefined {
 /**
  * Resolve the owning Claude Code session id to stamp onto the run (Prompt J —
  * session-scoped Stop gate). Precedence: an explicit `--session-id` flag (the
- * orchestrator/command can pass it deterministically) over the `CLAUDE_CODE_SESSION_ID`
+ * runner/command can pass it deterministically) over the `CLAUDE_CODE_SESSION_ID`
  * env var that Claude Code sets for Bash-tool invocations. Returns `undefined` when
  * neither is available. Session-mode `run create` rejects an undefined result (the Stop
  * hook resolves finalize-on-stop via `findActiveByOwner`, which requires an owner);
@@ -670,7 +670,7 @@ export async function runCreate(
     return EXIT.OK;
   }
   // Mandatory autonomous-mode gate: the pipeline runs unattended, no opt-out.
-  // A run can only be born in the foreground orchestrator session (which has the
+  // A run can only be born in the foreground runner session (which has the
   // env), so gating create here halts non-autonomous runs at the source.
   requireAutonomousMode();
 
@@ -709,12 +709,12 @@ export async function runCreate(
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
   // Session-mode runs must be owned: the Stop hook resolves finalize-on-stop via
   // findActiveByOwner, which never matches an ownerless run. Workflow-mode runs are
-  // exempt — the Workflow driver owns finalization, not the interactive session.
+  // exempt — the Workflow runner owns finalization, not the interactive session.
   if (ownerSession === undefined && mode === "session") {
     throw new UsageError(
       "run create: session-mode runs require an owning session id " +
         "(pass --session-id <id> or set CLAUDE_CODE_SESSION_ID). " +
-        "Workflow-mode runs are exempt (the Workflow driver owns finalization).",
+        "Workflow-mode runs are exempt (the Workflow runner owns finalization).",
     );
   }
   // Exactly-one-of the lifecycle flags → the typed intent. --new and an explicit
@@ -727,8 +727,8 @@ export async function runCreate(
   // --workflow/--no-ship are CREATE-ONLY mode/ship selectors; --resume continues a run
   // whose mode + ship_mode are already fixed (both immutable post-create). The combo is
   // incoherent and is the ROOT CAUSE of the `run --resume --workflow` incident: the flag
-  // rode the resume hand-off and launched a workflow driver against a session-mode run.
-  // Reject it loud here, before any driver launches. (No expressiveness lost: the only
+  // rode the resume hand-off and launched a workflow runner against a session-mode run.
+  // Reject it loud here, before any orchestrator launches. (No expressiveness lost: the only
   // case where `--resume --workflow` would create anything — no active run exists —
   // is identical to a bare `--workflow`, which the default intent already creates fresh.)
   if (resume && (args.flag("workflow") === true || args.flag("no-ship") === true)) {
@@ -826,7 +826,7 @@ async function runResume(argv: string[]): Promise<ExitCode> {
   // --workflow/--no-ship select mode/ship at CREATE; a resumed run keeps the mode +
   // ship_mode it was born with (both immutable). Silently ignoring these flags here is
   // the quieter twin of the create-side footgun — reject loud so neither path can ever
-  // imply a mode on resume. The driver is chosen from the run's persisted `mode`.
+  // imply a mode on resume. The orchestrator is chosen from the run's persisted `mode`.
   if (args.flag("workflow") === true || args.flag("no-ship") === true) {
     throw new UsageError(
       "run resume: --workflow/--no-ship are not valid on resume — a run keeps the mode/ship_mode " +
@@ -844,7 +844,7 @@ async function runResume(argv: string[]): Promise<ExitCode> {
 
   // --ignore-quota: persist on the run BEFORE applyResume so planResume short-circuits
   // to resume regardless of the live reading. Persisting also prevents re-suspension on
-  // subsequent steps (both coroutines read run.ignore_quota via the gate).
+  // subsequent steps (both orchestrators read run.ignore_quota via the gate).
   if (args.flag("ignore-quota") === true) {
     await state.update(runId, (s) => ({ ...s, ignore_quota: true }));
   }
@@ -910,7 +910,7 @@ const DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
 
 Emit the documentation-phase spawn request, or (with --results) record a scribe
 result: publish the docs commit onto staging and mark the phase done, or suspend
-the run on failure. The CLI never spawns scribe — a driver does.`;
+the run on failure. The CLI never spawns scribe — a orchestrator does.`;
 
 async function runDocs(argv: string[]): Promise<ExitCode> {
   const args = parseArgs(argv, { booleans: [] });

@@ -4,18 +4,18 @@
  * The spec pipeline needs two live agent spawns (spec-generator + spec-reviewer),
  * which a `factory` subprocess cannot do (no Agent tool). So the in-process
  * {@link import("../../spec/pipeline.js").runSpecPipeline} is split into three
- * orchestrator-sequenced reporter actions; the in-session orchestrator owns the
+ * runner-sequenced reporter actions; the in-session runner owns the
  * agent spawns AND the bounded regeneration loop, the CLI owns the deterministic
  * glue (resolveByIssue / PRD fetch / spec gates / review adjudication / store.write).
  *
  * State is threaded through a TRANSIENT scratch dir, `specBuildDir(dataDir,repo,issue)`,
  * holding three files: `prd.json` (written by `resolve`), `generated.json` (written
- * by the orchestrator after spawning the generator), and `verdict.json` (written by
- * the orchestrator after spawning the reviewer). Every action takes `--repo` +
- * `--issue` and recomputes the scratch dir, so the orchestrator never threads paths
+ * by the runner after spawning the generator), and `verdict.json` (written by
+ * the runner after spawning the reviewer). Every action takes `--repo` +
+ * `--issue` and recomputes the scratch dir, so the runner never threads paths
  * by hand — the CLI also echoes the concrete paths in each envelope.
  *
- * Loop (orchestrator-owned):
+ * Loop (runner-owned):
  *   resolve → reuse(pointer)  → DONE (go straight to `run create`)
  *           → generate(spawn) → [spawn generator → write generated.json] → gate
  *   gate    → revise(blockers)→ [re-spawn generator with blockers] → gate          (≤ max_iterations)
@@ -31,7 +31,7 @@ import { join } from "node:path";
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
-import { readJsonInput } from "../../driver/index.js";
+import { readJsonInput } from "../../orchestrator/index.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";
@@ -68,7 +68,7 @@ Usage:
 --repo is OPTIONAL: auto-derived from the 'origin' remote when omitted; an explicit
 value that disagrees with the remote fails loud.
 
-The in-session orchestrator drives the agent spawns + the bounded regen loop; each
+The in-session runner drives the agent spawns + the bounded regen loop; each
 action emits ONE JSON envelope naming the next step. Scratch JSON is threaded
 through <dataDir>/spec-build/<repo>/<issue>/{prd,generated,verdict}.json.
 
@@ -82,7 +82,7 @@ const PRD_FILE = "prd.json";
 const GENERATED_FILE = "generated.json";
 const VERDICT_FILE = "verdict.json";
 
-/** The single JSON document each `factory spec` action emits — the orchestrator's contract. */
+/** The single JSON document each `factory spec` action emits — the runner's contract. */
 export type SpecBuildEnvelope =
   | {
       /** An existing spec for this issue was reused (Δ X) — no generation needed. */
@@ -99,7 +99,7 @@ export type SpecBuildEnvelope =
       readonly spawn: SpecSpawnSpec<GenerateContext>;
       readonly prd_path: string;
       readonly generated_path: string;
-      /** The orchestrator's bound on the generate/review loop (config.spec.maxRegenIterations). */
+      /** The runner's bound on the generate/review loop (config.spec.maxRegenIterations). */
       readonly max_iterations: number;
     }
   | {
@@ -129,7 +129,7 @@ export type SpecBuildEnvelope =
       readonly generated_path: string;
     }
   | {
-      /** PASS — the spec is durably stored; the orchestrator proceeds to `run create`. */
+      /** PASS — the spec is durably stored; the runner proceeds to `run create`. */
       readonly kind: "stored";
       readonly repo: string;
       readonly issue: number;
@@ -201,7 +201,7 @@ export async function resolveSpec(
 
 /**
  * Run the deterministic spec gates against the generator's output. On a block, emit
- * `revise` (the orchestrator re-spawns the generator with the blockers). On a pass,
+ * `revise` (the runner re-spawns the generator with the blockers). On a pass,
  * emit the apex-pinned review spawn. `generated.json` is UNTRUSTED agent output, so
  * it is parsed loudly via {@link parseGenerateResult}.
  */
@@ -370,7 +370,7 @@ async function run(argv: string[]): Promise<ExitCode> {
 }
 
 export const specCommand: Subcommand = {
-  describe: "Build a durable spec (resolve → gate → store; orchestrator drives the agent spawns)",
+  describe: "Build a durable spec (resolve → gate → store; runner drives the agent spawns)",
   run: async (argv) => {
     try {
       return await run(argv);

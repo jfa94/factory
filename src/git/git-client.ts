@@ -98,7 +98,7 @@ export interface GitClient {
   /**
    * `git reset --hard <ref>` then `git clean -fd` — restore the worktree to `ref`,
    * discarding every commit/staged/unstaged change above it AND untracked (NON-ignored)
-   * files. The coroutine's idempotent re-spawn uses this to discard an abandoned
+   * files. The orchestrator's idempotent re-spawn uses this to discard an abandoned
    * producer's partial work before re-spawning at the same (phase, rung).
    *
    * `-fd` (NOT `-fdx`) deliberately preserves IGNORED files so the provisioned deps

@@ -9,14 +9,14 @@
  *
  * Every handler receives a READ-ONLY {@link PhaseContext} (the WS1 state the engine
  * passes in) and returns a `Promise<PhaseResult>`. Handlers do not write state and
- * do not decide transitions — they report a decision; the driver acts on it.
+ * do not decide transitions — they report a decision; the orchestrator acts on it.
  */
 import type { RunState, TaskState } from "../state/index.js";
 import type { PhaseResult } from "./result.js";
 
 /**
  * The read-only inputs a handler needs. The engine passes WS1 state in; handlers
- * never mutate it (the driver owns the StateManager write). `task` is absent for
+ * never mutate it (the orchestrator owns the StateManager write). `task` is absent for
  * the run-level `finalize` handler and present for every per-task phase.
  */
 export interface PhaseContext {
@@ -25,7 +25,7 @@ export interface PhaseContext {
   /** The task this phase acts on; absent for the run-level `finalize` phase. */
   readonly task?: TaskState;
   /**
-   * The current attempt number for a bounded `wait-retry`, when the driver is
+   * The current attempt number for a bounded `wait-retry`, when the orchestrator is
    * re-invoking the same phase. Absent on a first invocation (treated as 1).
    */
   readonly attempt?: number;

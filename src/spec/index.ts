@@ -1,6 +1,6 @@
 /**
  * `src/spec` — WS5 public surface. The ONE addressable WS5 import surface for
- * WS10 (the in-session driver) and any other downstream consumer. Deep-importing
+ * WS10 (the in-session runner) and any other downstream consumer. Deep-importing
  * `src/spec/*` is a smell; import from here.
  *
  * Re-exports: the durable spec schema (SpecTask/SpecManifest + parsers), the

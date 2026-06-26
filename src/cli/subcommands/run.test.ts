@@ -298,7 +298,7 @@ describe("createRun", () => {
 
     expect(run.run_id).toBe("run-a");
     expect(run.status).toBe("running");
-    // No --driver flag exists: v1 hardcodes the sequential execution_mode.
+    // No --orchestrator flag exists: v1 hardcodes the sequential execution_mode.
     expect(run.execution_mode).toBe("sequential");
     expect(run.spec).toEqual({ repo: REPO, spec_id: "42-checkout", issue_number: 42 });
     expect(Object.keys(run.tasks).sort()).toEqual(["t1", "t2"]);
@@ -829,7 +829,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     });
   });
 
-  it("runCreate: workflow-mode without session id → allowed (Workflow driver owns finalization)", async () => {
+  it("runCreate: workflow-mode without session id → allowed (Workflow runner owns finalization)", async () => {
     delete process.env.CLAUDE_CODE_SESSION_ID;
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);

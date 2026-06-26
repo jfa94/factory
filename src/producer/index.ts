@@ -1,6 +1,6 @@
 /**
  * `src/producer` — WS8 public surface (Decision 22/25/27, Δ D). The ONE
- * addressable WS8 import surface for WS10 (the in-session driver) and any other
+ * addressable WS8 import surface for WS10 (the in-session runner) and any other
  * downstream consumer. Deep-importing `src/producer/*` is a smell; import here.
  *
  * WS8 imports the frozen seams FROM `src/types` (PhaseResult constructors,
@@ -33,5 +33,5 @@ export {
 export { classifyFailure, type FailureSignal, type ClassifyDecision } from "./classify.js";
 
 // The escalation cap. The bounded nuke-and-retry ladder is re-expressed by the
-// driver via the persisted `escalation_rung` (src/driver/transitions.ts), capped here.
+// orchestrator via the persisted `escalation_rung` (src/orchestrator/transitions.ts), capped here.
 export { ESCALATION_CAP } from "./escalation.js";

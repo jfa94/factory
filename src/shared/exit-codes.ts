@@ -10,7 +10,7 @@
  *    than mapping to a silent success. The phase machine (WS2) maps its
  *    PhaseResult union onto these codes; an unmapped variant throws.
  *
- * Downstream (WS2 phase-machine, WS10 drivers) import this and only this for
+ * Downstream (WS2 phase-machine, WS10 orchestrators) import this and only this for
  * process exit semantics. Do not add codes without updating that mapping.
  */
 export const EXIT = {

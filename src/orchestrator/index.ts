@@ -1,19 +1,19 @@
 /**
- * WS10 — the driver's PUBLIC barrel.
+ * WS10 — the orchestrator's PUBLIC barrel.
  *
- * The Model-A driver engine: the deterministic SEAM the CLI/orchestrator drives —
- * the per-task coroutine ({@link nextAction}), the run-level coroutine ({@link nextTask}), the
+ * The Model-A orchestrator engine: the deterministic SEAM the CLI/runner drives —
+ * the per-task orchestrator ({@link nextAction}), the run-level orchestrator ({@link nextTask}), the
  * record cores, the quota gate, and the finalize coordinator — plus the reporter
  * dependency-bundle types those callers wire against. `deps.ts` stays INTERNAL (it
- * is the driver's own deep-import barrel); consumers import the frozen seams from
- * `src/types` and each domain barrel, and the driver-specific shapes from here.
+ * is the orchestrator's own deep-import barrel); consumers import the frozen seams from
+ * `src/types` and each domain barrel, and the orchestrator-specific shapes from here.
  */
 
 // -- the run FINALIZE coordinator (rollup + report + issues; WS12) ------------
 export { finalizeRun } from "./finalize.js";
 export type { FinalizeRunDeps, FinalizeRunResult } from "./finalize.js";
 
-// -- the shared deterministic transition logic (the coroutines build on these) ------
+// -- the shared deterministic transition logic (the orchestrators build on these) ------
 export {
   failTask,
   applyProducerOutcome,
@@ -25,14 +25,14 @@ export {
 // -- shared reporter helpers --------------------------------------------------
 export { specTaskOf, shipBody } from "./handlers.js";
 
-// -- dependency-bundle types (the reporter deps the coroutines + CLI wire) ----------
+// -- dependency-bundle types (the reporter deps the orchestrators + CLI wire) ----------
 export type { ShipMode, HandlerDeps } from "./types.js";
 
 // -- prompt-artifact store (the prompt_ref round-trip) -----------------------
 export { InMemoryArtifactStore, FsArtifactStore } from "./artifacts.js";
 export type { ArtifactStore } from "./artifacts.js";
 
-// -- record cores (the coroutine's deterministic result-record kernels) ----------------
+// -- record cores (the orchestrator's deterministic result-record kernels) ----------------
 export {
   readJsonInput,
   applyRecordProducer,
@@ -51,24 +51,24 @@ export {
 // -- drive results schema (factory next-action --results input) --------------------
 export { DriveResultsSchema, parseDriveResults, type DriveResults } from "./results.js";
 
-// -- quota gate (shared by both coroutines) ----------------------------------------
+// -- quota gate (shared by both orchestrators) ----------------------------------------
 export { applyQuotaGate, type QuotaGateDeps, type QuotaStop } from "./quota-gate.js";
 
-// -- per-task coroutine (factory next-action seam) ----------------------------
+// -- per-task orchestrator (factory next-action seam) ----------------------------
 export {
   nextAction,
   holdoutSidecar,
   MERGE_RESYNC_CAP,
-  type CoroutineDeps,
+  type OrchestratorDeps,
   type NextAction,
   type HoldoutSpawn,
   type DriveExpects,
-} from "./coroutine.js";
+} from "./orchestrator.js";
 
-// -- run-level coroutine (factory next-task seam) --------------------------------------
+// -- run-level orchestrator (factory next-task seam) --------------------------------------
 export { nextTask, type NextTask } from "./next.js";
 
-// -- docs phase emit + record coroutines (factory run docs seam) -----------------
+// -- docs phase emit + record orchestrators (factory run docs seam) -----------------
 export {
   runDocsEmit,
   runDocsRecord,

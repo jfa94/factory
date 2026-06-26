@@ -1,5 +1,5 @@
 /**
- * `factory next-action` — unit tests for the per-task coroutine CLI shell.
+ * `factory next-action` — unit tests for the per-task orchestrator CLI shell.
  *
  * Surfaces:
  *   1. arg/usage edges (short-circuit before wiring) via driveCommand;
@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { driveCommand } from "./drive.js";
 import { EXIT } from "../../shared/exit-codes.js";
 import { captureStream } from "../test-helpers.js";
-import { makeCoroutineDeps, makeSpec } from "../../driver/coroutine-fixtures.js";
+import { makeOrchestratorDeps, makeSpec } from "../../orchestrator/orchestrator-fixtures.js";
 import { SpecStore } from "../../spec/index.js";
 import { usageCachePath } from "../../quota/index.js";
 
@@ -121,12 +121,12 @@ describe("drive happy path", () => {
       deps,
       runId,
       cleanup: c,
-    } = await makeCoroutineDeps({
+    } = await makeOrchestratorDeps({
       taskStateOverrides: { task_id: "T1", status: "done" },
     });
     cleanup = c;
 
-    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadOrchestratorDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec");
 
@@ -157,12 +157,12 @@ describe("drive happy path", () => {
       deps,
       runId,
       cleanup: c,
-    } = await makeCoroutineDeps({
+    } = await makeOrchestratorDeps({
       taskStateOverrides: { task_id: "T1", phase: "tests" },
     });
     cleanup = c;
 
-    // Write the spec to disk — loadCoroutineDeps -> loadCliDeps -> SpecStore.read requires it.
+    // Write the spec to disk — loadOrchestratorDeps -> loadCliDeps -> SpecStore.read requires it.
     const spec = makeSpec([{ task_id: "T1", acceptance_criteria: ["only one"] }]);
     await new SpecStore({ dataDir: deps.dataDir, docsRoot: join(deps.dataDir, "_docs") }).write(spec, "# spec");
 

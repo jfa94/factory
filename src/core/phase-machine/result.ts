@@ -17,7 +17,7 @@
  *   bash rc 20 → DELETED (human gates retired, Decision 5 — no `human-gate` kind)
  *
  * Constructors below build well-formed variants so handlers/fakes never drift the
- * shape. The driver (WS10), not the engine, ACTS on a result; the engine only
+ * shape. The orchestrator (WS10), not the engine, ACTS on a result; the engine only
  * surfaces it after one structural exhaustiveness check (engine.ts).
  */
 import type { TaskPhase } from "./phases.js";

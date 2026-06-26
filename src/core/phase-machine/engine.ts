@@ -6,7 +6,7 @@
  * exhaustiveness check (a `switch` over `result.kind` whose `default` calls
  * {@link assertNever}). It does NOT:
  *   - shell out (handlers do),
- *   - read/write state.json (the driver does, via WS1 StateManager),
+ *   - read/write state.json (the orchestrator does, via WS1 StateManager),
  *   - sleep or loop.
  *
  * Two load-bearing guarantees:
@@ -15,9 +15,9 @@
  *   2. BOUNDED wait-retry. A `wait-retry` with `attempt > max_attempts` THROWS,
  *      forcing the caller to classify a fail. The engine cannot spin.
  *
- * The engine surfaces decisions; the DRIVER (WS10) acts on them. {@link nextPhaseFor}
- * computes the resume phase for `advance`/`spawn-agents` so the v1 session driver
- * and the v2 Workflow driver share the transition logic.
+ * The engine surfaces decisions; the ORCHESTRATOR (WS10) acts on them. {@link nextPhaseFor}
+ * computes the resume phase for `advance`/`spawn-agents` so the v1 session runner
+ * and the v2 Workflow runner share the transition logic.
  */
 import { TaskPhaseEnum, RunPhaseEnum, type TaskPhase, type RunPhase } from "./phases.js";
 import {
@@ -145,7 +145,7 @@ function checkResult(phase: EnginePhase, result: PhaseResult): PhaseResult {
  * For `advance` it is `result.to`; for `spawn-agents` it is `request.resume_phase`.
  * Returns `null` for any result that does not imply a resume phase (terminals,
  * graceful-stop, wait-retry — wait-retry re-runs its OWN `phase`, surfaced by the
- * caller directly). Shared by both drivers so transition logic lives in one place.
+ * caller directly). Shared by both runners so transition logic lives in one place.
  */
 export function nextPhaseFor(result: PhaseResult): TaskPhase | null {
   switch (result.kind) {

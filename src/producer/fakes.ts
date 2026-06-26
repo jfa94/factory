@@ -2,7 +2,7 @@
  * Test fixture for the producer unit tests: a minimal {@link Finding} builder.
  *
  * (The ladder/fix-forward/rebuttal fakes that once lived here were removed with the
- * dead ladder cluster — the driver re-expresses escalation via `escalation_rung`,
+ * dead ladder cluster — the orchestrator re-expresses escalation via `escalation_rung`,
  * so there is no in-module ladder to drive rung-by-rung.)
  */
 import type { Finding } from "../verifier/judgment/index.js";

@@ -1,5 +1,5 @@
 ---
-description: "Run an all-hands sweep (architecture/security/quality/implementation reviewers + orchestrator self-review + Codex if available) against the latest commit (or a chosen scope), then drive a reviewer ⇄ implementer loop until the reviewer is satisfied"
+description: "Run an all-hands sweep (architecture/security/quality/implementation reviewers + runner self-review + Codex if available) against the latest commit (or a chosen scope), then drive a reviewer ⇄ implementer loop until the reviewer is satisfied"
 argument-hint: "[--base <hash>|--full] [--limit <secs>] [--fixSeverity critical|high|medium|all] [--quick]"
 arguments:
   - name: "--base"
@@ -26,7 +26,7 @@ Two-phase debugging workflow:
 **Phase 0 — All-hands sweep (one shot, parallel fan-out).**
 
 1. Dispatch in a single message: `architecture-reviewer`, `security-reviewer`, `quality-reviewer`, `implementation-reviewer` subagents (parallel) + Codex adversarial review in the background (when `codex` CLI is available + authenticated).
-2. Orchestrator performs its own exhaustive line-by-line review of the diff.
+2. Runner performs its own exhaustive line-by-line review of the diff.
 3. Validate, dedupe, and classify every finding (`confirmed | dismissed | uncertain`) against the code AND the apparent intent of the diff (since `/factory:debug` has no spec).
 4. Build a remediation plan from confirmed + in-threshold findings; spawn `implementer` to implement it.
 

@@ -1,6 +1,6 @@
-// src/driver/workflow-envelope.ts
+// src/orchestrator/workflow-envelope.ts
 /**
- * The DETERMINISTIC parse + kind-guard that the workflow driver applies
+ * The DETERMINISTIC parse + kind-guard that the workflow runner applies
  * to a `factory next-task` / `factory next-action` envelope after it crosses the
  * exec-agent boundary back into Workflow JS.
  *
@@ -25,13 +25,13 @@
  *
  * SOURCE-OF-TRUTH / DELIBERATE MIRROR: the Workflow runtime cannot `import` or
  *   `require` a sibling module (it injects 8 readonly globals and nothing else),
- *   so `scripts/factory-run-driver.js` INLINES a byte-identical copy of
+ *   so `scripts/factory-run-runner.js` INLINES a byte-identical copy of
  *   {@link parseEnvelope} + the kind sets below. This module is the tested source
  *   of truth; the workflow's inline copy carries a comment pointing back here.
  *   Keep the two in lockstep — a drift is a silent re-introduction of the bug.
  */
 import type { NextTask } from "./next.js";
-import type { NextAction } from "./coroutine.js";
+import type { NextAction } from "./orchestrator.js";
 
 /**
  * The authoritative kind sets, DERIVED from the engine's envelope unions so they

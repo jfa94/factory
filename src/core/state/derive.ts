@@ -164,7 +164,7 @@ export function deriveMergeGateVerdict(
  * SINGLE source of truth shared by every live verify path (the fresh-review path
  * in `panel-run.ts` ← `runPanel`, and the resume / merge-resync re-entry path in
  * `handlers.ts`). Kept here, beside the merge-gate derivation it explains, so the two
- * drivers cannot drift apart again (they previously held divergent copies — one
+ * orchestrators cannot drift apart again (they previously held divergent copies — one
  * dropped the gate `detail`, one used different wording).
  *
  * Inspects BOTH halves of the merge gate (Decision 26):

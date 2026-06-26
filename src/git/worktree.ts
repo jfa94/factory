@@ -5,7 +5,7 @@
  * Decision 12 says: port BOTH the base-is-staging-tip assertion AND the
  * checkout-B fallback — do NOT rely on the `.claude/settings.json`
  * `worktree.baseRef:"head"` knob alone. The settings knob is read at session
- * start (and only by Claude Code's worktree machinery), so a Node driver MUST
+ * start (and only by Claude Code's worktree machinery), so a Node orchestrator MUST
  * independently (a) verify the worktree was born on the staging tip and fail loud
  * on drift (invariant #4), and (b) carry the `checkout -B` safety net for when
  * the knob is absent.

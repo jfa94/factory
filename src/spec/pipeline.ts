@@ -3,7 +3,7 @@
  *
  * The top-level resolve-or-generate orchestration (`runSpecPipeline`) was removed:
  * the live path is the 3-action `factory spec resolve|gate|store` CLI
- * (src/cli/subcommands/spec.ts), which the orchestrator drives agent-by-agent. What
+ * (src/cli/subcommands/spec.ts), which the runner drives agent-by-agent. What
  * remains is the ONE shared request builder the CLI `store` action (and any other
  * caller) uses, so spec-id + slug derivation has a single source of truth.
  */

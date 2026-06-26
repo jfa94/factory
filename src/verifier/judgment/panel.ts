@@ -37,16 +37,16 @@ export const PANEL_ROLES: readonly SpawnRole[] = [
 /**
  * The `prompt_ref` placeholder for a panel reviewer. The WS2 AgentSpecSchema
  * requires a non-empty `prompt_ref` on EVERY agent, but — UNLIKE producers, whose
- * `prompt_ref` points at a real per-run ProducerContext artifact the driver Reads
- * (handlers.ts `producerSpawn` → `putProducerContext`) — NO driver reads this value
- * for a reviewer. Both drivers (the session `pipeline-orchestrator` SKILL.md panel
- * step and `scripts/factory-run-driver.js`) build the reviewer prompt INLINE
+ * `prompt_ref` points at a real per-run ProducerContext artifact the runner Reads
+ * (handlers.ts `producerSpawn` → `putProducerContext`) — NO orchestrator reads this value
+ * for a reviewer. Both runners (the session `pipeline-runner` SKILL.md panel
+ * step and `scripts/factory-run-runner.js`) build the reviewer prompt INLINE
  * from the reviewer's `agents/<role>.md` definition plus the shared
  * `skills/review-protocol/SKILL.md` contract; the reviewer's lens lives in its agent
  * definition + the static protocol, so there is no per-run reviewer prompt file to
  * point at. This returns a stable, role-derived value purely to satisfy the schema's
  * non-empty constraint — it is NOT a readable artifact (CP2 #7: nothing writes a
- * `reviews/prompts/<role>.md` file, and no driver should try to Read one).
+ * `reviews/prompts/<role>.md` file, and no runner should try to Read one).
  */
 function promptRefFor(role: SpawnRole): string {
   return `reviews/prompts/${role}.md`;

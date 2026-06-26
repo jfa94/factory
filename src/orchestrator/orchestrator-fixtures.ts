@@ -1,6 +1,6 @@
 /**
- * Shared test fixtures for the per-task coroutine (coroutine.test.ts) and the run-level
- * coroutine (next.test.ts). Extracted verbatim from coroutine.test.ts with one additive
+ * Shared test fixtures for the per-task orchestrator (orchestrator.test.ts) and the run-level
+ * orchestrator (next.test.ts). Extracted verbatim from orchestrator.test.ts with one additive
  * extension: `runStatusOverride` seeds the run with a non-"running" status after
  * creation (needed for nextTask paused/terminal scenarios).
  *
@@ -21,7 +21,7 @@ import { InMemoryHoldoutStore } from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
 import { fakeUsageSignal, type UsageReading } from "../quota/usage-source.js";
 import type { TaskState, RunStatus, RunState } from "../types/index.js";
-import type { CoroutineDeps } from "./coroutine.js";
+import type { OrchestratorDeps } from "./orchestrator.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -92,10 +92,10 @@ export function makeSpec(
 }
 
 // ---------------------------------------------------------------------------
-// makeCoroutineDeps
+// makeOrchestratorDeps
 // ---------------------------------------------------------------------------
 
-export interface MakeCoroutineDepsOpts {
+export interface MakeOrchestratorDepsOpts {
   /** Spec task overrides (default: one pending T1 with 3 acceptance criteria). */
   tasks?: ReadonlyArray<{
     task_id: string;
@@ -126,8 +126,8 @@ export interface MakeCoroutineDepsOpts {
   docsApplicable?: boolean;
 }
 
-export interface CoroutineDepsResult {
-  deps: CoroutineDeps;
+export interface OrchestratorDepsResult {
+  deps: OrchestratorDeps;
   runId: string;
   dataDir: string;
   state: StateManager;
@@ -135,10 +135,10 @@ export interface CoroutineDepsResult {
   cleanup: () => Promise<void>;
 }
 
-export async function makeCoroutineDeps(
-  opts: MakeCoroutineDepsOpts = {},
-): Promise<CoroutineDepsResult> {
-  const dataDir = await mkdtemp(join(tmpdir(), "factory-coroutine-"));
+export async function makeOrchestratorDeps(
+  opts: MakeOrchestratorDepsOpts = {},
+): Promise<OrchestratorDepsResult> {
+  const dataDir = await mkdtemp(join(tmpdir(), "factory-orchestrator-"));
   const state = new StateManager({
     dataDir,
     lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
@@ -190,7 +190,7 @@ export async function makeCoroutineDeps(
   const gh = opts.ghClient ?? new FakeGhClient();
   const git = new FakeGitClient({ remoteHeads: { [`staging-${runId}`]: "sha-staging" } });
 
-  const deps: CoroutineDeps = {
+  const deps: OrchestratorDeps = {
     config: defaultConfig(),
     spec,
     git,

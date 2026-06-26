@@ -12,7 +12,7 @@ arguments:
     description: "Explicit <issue>-<slug> spec id, instead of --issue"
     required: false
   - name: "--workflow"
-    description: "CREATE-ONLY mode selector: run the parallel background Workflow driver. Default (omit): session — sequential, in-session agents. Cannot combine with --resume (rejected loud)"
+    description: "CREATE-ONLY mode selector: run the parallel background Workflow runner. Default (omit): session — sequential, in-session agents. Cannot combine with --resume (rejected loud)"
     required: false
   - name: "--no-ship"
     description: "CREATE-ONLY ship selector: open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop. Cannot combine with --resume (rejected loud)"
@@ -31,16 +31,16 @@ arguments:
 # /factory:run
 
 Start a **fresh** pipeline run. The `factory` CLI is the engine (ALL control flow); the
-driver is a dumb loop. `/factory:run` never silently reuses an existing run — to continue
+runner is a dumb loop. `/factory:run` never silently reuses an existing run — to continue
 one, use `/factory:resume`; to repair a stalled one, use `/factory:rescue`. Reject the call
 with a clear message if neither or both of `--issue`/`--spec-id` are given. `--repo` is
 OPTIONAL — the CLI auto-derives it from the `origin` remote of the current checkout (pass
 `--repo <owner/name>` only to override; an explicit value that disagrees with the remote fails
 loud).
 
-**Defaults (no flags): session + live** — the in-session orchestrator loop, auto-merging
+**Defaults (no flags): session + live** — the in-session runner loop, auto-merging
 each task into staging and the staging→develop rollup into develop. Two terse boolean
-overrides: `--workflow` (run the background Workflow driver instead of session) and
+overrides: `--workflow` (run the background Workflow runner instead of session) and
 `--no-ship` (open PRs but never merge instead of live).
 
 ## Both modes start the same
@@ -51,7 +51,7 @@ read `run_id` from the emitted `{kind:"created"|"superseded", run}` envelope). F
 command's `--workflow`/`--no-ship`/`--supersede`/`--resume`/`--ignore-quota` flags verbatim to Phase 2's `run
 create` so the resolved mode + ship intent persist on the run — the quota gate paces in
 `session` and hard-stops without pacing in `workflow` (Decision 24), and `ship_mode` is read
-back by the workflow driver + resume + finalize (never re-passed). `--workflow`/`--no-ship`
+back by the workflow runner + resume + finalize (never re-passed). `--workflow`/`--no-ship`
 are **create-only** mode/ship selectors: combining either with `--resume` is rejected loud by
 `run create` (a resumed run keeps the `mode`/`ship_mode` it was born with — both immutable), so
 never let a mode flag ride a resume hand-off. Always pass `--session-id
@@ -61,7 +61,7 @@ gate then keeps the autonomous loop alive only here and lets other sessions stop
 LOUD otherwise:
 
 ```
-Skill(pipeline-orchestrator)
+Skill(pipeline-runner)
 ```
 
 ## Active-run conflict (Decision 35 — no silent reuse)
@@ -102,9 +102,9 @@ Unless the user already passed `--supersede`/`--resume` (forwarded by the skill,
 the prompt), ask with one `AskUserQuestion` before doing anything destructive:
 
 - **Continue (resume)** → run `/factory:resume --run <existing.run_id>` — re-enter the
-  existing run where it left off (its staging branch + merged work are intact). The driver is
+  existing run where it left off (its staging branch + merged work are intact). The runner is
   chosen from the run's **persisted** `mode` (`session` → in-session loop; `workflow` → the
-  Workflow driver), NOT from any `--workflow` flag on this `/factory:run` invocation — so a
+  Workflow runner), NOT from any `--workflow` flag on this `/factory:run` invocation — so a
   `--resume --workflow` is a contradiction and `run create` rejects it loud.
 - **Supersede (fresh)** → re-run `factory run create … --supersede`: the old run is marked
   `superseded`, its `staging/<run-id>` branch + task PRs are deleted, and a fresh run starts.
@@ -127,10 +127,10 @@ task at a time, every agent spawned in this session.
 
 ## Workflow mode (`--workflow`)
 
-After Phase 2, launch the plugin's workflow driver and relay its result:
+After Phase 2, launch the plugin's workflow runner and relay its result:
 
 ```
-Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/scripts/factory-run-driver.js" })
+Workflow({ scriptPath: "${CLAUDE_PLUGIN_ROOT}/scripts/factory-run-runner.js" })
 ```
 
 Pass **no `args`**. The script self-resolves its run context (`run_id`, `data_dir`, `ship_mode`)
@@ -156,7 +156,7 @@ bypass flag. The gate lives in the deterministic engine (`src/autonomy/mode.ts`,
 non-zero with the relaunch instruction rather than degrading to per-tool permission prompts.
 
 `/factory:run` calls `factory autonomy preflight` as its first step (Phase 0 of the
-orchestrator skill). Preflight auto-scaffolds the merged settings when needed, so the user's
+runner skill). Preflight auto-scaffolds the merged settings when needed, so the user's
 only manual act is the relaunch itself:
 
 ```bash

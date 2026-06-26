@@ -84,7 +84,7 @@ describe("pipeline-guards — no active run passes through", () => {
 
 describe("pipeline-guards — ship guard is agent-deny while a run is active", () => {
   // The engine ships from inside `factory next-action` (a child_process gh call that
-  // never transits this Bash-tool hook — src/driver/ship.ts), so ANY ship command
+  // never transits this Bash-tool hook — src/orchestrator/ship.ts), so ANY ship command
   // reaching the hook is an agent-initiated attempt and is categorically denied,
   // independent of reviewers / pr_number / gate evidence.
   it("denies gh pr create while a run is active", async () => {

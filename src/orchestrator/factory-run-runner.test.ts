@@ -1,9 +1,9 @@
 /**
  * WS3 — behavioral drift-guard for the orchestration functions in
- * `scripts/factory-run-driver.js` (the `--mode workflow` driver).
+ * `scripts/factory-run-runner.js` (the `--mode workflow` orchestrator).
  *
  * The Workflow sandbox cannot import/require a sibling module (it injects readonly
- * globals and nothing else), so the driver is one self-contained `.js` that RUNS its
+ * globals and nothing else), so the orchestrator is one self-contained `.js` that RUNS its
  * main loop at module load — it cannot be imported. As with the parseEnvelope mirror
  * (workflow-envelope.test.ts), we read the SHIPPED bytes, slice out one function's
  * source, and reconstruct it in isolation via `new Function(...freeVars)` with fake
@@ -17,21 +17,21 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const driverSrc = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "../../scripts/factory-run-driver.js"),
+  join(dirname(fileURLToPath(import.meta.url)), "../../scripts/factory-run-runner.js"),
   "utf8",
 );
 
 /**
- * Slice one top-level declaration's source out of the driver. `startNeedle` anchors the
+ * Slice one top-level declaration's source out of the orchestrator. `startNeedle` anchors the
  * declaration; `endNeedle` is the start of the NEXT top-level construct (a blank line +
  * the following decl/comment), so the slice ends exactly at the function's closing brace
  * — never trailing a line comment that would comment out the wrapping `)`.
  */
 function sliceFn(startNeedle: string, endNeedle: string): string {
   const start = driverSrc.indexOf(startNeedle);
-  if (start < 0) throw new Error(`driver-drift: start anchor not found: ${startNeedle}`);
+  if (start < 0) throw new Error(`orchestrator-drift: start anchor not found: ${startNeedle}`);
   const end = driverSrc.indexOf(endNeedle, start);
-  if (end <= start) throw new Error(`driver-drift: end anchor not found: ${endNeedle}`);
+  if (end <= start) throw new Error(`orchestrator-drift: end anchor not found: ${endNeedle}`);
   return driverSrc.slice(start, end).trim();
 }
 
@@ -79,7 +79,7 @@ const SLICES = {
   recordResults: () => sliceFn("async function recordResults(", "\n\nasync function runProducer("),
 };
 
-describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
+describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
   it("all four orchestration functions are extractable (sanity)", () => {
     for (const [name, slice] of Object.entries(SLICES)) {
       expect(() => slice(), `slice failed for ${name}`).not.toThrow();

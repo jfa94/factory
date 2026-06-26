@@ -6,9 +6,9 @@
  * {@link buildReviewSpawn} hard-code that pin from {@link SPEC_DEFAULTS}; they do
  * NOT read it from a risk tier, task count, or any per-input config — the pin is
  * the whole point. WS5 owns spawn-request CONSTRUCTION + verdict parsing; the
- * WS10 in-session driver performs the live `Agent()` spawn (an agent cannot
+ * WS10 in-session runner performs the live `Agent()` spawn (an agent cannot
  * deterministically spawn an agent inside a unit), mirroring how WS2 handlers
- * report and the driver acts.
+ * report and the runner acts.
  *
  * The {@link SpecAgentRunner} interface lets the pipeline unit test with fakes —
  * no real LLM spawn.
@@ -52,7 +52,7 @@ export interface ReviewContext {
 }
 
 /**
- * A spawn spec the WS10 driver consumes to launch the agent. `model` and
+ * A spawn spec the WS10 runner consumes to launch the agent. `model` and
  * `effort` are the Decision-21 apex pin and are constants here.
  *
  * `context` is generic so each builder pins its exact shape ({@link GenerateContext} /

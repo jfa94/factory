@@ -7,15 +7,15 @@
  * {@link decideFinalize} so finalize behaviour has the one home WS2 gave it.
  *
  * The hook NO LONGER blocks a premature stop. A live run with pending work used to
- * emit `{decision:"block"}` to force the in-session orchestrator to keep driving —
+ * emit `{decision:"block"}` to force the in-session runner to keep driving —
  * the "session-hostage" behaviour that trapped a session which could not progress.
  * That arm (and its `FACTORY_ALLOW_STOP` escape hatch) is removed: a session may
  * always stop, and a run left `running` with pending work stays cleanly resumable via
  * `factory resume`. Re-entry is idempotent even when the stop landed mid-spawn: the
- * coroutine records a `spawn_in_flight` checkpoint at every spawn emit, so a resume that
+ * orchestrator records a `spawn_in_flight` checkpoint at every spawn emit, so a resume that
  * re-enters the same (phase, rung) before results were recorded resets the task worktree to
  * the captured pre-spawn tip — discarding the abandoned producer's partial work — before
- * re-spawning (see `coroutine.ts` spawn-agents case + `applyResume`).
+ * re-spawning (see `orchestrator.ts` spawn-agents case + `applyResume`).
  *
  *   FINALIZE-on-stop. If a session-mode `running` run has ≥1 task and EVERY task is
  *   terminal but the run was never explicitly finalized (the session ended right after
@@ -25,7 +25,7 @@
  *
  *   SESSION-SCOPED + MODE-AWARE (Prompt J — so the hook finalizes the RIGHT run, and
  *   only its own):
- *     (a) MODE — in `mode === "workflow"` the interactive session is NOT the driver: a
+ *     (a) MODE — in `mode === "workflow"` the interactive session is NOT the orchestrator: a
  *         background Workflow owns continuation AND finalize-on-stop, so the session
  *         passes through (finalizing on its behalf could race the Workflow).
  *     (b) OWNERSHIP — when the run carries an `owner_session` (stamped at `run create`)
@@ -93,7 +93,7 @@ export function decideStop(run: RunState | null, stoppingSession?: string): Stop
   if (run.status !== "running") return ALLOW; // terminal / paused / suspended: intentional.
 
   // (a) MODE-AWARENESS — workflow mode: the background Workflow owns continuation +
-  // finalize-on-stop, so the interactive session is never the driver here. Pass through
+  // finalize-on-stop, so the interactive session is never the orchestrator here. Pass through
   // (finalizing on its behalf could race the Workflow's own finalization).
   if (run.mode === "workflow") return ALLOW;
 

@@ -1,4 +1,4 @@
-// src/driver/workflow-envelope.test.ts
+// src/orchestrator/workflow-envelope.test.ts
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,8 +7,8 @@ import { DRIVE_KINDS, NEXT_KINDS, parseEnvelope, type EnvelopeKind } from "./wor
 
 describe("NEXT_KINDS / DRIVE_KINDS (engine-derived)", () => {
   // The authoritative discriminants, copied from the engine unions:
-  //   NextTask  (src/driver/next.ts)      = work | finalize | document | done | pause
-  //   NextAction (src/driver/coroutine.ts) = spawn | terminal | quota-blocked
+  //   NextTask  (src/orchestrator/next.ts)      = work | finalize | document | done | pause
+  //   NextAction (src/orchestrator/orchestrator.ts) = spawn | terminal | quota-blocked
   // The sets themselves are derived from a `Record<Union["kind"], true>` mirror,
   // so omitting a kind is a compile error; this test pins the runtime values to
   // the same authoritative lists (catching an accidental EXTRA kind in the mirror).
@@ -223,19 +223,19 @@ describe("EnvelopeKind type", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Drift guard — the inline copy in scripts/factory-run-driver.js MUST stay
+// Drift guard — the inline copy in scripts/factory-run-runner.js MUST stay
 // behaviorally identical to the TS source of truth above. The Workflow runtime
 // cannot import this module (it injects readonly globals and nothing else), so the
-// driver script INLINES parseEnvelope + the kind sets as a deliberate byte-for-byte
+// orchestrator script INLINES parseEnvelope + the kind sets as a deliberate byte-for-byte
 // mirror with NO compile-time link. This test reconstructs the SHIPPED JS bytes in
 // isolation (the script has top-level side effects, so it can't just be imported) and
 // runs the same input battery through both implementations — any divergence (a kind
 // added to one set only, an edited branch, a changed message) fails HERE, where the
 // vitest coverage lives, instead of silently re-opening the boundary corruption.
 // ---------------------------------------------------------------------------
-describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => {
+describe("inline workflow-orchestrator mirror stays in lockstep (drift guard)", () => {
   const driverSrc = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "../../scripts/factory-run-driver.js"),
+    join(dirname(fileURLToPath(import.meta.url)), "../../scripts/factory-run-runner.js"),
     "utf8",
   );
 

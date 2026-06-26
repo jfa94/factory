@@ -1,5 +1,5 @@
 /**
- * The run-level quota gate, shared by both coroutines (next/drive).
+ * The run-level quota gate, shared by both orchestrators (next/drive).
  * Reads the usage signal, evaluates the two-window pacer, and on a breach
  * persists the matching checkpoint + status and returns a structured
  * {@link QuotaStop}; on proceed returns null. Unobservable fails closed
@@ -7,7 +7,7 @@
  *
  * On a proceed (null return) the gate never writes state; clearing a stale
  * paused/suspended checkpoint on recovery is the CALLER's job (see nextAction in
- * coroutine.ts and nextTask in next.ts).
+ * orchestrator.ts and nextTask in next.ts).
  */
 import { evaluateQuota, buildCheckpoint, assertNever } from "./deps.js";
 import type { Config, RunState, StateManager, UsageSignal } from "./deps.js";
@@ -15,7 +15,7 @@ import { createLogger } from "../shared/index.js";
 
 const log = createLogger("quota-gate");
 
-/** The narrow deps the gate needs (a subset of CoroutineDeps). */
+/** The narrow deps the gate needs (a subset of OrchestratorDeps). */
 export interface QuotaGateDeps {
   readonly state: StateManager;
   readonly usage: UsageSignal;

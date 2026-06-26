@@ -68,7 +68,7 @@ export interface HoldoutValidateInput {
 }
 
 /**
- * The injectable holdout-validator boundary (the orchestrator spawns this agent as
+ * The injectable holdout-validator boundary (the runner spawns this agent as
  * the verify-phase holdout). The real v1 impl builds {@link buildHoldoutPrompt},
  * spawns the agent, and parses via {@link parseHoldoutVerdicts}; units inject a
  * fake. A parse failure in the real impl should resolve to `[]` (every withheld

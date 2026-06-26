@@ -1,7 +1,7 @@
 /**
  * WS6 — deterministic-verifier (gates) barrel. ONE GateRunner + per-gate
  * strategies, injectable tools + fakes, the clean-checkout gate-of-record, and the
- * memo. Downstream (WS8 producer, WS10 driver, the verify handler) imports ONLY
+ * memo. Downstream (WS8 producer, WS10 orchestrator, the verify handler) imports ONLY
  * from here.
  *
  * It re-exports WS6's own surface; it imports the frozen seams (GateEvidence /

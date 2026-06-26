@@ -1,10 +1,10 @@
 /**
- * WS10 — the driver's INTERNAL import barrel.
+ * WS10 — the orchestrator's INTERNAL import barrel.
  *
- * The driver is the integration capstone: it wires SEVEN domains (state, phase-
+ * The orchestrator is the integration capstone: it wires SEVEN domains (state, phase-
  * machine, git, quota, spec, deterministic + judgment verifiers, producer). Rather
- * than scatter deep imports across handlers.ts / coroutine.ts / record.ts, this
- * one module re-exports exactly the symbols the driver consumes, each FROM its
+ * than scatter deep imports across handlers.ts / orchestrator.ts / record.ts, this
+ * one module re-exports exactly the symbols the orchestrator consumes, each FROM its
  * sanctioned public barrel (src/types for the frozen seams; the per-domain
  * index.ts otherwise) — never a deep `src/<domain>/<file>` import. Mirrors the
  * "addressable from one place" discipline the seam barrels themselves follow.

@@ -239,7 +239,7 @@ describe("resolveActiveTask phase source", () => {
     expect(isTestWriterPhase(active)).toBe(true);
   });
 
-  it("pending row with a preflight cursor resolves null (the coroutine writes pending+preflight at entry)", () => {
+  it("pending row with a preflight cursor resolves null (the orchestrator writes pending+preflight at entry)", () => {
     delete process.env.FACTORY_TASK_ID;
     const r = run({ t1: task({ status: "pending", phase: "preflight" }) });
     expect(resolveActiveTask(r)).toBeNull();

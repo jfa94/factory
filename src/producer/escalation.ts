@@ -2,8 +2,8 @@
  * The producer escalation cap (Decision 25).
  *
  * The bounded nuke-and-retry ladder is NOT a producer-module function anymore: the
- * driver re-expresses it via the persisted `escalation_rung` (see
- * `src/driver/transitions.ts`), capped at this constant. Each rung "changes a
+ * orchestrator re-expresses it via the persisted `escalation_rung` (see
+ * `src/orchestrator/transitions.ts`), capped at this constant. Each rung "changes a
  * variable" — the combined model→effort dial (`src/producer/model-dial.ts`) climbs
  * the model to its ceiling then climbs effort, and rung ≥1 injects fresh /
  * prior-failure context. When the cap is reached with the merge gate still blocked, the

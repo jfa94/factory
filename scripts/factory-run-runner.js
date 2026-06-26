@@ -1,11 +1,11 @@
 export const meta = {
-  name: "factory-run-driver",
+  name: "factory-run-runner",
   description:
-    "INTERNAL workflow driver — launched by /factory:run --mode workflow; not a direct entry point. Steps ready tasks in parallel through the factory CLI engine.",
+    "INTERNAL workflow runner — launched by /factory:run --mode workflow; not a direct entry point. Steps ready tasks in parallel through the factory CLI engine.",
   whenToUse:
     "Internal only. Launched programmatically by /factory:run --mode workflow (after the spec phase + run create) via Workflow({ scriptPath }). Do NOT invoke directly — it skips preconditions/spec/run-create and fails.",
   phases: [
-    { title: "Drive", detail: "next/drive coroutine loop; producers + reviewers per request" },
+    { title: "Drive", detail: "next/drive orchestrator loop; producers + reviewers per request" },
   ],
 };
 
@@ -21,7 +21,7 @@ let shipMode;
 
 // Manifest role → plugin agentType. KNOWN GAP: workflow agent() has no maxTurns
 // option, so the request's per-agent `max_turns` budget is unenforceable in
-// workflow mode (the session driver honors it).
+// workflow mode (the session runner honors it).
 const AGENT_TYPE = {
   "test-writer": "factory:test-writer",
   implementer: "factory:implementer",
@@ -40,7 +40,7 @@ function agentTypeOf(role) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Envelope parse + kind-guard — DELIBERATE MIRROR of src/driver/workflow-envelope.ts.
+// Envelope parse + kind-guard — DELIBERATE MIRROR of src/orchestrator/workflow-envelope.ts.
 //
 // The Workflow sandbox cannot import/require a sibling module (it injects 8
 // readonly globals and nothing else), so the engine's tested parse+guard is
@@ -55,7 +55,7 @@ function agentTypeOf(role) {
 // stdout into ONE opaque string ({raw}); the engine JSON.parses + kind-guards HERE.
 //
 // SOURCE OF TRUTH for these two sets is `NEXT_KINDS` / `DRIVE_KINDS` in
-// src/driver/workflow-envelope.ts, where they are derived from the engine unions
+// src/orchestrator/workflow-envelope.ts, where they are derived from the engine unions
 // via a `Record<Union["kind"], true>` mirror (so omitting a kind is a TS compile
 // error). The Workflow runtime can't import that module, so the values are copied
 // here as plain arrays with NO compile-time guarantee — they MUST stay
@@ -490,7 +490,7 @@ for (;;) {
       .filter(Boolean)
       .join(", ");
     throw new Error(
-      `factory-run-driver: engine envelope missing ${missing} — rebuild dist (npm run build) ` +
+      `factory-run-runner: engine envelope missing ${missing} — rebuild dist (npm run build) ` +
         `and relaunch via /factory:run --mode workflow`,
     );
   }
