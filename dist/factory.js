@@ -9219,7 +9219,7 @@ var RealGhClient = class {
 };
 
 // src/spec/store.ts
-import { readFile as readFile5, readdir as readdir2 } from "node:fs/promises";
+import { readFile as readFile5, readdir as readdir2, rm as rm2 } from "node:fs/promises";
 import { join as join9 } from "node:path";
 var log17 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
@@ -9282,6 +9282,38 @@ var SpecStore = class {
     }
     const specId = matches[0];
     return this.read(repo, specId);
+  }
+  /**
+   * Delete the canonical spec dir for `(repo, issueNumber)`, if one exists.
+   * Used by `--supersede` to force Phase 1 to regenerate from the PRD rather
+   * than reuse a potentially-broken durable spec. Returns `true` when a dir
+   * was deleted, `false` when nothing matched (idempotent — a missing spec
+   * on supersede is not an error).
+   *
+   * @ponytail: only the canonical dataDir spec dir is removed; the in-repo
+   * reviewable mirror (`docs/factory/<spec-id>/`) is left in place —
+   * `store.write` overwrites it on regen. A slug-change leaves a cosmetic
+   * stale mirror dir; not worth working-tree churn for this edge case.
+   */
+  async deleteByIssue(repo, issueNumber) {
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      throw new Error(`deleteByIssue: issue number must be a positive integer, got ${issueNumber}`);
+    }
+    const repoRoot = join9(specsRoot(this.dataDir), repoKey(repo));
+    let entries;
+    try {
+      entries = await readdir2(repoRoot);
+    } catch (err) {
+      if (err.code === "ENOENT") return false;
+      throw err;
+    }
+    const matches = entries.filter((e) => issueOf(e) === issueNumber);
+    if (matches.length === 0) return false;
+    for (const specId of matches) {
+      await rm2(specDir(this.dataDir, repo, specId), { recursive: true, force: true });
+    }
+    log17.info(`deleted spec(s) for issue #${issueNumber} in ${repo}: ${matches.join(", ")}`);
+    return true;
   }
   /** Read + validate the request for a known `(repo, spec_id)`. */
   async read(repo, specId) {
@@ -13572,7 +13604,7 @@ import { join as join18 } from "node:path";
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
-  factory spec resolve [--repo <owner/name>] --issue <n>
+  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede]
   factory spec gate    [--repo <owner/name>] --issue <n>
   factory spec store   [--repo <owner/name>] --issue <n>
 
@@ -13598,7 +13630,10 @@ function scratchPaths(dataDir, repo, issue) {
     verdictPath: join18(dir, VERDICT_FILE)
   };
 }
-async function resolveSpec2(deps, repo, issue) {
+async function resolveSpec2(deps, repo, issue, { regenerate = false } = {}) {
+  if (regenerate) {
+    await deps.store.deleteByIssue(repo, issue);
+  }
   const existing = await deps.store.resolveByIssue(repo, issue);
   if (existing) {
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
@@ -13708,14 +13743,15 @@ async function run4(argv) {
   if (handler === void 0) {
     throw new UsageError(`unknown spec action '${action}' (expected resolve | gate | store)`);
   }
-  const args = parseArgs(argv.slice(1));
+  const args = parseArgs(argv.slice(1), { booleans: ["supersede"] });
   if (args.flag("help") === true) {
     emitLine(SPEC_HELP);
     return EXIT.OK;
   }
   const issue = parseIssue2(args.requireFlag("issue"));
   const repo = await resolveSpecRepo(args);
-  const envelope = await handler(wireDeps(), repo, issue);
+  const deps = wireDeps();
+  const envelope = action === "resolve" ? await resolveSpec2(deps, repo, issue, { regenerate: args.flag("supersede") === true }) : await handler(deps, repo, issue);
   emitJson(envelope);
   return EXIT.OK;
 }

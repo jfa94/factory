@@ -155,6 +155,37 @@ describe("resolveSpec", () => {
   });
 });
 
+describe("resolveSpec with regenerate:true (--supersede)", () => {
+  it("deletes the existing spec and emits generate — never reuse", async () => {
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+
+    const env = await resolveSpec(deps(), REPO, ISSUE, { regenerate: true });
+    expect(env.kind).toBe("generate");
+  });
+
+  it("after deletion resolveByIssue returns null", async () => {
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+
+    await resolveSpec(deps(), REPO, ISSUE, { regenerate: true });
+    expect(await store.resolveByIssue(REPO, ISSUE)).toBeNull();
+  });
+
+  it("regenerate:false still reuses an existing spec", async () => {
+    const store = new SpecStore({ dataDir, docsRoot: join(dataDir, "_docs") });
+    await store.write(buildManifest(REPO, ISSUE, PASS_GENERATED), PASS_GENERATED.specMd);
+
+    const env = await resolveSpec(deps(), REPO, ISSUE, { regenerate: false });
+    expect(env.kind).toBe("reuse");
+  });
+
+  it("regenerate:true with no existing spec is a no-op — still emits generate", async () => {
+    const env = await resolveSpec(deps(), REPO, ISSUE, { regenerate: true });
+    expect(env.kind).toBe("generate");
+  });
+});
+
 describe("gateSpec", () => {
   it("emits revise(source=gate) when a deterministic gate blocks", async () => {
     await resolveSpec(deps(), REPO, ISSUE); // writes prd.json

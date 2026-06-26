@@ -61,7 +61,7 @@ import type { Subcommand } from "../registry-types.js";
 const SPEC_HELP = `factory spec — deterministic spec-build seam (resolve → gate → store)
 
 Usage:
-  factory spec resolve [--repo <owner/name>] --issue <n>
+  factory spec resolve [--repo <owner/name>] --issue <n> [--supersede]
   factory spec gate    [--repo <owner/name>] --issue <n>
   factory spec store   [--repo <owner/name>] --issue <n>
 
@@ -169,12 +169,21 @@ function scratchPaths(
 /**
  * Reuse-or-begin: on a store hit return the pointer (Δ X — never regen); else fetch
  * the PRD, persist it to the scratch dir, and emit the apex-pinned generate spawn.
+ *
+ * Pass `regenerate: true` (from `--supersede`) to delete any existing durable spec
+ * before the reuse check, forcing Phase 1 to regenerate from the PRD. Deletion is
+ * mandatory — regen without delete risks two dirs for the same issue, which
+ * `resolveByIssue` treats as a store-integrity error.
  */
 export async function resolveSpec(
   deps: SpecBuildDeps,
   repo: string,
   issue: number,
+  { regenerate = false }: { regenerate?: boolean } = {},
 ): Promise<SpecBuildEnvelope> {
+  if (regenerate) {
+    await deps.store.deleteByIssue(repo, issue);
+  }
   const existing = await deps.store.resolveByIssue(repo, issue);
   if (existing) {
     return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
@@ -353,7 +362,7 @@ async function run(argv: string[]): Promise<ExitCode> {
     throw new UsageError(`unknown spec action '${action}' (expected resolve | gate | store)`);
   }
 
-  const args = parseArgs(argv.slice(1));
+  const args = parseArgs(argv.slice(1), { booleans: ["supersede"] });
   if (args.flag("help") === true) {
     emitLine(SPEC_HELP);
     return EXIT.OK;
@@ -364,7 +373,11 @@ async function run(argv: string[]): Promise<ExitCode> {
   const issue = parseIssue(args.requireFlag("issue"));
   const repo = await resolveSpecRepo(args);
 
-  const envelope = await handler(wireDeps(), repo, issue);
+  const deps = wireDeps();
+  const envelope =
+    action === "resolve"
+      ? await resolveSpec(deps, repo, issue, { regenerate: args.flag("supersede") === true })
+      : await handler(deps, repo, issue);
   emitJson(envelope);
   return EXIT.OK;
 }

@@ -43,8 +43,11 @@ envelope names, feed the raw results back.**
 from the `origin` remote of the current checkout; pass `--repo <o/n>` only to
 override. Run the bounded generate ⇄ review loop until `reuse` or `stored`:
 
+Pass `--supersede` to `resolve` when the invoking command forwarded it — `resolve`
+will delete the stale durable spec so the loop always emits `generate` (never `reuse`).
+
 ```
-env = factory spec resolve [--repo <o/n>] --issue <n>
+env = factory spec resolve [--repo <o/n>] --issue <n> [--supersede]
 loop on env.kind:
   reuse | stored → done (env.pointer); go to Phase 2
   generate → remember env.max_iterations (the loop bound)

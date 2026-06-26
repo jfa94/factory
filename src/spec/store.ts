@@ -22,7 +22,7 @@
  * `specsRoot` / `repoKey` / `docsFactoryDir`); this module never hand-joins a
  * path segment. Writes go through the atomic-write seam.
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { atomicWriteFile } from "../shared/atomic-write.js";
 import { parseJson, stringifyJson } from "../shared/json.js";
@@ -126,6 +126,42 @@ export class SpecStore {
 
     const specId = matches[0]!;
     return this.read(repo, specId);
+  }
+
+  /**
+   * Delete the canonical spec dir for `(repo, issueNumber)`, if one exists.
+   * Used by `--supersede` to force Phase 1 to regenerate from the PRD rather
+   * than reuse a potentially-broken durable spec. Returns `true` when a dir
+   * was deleted, `false` when nothing matched (idempotent — a missing spec
+   * on supersede is not an error).
+   *
+   * @ponytail: only the canonical dataDir spec dir is removed; the in-repo
+   * reviewable mirror (`docs/factory/<spec-id>/`) is left in place —
+   * `store.write` overwrites it on regen. A slug-change leaves a cosmetic
+   * stale mirror dir; not worth working-tree churn for this edge case.
+   */
+  async deleteByIssue(repo: string, issueNumber: number): Promise<boolean> {
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      throw new Error(`deleteByIssue: issue number must be a positive integer, got ${issueNumber}`);
+    }
+    const repoRoot = join(specsRoot(this.dataDir), repoKey(repo));
+
+    let entries: string[];
+    try {
+      entries = await readdir(repoRoot);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw err;
+    }
+
+    const matches = entries.filter((e) => issueOf(e) === issueNumber);
+    if (matches.length === 0) return false;
+
+    for (const specId of matches) {
+      await rm(specDir(this.dataDir, repo, specId), { recursive: true, force: true });
+    }
+    log.info(`deleted spec(s) for issue #${issueNumber} in ${repo}: ${matches.join(", ")}`);
+    return true;
   }
 
   /** Read + validate the request for a known `(repo, spec_id)`. */

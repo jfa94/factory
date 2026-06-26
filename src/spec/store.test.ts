@@ -254,3 +254,37 @@ describe("SpecStore.read — round-trips through the durable store", () => {
     await expect(store.resolveByIssue("owner/name", 123)).rejects.toThrow();
   });
 });
+
+describe("SpecStore.deleteByIssue — supersede spec deletion", () => {
+  it("deletes the canonical spec dir and returns true when a spec exists", async () => {
+    const store = newStore();
+    await store.write(request(), "# spec");
+
+    const deleted = await store.deleteByIssue("owner/name", 123);
+    expect(deleted).toBe(true);
+    // resolveByIssue must return null after deletion (the dir is gone)
+    expect(await store.resolveByIssue("owner/name", 123)).toBeNull();
+  });
+
+  it("returns false (no-op) when no spec exists for the issue", async () => {
+    const store = newStore();
+    expect(await store.deleteByIssue("owner/name", 999)).toBe(false);
+  });
+
+  it("returns false (no-op) when the repo dir does not exist", async () => {
+    const store = newStore();
+    expect(await store.deleteByIssue("nobody/nothing", 1)).toBe(false);
+  });
+
+  it("is idempotent — a second call returns false and does not throw", async () => {
+    const store = newStore();
+    await store.write(request(), "# spec");
+    await store.deleteByIssue("owner/name", 123);
+    expect(await store.deleteByIssue("owner/name", 123)).toBe(false);
+  });
+
+  it("rejects a non-positive issue number", async () => {
+    const store = newStore();
+    await expect(store.deleteByIssue("owner/name", 0)).rejects.toThrow();
+  });
+});

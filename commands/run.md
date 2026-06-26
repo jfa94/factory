@@ -18,7 +18,7 @@ arguments:
     description: "CREATE-ONLY ship selector: open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop. Cannot combine with --resume (rejected loud)"
     required: false
   - name: "--supersede"
-    description: "If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — skips the conflict prompt"
+    description: "If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — also deletes the durable spec so Phase 1 regenerates from the PRD. Skips the conflict prompt. (Has no effect on the spec when combined with --spec-id, which bypasses Phase 1.)"
     required: false
   - name: "--resume"
     description: "If an active run already exists, hand off to `/factory:resume` instead of starting fresh — skips the conflict prompt. Continues the run in its PERSISTED mode/ship; never pass --workflow/--no-ship alongside it"
@@ -58,7 +58,10 @@ never let a mode flag ride a resume hand-off. Always pass `--session-id
 "$CLAUDE_CODE_SESSION_ID"` so the run records THIS session as its `owner_session` — the Stop
 gate then keeps the autonomous loop alive only here and lets other sessions stop freely
 (Prompt J). With `--spec-id`, skip Phase 1 — the spec must already exist; `run create` fails
-LOUD otherwise:
+LOUD otherwise. When `--supersede` is set, forward it to Phase 1's `factory spec resolve` call
+so the stale durable spec is deleted before the reuse check — Phase 1 will always regenerate
+from the PRD in this case (never reuse). `--supersede` has no effect on the spec when combined
+with `--spec-id` (Phase 1 is skipped):
 
 ```
 Skill(pipeline-runner)
@@ -106,8 +109,9 @@ the prompt), ask with one `AskUserQuestion` before doing anything destructive:
   chosen from the run's **persisted** `mode` (`session` → in-session loop; `workflow` → the
   Workflow runner), NOT from any `--workflow` flag on this `/factory:run` invocation — so a
   `--resume --workflow` is a contradiction and `run create` rejects it loud.
-- **Supersede (fresh)** → re-run `factory run create … --supersede`: the old run is marked
-  `superseded`, its `staging/<run-id>` branch + task PRs are deleted, and a fresh run starts.
+- **Supersede (fresh)** → re-run `factory run create … --supersede`: the durable spec is
+  deleted and regenerated from the PRD (Phase 1), the old run is marked `superseded`, its
+  `staging/<run-id>` branch + task PRs are deleted, and a fresh run starts with the new spec.
   Then drive the fresh run.
 - **Cancel the prompt** → stop here; leave the existing run untouched and `running` (this
   declines to start a fresh run — it does NOT abandon the existing one).
