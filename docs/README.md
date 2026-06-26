@@ -1,4 +1,4 @@
-<!-- last-documented: e661eb2bf37677078730f7be62fb1f04b2e1407f -->
+<!-- last-documented: 214a8ea06052074e04f16e4b37a64711f429f9df -->
 
 # Dark Factory Plugin
 
@@ -47,7 +47,7 @@ hands.
 commits failing tests, then a `implementer` commits the minimal
 implementation — enforced by the TDD gate), passes a stack of deterministic
 automated gates (tests, coverage, mutation, SAST, type, lint, build, and the TDD
-gate itself), and clears a unanimous six-reviewer adversarial panel before it can
+gate itself), and clears a unanimous seven-reviewer adversarial panel before it can
 ship. Reviewer findings are independently confirmed before they act
 (verify-then-fix).
 

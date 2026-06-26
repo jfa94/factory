@@ -80,6 +80,9 @@ exists for the spec, `factory run create` exits `3` and emits
   `/factory:resume`; its `staging-<run-id>` branch and merged work are intact.
 - **Supersede (fresh)** — mark the old run `superseded`, delete its
   `staging-<run-id>` branch (which auto-closes its task PRs), and start fresh.
+  Supersede also deletes the durable spec for the issue so Phase 1 regenerates it
+  from the PRD — the fresh run does not inherit the same broken spec. (No effect on
+  the spec when paired with `--spec-id`, which skips Phase 1.)
 - **Cancel** — leave the existing run untouched.
 
 Pass `--resume` or `--supersede` up front to skip the prompt. To repair a run that

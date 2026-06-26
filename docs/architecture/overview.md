@@ -50,7 +50,7 @@ graph TD
   Runner -->|steps: next-task / next-action| CLI
   CLI -->|envelope: spawn request / next step| Runner
   Runner -->|Agent spawns| Producers[test-writer / implementer]
-  Runner -->|Agent spawns| Panel[6-reviewer panel + holdout + verifiers]
+  Runner -->|Agent spawns| Panel[7-reviewer panel + holdout + verifiers]
   Runner -->|next-action --results: records outcomes| CLI
   CLI -->|reads/writes| State[(run/spec state)]
   Hook -->|deny/allow at tool-use| Runner
@@ -151,7 +151,7 @@ preflight → tests → exec → verify → ship
 - **tests** — producer phase: the `test-writer` commits failing tests first (TDD).
 - **exec** — producer phase: the `implementer` commits the minimal implementation.
 - **verify** — the merge gate: deterministic gates + holdout validation + the
-  six-reviewer panel + verify-then-fix. Derives the merge gate verdict.
+  seven-reviewer panel + verify-then-fix. Derives the merge gate verdict.
 - **ship** — opens the task PR idempotently; in `live` mode serial-merges into the
   run's `staging-<run-id>` branch. The one phase that writes the terminal task status.
   It probes for a native GitHub merge queue and, when present, enqueues via

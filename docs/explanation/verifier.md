@@ -12,7 +12,7 @@ risk-invariant panel and verify-then-fix.
 graph TD
   W[Task worktree] --> Gates[Deterministic gates<br/>test·tdd·coverage·mutation·sast·type·lint·build]
   W --> Holdout[Holdout validation<br/>withheld answer-key]
-  W --> Panel[Judgment panel<br/>6 reviewers]
+  W --> Panel[Judgment panel<br/>7 reviewers]
   Gates --> MergeGate{Merge-gate verdict<br/>conjunctive}
   Holdout --> MergeGate
   Panel --> VtF[Verify-then-fix<br/>confirm each blocker]
@@ -48,7 +48,10 @@ does **not** do this for the merge gate. Every reviewer runs on every task:
 - `quality-reviewer` — adversarial code quality (Codex is the preferred implementer
   when available).
 - `architecture-reviewer`, `security-reviewer`, `silent-failure-hunter`,
-  `type-design-reviewer`.
+  `type-design-reviewer`, `systemic-failure-reviewer` — the last is the
+  cross-stage lens: stuck states, invariants without a repair path, unsafe
+  recovery, and over-pinned cross-stage contracts — defects that span multiple
+  files or pipeline stages that no line-level reviewer sees.
 
 Risk does not change _who_ reviews; it changes _the producer's starting model and
 escalation budget_ (see [producer-ladder.md](./producer-ladder.md)). The single

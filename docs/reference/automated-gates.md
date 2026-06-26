@@ -159,7 +159,7 @@ The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modifi
 
 The deterministic gates are only the first layer of the merge gate. The merge gate
 also records in **holdout validation** (a withheld answer-key, validated
-independently) and the **risk-invariant review panel** (six reviewers, unanimous
+independently) and the **risk-invariant review panel** (seven reviewers, unanimous
 approval required, with verify-then-fix confirmation of each blocking finding). The
 overall merge gate is the subject of
 [../explanation/verifier.md](../explanation/verifier.md).

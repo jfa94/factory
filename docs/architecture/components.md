@@ -111,7 +111,7 @@ Three sub-layers:
   strategies (test, tdd, coverage, mutation, sast, type, lint, build). Runs each
   enabled strategy, collects evidence, derives the conjunctive verdict. Includes
   the TDD gate (`strategies/tdd.ts`) and the gate evidence memo.
-- **judgment** (`judgment/`) — the risk-invariant six-reviewer panel (`panel.ts`,
+- **judgment** (`judgment/`) — the risk-invariant seven-reviewer panel (`panel.ts`,
   `panel-run.ts`), citation-verify (`citation-verify.ts`), and the independent
   finding-verifier (`finding-verifier.ts`) for verify-then-fix.
 - **holdout** (`holdout/`) — the answer-key split, store, validator prompt, and
