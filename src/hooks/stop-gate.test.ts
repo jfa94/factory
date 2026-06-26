@@ -32,7 +32,7 @@ function run(over: Partial<RunState> = {}, tasks: Record<string, TaskState> = {}
     schema_version: 1,
     run_id: "run-x",
     status: "running",
-    driver: "balanced",
+    execution_mode: "balanced",
     spec: SPEC,
     tasks,
     started_at: "t",

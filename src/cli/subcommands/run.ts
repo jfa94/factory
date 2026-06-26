@@ -368,7 +368,7 @@ async function createRunFromManifest(
     spec: specStore.toPointer(request),
     staging_branch: branch,
     // v1 coroutine seam drives tasks strictly one at a time — the driver dial is fixed.
-    driver: "sequential",
+    execution_mode: "sequential",
     ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
     ...(opts.ownerSession !== undefined ? { owner_session: opts.ownerSession } : {}),

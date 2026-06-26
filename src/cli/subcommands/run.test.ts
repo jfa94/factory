@@ -298,8 +298,8 @@ describe("createRun", () => {
 
     expect(run.run_id).toBe("run-a");
     expect(run.status).toBe("running");
-    // No --driver flag exists: v1 hardcodes the sequential driver.
-    expect(run.driver).toBe("sequential");
+    // No --driver flag exists: v1 hardcodes the sequential execution_mode.
+    expect(run.execution_mode).toBe("sequential");
     expect(run.spec).toEqual({ repo: REPO, spec_id: "42-checkout", issue_number: 42 });
     expect(Object.keys(run.tasks).sort()).toEqual(["t1", "t2"]);
     expect(run.tasks.t1!.status).toBe("pending");
@@ -318,13 +318,13 @@ describe("createRun", () => {
     expect((await state.read("run-pin")).staging_branch).toBe("staging-run-pin");
   });
 
-  it("resolves the spec by explicit spec-id and hardcodes the sequential driver", async () => {
+  it("resolves the spec by explicit spec-id and hardcodes the sequential execution_mode", async () => {
     const run = await createRun(state, store, {
       repo: REPO,
       specId: "42-checkout",
       runId: "run-b",
     });
-    expect(run.driver).toBe("sequential");
+    expect(run.execution_mode).toBe("sequential");
     expect(Object.keys(run.tasks).sort()).toEqual(["t1", "t2"]);
   });
 

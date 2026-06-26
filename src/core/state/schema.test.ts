@@ -31,7 +31,7 @@ describe("schema round-trip", () => {
   it("parses a minimal run, applying defaults", () => {
     const run = parseRunState(minimalRun());
     expect(run.status).toBe("running");
-    expect(run.driver).toBe("sequential");
+    expect(run.execution_mode).toBe("sequential");
     expect(run.mode).toBe("session");
     expect(run.schema_version).toBe(1);
     expect(run.tasks).toEqual({});

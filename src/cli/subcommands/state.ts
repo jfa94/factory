@@ -30,7 +30,7 @@ Exit OK with {"current": null} when there is no current run.`;
 /** One compact human line per task: "<id> <status> [phase] [rung] [pr]". */
 function summarize(run: RunState): string {
   const lines: string[] = [
-    `run ${run.run_id}  status=${run.status}  driver=${run.driver}`,
+    `run ${run.run_id}  status=${run.status}  execution_mode=`,
     `spec ${run.spec.repo}#${run.spec.issue_number} (${run.spec.spec_id})`,
     `tasks (${Object.keys(run.tasks).length}):`,
   ];

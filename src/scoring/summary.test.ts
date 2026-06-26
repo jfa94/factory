@@ -39,7 +39,7 @@ function mkRun(
   return parseRunState({
     run_id: "run-sum-1",
     status: opts.status ?? "failed",
-    driver: "balanced",
+    execution_mode: "balanced",
     spec: { repo: "acme/widgets", spec_id: "7-x", issue_number: 7 },
     tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
     started_at: opts.started_at ?? "2026-06-08T00:00:00.000Z",
@@ -226,7 +226,7 @@ describe("buildRunSummary — passthrough + clock", () => {
     expect(summary).toMatchObject({
       run_id: "run-sum-1",
       run_status: "failed",
-      driver: "balanced",
+      execution_mode: "balanced",
       spec_id: "7-x",
       issue_number: 7,
       repo: "acme/widgets",

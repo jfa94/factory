@@ -406,9 +406,9 @@ export type DocsPhase = z.infer<typeof DocsPhaseSchema>;
 // RunState
 // ---------------------------------------------------------------------------
 
-/** The orchestrator driver preset that produced this run (Sequential/Balanced). */
-export const DriverEnum = z.enum(["sequential", "balanced"]);
-export type Driver = z.infer<typeof DriverEnum>;
+/** The execution-mode preset that produced this run (Sequential/Balanced). */
+export const ExecutionModeEnum = z.enum(["sequential", "balanced"]);
+export type ExecutionMode = z.infer<typeof ExecutionModeEnum>;
 
 /**
  * Execution mode (Decision 24). `session` runs in the orchestrator's live
@@ -454,7 +454,7 @@ export const RunStateSchema = z.object({
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: z.string().min(1),
   status: RunStatusEnum.default("running"),
-  driver: DriverEnum.default("sequential"),
+  execution_mode: ExecutionModeEnum.default("sequential"),
   mode: RunModeEnum.default("session"),
   ship_mode: ShipModeEnum.default("live"),
 

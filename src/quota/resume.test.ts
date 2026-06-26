@@ -17,7 +17,7 @@ function suspendedRun(): RunState {
     schema_version: 1,
     run_id: "run-20260604-000000",
     status: "suspended",
-    driver: "balanced",
+    execution_mode: "balanced",
     spec: { repo: "owner/name", spec_id: "12-thing", issue_number: 12 },
     tasks: {
       a: { task_id: "a", risk_tier: "low", status: "done" },

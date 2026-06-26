@@ -71,7 +71,7 @@ function makeRun(tasks: TaskState[], overrides: Partial<RunState> = {}): RunStat
     schema_version: 1,
     run_id: "run-1",
     status: "failed",
-    driver: "balanced",
+    execution_mode: "balanced",
     spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
     tasks: record,
     started_at: "2026-01-01T00:00:00.000Z",

@@ -127,7 +127,7 @@ function run(tasks: Record<string, TaskState>): RunState {
     schema_version: 1,
     run_id: "run-x",
     status: "running",
-    driver: "balanced",
+    execution_mode: "balanced",
     spec: SPEC,
     tasks,
     started_at: "t",

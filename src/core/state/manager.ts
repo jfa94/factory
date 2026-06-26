@@ -73,7 +73,7 @@ export interface StateManagerOptions extends DataDirOptions {
 export interface CreateRunArgs {
   run_id: string;
   spec: SpecPointer;
-  driver?: RunState["driver"];
+  execution_mode?: RunState["execution_mode"];
   mode?: RunState["mode"];
   ship_mode?: RunState["ship_mode"];
   /** The owning Claude Code session id (Prompt J — session-scoped Stop gate). */
@@ -189,7 +189,7 @@ export class StateManager {
     const state = parseRunState({
       run_id: args.run_id,
       status: "running",
-      driver: args.driver ?? "sequential",
+      execution_mode: args.execution_mode ?? "sequential",
       mode: args.mode ?? "session",
       ship_mode: args.ship_mode ?? "live",
       // Stamp the owning session only when known (best-effort) — an absent owner

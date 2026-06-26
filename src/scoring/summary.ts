@@ -15,7 +15,7 @@
  * summary reports COUNTS the runtime actually has. A measured score is a deferred
  * enhancement, not a silent omission.
  */
-import type { RunState, RunStatus, Driver, FailureClass } from "../types/index.js";
+import type { RunState, RunStatus, ExecutionMode, FailureClass } from "../types/index.js";
 import type { PartialRunReport } from "./partial-report.js";
 import { FailureClassEnum } from "../types/index.js";
 import { nowIso } from "../shared/index.js";
@@ -39,7 +39,7 @@ export interface ShippedPr {
 export interface RunSummary {
   run_id: string;
   run_status: RunStatus;
-  driver: Driver;
+  execution_mode: ExecutionMode;
   spec_id: string;
   issue_number: number;
   repo: string;
@@ -114,7 +114,7 @@ export function buildRunSummary(
   return {
     run_id: run.run_id,
     run_status: run.status,
-    driver: run.driver,
+    execution_mode: run.execution_mode,
     spec_id: run.spec.spec_id,
     issue_number: run.spec.issue_number,
     repo: run.spec.repo,
@@ -154,7 +154,7 @@ export function renderRunSummaryMarkdown(summary: RunSummary): string {
   out.push(`## Run summary — \`${summary.run_id}\``);
   out.push("");
   out.push(
-    `**${summary.run_status.toUpperCase()}** · driver \`${summary.driver}\` · ` +
+    `**${summary.run_status.toUpperCase()}** · execution-mode \`${summary.execution_mode}\` · ` +
       `spec \`${summary.spec_id}\` (PRD #${summary.issue_number}) · ${summary.repo}`,
   );
   out.push(`**Duration:** ${renderDuration(summary.timing.duration_seconds)}`);
