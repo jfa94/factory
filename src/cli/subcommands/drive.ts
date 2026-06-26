@@ -1,5 +1,5 @@
 /**
- * `factory next-task-action --run <id> --task <id> [--results <file>] [--ship-mode <m>]` —
+ * `factory next-action --run <id> --task <id> [--results <file>] [--ship-mode <m>]` —
  * the per-task orchestrator (the engine seam both runners share).
  *
  * Runs every deterministic step it can and emits ONE JSON NextAction:
@@ -13,10 +13,10 @@ import { loadOrchestratorDeps } from "../wiring.js";
 import { nextAction, parseDriveResults, readJsonInput } from "../../orchestrator/index.js";
 import type { Subcommand } from "../registry-types.js";
 
-const HELP = `factory next-task-action — step one task until it needs agents or is terminal
+const HELP = `factory next-action — step one task until it needs agents or is terminal
 
 Usage:
-  factory next-task-action --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
+  factory next-action --run <id> --task <id> [--results <file>] [--ship-mode <mode>]
 
 --ship-mode (optional): no-merge | live — overrides the run's persisted ship_mode for
 this step only; omit to honor the persisted value (the seam default, never no-merge).
