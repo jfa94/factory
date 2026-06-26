@@ -13,7 +13,7 @@
  *   1. UNKNOWN KIND THROWS. The exhaustive switch makes a missing case a compile
  *      error and an unknown runtime `kind` a loud throw — never a silent advance.
  *   2. BOUNDED wait-retry. A `wait-retry` with `attempt > max_attempts` THROWS,
- *      forcing the caller to classify a drop. The engine cannot spin.
+ *      forcing the caller to classify a fail. The engine cannot spin.
  *
  * The engine surfaces decisions; the DRIVER (WS10) acts on them. {@link nextPhaseFor}
  * computes the resume phase for `advance`/`spawn-agents` so the v1 session driver
@@ -125,7 +125,7 @@ function checkResult(phase: EnginePhase, result: PhaseResult): PhaseResult {
       if (result.attempt > result.max_attempts) {
         throw new Error(
           `runPhase: wait-retry for phase '${result.phase}' exceeded max_attempts ` +
-            `(${result.attempt} > ${result.max_attempts}); caller must classify a drop (reason: ${result.reason})`,
+            `(${result.attempt} > ${result.max_attempts}); caller must classify a fail (reason: ${result.reason})`,
         );
       }
       return result;
@@ -175,7 +175,7 @@ export function nextPhaseFor(result: PhaseResult): TaskPhase | null {
  *
  * Rules (Decision 34 — whole-PRD delivery only; no partial rollup):
  *   - every task `done`                       → `completed`
- *   - any task not `done` (dropped, etc.)     → `failed` (develop gets nothing)
+ *   - any task not `done` (failed, etc.)     → `failed` (develop gets nothing)
  *
  * A non-terminal task remaining is a PROGRAMMING ERROR (finalize is only called
  * once the per-task loop has driven every task terminal). It THROWS loudly — it

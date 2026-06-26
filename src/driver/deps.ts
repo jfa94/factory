@@ -17,7 +17,7 @@ export {
   gracefulStop,
   waitRetry,
   taskDone,
-  taskDropped,
+  taskFailed,
   finalizeTerminal,
   assertNever,
   isTerminalResult,

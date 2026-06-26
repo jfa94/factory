@@ -4,7 +4,7 @@
  * A run that fails before any task ships leaves each task's tests+impl committed to
  * a LOCAL branch `factory/<run>/<task>` — never pushed (the push happens in `ship`,
  * AFTER verify). The pure {@link scanRun} classifies tasks from `failure_class`
- * alone, so it cannot tell a dropped task that carries real committed work from an
+ * alone, so it cannot tell a failed task that carries real committed work from an
  * empty one. {@link assessWork} fills that gap: for every non-shipped branched task
  * it reports whether the branch still exists and how many commits it carries above
  * the run's staging base.

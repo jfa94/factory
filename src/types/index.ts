@@ -102,7 +102,7 @@ export {
   gracefulStop,
   waitRetry,
   taskDone,
-  taskDropped,
+  taskFailed,
   finalizeTerminal,
   // the engine
   runPhase,

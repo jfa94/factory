@@ -2,15 +2,15 @@
  * The RUN-LEVEL COROUTINE — the engine half of the `factory next-task` seam.
  *
  * One invocation = one run-loop iteration: terminal check → quota gate (persisting
- * pause/suspend) → checkpoint clear on recovery → cascade-drop (transitive,
+ * pause/suspend) → checkpoint clear on recovery → cascade-fail (transitive,
  * blocked-environmental) → the READY set. Ready = every NON-TERMINAL task whose
  * deps are all `done` — in-flight tasks come first so a crashed driver finishes
  * what it started before opening new work.
  *
  * Circuit breaker (Decision 34): when no task is actionable yet non-terminal work
- * remains (dependency cycle / mutually-stuck graph), each wedged task is dropped as
+ * remains (dependency cycle / mutually-stuck graph), each wedged task is failed as
  * `spec-defect` and the envelope `all-terminal` is returned. The driver routes this
- * to finalize → `failed`, leaving `develop` clean. Every drop is LOUD (dropTask
+ * to finalize → `failed`, leaving `develop` clean. Every fail is LOUD (failTask
  * warns) with the full wedged set in the reason.
  *
  * Ordering invariant: terminal-run check BEFORE the quota gate — a terminal probe
@@ -23,9 +23,9 @@
  * Single-writer assumption: lock-free snapshot reads are sound because v1 has
  * exactly one driver process writing state; subagents never write run state.
  *
- * `cascade_dropped` on the `all-terminal` variant is THIS-INVOCATION-ONLY — it
- * lists tasks dropped by the cascade loop in this call. Authoritative drop
- * visibility lives in run state (task.status === "dropped") and the finalize
+ * `cascade_failed` on the `all-terminal` variant is THIS-INVOCATION-ONLY — it
+ * lists tasks failed by the cascade loop in this call. Authoritative fail
+ * visibility lives in run state (task.status === "failed") and the finalize
  * rollup.
  */
 import {
@@ -37,7 +37,7 @@ import {
   type RunState,
   type TaskState,
 } from "./deps.js";
-import { dropTask } from "./transitions.js";
+import { failTask } from "./transitions.js";
 import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
 import { applyCircuitBreaker } from "./circuit-breaker-gate.js";
 import type { CoroutineDeps } from "./coroutine.js";
@@ -59,12 +59,12 @@ export type NextTask =
   | (NextContext & {
       readonly kind: "work";
       readonly ready: readonly string[];
-      readonly cascade_dropped: readonly string[];
+      readonly cascade_failed: readonly string[];
     })
   | (NextContext & {
       readonly kind: "finalize";
-      /** Tasks dropped by the cascade loop in THIS invocation (not cumulative). */
-      readonly cascade_dropped: readonly string[];
+      /** Tasks failed by the cascade loop in THIS invocation (not cumulative). */
+      readonly cascade_failed: readonly string[];
     })
   | (NextContext & {
       readonly kind: "document";
@@ -85,10 +85,10 @@ function depsSatisfied(run: RunState, task: TaskState): boolean {
   return task.depends_on.every((d) => run.tasks[d]?.status === "done");
 }
 
-/** A dependency is unsatisfiable when it is absent or already dropped. */
+/** A dependency is unsatisfiable when it is absent or already failed. */
 function isUnsatisfiableDep(run: RunState, depId: string): boolean {
   const dep = run.tasks[depId];
-  return dep === undefined || dep.status === "dropped";
+  return dep === undefined || dep.status === "failed";
 }
 
 /**
@@ -125,7 +125,7 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
   const allTerminal = Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsDocs = allTerminal && (await wantsDocs(deps, run));
   if (allTerminal && !needsDocs) {
-    return { ...ctx(), kind: "finalize", cascade_dropped: [] };
+    return { ...ctx(), kind: "finalize", cascade_failed: [] };
   }
 
   // 3. Quota gate — a breach persists the checkpoint and stops cleanly. Workflow
@@ -161,9 +161,9 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
     return { ...ctx(), kind: "document" };
   }
 
-  // 5. Cascade-drop until stable. Pending tasks with an unsatisfiable dep are
-  //    dropped as blocked-environmental; a drop can expose further blocked tasks.
-  const cascadeDropped: string[] = [];
+  // 5. Cascade-fail until stable. Pending tasks with an unsatisfiable dep are
+  //    failed as blocked-environmental; a fail can expose further blocked tasks.
+  const cascadeFailed: string[] = [];
   for (;;) {
     run = await deps.state.read(runId);
     const blocked = Object.values(run.tasks).filter(
@@ -177,14 +177,14 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
           `next: task '${t.task_id}' classified blocked but no unsatisfiable dep found — unreachable`,
         );
       }
-      await dropTask(
+      await failTask(
         deps,
         runId,
         t.task_id,
         "blocked-environmental",
-        `dependency '${unsatisfied}' did not complete (dropped or missing)`,
+        `dependency '${unsatisfied}' did not complete (failed or missing)`,
       );
-      cascadeDropped.push(t.task_id);
+      cascadeFailed.push(t.task_id);
     }
   }
   // `run` is fresh from the loop's last read (no writes since the loop exited).
@@ -193,33 +193,33 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
   const tasks = Object.values(run.tasks);
 
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
-    return { ...ctx(), kind: "finalize", cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
 
   // 6b. Run-level circuit breaker (WS4) — a HARD run-abort guard, distinct from both
-  //     the recoverable quota pause and the Decision-34 wedge-drop below. Trips on
+  //     the recoverable quota pause and the Decision-34 wedge-fail below. Trips on
   //     genuine repeated capability failures (BOTH modes) or — workflow only — the
   //     runtime ceiling (see circuit-breaker-gate.ts for why session disarms runtime).
   //     Placed AFTER the terminal checks (never abort an already-finished run; never
   //     write on a terminal run) and AFTER the quota gate (a paused run early-returns
-  //     above, so quota waiting never trips the breaker). On a trip, drop every
+  //     above, so quota waiting never trips the breaker). On a trip, fail every
   //     remaining non-terminal task LOUD (capability-budget, breaker reason carried)
-  //     and fall through to all-terminal → finalize → `failed`, reusing the wedge-drop
+  //     and fall through to all-terminal → finalize → `failed`, reusing the wedge-fail
   //     path — so no new envelope kind or driver change is needed.
   const breaker = await applyCircuitBreaker(deps, runId);
   if (breaker !== null) {
     for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
-      await dropTask(
+      await failTask(
         deps,
         runId,
         t.task_id,
         "capability-budget",
         `circuit breaker tripped: ${breaker.reason}`,
       );
-      cascadeDropped.push(t.task_id);
+      cascadeFailed.push(t.task_id);
     }
     run = await deps.state.read(runId);
-    return { ...ctx(), kind: "finalize", cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
 
   // 7. Build the ready set: non-terminal tasks whose deps are all done.
@@ -235,22 +235,22 @@ export async function nextTask(deps: CoroutineDeps, runId: string): Promise<Next
     // remains — a dependency cycle / mutually-stuck graph that no future iteration
     // can resolve. Rather than throw (anti-spin), DROP each wedged task as a
     // spec-defect and fall through to all-terminal → finalize → `failed` (develop
-    // stays clean). LOUD: every drop is recorded with its reason (dropTask warns).
+    // stays clean). LOUD: every fail is recorded with its reason (failTask warns).
     const wedged = tasks.filter((t) => !isTerminalTaskStatus(t.status));
     const detail = wedged.map((t) => `${t.task_id}=${t.status}`).join(", ");
     for (const t of wedged) {
-      await dropTask(
+      await failTask(
         deps,
         runId,
         t.task_id,
         "spec-defect",
         `unrunnable: no ready task and no satisfiable path (dependency cycle/deadlock) — wedged set [${detail}]`,
       );
-      cascadeDropped.push(t.task_id);
+      cascadeFailed.push(t.task_id);
     }
     run = await deps.state.read(runId);
-    return { ...ctx(), kind: "finalize", cascade_dropped: cascadeDropped };
+    return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
 
-  return { ...ctx(), kind: "work", ready: ordered, cascade_dropped: cascadeDropped };
+  return { ...ctx(), kind: "work", ready: ordered, cascade_failed: cascadeFailed };
 }

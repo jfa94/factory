@@ -379,7 +379,7 @@ describe("nextAction", () => {
       const env1 = await nextAction(deps, runId, "T1");
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") return;
-      // NEEDS_CONTEXT → capability retry → rung bump (not a spec-defect drop)
+      // NEEDS_CONTEXT → capability retry → rung bump (not a spec-defect fail)
       const env = await nextAction(deps, runId, "T1", {
         result_key: env1.result_key,
         producer: { status: "STATUS: NEEDS_CONTEXT" },
@@ -394,12 +394,12 @@ describe("nextAction", () => {
     }
   });
 
-  // Relocated from loop.test.ts ("a producer blocked-escalate outcome drops
+  // Relocated from loop.test.ts ("a producer blocked-escalate outcome fails
   // immediately as spec-defect (no retry burn)"): a BLOCKED-escalate status is a
-  // spec-defect signal the producer itself raises — it drops on the FIRST spawn
+  // spec-defect signal the producer itself raises — it fails on the FIRST spawn
   // without bumping the rung (classify-before-retry, Δ D), distinct from the
   // NEEDS_CONTEXT capability retry above.
-  it("a producer blocked-escalate records to an immediate spec-defect drop (no rung burn)", async () => {
+  it("a producer blocked-escalate records to an immediate spec-defect fail (no rung burn)", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
       const env1 = await nextAction(deps, runId, "T1"); // tests spawn, rung 0
@@ -411,7 +411,7 @@ describe("nextAction", () => {
       });
       expect(env).toMatchObject({
         kind: "done",
-        outcome: { outcome: "dropped", failure_class: "spec-defect" },
+        outcome: { outcome: "failed", failure_class: "spec-defect" },
       });
       const run = await deps.state.read(runId);
       expect(run.tasks["T1"]?.escalation_rung).toBe(0); // never escalated
@@ -599,7 +599,7 @@ describe("nextAction", () => {
     }
   });
 
-  it("an exhausted ladder is a classified capability-budget drop", async () => {
+  it("an exhausted ladder is a classified capability-budget failure", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       taskStateOverrides: { task_id: "T1", escalation_rung: ESCALATION_CAP },
     });
@@ -607,21 +607,21 @@ describe("nextAction", () => {
       const env1 = await nextAction(deps, runId, "T1");
       expect(env1.kind).toBe("spawn");
       if (env1.kind !== "spawn") return;
-      // NEEDS_CONTEXT → capability retry → rung already at cap → drops capability-budget
+      // NEEDS_CONTEXT → capability retry → rung already at cap → fails capability-budget
       const env = await nextAction(deps, runId, "T1", {
         result_key: env1.result_key,
         producer: { status: "STATUS: NEEDS_CONTEXT" },
       });
       expect(env).toMatchObject({
         kind: "done",
-        outcome: { outcome: "dropped", failure_class: "capability-budget" },
+        outcome: { outcome: "failed", failure_class: "capability-budget" },
       });
     } finally {
       await cleanup();
     }
   });
 
-  it("live-merge BEHIND exhausted cap drops blocked-environmental", async () => {
+  it("live-merge BEHIND exhausted cap fails blocked-environmental", async () => {
     // Pre-seed an OPEN-but-BEHIND PR so every merge attempt refuses.
     // baseRefName must use the per-run staging branch so createTaskPrIdempotent
     // finds this PR (it now filters by base: runStagingBranch(runId) = "staging-run-1").
@@ -653,7 +653,7 @@ describe("nextAction", () => {
       const env = await nextAction(deps, runId, "T1");
       expect(env).toMatchObject({
         kind: "done",
-        outcome: { outcome: "dropped", failure_class: "blocked-environmental" },
+        outcome: { outcome: "failed", failure_class: "blocked-environmental" },
       });
     } finally {
       await cleanup();

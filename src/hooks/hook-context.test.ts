@@ -124,7 +124,7 @@ function task(over: Partial<TaskState> = {}): TaskState {
 
 function run(tasks: Record<string, TaskState>): RunState {
   return {
-    schema_version: 1,
+    schema_version: 2,
     run_id: "run-x",
     status: "running",
     execution_mode: "balanced",

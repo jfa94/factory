@@ -1,5 +1,5 @@
 /**
- * WS2 — THE acceptance harness. A canned 2-task run (one ships, one drops) driven
+ * WS2 — THE acceptance harness. A canned 2-task run (one ships, one fails) driven
  * through the engine by FULLY-FAKE handlers, asserting a FIXED PhaseResult
  * SEQUENCE. This is the golden contract: if the engine's dispatch or a result
  * shape drifts, the recorded transcript diverges.
@@ -7,14 +7,14 @@
  * It exercises every acceptance criterion in one place:
  *   - the full per-task walk preflight→tests→exec→verify→ship for each task,
  *   - a `spawn-agents` at tests / exec / verify,
- *   - a `task-terminal(done)` and a `task-terminal(dropped, capability-budget)`,
+ *   - a `task-terminal(done)` and a `task-terminal(failed, capability-budget)`,
  *   - a run-level `finalize-terminal(partial)` (NOT wait-retry) for the incomplete
- *     (one-dropped) run,
+ *     (one-failed) run,
  *   - finalize THROWS on a leftover non-terminal task (anti-spin).
  */
 import { describe, expect, it } from "vitest";
 import { runPhase, nextPhaseFor, decideFinalize, type EnginePhase } from "./engine.js";
-import { advance, spawn, taskDone, taskDropped, type PhaseResult } from "./result.js";
+import { advance, spawn, taskDone, taskFailed, type PhaseResult } from "./result.js";
 import type { PhaseContext, PhaseHandlers } from "./handlers.js";
 import type { SpawnRequest } from "./spawn.js";
 import { parseRunState, type RunState } from "../state/index.js";
@@ -39,10 +39,10 @@ const mkManifest = (
 
 /**
  * Fake handlers that drive a task to a desired outcome via a fixed script. The
- * "happy" task spawns at tests/exec/verify then ships to done. The "drop" task
- * spawns at tests then the exec phase classifies a capability-budget drop.
+ * "happy" task spawns at tests/exec/verify then ships to done. The "fail" task
+ * spawns at tests then the exec phase classifies a capability-budget failure.
  */
-function scriptedHandlers(outcome: "ship" | "drop"): PhaseHandlers {
+function scriptedHandlers(outcome: "ship" | "fail"): PhaseHandlers {
   const finalize: PhaseHandlers["finalize"] = async (ctx) => decideFinalize(ctx.run);
   if (outcome === "ship") {
     return {
@@ -57,7 +57,7 @@ function scriptedHandlers(outcome: "ship" | "drop"): PhaseHandlers {
   return {
     preflight: async () => advance("tests"),
     tests: async () => spawn(mkManifest("exec", "test-writer")),
-    exec: async () => taskDropped("capability-budget", "producer ladder exhausted"),
+    exec: async () => taskFailed("capability-budget", "producer ladder exhausted"),
     verify: async () => taskDone(),
     ship: async () => taskDone(),
     finalize,
@@ -107,28 +107,28 @@ describe("golden transcript — fixed PhaseResult sequence", () => {
     ]);
   });
 
-  it("the drop task reaches task-terminal(dropped, capability-budget)", async () => {
+  it("the fail task reaches task-terminal(failed, capability-budget)", async () => {
     const ctx: PhaseContext = {
       run: baseRun({ b: { task_id: "b", status: "pending", risk_tier: "low" } }),
     };
-    const transcript = await driveTask(scriptedHandlers("drop"), ctx);
+    const transcript = await driveTask(scriptedHandlers("fail"), ctx);
 
     expect(transcript).toEqual([
       advance("tests"),
       spawn(mkManifest("exec", "test-writer")),
-      taskDropped("capability-budget", "producer ladder exhausted"),
+      taskFailed("capability-budget", "producer ladder exhausted"),
     ]);
   });
 
-  it("the run-level finalize over {done, dropped} is finalize-terminal(failed), never wait-retry (Decision 34)", async () => {
-    // Both tasks now terminal: a shipped, b dropped.
-    // Decision 34: develop receives only complete PRDs — mixed done+dropped is 'failed'.
+  it("the run-level finalize over {done, failed} is finalize-terminal(failed), never wait-retry (Decision 34)", async () => {
+    // Both tasks now terminal: a shipped, b failed.
+    // Decision 34: develop receives only complete PRDs — mixed done+failed is 'failed'.
     const ctx: PhaseContext = {
       run: baseRun({
         a: { task_id: "a", status: "done", risk_tier: "low" },
         b: {
           task_id: "b",
-          status: "dropped",
+          status: "failed",
           risk_tier: "low",
           failure_class: "capability-budget",
           failure_reason: "producer ladder exhausted",

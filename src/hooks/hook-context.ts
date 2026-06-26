@@ -196,7 +196,7 @@ function statusToPhase(status: TaskState["status"]): TaskPhase | null {
       return TaskPhaseEnum.enum.ship;
     case "pending":
     case "done":
-    case "dropped":
+    case "failed":
       return null;
   }
 }

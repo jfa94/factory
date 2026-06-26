@@ -15,7 +15,7 @@ export type { FinalizeRunDeps, FinalizeRunResult } from "./finalize.js";
 
 // -- the shared deterministic transition logic (the coroutines build on these) ------
 export {
-  dropTask,
+  failTask,
   applyProducerOutcome,
   type TransitionDeps,
   type TaskOutcome,

@@ -439,7 +439,7 @@ describe("applyRecordReviews record", () => {
   });
 
   it("fail-closed: escalate path does NOT persist reviewers; approve path persists reviewers+phase atomically", async () => {
-    // ESCALATE branch: confirmed blocker → merge gate fails → escalateOrDrop path.
+    // ESCALATE branch: confirmed blocker → merge gate fails → escalateOrFail path.
     // Simulating the crash window: if reviewers were written before the panel result
     // was acted on, a no-results re-invoke at verify could derive a merge gate pass without
     // holdout evidence.  With the fix, reviewers must be EMPTY after the escalate record.
@@ -717,7 +717,7 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  it("BLOCKED—escalate drops spec-defect immediately (no rung burned)", async () => {
+  it("BLOCKED—escalate fails spec-defect immediately (no rung burned)", async () => {
     const env = await applyRecordProducer(
       state,
       RUN_ID,
@@ -729,11 +729,11 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
     expect(env.step.done).toBe(true);
     if (!env.step.done) throw new Error("unreachable");
     expect(env.step.outcome).toEqual(
-      expect.objectContaining({ outcome: "dropped", failure_class: "spec-defect" }),
+      expect.objectContaining({ outcome: "failed", failure_class: "spec-defect" }),
     );
     const task = (await state.read(RUN_ID)).tasks.t1!;
-    expect(task.status).toBe("dropped");
-    expect(task.escalation_rung).toBe(0); // a drop never burns a rung
+    expect(task.status).toBe("failed");
+    expect(task.escalation_rung).toBe(0); // a failure never burns a rung
   });
 
   it("NEEDS_CONTEXT escalates a rung, clears reviewers, resumes at the same phase", async () => {
@@ -764,8 +764,8 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
     expect((await state.read(RUN_ID)).tasks.t1!.escalation_rung).toBe(1);
   });
 
-  it("an exhausted ladder drops capability-budget", async () => {
-    // Advance the escalation rung to the cap so the next failure drops.
+  it("an exhausted ladder fails capability-budget", async () => {
+    // Advance the escalation rung to the cap so the next failure fails the task.
     await state.update(RUN_ID, (s) => ({
       ...s,
       tasks: {
@@ -778,9 +778,9 @@ describe("applyRecordProducer — classify-before-retry (Δ D)", () => {
     expect(env.step.done).toBe(true);
     if (!env.step.done) throw new Error("unreachable");
     expect(env.step.outcome).toEqual(
-      expect.objectContaining({ outcome: "dropped", failure_class: "capability-budget" }),
+      expect.objectContaining({ outcome: "failed", failure_class: "capability-budget" }),
     );
-    expect((await state.read(RUN_ID)).tasks.t1!.status).toBe("dropped");
+    expect((await state.read(RUN_ID)).tasks.t1!.status).toBe("failed");
   });
 
   it("is LOUD on a missing task", async () => {

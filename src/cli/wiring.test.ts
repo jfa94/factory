@@ -3,7 +3,7 @@
  *
  * The bundle is assembled from durable on-disk facts: the run's state.json (its
  * `{repo, spec_id}` pointer) + the durable spec at `specs/<repo>/<spec-id>/`. These
- * tests pin the happy path (every field wired, defaults applied) and the loud-drop
+ * tests pin the happy path (every field wired, defaults applied) and the loud-fail
  * edges (missing run, missing spec, store-integrity malformed repo slug) against a
  * real temp data dir — no mocks for the stores under test.
  */

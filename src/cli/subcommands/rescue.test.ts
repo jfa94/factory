@@ -51,7 +51,7 @@ describe("rescue scan/apply happy paths", () => {
       merge_resyncs: 0,
       ...seed,
     };
-    if (seed.status === "dropped") {
+    if (seed.status === "failed") {
       return { failure_class: "capability-budget" as const, failure_reason: "x", ...base };
     }
     return base;
@@ -72,8 +72,8 @@ describe("rescue scan/apply happy paths", () => {
       ...s,
       tasks: {
         a: task({ task_id: "a", status: "executing" }),
-        b: task({ task_id: "b", status: "dropped", failure_class: "blocked-environmental" }),
-        c: task({ task_id: "c", status: "dropped", failure_class: "spec-defect" }),
+        b: task({ task_id: "b", status: "failed", failure_class: "blocked-environmental" }),
+        c: task({ task_id: "c", status: "failed", failure_class: "spec-defect" }),
       },
     }));
   });
@@ -134,7 +134,7 @@ describe("rescue scan/apply happy paths", () => {
     const run = await new StateManager({ dataDir }).read("run-c");
     expect(run.tasks.a!.status).toBe("pending");
     expect(run.tasks.b!.status).toBe("pending");
-    expect(run.tasks.c!.status).toBe("dropped"); // dead-end left alone
+    expect(run.tasks.c!.status).toBe("failed"); // dead-end left alone
   });
 
   it("apply --include-dead-ends also resets the dead-end", async () => {
@@ -152,7 +152,7 @@ describe("rescue scan/apply happy paths", () => {
 
     const run = await new StateManager({ dataDir }).read("run-c");
     expect(run.tasks.a!.status).toBe("pending");
-    expect(run.tasks.b!.status).toBe("dropped"); // not named → untouched
+    expect(run.tasks.b!.status).toBe("failed"); // not named → untouched
     expect(run.tasks.c!.status).toBe("pending");
   });
 

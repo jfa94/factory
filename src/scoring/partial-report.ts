@@ -14,7 +14,7 @@
  * back from a stored "report" blob. The builder takes an explicit `now` so a test
  * pins `generated_at` deterministically.
  *
- * Honesty over guesswork: a `dropped` task never cleared the merge gate, so it
+ * Honesty over guesswork: a `failed` task never cleared the merge gate, so it
  * met NONE of its acceptance criteria. The report lists the task's FULL acceptance
  * criteria as `unmet_criteria` rather than fabricating per-criterion satisfaction
  * the runtime never recorded.
@@ -31,16 +31,16 @@ export interface ShippedLine {
   pr_number?: number;
 }
 
-/** A task that was a classified loud drop (status `dropped`). */
+/** A task that was a classified loud failure (status `failed`). */
 export interface FailureLine {
   task_id: string;
   title: string;
-  /** Closed-enum cause (set IFF dropped — guaranteed present by the schema). */
+  /** Closed-enum cause (set IFF failed — guaranteed present by the schema). */
   failure_class: FailureClass;
-  /** Human-facing reason recorded at drop time. */
+  /** Human-facing reason recorded at failure time. */
   failure_reason: string;
   /**
-   * The dropped task's FULL acceptance criteria — all unmet, because a drop never
+   * The failed task's FULL acceptance criteria — all unmet, because a failure never
    * cleared the merge gate. Sourced from the durable spec, not fabricated.
    */
   unmet_criteria: string[];
@@ -48,7 +48,7 @@ export interface FailureLine {
   pr_number?: number;
 }
 
-/** A task that is neither shipped nor dropped (only on a non-terminal run). */
+/** A task that is neither shipped nor failed (only on a non-terminal run). */
 export interface IncompleteLine {
   task_id: string;
   title: string;
@@ -68,7 +68,7 @@ export interface PartialRunReport {
   totals: { total: number; shipped: number; failed: number; incomplete: number };
   /** Shipped tasks, ordered by their position in the spec. */
   shipped: ShippedLine[];
-  /** Failed (dropped) tasks, ordered by their position in the spec. */
+  /** Failed (failed) tasks, ordered by their position in the spec. */
   failures: FailureLine[];
   /** Incomplete tasks (non-terminal run only), ordered by their position in the spec. */
   incomplete: IncompleteLine[];
@@ -119,8 +119,8 @@ export function buildPartialReport(
         branch: task.branch,
         pr_number: task.pr_number,
       });
-    } else if (task.status === "dropped") {
-      // The schema guarantees a dropped task carries both (cross-field refinement).
+    } else if (task.status === "failed") {
+      // The schema guarantees a failed task carries both (cross-field refinement).
       failures.push({
         task_id: task.task_id,
         title: spec.title,
@@ -171,18 +171,18 @@ export function failureCommentMarker(runId: string): string {
 }
 
 /**
- * Render the dropped tasks of a failed run as ONE markdown comment for the
- * originating PRD issue. Replaces the retired one-issue-per-drop behavior: GitHub
- * issues are PRDs, drops are run-internal, and the authoritative per-task status
- * already lives in the run state. Drops-only content — each block names the failure
+ * Render the failed tasks of a failed run as ONE markdown comment for the
+ * originating PRD issue. Replaces the retired one-issue-per-failure behavior: GitHub
+ * issues are PRDs, failures are run-internal, and the authoritative per-task status
+ * already lives in the run state. Failures-only content — each block names the failure
  * class, the human reason, and the task's FULL acceptance criteria (all unmet,
- * because a drop never cleared the merge gate). The leading marker makes a re-finalize
+ * because a failure never cleared the merge gate). The leading marker makes a re-finalize
  * idempotent (see {@link failureCommentMarker}).
  */
 export function renderFailureComment(report: PartialRunReport): string {
   const lines: string[] = [
     failureCommentMarker(report.run_id),
-    `Factory run \`${report.run_id}\` failed — ${report.failures.length} task(s) dropped. ` +
+    `Factory run \`${report.run_id}\` failed — ${report.failures.length} task(s) failed. ` +
       `PRD left open for rescue/resume.`,
   ];
   for (const failure of report.failures) {

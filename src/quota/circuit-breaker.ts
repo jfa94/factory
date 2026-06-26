@@ -14,7 +14,7 @@
  *     (default 480).
  *
  * The failure signal is run-CUMULATIVE, not strictly consecutive: it is the running
- * count of GENUINE capability-budget drops (the gate excludes cascade/wedge drops —
+ * count of GENUINE capability-budget failures (the gate excludes cascade/wedge failures —
  * see `circuit-breaker-gate.ts`). The threshold keeps its public config name
  * `maxConsecutiveFailures` for back-compat even though the signal it bounds is
  * cumulative — the INPUT field is named honestly (`cumulativeFailures`).
@@ -24,7 +24,7 @@
  * `pausedMinutes`, or an unparseable `startedAtIso`, trips.
  *
  * The cumulative-failure count is DERIVED by the driver gate (capability-budget
- * drops) — the frozen RunState has no breaker field; this module is the PURE
+ * failures) — the frozen RunState has no breaker field; this module is the PURE
  * predicate over values the driver threads in.
  */
 import type { Config } from "../config/schema.js";

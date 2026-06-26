@@ -8,9 +8,9 @@
  *   2. build the deterministic run report (status overridden to the terminal,
  *      since state.status is still `running`/`paused` until step 7)
  *   3. persist report.md (atomic) under the run store
- *   4. emit run.finalized + per-drop telemetry (thin jsonl; never fatal)
+ *   4. emit run.finalized + per-failure telemetry (thin jsonl; never fatal)
  *   5. on a `failed` run, post ONE comment on the originating PRD issue listing every
- *      dropped task (class + reason + unmet criteria) — GitHub issues are PRDs, not
+ *      failed task (class + reason + unmet criteria) — GitHub issues are PRDs, not
  *      tasks; the per-task status already lives in the run state. Idempotent: a hidden
  *      run-id marker lets a resumed finalize detect its own prior comment and skip
  *      (Δ S; "without repeating dead ends"). The PRD is left OPEN.
@@ -29,7 +29,7 @@
  * only once its outcome is fully shipped.
  *
  * no-merge cutover (ShipMode): the rollup PR is opened but never merged; the failure
- * comment is still posted (the drops are real regardless of merge).
+ * comment is still posted (the failures are real regardless of merge).
  */
 import {
   decideFinalize,
@@ -123,8 +123,8 @@ function rollupTitle(report: PartialRunReport): string {
 
 /**
  * On a `failed` run, post ONE comment on the originating PRD issue summarizing every
- * dropped task. GitHub issues are PRDs, not tasks — the authoritative per-task status
- * lives in the run state; this is the human-facing "loud drop" surface (Δ S), PRD-scoped
+ * failed task. GitHub issues are PRDs, not tasks — the authoritative per-task status
+ * lives in the run state; this is the human-facing "loud fail" surface (Δ S), PRD-scoped
  * and symmetric with the completed path's PRD-delivered comment. The PRD is left OPEN.
  *
  * Idempotent: the comment body carries a hidden run-id marker, so a resumed finalize
@@ -159,7 +159,7 @@ async function commentFailuresOnPrd(
 
 /**
  * Finalize a run whose tasks are ALL terminal: build + persist the report, emit
- * telemetry, file the per-drop issues, ship the rollup, then flip the run terminal.
+ * telemetry, file the per-failure issues, ship the rollup, then flip the run terminal.
  * See the module header for the resume-safe ordering + idempotency contract.
  */
 export async function finalizeRun(
@@ -182,7 +182,7 @@ export async function finalizeRun(
   // 4. telemetry (swallows its own IO errors — never fatal).
   await recordRunFinalized(deps.dataDir, report, { now });
 
-  // 5. on a failed run, one PRD comment summarizing the drops (deduped by run-id marker).
+  // 5. on a failed run, one PRD comment summarizing the failures (deduped by run-id marker).
   const failureCommentPosted = await commentFailuresOnPrd(deps, report);
 
   // 6. rollup — only on completed (Decision 34: develop receives whole PRDs only).

@@ -15,9 +15,9 @@
  * implementer's terminal STATUS line (agents/implementer.md): `done`,
  * `blocked-escalate` (a spec-defect signal the producer itself raises),
  * `needs-context` (the implementer wants more context — a fix-forward / retry
- * signal, NOT a drop), and `error` (the spawn itself failed). Classify-before-
+ * signal, NOT a failure), and `error` (the spawn itself failed). Classify-before-
  * retry (classify.ts) reads this union to decide whether a failure burns a rung
- * or drops immediately (Δ D).
+ * or fails immediately (Δ D).
  */
 import type { ProducerRole } from "../types/index.js";
 import type { ProducerContext } from "./prompt-context.js";
@@ -51,11 +51,11 @@ export interface ProducerSpawn {
  *   - `blocked-escalate` — the producer itself reports the TASK is unworkable as
  *                          specified (e.g. "STATUS: BLOCKED — escalate", an
  *                          untestable / contradictory criterion). A SPEC-DEFECT
- *                          signal — classify.ts routes it straight to a drop,
+ *                          signal — classify.ts routes it straight to a failure,
  *                          NEVER a re-exec (Δ D).
  *   - `needs-context`    — the implementer could not finish but the task is workable
  *                          with more context / a stronger model. A RETRY signal
- *                          (the ladder may bump a rung), not a drop.
+ *                          (the ladder may bump a rung), not a failure.
  *   - `error`            — the spawn itself failed (the agent crashed / produced
  *                          no parseable STATUS). LOUD + unresolved; treated as a
  *                          retryable producer failure, never an auto-advance.

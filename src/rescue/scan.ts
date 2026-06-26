@@ -5,21 +5,21 @@
  * suspended session left tasks STUCK mid-phase (status `executing`/`reviewing`/
  * `shipping`) with no determination ever reached. The driver has no handler for a
  * stuck in-flight task — the run-level coroutine (`nextTask`) THROWS "dependency cycle or deadlock" the moment
- * no task is actionable (no ready/cascade-droppable `pending` task) yet non-terminal
+ * no task is actionable (no ready/cascade-failable `pending` task) yet non-terminal
  * work remains. Resume never touches task state (it only clears the quota gate), so
  * resume alone cannot recover such a run.
  *
  * Rescue fills exactly that gap. `scanRun` is the PURE, read-only survey: it
  * classifies every task by what rescue can do with it and reports whether a re-drive
- * would deadlock — the input the orchestrator (and, for ambiguous drops, the
+ * would deadlock — the input the orchestrator (and, for ambiguous failures, the
  * rescue-diagnostic agent) reasons over before calling `rescue apply`.
  *
  * "Without repeating dead ends" (the WS12 acceptance) is encoded in the disposition:
- *   - `dropped` + `blocked-environmental` → RECOVERABLE: the blocker (a flaky env, a
+ *   - `failed` + `blocked-environmental` → RECOVERABLE: the blocker (a flaky env, a
  *     dependency that has since been reset) may have cleared, so a default rescue
  *     re-attempts it (Decision: "prefer recovery over abandonment");
- *   - `dropped` + `spec-defect` / `capability-budget` → DEAD-END: re-running repeats a
- *     determined failure, so a default rescue LEAVES it dropped. It is reset only when
+ *   - `failed` + `spec-defect` / `capability-budget` → DEAD-END: re-running repeats a
+ *     determined failure, so a default rescue LEAVES it failed. It is reset only when
  *     a human explicitly asserts the root cause is fixed (`apply --include-dead-ends`).
  *
  * SCOPE (v1): rescue reconciles RUN STATE only. GitHub-side drift (a PR merged but not
@@ -39,9 +39,9 @@ export type RescueDisposition =
   | "runnable"
   /** in-flight (`executing`/`reviewing`/`shipping`) — crashed mid-phase; resettable. */
   | "stuck"
-  /** `dropped` + `blocked-environmental` — the blocker may have cleared; resettable. */
+  /** `failed` + `blocked-environmental` — the blocker may have cleared; resettable. */
   | "recoverable"
-  /** `dropped` + `spec-defect`/`capability-budget` — re-running repeats it; left alone. */
+  /** `failed` + `spec-defect`/`capability-budget` — re-running repeats it; left alone. */
   | "dead-end";
 
 /** One task's rescue classification. */
@@ -69,15 +69,15 @@ export interface RescueScan {
   };
   /** Tasks a DEFAULT `rescue apply` resets to pending (stuck ∪ recoverable). */
   resettable: string[];
-  /** Dropped dead-ends reset only with `--include-dead-ends` (+ a real fix). */
+  /** Failed dead-ends reset only with `--include-dead-ends` (+ a real fix). */
   dead_ends: string[];
   /** True iff there is anything for rescue to reset. */
   needs_rescue: boolean;
   /**
    * True iff a re-drive would THROW: non-terminal work remains but no task is
-   * actionable (none ready, none cascade-droppable) — the driver's deadlock guard.
+   * actionable (none ready, none cascade-failable) — the driver's deadlock guard.
    * A terminal `failed`/`completed`/`superseded` run is never "deadlocked" (it already finalized);
-   * it may still be `needs_rescue` (recoverable drops to retry on reopen).
+   * it may still be `needs_rescue` (recoverable failures to retry on reopen).
    */
   would_deadlock: boolean;
   /** One-line human summary. */
@@ -93,7 +93,7 @@ function dispositionOf(
 ): RescueDisposition {
   if (status === "done") return "shipped";
   if (status === "pending") return "runnable";
-  if (status === "dropped") {
+  if (status === "failed") {
     return failureClass === "blocked-environmental" ? "recoverable" : "dead-end";
   }
   // executing | reviewing | shipping
@@ -109,7 +109,7 @@ function depsSatisfied(run: RunState, depends: readonly string[]): boolean {
 function hasUnsatisfiableDep(run: RunState, depends: readonly string[]): boolean {
   return depends.some((d) => {
     const dep = run.tasks[d];
-    return dep === undefined || dep.status === "dropped";
+    return dep === undefined || dep.status === "failed";
   });
 }
 
@@ -140,7 +140,7 @@ export function scanRun(run: RunState): RescueScan {
 
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
   // A pending task is "actionable" to the driver: it either runs (deps done) or is
-  // cascade-dropped (a dep dropped/missing). If no task is actionable yet non-terminal
+  // cascade-failed (a dep failed/missing). If no task is actionable yet non-terminal
   // work remains, a re-drive throws — that is `would_deadlock`.
   const actionablePending = all.some(
     (t) =>
@@ -179,7 +179,7 @@ function summarize(
 ): string {
   if (resettable === 0) {
     const tail =
-      deadEnds > 0 ? ` (${deadEnds} dead-end drop(s) — need a fix + --include-dead-ends)` : "";
+      deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) — need a fix + --include-dead-ends)` : "";
     return `run '${status}': no rescue needed${tail}`;
   }
   const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";

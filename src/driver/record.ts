@@ -27,7 +27,7 @@ import { join } from "node:path";
 import { parseJson } from "../shared/json.js";
 import {
   markInFlight,
-  escalateOrDrop,
+  escalateOrFail,
   applyProducerOutcome,
   type TaskStep,
 } from "./transitions.js";
@@ -85,13 +85,13 @@ export interface RecordDeps extends HandlerDeps {
 export interface TransitionEnvelope {
   readonly run_id: string;
   readonly task_id: string;
-  /** Keep going at `step.phase`, or stop with `step.outcome` (done/dropped). */
+  /** Keep going at `step.phase`, or stop with `step.outcome` (done/failed). */
   readonly step: TaskStep;
 }
 
 /**
  * Persist the in-flight phase cursor for a non-terminal step so the persisted task
- * status tracks the resume point. A terminal step (`done`/`dropped`) already wrote
+ * status tracks the resume point. A terminal step (`done`/`failed`) already wrote
  * its own status — nothing to mark. Used by the record paths in this module.
  */
 async function persistStepCursor(
@@ -416,7 +416,7 @@ export async function applyRecordReviews(
   //
   // Crash-safety invariant (fail-closed): reviewers are persisted ONLY on the
   // advance branch, in the SAME updateTask call that stamps the cursor. On the
-  // escalate/drop branch we do NOT persist reviewers — escalateOrDrop owns its
+  // escalate/fail branch we do NOT persist reviewers — escalateOrFail owns its
   // own state write. A crash before the single advance-write means a no-results
   // re-invoke at verify finds no reviewers → fresh panel spawn (fail-closed);
   // holdout evidence cannot be bypassed by replaying without holdout results.
@@ -435,8 +435,8 @@ export async function applyRecordReviews(
     }));
     step = { done: false, phase: nextPhaseVal };
   } else if (panel.result.kind === "wait-retry") {
-    // escalateOrDrop does its own state write; do NOT persist reviewers here.
-    step = await escalateOrDrop(
+    // escalateOrFail does its own state write; do NOT persist reviewers here.
+    step = await escalateOrFail(
       deps,
       runId,
       taskId,

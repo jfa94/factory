@@ -28,9 +28,9 @@ describe("next arg/usage edges", () => {
       const code = await nextCommand.run(["--help"]);
       expect(code).toBe(EXIT.OK);
       const help = stdout.read();
-      // Both the work and finalize lines must mention cascade_dropped.
-      expect(help).toMatch(/work.*cascade_dropped/);
-      expect(help).toMatch(/finalize.*cascade_dropped/);
+      // Both the work and finalize lines must mention cascade_failed.
+      expect(help).toMatch(/work.*cascade_failed/);
+      expect(help).toMatch(/finalize.*cascade_failed/);
     } finally {
       stdout.restore();
     }

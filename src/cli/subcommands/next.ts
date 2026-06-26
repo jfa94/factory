@@ -1,6 +1,6 @@
 /**
  * `factory next-task [--run <id>]` — the run-level coroutine: quota gate, checkpoint
- * recovery, cascade-drop, and the ready set. Emits ONE JSON NextTask.
+ * recovery, cascade-fail, and the ready set. Emits ONE JSON NextTask.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError } from "../args.js";
@@ -12,7 +12,7 @@ import type { RunState } from "../../core/state/index.js";
 import { resolveDataDir } from "../../config/index.js";
 import type { Subcommand } from "../registry-types.js";
 
-const HELP = `factory next-task — one run-loop step: quota gate, cascade-drop, ready set
+const HELP = `factory next-task — one run-loop step: quota gate, cascade-fail, ready set
 
 Usage:
   factory next-task [--run <id>]      (defaults to runs/current)
@@ -20,8 +20,8 @@ Usage:
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
 context — run_id, data_dir (canonical), ship_mode — so the workflow driver
 adopts them from the first \`next-task\` instead of via Workflow args:
-  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_dropped:[...] }
-  { kind:"finalize", run_id, data_dir, ship_mode, cascade_dropped:[...] }  → call \`factory run finalize\`
+  { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...] }
+  { kind:"finalize", run_id, data_dir, ship_mode, cascade_failed:[...] }  → call \`factory run finalize\`
   { kind:"done", run_id, data_dir, ship_mode, run_status }
   { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
@@ -118,7 +118,7 @@ async function run(argv: string[]): Promise<ExitCode> {
 }
 
 export const nextCommand: Subcommand = {
-  describe: "One run-loop step: quota gate, cascade-drop, emit the ready set",
+  describe: "One run-loop step: quota gate, cascade-fail, emit the ready set",
   run: async (argv) => {
     try {
       return await run(argv);

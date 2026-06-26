@@ -33,7 +33,7 @@
  * robustly downstream: a no-op producer (zero commits) leaves the task branch ==
  * base, so the WS6 deterministic gates (tests + TDD gate) fail → the task never
  * advances → the escalation ladder (bounded retries, cap 4) retries then emits
- * a classified loud drop. The reviewer STATUS check survives here as
+ * a classified loud failure. The reviewer STATUS check survives here as
  * {@link parseVerdict} (absent STATUS ⇒ blocked, never a silent approve). The
  * warn-only artifact checks (missing spec.md/tasks.json/review files) move to the
  * WS12 telemetry sink. Net: one SubagentStop hook (this file) with one observational

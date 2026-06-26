@@ -40,7 +40,7 @@ export interface SourceReader {
 export const CITATION_WINDOW = 2 as const;
 
 /** Why a finding was dropped (audit trail; never silent). */
-export type DropReason =
+export type FailReason =
   | "uncitable" // no file:line
   | "file-not-found" // SourceReader returned null
   | "line-out-of-range" // cited line past EOF / < 1 even after windowing
@@ -49,7 +49,7 @@ export type DropReason =
 /** A dropped finding paired with the machine-checkable reason it was dropped. */
 export interface DroppedFinding {
   readonly finding: Finding;
-  readonly reason: DropReason;
+  readonly reason: FailReason;
 }
 
 /** The result of one citation-verify pass. No verdict is computed here. */
@@ -79,11 +79,11 @@ function redactFinding(f: Finding): Finding {
 
 /**
  * Does `quote` substring-match any line within `line ±2` (1-based) of `lines`?
- * Returns the specific {@link DropReason} when it does NOT, or `null` when it
+ * Returns the specific {@link FailReason} when it does NOT, or `null` when it
  * matches. The window is clamped to the file bounds; if the cited line is itself
  * past EOF (no in-range line exists) that is `line-out-of-range`.
  */
-function checkQuote(quote: string, line: number, lines: readonly string[]): DropReason | null {
+function checkQuote(quote: string, line: number, lines: readonly string[]): FailReason | null {
   // 1-based cited line → 0-based index. Window is [line-2, line+2] (1-based),
   // clamped to [1, lines.length].
   const lo = Math.max(1, line - CITATION_WINDOW);

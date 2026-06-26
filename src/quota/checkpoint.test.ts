@@ -5,7 +5,7 @@ import { buildCheckpoint, clearCheckpoint } from "./checkpoint.js";
 /** A minimal running RunState we can merge a checkpoint patch into. */
 function baseRun(): RunState {
   return parseRunState({
-    schema_version: 1,
+    schema_version: 2,
     run_id: "run-20260604-000000",
     status: "running",
     execution_mode: "balanced",

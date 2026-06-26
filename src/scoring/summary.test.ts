@@ -7,7 +7,7 @@
  *   - effort sums reviewer results across tasks + takes the max escalation rung;
  *   - shipped_prs mirrors the report's shipped lines (PR pointers preserved/omitted);
  *   - duration is whole seconds, or null when ended_at is absent / unparseable / < 0;
- *   - the markdown render is a compact headline (drops line only when there are drops).
+ *   - the markdown render is a compact headline (fails line only when there are fails).
  */
 import { describe, it, expect } from "vitest";
 import { buildRunSummary, renderRunSummaryMarkdown } from "./summary.js";
@@ -26,7 +26,7 @@ function task(seed: TaskSeed): TaskState {
     merge_resyncs: 0,
     ...seed,
   };
-  if (seed.status === "dropped") {
+  if (seed.status === "failed") {
     return { failure_class: "capability-budget" as const, failure_reason: "x", ...base };
   }
   return base;
@@ -68,7 +68,7 @@ function report(over: Partial<PartialRunReport> = {}): PartialRunReport {
 const NOW = "2026-06-08T02:00:00.000Z";
 
 describe("buildRunSummary — failures_by_class shape", () => {
-  it("seeds every closed failure class to 0 when there are no drops", () => {
+  it("seeds every closed failure class to 0 when there are no fails", () => {
     const summary = buildRunSummary(mkRun([{ task_id: "a", status: "done" }]), report(), {
       now: NOW,
     });
@@ -79,12 +79,12 @@ describe("buildRunSummary — failures_by_class shape", () => {
     });
   });
 
-  it("tallies drops per class from the report", () => {
+  it("tallies fails per class from the report", () => {
     const summary = buildRunSummary(
       mkRun([
-        { task_id: "a", status: "dropped", failure_class: "spec-defect" },
-        { task_id: "b", status: "dropped", failure_class: "spec-defect" },
-        { task_id: "c", status: "dropped", failure_class: "capability-budget" },
+        { task_id: "a", status: "failed", failure_class: "spec-defect" },
+        { task_id: "b", status: "failed", failure_class: "spec-defect" },
+        { task_id: "c", status: "failed", failure_class: "capability-budget" },
       ]),
       report({
         failures: [
@@ -241,11 +241,11 @@ describe("buildRunSummary — passthrough + clock", () => {
 });
 
 describe("renderRunSummaryMarkdown", () => {
-  it("renders a compact headline with the drops line when there are drops", () => {
+  it("renders a compact headline with the fails line when there are fails", () => {
     const summary = buildRunSummary(
       mkRun([
         { task_id: "a", status: "done" },
-        { task_id: "b", status: "dropped", failure_class: "spec-defect" },
+        { task_id: "b", status: "failed", failure_class: "spec-defect" },
       ]),
       report({
         totals: { total: 2, shipped: 1, failed: 1, incomplete: 0 },
@@ -265,10 +265,10 @@ describe("renderRunSummaryMarkdown", () => {
     expect(md).toContain("## Run summary — `run-sum-1`");
     expect(md).toContain("**FAILED**");
     expect(md).toContain("1 shipped");
-    expect(md).toContain("**Drops:** 1 spec-defect");
+    expect(md).toContain("**Failures:** 1 spec-defect");
   });
 
-  it("omits the drops line entirely when nothing dropped", () => {
+  it("omits the fails line entirely when nothing failed", () => {
     const summary = buildRunSummary(
       mkRun([{ task_id: "a", status: "done" }], { status: "completed" }),
       report({
@@ -277,6 +277,6 @@ describe("renderRunSummaryMarkdown", () => {
       }),
       { now: NOW },
     );
-    expect(renderRunSummaryMarkdown(summary)).not.toContain("**Drops:**");
+    expect(renderRunSummaryMarkdown(summary)).not.toContain("**Failures:**");
   });
 });

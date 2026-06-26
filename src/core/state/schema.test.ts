@@ -33,7 +33,7 @@ describe("schema round-trip", () => {
     expect(run.status).toBe("running");
     expect(run.execution_mode).toBe("sequential");
     expect(run.mode).toBe("session");
-    expect(run.schema_version).toBe(1);
+    expect(run.schema_version).toBe(2);
     expect(run.tasks).toEqual({});
     expect(run.ended_at).toBeNull();
   });
@@ -79,7 +79,7 @@ describe("schema round-trip", () => {
         status: "failed",
         tasks: {
           t1: minimalTask({
-            status: "dropped",
+            status: "failed",
             failure_class: "capability-budget",
             failure_reason: "producer ladder exhausted",
             escalation_rung: 2,
@@ -119,7 +119,7 @@ describe("closed enums reject out-of-domain values (loud, not silent)", () => {
   it("rejects an out-of-domain failure class", () => {
     expect(() =>
       parseRunState(
-        minimalRun({ tasks: { t1: minimalTask({ status: "dropped", failure_class: "oops" }) } }),
+        minimalRun({ tasks: { t1: minimalTask({ status: "failed", failure_class: "oops" }) } }),
       ),
     ).toThrow();
   });
@@ -141,50 +141,50 @@ describe("closed enums reject out-of-domain values (loud, not silent)", () => {
 });
 
 describe("cross-field invariants are enforced (not just documented)", () => {
-  it("rejects a dropped task with NO failure_class (a drop must be classified)", () => {
-    expect(() => parseTaskState(minimalTask({ status: "dropped" }))).toThrow(/failure_class/);
+  it("rejects a failed task with NO failure_class (a fail must be classified)", () => {
+    expect(() => parseTaskState(minimalTask({ status: "failed" }))).toThrow(/failure_class/);
     expect(() =>
-      parseRunState(minimalRun({ tasks: { t1: minimalTask({ status: "dropped" }) } })),
+      parseRunState(minimalRun({ tasks: { t1: minimalTask({ status: "failed" }) } })),
     ).toThrow(/failure_class/);
   });
 
-  it("rejects a non-dropped task carrying a failure_class (set IFF dropped)", () => {
+  it("rejects a non-failed task carrying a failure_class (set IFF failed)", () => {
     expect(() =>
       parseTaskState(minimalTask({ status: "done", failure_class: "spec-defect" })),
     ).toThrow(/failure_class/);
-    // default status is "pending" — still non-dropped, still rejected.
+    // default status is "pending" — still non-failed, still rejected.
     expect(() => parseTaskState(minimalTask({ failure_class: "spec-defect" }))).toThrow(
       /failure_class/,
     );
   });
 
-  it("accepts a dropped task WITH a failure_class + failure_reason (the only valid drop shape)", () => {
+  it("accepts a failed task WITH a failure_class + failure_reason (the only valid fail shape)", () => {
     const t = parseTaskState(
       minimalTask({
-        status: "dropped",
+        status: "failed",
         failure_class: "capability-budget",
         failure_reason: "producer ladder exhausted",
       }),
     );
-    expect(t.status).toBe("dropped");
+    expect(t.status).toBe("failed");
     expect(t.failure_class).toBe("capability-budget");
     expect(t.failure_reason).toBe("producer ladder exhausted");
   });
 
-  it("rejects a dropped task with NO failure_reason (a drop must carry a reason)", () => {
-    // A drop is classified AND explained (Decision 22) — failure_reason mirrors
+  it("rejects a failed task with NO failure_reason (a fail must carry a reason)", () => {
+    // A fail is classified AND explained (Decision 22) — failure_reason mirrors
     // TaskTerminalResult's mandatory `reason`.
     expect(() =>
-      parseTaskState(minimalTask({ status: "dropped", failure_class: "spec-defect" })),
+      parseTaskState(minimalTask({ status: "failed", failure_class: "spec-defect" })),
     ).toThrow(/failure_reason/);
     expect(() =>
       parseTaskState(
-        minimalTask({ status: "dropped", failure_class: "spec-defect", failure_reason: "" }),
+        minimalTask({ status: "failed", failure_class: "spec-defect", failure_reason: "" }),
       ),
     ).toThrow(/failure_reason/);
   });
 
-  it("rejects a non-dropped task carrying a failure_reason (set IFF dropped)", () => {
+  it("rejects a non-failed task carrying a failure_reason (set IFF failed)", () => {
     expect(() => parseTaskState(minimalTask({ status: "done", failure_reason: "why?" }))).toThrow(
       /failure_reason/,
     );
@@ -262,7 +262,7 @@ describe("run-status terminal/non-terminal split (Δ E distinctness)", () => {
 
   it("task terminal split", () => {
     expect(isTerminalTaskStatus("done")).toBe(true);
-    expect(isTerminalTaskStatus("dropped")).toBe(true);
+    expect(isTerminalTaskStatus("failed")).toBe(true);
     expect(isTerminalTaskStatus("executing")).toBe(false);
   });
 

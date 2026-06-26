@@ -3,21 +3,21 @@
  * {@link evaluate} predicate (`quota/circuit-breaker.ts`) into the run coroutine.
  * Mirrors the {@link import("./quota-gate.js").applyQuotaGate} DI shape: a narrow
  * deps subset, evaluated over fresh state by `runId`, returning a structured verdict
- * or null to proceed. Never writes state — turning a trip into drops is the CALLER's
+ * or null to proceed. Never writes state — turning a trip into failures is the CALLER's
  * job (`nextTask`), exactly as the quota gate leaves recovery to its caller.
  *
  * A tripped verdict is a HARD run abort, DISTINCT from the recoverable quota pause:
- * the caller drops every remaining non-terminal task (loud, classified) and falls
+ * the caller fails every remaining non-terminal task (loud, classified) and falls
  * through to `all-terminal` → finalize → `failed`, reusing the proven Decision-34
- * wedge-drop path (so no new envelope kind / driver change is needed).
+ * wedge-fail path (so no new envelope kind / driver change is needed).
  *
  * This gate supplies the pure breaker the two signals it cannot derive itself, each
  * derived honestly from run state (derive-don't-store — no breaker counter persisted):
  *
- *  - FAILURE-COUNT arm (BOTH modes) — the count of `capability-budget` drops: tasks
+ *  - FAILURE-COUNT arm (BOTH modes) — the count of `capability-budget` failures: tasks
  *    whose producer escalation ladder genuinely exhausted its budget. We deliberately
  *    EXCLUDE `blocked-environmental` (dependency cascades) and `spec-defect` (wedge)
- *    drops: those are CONSEQUENCES of a failure, not independent failures. Counting
+ *    failures: those are CONSEQUENCES of a failure, not independent failures. Counting
  *    them would let ONE real failure that cascades to two dependents masquerade as
  *    three "consecutive" failures and abort still-runnable independent work — directly
  *    against the highest-quality-code objective. (The signal is run-cumulative, not
@@ -62,7 +62,7 @@ export async function applyCircuitBreaker(
 
   // Failure-count arm: genuine producer-capability exhaustion only (see header).
   const capabilityFailures = Object.values(run.tasks).filter(
-    (t) => t.status === "dropped" && t.failure_class === "capability-budget",
+    (t) => t.status === "failed" && t.failure_class === "capability-budget",
   ).length;
 
   // Runtime arm: exact only in workflow mode; disarmed in session mode by feeding

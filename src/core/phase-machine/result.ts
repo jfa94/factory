@@ -13,7 +13,7 @@
  *   bash rc 10 → "spawn-agents"
  *   bash rc 2  → "graceful-stop"
  *   bash rc 3  → "wait-retry"   (BOUNDED here; FORBIDDEN in finalize — anti-spin)
- *   bash rc 30 → "task-terminal"(dropped)
+ *   bash rc 30 → "task-terminal"(failed)
  *   bash rc 20 → DELETED (human gates retired, Decision 5 — no `human-gate` kind)
  *
  * Constructors below build well-formed variants so handlers/fakes never drift the
@@ -38,7 +38,7 @@ export interface SpawnAgentsResult {
 }
 
 /**
- * Quota breach — a GRACEFUL stop, never a drop (Decision 24). `"5h"` =
+ * Quota breach — a GRACEFUL stop, never a fail (Decision 24). `"5h"` =
  * pause-in-place (RunStatus `paused`); `"7d"` = persist + exit (RunStatus
  * `suspended`). Optional `resets_at_epoch` is the resume horizon.
  */
@@ -63,22 +63,22 @@ export interface WaitRetryResult {
 }
 
 /**
- * A task reached a TERMINAL status. `done` (success) or `dropped` + a CLOSED
- * {@link FailureClass} + a human-facing reason (Decision 22). The dropped shape
- * mirrors the WS1 "failure_class set IFF dropped" invariant.
+ * A task reached a TERMINAL status. `done` (success) or `failed` + a CLOSED
+ * {@link FailureClass} + a human-facing reason (Decision 22). The failed shape
+ * mirrors the WS1 "failure_class set IFF failed" invariant.
  */
 export interface TaskTerminalResult {
   kind: "task-terminal";
   outcome:
     | { outcome: "done" }
-    | { outcome: "dropped"; failure_class: FailureClass; reason: string };
+    | { outcome: "failed"; failure_class: FailureClass; reason: string };
 }
 
 /**
  * The run-level `finalize` result. ALWAYS terminal — there is deliberately no
  * `wait-retry` reachable from finalize (the explicit fix for the bash
  * `_stage_finalize_run` spin-bug). Two outcomes only (Decision 34): `completed`
- * = all tasks done; `failed` = any task dropped or run could not finish.
+ * = all tasks done; `failed` = any task failed or run could not finish.
  */
 export interface FinalizeTerminalResult {
   kind: "finalize-terminal";
@@ -146,10 +146,10 @@ export function taskDone(): TaskTerminalResult {
   return { kind: "task-terminal", outcome: { outcome: "done" } };
 }
 
-export function taskDropped(failure_class: FailureClass, reason: string): TaskTerminalResult {
+export function taskFailed(failure_class: FailureClass, reason: string): TaskTerminalResult {
   return {
     kind: "task-terminal",
-    outcome: { outcome: "dropped", failure_class, reason },
+    outcome: { outcome: "failed", failure_class, reason },
   };
 }
 

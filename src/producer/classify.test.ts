@@ -1,38 +1,38 @@
 import { describe, it, expect } from "vitest";
 import { classifyFailure } from "./classify.js";
 
-describe("classify-before-retry (Δ D) — deterministic/spec/environmental drop IMMEDIATELY", () => {
-  it("spec-defect: a structurally-unfixable deterministic gate → IMMEDIATE drop (no rung burned)", () => {
+describe("classify-before-retry (Δ D) — deterministic/spec/environmental fail IMMEDIATELY", () => {
+  it("spec-defect: a structurally-unfixable deterministic gate → IMMEDIATE fail (no rung burned)", () => {
     const d = classifyFailure({
       kind: "gate-failure",
       gate: "testability",
       structurallyUnfixable: true,
       reason: "criterion is untestable as written",
     });
-    expect(d.action).toBe("drop");
-    if (d.action === "drop") {
+    expect(d.action).toBe("fail");
+    if (d.action === "fail") {
       expect(d.failureClass).toBe("spec-defect");
       expect(d.reason.length).toBeGreaterThan(0);
     }
   });
 
-  it("spec-defect: producer 'blocked-escalate' (STATUS: BLOCKED — escalate) → IMMEDIATE drop, no re-exec", () => {
+  it("spec-defect: producer 'blocked-escalate' (STATUS: BLOCKED — escalate) → IMMEDIATE fail, no re-exec", () => {
     const d = classifyFailure({
       kind: "producer-status",
       status: "blocked-escalate",
       reason: "STATUS: BLOCKED — escalate: contradictory acceptance criteria",
     });
-    expect(d.action).toBe("drop");
-    if (d.action === "drop") expect(d.failureClass).toBe("spec-defect");
+    expect(d.action).toBe("fail");
+    if (d.action === "fail") expect(d.failureClass).toBe("spec-defect");
   });
 
-  it("blocked-environmental: an environmental blocker → IMMEDIATE drop, no re-exec", () => {
+  it("blocked-environmental: an environmental blocker → IMMEDIATE fail, no re-exec", () => {
     const d = classifyFailure({
       kind: "environmental",
       reason: "CI runner network unreachable",
     });
-    expect(d.action).toBe("drop");
-    if (d.action === "drop") expect(d.failureClass).toBe("blocked-environmental");
+    expect(d.action).toBe("fail");
+    if (d.action === "fail") expect(d.failureClass).toBe("blocked-environmental");
   });
 });
 
@@ -65,7 +65,7 @@ describe("classify-before-retry (Δ D) — capability failures are RETRYABLE", (
     );
   });
 
-  it("verifier-error is LOUD but retryable (re-run verify) — never an auto-advance, never a silent drop (D27)", () => {
+  it("verifier-error is LOUD but retryable (re-run verify) — never an auto-advance, never a silent fail (D27)", () => {
     const d = classifyFailure({ kind: "verifier-error", reason: "verifier crashed" });
     expect(d.action).toBe("retry");
     expect(d.reason).toContain("unresolved");

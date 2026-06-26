@@ -34,7 +34,7 @@ export {
   gracefulStop,
   waitRetry,
   taskDone,
-  taskDropped,
+  taskFailed,
   finalizeTerminal,
 } from "./result.js";
 export type {

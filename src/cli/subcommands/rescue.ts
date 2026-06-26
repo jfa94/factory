@@ -6,7 +6,7 @@
  *
  * Model A: this CLI is a REPORTER (`scan`) + a WRITER (`apply`), never an agent
  * spawner. `scan` emits the pure {@link scanRun} classification — the input the
- * orchestrator (and, for ambiguous drops, the orchestrator-spawned rescue-diagnostic
+ * orchestrator (and, for ambiguous failures, the orchestrator-spawned rescue-diagnostic
  * agent) reasons over; the diagnostic then drives `apply --task …`. The CLI provides
  * scan (its input) + apply (the consumer of its decisions); it does NOT run the
  * diagnostic itself.
@@ -49,11 +49,11 @@ Usage:
   --task               Reset exactly this task (repeatable). Overrides the default
                        resettable set; a 'done' task is a loud error, a 'pending'
                        one is skipped. An explicitly-named dead-end IS reset.
-  --include-dead-ends  Also reset dead-end drops (spec-defect / capability-budget).
+  --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
                        Use only after the root cause is actually fixed.
 
 Default (no --task): resets stuck (crashed in-flight) + recoverable
-(blocked-environmental) tasks, leaving dead-ends dropped. Reopens a terminal run
+(blocked-environmental) tasks, leaving dead-ends failed. Reopens a terminal run
 to 'running' when it reset work. Idempotent.
 
 Emits ONE JSON document:

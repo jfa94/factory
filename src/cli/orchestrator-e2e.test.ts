@@ -16,7 +16,7 @@
  *   1. Happy path (no-merge): single task → `completed`, PR opened but NOT merged,
  *      holdout holdout surfaced + recorded, all six panel reviewers approved.
  *   2. Happy path (live): same chain → `completed`, PR merged.
- *   3. Drop path: two-task run; second task at escalation cap → drops as
+ *   3. Drop path: two-task run; second task at escalation cap → fails as
  *      `capability-budget`; `finalizeRun` produces a `failed` run (Decision 34:
  *      develop receives only complete PRDs) and posts one PRD-issue failure comment.
  *
@@ -362,10 +362,10 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 3: Drop path — capability-budget drop → failed finalize (Decision 34)
+  // Scenario 3: Drop path — capability-budget failure → failed finalize (Decision 34)
   // -------------------------------------------------------------------------
 
-  it("drops a task at escalation cap → capability-budget → finalizeRun produces failed (Decision 34)", async () => {
+  it("fails a task at escalation cap → capability-budget → finalizeRun produces failed (Decision 34)", async () => {
     const request = specManifestTwo();
     await specStore.write(request, "# checkout spec\n\nvertical slice.");
 
@@ -375,13 +375,13 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
       runId: RUN_ID,
     });
 
-    // Seed t2 at ESCALATION_CAP so the first producer failure drops it.
+    // Seed t2 at ESCALATION_CAP so the first producer failure fails it.
     await state.updateTask(RUN_ID, TASK_ID_2, (t) => ({ ...t, escalation_rung: ESCALATION_CAP }));
 
     const deps = makeDeps(request, "no-merge");
 
     // t1: DONE normally. t2: deliberately unparseable producer status (no ESCALATE keyword)
-    // exercises the unparseable-producer-status path; at cap → capability-budget drop.
+    // exercises the unparseable-producer-status path; at cap → capability-budget failure.
     const answer = new AnswerBook({
       holdout: { runId: RUN_ID, store: holdout },
       producerStatuses: {
@@ -391,19 +391,19 @@ describe("orchestrator coroutine seam — golden contract E2E", () => {
 
     const finalRun = await driveToTerminal(deps, RUN_ID, answer);
 
-    // Decision 34: mixed done+dropped is 'failed' (develop receives only complete PRDs).
+    // Decision 34: mixed done+failed is 'failed' (develop receives only complete PRDs).
     expect(finalRun.status).toBe("failed");
 
     // t1 shipped normally.
     expect(finalRun.tasks[TASK_ID]!.status).toBe("done");
 
-    // t2 was dropped as capability-budget.
-    const droppedTask = finalRun.tasks[TASK_ID_2]!;
-    expect(droppedTask.status).toBe("dropped");
-    expect(droppedTask.failure_class).toBe("capability-budget");
+    // t2 was failed as capability-budget.
+    const failedTask = finalRun.tasks[TASK_ID_2]!;
+    expect(failedTask.status).toBe("failed");
+    expect(failedTask.failure_class).toBe("capability-budget");
 
-    // finalizeRun posted ONE failure comment on the PRD issue (drops surfaced there,
-    // not as per-task GitHub issues) naming the dropped task.
+    // finalizeRun posted ONE failure comment on the PRD issue (fails surfaced there,
+    // not as per-task GitHub issues) naming the failed task.
     expect(gh.issueComments).toHaveLength(1);
     expect(gh.issueComments[0]!.body).toContain(TASK_ID_2);
 

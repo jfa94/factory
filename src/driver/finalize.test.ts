@@ -6,7 +6,7 @@
  *   - completed  → rollup merges (live) / opens-only (no-merge), PRD closed +
  *                  per-run branch GC'd on a merged rollup, no failure comment;
  *   - failed     → no rollup (develop untouched, branch retained for rescue), ONE
- *                  PRD-issue comment listing the drops (Decision 36; Decision 34 —
+ *                  PRD-issue comment listing the fails (Decision 36; Decision 34 —
  *                  develop receives whole PRDs);
  *   - resume     → a second finalize posts no duplicate comment + short-circuits the rollup;
  *   - anti-spin  → a non-terminal task makes finalize THROW (never advances).
@@ -38,7 +38,7 @@ const NOW = "2026-06-08T12:00:00.000Z";
 /** A task partial for both the spec and the run-state seeding. */
 interface TaskSeed {
   task_id: string;
-  status: "done" | "dropped";
+  status: "done" | "failed";
   failure_class?: FailureClass;
   failure_reason?: string;
   branch?: string;
@@ -68,7 +68,7 @@ function makeSpec(tasks: readonly TaskSeed[]): SpecManifest {
   });
 }
 
-/** Map a seed to a terminal TaskState row (carries the drop cross-fields). */
+/** Map a seed to a terminal TaskState row (carries the fail cross-fields). */
 function taskRow(t: TaskSeed): TaskState {
   const base: TaskState = {
     task_id: t.task_id,
@@ -80,7 +80,7 @@ function taskRow(t: TaskSeed): TaskState {
     ...(t.branch !== undefined ? { branch: t.branch } : {}),
     ...(t.pr_number !== undefined ? { pr_number: t.pr_number } : {}),
   };
-  if (t.status === "dropped") {
+  if (t.status === "failed") {
     return {
       ...base,
       failure_class: t.failure_class ?? "capability-budget",
@@ -183,14 +183,14 @@ describe("finalizeRun", () => {
     expect(gh.deletedBranches).not.toContain(`staging-${RUN_ID}`);
   });
 
-  it("failed (some dropped): no rollup, one PRD comment, PRD left open (Decision 34)", async () => {
-    // Decision 34: develop receives only complete PRDs. A mixed done+dropped run is
+  it("failed (some failed): no rollup, one PRD comment, PRD left open (Decision 34)", async () => {
+    // Decision 34: develop receives only complete PRDs. A mixed done+failed run is
     // 'failed', gets no rollup, and the PRD issue is left open.
     const tasks: TaskSeed[] = [
       { task_id: "t1", status: "done", pr_number: 11 },
       {
         task_id: "t2",
-        status: "dropped",
+        status: "failed",
         failure_class: "spec-defect",
         failure_reason: "criterion unattainable",
       },
@@ -202,7 +202,7 @@ describe("finalizeRun", () => {
 
     expect(result.run.status).toBe("failed");
     expect(result.failureCommentPosted).toBe(true);
-    // ONE comment on the PRD issue (not a per-task GitHub issue), naming the drop + class.
+    // ONE comment on the PRD issue (not a per-task GitHub issue), naming the fail + class.
     expect(gh.issueComments).toHaveLength(1);
     expect(gh.issueComments[0]!.number).toBe(ISSUE);
     expect(gh.issueComments[0]!.body).toContain("t2");
@@ -216,10 +216,10 @@ describe("finalizeRun", () => {
     expect(gh.deletedBranches).not.toContain(`staging-${RUN_ID}`);
   });
 
-  it("failed (all dropped): no rollup, one consolidated PRD comment, run flips to failed", async () => {
+  it("failed (all failed): no rollup, one consolidated PRD comment, run flips to failed", async () => {
     const tasks: TaskSeed[] = [
-      { task_id: "t1", status: "dropped", failure_class: "capability-budget" },
-      { task_id: "t2", status: "dropped", failure_class: "blocked-environmental" },
+      { task_id: "t1", status: "failed", failure_class: "capability-budget" },
+      { task_id: "t2", status: "failed", failure_class: "blocked-environmental" },
     ];
     await seed(tasks);
 
@@ -228,17 +228,17 @@ describe("finalizeRun", () => {
     expect(result.run.status).toBe("failed");
     expect(result.rollup).toBeUndefined(); // nothing shipped → no rollup attempted
     expect(gh.created).toHaveLength(0);
-    // ONE comment listing every drop — not one GitHub issue per task.
+    // ONE comment listing every fail — not one GitHub issue per task.
     expect(result.failureCommentPosted).toBe(true);
     expect(gh.issueComments).toHaveLength(1);
     expect(gh.issueComments[0]!.body).toContain("t1");
     expect(gh.issueComments[0]!.body).toContain("t2");
   });
 
-  it("persists report.md and run.finalized + per-drop telemetry", async () => {
+  it("persists report.md and run.finalized + per-fail telemetry", async () => {
     const tasks: TaskSeed[] = [
       { task_id: "t1", status: "done", pr_number: 11 },
-      { task_id: "t2", status: "dropped", failure_class: "spec-defect" },
+      { task_id: "t2", status: "failed", failure_class: "spec-defect" },
     ];
     await seed(tasks);
 
@@ -246,7 +246,7 @@ describe("finalizeRun", () => {
 
     const md = await readFile(runReportPath(dataDir, RUN_ID), "utf8");
     expect(md).toContain("# Factory run report");
-    // Decision 34: mixed done+dropped is 'failed', not 'partial'.
+    // Decision 34: mixed done+failed is 'failed', not 'partial'.
     expect(md).toContain("Status:** FAILED");
     expect(md).toContain(NOW);
 
@@ -261,7 +261,7 @@ describe("finalizeRun", () => {
     // second finalize posts no second PRD comment and leaves the run status as failed.
     const tasks: TaskSeed[] = [
       { task_id: "t1", status: "done", pr_number: 11 },
-      { task_id: "t2", status: "dropped", failure_class: "spec-defect" },
+      { task_id: "t2", status: "failed", failure_class: "spec-defect" },
     ];
     await seed(tasks);
     const spec = makeSpec(tasks);
@@ -379,10 +379,10 @@ describe("finalizeRun", () => {
     expect(gh.issueComments).toHaveLength(0);
   });
 
-  it("failed (some dropped): no rollup, PRD NOT closed (Decision 34)", async () => {
+  it("failed (some failed): no rollup, PRD NOT closed (Decision 34)", async () => {
     const tasks: TaskSeed[] = [
       { task_id: "t1", status: "done", pr_number: 11 },
-      { task_id: "t2", status: "dropped", failure_class: "capability-budget" },
+      { task_id: "t2", status: "failed", failure_class: "capability-budget" },
     ];
     await seed(tasks);
 
@@ -390,7 +390,7 @@ describe("finalizeRun", () => {
 
     expect(res.run.status).toBe("failed");
     expect(gh.merges).toHaveLength(0);
-    // PRD NOT closed — but the failure comment IS posted (drops surfaced on the PRD).
+    // PRD NOT closed — but the failure comment IS posted (fails surfaced on the PRD).
     expect(gh.issueCloses).toHaveLength(0);
     expect(gh.issueComments).toHaveLength(1);
     expect(gh.issueComments[0]!.number).toBe(ISSUE);

@@ -3,7 +3,7 @@
  *
  * Focus: the DERIVATION the gate owns (the pure predicate's thresholds are already
  * covered in quota/circuit-breaker.test.ts). Namely:
- *   - failure-count arm counts ONLY capability-budget drops (both modes), excluding
+ *   - failure-count arm counts ONLY capability-budget failures (both modes), excluding
  *     blocked-environmental cascades and spec-defect wedges;
  *   - the runtime arm is armed in workflow mode and disarmed in session mode.
  *
@@ -17,8 +17,8 @@ import { makeCoroutineDeps, NOW } from "./coroutine-fixtures.js";
 import { epochToIso } from "../shared/time.js";
 import type { FailureClass } from "../types/index.js";
 
-/** Seed `task_id` as a classified drop (mirrors the WS1 dropped-task invariant). */
-async function drop(
+/** Seed `task_id` as a classified fail (mirrors the WS1 failed-task invariant). */
+async function failTask(
   state: Awaited<ReturnType<typeof makeCoroutineDeps>>["state"],
   runId: string,
   taskId: string,
@@ -26,7 +26,7 @@ async function drop(
 ): Promise<void> {
   await state.updateTask(runId, taskId, (t) => ({
     ...t,
-    status: "dropped",
+    status: "failed",
     failure_class: failureClass,
     failure_reason: `test seed (${failureClass})`,
   }));
@@ -40,12 +40,12 @@ const FOUR = [
 ];
 
 describe("applyCircuitBreaker — failure-count arm (capability-budget only)", () => {
-  it("trips at the cap of capability-budget drops (session mode)", async () => {
+  it("trips at the cap of capability-budget failures (session mode)", async () => {
     const { deps, runId, state, cleanup } = await makeCoroutineDeps({ tasks: FOUR });
     try {
-      await drop(state, runId, "T1", "capability-budget");
-      await drop(state, runId, "T2", "capability-budget");
-      await drop(state, runId, "T3", "capability-budget");
+      await failTask(state, runId, "T1", "capability-budget");
+      await failTask(state, runId, "T2", "capability-budget");
+      await failTask(state, runId, "T3", "capability-budget");
       const v = await applyCircuitBreaker(deps, runId);
       expect(v?.tripped).toBe(true);
       if (v) expect(v.reason).toMatch(/cumulative failures/);
@@ -54,15 +54,15 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
     }
   });
 
-  it("trips at the cap of capability-budget drops (workflow mode)", async () => {
+  it("trips at the cap of capability-budget failures (workflow mode)", async () => {
     const { deps, runId, state, cleanup } = await makeCoroutineDeps({
       tasks: FOUR,
       modeOverride: "workflow",
     });
     try {
-      await drop(state, runId, "T1", "capability-budget");
-      await drop(state, runId, "T2", "capability-budget");
-      await drop(state, runId, "T3", "capability-budget");
+      await failTask(state, runId, "T1", "capability-budget");
+      await failTask(state, runId, "T2", "capability-budget");
+      await failTask(state, runId, "T3", "capability-budget");
       const v = await applyCircuitBreaker(deps, runId);
       expect(v?.tripped).toBe(true);
       if (v) expect(v.reason).toMatch(/cumulative failures/);
@@ -74,22 +74,22 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
   it("does NOT count blocked-environmental cascades (dependency consequences)", async () => {
     const { deps, runId, state, cleanup } = await makeCoroutineDeps({ tasks: FOUR });
     try {
-      await drop(state, runId, "T1", "blocked-environmental");
-      await drop(state, runId, "T2", "blocked-environmental");
-      await drop(state, runId, "T3", "blocked-environmental");
-      await drop(state, runId, "T4", "blocked-environmental");
+      await failTask(state, runId, "T1", "blocked-environmental");
+      await failTask(state, runId, "T2", "blocked-environmental");
+      await failTask(state, runId, "T3", "blocked-environmental");
+      await failTask(state, runId, "T4", "blocked-environmental");
       expect(await applyCircuitBreaker(deps, runId)).toBeNull();
     } finally {
       await cleanup();
     }
   });
 
-  it("does NOT count spec-defect wedge drops", async () => {
+  it("does NOT count spec-defect wedge failures", async () => {
     const { deps, runId, state, cleanup } = await makeCoroutineDeps({ tasks: FOUR });
     try {
-      await drop(state, runId, "T1", "spec-defect");
-      await drop(state, runId, "T2", "spec-defect");
-      await drop(state, runId, "T3", "spec-defect");
+      await failTask(state, runId, "T1", "spec-defect");
+      await failTask(state, runId, "T2", "spec-defect");
+      await failTask(state, runId, "T3", "spec-defect");
       expect(await applyCircuitBreaker(deps, runId)).toBeNull();
     } finally {
       await cleanup();
@@ -100,11 +100,11 @@ describe("applyCircuitBreaker — failure-count arm (capability-budget only)", (
     // The exact false-trip this derivation prevents: 1 capability-budget + cascades.
     const { deps, runId, state, cleanup } = await makeCoroutineDeps({ tasks: FOUR });
     try {
-      await drop(state, runId, "T1", "capability-budget"); // the one real failure
-      await drop(state, runId, "T2", "blocked-environmental"); // cascade
-      await drop(state, runId, "T3", "blocked-environmental"); // cascade
+      await failTask(state, runId, "T1", "capability-budget"); // the one real failure
+      await failTask(state, runId, "T2", "blocked-environmental"); // cascade
+      await failTask(state, runId, "T3", "blocked-environmental"); // cascade
       // Even a second genuine failure stays under the cap (2 < 3).
-      await drop(state, runId, "T4", "capability-budget");
+      await failTask(state, runId, "T4", "capability-budget");
       expect(await applyCircuitBreaker(deps, runId)).toBeNull();
     } finally {
       await cleanup();

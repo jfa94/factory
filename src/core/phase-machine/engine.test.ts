@@ -97,7 +97,7 @@ describe("invariant #2 — bounded wait-retry", () => {
   });
 });
 
-describe("graceful-stop is accepted from a per-task phase (quota breach, never a drop)", () => {
+describe("graceful-stop is accepted from a per-task phase (quota breach, never a fail)", () => {
   it("a per-task phase returning graceful-stop is surfaced unchanged", async () => {
     const h = fakeHandlers({ exec: async () => gracefulStop("5h", "5h window breached") });
     const r = await runPhase("exec", ctx, h);
@@ -187,12 +187,12 @@ describe("decideFinalize is pure + terminal-by-construction", () => {
     expect(decideFinalize(run)).toEqual(finalizeTerminal("completed"));
   });
 
-  it("some done + some dropped → failed (develop gets nothing, Decision 34)", () => {
+  it("some done + some failed → failed (develop gets nothing, Decision 34)", () => {
     const run = mkRun({
       a: { task_id: "a", status: "done", risk_tier: "low" },
       b: {
         task_id: "b",
-        status: "dropped",
+        status: "failed",
         risk_tier: "low",
         failure_class: "spec-defect",
         failure_reason: "untestable criterion",
@@ -205,7 +205,7 @@ describe("decideFinalize is pure + terminal-by-construction", () => {
     const run = mkRun({
       a: {
         task_id: "a",
-        status: "dropped",
+        status: "failed",
         risk_tier: "low",
         failure_class: "capability-budget",
         failure_reason: "producer ladder exhausted",
@@ -218,7 +218,7 @@ describe("decideFinalize is pure + terminal-by-construction", () => {
     const run = mkRun({
       a: {
         task_id: "a",
-        status: "dropped",
+        status: "failed",
         risk_tier: "low",
         failure_class: "capability-budget",
         failure_reason: "producer ladder exhausted",

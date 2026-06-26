@@ -12,7 +12,7 @@ describe("parseProducerStatus — closed outcome from the terminal STATUS line",
     if (o.status === "blocked-escalate") expect(o.reason).toContain("escalate");
   });
 
-  it("STATUS: NEEDS_CONTEXT → needs-context (retry signal, not a drop)", () => {
+  it("STATUS: NEEDS_CONTEXT → needs-context (retry signal, not a fail)", () => {
     expect(parseProducerStatus("STATUS: NEEDS_CONTEXT").status).toBe("needs-context");
   });
 

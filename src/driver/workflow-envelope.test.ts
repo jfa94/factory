@@ -43,22 +43,22 @@ describe("parseEnvelope — happy path", () => {
       data_dir: "/d",
       ship_mode: "pr",
       ready: ["T1", "T2"],
-      cascade_dropped: [],
+      cascade_failed: [],
     });
     const env = parseEnvelope(raw, NEXT_KINDS, "next");
     expect(env.kind).toBe("work");
     // Switching on the discriminant narrows to the per-variant payload type — the
     // C2 improvement (no bare `{ [field]: unknown }`). Inside this arm `env.ready`
-    // and `env.cascade_dropped` are statically typed string[] / drop[].
+    // and `env.cascade_failed` are statically typed string[] / fail[].
     if (env.kind !== "work") throw new Error("expected work");
     // Bind to the concrete per-variant types — this is the type-level regression
     // guard: if C2 regressed to `{ [field]: unknown }` these annotations would be
     // `unknown`-source assignments and FAIL the build (not just pass at runtime).
     const ready: readonly string[] = env.ready;
-    const cascadeDropped: readonly string[] = env.cascade_dropped;
+    const cascadeFailed: readonly string[] = env.cascade_failed;
     // Arrays survive as arrays (not stringified) — the corruption this guards against.
     expect(ready).toEqual(["T1", "T2"]);
-    expect(cascadeDropped).toEqual([]);
+    expect(cascadeFailed).toEqual([]);
     expect(env.run_id).toBe("run-1");
   });
 
@@ -88,7 +88,7 @@ describe("parseEnvelope — corrupt kind (the re-key failure)", () => {
       kind: "factory-envelope",
       kind_type: "work",
       ready: '["T1","T2"]',
-      cascade_dropped: "[]",
+      cascade_failed: "[]",
     });
     expect(() => parseEnvelope(raw, NEXT_KINDS, "next")).toThrow(/factory-envelope/);
   });
@@ -164,7 +164,7 @@ describe("parseEnvelope — markdown-fence tolerance (blocker #9 backstop)", () 
   // the "no fences" instruction. The deterministic guard strips a FULLY-WRAPPING fence
   // so the most common LLM-output flake doesn't fail the run — defense-in-depth behind
   // the sonnet model upgrade.
-  const json = JSON.stringify({ kind: "work", ready: ["T1", "T2"], cascade_dropped: [] });
+  const json = JSON.stringify({ kind: "work", ready: ["T1", "T2"], cascade_failed: [] });
 
   it("strips a ```json fence and parses the inner envelope", () => {
     const env = parseEnvelope("```json\n" + json + "\n```", NEXT_KINDS, "next");
@@ -279,7 +279,7 @@ describe("inline workflow-driver mirror stays in lockstep (drift guard)", () => 
   const PROBES: Probe[] = [
     {
       name: "valid tasks-ready",
-      raw: JSON.stringify({ kind: "work", ready: ["T1"], cascade_dropped: [] }),
+      raw: JSON.stringify({ kind: "work", ready: ["T1"], cascade_failed: [] }),
       set: "next",
     },
     { name: "valid run-terminal", raw: JSON.stringify({ kind: "done" }), set: "next" },

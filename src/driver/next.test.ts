@@ -91,8 +91,8 @@ describe("nextTask", () => {
     }
   });
 
-  it("cascade-drops pending tasks whose dependency dropped, transitively", async () => {
-    // T1 dropped; T2 depends_on [T1]; T3 depends_on [T2]; T4 independent pending
+  it("cascade-fails pending tasks whose dependency failed, transitively", async () => {
+    // T1 failed; T2 depends_on [T1]; T3 depends_on [T2]; T4 independent pending
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
@@ -102,10 +102,10 @@ describe("nextTask", () => {
       ],
     });
     try {
-      // Seed T1 as dropped
+      // Seed T1 as failed
       await deps.state.updateTask(runId, "T1", (t) => ({
         ...t,
-        status: "dropped",
+        status: "failed",
         failure_class: "capability-budget",
         failure_reason: "test seed",
       }));
@@ -113,7 +113,7 @@ describe("nextTask", () => {
       const env = await nextTask(deps, runId);
       expect(env.kind).toBe("work");
       if (env.kind !== "work") return;
-      expect(env.cascade_dropped.slice().sort()).toEqual(["T2", "T3"]);
+      expect(env.cascade_failed.slice().sort()).toEqual(["T2", "T3"]);
       expect(env.ready).toEqual(["T4"]);
       const run = await deps.state.read(runId);
       expect(run.tasks["T2"]?.failure_class).toBe("blocked-environmental");
@@ -160,11 +160,11 @@ describe("nextTask", () => {
       ],
     });
     try {
-      // Seed T1 done, T2 dropped
+      // Seed T1 done, T2 failed
       await deps.state.updateTask(runId, "T1", (t) => ({ ...t, status: "done" }));
       await deps.state.updateTask(runId, "T2", (t) => ({
         ...t,
-        status: "dropped",
+        status: "failed",
         failure_class: "capability-budget",
         failure_reason: "test seed",
       }));
@@ -176,9 +176,9 @@ describe("nextTask", () => {
     }
   });
 
-  // Decision 34: a dependency cycle must NOT throw — the circuit breaker drops each
+  // Decision 34: a dependency cycle must NOT throw — the circuit breaker fails each
   // wedged task as spec-defect and returns all-terminal so the run finalizes to failed.
-  it("dependency cycle (T1↔T2) → all-terminal with both tasks spec-defect dropped", async () => {
+  it("dependency cycle (T1↔T2) → all-terminal with both tasks spec-defect failed", async () => {
     // Pathological DAG: T1 executing with depends_on [T2], T2 pending depends_on [T1]
     // This bypasses seeding via direct state writes.
     const { deps, runId, cleanup } = await makeCoroutineDeps({
@@ -208,12 +208,12 @@ describe("nextTask", () => {
       const env = await nextTask(deps, runId);
       expect(env.kind).toBe("finalize");
       if (env.kind !== "finalize") return;
-      expect(env.cascade_dropped.slice().sort()).toEqual(["T1", "T2"]);
+      expect(env.cascade_failed.slice().sort()).toEqual(["T1", "T2"]);
 
       const run = await deps.state.read(runId);
-      expect(run.tasks["T1"]?.status).toBe("dropped");
+      expect(run.tasks["T1"]?.status).toBe("failed");
       expect(run.tasks["T1"]?.failure_class).toBe("spec-defect");
-      expect(run.tasks["T2"]?.status).toBe("dropped");
+      expect(run.tasks["T2"]?.status).toBe("failed");
       expect(run.tasks["T2"]?.failure_class).toBe("spec-defect");
     } finally {
       await cleanup();
@@ -248,7 +248,7 @@ describe("nextTask", () => {
       await deps.state.updateTask(runId, "T1", (t) => ({ ...t, status: "done" }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "finalize", cascade_dropped: [] });
+      expect(env).toMatchObject({ kind: "finalize", cascade_failed: [] });
       // The quota gate must NOT have run — run stays running with no checkpoint
       const run = await deps.state.read(runId);
       expect(run.status).toBe("running");
@@ -258,9 +258,9 @@ describe("nextTask", () => {
     }
   });
 
-  // I1 pin: cascade that resolves the run to all-terminal carries the dropped ids.
-  it("cascade resolving run to all-terminal → all-terminal with cascade_dropped", async () => {
-    // T1 dropped; T2 pending depends_on [T1] — cascade drops T2, run is all-terminal.
+  // I1 pin: cascade that resolves the run to all-terminal carries the failed ids.
+  it("cascade resolving run to all-terminal → all-terminal with cascade_failed", async () => {
+    // T1 failed; T2 pending depends_on [T1] — cascade fails T2, run is all-terminal.
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
@@ -270,13 +270,13 @@ describe("nextTask", () => {
     try {
       await deps.state.updateTask(runId, "T1", (t) => ({
         ...t,
-        status: "dropped",
+        status: "failed",
         failure_class: "capability-budget",
         failure_reason: "test seed",
       }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "finalize", cascade_dropped: ["T2"] });
+      expect(env).toMatchObject({ kind: "finalize", cascade_failed: ["T2"] });
     } finally {
       await cleanup();
     }
@@ -303,15 +303,15 @@ describe("nextTask", () => {
     }
   });
 
-  // Empty run (tasks: {}) → all-terminal with empty cascade_dropped.
-  it("empty run (no tasks) → all-terminal with cascade_dropped []", async () => {
+  // Empty run (tasks: {}) → all-terminal with empty cascade_failed.
+  it("empty run (no tasks) → all-terminal with cascade_failed []", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps();
     try {
       // Clear the default T1 so the run has zero tasks
       await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "finalize", cascade_dropped: [] });
+      expect(env).toMatchObject({ kind: "finalize", cascade_failed: [] });
     } finally {
       await cleanup();
     }
@@ -326,7 +326,7 @@ describe("nextTask", () => {
       await deps.state.update(runId, (s) => ({ ...s, tasks: {} }));
 
       const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "finalize", cascade_dropped: [] });
+      expect(env).toMatchObject({ kind: "finalize", cascade_failed: [] });
       const run = await deps.state.read(runId);
       expect(run.status).toBe("running");
       expect(run.quota).toBeUndefined();
@@ -336,8 +336,8 @@ describe("nextTask", () => {
   });
 
   // Decision 34: self-dependency (T1→T1) is also a wedged/cycle state — the circuit
-  // breaker drops T1 as spec-defect and returns all-terminal.
-  it("self-dependency (T1 depends_on T1) → all-terminal with T1 spec-defect dropped", async () => {
+  // breaker fails T1 as spec-defect and returns all-terminal.
+  it("self-dependency (T1 depends_on T1) → all-terminal with T1 spec-defect failed", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       tasks: [{ task_id: "T1", acceptance_criteria: ["only one"] }],
     });
@@ -351,19 +351,19 @@ describe("nextTask", () => {
       const env = await nextTask(deps, runId);
       expect(env.kind).toBe("finalize");
       if (env.kind !== "finalize") return;
-      expect(env.cascade_dropped).toContain("T1");
+      expect(env.cascade_failed).toContain("T1");
 
       const run = await deps.state.read(runId);
-      expect(run.tasks["T1"]?.status).toBe("dropped");
+      expect(run.tasks["T1"]?.status).toBe("failed");
       expect(run.tasks["T1"]?.failure_class).toBe("spec-defect");
     } finally {
       await cleanup();
     }
   });
 
-  // WS4 run-level circuit breaker: capability-budget drops at the cap abort the run —
-  // every remaining runnable task is dropped and the run finalizes (all-terminal → failed).
-  it("circuit breaker: capability-budget drops at the cap abort runnable work → all-terminal", async () => {
+  // WS4 run-level circuit breaker: capability-budget fails at the cap abort the run —
+  // every remaining runnable task is failed and the run finalizes (all-terminal → failed).
+  it("circuit breaker: capability-budget fails at the cap abort runnable work → all-terminal", async () => {
     const { deps, runId, cleanup } = await makeCoroutineDeps({
       tasks: [
         { task_id: "T1", acceptance_criteria: ["only one"] },
@@ -376,7 +376,7 @@ describe("nextTask", () => {
       for (const id of ["T1", "T2", "T3"]) {
         await deps.state.updateTask(runId, id, (t) => ({
           ...t,
-          status: "dropped",
+          status: "failed",
           failure_class: "capability-budget",
           failure_reason: "test seed",
         }));
@@ -385,10 +385,10 @@ describe("nextTask", () => {
       const env = await nextTask(deps, runId);
       expect(env.kind).toBe("finalize");
       if (env.kind !== "finalize") return;
-      expect(env.cascade_dropped).toContain("T4");
+      expect(env.cascade_failed).toContain("T4");
 
       const run = await deps.state.read(runId);
-      expect(run.tasks["T4"]?.status).toBe("dropped");
+      expect(run.tasks["T4"]?.status).toBe("failed");
       expect(run.tasks["T4"]?.failure_class).toBe("capability-budget");
       expect(run.tasks["T4"]?.failure_reason).toMatch(/circuit breaker tripped/);
     } finally {
@@ -410,7 +410,7 @@ describe("nextTask", () => {
       for (const id of ["T1", "T2"]) {
         await deps.state.updateTask(runId, id, (t) => ({
           ...t,
-          status: "dropped",
+          status: "failed",
           failure_class: "capability-budget",
           failure_reason: "test seed",
         }));
@@ -467,7 +467,7 @@ describe("docs-ready gate", () => {
     }
   });
 
-  it("failed run (a dropped task) → all-terminal, never docs-ready", async () => {
+  it("failed run (a failed task) → all-terminal, never docs-ready", async () => {
     const { deps, runId, state, cleanup } = await makeCoroutineDeps({
       tasks: [{ task_id: "T1" }],
       docsApplicable: true,
@@ -475,7 +475,7 @@ describe("docs-ready gate", () => {
     try {
       await state.updateTask(runId, "T1", (t) => ({
         ...t,
-        status: "dropped",
+        status: "failed",
         failure_class: "spec-defect",
         failure_reason: "x",
         ended_at: DONE_AT,

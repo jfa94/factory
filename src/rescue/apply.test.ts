@@ -3,9 +3,9 @@
  *
  * Exercises {@link applyRescue} against the real {@link StateManager} (temp dir):
  *   - resets stuck (crashed in-flight) + recoverable (blocked-environmental) tasks
- *     to a clean `pending`, clearing the stale producer/reviewer/drop state but
+ *     to a clean `pending`, clearing the stale producer/reviewer/fail state but
  *     PRESERVING the git/PR pointers;
- *   - leaves dead-end drops (spec-defect/capability-budget) dropped by default,
+ *   - leaves dead-end failures (spec-defect/capability-budget) failed by default,
  *     resetting them only with `includeDeadEnds`;
  *   - never resets a `done` task (default skips it; an explicit --task is a throw);
  *   - reopens a TERMINAL run to `running` when it reset work; leaves a non-terminal
@@ -36,7 +36,7 @@ function task(seed: TaskSeed): TaskState {
     merge_resyncs: 0,
     ...seed,
   };
-  if (seed.status === "dropped") {
+  if (seed.status === "failed") {
     return {
       failure_class: "capability-budget" as const,
       failure_reason: "ran out of retries",
@@ -103,8 +103,8 @@ describe("applyRescue", () => {
     expect(a.pr_number).toBe(9);
   });
 
-  it("resets a recoverable (blocked-environmental) drop, clearing the classification", async () => {
-    await seed([{ task_id: "b", status: "dropped", failure_class: "blocked-environmental" }]);
+  it("resets a recoverable (blocked-environmental) fail, clearing the classification", async () => {
+    await seed([{ task_id: "b", status: "failed", failure_class: "blocked-environmental" }]);
 
     const result = await applyRescue(state, RUN_ID);
 
@@ -115,15 +115,15 @@ describe("applyRescue", () => {
     expect(b.failure_reason).toBeUndefined();
   });
 
-  it("leaves dead-end drops dropped by default, but resets them with includeDeadEnds", async () => {
+  it("leaves dead-end failures failed by default, but resets them with includeDeadEnds", async () => {
     await seed([
-      { task_id: "spec", status: "dropped", failure_class: "spec-defect" },
-      { task_id: "cap", status: "dropped", failure_class: "capability-budget" },
+      { task_id: "spec", status: "failed", failure_class: "spec-defect" },
+      { task_id: "cap", status: "failed", failure_class: "capability-budget" },
     ]);
 
     const def = await applyRescue(state, RUN_ID);
     expect(def.reset).toEqual([]); // dead-ends untouched
-    expect((await state.read(RUN_ID)).tasks.spec!.status).toBe("dropped");
+    expect((await state.read(RUN_ID)).tasks.spec!.status).toBe("failed");
 
     const forced = await applyRescue(state, RUN_ID, { includeDeadEnds: true });
     expect(forced.reset).toEqual(["spec", "cap"]);
@@ -146,7 +146,7 @@ describe("applyRescue", () => {
     await seed(
       [
         { task_id: "a", status: "done", pr_number: 11 },
-        { task_id: "b", status: "dropped", failure_class: "blocked-environmental" },
+        { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
       ],
       "failed",
     );
@@ -185,7 +185,7 @@ describe("applyRescue", () => {
     await seed(
       [
         { task_id: "a", status: "done", pr_number: 11 },
-        { task_id: "b", status: "dropped", failure_class: "blocked-environmental" },
+        { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
       ],
       "failed",
     );
@@ -202,7 +202,7 @@ describe("applyRescue", () => {
 
   describe("explicit --task selection", () => {
     it("resets a named dead-end (naming is the human assertion)", async () => {
-      await seed([{ task_id: "spec", status: "dropped", failure_class: "spec-defect" }]);
+      await seed([{ task_id: "spec", status: "failed", failure_class: "spec-defect" }]);
 
       const result = await applyRescue(state, RUN_ID, { tasks: ["spec"] });
       expect(result.reset).toEqual(["spec"]);

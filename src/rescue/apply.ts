@@ -3,15 +3,15 @@
  *
  * `scanRun` (scan.ts) classifies a stalled run; `applyRescue` is the only mutation
  * that acts on that classification. It resets the resettable tasks back to `pending`
- * (clearing the stale producer/reviewer/drop state) and, if the run had already
+ * (clearing the stale producer/reviewer/failure state) and, if the run had already
  * finalized to a terminal status, REOPENS it to `running` so the driver picks the
  * reset work back up. After apply, a plain `factory run resume` (quota gate) +
  * re-drive carries the run forward — rescue is the missing seam between them.
  *
  * THE "without repeating dead ends" CONTRACT (WS12 acceptance), enforced here:
  *   - DEFAULT apply resets `scan.resettable` = stuck (crashed in-flight) ∪
- *     recoverable (`dropped` + `blocked-environmental`, blocker may have cleared).
- *   - DEAD-END drops (`spec-defect` / `capability-budget`) are LEFT dropped — a
+ *     recoverable (`failed` + `blocked-environmental`, blocker may have cleared).
+ *   - DEAD-END failures (`spec-defect` / `capability-budget`) are LEFT failed — a
  *     re-attempt just repeats a determined failure. They reset ONLY when a human
  *     asserts the root cause is fixed, via `includeDeadEnds` (the CLI
  *     `--include-dead-ends` flag).
@@ -39,7 +39,7 @@ export interface RescueApplyOptions {
    */
   tasks?: readonly string[];
   /**
-   * Also reset dead-end drops (`spec-defect`/`capability-budget`). Ignored when
+   * Also reset dead-end failures (`spec-defect`/`capability-budget`). Ignored when
    * explicit `tasks` are given (those are reset regardless). The human is
    * asserting the root cause is fixed; default is `false` (don't repeat dead ends).
    */
@@ -61,12 +61,12 @@ export interface RescueApplyResult {
 
 /**
  * Reset one task row to a clean `pending` state. Drops the stale producer dial
- * position, panel results, drop classification, lifecycle timestamps, phase cursor,
+ * position, panel results, failure classification, lifecycle timestamps, phase cursor,
  * and merge re-sync budget; PRESERVES identity, the dependency edges, the spec-time
  * risk dial, and the git/PR pointers (so an existing branch/PR is reused on the next
  * attempt — idempotent-create, Δ P).
  * `failure_class`/`failure_reason` MUST be dropped: the schema forbids them on any
- * non-dropped status (refineTaskCrossFields), so a reset that kept them would fail
+ * non-failed status (refineTaskCrossFields), so a reset that kept them would fail
  * re-validation.
  */
 function resetTaskRow(task: TaskState): TaskState {

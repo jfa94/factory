@@ -25,7 +25,7 @@ function task(seed: TaskSeed): TaskState {
     merge_resyncs: 0,
     ...seed,
   };
-  if (seed.status === "dropped") {
+  if (seed.status === "failed") {
     return { failure_class: "spec-defect" as const, failure_reason: "x", ...base };
   }
   return base;
@@ -58,7 +58,7 @@ describe("assessWork", () => {
   it("reports commit counts for branched non-shipped tasks", async () => {
     const run = mkRun([
       { task_id: "a", status: "executing", branch: "factory/run-1/a" },
-      { task_id: "b", status: "dropped", branch: "factory/run-1/b", pr_number: 42 },
+      { task_id: "b", status: "failed", branch: "factory/run-1/b", pr_number: 42 },
     ]);
     const probe = makeProbe([BASE, "factory/run-1/a", "factory/run-1/b"], {
       "factory/run-1/a": 3,
@@ -82,7 +82,7 @@ describe("assessWork", () => {
   });
 
   it("an absent branch reports branch_exists:false, commits_ahead:null (no count attempted)", async () => {
-    const run = mkRun([{ task_id: "a", status: "dropped", branch: "factory/run-1/a" }]);
+    const run = mkRun([{ task_id: "a", status: "failed", branch: "factory/run-1/a" }]);
     const probe = makeProbe([BASE]); // base resolves; branch does not
 
     const out = await assessWork(run, probe);
@@ -95,7 +95,7 @@ describe("assessWork", () => {
   });
 
   it("an unresolvable base reports base_resolved:false and null counts even for present branches", async () => {
-    const run = mkRun([{ task_id: "a", status: "dropped", branch: "factory/run-1/a" }]);
+    const run = mkRun([{ task_id: "a", status: "failed", branch: "factory/run-1/a" }]);
     const probe = makeProbe(["factory/run-1/a"]); // branch exists, base does NOT
 
     const out = await assessWork(run, probe);
@@ -132,7 +132,7 @@ describe("assessWork", () => {
   });
 
   it("honors the pinned staging_branch over the recomputed name", async () => {
-    const run = mkRun([{ task_id: "a", status: "dropped", branch: "factory/run-1/a" }], {
+    const run = mkRun([{ task_id: "a", status: "failed", branch: "factory/run-1/a" }], {
       staging_branch: "staging-custom",
     });
     const probe = makeProbe(["origin/staging-custom", "factory/run-1/a"], {

@@ -71,7 +71,7 @@ export function nextPhase(s: TaskPhase): TaskPhase | null {
  *   - `verify`    → `reviewing` (merge gate in flight)
  *   - `ship`      → `shipping`  (PR open / merging)
  *
- * Note these are IN-FLIGHT statuses; terminal statuses (`done`/`dropped`) come
+ * Note these are IN-FLIGHT statuses; terminal statuses (`done`/`failed`) come
  * from a `task-terminal` result, not from a phase.
  */
 export function phaseToInFlightStatus(s: TaskPhase): TaskStatus {

@@ -47,7 +47,7 @@ import { z } from "zod";
  *   - `suspended`  — QUOTA 7d-window breach (Decision 24): state persisted and the
  *                    process exited cleanly. NON-terminal; a (human-relaunched in
  *                    v1) `factory run resume` continues from checkpoint. No work
- *                    was dropped, nothing failed quality.
+ *                    was failed, nothing failed quality.
  *   - `failed`     — the run could not deliver the whole PRD — couldn't start, or
  *                    gave up after partial work; `develop` is untouched, the PRD
  *                    left open. TERMINAL.
@@ -82,8 +82,8 @@ export function isTerminalRunStatus(s: RunStatus): s is (typeof TERMINAL_RUN_STA
  *   - `reviewing`  — the merge gate (gates + panel) is in flight.
  *   - `shipping`   — verified; PR open / merging into staging.
  *   - `done`       — merged into staging (TERMINAL, success).
- *   - `dropped`    — the producer escalation ladder was exhausted; this task is a
- *                    classified loud drop (Decision 22). TERMINAL, failure. Pairs
+ *   - `failed`    — the producer escalation ladder was exhausted; this task is a
+ *                    classified loud fail (Decision 22). TERMINAL, failure. Pairs
  *                    with a {@link FailureClassEnum} value in `failure_class`.
  */
 export const TaskStatusEnum = z.enum([
@@ -92,27 +92,27 @@ export const TaskStatusEnum = z.enum([
   "reviewing",
   "shipping",
   "done",
-  "dropped",
+  "failed",
 ]);
 export type TaskStatus = z.infer<typeof TaskStatusEnum>;
 
 /** Task statuses that are TERMINAL. */
-export const TERMINAL_TASK_STATUSES = ["done", "dropped"] as const;
+export const TERMINAL_TASK_STATUSES = ["done", "failed"] as const;
 /** True iff the task status is terminal. */
 export function isTerminalTaskStatus(s: TaskStatus): boolean {
   return (TERMINAL_TASK_STATUSES as readonly string[]).includes(s);
 }
 
 /**
- * CLOSED failure-class enum (Decision 22, Δ D). When a task is `dropped` the
- * drop is *classified* so the partial-run report tells the human what to do.
+ * CLOSED failure-class enum (Decision 22, Δ D). When a task is `failed` the
+ * fail is *classified* so the partial-run report tells the human what to do.
  * This is a small, deliberately-final set — adding a class is a design change,
  * not a config tweak.
  *   - `capability-budget`     — the producer could not meet the bar within the
  *                               escalation ladder's retry/model budget.
  *   - `spec-defect`           — the failure is in the spec/target itself (e.g. an
  *                               untestable criterion, a contradiction). Classify-
- *                               before-retry (Δ D) sends these straight to drop.
+ *                               before-retry (Δ D) sends these straight to fail.
  *   - `blocked-environmental` — an external blocker (CI infra, network, a missing
  *                               dependency the task cannot itself provision).
  */
@@ -136,7 +136,7 @@ export type RiskTier = z.infer<typeof RiskTierEnum>;
  * Escalation rung — where on the producer ladder the task currently sits
  * (Decision 25). Rung 0 = the starting rung implied by the risk tier; each
  * nuke-and-retry bumps it. The ladder cap (`ESCALATION_CAP` = 4 extra attempts) is
- * enforced by the driver (`src/driver/transitions.ts` escalateOrDrop), not the
+ * enforced by the driver (`src/driver/transitions.ts` escalateOrFail), not the
  * schema; the schema only records the rung reached so a resume continues from the
  * right place. Non-negative integer.
  */
@@ -243,17 +243,17 @@ export const TaskStateSchema = z.object({
   /** PR number once created (idempotent-create keyed off branch, Δ P). */
   pr_number: z.number().int().positive().optional(),
 
-  // --- Drop classification (Decision 22, Δ D) ---
-  /** Set IFF status === "dropped": the closed-enum cause. */
+  // --- Failure classification (Decision 22, Δ D) ---
+  /** Set IFF status === "failed": the closed-enum cause. */
   failure_class: FailureClassEnum.optional(),
-  /** Human-facing reason string accompanying a drop. */
+  /** Human-facing reason string accompanying a fail. */
   failure_reason: z.string().optional(),
 
   /**
    * The precise resume cursor for the drive coroutine — which TaskPhase the task is
    * at/resuming at. Written by markInFlight. Lossy `status` stays the human-facing
    * summary; `phase` is the machine cursor. Absent = not started (preflight).
-   * NOTE: on terminal rows (done/dropped), `phase` is the last in-flight phase,
+   * NOTE: on terminal rows (done/failed), `phase` is the last in-flight phase,
    * not a resume point — terminal writers do not clear it.
    * NOTE: these literals DUPLICATE phase-machine's TASK_PHASE_ORDER because
    * core/state must not import phase-machine (dependency direction, enforced by
@@ -275,7 +275,7 @@ export const TaskStateSchema = z.object({
    * the resume that re-enters the SAME (phase, rung) before any results were recorded,
    * the coroutine resets the worktree to `tip_sha` — discarding ONLY the interrupted
    * phase's work (prior completed phases live below it) — then re-spawns. A fresh
-   * spawn overwrites it; terminal writers (complete/drop) clear it. Absent = no spawn
+   * spawn overwrites it; terminal writers (complete/fail) clear it. Absent = no spawn
    * in flight (the steady state between phases).
    *
    * `phase` is the spawn-phase subset (tests|exec|verify) — preflight/ship never spawn.
@@ -298,47 +298,47 @@ export const TaskStateSchema = z.object({
 export type TaskState = z.infer<typeof TaskStateSchema>;
 
 /**
- * Cross-field invariant (Decision 22, Δ D): a drop MUST be classified, and a
- * failure_class is meaningless on any non-dropped status — "set IFF dropped".
+ * Cross-field invariant (Decision 22, Δ D): a fail MUST be classified, and a
+ * failure_class is meaningless on any non-failed status — "set IFF failed".
  * Applied at parse time (see {@link parseTaskState} / {@link parseRunState}) so
  * the exported {@link TaskStateSchema} stays a plain object — keeps `.shape` /
  * `.extend` for downstream — while every sanctioned parse still rejects the
- * invalid shapes. Lets WS2/WS12 non-null-assert failure_class on a dropped task
+ * invalid shapes. Lets WS2/WS12 non-null-assert failure_class on a failed task
  * and never encounter it on a done one.
  */
 function refineTaskCrossFields(task: TaskState, ctx: z.RefinementCtx): void {
-  const isDropped = task.status === "dropped";
-  if (isDropped && task.failure_class == null) {
+  const isFailed = task.status === "failed";
+  if (isFailed && task.failure_class == null) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["failure_class"],
-      message: `task '${task.task_id}' is 'dropped' but has no failure_class (a drop must be classified)`,
+      message: `task '${task.task_id}' is 'failed' but has no failure_class (a fail must be classified)`,
     });
   }
-  if (!isDropped && task.failure_class != null) {
+  if (!isFailed && task.failure_class != null) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["failure_class"],
-      message: `task '${task.task_id}' has failure_class '${task.failure_class}' but status is '${task.status}' (failure_class is set IFF dropped)`,
+      message: `task '${task.task_id}' has failure_class '${task.failure_class}' but status is '${task.status}' (failure_class is set IFF failed)`,
     });
   }
 
-  // `failure_reason` is set IFF dropped, mirroring failure_class — TaskTerminalResult's
-  // dropped variant makes `reason: string` MANDATORY, so the persisted twin must too
-  // (Decision 22: a drop carries the human-facing reason for the partial-run report).
+  // `failure_reason` is set IFF failed, mirroring failure_class — TaskTerminalResult's
+  // failed variant makes `reason: string` MANDATORY, so the persisted twin must too
+  // (Decision 22: a fail carries the human-facing reason for the partial-run report).
   const hasReason = task.failure_reason != null && task.failure_reason.length > 0;
-  if (isDropped && !hasReason) {
+  if (isFailed && !hasReason) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["failure_reason"],
-      message: `task '${task.task_id}' is 'dropped' but has no failure_reason (a drop must carry a human-facing reason)`,
+      message: `task '${task.task_id}' is 'failed' but has no failure_reason (a fail must carry a human-facing reason)`,
     });
   }
-  if (!isDropped && task.failure_reason != null) {
+  if (!isFailed && task.failure_reason != null) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["failure_reason"],
-      message: `task '${task.task_id}' has a failure_reason but status is '${task.status}' (failure_reason is set IFF dropped)`,
+      message: `task '${task.task_id}' has a failure_reason but status is '${task.status}' (failure_reason is set IFF failed)`,
     });
   }
 
@@ -450,7 +450,7 @@ export type ShipMode = z.infer<typeof ShipModeEnum>;
  */
 export const RunStateSchema = z.object({
   /** State-schema version (independent of plugin version). */
-  schema_version: z.literal(1).default(1),
+  schema_version: z.literal(2).default(2),
   /** `run-YYYYMMDD-HHMMSS`. */
   run_id: z.string().min(1),
   status: RunStatusEnum.default("running"),
@@ -543,7 +543,7 @@ export function parseRunState(raw: unknown): RunState {
 
 /**
  * Parse + validate an unknown value as a {@link TaskState}, including the
- * "failure_class set IFF dropped" cross-field invariant. Prefer this over
+ * "failure_class set IFF failed" cross-field invariant. Prefer this over
  * `TaskStateSchema.parse`.
  */
 export function parseTaskState(raw: unknown): TaskState {

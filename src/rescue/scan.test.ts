@@ -4,8 +4,8 @@
  * `scanRun` is pure over {@link RunState}, so these tests build run states directly
  * via {@link parseRunState} and assert the classification contract:
  *   - disposition: done→shipped, pending→runnable, in-flight→stuck,
- *     dropped+blocked-environmental→recoverable, dropped+other→dead-end;
- *   - resettable = stuck ∪ recoverable; dead_ends = the dead-end drops;
+ *     failed+blocked-environmental→recoverable, failed+other→dead-end;
+ *   - resettable = stuck ∪ recoverable; dead_ends = the dead-end failures;
  *   - needs_rescue iff anything is resettable;
  *   - would_deadlock iff non-terminal work remains but no pending task is actionable
  *     (the driver's deadlock guard) — distinct from needs_rescue;
@@ -29,8 +29,8 @@ function task(seed: TaskSeed): TaskState {
     merge_resyncs: 0,
     ...seed,
   };
-  // A dropped row must carry the classification (cross-field invariant).
-  if (seed.status === "dropped") {
+  // A failed row must carry the classification (cross-field invariant).
+  if (seed.status === "failed") {
     return {
       failure_class: "capability-budget" as const,
       failure_reason: "ran out of retries",
@@ -60,9 +60,9 @@ describe("scanRun — disposition", () => {
         { task_id: "stuck-x", status: "executing" },
         { task_id: "stuck-r", status: "reviewing" },
         { task_id: "stuck-s", status: "shipping" },
-        { task_id: "recover", status: "dropped", failure_class: "blocked-environmental" },
-        { task_id: "dead-spec", status: "dropped", failure_class: "spec-defect" },
-        { task_id: "dead-cap", status: "dropped", failure_class: "capability-budget" },
+        { task_id: "recover", status: "failed", failure_class: "blocked-environmental" },
+        { task_id: "dead-spec", status: "failed", failure_class: "spec-defect" },
+        { task_id: "dead-cap", status: "failed", failure_class: "capability-budget" },
       ]),
     );
     const disp = Object.fromEntries(scan.tasks.map((t) => [t.task_id, t.disposition]));
@@ -92,8 +92,8 @@ describe("scanRun — resettable / dead_ends / needs_rescue", () => {
     const scan = scanRun(
       mkRun([
         { task_id: "a", status: "executing" },
-        { task_id: "b", status: "dropped", failure_class: "blocked-environmental" },
-        { task_id: "c", status: "dropped", failure_class: "spec-defect" },
+        { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
+        { task_id: "c", status: "failed", failure_class: "spec-defect" },
         { task_id: "d", status: "done" },
       ]),
     );
@@ -106,13 +106,13 @@ describe("scanRun — resettable / dead_ends / needs_rescue", () => {
     const scan = scanRun(
       mkRun([
         { task_id: "a", status: "done" },
-        { task_id: "c", status: "dropped", failure_class: "spec-defect" },
+        { task_id: "c", status: "failed", failure_class: "spec-defect" },
       ]),
     );
     expect(scan.resettable).toEqual([]);
     expect(scan.needs_rescue).toBe(false);
     expect(scan.summary).toMatch(/no rescue needed/);
-    expect(scan.summary).toMatch(/dead-end/); // names the unrecoverable drop
+    expect(scan.summary).toMatch(/dead-end/); // names the unrecoverable fail
   });
 
   it("carries failure/branch/PR passthrough on the task lines", () => {
@@ -121,7 +121,7 @@ describe("scanRun — resettable / dead_ends / needs_rescue", () => {
         { task_id: "a", status: "shipping", branch: "factory/run/a", pr_number: 9 },
         {
           task_id: "b",
-          status: "dropped",
+          status: "failed",
           failure_class: "spec-defect",
           failure_reason: "criterion unattainable",
         },
@@ -168,24 +168,24 @@ describe("scanRun — would_deadlock (the driver's guard, mirrored)", () => {
       mkRun(
         [
           { task_id: "a", status: "done" },
-          { task_id: "b", status: "dropped", failure_class: "blocked-environmental" },
+          { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
         ],
         "failed",
       ),
     );
     expect(scan.would_deadlock).toBe(false);
-    // a recoverable drop on a terminal run still needs rescue (retry on reopen).
+    // a recoverable fail on a terminal run still needs rescue (retry on reopen).
     expect(scan.needs_rescue).toBe(true);
   });
 
-  it("treats a pending task whose dep was dropped as actionable (cascade-droppable)", () => {
+  it("treats a pending task whose dep was failed as actionable (cascade-failable)", () => {
     const scan = scanRun(
       mkRun([
-        { task_id: "a", status: "dropped", failure_class: "spec-defect" },
+        { task_id: "a", status: "failed", failure_class: "spec-defect" },
         { task_id: "b", status: "pending", depends_on: ["a"] },
       ]),
     );
-    // B's dep is dropped → the driver cascade-drops B; not a deadlock.
+    // B's dep is failed → the driver cascade-fails B; not a deadlock.
     expect(scan.would_deadlock).toBe(false);
   });
 });
@@ -196,7 +196,7 @@ describe("scanRun — summary", () => {
       mkRun(
         [
           { task_id: "a", status: "done" },
-          { task_id: "b", status: "dropped", failure_class: "blocked-environmental" },
+          { task_id: "b", status: "failed", failure_class: "blocked-environmental" },
         ],
         "failed",
       ),

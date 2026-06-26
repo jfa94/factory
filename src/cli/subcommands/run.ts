@@ -72,7 +72,7 @@ Usage:
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
-  finalize   Build the run report, file per-drop issues, ship the rollup only when completed, flip terminal.
+  finalize   Build the run report, file per-failure issues, ship the rollup only when completed, flip terminal.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 
@@ -133,7 +133,7 @@ Usage:
               merges the staging→develop rollup; no-merge opens it only).
 
 Builds the deterministic partial-run report (report.md), emits run.finalized
-telemetry, on a failed run comments the dropped tasks on the PRD issue (deduped),
+telemetry, on a failed run comments the failed tasks on the PRD issue (deduped),
 opens + CI-gates + (when shipping live) squash-merges the staging→develop rollup,
 then flips the run terminal — in that resume-safe order. LOUD if any task is still
 non-terminal.

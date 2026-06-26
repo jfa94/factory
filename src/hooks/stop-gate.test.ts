@@ -29,7 +29,7 @@ function task(over: Partial<TaskState> = {}): TaskState {
 
 function run(over: Partial<RunState> = {}, tasks: Record<string, TaskState> = {}): RunState {
   return {
-    schema_version: 1,
+    schema_version: 2,
     run_id: "run-x",
     status: "running",
     execution_mode: "balanced",
@@ -135,22 +135,22 @@ describe("decideStop — session-mode, all tasks terminal → finalize", () => {
     expect(action).toEqual({ kind: "finalize", status: "completed" });
   });
 
-  it("mix of done + dropped → finalize failed (Decision 34: no partial rollup)", () => {
+  it("mix of done + failed → finalize failed (Decision 34: no partial rollup)", () => {
     const action = decideStop(
       run(
         {},
         {
           a: task({ task_id: "a", status: "done" }),
-          b: task({ task_id: "b", status: "dropped", failure_class: "capability-budget" }),
+          b: task({ task_id: "b", status: "failed", failure_class: "capability-budget" }),
         },
       ),
     );
     expect(action).toEqual({ kind: "finalize", status: "failed" });
   });
 
-  it("all dropped (zero done) → finalize failed", () => {
+  it("all failed (zero done) → finalize failed", () => {
     const action = decideStop(
-      run({}, { a: task({ task_id: "a", status: "dropped", failure_class: "spec-defect" }) }),
+      run({}, { a: task({ task_id: "a", status: "failed", failure_class: "spec-defect" }) }),
     );
     expect(action).toEqual({ kind: "finalize", status: "failed" });
   });

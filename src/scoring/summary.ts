@@ -4,7 +4,7 @@
  * A compact, deterministic roll-up of a run's outcome, derived PURELY from the
  * persisted {@link RunState} + the {@link PartialRunReport} already built from it.
  * The orchestrator surfaces this (alongside the partial report) so a finished run —
- * `completed` or `failed` — is legible at a glance: what shipped, what dropped and
+ * `completed` or `failed` — is legible at a glance: what shipped, what failed and
  * under which failure class, how long it took, and how much producer + reviewer
  * effort it consumed.
  *
@@ -52,7 +52,7 @@ export interface RunSummary {
   };
   /** Task tallies (mirrors the partial report's totals). */
   totals: PartialRunReport["totals"];
-  /** Drop tally per closed failure class — every class present (0 when none). */
+  /** Failure tally per closed failure class — every class present (0 when none). */
   failures_by_class: Record<FailureClass, number>;
   /** Producer + reviewer effort. */
   effort: RunEffort;
@@ -167,7 +167,7 @@ export function renderRunSummaryMarkdown(summary: RunSummary): string {
     .filter((c) => summary.failures_by_class[c] > 0)
     .map((c) => `${summary.failures_by_class[c]} ${c}`)
     .join(" · ");
-  if (classLine.length > 0) out.push(`**Drops:** ${classLine}`);
+  if (classLine.length > 0) out.push(`**Failures:** ${classLine}`);
 
   out.push(
     `**Effort:** ${summary.effort.reviewer_results} reviewer result(s) · ` +

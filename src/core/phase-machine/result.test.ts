@@ -5,7 +5,7 @@ import {
   gracefulStop,
   waitRetry,
   taskDone,
-  taskDropped,
+  taskFailed,
   finalizeTerminal,
   assertNever,
   isTerminalResult,
@@ -53,11 +53,11 @@ describe("PhaseResult constructors build correct discriminants", () => {
     });
   });
 
-  it("taskDone / taskDropped build the nested outcome", () => {
+  it("taskDone / taskFailed build the nested outcome", () => {
     expect(taskDone()).toEqual({ kind: "task-terminal", outcome: { outcome: "done" } });
-    expect(taskDropped("capability-budget", "exhausted")).toEqual({
+    expect(taskFailed("capability-budget", "exhausted")).toEqual({
       kind: "task-terminal",
-      outcome: { outcome: "dropped", failure_class: "capability-budget", reason: "exhausted" },
+      outcome: { outcome: "failed", failure_class: "capability-budget", reason: "exhausted" },
     });
   });
 
@@ -81,7 +81,7 @@ describe("isTerminalResult", () => {
   it("classifies each kind correctly", () => {
     const terminal: PhaseResult[] = [
       taskDone(),
-      taskDropped("spec-defect", "bad spec"),
+      taskFailed("spec-defect", "bad spec"),
       finalizeTerminal("completed"),
       gracefulStop("7d", "quota"),
     ];

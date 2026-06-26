@@ -115,7 +115,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       const { agent } = makeAgent([null]);
       const out = await build(agent)("T1", env());
       expect(out.producer.status).toMatch(/^STATUS: ERROR/);
-      // Critical: a transient harness death must NOT classify as a permanent BLOCKED drop.
+      // Critical: a transient harness death must NOT classify as a permanent BLOCKED failure.
       expect(out.producer.status).not.toContain("BLOCKED");
     });
 
@@ -186,7 +186,7 @@ describe("factory-run-driver orchestration (workflow-mode drift guard)", () => {
       await expect(build(agent)("T1", panelEnv(2))).rejects.toThrow(/reviewer\(s\) died/);
     });
 
-    it("throws loud when a finding-verifier dies (null verdict slot), never a silent blocker-drop", async () => {
+    it("throws loud when a finding-verifier dies (null verdict slot), never a silent blocker-failure", async () => {
       // 1 reviewer with one blocking+citable finding; its verifier returns null.
       const blocking = {
         reviewer: "r0",

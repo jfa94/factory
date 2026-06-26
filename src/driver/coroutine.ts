@@ -43,8 +43,8 @@ import type { UsageSignal } from "./deps.js";
 import {
   markInFlight,
   completeTask,
-  dropStep,
-  escalateOrDrop,
+  failStep,
+  escalateOrFail,
   type TaskOutcome,
   type TaskStep,
 } from "./transitions.js";
@@ -152,7 +152,7 @@ function terminalOutcome(task: TaskState): TaskOutcome {
     );
   }
   return {
-    outcome: "dropped",
+    outcome: "failed",
     failure_class: task.failure_class,
     reason: task.failure_reason,
   };
@@ -349,7 +349,7 @@ export async function nextAction(
         // phase, escalate bumps the rung, and the ship→exec re-sync lands on exec while
         // the checkpoint still names verify. Verify spawns read-only reviewers in their
         // own isolated worktrees, so HEAD never moved and the reset is a no-op. Terminal
-        // writers (complete/drop) clear it; recording need not (the (phase, rung) change
+        // writers (complete/fail) clear it; recording need not (the (phase, rung) change
         // already shields it), so this stays the lone live read of the field.
         // Gated on the worktree existing: past preflight every producer/verify spawn
         // has one, so this is true in any real run. When it is ABSENT (a degenerate
@@ -390,14 +390,14 @@ export async function nextAction(
           if (!step.done) throw new Error("coroutine: completeTask returned non-terminal step");
           return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
-        const step = await dropStep(
+        const step = await failStep(
           deps,
           runId,
           taskId,
           result.outcome.failure_class,
           result.outcome.reason,
         );
-        if (!step.done) throw new Error("coroutine: dropStep returned non-terminal step");
+        if (!step.done) throw new Error("coroutine: failStep returned non-terminal step");
         return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
       }
       case "wait-retry": {
@@ -408,9 +408,9 @@ export async function nextAction(
           // budget (old code committed the bump under phase "ship", then markInFlight
           // separately wrote the exec cursor — a crash in that window replayed ship
           // and re-bumped). The capped check runs inside the mutator against the
-          // committed value, never a stale pre-read. Over-cap is a terminal drop and
-          // deliberately leaves the cursor at "ship" (the drop is the next write,
-          // idempotent on resume) so a crash-during-drop doesn't re-run exec+verify
+          // committed value, never a stale pre-read. Over-cap is a terminal failure and
+          // deliberately leaves the cursor at "ship" (the failure is the next write,
+          // idempotent on resume) so a crash-during-fail doesn't re-run exec+verify
           // and re-spend agent budget.
           let newResyncs = 0;
           let overCap = false;
@@ -426,14 +426,14 @@ export async function nextAction(
             };
           });
           if (overCap) {
-            const step = await dropStep(
+            const step = await failStep(
               deps,
               runId,
               taskId,
               "blocked-environmental",
               `serial-merge re-sync budget (${MERGE_RESYNC_CAP}) exhausted: ${result.reason}`,
             );
-            if (!step.done) throw new Error("coroutine: dropStep returned non-terminal step");
+            if (!step.done) throw new Error("coroutine: failStep returned non-terminal step");
             return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
           }
           log.info(
@@ -445,7 +445,7 @@ export async function nextAction(
           continue;
         }
         // verify merge gate blocked on a crash-resume replay → same classify path as the record.
-        const step = await escalateOrDrop(
+        const step = await escalateOrFail(
           deps,
           runId,
           taskId,
@@ -456,7 +456,7 @@ export async function nextAction(
           return { kind: "done", run_id: runId, task_id: taskId, outcome: step.outcome };
         }
         phase = step.phase;
-        cursorPersisted = false; // escalateOrDrop wrote rung+reviewers, not the cursor
+        cursorPersisted = false; // escalateOrFail wrote rung+reviewers, not the cursor
         continue;
       }
       case "graceful-stop":

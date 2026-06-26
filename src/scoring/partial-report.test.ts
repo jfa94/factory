@@ -47,14 +47,14 @@ function doneTask(id: string, pr: number): TaskState {
   } as TaskState;
 }
 
-function droppedTask(
+function failedTask(
   id: string,
   failure_class: TaskState["failure_class"],
   reason: string,
 ): TaskState {
   return {
     task_id: id,
-    status: "dropped",
+    status: "failed",
     failure_class,
     failure_reason: reason,
   } as TaskState;
@@ -68,7 +68,7 @@ function makeRun(tasks: TaskState[], overrides: Partial<RunState> = {}): RunStat
   const record: Record<string, TaskState> = {};
   for (const t of tasks) record[t.task_id] = t;
   return parseRunState({
-    schema_version: 1,
+    schema_version: 2,
     run_id: "run-1",
     status: "failed",
     execution_mode: "balanced",
@@ -91,7 +91,7 @@ describe("buildPartialReport", () => {
     const run = makeRun([
       doneTask("t1", 11),
       doneTask("t2", 12),
-      droppedTask("t3", "capability-budget", "ladder exhausted"),
+      failedTask("t3", "capability-budget", "ladder exhausted"),
     ]);
 
     const report = buildPartialReport(run, spec, { now: NOW });
@@ -135,12 +135,12 @@ describe("buildPartialReport", () => {
     expect(report.incomplete).toEqual([]);
   });
 
-  it("a failed run (nothing shipped) lists all drops, no shipped", () => {
+  it("a failed run (nothing shipped) lists all fails, no shipped", () => {
     const spec = makeSpec([specTask("t1"), specTask("t2")]);
     const run = makeRun(
       [
-        droppedTask("t1", "spec-defect", "untestable criterion"),
-        droppedTask("t2", "blocked-environmental", "dependency dropped"),
+        failedTask("t1", "spec-defect", "untestable criterion"),
+        failedTask("t2", "blocked-environmental", "dependency failed"),
       ],
       { status: "failed" },
     );
@@ -178,12 +178,12 @@ describe("buildPartialReport", () => {
 
   it("carries branch/pr pointers through to failures when present", () => {
     const spec = makeSpec([specTask("t1")]);
-    const dropped: TaskState = {
-      ...droppedTask("t1", "capability-budget", "exhausted"),
+    const failed: TaskState = {
+      ...failedTask("t1", "capability-budget", "exhausted"),
       branch: "factory/run-1/t1",
       pr_number: 99,
     };
-    const run = makeRun([dropped], { status: "failed" });
+    const run = makeRun([failed], { status: "failed" });
 
     const report = buildPartialReport(run, spec, { now: NOW });
     expect(report.failures[0]).toMatchObject({ branch: "factory/run-1/t1", pr_number: 99 });
@@ -195,7 +195,7 @@ describe("renderPartialReportMarkdown", () => {
     const spec = makeSpec([specTask("t1"), specTask("t2")]);
     const run = makeRun([
       doneTask("t1", 11),
-      droppedTask("t2", "capability-budget", "ladder exhausted"),
+      failedTask("t2", "capability-budget", "ladder exhausted"),
     ]);
 
     const md = renderPartialReportMarkdown(buildPartialReport(run, spec, { now: NOW }));
@@ -224,7 +224,7 @@ describe("renderPartialReportMarkdown", () => {
 
   it("shows _none_ when nothing shipped", () => {
     const spec = makeSpec([specTask("t1")]);
-    const run = makeRun([droppedTask("t1", "spec-defect", "untestable")], { status: "failed" });
+    const run = makeRun([failedTask("t1", "spec-defect", "untestable")], { status: "failed" });
     const md = renderPartialReportMarkdown(buildPartialReport(run, spec, { now: NOW }));
 
     expect(md).toContain("## Shipped (0)");
@@ -239,12 +239,12 @@ describe("failureCommentMarker", () => {
 });
 
 describe("renderFailureComment", () => {
-  it("leads with the marker and renders one block per drop with unmet criteria checkboxes", () => {
+  it("leads with the marker and renders one block per fail with unmet criteria checkboxes", () => {
     const spec = makeSpec([specTask("t1"), specTask("t2")]);
     const run = makeRun(
       [
-        droppedTask("t1", "capability-budget", "ladder exhausted at rung 2"),
-        droppedTask("t2", "spec-defect", "criterion unattainable"),
+        failedTask("t1", "capability-budget", "ladder exhausted at rung 2"),
+        failedTask("t2", "spec-defect", "criterion unattainable"),
       ],
       { status: "failed" },
     );
@@ -253,9 +253,9 @@ describe("renderFailureComment", () => {
 
     // Marker is the very first line → finalize's dedup scan finds it on re-entry.
     expect(body.startsWith(failureCommentMarker("run-1"))).toBe(true);
-    expect(body).toContain("Factory run `run-1` failed — 2 task(s) dropped");
+    expect(body).toContain("Factory run `run-1` failed — 2 task(s) failed");
     expect(body).toContain("PRD left open for rescue/resume");
-    // One block per dropped task.
+    // One block per failed task.
     expect(body).toContain("### `t1` — Title t1");
     expect(body).toContain("- **Class:** `capability-budget`");
     expect(body).toContain("- **Reason:** ladder exhausted at rung 2");
@@ -268,12 +268,12 @@ describe("renderFailureComment", () => {
 
   it("includes branch + PR pointers when present", () => {
     const spec = makeSpec([specTask("t1")]);
-    const dropped: TaskState = {
-      ...droppedTask("t1", "blocked-environmental", "CI infra down"),
+    const failed: TaskState = {
+      ...failedTask("t1", "blocked-environmental", "CI infra down"),
       branch: "factory/run-1/t1",
       pr_number: 7,
     };
-    const run = makeRun([dropped], { status: "failed" });
+    const run = makeRun([failed], { status: "failed" });
     const report = buildPartialReport(run, spec, { now: NOW });
     const body = renderFailureComment(report);
 

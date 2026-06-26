@@ -14,7 +14,7 @@
  *
  * A resume NEVER touches committed task state: it only returns the run-level
  * status/quota patch (Decision 24 — suspended means "no work dropped, nothing
- * failed quality", so done/dropped tasks stay exactly as persisted).
+ * failed quality", so done/failed tasks stay exactly as persisted).
  */
 import type { RunState } from "../types/index.js";
 import type { Config } from "../config/schema.js";

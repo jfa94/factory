@@ -1,11 +1,11 @@
 /**
  * WS10 / Task C — unit tests for the SHARED deterministic transition logic
- * ({@link transitions.ts}). These are the per-task ladder + drop/complete writes
+ * ({@link transitions.ts}). These are the per-task ladder + fail/complete writes
  * that the coroutine records through (`record.ts` / `coroutine.ts`), so they are tested here ONCE,
  * against a real {@link StateManager} (temp dir). The coroutine suite (`coroutine.test.ts`) is
  * the end-to-end regression guard; this suite pins
- * the units in isolation (every branch of escalateOrDrop / applyProducerOutcome /
- * classifyProducerFailure / markInFlight / completeTask / dropTask / dropStep).
+ * the units in isolation (every branch of escalateOrFail / applyProducerOutcome /
+ * classifyProducerFailure / markInFlight / completeTask / failTask / failStep).
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -15,9 +15,9 @@ import { join } from "node:path";
 import {
   markInFlight,
   completeTask,
-  dropTask,
-  dropStep,
-  escalateOrDrop,
+  failTask,
+  failStep,
+  escalateOrFail,
   classifyProducerFailure,
   applyProducerOutcome,
   type TransitionDeps,
@@ -29,7 +29,7 @@ import type { TaskState, TaskPhase } from "../types/index.js";
 
 const RUN_ID = "run-1";
 
-describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
+describe("driver transitions (shared loop + CLI ladder/fail logic)", () => {
   let dataDir: string;
   let state: StateManager;
   let deps: TransitionDeps;
@@ -132,58 +132,58 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     expect((await readTask("t1")).spawn_in_flight).toBeUndefined();
   });
 
-  // -- dropTask / dropStep --------------------------------------------------
+  // -- failTask / failStep --------------------------------------------------
 
-  it("dropTask persists the closed failure_class + reason (loud drop)", async () => {
+  it("failTask persists the closed failure_class + reason (loud fail)", async () => {
     await seedTask({ task_id: "t1", status: "executing" });
-    await dropTask(deps, RUN_ID, "t1", "spec-defect", "criterion self-contradictory");
+    await failTask(deps, RUN_ID, "t1", "spec-defect", "criterion self-contradictory");
 
     const task = await readTask("t1");
-    expect(task.status).toBe("dropped");
+    expect(task.status).toBe("failed");
     expect(task.failure_class).toBe("spec-defect");
     expect(task.failure_reason).toBe("criterion self-contradictory");
     expect(task.ended_at).toBeDefined();
   });
 
-  it("dropTask clears any spawn_in_flight checkpoint (WS2 terminal hygiene)", async () => {
+  it("failTask clears any spawn_in_flight checkpoint (WS2 terminal hygiene)", async () => {
     await seedTask({
       task_id: "t1",
       status: "executing",
       spawn_in_flight: { phase: "exec", rung: 2, tip_sha: "sha-tip" },
     });
-    await dropTask(deps, RUN_ID, "t1", "capability-budget", "cap reached");
+    await failTask(deps, RUN_ID, "t1", "capability-budget", "cap reached");
     expect((await readTask("t1")).spawn_in_flight).toBeUndefined();
   });
 
-  it("dropStep drops then returns the dropped outcome step", async () => {
+  it("failStep fails then returns the failed outcome step", async () => {
     await seedTask({ task_id: "t1", status: "executing" });
-    const step = await dropStep(deps, RUN_ID, "t1", "blocked-environmental", "ci down");
+    const step = await failStep(deps, RUN_ID, "t1", "blocked-environmental", "ci down");
 
     expect(step).toEqual({
       done: true,
-      outcome: { outcome: "dropped", failure_class: "blocked-environmental", reason: "ci down" },
+      outcome: { outcome: "failed", failure_class: "blocked-environmental", reason: "ci down" },
     });
-    expect((await readTask("t1")).status).toBe("dropped");
+    expect((await readTask("t1")).status).toBe("failed");
   });
 
-  // -- escalateOrDrop -------------------------------------------------------
+  // -- escalateOrFail -------------------------------------------------------
 
-  it("escalateOrDrop on a drop decision is an immediate classified drop (no rung burn)", async () => {
+  it("escalateOrFail on a fail decision is an immediate classified fail (no rung burn)", async () => {
     await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
     const decision: ClassifyDecision = {
-      action: "drop",
+      action: "fail",
       failureClass: "spec-defect",
       reason: "unworkable",
     };
-    const step = await escalateOrDrop(deps, RUN_ID, "t1", decision, "exec");
+    const step = await escalateOrFail(deps, RUN_ID, "t1", decision, "exec");
 
     expect(step.done).toBe(true);
     const task = await readTask("t1");
-    expect(task.status).toBe("dropped");
+    expect(task.status).toBe("failed");
     expect(task.escalation_rung).toBe(0); // never escalated
   });
 
-  it("escalateOrDrop on a retry below the cap bumps the rung, clears reviewers, resumes at the phase", async () => {
+  it("escalateOrFail on a retry below the cap bumps the rung, clears reviewers, resumes at the phase", async () => {
     await seedTask({
       task_id: "t1",
       status: "reviewing",
@@ -191,7 +191,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
       reviewers: [{ reviewer: "quality-reviewer", verdict: "blocked", confirmed_blockers: 1 }],
     });
     const decision: ClassifyDecision = { action: "retry", reason: "merge gate blocked" };
-    const step = await escalateOrDrop(deps, RUN_ID, "t1", decision, "exec");
+    const step = await escalateOrFail(deps, RUN_ID, "t1", decision, "exec");
 
     expect(step).toEqual({ done: false, phase: "exec" });
     const task = await readTask("t1");
@@ -199,32 +199,32 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     expect(task.reviewers).toEqual([]); // stale reviewers cleared so verify re-derives
   });
 
-  it("escalateOrDrop on a retry AT the cap drops capability-budget (ladder owns the cap)", async () => {
+  it("escalateOrFail on a retry AT the cap fails capability-budget (ladder owns the cap)", async () => {
     await seedTask({ task_id: "t1", status: "reviewing", escalation_rung: ESCALATION_CAP });
     const decision: ClassifyDecision = { action: "retry", reason: "still blocked" };
-    const step = await escalateOrDrop(deps, RUN_ID, "t1", decision, "exec");
+    const step = await escalateOrFail(deps, RUN_ID, "t1", decision, "exec");
 
     expect(step.done).toBe(true);
     if (!step.done) throw new Error("unreachable");
-    expect(step.outcome.outcome).toBe("dropped");
-    if (step.outcome.outcome !== "dropped") throw new Error("unreachable");
+    expect(step.outcome.outcome).toBe("failed");
+    if (step.outcome.outcome !== "failed") throw new Error("unreachable");
     expect(step.outcome.failure_class).toBe("capability-budget");
     expect((await readTask("t1")).escalation_rung).toBe(ESCALATION_CAP); // not bumped past cap
   });
 
-  it("escalateOrDrop throws loud if the task vanished mid-flight", async () => {
+  it("escalateOrFail throws loud if the task vanished mid-flight", async () => {
     const decision: ClassifyDecision = { action: "retry", reason: "x" };
-    await expect(escalateOrDrop(deps, RUN_ID, "ghost", decision, "exec")).rejects.toThrow(
+    await expect(escalateOrFail(deps, RUN_ID, "ghost", decision, "exec")).rejects.toThrow(
       /vanished/i,
     );
   });
 
   // -- classifyProducerFailure ----------------------------------------------
 
-  it("classifyProducerFailure: blocked-escalate → drop spec-defect", () => {
+  it("classifyProducerFailure: blocked-escalate → fail spec-defect", () => {
     const d = classifyProducerFailure({ status: "blocked-escalate", reason: "unworkable" });
     expect(d).toEqual({
-      action: "drop",
+      action: "fail",
       failureClass: "spec-defect",
       reason: expect.stringContaining("unworkable"),
     });
@@ -273,7 +273,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
     expect((await readTask("t1")).escalation_rung).toBe(1);
   });
 
-  it("applyProducerOutcome on blocked-escalate drops immediately (spec-defect, no rung burn)", async () => {
+  it("applyProducerOutcome on blocked-escalate fails immediately (spec-defect, no rung burn)", async () => {
     await seedTask({ task_id: "t1", status: "executing", escalation_rung: 0 });
     const outcome: ProducerOutcome = { status: "blocked-escalate", reason: "unworkable" };
     const step = await applyProducerOutcome(
@@ -286,7 +286,7 @@ describe("driver transitions (shared loop + CLI ladder/drop logic)", () => {
 
     expect(step.done).toBe(true);
     if (!step.done) throw new Error("unreachable");
-    if (step.outcome.outcome !== "dropped") throw new Error("unreachable");
+    if (step.outcome.outcome !== "failed") throw new Error("unreachable");
     expect(step.outcome.failure_class).toBe("spec-defect");
     expect((await readTask("t1")).escalation_rung).toBe(0);
   });

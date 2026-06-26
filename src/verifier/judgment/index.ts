@@ -45,7 +45,7 @@ export {
   CITATION_WINDOW,
   verifyCitations,
   type SourceReader,
-  type DropReason,
+  type FailReason,
   type DroppedFinding,
   type CitationVerifyResult,
   type VerifyCitationsOptions,

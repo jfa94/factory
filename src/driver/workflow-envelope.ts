@@ -13,7 +13,7 @@
  *   structured output." Re-emitting a typed object invited the model to re-key it:
  *     {kind:"work", ready:["T1","T2"], …}
  *       →  {kind:"factory-envelope", kind_type:"work",
- *           ready:"[\"T1\",\"T2\"]" (stringified), cascade_dropped:"[]"}
+ *           ready:"[\"T1\",\"T2\"]" (stringified), cascade_failed:"[]"}
  *   The loose schema caught none of it; the run mis-drove and died at the JS kind
  *   guard with `unknown envelope kind 'factory-envelope'`.
  *

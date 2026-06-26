@@ -9,12 +9,12 @@ const CONFIG = defaultConfig();
 const NOW = 1_700_000_000;
 
 /**
- * A suspended run with one done task and one dropped task — committed work that
+ * A suspended run with one done task and one failed task — committed work that
  * must NOT be disturbed by a resume.
  */
 function suspendedRun(): RunState {
   return parseRunState({
-    schema_version: 1,
+    schema_version: 2,
     run_id: "run-20260604-000000",
     status: "suspended",
     execution_mode: "balanced",
@@ -24,7 +24,7 @@ function suspendedRun(): RunState {
       b: {
         task_id: "b",
         risk_tier: "high",
-        status: "dropped",
+        status: "failed",
         failure_class: "capability-budget",
         failure_reason: "ladder exhausted",
       },
@@ -73,10 +73,10 @@ describe("Δ F resume from checkpoint — under-curve reading resumes from the l
     const resumed = parseRunState({ ...run, ...plan.clear });
     expect(resumed.status).toBe("running");
     expect(resumed.quota).toBeUndefined();
-    // Committed task state is untouched: the done task stays done, the dropped
-    // task stays dropped with its classification intact.
+    // Committed task state is untouched: the done task stays done, the failed
+    // task stays failed with its classification intact.
     expect(resumed.tasks.a!.status).toBe("done");
-    expect(resumed.tasks.b!.status).toBe("dropped");
+    expect(resumed.tasks.b!.status).toBe("failed");
     expect(resumed.tasks.b!.failure_class).toBe("capability-budget");
   });
 });

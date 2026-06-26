@@ -74,7 +74,7 @@ describe("score happy paths", () => {
       merge_resyncs: 0,
       ...seed,
     };
-    if (seed.status === "dropped") {
+    if (seed.status === "failed") {
       return { failure_class: "spec-defect" as const, failure_reason: "x", ...base };
     }
     return base;
@@ -98,7 +98,7 @@ describe("score happy paths", () => {
       status: "failed",
       tasks: {
         a: task({ task_id: "a", status: "done", pr_number: 11, branch: "factory/run/a" }),
-        b: task({ task_id: "b", status: "dropped", failure_class: "spec-defect" }),
+        b: task({ task_id: "b", status: "failed", failure_class: "spec-defect" }),
       },
     }));
   });

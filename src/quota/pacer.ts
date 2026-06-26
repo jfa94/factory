@@ -6,8 +6,8 @@
  * The decision space is deliberately small and quota-only — it can describe
  * proceed, a 5h PAUSE-in-place, a 7d SUSPEND (clean exit + resumable), or a
  * fail-closed HALT when usage cannot be observed. Crucially it can NEVER describe
- * a quality `partial` or a `dropped` task (Δ E): the pacer has no vocabulary for
- * those outcomes, so "quota never emits partial/drop" is true by construction.
+ * a quality `partial` or a `failed` task (Δ E): the pacer has no vocabulary for
+ * those outcomes, so "quota never emits partial/fail" is true by construction.
  *
  * Window semantics: utilization is compared with strict `>` against the curve cap
  * for the CURRENT window position (matching the bash `$a > $b` over_threshold
