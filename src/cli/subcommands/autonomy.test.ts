@@ -3,7 +3,7 @@
  * `pipeline-ensure-autonomy`. It materializes `${CLAUDE_PLUGIN_DATA}/merged-settings.json`
  * from `templates/settings.autonomous.json` merged with the user's settings,
  * with placeholder substitution + env-baking + statusLine wiring, and prints the
- * `claude --settings <path>` relaunch command.
+ * `claude --worktree --settings <path>` relaunch command.
  *
  * The materialize core is pure + injectable (template string, user settings,
  * dataDir, pluginRoot) so units never touch the real ~/.claude or a real plugin
@@ -281,7 +281,7 @@ describe("runAutonomyEnsure", () => {
     expect(result.path).toBe(path);
     // Prints the relaunch command.
     const printed = out.join("");
-    expect(printed).toContain(`claude --settings ${path}`);
+    expect(printed).toContain(`claude --worktree --settings ${path}`);
   });
 
   it("reads the user's settings.json when present and chains its statusLine", async () => {
@@ -492,7 +492,7 @@ describe("runAutonomyPreflight", () => {
     expect(written.__sentinel).toBeUndefined();
     expect(written._factoryVersion).toBe("1.0.0");
     const printed = out.join("");
-    expect(printed).toContain(`claude --settings ${settingsPath()}`);
+    expect(printed).toContain(`claude --worktree --settings ${settingsPath()}`);
     expect(printed).toContain("stale");
     // Human-facing result: an unmistakable HALT: line on the relaunch-required path.
     expect(printed).toContain("HALT:");
@@ -524,7 +524,7 @@ describe("runAutonomyPreflight", () => {
     });
     expect(code).toBe(EXIT.ERROR);
     expect(existsSync(settingsPath())).toBe(true);
-    expect(out.join("")).toContain(`claude --settings ${settingsPath()}`);
+    expect(out.join("")).toContain(`claude --worktree --settings ${settingsPath()}`);
   });
 
   it("exits OK without writing when autonomous via raw env + no file (CI path)", async () => {
@@ -587,6 +587,6 @@ describe("runAutonomyPreflight", () => {
       home: HOME,
       writeStdout: (t) => out.push(t),
     });
-    expect(out.join("")).toContain(`claude --settings ${settingsPath()}`);
+    expect(out.join("")).toContain(`claude --worktree --settings ${settingsPath()}`);
   });
 });

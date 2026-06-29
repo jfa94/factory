@@ -4,7 +4,7 @@
  * Ports the old `bin/pipeline-ensure-autonomy` regenerate step to the Node CLI.
  * It materializes `${CLAUDE_PLUGIN_DATA}/merged-settings.json` from
  * `templates/settings.autonomous.json` merged with the user's existing settings,
- * then prints the `claude --settings <merged-settings.json>` relaunch command.
+ * then prints the `claude --worktree --settings <merged-settings.json>` relaunch command.
  * A session relaunched with it runs in autonomous mode and — because the
  * template wires `statusLine → factory statusline` — produces a fresh
  * usage-cache.json (the session-mode quota pacer's input) on the first turn.
