@@ -10367,6 +10367,9 @@ function mutationScope(changedFiles) {
 function diffScopedTestFiles(changedFiles) {
   return filterDedup(changedFiles, isTestPath);
 }
+function escapeStrykerGlob(p) {
+  return p.replace(/[[\]{}()*?!+@|]/g, (c) => `[${c}]`);
+}
 function filterDedup(files, keep) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
@@ -10973,7 +10976,7 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
   /** Report path relative to the worktree (stryker html/json reporter default). */
   static REPORT_PATH = "reports/mutation/mutation.json";
   async run(mutate, opts) {
-    const csv = mutate.join(",");
+    const csv = mutate.map(escapeStrykerGlob).join(",");
     const proc2 = toProc(
       await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, this.env)
     );

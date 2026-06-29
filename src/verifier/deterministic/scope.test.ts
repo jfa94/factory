@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   diffScopedTestFiles,
+  escapeStrykerGlob,
   isDocsPath,
   isMutableSrc,
   isTestPath,
@@ -100,6 +101,34 @@ describe("isMutableSrc + mutationScope (Δ O — ports mutation-gate T3a/b/c)", 
 
   it("de-duplicates while preserving order", () => {
     expect(mutationScope(["src/a.ts", "src/a.ts", "src/b.ts"])).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+});
+
+describe("escapeStrykerGlob (glob-literal escaping for --mutate CSV)", () => {
+  it("escapes [ and ] (Next.js dynamic-route segments)", () => {
+    // The externally-verified triggering case: src/app/feedback/[token]/actions.ts
+    expect(escapeStrykerGlob("src/app/feedback/[token]/actions.ts")).toBe(
+      "src/app/feedback/[[]token[]]/actions.ts",
+    );
+  });
+
+  it("escapes spread params ([...slug])", () => {
+    expect(escapeStrykerGlob("src/app/[...slug]/page.ts")).toBe("src/app/[[]...slug[]]/page.ts");
+  });
+
+  it("escapes route groups ((...))", () => {
+    expect(escapeStrykerGlob("src/app/(marketing)/page.ts")).toBe(
+      "src/app/[(]marketing[)]/page.ts",
+    );
+  });
+
+  it("escapes parallel routes (@)", () => {
+    expect(escapeStrykerGlob("src/app/@modal/default.ts")).toBe("src/app/[@]modal/default.ts");
+  });
+
+  it("leaves plain paths unchanged", () => {
+    expect(escapeStrykerGlob("src/app/page.ts")).toBe("src/app/page.ts");
+    expect(escapeStrykerGlob("src/lib/utils.ts")).toBe("src/lib/utils.ts");
   });
 });
 

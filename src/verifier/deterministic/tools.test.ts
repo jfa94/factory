@@ -297,6 +297,16 @@ describe("Default command tools: local-bin resolution + test-gate coverage", () 
     expect(strykerCall[0]).toBe("/wt/node_modules/.bin/stryker");
     expect(strykerCall[1]).toEqual(["run", "--mutate", "a.ts,b.ts"]);
   });
+
+  it("DefaultStrykerTool escapes glob metacharacters in dynamic-route paths", async () => {
+    execMock.mockResolvedValue(res(""));
+    await new DefaultStrykerTool(found("/wt/node_modules/.bin/stryker")).run(
+      ["src/app/feedback/[token]/actions.ts"],
+      { cwd: "/wt" },
+    );
+    const strykerCall = execMock.mock.calls.find((c) => String(c[0]).endsWith("stryker"))!;
+    expect(strykerCall[1]).toEqual(["run", "--mutate", "src/app/feedback/[[]token[]]/actions.ts"]);
+  });
 });
 
 describe("gate env injection (CI parity — quality.gateEnv)", () => {

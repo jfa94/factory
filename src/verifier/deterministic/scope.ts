@@ -97,6 +97,19 @@ export function diffScopedTestFiles(changedFiles: readonly string[]): string[] {
   return filterDedup(changedFiles, isTestPath);
 }
 
+/**
+ * Escape glob metacharacters in a literal file path so Stryker's `--mutate`
+ * matcher treats it as a literal, not a glob. git-diff paths are always literal;
+ * Next.js dynamic-route segments (`[token]`, `[...slug]`), route groups (`(...)`),
+ * and parallel routes (`@`) would otherwise glob-expand to zero files →
+ * "No tests were executed" → exit 1. Char-class wrapping (`[` → `[[]`, `]` → `[]]`,
+ * …) is the portable glob-literal idiom Stryker's matcher honors; backslash-escaping
+ * does NOT work (tested — still zero files).
+ */
+export function escapeStrykerGlob(p: string): string {
+  return p.replace(/[[\]{}()*?!+@|]/g, (c) => `[${c}]`);
+}
+
 /** Keep the files matching `keep`, de-duplicated and order-preserving. */
 function filterDedup(files: readonly string[], keep: (file: string) => boolean): string[] {
   const seen = new Set<string>();

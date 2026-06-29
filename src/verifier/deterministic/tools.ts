@@ -13,6 +13,7 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { exec, type ExecResult } from "../../shared/index.js";
+import { escapeStrykerGlob } from "./scope.js";
 
 /** Common per-call options shared by the CLI wrappers. */
 export interface ToolRunOpts {
@@ -393,7 +394,7 @@ export class DefaultStrykerTool implements StrykerTool {
   ) {}
 
   async run(mutate: readonly string[], opts: ToolRunOpts): Promise<StrykerResult> {
-    const csv = mutate.join(",");
+    const csv = mutate.map(escapeStrykerGlob).join(",");
     const proc = toProc(
       await runTool(this.resolve, "stryker", ["run", "--mutate", csv], opts, this.env),
     );

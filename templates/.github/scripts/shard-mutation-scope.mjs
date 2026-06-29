@@ -3,6 +3,11 @@
 // src/bin/shard-mutation-scope.ts
 import { readFileSync } from "node:fs";
 
+// src/verifier/deterministic/scope.ts
+function escapeStrykerGlob(p) {
+  return p.replace(/[[\]{}()*?!+@|]/g, (c) => `[${c}]`);
+}
+
 // src/verifier/deterministic/shard.ts
 function sloc(text) {
   let count = 0;
@@ -52,7 +57,7 @@ function shardByCost(files, weights, n) {
     lightest.files.push(file);
     lightest.load += weight;
   }
-  return bins.map((b) => b.files.join(","));
+  return bins.map((b) => b.files.map(escapeStrykerGlob).join(","));
 }
 
 // src/bin/shard-mutation-scope.ts

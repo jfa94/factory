@@ -102,6 +102,17 @@ describe("shardByCost — balance & determinism", () => {
   });
 });
 
+describe("shardByCost — glob escaping for --mutate CSV", () => {
+  it("escapes glob metacharacters in dynamic-route paths", () => {
+    const files = ["src/app/feedback/[token]/actions.ts", "src/normal.ts"];
+    const out = shardByCost(files, [1, 1], 2);
+    const entries = out.flatMap((csv) => (csv === "" ? [] : csv.split(",")));
+    expect(entries).toContain("src/app/feedback/[[]token[]]/actions.ts");
+    expect(entries).toContain("src/normal.ts");
+    expect(entries).not.toContain("src/app/feedback/[token]/actions.ts");
+  });
+});
+
 describe("sloc — weight proxy strips noise", () => {
   it("excludes blank, comment, and import/export-from lines", () => {
     const src = [

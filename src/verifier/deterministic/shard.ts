@@ -1,3 +1,5 @@
+import { escapeStrykerGlob } from "./scope.js";
+
 /**
  * Cost-aware mutation sharding (the balancer behind the CI `mutation-scope` job).
  *
@@ -98,5 +100,5 @@ export function shardByCost(
     lightest.load += weight;
   }
 
-  return bins.map((b) => b.files.join(","));
+  return bins.map((b) => b.files.map(escapeStrykerGlob).join(","));
 }
