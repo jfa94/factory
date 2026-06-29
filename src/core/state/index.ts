@@ -63,7 +63,7 @@ export {
   deriveMergeGateVerdict,
   mergeGateBlockReason,
 } from "./derive.js";
-export type { GateEvidence, GateVerdict } from "./derive.js";
+export type { GateId, EvidenceGate, GateEvidence, GateVerdict } from "./derive.js";
 
 // --- StateManager + path helpers ---
 export {

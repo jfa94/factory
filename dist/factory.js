@@ -12174,9 +12174,39 @@ var FsArtifactStore = class {
   }
 };
 
-// src/orchestrator/record.ts
-import { readFile as readFile11 } from "node:fs/promises";
+// src/orchestrator/docs-applicable.ts
+import { readFile as readFile11, stat } from "node:fs/promises";
 import { join as join15 } from "node:path";
+async function readJsonOrNull2(file) {
+  let raw;
+  try {
+    raw = await readFile11(file, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function docsEnabled(packageJson) {
+  const enabled = packageJson?.factory?.docs?.enabled;
+  return enabled !== false;
+}
+async function isDocsApplicable(repoRoot) {
+  try {
+    const s = await stat(join15(repoRoot, "docs"));
+    if (!s.isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return docsEnabled(await readJsonOrNull2(join15(repoRoot, "package.json")));
+}
+
+// src/orchestrator/record.ts
+import { readFile as readFile12 } from "node:fs/promises";
+import { join as join16 } from "node:path";
 var log24 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
@@ -12184,7 +12214,7 @@ async function persistStepCursor(deps, runId, taskId, step) {
   }
 }
 async function readJsonInput(path4) {
-  const raw = await readFile11(path4, "utf8");
+  const raw = await readFile12(path4, "utf8");
   return parseJson(raw, path4);
 }
 function producerPhaseInfo(phase) {
@@ -12246,7 +12276,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile11(join15(worktree, file), "utf8");
+      const text = await readFile12(join16(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
       if (err?.code !== "ENOENT") throw err;
@@ -12721,12 +12751,12 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join16 } from "node:path";
+import { join as join17 } from "node:path";
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
-  return join16(dataDir, "runs", runId, "docs-worktree");
+  return join17(dataDir, "runs", runId, "docs-worktree");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -12926,36 +12956,6 @@ async function nextTask(deps, runId) {
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
   return { ...ctx(), kind: "work", ready: ordered, cascade_failed: cascadeFailed };
-}
-
-// src/orchestrator/docs-applicable.ts
-import { readFile as readFile12, stat } from "node:fs/promises";
-import { join as join17 } from "node:path";
-async function readJsonOrNull2(file) {
-  let raw;
-  try {
-    raw = await readFile12(file, "utf8");
-  } catch {
-    return null;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-function docsEnabled(packageJson) {
-  const enabled = packageJson?.factory?.docs?.enabled;
-  return enabled !== false;
-}
-async function isDocsApplicable(repoRoot) {
-  try {
-    const s = await stat(join17(repoRoot, "docs"));
-    if (!s.isDirectory()) return false;
-  } catch {
-    return false;
-  }
-  return docsEnabled(await readJsonOrNull2(join17(repoRoot, "package.json")));
 }
 
 // src/cli/wiring.ts

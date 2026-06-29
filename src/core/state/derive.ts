@@ -20,8 +20,22 @@
  * of machine-checkable evidence; the panel (judgment) verdict is the conjunction
  * (unanimity) over reviewer results — itself derived, never stored.
  */
-import type { EvidenceGate } from "../../verifier/deterministic/gate-id.js";
 import type { ReviewerResult, TaskState } from "./schema.js";
+
+/** The closed set of deterministic gates. */
+export type GateId = "test" | "tdd" | "coverage" | "mutation" | "sast" | "type" | "lint" | "build";
+
+/**
+ * The closed evidence-label domain for {@link GateEvidence.gate}. A gate verdict's
+ * evidence is produced by ONE of three sources, each with a structurally-closed
+ * label: a deterministic gate ({@link GateId}), the holdout check (`"holdout"`),
+ * or a panel reviewer (`` `panel:${reviewer}` ``). The template-literal member
+ * captures the dynamic-but-closed panel labels in-place, so every construction
+ * site type-checks while an arbitrary/typo'd label (e.g. `"tests"` — canonical is
+ * `"test"`) is rejected at compile time. Widening this to `string` would re-open
+ * the hole; keep it a closed union.
+ */
+export type EvidenceGate = GateId | "holdout" | `panel:${string}`;
 
 /**
  * Evidence a deterministic gate produced on this run/check. This is GROUND TRUTH

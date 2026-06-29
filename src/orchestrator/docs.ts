@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { nowIso } from "../shared/index.js";
-import { parseProducerStatus } from "../producer/agents.js";
+import { parseProducerStatus } from "./deps.js";
 import { resolveStagingBranch, type Config, type GitClient, type StateManager } from "./deps.js";
 
 export interface DocsRunDeps {

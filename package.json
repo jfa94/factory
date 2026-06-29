@@ -7,7 +7,7 @@
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "pnpm@9.x",
+  "packageManager": "pnpm@11.9.0",
   "bin": {
     "factory": "dist/factory.js",
     "factory-hook": "dist/factory-hook.js"

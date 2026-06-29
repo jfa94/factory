@@ -32,6 +32,9 @@ export type { ShipMode, HandlerDeps } from "./types.js";
 export { InMemoryArtifactStore, FsArtifactStore } from "./artifacts.js";
 export type { ArtifactStore } from "./artifacts.js";
 
+// -- docs applicability check ------------------------------------------------
+export { isDocsApplicable } from "./docs-applicable.js";
+
 // -- record cores (the orchestrator's deterministic result-record kernels) ----------------
 export {
   readJsonInput,

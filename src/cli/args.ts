@@ -105,8 +105,7 @@ export function parseArgs(argv: readonly string[], opts: ParseOptions = {}): Par
 // Re-export from shared so every existing `from "./args.js"` import site keeps working.
 export { UsageError, isUsageError } from "../shared/usage-error.js";
 
-import type { ShipMode } from "../orchestrator/types.js";
-import { ShipModeEnum } from "../core/state/index.js";
+import { ShipModeEnum, type ShipMode } from "../core/state/index.js";
 export type { ShipMode };
 
 /**
