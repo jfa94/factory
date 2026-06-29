@@ -12,6 +12,7 @@ afterward.
 ## Prerequisites
 
 - Node.js **22 or newer** (`node --version`).
+- **pnpm** (`npm install -g pnpm` or via [corepack](https://nodejs.org/api/corepack.html): `corepack enable`).
 - `git`.
 - A clone of this repository.
 
@@ -19,7 +20,7 @@ afterward.
 
 ```bash
 cd factory-plugin
-npm install
+pnpm install
 ```
 
 ## 2. Run the full verification
@@ -28,7 +29,7 @@ The single command that typechecks, checks for circular imports, lints, tests,
 and builds is:
 
 ```bash
-npm run verify
+pnpm run verify
 ```
 
 You should see the test suite pass (over a hundred test files, well over a
