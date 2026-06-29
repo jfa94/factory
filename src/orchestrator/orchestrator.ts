@@ -58,7 +58,7 @@ import { makePhaseHandlers } from "./handlers.js";
 import { resolveStagingBranch } from "./deps.js";
 import { shipTask } from "./ship.js";
 import { taskWorktreePath } from "./paths.js";
-import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
+import { applyQuotaGate, quotaStopFields, type QuotaStop } from "./quota-gate.js";
 import { resolveReviewModel } from "../verifier/judgment/index.js";
 import { buildHoldoutPrompt, FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
 import { isSpawnPhase } from "./results.js";
@@ -275,14 +275,7 @@ export async function nextAction(
   //    and --ignore-quota skip pacing (Decision 24).
   const stop = await applyQuotaGate(deps, runId, run.mode, run.ignore_quota);
   if (stop !== null) {
-    return {
-      kind: "pause",
-      run_id: runId,
-      task_id: taskId,
-      scope: stop.scope,
-      reason: stop.reason,
-      ...(stop.resets_at_epoch !== undefined ? { resets_at_epoch: stop.resets_at_epoch } : {}),
-    };
+    return { kind: "pause", run_id: runId, task_id: taskId, ...quotaStopFields(stop) };
   }
 
   let phase: TaskPhase = task.phase ?? "preflight";

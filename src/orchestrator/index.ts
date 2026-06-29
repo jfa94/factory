@@ -55,7 +55,12 @@ export {
 export { DriveResultsSchema, parseDriveResults, type DriveResults } from "./results.js";
 
 // -- quota gate (shared by both orchestrators) ----------------------------------------
-export { applyQuotaGate, type QuotaGateDeps, type QuotaStop } from "./quota-gate.js";
+export {
+  applyQuotaGate,
+  quotaStopFields,
+  type QuotaGateDeps,
+  type QuotaStop,
+} from "./quota-gate.js";
 
 // -- per-task orchestrator (factory next-action seam) ----------------------------
 export {

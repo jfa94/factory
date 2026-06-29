@@ -759,11 +759,10 @@ export async function runCreate(
   }
   const intent: NonNullable<RunIntent["intent"]> = picked[0] ?? "default";
   const ignoreQuota = args.flag("ignore-quota") === true;
+  const hasDataDirOverride = overrides.dataDir !== undefined;
 
-  const dataDir = resolveDataDir(
-    overrides.dataDir !== undefined ? { dataDir: overrides.dataDir } : {},
-  );
-  const config = loadConfig(overrides.dataDir !== undefined ? { dataDir } : {});
+  const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
+  const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
   // Decision 33: build the staging deps bundle (git + gh + config + root + repo

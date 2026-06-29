@@ -39,7 +39,7 @@ import {
 } from "./deps.js";
 import { failTask } from "./transitions.js";
 import { MAX_DOCS_ATTEMPTS } from "./docs.js";
-import { applyQuotaGate, type QuotaStop } from "./quota-gate.js";
+import { applyQuotaGate, quotaStopFields, type QuotaStop } from "./quota-gate.js";
 import { applyCircuitBreaker } from "./circuit-breaker-gate.js";
 import type { OrchestratorDeps } from "./orchestrator.js";
 
@@ -142,13 +142,7 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
   //    mode and --ignore-quota skip pacing (Decision 24).
   const stop = await applyQuotaGate(deps, runId, run.mode, run.ignore_quota);
   if (stop !== null) {
-    return {
-      ...ctx(),
-      kind: "pause",
-      scope: stop.scope,
-      reason: stop.reason,
-      ...(stop.resets_at_epoch !== undefined ? { resets_at_epoch: stop.resets_at_epoch } : {}),
-    };
+    return { ...ctx(), kind: "pause", ...quotaStopFields(stop) };
   }
 
   // 4. Clear stale checkpoint on recovery (paused/suspended → running). The gate

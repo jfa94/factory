@@ -57,7 +57,7 @@ import { runReportPath } from "../core/state/paths.js";
 const log = createLogger("finalize");
 
 /** Comment body posted to the PRD issue when the rollup merges (Decision 34). */
-function prdDoneComment(report: PartialRunReport, rollupResult: RollupResult): string {
+export function prdDoneComment(report: PartialRunReport, rollupResult: RollupResult): string {
   const prRef = rollupResult.url
     ? `[#${rollupResult.number}](${rollupResult.url})`
     : `#${rollupResult.number}`;

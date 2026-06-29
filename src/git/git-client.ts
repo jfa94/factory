@@ -118,14 +118,16 @@ export class DefaultGitClient implements GitClient {
     this.runner = runner;
   }
 
+  private toExecOpts(opts?: GitOpts): ExecOptions {
+    return opts?.cwd ? { cwd: opts.cwd } : {};
+  }
+
   private exec(args: readonly string[], opts?: GitOpts) {
-    const execOpts: ExecOptions = opts?.cwd ? { cwd: opts.cwd } : {};
-    return this.runner(args, execOpts);
+    return this.runner(args, this.toExecOpts(opts));
   }
 
   private execOrThrow(args: readonly string[], opts?: GitOpts) {
-    const execOpts: ExecOptions = opts?.cwd ? { cwd: opts.cwd } : {};
-    return runOrThrow("git", this.runner, args, execOpts);
+    return runOrThrow("git", this.runner, args, this.toExecOpts(opts));
   }
 
   async fetch(remote: string, ref: string, opts?: GitOpts): Promise<void> {

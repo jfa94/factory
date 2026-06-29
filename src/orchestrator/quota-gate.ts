@@ -76,3 +76,19 @@ export async function applyQuotaGate(
       return assertNever(decision);
   }
 }
+
+/**
+ * The shared spread for a quota-pause return: scope + reason + optional resets_at_epoch.
+ * Both orchestrators (nextAction, nextTask) spread this into their pause envelope.
+ */
+export function quotaStopFields(stop: QuotaStop): {
+  scope: QuotaStop["scope"];
+  reason: string;
+  resets_at_epoch?: number;
+} {
+  return {
+    scope: stop.scope,
+    reason: stop.reason,
+    ...(stop.resets_at_epoch !== undefined ? { resets_at_epoch: stop.resets_at_epoch } : {}),
+  };
+}

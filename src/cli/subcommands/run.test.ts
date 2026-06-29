@@ -815,6 +815,45 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect((emitted.existing as Record<string, unknown>).run_id).toBe("run-a");
   });
 
+  it("runCreate: 7d-parked run → EXIT.CONFLICT + kind:'pause' envelope (quota-block branch)", async () => {
+    // Seed run-old as suspended with a 7d quota checkpoint (future resets_at_epoch).
+    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-old" });
+    await state.update("run-old", (s) => ({
+      ...s,
+      status: "suspended",
+      quota: { binding_window: "7d" as const, resets_at_epoch: 9_999_999_999 },
+    }));
+
+    const stdoutChunks: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+
+    let exitCode: number | undefined;
+    try {
+      exitCode = await runCreate(["--issue", "42"], {
+        gitClient: git,
+        ghClient: gh,
+        cwd: "/x",
+        dataDir,
+      });
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+
+    expect(exitCode).toBe(EXIT.CONFLICT);
+    const env = JSON.parse(stdoutChunks.join("")) as Record<string, unknown>;
+    expect(env.kind).toBe("pause");
+    expect(env.scope).toBe("7d");
+    expect(env.run_id).toBe("run-old");
+  });
+
   it("runCreate: session-mode without session id → UsageError (Stop hook needs an owner)", async () => {
     // The file-level beforeEach sets CLAUDE_CODE_SESSION_ID; delete it to simulate a
     // bare invocation with no owner available.
@@ -1593,6 +1632,33 @@ describe("applyResume", () => {
     await applyResume(state, "r1", underCurve(), defaultConfig(), after2h);
     const afterSecond = (await state.read("r1")).paused_minutes ?? 0;
     expect(afterSecond).toBeGreaterThanOrEqual(afterFirst + 59);
+  });
+
+  it("F: priorUpdatedAt overrides run.updated_at for idle-time (--ignore-quota write fix)", async () => {
+    // Simulate a run paused ~60min ago (updated_at = 3600s before NOW).
+    await createBareRun("r1");
+    const T0 = NOW - 3600;
+    await state.update("r1", (s) => ({
+      ...s,
+      status: "paused",
+      quota: { binding_window: "5h" as const, resets_at_epoch: 0 },
+      updated_at: new Date(T0 * 1000).toISOString(),
+    }));
+    // Stamp updated_at to NOW (mimics the --ignore-quota state.update write).
+    await state.update("r1", (s) => ({ ...s, ignore_quota: true }));
+    // Without priorUpdatedAt the idle gap would be ~0 (updated_at just got stomped).
+    // With priorUpdatedAt = T0 the idle gap should be ~60 minutes.
+    const env = asResumed(
+      await applyResume(
+        state,
+        "r1",
+        underCurve(),
+        defaultConfig(),
+        NOW,
+        new Date(T0 * 1000).toISOString(),
+      ),
+    );
+    expect(env.run.paused_minutes ?? 0).toBeGreaterThanOrEqual(59);
   });
 });
 

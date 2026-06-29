@@ -19,7 +19,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { finalizeRun, type FinalizeRunDeps } from "./finalize.js";
+import { finalizeRun, prdDoneComment, type FinalizeRunDeps } from "./finalize.js";
 import { StateManager } from "../core/state/manager.js";
 import { FakeGhClient, FakeGitClient } from "../git/fakes.js";
 import { parseSpecManifest, type SpecManifest } from "../spec/index.js";
@@ -412,5 +412,40 @@ describe("finalizeRun", () => {
     expect(gh.created.at(-1)?.head).toBe(`staging-${RUN_ID}`);
     // (c) run reached completed.
     expect(res.run.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// prdDoneComment — URL-absent branch (number-only fallback)
+// ---------------------------------------------------------------------------
+
+describe("prdDoneComment", () => {
+  const baseReport = {
+    run_id: "run-final-1",
+    run_status: "completed" as const,
+    spec_id: "42-checkout",
+    issue_number: 42,
+    repo: "acme/widgets",
+    generated_at: "2026-06-29T00:00:00.000Z",
+    totals: { total: 1, shipped: 1, failed: 0, incomplete: 0 },
+    shipped: [],
+    failures: [],
+    incomplete: [],
+  };
+
+  it("uses markdown link when url is present", () => {
+    const c = prdDoneComment(baseReport, {
+      number: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      resumed: false,
+      merged: true,
+    });
+    expect(c).toContain("[#7](https://github.com/acme/widgets/pull/7)");
+  });
+
+  it("falls back to bare number when url is absent (empty string)", () => {
+    const c = prdDoneComment(baseReport, { number: 42, url: "", resumed: false, merged: true });
+    expect(c).toContain("#42");
+    expect(c).not.toContain("[#42](");
   });
 });

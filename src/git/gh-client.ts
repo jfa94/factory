@@ -482,13 +482,9 @@ export class DefaultGhClient implements GhClient {
     if (r.truncated) {
       throw new Error(`gh api ${path}: output truncated — refusing to parse clipped ruleset JSON`);
     }
-    try {
-      const rules = parseJson<Array<{ type?: string }>>(r.stdout, path);
-      return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
-    } catch (err) {
-      // Unparseable JSON in a 200 body means "couldn't tell" — throw rather than
-      // silently return false and mask a real native merge queue (mirrors comment above).
-      throw err;
-    }
+    // Unparseable JSON in a 200 body means "couldn't tell" — throw rather than
+    // silently return false and mask a real native merge queue (mirrors comment above).
+    const rules = parseJson<Array<{ type?: string }>>(r.stdout, path);
+    return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
   }
 }
