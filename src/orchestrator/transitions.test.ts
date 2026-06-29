@@ -150,6 +150,7 @@ describe("orchestrator transitions (shared loop + CLI ladder/fail logic)", () =>
     await seedTask({
       task_id: "t1",
       status: "executing",
+      escalation_rung: 2, // must match spawn_in_flight.rung (T3: rung never goes backward)
       spawn_in_flight: { phase: "exec", rung: 2, tip_sha: "sha-tip" },
     });
     await failTask(deps, RUN_ID, "t1", "capability-budget", "cap reached");

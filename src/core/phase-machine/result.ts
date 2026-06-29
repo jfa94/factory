@@ -69,9 +69,7 @@ export interface WaitRetryResult {
  */
 export interface TaskTerminalResult {
   kind: "task-terminal";
-  outcome:
-    | { outcome: "done" }
-    | { outcome: "failed"; failure_class: FailureClass; reason: string };
+  outcome: { outcome: "done" } | { outcome: "failed"; failure_class: FailureClass; reason: string };
 }
 
 /**
@@ -139,6 +137,14 @@ export function waitRetry(
   attempt: number,
   max_attempts: number,
 ): WaitRetryResult {
+  // T2: enforce the attempt ≤ max_attempts invariant at construction time. The engine
+  // also throws (engine.ts:124-132), but callers like panel-run.ts:198 build
+  // WaitRetryResult directly without routing through the engine — this closes that gap.
+  if (attempt > max_attempts) {
+    throw new Error(
+      `waitRetry: wait-retry for phase '${phase}' exceeded max_attempts (${attempt} > ${max_attempts})`,
+    );
+  }
   return { kind: "wait-retry", phase, reason, attempt, max_attempts };
 }
 

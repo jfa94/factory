@@ -1693,7 +1693,9 @@ function exec(command, args = [], opts = {}) {
       });
     });
     if (opts.input !== void 0 && child.stdin) {
-      child.stdin.on("error", () => {
+      child.stdin.on("error", (err) => {
+        if (err.code === "EPIPE") return;
+        settleReject(err);
       });
       child.stdin.end(opts.input);
     }
@@ -7153,6 +7155,10 @@ function isTestPath(file) {
   return false;
 }
 
+// src/types/phases-vocab.ts
+var TASK_PHASES = ["preflight", "tests", "exec", "verify", "ship"];
+var SPAWN_PHASES = ["tests", "exec", "verify"];
+
 // src/core/state/schema.ts
 var RunStatusEnum = external_exports.enum([
   "running",
@@ -7259,7 +7265,7 @@ var TaskStateSchema = external_exports.object({
    * Do NOT delete that test: it is the only thing tying this hand-copied list to its
    * source of truth.
    */
-  phase: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
+  phase: external_exports.enum(TASK_PHASES).optional(),
   /** Ship live-merge re-sync count (cap enforced by the orchestrator; persisted so the cap survives process boundaries). */
   merge_resyncs: external_exports.number().int().min(0).default(0),
   /**
@@ -7279,7 +7285,7 @@ var TaskStateSchema = external_exports.object({
    * src/orchestrator/orchestrator.test.ts pins them equal (mirrors the `phase` field's pin).
    */
   spawn_in_flight: external_exports.object({
-    phase: external_exports.enum(["tests", "exec", "verify"]),
+    phase: external_exports.enum(SPAWN_PHASES),
     rung: external_exports.number().int().min(0),
     tip_sha: external_exports.string().min(1)
   }).optional(),
@@ -7334,6 +7340,13 @@ function refineTaskCrossFields(task, ctx) {
       });
     }
   });
+  if (task.spawn_in_flight !== void 0 && task.escalation_rung !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["spawn_in_flight", "rung"],
+      message: `task '${task.task_id}' spawn_in_flight.rung (${task.spawn_in_flight.rung}) > escalation_rung (${task.escalation_rung}) \u2014 rung went backward, stale checkpoint from before a rescue reset`
+    });
+  }
 }
 var TaskStateChecked = TaskStateSchema.superRefine(refineTaskCrossFields);
 var QuotaCheckpointSchema = external_exports.object({
@@ -7420,6 +7433,24 @@ function refineRunCrossFields(run, ctx) {
       path: ["quota"],
       message: `run '${run.run_id}' carries a quota checkpoint but status is '${run.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
+  }
+  if (run.docs !== void 0) {
+    const isFailed = run.docs.status === "failed";
+    const hasReason = run.docs.reason != null && run.docs.reason.length > 0;
+    if (isFailed && !hasReason) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["docs", "reason"],
+        message: `run '${run.run_id}' docs phase is 'failed' but has no reason`
+      });
+    }
+    if (!isFailed && hasReason) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["docs", "reason"],
+        message: `run '${run.run_id}' docs phase is '${run.docs.status}' but carries a reason (reason is set IFF failed)`
+      });
+    }
   }
   for (const [k, value] of Object.entries(run.tasks)) {
     if (k !== value.task_id) {
@@ -7854,7 +7885,7 @@ var StateManager = class _StateManager {
 };
 
 // src/core/phase-machine/phases.ts
-var TaskPhaseEnum = external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]);
+var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
 var RunPhaseEnum = external_exports.enum(["finalize"]);
 
 // src/core/phase-machine/spawn.ts

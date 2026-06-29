@@ -6146,6 +6146,10 @@ function isUsageError(err) {
   return err instanceof UsageError || typeof err === "object" && err !== null && "isUsageError" in err;
 }
 
+// src/types/phases-vocab.ts
+var TASK_PHASES = ["preflight", "tests", "exec", "verify", "ship"];
+var SPAWN_PHASES = ["tests", "exec", "verify"];
+
 // src/core/state/schema.ts
 var RunStatusEnum = external_exports.enum([
   "running",
@@ -6252,7 +6256,7 @@ var TaskStateSchema = external_exports.object({
    * Do NOT delete that test: it is the only thing tying this hand-copied list to its
    * source of truth.
    */
-  phase: external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
+  phase: external_exports.enum(TASK_PHASES).optional(),
   /** Ship live-merge re-sync count (cap enforced by the orchestrator; persisted so the cap survives process boundaries). */
   merge_resyncs: external_exports.number().int().min(0).default(0),
   /**
@@ -6272,7 +6276,7 @@ var TaskStateSchema = external_exports.object({
    * src/orchestrator/orchestrator.test.ts pins them equal (mirrors the `phase` field's pin).
    */
   spawn_in_flight: external_exports.object({
-    phase: external_exports.enum(["tests", "exec", "verify"]),
+    phase: external_exports.enum(SPAWN_PHASES),
     rung: external_exports.number().int().min(0),
     tip_sha: external_exports.string().min(1)
   }).optional(),
@@ -6327,6 +6331,13 @@ function refineTaskCrossFields(task, ctx) {
       });
     }
   });
+  if (task.spawn_in_flight !== void 0 && task.escalation_rung !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["spawn_in_flight", "rung"],
+      message: `task '${task.task_id}' spawn_in_flight.rung (${task.spawn_in_flight.rung}) > escalation_rung (${task.escalation_rung}) \u2014 rung went backward, stale checkpoint from before a rescue reset`
+    });
+  }
 }
 var TaskStateChecked = TaskStateSchema.superRefine(refineTaskCrossFields);
 var QuotaCheckpointSchema = external_exports.object({
@@ -6413,6 +6424,24 @@ function refineRunCrossFields(run9, ctx) {
       path: ["quota"],
       message: `run '${run9.run_id}' carries a quota checkpoint but status is '${run9.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
+  }
+  if (run9.docs !== void 0) {
+    const isFailed = run9.docs.status === "failed";
+    const hasReason = run9.docs.reason != null && run9.docs.reason.length > 0;
+    if (isFailed && !hasReason) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["docs", "reason"],
+        message: `run '${run9.run_id}' docs phase is 'failed' but has no reason`
+      });
+    }
+    if (!isFailed && hasReason) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["docs", "reason"],
+        message: `run '${run9.run_id}' docs phase is '${run9.docs.status}' but carries a reason (reason is set IFF failed)`
+      });
+    }
   }
   for (const [k, value] of Object.entries(run9.tasks)) {
     if (k !== value.task_id) {
@@ -7578,7 +7607,9 @@ function exec(command, args = [], opts = {}) {
       });
     });
     if (opts.input !== void 0 && child.stdin) {
-      child.stdin.on("error", () => {
+      child.stdin.on("error", (err) => {
+        if (err.code === "EPIPE") return;
+        settleReject(err);
       });
       child.stdin.end(opts.input);
     }
@@ -8909,15 +8940,9 @@ var scaffoldCommand = {
 };
 
 // src/core/phase-machine/phases.ts
-var TaskPhaseEnum = external_exports.enum(["preflight", "tests", "exec", "verify", "ship"]);
+var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
 var RunPhaseEnum = external_exports.enum(["finalize"]);
-var TASK_PHASE_ORDER = [
-  "preflight",
-  "tests",
-  "exec",
-  "verify",
-  "ship"
-];
+var TASK_PHASE_ORDER = TASK_PHASES;
 function nextPhase(s) {
   const i = TASK_PHASE_ORDER.indexOf(s);
   if (i < 0) {
@@ -8995,6 +9020,11 @@ function spawn2(request) {
   return { kind: "spawn-agents", request };
 }
 function waitRetry(phase, reason, attempt, max_attempts) {
+  if (attempt > max_attempts) {
+    throw new Error(
+      `waitRetry: wait-retry for phase '${phase}' exceeded max_attempts (${attempt} > ${max_attempts})`
+    );
+  }
   return { kind: "wait-retry", phase, reason, attempt, max_attempts };
 }
 function taskDone() {
@@ -11225,7 +11255,7 @@ function buildPanelManifest(resumePhase, model, maxTurns) {
 // src/verifier/judgment/finding.ts
 var log21 = createLogger("finding");
 var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
-var FindingSchema = external_exports.object({
+var FindingBaseSchema = external_exports.object({
   /** Which panel reviewer raised this (free-form; the role string). */
   reviewer: external_exports.string().min(1),
   /** Closed severity. */
@@ -11246,6 +11276,24 @@ var FindingSchema = external_exports.object({
   /** Human-facing description of the concern. */
   description: external_exports.string().min(1)
 });
+var FindingSchema = FindingBaseSchema.superRefine((finding, ctx) => {
+  const hasFile = finding.file !== void 0;
+  const hasLine = finding.line !== void 0;
+  if (hasFile && !hasLine) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["line"],
+      message: `finding has 'file' but no 'line' \u2014 provide both or neither for a citable finding`
+    });
+  }
+  if (hasLine && !hasFile) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["file"],
+      message: `finding has 'line' but no 'file' \u2014 provide both or neither for a citable finding`
+    });
+  }
+});
 var RawReviewVerdictEnum = external_exports.enum(["approve", "blocked", "error"]);
 var RawReviewSchema = external_exports.object({
   /** The reviewer identity (role string). */
@@ -11256,7 +11304,7 @@ var RawReviewSchema = external_exports.object({
   findings: external_exports.array(FindingSchema)
 });
 var KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape));
-var KNOWN_FINDING_KEYS = new Set(Object.keys(FindingSchema.shape));
+var KNOWN_FINDING_KEYS = new Set(Object.keys(FindingBaseSchema.shape));
 function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) {
   const topUnknown = [];
   const findingUnknown = [];
@@ -11416,96 +11464,6 @@ function nextOrSelf(phase) {
   return phase === "verify" ? "ship" : phase;
 }
 
-// src/verifier/holdout/split.ts
-import { createHash } from "node:crypto";
-function holdoutCount(total, percent) {
-  if (percent <= 0 || total <= 1) {
-    return 0;
-  }
-  let count = Math.floor(total * percent / 100);
-  if (count < 1) {
-    count = 1;
-  }
-  if (count >= total) {
-    count = total - 1;
-  }
-  return count;
-}
-function rankKey(seed, index) {
-  return createHash("sha256").update(`${seed}\0${index}`).digest("hex");
-}
-function splitHoldout(criteria, percent, seed) {
-  const total = criteria.length;
-  const count = holdoutCount(total, percent);
-  if (count === 0) {
-    return { visible: [...criteria], withheld: [] };
-  }
-  const withheldIdx = new Set(
-    criteria.map((_, i) => ({ i, key: rankKey(seed, i) })).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : a.i - b.i).slice(0, count).map((r) => r.i)
-  );
-  const visible = [];
-  const withheld = [];
-  criteria.forEach((c, i) => {
-    (withheldIdx.has(i) ? withheld : visible).push(c);
-  });
-  return { visible, withheld };
-}
-
-// src/verifier/holdout/store.ts
-import { mkdir as mkdir8, readFile as readFile8 } from "node:fs/promises";
-import { dirname as dirname6, join as join11 } from "node:path";
-var HoldoutRecordSchema = external_exports.object({
-  task_id: external_exports.string().min(1),
-  withheld_criteria: external_exports.array(external_exports.string()),
-  total_criteria: external_exports.number().int().nonnegative(),
-  withheld_count: external_exports.number().int().nonnegative()
-}).strict().refine((r) => r.withheld_count === r.withheld_criteria.length, {
-  message: "withheld_count must equal withheld_criteria.length"
-});
-function parseHoldoutRecord(raw, source) {
-  const result = HoldoutRecordSchema.safeParse(raw);
-  if (!result.success) {
-    const where = source ? ` (${source})` : "";
-    throw new Error(`invalid holdout record${where}: ${result.error.message}`);
-  }
-  return result.data;
-}
-function makeHoldoutRecord(taskId, withheld, totalCriteria) {
-  return {
-    task_id: taskId,
-    withheld_criteria: [...withheld],
-    total_criteria: totalCriteria,
-    withheld_count: withheld.length
-  };
-}
-var FsHoldoutStore = class {
-  constructor(dataDir) {
-    this.dataDir = dataDir;
-  }
-  path(runId, taskId) {
-    const safe = validateId(taskId, "task_id");
-    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
-  }
-  async put(runId, record) {
-    const path4 = this.path(runId, record.task_id);
-    await mkdir8(dirname6(path4), { recursive: true });
-    await atomicWriteFile(path4, stringifyJson(record));
-  }
-  async get(runId, taskId) {
-    const path4 = this.path(runId, taskId);
-    const raw = await readFile8(path4, "utf8");
-    return parseHoldoutRecord(parseJson(raw, path4), path4);
-  }
-  async has(runId, taskId) {
-    try {
-      await readFile8(this.path(runId, taskId), "utf8");
-      return true;
-    } catch {
-      return false;
-    }
-  }
-};
-
 // src/verifier/holdout/validate.ts
 function clampThreshold(raw) {
   if (!Number.isFinite(raw)) {
@@ -11604,6 +11562,96 @@ function holdoutEvidence(result) {
   };
 }
 
+// src/verifier/holdout/split.ts
+import { createHash } from "node:crypto";
+function holdoutCount(total, percent) {
+  if (percent <= 0 || total <= 1) {
+    return 0;
+  }
+  let count = Math.floor(total * percent / 100);
+  if (count < 1) {
+    count = 1;
+  }
+  if (count >= total) {
+    count = total - 1;
+  }
+  return count;
+}
+function rankKey(seed, index) {
+  return createHash("sha256").update(`${seed}\0${index}`).digest("hex");
+}
+function splitHoldout(criteria, percent, seed) {
+  const total = criteria.length;
+  const count = holdoutCount(total, percent);
+  if (count === 0) {
+    return { visible: [...criteria], withheld: [] };
+  }
+  const withheldIdx = new Set(
+    criteria.map((_, i) => ({ i, key: rankKey(seed, i) })).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : a.i - b.i).slice(0, count).map((r) => r.i)
+  );
+  const visible = [];
+  const withheld = [];
+  criteria.forEach((c, i) => {
+    (withheldIdx.has(i) ? withheld : visible).push(c);
+  });
+  return { visible, withheld };
+}
+
+// src/verifier/holdout/store.ts
+import { mkdir as mkdir8, readFile as readFile8 } from "node:fs/promises";
+import { dirname as dirname6, join as join11 } from "node:path";
+var HoldoutRecordSchema = external_exports.object({
+  task_id: external_exports.string().min(1),
+  withheld_criteria: external_exports.array(external_exports.string()),
+  total_criteria: external_exports.number().int().nonnegative(),
+  withheld_count: external_exports.number().int().nonnegative()
+}).strict().refine((r) => r.withheld_count === r.withheld_criteria.length, {
+  message: "withheld_count must equal withheld_criteria.length"
+});
+function parseHoldoutRecord(raw, source) {
+  const result = HoldoutRecordSchema.safeParse(raw);
+  if (!result.success) {
+    const where = source ? ` (${source})` : "";
+    throw new Error(`invalid holdout record${where}: ${result.error.message}`);
+  }
+  return result.data;
+}
+function makeHoldoutRecord(taskId, withheld, totalCriteria) {
+  return {
+    task_id: taskId,
+    withheld_criteria: [...withheld],
+    total_criteria: totalCriteria,
+    withheld_count: withheld.length
+  };
+}
+var FsHoldoutStore = class {
+  constructor(dataDir) {
+    this.dataDir = dataDir;
+  }
+  path(runId, taskId) {
+    const safe = validateId(taskId, "task_id");
+    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
+  }
+  async put(runId, record) {
+    const path4 = this.path(runId, record.task_id);
+    await mkdir8(dirname6(path4), { recursive: true });
+    await atomicWriteFile(path4, stringifyJson(record));
+  }
+  async get(runId, taskId) {
+    const path4 = this.path(runId, taskId);
+    const raw = await readFile8(path4, "utf8");
+    return parseHoldoutRecord(parseJson(raw, path4), path4);
+  }
+  async has(runId, taskId) {
+    try {
+      await readFile8(this.path(runId, taskId), "utf8");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+
 // src/verifier/holdout/verdict-store.ts
 import { mkdir as mkdir9, readFile as readFile9 } from "node:fs/promises";
 import { dirname as dirname7, join as join12 } from "node:path";
@@ -11640,6 +11688,14 @@ var FsHoldoutVerdictStore = class {
     }
   }
 };
+
+// src/verifier/holdout/index.ts
+async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, passRate) {
+  if (!await holdout.has(runId, taskId)) return void 0;
+  const record = await holdout.get(runId, taskId);
+  const verdicts = await verdictStore.get(runId, taskId);
+  return holdoutEvidence(checkHoldout(record, verdicts, passRate));
+}
 
 // src/orchestrator/finalize.ts
 var log22 = createLogger("finalize");
@@ -12011,6 +12067,7 @@ function makePhaseHandlers(deps) {
         );
       }
       const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id);
+      const fastPathEvidence = [...gate.evidence];
       if (holdoutExpected) {
         const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
         const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id);
@@ -12023,8 +12080,16 @@ function makePhaseHandlers(deps) {
             )
           );
         }
+        const holdoutGate = await deriveHoldoutEvidence(
+          deps.holdout,
+          verdictStore,
+          ctx.run.run_id,
+          task.task_id,
+          deps.config.quality.holdoutPassRate
+        );
+        if (holdoutGate !== void 0) fastPathEvidence.push(holdoutGate);
       }
-      const mergeGate = deriveMergeGateVerdict({ reviewers: task.reviewers }, gate.evidence);
+      const mergeGate = deriveMergeGateVerdict({ reviewers: task.reviewers }, fastPathEvidence);
       if (mergeGate.passed) {
         return advance("ship");
       }
@@ -12239,13 +12304,14 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   };
   const gate = await new GateRunner().run(gateCtx);
   const gateEvidence = [...gate.evidence];
-  if (await deps.holdout.has(runId, taskId)) {
-    const record = await deps.holdout.get(runId, taskId);
-    const verdicts = await verdictStore.get(runId, taskId);
-    gateEvidence.push(
-      holdoutEvidence(checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate))
-    );
-  }
+  const holdoutGate = await deriveHoldoutEvidence(
+    deps.holdout,
+    verdictStore,
+    runId,
+    taskId,
+    deps.config.quality.holdoutPassRate
+  );
+  if (holdoutGate !== void 0) gateEvidence.push(holdoutGate);
   const panel = await runPanel({
     reviews,
     source,
@@ -12295,7 +12361,6 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
 }
 
 // src/orchestrator/results.ts
-var SPAWN_PHASES = ["tests", "exec", "verify"];
 var ResultKeySchema = external_exports.object({ phase: external_exports.enum(SPAWN_PHASES), rung: external_exports.number().int().min(0) }).strict();
 var ProducerResultSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
 var HoldoutResultSchema = external_exports.object({ raw: external_exports.string().min(1) }).strict();
@@ -12770,6 +12835,10 @@ async function nextTask(deps, runId) {
   const allTerminal = Object.values(run9.tasks).every((t) => isTerminalTaskStatus(t.status));
   const needsDocs = allTerminal && await wantsDocs(deps, run9);
   if (allTerminal && !needsDocs) {
+    if (run9.status === "paused" || run9.status === "suspended") {
+      const patch = clearCheckpoint();
+      await deps.state.update(runId, (s) => ({ ...s, status: patch.status, quota: patch.quota }));
+    }
     return { ...ctx(), kind: "finalize", cascade_failed: [] };
   }
   const stop = await applyQuotaGate(deps, runId, run9.mode, run9.ignore_quota);
@@ -13885,6 +13954,11 @@ function resetTaskRow(task) {
     started_at: _startedAt,
     ended_at: _endedAt,
     phase: _phase,
+    // WS2 hygiene: mirror completeTask/failTask (transitions.ts:88,112). A stale
+    // checkpoint with escalation_rung reset to 0 would re-match the orchestrator's
+    // idempotent re-spawn guard (orchestrator.ts:358-373) and hard-reset the freshly
+    // recreated worktree to the pre-rescue tip_sha.
+    spawn_in_flight: _spawnInFlight,
     ...rest
   } = task;
   return {

@@ -83,31 +83,31 @@ describe("WS7 Finding schema (Δ K)", () => {
     }
   });
 
-  // The both-or-neither guard. `file`/`line` are independently optional on the
-  // schema (a half-citation is REPRESENTABLE, deliberately — finding.ts:12-17),
-  // but isCitable is the SOLE gate both consumers run (panel-run / citation-verify)
-  // and it must reject a half-citation exactly as it rejects a no-citation finding.
-  // Pins that against a future refactor that loosens the conjunction (B3).
-  it("isCitable is both-or-neither: a half-citation is NOT citable", () => {
-    const fileOnly = parseFinding({
-      reviewer: "security-reviewer",
-      severity: "critical",
-      blocking: true,
-      file: "src/app.ts",
-      quote: "const x = eval(input)",
-      description: "file but no line",
-    });
-    expect(isCitable(fileOnly)).toBe(false);
+  // T4: half-citations (file-without-line, line-without-file) are now a LOUD parse
+  // error — rejected by FindingSchema's superRefine so reviewers get a ZodError
+  // instead of a silent drop by isCitable (which was the old behavior).
+  it("T4: parseFinding rejects half-citations (file-without-line, line-without-file)", () => {
+    expect(() =>
+      parseFinding({
+        reviewer: "security-reviewer",
+        severity: "critical",
+        blocking: true,
+        file: "src/app.ts",
+        quote: "const x = eval(input)",
+        description: "file but no line",
+      }),
+    ).toThrow();
 
-    const lineOnly = parseFinding({
-      reviewer: "security-reviewer",
-      severity: "critical",
-      blocking: true,
-      line: 42,
-      quote: "const x = eval(input)",
-      description: "line but no file",
-    });
-    expect(isCitable(lineOnly)).toBe(false);
+    expect(() =>
+      parseFinding({
+        reviewer: "security-reviewer",
+        severity: "critical",
+        blocking: true,
+        line: 42,
+        quote: "const x = eval(input)",
+        description: "line but no file",
+      }),
+    ).toThrow();
   });
 });
 

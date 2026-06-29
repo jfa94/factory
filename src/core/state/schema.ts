@@ -28,6 +28,7 @@
  *     deliberately has NO field that holds a gate pass/fail boolean.
  */
 import { z } from "zod";
+import { TASK_PHASES, SPAWN_PHASES } from "../../types/phases-vocab.js";
 
 // ---------------------------------------------------------------------------
 // Closed enums (the seam's vocabulary)
@@ -272,7 +273,7 @@ export const TaskStateSchema = z.object({
    * Do NOT delete that test: it is the only thing tying this hand-copied list to its
    * source of truth.
    */
-  phase: z.enum(["preflight", "tests", "exec", "verify", "ship"]).optional(),
+  phase: z.enum(TASK_PHASES).optional(),
   /** Ship live-merge re-sync count (cap enforced by the orchestrator; persisted so the cap survives process boundaries). */
   merge_resyncs: z.number().int().min(0).default(0),
 
@@ -294,7 +295,7 @@ export const TaskStateSchema = z.object({
    */
   spawn_in_flight: z
     .object({
-      phase: z.enum(["tests", "exec", "verify"]),
+      phase: z.enum(SPAWN_PHASES),
       rung: z.number().int().min(0),
       tip_sha: z.string().min(1),
     })
@@ -371,6 +372,26 @@ function refineTaskCrossFields(task: TaskState, ctx: z.RefinementCtx): void {
       });
     }
   });
+
+  // T3 defense-in-depth: spawn_in_flight.rung must never EXCEED escalation_rung.
+  // A forward gap (spawn_in_flight.rung < escalation_rung) is a valid transient
+  // state — the escalation bumped the rung and the next spawn will overwrite the
+  // checkpoint. A backward gap (spawn_in_flight.rung > escalation_rung) is
+  // impossible in the normal state machine (rung only increases) and indicates an
+  // improper backward reset like the G2 bug (resetTaskRow resetting escalation_rung
+  // to 0 without clearing spawn_in_flight). The primary fix is rescue/apply.ts
+  // clearing the field; this invariant catches any future regression at parse time.
+  if (
+    task.spawn_in_flight !== undefined &&
+    task.escalation_rung !== undefined &&
+    task.spawn_in_flight.rung > task.escalation_rung
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["spawn_in_flight", "rung"],
+      message: `task '${task.task_id}' spawn_in_flight.rung (${task.spawn_in_flight.rung}) > escalation_rung (${task.escalation_rung}) — rung went backward, stale checkpoint from before a rescue reset`,
+    });
+  }
 }
 
 /** {@link TaskStateSchema} + cross-field checks — the validating form the seam parses. */
@@ -544,6 +565,28 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
       path: ["quota"],
       message: `run '${run.run_id}' carries a quota checkpoint but status is '${run.status}' (a quota checkpoint is valid only while paused|suspended)`,
     });
+  }
+
+  // T1: DocsPhase "reason set IFF failed" — mirrors the TaskState failure_reason
+  // invariant (refineTaskCrossFields above). A failed docs phase must carry a reason
+  // (human-facing report); a reason on a done docs phase is a serialization smell.
+  if (run.docs !== undefined) {
+    const isFailed = run.docs.status === "failed";
+    const hasReason = run.docs.reason != null && run.docs.reason.length > 0;
+    if (isFailed && !hasReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["docs", "reason"],
+        message: `run '${run.run_id}' docs phase is 'failed' but has no reason`,
+      });
+    }
+    if (!isFailed && hasReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["docs", "reason"],
+        message: `run '${run.run_id}' docs phase is '${run.docs.status}' but carries a reason (reason is set IFF failed)`,
+      });
+    }
   }
 
   // F2: tasks map key must equal the row's task_id so DAG traversal and keyed lookups

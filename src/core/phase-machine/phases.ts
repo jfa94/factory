@@ -16,13 +16,14 @@
  */
 import { z } from "zod";
 import { TaskStatusEnum, type TaskStatus } from "../state/index.js";
+import { TASK_PHASES } from "../../types/phases-vocab.js";
 
 /**
  * The per-task phases, in execution order. CLOSED set — a value outside it is a
  * LOUD parse error (mirrors the WS1 closed-enum discipline). Renamed from the
  * bash taxonomy: `preexec_tests→tests`, `postexec→exec`, `postreview→verify`.
  */
-export const TaskPhaseEnum = z.enum(["preflight", "tests", "exec", "verify", "ship"]);
+export const TaskPhaseEnum = z.enum(TASK_PHASES);
 export type TaskPhase = z.infer<typeof TaskPhaseEnum>;
 
 /**
@@ -37,13 +38,7 @@ export type RunPhase = z.infer<typeof RunPhaseEnum>;
  * The canonical per-task phase order. `nextPhase` walks this; the engine and both
  * runners (v1 session, v2 Workflow) share it so the transition logic has ONE home.
  */
-export const TASK_PHASE_ORDER: readonly TaskPhase[] = [
-  "preflight",
-  "tests",
-  "exec",
-  "verify",
-  "ship",
-] as const;
+export const TASK_PHASE_ORDER: readonly TaskPhase[] = TASK_PHASES;
 
 /**
  * The phase that follows `s` in {@link TASK_PHASE_ORDER}, or `null` when `s` is the

@@ -6,6 +6,10 @@
  * score → a {@link GateEvidence} recorded into the risk-invariant merge gate. Deep-
  * importing `src/verifier/holdout/*` is a smell; import here.
  */
+import type { GateEvidence } from "../../types/index.js";
+import { checkHoldout, holdoutEvidence } from "./validate.js";
+import type { HoldoutStore } from "./store.js";
+import type { HoldoutVerdictStore } from "./verdict-store.js";
 
 // The deterministic criteria split.
 export { splitHoldout, holdoutCount, type HoldoutSplit } from "./split.js";
@@ -27,7 +31,6 @@ export {
   parseHoldoutVerdicts,
   checkHoldout,
   holdoutEvidence,
-  deriveHoldoutEvidence,
   type HoldoutVerdict,
   type HoldoutCriterionResult,
   type HoldoutCheckResult,
@@ -44,3 +47,24 @@ export {
 
 // Exported fakes for downstream + own unit tests.
 export { FakeHoldoutValidatorRunner, type FakeHoldoutMode } from "./fakes.js";
+
+/**
+ * Re-derive holdout gate evidence from persisted verdicts. Returns `undefined` if no
+ * holdout record exists for this task. Shared by
+ * {@link import("../../orchestrator/record.js").applyRecordReviews} (full-path) and the
+ * merge-resync verify fast-path ({@link import("../../orchestrator/handlers.js")}) so
+ * both always include holdout evidence in the merge gate. Lives here (not in validate.ts)
+ * to avoid the validate.ts → verdict-store.ts → validate.ts import cycle.
+ */
+export async function deriveHoldoutEvidence(
+  holdout: HoldoutStore,
+  verdictStore: HoldoutVerdictStore,
+  runId: string,
+  taskId: string,
+  passRate: number,
+): Promise<GateEvidence | undefined> {
+  if (!(await holdout.has(runId, taskId))) return undefined;
+  const record = await holdout.get(runId, taskId);
+  const verdicts = await verdictStore.get(runId, taskId);
+  return holdoutEvidence(checkHoldout(record, verdicts, passRate));
+}

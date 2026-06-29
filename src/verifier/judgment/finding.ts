@@ -37,7 +37,8 @@ export type FindingSeverity = z.infer<typeof FindingSeverityEnum>;
  * non-localised concern; such a finding is parseable but uncitable (see
  * {@link isCitable}) and is dropped by citation-verify.
  */
-export const FindingSchema = z.object({
+// Base object schema kept separate so .shape is accessible after superRefine wraps it.
+const FindingBaseSchema = z.object({
   /** Which panel reviewer raised this (free-form; the role string). */
   reviewer: z.string().min(1),
   /** Closed severity. */
@@ -57,6 +58,29 @@ export const FindingSchema = z.object({
   quote: z.string().min(1),
   /** Human-facing description of the concern. */
   description: z.string().min(1),
+});
+
+export const FindingSchema = FindingBaseSchema.superRefine((finding, ctx) => {
+  // T4: file and line are both-or-neither. A half-citation (file without line, or
+  // line without file) parses as a valid Finding but isCitable() drops it silently —
+  // indistinguishable from an intentionally non-localised concern. Reject loudly so
+  // reviewers get a schema error instead of a silent drop.
+  const hasFile = finding.file !== undefined;
+  const hasLine = finding.line !== undefined;
+  if (hasFile && !hasLine) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["line"],
+      message: `finding has 'file' but no 'line' — provide both or neither for a citable finding`,
+    });
+  }
+  if (hasLine && !hasFile) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["file"],
+      message: `finding has 'line' but no 'file' — provide both or neither for a citable finding`,
+    });
+  }
 });
 export type Finding = z.infer<typeof FindingSchema>;
 
@@ -104,7 +128,7 @@ export type RawReview = z.infer<typeof RawReviewSchema>;
 // Known top-level keys — derived from schema shape, not hand-maintained.
 const KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape));
 // Known per-finding keys — derived from schema shape, not hand-maintained.
-const KNOWN_FINDING_KEYS = new Set(Object.keys(FindingSchema.shape));
+const KNOWN_FINDING_KEYS = new Set(Object.keys(FindingBaseSchema.shape));
 
 /** Detect and warn on unknown keys stripped by Zod in a plain-object value. */
 function warnStrippedKeys(

@@ -6,6 +6,7 @@
  * `reviews` when the envelope carried a holdout. Parsed LOUD (Zod strict).
  */
 import { z } from "zod";
+import { SPAWN_PHASES } from "../types/phases-vocab.js";
 
 // ---------------------------------------------------------------------------
 // SpawnPhase + ResultKey
@@ -13,9 +14,10 @@ import { z } from "zod";
 
 /**
  * The only phases that can appear in a spawn envelope (preflight only advances;
- * ship never spawns). Defined here so results.ts does not import orchestrator.ts.
+ * ship never spawns). Re-exported from the zero-import phases-vocab leaf so this
+ * module stays a single source of truth for consumers (orchestrator, tests).
  */
-export const SPAWN_PHASES = ["tests", "exec", "verify"] as const;
+export { SPAWN_PHASES };
 export type SpawnPhase = (typeof SPAWN_PHASES)[number];
 
 /**
