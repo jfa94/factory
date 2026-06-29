@@ -5987,7 +5987,8 @@ function inferPluginRoot() {
       dir = dirname2(dir);
     }
     return resolve(here, "..");
-  } catch {
+  } catch (err) {
+    log2.debug(`inferPluginRoot: ${err.message}; falling back to cwd`);
     return process.cwd();
   }
 }
@@ -7672,13 +7673,14 @@ var DefaultGitClient = class {
   constructor(runner = defaultGitRunner) {
     this.runner = runner;
   }
+  toExecOpts(opts) {
+    return opts?.cwd ? { cwd: opts.cwd } : {};
+  }
   exec(args, opts) {
-    const execOpts = opts?.cwd ? { cwd: opts.cwd } : {};
-    return this.runner(args, execOpts);
+    return this.runner(args, this.toExecOpts(opts));
   }
   execOrThrow(args, opts) {
-    const execOpts = opts?.cwd ? { cwd: opts.cwd } : {};
-    return runOrThrow("git", this.runner, args, execOpts);
+    return runOrThrow("git", this.runner, args, this.toExecOpts(opts));
   }
   async fetch(remote, ref, opts) {
     await this.execOrThrow(["fetch", remote, ref], opts);
@@ -8059,12 +8061,8 @@ var DefaultGhClient = class {
     if (r.truncated) {
       throw new Error(`gh api ${path4}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
     }
-    try {
-      const rules = parseJson(r.stdout, path4);
-      return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
-    } catch (err) {
-      throw err;
-    }
+    const rules = parseJson(r.stdout, path4);
+    return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
   }
 };
 
@@ -9792,8 +9790,10 @@ var StatuslineUsageSignal = class {
     let raw;
     try {
       raw = parseJson(readFileSync4(file, "utf8"), file);
-    } catch {
-      log18.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
+    } catch (err) {
+      log18.warn(
+        `usage-cache.json is malformed at ${file}: ${err.message}; emitting unavailable sentinel`
+      );
       return unavailable("usage-cache-malformed");
     }
     return readingFromCache(raw, now);
@@ -10397,6 +10397,9 @@ function mutationScope(changedFiles) {
 function diffScopedTestFiles(changedFiles) {
   return filterDedup(changedFiles, isTestPath);
 }
+function isVitestRunnable(file) {
+  return /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file);
+}
 function escapeStrykerGlob(p) {
   return p.replace(/[[\]{}()*?!+@|]/g, (c) => `[${c}]`);
 }
@@ -10419,12 +10422,20 @@ var testStrategy = {
     const base = `origin/${ctx.baseRef}`;
     const changed = await ctx.tools.git.changedFiles(base, { cwd: ctx.worktree });
     const scoped = diffScopedTestFiles(changed);
-    const result = await ctx.tools.vitest.run(scoped, { cwd: ctx.worktree });
+    const runnable = scoped.filter(isVitestRunnable);
+    if (scoped.length > 0 && runnable.length === 0) {
+      return ran(
+        "test",
+        true,
+        `diff-scoped: ${scoped.length} non-vitest test file(s) not executed (e.g. pgTAP)`
+      );
+    }
+    const result = await ctx.tools.vitest.run(runnable, { cwd: ctx.worktree });
     if (result.truncated) {
       throw new Error("test gate: vitest output truncated \u2014 refusing to judge a clipped run");
     }
     const observed = result.code === 0;
-    const detail = scoped.length > 0 ? `diff-scoped (${scoped.length} test file(s))` : "un-scoped";
+    const detail = runnable.length > 0 ? `diff-scoped (${runnable.length} test file(s))` : "un-scoped";
     return ran("test", observed, `vitest exit=${result.code ?? "null"} ${detail}`);
   }
 };
@@ -12467,6 +12478,13 @@ async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false
       return assertNever(decision);
   }
 }
+function quotaStopFields(stop) {
+  return {
+    scope: stop.scope,
+    reason: stop.reason,
+    ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
+  };
+}
 
 // src/orchestrator/ship.ts
 var log26 = createLogger("ship");
@@ -12614,14 +12632,7 @@ async function nextAction(deps, runId, taskId, results) {
   }
   const stop = await applyQuotaGate(deps, runId, run9.mode, run9.ignore_quota);
   if (stop !== null) {
-    return {
-      kind: "pause",
-      run_id: runId,
-      task_id: taskId,
-      scope: stop.scope,
-      reason: stop.reason,
-      ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
-    };
+    return { kind: "pause", run_id: runId, task_id: taskId, ...quotaStopFields(stop) };
   }
   let phase = task.phase ?? "preflight";
   let cursorPersisted = false;
@@ -12780,6 +12791,8 @@ async function runDocsEmit(deps, runId) {
   await deps.git.fetch("origin", base);
   if (!await deps.git.worktreeExists(worktree)) {
     await deps.git.worktreeAdd(["-b", docsBranch, worktree, `origin/${staging}`]);
+  } else if ((run9.docs?.attempts ?? 0) >= 1) {
+    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
   return {
     kind: "spawn",
@@ -12873,13 +12886,7 @@ async function nextTask(deps, runId) {
   }
   const stop = await applyQuotaGate(deps, runId, run9.mode, run9.ignore_quota);
   if (stop !== null) {
-    return {
-      ...ctx(),
-      kind: "pause",
-      scope: stop.scope,
-      reason: stop.reason,
-      ...stop.resets_at_epoch !== void 0 ? { resets_at_epoch: stop.resets_at_epoch } : {}
-    };
+    return { ...ctx(), kind: "pause", ...quotaStopFields(stop) };
   }
   if (run9.status === "paused" || run9.status === "suspended") {
     const patch = clearCheckpoint();
@@ -13291,7 +13298,7 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
     };
   });
 }
-async function applyResume(state, runId, reading, config, nowEpochSec) {
+async function applyResume(state, runId, reading, config, nowEpochSec, priorUpdatedAt) {
   const run9 = await state.read(runId);
   if (isTerminalRunStatus(run9.status)) {
     throw new Error(`run resume: run '${runId}' is terminal (${run9.status}); nothing to resume`);
@@ -13303,7 +13310,7 @@ async function applyResume(state, runId, reading, config, nowEpochSec) {
     case "resume": {
       const idleMinutes = Math.max(
         0,
-        Math.floor((nowEpochSec - parseIso8601ToEpoch(run9.updated_at)) / 60)
+        Math.floor((nowEpochSec - parseIso8601ToEpoch(priorUpdatedAt ?? run9.updated_at)) / 60)
       );
       const updated = await state.update(runId, (s) => ({
         ...s,
@@ -13395,10 +13402,9 @@ async function runCreate(argv, overrides = {}) {
   }
   const intent = picked[0] ?? "default";
   const ignoreQuota = args.flag("ignore-quota") === true;
-  const dataDir = resolveDataDir(
-    overrides.dataDir !== void 0 ? { dataDir: overrides.dataDir } : {}
-  );
-  const config = loadConfig(overrides.dataDir !== void 0 ? { dataDir } : {});
+  const hasDataDirOverride = overrides.dataDir !== void 0;
+  const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
+  const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
   const state = new StateManager({ dataDir });
   const specStore = new SpecStore({ dataDir });
   const ghClient = overrides.ghClient ?? new DefaultGhClient();
@@ -13475,11 +13481,12 @@ async function runResume(argv) {
   const config = loadConfig({ dataDir });
   const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "resume");
+  const { updated_at: priorUpdatedAt } = await state.read(runId);
   if (args.flag("ignore-quota") === true) {
     await state.update(runId, (s) => ({ ...s, ignore_quota: true }));
   }
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
-  const envelope = await applyResume(state, runId, reading, config, nowEpoch());
+  const envelope = await applyResume(state, runId, reading, config, nowEpoch(), priorUpdatedAt);
   emitJson(envelope);
   return EXIT.OK;
 }

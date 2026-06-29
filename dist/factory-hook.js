@@ -6625,7 +6625,8 @@ function inferPluginRoot() {
       dir = dirname2(dir);
     }
     return resolve(here, "..");
-  } catch {
+  } catch (err) {
+    log4.debug(`inferPluginRoot: ${err.message}; falling back to cwd`);
     return process.cwd();
   }
 }

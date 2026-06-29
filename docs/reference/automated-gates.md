@@ -59,6 +59,25 @@ would otherwise fail the scoped run — every file the scoped tests don't exerci
 reports 0% — a false negative unrelated to whether the tests pass. Coverage is the
 `coverage` gate's job (before/after summaries), never the `test` gate's.
 
+Before handing the diff-scoped test files to vitest, the strategy filters them to
+the **vitest-runnable** extensions (`.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`, via
+`isVitestRunnable` in `scope.ts`). The TDD gate's test-path matrix is broader than
+what vitest can execute — it also classifies pgTAP (`*.test.sql`), Go (`*_test.go`),
+and other non-JS test files as test commits. Handing one of those to vitest yields
+"No test files found" → exit 1 → a spurious `test`-gate failure. So:
+
+- **Mixed change** (some vitest-runnable tests present): vitest runs the runnable
+  subset; non-runnable files are left to the target repo's own CI and the reviewer
+  panel.
+- **Pure non-JS change** (the diff scoped one or more test files but **none** are
+  vitest-runnable, e.g. a pgTAP-only commit): the gate is EXECUTION-only and the
+  `tdd` gate already owns test _existence_, so it returns a **vacuous pass** with
+  explicit evidence detail naming the count of non-vitest files not executed (e.g.
+  `diff-scoped: 2 non-vitest test file(s) not executed (e.g. pgTAP)`). Non-JS
+  green-ness is delegated to the reviewer panel and the repo's own CI (which runs
+  pgTAP / Go / etc.).
+- **No test files in the diff:** the run is un-scoped (full suite).
+
 Evidence is memoized by the worktree's git tree-SHA, so an identical-content
 re-run skips re-executing the tool — but the verdict is still re-derived, so a
 cache hit never bypasses re-derivation.
@@ -84,7 +103,7 @@ it writes, so the local gate and the repo's GitHub CI build with identical env. 
 
 | Gate       | Checks                                                                                                                      | Fail-closed when                                                                                                                          |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `test`     | The project test suite passes.                                                                                              | Tests fail or cannot run.                                                                                                                 |
+| `test`     | The vitest-runnable changed test files pass (diff-scoped). Pure non-JS test sets (pgTAP, Go…) get a vacuous pass.           | Runnable tests fail or cannot run.                                                                                                        |
 | `tdd`      | Tests precede implementation on the pre-squash task branch (test-before-impl commit ordering).                              | An impl commit lands with no preceding failing-test commit. Memoized by tip SHA; a no-op on squashed history.                             |
 | `coverage` | No metric (`lines`, `branches`, `functions`, `statements`) regressed by more than `quality.coverageRegressionTolerancePct`. | Exactly one of the before/after summaries is missing, or either is invalid. **Both absent → _skipped_, not failed** (opt-in — see below). |
 | `mutation` | Mutation score (derived in-engine from the stock json report's per-file mutants) meets `quality.mutationScoreTarget`.       | Score below target, or no score is derivable from a present report (non-empty scope).                                                     |

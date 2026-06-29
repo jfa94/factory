@@ -10,6 +10,7 @@ import {
   isDocsPath,
   isMutableSrc,
   isTestPath,
+  isVitestRunnable,
   mutationScope,
 } from "./scope.js";
 
@@ -129,6 +130,31 @@ describe("escapeStrykerGlob (glob-literal escaping for --mutate CSV)", () => {
   it("leaves plain paths unchanged", () => {
     expect(escapeStrykerGlob("src/app/page.ts")).toBe("src/app/page.ts");
     expect(escapeStrykerGlob("src/lib/utils.ts")).toBe("src/lib/utils.ts");
+  });
+});
+
+describe("isVitestRunnable (vitest-executable file predicate)", () => {
+  it("returns true for JS/TS extensions vitest can execute", () => {
+    const runnable = [
+      "src/foo.test.ts",
+      "src/foo.spec.tsx",
+      "tests/bar.js",
+      "tests/baz.mjs",
+      "src/foo.cjs",
+      "src/foo.jsx",
+    ];
+    for (const p of runnable) expect(isVitestRunnable(p), p).toBe(true);
+  });
+
+  it("returns false for non-JS test files vitest cannot execute", () => {
+    const notRunnable = [
+      "supabase/tests/x.test.sql",
+      "pkg/foo_test.go",
+      "src/FooTest.java",
+      "tests/foo_test.py",
+      "spec/foo_spec.rb",
+    ];
+    for (const p of notRunnable) expect(isVitestRunnable(p), p).toBe(false);
   });
 });
 
