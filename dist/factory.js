@@ -14366,7 +14366,7 @@ ensure     Merges templates/settings.autonomous.json with your existing settings
            baked, statusLine wired to \`factory statusline\`) and prints the relaunch
            command:
 
-             claude --settings <merged-settings.json>
+             claude --worktree --settings <merged-settings.json>
 
 status     Reports whether THIS session is autonomous and whether merged-settings.json
            exists. Exits 0 when autonomous, 1 when not (never throws).
@@ -14505,7 +14505,7 @@ async function runAutonomyEnsure(opts = {}) {
   });
   const path4 = mergedSettingsPath(dataDir);
   await atomicWriteFile(path4, stringifyJson(merged));
-  const relaunchCommand = `claude --settings ${path4}`;
+  const relaunchCommand = `claude --worktree --settings ${path4}`;
   write(
     `Wrote autonomous settings \u2192 ${path4}
 Relaunch the session in autonomous mode with:
@@ -14545,7 +14545,7 @@ merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path4.l
       `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
 merged-settings: ${status.mergedSettingsPresent ? `present at ${path4}` : "absent"}
 ` + (status.mergedSettingsPresent ? `Relaunch the session with:
-  claude --settings ${path4}
+  claude --worktree --settings ${path4}
 ` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
 `)
     );
