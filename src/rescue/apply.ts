@@ -80,6 +80,11 @@ function resetTaskRow(task: TaskState): TaskState {
     started_at: _startedAt,
     ended_at: _endedAt,
     phase: _phase,
+    // WS2 hygiene: mirror completeTask/failTask (transitions.ts:88,112). A stale
+    // checkpoint with escalation_rung reset to 0 would re-match the orchestrator's
+    // idempotent re-spawn guard (orchestrator.ts:358-373) and hard-reset the freshly
+    // recreated worktree to the pre-rescue tip_sha.
+    spawn_in_flight: _spawnInFlight,
     ...rest
   } = task;
   return {

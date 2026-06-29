@@ -27,6 +27,7 @@ export {
   parseHoldoutVerdicts,
   checkHoldout,
   holdoutEvidence,
+  deriveHoldoutEvidence,
   type HoldoutVerdict,
   type HoldoutCriterionResult,
   type HoldoutCheckResult,

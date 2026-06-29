@@ -20,7 +20,8 @@
  *     into the risk-invariant merge gate via the existing `deriveMergeGateVerdict`.
  */
 import type { GateEvidence } from "../../types/index.js";
-import type { HoldoutRecord } from "./store.js";
+import type { HoldoutRecord, HoldoutStore } from "./store.js";
+import type { HoldoutVerdictStore } from "./verdict-store.js";
 
 /** One reviewer verdict on a single withheld criterion. */
 export interface HoldoutVerdict {
@@ -218,4 +219,24 @@ export function holdoutEvidence(result: HoldoutCheckResult): GateEvidence {
     observed: result.status === "pass",
     detail: `holdout ${result.satisfied}/${result.withheld} (${result.passPct}% ${result.status === "pass" ? "≥" : "<"} ${result.threshold}%)`,
   };
+}
+
+/**
+ * Re-derive holdout gate evidence from persisted verdicts. Returns `undefined` if no
+ * holdout record exists for this task (i.e. task is not a holdout task). Shared by
+ * {@link import("../../orchestrator/record.js").applyRecordReviews} (full-path) and the
+ * merge-resync verify fast-path ({@link import("../../orchestrator/handlers.js")}) so
+ * both always include holdout evidence in the merge gate.
+ */
+export async function deriveHoldoutEvidence(
+  holdout: HoldoutStore,
+  verdictStore: HoldoutVerdictStore,
+  runId: string,
+  taskId: string,
+  passRate: number,
+): Promise<GateEvidence | undefined> {
+  if (!(await holdout.has(runId, taskId))) return undefined;
+  const record = await holdout.get(runId, taskId);
+  const verdicts = await verdictStore.get(runId, taskId);
+  return holdoutEvidence(checkHoldout(record, verdicts, passRate));
 }

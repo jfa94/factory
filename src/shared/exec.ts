@@ -139,8 +139,9 @@ export function exec(
     });
 
     if (opts.input !== undefined && child.stdin) {
-      child.stdin.on("error", () => {
-        /* EPIPE if child exits early; the close handler reports the real result */
+      child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EPIPE") return; // child exited early; close handler reports the result
+        settleReject(err);
       });
       child.stdin.end(opts.input);
     }

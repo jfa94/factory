@@ -60,7 +60,7 @@ import {
 import type { HandlerDeps } from "./types.js";
 import { taskWorktreePath } from "./paths.js";
 import { taskExemptReader } from "./exempt.js";
-import { FsHoldoutVerdictStore } from "../verifier/holdout/index.js";
+import { FsHoldoutVerdictStore, deriveHoldoutEvidence } from "../verifier/holdout/index.js";
 
 /**
  * A producer role the tests/exec reporters spawn. Mirrors the WS8
@@ -299,6 +299,8 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
       // holdout evidence (fail-closed). Caveat: the store is task-keyed, not rung-keyed,
       // so a stale prior-rung verdict still satisfies the check (residual gap, tracked).
       const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id);
+      // Mutable evidence copy so we can append holdout gate below without mutating gate.evidence.
+      const fastPathEvidence = [...gate.evidence];
       if (holdoutExpected) {
         const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
         const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id);
@@ -311,9 +313,22 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
             ),
           );
         }
+        // Re-derive holdout gate evidence for the fast-path. The normal composition site
+        // is applyRecordReviews (record.ts:382-388), which is skipped on merge-resync.
+        // Without this a re-synced implementation that fails withheld criteria can pass
+        // the merge gate. deriveHoldoutEvidence() returns undefined if no record exists,
+        // but holdoutExpected guarantees one does.
+        const holdoutGate = await deriveHoldoutEvidence(
+          deps.holdout,
+          verdictStore,
+          ctx.run.run_id,
+          task.task_id,
+          deps.config.quality.holdoutPassRate,
+        );
+        if (holdoutGate !== undefined) fastPathEvidence.push(holdoutGate);
       }
 
-      const mergeGate = deriveMergeGateVerdict({ reviewers: task.reviewers }, gate.evidence);
+      const mergeGate = deriveMergeGateVerdict({ reviewers: task.reviewers }, fastPathEvidence);
       if (mergeGate.passed) {
         return advance("ship");
       }

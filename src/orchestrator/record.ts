@@ -46,6 +46,7 @@ import {
 import {
   checkHoldout,
   holdoutEvidence,
+  deriveHoldoutEvidence,
   parseHoldoutVerdicts,
   type HoldoutVerdict,
   type HoldoutVerdictStore,
@@ -379,13 +380,14 @@ export async function applyRecordReviews(
   // 3. holdout gate evidence — RE-DERIVED from the verdicts applyRecordHoldout persisted
   //    (derive-don't-store exception). A withheld key with no persisted verdicts is an
   //    orchestration error (applyRecordHoldout must record first) — LOUD, never a silent pass.
-  if (await deps.holdout.has(runId, taskId)) {
-    const record = await deps.holdout.get(runId, taskId);
-    const verdicts = await verdictStore.get(runId, taskId);
-    gateEvidence.push(
-      holdoutEvidence(checkHoldout(record, verdicts, deps.config.quality.holdoutPassRate)),
-    );
-  }
+  const holdoutGate = await deriveHoldoutEvidence(
+    deps.holdout,
+    verdictStore,
+    runId,
+    taskId,
+    deps.config.quality.holdoutPassRate,
+  );
+  if (holdoutGate !== undefined) gateEvidence.push(holdoutGate);
 
   // 4. derive the merge gate (citation-verify + replay-confirm + conjunctive merge gate).
   const panel = await runPanel({
