@@ -98,16 +98,6 @@ export function diffScopedTestFiles(changedFiles: readonly string[]): string[] {
 }
 
 /**
- * Can vitest execute this file? Only the JS/TS family. pgTAP (`*.test.sql`),
- * Go (`*_test.go`), etc. pass {@link isTestPath} (the tdd gate classifies them as
- * test commits) but vitest can't run them — handing one to vitest yields
- * "No test files found" → exit 1 → spurious test-gate failure.
- */
-export function isVitestRunnable(file: string): boolean {
-  return /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file);
-}
-
-/**
  * Escape glob metacharacters in a literal file path so Stryker's `--mutate`
  * matcher treats it as a literal, not a glob. git-diff paths are always literal;
  * Next.js dynamic-route segments (`[token]`, `[...slug]`), route groups (`(...)`),

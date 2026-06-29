@@ -10397,9 +10397,6 @@ function mutationScope(changedFiles) {
 function diffScopedTestFiles(changedFiles) {
   return filterDedup(changedFiles, isTestPath);
 }
-function isVitestRunnable(file) {
-  return /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file);
-}
 function escapeStrykerGlob(p) {
   return p.replace(/[[\]{}()*?!+@|]/g, (c) => `[${c}]`);
 }
@@ -10416,6 +10413,9 @@ function filterDedup(files, keep) {
 }
 
 // src/verifier/deterministic/strategies/test.ts
+function isVitestRunnable(file) {
+  return /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file) && !file.endsWith(".d.ts");
+}
 var testStrategy = {
   id: "test",
   async run(ctx) {
@@ -10424,19 +10424,17 @@ var testStrategy = {
     const scoped = diffScopedTestFiles(changed);
     const runnable = scoped.filter(isVitestRunnable);
     if (scoped.length > 0 && runnable.length === 0) {
-      return ran(
-        "test",
-        true,
-        `diff-scoped: ${scoped.length} non-vitest test file(s) not executed (e.g. pgTAP)`
-      );
+      return skip("test", "no-vitest-runnable-tests-in-scope");
     }
     const result = await ctx.tools.vitest.run(runnable, { cwd: ctx.worktree });
     if (result.truncated) {
       throw new Error("test gate: vitest output truncated \u2014 refusing to judge a clipped run");
     }
     const observed = result.code === 0;
-    const detail = runnable.length > 0 ? `diff-scoped (${runnable.length} test file(s))` : "un-scoped";
-    return ran("test", observed, `vitest exit=${result.code ?? "null"} ${detail}`);
+    const skipped = scoped.length - runnable.length;
+    const scope = runnable.length > 0 ? `diff-scoped (${runnable.length} test file(s))` : "un-scoped";
+    const detail = `vitest exit=${result.code ?? "null"} ${scope}` + (skipped > 0 ? `; ${skipped} non-vitest file(s) not executed` : "");
+    return ran("test", observed, detail);
   }
 };
 
