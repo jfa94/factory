@@ -70,6 +70,10 @@ export async function runDocsEmit(deps: DocsRunDeps, runId: string): Promise<Doc
   // `git worktree add` FATALS on an existing path, so reuse it instead of re-creating.
   if (!(await deps.git.worktreeExists(worktree))) {
     await deps.git.worktreeAdd(["-b", docsBranch, worktree, `origin/${staging}`]);
+  } else if ((run.docs?.attempts ?? 0) >= 1) {
+    // Retry: reset dirty worktree to staging tip so the prior failed commit/edit doesn't
+    // bleed into the new attempt (preserves "at most one docs commit" invariant).
+    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
 
   return {

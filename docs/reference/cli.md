@@ -167,15 +167,14 @@ construction site. The prior-spec fields are also untrusted: because `prior_spec
 `prior_tasks` derive from the untrusted PRD, the `spec-generator`'s Untrusted Input Contract
 treats them and `review_feedback` as data to patch, never directives to obey.
 
-## `run <create|resume|finalize|cancel>`
+## `run <create|resume|finalize|docs|cancel>`
 
 ### `run create`
 
 Action. Resolves a durable spec, creates a fresh run, seeds one `pending` task per
 spec task, cuts + GitHub-protects the run's `staging-<run-id>` integration branch
-from `develop` (Decision 33), and emits `{kind:"created", run}`. Seeding copies only
-the producer dial (`risk_tier`) + dependency edges — never `tdd_exempt` (read from
-the spec at runtime). Duplicate, self, dangling, or cyclic dependency edges fail
+from `develop` (Decision 33), and emits `{kind:"created", run}`. Seeding copies only dependency edges (`depends_on`); neither `risk_tier` nor
+`tdd_exempt` is persisted — both read live from the spec (Decision 25). Duplicate, self, dangling, or cyclic dependency edges fail
 loudly at seed time.
 
 ```

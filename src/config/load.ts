@@ -169,7 +169,8 @@ export function inferPluginRoot(): string {
       dir = dirname(dir);
     }
     return resolve(here, "..");
-  } catch {
+  } catch (err) {
+    log.debug(`inferPluginRoot: ${(err as Error).message}; falling back to cwd`);
     return process.cwd();
   }
 }

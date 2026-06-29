@@ -72,11 +72,11 @@ Skill(pipeline-runner)
 If an active run already exists for this spec, Phase 2's `run create` exits `3`. There are
 two distinct conflict envelopes — **handle `kind` first**:
 
-### `kind:"quota-blocked"` — weekly quota hard stop
+### `kind:"pause"` — weekly quota hard stop
 
 ```json
 {
-  "kind": "quota-blocked",
+  "kind": "pause",
   "scope": "7d",
   "run_id": "…",
   "status": "suspended",

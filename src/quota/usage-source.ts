@@ -194,8 +194,10 @@ export class StatuslineUsageSignal implements UsageSignal {
     let raw: unknown;
     try {
       raw = parseJson<unknown>(readFileSync(file, "utf8"), file);
-    } catch {
-      log.warn(`usage-cache.json is malformed at ${file}; emitting unavailable sentinel`);
+    } catch (err) {
+      log.warn(
+        `usage-cache.json is malformed at ${file}: ${(err as Error).message}; emitting unavailable sentinel`,
+      );
       return unavailable("usage-cache-malformed");
     }
 

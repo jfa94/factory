@@ -1,5 +1,5 @@
 /**
- * `factory run <create|resume>` — the run-lifecycle entrypoint (C6).
+ * `factory run <create|resume|finalize|docs|cancel>` — the run-lifecycle entrypoint (C6).
  *
  * Model A: the CLI never spawns an agent. `run create` resolves a DURABLE spec (by
  * stable issue number or explicit spec-id), creates a fresh run, SEEDS its task
@@ -168,9 +168,8 @@ Emits ONE JSON envelope:
 
 /**
  * Map a durable {@link SpecManifest} to the run's initial `pending` task rows.
- * Each task carries ONLY the producer dial + dependency edges; `tdd_exempt` is
- * deliberately NOT copied (it is read from the spec at runtime, never persisted to
- * run state). LOUD on a duplicate task id, an unsafe id charset, a self-dependency,
+ * Each task carries ONLY dependency edges (`depends_on`); neither `risk_tier` nor
+ * `tdd_exempt` is persisted — both read live from the spec (Decision 25). LOUD on a duplicate task id, an unsafe id charset, a self-dependency,
  * a dangling dependency, or a dependency cycle — all are spec-integrity defects
  * that would otherwise deadlock the orchestrator.
  */
@@ -572,6 +571,11 @@ export async function applyResume(
   reading: UsageReading,
   config: Config,
   nowEpochSec: number,
+  /** Pre-write snapshot of `updated_at` — callers that stamp the run before calling
+   * (e.g. `--ignore-quota` persists `ignore_quota:true`) must pass the value they
+   * captured BEFORE the write so idle time is computed against the real pause epoch,
+   * not the stamp time. Omit when there is no preceding write. */
+  priorUpdatedAt?: string,
 ): Promise<ResumeResult> {
   const run = await state.read(runId);
   if (isTerminalRunStatus(run.status)) {
@@ -586,9 +590,11 @@ export async function applyResume(
     case "resume": {
       // Accumulate the idle gap into paused_minutes so the runtime breaker deducts
       // real suspend/pause time from the wall-clock ceiling on the next evaluation.
+      // Use priorUpdatedAt when a caller stamped updated_at before calling us (e.g.
+      // --ignore-quota write), otherwise fall back to the run's own timestamp.
       const idleMinutes = Math.max(
         0,
-        Math.floor((nowEpochSec - parseIso8601ToEpoch(run.updated_at)) / 60),
+        Math.floor((nowEpochSec - parseIso8601ToEpoch(priorUpdatedAt ?? run.updated_at)) / 60),
       );
       const updated = await state.update(runId, (s) => ({
         ...s,
@@ -849,6 +855,10 @@ async function runResume(argv: string[]): Promise<ExitCode> {
   const state = new StateManager({ dataDir });
   const runId = await resolveRunId(state, args, "resume");
 
+  // Capture updated_at BEFORE any write so the idle-time calculation in applyResume
+  // uses the real pause epoch, not the timestamp we're about to stamp.
+  const { updated_at: priorUpdatedAt } = await state.read(runId);
+
   // --ignore-quota: persist on the run BEFORE applyResume so planResume short-circuits
   // to resume regardless of the live reading. Persisting also prevents re-suspension on
   // subsequent steps (both orchestrators read run.ignore_quota via the gate).
@@ -857,7 +867,7 @@ async function runResume(argv: string[]): Promise<ExitCode> {
   }
 
   const reading = await new StatuslineUsageSignal({ dataDir }).read();
-  const envelope = await applyResume(state, runId, reading, config, nowEpoch());
+  const envelope = await applyResume(state, runId, reading, config, nowEpoch(), priorUpdatedAt);
   emitJson(envelope);
   return EXIT.OK;
 }

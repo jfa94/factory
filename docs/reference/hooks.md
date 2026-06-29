@@ -23,7 +23,7 @@ exits `2`.
 
 ## `hooks.json` wiring
 
-The seven guards are wired across six matcher entries (some guards run under more
+The seven guards are wired across five matcher entries (some guards run under more
 than one matcher):
 
 ```mermaid
