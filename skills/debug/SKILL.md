@@ -1,261 +1,350 @@
 ---
 name: debug
-description: "Runs an all-hands sweep (architecture + security + quality + implementation reviewers + orchestrator self-review + Codex if available) in parallel, addresses validated findings, then drives the iterative reviewer ⇄ implementer loop until clean. Used by /factory:debug."
+description: (internal) Drive /factory:debug — the whole-scope review⇄fix loop. The `factory debug <start|review|spec|seed|finalize>` CLI owns every decision (base resolution, adjudication, pass ownership, finalize); you spawn what each envelope names and feed results back, exactly like skills/pipeline-runner/SKILL.md.
+auto-invoke: false
 ---
 
-# /factory:debug — All-Hands Sweep + Reviewer ⇄ Implementer Loop
+# Debug — the /factory:debug whole-scope review⇄fix loop
+
+`/factory:debug` runs the SAME risk-invariant judgment layer the per-task merge gate
+uses (citation-verify → independent finding-verifier → per-reviewer adjudication),
+applied to a **whole-scope diff** (`--base`/`--full` .. `HEAD`) instead of one task's
+diff. Confirmed blockers are rendered into a synthetic PRD and driven through the
+**ordinary** `factory spec` / `factory next-task` / `factory next-action` machinery —
+so a debug pass is executed by the SAME producer⇄reviewer loop `/factory:run` uses,
+just seeded from a review report instead of a GitHub issue. `factory debug
+<start|review|spec|seed|finalize>` is the deterministic seam
+(`src/cli/subcommands/debug.ts`); you are the same "dumb loop" role
+`skills/pipeline-runner/SKILL.md` describes — you never decide a transition, you
+spawn exactly what an envelope names and feed the raw results back.
 
 <EXTREMELY-IMPORTANT>
 ## Iron Law
 
-EVERY REVIEW (PHASE 0 SWEEP AND EVERY LOOP ROUND) COMMITS A REVIEW ARTIFACT TO STATE BEFORE SPAWNING THE EXECUTOR.
-
-- **Phase 0 (sweep):** Each reviewer (subagent or Codex) writes its raw output to `phase0/<reviewer>.raw.txt`. The orchestrator consolidates them into `phase0/findings.json` and `phase0/plan.md` BEFORE spawning the Phase 0 executor.
-- **Phase 1 (loop):** The active reviewer path (Codex via `pipeline-debug-review`, or Claude via `quality-reviewer` agent + `pipeline-debug-normalize`) writes `round-N.review.json` to the run's state dir and prints `{blocking_count, below_threshold_count, verdict, review_file}` on stdout. You do NOT spawn the executor without first persisting that artifact, and you do NOT advance to round N+1 without the executor's STATUS line recorded.
+1. **`factory debug spec` is sound ONLY after a `{kind:"findings"}` review-record
+   result.** Never call `debug spec resolve|gate|store` after a `{kind:"clean"}`
+   result — a clean pass has zero confirmed blockers, so the synthetic PRD it would
+   render (`"(no confirmed blockers)"`) can never pass the spec gate's traceability
+   check (Task 6 report, "Issues or concerns"). `clean` branches straight to
+   **finalize** (step 4) and STOPS.
+2. **`next-task`'s `"finalize"` kind during a debug run means "this pass is done, go
+   re-review" — it is NEVER a signal to call `factory run finalize`.** Only step 4's
+   clean/cap branch calls the ONE real finalize, `factory debug finalize`, exactly
+   once per session. See "Finalize interception" below — this is the single most
+   important deviation from `skills/pipeline-runner/SKILL.md`'s Phase 3 loop.
 
 Violating the letter of this rule violates the spirit. No exceptions.
 </EXTREMELY-IMPORTANT>
 
 ## Iron Laws
 
-1. **Resolve the base ref before the first review.** `--base <hash>` overrides; `--full` resolves to the empty-tree SHA `4b825dc642cb6eb9a060e54bf8d69288fbee4904`; default is `HEAD~1`. `--base` and `--full` are mutually exclusive — abort with a usage line if both are present.
-2. **Validate `--fixSeverity` upfront.** Allowed: `critical | high | medium | all`. Default `medium`. Reject anything else.
-3. **Time limit is a soft boundary.** Check the deadline at the TOP of Phase 0 (step 6) and at the TOP of each Phase 1 loop iteration only. Do NOT abort a reviewer or executor in flight.
-4. **Surface every escalation.** When `pipeline-debug-escalate` prints `ESCALATED path=<X>`, your final user-facing message MUST include the line `Escalated to human review. Audit trail: <X>`.
-5. **Phase 0 fan-out is parallel — single message, multiple `Agent` tool calls.** Architecture, security, quality, and implementation reviewers MUST be dispatched in one assistant message so they run concurrently. The Codex sweep (when available) is launched in the same message via `Bash` with `run_in_background: true`. The orchestrator's own line-by-line review runs immediately after the parallel batch returns (it cannot truly parallelize with itself).
-6. **Findings are validated before they are addressed.** Every Phase 0 finding is classified `confirmed | dismissed | uncertain` against (a) the actual code in the diff and (b) the apparent intent of the diff (since `/factory:debug` has no spec). Only `confirmed` findings enter the plan. Dismissed and uncertain ones are catalogued with the reason.
-7. **Budget is gated twice — but pauses, never stops the factory.** The 5h API budget is consulted via `pipeline-quota-check` (a) before launch and (b) between Phase 0 and Phase 1. The full ladder is in the **Quota-aware ladder** section below. Crossing a low-budget threshold delegates the wait loop to `pipeline-quota-gate-cli`, which paces a bounded wait-and-retry (`quota_wait_cycles` cap 60 ≈ 9h, `quota_stale_cycles` cap 6 ≈ 1h) until the next band is reached — it does **not** abort. The only abort paths are: the wait-cycle cap (stuck high-utilization) and the stale-cycle cap (telemetry fully broken). `--quick` skips Phase 0 and skips the between-phases re-check. Both budget gates run only **after** the Autonomy precondition (above) clears — quota telemetry is only fresh inside an autonomous session.
+1. **Never decide a transition.** The only next action is what the last envelope
+   said. You never edit session/state JSON, never re-order steps, never re-run a
+   step to "check" (identical to `skills/pipeline-runner/SKILL.md`).
+2. **Spawn exactly what the manifest says; collect output verbatim.** Role, model,
+   `max_turns`, isolation per `skills/pipeline-runner/SKILL.md`'s Agent spawn
+   matrix — reused unchanged, not re-derived here.
+3. **Fail loud.** An unknown envelope `kind`, an unexpected non-zero exit, or a
+   `debug spec`/`debug seed` LOUD `Error` (e.g. "run 'debug review --record'
+   first") → STOP and surface it verbatim. Never blind-retry.
+4. **`session.base` never moves.** It is set once at `start`; every pass reviews
+   the SAME `base..HEAD` range on the SAME debug staging branch, so later passes
+   naturally see fewer residual findings as fixes land.
 
-## Inputs
+## Autonomy check (precondition for all numbered steps)
 
-The command parses flags into a single line of arguments and invokes this skill with them. Expected variables:
-
-- `BASE` — resolved base ref (hash, branch, or empty-tree SHA)
-- `SEVERITY` — `critical | high | medium | all`
-- `LIMIT` — integer seconds (0 = unlimited)
-- `QUICK` — `true | false` (default `false`). When `true`, skip Phase 0 entirely.
-- `RUN_ID` — generated by the skill if not provided (`debug-<unix-ts>`)
-
-## Quota-aware ladder
-
-The skill consults `pipeline-quota-check` (5h window) before launch and again between Phase 0 and Phase 1. The 5h **remaining** percentage drives the response (`remaining = 100 - five_hour.utilization`):
-
-| Remaining | Pre-launch behavior                                                          | Between Phase 0 → Phase 1                                                    |
-| --------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| ≥ 60%     | Free run (silent)                                                            | Free run (silent)                                                            |
-| 40–60%    | Free run; print one-line budget notice (NOT a prompt)                        | Free run; one-line budget notice (NOT a prompt)                              |
-| 20–40%    | Ask user: "5h budget at <util>% used (<rem>% left). Use --quick? (Y/n)"      | Print notice; proceed but inform user that another sweep would be unsafe     |
-| 10–20%    | Force `--quick` (skip Phase 0); print explanation                            | **Wait-and-retry loop** until `remaining ≥ 20%` (next band) or window resets |
-| < 10%     | **Wait-and-retry loop** until `remaining ≥ 10%` (next band) or window resets | **Wait-and-retry loop** until `remaining ≥ 20%`                              |
-
-**Hard rule:** `AskUserQuestion` fires at exactly ONE pre-launch band (`20 ≤ remaining < 40`). Above 40%, never prompt. Between-phases gate never prompts at any band.
-
-**Pause, do not abort.** Crossing a low-budget threshold pauses the run until the next band is reached — it does not stop the factory. The wait loop is delegated to `pipeline-quota-gate-cli` so the sleep / cycle-cap / stale-cache logic stays in one place (shared with `/factory:run`):
+Identical mechanics to `/factory:run`'s Phase 0 step 2 (`factory autonomy
+preflight`) — reused unchanged, just repositioned as this skill's own first step
+since `/factory:debug` is a standalone entry point, not a sub-phase of the run
+skill:
 
 ```bash
-phase=phase0   # or phase1 below
-while :; do
-  pipeline-quota-gate-cli --run-id "$RUN_ID" --tier feature --boundary "${phase}-budget"; rc=$?
-  case $rc in
-    0) break ;;                                              # remaining crossed the next band — proceed
-    2) STATUS="BUDGET_ABORTED — wait cycle limit reached"; break ;;
-    3) continue ;;                                           # wait_retry — next loop turn refreshes statusline
-  esac
-done
+factory autonomy preflight   # exits 0 to proceed, 1 to halt
 ```
 
-The CLI maintains `circuit_breaker.quota_wait_cycles` (cap 60, ≈9h) and `circuit_breaker.quota_stale_cycles` (cap 6, ≈1h) in run state — the skill no longer rolls its own counters. Pause time is excluded from `LIMIT` because the CLI writes `circuit_breaker.pause_minutes` (mirrored by `pipeline-circuit-breaker`).
+It auto-scaffolds `merged-settings.json` when the session is not autonomous OR the
+settings are stale/missing/unstamped, and prints the relaunch command. The pipeline
+runs unattended — `debug start` HALTS loud otherwise (same `src/autonomy/mode.ts`
+gate `run create` uses). On a non-zero exit, relay the printed `claude --settings
+<merged-settings.json>` command to the user and **stop** — the relaunch is the
+user's irreducible step. `factory autonomy status`/`ensure` remain the manual
+primitives (see `/factory:run`'s "Autonomous mode" section for the full mechanics —
+not duplicated here).
 
-A stale `usage-cache.json` (statusline silent during a sleep) now yields `rc=3` instead of aborting; only the stale-cycle cap escalates to abort. Telemetry that was broken **before** the first wait still aborts at the very first check via the cap on stale cycles, but transient single misses are absorbed.
-
-The `AskUserQuestion` tool is used for the 20–40% pre-launch prompt; default to `--quick` if no answer.
-
-## Procedure
-
-### Autonomy check (precondition for all numbered steps)
-
-The pre-launch quota gate (step 5) reads `usage-cache.json`, which is only written by the factory statusline writer (`factory statusline`) while running under `merged-settings.json`. In a non-autonomous session the cache is stale by design and every quota call returns `unavailable`. Verify autonomous mode FIRST — the same engine gate `factory run create` enforces (`src/autonomy/mode.ts`).
+## Step 1 — `factory debug start`
 
 ```bash
-factory autonomy status --json   # exits 0 when autonomous, 1 when not
+factory debug start [--base <hash> | --full] [--no-ship] [--author-e2e] \
+  [--max-passes <n>] --session-id "$CLAUDE_CODE_SESSION_ID"
 ```
 
-The payload is `{ autonomous, envSet, mergedSettingsPresent, mergedSettingsPath }`. Persist `state.autonomy = { autonomous, checked_at: $(date +%s) }` as part of the initial state object written in step 3 below.
+- `--base <hash>` / `--full` are mutually exclusive (`--full` diffs against the git
+  empty-tree SHA `4b825dc642cb6eb9a060e54bf8d69288fbee4904`, i.e. review the ENTIRE
+  tree); omit both for the default `HEAD~1`. Passing both throws a `UsageError`
+  ("debug start: pass exactly one of --base or --full").
+- `--no-ship` persists no-merge ship mode on the eventual debug `RunState` (default:
+  live). `--author-e2e` persists `e2e:true` on it (opt into the e2e-authoring
+  phase during the task loop, step 5). Neither takes effect until `seed` (step 4)
+  actually creates the run.
+- `--max-passes <n>` caps review⇄fix passes before the driver must stop looping
+  (default 5; must be a positive integer or `debug start` throws).
+- Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` (falls back to the env var
+  itself if omitted) — same ownership rationale as `run create` in
+  `skills/pipeline-runner/SKILL.md`'s Phase 2.
 
-If the command exits 0 (`autonomous: true`), proceed into the numbered Setup steps.
+Mints the run id, cuts the debug staging branch (the SAME `ensureStaging` +
+`runStagingBranch` mechanism `run create` uses), and emits:
 
-Otherwise, **stop**. Print: `Autonomous mode required for /factory:debug. Relaunch with exactly: claude --settings <mergedSettingsPath> (or export FACTORY_AUTONOMOUS_MODE=1 for CI), then re-run /factory:debug.` Run `factory autonomy ensure` first if `mergedSettingsPresent` is false. Do not append `--dangerously-skip-permissions` — `merged-settings.json` grants scoped autonomy via `permissions.allow` plus the deny list and `PreToolUse` guards; bypassing permissions defeats them. Surface the command verbatim, no extra flags.
-
-> Note: the old bash `pipeline-ensure-autonomy` distinguished a `stale-cache` state (settings wired but statusline not ticked). `factory autonomy status` reports presence, not freshness; the richer stale-cache state machine is part of the deferred `/factory:debug` redesign epic (see CLAUDE.md "Known gaps").
-
-Not surfaced in the user-facing summary (parity with `/factory:run`); audit only via `state.autonomy.*`.
-
-### Setup
-
-1. **Validate flags + resolve base.** If `--full` and `--base` both set, abort: `usage: /factory:debug [--base <hash>|--full] [--limit <s>] [--fixSeverity ...]`.
-2. **Compute deadline.** `deadline = LIMIT > 0 ? $(date +%s) + LIMIT : 0`.
-3. **Initialise state.** `state_dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/factory}/debug/$RUN_ID"`. `mkdir -p "$state_dir/phase0"`. Write `state.json` with `{base, severity, deadline, started_at, quick:$QUICK, autonomy:{...from precondition...}, phase0:{}, rounds:[]}`.
-4. **Detect reviewer once.** Run `pipeline-detect-reviewer` and capture both `.reviewer` (`codex` or `claude-code`) and `.command` (an absolute path to the Codex wrapper when `reviewer == codex`; absent otherwise). Persist `reviewer` in `state.json`, and — when present — `phase0.codex_review_cmd` set to the `.command` string. The choice is fixed for the run; it controls both the Phase 0 Codex slot and the Phase 1 loop branch. Using detect-reviewer's absolute `.command` (rather than the bare name `pipeline-codex-review`) avoids PATH-shadow regressions where a stale wrapper on PATH silently swallows reviews.
-5. **Pre-launch quota gate.** Skip if `QUICK == true` (the user has already opted out of the heavy phase). Otherwise:
-   1. Run `pipeline-quota-check` and capture the full JSON output as `quota_raw`. From it, capture `.five_hour.utilization`, `.five_hour.resets_at_epoch`, and `.detection_method` for the ladder logic below; the full `quota_raw` is persisted in step 5.v as the audit trail.
-   2. If `detection_method == "unavailable"`: do NOT auto-degrade and do NOT enter the wait loop. Use `AskUserQuestion` with question `"Quota telemetry unavailable (<reason>). Cannot enforce the budget ladder or wait for budget recovery. Continue with --quick (skip Phase 0 + between-phases gate; reviewer ⇄ implementer loop still runs, bounded by --limit and reviewer rounds) or abort?"`, options `Continue with --quick | Abort`. There is no default — wait for the user's choice. If `Continue with --quick`: set `QUICK = true`, persist `state.quick_forced_by = "user-prompt-no-telemetry"` and `phase0.pre_launch_action = "user-continue-no-telemetry"`, jump to step 6. If `Abort`: print `STATUS: BUDGET_ABORTED — quota detection failed (<reason>); user declined to continue without telemetry`, persist `state.budget_aborted = true` and `phase0.pre_launch_action = "user-aborted-no-telemetry"`, break.
-   3. Compute `remaining = 100 - utilization`. Apply the **Quota-aware ladder** (Pre-launch column). **The bands below are mutually exclusive — evaluate in order, take the FIRST match, then stop. NEVER use `AskUserQuestion` when `remaining >= 40`; the 40–60% notice is a one-line printf, not a prompt.**
-      - **`remaining >= 60`**: proceed silently. No notice, no prompt. Stop.
-      - **`40 <= remaining < 60`**: proceed; print exactly one line: `Budget notice: <rem>% 5h remaining; proceeding with full sweep.` Do NOT call `AskUserQuestion`. Stop.
-      - **`20 <= remaining < 40`**: call `AskUserQuestion` with question `"5h API budget at <util>% used (<rem>% left). Phase 0 fans out 4+ subagents and may consume 10–25% of remaining budget. Use --quick (skip Phase 0)?"`, options `Yes (skip Phase 0) | No (run full sweep)`. Default to `Yes` if the user does not respond. If `Yes`, set `QUICK = true` and persist `state.quick_forced_by = "user-prompt"`. Stop.
-      - **`10 <= remaining < 20`**: enter the **wait-and-retry loop** (see "Quota-aware ladder" above) with `target_band = 20`. On exit (cycle limit reached or telemetry broken): abort with the printed status and break. Otherwise re-evaluate from step 5.iii with the fresh `remaining`.
-      - **`remaining < 10`**: enter the **wait-and-retry loop** with `target_band = 10`. Same exit behavior; on resume re-evaluate from step 5.iii.
-   4. Persist `phase0.pre_launch_remaining = $remaining` (omit when 5.ii fired — no telemetry to record), `phase0.pre_launch_action = proceed|prompt|forced-quick|user-continue-no-telemetry|user-aborted-no-telemetry|waited|aborted`, and (when waited) `circuit_breaker.pause_minutes` and `circuit_breaker.quota_wait_cycles` in `state.json`.
-   5. **Provenance.** Persist `phase0.pre_launch_check` in `state.json` — the raw `quota_raw` JSON from 5.i augmented with two fields: `checked_at` (current epoch, seconds) and `cache_age_at_check` (seconds; `checked_at - quota_raw.captured_at` when telemetry is present, `null` when `detection_method == "unavailable"`). When 5.ii fired (telemetry unavailable), persist the sentinel JSON verbatim under the same key — its `reason` field is the audit trail. This is the audit record for the budget decision; it is read by post-run inspection, never by the live pipeline.
-
-### Phase 0 — All-Hands Sweep (one shot, parallel fan-out)
-
-If `QUICK == true` (set by flag, by user prompt at step 5.iii, by forced budget-low, or by user prompt at step 5.ii when telemetry is unavailable), skip the entire Phase 0 block (steps 6–12) and jump to step 13 (between-phases gate). Persist `phase0.skipped = true` and `phase0.skipped_reason = "quick-flag" | "user-prompt" | "budget-low" | "user-continue-no-telemetry"` in `state.json`.
-
-6. **Deadline check.** If `deadline > 0 && $(date +%s) >= deadline`: print summary with `STATUS: TIME_LIMIT` and break (do not enter Phase 1).
-7. **Parallel fan-out (single assistant message, multiple tool calls).** Dispatch all of the following concurrently:
-   - `Agent` `subagent_type: "architecture-reviewer"` — prompt: review diff `$BASE..HEAD` for module-boundary, dependency-direction, coupling, and AI architectural anti-patterns. Output the agent's standard structured findings (severity + file:line quotes).
-   - `Agent` `subagent_type: "security-reviewer"` — prompt: review diff `$BASE..HEAD` for OWASP Top 10, framework-specific risks, and AI insecure defaults. Output the agent's standard structured findings.
-   - `Agent` `subagent_type: "quality-reviewer"` — prompt: adversarial code-quality review of diff `$BASE..HEAD` (logic errors, test quality, AI anti-patterns). Output the agent's standard structured findings.
-   - `Agent` `subagent_type: "implementation-reviewer"` — prompt: trace the apparent intent of the diff `$BASE..HEAD` (since `/factory:debug` has no spec, infer intent from commit messages + code shape) and flag where the implementation diverges from that intent or leaves gaps.
-   - **Codex sweep, only if `reviewer == codex`:** `Bash` `run_in_background: true`, command: `$codex_review_cmd --task-id "debug-phase0-$RUN_ID" > "$state_dir/phase0/codex.raw.txt" 2>&1` — substitute the literal value of `phase0.codex_review_cmd` captured at step 4 (already absolute and already includes `--base "$BASE"`). Track the shell id; collect output later via `BashOutput`.
-
-   Each subagent's full final assistant message is captured to `$state_dir/phase0/<reviewer>.raw.txt` (e.g. `architecture.raw.txt`).
-
-8. **Orchestrator self-review.** Immediately after step 7 returns, the orchestrator (you) performs an exhaustive line-by-line read of the diff `$BASE..HEAD`. Cover: correctness, edge cases, error handling, concurrency, resource lifecycle, public-API contracts, test coverage gaps, and anything the four subagent specialists would not natively catch. Write your findings to `$state_dir/phase0/orchestrator.raw.txt` in the same severity-tagged format as the subagents.
-9. **Drain the Codex background job (if launched).** Poll the shell id with `BashOutput` until exit; ensure `$state_dir/phase0/codex.raw.txt` is complete. If Codex exited non-zero, record `phase0.codex_skipped = true` in `state.json` with the reason and continue without Codex findings (do NOT abort the sweep).
-10. **Validate, dedupe, catalogue.** For every finding across all `*.raw.txt` files:
-    - **Verify against the code** — open the cited file:line and confirm the issue exists in the actual diff.
-    - **Verify against intent** — confirm the finding is in scope for the diff (since there is no spec, intent = commit messages + the change itself; out-of-scope drive-by complaints are dismissed).
-    - Classify: `confirmed | dismissed | uncertain` with a one-line reason.
-    - Dedupe across reviewers: collapse findings that point at the same file:line + root cause into a single entry; preserve the list of source reviewers.
-    - Write the consolidated catalogue to `$state_dir/phase0/findings.json` with shape:
-      ```
-      {
-        "base": "<sha>",
-        "severity_threshold": "<SEVERITY>",
-        "findings": [
-          {
-            "id": "p0-001",
-            "file": "...", "line": N,
-            "severity": "critical|high|medium|low",
-            "title": "...",
-            "evidence": "<verbatim code or import edge>",
-            "sources": ["architecture-reviewer", "orchestrator", ...],
-            "classification": "confirmed|dismissed|uncertain",
-            "classification_reason": "..."
-          }
-        ]
-      }
-      ```
-11. **Build the remediation plan.** Filter the catalogue to `classification == "confirmed" && severity ∈ threshold_set(SEVERITY)`. Write `$state_dir/phase0/plan.md` containing, in dependency order: a numbered list of fixes, each with `id`, `file:line`, root-cause statement, and the proposed minimal change. If zero confirmed-and-in-threshold findings remain, write `plan.md` with the single line `NO_FIXES_REQUIRED` and jump to step 13 (skip the executor — there is nothing to execute).
-12. **Execute the plan.** Spawn one `Agent` `subagent_type: "implementer"`, `isolation: "worktree"`, with the Phase 0 executor prompt template (below). Capture its final assistant message to `$state_dir/phase0/executor.log`. Extract the STATUS line.
-    - If STATUS is `BLOCKED — escalate: <reason>`: run `pipeline-debug-escalate --run-id "$RUN_ID" --reason "<reason>" --base "$BASE" --severity "$SEVERITY" --findings "$state_dir/phase0/findings.json" --executor-msg "$state_dir/phase0/executor.log"`. Print summary with `STATUS: ESCALATED` and the audit-trail line. Break (do not enter Phase 1).
-    - If STATUS is `BLOCKED` (other): print summary with `STATUS: BLOCKED — phase 0 executor blocked: <as-returned>`, break.
-    - If STATUS is `NEEDS_CONTEXT`: **fall through to Phase 1.** Persist `phase0.fell_through = "needs-context"` in `state.json`. Rationale: missing context is exactly what the iterative reviewer ⇄ implementer loop is designed to surface and resolve; halting here would waste the rest of the budget.
-    - Else (`DONE | DONE_WITH_CONCERNS`): proceed to Phase 1.
-
-### Phase 1 — Reviewer ⇄ Implementer Loop (existing behavior)
-
-13. **Between-phases quota gate.** Re-read the 5h budget before starting Phase 1:
-    1. If Phase 0 was skipped via `QUICK`, skip this re-check (we only ran the cheap path) and proceed directly to step 14.
-    2. Run `pipeline-quota-check` and capture the full JSON output as `quota_raw` (used in step 13.4 below). If `detection_method == "unavailable"`: do NOT auto-degrade and do NOT enter the wait loop. Use `AskUserQuestion` with question `"Quota telemetry unavailable between phases (<reason>). Cannot enforce the between-phases ladder or wait for budget recovery. Continue into Phase 1 without the gate (loop still bounded by --limit and reviewer rounds) or abort?"`, options `Continue into Phase 1 | Abort`. There is no default — wait for the user's choice. Phase 0 results remain on disk regardless. If `Continue into Phase 1`: persist `phase1.pre_loop_action = "user-continue-no-telemetry"`, proceed to step 14. If `Abort`: print `STATUS: BUDGET_ABORTED — quota detection failed (<reason>); user declined to continue without telemetry; will not start Phase 1`, persist `phase1.pre_loop_action = "user-aborted-no-telemetry"`, break.
-    3. Compute `remaining = 100 - utilization`. Apply the **Quota-aware ladder** (Between Phase 0 → Phase 1 column). **Bands are mutually exclusive — evaluate in order, take the FIRST match, then stop. There is NO `AskUserQuestion` prompt at this gate at any band.**
-       - **`remaining >= 60`**: proceed silently. Stop.
-       - **`40 <= remaining < 60`**: proceed; print exactly one line: `Budget notice: <rem>% 5h remaining; entering Phase 1.` Stop.
-       - **`20 <= remaining < 40`**: print `Between-phases notice: <rem>% 5h remaining. Proceeding into Phase 1; another full sweep would be unsafe.` Proceed. Stop.
-       - **`remaining < 20`**: enter the **wait-and-retry loop** with `target_band = 20`. On exit (cycle limit reached or telemetry broken): abort with the printed status and break. Otherwise re-evaluate from step 13.iii with the fresh `remaining`. Phase 0 results remain on disk throughout the wait.
-    4. Persist `phase1.pre_loop_remaining = $remaining` (omit when 13.2 fired — no telemetry to record), `phase1.pre_loop_action = proceed|notice|waited|aborted|user-continue-no-telemetry|user-aborted-no-telemetry`, and (when waited) `circuit_breaker.pause_minutes` and `circuit_breaker.quota_wait_cycles` in `state.json`.
-    5. **Provenance.** Persist `phase1.pre_loop_check` in `state.json` — the raw `quota_raw` JSON from 13.2 augmented with `checked_at` (current epoch, seconds) and `cache_age_at_check` (seconds; `checked_at - quota_raw.captured_at` when telemetry is present, `null` when `detection_method == "unavailable"`). When 13.2 fired (telemetry unavailable), persist the sentinel JSON verbatim. Audit-only — never read by the live pipeline.
-
-14. **Loop (round = 1..N):**
-    1. If `deadline > 0 && $(date +%s) >= deadline`: print summary with `STATUS: TIME_LIMIT`, break.
-    2. Produce the round review artifact based on `reviewer` from step 4:
-       - **Codex branch** (`reviewer == codex`): run `pipeline-debug-review --base "$BASE" --severity "$SEVERITY" --out-dir "$state_dir" --round "$round"`. Parse stdout JSON.
-       - **Claude branch** (`reviewer == claude-code`): use the `Agent` tool with `subagent_type: "quality-reviewer"` to review the diff between `$BASE` and `HEAD`. Capture the agent's full final assistant message to `$state_dir/round-${round}.raw-review.txt`, then run `cat "$state_dir/round-${round}.raw-review.txt" | pipeline-parse-review --reviewer claude-code --base "$BASE" | pipeline-debug-normalize --severity "$SEVERITY" --out-dir "$state_dir" --round "$round"`. Parse the final stdout JSON. If either pipe stage exits non-zero, print summary with `STATUS: BLOCKED — review parse failed` and break.
-    3. If `blocking_count == 0`: print summary with `STATUS: CLEAN`, break.
-    4. Build the executor-fix prompt. Use the `Agent` tool with `subagent_type: "implementer"`, `isolation: "worktree"`. Prompt content (template below).
-    5. Capture the executor's final assistant message → `state_dir/round-${round}.executor.log`. Extract STATUS line.
-    6. If STATUS matches `BLOCKED — escalate: <reason>`: run `pipeline-debug-escalate --run-id "$RUN_ID" --reason "<reason>" --base "$BASE" --severity "$SEVERITY" --findings "$review_file" --executor-msg "$state_dir/round-${round}.executor.log"`. Capture the `ESCALATED path=<X>` line. Print summary with `STATUS: ESCALATED` and `Escalated to human review. Audit trail: <X>`. Break.
-    7. If STATUS is `BLOCKED` (other) or `NEEDS_CONTEXT`: print summary with `STATUS: <as-returned>`, break.
-    8. Else (`DONE | DONE_WITH_CONCERNS`): increment `round`, continue.
-
-15. **Final summary** (always printed). Include: Phase 0 result (executor STATUS + counts of confirmed/dismissed findings, OR skip reason if `phase0.skipped`), Phase 1 rounds run, final STATUS, last review's `below_threshold_count`, the budget ladder actions taken, and the escalation line if applicable.
-
-## Phase 0 executor prompt template
-
-```
-[debug:phase0]
-
-You are running under /factory:debug Phase 0 — the all-hands sweep has consolidated findings from architecture-reviewer, security-reviewer, quality-reviewer, implementation-reviewer, the orchestrator's self-review, and (when available) Codex. There is no spec; intent = the diff between ${BASE} and HEAD plus its commit messages.
-
-Inputs:
-- Catalogue (validated, deduped): ${state_dir}/phase0/findings.json
-- Remediation plan (only confirmed + in-threshold items): ${state_dir}/phase0/plan.md
-
-Iron Law reminder: the orchestrator already verified each finding against the code AND against intent — every item in plan.md is confirmed-and-in-threshold. Implement them in the listed order. Address root causes, not symptoms. If a fix requires a fundamental design/architecture change beyond the diff's intent, end with STATUS: BLOCKED — escalate: <reason>.
-
-Commit fixes locally — do not push.
-
-End with STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
+```json
+{ "kind": "review", "run_id": "<id>", "base": "<resolved base>", "worktree": "<cwd>", "pass": 1 }
 ```
 
-## Phase 1 executor-fix prompt template
+No `RunState` exists yet — a debug run is born later, at `seed` (step 4). Record
+`run_id` and `worktree` (the checkout you are already running in — debug does NOT
+cut a separate worktree per pass); every subsequent action takes `--run <run_id>`.
+Proceed to step 2.
 
-```
-[debug:round-${round}]
+## Step 2 — Review a pass: `factory debug review --emit` / `--record`
 
-You are running under /factory:debug — there is no spec; the task is to address the reviewer's findings on the diff between ${BASE} and HEAD.
+### 2a. Emit the panel manifest
 
-Review file (normalized JSON, contains findings array): ${review_file}
-
-Iron Law reminder: verify each finding (technically + against task intent) before planning a fix; address root causes, not symptoms; if a root cause is a fundamental design/architecture flaw outside scope, end with STATUS: BLOCKED — escalate: <reason>.
-
-For each finding, classify it as confirmed / dismissed / uncertain BEFORE editing any code. Then implement only the confirmed ones. Commit fixes locally — do not push.
-
-End with STATUS: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
+```bash
+factory debug review --emit --run <run_id>
 ```
 
-## Final user-facing summary template
+Emits:
 
-```
-/factory:debug summary
-
-- Run ID: ${RUN_ID}
-- Base: ${BASE}
-- Severity: ${SEVERITY}
-- Quick mode: ${QUICK} (forced by: ${QUICK_FORCED_BY|cli-flag|user-prompt|budget-low|user-prompt-no-telemetry|n/a})
-- Pre-launch budget: ${PRE_LAUNCH_REMAINING|n/a}% 5h remaining → ${PRE_LAUNCH_ACTION|proceed|prompt|forced-quick|user-continue-no-telemetry|user-aborted-no-telemetry|waited|aborted}
-  - Provenance: util=${PRE_LAUNCH_CHECK_UTIL}%, window_hour=${PRE_LAUNCH_CHECK_WINDOW_HOUR}, threshold=${PRE_LAUNCH_CHECK_THRESHOLD}%, cache_age=${PRE_LAUNCH_CHECK_CACHE_AGE}s (from phase0.pre_launch_check; "n/a" when telemetry was unavailable)
-  [Waited ${PHASE0_WAIT_MINUTES}m across ${PHASE0_WAIT_CYCLES} cycles — only when PRE_LAUNCH_ACTION=waited]
-- Phase 0 sweep: ${PHASE0_STATUS}  [or "skipped (${PHASE0_SKIP_REASON})"]
-  - Reviewers run: architecture, security, quality, implementation, orchestrator${CODEX_SUFFIX}
-  - Findings: ${CONFIRMED_COUNT} confirmed / ${DISMISSED_COUNT} dismissed / ${UNCERTAIN_COUNT} uncertain
-  - Plan: ${state_dir}/phase0/plan.md
-- Between-phases budget: ${PRE_LOOP_REMAINING|n/a}% 5h remaining → ${PRE_LOOP_ACTION|proceed|notice|waited|aborted|user-continue-no-telemetry|user-aborted-no-telemetry}
-  - Provenance: util=${PRE_LOOP_CHECK_UTIL}%, window_hour=${PRE_LOOP_CHECK_WINDOW_HOUR}, threshold=${PRE_LOOP_CHECK_THRESHOLD}%, cache_age=${PRE_LOOP_CHECK_CACHE_AGE}s (from phase1.pre_loop_check; "n/a" when telemetry was unavailable)
-  [Waited ${PHASE1_WAIT_MINUTES}m across ${PHASE1_WAIT_CYCLES} cycles — only when PRE_LOOP_ACTION=waited]
-- Phase 1 rounds: ${round}
-- Final: ${STATUS}
-- Below-threshold findings remaining: ${below_threshold_count}
-  [Escalated to human review. Audit trail: <path> — only when STATUS=ESCALATED]
+```json
+{
+  "kind": "review-spawn",
+  "run_id": "<id>",
+  "pass": <n>,
+  "manifest": { "resume_phase": "verify", "agents": [ /* 7 panel roles */ ] },
+  "base": "<resolved base>",
+  "worktree": "<cwd>",
+  "codex_available": true | false
+}
 ```
 
-## Verification Checklist (MUST pass before printing the final summary)
+`manifest` is `buildPanelManifest("verify", <reviewModel>, <maxTurnsDeep>)` —
+**identical construction** to the per-task verify phase's panel (Δ T/Δ K: the panel
+is risk-invariant, same model + turn budget for every reviewer, no debug-specific
+variant). Its `agents` array is the SAME fixed 7-role
+`PANEL_ROLES` (`src/verifier/judgment/panel.ts`) `skills/pipeline-runner/SKILL.md`'s
+per-task "Panel" step spawns:
 
-- [ ] Validated flags (mutually exclusive, severity in allowed set, `--quick` captured)
-- [ ] Resolved base ref BEFORE the first review
-- [ ] Detected reviewer once via `pipeline-detect-reviewer` and used the same branch for both Phase 0 (Codex slot) and every Phase 1 round
-- [ ] **Autonomy check (precondition):** Ran `factory autonomy status` BEFORE the numbered Setup steps; halted with relaunch instructions when it exited non-zero (`autonomous: false`); persisted `state.autonomy.{autonomous, checked_at}`.
-- [ ] **Pre-launch quota gate:** Ran `pipeline-quota-check` (unless `QUICK` was already set by flag); applied the ladder (proceed / prompt / forced-quick / user-continue-no-telemetry / user-aborted-no-telemetry / waited / aborted); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase0.pre_launch_*` in `state.json`; persisted `phase0.pre_launch_check` (raw quota JSON + `checked_at` + `cache_age_at_check`) for audit. When `detection_method == "unavailable"`, asked the user via `AskUserQuestion` whether to continue with `--quick` or abort (no auto-degrade, no wait).
-- [ ] **Phase 0:** Dispatched architecture, security, quality, implementation reviewers in a SINGLE assistant message (parallel). Codex sweep launched in same message via background `Bash` when `reviewer == codex`. (Skipped when `QUICK == true`.)
-- [ ] **Phase 0:** Captured raw output from every reviewer (and the orchestrator's self-review) under `state_dir/phase0/*.raw.txt`
-- [ ] **Phase 0:** Wrote `phase0/findings.json` (validated + deduped + classified) and `phase0/plan.md` BEFORE spawning the Phase 0 executor
-- [ ] **Phase 0:** Captured `phase0/executor.log` and acted on its STATUS line (escalate / break / fall-through-on-NEEDS_CONTEXT / proceed)
-- [ ] **Between-phases quota gate:** Re-ran `pipeline-quota-check` (skipped only when `QUICK == true`); applied the between-phases ladder (proceed / notice / waited / aborted / user-continue-no-telemetry / user-aborted-no-telemetry); on `waited`, ran the bounded wait-and-retry loop and persisted `circuit_breaker.pause_minutes` + `circuit_breaker.quota_wait_cycles`; persisted `phase1.pre_loop_*` in `state.json`; persisted `phase1.pre_loop_check` (raw quota JSON + `checked_at` + `cache_age_at_check`) for audit. When `detection_method == "unavailable"`, asked the user via `AskUserQuestion` whether to continue without the gate or abort (no auto-degrade, no wait).
-- [ ] **Phase 1:** Persisted each round's review artifact + executor log (and `raw-review.txt` on the Claude branch) under `state_dir`
-- [ ] When any executor escalated, ran `pipeline-debug-escalate` and surfaced its path verbatim in the summary
-- [ ] Time limit was checked only at the top of Phase 0 and at the top of each Phase 1 iteration
-- [ ] Final summary surfaced both budget gate actions (pre-launch + between-phases) and the Phase 0 skip reason if applicable
+- `implementation-reviewer`, `quality-reviewer`, `architecture-reviewer`,
+  `security-reviewer`, `silent-failure-hunter`, `type-design-reviewer`,
+  `systemic-failure-reviewer`.
 
-Can't check every box? Print `STATUS: BLOCKED — <reason>` instead of a normal summary.
+**Spawn all 7 in one assistant message** (parallel), isolation `"worktree"`, model
+mapped per the manifest agent's `model` field (per
+`skills/pipeline-runner/SKILL.md`'s Agent spawn matrix / model-alias table). Before
+spawning, each reviewer's prompt is built INLINE from that role's `agents/<role>.md`
+definition PLUS the shared `skills/review-protocol/SKILL.md` contract — there is no
+per-run prompt file to Read (`prompt_ref` is a schema placeholder, never a real
+artifact; see `panel.ts`'s `promptRefFor` doc comment). Tell each reviewer to
+inspect via `git -C <worktree> diff <base>` (the envelope's `base`/`worktree`
+verbatim) and emit exactly one RawReview JSON per `skills/review-protocol/SKILL.md`'s
+output contract: `{ reviewer, verdict: "approve"|"blocked"|"error", findings: [
+{ reviewer, severity, blocking, file, line, quote, description } ] }`.
+
+**Cross-vendor (Codex).** `codex_available` is the CLI's own resolution
+(`config.codex.model !== undefined` — a config-presence check, not a live probe;
+`src/cli/subcommands/debug.ts`'s `debugReviewEmit`) — read it off THIS envelope,
+never re-derive it. `skills/pipeline-runner/SKILL.md` does not document a separate
+runner-side Codex spawn for the per-task panel either (the panel's 7 roles are
+ALL Claude agents; a second vendor participates only via the finding-verifier's
+identity, below) — debug follows the identical convention: `codex_available` governs
+ONLY whether you omit or include `crossVendorAbsent` in the `--results` file
+(2b, below), never an extra manifest entry.
+
+**Verify-then-fix.** For EVERY finding any reviewer marked `blocking: true` AND
+citable (`file`+`line` both present), spawn an INDEPENDENT finding-verifier —
+`general-purpose`, isolation `"worktree"`, model `opus`, adversarial framing ("does
+this finding hold against the code?"), inspecting via `git -C <worktree> diff
+
+<base>` — per `skills/pipeline-runner/SKILL.md`'s "Collecting a spawn envelope" →
+`expects: "reviews"` step 3, reused verbatim (not re-derived here). It returns
+`{ "holds": true|false, "note": "<why>" }`.
+
+### 2b. Record the results
+
+Write EXACTLY this shape (identical to `RecordReviewsInput` /
+`skills/pipeline-runner/SKILL.md`'s per-task results file, minus the `holdout` key —
+a whole-scope pass has no sidecar/holdout-validator step):
+
+```json
+{
+  "reviews": [ /* each panel reviewer's raw RawReview JSON, verbatim */ ],
+  "verifications": [
+    { "reviewer": "<role>", "verdicts": [ { "file", "line", "holds", "note" } ] }
+  ],
+  "crossVendorAbsent": { "reason": "no second-vendor reviewer configured" }
+}
+```
+
+Omit `crossVendorAbsent` entirely when `codex_available` was `true`; include it
+(with that exact reason string) when it was `false`. Include one verdict for every
+blocking+citable finding — the CLI fails closed on a missing one.
+
+```bash
+factory debug review --record --run <run_id> --results <path-to-above-file>
+```
+
+Emits ONE of:
+
+- `{ "kind": "clean", "run_id", "pass" }` — zero confirmed blockers (review
+  findings AND the repo's COMMITTED e2e suite are folded into the SAME check via
+  `foldE2eIntoBlockers` — "confirmed blocker" already means "review OR e2e").
+  **Go straight to step 4 (finalize). Do NOT call `debug spec`.**
+- `{ "kind": "findings", "run_id", "pass", "report_path", "confirmed_count" }` —
+  ≥1 confirmed blocker, written to `report_path` (a markdown findings write-up
+  under `<dataDir>/debug/<run-id>/pass-<n>/findings.md`).
+  - If `pass == maxPasses` (from `debug start`'s `--max-passes`, tracked by you —
+    the CLI does not itself compare `pass` to the cap): **go straight to step 4
+    (finalize)**, reporting `report_path`'s residual findings as unresolved. STOP.
+  - Else: continue to step 3 (the spec sub-loop).
+
+## Step 3 — Spec sub-loop: `factory debug spec resolve|gate|store`
+
+Only reachable from a `findings` result with `pass < maxPasses` (Iron Law 1). Same
+generate⇄review mechanics as `skills/pipeline-runner/SKILL.md`'s Phase 1 (spec-generator
+/ spec-reviewer, the SAME `agents/spec-generator.md` / `agents/spec-reviewer.md`,
+the SAME `max_iterations` bound) — only the CLI subcommand differs
+(`debug spec` vs `spec`) and the seed is a synthetic PRD rendered from this pass's
+confirmed blockers instead of a fetched GitHub PRD:
+
+```bash
+env = factory debug spec resolve --run <run_id>
+loop on env.kind:
+  reuse   → a durable spec already exists for this pass's synthetic issue number
+            (`DEBUG_ISSUE_BASE + pass`) — call `factory debug spec store --run
+            <run_id>` once anyway (idempotent) so `session.specId` is persisted;
+            only `store`'s `kind:"stored"` branch writes it (`resolve`'s `reuse`
+            envelope does NOT touch the session — see `debugSpecStore`'s doc
+            comment). Then go to step 4 (seed).
+  generate → remember env.max_iterations
+      spawn spec-generator (worktree, opus) with env.spawn.context embedded
+      write its GenerateResult JSON verbatim to env.generated_path
+      env = factory debug spec gate --run <run_id>
+  revise  → (count iterations; > max_iterations → STOP LOUD, spec-defect)
+      spawn spec-generator (worktree, opus) with env.spawn.context embedded
+      (context already carries the prior spec + blockers — PATCH, don't re-author)
+      write its GenerateResult JSON verbatim to env.generated_path
+      env = factory debug spec gate --run <run_id>
+  review  → spawn spec-reviewer (worktree, opus) with env.spawn.context embedded
+      write its ReviewVerdict JSON to env.verdict_path
+      env = factory debug spec store --run <run_id>
+  stored  → session.specId persisted (debugSpecStore's side effect on
+            kind:"stored"). Go to step 4 (seed).
+```
+
+Every `debug spec` action's envelope is the SAME `SpecBuildEnvelope` union `factory
+spec`'s actions return (`src/cli/subcommands/spec.ts`) — `resolve`/`gate`/`store`
+are thin pass-throughs fed a `SpecBuildDeps` swapped to a network-free `GhClient`
+that returns the synthetic PRD instead of shelling out to `gh` (`debugRepo` still
+auto-derives `owner/name` from the checkout's `origin` remote, exactly like real
+`factory spec`). `debug spec resolve|gate|store` is LOUD (`Error`, not
+`UsageError`) if `review --record` has not run yet this pass — "run 'debug review
+--record' first".
+
+## Step 4 — `factory debug seed`
+
+```bash
+factory debug seed --run <run_id>
+```
+
+**Pass ownership (load-bearing — read this before touching `pass` anywhere):**
+`session.pass` names the round CURRENTLY being reviewed/fixed. Steps 2 and 3 read
+it as-is and never change it. `seed` is the ONLY action that advances it — pass 1:
+creates the real `RunState` (`debug:true`, `intent:"fresh"`, `ship_mode`/`e2e` from
+`debug start`'s `--no-ship`/`--author-e2e`) via the UNCHANGED `createRun`. Pass > 1:
+appends the pass's fix tasks onto the SAME run's existing tasks
+(`appendTasksFromSpec`). Either way, `seed` writes `pass: pass+1` into the session
+BEFORE returning — so your NEXT `debug review --emit` call (once this pass's tasks
+are terminal) naturally reviews as the next pass without any separate "advance"
+action. Never increment `pass` yourself; never call `seed` a second time for the
+same pass.
+
+Emits `{ "kind": "loop", "run_id": "<id>" }`. Proceed to step 5.
+
+## Step 5 — Drive the task loop (THE LOOP, reused)
+
+Drive `run_id` through `skills/pipeline-runner/SKILL.md`'s Phase 3 THE LOOP
+EXACTLY as written there — `factory next-task` / `factory next-action`, the
+`expects: "producer-status"` / `expects: "reviews"` spawn collection, the Agent
+spawn matrix, the `e2e`/`document` stage handling if `--author-e2e` was set — none
+of it is re-derived here. **One deviation, called out on its own because getting it
+wrong ships nothing or ships too early:**
+
+### Finalize interception (the ONE deviation from Phase 3)
+
+```
+loop:
+  env = factory next-task --run <run_id>
+  case env.kind:
+    "finalize" → this pass's tasks are ALL terminal. Do NOT run `factory run
+                 finalize`. Go back to step 2 (factory debug review --emit) to
+                 re-review base..HEAD now that this pass's fixes have landed.
+    "done"   → (should not occur mid-debug-session before a "finalize"; treat
+                 identically to "finalize" above if it ever does — same
+                 interception)
+    "e2e" / "document" / "pause" / "work" → EXACTLY as Phase 3 describes.
+```
+
+`next-task` has no idea it is driving a debug session — it emits `"finalize"`
+whenever a run's tasks are all terminal, debug or not (`src/orchestrator/next.ts`).
+The ONLY thing that makes a debug session different is that YOU intercept that
+signal here instead of calling `factory run finalize`. Only step 6's clean/cap
+branch (from step 2) ever calls the real finalize — `factory debug finalize`.
+
+## Step 6 — `factory debug finalize` (the one real finalize)
+
+Reached ONLY from step 2's `clean` branch, or step 2's `findings` branch when
+`pass == maxPasses`. Called EXACTLY ONCE per debug session:
+
+```bash
+factory debug finalize --run <run_id> [--no-ship]
+```
+
+Mirrors `run.ts`'s `runFinalize` byte-for-byte (`loadCliDeps` → `finalizeRun`,
+UNCHANGED — just re-emitted under debug's own envelope kind). Emits:
+
+```json
+{
+  "kind": "finalized",
+  "run": {
+    /* RunState */
+  },
+  "report": {
+    /* PartialRunReport */
+  },
+  "rollup": {
+    /* RollupResult, optional */
+  },
+  "failure_comment_posted": false
+}
+```
+
+`failure_comment_posted` is always `false` for a debug run — `finalizeRun` skips
+the PRD-facing failure comment and the completed-rollup PRD comment/close for
+`run.debug === true` runs (Decision 39's deferred-finalize guards, Task 4): a debug
+session has no real PRD issue to comment on or close, only its own staging
+branch/PR. The rollup PR itself (staging → the base branch) is still opened/merged
+normally — that PR **is** `/factory:debug`'s one deliverable.
+
+## Report
+
+Surface: run id, base, pass count reached, final `kind` (`clean` vs
+`findings`-at-cap), the rollup PR (or "no-ship: PRs left open" if `--no-ship`), and
+— on a cap-out — the last pass's `report_path` so residual findings are visible.
+`factory state <run_id> --summary` gives the same shape `skills/pipeline-runner/SKILL.md`'s
+Phase 4 reads for `/factory:run`; reuse it here too.
+
+## When NOT to use this skill
+
+- CLI/internal questions or debugging the factory plugin itself → regular tools.
+- Driving `/factory:run`'s normal PRD→PR pipeline → `skills/pipeline-runner/SKILL.md`.
+- A finished debug session → `factory state`; nothing to resume (debug's
+  session-resume story is a documented known gap — see CLAUDE.md).

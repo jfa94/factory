@@ -1,60 +1,50 @@
 ---
-description: "Run an all-hands sweep (architecture/security/quality/implementation reviewers + runner self-review + Codex if available) against the latest commit (or a chosen scope), then drive a reviewer ⇄ implementer loop until the reviewer is satisfied"
-argument-hint: "[--base <hash>|--full] [--limit <secs>] [--fixSeverity critical|high|medium|all] [--quick]"
+description: "Run the whole-scope review⇄fix loop against the diff since a base ref (or the entire tree), driven by the same risk-invariant panel + producer⇄reviewer machinery /factory:run uses, until clean or the pass cap is hit"
+argument-hint: "[--base <hash>|--full] [--no-ship] [--author-e2e] [--max-passes <n>] [--session-id <id>]"
 arguments:
   - name: "--base"
-    description: "Diff base (commit hash). Mutually exclusive with --full. Default: HEAD~1."
+    description: "Diff base (commit hash) for the whole-scope review. Mutually exclusive with --full. Default: HEAD~1."
     required: false
   - name: "--full"
-    description: "Review the entire codebase (sets base to git's empty-tree SHA). Mutually exclusive with --base."
+    description: "Review the ENTIRE codebase (diffs against git's empty-tree SHA). Mutually exclusive with --base."
     required: false
-  - name: "--limit"
-    description: "Maximum runtime in seconds. Soft limit — checked between loop iterations only."
+  - name: "--no-ship"
+    description: "Open the debug session's task/rollup PRs but never merge. Default (omit): live — auto-merge."
     required: false
-  - name: "--fixSeverity"
-    description: "Minimum severity to address: critical | high | medium | all. Default: medium."
+  - name: "--author-e2e"
+    description: "Opt the eventual debug run into the e2e-authoring phase during the task loop (same engine stage /factory:run --e2e uses)."
     required: false
-  - name: "--quick"
-    description: "Skip Phase 0 (all-hands sweep) and go straight to the Phase 1 reviewer ⇄ implementer loop. Useful when the 5h API budget is tight or you only need an iterative polish pass."
+  - name: "--max-passes"
+    description: "Cap on review⇄fix passes before the loop must stop and finalize with residual findings. Default: 5."
+    required: false
+  - name: "--session-id"
+    description: "Owning Claude Code session id (defaults to $CLAUDE_CODE_SESSION_ID)."
     required: false
 ---
 
 # /factory:debug
 
-Two-phase debugging workflow:
+Whole-scope review⇄fix loop: repeatedly review the diff between a base ref and
+`HEAD` with the same risk-invariant 7-role panel `/factory:run`'s merge gate uses,
+turn confirmed blockers into a synthetic spec, drive it through the ordinary
+`factory next-task`/`factory next-action` producer⇄reviewer loop, and repeat until
+a pass comes back clean (or `--max-passes` is reached) — then finalize into one PR.
 
-**Phase 0 — All-hands sweep (one shot, parallel fan-out).**
-
-1. Dispatch in a single message: `architecture-reviewer`, `security-reviewer`, `quality-reviewer`, `implementation-reviewer` subagents (parallel) + Codex adversarial review in the background (when `codex` CLI is available + authenticated).
-2. Runner performs its own exhaustive line-by-line review of the diff.
-3. Validate, dedupe, and classify every finding (`confirmed | dismissed | uncertain`) against the code AND the apparent intent of the diff (since `/factory:debug` has no spec).
-4. Build a remediation plan from confirmed + in-threshold findings; spawn `implementer` to implement it.
-
-**Phase 1 — Reviewer ⇄ Implementer loop (existing behavior).**
-
-5. Review the diff between `--base` (or HEAD~1, or root) and HEAD.
-6. Filter findings by `--fixSeverity`.
-7. If any remain, spawn `implementer` to verify and fix them.
-8. Repeat until clean, escalated, or `--limit` reached.
-
-**Autonomous mode required.** Like `/factory:run`, `/factory:debug` runs `factory autonomy preflight` at the top of Setup. Preflight auto-scaffolds `merged-settings.json` when the session is not autonomous or the settings are stale/missing/unstamped, then exits non-zero so the skill halts with the printed relaunch command (`claude --settings <merged-settings.json>`); it exits zero to proceed when already autonomous (including `FACTORY_AUTONOMOUS_MODE=1` for CI). The pre-launch quota gate runs only after this check clears — `usage-cache.json` is only kept fresh inside an autonomous session.
-
-**Budget gating.** Before launch and again between Phase 0 and Phase 1, the skill checks the 5h API window via `pipeline-quota-check`. The 5h **remaining** percentage drives a 4-band ladder (`≥ 40 / 20–40 / 10–20 / < 10` pre-launch; `≥ 40 / 20–40 / < 20` between-phases). At `20–40%` remaining the user is prompted to opt into `--quick`. Below the next bands the run **pauses** in a bounded wait-and-retry loop until budget recovers — it does not abort (only telemetry failure or the wait-cycle cap aborts). `--quick` skips Phase 0 entirely and skips the between-phases re-check. See the **Quota-aware ladder** in `skills/debug/SKILL.md`.
-
-Parse flags from the user's input. Reject the call if both `--base` and `--full` are provided. Resolve the base ref:
-
-- `--base <hash>` → that hash.
-- `--full` → `4b825dc642cb6eb9a060e54bf8d69288fbee4904` (git empty tree).
-- (default) → `HEAD~1`.
-
-Validate `--fixSeverity` against `{critical, high, medium, all}` (default: `medium`).
-
-Capture `--quick` as a boolean (default: `false`).
+Parse `--base`/`--full` (reject if both are present), `--no-ship`, `--author-e2e`,
+`--max-passes <n>` (positive integer), and `--session-id` from the invoking
+command's flags. Like `/factory:run`, this requires autonomous mode — the skill
+runs `factory autonomy preflight` as its own first step; a non-autonomous session
+halts with the printed relaunch command (`claude --settings <merged-settings.json>`).
 
 Then load the skill:
 
 ```
-Skill(debug, "base=<resolved> severity=<level> limit=<seconds> quick=<true|false> run-id=debug-$(date +%s)")
+Skill(debug, "base=<resolved|omitted> full=<true|false> no-ship=<true|false> author-e2e=<true|false> max-passes=<n|default> session-id=<id|$CLAUDE_CODE_SESSION_ID>")
 ```
 
-All loop + quota-gate logic lives in `skills/debug/SKILL.md`. Do not duplicate it here.
+All loop logic — the autonomy check, `factory debug start`, the panel spawn +
+finding-verifier + review-record cycle, the synthetic-spec sub-loop, `factory debug
+seed`, driving the task loop (including the finalize-interception rule — a
+mid-session `next-task` `"finalize"` means "re-review", never "call `factory run
+finalize`"), and the one real `factory debug finalize` at the end — lives in
+`skills/debug/SKILL.md`. Do not duplicate it here.
