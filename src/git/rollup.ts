@@ -34,6 +34,17 @@ const DEFAULT_MAX_POLLS = 80; // ~20 min at 15s — the full-CI gate's outer bou
 
 const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * True iff `err` is the specific `gh pr merge` failure GitHub raises when branch
+ * protection on `base` blocks an IMMEDIATE merge (e.g. a required status check
+ * that only the merge queue / auto-merge satisfies) even though this module's own
+ * CI + mergeable checks just passed. NOT a general "any merge failure" catch —
+ * anything else (auth, rate-limit, a genuinely non-mergeable PR) re-throws.
+ */
+function isBranchPolicyBlock(err: unknown): boolean {
+  return err instanceof Error && /base branch policy prohibits the merge/i.test(err.message);
+}
+
 /** Args to {@link rollup}. */
 export interface RollupArgs {
   ghClient: GhClient;
@@ -59,7 +70,12 @@ export interface RollupArgs {
 }
 
 /** Why the rollup did not merge (absent when `merged`). */
-export type RollupNotMergedReason = "no-merge" | "ci-failing" | "ci-timeout" | "not-mergeable";
+export type RollupNotMergedReason =
+  | "no-merge"
+  | "ci-failing"
+  | "ci-timeout"
+  | "not-mergeable"
+  | "auto-armed";
 
 /** Result of {@link rollup}. */
 export interface RollupResult {
@@ -173,7 +189,22 @@ export async function rollup(args: RollupArgs): Promise<RollupResult> {
     return { number, url, resumed, merged: false, reason: "not-mergeable", ci };
   }
 
-  await args.ghClient.prMergeSquash(number, { subject, body: args.body });
-  log.info(`rollup PR #${number} squash-merged into ${base}`);
-  return { number, url, resumed, merged: true, subject, ci };
+  try {
+    await args.ghClient.prMergeSquash(number, { subject, body: args.body });
+    log.info(`rollup PR #${number} squash-merged into ${base}`);
+    return { number, url, resumed, merged: true, subject, ci };
+  } catch (err) {
+    if (!isBranchPolicyBlock(err)) throw err;
+    // Surgical fallback, NOT an unconditional --auto (that would error on a repo
+    // with no branch protection at all — `gh pr merge --auto` requires auto-merge
+    // to be enabled). Retry ONCE, arming the merge to land once GitHub's own
+    // policy is satisfied; the PR is armed, not merged, so this is still a
+    // `merged: false` outcome — finalize's existing not-merged path (PRD
+    // comment/close skipped, staging branch retained) applies unchanged.
+    log.warn(
+      `rollup PR #${number}: base branch policy prohibits an immediate merge — arming --auto`,
+    );
+    await args.ghClient.prMergeSquash(number, { subject, body: args.body, auto: true });
+    return { number, url, resumed, merged: false, reason: "auto-armed", ci };
+  }
 }

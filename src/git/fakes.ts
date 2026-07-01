@@ -344,6 +344,12 @@ export class FakeGhClient implements GhClient {
    * can prove the caller degrades-and-logs rather than crashing (Theme D1).
    */
   failMergeQueueProbe?: Error;
+  /**
+   * When set, prMergeSquash throws this UNLESS `opts.auto` is true — simulates a
+   * protected base branch rejecting an immediate merge while accepting the
+   * `--auto` arm (D3: rollup's surgical branch-policy fallback).
+   */
+  failMergeSquashUnlessAuto?: Error;
 
   constructor(opts: FakeGhOptions = {}) {
     for (const pr of opts.prs ?? []) this.prs.set(pr.headRefName, pr);
@@ -427,6 +433,7 @@ export class FakeGhClient implements GhClient {
 
   async prMergeSquash(number: number, opts?: PrMergeOptions & GhOpts): Promise<void> {
     if (this.onMergeEnter) await this.onMergeEnter(number);
+    if (this.failMergeSquashUnlessAuto && !opts?.auto) throw this.failMergeSquashUnlessAuto;
     this.calls.push(`pr merge ${number} --squash${opts?.auto ? " --auto" : ""}`);
     this.merges.push({
       number,

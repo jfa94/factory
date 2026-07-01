@@ -256,11 +256,19 @@ export async function finalizeRun(
 
   // 7. flip terminal LAST (so a crash in 2–6 leaves the run resumable).
   const finalized = await deps.state.finalize(runId, terminal);
+  // D3: a not-merged rollup (incl. the new "auto-armed" branch-policy fallback) names
+  // its reason here — "visible, not silent" for the completed-but-not-yet-landed gap
+  // (status flips to `completed` at step 1, before the rollup even runs).
+  const rollupNote = rollupResult
+    ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` +
+      (rollupResult.merged ? "" : ` (${rollupResult.reason})`)
+    : ", no rollup";
   log.info(
     `run '${runId}' finalized: ${terminal} ` +
       `(${report.totals.shipped} shipped, ${report.totals.failed} failed` +
       `${failureCommentPosted ? ", PRD failure comment posted" : ""}` +
-      `${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`,
+      rollupNote +
+      `)`,
   );
 
   return {

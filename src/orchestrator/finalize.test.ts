@@ -214,6 +214,32 @@ describe("finalizeRun", () => {
     expect(gh.deletedBranches).not.toContain(`staging-${RUN_ID}`);
   });
 
+  it("completed + branch-policy block (D3): rollup arms --auto, reason surfaces, PRD/branch untouched", async () => {
+    const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
+    await seed(tasks);
+    gh.failMergeSquashUnlessAuto = new Error(
+      "GraphQL: Pull request is not mergeable: the base branch policy prohibits the merge. (mergePullRequest)",
+    );
+
+    const result = await finalizeRun(makeDeps(makeSpec(tasks), "live"), RUN_ID);
+
+    // status is decided before rollup even runs — a "completed" run whose develop
+    // merge is only ARMED, not landed (the accepted, surfaced-not-silent gap, D3).
+    expect(result.run.status).toBe("completed");
+    expect(result.rollup?.merged).toBe(false);
+    expect(result.rollup?.reason).toBe("auto-armed");
+    // the auto-armed retry IS a recorded merge call (armed via --auto), just not a
+    // landed one — same "merged: false" contract as no-merge/ci-failing/etc.
+    expect(gh.merges).toHaveLength(1);
+    expect(gh.merges[0]).toMatchObject({ auto: true });
+    // not merged → the merged-only PRD comment/close + branch GC block is skipped.
+    expect(gh.created).toHaveLength(1); // PR still opened
+    expect(gh.issueComments).toHaveLength(0); // no PRD-delivered comment
+    expect(gh.issueCloses).toHaveLength(0); // PRD left open
+    expect(gh.deletedBranches).not.toContain(`staging-${RUN_ID}`);
+    expect(gh.protectionDeletes).not.toContain(`staging-${RUN_ID}`);
+  });
+
   it("failed (some failed): no rollup, one PRD comment, PRD left open (Decision 34)", async () => {
     // Decision 34: develop receives only complete PRDs. A mixed done+failed run is
     // 'failed', gets no rollup, and the PRD issue is left open.

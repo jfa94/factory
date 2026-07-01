@@ -119,6 +119,41 @@ describe("rollup — open + full-CI gate + squash-merge (§④, Δ S)", () => {
   });
 });
 
+describe("rollup — D3: base branch policy fallback to --auto (surgical, not unconditional)", () => {
+  it("an unprotected repo merges immediately, WITHOUT --auto (regression guard)", async () => {
+    const gh = new FakeGhClient(); // no failMergeSquashUnlessAuto set — merge just works
+    const { args } = makeArgs(gh);
+    const r = await rollup(args);
+
+    expect(r).toMatchObject({ merged: true });
+    expect(gh.merges[0]).toMatchObject({ auto: false });
+  });
+
+  it("'base branch policy prohibits the merge' → retries once with --auto → merged:false, reason:'auto-armed'", async () => {
+    const gh = new FakeGhClient({ prs: [openRollupPr(50)] });
+    gh.failMergeSquashUnlessAuto = new Error(
+      "GraphQL: Pull request is not mergeable: the base branch policy prohibits the merge. (mergePullRequest)",
+    );
+    const { args } = makeArgs(gh);
+    const r = await rollup(args);
+
+    expect(r).toMatchObject({ merged: false, reason: "auto-armed", ci: "passing" });
+    // Exactly one successful merge call recorded — the auto retry (the plain
+    // attempt threw before FakeGhClient ever records a `calls`/`merges` entry).
+    expect(gh.merges).toHaveLength(1);
+    expect(gh.merges[0]).toMatchObject({ number: 50, auto: true });
+  });
+
+  it("a genuinely different merge failure (not the branch-policy text) still throws — no silent fallback", async () => {
+    const gh = new FakeGhClient({ prs: [openRollupPr(51)] });
+    gh.failMergeSquashUnlessAuto = new Error("HTTP 401: Bad credentials");
+    const { args } = makeArgs(gh);
+
+    await expect(rollup(args)).rejects.toThrow(/Bad credentials/);
+    expect(gh.merges).toHaveLength(0);
+  });
+});
+
 describe("rollup — idempotent / resume-safe", () => {
   it("resumes an existing OPEN rollup PR (no duplicate create)", async () => {
     const gh = new FakeGhClient({ prs: [openRollupPr(47)] });
