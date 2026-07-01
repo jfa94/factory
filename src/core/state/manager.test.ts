@@ -94,6 +94,13 @@ describe("lifecycle: create / read / update / finalize", () => {
     expect(cur?.run_id).toBe("run-1");
   });
 
+  it("exists() is true after create() and false for a run id never created", async () => {
+    const m = mgr();
+    await m.create({ run_id: "run-1", spec });
+    expect(m.exists("run-1")).toBe(true);
+    expect(m.exists("never-created")).toBe(false);
+  });
+
   it("update mutates under lock and re-stamps updated_at + re-validates", async () => {
     const m = mgr();
     await m.create({ run_id: "run-1", spec });

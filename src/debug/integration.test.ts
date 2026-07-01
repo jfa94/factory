@@ -194,20 +194,14 @@ describe("Scenario A — 1-pass clean convergence", () => {
     const recorded = await debugReviewRecord(d, runId, cleanResults());
     expect(recorded).toEqual({ kind: "clean", run_id: runId, pass: 1 });
 
-    // DISCOVERED GAP (see the Task 8 report): per skills/debug/SKILL.md step 2b,
-    // a `{kind:"clean"}` result on ANY pass — including pass 1, before `debug
-    // spec`/`debug seed` have EVER run — instructs the runner to go straight to
-    // step 6, `factory debug finalize --run <run_id>`. But NO RunState is ever
-    // created until `debug seed` (pass 1's `createRun`), and Iron Law 1
-    // forbids calling `debug spec`/`debug seed` after a clean result (the
-    // synthetic PRD would carry zero blockers and can never pass the spec
-    // gate's traceability check). So a genuinely clean-on-first-pass debug
-    // session has no RunState to finalize: `debugFinalize` calls
-    // `loadCliDeps` -> `state.read(runId)`, which throws ENOENT (no
-    // state.json was ever written for this run id). This is a confirmed,
-    // reproducible gap in Tasks 1-7's design, not a test artifact — locked in
-    // here as a regression-capturing assertion of TODAY's actual behavior.
-    await expect(debugFinalize({ dataDir }, runId)).rejects.toThrow(/ENOENT/);
+    // A `{kind:"clean"}` result on pass 1 — before `debug spec`/`debug seed`
+    // have EVER run (Iron Law 1 forbids calling them after a clean result) —
+    // means no RunState was ever created for this run id. `debugFinalize`
+    // detects this via `StateManager.exists` and returns `nothing-to-ship`
+    // instead of delegating to `finalizeRun` (which would otherwise throw
+    // ENOENT trying to read a RunState that was never written).
+    const finalizeResult = await debugFinalize({ dataDir }, runId);
+    expect(finalizeResult).toEqual({ kind: "nothing-to-ship", run_id: runId });
   });
 });
 

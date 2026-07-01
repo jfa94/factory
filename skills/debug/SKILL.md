@@ -196,7 +196,12 @@ Emits ONE of:
 - `{ "kind": "clean", "run_id", "pass" }` — zero confirmed blockers (review
   findings AND the repo's COMMITTED e2e suite are folded into the SAME check via
   `foldE2eIntoBlockers` — "confirmed blocker" already means "review OR e2e").
-  **Go straight to step 6 (finalize). Do NOT call `debug spec`.**
+  **Go straight to step 6 (finalize). Do NOT call `debug spec`.** On pass 1
+  this means no `RunState` was ever created (`debug seed` never ran), so step
+  6's `debug finalize` call emits `{kind:"nothing-to-ship", run_id}` instead of
+  `{kind:"finalized", ...}` — treat that as a normal, successful terminal
+  state (report "clean — nothing to ship, no PR opened" and stop), not an
+  error.
 - `{ "kind": "findings", "run_id", "pass", "report_path", "confirmed_count" }` —
   ≥1 confirmed blocker, written to `report_path` (a markdown findings write-up
   under `<dataDir>/debug/<run-id>/pass-<n>/findings.md`).
@@ -332,6 +337,13 @@ the PRD-facing failure comment and the completed-rollup PRD comment/close for
 session has no real PRD issue to comment on or close, only its own staging
 branch/PR. The rollup PR itself (staging → the base branch) is still opened/merged
 normally — that PR **is** `/factory:debug`'s one deliverable.
+
+When step 6 is reached from a pass-1 `clean` result, no `RunState` was ever
+seeded — `finalize` emits `{ "kind": "nothing-to-ship", "run_id" }` instead of
+the above. No rollup PR exists because no code ever changed. Report this
+outcome plainly (e.g. "debug run `<run_id>`: codebase already clean, no
+changes needed, nothing shipped") and stop; do not treat it as a failure or
+try to read `run`/`report`/`rollup` fields from it.
 
 ## Report
 

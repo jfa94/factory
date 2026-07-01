@@ -6924,6 +6924,15 @@ var StateManager = class _StateManager {
     return _StateManager.guardedParse(parseJson(raw, path5), path5);
   }
   /**
+   * True iff a RunState exists on disk for this run id. Synchronous,
+   * no read/parse — mirrors the existence check `create()` already uses
+   * internally before writing. Lets a caller distinguish "no run was ever
+   * created" from a genuine read failure without parsing.
+   */
+  exists(runId) {
+    return existsSync4(this.statePath(runId));
+  }
+  /**
    * Read the run currently pointed at by `runs/current`, or null if there is no
    * current run. `current` is a directory symlink; we read `state.json` *through*
    * it (the OS follows the symlink during the path walk), so no separate readlink
@@ -14739,7 +14748,9 @@ Usage:
   factory debug finalize --run <id> [--no-ship]
 
 Delegates to the UNCHANGED finalizeRun exactly once (mirrors 'factory run finalize').
-Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }.`;
+Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
+{ kind:"nothing-to-ship", run_id } when the session converged clean before any
+RunState was ever created (no 'debug seed' ever ran).`;
 function debugSessionPath(dataDir, runId) {
   return join18(dataDir, "debug", runId, DEBUG_SESSION_FILE);
 }
@@ -14904,6 +14915,9 @@ async function debugSeed(deps, runId) {
   return { kind: "loop", run_id: runId };
 }
 async function debugFinalize(deps, runId, shipMode) {
+  if (!new StateManager({ dataDir: deps.dataDir }).exists(runId)) {
+    return { kind: "nothing-to-ship", run_id: runId };
+  }
   const cliDeps = await loadCliDeps({
     dataDir: deps.dataDir,
     runId,

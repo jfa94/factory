@@ -196,7 +196,9 @@ Usage:
   factory debug finalize --run <id> [--no-ship]
 
 Delegates to the UNCHANGED finalizeRun exactly once (mirrors 'factory run finalize').
-Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }.`;
+Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }, or
+{ kind:"nothing-to-ship", run_id } when the session converged clean before any
+RunState was ever created (no 'debug seed' ever ran).`;
 
 // ---------------------------------------------------------------------------
 // Session scratch state
@@ -289,6 +291,13 @@ export type DebugEnvelope =
       readonly report: PartialRunReport;
       readonly rollup?: RollupResult;
       readonly failure_comment_posted: boolean;
+    }
+  | {
+      /** `finalize`'s output when no RunState was ever created for this run —
+       * the debug session converged clean on pass 1, before `seed` ever ran.
+       * Nothing changed, so there is nothing to ship: no rollup PR, no report. */
+      readonly kind: "nothing-to-ship";
+      readonly run_id: string;
     };
 
 // ---------------------------------------------------------------------------
@@ -579,6 +588,9 @@ export async function debugFinalize(
   runId: string,
   shipMode?: RunState["ship_mode"],
 ): Promise<DebugEnvelope> {
+  if (!new StateManager({ dataDir: deps.dataDir }).exists(runId)) {
+    return { kind: "nothing-to-ship", run_id: runId };
+  }
   const cliDeps = await loadCliDeps({
     dataDir: deps.dataDir,
     runId,

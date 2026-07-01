@@ -7790,6 +7790,15 @@ var StateManager = class _StateManager {
     return _StateManager.guardedParse(parseJson(raw, path), path);
   }
   /**
+   * True iff a RunState exists on disk for this run id. Synchronous,
+   * no read/parse — mirrors the existence check `create()` already uses
+   * internally before writing. Lets a caller distinguish "no run was ever
+   * created" from a genuine read failure without parsing.
+   */
+  exists(runId) {
+    return existsSync4(this.statePath(runId));
+  }
+  /**
    * Read the run currently pointed at by `runs/current`, or null if there is no
    * current run. `current` is a directory symlink; we read `state.json` *through*
    * it (the OS follows the symlink during the path walk), so no separate readlink
