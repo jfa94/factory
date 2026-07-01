@@ -82,11 +82,13 @@ const ALLOW: StopAction = { kind: "allow" };
  *   1. no active run / not `running`            → allow.
  *   2. `mode === "workflow"`                     → allow (the Workflow, not the session,
  *      drives continuation + finalize-on-stop).
- *   3. owner KNOWN and stopping session ≠ owner  → allow (a session never finalizes
+ *   3. `debug === true`                          → allow (the debug driver owns finalize
+ *      between review⇄fix passes, not the plain Stop gate).
+ *   4. owner KNOWN and stopping session ≠ owner  → allow (a session never finalizes
  *      another session's run).
- *   4. pending work (in-flight tasks, or setup unfinished) → allow (NO hostage: the run
+ *   5. pending work (in-flight tasks, or setup unfinished) → allow (NO hostage: the run
  *      stays `running` and resumable via `factory resume`).
- *   5. otherwise (≥1 task, all terminal)         → finalize-on-stop.
+ *   6. otherwise (≥1 task, all terminal)         → finalize-on-stop.
  */
 export function decideStop(run: RunState | null, stoppingSession?: string): StopAction {
   if (run === null) return ALLOW; // no active run — nothing to gate.
@@ -96,6 +98,11 @@ export function decideStop(run: RunState | null, stoppingSession?: string): Stop
   // finalize-on-stop, so the interactive session is never the orchestrator here. Pass through
   // (finalizing on its behalf could race the Workflow's own finalization).
   if (run.mode === "workflow") return ALLOW;
+
+  // (a.1) DEBUG-AWARENESS — a debug run loops through multiple review⇄fix passes
+  // before finalizing (unlike a plain run, which finalizes as soon as all tasks go
+  // terminal). The debug driver, not the Stop gate, owns finalize between passes.
+  if (run.debug === true) return ALLOW; // the debug driver owns finalize between passes
 
   // (b) SESSION-OWNERSHIP — when the owning session is KNOWN and a DIFFERENT session is
   // stopping, that run is unrelated to this session: pass through.

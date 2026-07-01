@@ -6492,6 +6492,15 @@ var RunStateSchema = external_exports.object({
   /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
   e2e_phase: E2ePhaseSchema.optional(),
   /**
+   * Whether this run is a `/factory:debug` session. Set once at `run create`;
+   * immutable for the run's lifetime — mirrors `e2e`/`ignore_quota`. A `debug:true`
+   * run loops through multiple review⇄fix passes before finalizing, so it defers
+   * `run finalize` (the PRD comment/close + the Stop-gate finalize-on-stop) to the
+   * debug driver instead of the plain runner loop. Default false: a run without the
+   * flag finalizes exactly as before.
+   */
+  debug: external_exports.boolean().default(false),
+  /**
    * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
    * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
    * real pause time from wall-time, preventing a false trip on a long-paused run. Default
@@ -12203,7 +12212,7 @@ async function finalizeRun(deps, runId) {
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
-  const failureCommentPosted = await commentFailuresOnPrd(deps, report);
+  const failureCommentPosted = run9.debug ? false : await commentFailuresOnPrd(deps, report);
   let rollupResult;
   if (terminal === "completed") {
     const stagingBranch = resolveStagingBranch(runId, run9.staging_branch);
@@ -12220,17 +12229,19 @@ async function finalizeRun(deps, runId) {
       ...deps.rollup ?? {}
     });
     if (rollupResult.merged) {
-      if (!rollupResult.resumed) {
-        await deps.gh.issueComment({
+      if (!run9.debug) {
+        if (!rollupResult.resumed) {
+          await deps.gh.issueComment({
+            repo: report.repo,
+            number: report.issue_number,
+            body: prdDoneComment(report, rollupResult)
+          });
+        }
+        await deps.gh.issueClose({
           repo: report.repo,
-          number: report.issue_number,
-          body: prdDoneComment(report, rollupResult)
+          number: report.issue_number
         });
       }
-      await deps.gh.issueClose({
-        repo: report.repo,
-        number: report.issue_number
-      });
       await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
       await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
     }
@@ -14217,6 +14228,9 @@ async function applyResume(state, runId, reading, config, nowEpochSec, priorUpda
   const run9 = await state.read(runId);
   if (isTerminalRunStatus(run9.status)) {
     throw new Error(`run resume: run '${runId}' is terminal (${run9.status}); nothing to resume`);
+  }
+  if (run9.debug) {
+    return { kind: "debug-resume", run_id: runId, run: run9 };
   }
   const plan = planResume(run9, reading, config, nowEpochSec);
   switch (plan.kind) {

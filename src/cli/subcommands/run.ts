@@ -563,6 +563,21 @@ export type ResumeResult =
       readonly status: RunStatus;
       readonly reason: string;
       readonly resets_at_epoch?: number;
+    }
+  | {
+      /**
+       * A `debug:true` run resolved through the plain `resume` action. The plain
+       * runner loop's `planResume`/quota-recheck path is NOT for a debug run — it
+       * loops multiple review⇄fix passes on ONE run instead of finalizing as soon as
+       * tasks go terminal (Decision 39, deferred to the debug driver). Returning this
+       * distinct kind, before any quota/planResume logic runs, signals the caller (a
+       * human or `/factory:debug`) to re-enter the debug SKILL rather than drive the
+       * run through the ordinary resume path. Minimal by design: only the CALLER-facing
+       * envelope, not the debug-resume UX itself (that lands with the debug driver).
+       */
+      readonly kind: "debug-resume";
+      readonly run_id: string;
+      readonly run: RunState;
     };
 
 /**
@@ -591,6 +606,13 @@ export async function applyResume(
   const run = await state.read(runId);
   if (isTerminalRunStatus(run.status)) {
     throw new Error(`run resume: run '${runId}' is terminal (${run.status}); nothing to resume`);
+  }
+  // Decision 39: a debug run is not a plain resume — it loops multiple review⇄fix
+  // passes on this run instead of finalizing once tasks go terminal, so the debug
+  // driver (not planResume/the quota recheck) must drive it. Return early, LOUD and
+  // distinct, before any quota/planResume logic runs or touches state.
+  if (run.debug) {
+    return { kind: "debug-resume", run_id: runId, run };
   }
 
   const plan = planResume(run, reading, config, nowEpochSec);

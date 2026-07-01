@@ -75,6 +75,25 @@ describe("decideStop — workflow mode → allow (the Workflow drives, not the s
   });
 });
 
+describe("decideStop — debug mode → allow (the debug driver owns finalize between passes)", () => {
+  it("session-owned, running, all-terminal, debug:true → allow (NOT finalize)", () => {
+    // Exact scenario that would previously have incorrectly finalized: absent the
+    // debug guard, this is the "every task done → finalize completed" case below.
+    const action = decideStop(run({ debug: true }, { a: task({ task_id: "a", status: "done" }) }));
+    expect(action).toEqual({ kind: "allow" });
+  });
+
+  it("debug:true with pending work → allow (already allowed, but stays allow)", () => {
+    const action = decideStop(run({ debug: true }, { t1: task({ status: "executing" }) }));
+    expect(action).toEqual({ kind: "allow" });
+  });
+
+  it("debug:false (explicit), all-terminal → finalize as before (regression guard)", () => {
+    const action = decideStop(run({ debug: false }, { a: task({ task_id: "a", status: "done" }) }));
+    expect(action).toEqual({ kind: "finalize", status: "completed" });
+  });
+});
+
 describe("decideStop — session-ownership", () => {
   const OWNER = "session-owner-abc";
 

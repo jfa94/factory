@@ -7515,6 +7515,15 @@ var RunStateSchema = external_exports.object({
   /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
   e2e_phase: E2ePhaseSchema.optional(),
   /**
+   * Whether this run is a `/factory:debug` session. Set once at `run create`;
+   * immutable for the run's lifetime — mirrors `e2e`/`ignore_quota`. A `debug:true`
+   * run loops through multiple review⇄fix passes before finalizing, so it defers
+   * `run finalize` (the PRD comment/close + the Stop-gate finalize-on-stop) to the
+   * debug driver instead of the plain runner loop. Default false: a run without the
+   * flag finalizes exactly as before.
+   */
+  debug: external_exports.boolean().default(false),
+  /**
    * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
    * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
    * real pause time from wall-time, preventing a false trip on a long-paused run. Default
@@ -8393,6 +8402,7 @@ function decideStop(run, stoppingSession) {
   if (run === null) return ALLOW;
   if (run.status !== "running") return ALLOW;
   if (run.mode === "workflow") return ALLOW;
+  if (run.debug === true) return ALLOW;
   if (run.owner_session !== void 0 && stoppingSession !== void 0 && stoppingSession !== run.owner_session) {
     return ALLOW;
   }

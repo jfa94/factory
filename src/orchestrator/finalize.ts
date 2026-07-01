@@ -191,7 +191,10 @@ export async function finalizeRun(
   await recordRunFinalized(deps.dataDir, report, { now });
 
   // 5. on a failed run, one PRD comment summarizing the failures (deduped by run-id marker).
-  const failureCommentPosted = await commentFailuresOnPrd(deps, report);
+  // Decision 39 (debug driver, forward decl): a debug run isn't a whole-PRD delivery —
+  // it loops review⇄fix passes on the debug session's OWN staging branch/PR, so the PRD
+  // issue is never touched from finalize (the debug driver owns any PRD-facing comms).
+  const failureCommentPosted = run.debug ? false : await commentFailuresOnPrd(deps, report);
 
   // 6. rollup — only on completed (Decision 34: develop receives whole PRDs only).
   //    On failed, develop is untouched (the PRD failure comment is already posted above).
@@ -222,17 +225,23 @@ export async function finalizeRun(
       // and must not double-post. issueClose is naturally idempotent (closing a closed
       // issue is a no-op), so it stays unconditional. issue_number is a required field
       // (always ≥1), so there is no presence guard to make.
-      if (!rollupResult.resumed) {
-        await deps.gh.issueComment({
+      // Decision 39 (debug driver, forward decl): a debug run's rollup targets the
+      // debug session's own staging branch/PR, not a PRD delivery — the PRD comment +
+      // close are skipped, but the branch GC below stays unconditional (it operates on
+      // the debug run's real branch/PR regardless of PRD linkage).
+      if (!run.debug) {
+        if (!rollupResult.resumed) {
+          await deps.gh.issueComment({
+            repo: report.repo,
+            number: report.issue_number,
+            body: prdDoneComment(report, rollupResult),
+          });
+        }
+        await deps.gh.issueClose({
           repo: report.repo,
           number: report.issue_number,
-          body: prdDoneComment(report, rollupResult),
         });
       }
-      await deps.gh.issueClose({
-        repo: report.repo,
-        number: report.issue_number,
-      });
       // Branch GC (Decision 35): a completed+merged run is fully contained in develop, so
       // tear down its per-run staging branch. Protection FIRST — GitHub blocks deleting a
       // protected ref. Both ops are idempotent (404-tolerant), so a resumed finalize safely

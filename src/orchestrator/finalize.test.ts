@@ -447,6 +447,124 @@ describe("finalizeRun", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Decision 39 (debug driver, forward decl): `run.debug` defers the PRD-facing
+// finalize guards — commentFailuresOnPrd + the completed-rollup issueComment/
+// issueClose pair — to the debug driver instead of the plain finalize coordinator.
+// ---------------------------------------------------------------------------
+
+/**
+ * A gh fake that throws on the three PRD-facing calls (issueComment, issueClose,
+ * listIssueComments) so a test can prove finalize never reaches them — while every
+ * other gh op (rollup PR create/merge/checks, branch GC) behaves exactly like the
+ * plain {@link FakeGhClient}.
+ */
+class ThrowingCommentGh extends FakeGhClient {
+  override async issueComment(): Promise<void> {
+    throw new Error("issueComment called — should be unreachable under run.debug");
+  }
+  override async issueClose(): Promise<void> {
+    throw new Error("issueClose called — should be unreachable under run.debug");
+  }
+  override async listIssueComments(): Promise<string[]> {
+    throw new Error("listIssueComments called — should be unreachable under run.debug");
+  }
+}
+
+describe("finalizeRun — run.debug defers PRD-facing calls to the debug driver", () => {
+  let dataDir: string;
+  let state: StateManager;
+  let gh: ThrowingCommentGh;
+  let git: FakeGitClient;
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "factory-finalize-debug-"));
+    state = new StateManager({
+      dataDir,
+      lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
+    });
+    gh = new ThrowingCommentGh();
+    git = new FakeGitClient();
+    await state.create({
+      run_id: RUN_ID,
+      spec: { repo: REPO, spec_id: SPEC_ID, issue_number: ISSUE },
+    });
+  });
+
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  async function seed(tasks: readonly TaskSeed[]): Promise<void> {
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      tasks: Object.fromEntries(tasks.map((t) => [t.task_id, taskRow(t)])),
+    }));
+  }
+
+  function makeDebugDeps(spec: SpecManifest, shipMode: ShipMode): FinalizeRunDeps {
+    return {
+      state,
+      gh,
+      git,
+      config: defaultConfig(),
+      spec,
+      dataDir,
+      owner: "acme",
+      repo: "widgets",
+      shipMode,
+      nowIso: NOW,
+      rollup: { sleep: async () => {}, pollIntervalMs: 0, maxPolls: 3 },
+    };
+  }
+
+  it("debug:true completed run finalizes successfully despite a throwing gh (issueComment/issueClose never reached)", async () => {
+    const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
+    await seed(tasks);
+    await state.update(RUN_ID, (s) => ({ ...s, debug: true }));
+
+    const result = await finalizeRun(makeDebugDeps(makeSpec(tasks), "live"), RUN_ID);
+
+    expect(result.run.status).toBe("completed");
+    expect(result.rollup?.merged).toBe(true); // rollup itself stays unconditional
+    expect(result.failureCommentPosted).toBe(false);
+  });
+
+  it("debug:true failed run finalizes successfully despite a throwing gh (commentFailuresOnPrd never reached)", async () => {
+    const tasks: TaskSeed[] = [
+      { task_id: "t1", status: "failed", failure_class: "capability-budget" },
+    ];
+    await seed(tasks);
+    await state.update(RUN_ID, (s) => ({ ...s, debug: true }));
+
+    const result = await finalizeRun(makeDebugDeps(makeSpec(tasks), "live"), RUN_ID);
+
+    expect(result.run.status).toBe("failed");
+    expect(result.failureCommentPosted).toBe(false);
+  });
+
+  it("debug:false (regression guard) completed run still calls issueComment/issueClose — throwing gh propagates", async () => {
+    const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
+    await seed(tasks);
+    // run.debug defaults to false — no update needed.
+
+    await expect(finalizeRun(makeDebugDeps(makeSpec(tasks), "live"), RUN_ID)).rejects.toThrow(
+      /issueComment/,
+    );
+  });
+
+  it("debug:false (regression guard) failed run still calls commentFailuresOnPrd — throwing gh propagates", async () => {
+    const tasks: TaskSeed[] = [
+      { task_id: "t1", status: "failed", failure_class: "capability-budget" },
+    ];
+    await seed(tasks);
+
+    await expect(finalizeRun(makeDebugDeps(makeSpec(tasks), "live"), RUN_ID)).rejects.toThrow(
+      /listIssueComments/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // prdDoneComment — URL-absent branch (number-only fallback)
 // ---------------------------------------------------------------------------
 

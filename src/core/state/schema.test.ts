@@ -427,6 +427,20 @@ describe("RunState.e2e (the --e2e opt-in flag)", () => {
   });
 });
 
+describe("RunState.debug (the /factory:debug session flag)", () => {
+  it("defaults to false when omitted", () => {
+    expect(parseRunState(minimalRun()).debug).toBe(false);
+  });
+
+  it("round-trips true", () => {
+    expect(parseRunState(minimalRun({ debug: true })).debug).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    expect(() => parseRunState(minimalRun({ debug: "yes" }))).toThrow();
+  });
+});
+
 describe("e2e phase marker + author manifest", () => {
   it("absent by default → undefined", () => {
     expect(parseRunState(minimalRun()).e2e_phase).toBeUndefined();

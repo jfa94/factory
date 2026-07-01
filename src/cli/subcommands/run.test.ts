@@ -1711,6 +1711,50 @@ describe("applyResume", () => {
     );
     expect(env.run.paused_minutes ?? 0).toBeGreaterThanOrEqual(59);
   });
+
+  describe("Decision 39: run.debug routes to a distinct 'debug-resume' envelope", () => {
+    function asDebugResume(env: ResumeResult): Extract<ResumeResult, { kind: "debug-resume" }> {
+      if (env.kind !== "debug-resume") throw new Error(`expected debug-resume, got ${env.kind}`);
+      return env;
+    }
+
+    it("a debug:true run returns debug-resume BEFORE any quota/planResume logic runs", async () => {
+      await createBareRun("r1");
+      await state.update("r1", (s) => ({ ...s, debug: true }));
+
+      // UNAVAILABLE would normally fail-closed via planResume/quota; a debug run must
+      // never reach that logic, so this must NOT throw or block.
+      const env = asDebugResume(await applyResume(state, "r1", UNAVAILABLE, defaultConfig(), NOW));
+      expect(env.run_id).toBe("r1");
+      expect(env.run.debug).toBe(true);
+
+      // No quota/planResume side effects: status and quota checkpoint untouched.
+      const reread = await state.read("r1");
+      expect(reread.status).toBe("running");
+      expect(reread.quota).toBeUndefined();
+    });
+
+    it("a debug:true PAUSED run also short-circuits to debug-resume (never clears the checkpoint via planResume)", async () => {
+      await createBareRun("r1");
+      await state.update("r1", (s) => ({ ...s, debug: true }));
+      await setStatus("r1", "paused", "5h");
+
+      const env = asDebugResume(await applyResume(state, "r1", underCurve(), defaultConfig(), NOW));
+      expect(env.run.status).toBe("paused"); // untouched — planResume never ran
+      expect(env.run.quota).toBeDefined(); // checkpoint left intact
+
+      const reread = await state.read("r1");
+      expect(reread.status).toBe("paused");
+      expect(reread.quota).toBeDefined();
+    });
+
+    it("debug:false (regression guard) is unaffected — resumes exactly as before", async () => {
+      await createBareRun("r1");
+      // debug defaults to false — no update needed.
+      const env = asResumed(await applyResume(state, "r1", underCurve(), defaultConfig(), NOW));
+      expect(env.run.status).toBe("running");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
