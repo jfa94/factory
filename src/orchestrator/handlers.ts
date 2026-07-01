@@ -47,6 +47,7 @@ import {
   type Config,
   type GateContext,
   type PriorFailureNote,
+  type ConfirmedBlocker,
   type ProducerContext,
   type SpawnRequest,
   type SpecManifest,
@@ -147,6 +148,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
     rung: number,
     resumePhase: TaskPhase,
     extraPriorFailures: readonly PriorFailureNote[] = [],
+    confirmedBlockers?: readonly ConfirmedBlocker[],
   ): Promise<PhaseResult> {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const split = splitFor(deps.config, runId, specTask);
@@ -164,6 +166,10 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         ...extraPriorFailures,
         ...(dial.injectsPriorFailure ? [priorFailureNote(rung)] : []),
       ],
+      // D5 fix-forward: a blocked verify's confirmed reviewer blockers ∪ gate-stderr
+      // record (record.ts persisted it as `task.fix_findings`), recorded in as
+      // concrete PATCH instructions rather than re-nuking the implementation.
+      ...(confirmedBlockers !== undefined ? { confirmedBlockers } : {}),
     });
     const promptRef = await deps.artifacts.putProducerContext(
       runId,
@@ -280,6 +286,10 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         task.escalation_rung,
         "verify",
         e2eFeedbackNote(task),
+        // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
+        // gate-stderr record (record.ts persisted it on the wait-retry branch) —
+        // patches the specific verified misses instead of re-nuking.
+        task.fix_findings,
       );
     },
 

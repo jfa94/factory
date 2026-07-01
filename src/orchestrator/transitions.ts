@@ -89,6 +89,9 @@ export async function completeTask(
     // Decision 39: an e2e reopen's feedback is cleared once the task ships again —
     // the schema's own field comment ("cleared once the task ships again").
     e2e_feedback: undefined,
+    // D5: a stale fix-forward record from an earlier blocked rung must not
+    // outlive the task it was for.
+    fix_findings: undefined,
   }));
   return { done: true, outcome: { outcome: "done" } };
 }

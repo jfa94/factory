@@ -137,6 +137,7 @@ export type {
   ProducerContext,
   DialResult,
   PriorFailureNote,
+  ConfirmedBlocker,
   FailureSignal,
   ClassifyDecision,
 } from "../producer/index.js";

@@ -13,17 +13,34 @@ import type { GateOutcome, GateStrategy, StrategyContext } from "../strategy.js"
 import { ran } from "../strategy.js";
 import type { GateTools, ProcResult, ToolRunOpts } from "../tools.js";
 
+/** Cap for the stderr/stdout excerpt appended to a failing gate's detail (chars). */
+const EXCERPT_MAX_CHARS = 1000;
+
+/** Trim + cap raw process output for inclusion in a gate's detail (fix-forward channel). */
+function excerpt(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= EXCERPT_MAX_CHARS) return trimmed;
+  return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}… (truncated)`;
+}
+
 /**
  * Map a finished process result to a {@link GateOutcome}: fail LOUD on truncation
  * (never judge a clipped run), else observed = `exit 0` with a `<label> exit=<code>`
- * detail. Exported so a gate with a pre-run applicability check (e.g. lint) reuses
- * the exact same mapping for its run path.
+ * detail. On a FAILING run, the detail also carries a capped stderr (falling back to
+ * stdout) excerpt — this is the only place the concrete lint/tsc/build error text is
+ * available; without it here, fix-forward (prompt-context.ts's confirmedBlockers →
+ * fixInstructions) has nothing but the bare exit code to hand the next producer rung.
+ * A passing run's detail is unchanged (nothing to fix). Exported so a gate with a
+ * pre-run applicability check (e.g. lint) reuses the exact same mapping for its run path.
  */
 export function procOutcome(id: GateId, label: string, result: ProcResult): GateOutcome {
   if (result.truncated) {
     throw new Error(`${id} gate: ${label} output truncated — refusing to judge a clipped run`);
   }
-  return ran(id, result.code === 0, `${label} exit=${result.code ?? "null"}`);
+  const base = `${label} exit=${result.code ?? "null"}`;
+  if (result.code === 0) return ran(id, true, base);
+  const output = excerpt(result.stderr || result.stdout);
+  return ran(id, false, output ? `${base}: ${output}` : base);
 }
 
 /** Build a process-gate strategy from its id, label, and tool invocation. */

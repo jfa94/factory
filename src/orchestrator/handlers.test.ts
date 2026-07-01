@@ -142,6 +142,7 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
         ? { test_revision_feedback: task.test_revision_feedback }
         : {}),
       ...(task.e2e_feedback ? { e2e_feedback: task.e2e_feedback } : {}),
+      ...(task.fix_findings ? { fix_findings: task.fix_findings } : {}),
     };
     await state.update(RUN_ID, (s) => ({ ...s, tasks: { ...s.tasks, [full.task_id]: full } }));
     const run = await state.read(RUN_ID);
@@ -395,6 +396,48 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     expect(persisted.priorFailures.some((f) => f.summary.includes("order confirmation"))).toBe(
       true,
     );
+  });
+
+  it("exec threads a persisted fix_findings record (D5 fix-forward) into the implementer's fixInstructions", async () => {
+    const deps = makeDeps();
+    const handlers = makePhaseHandlers(deps);
+    const ctx = await ctxFor({
+      task_id: "t-multi",
+      fix_findings: [
+        {
+          reviewer: "lint",
+          file: "src/lib/x.ts",
+          line: 10,
+          description: "eslint exit=1: no-unsafe-assignment",
+        },
+      ],
+    });
+    const result = await handlers.exec(ctx);
+
+    expect(result.kind).toBe("spawn-agents");
+    if (result.kind !== "spawn-agents") throw new Error("unreachable");
+    const agent = result.request.agents[0]!;
+    const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref);
+    expect(persisted.fixInstructions).toEqual([
+      {
+        reviewer: "lint",
+        file: "src/lib/x.ts",
+        line: 10,
+        description: "eslint exit=1: no-unsafe-assignment",
+      },
+    ]);
+  });
+
+  it("exec with no fix_findings yields empty fixInstructions (a fresh attempt, not a patch)", async () => {
+    const handlers = makePhaseHandlers(makeDeps());
+    const ctx = await ctxFor({ task_id: "t-multi" });
+    const result = await handlers.exec(ctx);
+
+    expect(result.kind).toBe("spawn-agents");
+    if (result.kind !== "spawn-agents") throw new Error("unreachable");
+    const agent = result.request.agents[0]!;
+    const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref);
+    expect(persisted.fixInstructions).toEqual([]);
   });
 
   // -- verify (CLI single-step reporter; NO holdout) ------------------------

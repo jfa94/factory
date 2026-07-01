@@ -23,6 +23,15 @@
  */
 import type { Finding } from "../verifier/judgment/index.js";
 
+/**
+ * Structural subset of a confirmed-blocker `Finding` this module actually reads
+ * (reviewer/file/line/description) — narrower than the full judgment {@link Finding}
+ * so BOTH a live `PanelRunResult.confirmedBlockers` (`Finding[]`, from a fresh
+ * verify) and a persisted `TaskState.fix_findings` (the lean `FixFinding[]` D5
+ * carries across a fix-forward re-spawn) satisfy it directly — no conversion step.
+ */
+export type ConfirmedBlocker = Pick<Finding, "reviewer" | "file" | "line" | "description">;
+
 /** A single confirmed-blocker fix instruction for the implementer's patch pass. */
 export interface FixInstruction {
   /** The reviewer that raised it (audit). */
@@ -66,7 +75,7 @@ export interface BuildProducerContextInput {
    * pass. Empty on a fresh attempt. Only CONFIRMED blockers (post WS7
    * verify-then-fix) belong here — never raw reviewer findings.
    */
-  readonly confirmedBlockers?: readonly Finding[];
+  readonly confirmedBlockers?: readonly ConfirmedBlocker[];
   /**
    * Prior-failure notes to inject (rung ≥ 2). Empty on rung 0/1. Their PRESENCE
    * is the rung-2 "changed variable" (the injected context).
@@ -97,7 +106,7 @@ export interface ProducerContext {
 }
 
 /** Map a confirmed-blocker {@link Finding} to a concrete {@link FixInstruction}. */
-function toFixInstruction(f: Finding): FixInstruction {
+function toFixInstruction(f: ConfirmedBlocker): FixInstruction {
   const base: FixInstruction = { reviewer: f.reviewer, description: f.description };
   if (f.file !== undefined && f.line !== undefined) {
     return { ...base, file: f.file, line: f.line };

@@ -207,6 +207,23 @@ export const ReviewerResultSchema = z.object({
 export type ReviewerResult = z.infer<typeof ReviewerResultSchema>;
 
 /**
+ * One fix-forward instruction carried into the NEXT producer rung after a
+ * merge-gate block (D5 fix-forward channel). A lean LOCAL shape — deliberately
+ * NOT the verifier's `Finding` type: this module is the frozen state seam other
+ * layers import FROM (never the reverse), so importing a verifier type here would
+ * invert that dependency. `record.ts` maps confirmed reviewer blockers and
+ * non-holdout failing gate evidence into this shape before persisting.
+ */
+export const FixFindingSchema = z.object({
+  /** Origin of the finding: a reviewer name (e.g. "security") or a gate id (e.g. "lint"). */
+  reviewer: z.string().min(1),
+  file: z.string().optional(),
+  line: z.number().int().positive().optional(),
+  description: z.string().min(1),
+});
+export type FixFinding = z.infer<typeof FixFindingSchema>;
+
+/**
  * Per-task state. Carries the producer ladder position, the panel results, the
  * git/PR pointers, and the failure classification — but NO stored gate-verdict
  * booleans, and NO producer dial: the `risk_tier` dial is read live from the spec
@@ -253,6 +270,18 @@ export const TaskStateSchema = z.object({
    * Transient — not a failure field (allowed on any status).
    */
   e2e_feedback: z.string().optional(),
+
+  /**
+   * Fix-forward instructions carried from a blocked merge-gate verify into the
+   * NEXT producer (`exec`) rung (D5 fix-forward channel). Composed at the
+   * wait-retry branch (`record.ts`) from confirmed reviewer blockers ∪ non-holdout
+   * failing gate evidence, persisted BEFORE `escalateOrFail` clears `reviewers`
+   * (mirrors the `test_revision_feedback` precedent: a separate write ahead of the
+   * ladder transition). `handlers.ts`'s `exec` reads it into `buildProducerContext`
+   * as `confirmedBlockers`. Cleared on the next advance/complete. Absent otherwise.
+   * Transient — not a failure field (allowed on any status).
+   */
+  fix_findings: z.array(FixFindingSchema).optional(),
 
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */

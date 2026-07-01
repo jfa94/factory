@@ -27,6 +27,7 @@ export {
   type ProducerContext,
   type FixInstruction,
   type PriorFailureNote,
+  type ConfirmedBlocker,
 } from "./prompt-context.js";
 
 // Classify-before-retry (Δ D).

@@ -319,6 +319,30 @@ describe("applyRecordReviews record", () => {
     expect(task.status).toBe("shipping"); // markInFlight(ship)
   });
 
+  it("advancing past a prior blocked rung clears the stale fix_findings record (D5)", async () => {
+    const deps = makeDeps();
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      tasks: {
+        ...s.tasks,
+        [TASK_ID]: {
+          ...s.tasks[TASK_ID]!,
+          fix_findings: [{ reviewer: "lint", description: "eslint exit=1: stale" }],
+        },
+      },
+    }));
+    const input: RecordReviewsInput = {
+      reviews: [approve("quality"), approve("security")],
+      verifications: [],
+    };
+
+    const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
+
+    expect(env.mergeGate.passed).toBe(true);
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.fix_findings).toBeUndefined();
+  });
+
   it("a confirmed blocker blocks the merge gate → escalate (clear reviewers, resume at exec)", async () => {
     await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
     const deps = makeDeps();
@@ -363,6 +387,11 @@ describe("applyRecordReviews record", () => {
     expect(task.escalation_rung).toBe(1);
     expect(task.reviewers).toEqual([]);
     expect(task.status).toBe("executing"); // cursor re-stamped at exec
+    // D5 fix-forward: the confirmed blocker survives escalateOrFail's reviewers
+    // clear, in the lean fix_findings shape (not the full judgment Finding).
+    expect(task.fix_findings).toEqual([
+      { reviewer: "quality", file: "src/x.ts", line: 2, description: "magic number" },
+    ]);
   });
 
   it("a kept blocker with NO recorded verdict FAILS CLOSED (verifier error, never a pass)", async () => {
@@ -413,6 +442,10 @@ describe("applyRecordReviews record", () => {
     expect(env.step).toEqual({ done: false, phase: "exec" });
     // The holdout gate evidence is part of the derived merge gate.
     expect(env.mergeGate.from.some((e) => e.gate === "holdout" && e.observed === false)).toBe(true);
+    // LEAK GUARD (D5): the holdout is a deliberate quality mechanism, not a bug —
+    // its failing evidence must NEVER surface as a fix-forward instruction.
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.fix_findings?.some((f) => f.reviewer === "holdout")).toBe(false);
   });
 
   it("a satisfied holdout + approving panel + green gates advances to ship", async () => {

@@ -30,6 +30,7 @@ export {
   // object schemas
   SpecPointerSchema,
   ReviewerResultSchema,
+  FixFindingSchema,
   TaskStateSchema,
   QuotaCheckpointSchema,
   RunStateSchema,
@@ -54,6 +55,7 @@ export type {
   ShipMode,
   SpecPointer,
   ReviewerResult,
+  FixFinding,
   TaskState,
   QuotaCheckpoint,
   RunState,

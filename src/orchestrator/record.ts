@@ -42,6 +42,7 @@ import {
   type RawReview,
   type SourceReader,
   type FindingVerifierRunner,
+  type AdjudicatedReviewer,
 } from "../verifier/judgment/index.js";
 import {
   checkHoldout,
@@ -59,6 +60,7 @@ import type {
   ReviewerResult,
   ProducerRole,
   TaskPhase,
+  FixFinding,
 } from "../types/index.js";
 import type { HandlerDeps } from "./types.js";
 import { resolveStagingBranch } from "./deps.js";
@@ -340,6 +342,34 @@ export function makeReplayRunnerFactory(
 }
 
 /**
+ * Compose the D5 fix-forward record from a blocked verify pass: confirmed
+ * reviewer blockers ∪ non-holdout FAILING gate evidence, mapped to the lean
+ * {@link FixFinding} shape `record.ts` persists (never the full judgment
+ * `Finding` — that would invert the core/state↔verifier layering).
+ *
+ * LEAK GUARD: a `gate === "holdout"` entry is deliberately excluded — the
+ * holdout mechanism is a quality mechanism, not a bug, and its detail must
+ * never reach the producer's fix-forward prompt.
+ */
+function composeFixFindings(
+  adjudicated: readonly AdjudicatedReviewer[],
+  gateEvidence: readonly GateEvidence[],
+): FixFinding[] {
+  const fromReviewers: FixFinding[] = adjudicated.flatMap((a) =>
+    a.confirmedBlockers.map((f) => ({
+      reviewer: f.reviewer,
+      ...(f.file !== undefined ? { file: f.file } : {}),
+      ...(f.line !== undefined ? { line: f.line } : {}),
+      description: f.description,
+    })),
+  );
+  const fromGates: FixFinding[] = gateEvidence
+    .filter((g) => g.gate !== "holdout" && !g.observed)
+    .map((g) => ({ reviewer: g.gate, description: g.detail ?? `${g.gate} gate failed` }));
+  return [...fromReviewers, ...fromGates];
+}
+
+/**
  * Record the panel + verify-then-fix verdicts into the merge gate and return the next-step
  * envelope. `verdictStore` is the holdout-verdict source `applyRecordHoldout` persisted.
  */
@@ -422,6 +452,10 @@ export async function applyRecordReviews(
   // own state write. A crash before the single advance-write means a no-results
   // re-invoke at verify finds no reviewers → fresh panel spawn (fail-closed);
   // holdout evidence cannot be bypassed by replaying without holdout results.
+  // (The wait-retry branch's extra fix_findings write, below, is a best-effort
+  // ADDITION to that fresh re-spawn, not a substitute for it — a crash before it
+  // lands just means the next producer rung gets no fix instructions, same as
+  // today's behavior; it can never leak stale reviewer state.)
 
   let step: TaskStep;
   if (panel.result.kind === "advance") {
@@ -434,10 +468,17 @@ export async function applyRecordReviews(
       reviewers: [...panel.reviewerResults],
       phase: nextPhaseVal,
       status: nextStatus,
+      // A passing verify clears any stale fix-forward record from a prior blocked round.
+      fix_findings: undefined,
     }));
     step = { done: false, phase: nextPhaseVal };
   } else if (panel.result.kind === "wait-retry") {
-    // escalateOrFail does its own state write; do NOT persist reviewers here.
+    // D5 fix-forward: persist the confirmed-blocker ∪ gate-stderr record BEFORE
+    // escalating — the same "separate write ahead of the ladder transition"
+    // pattern applyProducerOutcome uses for test_revision_feedback. escalateOrFail's
+    // `{...t}` spread then carries it across the rung bump while it clears reviewers.
+    const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
+    await deps.state.updateTask(runId, taskId, (t) => ({ ...t, fix_findings: fixFindings }));
     step = await escalateOrFail(
       deps,
       runId,

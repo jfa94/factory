@@ -99,4 +99,33 @@ describe("prompt-context — fix-forward instructions (D27)", () => {
     expect(ctx.fixInstructions[0]?.file).toBe("src/y.ts");
     expect(ctx.fixInstructions[0]?.line).toBeUndefined();
   });
+
+  it("a lean gate-stderr-sourced blocker (no severity/blocking/quote — a persisted fix_findings record) still yields a fix instruction", () => {
+    // D5: record.ts persists TaskState.fix_findings as the lean {reviewer, file?,
+    // line?, description} shape — NOT a full judgment Finding. This proves that
+    // shape satisfies confirmedBlockers without any conversion step.
+    const ctx = buildProducerContext({
+      taskId: "T1",
+      title: "t",
+      description: "d",
+      visibleCriteria: ["c"],
+      files: ["f"],
+      rung: 0,
+      confirmedBlockers: [
+        {
+          reviewer: "lint",
+          file: "src/lib/x.ts",
+          line: 10,
+          description: "eslint exit=1: no-unsafe-assignment",
+        },
+      ],
+    });
+    expect(ctx.fixInstructions).toHaveLength(1);
+    expect(ctx.fixInstructions[0]).toMatchObject({
+      reviewer: "lint",
+      file: "src/lib/x.ts",
+      line: 10,
+      description: "eslint exit=1: no-unsafe-assignment",
+    });
+  });
 });
