@@ -26,9 +26,9 @@ spawn exactly what an envelope names and feed the raw results back.
    result — a clean pass has zero confirmed blockers, so the synthetic PRD it would
    render (`"(no confirmed blockers)"`) can never pass the spec gate's traceability
    check (Task 6 report, "Issues or concerns"). `clean` branches straight to
-   **finalize** (step 4) and STOPS.
+   **finalize** (step 6) and STOPS.
 2. **`next-task`'s `"finalize"` kind during a debug run means "this pass is done, go
-   re-review" — it is NEVER a signal to call `factory run finalize`.** Only step 4's
+   re-review" — it is NEVER a signal to call `factory run finalize`.** Only step 6's
    clean/cap branch calls the ONE real finalize, `factory debug finalize`, exactly
    once per session. See "Finalize interception" below — this is the single most
    important deviation from `skills/pipeline-runner/SKILL.md`'s Phase 3 loop.
@@ -162,9 +162,8 @@ ONLY whether you omit or include `crossVendorAbsent` in the `--results` file
 **Verify-then-fix.** For EVERY finding any reviewer marked `blocking: true` AND
 citable (`file`+`line` both present), spawn an INDEPENDENT finding-verifier —
 `general-purpose`, isolation `"worktree"`, model `opus`, adversarial framing ("does
-this finding hold against the code?"), inspecting via `git -C <worktree> diff
-
-<base>` — per `skills/pipeline-runner/SKILL.md`'s "Collecting a spawn envelope" →
+this finding hold against the code?"), inspecting via `git -C <worktree> diff <base>` —
+per `skills/pipeline-runner/SKILL.md`'s "Collecting a spawn envelope" →
 `expects: "reviews"` step 3, reused verbatim (not re-derived here). It returns
 `{ "holds": true|false, "note": "<why>" }`.
 
@@ -197,12 +196,12 @@ Emits ONE of:
 - `{ "kind": "clean", "run_id", "pass" }` — zero confirmed blockers (review
   findings AND the repo's COMMITTED e2e suite are folded into the SAME check via
   `foldE2eIntoBlockers` — "confirmed blocker" already means "review OR e2e").
-  **Go straight to step 4 (finalize). Do NOT call `debug spec`.**
+  **Go straight to step 6 (finalize). Do NOT call `debug spec`.**
 - `{ "kind": "findings", "run_id", "pass", "report_path", "confirmed_count" }` —
   ≥1 confirmed blocker, written to `report_path` (a markdown findings write-up
   under `<dataDir>/debug/<run-id>/pass-<n>/findings.md`).
   - If `pass == maxPasses` (from `debug start`'s `--max-passes`, tracked by you —
-    the CLI does not itself compare `pass` to the cap): **go straight to step 4
+    the CLI does not itself compare `pass` to the cap): **go straight to step 6
     (finalize)**, reporting `report_path`'s residual findings as unresolved. STOP.
   - Else: continue to step 3 (the spec sub-loop).
 
