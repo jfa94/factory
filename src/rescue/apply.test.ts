@@ -18,7 +18,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { applyRescue } from "./apply.js";
+import { applyRescue, resetTaskRow } from "./apply.js";
 import { StateManager } from "../core/state/manager.js";
 import type { RunStatus, TaskState } from "../types/index.js";
 
@@ -273,5 +273,79 @@ describe("applyRescue", () => {
     const c = run.tasks.c!;
     expect(c.phase).toBeUndefined();
     expect(c.merge_resyncs).toBe(0);
+  });
+
+  it("a plain rescue reset carries forward the task's existing e2e_feedback unchanged", async () => {
+    await seed([
+      {
+        task_id: "d",
+        status: "executing",
+        phase: "verify",
+        e2e_feedback: "checkout: expected order confirmation, got 500",
+      },
+    ]);
+
+    await applyRescue(state, RUN_ID);
+
+    const run = await state.read(RUN_ID);
+    expect(run.tasks.d!.e2e_feedback).toBe("checkout: expected order confirmation, got 500");
+  });
+});
+
+describe("resetTaskRow (Decision 39 — e2e reopen reuse)", () => {
+  function task(
+    seed: Partial<TaskState> & { task_id: string; status: TaskState["status"] },
+  ): TaskState {
+    return {
+      depends_on: [],
+      escalation_rung: 2,
+      reviewers: [{ reviewer: "security", verdict: "approve", confirmed_blockers: 0 }],
+      merge_resyncs: 1,
+      ...seed,
+    };
+  }
+
+  it("drops test_revision_feedback (unrelated intra-attempt note) on every reset", () => {
+    const reset = resetTaskRow(
+      task({ task_id: "a", status: "shipping", test_revision_feedback: "stale" }),
+    );
+    expect(reset.test_revision_feedback).toBeUndefined();
+  });
+
+  it("with no opts, carries forward an existing e2e_feedback unchanged", () => {
+    const reset = resetTaskRow(
+      task({ task_id: "a", status: "shipping", e2e_feedback: "checkout: 500 on submit" }),
+    );
+    expect(reset.e2e_feedback).toBe("checkout: 500 on submit");
+  });
+
+  it("with no prior e2e_feedback and no opts, stays absent", () => {
+    const reset = resetTaskRow(task({ task_id: "a", status: "shipping" }));
+    expect(reset.e2e_feedback).toBeUndefined();
+  });
+
+  it("opts.e2eFeedback OVERWRITES any existing e2e_feedback — the e2e reopen path", () => {
+    const reset = resetTaskRow(
+      task({ task_id: "a", status: "shipping", e2e_feedback: "old note" }),
+      {
+        e2eFeedback: "checkout: expected order confirmation, got 500",
+      },
+    );
+    expect(reset.e2e_feedback).toBe("checkout: expected order confirmation, got 500");
+  });
+
+  it("opts.e2eFeedback SETS a fresh value even with no prior feedback", () => {
+    const reset = resetTaskRow(task({ task_id: "a", status: "shipping" }), {
+      e2eFeedback: "login: 403 on submit",
+    });
+    expect(reset.e2e_feedback).toBe("login: 403 on submit");
+  });
+
+  it("still resets status/escalation/reviewers/merge_resyncs alongside an e2e feedback set", () => {
+    const reset = resetTaskRow(task({ task_id: "a", status: "shipping" }), { e2eFeedback: "x" });
+    expect(reset.status).toBe("pending");
+    expect(reset.escalation_rung).toBe(0);
+    expect(reset.reviewers).toEqual([]);
+    expect(reset.merge_resyncs).toBe(0);
   });
 });

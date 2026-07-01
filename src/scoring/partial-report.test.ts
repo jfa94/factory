@@ -188,6 +188,31 @@ describe("buildPartialReport", () => {
     const report = buildPartialReport(run, spec, { now: NOW });
     expect(report.failures[0]).toMatchObject({ branch: "factory/run-1/t1", pr_number: 99 });
   });
+
+  it("surfaces e2e_failure when every task shipped but the e2e phase failed (Decision 39)", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], {
+      status: "failed",
+      e2e_phase: {
+        status: "failed",
+        reason: "checkout: cap-exhausted critical",
+        manifest: [],
+        reopen_counts: {},
+        ended_at: NOW,
+      },
+    });
+
+    const report = buildPartialReport(run, spec, { now: NOW });
+    expect(report.failures).toEqual([]);
+    expect(report.e2e_failure).toBe("checkout: cap-exhausted critical");
+  });
+
+  it("omits e2e_failure when the e2e phase is absent or done", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], { status: "completed" });
+
+    expect(buildPartialReport(run, spec, { now: NOW }).e2e_failure).toBeUndefined();
+  });
 });
 
 describe("renderPartialReportMarkdown", () => {
@@ -229,6 +254,25 @@ describe("renderPartialReportMarkdown", () => {
 
     expect(md).toContain("## Shipped (0)");
     expect(md).toContain("_none_");
+  });
+
+  it("renders the e2e veto section even when nothing is in `failures` (Decision 39)", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], {
+      status: "failed",
+      e2e_phase: {
+        status: "failed",
+        reason: "checkout: cap-exhausted critical",
+        manifest: [],
+        reopen_counts: {},
+        ended_at: NOW,
+      },
+    });
+    const md = renderPartialReportMarkdown(buildPartialReport(run, spec, { now: NOW }));
+
+    expect(md).toContain("## End-to-end verification failed");
+    expect(md).toContain("checkout: cap-exhausted critical");
+    expect(md).not.toContain("## Failed");
   });
 });
 
@@ -279,5 +323,24 @@ describe("renderFailureComment", () => {
 
     expect(body).toContain("- **Branch:** `factory/run-1/t1`");
     expect(body).toContain("- **PR:** #7");
+  });
+
+  it("surfaces the e2e veto section even with zero task failures (Decision 39)", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], {
+      status: "failed",
+      e2e_phase: {
+        status: "failed",
+        reason: "checkout: cap-exhausted critical",
+        manifest: [],
+        reopen_counts: {},
+        ended_at: NOW,
+      },
+    });
+    const report = buildPartialReport(run, spec, { now: NOW });
+    const body = renderFailureComment(report);
+
+    expect(body).toContain("### End-to-end verification failed");
+    expect(body).toContain("checkout: cap-exhausted critical");
   });
 });

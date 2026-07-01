@@ -205,6 +205,114 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **synonyms**: —
 - **code anchor**: `src/verifier/holdout/validate.ts`
 
+## E2E Testing
+
+### E2E Phase
+
+- **type**: Process
+- **status**: accepted
+- **definition**: A Run-level stage, opted into via `--e2e`, that authors and runs browser journeys against the integrated staging app once every Task is terminal, so a feature can be checked end-to-end rather than only unit-by-unit. It runs immediately before documentation.
+- **invariants**:
+  - Only runs on a Run that opted in at creation; the choice cannot change on Resume.
+  - Never marks the Run itself failed or complete directly — it can only reopen a Task or hand off to the next stage.
+- **examples**:
+  - A Run with `--e2e` reaches "every Task terminal" and the phase authors + runs journeys before the docs stage fires.
+  - Counter-example: a Run without `--e2e` skips this stage entirely and proceeds straight to docs.
+- **relationships**: follows Task completion; precedes documentation; produces the E2E Reopen Loop; consumes the Fail-first Proof and the E2E Runner.
+- **synonyms**: —
+- **code anchor**: `src/orchestrator/e2e.ts`
+
+### E2E Author
+
+- **type**: Role
+- **status**: accepted
+- **definition**: The actor that explores the live staging app and writes browser journeys proving features work end-to-end — a Critical (Persisted) E2E Spec for load-bearing paths, a Throwaway E2E Spec for everything else it judges user-facing. It writes specs; it never reviews or reopens work.
+- **invariants**:
+  - Runs at most once per E2E Phase entry; a later pass in the same Reopen Loop reruns its specs rather than re-inventing them.
+  - Every spec it writes must be proven passing against the live app before it hands off.
+- **examples**:
+  - Explores a newly-shipped checkout flow, writes one Critical spec for the money path and a Throwaway spec covering the rest of the Task's acceptance criteria.
+  - Counter-example: judging its own spec's failure as a false alarm and suppressing it — that call belongs to the E2E Phase's disposition logic, not the author.
+- **relationships**: serves the E2E Phase; produces Critical and Throwaway E2E Specs; its output is checked by the Fail-first Proof.
+- **synonyms**: —
+- **code anchor**: `agents/e2e-author.md`
+
+### Critical (Persisted) E2E Spec
+
+- **type**: Value Object
+- **status**: accepted
+- **definition**: A browser journey the E2E Author judged load-bearing enough to keep permanently — committed into the target repository rather than discarded at the end of the Run. Where a spec is stored is what marks it Critical; nothing else does.
+- **invariants**:
+  - Lives inside the repository's committed E2E test directory, never anywhere ephemeral.
+  - Must pass the Fail-first Proof before it is ever committed.
+  - Only the E2E Author may add or change one; no other Role may touch it.
+- **examples**:
+  - A checkout journey is committed as a Critical spec, so it keeps gating every future `--e2e` Run and every pull request afterward.
+  - Counter-example: a one-off spec for a minor settings toggle, discarded at Run end — that belongs in the Throwaway tier instead.
+- **relationships**: authored by the E2E Author; verified by the Fail-first Proof; executed by the E2E Runner; joined to its Task by the E2E Reopen Loop's manifest.
+- **synonyms**: Critical Spec, Persisted Spec
+- **code anchor**: `src/orchestrator/e2e.ts`
+
+### Throwaway E2E Spec
+
+- **type**: Value Object
+- **status**: accepted
+- **definition**: A browser journey the E2E Author writes for a single Task's user-facing behavior, kept only for the duration of the current Run and discarded once it ends.
+- **invariants**:
+  - Never committed to the target repository.
+  - Covers at most the Run currently in progress; it has no bearing on any future Run.
+- **examples**:
+  - A Task adding a settings toggle gets a Throwaway spec that exercises it once, then is discarded when the Run finishes.
+  - Counter-example: a spec meant to keep gating every future Run — that is a Critical spec, not a Throwaway one.
+- **relationships**: authored by the E2E Author; joined to its Task by the E2E Reopen Loop's manifest; not subject to the Fail-first Proof.
+- **synonyms**: Ephemeral Spec
+- **code anchor**: `src/orchestrator/e2e.ts`
+
+### Fail-first Proof
+
+- **type**: Policy
+- **status**: accepted
+- **definition**: A check that a Critical (Persisted) E2E Spec actually proves something, run before the spec is ever committed — the end-to-end analogue of the TDD Gate's red-then-green discipline, standing in for the human review an autonomously-written assertion never gets. The spec must fail against the codebase as it stood before the feature existed and pass against it with the feature integrated.
+- **invariants**:
+  - A spec that already passes before the feature exists is rejected as proving nothing.
+  - A spec that still fails after the feature is proven working is rejected as unusable.
+- **examples**:
+  - A checkout spec fails against the pre-feature codebase and passes once the feature is integrated — it clears the proof and may be committed.
+  - Counter-example: a spec that passes even without the feature (e.g., it never actually exercises the new behavior) — rejected as vacuous.
+- **relationships**: gates a Critical (Persisted) E2E Spec; performed by the E2E Runner; enforced within the E2E Phase.
+- **synonyms**: —
+- **code anchor**: `src/orchestrator/e2e.ts`
+
+### E2E Reopen Loop
+
+- **type**: Process
+- **status**: accepted
+- **definition**: The mechanism by which a failing E2E journey sends its Task back to the start of the implementation work, carrying feedback about what went wrong, rather than leaving the Run to fail outright. The failing spec is traced back to the Task(s) it covers, and that Task is reopened.
+- **invariants**:
+  - A failing journey can only be traced back to a Task it was explicitly linked to when authored; an untraceable failure cannot be silently ignored.
+  - A Task may be reopened this way only a bounded number of times before the Run is failed outright instead.
+- **examples**:
+  - A checkout journey fails; the Task that implemented checkout is reopened with a note describing the failure, and its implementation work restarts.
+  - Counter-example: a Throwaway spec that keeps failing on a later pass after already reopening once — later passes reopen only for Critical failures, so this one instead becomes an advisory note.
+- **relationships**: triggered by the E2E Phase; consumes the E2E Author's manifest; bounded per Task.
+- **synonyms**: —
+- **code anchor**: `src/orchestrator/e2e.ts`
+
+### E2E Runner
+
+- **type**: Policy
+- **status**: accepted
+- **definition**: The mechanism that actually executes browser journeys and reports which passed, failed, or were flaky (failed, then passed on a retry). A flaky result is reported but never treated as a real failure.
+- **invariants**:
+  - Never falls back to a network-fetched tool if the expected local one is missing — a missing tool is reported as a failure, not silently worked around.
+  - A flaky result never triggers the E2E Reopen Loop.
+- **examples**:
+  - A journey fails once, then passes on an automatic retry — reported as flaky, and the Run proceeds without reopening anything.
+  - Counter-example: a journey that fails on every attempt — a real failure, eligible for the E2E Reopen Loop.
+- **relationships**: performs the Fail-first Proof; executes Critical and Throwaway E2E Specs; used by the E2E Phase.
+- **synonyms**: —
+- **code anchor**: `src/verifier/e2e/runner.ts`
+
 ## Risk & safety
 
 ### Risk Tier

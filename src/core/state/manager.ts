@@ -83,6 +83,8 @@ export interface CreateRunArgs {
   staging_branch?: RunState["staging_branch"];
   /** Quota-gate bypass from `--ignore-quota`; persisted so both orchestrators skip the gate. */
   ignore_quota?: RunState["ignore_quota"];
+  /** e2e-phase opt-in from `--e2e` (Decision 39); persisted so `wantsE2e` reads it live. */
+  e2e?: RunState["e2e"];
 }
 
 export class StateManager {
@@ -214,6 +216,7 @@ export class StateManager {
       ...(args.owner_session !== undefined ? { owner_session: args.owner_session } : {}),
       ...(args.staging_branch !== undefined ? { staging_branch: args.staging_branch } : {}),
       ...(args.ignore_quota !== undefined ? { ignore_quota: args.ignore_quota } : {}),
+      ...(args.e2e !== undefined ? { e2e: args.e2e } : {}),
       spec: args.spec,
       tasks: {},
       started_at: now,

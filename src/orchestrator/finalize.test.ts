@@ -168,6 +168,37 @@ describe("finalizeRun", () => {
     );
   });
 
+  it("e2e-failed override (Decision 39): every task shipped but e2e vetoes → failed, no rollup, PRD comment posted", async () => {
+    const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
+    await seed(tasks);
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e: true,
+      e2e_phase: {
+        status: "failed",
+        reason: "checkout: cap-exhausted critical",
+        manifest: [],
+        reopen_counts: {},
+        ended_at: NOW,
+      },
+    }));
+
+    const result = await finalizeRun(makeDeps(makeSpec(tasks), "live"), RUN_ID);
+
+    // decideFinalize alone would say "completed" (every task done) — the e2e phase
+    // overrides it to "failed" even though `report.failures` is empty.
+    expect(result.run.status).toBe("failed");
+    expect(result.report.run_status).toBe("failed");
+    expect(result.report.failures).toEqual([]);
+    expect(result.report.e2e_failure).toBe("checkout: cap-exhausted critical");
+    // No rollup: develop must never receive an e2e-vetoed run.
+    expect(result.rollup).toBeUndefined();
+    expect(gh.merges).toHaveLength(0);
+    // The PRD comment fires even with zero task failures (an e2e-only veto).
+    expect(result.failureCommentPosted).toBe(true);
+    expect((await state.read(RUN_ID)).status).toBe("failed");
+  });
+
   it("completed + no-merge: opens the rollup PR but never merges it", async () => {
     const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
     await seed(tasks);

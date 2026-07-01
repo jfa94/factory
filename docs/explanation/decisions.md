@@ -913,6 +913,103 @@ into a self-healing path instead of a loud fail. See
 
 ---
 
+## Decision 39 — E2E Is a Run-Level Engine Phase; Criticality Is Persistence, Not a Tag
+
+Unit-level gates (vitest, tdd, coverage, mutation, sast, type, lint) verify a task in
+isolation; they cannot catch a feature that's broken once every task's change is
+integrated. `--e2e` adds an autonomous Playwright phase that authors and runs journey
+tests against the integrated staging app and **acts** on failures by reopening the
+task responsible — mirroring the docs phase (Decision 37), ordered immediately
+**before** it (don't document code about to change).
+
+**Criticality by persistence, not a tag.** The `e2e-author` agent writes two kinds of
+spec, distinguished only by WHERE they land — there is no `@critical` annotation, no
+metadata file:
+
+- **Committed** (target repo's `e2e/`, default `e2e.testDir`) = **critical**. Thin,
+  journey-oriented, load-bearing — gates this run, every future `--e2e` run, and the
+  repo's CI (the durable net; see the `e2e` job added to `quality-gate.yml`).
+- **Ephemeral** (an out-of-repo run directory, never committed) = **throwaway**. One
+  per user-facing task, broader coverage, exists only to shake out this run's issues;
+  discarded at run end.
+
+Committing per-task tags or annotations would let an author-side bug silently widen or
+narrow what gates future runs; a directory boundary cannot drift the same way.
+
+**Spec→task link is an author-emitted manifest**, keyed by `task_id`. No Playwright
+tag, no git provenance, no source-file→task mapping exists (a squash-merged commit
+loses per-task attribution) — the author already has every task's `task_id` +
+`acceptance_criteria` for free, so it returns
+`[{ task_ids, spec_path, kind: "critical"|"throwaway" }]` via the universal
+`--results` seam (`E2eResultsSchema`). This is the ONLY join the engine has: a spec
+the author forgets to list can never be traced back to its task if it later fails.
+
+**Fail-first proof — the autonomous stand-in for human assertion review.** No human
+reviews an autonomously-authored e2e assertion before it gates a run; a spec that's
+green but meaningless (asserting something trivially true) gives false confidence.
+Every **critical** spec must carry exactly one `control:`-prefixed assertion that
+passes on any boot of the app, independent of the feature under test. Before a
+critical spec is ever merged, the engine runs it twice via `runE2e()`: once against
+the **unmodified base branch** (expects the control assertion GREEN + every journey
+assertion RED — proof the app booted but the feature doesn't exist yet) and once
+against **staging with the feature** (expects everything GREEN). A spec whose control
+assertion fails on base is rejected as "base unusable"; a spec already green on base
+is rejected as vacuous. Throwaway specs carry no such proof — only author
+self-validation against live staging — since they never gate anything past this run.
+
+**Reopen cadence and disposition.** Pass 1 reopens for any failing mappable spec
+(critical or throwaway); pass 2+ reopens only for critical failures — a throwaway spec
+existed to shake out issues in the tasks it covers, not to gate convergence forever.
+Flaky (Playwright's own fail-then-pass-on-retry classification) never reopens. 0
+critical red → the run completes (a residual throwaway red becomes an advisory line in
+the report, not a blocker); an unmappable critical failure or one that exhausts
+`e2e.reopenCap` fails the run outright.
+
+**Reopen never flips `run.status`.** Only the task rows reset to `pending` (carrying
+`e2e_feedback`, reusing the `resetTaskRow` rescue primitive); the run stays `"running"`
+throughout every pass — `finalizeRun` is the only writer of a terminal run status. The
+`e2e` phase marker (`E2ePhaseSchema.status`) is cleared on reopen so the phase re-fires
+once the reopened task settles — the one place this mirrors-but-diverges from the docs
+phase, whose marker never re-clears (docs never has a reason to re-run mid-run).
+
+**Simplified reject→fail, no re-author loop.** `parseProducerStatus` — the shared
+STATUS-line grammar for every producer-like role — governs the author's terminal line
+too; in `runE2eRecord` ANY non-`"done"` outcome (`blocked-escalate`, `needs-context`,
+`error`) fails the whole e2e phase outright. There is deliberately no "ask the author
+to try again" retry loop: an author that couldn't finish authoring is a signal to
+surface, not paper over with another attempt at the same live app.
+
+**Config is consumed, not just declared.** `e2e.startCommand`/`baseURL`/`testDir`/
+`readyTimeoutMs`/`reopenCap` (`E2eConfigSchema`) are read by the runtime at every call
+site — repeating `.quality.redTestCommand`'s "declared but never wired" mistake was an
+explicit thing to avoid here. Unconfigured `startCommand`/`baseURL` on an `--e2e` run
+suspends the phase (loud, resumable via `/factory:resume`) rather than silently
+skipping it.
+
+**`--e2e` is create-only**, exactly like `--workflow`/`--no-ship` — persisted on the
+run at creation, immutable across `--resume`. This class of bug (a boolean flag added
+to `CreateRunArgs`/`StateManager.create()`'s whitelist but missed in the parallel
+`--resume` rejection guard) is worth naming: any future create-only run flag needs
+BOTH the create-guard AND the resume-guard updated together, or `factory run resume
+--<flag>` silently no-ops instead of rejecting loud.
+
+**TCB.** `e2e/**` is implementer-write-denied (`src/hooks/tcb.ts`, category
+`e2e-suite`) — only the `e2e-author` agent commits there; an implementer that could
+edit a committed spec could make its own feature's failing journey pass without fixing
+the underlying bug. Hardcoded to the literal `e2e` path component per the existing "no
+config parameter can influence the denylist" invariant (Δ W) — a repo that customizes
+`e2e.testDir` away from the default is not covered by this rule, a known limitation
+rather than a bypass an implementer could reach (it cannot set config either).
+
+**Deferred, not built:** `debug`'s e2e integration (critical suite on every debug run,
+`--full-e2e` for full coverage, folding results into the report → spec → re-review
+loop until no crucial/important findings). `/factory:debug` is non-functional today
+(retired `pipeline-*` bash bins) — the core (`runE2e()`, the author, the manifest
+contract) is deliberately consumer-agnostic so debug becomes a second consumer later
+without touching this phase.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

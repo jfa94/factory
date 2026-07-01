@@ -72,6 +72,21 @@ export interface PartialRunReport {
   failures: FailureLine[];
   /** Incomplete tasks (non-terminal run only), ordered by their position in the spec. */
   incomplete: IncompleteLine[];
+  /**
+   * The e2e phase's failure reason (Decision 39), present IFF `run.e2e_phase.status
+   * === "failed"`. This is the ONLY way a `failed` run_status can coexist with an
+   * empty `failures` list — every task shipped, but a residual critical red / an
+   * unmappable critical regression / a cap-exhausted critical vetoed the rollup. The
+   * PRD comment + rollup-PR body must surface this or "never ship silently" is broken.
+   */
+  e2e_failure?: string;
+  /**
+   * Non-gating e2e note (Decision 9) — e.g. residual THROWAWAY red that did NOT
+   * block completion. Present IFF `run.e2e_phase.status === "done"` and the phase
+   * left an advisory. Mutually exclusive with {@link e2e_failure} (one phase
+   * outcome, one note).
+   */
+  e2e_advisory?: string;
 }
 
 /** Options for {@link buildPartialReport}. */
@@ -157,6 +172,10 @@ export function buildPartialReport(
     shipped,
     failures,
     incomplete,
+    ...(run.e2e_phase?.status === "failed" ? { e2e_failure: run.e2e_phase.reason } : {}),
+    ...(run.e2e_phase?.status === "done" && run.e2e_phase.advisory !== undefined
+      ? { e2e_advisory: run.e2e_phase.advisory }
+      : {}),
   };
 }
 
@@ -185,6 +204,13 @@ export function renderFailureComment(report: PartialRunReport): string {
     `Factory run \`${report.run_id}\` failed — ${report.failures.length} task(s) failed. ` +
       `PRD left open for rescue/resume.`,
   ];
+  if (report.e2e_failure !== undefined) {
+    lines.push(
+      "",
+      "### End-to-end verification failed",
+      `Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`,
+    );
+  }
   for (const failure of report.failures) {
     lines.push("", `### \`${failure.task_id}\` — ${failure.title}`);
     lines.push(`- **Class:** \`${failure.failure_class}\``);
@@ -235,6 +261,18 @@ export function renderPartialReportMarkdown(report: PartialRunReport): string {
     }
   }
   out.push("");
+
+  if (report.e2e_failure !== undefined) {
+    out.push("## End-to-end verification failed");
+    out.push(`Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`);
+    out.push("");
+  }
+
+  if (report.e2e_advisory !== undefined) {
+    out.push("## End-to-end verification — advisory");
+    out.push(report.e2e_advisory);
+    out.push("");
+  }
 
   if (report.failures.length > 0) {
     out.push(`## Failed (${report.failures.length})`);

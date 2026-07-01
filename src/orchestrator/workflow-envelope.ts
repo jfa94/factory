@@ -47,16 +47,17 @@ import type { NextAction } from "./orchestrator.js";
  * green. The `Record` mirror closes that hole.)
  */
 const NEXT_KIND_MIRROR: Record<NextTask["kind"], true> = {
-  "work": true,
-  "finalize": true,
-  "document": true,
-  "done": true,
-  "pause": true,
+  work: true,
+  finalize: true,
+  document: true,
+  e2e: true,
+  done: true,
+  pause: true,
 };
 const DRIVE_KIND_MIRROR: Record<NextAction["kind"], true> = {
   spawn: true,
   done: true,
-  "pause": true,
+  pause: true,
 };
 
 export const NEXT_KINDS: ReadonlySet<NextTask["kind"]> = new Set(

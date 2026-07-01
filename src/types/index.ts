@@ -44,6 +44,9 @@ export {
   SpecPointerSchema,
   ReviewerResultSchema,
   QuotaCheckpointSchema,
+  E2eSpecKindEnum,
+  E2eManifestEntrySchema,
+  E2ePhaseSchema,
   parseRunState,
   parseTaskState,
   TERMINAL_RUN_STATUSES,
@@ -72,6 +75,9 @@ export type {
   QuotaCheckpoint,
   GateEvidence,
   GateVerdict,
+  E2eSpecKind,
+  E2eManifestEntry,
+  E2ePhase,
 } from "../core/state/index.js";
 
 // WS2 — phase-machine seam. A COMPLETE mirror of src/core/phase-machine: the PURE

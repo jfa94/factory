@@ -31,6 +31,8 @@ export {
   TestWriterSchema,
   CodexSchema,
   GitSchema,
+  E2eConfigSchema,
   type Config,
   type SpecConfig,
+  type E2eConfig,
 } from "./schema.js";

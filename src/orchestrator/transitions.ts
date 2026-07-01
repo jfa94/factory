@@ -86,6 +86,9 @@ export async function completeTask(
     status: "done",
     ended_at: t.ended_at ?? nowIso(),
     spawn_in_flight: undefined, // WS2 hygiene: no spawn is in flight past a terminal task
+    // Decision 39: an e2e reopen's feedback is cleared once the task ships again —
+    // the schema's own field comment ("cleared once the task ships again").
+    e2e_feedback: undefined,
   }));
   return { done: true, outcome: { outcome: "done" } };
 }

@@ -91,6 +91,12 @@ script).
 - `ship.ts` (`shipTask`) opens the PR + serial-merges; `finalize.ts` is the
   run-completion coordinator (report → PRD-issue fails comment → rollup → flip
   terminal, in resume-safe order).
+- `docs.ts` / `e2e.ts` — the run-level **coroutines** behind `factory run docs` /
+  `factory run e2e`, each an emit/record pair symmetric with `nextAction`. `docs.ts`
+  runs once before finalize (Decision 37); `e2e.ts` runs before docs on an `--e2e` run
+  (Decision 39) — it spawns the `e2e-author` once, proves + merges the critical suite,
+  then re-runs the suite on every re-entry and can reopen a task (via `resetTaskRow`)
+  without touching `run.status`.
 
 ## Producer (`src/producer`)
 
@@ -116,6 +122,11 @@ Three sub-layers:
   finding-verifier (`finding-verifier.ts`) for verify-then-fix.
 - **holdout** (`holdout/`) — the answer-key split, store, validator prompt, and
   pass-rate check.
+- **e2e** (`e2e/runner.ts`) — the injectable Playwright wrapper (`runE2e()`) the
+  run-level e2e coroutine and the fail-first proof shell through. Resolves the
+  worktree's own local `playwright` binary (never the `npx` fallback) and parses its
+  JSON reporter into a flat pass/fail/flaky result (Decision 39). Distinct from the
+  per-task deterministic gates — e2e is a run-level phase, not a unit gate.
 
 See [explanation/verifier.md](../explanation/verifier.md) and
 [reference/automated-gates.md](../reference/automated-gates.md).

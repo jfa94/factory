@@ -189,6 +189,29 @@ export function buildTcbRules(ctx: TcbContext = {}): readonly TcbRule[] {
     });
   }
 
+  // 3b. The committed critical e2e suite: `e2e/**` (Decision 39). Persistence IS
+  //     the criticality signal — an implementer that could edit a committed spec
+  //     could make its own feature's failing journey pass without fixing the bug.
+  //     Only the e2e-author agent (never the implementer/test-writer) writes here.
+  //     Hardcoded to the literal "e2e" component per the Δ W invariant above (no
+  //     config parameter) — a repo that customizes `e2e.testDir` away from the
+  //     default is NOT covered by this rule; a known limitation, not a bypass path
+  //     an implementer can reach (it can't set config either).
+  if (ctx.repoRoot) {
+    const e2eDir = canonicalizeAnchor(resolve(ctx.repoRoot, "e2e"));
+    rules.push({
+      category: "e2e-suite",
+      describe: "e2e/** (committed critical e2e suite — Decision 39)",
+      test: (p) => isAtOrUnder(p, e2eDir),
+    });
+  } else {
+    rules.push({
+      category: "e2e-suite",
+      describe: "e2e/** (committed critical e2e suite — Decision 39)",
+      test: (p) => hasComponent(p, "e2e"),
+    });
+  }
+
   // 4. Out-of-repo run store: `<dataDir>/runs/**` (run state, holdouts, reviews).
   //    Holdouts (Δ Y) are the answer key — never writable from an implementer tree.
   if (ctx.dataDir) {

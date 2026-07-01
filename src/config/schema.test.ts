@@ -94,4 +94,53 @@ describe("ConfigSchema", () => {
     const injected = ConfigSchema.parse({ humanReviewLevel: 2 } as Record<string, unknown>);
     expect("humanReviewLevel" in injected).toBe(false);
   });
+
+  describe("e2e (Decision 39 — Playwright config)", () => {
+    it("defaults testDir, readyTimeoutMs, reopenCap; leaves startCommand/baseURL/enabled unset", () => {
+      const cfg = ConfigSchema.parse({});
+      expect(cfg.e2e.testDir).toBe("e2e");
+      expect(cfg.e2e.readyTimeoutMs).toBe(30_000);
+      expect(cfg.e2e.reopenCap).toBe(2);
+      expect(cfg.e2e.enabled).toBeUndefined();
+      expect(cfg.e2e.startCommand).toBeUndefined();
+      expect(cfg.e2e.baseURL).toBeUndefined();
+    });
+
+    it("round-trips a fully-configured e2e block", () => {
+      const cfg = ConfigSchema.parse({
+        e2e: {
+          enabled: true,
+          startCommand: "npm run dev",
+          baseURL: "http://localhost:3000",
+          testDir: "tests/e2e",
+          readyTimeoutMs: 60_000,
+          reopenCap: 1,
+        },
+      });
+      expect(cfg.e2e).toEqual({
+        enabled: true,
+        startCommand: "npm run dev",
+        baseURL: "http://localhost:3000",
+        testDir: "tests/e2e",
+        readyTimeoutMs: 60_000,
+        reopenCap: 1,
+      });
+    });
+
+    it("merges a partial e2e override while defaulting siblings", () => {
+      const cfg = ConfigSchema.parse({ e2e: { startCommand: "npm start" } });
+      expect(cfg.e2e.startCommand).toBe("npm start");
+      expect(cfg.e2e.testDir).toBe("e2e");
+      expect(cfg.e2e.reopenCap).toBe(2);
+    });
+
+    it("rejects an empty testDir and a negative reopenCap (loud, not silent)", () => {
+      expect(() => ConfigSchema.parse({ e2e: { testDir: "" } })).toThrow();
+      expect(() => ConfigSchema.parse({ e2e: { reopenCap: -1 } })).toThrow();
+    });
+
+    it("reopenCap accepts 0 (no reopen budget, still schema-valid)", () => {
+      expect(ConfigSchema.parse({ e2e: { reopenCap: 0 } }).e2e.reopenCap).toBe(0);
+    });
+  });
 });

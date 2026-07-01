@@ -137,7 +137,9 @@ async function commentFailuresOnPrd(
   deps: FinalizeRunDeps,
   report: PartialRunReport,
 ): Promise<boolean> {
-  if (report.failures.length === 0) return false;
+  // Decision 39: a `failed` run with zero task failures (an e2e-only veto — every
+  // task shipped) still needs the PRD comment, or "never ship silently" is broken.
+  if (report.failures.length === 0 && report.e2e_failure === undefined) return false;
 
   const marker = failureCommentMarker(report.run_id);
   const existing = await deps.gh.listIssueComments({
@@ -170,7 +172,13 @@ export async function finalizeRun(
   const run = await deps.state.read(runId);
 
   // 1. terminal status (throws loud if any task is non-terminal — anti-spin).
-  const terminal = decideFinalize(run).run_status;
+  // Decision 39: a `failed` e2e phase overrides the task-based verdict to `failed`
+  // even when every task individually shipped — decideFinalize (WS2, pure
+  // task-status) has no visibility into the e2e phase (residual critical red, an
+  // unmappable critical regression, or a cap-exhausted critical), so the override
+  // lives here, the run's finalize coordinator.
+  const taskTerminal = decideFinalize(run).run_status;
+  const terminal = run.e2e_phase?.status === "failed" ? "failed" : taskTerminal;
 
   // 2. report — status overridden to the DECIDED terminal (state flips in step 7).
   const report = buildPartialReport({ ...run, status: terminal }, deps.spec, { now });

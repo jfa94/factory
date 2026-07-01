@@ -399,3 +399,104 @@ describe("TaskState.test_revision_feedback (defective-RED-test recovery)", () =>
     expect(t.test_revision_feedback).toBe("still defective");
   });
 });
+
+describe("TaskState.e2e_feedback (e2e reopen loop)", () => {
+  it("is optional (absent by default) and round-trips a stamped value", () => {
+    expect(parseTaskState(minimalTask()).e2e_feedback).toBeUndefined();
+    const fb = "checkout: expected order confirmation, got 500";
+    expect(parseTaskState(minimalTask({ e2e_feedback: fb })).e2e_feedback).toBe(fb);
+  });
+
+  it("is allowed on a pending row (a reopen resets status to pending alongside it)", () => {
+    const t = parseTaskState(minimalTask({ status: "pending", e2e_feedback: "still red" }));
+    expect(t.e2e_feedback).toBe("still red");
+  });
+});
+
+describe("RunState.e2e (the --e2e opt-in flag)", () => {
+  it("defaults to false", () => {
+    expect(parseRunState(minimalRun()).e2e).toBe(false);
+  });
+
+  it("round-trips true", () => {
+    expect(parseRunState(minimalRun({ e2e: true })).e2e).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    expect(() => parseRunState(minimalRun({ e2e: "yes" }))).toThrow();
+  });
+});
+
+describe("e2e phase marker + author manifest", () => {
+  it("absent by default → undefined", () => {
+    expect(parseRunState(minimalRun()).e2e_phase).toBeUndefined();
+  });
+
+  it("round-trips a done marker with a manifest and reopen counts", () => {
+    const run = parseRunState(
+      minimalRun({
+        e2e_phase: {
+          status: "done",
+          manifest: [
+            { task_ids: ["t1"], spec_path: "e2e/checkout.spec.ts", kind: "critical" },
+            { task_ids: ["t2"], spec_path: "throwaway/t2.spec.ts", kind: "throwaway" },
+          ],
+          reopen_counts: { t1: 1 },
+          ended_at: NOW,
+        },
+      }),
+    );
+    expect(run.e2e_phase?.status).toBe("done");
+    expect(run.e2e_phase?.manifest).toHaveLength(2);
+    expect(run.e2e_phase?.reopen_counts).toEqual({ t1: 1 });
+  });
+
+  it("status is optional even when a manifest is present (the reopen-clear state)", () => {
+    // The twist vs DocsPhase: status is CLEARED on reopen while manifest/counts persist.
+    const run = parseRunState(
+      minimalRun({
+        e2e_phase: {
+          manifest: [{ task_ids: ["t1"], spec_path: "e2e/checkout.spec.ts", kind: "critical" }],
+          reopen_counts: { t1: 1 },
+        },
+      }),
+    );
+    expect(run.e2e_phase?.status).toBeUndefined();
+    expect(run.e2e_phase?.manifest).toHaveLength(1);
+  });
+
+  it("manifest and reopen_counts default to empty", () => {
+    const run = parseRunState(minimalRun({ e2e_phase: { status: "done", ended_at: NOW } }));
+    expect(run.e2e_phase?.manifest).toEqual([]);
+    expect(run.e2e_phase?.reopen_counts).toEqual({});
+  });
+
+  it("rejects an unknown e2e phase status", () => {
+    expect(() =>
+      parseRunState(minimalRun({ e2e_phase: { status: "weird", ended_at: NOW } })),
+    ).toThrow();
+  });
+
+  it("rejects an unknown manifest kind", () => {
+    expect(() =>
+      parseRunState(
+        minimalRun({
+          e2e_phase: {
+            manifest: [{ task_ids: ["t1"], spec_path: "e2e/x.spec.ts", kind: "smoke" }],
+          },
+        }),
+      ),
+    ).toThrow();
+  });
+
+  it("reason set IFF failed (mirrors DocsPhase)", () => {
+    expect(() => parseRunState(minimalRun({ e2e_phase: { status: "failed" } }))).toThrow(); // failed with no reason
+    expect(() =>
+      parseRunState(minimalRun({ e2e_phase: { status: "done", reason: "why" } })),
+    ).toThrow(); // done with a reason
+    const run = parseRunState(
+      minimalRun({ e2e_phase: { status: "failed", reason: "reopen cap exhausted for t1" } }),
+    );
+    expect(run.e2e_phase?.reason).toBe("reopen cap exhausted for t1");
+  });
+});

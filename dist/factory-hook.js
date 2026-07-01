@@ -6559,6 +6559,36 @@ var GitSchema = external_exports.object({
    */
   branchPrefix: external_exports.string().min(1).default("factory")
 }).default({});
+var E2eConfigSchema = external_exports.object({
+  /**
+   * Repo-level "e2e IS configured" signal, distinct from the run's `--e2e` flag
+   * (that's "run this run WITH e2e"). Informational/future-gating only today —
+   * `startCommand`+`baseURL` presence is the real readiness check.
+   */
+  enabled: external_exports.boolean().optional(),
+  /**
+   * Command that boots the target app, for both Playwright's `webServer` (test
+   * runs) and the e2e-author's live-exploration boot (`reuseExistingServer`).
+   * Required before a run may pass `--e2e`.
+   */
+  startCommand: external_exports.string().optional(),
+  /** Base URL the app serves once `startCommand` is up. Required before `--e2e`. */
+  baseURL: external_exports.string().optional(),
+  /**
+   * Repo-relative directory the COMMITTED critical suite lives in. Persistence
+   * in this directory IS the criticality signal (Decision 39) — no `@critical`
+   * tag exists.
+   */
+  testDir: external_exports.string().min(1).default("e2e"),
+  /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
+  readyTimeoutMs: external_exports.number().int().positive().default(3e4),
+  /**
+   * Per-task cap on e2e-triggered reopens (Decision 7). A critical spec still
+   * red after this many reopens of its mapped task fails the run outright
+   * instead of looping forever.
+   */
+  reopenCap: external_exports.number().int().nonnegative().default(2)
+}).default({});
 var ConfigSchema = external_exports.object({
   quality: QualitySchema,
   quota: QuotaSchema,
@@ -6567,6 +6597,7 @@ var ConfigSchema = external_exports.object({
   testWriter: TestWriterSchema,
   codex: CodexSchema,
   git: GitSchema,
+  e2e: E2eConfigSchema,
   /**
    * Cumulative genuine capability-budget task failures before the run aborts.
    * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
@@ -6758,6 +6789,20 @@ function buildTcbRules(ctx = {}) {
       category: "hooks",
       describe: "hooks/** (the guard hooks \u2014 editing one disables the boundary)",
       test: (p) => hasComponent(p, "hooks")
+    });
+  }
+  if (ctx.repoRoot) {
+    const e2eDir = canonicalizeAnchor(resolve2(ctx.repoRoot, "e2e"));
+    rules.push({
+      category: "e2e-suite",
+      describe: "e2e/** (committed critical e2e suite \u2014 Decision 39)",
+      test: (p) => isAtOrUnder(p, e2eDir)
+    });
+  } else {
+    rules.push({
+      category: "e2e-suite",
+      describe: "e2e/** (committed critical e2e suite \u2014 Decision 39)",
+      test: (p) => hasComponent(p, "e2e")
     });
   }
   if (ctx.dataDir) {
@@ -7239,6 +7284,16 @@ var TaskStateSchema = external_exports.object({
    * otherwise. Transient — not a failure field (allowed on any status).
    */
   test_revision_feedback: external_exports.string().optional(),
+  /**
+   * Feedback carried from a failing e2e journey spec into this task's NEXT
+   * implementation pass (the e2e reopen loop, Decision 39). Set by the e2e coroutine
+   * when it maps a failing spec to this task via the author manifest and resets the
+   * task to `pending`; injected into the regenerated producer's prior-failure context
+   * (mirrors `test_revision_feedback`, but originates from a RUN-LEVEL phase, not a
+   * per-task producer outcome). Cleared once the task ships again. Absent otherwise.
+   * Transient — not a failure field (allowed on any status).
+   */
+  e2e_feedback: external_exports.string().optional(),
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
@@ -7363,6 +7418,32 @@ var DocsPhaseSchema = external_exports.object({
   attempts: external_exports.number().int().nonnegative().optional(),
   ended_at: external_exports.string()
 });
+var E2eSpecKindEnum = external_exports.enum(["critical", "throwaway"]);
+var E2eManifestEntrySchema = external_exports.object({
+  /** Task id(s) this spec exercises (a critical journey spec may span >1 task). */
+  task_ids: external_exports.array(external_exports.string().min(1)).min(1),
+  /** Spec file path — repo-relative for `critical`, run-ephemeral-dir-relative for `throwaway`. */
+  spec_path: external_exports.string().min(1),
+  kind: E2eSpecKindEnum
+});
+var E2ePhaseSchema = external_exports.object({
+  status: external_exports.enum(["done", "failed"]).optional(),
+  reason: external_exports.string().optional(),
+  /**
+   * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
+   * didn't block completion (Decision 9: only critical red gates). Distinct from
+   * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
+   * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
+   */
+  advisory: external_exports.string().optional(),
+  /** Cumulative attempt count across ALL passes (1-indexed). */
+  attempts: external_exports.number().int().nonnegative().optional(),
+  /** The author's spec→task manifest, fixed once authored and reused across passes. */
+  manifest: external_exports.array(E2eManifestEntrySchema).default([]),
+  /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
+  reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
+  ended_at: external_exports.string().optional()
+});
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
@@ -7415,6 +7496,14 @@ var RunStateSchema = external_exports.object({
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /**
+   * Whether this run opted into the e2e phase (the `--e2e` flag). Set once at
+   * `run create`; immutable for the run's lifetime — mirrors `ignore_quota`.
+   * Default false: a run without the flag never gates on `wantsE2e()`.
+   */
+  e2e: external_exports.boolean().default(false),
+  /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
+  e2e_phase: E2ePhaseSchema.optional(),
+  /**
    * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
    * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
    * real pause time from wall-time, preventing a false trip on a long-paused run. Default
@@ -7450,6 +7539,24 @@ function refineRunCrossFields(run, ctx) {
         code: external_exports.ZodIssueCode.custom,
         path: ["docs", "reason"],
         message: `run '${run.run_id}' docs phase is '${run.docs.status}' but carries a reason (reason is set IFF failed)`
+      });
+    }
+  }
+  if (run.e2e_phase !== void 0 && run.e2e_phase.status !== void 0) {
+    const isFailed = run.e2e_phase.status === "failed";
+    const hasReason = run.e2e_phase.reason != null && run.e2e_phase.reason.length > 0;
+    if (isFailed && !hasReason) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["e2e_phase", "reason"],
+        message: `run '${run.run_id}' e2e phase is 'failed' but has no reason`
+      });
+    }
+    if (!isFailed && hasReason) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["e2e_phase", "reason"],
+        message: `run '${run.run_id}' e2e phase is '${run.e2e_phase.status}' but carries a reason (reason is set IFF failed)`
       });
     }
   }
@@ -7624,6 +7731,7 @@ var StateManager = class _StateManager {
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
       ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
+      ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,

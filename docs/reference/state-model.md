@@ -88,6 +88,8 @@ lookups never read a misfiled row.
 | `ignore_quota`              | boolean                    | When `true`, the quota gate is skipped unconditionally for this run — both orchestrators + runners read it from state (no per-call threading), mirroring the `mode==="workflow"` skip. Set at create from `--ignore-quota`, or toggled true by `factory resume --ignore-quota`. Default `false`; a legacy run without the field reads as `false`.                                 |
 | `quota`                     | QuotaCheckpoint?           | Resume checkpoint; present _iff_ paused/suspended.                                                                                                                                                                                                                                                                                                                                |
 | `docs`                      | DocsPhase?                 | Documentation-phase marker; absent until the engine docs phase runs ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-phase-before-finalize)).                                                                                                                                                                                                   |
+| `e2e`                       | boolean (default false)    | Whether this run opted into the e2e phase (the `--e2e` flag). Set once at create, immutable across resume. Default `false`: a run without the flag never schedules the e2e stage ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)).                                                                  |
+| `e2e_phase`                 | E2ePhase?                  | E2E-phase marker + author manifest; absent until the e2e phase first runs. See [`E2ePhase`](#e2ephase).                                                                                                                                                                                                                                                                           |
 | `paused_minutes`            | number (default 0)         | Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen, accumulated on each resume or rescue-reopen. The runtime circuit-breaker deducts it from wall-time so a long-paused run does not falsely trip. Absent on legacy runs → `0`.                                                                                                                 |
 | `started_at` / `updated_at` | string                     | ISO-8601.                                                                                                                                                                                                                                                                                                                                                                         |
 | `ended_at`                  | string \| null             | ISO-8601, null until terminal.                                                                                                                                                                                                                                                                                                                                                    |
@@ -130,6 +132,7 @@ one.
 | `phase`                   | TaskPhase?                    | The `next-action` orchestrator's resume cursor (see below).                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `merge_resyncs`           | int ≥0 (default 0)            | Ship live-merge re-sync count (see below).                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `spawn_in_flight`         | object?                       | Spawn-in-flight checkpoint for idempotent re-spawn (see below).                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `e2e_feedback`            | string?                       | Feedback carried from a failing e2e journey into this task's NEXT implementation pass (the e2e reopen loop, [Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)). Set by the e2e coroutine when it reopens the task (via `resetTaskRow`); injected into the producer's prior-failure context. **Transient — not a failure field; allowed on any status.**                                       |
 | `started_at` / `ended_at` | string?                       | ISO-8601.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 `TaskState` stores **no** `risk_tier`. The single producer dial (`low | medium |
@@ -231,4 +234,29 @@ finalizes `completed` without a docs commit.
 There is no `skipped` value — when docs are not applicable (no `/docs` directory or
 `package.json` `factory.docs.enabled: false`), `factory next-task` decides applicability
 read-only and the marker simply stays absent.
+
+## `E2ePhase`
+
+`{ status?: "done" | "failed", reason?, advisory?, attempts?, manifest, reopen_counts, ended_at? }`
+— the engine-owned e2e-phase marker + author manifest ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)),
+present only on an `--e2e` run and absent until the phase first runs.
+
+Unlike `DocsPhase` (written once, never re-entered), this marker is **re-fired** on every
+reopen: `status` is cleared back to absent when a failing journey reopens a task, so the
+phase runs again once the reopened task settles. Two fields **persist** across the clear:
+
+- `manifest` — the author's spec→task rows (`{ task_ids, spec_path, kind: "critical" | "throwaway" }`),
+  fixed at authoring time and reused on every later pass (the author is not re-invoked;
+  throwaway specs are re-run, not re-authored). This is the only join from a failing spec
+  back to its task.
+- `reopen_counts` — per-`task_id` cumulative reopen count, bounding each task by
+  `e2e.reopenCap` across the whole run, not just one pass.
+
+`status` semantics: absent = not yet run this pass (or cleared for a reopen re-fire);
+`done` = every critical spec green (the run proceeds to docs); `failed` (with `reason`) =
+the run fails — residual critical red, an unmappable critical failure, a rejected
+fail-first proof, an exhausted `reopenCap`, or a non-`DONE` author status. `advisory` is
+the `done`-side counterpart of `reason` — a non-gating note (e.g. residual throwaway red)
+never present on `failed`. `attempts` is the cumulative 1-indexed pass count. A reopen
+never touches `run.status`, which stays `running` until `finalize`.
 </content>

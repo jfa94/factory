@@ -33,6 +33,10 @@ export {
   TaskStateSchema,
   QuotaCheckpointSchema,
   RunStateSchema,
+  // e2e phase (Decision 39)
+  E2eSpecKindEnum,
+  E2eManifestEntrySchema,
+  E2ePhaseSchema,
   // parsers
   parseRunState,
   parseTaskState,
@@ -53,6 +57,9 @@ export type {
   TaskState,
   QuotaCheckpoint,
   RunState,
+  E2eSpecKind,
+  E2eManifestEntry,
+  E2ePhase,
 } from "./schema.js";
 
 // --- Derive-don't-store gate-verdict accessors ---

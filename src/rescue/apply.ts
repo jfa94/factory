@@ -60,6 +60,16 @@ export interface RescueApplyResult {
   skipped: string[];
 }
 
+/** Optional overrides applied on top of a plain {@link resetTaskRow} reset. */
+export interface ResetTaskRowOpts {
+  /**
+   * Fresh e2e-reopen feedback to stamp onto the reset row (Decision 39). When
+   * omitted, whatever `e2e_feedback` the task already carries flows through
+   * UNCHANGED — see the field's own note below.
+   */
+  e2eFeedback?: string;
+}
+
 /**
  * Reset one task row to a clean `pending` state. Drops the stale producer dial
  * position, panel results, failure classification, lifecycle timestamps, phase cursor,
@@ -69,8 +79,16 @@ export interface RescueApplyResult {
  * `failure_class`/`failure_reason` MUST be dropped: the schema forbids them on any
  * non-failed status (refineTaskCrossFields), so a reset that kept them would fail
  * re-validation.
+ *
+ * `e2e_feedback` is DELIBERATELY NOT in the destructure-and-drop list below (unlike
+ * `test_revision_feedback`): a plain rescue reset carries forward whatever e2e
+ * feedback the task already had — the task's still-open e2e complaint is unrelated
+ * to why THIS reset fired, so it isn't stale. The run-level e2e coroutine's reopen
+ * loop (src/orchestrator/e2e.ts, Decision 39) reuses this SAME function, passing a
+ * fresh `e2eFeedback` string via `opts` to overwrite it — one source of truth for
+ * "what a reset clears/keeps", shared by both call sites. Exported for that reuse.
  */
-function resetTaskRow(task: TaskState): TaskState {
+export function resetTaskRow(task: TaskState, opts: ResetTaskRowOpts = {}): TaskState {
   // Destructure OUT the fields a reset must clear; keep the rest verbatim.
   const {
     failure_class: _failureClass,
@@ -93,6 +111,7 @@ function resetTaskRow(task: TaskState): TaskState {
     escalation_rung: 0,
     reviewers: [],
     merge_resyncs: 0,
+    ...(opts.e2eFeedback !== undefined ? { e2e_feedback: opts.e2eFeedback } : {}),
   };
 }
 

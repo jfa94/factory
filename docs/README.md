@@ -1,4 +1,4 @@
-<!-- last-documented: 5ac70273609600d402ff8b72aa5df1e164abf4d7 -->
+<!-- last-documented: 9a19bd8705d110d76e7bb3934067917ecccf5ed3 -->
 
 # Dark Factory Plugin
 
@@ -97,6 +97,7 @@ contract.
 ### How-to guides
 
 - [Run the pipeline](./guides/run-the-pipeline.md) — drive a PRD issue to shipped PRs.
+- [Run with end-to-end tests](./guides/run-with-e2e.md) — add the autonomous Playwright e2e phase with `--e2e`.
 - [Scaffold a target repo](./guides/scaffold-a-repo.md) — prepare a repo (CI net, gate configs, `develop` branch protection).
 - [Configure the factory](./guides/configure-the-factory.md) — inspect and edit the config overlay.
 - [Rescue a stalled run](./guides/rescue-a-stalled-run.md) — recover a crashed/suspended run that resume cannot untangle.

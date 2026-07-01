@@ -78,6 +78,31 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     expect(isTcbProtected(p, ctx())?.rule.category).toBe("hooks");
   });
 
+  it("Decision 39: matches e2e/** (committed critical e2e suite)", () => {
+    const p = join(repoRoot, "e2e", "checkout.spec.ts");
+    mkdirSync(join(repoRoot, "e2e"), { recursive: true });
+    writeFileSync(p, "x");
+    expect(isTcbProtected(p, ctx())?.rule.category).toBe("e2e-suite");
+  });
+
+  it("Decision 39: the e2e deny is context-free (fires even without a wired repo dir)", () => {
+    // Like .github/workflows/** and docs/factory/**, component-anchored and
+    // unconditional — an implementer touching e2e/** is denied even before a
+    // repoRoot is wired into ctx.
+    const p = join(repoRoot, "e2e", "checkout.spec.ts");
+    mkdirSync(join(repoRoot, "e2e"), { recursive: true });
+    writeFileSync(p, "x");
+    expect(isTcbProtected(p)?.rule.category).toBe("e2e-suite");
+  });
+
+  it("Decision 39: a non-e2e path (e.g. src/e2e-helper.ts) is NOT protected", () => {
+    // Scoped to the e2e/** directory, not any path containing the substring "e2e".
+    const p = join(repoRoot, "src", "e2e-helper.ts");
+    mkdirSync(join(repoRoot, "src"), { recursive: true });
+    writeFileSync(p, "x");
+    expect(isTcbProtected(p, ctx())).toBeNull();
+  });
+
   it("Δ Y: matches the holdout store under <dataDir>/runs/**", () => {
     const p = join(dataDir, "runs", "run-1", "holdouts", "answers.json");
     writeFileSync(p, "x");
@@ -180,6 +205,7 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     expect(categories).toContain("data-specs");
     expect(categories).toContain("data-config");
     expect(categories).toContain("docs-factory");
+    expect(categories).toContain("e2e-suite");
   });
 
   it("canonicalizePath collapses ./ and .. for a non-existent leaf (create case)", () => {

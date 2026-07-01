@@ -89,14 +89,14 @@ var require_polyfills = __commonJS({
       fs.fstatSync = statFixSync(fs.fstatSync);
       fs.lstatSync = statFixSync(fs.lstatSync);
       if (fs.chmod && !fs.lchmod) {
-        fs.lchmod = function(path4, mode, cb) {
+        fs.lchmod = function(path5, mode, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchmodSync = function() {
         };
       }
       if (fs.chown && !fs.lchown) {
-        fs.lchown = function(path4, uid, gid, cb) {
+        fs.lchown = function(path5, uid, gid, cb) {
           if (cb) process.nextTick(cb);
         };
         fs.lchownSync = function() {
@@ -163,9 +163,9 @@ var require_polyfills = __commonJS({
         };
       })(fs.readSync);
       function patchLchmod(fs2) {
-        fs2.lchmod = function(path4, mode, callback) {
+        fs2.lchmod = function(path5, mode, callback) {
           fs2.open(
-            path4,
+            path5,
             constants.O_WRONLY | constants.O_SYMLINK,
             mode,
             function(err, fd) {
@@ -181,8 +181,8 @@ var require_polyfills = __commonJS({
             }
           );
         };
-        fs2.lchmodSync = function(path4, mode) {
-          var fd = fs2.openSync(path4, constants.O_WRONLY | constants.O_SYMLINK, mode);
+        fs2.lchmodSync = function(path5, mode) {
+          var fd = fs2.openSync(path5, constants.O_WRONLY | constants.O_SYMLINK, mode);
           var threw = true;
           var ret;
           try {
@@ -203,8 +203,8 @@ var require_polyfills = __commonJS({
       }
       function patchLutimes(fs2) {
         if (constants.hasOwnProperty("O_SYMLINK") && fs2.futimes) {
-          fs2.lutimes = function(path4, at, mt, cb) {
-            fs2.open(path4, constants.O_SYMLINK, function(er, fd) {
+          fs2.lutimes = function(path5, at, mt, cb) {
+            fs2.open(path5, constants.O_SYMLINK, function(er, fd) {
               if (er) {
                 if (cb) cb(er);
                 return;
@@ -216,8 +216,8 @@ var require_polyfills = __commonJS({
               });
             });
           };
-          fs2.lutimesSync = function(path4, at, mt) {
-            var fd = fs2.openSync(path4, constants.O_SYMLINK);
+          fs2.lutimesSync = function(path5, at, mt) {
+            var fd = fs2.openSync(path5, constants.O_SYMLINK);
             var ret;
             var threw = true;
             try {
@@ -335,11 +335,11 @@ var require_legacy_streams = __commonJS({
         ReadStream,
         WriteStream
       };
-      function ReadStream(path4, options) {
-        if (!(this instanceof ReadStream)) return new ReadStream(path4, options);
+      function ReadStream(path5, options) {
+        if (!(this instanceof ReadStream)) return new ReadStream(path5, options);
         Stream.call(this);
         var self = this;
-        this.path = path4;
+        this.path = path5;
         this.fd = null;
         this.readable = true;
         this.paused = false;
@@ -384,10 +384,10 @@ var require_legacy_streams = __commonJS({
           self._read();
         });
       }
-      function WriteStream(path4, options) {
-        if (!(this instanceof WriteStream)) return new WriteStream(path4, options);
+      function WriteStream(path5, options) {
+        if (!(this instanceof WriteStream)) return new WriteStream(path5, options);
         Stream.call(this);
-        this.path = path4;
+        this.path = path5;
         this.fd = null;
         this.writable = true;
         this.flags = "w";
@@ -530,14 +530,14 @@ var require_graceful_fs = __commonJS({
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
       fs2.readFile = readFile14;
-      function readFile14(path4, options, cb) {
+      function readFile14(path5, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$readFile(path4, options, cb);
-        function go$readFile(path5, options2, cb2, startTime) {
-          return fs$readFile(path5, options2, function(err) {
+        return go$readFile(path5, options, cb);
+        function go$readFile(path6, options2, cb2, startTime) {
+          return fs$readFile(path6, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$readFile, [path5, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$readFile, [path6, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -547,14 +547,14 @@ var require_graceful_fs = __commonJS({
       }
       var fs$writeFile = fs2.writeFile;
       fs2.writeFile = writeFile2;
-      function writeFile2(path4, data, options, cb) {
+      function writeFile2(path5, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$writeFile(path4, data, options, cb);
-        function go$writeFile(path5, data2, options2, cb2, startTime) {
-          return fs$writeFile(path5, data2, options2, function(err) {
+        return go$writeFile(path5, data, options, cb);
+        function go$writeFile(path6, data2, options2, cb2, startTime) {
+          return fs$writeFile(path6, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$writeFile, [path5, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$writeFile, [path6, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -565,14 +565,14 @@ var require_graceful_fs = __commonJS({
       var fs$appendFile = fs2.appendFile;
       if (fs$appendFile)
         fs2.appendFile = appendFile2;
-      function appendFile2(path4, data, options, cb) {
+      function appendFile2(path5, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        return go$appendFile(path4, data, options, cb);
-        function go$appendFile(path5, data2, options2, cb2, startTime) {
-          return fs$appendFile(path5, data2, options2, function(err) {
+        return go$appendFile(path5, data, options, cb);
+        function go$appendFile(path6, data2, options2, cb2, startTime) {
+          return fs$appendFile(path6, data2, options2, function(err) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$appendFile, [path5, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$appendFile, [path6, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -582,8 +582,8 @@ var require_graceful_fs = __commonJS({
       }
       var fs$copyFile = fs2.copyFile;
       if (fs$copyFile)
-        fs2.copyFile = copyFile;
-      function copyFile(src, dest, flags, cb) {
+        fs2.copyFile = copyFile2;
+      function copyFile2(src, dest, flags, cb) {
         if (typeof flags === "function") {
           cb = flags;
           flags = 0;
@@ -603,31 +603,31 @@ var require_graceful_fs = __commonJS({
       var fs$readdir = fs2.readdir;
       fs2.readdir = readdir3;
       var noReaddirOptionVersions = /^v[0-5]\./;
-      function readdir3(path4, options, cb) {
+      function readdir3(path5, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
-        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path5, options2, cb2, startTime) {
-          return fs$readdir(path5, fs$readdirCallback(
-            path5,
+        var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path6, options2, cb2, startTime) {
+          return fs$readdir(path6, fs$readdirCallback(
+            path6,
             options2,
             cb2,
             startTime
           ));
-        } : function go$readdir2(path5, options2, cb2, startTime) {
-          return fs$readdir(path5, options2, fs$readdirCallback(
-            path5,
+        } : function go$readdir2(path6, options2, cb2, startTime) {
+          return fs$readdir(path6, options2, fs$readdirCallback(
+            path6,
             options2,
             cb2,
             startTime
           ));
         };
-        return go$readdir(path4, options, cb);
-        function fs$readdirCallback(path5, options2, cb2, startTime) {
+        return go$readdir(path5, options, cb);
+        function fs$readdirCallback(path6, options2, cb2, startTime) {
           return function(err, files) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
               enqueue([
                 go$readdir,
-                [path5, options2, cb2],
+                [path6, options2, cb2],
                 err,
                 startTime || Date.now(),
                 Date.now()
@@ -698,7 +698,7 @@ var require_graceful_fs = __commonJS({
         enumerable: true,
         configurable: true
       });
-      function ReadStream(path4, options) {
+      function ReadStream(path5, options) {
         if (this instanceof ReadStream)
           return fs$ReadStream.apply(this, arguments), this;
         else
@@ -718,7 +718,7 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function WriteStream(path4, options) {
+      function WriteStream(path5, options) {
         if (this instanceof WriteStream)
           return fs$WriteStream.apply(this, arguments), this;
         else
@@ -736,22 +736,22 @@ var require_graceful_fs = __commonJS({
           }
         });
       }
-      function createReadStream(path4, options) {
-        return new fs2.ReadStream(path4, options);
+      function createReadStream(path5, options) {
+        return new fs2.ReadStream(path5, options);
       }
-      function createWriteStream(path4, options) {
-        return new fs2.WriteStream(path4, options);
+      function createWriteStream(path5, options) {
+        return new fs2.WriteStream(path5, options);
       }
       var fs$open = fs2.open;
       fs2.open = open2;
-      function open2(path4, flags, mode, cb) {
+      function open2(path5, flags, mode, cb) {
         if (typeof mode === "function")
           cb = mode, mode = null;
-        return go$open(path4, flags, mode, cb);
-        function go$open(path5, flags2, mode2, cb2, startTime) {
-          return fs$open(path5, flags2, mode2, function(err, fd) {
+        return go$open(path5, flags, mode, cb);
+        function go$open(path6, flags2, mode2, cb2, startTime) {
+          return fs$open(path6, flags2, mode2, function(err, fd) {
             if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-              enqueue([go$open, [path5, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
+              enqueue([go$open, [path6, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
             else {
               if (typeof cb2 === "function")
                 cb2.apply(this, arguments);
@@ -1280,7 +1280,7 @@ var require_mtime_precision = __commonJS({
 var require_lockfile = __commonJS({
   "node_modules/proper-lockfile/lib/lockfile.js"(exports, module) {
     "use strict";
-    var path4 = __require("path");
+    var path5 = __require("path");
     var fs = require_graceful_fs();
     var retry = require_retry2();
     var onExit = require_signal_exit();
@@ -1291,7 +1291,7 @@ var require_lockfile = __commonJS({
     }
     function resolveCanonicalPath(file, options, callback) {
       if (!options.realpath) {
-        return callback(null, path4.resolve(file));
+        return callback(null, path5.resolve(file));
       }
       options.fs.realpath(file, callback);
     }
@@ -1724,10 +1724,10 @@ async function bestEffortUnlink(p) {
 var JsonParseError = class extends Error {
   path;
   cause;
-  constructor(message, path4, cause) {
+  constructor(message, path5, cause) {
     super(message);
     this.name = "JsonParseError";
-    this.path = path4;
+    this.path = path5;
     this.cause = cause;
   }
 };
@@ -2225,8 +2225,8 @@ function getErrorMap() {
 
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path4, errorMaps, issueData } = params;
-  const fullPath = [...path4, ...issueData.path || []];
+  const { data, path: path5, errorMaps, issueData } = params;
+  const fullPath = [...path5, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -2342,11 +2342,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path4, key) {
+  constructor(parent, value, path5, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path4;
+    this._path = path5;
     this._key = key;
   }
   get path() {
@@ -5921,6 +5921,36 @@ var GitSchema = external_exports.object({
    */
   branchPrefix: external_exports.string().min(1).default("factory")
 }).default({});
+var E2eConfigSchema = external_exports.object({
+  /**
+   * Repo-level "e2e IS configured" signal, distinct from the run's `--e2e` flag
+   * (that's "run this run WITH e2e"). Informational/future-gating only today —
+   * `startCommand`+`baseURL` presence is the real readiness check.
+   */
+  enabled: external_exports.boolean().optional(),
+  /**
+   * Command that boots the target app, for both Playwright's `webServer` (test
+   * runs) and the e2e-author's live-exploration boot (`reuseExistingServer`).
+   * Required before a run may pass `--e2e`.
+   */
+  startCommand: external_exports.string().optional(),
+  /** Base URL the app serves once `startCommand` is up. Required before `--e2e`. */
+  baseURL: external_exports.string().optional(),
+  /**
+   * Repo-relative directory the COMMITTED critical suite lives in. Persistence
+   * in this directory IS the criticality signal (Decision 39) — no `@critical`
+   * tag exists.
+   */
+  testDir: external_exports.string().min(1).default("e2e"),
+  /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
+  readyTimeoutMs: external_exports.number().int().positive().default(3e4),
+  /**
+   * Per-task cap on e2e-triggered reopens (Decision 7). A critical spec still
+   * red after this many reopens of its mapped task fails the run outright
+   * instead of looping forever.
+   */
+  reopenCap: external_exports.number().int().nonnegative().default(2)
+}).default({});
 var ConfigSchema = external_exports.object({
   quality: QualitySchema,
   quota: QuotaSchema,
@@ -5929,6 +5959,7 @@ var ConfigSchema = external_exports.object({
   testWriter: TestWriterSchema,
   codex: CodexSchema,
   git: GitSchema,
+  e2e: E2eConfigSchema,
   /**
    * Cumulative genuine capability-budget task failures before the run aborts.
    * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
@@ -6064,9 +6095,9 @@ function parseSetToken(token) {
   if (eq <= 0) {
     throw new Error(`configure: --set expects 'key.path=value', got '${token}'`);
   }
-  const path4 = splitPath(token.slice(0, eq));
+  const path5 = splitPath(token.slice(0, eq));
   const rawValue = token.slice(eq + 1);
-  return { path: path4, value: coerceValue(rawValue) };
+  return { path: path5, value: coerceValue(rawValue) };
 }
 function coerceValue(raw) {
   try {
@@ -6076,32 +6107,32 @@ function coerceValue(raw) {
   }
 }
 function splitPath(dotted) {
-  const path4 = dotted.split(".");
-  if (path4.length === 0 || path4.some((s) => s.length === 0)) {
+  const path5 = dotted.split(".");
+  if (path5.length === 0 || path5.some((s) => s.length === 0)) {
     throw new Error(`configure: invalid key path '${dotted}'`);
   }
-  return path4;
+  return path5;
 }
-function setAtPath(obj, path4, value) {
+function setAtPath(obj, path5, value) {
   const next = structuredClone(obj);
   let cursor = next;
-  for (let i = 0; i < path4.length - 1; i++) {
-    const key = path4[i];
+  for (let i = 0; i < path5.length - 1; i++) {
+    const key = path5[i];
     const existing = cursor[key];
     if (existing === void 0 || existing === null || typeof existing !== "object" || Array.isArray(existing)) {
       cursor[key] = {};
     }
     cursor = cursor[key];
   }
-  cursor[path4[path4.length - 1]] = value;
+  cursor[path5[path5.length - 1]] = value;
   return next;
 }
-function unsetAtPath(obj, path4) {
+function unsetAtPath(obj, path5) {
   const next = structuredClone(obj);
   const parents = [];
   let cursor = next;
-  for (let i = 0; i < path4.length - 1; i++) {
-    const key = path4[i];
+  for (let i = 0; i < path5.length - 1; i++) {
+    const key = path5[i];
     const child = cursor[key];
     if (child === void 0 || child === null || typeof child !== "object" || Array.isArray(child)) {
       return next;
@@ -6109,7 +6140,7 @@ function unsetAtPath(obj, path4) {
     parents.push({ container: cursor, key });
     cursor = child;
   }
-  delete cursor[path4[path4.length - 1]];
+  delete cursor[path5[path5.length - 1]];
   for (let i = parents.length - 1; i >= 0; i--) {
     const { container, key } = parents[i];
     const child = container[key];
@@ -6121,14 +6152,14 @@ function unsetAtPath(obj, path4) {
   }
   return next;
 }
-function getAtPath(config, path4) {
+function getAtPath(config, path5) {
   let cursor = config;
-  for (const key of path4) {
+  for (const key of path5) {
     if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) {
-      throw new Error(`configure: '${path4.join(".")}' has no value (not an object at '${key}')`);
+      throw new Error(`configure: '${path5.join(".")}' has no value (not an object at '${key}')`);
     }
     if (!(key in cursor)) {
-      throw new Error(`configure: unknown config key '${path4.join(".")}'`);
+      throw new Error(`configure: unknown config key '${path5.join(".")}'`);
     }
     cursor = cursor[key];
   }
@@ -6230,6 +6261,16 @@ var TaskStateSchema = external_exports.object({
    * otherwise. Transient — not a failure field (allowed on any status).
    */
   test_revision_feedback: external_exports.string().optional(),
+  /**
+   * Feedback carried from a failing e2e journey spec into this task's NEXT
+   * implementation pass (the e2e reopen loop, Decision 39). Set by the e2e coroutine
+   * when it maps a failing spec to this task via the author manifest and resets the
+   * task to `pending`; injected into the regenerated producer's prior-failure context
+   * (mirrors `test_revision_feedback`, but originates from a RUN-LEVEL phase, not a
+   * per-task producer outcome). Cleared once the task ships again. Absent otherwise.
+   * Transient — not a failure field (allowed on any status).
+   */
+  e2e_feedback: external_exports.string().optional(),
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
@@ -6354,6 +6395,32 @@ var DocsPhaseSchema = external_exports.object({
   attempts: external_exports.number().int().nonnegative().optional(),
   ended_at: external_exports.string()
 });
+var E2eSpecKindEnum = external_exports.enum(["critical", "throwaway"]);
+var E2eManifestEntrySchema = external_exports.object({
+  /** Task id(s) this spec exercises (a critical journey spec may span >1 task). */
+  task_ids: external_exports.array(external_exports.string().min(1)).min(1),
+  /** Spec file path — repo-relative for `critical`, run-ephemeral-dir-relative for `throwaway`. */
+  spec_path: external_exports.string().min(1),
+  kind: E2eSpecKindEnum
+});
+var E2ePhaseSchema = external_exports.object({
+  status: external_exports.enum(["done", "failed"]).optional(),
+  reason: external_exports.string().optional(),
+  /**
+   * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
+   * didn't block completion (Decision 9: only critical red gates). Distinct from
+   * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
+   * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
+   */
+  advisory: external_exports.string().optional(),
+  /** Cumulative attempt count across ALL passes (1-indexed). */
+  attempts: external_exports.number().int().nonnegative().optional(),
+  /** The author's spec→task manifest, fixed once authored and reused across passes. */
+  manifest: external_exports.array(E2eManifestEntrySchema).default([]),
+  /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
+  reopen_counts: external_exports.record(external_exports.string(), external_exports.number().int().nonnegative()).default({}),
+  ended_at: external_exports.string().optional()
+});
 var ExecutionModeEnum = external_exports.enum(["sequential", "balanced"]);
 var RunModeEnum = external_exports.enum(["session", "workflow"]);
 var ShipModeEnum = external_exports.enum(["no-merge", "live"]);
@@ -6406,6 +6473,14 @@ var RunStateSchema = external_exports.object({
   /** Documentation phase marker; absent until the docs phase runs (engine docs phase). */
   docs: DocsPhaseSchema.optional(),
   /**
+   * Whether this run opted into the e2e phase (the `--e2e` flag). Set once at
+   * `run create`; immutable for the run's lifetime — mirrors `ignore_quota`.
+   * Default false: a run without the flag never gates on `wantsE2e()`.
+   */
+  e2e: external_exports.boolean().default(false),
+  /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
+  e2e_phase: E2ePhaseSchema.optional(),
+  /**
    * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
    * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
    * real pause time from wall-time, preventing a false trip on a long-paused run. Default
@@ -6441,6 +6516,24 @@ function refineRunCrossFields(run9, ctx) {
         code: external_exports.ZodIssueCode.custom,
         path: ["docs", "reason"],
         message: `run '${run9.run_id}' docs phase is '${run9.docs.status}' but carries a reason (reason is set IFF failed)`
+      });
+    }
+  }
+  if (run9.e2e_phase !== void 0 && run9.e2e_phase.status !== void 0) {
+    const isFailed = run9.e2e_phase.status === "failed";
+    const hasReason = run9.e2e_phase.reason != null && run9.e2e_phase.reason.length > 0;
+    if (isFailed && !hasReason) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["e2e_phase", "reason"],
+        message: `run '${run9.run_id}' e2e phase is 'failed' but has no reason`
+      });
+    }
+    if (!isFailed && hasReason) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["e2e_phase", "reason"],
+        message: `run '${run9.run_id}' e2e phase is '${run9.e2e_phase.status}' but carries a reason (reason is set IFF failed)`
       });
     }
   }
@@ -6763,6 +6856,7 @@ var StateManager = class _StateManager {
       ...args.owner_session !== void 0 ? { owner_session: args.owner_session } : {},
       ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
+      ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -6787,9 +6881,9 @@ var StateManager = class _StateManager {
    * schema/JSON violation (never a silent partial).
    */
   async read(runId) {
-    const path4 = this.statePath(runId);
-    const raw = await readFile(path4, "utf8");
-    return _StateManager.guardedParse(parseJson(raw, path4), path4);
+    const path5 = this.statePath(runId);
+    const raw = await readFile(path5, "utf8");
+    return _StateManager.guardedParse(parseJson(raw, path5), path5);
   }
   /**
    * Read the run currently pointed at by `runs/current`, or null if there is no
@@ -7516,8 +7610,8 @@ async function run(argv) {
   }
   let raw = readRawConfig();
   for (const token of sets) {
-    const { path: path4, value } = parseSetToken(token);
-    raw = setAtPath(raw, path4, value);
+    const { path: path5, value } = parseSetToken(token);
+    raw = setAtPath(raw, path5, value);
   }
   for (const token of unsets) {
     raw = unsetAtPath(raw, splitPath(token));
@@ -7636,9 +7730,9 @@ ${result.stderr.trim()}`
 // src/shared/jsonl.ts
 import { appendFile, mkdir as mkdir5, readFile as readFile2 } from "node:fs/promises";
 import { dirname as dirname4 } from "node:path";
-async function appendJsonl(path4, record) {
-  await mkdir5(dirname4(path4), { recursive: true });
-  await appendFile(path4, JSON.stringify(record) + "\n", "utf8");
+async function appendJsonl(path5, record) {
+  await mkdir5(dirname4(path5), { recursive: true });
+  await appendFile(path5, JSON.stringify(record) + "\n", "utf8");
 }
 
 // src/shared/paths.ts
@@ -7740,9 +7834,9 @@ var DefaultGitClient = class {
   async worktreeAdd(args, opts) {
     await this.execOrThrow(["worktree", "add", ...args], opts);
   }
-  async worktreeExists(path4, opts) {
+  async worktreeExists(path5, opts) {
     const r = await this.execOrThrow(["worktree", "list", "--porcelain"], opts);
-    return r.stdout.split("\n").some((line) => line === `worktree ${path4}`);
+    return r.stdout.split("\n").some((line) => line === `worktree ${path5}`);
   }
   async worktreeRemove(args, opts) {
     const r = await this.exec(["worktree", "remove", ...args], opts);
@@ -7770,20 +7864,20 @@ var DefaultGitClient = class {
 function parseRemoteUrl(url) {
   const trimmed = url.trim();
   if (trimmed.length === 0) return null;
-  let path4;
+  let path5;
   const scp = /^[^/@]+@[^/:]+:(.+)$/.exec(trimmed);
   if (scp && !trimmed.includes("://")) {
-    path4 = scp[1];
+    path5 = scp[1];
   } else {
     const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(.+)$/.exec(trimmed);
     if (withScheme) {
       const afterScheme = withScheme[1];
       const firstSlash = afterScheme.indexOf("/");
-      if (firstSlash >= 0) path4 = afterScheme.slice(firstSlash + 1);
+      if (firstSlash >= 0) path5 = afterScheme.slice(firstSlash + 1);
     }
   }
-  if (path4 === void 0) return null;
-  let p = path4.replace(/\/+$/, "");
+  if (path5 === void 0) return null;
+  let p = path5.replace(/\/+$/, "");
   p = p.replace(/\.git$/i, "");
   const segments = p.split("/").filter((s) => s.length > 0);
   if (segments.length < 2) return null;
@@ -7951,11 +8045,11 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async deleteRemoteBranch(owner, repo, branch, opts) {
-    const path4 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
-    const r = await this.runner(["api", "--method", "DELETE", path4], this.execOpts(opts));
+    const path5 = `repos/${owner}/${repo}/git/refs/heads/${branch}`;
+    const r = await this.runner(["api", "--method", "DELETE", path5], this.execOpts(opts));
     if (r.code !== 0 && !/Reference does not exist|404|Not Found|422/i.test(r.stderr)) {
       throw new Error(
-        `gh api DELETE ${path4} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
+        `gh api DELETE ${path5} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`
       );
     }
   }
@@ -8000,8 +8094,8 @@ var DefaultGhClient = class {
     await runOrThrow("gh", this.runner, argv, this.execOpts(opts));
   }
   async repoProtection(owner, repo, branch, opts) {
-    const path4 = `repos/${owner}/${repo}/branches/${branch}/protection`;
-    const r = await this.runner(["api", path4], this.execOpts(opts));
+    const path5 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const r = await this.runner(["api", path5], this.execOpts(opts));
     if (r.code !== 0) {
       if (/404|Not Found|Branch not protected/i.test(r.stderr)) {
         return {
@@ -8011,14 +8105,14 @@ var DefaultGhClient = class {
           hasMergeQueue: false
         };
       }
-      throw new Error(`gh api ${path4} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+      throw new Error(`gh api ${path5} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
     if (r.truncated) {
       throw new Error(
-        `gh api ${path4}: output truncated \u2014 refusing to parse clipped protection JSON`
+        `gh api ${path5}: output truncated \u2014 refusing to parse clipped protection JSON`
       );
     }
-    const raw = parseJson(r.stdout, path4);
+    const raw = parseJson(r.stdout, path5);
     const rsc = raw.required_status_checks ?? null;
     let mq = false;
     try {
@@ -8035,7 +8129,7 @@ var DefaultGhClient = class {
     };
   }
   async putProtection(owner, repo, branch, body, opts) {
-    const path4 = `repos/${owner}/${repo}/branches/${branch}/protection`;
+    const path5 = `repos/${owner}/${repo}/branches/${branch}/protection`;
     const payload = JSON.stringify({
       required_status_checks: {
         strict: body.strict,
@@ -8046,22 +8140,22 @@ var DefaultGhClient = class {
       restrictions: null
     });
     log6.info(`provisioning branch protection for ${owner}/${repo}@${branch}`);
-    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path4, "--input", "-"], {
+    await runOrThrow("gh", this.runner, ["api", "--method", "PUT", path5, "--input", "-"], {
       ...this.execOpts(opts),
       input: payload
     });
   }
   async mergeQueueProbe(owner, repo, branch, opts) {
-    const path4 = `repos/${owner}/${repo}/rules/branches/${branch}`;
-    const r = await this.runner(["api", path4], this.execOpts(opts));
+    const path5 = `repos/${owner}/${repo}/rules/branches/${branch}`;
+    const r = await this.runner(["api", path5], this.execOpts(opts));
     if (r.code !== 0) {
       if (/404|Not Found/i.test(r.stderr)) return false;
-      throw new Error(`gh api ${path4} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
+      throw new Error(`gh api ${path5} failed (code=${r.code ?? "null"}): ${r.stderr.trim()}`);
     }
     if (r.truncated) {
-      throw new Error(`gh api ${path4}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
+      throw new Error(`gh api ${path5}: output truncated \u2014 refusing to parse clipped ruleset JSON`);
     }
-    const rules = parseJson(r.stdout, path4);
+    const rules = parseJson(r.stdout, path5);
     return Array.isArray(rules) && rules.some((rule) => rule.type === "merge_queue");
   }
 };
@@ -8682,26 +8776,26 @@ function mergeTargetSettings(existing, dataDirRules) {
 }
 async function ensureTargetSettings(opts) {
   const dir = join7(opts.targetRoot, ".claude");
-  const path4 = join7(dir, "settings.json");
-  const created = !existsSync6(path4);
+  const path5 = join7(dir, "settings.json");
+  const created = !existsSync6(path5);
   let existing = {};
   if (!created) {
-    const raw = await readFile3(path4, "utf8");
+    const raw = await readFile3(path5, "utf8");
     const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
     if (isObject(parsed)) {
       existing = parsed;
     } else {
       log14.warn(
-        `${path4} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
+        `${path5} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
   }
   const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
   if (created || changed) {
     await mkdir6(dir, { recursive: true });
-    await atomicWriteFile(path4, stringifyJson(settings));
+    await atomicWriteFile(path5, stringifyJson(settings));
   }
-  return { settings, changed, created, path: path4 };
+  return { settings, changed, created, path: path5 };
 }
 
 // src/cli/subcommands/scaffold.ts
@@ -8769,7 +8863,12 @@ var TEMPLATE_MANIFEST = [
   { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
   { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
   { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
-  { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true }
+  { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true },
+  // e2e (Decision 39) — seed only; @playwright/test must already be a devDependency
+  // (scaffold never installs packages) and the config's webServer.command is a TODO
+  // the project fills in. testDir here MUST match `e2e.testDir` (default "e2e").
+  { rel: "playwright.config.ts", policy: "seed", nodeOnly: true },
+  { rel: "e2e/example.spec.ts", policy: "seed", nodeOnly: true }
 ];
 async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
   const segs = entry.rel.split("/");
@@ -8802,21 +8901,21 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   lists.updated.push(entry.rel);
 }
 async function ensureGitignore(root, lists) {
-  const path4 = join8(root, ".gitignore");
-  const rel = relative(root, path4);
-  if (!existsSync7(path4)) {
-    await writeFile(path4, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
+  const path5 = join8(root, ".gitignore");
+  const rel = relative(root, path5);
+  if (!existsSync7(path5)) {
+    await writeFile(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
     lists.created.push(rel);
     return;
   }
-  const current = await readFile4(path4, "utf8");
+  const current = await readFile4(path5, "utf8");
   const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
   if (missing.length === 0) {
     lists.present.push(rel);
     return;
   }
   const sep2 = current.endsWith("\n") ? "" : "\n";
-  await writeFile(path4, current + sep2 + missing.join("\n") + "\n", "utf8");
+  await writeFile(path5, current + sep2 + missing.join("\n") + "\n", "utf8");
   lists.present.push(rel);
 }
 async function runScaffold(opts) {
@@ -10023,7 +10122,9 @@ function buildPartialReport(run9, request, opts = {}) {
     },
     shipped,
     failures,
-    incomplete
+    incomplete,
+    ...run9.e2e_phase?.status === "failed" ? { e2e_failure: run9.e2e_phase.reason } : {},
+    ...run9.e2e_phase?.status === "done" && run9.e2e_phase.advisory !== void 0 ? { e2e_advisory: run9.e2e_phase.advisory } : {}
   };
 }
 function failureCommentMarker(runId) {
@@ -10034,6 +10135,13 @@ function renderFailureComment(report) {
     failureCommentMarker(report.run_id),
     `Factory run \`${report.run_id}\` failed \u2014 ${report.failures.length} task(s) failed. PRD left open for rescue/resume.`
   ];
+  if (report.e2e_failure !== void 0) {
+    lines.push(
+      "",
+      "### End-to-end verification failed",
+      `Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`
+    );
+  }
   for (const failure of report.failures) {
     lines.push("", `### \`${failure.task_id}\` \u2014 ${failure.title}`);
     lines.push(`- **Class:** \`${failure.failure_class}\``);
@@ -10072,6 +10180,16 @@ function renderPartialReportMarkdown(report) {
     }
   }
   out.push("");
+  if (report.e2e_failure !== void 0) {
+    out.push("## End-to-end verification failed");
+    out.push(`Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`);
+    out.push("");
+  }
+  if (report.e2e_advisory !== void 0) {
+    out.push("## End-to-end verification \u2014 advisory");
+    out.push(report.e2e_advisory);
+    out.push("");
+  }
   if (report.failures.length > 0) {
     out.push(`## Failed (${report.failures.length})`);
     for (const f of report.failures) {
@@ -11157,14 +11275,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log31 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log31.code !== 0) {
+    const log32 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log32.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log31.code ?? "null"}): ${log31.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log32.code ?? "null"}): ${log32.stderr.trim()}`
       );
     }
-    assertNotTruncated(log31, "git log (tdd classification)");
-    const shas = splitLines(log31.stdout).reverse();
+    assertNotTruncated(log32, "git log (tdd classification)");
+    const shas = splitLines(log32.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -11642,14 +11760,14 @@ var FsHoldoutStore = class {
     return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
-    const path4 = this.path(runId, record.task_id);
-    await mkdir8(dirname6(path4), { recursive: true });
-    await atomicWriteFile(path4, stringifyJson(record));
+    const path5 = this.path(runId, record.task_id);
+    await mkdir8(dirname6(path5), { recursive: true });
+    await atomicWriteFile(path5, stringifyJson(record));
   }
   async get(runId, taskId) {
-    const path4 = this.path(runId, taskId);
-    const raw = await readFile8(path4, "utf8");
-    return parseHoldoutRecord(parseJson(raw, path4), path4);
+    const path5 = this.path(runId, taskId);
+    const raw = await readFile8(path5, "utf8");
+    return parseHoldoutRecord(parseJson(raw, path5), path5);
   }
   async has(runId, taskId) {
     try {
@@ -11679,14 +11797,14 @@ var FsHoldoutVerdictStore = class {
     return join12(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
-    const path4 = this.path(runId, taskId);
-    await mkdir9(dirname7(path4), { recursive: true });
-    await atomicWriteFile(path4, stringifyJson([...verdicts]));
+    const path5 = this.path(runId, taskId);
+    await mkdir9(dirname7(path5), { recursive: true });
+    await atomicWriteFile(path5, stringifyJson([...verdicts]));
   }
   async get(runId, taskId) {
-    const path4 = this.path(runId, taskId);
-    const raw = await readFile9(path4, "utf8");
-    return HoldoutVerdictsSchema.parse(parseJson(raw, path4));
+    const path5 = this.path(runId, taskId);
+    const raw = await readFile9(path5, "utf8");
+    return HoldoutVerdictsSchema.parse(parseJson(raw, path5));
   }
   async has(runId, taskId) {
     try {
@@ -11706,6 +11824,299 @@ async function deriveHoldoutEvidence(holdout, verdictStore, runId, taskId, passR
   return holdoutEvidence(checkHoldout(record, verdicts, passRate));
 }
 
+// src/verifier/e2e/runner.ts
+import path4 from "node:path";
+import { access as access3 } from "node:fs/promises";
+async function pathExists2(p) {
+  try {
+    await access3(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function resolveLocalPlaywrightBin(cwd, exists = pathExists2) {
+  let dir = path4.resolve(cwd);
+  for (; ; ) {
+    const candidate = path4.join(dir, "node_modules", ".bin", "playwright");
+    if (await exists(candidate)) return candidate;
+    const parent = path4.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+function missingBinResult2(cwd) {
+  return {
+    code: 127,
+    stdout: "",
+    stderr: `playwright: no local binary found under node_modules/.bin (walked up from ${cwd}); refusing the npx fallback \u2014 install @playwright/test so the pinned local binary resolves.`,
+    truncated: false
+  };
+}
+var DefaultPlaywrightTool = class {
+  constructor(resolve2 = resolveLocalPlaywrightBin) {
+    this.resolve = resolve2;
+  }
+  async run(opts) {
+    const bin = await this.resolve(opts.cwd);
+    if (bin === null) return missingBinResult2(opts.cwd);
+    const args = ["test"];
+    if (opts.testDir) args.push(opts.testDir);
+    if (opts.grep) args.push("--grep", opts.grep);
+    args.push("--reporter=json");
+    const result = await exec(bin, args, { cwd: opts.cwd, env: opts.env });
+    return {
+      code: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      truncated: result.truncated
+    };
+  }
+};
+function collectSpecs(suites) {
+  const out = [];
+  for (const suite of suites ?? []) {
+    out.push(...suite.specs ?? []);
+    out.push(...collectSpecs(suite.suites));
+  }
+  return out;
+}
+function specStatus(spec) {
+  const statuses = spec.tests.map((t) => t.status);
+  if (statuses.includes("unexpected")) return "failed";
+  if (statuses.includes("flaky")) return "flaky";
+  if (statuses.length > 0 && statuses.every((s) => s === "skipped")) return "skipped";
+  return "passed";
+}
+function parseE2eReport(json) {
+  let report;
+  try {
+    report = JSON.parse(json);
+  } catch (err) {
+    throw new Error(
+      `e2e runner: could not parse Playwright JSON reporter output: ${err.message}`
+    );
+  }
+  const specs = collectSpecs(report.suites).map((s) => ({
+    file: s.file,
+    title: s.title,
+    status: specStatus(s)
+  }));
+  const counts = {
+    passed: specs.filter((s) => s.status === "passed").length,
+    failed: specs.filter((s) => s.status === "failed").length,
+    flaky: specs.filter((s) => s.status === "flaky").length,
+    skipped: specs.filter((s) => s.status === "skipped").length
+  };
+  return { ok: counts.failed === 0, specs, counts };
+}
+async function runE2e(opts, tool = new DefaultPlaywrightTool()) {
+  const result = await tool.run(opts);
+  if (result.truncated) {
+    throw new Error(
+      `e2e runner: Playwright JSON reporter output for ${opts.cwd} was TRUNCATED (hit maxBuffer) \u2014 refusing to parse a clipped payload`
+    );
+  }
+  if (result.stdout.trim().length === 0) {
+    throw new Error(
+      `e2e runner: playwright produced no output (code=${result.code ?? "null"}): ${result.stderr}`
+    );
+  }
+  return parseE2eReport(result.stdout);
+}
+
+// src/rescue/scan.ts
+function dispositionOf(status, failureClass) {
+  if (status === "done") return "shipped";
+  if (status === "pending") return "runnable";
+  if (status === "failed") {
+    return failureClass === "blocked-environmental" ? "recoverable" : "dead-end";
+  }
+  return "stuck";
+}
+function depsSatisfied(run9, depends) {
+  return depends.every((d) => run9.tasks[d]?.status === "done");
+}
+function hasUnsatisfiableDep(run9, depends) {
+  return depends.some((d) => {
+    const dep = run9.tasks[d];
+    return dep === void 0 || dep.status === "failed";
+  });
+}
+function scanRun(run9) {
+  const all = Object.values(run9.tasks);
+  const tasks = all.map((t) => ({
+    task_id: t.task_id,
+    status: t.status,
+    disposition: dispositionOf(t.status, t.failure_class),
+    ...t.failure_class !== void 0 ? { failure_class: t.failure_class } : {},
+    ...t.failure_reason !== void 0 ? { failure_reason: t.failure_reason } : {},
+    ...t.branch !== void 0 ? { branch: t.branch } : {},
+    ...t.pr_number !== void 0 ? { pr_number: t.pr_number } : {}
+  }));
+  const by = (d) => tasks.filter((t) => t.disposition === d);
+  const stuck = by("stuck");
+  const recoverable = by("recoverable");
+  const deadEnd = by("dead-end");
+  const resettable = [...stuck, ...recoverable].map((t) => t.task_id);
+  const dead_ends = deadEnd.map((t) => t.task_id);
+  const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
+  const actionablePending = all.some(
+    (t) => t.status === "pending" && (depsSatisfied(run9, t.depends_on) || hasUnsatisfiableDep(run9, t.depends_on))
+  );
+  const would_deadlock = !allTerminal && !actionablePending;
+  const needs_rescue = resettable.length > 0;
+  return {
+    run_id: run9.run_id,
+    run_status: run9.status,
+    counts: {
+      total: all.length,
+      shipped: by("shipped").length,
+      runnable: by("runnable").length,
+      stuck: stuck.length,
+      recoverable: recoverable.length,
+      dead_end: deadEnd.length
+    },
+    resettable,
+    dead_ends,
+    needs_rescue,
+    would_deadlock,
+    summary: summarize2(run9.status, resettable.length, dead_ends.length, would_deadlock),
+    tasks
+  };
+}
+function summarize2(status, resettable, deadEnds, wouldDeadlock) {
+  if (resettable === 0) {
+    const tail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
+    return `run '${status}': no rescue needed${tail}`;
+  }
+  const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
+  const deadlock = wouldDeadlock ? "; a re-drive would deadlock without rescue" : "";
+  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}`;
+}
+
+// src/rescue/assess.ts
+async function assessWork(run9, probe) {
+  const baseRef = `origin/${resolveStagingBranch(run9.run_id, run9.staging_branch)}`;
+  const baseResolved = await probe.refExists(baseRef);
+  const tasks = [];
+  for (const t of Object.values(run9.tasks)) {
+    if (t.status === "done") continue;
+    if (t.branch === void 0) continue;
+    const branchExists = await probe.refExists(t.branch);
+    const pr = t.pr_number !== void 0 ? { pr_number: t.pr_number } : {};
+    if (branchExists) {
+      const commitsAhead = baseResolved ? await probe.commitsAhead(baseRef, t.branch) : null;
+      tasks.push({
+        task_id: t.task_id,
+        branch: t.branch,
+        branch_exists: true,
+        commits_ahead: commitsAhead,
+        ...pr
+      });
+    } else {
+      tasks.push({
+        task_id: t.task_id,
+        branch: t.branch,
+        branch_exists: false,
+        commits_ahead: null,
+        ...pr
+      });
+    }
+  }
+  return { base_ref: baseRef, base_resolved: baseResolved, tasks };
+}
+
+// src/rescue/apply.ts
+function resetTaskRow(task, opts = {}) {
+  const {
+    failure_class: _failureClass,
+    failure_reason: _failureReason,
+    producer_role: _producerRole,
+    test_revision_feedback: _testRevisionFeedback,
+    started_at: _startedAt,
+    ended_at: _endedAt,
+    phase: _phase,
+    // WS2 hygiene: mirror completeTask/failTask (transitions.ts:88,112). A stale
+    // checkpoint with escalation_rung reset to 0 would re-match the orchestrator's
+    // idempotent re-spawn guard (orchestrator.ts:358-373) and hard-reset the freshly
+    // recreated worktree to the pre-rescue tip_sha.
+    spawn_in_flight: _spawnInFlight,
+    ...rest
+  } = task;
+  return {
+    ...rest,
+    status: "pending",
+    escalation_rung: 0,
+    reviewers: [],
+    merge_resyncs: 0,
+    ...opts.e2eFeedback !== void 0 ? { e2e_feedback: opts.e2eFeedback } : {}
+  };
+}
+function selectTargets(run9, opts) {
+  const explicit = opts.tasks ?? [];
+  if (explicit.length > 0) {
+    const targets2 = [];
+    const skipped = [];
+    for (const id of explicit) {
+      const task = run9.tasks[id];
+      if (task === void 0) {
+        throw new Error(`rescue: run '${run9.run_id}' has no task '${id}'`);
+      }
+      if (task.status === "done") {
+        throw new Error(
+          `rescue: refusing to reset shipped task '${id}' (status 'done') \u2014 would un-ship merged work`
+        );
+      }
+      if (task.status === "pending") {
+        skipped.push(id);
+        continue;
+      }
+      targets2.push(id);
+    }
+    return { targets: targets2, skipped };
+  }
+  const scan = scanRun(run9);
+  const targets = opts.includeDeadEnds ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
+  return { targets, skipped: [] };
+}
+async function applyRescue(state, runId, opts = {}) {
+  let result = null;
+  const now = nowEpoch();
+  const updated = await state.update(runId, (run9) => {
+    const { targets, skipped } = selectTargets(run9, opts);
+    const wasTerminal = isTerminalRunStatus(run9.status);
+    const reopen = wasTerminal && targets.length > 0;
+    result = {
+      run_id: runId,
+      run_status: reopen ? "running" : run9.status,
+      reset: targets,
+      reopened: reopen,
+      skipped
+    };
+    if (targets.length === 0 && !reopen) {
+      return run9;
+    }
+    const nextTasks = { ...run9.tasks };
+    for (const id of targets) {
+      nextTasks[id] = resetTaskRow(run9.tasks[id]);
+    }
+    return {
+      ...run9,
+      tasks: nextTasks,
+      // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
+      // so returning to `running` with `ended_at:null` satisfies every invariant.
+      // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.
+      ...reopen ? {
+        status: "running",
+        ended_at: null,
+        paused_minutes: (run9.paused_minutes ?? 0) + Math.max(0, Math.floor((now - parseIso8601ToEpoch(run9.updated_at)) / 60))
+      } : {}
+    };
+  });
+  return { ...result, run_status: updated.status };
+}
+
 // src/orchestrator/finalize.ts
 var log22 = createLogger("finalize");
 function prdDoneComment(report, rollupResult) {
@@ -11718,7 +12129,7 @@ function rollupTitle(report) {
   return `factory: ${report.spec_id} \u2192 develop (PRD #${report.issue_number})`;
 }
 async function commentFailuresOnPrd(deps, report) {
-  if (report.failures.length === 0) return false;
+  if (report.failures.length === 0 && report.e2e_failure === void 0) return false;
   const marker = failureCommentMarker(report.run_id);
   const existing = await deps.gh.listIssueComments({
     repo: report.repo,
@@ -11738,7 +12149,8 @@ async function commentFailuresOnPrd(deps, report) {
 async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
   const run9 = await deps.state.read(runId);
-  const terminal = decideFinalize(run9).run_status;
+  const taskTerminal = decideFinalize(run9).run_status;
+  const terminal = run9.e2e_phase?.status === "failed" ? "failed" : taskTerminal;
   const report = buildPartialReport({ ...run9, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
@@ -11805,8 +12217,11 @@ async function completeTask(deps, runId, taskId) {
     ...t,
     status: "done",
     ended_at: t.ended_at ?? nowIso(),
-    spawn_in_flight: void 0
+    spawn_in_flight: void 0,
     // WS2 hygiene: no spawn is in flight past a terminal task
+    // Decision 39: an e2e reopen's feedback is cleared once the task ships again —
+    // the schema's own field comment ("cleared once the task ships again").
+    e2e_feedback: void 0
   }));
   return { done: true, outcome: { outcome: "done" } };
 }
@@ -11937,6 +12352,14 @@ function makePhaseHandlers(deps) {
       summary: `prior attempt at rung ${prior} did not clear the merge gate`
     };
   }
+  function e2eFeedbackNote(task) {
+    return task.e2e_feedback !== void 0 ? [
+      {
+        rung: task.escalation_rung,
+        summary: `An end-to-end journey test FAILED against this task's previously-shipped work: ${task.e2e_feedback}. Fix the underlying issue \u2014 implementation or test, whichever is wrong \u2014 so the journey passes.`
+      }
+    ] : [];
+  }
   async function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = []) {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const split = splitFor(deps.config, runId, specTask);
@@ -12027,14 +12450,10 @@ function makePhaseHandlers(deps) {
           summary: `Your PRIOR test for this task was rejected as INCORRECT by the implementer and reviewers: ${task.test_revision_feedback}. Write a BEHAVIORAL test derived from the acceptance criteria \u2014 do NOT pin an implementation source literal (no toContain("<source string>")).`
         }
       ] : [];
-      return producerSpawn(
-        "test-writer",
-        specTask,
-        ctx.run.run_id,
-        task.escalation_rung,
-        "exec",
-        revisionNote
-      );
+      return producerSpawn("test-writer", specTask, ctx.run.run_id, task.escalation_rung, "exec", [
+        ...revisionNote,
+        ...e2eFeedbackNote(task)
+      ]);
     },
     /**
      * exec: spawn the implementer for the current rung against the holdout-stripped
@@ -12044,7 +12463,14 @@ function makePhaseHandlers(deps) {
     async exec(ctx) {
       const task = requireTask3(ctx, "exec");
       const specTask = specTaskOf(deps.spec, task.task_id);
-      return producerSpawn("implementer", specTask, ctx.run.run_id, task.escalation_rung, "verify");
+      return producerSpawn(
+        "implementer",
+        specTask,
+        ctx.run.run_id,
+        task.escalation_rung,
+        "verify",
+        e2eFeedbackNote(task)
+      );
     },
     /**
      * verify reporter: run the deterministic gates, then either spawn the
@@ -12171,15 +12597,15 @@ var FsArtifactStore = class {
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
-    const path4 = this.absPath(runId, ref);
-    await mkdir10(dirname8(path4), { recursive: true });
-    await atomicWriteFile(path4, stringifyJson(context));
+    const path5 = this.absPath(runId, ref);
+    await mkdir10(dirname8(path5), { recursive: true });
+    await atomicWriteFile(path5, stringifyJson(context));
     return ref;
   }
   async getProducerContext(runId, promptRef) {
-    const path4 = this.absPath(runId, promptRef);
-    const raw = await readFile10(path4, "utf8");
-    return parseJson(raw, path4);
+    const path5 = this.absPath(runId, promptRef);
+    const raw = await readFile10(path5, "utf8");
+    return parseJson(raw, path5);
   }
 };
 
@@ -12222,9 +12648,9 @@ async function persistStepCursor(deps, runId, taskId, step) {
     await markInFlight(deps, runId, taskId, step.phase);
   }
 }
-async function readJsonInput(path4) {
-  const raw = await readFile12(path4, "utf8");
-  return parseJson(raw, path4);
+async function readJsonInput(path5) {
+  const raw = await readFile12(path5, "utf8");
+  return parseJson(raw, path5);
 }
 function producerPhaseInfo(phase) {
   if (phase === "tests") return { role: "test-writer", phase: "tests", after: "exec" };
@@ -12854,7 +13280,7 @@ async function applyCircuitBreaker(deps, runId) {
 }
 
 // src/orchestrator/next.ts
-function depsSatisfied(run9, task) {
+function depsSatisfied2(run9, task) {
   return task.depends_on.every((d) => run9.tasks[d]?.status === "done");
 }
 function isUnsatisfiableDep(run9, depId) {
@@ -12864,8 +13290,14 @@ function isUnsatisfiableDep(run9, depId) {
 async function wantsDocs(deps, run9) {
   if (run9.docs?.status === "done") return false;
   if ((run9.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false;
+  if (run9.e2e_phase?.status === "failed") return false;
   if (decideFinalize(run9).run_status !== "completed") return false;
   return deps.docsApplicable();
+}
+function wantsE2e(run9) {
+  if (!run9.e2e) return false;
+  if (run9.e2e_phase?.status !== void 0) return false;
+  return decideFinalize(run9).run_status === "completed";
 }
 async function nextTask(deps, runId) {
   let run9 = await deps.state.read(runId);
@@ -12874,8 +13306,9 @@ async function nextTask(deps, runId) {
     return { ...ctx(), kind: "done", run_status: run9.status };
   }
   const allTerminal = Object.values(run9.tasks).every((t) => isTerminalTaskStatus(t.status));
-  const needsDocs = allTerminal && await wantsDocs(deps, run9);
-  if (allTerminal && !needsDocs) {
+  const needsE2e = allTerminal && wantsE2e(run9);
+  const needsDocs = allTerminal && !needsE2e && await wantsDocs(deps, run9);
+  if (allTerminal && !needsE2e && !needsDocs) {
     if (run9.status === "paused" || run9.status === "suspended") {
       const patch = clearCheckpoint();
       await deps.state.update(runId, (s) => ({ ...s, status: patch.status, quota: patch.quota }));
@@ -12893,6 +13326,9 @@ async function nextTask(deps, runId) {
       status: patch.status,
       quota: patch.quota
     }));
+  }
+  if (needsE2e) {
+    return { ...ctx(), kind: "e2e" };
   }
   if (needsDocs) {
     return { ...ctx(), kind: "document" };
@@ -12940,7 +13376,7 @@ async function nextTask(deps, runId) {
     run9 = await deps.state.read(runId);
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
-  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied(run9, t));
+  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied2(run9, t));
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
@@ -12961,6 +13397,297 @@ async function nextTask(deps, runId) {
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
   return { ...ctx(), kind: "work", ready: ordered, cascade_failed: cascadeFailed };
+}
+
+// src/orchestrator/e2e.ts
+import { copyFile, mkdir as mkdir11 } from "node:fs/promises";
+import { dirname as dirname9, join as join18 } from "node:path";
+var log28 = createLogger("e2e");
+var DefaultE2eFileOps = class {
+  async copySpec(from, to) {
+    await mkdir11(dirname9(to), { recursive: true });
+    await copyFile(from, to);
+  }
+};
+var E2E_AUTHOR_MODEL = "sonnet";
+var E2E_AUTHOR_MAX_TURNS = 90;
+var CONTROL_TITLE_PREFIX = "control:";
+var E2eResultsSchema = external_exports.object({
+  status: external_exports.string().min(1),
+  /** Empty when the author judged no task in this run to be UI-facing. */
+  manifest: external_exports.array(E2eManifestEntrySchema).default([])
+}).strict();
+function e2eWorktreePath(dataDir, runId) {
+  return join18(dataDir, "runs", runId, "e2e-worktree");
+}
+function e2eRunWorktreePath(dataDir, runId) {
+  return join18(dataDir, "runs", runId, "e2e-run-worktree");
+}
+function e2eBaseProofWorktreePath(dataDir, runId) {
+  return join18(dataDir, "runs", runId, "e2e-base-proof-worktree");
+}
+function e2eThrowawayDir(dataDir, runId) {
+  return join18(dataDir, "runs", runId, "e2e-throwaway");
+}
+function e2eBranchName(runId) {
+  return `e2e-${runId}`;
+}
+function buildAuthorPrompt(args) {
+  const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
+  return [
+    "You are the factory e2e-author running the pipeline's end-to-end test-authoring phase.",
+    `1. cd into your worktree: ${args.worktree} (checked out on the e2e branch off the staging tip).`,
+    `2. Boot the app: \`${args.startCommand}\` \u2192 ${args.baseURL} (reuse if already running).`,
+    "3. Review every task this PRD delivered:",
+    taskLines,
+    `4. For each USER-FACING task, explore the live app via the Playwright MCP tools and author a THROWAWAY spec into ${args.throwawayDir} (OUTSIDE this worktree \u2014 never commit it).`,
+    `5. Author a small number of CRITICAL, money-path JOURNEY specs (thin \u2014 the load-bearing net, not per-task coverage) into ${args.worktree}/${args.testDir}/ and COMMIT them in this worktree. Each critical spec MUST include one assertion titled with the "${CONTROL_TITLE_PREFIX}" prefix that passes on ANY boot of the app (e.g. the page loads) \u2014 the fail-first proof uses it to tell 'the app didn't boot' apart from 'the feature doesn't exist yet.'`,
+    "6. Self-validate: every spec you authored must be green against the live (staging) app before you finish.",
+    "7. Do NOT push (the engine merges the critical specs on record). Do NOT edit non-e2e files.",
+    'Finish with your terminal STATUS line and return {"status": "<line>", "manifest": [...]} \u2014 the manifest is an array of {task_ids, spec_path, kind} rows, one per spec you authored (critical `spec_path` is worktree-relative; throwaway `spec_path` is throwaway-dir-relative). Per agents/e2e-author.md + skills/e2e-authoring/SKILL.md for the full authoring discipline.'
+  ].join("\n");
+}
+async function runE2eEmit(deps, runId) {
+  const run9 = await deps.state.read(runId);
+  const cfg = deps.config.e2e;
+  if (!cfg.startCommand || !cfg.baseURL) {
+    const reason = "e2e phase requires e2e.startCommand and e2e.baseURL \u2014 run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>` first";
+    await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
+    log28.warn(`run '${runId}': ${reason}`);
+    return { kind: "suspend", run_id: runId, reason };
+  }
+  if (run9.e2e_phase === void 0) {
+    return prepareAuthorSpawn(deps, run9, runId, cfg.startCommand, cfg.baseURL, cfg.testDir);
+  }
+  return runSuiteAndDecide(deps, runId);
+}
+async function prepareAuthorSpawn(deps, run9, runId, startCommand, baseURL, testDir) {
+  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const base = deps.config.git.baseBranch;
+  const branch = e2eBranchName(runId);
+  const worktree = e2eWorktreePath(deps.dataDir, runId);
+  const baseRef = `origin/${base}`;
+  await deps.git.fetch("origin", staging);
+  if (!await deps.git.worktreeExists(worktree)) {
+    await deps.git.worktreeAdd(["-b", branch, worktree, `origin/${staging}`]);
+  }
+  const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
+  return {
+    kind: "spawn",
+    run_id: runId,
+    worktree,
+    base_ref: baseRef,
+    staging_branch: staging,
+    e2e_branch: branch,
+    throwaway_dir: throwawayDir,
+    model: E2E_AUTHOR_MODEL,
+    max_turns: E2E_AUTHOR_MAX_TURNS,
+    prompt: buildAuthorPrompt({
+      worktree,
+      baseRef,
+      throwawayDir,
+      testDir,
+      startCommand,
+      baseURL,
+      spec: deps.spec
+    })
+  };
+}
+async function runE2eRecord(deps, runId, results) {
+  const outcome = parseProducerStatus(results.status);
+  if (outcome.status !== "done") {
+    const reason = `e2e-author: ${"reason" in outcome ? outcome.reason : "no parseable status"}`;
+    await markFailed(deps, runId, reason);
+    return { kind: "failed", run_id: runId, reason };
+  }
+  const run9 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const worktree = e2eWorktreePath(deps.dataDir, runId);
+  const critical = results.manifest.filter((e) => e.kind === "critical");
+  if (critical.length > 0) {
+    const proof = await proveCriticals(deps, runId, critical, worktree);
+    if (!proof.ok) {
+      await deps.git.worktreeRemove([worktree, "--force"]);
+      await markFailed(deps, runId, proof.reason);
+      return { kind: "failed", run_id: runId, reason: proof.reason };
+    }
+  }
+  if (critical.length > 0) {
+    await deps.git.mergeFfOrCommit(staging, e2eBranchName(runId));
+    await deps.git.push("origin", staging);
+  }
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    e2e_phase: {
+      ...s.e2e_phase ?? { reopen_counts: {} },
+      manifest: results.manifest
+    }
+  }));
+  return runSuiteAndDecide(deps, runId);
+}
+function classifyBaseRun(specs) {
+  const control = specs.filter((s) => s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
+  const journey = specs.filter((s) => !s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
+  return {
+    controlGreen: control.length === 0 || control.every((s) => s.status === "passed"),
+    journeyRed: journey.length > 0 && journey.every((s) => s.status === "failed")
+  };
+}
+async function proveCriticals(deps, runId, critical, authorWorktree) {
+  const cfg = deps.config.e2e;
+  const files = deps.files ?? new DefaultE2eFileOps();
+  const tool = deps.playwright ?? new DefaultPlaywrightTool();
+  const wtPath = e2eBaseProofWorktreePath(deps.dataDir, runId);
+  const base = `origin/${deps.config.git.baseBranch}`;
+  if (!await deps.git.worktreeExists(wtPath)) {
+    await deps.git.worktreeAdd(["-b", `e2e-base-proof-${runId}`, wtPath, base]);
+  }
+  try {
+    for (const entry of critical) {
+      await files.copySpec(join18(authorWorktree, entry.spec_path), join18(wtPath, entry.spec_path));
+      const baseResult = await runE2e(
+        { cwd: wtPath, env: { BASE_URL: cfg.baseURL }, testDir: entry.spec_path },
+        tool
+      );
+      const { controlGreen, journeyRed } = classifyBaseRun(baseResult.specs);
+      if (!controlGreen) {
+        return {
+          ok: false,
+          reason: `fail-first proof: base worktree unusable for '${entry.spec_path}' \u2014 its control assertion failed against the unmodified base app`
+        };
+      }
+      if (!journeyRed) {
+        return {
+          ok: false,
+          reason: `fail-first proof: '${entry.spec_path}' did not fail against the base app (vacuous-pass risk) \u2014 rejected`
+        };
+      }
+      const stagingResult = await runE2e(
+        { cwd: authorWorktree, env: { BASE_URL: cfg.baseURL }, testDir: entry.spec_path },
+        tool
+      );
+      if (!stagingResult.ok) {
+        return {
+          ok: false,
+          reason: `fail-first proof: '${entry.spec_path}' is still red against staging`
+        };
+      }
+    }
+    return { ok: true, reason: "" };
+  } finally {
+    await deps.git.worktreeRemove([wtPath, "--force"]);
+  }
+}
+async function markDone(deps, runId, opts) {
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    e2e_phase: {
+      ...s.e2e_phase ?? { manifest: [], reopen_counts: {} },
+      status: "done",
+      reason: void 0,
+      advisory: opts.advisory,
+      attempts: opts.attempts,
+      ended_at: nowIso()
+    }
+  }));
+}
+async function markFailed(deps, runId, reason, attempts) {
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    e2e_phase: {
+      ...s.e2e_phase ?? { manifest: [], reopen_counts: {} },
+      status: "failed",
+      reason,
+      advisory: void 0,
+      attempts: attempts ?? s.e2e_phase?.attempts,
+      ended_at: nowIso()
+    }
+  }));
+  log28.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
+}
+function findEntry(manifest, spec) {
+  return manifest.find((e) => spec.file === e.spec_path || spec.file.endsWith(`/${e.spec_path}`));
+}
+async function runSuiteAndDecide(deps, runId) {
+  const run9 = await deps.state.read(runId);
+  const manifest = run9.e2e_phase?.manifest ?? [];
+  const attempts = (run9.e2e_phase?.attempts ?? 0) + 1;
+  const firstPass = attempts === 1;
+  const cfg = deps.config.e2e;
+  if (manifest.length === 0) {
+    await markDone(deps, runId, { attempts });
+    return { kind: "done", run_id: runId };
+  }
+  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const worktree = e2eRunWorktreePath(deps.dataDir, runId);
+  await deps.git.fetch("origin", staging);
+  if (!await deps.git.worktreeExists(worktree)) {
+    await deps.git.worktreeAdd(["-b", `e2e-run-${runId}`, worktree, `origin/${staging}`]);
+  } else {
+    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
+  }
+  const tool = deps.playwright ?? new DefaultPlaywrightTool();
+  const criticalResult = await runE2e(
+    { cwd: worktree, env: { BASE_URL: cfg.baseURL }, testDir: cfg.testDir },
+    tool
+  );
+  const throwaway = manifest.filter((e) => e.kind === "throwaway");
+  const throwawayResult = throwaway.length > 0 ? await runE2e(
+    {
+      cwd: worktree,
+      env: { BASE_URL: cfg.baseURL },
+      testDir: e2eThrowawayDir(deps.dataDir, runId)
+    },
+    tool
+  ) : void 0;
+  const criticalFailed = criticalResult.specs.filter((s) => s.status === "failed");
+  const throwawayFailed = throwawayResult?.specs.filter((s) => s.status === "failed") ?? [];
+  if (criticalFailed.length === 0) {
+    const advisory = throwawayFailed.length > 0 ? `${throwawayFailed.length} throwaway spec(s) still red (non-gating): ` + throwawayFailed.map((s) => s.title).join(", ") : void 0;
+    await markDone(deps, runId, { attempts, advisory });
+    return { kind: "done", run_id: runId };
+  }
+  const mappedCritical = criticalFailed.map((s) => ({ spec: s, entry: findEntry(manifest, s) }));
+  const unmappable = mappedCritical.filter((m) => m.entry === void 0);
+  if (unmappable.length > 0) {
+    const reason = `unmappable critical e2e failure(s): ${unmappable.map((m) => m.spec.file).join(", ")} \u2014 no manifest entry names this spec`;
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  }
+  const throwawayCandidates = firstPass ? throwawayFailed.map((s) => ({ spec: s, entry: findEntry(manifest, s) })) : [];
+  const mappable = [...mappedCritical, ...throwawayCandidates].filter(
+    (m) => m.entry !== void 0
+  );
+  const taskIds = [...new Set(mappable.flatMap((m) => m.entry.task_ids))];
+  const reopenCounts = { ...run9.e2e_phase?.reopen_counts ?? {} };
+  const capExhausted = taskIds.filter((id) => (reopenCounts[id] ?? 0) >= cfg.reopenCap);
+  if (capExhausted.length > 0) {
+    const reason = `e2e reopen cap (${cfg.reopenCap}) exhausted for task(s): ${capExhausted.join(", ")}`;
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  }
+  const feedback = "The e2e phase found these journeys still failing:\n" + mappable.map((m) => `- ${m.entry.spec_path} \u2014 "${m.spec.title}"`).join("\n");
+  for (const id of taskIds) reopenCounts[id] = (reopenCounts[id] ?? 0) + 1;
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    tasks: Object.fromEntries(
+      Object.entries(s.tasks).map(
+        ([id, t]) => taskIds.includes(id) ? [id, resetTaskRow(t, { e2eFeedback: feedback })] : [id, t]
+      )
+    ),
+    e2e_phase: {
+      ...s.e2e_phase ?? { manifest },
+      status: void 0,
+      reason: void 0,
+      advisory: void 0,
+      attempts,
+      manifest: s.e2e_phase?.manifest ?? manifest,
+      reopen_counts: reopenCounts
+    }
+  }));
+  log28.info(`run '${runId}': e2e reopening task(s) ${taskIds.join(", ")} (pass ${attempts})`);
+  return { kind: "reopen", run_id: runId, task_ids: taskIds, reason: feedback };
 }
 
 // src/cli/wiring.ts
@@ -13050,7 +13777,7 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/cli/subcommands/run.ts
-var log28 = createLogger("run");
+var log29 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -13058,6 +13785,7 @@ Usage:
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
   factory run docs [--run <id>] [--results <path>]
+  factory run e2e [--run <id>] [--results <path>]
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
@@ -13065,11 +13793,12 @@ Actions:
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, file per-failure issues, ship the rollup only when completed, flip terminal.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
+  e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] [--e2e] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -13090,6 +13819,9 @@ Usage:
   --ignore-quota Bypass the weekly-quota hard stop AND the per-step quota pacer for this run.
                 Persisted as ignore_quota:true so both orchestrators + orchestrators skip the gate
                 without re-passing \u2014 lets create/--supersede proceed past a 7d-parked run.
+  --e2e         Opt into the run-level e2e phase (Decision 39): after all tasks are terminal,
+                author + run Playwright journeys against staging before docs/finalize; a
+                mappable failing journey reopens its task with feedback. Persisted as e2e:true.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; absent \u21D2 owner-unknown (Stop gate unscoped).
 
@@ -13218,7 +13950,7 @@ async function resolveSpec(specStore, opts) {
 }
 async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
   if (opts.mode === "workflow") {
-    log28.warn(
+    log29.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
     );
   }
@@ -13233,7 +13965,8 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
     ...opts.mode !== void 0 ? { mode: opts.mode } : {},
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
     ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {},
-    ...opts.ignoreQuota === true ? { ignore_quota: true } : {}
+    ...opts.ignoreQuota === true ? { ignore_quota: true } : {},
+    ...opts.e2e === true ? { e2e: true } : {}
   });
   const run9 = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
   if (stagingDeps !== void 0) {
@@ -13347,7 +14080,7 @@ function resolveOwnerSession(flag, env = process.env) {
 }
 async function runCreate(argv, overrides = {}) {
   const args = parseArgs(argv, {
-    booleans: ["new", "workflow", "no-ship", "supersede", "resume", "ignore-quota"]
+    booleans: ["new", "workflow", "no-ship", "supersede", "resume", "ignore-quota", "e2e"]
   });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
@@ -13387,9 +14120,9 @@ async function runCreate(argv, overrides = {}) {
   const fresh = args.flag("new") === true || explicitRunId !== void 0;
   const supersede = args.flag("supersede") === true;
   const resume = args.flag("resume") === true;
-  if (resume && (args.flag("workflow") === true || args.flag("no-ship") === true)) {
+  if (resume && (args.flag("workflow") === true || args.flag("no-ship") === true || args.flag("e2e") === true)) {
     throw new UsageError(
-      "run create: --workflow/--no-ship are create-only and cannot combine with --resume \u2014 a resumed run keeps the mode/ship_mode it was created with. Drop the flag to continue the existing run, or use --supersede to start fresh in that mode."
+      "run create: --workflow/--no-ship/--e2e are create-only and cannot combine with --resume \u2014 a resumed run keeps the mode/ship_mode/e2e it was created with. Drop the flag to continue the existing run, or use --supersede to start fresh in that mode."
     );
   }
   const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
@@ -13400,6 +14133,7 @@ async function runCreate(argv, overrides = {}) {
   }
   const intent = picked[0] ?? "default";
   const ignoreQuota = args.flag("ignore-quota") === true;
+  const e2e = args.flag("e2e") === true;
   const hasDataDirOverride = overrides.dataDir !== void 0;
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
   const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
@@ -13426,6 +14160,7 @@ async function runCreate(argv, overrides = {}) {
       shipMode,
       ...ownerSession !== void 0 ? { ownerSession } : {},
       ...ignoreQuota ? { ignoreQuota } : {},
+      ...e2e ? { e2e } : {},
       intent
     },
     stagingDeps
@@ -13464,14 +14199,14 @@ async function runCreate(argv, overrides = {}) {
   return EXIT.OK;
 }
 async function runResume(argv) {
-  const args = parseArgs(argv, { booleans: ["workflow", "no-ship", "ignore-quota"] });
+  const args = parseArgs(argv, { booleans: ["workflow", "no-ship", "ignore-quota", "e2e"] });
   if (args.flag("help") === true) {
     emitLine(RESUME_HELP);
     return EXIT.OK;
   }
-  if (args.flag("workflow") === true || args.flag("no-ship") === true) {
+  if (args.flag("workflow") === true || args.flag("no-ship") === true || args.flag("e2e") === true) {
     throw new UsageError(
-      "run resume: --workflow/--no-ship are not valid on resume \u2014 a run keeps the mode/ship_mode it was created with. Resume drives the run in its persisted mode."
+      "run resume: --workflow/--no-ship/--e2e are not valid on resume \u2014 a run keeps the mode/ship_mode/e2e it was created with. Resume drives the run in its persisted mode."
     );
   }
   requireAutonomousMode();
@@ -13552,6 +14287,41 @@ async function runDocs(argv) {
     throw new UsageError("--results requires a file path");
   } else {
     emitJson(await runDocsEmit(deps, runId));
+  }
+  return EXIT.OK;
+}
+var E2E_HELP = `factory run e2e [--run <id>] [--results <path>]
+
+Emit the e2e-phase spawn request (author or run-suite, Decision 39), or (with
+--results) record the e2e-author's manifest: prove + commit critical journeys,
+run the full suite against staging, and either mark the phase done, reopen a
+mappable failing task with feedback, or fail the run. The CLI never spawns the
+e2e author \u2014 a orchestrator does.`;
+async function runE2ePhase(argv) {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(E2E_HELP);
+    return EXIT.OK;
+  }
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const runId = await resolveRunId(state, args, "e2e");
+  const deps = await loadCliDeps({ dataDir, runId });
+  const resultsPath = args.flag("results");
+  if (typeof resultsPath === "string" && resultsPath.length > 0) {
+    let results;
+    try {
+      results = E2eResultsSchema.parse(await readJsonInput(resultsPath));
+    } catch (err) {
+      throw new UsageError(
+        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    emitJson(await runE2eRecord(deps, runId, results));
+  } else if (resultsPath !== void 0) {
+    throw new UsageError("--results requires a file path");
+  } else {
+    emitJson(await runE2eEmit(deps, runId));
   }
   return EXIT.OK;
 }
@@ -13639,11 +14409,13 @@ async function run3(argv) {
       return runFinalize(rest);
     case "docs":
       return runDocs(rest);
+    case "e2e":
+      return runE2ePhase(rest);
     case "cancel":
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | docs | cancel)`
+        `unknown run action '${action}' (expected create | resume | finalize | docs | e2e | cancel)`
       );
   }
 }
@@ -13677,7 +14449,7 @@ var resumeCommand = {
 };
 
 // src/cli/subcommands/spec.ts
-import { join as join18 } from "node:path";
+import { join as join19 } from "node:path";
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
@@ -13702,9 +14474,9 @@ var VERDICT_FILE = "verdict.json";
 function scratchPaths(dataDir, repo, issue) {
   const dir = specBuildDir(dataDir, repo, issue);
   return {
-    prdPath: join18(dir, PRD_FILE),
-    generatedPath: join18(dir, GENERATED_FILE),
-    verdictPath: join18(dir, VERDICT_FILE)
+    prdPath: join19(dir, PRD_FILE),
+    generatedPath: join19(dir, GENERATED_FILE),
+    verdictPath: join19(dir, VERDICT_FILE)
   };
 }
 async function resolveSpec2(deps, repo, issue, { regenerate = false } = {}) {
@@ -13846,197 +14618,6 @@ var specCommand = {
     }
   }
 };
-
-// src/rescue/scan.ts
-function dispositionOf(status, failureClass) {
-  if (status === "done") return "shipped";
-  if (status === "pending") return "runnable";
-  if (status === "failed") {
-    return failureClass === "blocked-environmental" ? "recoverable" : "dead-end";
-  }
-  return "stuck";
-}
-function depsSatisfied2(run9, depends) {
-  return depends.every((d) => run9.tasks[d]?.status === "done");
-}
-function hasUnsatisfiableDep(run9, depends) {
-  return depends.some((d) => {
-    const dep = run9.tasks[d];
-    return dep === void 0 || dep.status === "failed";
-  });
-}
-function scanRun(run9) {
-  const all = Object.values(run9.tasks);
-  const tasks = all.map((t) => ({
-    task_id: t.task_id,
-    status: t.status,
-    disposition: dispositionOf(t.status, t.failure_class),
-    ...t.failure_class !== void 0 ? { failure_class: t.failure_class } : {},
-    ...t.failure_reason !== void 0 ? { failure_reason: t.failure_reason } : {},
-    ...t.branch !== void 0 ? { branch: t.branch } : {},
-    ...t.pr_number !== void 0 ? { pr_number: t.pr_number } : {}
-  }));
-  const by = (d) => tasks.filter((t) => t.disposition === d);
-  const stuck = by("stuck");
-  const recoverable = by("recoverable");
-  const deadEnd = by("dead-end");
-  const resettable = [...stuck, ...recoverable].map((t) => t.task_id);
-  const dead_ends = deadEnd.map((t) => t.task_id);
-  const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
-  const actionablePending = all.some(
-    (t) => t.status === "pending" && (depsSatisfied2(run9, t.depends_on) || hasUnsatisfiableDep(run9, t.depends_on))
-  );
-  const would_deadlock = !allTerminal && !actionablePending;
-  const needs_rescue = resettable.length > 0;
-  return {
-    run_id: run9.run_id,
-    run_status: run9.status,
-    counts: {
-      total: all.length,
-      shipped: by("shipped").length,
-      runnable: by("runnable").length,
-      stuck: stuck.length,
-      recoverable: recoverable.length,
-      dead_end: deadEnd.length
-    },
-    resettable,
-    dead_ends,
-    needs_rescue,
-    would_deadlock,
-    summary: summarize2(run9.status, resettable.length, dead_ends.length, would_deadlock),
-    tasks
-  };
-}
-function summarize2(status, resettable, deadEnds, wouldDeadlock) {
-  if (resettable === 0) {
-    const tail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
-    return `run '${status}': no rescue needed${tail}`;
-  }
-  const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
-  const deadlock = wouldDeadlock ? "; a re-drive would deadlock without rescue" : "";
-  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}`;
-}
-
-// src/rescue/assess.ts
-async function assessWork(run9, probe) {
-  const baseRef = `origin/${resolveStagingBranch(run9.run_id, run9.staging_branch)}`;
-  const baseResolved = await probe.refExists(baseRef);
-  const tasks = [];
-  for (const t of Object.values(run9.tasks)) {
-    if (t.status === "done") continue;
-    if (t.branch === void 0) continue;
-    const branchExists = await probe.refExists(t.branch);
-    const pr = t.pr_number !== void 0 ? { pr_number: t.pr_number } : {};
-    if (branchExists) {
-      const commitsAhead = baseResolved ? await probe.commitsAhead(baseRef, t.branch) : null;
-      tasks.push({
-        task_id: t.task_id,
-        branch: t.branch,
-        branch_exists: true,
-        commits_ahead: commitsAhead,
-        ...pr
-      });
-    } else {
-      tasks.push({
-        task_id: t.task_id,
-        branch: t.branch,
-        branch_exists: false,
-        commits_ahead: null,
-        ...pr
-      });
-    }
-  }
-  return { base_ref: baseRef, base_resolved: baseResolved, tasks };
-}
-
-// src/rescue/apply.ts
-function resetTaskRow(task) {
-  const {
-    failure_class: _failureClass,
-    failure_reason: _failureReason,
-    producer_role: _producerRole,
-    test_revision_feedback: _testRevisionFeedback,
-    started_at: _startedAt,
-    ended_at: _endedAt,
-    phase: _phase,
-    // WS2 hygiene: mirror completeTask/failTask (transitions.ts:88,112). A stale
-    // checkpoint with escalation_rung reset to 0 would re-match the orchestrator's
-    // idempotent re-spawn guard (orchestrator.ts:358-373) and hard-reset the freshly
-    // recreated worktree to the pre-rescue tip_sha.
-    spawn_in_flight: _spawnInFlight,
-    ...rest
-  } = task;
-  return {
-    ...rest,
-    status: "pending",
-    escalation_rung: 0,
-    reviewers: [],
-    merge_resyncs: 0
-  };
-}
-function selectTargets(run9, opts) {
-  const explicit = opts.tasks ?? [];
-  if (explicit.length > 0) {
-    const targets2 = [];
-    const skipped = [];
-    for (const id of explicit) {
-      const task = run9.tasks[id];
-      if (task === void 0) {
-        throw new Error(`rescue: run '${run9.run_id}' has no task '${id}'`);
-      }
-      if (task.status === "done") {
-        throw new Error(
-          `rescue: refusing to reset shipped task '${id}' (status 'done') \u2014 would un-ship merged work`
-        );
-      }
-      if (task.status === "pending") {
-        skipped.push(id);
-        continue;
-      }
-      targets2.push(id);
-    }
-    return { targets: targets2, skipped };
-  }
-  const scan = scanRun(run9);
-  const targets = opts.includeDeadEnds ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
-  return { targets, skipped: [] };
-}
-async function applyRescue(state, runId, opts = {}) {
-  let result = null;
-  const now = nowEpoch();
-  const updated = await state.update(runId, (run9) => {
-    const { targets, skipped } = selectTargets(run9, opts);
-    const wasTerminal = isTerminalRunStatus(run9.status);
-    const reopen = wasTerminal && targets.length > 0;
-    result = {
-      run_id: runId,
-      run_status: reopen ? "running" : run9.status,
-      reset: targets,
-      reopened: reopen,
-      skipped
-    };
-    if (targets.length === 0 && !reopen) {
-      return run9;
-    }
-    const nextTasks = { ...run9.tasks };
-    for (const id of targets) {
-      nextTasks[id] = resetTaskRow(run9.tasks[id]);
-    }
-    return {
-      ...run9,
-      tasks: nextTasks,
-      // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
-      // so returning to `running` with `ended_at:null` satisfies every invariant.
-      // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.
-      ...reopen ? {
-        status: "running",
-        ended_at: null,
-        paused_minutes: (run9.paused_minutes ?? 0) + Math.max(0, Math.floor((now - parseIso8601ToEpoch(run9.updated_at)) / 60))
-      } : {}
-    };
-  });
-  return { ...result, run_status: updated.status };
-}
 
 // src/cli/subcommands/rescue.ts
 var RESCUE_HELP = `factory rescue \u2014 scan or recover a stalled run
@@ -14349,7 +14930,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log29 = createLogger("cli:statusline");
+var log30 = createLogger("cli:statusline");
 var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -14374,7 +14955,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log29.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log30.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return;
   }
   const now = (deps.now ?? nowEpoch)();
@@ -14382,7 +14963,7 @@ async function writeCache(rateLimits, deps) {
   try {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
   } catch (err) {
-    log29.warn(`failed to write usage-cache.json: ${err.message}`);
+    log30.warn(`failed to write usage-cache.json: ${err.message}`);
   }
 }
 async function passthrough(payload, deps) {
@@ -14393,12 +14974,12 @@ async function passthrough(payload, deps) {
     const result = await run9(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log29.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log30.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log29.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log30.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -14432,9 +15013,9 @@ var statuslineCommand = {
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync9 } from "node:fs";
 import { readFile as readFile13 } from "node:fs/promises";
-import { join as join19 } from "node:path";
+import { join as join20 } from "node:path";
 import { homedir as homedir3 } from "node:os";
-var log30 = createLogger("autonomy");
+var log31 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -14470,7 +15051,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join19(dataDir, "merged-settings.json");
+  return join20(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -14546,10 +15127,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path4 = join19(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync9(path4)) return void 0;
+  const path5 = join20(pluginRoot, ".claude-plugin", "plugin.json");
+  if (!existsSync9(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile13(path4, "utf8"));
+    const parsed = JSON.parse(await readFile13(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -14559,19 +15140,19 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join19(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join20(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync9(userSettingsPath)) {
     try {
       const parsed = JSON.parse(await readFile13(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
-      else log30.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      else log31.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
-      log30.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log31.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join19(pluginRoot, "templates", "settings.autonomous.json");
+  const templatePath = join20(pluginRoot, "templates", "settings.autonomous.json");
   const template = await readFile13(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
@@ -14582,11 +15163,11 @@ async function runAutonomyEnsure(opts = {}) {
     home,
     version
   });
-  const path4 = mergedSettingsPath(dataDir);
-  await atomicWriteFile(path4, stringifyJson(merged));
-  const relaunchCommand = `claude --worktree --settings ${path4}`;
+  const path5 = mergedSettingsPath(dataDir);
+  await atomicWriteFile(path5, stringifyJson(merged));
+  const relaunchCommand = `claude --worktree --settings ${path5}`;
   write(
-    `Wrote autonomous settings \u2192 ${path4}
+    `Wrote autonomous settings \u2192 ${path5}
 Relaunch the session in autonomous mode with:
 
   ${relaunchCommand}
@@ -14594,47 +15175,47 @@ Relaunch the session in autonomous mode with:
 (the first agent turn refreshes the usage cache \u2192 session-mode quota pacing.)
 `
   );
-  return { path: path4, relaunchCommand };
+  return { path: path5, relaunchCommand };
 }
 async function runAutonomyStatus(opts = {}) {
   const env = opts.env ?? process.env;
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
-  let path4 = "";
+  let path5 = "";
   try {
     const dataDir = opts.dataDir ?? resolveDataDir();
-    path4 = mergedSettingsPath(dataDir);
+    path5 = mergedSettingsPath(dataDir);
   } catch {
   }
   const status = {
     autonomous: isAutonomous(env),
     envSet: env.FACTORY_AUTONOMOUS_MODE !== void 0,
-    mergedSettingsPresent: path4.length > 0 && existsSync9(path4),
-    mergedSettingsPath: path4
+    mergedSettingsPresent: path5.length > 0 && existsSync9(path5),
+    mergedSettingsPath: path5
   };
   if (opts.json === true) {
     write(stringifyJson(status) + "\n");
   } else if (status.autonomous) {
     write(
       `autonomous: yes (FACTORY_AUTONOMOUS_MODE=1)
-merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path4.length > 0 ? ` at ${path4}` : ""}
+merged-settings: ${status.mergedSettingsPresent ? "present" : "absent"}${path5.length > 0 ? ` at ${path5}` : ""}
 `
     );
   } else {
     write(
       `autonomous: NO \u2014 the pipeline will refuse to start or resume a run.
-merged-settings: ${status.mergedSettingsPresent ? `present at ${path4}` : "absent"}
+merged-settings: ${status.mergedSettingsPresent ? `present at ${path5}` : "absent"}
 ` + (status.mergedSettingsPresent ? `Relaunch the session with:
-  claude --worktree --settings ${path4}
+  claude --worktree --settings ${path5}
 ` : `Run \`factory autonomy ensure\` first, then relaunch with the printed command.
 `)
     );
   }
   return status.autonomous ? EXIT.OK : EXIT.ERROR;
 }
-async function readOnDiskVersion(path4) {
-  if (!existsSync9(path4)) return void 0;
+async function readOnDiskVersion(path5) {
+  if (!existsSync9(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile13(path4, "utf8"));
+    const parsed = JSON.parse(await readFile13(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }
@@ -14674,10 +15255,10 @@ async function runAutonomyPreflight(opts = {}) {
     pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
   } catch {
   }
-  const path4 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
-  const mergedSettingsPresent = path4.length > 0 && existsSync9(path4);
+  const path5 = dataDir !== void 0 ? mergedSettingsPath(dataDir) : "";
+  const mergedSettingsPresent = path5.length > 0 && existsSync9(path5);
   const pluginVersion = pluginRoot !== void 0 ? await readPluginVersion(pluginRoot) : void 0;
-  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path4) : void 0;
+  const onDiskVersion = mergedSettingsPresent ? await readOnDiskVersion(path5) : void 0;
   const decision = decideAutonomyPreflight({
     autonomous: isAutonomous(env),
     mergedSettingsPresent,

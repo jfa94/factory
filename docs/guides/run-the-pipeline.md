@@ -35,16 +35,17 @@ branch at create — there is no shared `staging` branch to protect.)
 existing run](#start-fresh-vs-continue-an-existing-run) below for what happens when
 an active run already exists for the spec.
 
-| Flag                  | Required | Notes                                                                                                   |
-| --------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `--repo <owner/name>` | no       | Target repo. Auto-derived from the `origin` remote when omitted.                                        |
-| `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                                 |
-| `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                                    |
-| `--workflow`          | no       | Run the background Workflow runner. Omit for the in-session loop (default) — see below.                 |
-| `--no-ship`           | no       | Open the PRs but never merge. Omit for the default **live** — auto-merge tasks→staging, rollup→develop. |
-| `--supersede`         | no       | If an active run already exists, replace it (see below). Mutually exclusive with `--resume`.            |
-| `--resume`            | no       | If an active run already exists, hand off to `/factory:resume` instead of starting fresh.               |
-| `--ignore-quota`      | no       | Override the weekly-quota hard stop **and** disable per-step quota pacing for this run (see below).     |
+| Flag                  | Required | Notes                                                                                                                                                                                   |
+| --------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <owner/name>` | no       | Target repo. Auto-derived from the `origin` remote when omitted.                                                                                                                        |
+| `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                                                                                                                 |
+| `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                                                                                                                    |
+| `--workflow`          | no       | Run the background Workflow runner. Omit for the in-session loop (default) — see below.                                                                                                 |
+| `--no-ship`           | no       | Open the PRs but never merge. Omit for the default **live** — auto-merge tasks→staging, rollup→develop.                                                                                 |
+| `--e2e`               | no       | Opt into the run-level e2e phase — author + run Playwright journeys against staging before docs. Create-only + immutable on resume. See [Run with end-to-end tests](./run-with-e2e.md). |
+| `--supersede`         | no       | If an active run already exists, replace it (see below). Mutually exclusive with `--resume`.                                                                                            |
+| `--resume`            | no       | If an active run already exists, hand off to `/factory:resume` instead of starting fresh.                                                                                               |
+| `--ignore-quota`      | no       | Override the weekly-quota hard stop **and** disable per-step quota pacing for this run (see below).                                                                                     |
 
 `--workflow` selects the runner. Both step the same `factory next-task` / `factory next-action`
 seam and enforce the identical engine gates; they differ only in where the loop
@@ -114,7 +115,15 @@ tests → exec → verify → ship`), emitting a spawn request whenever it needs
    agents. The runner spawns the producers and the review panel the request
    names, then records their raw output back with `factory next-action --results` (one
    state step). The engine — not the runner — decides every transition.
-5. **Docs** — once all tasks are terminal and the PRD would be `completed`,
+5. **E2E** (`--e2e` runs only) — once all tasks are terminal, before docs,
+   `factory next-task` schedules the e2e stage. The runner runs `factory run e2e`,
+   which spawns the `e2e-author` to write + prove journey specs against the integrated
+   staging app, then runs the suite. A failing mappable journey reopens its task
+   (`e2e_feedback`) and re-drives it — the run stays `running`; a critical failure that
+   exhausts `e2e.reopenCap` fails the run. On a run created without `--e2e` this phase is
+   skipped entirely. See [Run with end-to-end tests](./run-with-e2e.md).
+6. **Docs** — once all tasks are terminal (and the e2e phase, if any, is `done`) and the
+   PRD would be `completed`,
    `factory next-task` returns `document` (not yet `finalize`) if the repo keeps a
    `/docs` directory and docs aren't opted out. The runner runs `factory run docs`,
    which emits a scribe spawn request; the runner spawns the `scribe` agent and records the
@@ -122,7 +131,7 @@ tests → exec → verify → ship`), emitting a spawn request whenever it needs
    emit `finalize`. A docs failure suspends the run (resumable via
    `/factory:resume`). On a `failed` run, or when docs are opted out, this phase is
    skipped.
-6. **Completion** — `factory run finalize` builds the report; on a `failed` run it
+7. **Completion** — `factory run finalize` builds the report; on a `failed` run it
    posts one comment on the PRD issue listing the failed tasks; **only when the
    whole PRD completed** does it ship the `staging-<run-id> → develop` rollup (which
    includes the docs commit, since it landed on staging before finalize), comment on

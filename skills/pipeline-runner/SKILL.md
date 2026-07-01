@@ -129,6 +129,8 @@ loop:
   case env.kind:
     "done"  → go to Phase 4 (report)
     "finalize"  → factory run finalize --run <run_id>; go to Phase 4
+    "e2e"    → run the E2E STAGE (below); on done/failed/reopen, loop; on suspend,
+                      report the reason + STOP (run is suspended — /factory:resume retries)
     "document"    → run the DOCS STAGE (below); on done, loop; on suspend,
                       report the reason + STOP (run is suspended — /factory:resume retries)
     "pause" → report scope/reason/resets_at_epoch; tell the user to re-run
@@ -148,6 +150,32 @@ step(task):
 If `next-action` rejects `--results` as stale/duplicate (result_key mismatch), re-invoke WITHOUT `--results` to get the current envelope and continue — the ONE sanctioned retry (Iron Law 3 applies to everything else).
 
 ```
+e2e stage:
+  eenv = factory run e2e --run <run_id>
+  case eenv.kind:
+    "done"    → loop  # phase concluded clean (0 critical red; a residual throwaway
+                       #   red is folded into the report as an advisory, not a stop)
+    "failed"  → loop  # phase concluded FAILED (unmappable/cap-exhausted critical red) —
+                       #   run.status is NOT flipped here; next-task routes straight to
+                       #   finalize next, which reads e2e_phase into the report
+    "reopen"  → loop  # a failing journey was joined to its task via the author's
+                       #   manifest; that task was reset to pending with e2e_feedback
+                       #   set — next iteration re-drives it as "work"
+    "suspend" → report eenv.reason; STOP  # e2e.startCommand/baseURL not configured
+                                           #   (or similar); /factory:resume retries
+    "spawn"   → spawn the e2e author (subagent_type `e2e-author`, model per eenv.model,
+                isolation OMITTED — it works IN eenv.worktree), prompt = eenv.prompt
+                VERBATIM. It explores the live staging app (Playwright MCP), authors
+                throwaway journey specs (into eenv.throwaway_dir — never committed) and
+                any load-bearing journey specs (into eenv.worktree's e2e/ — committed),
+                self-validates green, and finishes with its terminal STATUS line plus a
+                manifest joining each spec to the task_id(s) it covers.
+                Write {"status":"<line>","manifest":[{"task_ids":[...],
+                "spec_path":"...","kind":"critical|throwaway"}, ...]} to a results file
+                under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+                eenv2 = factory run e2e --run <run_id> --results <file>
+                case eenv2.kind: "done"|"failed"|"reopen" → loop; "suspend" → report + STOP
+
 docs stage:
   denv = factory run docs --run <run_id>
   case denv.kind:
@@ -220,6 +248,7 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 | 6 panel reviewers                    | the manifest `role`                | `"worktree"`                               |
 | holdout-validator / finding-verifier | `general-purpose`                  | `"worktree"`                               |
 | spec-generator / spec-reviewer       | `spec-generator` / `spec-reviewer` | `"worktree"`                               |
+| e2e-author                           | `e2e-author`                       | **none** (omit) — works IN `eenv.worktree` |
 
 Model alias mapping: manifest model id contains `haiku` → `haiku`; `sonnet` →
 `sonnet`; otherwise → `opus`. The manifest `effort` (when present) is passed to the
@@ -237,6 +266,9 @@ so no aliasing applies; it appears only on producer spawns, never reviewers.
   drop with its class — plainly, never papered over.
 - Documentation is no longer a Phase-4 step: the engine runs it as the
   `docs-ready` stage in THE LOOP (Phase 3), before finalize ships the rollup.
+  On an `--e2e` run, the e2e stage runs before docs (Decision 39) — a failed
+  e2e phase skips docs entirely (don't document code the e2e verdict just
+  condemned) and is reported alongside the rollup, not as a separate step.
 
 ## When NOT to use this skill
 

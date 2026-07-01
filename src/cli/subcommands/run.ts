@@ -38,6 +38,9 @@ import {
   runDocsEmit,
   runDocsRecord,
   DocsResultsSchema,
+  runE2eEmit,
+  runE2eRecord,
+  E2eResultsSchema,
   readJsonInput,
 } from "../../orchestrator/index.js";
 import { loadCliDeps } from "../wiring.js";
@@ -67,6 +70,7 @@ Usage:
   factory run resume [--run <id>]
   factory run finalize [--run <id>] [--no-ship]
   factory run docs [--run <id>] [--results <path>]
+  factory run e2e [--run <id>] [--results <path>]
   factory run cancel [--run <id>] [--cleanup] [--session-id <id>]
 
 Actions:
@@ -74,12 +78,13 @@ Actions:
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
   finalize   Build the run report, file per-failure issues, ship the rollup only when completed, flip terminal.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
+  e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
 
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] [--e2e] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -100,6 +105,9 @@ Usage:
   --ignore-quota Bypass the weekly-quota hard stop AND the per-step quota pacer for this run.
                 Persisted as ignore_quota:true so both orchestrators + orchestrators skip the gate
                 without re-passing — lets create/--supersede proceed past a 7d-parked run.
+  --e2e         Opt into the run-level e2e phase (Decision 39): after all tasks are terminal,
+                author + run Playwright journeys against staging before docs/finalize; a
+                mappable failing journey reopens its task with feedback. Persisted as e2e:true.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
                 Defaults to $CLAUDE_CODE_SESSION_ID; absent ⇒ owner-unknown (Stop gate unscoped).
 
@@ -308,6 +316,8 @@ export type CreateRunOptions = SpecSelector &
     readonly ownerSession?: RunState["owner_session"];
     /** When true, persist `ignore_quota: true` on the run (from `--ignore-quota`). */
     readonly ignoreQuota?: boolean;
+    /** When true, persist `e2e: true` on the run (from `--e2e`) — opts into the e2e phase. */
+    readonly e2e?: boolean;
   };
 
 /**
@@ -372,6 +382,7 @@ async function createRunFromManifest(
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
     ...(opts.ownerSession !== undefined ? { owner_session: opts.ownerSession } : {}),
     ...(opts.ignoreQuota === true ? { ignore_quota: true } : {}),
+    ...(opts.e2e === true ? { e2e: true } : {}),
   });
   const run = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 
@@ -676,7 +687,7 @@ export async function runCreate(
   overrides: RunCreateOverrides = {},
 ): Promise<ExitCode> {
   const args = parseArgs(argv, {
-    booleans: ["new", "workflow", "no-ship", "supersede", "resume", "ignore-quota"],
+    booleans: ["new", "workflow", "no-ship", "supersede", "resume", "ignore-quota", "e2e"],
   });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
@@ -737,17 +748,20 @@ export async function runCreate(
   const fresh = args.flag("new") === true || explicitRunId !== undefined;
   const supersede = args.flag("supersede") === true;
   const resume = args.flag("resume") === true;
-  // --workflow/--no-ship are CREATE-ONLY mode/ship selectors; --resume continues a run
-  // whose mode + ship_mode are already fixed (both immutable post-create). The combo is
+  // --workflow/--no-ship/--e2e are CREATE-ONLY selectors; --resume continues a run
+  // whose mode + ship_mode + e2e are already fixed (all immutable post-create). The combo is
   // incoherent and is the ROOT CAUSE of the `run --resume --workflow` incident: the flag
   // rode the resume hand-off and launched a workflow runner against a session-mode run.
   // Reject it loud here, before any orchestrator launches. (No expressiveness lost: the only
   // case where `--resume --workflow` would create anything — no active run exists —
   // is identical to a bare `--workflow`, which the default intent already creates fresh.)
-  if (resume && (args.flag("workflow") === true || args.flag("no-ship") === true)) {
+  if (
+    resume &&
+    (args.flag("workflow") === true || args.flag("no-ship") === true || args.flag("e2e") === true)
+  ) {
     throw new UsageError(
-      "run create: --workflow/--no-ship are create-only and cannot combine with --resume — " +
-        "a resumed run keeps the mode/ship_mode it was created with. Drop the flag to continue " +
+      "run create: --workflow/--no-ship/--e2e are create-only and cannot combine with --resume — " +
+        "a resumed run keeps the mode/ship_mode/e2e it was created with. Drop the flag to continue " +
         "the existing run, or use --supersede to start fresh in that mode.",
     );
   }
@@ -759,6 +773,7 @@ export async function runCreate(
   }
   const intent: NonNullable<RunIntent["intent"]> = picked[0] ?? "default";
   const ignoreQuota = args.flag("ignore-quota") === true;
+  const e2e = args.flag("e2e") === true;
   const hasDataDirOverride = overrides.dataDir !== undefined;
 
   const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
@@ -788,6 +803,7 @@ export async function runCreate(
       shipMode,
       ...(ownerSession !== undefined ? { ownerSession } : {}),
       ...(ignoreQuota ? { ignoreQuota } : {}),
+      ...(e2e ? { e2e } : {}),
       intent,
     },
     stagingDeps,
@@ -830,19 +846,23 @@ export async function runCreate(
 }
 
 async function runResume(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["workflow", "no-ship", "ignore-quota"] });
+  const args = parseArgs(argv, { booleans: ["workflow", "no-ship", "ignore-quota", "e2e"] });
   if (args.flag("help") === true) {
     emitLine(RESUME_HELP);
     return EXIT.OK;
   }
-  // --workflow/--no-ship select mode/ship at CREATE; a resumed run keeps the mode +
-  // ship_mode it was born with (both immutable). Silently ignoring these flags here is
-  // the quieter twin of the create-side footgun — reject loud so neither path can ever
-  // imply a mode on resume. The orchestrator is chosen from the run's persisted `mode`.
-  if (args.flag("workflow") === true || args.flag("no-ship") === true) {
+  // --workflow/--no-ship/--e2e select mode/ship/e2e at CREATE; a resumed run keeps them
+  // all as born (immutable). Silently ignoring these flags here is the quieter twin of
+  // the create-side footgun — reject loud so neither path can ever imply a mode on resume.
+  // The orchestrator is chosen from the run's persisted `mode`.
+  if (
+    args.flag("workflow") === true ||
+    args.flag("no-ship") === true ||
+    args.flag("e2e") === true
+  ) {
     throw new UsageError(
-      "run resume: --workflow/--no-ship are not valid on resume — a run keeps the mode/ship_mode " +
-        "it was created with. Resume drives the run in its persisted mode.",
+      "run resume: --workflow/--no-ship/--e2e are not valid on resume — a run keeps the " +
+        "mode/ship_mode/e2e it was created with. Resume drives the run in its persisted mode.",
     );
   }
   // Mandatory autonomous-mode gate (see runCreate): resume re-activates a run and
@@ -954,6 +974,44 @@ async function runDocs(argv: string[]): Promise<ExitCode> {
     throw new UsageError("--results requires a file path");
   } else {
     emitJson(await runDocsEmit(deps, runId));
+  }
+  return EXIT.OK;
+}
+
+const E2E_HELP = `factory run e2e [--run <id>] [--results <path>]
+
+Emit the e2e-phase spawn request (author or run-suite, Decision 39), or (with
+--results) record the e2e-author's manifest: prove + commit critical journeys,
+run the full suite against staging, and either mark the phase done, reopen a
+mappable failing task with feedback, or fail the run. The CLI never spawns the
+e2e author — a orchestrator does.`;
+
+async function runE2ePhase(argv: string[]): Promise<ExitCode> {
+  const args = parseArgs(argv, { booleans: [] });
+  if (args.flag("help") === true) {
+    emitLine(E2E_HELP);
+    return EXIT.OK;
+  }
+  const dataDir = resolveDataDir({});
+  const state = new StateManager({ dataDir });
+  const runId = await resolveRunId(state, args, "e2e");
+  const deps = await loadCliDeps({ dataDir, runId });
+
+  const resultsPath = args.flag("results");
+  if (typeof resultsPath === "string" && resultsPath.length > 0) {
+    let results;
+    try {
+      results = E2eResultsSchema.parse(await readJsonInput<unknown>(resultsPath));
+    } catch (err) {
+      throw new UsageError(
+        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    emitJson(await runE2eRecord(deps, runId, results));
+  } else if (resultsPath !== undefined) {
+    throw new UsageError("--results requires a file path");
+  } else {
+    emitJson(await runE2eEmit(deps, runId));
   }
   return EXIT.OK;
 }
@@ -1115,11 +1173,13 @@ async function run(argv: string[]): Promise<ExitCode> {
       return runFinalize(rest);
     case "docs":
       return runDocs(rest);
+    case "e2e":
+      return runE2ePhase(rest);
     case "cancel":
       return runCancel(rest);
     default:
       throw new UsageError(
-        `unknown run action '${action}' (expected create | resume | finalize | docs | cancel)`,
+        `unknown run action '${action}' (expected create | resume | finalize | docs | e2e | cancel)`,
       );
   }
 }

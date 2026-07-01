@@ -114,6 +114,27 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
   }
 
   /**
+   * On an e2e reopen (Decision 39), the run-level e2e coroutine carries a failing
+   * journey's feedback onto the task row and resets it to `pending`. Injected into
+   * BOTH producer roles — unlike `test_revision_feedback` (test-writer only), an e2e
+   * failure could equally mean the implementation OR the test itself is wrong, so
+   * both need the same signal. Cleared on the next `completeTask` (transitions.ts).
+   */
+  function e2eFeedbackNote(task: TaskState): PriorFailureNote[] {
+    return task.e2e_feedback !== undefined
+      ? [
+          {
+            rung: task.escalation_rung,
+            summary:
+              `An end-to-end journey test FAILED against this task's previously-shipped ` +
+              `work: ${task.e2e_feedback}. Fix the underlying issue — implementation or test, ` +
+              `whichever is wrong — so the journey passes.`,
+          },
+        ]
+      : [];
+  }
+
+  /**
    * Assemble + PERSIST a producer prompt-context for `(role, rung)` and return the
    * one-agent spawn request that resumes at `resumePhase`. The context is built from
    * the holdout-stripped `visibleCriteria` only; the prior-failure note is recorded in
@@ -238,14 +259,10 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
               },
             ]
           : [];
-      return producerSpawn(
-        "test-writer",
-        specTask,
-        ctx.run.run_id,
-        task.escalation_rung,
-        "exec",
-        revisionNote,
-      );
+      return producerSpawn("test-writer", specTask, ctx.run.run_id, task.escalation_rung, "exec", [
+        ...revisionNote,
+        ...e2eFeedbackNote(task),
+      ]);
     },
 
     /**
@@ -256,7 +273,14 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
     async exec(ctx: PhaseContext): Promise<PhaseResult> {
       const task = requireTask(ctx, "exec");
       const specTask = specTaskOf(deps.spec, task.task_id);
-      return producerSpawn("implementer", specTask, ctx.run.run_id, task.escalation_rung, "verify");
+      return producerSpawn(
+        "implementer",
+        specTask,
+        ctx.run.run_id,
+        task.escalation_rung,
+        "verify",
+        e2eFeedbackNote(task),
+      );
     },
 
     /**

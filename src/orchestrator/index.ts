@@ -86,3 +86,14 @@ export {
   type DocsAction,
   type DocsResults,
 } from "./docs.js";
+
+// -- e2e phase emit + record orchestrators (factory run e2e seam, Decision 39) -----------------
+export {
+  runE2eEmit,
+  runE2eRecord,
+  CONTROL_TITLE_PREFIX,
+  E2eResultsSchema,
+  type E2eRunDeps,
+  type E2eAction,
+  type E2eAuthorResults,
+} from "./e2e.js";

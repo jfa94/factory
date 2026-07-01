@@ -213,6 +213,12 @@ describe("run arg/usage edges", () => {
   it("finalize: --help prints help and exits OK", async () => {
     expect(await runCommand.run(["finalize", "--help"])).toBe(EXIT.OK);
   });
+  it("docs: --help prints help and exits OK", async () => {
+    expect(await runCommand.run(["docs", "--help"])).toBe(EXIT.OK);
+  });
+  it("e2e: --help prints help and exits OK", async () => {
+    expect(await runCommand.run(["e2e", "--help"])).toBe(EXIT.OK);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -915,6 +921,23 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     });
   });
 
+  it("runCreate: --resume + --e2e → UsageError naming the create-only flags (root-cause guard)", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    await expect(
+      runCreate(["--issue", "42", "--resume", "--e2e"], {
+        gitClient: git,
+        ghClient: gh,
+        cwd: "/x",
+        dataDir,
+      }),
+    ).rejects.toMatchObject({
+      isUsageError: true,
+      message: expect.stringMatching(/create-only and cannot combine with --resume/),
+    });
+  });
+
   it("runCreate: bare --workflow still creates a fresh run with mode='workflow' (guard is scoped to --resume)", async () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
@@ -965,6 +988,34 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     );
     expect(code).toBe(EXIT.OK);
     expect((await state.read("run-iq")).ignore_quota).toBe(true);
+  });
+
+  it("runCreate: --e2e → fresh run is born with e2e:true (persistence guard)", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const code = await runCreate(["--issue", "42", "--run-id", "run-e2e", "--e2e", "--workflow"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/x",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-e2e")).e2e).toBe(true);
+  });
+
+  it("runCreate: no --e2e → run defaults to e2e:false", async () => {
+    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
+    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
+    const gh = new FakeGhClient();
+    const code = await runCreate(["--issue", "42", "--run-id", "run-no-e2e", "--workflow"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/x",
+      dataDir,
+    });
+    expect(code).toBe(EXIT.OK);
+    expect((await state.read("run-no-e2e")).e2e).toBe(false);
   });
 
   // -------------------------------------------------------------------------

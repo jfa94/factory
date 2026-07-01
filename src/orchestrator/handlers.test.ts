@@ -141,6 +141,7 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
       ...(task.test_revision_feedback
         ? { test_revision_feedback: task.test_revision_feedback }
         : {}),
+      ...(task.e2e_feedback ? { e2e_feedback: task.e2e_feedback } : {}),
     };
     await state.update(RUN_ID, (s) => ({ ...s, tasks: { ...s.tasks, [full.task_id]: full } }));
     const run = await state.read(RUN_ID);
@@ -327,6 +328,26 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     expect(persisted.priorFailures[0]!.summary).toContain("auth.uid()");
   });
 
+  it("tests injects the e2e-reopen note (Decision 39) even at rung 1, alongside a test-revision note", async () => {
+    const deps = makeDeps();
+    const handlers = makePhaseHandlers(deps);
+    const ctx = await ctxFor({
+      task_id: "t-multi",
+      escalation_rung: 1,
+      e2e_feedback: "checkout: expected order confirmation, got 500",
+    });
+    const result = await handlers.tests(ctx);
+
+    expect(result.kind).toBe("spawn-agents");
+    if (result.kind !== "spawn-agents") throw new Error("unreachable");
+    const agent = result.request.agents[0]!;
+    const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref);
+    expect(persisted.injectedPriorFailure).toBe(true);
+    expect(persisted.priorFailures.some((f) => f.summary.includes("order confirmation"))).toBe(
+      true,
+    );
+  });
+
   it("tests threads the dialed effort into the request once the model has hit its ceiling (rung 3 = ceiling+xhigh)", async () => {
     const deps = makeDeps();
     const handlers = makePhaseHandlers(deps);
@@ -355,6 +376,25 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     if (result.kind !== "spawn-agents") throw new Error("unreachable");
     expect(result.request.resume_phase).toBe("verify");
     expect(result.request.agents[0]!.role).toBe("implementer");
+  });
+
+  it("exec injects the e2e-reopen note (Decision 39) into the implementer's context", async () => {
+    const deps = makeDeps();
+    const handlers = makePhaseHandlers(deps);
+    const ctx = await ctxFor({
+      task_id: "t-multi",
+      e2e_feedback: "checkout: expected order confirmation, got 500",
+    });
+    const result = await handlers.exec(ctx);
+
+    expect(result.kind).toBe("spawn-agents");
+    if (result.kind !== "spawn-agents") throw new Error("unreachable");
+    const agent = result.request.agents[0]!;
+    const persisted = await artifacts.getProducerContext(RUN_ID, agent.prompt_ref);
+    expect(persisted.injectedPriorFailure).toBe(true);
+    expect(persisted.priorFailures.some((f) => f.summary.includes("order confirmation"))).toBe(
+      true,
+    );
   });
 
   // -- verify (CLI single-step reporter; NO holdout) ------------------------

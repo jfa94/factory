@@ -22,7 +22,8 @@ export type TcbCategory =
   | "data-runs"
   | "data-specs"
   | "data-config"
-  | "docs-factory";
+  | "docs-factory"
+  | "e2e-suite";
 
 /** One compiled denylist rule. `test(absPath)` decides membership. */
 export interface TcbRule {
@@ -50,7 +51,7 @@ export interface TcbMatch {
  * WHERE the data dir is, never WHETHER it is protected.
  */
 export interface TcbContext {
-  /** The repo root (target repo) absolute path. Used for `.github/`, `hooks/`. */
+  /** The repo root (target repo) absolute path. Used for `.github/`, `hooks/`, `e2e/`. */
   readonly repoRoot?: string;
   /** The plugin data dir absolute path (out-of-repo `runs/`, `specs/`). */
   readonly dataDir?: string;

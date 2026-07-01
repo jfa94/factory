@@ -243,6 +243,17 @@ export const TaskStateSchema = z.object({
    */
   test_revision_feedback: z.string().optional(),
 
+  /**
+   * Feedback carried from a failing e2e journey spec into this task's NEXT
+   * implementation pass (the e2e reopen loop, Decision 39). Set by the e2e coroutine
+   * when it maps a failing spec to this task via the author manifest and resets the
+   * task to `pending`; injected into the regenerated producer's prior-failure context
+   * (mirrors `test_revision_feedback`, but originates from a RUN-LEVEL phase, not a
+   * per-task producer outcome). Cleared once the task ships again. Absent otherwise.
+   * Transient — not a failure field (allowed on any status).
+   */
+  e2e_feedback: z.string().optional(),
+
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: z.array(ReviewerResultSchema).default([]),
@@ -435,6 +446,70 @@ export const DocsPhaseSchema = z.object({
 export type DocsPhase = z.infer<typeof DocsPhaseSchema>;
 
 // ---------------------------------------------------------------------------
+// E2E phase marker + author manifest (engine-owned e2e phase, Decision 39)
+// ---------------------------------------------------------------------------
+
+/**
+ * Criticality by PERSISTENCE, not tags (Decision 39). `critical` specs are
+ * committed to the target repo's `e2e/` (proven via the fail-first proof, gate
+ * the run + CI); `throwaway` specs live only in the run's ephemeral out-of-repo
+ * dir (advisory, discarded at run end). Nothing is annotated inside the spec file
+ * itself — this enum only labels a manifest row, it is never written into the
+ * Playwright test source.
+ */
+export const E2eSpecKindEnum = z.enum(["critical", "throwaway"]);
+export type E2eSpecKind = z.infer<typeof E2eSpecKindEnum>;
+
+/**
+ * One author-emitted manifest row — the spec→task link (Decision 39: a manifest,
+ * not Playwright tags/annotations and not git provenance, since squash-merges
+ * destroy commit→task history at both task→staging and staging→develop). Fixed at
+ * authoring time; the e2e coroutine joins a failing spec back to its task(s)
+ * purely through this array, never through source inspection.
+ */
+export const E2eManifestEntrySchema = z.object({
+  /** Task id(s) this spec exercises (a critical journey spec may span >1 task). */
+  task_ids: z.array(z.string().min(1)).min(1),
+  /** Spec file path — repo-relative for `critical`, run-ephemeral-dir-relative for `throwaway`. */
+  spec_path: z.string().min(1),
+  kind: E2eSpecKindEnum,
+});
+export type E2eManifestEntry = z.infer<typeof E2eManifestEntrySchema>;
+
+/**
+ * Run-level e2e phase marker + author manifest (engine-owned e2e phase, ordered
+ * BEFORE docs). Unlike {@link DocsPhaseSchema} — written once and never
+ * re-entered — this object's `status` is CLEARED (set back to absent) on every
+ * reopen so `wantsE2e()` re-fires the phase once the reopened task settles, while
+ * `manifest` and `reopen_counts` PERSIST across the clear: the author is not
+ * re-invoked on later passes (throwaway specs are re-run, not re-authored) and the
+ * per-task reopen cap holds across the whole run, not just one pass.
+ *   - `status` absent  — phase not yet run this pass, or cleared for a reopen re-fire.
+ *   - `status` "done"  — every critical spec is green; the run proceeds to docs.
+ *   - `status` "failed"— run FAILS: residual critical red, an unmappable critical
+ *                        regression, or a cap-exhausted critical (Decision 39).
+ */
+export const E2ePhaseSchema = z.object({
+  status: z.enum(["done", "failed"]).optional(),
+  reason: z.string().optional(),
+  /**
+   * Non-gating note surfaced on a `done` phase — e.g. residual THROWAWAY red that
+   * didn't block completion (Decision 9: only critical red gates). Distinct from
+   * `reason`, which the T2 cross-field check reserves for `failed` (set IFF
+   * failed) — `advisory` is the `done`-side counterpart, never present on `failed`.
+   */
+  advisory: z.string().optional(),
+  /** Cumulative attempt count across ALL passes (1-indexed). */
+  attempts: z.number().int().nonnegative().optional(),
+  /** The author's spec→task manifest, fixed once authored and reused across passes. */
+  manifest: z.array(E2eManifestEntrySchema).default([]),
+  /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */
+  reopen_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  ended_at: z.string().optional(),
+});
+export type E2ePhase = z.infer<typeof E2ePhaseSchema>;
+
+// ---------------------------------------------------------------------------
 // RunState
 // ---------------------------------------------------------------------------
 
@@ -537,6 +612,16 @@ export const RunStateSchema = z.object({
   docs: DocsPhaseSchema.optional(),
 
   /**
+   * Whether this run opted into the e2e phase (the `--e2e` flag). Set once at
+   * `run create`; immutable for the run's lifetime — mirrors `ignore_quota`.
+   * Default false: a run without the flag never gates on `wantsE2e()`.
+   */
+  e2e: z.boolean().default(false),
+
+  /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
+  e2e_phase: E2ePhaseSchema.optional(),
+
+  /**
    * Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen.
    * Accumulated on each resume or rescue-reopen so the runtime circuit-breaker can deduct
    * real pause time from wall-time, preventing a false trip on a long-paused run. Default
@@ -585,6 +670,29 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
         code: z.ZodIssueCode.custom,
         path: ["docs", "reason"],
         message: `run '${run.run_id}' docs phase is '${run.docs.status}' but carries a reason (reason is set IFF failed)`,
+      });
+    }
+  }
+
+  // T2: E2ePhase "reason set IFF failed" — mirrors the DocsPhase check above. Unlike
+  // docs, `status` may also be legitimately ABSENT (pending, or cleared for a reopen
+  // re-fire) — a reason is meaningless then too, so the check only fires when status
+  // is present.
+  if (run.e2e_phase !== undefined && run.e2e_phase.status !== undefined) {
+    const isFailed = run.e2e_phase.status === "failed";
+    const hasReason = run.e2e_phase.reason != null && run.e2e_phase.reason.length > 0;
+    if (isFailed && !hasReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["e2e_phase", "reason"],
+        message: `run '${run.run_id}' e2e phase is 'failed' but has no reason`,
+      });
+    }
+    if (!isFailed && hasReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["e2e_phase", "reason"],
+        message: `run '${run.run_id}' e2e phase is '${run.e2e_phase.status}' but carries a reason (reason is set IFF failed)`,
       });
     }
   }

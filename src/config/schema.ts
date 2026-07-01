@@ -234,6 +234,51 @@ export const GitSchema = z
   .default({});
 
 /**
+ * Playwright e2e config (Decision 39). All optional/defaulted so a repo that never
+ * passes `--e2e` pays nothing. `startCommand`/`baseURL` are unset until `factory
+ * configure --set e2e.startCommand=… --set e2e.baseURL=…` runs; the e2e coroutine
+ * (`src/orchestrator/e2e.ts`) refuses to start the phase without both, rather than
+ * silently no-op-ing (the `redTestCommand` cautionary tale at :53-57 — declared but
+ * never load-bearing — must NOT repeat here: the runner module actually reads
+ * every key below).
+ */
+export const E2eConfigSchema = z
+  .object({
+    /**
+     * Repo-level "e2e IS configured" signal, distinct from the run's `--e2e` flag
+     * (that's "run this run WITH e2e"). Informational/future-gating only today —
+     * `startCommand`+`baseURL` presence is the real readiness check.
+     */
+    enabled: z.boolean().optional(),
+    /**
+     * Command that boots the target app, for both Playwright's `webServer` (test
+     * runs) and the e2e-author's live-exploration boot (`reuseExistingServer`).
+     * Required before a run may pass `--e2e`.
+     */
+    startCommand: z.string().optional(),
+    /** Base URL the app serves once `startCommand` is up. Required before `--e2e`. */
+    baseURL: z.string().optional(),
+    /**
+     * Repo-relative directory the COMMITTED critical suite lives in. Persistence
+     * in this directory IS the criticality signal (Decision 39) — no `@critical`
+     * tag exists.
+     */
+    testDir: z.string().min(1).default("e2e"),
+    /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
+    readyTimeoutMs: z.number().int().positive().default(30_000),
+    /**
+     * Per-task cap on e2e-triggered reopens (Decision 7). A critical spec still
+     * red after this many reopens of its mapped task fails the run outright
+     * instead of looping forever.
+     */
+    reopenCap: z.number().int().nonnegative().default(2),
+  })
+  .default({});
+
+/** Fully-resolved e2e config (all defaults applied). */
+export type E2eConfig = z.infer<typeof E2eConfigSchema>;
+
+/**
  * The single root config schema. Every sub-block defaults, so an empty object
  * (or a missing config file) parses to a complete config.
  */
@@ -246,6 +291,7 @@ export const ConfigSchema = z
     testWriter: TestWriterSchema,
     codex: CodexSchema,
     git: GitSchema,
+    e2e: E2eConfigSchema,
     /**
      * Cumulative genuine capability-budget task failures before the run aborts.
      * The signal is run-cumulative, not strictly consecutive (the breaker gate counts

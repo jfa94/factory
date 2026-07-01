@@ -393,3 +393,7 @@ dist/
 dist/*
 !dist/factory.js
 !dist/factory-hook.js
+
+# Playwright MCP session artifacts (accessibility snapshots etc.) — scratch from
+# interactive exploration via mcp__plugin_playwright_playwright__*, never committed.
+.playwright-mcp/

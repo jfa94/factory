@@ -12,13 +12,7 @@ describe("NEXT_KINDS / DRIVE_KINDS (engine-derived)", () => {
   // The sets themselves are derived from a `Record<Union["kind"], true>` mirror,
   // so omitting a kind is a compile error; this test pins the runtime values to
   // the same authoritative lists (catching an accidental EXTRA kind in the mirror).
-  const NEXT_AUTHORITATIVE = [
-    "work",
-    "finalize",
-    "document",
-    "done",
-    "pause",
-  ];
+  const NEXT_AUTHORITATIVE = ["work", "finalize", "document", "e2e", "done", "pause"];
   const DRIVE_AUTHORITATIVE = ["spawn", "done", "pause"];
 
   it("NEXT_KINDS is exactly the NextTask discriminants", () => {

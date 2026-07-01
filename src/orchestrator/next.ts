@@ -71,6 +71,10 @@ export type NextTask =
       readonly kind: "document";
     })
   | (NextContext & {
+      /** The e2e phase (Decision 39) — ordered BEFORE `document`. */
+      readonly kind: "e2e";
+    })
+  | (NextContext & {
       readonly kind: "done";
       readonly run_status: (typeof TERMINAL_RUN_STATUSES)[number];
     })
@@ -96,12 +100,35 @@ function isUnsatisfiableDep(run: RunState, depId: string): boolean {
  * True iff a fully-terminal run still needs its docs phase: prospective status
  * `completed`, docs not already `done`, and docs applicable to the target repo.
  * The caller MUST guarantee all tasks are terminal — decideFinalize throws otherwise.
+ *
+ * A `failed` e2e phase (Decision 39) skips docs entirely — the run is headed
+ * straight to finalize (which overrides the terminal status to `failed`; see
+ * finalize.ts), so documenting code the e2e verdict just condemned is pointless.
  */
 async function wantsDocs(deps: OrchestratorDeps, run: RunState): Promise<boolean> {
   if (run.docs?.status === "done") return false;
   if ((run.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false; // cap: treat docs as done
+  if (run.e2e_phase?.status === "failed") return false;
   if (decideFinalize(run).run_status !== "completed") return false;
   return deps.docsApplicable();
+}
+
+/**
+ * True iff a fully-terminal run still needs its e2e phase (Decision 39): the run
+ * opted in (`--e2e` → `run.e2e`), the phase has not already CONCLUDED this run
+ * (`done` or `failed` — a `failed` verdict carries straight through to finalize,
+ * it is never re-entered), and the run is PROSPECTIVELY `completed` (every task
+ * shipped). Ordered BEFORE `wantsDocs` — don't document code the e2e phase may
+ * still reopen a task to change.
+ *
+ * `e2e_phase.status` is CLEARED (reset to absent) by the e2e coroutine on every
+ * reopen, so this gate re-fires once the reopened task settles back to terminal —
+ * unlike docs, which never re-enters once `done`.
+ */
+function wantsE2e(run: RunState): boolean {
+  if (!run.e2e) return false;
+  if (run.e2e_phase?.status !== undefined) return false; // "done" or "failed" — concluded
+  return decideFinalize(run).run_status === "completed";
 }
 
 export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<NextTask> {
@@ -121,12 +148,15 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
 
   // 2. All-tasks-terminal check BEFORE the quota gate. A GENUINELY finished run
   //    early-returns here (a finished run must never write a pause checkpoint). But a
-  //    run whose tasks are all terminal yet whose docs phase is still pending is NOT
+  //    run whose tasks are all terminal yet whose e2e/docs phase is still pending is NOT
   //    finished: it falls through to the quota gate + checkpoint clear so a
-  //    docs-suspended run resumes cleanly, then returns `docs-ready` after step 4.
+  //    e2e/docs-suspended run resumes cleanly, then returns the phase kind after step 4.
+  //    e2e is evaluated BEFORE docs (Decision 39) and short-circuits it: `needsDocs`
+  //    is never even computed while e2e still has work to do.
   const allTerminal = Object.values(run.tasks).every((t) => isTerminalTaskStatus(t.status));
-  const needsDocs = allTerminal && (await wantsDocs(deps, run));
-  if (allTerminal && !needsDocs) {
+  const needsE2e = allTerminal && wantsE2e(run);
+  const needsDocs = allTerminal && !needsE2e && (await wantsDocs(deps, run));
+  if (allTerminal && !needsE2e && !needsDocs) {
     // Clear quota checkpoint before finalizing: a paused run whose tasks all complete
     // bypasses the step-4 clear below. Without this, a stop between this return and
     // factory-run-finalize strands the run as paused (stop-gate returns ALLOW for
@@ -155,6 +185,14 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
       status: patch.status,
       quota: patch.quota,
     }));
+  }
+
+  // E2E gate (Decision 39): a completed run that opted into `--e2e` and hasn't
+  // concluded its e2e phase yet. Checked BEFORE docs — a reopen loops back through
+  // the ready-task set below, and docs must not run against code the e2e verdict
+  // may still send back for rework.
+  if (needsE2e) {
+    return { ...ctx(), kind: "e2e" };
   }
 
   // Docs gate: a completed run with a pending, applicable docs phase. Reached only

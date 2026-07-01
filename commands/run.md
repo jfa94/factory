@@ -1,6 +1,6 @@
 ---
 description: "Start a fresh factory autonomous coding pipeline run (PRD issue → task PRs → staging → develop)"
-argument-hint: "(--issue <N> | --spec-id <id>) [--repo <owner/name>] [--workflow] [--no-ship] [--supersede | --resume] [--ignore-quota]"
+argument-hint: "(--issue <N> | --spec-id <id>) [--repo <owner/name>] [--workflow] [--no-ship] [--e2e] [--supersede | --resume] [--ignore-quota]"
 arguments:
   - name: "--repo"
     description: "Target GitHub repo as <owner>/<name> (OPTIONAL — auto-derived from the origin remote; pass to override)"
@@ -16,6 +16,9 @@ arguments:
     required: false
   - name: "--no-ship"
     description: "CREATE-ONLY ship selector: open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop. Cannot combine with --resume (rejected loud)"
+    required: false
+  - name: "--e2e"
+    description: "Opt into the run-level e2e phase (Decision 39): once all tasks are terminal, author + run Playwright journeys against staging before docs/finalize; a mappable failing journey reopens its task with feedback. Persisted on the run — CREATE-ONLY, like --workflow/--no-ship"
     required: false
   - name: "--supersede"
     description: "If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — also deletes the durable spec so Phase 1 regenerates from the PRD. Skips the conflict prompt. (Has no effect on the spec when combined with --spec-id, which bypasses Phase 1.)"
@@ -46,14 +49,14 @@ overrides: `--workflow` (run the background Workflow runner instead of session) 
 ## Both modes start the same
 
 Load the skill and run its Phases 0–2 (preconditions → spec loop → `factory run create
-[--workflow] [--no-ship] [--supersede | --resume] --session-id "$CLAUDE_CODE_SESSION_ID"`;
+[--workflow] [--no-ship] [--e2e] [--supersede | --resume] --session-id "$CLAUDE_CODE_SESSION_ID"`;
 read `run_id` from the emitted `{kind:"created"|"superseded", run}` envelope). Forward THIS
-command's `--workflow`/`--no-ship`/`--supersede`/`--resume`/`--ignore-quota` flags verbatim to Phase 2's `run
+command's `--workflow`/`--no-ship`/`--e2e`/`--supersede`/`--resume`/`--ignore-quota` flags verbatim to Phase 2's `run
 create` so the resolved mode + ship intent persist on the run — the quota gate paces in
 `session` and hard-stops without pacing in `workflow` (Decision 24), and `ship_mode` is read
-back by the workflow runner + resume + finalize (never re-passed). `--workflow`/`--no-ship`
-are **create-only** mode/ship selectors: combining either with `--resume` is rejected loud by
-`run create` (a resumed run keeps the `mode`/`ship_mode` it was born with — both immutable), so
+back by the workflow runner + resume + finalize (never re-passed). `--workflow`/`--no-ship`/`--e2e`
+are **create-only** selectors: combining any of them with `--resume` is rejected loud by
+`run create` (a resumed run keeps the `mode`/`ship_mode`/`e2e` it was born with — all immutable), so
 never let a mode flag ride a resume hand-off. Always pass `--session-id
 "$CLAUDE_CODE_SESSION_ID"` so the run records THIS session as its `owner_session` — the Stop
 gate then keeps the autonomous loop alive only here and lets other sessions stop freely
@@ -148,8 +151,9 @@ file-lock serialized). When it returns:
   re-runs `/factory:resume` after the window resets. Do NOT finalize.
 - otherwise → run the skill's Phase 4: `factory run finalize --run <run_id>` (ship mode is
   read from the run's persisted `ship_mode`), then `factory score` + `factory state --summary`,
-  and report. (Documentation is handled in-loop as the `docs-ready` engine stage before
-  finalize — not a separate post-finalize step here.)
+  and report. (On an `--e2e` run, the e2e phase and documentation are both handled in-loop as
+  engine stages — e2e before docs (Decision 39) — before finalize; not separate post-finalize
+  steps here.)
 
 ## Autonomous mode (MANDATORY — no opt-in, no opt-out)
 

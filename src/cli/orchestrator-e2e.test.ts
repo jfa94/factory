@@ -199,6 +199,7 @@ async function driveToTerminal(
     }
     if (next.kind === "pause") throw new Error(`unexpected quota stop: ${next.reason}`);
     if (next.kind === "document") throw new Error("unexpected docs-ready in E2E helper");
+    if (next.kind === "e2e") throw new Error("unexpected e2e-ready in E2E helper");
 
     const taskId = next.ready[0]!; // sequential orchestrator: first ready task
     let results: DriveResults | undefined;

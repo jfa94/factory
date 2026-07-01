@@ -68,6 +68,7 @@ describe("orchestrator transitions (shared loop + CLI ladder/fail logic)", () =>
           ...(t.ended_at ? { ended_at: t.ended_at } : {}),
           ...(t.producer_role ? { producer_role: t.producer_role } : {}),
           ...(t.test_revision_feedback ? { test_revision_feedback: t.test_revision_feedback } : {}),
+          ...(t.e2e_feedback ? { e2e_feedback: t.e2e_feedback } : {}),
           ...(t.spawn_in_flight ? { spawn_in_flight: t.spawn_in_flight } : {}),
         },
       },
@@ -131,6 +132,16 @@ describe("orchestrator transitions (shared loop + CLI ladder/fail logic)", () =>
     });
     await completeTask(deps, RUN_ID, "t1");
     expect((await readTask("t1")).spawn_in_flight).toBeUndefined();
+  });
+
+  it("completeTask clears any e2e_feedback (Decision 39 — cleared once the task ships again)", async () => {
+    await seedTask({
+      task_id: "t1",
+      status: "shipping",
+      e2e_feedback: "checkout: expected order confirmation, got 500",
+    });
+    await completeTask(deps, RUN_ID, "t1");
+    expect((await readTask("t1")).e2e_feedback).toBeUndefined();
   });
 
   // -- failTask / failStep --------------------------------------------------

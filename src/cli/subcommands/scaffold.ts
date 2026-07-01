@@ -237,6 +237,11 @@ const TEMPLATE_MANIFEST: readonly TemplateEntry[] = [
   { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
   { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
   { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true },
+  // e2e (Decision 39) — seed only; @playwright/test must already be a devDependency
+  // (scaffold never installs packages) and the config's webServer.command is a TODO
+  // the project fills in. testDir here MUST match `e2e.testDir` (default "e2e").
+  { rel: "playwright.config.ts", policy: "seed", nodeOnly: true },
+  { rel: "e2e/example.spec.ts", policy: "seed", nodeOnly: true },
 ];
 
 /** Mutable file buckets a scaffold run accumulates, surfaced in the report. */

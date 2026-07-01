@@ -14,5 +14,5 @@ export type { RescueScan, RescueTaskLine, RescueDisposition } from "./scan.js";
 export { assessWork } from "./assess.js";
 export type { WorkProbe, WorkAssessment, TaskWork } from "./assess.js";
 
-export { applyRescue } from "./apply.js";
-export type { RescueApplyOptions, RescueApplyResult } from "./apply.js";
+export { applyRescue, resetTaskRow } from "./apply.js";
+export type { RescueApplyOptions, RescueApplyResult, ResetTaskRowOpts } from "./apply.js";

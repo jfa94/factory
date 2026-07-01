@@ -167,7 +167,7 @@ construction site. The prior-spec fields are also untrusted: because `prior_spec
 `prior_tasks` derive from the untrusted PRD, the `spec-generator`'s Untrusted Input Contract
 treats them and `review_feedback` as data to patch, never directives to obey.
 
-## `run <create|resume|finalize|docs|cancel>`
+## `run <create|resume|finalize|docs|e2e|cancel>`
 
 ### `run create`
 
@@ -179,23 +179,24 @@ loudly at seed time.
 
 ```
 factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>]
-                   [--new] [--supersede | --resume] [--workflow] [--no-ship] [--ignore-quota]
-                   [--session-id <id>]
+                   [--new] [--supersede | --resume] [--workflow] [--no-ship] [--e2e]
+                   [--ignore-quota] [--session-id <id>]
 ```
 
-| Flag                  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--repo <owner/name>` | **Optional.** Repo identity (the first key of the spec store). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with the remote fails loud.                                                                                                                                                                                                                                                                                  |
-| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`.                                                                                                                                                                                                                                                                                                                                                                                          |
-| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                                                                                                                                                                                                                                                                                                            |
-| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                                                                                                                                                                                                                                                                                                           |
-| `--new`               | Force a fresh run, bypassing the active-run conflict scan.                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--supersede`         | If an active run exists for this spec, mark it `superseded`, delete its `staging-<run-id>` branch (auto-closing its task PRs), then create a fresh run. Emits `{kind:"superseded", run, supersededId}`. Mutually exclusive with `--resume`. **Run-level only** — `run create` does not touch the durable spec; the runner regenerates it by forwarding `--supersede` into Phase 1's [`spec resolve`](#spec-resolvegatestore) (skipped when `--spec-id` is used). |
-| `--resume`            | If an active run exists, do not create — return the conflict (exit `3`) so the caller hands off to [`resume`](#resume). Mutually exclusive with `--supersede`.                                                                                                                                                                                                                                                                                                   |
-| `--workflow`          | Run the parallel background Workflow runner. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                                                                                                                                                                                                                                             |
-| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging-<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow runner + resume + finalize read it without re-passing.                                                                                                                                                                                                |
-| `--ignore-quota`      | Bypass the weekly-quota hard stop **and** the per-step quota pacer for this run. Persisted as `ignore_quota: true` so both orchestrators + runners skip the gate without re-passing. Lets create/supersede proceed even when the existing run is 7d-parked. Operator override for a mistaken suspend / manual reset.                                                                                                                                             |
-| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`. **Required for session-mode creates** — an ownerless session-mode run is rejected as a usage error (the Stop hook finalizes via `findActiveByOwner`, which can never match an ownerless run). Workflow-mode creates are exempt (the Workflow runner owns finalization).                                                                                   |
+| Flag                  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <owner/name>` | **Optional.** Repo identity (the first key of the spec store). Auto-derived from the `origin` remote when omitted; an explicit value that disagrees with the remote fails loud.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `--issue <n>`         | PRD issue number — the stable lookup key. One of `--issue`/`--spec-id`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `--spec-id <id>`      | Explicit `<issue>-<slug>` spec id. Mutually exclusive with `--issue`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `--run-id <id>`       | Override the generated `run-YYYYMMDD-HHMMSS` id (determinism/tests). A named id forces a fresh create.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `--new`               | Force a fresh run, bypassing the active-run conflict scan.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `--supersede`         | If an active run exists for this spec, mark it `superseded`, delete its `staging-<run-id>` branch (auto-closing its task PRs), then create a fresh run. Emits `{kind:"superseded", run, supersededId}`. Mutually exclusive with `--resume`. **Run-level only** — `run create` does not touch the durable spec; the runner regenerates it by forwarding `--supersede` into Phase 1's [`spec resolve`](#spec-resolvegatestore) (skipped when `--spec-id` is used).                                                                                                                                                                                     |
+| `--resume`            | If an active run exists, do not create — return the conflict (exit `3`) so the caller hands off to [`resume`](#resume). Mutually exclusive with `--supersede`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `--workflow`          | Run the parallel background Workflow runner. **Default (omit): session** — sequential, quota-paced, in-session agents. Persisted as `mode` (`workflow` disables pacing — hard-stop).                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `--no-ship`           | Open the task/rollup PRs but never merge. **Default (omit): live** — serial-merge each task into the run's `staging-<run-id>` branch and the rollup into develop. Persisted as `ship_mode` so the workflow runner + resume + finalize read it without re-passing.                                                                                                                                                                                                                                                                                                                                                                                    |
+| `--e2e`               | Opt into the run-level **e2e phase** ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)): after every task is terminal, author + run Playwright journeys against the integrated staging app before docs/finalize; a mappable failing journey reopens its task with feedback. Persisted as `e2e: true`. **Create-only + immutable on resume**, exactly like `--workflow`/`--no-ship` — rejected loud if paired with `--resume`. Requires `e2e.startCommand` + `e2e.baseURL` configured, or the phase suspends. See [Run with end-to-end tests](../guides/run-with-e2e.md). |
+| `--ignore-quota`      | Bypass the weekly-quota hard stop **and** the per-step quota pacer for this run. Persisted as `ignore_quota: true` so both orchestrators + runners skip the gate without re-passing. Lets create/supersede proceed even when the existing run is 7d-parked. Operator override for a mistaken suspend / manual reset.                                                                                                                                                                                                                                                                                                                                 |
+| `--session-id <id>`   | Owning Claude Code session id for the session-scoped Stop gate. Defaults to `$CLAUDE_CODE_SESSION_ID`. **Required for session-mode creates** — an ownerless session-mode run is rejected as a usage error (the Stop hook finalizes via `findActiveByOwner`, which can never match an ownerless run). Workflow-mode creates are exempt (the Workflow runner owns finalization).                                                                                                                                                                                                                                                                       |
 
 **Autonomy gate (mandatory, no opt-out):** `run create` HALTS loud (`NotAutonomousError`,
 exit 1) unless the session is autonomous (`FACTORY_AUTONOMOUS_MODE=1`). The pipeline runs
@@ -304,6 +305,60 @@ factory run docs [--run <id>] [--results <path>]
 The runner runs `run docs` only when [`next-task`](#next-task) emits `document`. `next-task`
 withholds `finalize` until the `docs` phase is `done`, so `run finalize` never
 ships a half-documented rollup.
+
+### `run e2e`
+
+Orchestrator (emit + record), symmetric with [`run docs`](#run-docs): the engine-owned
+end-to-end phase on an `--e2e` run ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)),
+ordered immediately **before** the docs phase. The CLI **never spawns the e2e-author** — a
+runner does. Only ever runs when `next-task` schedules the e2e stage; a run created without
+`--e2e` never reaches it.
+
+```
+factory run e2e [--run <id>] [--results <path>]
+```
+
+The phase does two distinct kinds of work, so a single subcommand covers both — the
+returned envelope's `kind` tells the runner whether an agent is needed:
+
+- **Emit** (no `--results`): on the **first** entry (`e2e_phase` unset) it prepares an
+  author worktree on an `e2e-<run-id>` branch off the run's `staging-<run-id>` tip and
+  returns a `spawn` request
+  `{kind:"spawn", run_id, worktree, base_ref, staging_branch, e2e_branch, throwaway_dir, model, max_turns, prompt}`.
+  The prompt directs the `e2e-author` to boot the app (`e2e.startCommand` → `e2e.baseURL`),
+  explore each user-facing task, author **critical** journey specs into the worktree's
+  `e2e.testDir` (committed) plus **throwaway** specs into `throwaway_dir` (out-of-repo,
+  never committed), self-validate them green against staging, and return a manifest —
+  **without pushing**. On a **re-entry** (after a reopened task settles back to terminal)
+  it does not spawn — it re-runs the already-authored suite mechanically and returns a
+  conclusive `done` | `failed` | `reopen` | `suspend`. If `e2e.startCommand` /
+  `e2e.baseURL` are unset it returns `{kind:"suspend", …}` and suspends the run.
+- **Record** (`--results <path>`): reads the e2e-author's
+  `{status:"<STATUS line>", manifest:[{task_ids, spec_path, kind}]}` envelope
+  (`E2eResultsSchema`). Any non-`DONE` author status fails the whole e2e phase (no
+  re-author retry loop). On `DONE` it runs the **fail-first proof** on every critical
+  spec (red against the base branch with its `control:` assertion green; green against
+  staging), merges only the proven critical specs into `staging-<run-id>`, then runs the
+  full suite and applies the disposition.
+
+Both paths converge on the same suite-run decision, which returns one of:
+
+- `{kind:"done", run_id}` — no critical spec is red (a residual throwaway red becomes an
+  advisory line in the report, never a blocker); the phase is marked `done` and the run
+  proceeds to docs/finalize.
+- `{kind:"reopen", run_id, task_ids, reason}` — a mappable spec failed; the named tasks
+  are reset to `pending` carrying the failure as `e2e_feedback` (reusing the
+  `resetTaskRow` rescue primitive). **The run status stays `running`** — only task rows
+  reset. Pass 1 reopens for any mappable failure (critical or throwaway); pass 2+ reopens
+  only for critical. The e2e phase re-fires once the reopened tasks settle.
+- `{kind:"failed", run_id, reason}` — an unmappable critical failure (no manifest entry
+  names the failing spec), an exhausted `e2e.reopenCap`, a rejected fail-first proof, or a
+  non-`DONE` author status. The docs phase is then skipped.
+- `{kind:"suspend", run_id, reason}` — `e2e.startCommand`/`e2e.baseURL` not configured;
+  resumable via `/factory:resume` after configuring them.
+
+`next-task` schedules e2e before docs, so a failed e2e phase never reaches the docs or
+rollup steps. See [Run with end-to-end tests](../guides/run-with-e2e.md).
 
 ### `run cancel`
 

@@ -512,6 +512,139 @@ describe("docs-ready gate", () => {
   });
 });
 
+describe("e2e-ready gate (Decision 39)", () => {
+  const DONE_AT = "2026-01-01T00:00:00.000Z";
+
+  it("completed + e2e opted-in + phase not yet run → e2e-ready", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, e2e: true }));
+      expect((await nextTask(deps, runId)).kind).toBe("e2e");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("completed + e2e NOT opted-in → falls straight through to finalize (no e2e gate)", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("completed + e2e phase already done → skips e2e, proceeds to finalize", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({
+        ...s,
+        e2e: true,
+        e2e_phase: { status: "done", manifest: [], reopen_counts: {}, ended_at: DONE_AT },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("completed + e2e phase failed → finalize directly, never re-enters e2e", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({
+        ...s,
+        e2e: true,
+        e2e_phase: {
+          status: "failed",
+          reason: "checkout: cap-exhausted critical",
+          manifest: [],
+          reopen_counts: {},
+          ended_at: DONE_AT,
+        },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("e2e precedes docs — a docs-applicable run with e2e still pending gets e2e, not document", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({ ...s, e2e: true }));
+      expect((await nextTask(deps, runId)).kind).toBe("e2e");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("a failed e2e phase skips docs too — finalize, not document, even when docs is applicable", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+      docsApplicable: true,
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      await state.update(runId, (s) => ({
+        ...s,
+        e2e: true,
+        e2e_phase: {
+          status: "failed",
+          reason: "unmappable critical regression",
+          manifest: [],
+          reopen_counts: {},
+          ended_at: DONE_AT,
+        },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("finalize");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("e2e-cleared-for-reopen run resumes through the quota gate back to e2e (status cleared to running)", async () => {
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({
+      tasks: [{ task_id: "T1" }],
+    });
+    try {
+      await state.updateTask(runId, "T1", (t) => ({ ...t, status: "done", ended_at: DONE_AT }));
+      // e2e_phase.status absent = cleared for a reopen re-fire (manifest/counts persist).
+      await state.update(runId, (s) => ({
+        ...s,
+        e2e: true,
+        status: "suspended",
+        quota: { binding_window: "5h" as const, resets_at_epoch: 1_700_018_000 },
+        e2e_phase: {
+          manifest: [{ task_ids: ["T1"], spec_path: "e2e/x.spec.ts", kind: "critical" }],
+          reopen_counts: { T1: 1 },
+        },
+      }));
+      expect((await nextTask(deps, runId)).kind).toBe("e2e");
+      const resumed = await state.read(runId);
+      expect(resumed.status).toBe("running");
+      expect(resumed.quota).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
 describe("docs ordering invariant", () => {
   const DONE_AT = "2026-01-01T00:00:00.000Z";
 

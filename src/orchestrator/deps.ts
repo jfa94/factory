@@ -38,6 +38,8 @@ export {
   deriveMergeGateVerdict,
   mergeGateBlockReason,
   StateManager,
+  E2eSpecKindEnum,
+  E2eManifestEntrySchema,
 } from "../types/index.js";
 export type {
   Config,
@@ -59,6 +61,9 @@ export type {
   AgentSpec,
   SpawnRole,
   TaskPhase,
+  E2eSpecKind,
+  E2eManifestEntry,
+  E2ePhase,
 } from "../types/index.js";
 
 // --- git / PR I/O (src/git) -------------------------------------------------
@@ -184,3 +189,16 @@ export type {
   HoldoutValidateInput,
   HoldoutValidatorRunner,
 } from "../verifier/holdout/index.js";
+
+// --- e2e runner (src/verifier/e2e) — Decision 39 ----------------------------
+export { runE2e, DefaultPlaywrightTool } from "../verifier/e2e/index.js";
+export type {
+  E2eRunOpts,
+  E2eResults,
+  E2eSpecResult,
+  PlaywrightTool,
+} from "../verifier/e2e/index.js";
+
+// --- rescue reset primitive (src/rescue) — reused by the e2e reopen loop ----
+export { resetTaskRow } from "../rescue/index.js";
+export type { ResetTaskRowOpts } from "../rescue/index.js";

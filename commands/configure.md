@@ -146,6 +146,26 @@ config feeds both the local gate and CI (see [/factory:scaffold](./scaffold.md))
 | `maxTurnsDeep`  | 40      | Max turns for a deep review pass                  |
 | `maxTurnsQuick` | 20      | Max turns for a quick review pass                 |
 
+### E2E phase (`e2e.*`, Decision 39)
+
+| Key              | Default | Meaning                                                                                                                                    |
+| ---------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`        | —       | Repo-level "e2e is configured" signal (informational; readiness is actually gated on `startCommand`+`baseURL` below)                       |
+| `startCommand`   | —       | Boots the target app — for Playwright's `webServer` AND the e2e-author's live-exploration boot. **Required** before a run may pass `--e2e` |
+| `baseURL`        | —       | Base URL the app serves once `startCommand` is up. **Required** before `--e2e`                                                             |
+| `testDir`        | e2e     | Repo-relative dir the COMMITTED critical suite lives in — persistence here IS the criticality signal, no `@critical` tag exists            |
+| `readyTimeoutMs` | 30000   | Max wait for `startCommand` to become ready before the boot fails                                                                          |
+| `reopenCap`      | 2       | Per-task cap on e2e-triggered reopens; a critical spec still red after this many fails the run outright                                    |
+
+> `startCommand`/`baseURL` unset on an `--e2e` run **suspends** the phase loud
+> (resumable via `/factory:resume`) rather than skipping it silently — set both
+> before your first `--e2e` run:
+>
+> ```bash
+> factory configure --set e2e.startCommand="npm run dev"
+> factory configure --set e2e.baseURL="http://localhost:3000"
+> ```
+
 ### Quota pacer (`quota.*`)
 
 `sleepCapSec` (540), `maxWaitCycles` (60), `maxStaleCycles` (6), `wallBudgetMin` (75),
