@@ -7760,6 +7760,7 @@ var StateManager = class _StateManager {
       ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
       ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
+      ...args.debug !== void 0 ? { debug: args.debug } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,

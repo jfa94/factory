@@ -529,8 +529,8 @@ var require_graceful_fs = __commonJS({
       fs2.createReadStream = createReadStream;
       fs2.createWriteStream = createWriteStream;
       var fs$readFile = fs2.readFile;
-      fs2.readFile = readFile14;
-      function readFile14(path5, options, cb) {
+      fs2.readFile = readFile15;
+      function readFile15(path5, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$readFile(path5, options, cb);
@@ -1673,6 +1673,9 @@ function createLogger(scope) {
 }
 var log = createLogger("factory");
 
+// src/shared/json.ts
+import { readFile } from "node:fs/promises";
+
 // src/shared/atomic-write.ts
 import { mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname, basename, join } from "node:path";
@@ -1743,8 +1746,14 @@ function parseJson(text, sourcePath) {
     );
   }
 }
+async function readJsonFile(path5) {
+  return parseJson(await readFile(path5, "utf8"), path5);
+}
 function stringifyJson(value) {
   return JSON.stringify(value, null, 2) + "\n";
+}
+async function writeJsonFile(path5, value) {
+  await atomicWriteFile(path5, stringifyJson(value));
 }
 
 // node_modules/zod/v3/external.js
@@ -6512,60 +6521,60 @@ var RunStateSchema = external_exports.object({
   updated_at: external_exports.string(),
   ended_at: external_exports.string().nullable().default(null)
 });
-function refineRunCrossFields(run9, ctx) {
+function refineRunCrossFields(run10, ctx) {
   const quotaStatuses = ["paused", "suspended"];
-  if (run9.quota != null && !quotaStatuses.includes(run9.status)) {
+  if (run10.quota != null && !quotaStatuses.includes(run10.status)) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["quota"],
-      message: `run '${run9.run_id}' carries a quota checkpoint but status is '${run9.status}' (a quota checkpoint is valid only while paused|suspended)`
+      message: `run '${run10.run_id}' carries a quota checkpoint but status is '${run10.status}' (a quota checkpoint is valid only while paused|suspended)`
     });
   }
-  if (run9.docs !== void 0) {
-    const isFailed = run9.docs.status === "failed";
-    const hasReason = run9.docs.reason != null && run9.docs.reason.length > 0;
+  if (run10.docs !== void 0) {
+    const isFailed = run10.docs.status === "failed";
+    const hasReason = run10.docs.reason != null && run10.docs.reason.length > 0;
     if (isFailed && !hasReason) {
       ctx.addIssue({
         code: external_exports.ZodIssueCode.custom,
         path: ["docs", "reason"],
-        message: `run '${run9.run_id}' docs phase is 'failed' but has no reason`
+        message: `run '${run10.run_id}' docs phase is 'failed' but has no reason`
       });
     }
     if (!isFailed && hasReason) {
       ctx.addIssue({
         code: external_exports.ZodIssueCode.custom,
         path: ["docs", "reason"],
-        message: `run '${run9.run_id}' docs phase is '${run9.docs.status}' but carries a reason (reason is set IFF failed)`
+        message: `run '${run10.run_id}' docs phase is '${run10.docs.status}' but carries a reason (reason is set IFF failed)`
       });
     }
   }
-  if (run9.e2e_phase !== void 0 && run9.e2e_phase.status !== void 0) {
-    const isFailed = run9.e2e_phase.status === "failed";
-    const hasReason = run9.e2e_phase.reason != null && run9.e2e_phase.reason.length > 0;
+  if (run10.e2e_phase !== void 0 && run10.e2e_phase.status !== void 0) {
+    const isFailed = run10.e2e_phase.status === "failed";
+    const hasReason = run10.e2e_phase.reason != null && run10.e2e_phase.reason.length > 0;
     if (isFailed && !hasReason) {
       ctx.addIssue({
         code: external_exports.ZodIssueCode.custom,
         path: ["e2e_phase", "reason"],
-        message: `run '${run9.run_id}' e2e phase is 'failed' but has no reason`
+        message: `run '${run10.run_id}' e2e phase is 'failed' but has no reason`
       });
     }
     if (!isFailed && hasReason) {
       ctx.addIssue({
         code: external_exports.ZodIssueCode.custom,
         path: ["e2e_phase", "reason"],
-        message: `run '${run9.run_id}' e2e phase is '${run9.e2e_phase.status}' but carries a reason (reason is set IFF failed)`
+        message: `run '${run10.run_id}' e2e phase is '${run10.e2e_phase.status}' but carries a reason (reason is set IFF failed)`
       });
     }
-    const hasAdvisory = run9.e2e_phase.advisory != null && run9.e2e_phase.advisory.length > 0;
+    const hasAdvisory = run10.e2e_phase.advisory != null && run10.e2e_phase.advisory.length > 0;
     if (isFailed && hasAdvisory) {
       ctx.addIssue({
         code: external_exports.ZodIssueCode.custom,
         path: ["e2e_phase", "advisory"],
-        message: `run '${run9.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`
+        message: `run '${run10.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`
       });
     }
   }
-  for (const [k, value] of Object.entries(run9.tasks)) {
+  for (const [k, value] of Object.entries(run10.tasks)) {
     if (k !== value.task_id) {
       ctx.addIssue({
         code: external_exports.ZodIssueCode.custom,
@@ -6625,7 +6634,7 @@ function mergeGateBlockReason(reviewers, gateEvidence) {
 }
 
 // src/core/state/manager.ts
-import { mkdir as mkdir4, readFile, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
+import { mkdir as mkdir4, readFile as readFile2, readdir, rename as rename2, rm, symlink, unlink as unlink2 } from "node:fs/promises";
 import { existsSync as existsSync4 } from "node:fs";
 import { dirname as dirname3, join as join4 } from "node:path";
 
@@ -6885,6 +6894,7 @@ var StateManager = class _StateManager {
       ...args.staging_branch !== void 0 ? { staging_branch: args.staging_branch } : {},
       ...args.ignore_quota !== void 0 ? { ignore_quota: args.ignore_quota } : {},
       ...args.e2e !== void 0 ? { e2e: args.e2e } : {},
+      ...args.debug !== void 0 ? { debug: args.debug } : {},
       spec: args.spec,
       tasks: {},
       started_at: now,
@@ -6910,7 +6920,7 @@ var StateManager = class _StateManager {
    */
   async read(runId) {
     const path5 = this.statePath(runId);
-    const raw = await readFile(path5, "utf8");
+    const raw = await readFile2(path5, "utf8");
     return _StateManager.guardedParse(parseJson(raw, path5), path5);
   }
   /**
@@ -6952,7 +6962,7 @@ var StateManager = class _StateManager {
     const statePath = join4(link, "state.json");
     let raw;
     try {
-      raw = await readFile(statePath, "utf8");
+      raw = await readFile2(statePath, "utf8");
     } catch (err) {
       if (err.code === "ENOENT") return null;
       throw err;
@@ -7663,13 +7673,191 @@ var configureCommand = {
   }
 };
 
+// src/cli/subcommands/debug.ts
+import { join as join18 } from "node:path";
+
+// src/core/phase-machine/phases.ts
+var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
+var RunPhaseEnum = external_exports.enum(["finalize"]);
+var TASK_PHASE_ORDER = TASK_PHASES;
+function nextPhase(s) {
+  const i = TASK_PHASE_ORDER.indexOf(s);
+  if (i < 0) {
+    throw new Error(`nextPhase: '${s}' is not a known task phase`);
+  }
+  const next = TASK_PHASE_ORDER[i + 1];
+  return next ?? null;
+}
+function phaseToInFlightStatus(s) {
+  switch (s) {
+    case "preflight":
+      return TaskStatusEnum.enum.pending;
+    case "tests":
+      return TaskStatusEnum.enum.executing;
+    case "exec":
+      return TaskStatusEnum.enum.executing;
+    case "verify":
+      return TaskStatusEnum.enum.reviewing;
+    case "ship":
+      return TaskStatusEnum.enum.shipping;
+  }
+}
+
+// src/core/phase-machine/spawn.ts
+var SpawnRoleEnum = external_exports.enum([
+  "test-writer",
+  "implementer",
+  "implementation-reviewer",
+  "quality-reviewer",
+  "architecture-reviewer",
+  "security-reviewer",
+  "silent-failure-hunter",
+  "type-design-reviewer",
+  "systemic-failure-reviewer",
+  "scribe"
+]);
+var AgentSpecSchema = external_exports.object({
+  /** The reviewer/producer role (closed set). */
+  role: SpawnRoleEnum,
+  /** Worktree isolation. Defaults to "worktree". */
+  isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
+  /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
+  model: external_exports.string().min(1),
+  /** Hard turn budget for the agent (positive integer). */
+  max_turns: external_exports.number().int().positive(),
+  /** Pointer to the prompt artifact, run-store relative (non-empty). */
+  prompt_ref: external_exports.string().min(1),
+  /**
+   * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
+   * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
+   * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
+   */
+  effort: EffortEnum.optional()
+});
+var SpawnRequestSchema = external_exports.object({
+  /** Engine resumes here after the agents return. A per-task phase. */
+  resume_phase: TaskPhaseEnum,
+  /** Agents to spawn; at least one (an empty request is a programming error). */
+  agents: external_exports.array(AgentSpecSchema).min(1)
+});
+function parseSpawnRequest(raw) {
+  return SpawnRequestSchema.parse(raw);
+}
+
+// src/core/phase-machine/result.ts
+function assertNever(x) {
+  throw new Error(
+    `assertNever: unhandled value ${JSON.stringify(x)} \u2014 a PhaseResult.kind was not handled`
+  );
+}
+function advance(to) {
+  return { kind: "advance", to };
+}
+function spawn(request) {
+  return { kind: "spawn-agents", request };
+}
+function waitRetry(phase, reason, attempt, max_attempts) {
+  if (attempt > max_attempts) {
+    throw new Error(
+      `waitRetry: wait-retry for phase '${phase}' exceeded max_attempts (${attempt} > ${max_attempts})`
+    );
+  }
+  return { kind: "wait-retry", phase, reason, attempt, max_attempts };
+}
+function taskDone() {
+  return { kind: "task-terminal", outcome: { outcome: "done" } };
+}
+function finalizeTerminal(run_status) {
+  return { kind: "finalize-terminal", run_status };
+}
+
+// src/core/phase-machine/engine.ts
+async function runPhase(phase, ctx, handlers) {
+  const result = await dispatch(phase, ctx, handlers);
+  return checkResult(phase, result);
+}
+async function dispatch(phase, ctx, handlers) {
+  const runParsed = RunPhaseEnum.safeParse(phase);
+  if (runParsed.success) {
+    const runPhaseName = runParsed.data;
+    switch (runPhaseName) {
+      case "finalize":
+        return handlers.finalize(ctx);
+      default:
+        return assertNever(runPhaseName);
+    }
+  }
+  const parsed = TaskPhaseEnum.safeParse(phase);
+  if (!parsed.success) {
+    throw new Error(`runPhase: unknown phase '${String(phase)}'`);
+  }
+  const taskPhase = parsed.data;
+  switch (taskPhase) {
+    case "preflight":
+      return handlers.preflight(ctx);
+    case "tests":
+      return handlers.tests(ctx);
+    case "exec":
+      return handlers.exec(ctx);
+    case "verify":
+      return handlers.verify(ctx);
+    case "ship":
+      return handlers.ship(ctx);
+    default:
+      return assertNever(taskPhase);
+  }
+}
+function checkResult(phase, result) {
+  if (RunPhaseEnum.safeParse(phase).success) {
+    if (result.kind !== "finalize-terminal") {
+      throw new Error(
+        `runPhase: run-level phase '${String(phase)}' returned '${result.kind}' \u2014 finalize is terminal and must return only 'finalize-terminal' (it must never spin)`
+      );
+    }
+    return result;
+  }
+  switch (result.kind) {
+    case "advance":
+    case "spawn-agents":
+    case "graceful-stop":
+    case "task-terminal":
+      return result;
+    case "wait-retry": {
+      if (result.attempt > result.max_attempts) {
+        throw new Error(
+          `runPhase: wait-retry for phase '${result.phase}' exceeded max_attempts (${result.attempt} > ${result.max_attempts}); caller must classify a fail (reason: ${result.reason})`
+        );
+      }
+      return result;
+    }
+    case "finalize-terminal":
+      throw new Error(
+        `runPhase: per-task phase '${String(phase)}' returned 'finalize-terminal' \u2014 that result is reserved for the run-level finalize phase`
+      );
+    default:
+      return assertNever(result);
+  }
+}
+function decideFinalize(run10) {
+  const tasks = Object.values(run10.tasks);
+  const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
+  if (nonTerminal.length > 0) {
+    const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
+    throw new Error(
+      `decideFinalize: ${nonTerminal.length} non-terminal task(s) remain [${ids}] \u2014 finalize is terminal and must not be called with in-flight work (would spin in bash)`
+    );
+  }
+  const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
+  return finalizeTerminal(allDone ? "completed" : "failed");
+}
+
 // src/shared/exec.ts
-import { spawn } from "node:child_process";
+import { spawn as spawn2 } from "node:child_process";
 var DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
 function exec(command, args = [], opts = {}) {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
   return new Promise((resolve2, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn2(command, args, {
       cwd: opts.cwd,
       env: opts.envMode === "replace" ? opts.env ?? {} : opts.env ? { ...process.env, ...opts.env } : process.env,
       shell: opts.shell ?? false,
@@ -7756,7 +7944,7 @@ ${result.stderr.trim()}`
 };
 
 // src/shared/jsonl.ts
-import { appendFile, mkdir as mkdir5, readFile as readFile2 } from "node:fs/promises";
+import { appendFile, mkdir as mkdir5, readFile as readFile3 } from "node:fs/promises";
 import { dirname as dirname4 } from "node:path";
 async function appendJsonl(path5, record) {
   await mkdir5(dirname4(path5), { recursive: true });
@@ -8363,14 +8551,14 @@ async function resolveSetupCommand(worktreePath, setupCommand, fileExists) {
 }
 async function provisionWorktree(args) {
   const fileExists = args.fileExists ?? defaultFileExists;
-  const run9 = args.run ?? defaultRun;
+  const run10 = args.run ?? defaultRun;
   const command = await resolveSetupCommand(args.path, args.setupCommand, fileExists);
   if (command === null) {
     log9.debug(`no setupCommand and no lockfile in ${args.path} \u2014 skipping worktree provisioning`);
     return;
   }
   log9.info(`provisioning worktree: ${command} (cwd=${args.path})`);
-  const res = await run9(command, args.path);
+  const res = await run10(command, args.path);
   if (res.code !== 0) {
     const detail = res.stderr.trim();
     throw new Error(
@@ -8652,595 +8840,505 @@ function resolveStagingBranch(runId, pinned) {
   return runStagingBranch(runId);
 }
 
-// src/cli/current.ts
-async function readCurrentForCwd(state, overrides = {}) {
-  const cwd = overrides.cwd ?? process.cwd();
-  const gitClient = overrides.gitClient ?? new DefaultGitClient();
-  let repo;
-  try {
-    repo = await resolveRepo({ cwd, gitClient });
-  } catch {
-    return state.readCurrent();
+// src/scoring/partial-report.ts
+function buildPartialReport(run10, request, opts = {}) {
+  const specById = new Map(request.tasks.map((t) => [t.task_id, t]));
+  const orderOf = new Map(request.tasks.map((t, i) => [t.task_id, i]));
+  const shipped = [];
+  const failures = [];
+  const incomplete = [];
+  for (const task of Object.values(run10.tasks)) {
+    const spec = specById.get(task.task_id);
+    if (spec === void 0) {
+      throw new Error(
+        `buildPartialReport: run task '${task.task_id}' is absent from spec '${request.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run10.run_id})`
+      );
+    }
+    if (task.status === "done") {
+      shipped.push({
+        task_id: task.task_id,
+        title: spec.title,
+        branch: task.branch,
+        pr_number: task.pr_number
+      });
+    } else if (task.status === "failed") {
+      failures.push({
+        task_id: task.task_id,
+        title: spec.title,
+        failure_class: task.failure_class,
+        failure_reason: task.failure_reason,
+        unmet_criteria: [...spec.acceptance_criteria],
+        branch: task.branch,
+        pr_number: task.pr_number
+      });
+    } else {
+      incomplete.push({ task_id: task.task_id, title: spec.title, status: task.status });
+    }
   }
-  return state.readCurrentForRepo(repo);
+  const bySpecOrder = (a, b) => (orderOf.get(a.task_id) ?? 0) - (orderOf.get(b.task_id) ?? 0);
+  shipped.sort(bySpecOrder);
+  failures.sort(bySpecOrder);
+  incomplete.sort(bySpecOrder);
+  return {
+    run_id: run10.run_id,
+    run_status: run10.status,
+    spec_id: run10.spec.spec_id,
+    issue_number: run10.spec.issue_number,
+    repo: run10.spec.repo,
+    generated_at: opts.now ?? nowIso(),
+    totals: {
+      total: shipped.length + failures.length + incomplete.length,
+      shipped: shipped.length,
+      failed: failures.length,
+      incomplete: incomplete.length
+    },
+    shipped,
+    failures,
+    incomplete,
+    ...run10.e2e_phase?.status === "failed" ? { e2e_failure: run10.e2e_phase.reason } : {},
+    ...run10.e2e_phase?.status === "done" && run10.e2e_phase.advisory !== void 0 ? { e2e_advisory: run10.e2e_phase.advisory } : {}
+  };
 }
-
-// src/cli/subcommands/state.ts
-var HELP2 = `factory state \u2014 read run state (read-only)
-
-Usage:
-  factory state                 Print the current run's state as JSON
-  factory state <run-id>        Print a specific run's state as JSON
-  factory state --summary       Print a compact human summary instead
-
-Exit OK with {"current": null} when there is no current run.`;
-function summarize(run9) {
+function failureCommentMarker(runId) {
+  return `<!-- factory:run-failed:${runId} -->`;
+}
+function renderFailureComment(report) {
   const lines = [
-    `run ${run9.run_id}  status=${run9.status}  execution_mode=`,
-    `spec ${run9.spec.repo}#${run9.spec.issue_number} (${run9.spec.spec_id})`,
-    `tasks (${Object.keys(run9.tasks).length}):`
+    failureCommentMarker(report.run_id),
+    `Factory run \`${report.run_id}\` failed \u2014 ${report.failures.length} task(s) failed. PRD left open for rescue/resume.`
   ];
-  for (const t of Object.values(run9.tasks)) {
-    const bits = [`  ${t.task_id}`, t.status];
-    if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
-    if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
-    if (t.failure_class !== void 0) bits.push(`class=${t.failure_class}`);
-    lines.push(bits.join("  "));
+  if (report.e2e_failure !== void 0) {
+    lines.push(
+      "",
+      "### End-to-end verification failed",
+      `Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`
+    );
+  }
+  for (const failure of report.failures) {
+    lines.push("", `### \`${failure.task_id}\` \u2014 ${failure.title}`);
+    lines.push(`- **Class:** \`${failure.failure_class}\``);
+    lines.push(`- **Reason:** ${failure.failure_reason}`);
+    if (failure.branch !== void 0) lines.push(`- **Branch:** \`${failure.branch}\``);
+    if (failure.pr_number !== void 0) lines.push(`- **PR:** #${failure.pr_number}`);
+    lines.push("- **Unmet acceptance criteria:**");
+    for (const c of failure.unmet_criteria) lines.push(`  - [ ] ${c}`);
   }
   return lines.join("\n");
 }
-async function runState(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["summary"] });
-  if (args.flag("help") === true) {
-    emitLine(HELP2);
-    return EXIT.OK;
-  }
-  const state = new StateManager();
-  const runId = args.positionals[0];
-  const runState2 = runId !== void 0 ? await state.read(runId) : await readCurrentForCwd(state, overrides);
-  if (runState2 === null) {
-    if (args.flag("summary") === true) {
-      emitLine("no current run");
-    } else {
-      emitJson({ current: null });
-    }
-    return EXIT.OK;
-  }
-  if (args.flag("summary") === true) {
-    emitLine(summarize(runState2));
-  } else {
-    emitJson(runState2);
-  }
-  return EXIT.OK;
+function statusLabel(status) {
+  return status.toUpperCase();
 }
-var stateCommand = {
-  describe: "Print run state (current or by run-id); read-only",
-  run: async (argv) => {
-    try {
-      return await runState(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`state: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
-};
-
-// src/cli/subcommands/scaffold.ts
-import { mkdir as mkdir7, readFile as readFile4, writeFile } from "node:fs/promises";
-import { existsSync as existsSync7 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { dirname as dirname5, join as join8, relative } from "node:path";
-import { fileURLToPath } from "node:url";
-
-// src/cli/subcommands/target-settings.ts
-import { mkdir as mkdir6, readFile as readFile3 } from "node:fs/promises";
-import { existsSync as existsSync6 } from "node:fs";
-import { join as join7 } from "node:path";
-var log14 = createLogger("cli:target-settings");
-var FACTORY_TARGET_BASE_ALLOWLIST = [
-  "Bash(factory:*)",
-  "Bash(git:*)",
-  "Bash(gh:*)",
-  "Bash(npm:*)",
-  "Bash(npx:*)",
-  "Read",
-  "Write",
-  "Edit",
-  "Grep",
-  "Glob",
-  "Agent"
-];
-var DATA_DIR_VERBS = ["Read", "Write", "Edit"];
-var STALE_DATA_DIR_ALLOW = [
-  "Read(${CLAUDE_PLUGIN_DATA}/**)",
-  "Write(${CLAUDE_PLUGIN_DATA}/**)",
-  "Edit(${CLAUDE_PLUGIN_DATA}/**)"
-];
-var STALE_DATA_DIR_ADDITIONAL = "${CLAUDE_PLUGIN_DATA}";
-function buildTargetDataDirRules(opts) {
-  const baked = tildeShorten(opts.dataDir, opts.home);
-  return { allowGlobBase: baked, additionalDir: baked };
-}
-function dataDirAllowRules(allowGlobBase) {
-  return DATA_DIR_VERBS.map((verb) => `${verb}(${allowGlobBase}/**)`);
-}
-function isObject(v) {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-function mergeTargetSettings(existing, dataDirRules) {
-  const settings = structuredClone(existing);
-  let changed = false;
-  const permissions = isObject(settings.permissions) ? settings.permissions : {};
-  const currentAllow = Array.isArray(permissions.allow) ? permissions.allow.filter((e) => typeof e === "string") : [];
-  const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e));
-  const removedStaleAllow = strippedAllow.length !== currentAllow.length;
-  const targetAllow = [
-    ...FACTORY_TARGET_BASE_ALLOWLIST,
-    ...dataDirAllowRules(dataDirRules.allowGlobBase)
-  ];
-  const have = new Set(strippedAllow);
-  const additions = targetAllow.filter((e) => !have.has(e));
-  if (removedStaleAllow || additions.length > 0) {
-    permissions.allow = [...strippedAllow, ...additions];
-    settings.permissions = permissions;
-    changed = true;
-  }
-  const currentDirs = Array.isArray(permissions.additionalDirectories) ? permissions.additionalDirectories.filter((e) => typeof e === "string") : [];
-  const strippedDirs = currentDirs.filter((e) => e !== STALE_DATA_DIR_ADDITIONAL);
-  const removedStaleDir = strippedDirs.length !== currentDirs.length;
-  const haveDirs = new Set(strippedDirs);
-  const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e));
-  if (removedStaleDir || dirAdditions.length > 0) {
-    permissions.additionalDirectories = [...strippedDirs, ...dirAdditions];
-    settings.permissions = permissions;
-    changed = true;
-  }
-  const worktree = isObject(settings.worktree) ? settings.worktree : {};
-  if (worktree.baseRef !== "head") {
-    worktree.baseRef = "head";
-    settings.worktree = worktree;
-    changed = true;
-  }
-  return { settings, changed };
-}
-async function ensureTargetSettings(opts) {
-  const dir = join7(opts.targetRoot, ".claude");
-  const path5 = join7(dir, "settings.json");
-  const created = !existsSync6(path5);
-  let existing = {};
-  if (!created) {
-    const raw = await readFile3(path5, "utf8");
-    const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
-    if (isObject(parsed)) {
-      existing = parsed;
-    } else {
-      log14.warn(
-        `${path5} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
-      );
-    }
-  }
-  const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
-  if (created || changed) {
-    await mkdir6(dir, { recursive: true });
-    await atomicWriteFile(path5, stringifyJson(settings));
-  }
-  return { settings, changed, created, path: path5 };
-}
-
-// src/cli/subcommands/scaffold.ts
-var log15 = createLogger("scaffold");
-var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
-
-Usage:
-  factory scaffold [--repo <owner/name>] [--provision]
-
-Copies the committed CI + gate-config templates and probes branch protection on
-develop (the integration base). Without --provision a repo whose develop branch is
-not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
-Per-run staging branches are minted at run create \u2014 scaffold no longer touches them.
-Also auto-detects the repo's CI build env and gap-fills quality.gateEnv (the same
-detection as 'factory configure --detect-gate-env'), captured BEFORE the managed
-quality-gate.yml template overwrites the repo's own workflow.
-
-Options:
-  --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
-                        Auto-derived from the 'origin' remote when omitted; an
-                        explicit value disagreeing with the remote fails loud.
-  --provision           Write branch protection if missing (default: refuse)`;
-var GITIGNORE_ENTRIES = [
-  "# Claude Code local state (factory scaffold guarantee)",
-  ".claude/worktrees/",
-  ".claude/plugins/",
-  ".claude/file-history/",
-  ".claude/backups/",
-  ".claude/debug/",
-  ".claude/todos/",
-  ".claude/plans/",
-  ".claude/memory/",
-  ".claude/statsig/",
-  ".claude/cache/",
-  ".claude/paste-cache/",
-  ".claude/projects/",
-  ".claude/shell-snapshots/",
-  ".claude/tasks/",
-  ".claude/telemetry/",
-  ".claude/workflows/",
-  ".claude/history.jsonl",
-  ".claude/CLAUDE.local.md",
-  ".claude/tool-audit.jsonl",
-  ".claude/settings.local.json",
-  "# factory plugin state",
-  ".claude-plugin-data/",
-  "*.worktree"
-];
-function resolveTemplatesDir() {
-  let dir = dirname5(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 6; i++) {
-    const candidate = join8(dir, "templates");
-    if (existsSync7(join8(candidate, ".github", "workflows", "quality-gate.yml"))) {
-      return candidate;
-    }
-    const parent = dirname5(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  throw new Error("scaffold: could not locate the plugin templates/ directory");
-}
-var QUALITY_GATE_REL = ".github/workflows/quality-gate.yml";
-var TEMPLATE_MANIFEST = [
-  { rel: QUALITY_GATE_REL, policy: "managed" },
-  { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
-  { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
-  { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
-  { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true },
-  // e2e (Decision 39) — seed only; @playwright/test must already be a devDependency
-  // (scaffold never installs packages) and the config's webServer.command is a TODO
-  // the project fills in. testDir here MUST match `e2e.testDir` (default "e2e").
-  { rel: "playwright.config.ts", policy: "seed", nodeOnly: true },
-  { rel: "e2e/example.spec.ts", policy: "seed", nodeOnly: true }
-];
-async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
-  const segs = entry.rel.split("/");
-  const src = join8(templatesDir, ...segs);
-  const dest = join8(targetRoot, ...segs);
-  if (!existsSync7(src)) {
-    log15.warn(`template missing, skipping: ${src}`);
-    return;
-  }
-  const render = async () => {
-    const text = await readFile4(src, "utf8");
-    return transform ? transform(text) : text;
-  };
-  if (!existsSync7(dest)) {
-    await mkdir7(dirname5(dest), { recursive: true });
-    await writeFile(dest, await render(), "utf8");
-    lists.created.push(entry.rel);
-    return;
-  }
-  if (entry.policy === "seed") {
-    lists.present.push(entry.rel);
-    return;
-  }
-  const [rendered, destText] = await Promise.all([render(), readFile4(dest, "utf8")]);
-  if (rendered === destText) {
-    lists.present.push(entry.rel);
-    return;
-  }
-  await writeFile(dest, rendered, "utf8");
-  lists.updated.push(entry.rel);
-}
-async function ensureGitignore(root, lists) {
-  const path5 = join8(root, ".gitignore");
-  const rel = relative(root, path5);
-  if (!existsSync7(path5)) {
-    await writeFile(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
-    lists.created.push(rel);
-    return;
-  }
-  const current = await readFile4(path5, "utf8");
-  const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
-  if (missing.length === 0) {
-    lists.present.push(rel);
-    return;
-  }
-  const sep2 = current.endsWith("\n") ? "" : "\n";
-  await writeFile(path5, current + sep2 + missing.join("\n") + "\n", "utf8");
-  lists.present.push(rel);
-}
-async function runScaffold(opts) {
-  const lists = { created: [], present: [], updated: [] };
-  const gateEnv = await applyGateEnvDetection(opts.targetRoot, { dataDir: opts.dataDir });
-  if (gateEnv.written.length > 0) {
-    log15.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
-  }
-  if (gateEnv.warnings.length > 0) {
-    log15.warn(
-      `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
-    );
-  }
-  const isNodePackage = existsSync7(join8(opts.targetRoot, "package.json"));
-  for (const entry of TEMPLATE_MANIFEST) {
-    if (entry.nodeOnly && !isNodePackage) continue;
-    const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
-    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
-  }
-  if (lists.updated.length > 0) {
-    log15.info(
-      `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
-    );
-  }
-  await ensureGitignore(opts.targetRoot, lists);
-  const settings = await ensureTargetSettings({
-    targetRoot: opts.targetRoot,
-    dataDirRules: opts.dataDirRules
-  });
-  const settingsRel = relative(opts.targetRoot, settings.path);
-  if (settings.created) lists.created.push(settingsRel);
-  else lists.present.push(settingsRel);
-  const branch = opts.config.git.baseBranch;
-  const required = opts.config.git.requiredStatusChecks;
-  let state = await probeProtection({
-    ghClient: opts.ghClient,
-    owner: opts.owner,
-    repo: opts.repo,
-    branch
-  });
-  let provisioned = false;
-  if (opts.provision) {
-    state = await provisionProtection({
-      ghClient: opts.ghClient,
-      owner: opts.owner,
-      repo: opts.repo,
-      branch,
-      requiredChecks: required,
-      provision: true
-    });
-    provisioned = true;
-  }
-  requireProtectionOrRefuse(state, required, branch);
-  return {
-    repo: `${opts.owner}/${opts.repo}`,
-    files_created: lists.created,
-    files_present: lists.present,
-    files_updated: lists.updated,
-    protection: {
-      enabled: state.enabled,
-      strict_up_to_date: state.strictUpToDate,
-      required_status_checks: state.requiredStatusChecks,
-      provisioned
-    },
-    settings: { created: settings.created, changed: settings.changed },
-    // Include the detection report whenever a key was detected OR any anomaly
-    // surfaced (a parse warning, an expression-ref/secret/key drop) — so a malformed
-    // workflow's `warnings` are never silently swallowed. `written`/`conflicts` each
-    // imply a detected key, so they're subsumed by the detected-key check. Omitted
-    // only for a clean brand-new repo (no workflows, nothing to report).
-    ...Object.keys(gateEnv.detected).length > 0 || gateEnv.warnings.length > 0 || gateEnv.skippedExpressionRefs.length > 0 || gateEnv.droppedSecrets.length > 0 || gateEnv.droppedKeys.length > 0 ? { gateEnv } : {}
-  };
-}
-async function resolveScaffoldRepo(args, overrides = {}) {
-  const slug = await resolveRepo({
-    explicit: optionalString(args.flag("repo")),
-    cwd: overrides.cwd ?? process.cwd(),
-    gitClient: overrides.gitClient ?? new DefaultGitClient()
-  });
-  return splitRepoSlug(slug);
-}
-async function run2(argv) {
-  const args = parseArgs(argv, { booleans: ["provision"] });
-  if (args.flag("help") === true) {
-    emitLine(HELP3);
-    return EXIT.OK;
-  }
-  const { owner, repo } = await resolveScaffoldRepo(args);
-  const dataDir = resolveDataDir();
-  const report = await runScaffold({
-    targetRoot: process.cwd(),
-    templatesDir: resolveTemplatesDir(),
-    owner,
-    repo,
-    config: loadConfig(),
-    ghClient: new DefaultGhClient(),
-    // Bake the resolved data dir into the target permission rules, and thread it
-    // into CI build-env detection's config write.
-    dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir2() }),
-    dataDir,
-    provision: args.flag("provision") === true
-  });
-  emitJson(report);
-  return EXIT.OK;
-}
-var scaffoldCommand = {
-  describe: "Prepare a repo (templates + develop branch protection) for the pipeline",
-  run: async (argv) => {
-    try {
-      return await run2(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`scaffold: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
-};
-
-// src/core/phase-machine/phases.ts
-var TaskPhaseEnum = external_exports.enum(TASK_PHASES);
-var RunPhaseEnum = external_exports.enum(["finalize"]);
-var TASK_PHASE_ORDER = TASK_PHASES;
-function nextPhase(s) {
-  const i = TASK_PHASE_ORDER.indexOf(s);
-  if (i < 0) {
-    throw new Error(`nextPhase: '${s}' is not a known task phase`);
-  }
-  const next = TASK_PHASE_ORDER[i + 1];
-  return next ?? null;
-}
-function phaseToInFlightStatus(s) {
-  switch (s) {
-    case "preflight":
-      return TaskStatusEnum.enum.pending;
-    case "tests":
-      return TaskStatusEnum.enum.executing;
-    case "exec":
-      return TaskStatusEnum.enum.executing;
-    case "verify":
-      return TaskStatusEnum.enum.reviewing;
-    case "ship":
-      return TaskStatusEnum.enum.shipping;
-  }
-}
-
-// src/core/phase-machine/spawn.ts
-var SpawnRoleEnum = external_exports.enum([
-  "test-writer",
-  "implementer",
-  "implementation-reviewer",
-  "quality-reviewer",
-  "architecture-reviewer",
-  "security-reviewer",
-  "silent-failure-hunter",
-  "type-design-reviewer",
-  "systemic-failure-reviewer",
-  "scribe"
-]);
-var AgentSpecSchema = external_exports.object({
-  /** The reviewer/producer role (closed set). */
-  role: SpawnRoleEnum,
-  /** Worktree isolation. Defaults to "worktree". */
-  isolation: external_exports.enum(["worktree", "none"]).default("worktree"),
-  /** Model identifier to run the agent on (non-empty; WS8 resolves the value). */
-  model: external_exports.string().min(1),
-  /** Hard turn budget for the agent (positive integer). */
-  max_turns: external_exports.number().int().positive(),
-  /** Pointer to the prompt artifact, run-store relative (non-empty). */
-  prompt_ref: external_exports.string().min(1),
-  /**
-   * Optional effort/reasoning level to spawn at (the closed {@link EffortEnum}:
-   * low|medium|high|xhigh|max). Omitted ⇒ inherit the spawn default. Set by the
-   * producer dial's effort climb (`model-dial.ts`) on high escalation rungs.
-   */
-  effort: EffortEnum.optional()
-});
-var SpawnRequestSchema = external_exports.object({
-  /** Engine resumes here after the agents return. A per-task phase. */
-  resume_phase: TaskPhaseEnum,
-  /** Agents to spawn; at least one (an empty request is a programming error). */
-  agents: external_exports.array(AgentSpecSchema).min(1)
-});
-function parseSpawnRequest(raw) {
-  return SpawnRequestSchema.parse(raw);
-}
-
-// src/core/phase-machine/result.ts
-function assertNever(x) {
-  throw new Error(
-    `assertNever: unhandled value ${JSON.stringify(x)} \u2014 a PhaseResult.kind was not handled`
+function renderPartialReportMarkdown(report) {
+  const out = [];
+  out.push(`# Factory run report \u2014 \`${report.run_id}\``);
+  out.push("");
+  out.push(
+    `**Status:** ${statusLabel(report.run_status)} \xB7 **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number}) \xB7 **Repo:** ${report.repo}`
   );
-}
-function advance(to) {
-  return { kind: "advance", to };
-}
-function spawn2(request) {
-  return { kind: "spawn-agents", request };
-}
-function waitRetry(phase, reason, attempt, max_attempts) {
-  if (attempt > max_attempts) {
-    throw new Error(
-      `waitRetry: wait-retry for phase '${phase}' exceeded max_attempts (${attempt} > ${max_attempts})`
-    );
+  out.push(`**Generated:** ${report.generated_at}`);
+  out.push("");
+  out.push(
+    `**Tasks:** ${report.totals.total} total \xB7 ${report.totals.shipped} shipped \xB7 ${report.totals.failed} failed \xB7 ${report.totals.incomplete} incomplete`
+  );
+  out.push("");
+  out.push(`## Shipped (${report.shipped.length})`);
+  if (report.shipped.length === 0) {
+    out.push("_none_");
+  } else {
+    for (const s of report.shipped) {
+      const pr = s.pr_number !== void 0 ? ` \u2014 PR #${s.pr_number}` : "";
+      const br = s.branch !== void 0 ? ` (\`${s.branch}\`)` : "";
+      out.push(`- \`${s.task_id}\` \u2014 ${s.title}${pr}${br}`);
+    }
   }
-  return { kind: "wait-retry", phase, reason, attempt, max_attempts };
-}
-function taskDone() {
-  return { kind: "task-terminal", outcome: { outcome: "done" } };
-}
-function finalizeTerminal(run_status) {
-  return { kind: "finalize-terminal", run_status };
+  out.push("");
+  if (report.e2e_failure !== void 0) {
+    out.push("## End-to-end verification failed");
+    out.push(`Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`);
+    out.push("");
+  }
+  if (report.e2e_advisory !== void 0) {
+    out.push("## End-to-end verification \u2014 advisory");
+    out.push(report.e2e_advisory);
+    out.push("");
+  }
+  if (report.failures.length > 0) {
+    out.push(`## Failed (${report.failures.length})`);
+    for (const f of report.failures) {
+      out.push("");
+      out.push(`### \`${f.task_id}\` \u2014 ${f.title}`);
+      out.push(`- **Class:** \`${f.failure_class}\``);
+      out.push(`- **Reason:** ${f.failure_reason}`);
+      out.push("- **Unmet acceptance criteria:**");
+      for (const c of f.unmet_criteria) out.push(`  - ${c}`);
+    }
+    out.push("");
+  }
+  if (report.incomplete.length > 0) {
+    out.push(`## Incomplete (${report.incomplete.length})`);
+    for (const i of report.incomplete) {
+      out.push(`- \`${i.task_id}\` \u2014 ${i.title} (\`${i.status}\`)`);
+    }
+    out.push("");
+  }
+  return out.join("\n");
 }
 
-// src/core/phase-machine/engine.ts
-async function runPhase(phase, ctx, handlers) {
-  const result = await dispatch(phase, ctx, handlers);
-  return checkResult(phase, result);
+// src/scoring/summary.ts
+function durationSeconds(startedAt, endedAt) {
+  if (endedAt === null) return null;
+  const start = Date.parse(startedAt);
+  const end = Date.parse(endedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const delta = Math.floor((end - start) / 1e3);
+  return delta >= 0 ? delta : null;
 }
-async function dispatch(phase, ctx, handlers) {
-  const runParsed = RunPhaseEnum.safeParse(phase);
-  if (runParsed.success) {
-    const runPhaseName = runParsed.data;
-    switch (runPhaseName) {
-      case "finalize":
-        return handlers.finalize(ctx);
-      default:
-        return assertNever(runPhaseName);
-    }
+function buildRunSummary(run10, report, opts = {}) {
+  const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
+  for (const f of report.failures) {
+    failuresByClass[f.failure_class] += 1;
   }
-  const parsed = TaskPhaseEnum.safeParse(phase);
-  if (!parsed.success) {
-    throw new Error(`runPhase: unknown phase '${String(phase)}'`);
-  }
-  const taskPhase = parsed.data;
-  switch (taskPhase) {
-    case "preflight":
-      return handlers.preflight(ctx);
-    case "tests":
-      return handlers.tests(ctx);
-    case "exec":
-      return handlers.exec(ctx);
-    case "verify":
-      return handlers.verify(ctx);
-    case "ship":
-      return handlers.ship(ctx);
-    default:
-      return assertNever(taskPhase);
-  }
+  const tasks = Object.values(run10.tasks);
+  const effort = {
+    reviewer_results: tasks.reduce((n, t) => n + t.reviewers.length, 0),
+    max_escalation_rung: tasks.reduce((m, t) => Math.max(m, t.escalation_rung), 0)
+  };
+  const shipped_prs = report.shipped.map((s) => ({
+    task_id: s.task_id,
+    ...s.pr_number !== void 0 ? { pr_number: s.pr_number } : {},
+    ...s.branch !== void 0 ? { branch: s.branch } : {}
+  }));
+  return {
+    run_id: run10.run_id,
+    run_status: run10.status,
+    execution_mode: run10.execution_mode,
+    spec_id: run10.spec.spec_id,
+    issue_number: run10.spec.issue_number,
+    repo: run10.spec.repo,
+    generated_at: opts.now ?? nowIso(),
+    timing: {
+      started_at: run10.started_at,
+      ended_at: run10.ended_at,
+      duration_seconds: durationSeconds(run10.started_at, run10.ended_at)
+    },
+    totals: report.totals,
+    failures_by_class: failuresByClass,
+    effort,
+    shipped_prs
+  };
 }
-function checkResult(phase, result) {
-  if (RunPhaseEnum.safeParse(phase).success) {
-    if (result.kind !== "finalize-terminal") {
-      throw new Error(
-        `runPhase: run-level phase '${String(phase)}' returned '${result.kind}' \u2014 finalize is terminal and must return only 'finalize-terminal' (it must never spin)`
-      );
-    }
-    return result;
-  }
-  switch (result.kind) {
-    case "advance":
-    case "spawn-agents":
-    case "graceful-stop":
-    case "task-terminal":
-      return result;
-    case "wait-retry": {
-      if (result.attempt > result.max_attempts) {
-        throw new Error(
-          `runPhase: wait-retry for phase '${result.phase}' exceeded max_attempts (${result.attempt} > ${result.max_attempts}); caller must classify a fail (reason: ${result.reason})`
-        );
-      }
-      return result;
-    }
-    case "finalize-terminal":
-      throw new Error(
-        `runPhase: per-task phase '${String(phase)}' returned 'finalize-terminal' \u2014 that result is reserved for the run-level finalize phase`
-      );
-    default:
-      return assertNever(result);
+
+// src/scoring/telemetry.ts
+var log14 = createLogger("telemetry");
+async function writeMetric(dataDir, runId, event, data, opts) {
+  const record = {
+    ts: opts.now ?? nowIso(),
+    run_id: runId,
+    event,
+    ...data !== void 0 ? { data } : {}
+  };
+  try {
+    await appendJsonl(runMetricsPath(dataDir, runId), record);
+    return { record, written: true };
+  } catch (err) {
+    log14.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
+    return { record, written: false };
   }
 }
-function decideFinalize(run9) {
-  const tasks = Object.values(run9.tasks);
-  const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
-  if (nonTerminal.length > 0) {
-    const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
-    throw new Error(
-      `decideFinalize: ${nonTerminal.length} non-terminal task(s) remain [${ids}] \u2014 finalize is terminal and must not be called with in-flight work (would spin in bash)`
+async function recordRunFinalized(dataDir, report, opts = {}) {
+  const now = opts.now ?? nowIso();
+  let dropped = 0;
+  const finalized = await writeMetric(
+    dataDir,
+    report.run_id,
+    "run.finalized",
+    {
+      status: report.run_status,
+      spec_id: report.spec_id,
+      issue_number: report.issue_number,
+      totals: report.totals
+    },
+    { now }
+  );
+  if (!finalized.written) dropped++;
+  for (const f of report.failures) {
+    const r = await writeMetric(
+      dataDir,
+      report.run_id,
+      "task.dropped",
+      { task_id: f.task_id, failure_class: f.failure_class },
+      { now }
     );
+    if (!r.written) dropped++;
   }
-  const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
-  return finalizeTerminal(allDone ? "completed" : "failed");
+  if (dropped > 0) {
+    log14.warn(
+      `telemetry: ${dropped} metric write(s) dropped this run (${report.run_id}); the metrics stream is incomplete`
+    );
+    await writeMetric(dataDir, report.run_id, "telemetry.writes_dropped", { dropped }, { now });
+  }
+}
+
+// src/quota/usage-source.ts
+import { existsSync as existsSync6, readFileSync as readFileSync4 } from "node:fs";
+import { join as join7 } from "node:path";
+var log15 = createLogger("quota:usage");
+var STALE_CEILING_SECONDS = 3600;
+var STALE_WARN_SECONDS = 120;
+var RawWindowSchema = external_exports.object({
+  used_percentage: external_exports.unknown().optional(),
+  resets_at: external_exports.unknown().optional()
+}).passthrough();
+var RawCacheSchema = external_exports.object({
+  five_hour: RawWindowSchema.optional(),
+  seven_day: RawWindowSchema.optional(),
+  captured_at: external_exports.unknown().optional()
+}).passthrough();
+function asFiniteNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return null;
+}
+function unavailable(reason) {
+  return { kind: "unavailable", reason };
+}
+function readingFromCache(raw, nowEpoch2) {
+  const parsed = RawCacheSchema.safeParse(raw);
+  if (!parsed.success) {
+    return unavailable("usage-cache-malformed");
+  }
+  const cache = parsed.data;
+  const capturedAt = asFiniteNumber(cache.captured_at) ?? 0;
+  const age = nowEpoch2 - capturedAt;
+  if (age > STALE_CEILING_SECONDS) {
+    return unavailable("usage-cache-too-stale");
+  }
+  if (age > STALE_WARN_SECONDS) {
+    log15.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
+  }
+  const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
+  const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
+  if (fivePct === null || sevenPct === null) {
+    return unavailable("usage-cache-fields-missing");
+  }
+  const fiveResets = asFiniteNumber(cache.five_hour?.resets_at);
+  const sevenResets = asFiniteNumber(cache.seven_day?.resets_at);
+  if (fiveResets === null || sevenResets === null) {
+    return unavailable("resets-at-missing");
+  }
+  if (fiveResets <= nowEpoch2) {
+    return unavailable("five-hour-window-reset");
+  }
+  if (sevenResets <= nowEpoch2) {
+    return unavailable("seven-day-window-reset");
+  }
+  return {
+    kind: "available",
+    fiveHour: { utilizationPct: fivePct, resetsAtEpoch: fiveResets },
+    sevenDay: { utilizationPct: sevenPct, resetsAtEpoch: sevenResets },
+    capturedAt
+  };
+}
+function usageCachePath(dataDir) {
+  return join7(dataDir, "usage-cache.json");
+}
+var StatuslineUsageSignal = class {
+  opts;
+  constructor(opts = {}) {
+    this.opts = opts;
+  }
+  async read() {
+    const now = (this.opts.now ?? nowEpoch)();
+    let dataDir;
+    try {
+      dataDir = resolveDataDir(this.opts);
+    } catch {
+      return unavailable("usage-cache-missing");
+    }
+    const file = usageCachePath(dataDir);
+    if (!existsSync6(file)) {
+      log15.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
+      return unavailable("usage-cache-missing");
+    }
+    let raw;
+    try {
+      raw = parseJson(readFileSync4(file, "utf8"), file);
+    } catch (err) {
+      log15.warn(
+        `usage-cache.json is malformed at ${file}: ${err.message}; emitting unavailable sentinel`
+      );
+      return unavailable("usage-cache-malformed");
+    }
+    return readingFromCache(raw, now);
+  }
+};
+
+// src/quota/window.ts
+var FIVE_HOUR_WINDOW_SECONDS = 18e3;
+var SEVEN_DAY_WINDOW_SECONDS = 604800;
+var SECONDS_PER_HOUR = 3600;
+var SECONDS_PER_DAY = 86400;
+var MIN_HOUR = 1;
+var MAX_HOUR = 5;
+var MIN_DAY = 1;
+var MAX_DAY = 7;
+function clamp(value, lo, hi) {
+  if (value < lo) return lo;
+  if (value > hi) return hi;
+  return value;
+}
+function computeWindowHour(resetsAtEpoch, nowEpoch2) {
+  const windowStart = resetsAtEpoch - FIVE_HOUR_WINDOW_SECONDS;
+  const elapsed = nowEpoch2 - windowStart;
+  const hour = Math.floor(elapsed / SECONDS_PER_HOUR) + 1;
+  return clamp(hour, MIN_HOUR, MAX_HOUR);
+}
+function computeWindowDay(resetsAtEpoch, nowEpoch2) {
+  const windowStart = resetsAtEpoch - SEVEN_DAY_WINDOW_SECONDS;
+  const elapsed = nowEpoch2 - windowStart;
+  const day = Math.floor(elapsed / SECONDS_PER_DAY) + 1;
+  return clamp(day, MIN_DAY, MAX_DAY);
+}
+function hourlyThresholdFor(hour, hourlyThresholds) {
+  return curveValue(hour, hourlyThresholds);
+}
+function dailyThresholdFor(day, dailyThresholds) {
+  return curveValue(day, dailyThresholds);
+}
+function curveValue(position, curve) {
+  if (curve.length === 0) {
+    throw new RangeError("quota curve is empty \u2014 cannot resolve a threshold (config defect)");
+  }
+  const idx = clamp(position - 1, 0, curve.length - 1);
+  return curve[idx];
+}
+
+// src/quota/pacer.ts
+function evaluate(reading, config, nowEpoch2) {
+  if (reading.kind === "unavailable") {
+    return { kind: "unavailable-halt", reason: `usage unavailable: ${reading.reason}` };
+  }
+  const { hourlyThresholds, dailyThresholds } = config.quota;
+  const windowHour = computeWindowHour(reading.fiveHour.resetsAtEpoch, nowEpoch2);
+  const hourlyCap = hourlyThresholdFor(windowHour, hourlyThresholds);
+  const fiveOver = reading.fiveHour.utilizationPct > hourlyCap;
+  const windowDay = computeWindowDay(reading.sevenDay.resetsAtEpoch, nowEpoch2);
+  const dailyCap = dailyThresholdFor(windowDay, dailyThresholds);
+  const sevenOver = reading.sevenDay.utilizationPct > dailyCap;
+  if (sevenOver) {
+    return {
+      kind: "suspend-7d",
+      resetsAtEpoch: reading.sevenDay.resetsAtEpoch,
+      reason: `7d quota over curve: ${reading.sevenDay.utilizationPct}% used > ${dailyCap}% cap at window-day ${windowDay}`
+    };
+  }
+  if (fiveOver) {
+    return {
+      kind: "pause-5h",
+      resetsAtEpoch: reading.fiveHour.resetsAtEpoch,
+      reason: `5h quota over curve: ${reading.fiveHour.utilizationPct}% used > ${hourlyCap}% cap at window-hour ${windowHour}`
+    };
+  }
+  return { kind: "proceed" };
+}
+
+// src/quota/checkpoint.ts
+function buildCheckpoint(decision) {
+  switch (decision.kind) {
+    case "pause-5h":
+      return {
+        status: "paused",
+        quota: QuotaCheckpointSchema.parse({
+          binding_window: "5h",
+          resets_at_epoch: decision.resetsAtEpoch
+        })
+      };
+    case "suspend-7d":
+      return {
+        status: "suspended",
+        quota: QuotaCheckpointSchema.parse({
+          binding_window: "7d",
+          resets_at_epoch: decision.resetsAtEpoch
+        })
+      };
+  }
+}
+function clearCheckpoint() {
+  return { status: "running", quota: void 0 };
+}
+
+// src/quota/circuit-breaker.ts
+function isNonNegativeFinite(value) {
+  return Number.isFinite(value) && value >= 0;
+}
+function evaluate2(input, config, nowEpoch2) {
+  const { cumulativeFailures, pausedMinutes, startedAtIso } = input;
+  if (!isNonNegativeFinite(cumulativeFailures)) {
+    return {
+      tripped: true,
+      reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
+    };
+  }
+  if (!isNonNegativeFinite(pausedMinutes)) {
+    return {
+      tripped: true,
+      reason: `circuit breaker fail-closed: pausedMinutes is not a non-negative finite number (got ${String(pausedMinutes)})`
+    };
+  }
+  const { maxConsecutiveFailures, maxRuntimeMinutes } = config;
+  if (cumulativeFailures >= maxConsecutiveFailures) {
+    return {
+      tripped: true,
+      reason: `max cumulative failures (${cumulativeFailures} >= ${maxConsecutiveFailures})`
+    };
+  }
+  let startEpoch;
+  try {
+    startEpoch = parseIso8601ToEpoch(startedAtIso);
+  } catch {
+    return {
+      tripped: true,
+      reason: `circuit breaker fail-closed: unparseable startedAtIso '${startedAtIso}'`
+    };
+  }
+  const wallMinutes = Math.floor((nowEpoch2 - startEpoch) / 60);
+  const runtimeMinutes = Math.max(0, wallMinutes - pausedMinutes);
+  if (runtimeMinutes >= maxRuntimeMinutes) {
+    return {
+      tripped: true,
+      reason: `max runtime reached (${runtimeMinutes}min >= ${maxRuntimeMinutes}min)`
+    };
+  }
+  return { tripped: false };
+}
+
+// src/quota/router.ts
+function selectProducerModel(riskTier, config) {
+  const models = config.quota.producerModels;
+  switch (riskTier) {
+    case "low":
+      return models.low;
+    case "medium":
+      return models.medium;
+    case "high":
+      return models.high;
+    default:
+      return assertNever(riskTier);
+  }
+}
+
+// src/quota/resume.ts
+function planResume(run10, reading, config, nowEpoch2) {
+  if (run10.status !== "paused" && run10.status !== "suspended") {
+    return { kind: "not-resumable", status: run10.status };
+  }
+  if (run10.ignore_quota) {
+    return { kind: "resume", clear: clearCheckpoint() };
+  }
+  const decision = evaluate(reading, config, nowEpoch2);
+  if (decision.kind === "proceed") {
+    return { kind: "resume", clear: clearCheckpoint() };
+  }
+  return { kind: "pause", decision };
 }
 
 // src/spec/schema.ts
@@ -9378,8 +9476,8 @@ var RealGhClient = class {
 };
 
 // src/spec/store.ts
-import { readFile as readFile5, readdir as readdir2, rm as rm2 } from "node:fs/promises";
-import { join as join9 } from "node:path";
+import { readFile as readFile4, readdir as readdir2, rm as rm2 } from "node:fs/promises";
+import { join as join8 } from "node:path";
 var log17 = createLogger("spec:store");
 var SPEC_MD_FILE = "spec.md";
 var TASKS_FILE = "tasks.json";
@@ -9406,7 +9504,7 @@ var SpecStore = class {
   docsRoot;
   constructor(opts = {}) {
     this.dataDir = resolveDataDir(opts);
-    this.docsRoot = opts.docsRoot ?? join9(process.cwd(), "docs");
+    this.docsRoot = opts.docsRoot ?? join8(process.cwd(), "docs");
   }
   /**
    * Resolve an existing spec for `(repo, issueNumber)` — Δ X reuse. Scans the
@@ -9423,7 +9521,7 @@ var SpecStore = class {
         `resolveByIssue: issue number must be a positive integer, got ${issueNumber}`
       );
     }
-    const repoRoot = join9(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
@@ -9458,7 +9556,7 @@ var SpecStore = class {
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
       throw new Error(`deleteByIssue: issue number must be a positive integer, got ${issueNumber}`);
     }
-    const repoRoot = join9(specsRoot(this.dataDir), repoKey(repo));
+    const repoRoot = join8(specsRoot(this.dataDir), repoKey(repo));
     let entries;
     try {
       entries = await readdir2(repoRoot);
@@ -9477,8 +9575,8 @@ var SpecStore = class {
   /** Read + validate the request for a known `(repo, spec_id)`. */
   async read(repo, specId) {
     const dir = specDir(this.dataDir, repo, specId);
-    const tasksRaw = await readFile5(join9(dir, TASKS_FILE), "utf8");
-    const tasks = parseSpecTasks(parseJson(tasksRaw, join9(dir, TASKS_FILE)));
+    const tasksRaw = await readFile4(join8(dir, TASKS_FILE), "utf8");
+    const tasks = parseSpecTasks(parseJson(tasksRaw, join8(dir, TASKS_FILE)));
     const meta = await this.readMeta(dir);
     return parseSpecManifest({
       spec_id: specId,
@@ -9504,10 +9602,10 @@ var SpecStore = class {
     const parsed = parseSpecManifest(request);
     const dir = specDir(this.dataDir, parsed.repo, parsed.spec_id);
     const tasksJson = stringifyJson(parsed.tasks);
-    await atomicWriteFile(join9(dir, SPEC_MD_FILE), specMd);
-    await atomicWriteFile(join9(dir, TASKS_FILE), tasksJson);
+    await atomicWriteFile(join8(dir, SPEC_MD_FILE), specMd);
+    await atomicWriteFile(join8(dir, TASKS_FILE), tasksJson);
     await atomicWriteFile(
-      join9(dir, META_FILE),
+      join8(dir, META_FILE),
       stringifyJson({
         issue_number: parsed.issue_number,
         slug: parsed.slug,
@@ -9518,8 +9616,8 @@ var SpecStore = class {
     const reviewDir = docsFactoryDir(this.docsRoot, parsed.spec_id);
     let mirrored = true;
     try {
-      await atomicWriteFile(join9(reviewDir, SPEC_MD_FILE), specMd);
-      await atomicWriteFile(join9(reviewDir, TASKS_FILE), tasksJson);
+      await atomicWriteFile(join8(reviewDir, SPEC_MD_FILE), specMd);
+      await atomicWriteFile(join8(reviewDir, TASKS_FILE), tasksJson);
     } catch (err) {
       mirrored = false;
       log17.warn(
@@ -9540,10 +9638,10 @@ var SpecStore = class {
     };
   }
   async readMeta(dir) {
-    const raw = await readFile5(join9(dir, META_FILE), "utf8");
+    const raw = await readFile4(join8(dir, META_FILE), "utf8");
     const meta = parseJson(
       raw,
-      join9(dir, META_FILE)
+      join8(dir, META_FILE)
     );
     const issueNumber = typeof meta.issue_number === "number" ? meta.issue_number : 0;
     const generatedAt = typeof meta.generated_at === "string" ? meta.generated_at : "";
@@ -9836,507 +9934,6 @@ function buildManifest(repo, issueNumber, generated) {
     generated_at: nowIso(),
     tasks: generated.tasks
   });
-}
-
-// src/quota/usage-source.ts
-import { existsSync as existsSync8, readFileSync as readFileSync4 } from "node:fs";
-import { join as join10 } from "node:path";
-var log18 = createLogger("quota:usage");
-var STALE_CEILING_SECONDS = 3600;
-var STALE_WARN_SECONDS = 120;
-var RawWindowSchema = external_exports.object({
-  used_percentage: external_exports.unknown().optional(),
-  resets_at: external_exports.unknown().optional()
-}).passthrough();
-var RawCacheSchema = external_exports.object({
-  five_hour: RawWindowSchema.optional(),
-  seven_day: RawWindowSchema.optional(),
-  captured_at: external_exports.unknown().optional()
-}).passthrough();
-function asFiniteNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  return null;
-}
-function unavailable(reason) {
-  return { kind: "unavailable", reason };
-}
-function readingFromCache(raw, nowEpoch2) {
-  const parsed = RawCacheSchema.safeParse(raw);
-  if (!parsed.success) {
-    return unavailable("usage-cache-malformed");
-  }
-  const cache = parsed.data;
-  const capturedAt = asFiniteNumber(cache.captured_at) ?? 0;
-  const age = nowEpoch2 - capturedAt;
-  if (age > STALE_CEILING_SECONDS) {
-    return unavailable("usage-cache-too-stale");
-  }
-  if (age > STALE_WARN_SECONDS) {
-    log18.warn(`usage-cache.json is ${age}s old (>${STALE_WARN_SECONDS}s) \u2014 data may be stale`);
-  }
-  const fivePct = asFiniteNumber(cache.five_hour?.used_percentage);
-  const sevenPct = asFiniteNumber(cache.seven_day?.used_percentage);
-  if (fivePct === null || sevenPct === null) {
-    return unavailable("usage-cache-fields-missing");
-  }
-  const fiveResets = asFiniteNumber(cache.five_hour?.resets_at);
-  const sevenResets = asFiniteNumber(cache.seven_day?.resets_at);
-  if (fiveResets === null || sevenResets === null) {
-    return unavailable("resets-at-missing");
-  }
-  if (fiveResets <= nowEpoch2) {
-    return unavailable("five-hour-window-reset");
-  }
-  if (sevenResets <= nowEpoch2) {
-    return unavailable("seven-day-window-reset");
-  }
-  return {
-    kind: "available",
-    fiveHour: { utilizationPct: fivePct, resetsAtEpoch: fiveResets },
-    sevenDay: { utilizationPct: sevenPct, resetsAtEpoch: sevenResets },
-    capturedAt
-  };
-}
-function usageCachePath(dataDir) {
-  return join10(dataDir, "usage-cache.json");
-}
-var StatuslineUsageSignal = class {
-  opts;
-  constructor(opts = {}) {
-    this.opts = opts;
-  }
-  async read() {
-    const now = (this.opts.now ?? nowEpoch)();
-    let dataDir;
-    try {
-      dataDir = resolveDataDir(this.opts);
-    } catch {
-      return unavailable("usage-cache-missing");
-    }
-    const file = usageCachePath(dataDir);
-    if (!existsSync8(file)) {
-      log18.warn(`usage-cache.json not found at ${file}; emitting unavailable sentinel`);
-      return unavailable("usage-cache-missing");
-    }
-    let raw;
-    try {
-      raw = parseJson(readFileSync4(file, "utf8"), file);
-    } catch (err) {
-      log18.warn(
-        `usage-cache.json is malformed at ${file}: ${err.message}; emitting unavailable sentinel`
-      );
-      return unavailable("usage-cache-malformed");
-    }
-    return readingFromCache(raw, now);
-  }
-};
-
-// src/quota/window.ts
-var FIVE_HOUR_WINDOW_SECONDS = 18e3;
-var SEVEN_DAY_WINDOW_SECONDS = 604800;
-var SECONDS_PER_HOUR = 3600;
-var SECONDS_PER_DAY = 86400;
-var MIN_HOUR = 1;
-var MAX_HOUR = 5;
-var MIN_DAY = 1;
-var MAX_DAY = 7;
-function clamp(value, lo, hi) {
-  if (value < lo) return lo;
-  if (value > hi) return hi;
-  return value;
-}
-function computeWindowHour(resetsAtEpoch, nowEpoch2) {
-  const windowStart = resetsAtEpoch - FIVE_HOUR_WINDOW_SECONDS;
-  const elapsed = nowEpoch2 - windowStart;
-  const hour = Math.floor(elapsed / SECONDS_PER_HOUR) + 1;
-  return clamp(hour, MIN_HOUR, MAX_HOUR);
-}
-function computeWindowDay(resetsAtEpoch, nowEpoch2) {
-  const windowStart = resetsAtEpoch - SEVEN_DAY_WINDOW_SECONDS;
-  const elapsed = nowEpoch2 - windowStart;
-  const day = Math.floor(elapsed / SECONDS_PER_DAY) + 1;
-  return clamp(day, MIN_DAY, MAX_DAY);
-}
-function hourlyThresholdFor(hour, hourlyThresholds) {
-  return curveValue(hour, hourlyThresholds);
-}
-function dailyThresholdFor(day, dailyThresholds) {
-  return curveValue(day, dailyThresholds);
-}
-function curveValue(position, curve) {
-  if (curve.length === 0) {
-    throw new RangeError("quota curve is empty \u2014 cannot resolve a threshold (config defect)");
-  }
-  const idx = clamp(position - 1, 0, curve.length - 1);
-  return curve[idx];
-}
-
-// src/quota/pacer.ts
-function evaluate(reading, config, nowEpoch2) {
-  if (reading.kind === "unavailable") {
-    return { kind: "unavailable-halt", reason: `usage unavailable: ${reading.reason}` };
-  }
-  const { hourlyThresholds, dailyThresholds } = config.quota;
-  const windowHour = computeWindowHour(reading.fiveHour.resetsAtEpoch, nowEpoch2);
-  const hourlyCap = hourlyThresholdFor(windowHour, hourlyThresholds);
-  const fiveOver = reading.fiveHour.utilizationPct > hourlyCap;
-  const windowDay = computeWindowDay(reading.sevenDay.resetsAtEpoch, nowEpoch2);
-  const dailyCap = dailyThresholdFor(windowDay, dailyThresholds);
-  const sevenOver = reading.sevenDay.utilizationPct > dailyCap;
-  if (sevenOver) {
-    return {
-      kind: "suspend-7d",
-      resetsAtEpoch: reading.sevenDay.resetsAtEpoch,
-      reason: `7d quota over curve: ${reading.sevenDay.utilizationPct}% used > ${dailyCap}% cap at window-day ${windowDay}`
-    };
-  }
-  if (fiveOver) {
-    return {
-      kind: "pause-5h",
-      resetsAtEpoch: reading.fiveHour.resetsAtEpoch,
-      reason: `5h quota over curve: ${reading.fiveHour.utilizationPct}% used > ${hourlyCap}% cap at window-hour ${windowHour}`
-    };
-  }
-  return { kind: "proceed" };
-}
-
-// src/quota/checkpoint.ts
-function buildCheckpoint(decision) {
-  switch (decision.kind) {
-    case "pause-5h":
-      return {
-        status: "paused",
-        quota: QuotaCheckpointSchema.parse({
-          binding_window: "5h",
-          resets_at_epoch: decision.resetsAtEpoch
-        })
-      };
-    case "suspend-7d":
-      return {
-        status: "suspended",
-        quota: QuotaCheckpointSchema.parse({
-          binding_window: "7d",
-          resets_at_epoch: decision.resetsAtEpoch
-        })
-      };
-  }
-}
-function clearCheckpoint() {
-  return { status: "running", quota: void 0 };
-}
-
-// src/quota/circuit-breaker.ts
-function isNonNegativeFinite(value) {
-  return Number.isFinite(value) && value >= 0;
-}
-function evaluate2(input, config, nowEpoch2) {
-  const { cumulativeFailures, pausedMinutes, startedAtIso } = input;
-  if (!isNonNegativeFinite(cumulativeFailures)) {
-    return {
-      tripped: true,
-      reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
-    };
-  }
-  if (!isNonNegativeFinite(pausedMinutes)) {
-    return {
-      tripped: true,
-      reason: `circuit breaker fail-closed: pausedMinutes is not a non-negative finite number (got ${String(pausedMinutes)})`
-    };
-  }
-  const { maxConsecutiveFailures, maxRuntimeMinutes } = config;
-  if (cumulativeFailures >= maxConsecutiveFailures) {
-    return {
-      tripped: true,
-      reason: `max cumulative failures (${cumulativeFailures} >= ${maxConsecutiveFailures})`
-    };
-  }
-  let startEpoch;
-  try {
-    startEpoch = parseIso8601ToEpoch(startedAtIso);
-  } catch {
-    return {
-      tripped: true,
-      reason: `circuit breaker fail-closed: unparseable startedAtIso '${startedAtIso}'`
-    };
-  }
-  const wallMinutes = Math.floor((nowEpoch2 - startEpoch) / 60);
-  const runtimeMinutes = Math.max(0, wallMinutes - pausedMinutes);
-  if (runtimeMinutes >= maxRuntimeMinutes) {
-    return {
-      tripped: true,
-      reason: `max runtime reached (${runtimeMinutes}min >= ${maxRuntimeMinutes}min)`
-    };
-  }
-  return { tripped: false };
-}
-
-// src/quota/router.ts
-function selectProducerModel(riskTier, config) {
-  const models = config.quota.producerModels;
-  switch (riskTier) {
-    case "low":
-      return models.low;
-    case "medium":
-      return models.medium;
-    case "high":
-      return models.high;
-    default:
-      return assertNever(riskTier);
-  }
-}
-
-// src/quota/resume.ts
-function planResume(run9, reading, config, nowEpoch2) {
-  if (run9.status !== "paused" && run9.status !== "suspended") {
-    return { kind: "not-resumable", status: run9.status };
-  }
-  if (run9.ignore_quota) {
-    return { kind: "resume", clear: clearCheckpoint() };
-  }
-  const decision = evaluate(reading, config, nowEpoch2);
-  if (decision.kind === "proceed") {
-    return { kind: "resume", clear: clearCheckpoint() };
-  }
-  return { kind: "pause", decision };
-}
-
-// src/scoring/partial-report.ts
-function buildPartialReport(run9, request, opts = {}) {
-  const specById = new Map(request.tasks.map((t) => [t.task_id, t]));
-  const orderOf = new Map(request.tasks.map((t, i) => [t.task_id, i]));
-  const shipped = [];
-  const failures = [];
-  const incomplete = [];
-  for (const task of Object.values(run9.tasks)) {
-    const spec = specById.get(task.task_id);
-    if (spec === void 0) {
-      throw new Error(
-        `buildPartialReport: run task '${task.task_id}' is absent from spec '${request.spec_id}' \u2014 run/spec mismatch (wrong spec paired with run ${run9.run_id})`
-      );
-    }
-    if (task.status === "done") {
-      shipped.push({
-        task_id: task.task_id,
-        title: spec.title,
-        branch: task.branch,
-        pr_number: task.pr_number
-      });
-    } else if (task.status === "failed") {
-      failures.push({
-        task_id: task.task_id,
-        title: spec.title,
-        failure_class: task.failure_class,
-        failure_reason: task.failure_reason,
-        unmet_criteria: [...spec.acceptance_criteria],
-        branch: task.branch,
-        pr_number: task.pr_number
-      });
-    } else {
-      incomplete.push({ task_id: task.task_id, title: spec.title, status: task.status });
-    }
-  }
-  const bySpecOrder = (a, b) => (orderOf.get(a.task_id) ?? 0) - (orderOf.get(b.task_id) ?? 0);
-  shipped.sort(bySpecOrder);
-  failures.sort(bySpecOrder);
-  incomplete.sort(bySpecOrder);
-  return {
-    run_id: run9.run_id,
-    run_status: run9.status,
-    spec_id: run9.spec.spec_id,
-    issue_number: run9.spec.issue_number,
-    repo: run9.spec.repo,
-    generated_at: opts.now ?? nowIso(),
-    totals: {
-      total: shipped.length + failures.length + incomplete.length,
-      shipped: shipped.length,
-      failed: failures.length,
-      incomplete: incomplete.length
-    },
-    shipped,
-    failures,
-    incomplete,
-    ...run9.e2e_phase?.status === "failed" ? { e2e_failure: run9.e2e_phase.reason } : {},
-    ...run9.e2e_phase?.status === "done" && run9.e2e_phase.advisory !== void 0 ? { e2e_advisory: run9.e2e_phase.advisory } : {}
-  };
-}
-function failureCommentMarker(runId) {
-  return `<!-- factory:run-failed:${runId} -->`;
-}
-function renderFailureComment(report) {
-  const lines = [
-    failureCommentMarker(report.run_id),
-    `Factory run \`${report.run_id}\` failed \u2014 ${report.failures.length} task(s) failed. PRD left open for rescue/resume.`
-  ];
-  if (report.e2e_failure !== void 0) {
-    lines.push(
-      "",
-      "### End-to-end verification failed",
-      `Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`
-    );
-  }
-  for (const failure of report.failures) {
-    lines.push("", `### \`${failure.task_id}\` \u2014 ${failure.title}`);
-    lines.push(`- **Class:** \`${failure.failure_class}\``);
-    lines.push(`- **Reason:** ${failure.failure_reason}`);
-    if (failure.branch !== void 0) lines.push(`- **Branch:** \`${failure.branch}\``);
-    if (failure.pr_number !== void 0) lines.push(`- **PR:** #${failure.pr_number}`);
-    lines.push("- **Unmet acceptance criteria:**");
-    for (const c of failure.unmet_criteria) lines.push(`  - [ ] ${c}`);
-  }
-  return lines.join("\n");
-}
-function statusLabel(status) {
-  return status.toUpperCase();
-}
-function renderPartialReportMarkdown(report) {
-  const out = [];
-  out.push(`# Factory run report \u2014 \`${report.run_id}\``);
-  out.push("");
-  out.push(
-    `**Status:** ${statusLabel(report.run_status)} \xB7 **Spec:** \`${report.spec_id}\` (PRD #${report.issue_number}) \xB7 **Repo:** ${report.repo}`
-  );
-  out.push(`**Generated:** ${report.generated_at}`);
-  out.push("");
-  out.push(
-    `**Tasks:** ${report.totals.total} total \xB7 ${report.totals.shipped} shipped \xB7 ${report.totals.failed} failed \xB7 ${report.totals.incomplete} incomplete`
-  );
-  out.push("");
-  out.push(`## Shipped (${report.shipped.length})`);
-  if (report.shipped.length === 0) {
-    out.push("_none_");
-  } else {
-    for (const s of report.shipped) {
-      const pr = s.pr_number !== void 0 ? ` \u2014 PR #${s.pr_number}` : "";
-      const br = s.branch !== void 0 ? ` (\`${s.branch}\`)` : "";
-      out.push(`- \`${s.task_id}\` \u2014 ${s.title}${pr}${br}`);
-    }
-  }
-  out.push("");
-  if (report.e2e_failure !== void 0) {
-    out.push("## End-to-end verification failed");
-    out.push(`Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`);
-    out.push("");
-  }
-  if (report.e2e_advisory !== void 0) {
-    out.push("## End-to-end verification \u2014 advisory");
-    out.push(report.e2e_advisory);
-    out.push("");
-  }
-  if (report.failures.length > 0) {
-    out.push(`## Failed (${report.failures.length})`);
-    for (const f of report.failures) {
-      out.push("");
-      out.push(`### \`${f.task_id}\` \u2014 ${f.title}`);
-      out.push(`- **Class:** \`${f.failure_class}\``);
-      out.push(`- **Reason:** ${f.failure_reason}`);
-      out.push("- **Unmet acceptance criteria:**");
-      for (const c of f.unmet_criteria) out.push(`  - ${c}`);
-    }
-    out.push("");
-  }
-  if (report.incomplete.length > 0) {
-    out.push(`## Incomplete (${report.incomplete.length})`);
-    for (const i of report.incomplete) {
-      out.push(`- \`${i.task_id}\` \u2014 ${i.title} (\`${i.status}\`)`);
-    }
-    out.push("");
-  }
-  return out.join("\n");
-}
-
-// src/scoring/summary.ts
-function durationSeconds(startedAt, endedAt) {
-  if (endedAt === null) return null;
-  const start = Date.parse(startedAt);
-  const end = Date.parse(endedAt);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  const delta = Math.floor((end - start) / 1e3);
-  return delta >= 0 ? delta : null;
-}
-function buildRunSummary(run9, report, opts = {}) {
-  const failuresByClass = Object.fromEntries(FailureClassEnum.options.map((c) => [c, 0]));
-  for (const f of report.failures) {
-    failuresByClass[f.failure_class] += 1;
-  }
-  const tasks = Object.values(run9.tasks);
-  const effort = {
-    reviewer_results: tasks.reduce((n, t) => n + t.reviewers.length, 0),
-    max_escalation_rung: tasks.reduce((m, t) => Math.max(m, t.escalation_rung), 0)
-  };
-  const shipped_prs = report.shipped.map((s) => ({
-    task_id: s.task_id,
-    ...s.pr_number !== void 0 ? { pr_number: s.pr_number } : {},
-    ...s.branch !== void 0 ? { branch: s.branch } : {}
-  }));
-  return {
-    run_id: run9.run_id,
-    run_status: run9.status,
-    execution_mode: run9.execution_mode,
-    spec_id: run9.spec.spec_id,
-    issue_number: run9.spec.issue_number,
-    repo: run9.spec.repo,
-    generated_at: opts.now ?? nowIso(),
-    timing: {
-      started_at: run9.started_at,
-      ended_at: run9.ended_at,
-      duration_seconds: durationSeconds(run9.started_at, run9.ended_at)
-    },
-    totals: report.totals,
-    failures_by_class: failuresByClass,
-    effort,
-    shipped_prs
-  };
-}
-
-// src/scoring/telemetry.ts
-var log19 = createLogger("telemetry");
-async function writeMetric(dataDir, runId, event, data, opts) {
-  const record = {
-    ts: opts.now ?? nowIso(),
-    run_id: runId,
-    event,
-    ...data !== void 0 ? { data } : {}
-  };
-  try {
-    await appendJsonl(runMetricsPath(dataDir, runId), record);
-    return { record, written: true };
-  } catch (err) {
-    log19.warn(`failed to write metric '${event}' for ${runId}: ${err.message}`);
-    return { record, written: false };
-  }
-}
-async function recordRunFinalized(dataDir, report, opts = {}) {
-  const now = opts.now ?? nowIso();
-  let dropped = 0;
-  const finalized = await writeMetric(
-    dataDir,
-    report.run_id,
-    "run.finalized",
-    {
-      status: report.run_status,
-      spec_id: report.spec_id,
-      issue_number: report.issue_number,
-      totals: report.totals
-    },
-    { now }
-  );
-  if (!finalized.written) dropped++;
-  for (const f of report.failures) {
-    const r = await writeMetric(
-      dataDir,
-      report.run_id,
-      "task.dropped",
-      { task_id: f.task_id, failure_class: f.failure_class },
-      { now }
-    );
-    if (!r.written) dropped++;
-  }
-  if (dropped > 0) {
-    log19.warn(
-      `telemetry: ${dropped} metric write(s) dropped this run (${report.run_id}); the metrics stream is incomplete`
-    );
-    await writeMetric(dataDir, report.run_id, "telemetry.writes_dropped", { dropped }, { now });
-  }
 }
 
 // src/producer/agents.ts
@@ -10946,7 +10543,7 @@ var buildStrategy = procStrategy(
 );
 
 // src/verifier/deterministic/gate-runner.ts
-var log20 = createLogger("gate-runner");
+var log18 = createLogger("gate-runner");
 function strategyFor(id) {
   switch (id) {
     case "test":
@@ -10988,7 +10585,7 @@ var GateRunner = class {
       if (cached !== void 0) {
         report.push({ gate: id, outcome: { kind: "ran", evidence: cached } });
         evidence.push(cached);
-        log20.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
+        log18.debug(`gate ${id} served from tree-SHA evidence memo (${treeSha})`);
         continue;
       }
       const strategy = strategyFor(id);
@@ -11009,7 +10606,7 @@ var GateRunner = class {
         memo.putEvidence(id, treeSha, outcome.evidence);
       } else {
         skipped.push({ gate: outcome.gate, reason: outcome.reason });
-        log20.debug(`gate ${id} skipped: ${outcome.reason}`);
+        log18.debug(`gate ${id} skipped: ${outcome.reason}`);
       }
     }
     const verdict = deriveAllGatesVerdict(evidence);
@@ -11018,7 +10615,7 @@ var GateRunner = class {
 };
 
 // src/verifier/deterministic/tdd-exempt.ts
-import { readFile as readFile6 } from "node:fs/promises";
+import { readFile as readFile5 } from "node:fs/promises";
 import path2 from "node:path";
 function isTddExempt(taskId, tasksJson, packageJson) {
   const list = extractTaskList(tasksJson);
@@ -11052,7 +10649,7 @@ var DefaultExemptReader = class {
 async function readJsonOrNull(file) {
   let raw;
   try {
-    raw = await readFile6(file, "utf8");
+    raw = await readFile5(file, "utf8");
   } catch {
     return null;
   }
@@ -11064,7 +10661,7 @@ async function readJsonOrNull(file) {
 }
 
 // src/verifier/deterministic/tools.ts
-import { access as access2, readFile as readFile7 } from "node:fs/promises";
+import { access as access2, readFile as readFile6 } from "node:fs/promises";
 import path3 from "node:path";
 function toProc(r) {
   return { code: r.code, stdout: r.stdout, stderr: r.stderr, truncated: r.truncated };
@@ -11172,7 +10769,7 @@ var DefaultStrykerTool = class _DefaultStrykerTool {
     const reportPath = path3.join(opts.cwd, _DefaultStrykerTool.REPORT_PATH);
     let raw;
     try {
-      raw = await readFile7(reportPath, "utf8");
+      raw = await readFile6(reportPath, "utf8");
     } catch {
       return { proc: proc2, report: { report: "absent" } };
     }
@@ -11224,7 +10821,7 @@ var DefaultCoverageReader = class {
     const file = path3.join(opts.cwd, "coverage", `${label}-coverage-summary.json`);
     let raw;
     try {
-      raw = await readFile7(file, "utf8");
+      raw = await readFile6(file, "utf8");
     } catch {
       return { state: "absent" };
     }
@@ -11412,7 +11009,7 @@ function buildPanelManifest(resumePhase, model, maxTurns) {
 }
 
 // src/verifier/judgment/finding.ts
-var log21 = createLogger("finding");
+var log19 = createLogger("finding");
 var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
 var FindingBaseSchema = external_exports.object({
   /** Which panel reviewer raised this (free-form; the role string). */
@@ -11482,7 +11079,7 @@ function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) 
     }
   }
   if (topUnknown.length > 0 || findingUnknown.length > 0) {
-    log21.warn(
+    log19.warn(
       `review parse: stripped unknown keys from reviewer '${context}' payload: top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`
     );
   }
@@ -11757,8 +11354,8 @@ function splitHoldout(criteria, percent, seed) {
 }
 
 // src/verifier/holdout/store.ts
-import { mkdir as mkdir8, readFile as readFile8 } from "node:fs/promises";
-import { dirname as dirname6, join as join11 } from "node:path";
+import { mkdir as mkdir6, readFile as readFile7 } from "node:fs/promises";
+import { dirname as dirname5, join as join9 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -11789,21 +11386,21 @@ var FsHoldoutStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
+    return join9(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
     const path5 = this.path(runId, record.task_id);
-    await mkdir8(dirname6(path5), { recursive: true });
+    await mkdir6(dirname5(path5), { recursive: true });
     await atomicWriteFile(path5, stringifyJson(record));
   }
   async get(runId, taskId) {
     const path5 = this.path(runId, taskId);
-    const raw = await readFile8(path5, "utf8");
+    const raw = await readFile7(path5, "utf8");
     return parseHoldoutRecord(parseJson(raw, path5), path5);
   }
   async has(runId, taskId) {
     try {
-      await readFile8(this.path(runId, taskId), "utf8");
+      await readFile7(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -11812,8 +11409,8 @@ var FsHoldoutStore = class {
 };
 
 // src/verifier/holdout/verdict-store.ts
-import { mkdir as mkdir9, readFile as readFile9 } from "node:fs/promises";
-import { dirname as dirname7, join as join12 } from "node:path";
+import { mkdir as mkdir7, readFile as readFile8 } from "node:fs/promises";
+import { dirname as dirname6, join as join10 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -11826,21 +11423,21 @@ var FsHoldoutVerdictStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join12(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
+    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
     const path5 = this.path(runId, taskId);
-    await mkdir9(dirname7(path5), { recursive: true });
+    await mkdir7(dirname6(path5), { recursive: true });
     await atomicWriteFile(path5, stringifyJson([...verdicts]));
   }
   async get(runId, taskId) {
     const path5 = this.path(runId, taskId);
-    const raw = await readFile9(path5, "utf8");
+    const raw = await readFile8(path5, "utf8");
     return HoldoutVerdictsSchema.parse(parseJson(raw, path5));
   }
   async has(runId, taskId) {
     try {
-      await readFile9(this.path(runId, taskId), "utf8");
+      await readFile8(this.path(runId, taskId), "utf8");
       return true;
     } catch {
       return false;
@@ -11975,17 +11572,17 @@ function dispositionOf(status, failureClass) {
   }
   return "stuck";
 }
-function depsSatisfied(run9, depends) {
-  return depends.every((d) => run9.tasks[d]?.status === "done");
+function depsSatisfied(run10, depends) {
+  return depends.every((d) => run10.tasks[d]?.status === "done");
 }
-function hasUnsatisfiableDep(run9, depends) {
+function hasUnsatisfiableDep(run10, depends) {
   return depends.some((d) => {
-    const dep = run9.tasks[d];
+    const dep = run10.tasks[d];
     return dep === void 0 || dep.status === "failed";
   });
 }
-function scanRun(run9) {
-  const all = Object.values(run9.tasks);
+function scanRun(run10) {
+  const all = Object.values(run10.tasks);
   const tasks = all.map((t) => ({
     task_id: t.task_id,
     status: t.status,
@@ -12003,14 +11600,14 @@ function scanRun(run9) {
   const dead_ends = deadEnd.map((t) => t.task_id);
   const allTerminal = all.every((t) => isTerminalTaskStatus(t.status));
   const actionablePending = all.some(
-    (t) => t.status === "pending" && (depsSatisfied(run9, t.depends_on) || hasUnsatisfiableDep(run9, t.depends_on))
+    (t) => t.status === "pending" && (depsSatisfied(run10, t.depends_on) || hasUnsatisfiableDep(run10, t.depends_on))
   );
   const would_deadlock = !allTerminal && !actionablePending;
-  const e2e_failed = run9.e2e_phase?.status === "failed";
+  const e2e_failed = run10.e2e_phase?.status === "failed";
   const needs_rescue = resettable.length > 0 || e2e_failed;
   return {
-    run_id: run9.run_id,
-    run_status: run9.status,
+    run_id: run10.run_id,
+    run_status: run10.status,
     counts: {
       total: all.length,
       shipped: by("shipped").length,
@@ -12024,11 +11621,11 @@ function scanRun(run9) {
     needs_rescue,
     e2e_failed,
     would_deadlock,
-    summary: summarize2(run9.status, resettable.length, dead_ends.length, would_deadlock, e2e_failed),
+    summary: summarize(run10.status, resettable.length, dead_ends.length, would_deadlock, e2e_failed),
     tasks
   };
 }
-function summarize2(status, resettable, deadEnds, wouldDeadlock, e2eFailed) {
+function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed) {
   const e2eTail = e2eFailed ? " (e2e phase failed \u2014 needs a fix + --reset-e2e)" : "";
   if (resettable === 0) {
     const deadEndTail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
@@ -12041,11 +11638,11 @@ function summarize2(status, resettable, deadEnds, wouldDeadlock, e2eFailed) {
 }
 
 // src/rescue/assess.ts
-async function assessWork(run9, probe) {
-  const baseRef = `origin/${resolveStagingBranch(run9.run_id, run9.staging_branch)}`;
+async function assessWork(run10, probe) {
+  const baseRef = `origin/${resolveStagingBranch(run10.run_id, run10.staging_branch)}`;
   const baseResolved = await probe.refExists(baseRef);
   const tasks = [];
-  for (const t of Object.values(run9.tasks)) {
+  for (const t of Object.values(run10.tasks)) {
     if (t.status === "done") continue;
     if (t.branch === void 0) continue;
     const branchExists = await probe.refExists(t.branch);
@@ -12108,15 +11705,15 @@ function resetTaskRow(task, opts = {}) {
     ...opts.e2eFeedback !== void 0 ? { e2e_feedback: opts.e2eFeedback } : {}
   };
 }
-function selectTargets(run9, opts) {
+function selectTargets(run10, opts) {
   const explicit = opts.tasks ?? [];
   if (explicit.length > 0) {
     const targets2 = [];
     const skipped = [];
     for (const id of explicit) {
-      const task = run9.tasks[id];
+      const task = run10.tasks[id];
       if (task === void 0) {
-        throw new Error(`rescue: run '${run9.run_id}' has no task '${id}'`);
+        throw new Error(`rescue: run '${run10.run_id}' has no task '${id}'`);
       }
       if (task.status === "done") {
         throw new Error(
@@ -12131,43 +11728,43 @@ function selectTargets(run9, opts) {
     }
     return { targets: targets2, skipped };
   }
-  const scan = scanRun(run9);
+  const scan = scanRun(run10);
   const targets = opts.includeDeadEnds ? [...scan.resettable, ...scan.dead_ends] : [...scan.resettable];
   return { targets, skipped: [] };
 }
 async function applyRescue(state, runId, opts = {}) {
   let result = null;
   const now = nowEpoch();
-  const updated = await state.update(runId, (run9) => {
-    const { targets, skipped } = selectTargets(run9, opts);
-    const wasTerminal = isTerminalRunStatus(run9.status);
-    const e2eReset = opts.resetE2e === true && run9.e2e_phase?.status === "failed";
+  const updated = await state.update(runId, (run10) => {
+    const { targets, skipped } = selectTargets(run10, opts);
+    const wasTerminal = isTerminalRunStatus(run10.status);
+    const e2eReset = opts.resetE2e === true && run10.e2e_phase?.status === "failed";
     const reopen = wasTerminal && (targets.length > 0 || e2eReset);
     result = {
       run_id: runId,
-      run_status: reopen ? "running" : run9.status,
+      run_status: reopen ? "running" : run10.status,
       reset: targets,
       reopened: reopen,
       skipped
     };
     if (targets.length === 0 && !reopen) {
-      return run9;
+      return run10;
     }
-    const nextTasks = { ...run9.tasks };
+    const nextTasks = { ...run10.tasks };
     for (const id of targets) {
-      nextTasks[id] = resetTaskRow(run9.tasks[id]);
+      nextTasks[id] = resetTaskRow(run10.tasks[id]);
     }
     return {
-      ...run9,
+      ...run10,
       tasks: nextTasks,
-      ...e2eReset ? { e2e_phase: reopenE2ePhase(run9.e2e_phase) } : {},
+      ...e2eReset ? { e2e_phase: reopenE2ePhase(run10.e2e_phase) } : {},
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
       // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.
       ...reopen ? {
         status: "running",
         ended_at: null,
-        paused_minutes: (run9.paused_minutes ?? 0) + Math.max(0, Math.floor((now - parseIso8601ToEpoch(run9.updated_at)) / 60))
+        paused_minutes: (run10.paused_minutes ?? 0) + Math.max(0, Math.floor((now - parseIso8601ToEpoch(run10.updated_at)) / 60))
       } : {}
     };
   });
@@ -12175,7 +11772,7 @@ async function applyRescue(state, runId, opts = {}) {
 }
 
 // src/orchestrator/finalize.ts
-var log22 = createLogger("finalize");
+var log20 = createLogger("finalize");
 function prdDoneComment(report, rollupResult) {
   const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`;
   return `PRD delivered \u2014 all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.
@@ -12193,7 +11790,7 @@ async function commentFailuresOnPrd(deps, report) {
     number: report.issue_number
   });
   if (existing.some((body) => body.includes(marker))) {
-    log22.info(`failure comment already posted for run '${report.run_id}' \u2014 skipping duplicate`);
+    log20.info(`failure comment already posted for run '${report.run_id}' \u2014 skipping duplicate`);
     return false;
   }
   await deps.gh.issueComment({
@@ -12205,17 +11802,17 @@ async function commentFailuresOnPrd(deps, report) {
 }
 async function finalizeRun(deps, runId) {
   const now = deps.nowIso ?? nowIso();
-  const run9 = await deps.state.read(runId);
-  const taskTerminal = decideFinalize(run9).run_status;
-  const terminal = run9.e2e_phase?.status === "failed" ? "failed" : taskTerminal;
-  const report = buildPartialReport({ ...run9, status: terminal }, deps.spec, { now });
+  const run10 = await deps.state.read(runId);
+  const taskTerminal = decideFinalize(run10).run_status;
+  const terminal = run10.e2e_phase?.status === "failed" ? "failed" : taskTerminal;
+  const report = buildPartialReport({ ...run10, status: terminal }, deps.spec, { now });
   const markdown = renderPartialReportMarkdown(report);
   await atomicWriteFile(runReportPath(deps.dataDir, runId), markdown);
   await recordRunFinalized(deps.dataDir, report, { now });
-  const failureCommentPosted = run9.debug ? false : await commentFailuresOnPrd(deps, report);
+  const failureCommentPosted = run10.debug ? false : await commentFailuresOnPrd(deps, report);
   let rollupResult;
   if (terminal === "completed") {
-    const stagingBranch = resolveStagingBranch(runId, run9.staging_branch);
+    const stagingBranch = resolveStagingBranch(runId, run10.staging_branch);
     await deps.git.fetch("origin", deps.config.git.baseBranch);
     await deps.git.mergeFfOrCommit(stagingBranch, `origin/${deps.config.git.baseBranch}`);
     await deps.git.push("origin", stagingBranch);
@@ -12229,7 +11826,7 @@ async function finalizeRun(deps, runId) {
       ...deps.rollup ?? {}
     });
     if (rollupResult.merged) {
-      if (!run9.debug) {
+      if (!run10.debug) {
         if (!rollupResult.resumed) {
           await deps.gh.issueComment({
             repo: report.repo,
@@ -12246,10 +11843,10 @@ async function finalizeRun(deps, runId) {
       await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
     }
   } else {
-    log22.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
+    log20.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
-  log22.info(
+  log20.info(
     `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed${failureCommentPosted ? ", PRD failure comment posted" : ""}${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
   );
   return {
@@ -12261,7 +11858,7 @@ async function finalizeRun(deps, runId) {
 }
 
 // src/orchestrator/transitions.ts
-var log23 = createLogger("transitions");
+var log21 = createLogger("transitions");
 function markInFlight(deps, runId, taskId, phase) {
   const status = phaseToInFlightStatus(phase);
   return deps.state.updateTask(runId, taskId, (t) => ({
@@ -12285,7 +11882,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function failTask(deps, runId, taskId, failureClass, reason) {
-  log23.warn(`task '${taskId}' failed (${failureClass}): ${reason}`);
+  log21.warn(`task '${taskId}' failed (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "failed",
@@ -12304,8 +11901,8 @@ async function escalateOrFail(deps, runId, taskId, decision, resumePhase) {
   if (decision.action === "fail") {
     return failStep(deps, runId, taskId, decision.failureClass, decision.reason);
   }
-  const run9 = await deps.state.read(runId);
-  const task = run9.tasks[taskId];
+  const run10 = await deps.state.read(runId);
+  const task = run10.tasks[taskId];
   if (task === void 0) {
     throw new Error(`transitions: task '${taskId}' vanished from run '${runId}'`);
   }
@@ -12324,7 +11921,7 @@ async function escalateOrFail(deps, runId, taskId, decision, resumePhase) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log23.info(
+  log21.info(
     `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`
   );
   return { done: false, phase: resumePhase };
@@ -12374,11 +11971,11 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
 }
 
 // src/orchestrator/paths.ts
-import { join as join13 } from "node:path";
+import { join as join11 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join13(worktreesRoot(dataDir), runId, taskId);
+  return join11(worktreesRoot(dataDir), runId, taskId);
 }
 
 // src/orchestrator/exempt.ts
@@ -12460,7 +12057,7 @@ function makePhaseHandlers(deps) {
         }
       ]
     });
-    return spawn2(request);
+    return spawn(request);
   }
   return {
     /**
@@ -12552,7 +12149,7 @@ function makePhaseHandlers(deps) {
       };
       const gate = await new GateRunner().run(gateCtx);
       if (task.reviewers.length === 0) {
-        return spawn2(
+        return spawn(
           buildPanelManifest(
             "verify",
             resolveReviewModel(deps.config),
@@ -12566,7 +12163,7 @@ function makePhaseHandlers(deps) {
         const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
         const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id);
         if (!hasVerdicts) {
-          return spawn2(
+          return spawn(
             buildPanelManifest(
               "verify",
               resolveReviewModel(deps.config),
@@ -12642,8 +12239,8 @@ function shipBody(runId, specTask) {
 }
 
 // src/orchestrator/artifacts.ts
-import { mkdir as mkdir10, readFile as readFile10 } from "node:fs/promises";
-import { dirname as dirname8, join as join14 } from "node:path";
+import { mkdir as mkdir8, readFile as readFile9 } from "node:fs/promises";
+import { dirname as dirname7, join as join12 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
 }
@@ -12652,29 +12249,29 @@ var FsArtifactStore = class {
     this.dataDir = dataDir;
   }
   absPath(runId, ref) {
-    return join14(runDir(this.dataDir, runId), ref);
+    return join12(runDir(this.dataDir, runId), ref);
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
     const path5 = this.absPath(runId, ref);
-    await mkdir10(dirname8(path5), { recursive: true });
+    await mkdir8(dirname7(path5), { recursive: true });
     await atomicWriteFile(path5, stringifyJson(context));
     return ref;
   }
   async getProducerContext(runId, promptRef) {
     const path5 = this.absPath(runId, promptRef);
-    const raw = await readFile10(path5, "utf8");
+    const raw = await readFile9(path5, "utf8");
     return parseJson(raw, path5);
   }
 };
 
 // src/orchestrator/docs-applicable.ts
-import { readFile as readFile11, stat } from "node:fs/promises";
-import { join as join15 } from "node:path";
+import { readFile as readFile10, stat } from "node:fs/promises";
+import { join as join13 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
-    raw = await readFile11(file, "utf8");
+    raw = await readFile10(file, "utf8");
   } catch {
     return null;
   }
@@ -12690,25 +12287,25 @@ function docsEnabled(packageJson) {
 }
 async function isDocsApplicable(repoRoot) {
   try {
-    const s = await stat(join15(repoRoot, "docs"));
+    const s = await stat(join13(repoRoot, "docs"));
     if (!s.isDirectory()) return false;
   } catch {
     return false;
   }
-  return docsEnabled(await readJsonOrNull2(join15(repoRoot, "package.json")));
+  return docsEnabled(await readJsonOrNull2(join13(repoRoot, "package.json")));
 }
 
 // src/orchestrator/record.ts
-import { readFile as readFile12 } from "node:fs/promises";
-import { join as join16 } from "node:path";
-var log24 = createLogger("record");
+import { readFile as readFile11 } from "node:fs/promises";
+import { join as join14 } from "node:path";
+var log22 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.phase);
   }
 }
 async function readJsonInput(path5) {
-  const raw = await readFile12(path5, "utf8");
+  const raw = await readFile11(path5, "utf8");
   return parseJson(raw, path5);
 }
 function producerPhaseInfo(phase) {
@@ -12723,8 +12320,8 @@ async function applyRecordProducer(state, runId, taskId, phase, statusLine) {
       `record-producer: phase order drift \u2014 nextPhase('${info.phase}') !== '${info.after}'`
     );
   }
-  const run9 = await state.read(runId);
-  if (run9.tasks[taskId] === void 0) {
+  const run10 = await state.read(runId);
+  if (run10.tasks[taskId] === void 0) {
     throw new Error(`record-producer: run '${runId}' has no task '${taskId}'`);
   }
   const outcome = parseProducerStatus(statusLine);
@@ -12743,7 +12340,7 @@ function parseVerdictsFailClosed(raw) {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log24.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log22.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
@@ -12770,7 +12367,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile12(join16(worktree, file), "utf8");
+      const text = await readFile11(join14(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
       if (err?.code !== "ENOENT") throw err;
@@ -12808,8 +12405,8 @@ function makeReplayRunnerFactory(input) {
   };
 }
 async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
-  const run9 = await deps.state.read(runId);
-  const task = run9.tasks[taskId];
+  const run10 = await deps.state.read(runId);
+  const task = run10.tasks[taskId];
   if (task === void 0) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
@@ -12821,7 +12418,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     runId,
     taskId,
     worktree,
-    baseRef: resolveStagingBranch(runId, run9.staging_branch),
+    baseRef: resolveStagingBranch(runId, run10.staging_branch),
     config: deps.config,
     tools: deps.tools,
     exemptReader: taskExemptReader(deps, worktree)
@@ -12847,7 +12444,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
   if (panel.crossVendorAbsence !== void 0) {
-    log24.warn(
+    log22.warn(
       `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` + panel.crossVendorAbsence.reason
     );
   }
@@ -12923,7 +12520,7 @@ function isSpawnPhase(phase) {
 }
 
 // src/orchestrator/quota-gate.ts
-var log25 = createLogger("quota-gate");
+var log23 = createLogger("quota-gate");
 async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false) {
   if (mode === "workflow" || ignoreQuota) return null;
   const reading = await deps.usage.read();
@@ -12935,8 +12532,8 @@ async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false
     case "pause-5h":
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
-      log25.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
-      const run9 = await deps.state.update(runId, (s) => ({
+      log23.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
+      const run10 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
         quota: patch.quota
@@ -12945,17 +12542,17 @@ async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false
         scope: decision.kind === "pause-5h" ? "5h" : "7d",
         reason: decision.reason,
         resets_at_epoch: decision.resetsAtEpoch,
-        run: run9
+        run: run10
       };
     }
     case "unavailable-halt": {
-      log25.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
-      const run9 = await deps.state.update(runId, (s) => ({
+      log23.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
+      const run10 = await deps.state.update(runId, (s) => ({
         ...s,
         status: "suspended",
         quota: void 0
       }));
-      return { scope: "unavailable", reason: decision.reason, run: run9 };
+      return { scope: "unavailable", reason: decision.reason, run: run10 };
     }
     default:
       return assertNever(decision);
@@ -12970,7 +12567,7 @@ function quotaStopFields(stop) {
 }
 
 // src/orchestrator/ship.ts
-var log26 = createLogger("ship");
+var log24 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
     throw new Error("ship: phase 'ship' requires a task but ctx.task is absent");
@@ -13010,19 +12607,19 @@ async function shipTask(deps, ctx) {
   });
   const outcome = await serializer.merge(pr.number);
   if (outcome.merged) {
-    log26.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    log24.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
     return taskDone();
   }
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
 // src/orchestrator/orchestrator.ts
-var log27 = createLogger("orchestrator");
+var log25 = createLogger("orchestrator");
 var MERGE_RESYNC_CAP = 8;
-function requireTask2(run9, taskId) {
-  const task = run9.tasks[taskId];
+function requireTask2(run10, taskId) {
+  const task = run10.tasks[taskId];
   if (task === void 0) {
-    throw new Error(`orchestrator: run '${run9.run_id}' has no task '${taskId}'`);
+    throw new Error(`orchestrator: run '${run10.run_id}' has no task '${taskId}'`);
   }
   return task;
 }
@@ -13108,12 +12705,12 @@ async function recordResults(deps, runId, taskId, phase, task, results) {
   return env.step;
 }
 async function nextAction(deps, runId, taskId, results) {
-  let run9 = await deps.state.read(runId);
-  let task = requireTask2(run9, taskId);
+  let run10 = await deps.state.read(runId);
+  let task = requireTask2(run10, taskId);
   if (isTerminalTaskStatus(task.status)) {
     return { kind: "done", run_id: runId, task_id: taskId, outcome: terminalOutcome(task) };
   }
-  const stop = await applyQuotaGate(deps, runId, run9.mode, run9.ignore_quota);
+  const stop = await applyQuotaGate(deps, runId, run10.mode, run10.ignore_quota);
   if (stop !== null) {
     return { kind: "pause", run_id: runId, task_id: taskId, ...quotaStopFields(stop) };
   }
@@ -13129,10 +12726,10 @@ async function nextAction(deps, runId, taskId, results) {
   }
   const handlers = makePhaseHandlers(deps);
   for (; ; ) {
-    run9 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, phase);
+    run10 = cursorPersisted ? await deps.state.read(runId) : await markInFlight(deps, runId, taskId, phase);
     cursorPersisted = true;
-    task = requireTask2(run9, taskId);
-    const ctx = { run: run9, task, attempt: task.escalation_rung + 1 };
+    task = requireTask2(run10, taskId);
+    const ctx = { run: run10, task, attempt: task.escalation_rung + 1 };
     const result = phase === "ship" ? await shipTask(deps, ctx) : await runPhase(phase, ctx, handlers);
     switch (result.kind) {
       case "advance": {
@@ -13144,7 +12741,7 @@ async function nextAction(deps, runId, taskId, results) {
         const spawnPhase = asSpawnPhase(phase);
         const expects = spawnPhase === "verify" ? "reviews" : "producer-status";
         const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-        const base_ref = `origin/${resolveStagingBranch(runId, run9.staging_branch)}`;
+        const base_ref = `origin/${resolveStagingBranch(runId, run10.staging_branch)}`;
         const holdout = spawnPhase === "verify" ? await holdoutSidecar(deps, runId, taskId, base_ref) : void 0;
         const result_key = { phase: spawnPhase, rung: task.escalation_rung };
         if (await deps.git.worktreeExists(worktree)) {
@@ -13214,7 +12811,7 @@ async function nextAction(deps, runId, taskId, results) {
             if (!step2.done) throw new Error("orchestrator: failStep returned non-terminal step");
             return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
-          log27.info(
+          log25.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
           );
           phase = "exec";
@@ -13245,12 +12842,12 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join17 } from "node:path";
+import { join as join15 } from "node:path";
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
-  return join17(dataDir, "runs", runId, "docs-worktree");
+  return join15(dataDir, "runs", runId, "docs-worktree");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -13264,8 +12861,8 @@ function buildScribePrompt(worktree, baseRef) {
   ].join("\n");
 }
 async function runDocsEmit(deps, runId) {
-  const run9 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const run10 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const base = deps.config.git.baseBranch;
   const docsBranch = `docs-${runId}`;
   const worktree = docsWorktreePath(deps.dataDir, runId);
@@ -13274,7 +12871,7 @@ async function runDocsEmit(deps, runId) {
   await deps.git.fetch("origin", base);
   if (!await deps.git.worktreeExists(worktree)) {
     await deps.git.worktreeAdd(["-b", docsBranch, worktree, `origin/${staging}`]);
-  } else if ((run9.docs?.attempts ?? 0) >= 1) {
+  } else if ((run10.docs?.attempts ?? 0) >= 1) {
     await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
   return {
@@ -13291,8 +12888,8 @@ async function runDocsEmit(deps, runId) {
 }
 var DocsResultsSchema = external_exports.object({ status: external_exports.string().min(1) }).strict();
 async function runDocsRecord(deps, runId, results) {
-  const run9 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const run10 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const docsBranch = `docs-${runId}`;
   const worktree = docsWorktreePath(deps.dataDir, runId);
   const outcome = parseProducerStatus(results.status);
@@ -13304,7 +12901,7 @@ async function runDocsRecord(deps, runId, results) {
     return { kind: "done", run_id: runId };
   }
   const reason = "reason" in outcome ? outcome.reason : "docs phase failed";
-  const attempts = (run9.docs?.attempts ?? 0) + 1;
+  const attempts = (run10.docs?.attempts ?? 0) + 1;
   const docsRecord = { status: "failed", reason, attempts, ended_at: nowIso() };
   if (attempts >= MAX_DOCS_ATTEMPTS) {
     await deps.state.update(runId, (s) => ({ ...s, docs: docsRecord }));
@@ -13320,17 +12917,17 @@ async function runDocsRecord(deps, runId, results) {
 
 // src/orchestrator/circuit-breaker-gate.ts
 async function applyCircuitBreaker(deps, runId) {
-  const run9 = await deps.state.read(runId);
+  const run10 = await deps.state.read(runId);
   const now = deps.now();
-  const capabilityFailures = Object.values(run9.tasks).filter(
+  const capabilityFailures = Object.values(run10.tasks).filter(
     (t) => t.status === "failed" && t.failure_class === "capability-budget"
   ).length;
-  const startedAtIso = run9.mode === "workflow" ? run9.started_at : epochToIso(now);
+  const startedAtIso = run10.mode === "workflow" ? run10.started_at : epochToIso(now);
   const verdict = evaluate2(
     {
       startedAtIso,
       cumulativeFailures: capabilityFailures,
-      pausedMinutes: run9.paused_minutes ?? 0
+      pausedMinutes: run10.paused_minutes ?? 0
     },
     deps.config,
     now
@@ -13339,48 +12936,48 @@ async function applyCircuitBreaker(deps, runId) {
 }
 
 // src/orchestrator/next.ts
-function depsSatisfied2(run9, task) {
-  return task.depends_on.every((d) => run9.tasks[d]?.status === "done");
+function depsSatisfied2(run10, task) {
+  return task.depends_on.every((d) => run10.tasks[d]?.status === "done");
 }
-function isUnsatisfiableDep(run9, depId) {
-  const dep = run9.tasks[depId];
+function isUnsatisfiableDep(run10, depId) {
+  const dep = run10.tasks[depId];
   return dep === void 0 || dep.status === "failed";
 }
-async function wantsDocs(deps, run9) {
-  if (run9.docs?.status === "done") return false;
-  if ((run9.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false;
-  if (run9.e2e_phase?.status === "failed") return false;
-  if (decideFinalize(run9).run_status !== "completed") return false;
+async function wantsDocs(deps, run10) {
+  if (run10.docs?.status === "done") return false;
+  if ((run10.docs?.attempts ?? 0) >= MAX_DOCS_ATTEMPTS) return false;
+  if (run10.e2e_phase?.status === "failed") return false;
+  if (decideFinalize(run10).run_status !== "completed") return false;
   return deps.docsApplicable();
 }
-function wantsE2e(run9) {
-  if (!run9.e2e) return false;
-  if (run9.e2e_phase?.status !== void 0) return false;
-  return decideFinalize(run9).run_status === "completed";
+function wantsE2e(run10) {
+  if (!run10.e2e) return false;
+  if (run10.e2e_phase?.status !== void 0) return false;
+  return decideFinalize(run10).run_status === "completed";
 }
 async function nextTask(deps, runId) {
-  let run9 = await deps.state.read(runId);
-  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run9.ship_mode });
-  if (isTerminalRunStatus(run9.status)) {
-    return { ...ctx(), kind: "done", run_status: run9.status };
+  let run10 = await deps.state.read(runId);
+  const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run10.ship_mode });
+  if (isTerminalRunStatus(run10.status)) {
+    return { ...ctx(), kind: "done", run_status: run10.status };
   }
-  const allTerminal = Object.values(run9.tasks).every((t) => isTerminalTaskStatus(t.status));
-  const needsE2e = allTerminal && wantsE2e(run9);
-  const needsDocs = allTerminal && !needsE2e && await wantsDocs(deps, run9);
+  const allTerminal = Object.values(run10.tasks).every((t) => isTerminalTaskStatus(t.status));
+  const needsE2e = allTerminal && wantsE2e(run10);
+  const needsDocs = allTerminal && !needsE2e && await wantsDocs(deps, run10);
   if (allTerminal && !needsE2e && !needsDocs) {
-    if (run9.status === "paused" || run9.status === "suspended") {
+    if (run10.status === "paused" || run10.status === "suspended") {
       const patch = clearCheckpoint();
       await deps.state.update(runId, (s) => ({ ...s, status: patch.status, quota: patch.quota }));
     }
     return { ...ctx(), kind: "finalize", cascade_failed: [] };
   }
-  const stop = await applyQuotaGate(deps, runId, run9.mode, run9.ignore_quota);
+  const stop = await applyQuotaGate(deps, runId, run10.mode, run10.ignore_quota);
   if (stop !== null) {
     return { ...ctx(), kind: "pause", ...quotaStopFields(stop) };
   }
-  if (run9.status === "paused" || run9.status === "suspended") {
+  if (run10.status === "paused" || run10.status === "suspended") {
     const patch = clearCheckpoint();
-    run9 = await deps.state.update(runId, (s) => ({
+    run10 = await deps.state.update(runId, (s) => ({
       ...s,
       status: patch.status,
       quota: patch.quota
@@ -13394,13 +12991,13 @@ async function nextTask(deps, runId) {
   }
   const cascadeFailed = [];
   for (; ; ) {
-    run9 = await deps.state.read(runId);
-    const blocked = Object.values(run9.tasks).filter(
-      (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run9, d))
+    run10 = await deps.state.read(runId);
+    const blocked = Object.values(run10.tasks).filter(
+      (t) => t.status === "pending" && t.depends_on.some((d) => isUnsatisfiableDep(run10, d))
     );
     if (blocked.length === 0) break;
     for (const t of blocked) {
-      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run9, d));
+      const unsatisfied = t.depends_on.find((d) => isUnsatisfiableDep(run10, d));
       if (unsatisfied === void 0) {
         throw new Error(
           `next: task '${t.task_id}' classified blocked but no unsatisfiable dep found \u2014 unreachable`
@@ -13416,7 +13013,7 @@ async function nextTask(deps, runId) {
       cascadeFailed.push(t.task_id);
     }
   }
-  const tasks = Object.values(run9.tasks);
+  const tasks = Object.values(run10.tasks);
   if (tasks.every((t) => isTerminalTaskStatus(t.status))) {
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
@@ -13432,10 +13029,10 @@ async function nextTask(deps, runId) {
       );
       cascadeFailed.push(t.task_id);
     }
-    run9 = await deps.state.read(runId);
+    run10 = await deps.state.read(runId);
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
-  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied2(run9, t));
+  const ready = tasks.filter((t) => !isTerminalTaskStatus(t.status) && depsSatisfied2(run10, t));
   const inFlight = ready.filter((t) => t.status !== "pending").map((t) => t.task_id);
   const pending = ready.filter((t) => t.status === "pending").map((t) => t.task_id);
   const ordered = [...inFlight, ...pending];
@@ -13452,24 +13049,24 @@ async function nextTask(deps, runId) {
       );
       cascadeFailed.push(t.task_id);
     }
-    run9 = await deps.state.read(runId);
+    run10 = await deps.state.read(runId);
     return { ...ctx(), kind: "finalize", cascade_failed: cascadeFailed };
   }
   return { ...ctx(), kind: "work", ready: ordered, cascade_failed: cascadeFailed };
 }
 
 // src/orchestrator/e2e.ts
-import { copyFile, mkdir as mkdir11, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname9, isAbsolute, join as join18 } from "node:path";
-var log28 = createLogger("e2e");
+import { copyFile, mkdir as mkdir9, writeFile } from "node:fs/promises";
+import { dirname as dirname8, isAbsolute, join as join16 } from "node:path";
+var log26 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
-    await mkdir11(dirname9(to), { recursive: true });
+    await mkdir9(dirname8(to), { recursive: true });
     await copyFile(from, to);
   }
   async writeConfig(path5, contents) {
-    await mkdir11(dirname9(path5), { recursive: true });
-    await writeFile2(path5, contents);
+    await mkdir9(dirname8(path5), { recursive: true });
+    await writeFile(path5, contents);
   }
 };
 var E2E_AUTHOR_MODEL = "sonnet";
@@ -13489,16 +13086,16 @@ var E2eResultsSchema = external_exports.object({
   no_ui_surface: external_exports.boolean().optional()
 }).strict();
 function e2eWorktreePath(dataDir, runId) {
-  return join18(dataDir, "runs", runId, "e2e-worktree");
+  return join16(dataDir, "runs", runId, "e2e-worktree");
 }
 function e2eRunWorktreePath(dataDir, runId) {
-  return join18(dataDir, "runs", runId, "e2e-run-worktree");
+  return join16(dataDir, "runs", runId, "e2e-run-worktree");
 }
 function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join18(dataDir, "runs", runId, "e2e-base-proof-worktree");
+  return join16(dataDir, "runs", runId, "e2e-base-proof-worktree");
 }
 function e2eThrowawayDir(dataDir, runId) {
-  return join18(dataDir, "runs", runId, "e2e-throwaway");
+  return join16(dataDir, "runs", runId, "e2e-throwaway");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -13535,21 +13132,21 @@ function buildAuthorPrompt(args) {
   ].join("\n");
 }
 async function runE2eEmit(deps, runId) {
-  const run9 = await deps.state.read(runId);
+  const run10 = await deps.state.read(runId);
   const cfg = deps.config.e2e;
   if (!cfg.startCommand || !cfg.baseURL) {
     const reason = "e2e phase requires e2e.startCommand and e2e.baseURL \u2014 run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>` first";
     await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
-    log28.warn(`run '${runId}': ${reason}`);
+    log26.warn(`run '${runId}': ${reason}`);
     return { kind: "suspend", run_id: runId, reason };
   }
-  if (run9.e2e_phase === void 0) {
-    return prepareAuthorSpawn(deps, run9, runId, cfg.startCommand, cfg.baseURL, cfg.testDir);
+  if (run10.e2e_phase === void 0) {
+    return prepareAuthorSpawn(deps, run10, runId, cfg.startCommand, cfg.baseURL, cfg.testDir);
   }
   return runSuiteAndDecide(deps, runId);
 }
-async function prepareAuthorSpawn(deps, run9, runId, startCommand, baseURL, testDir) {
-  const staging = resolveStagingBranch(runId, run9.staging_branch);
+async function prepareAuthorSpawn(deps, run10, runId, startCommand, baseURL, testDir) {
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const base = deps.config.git.baseBranch;
   const branch = e2eBranchName(runId);
   const worktree = e2eWorktreePath(deps.dataDir, runId);
@@ -13614,12 +13211,12 @@ async function runE2eRecord(deps, runId, results) {
     }
   }
   const cfg = deps.config.e2e;
-  const run9 = await deps.state.read(runId);
-  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const run10 = await deps.state.read(runId);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const worktree = e2eWorktreePath(deps.dataDir, runId);
   const critical = results.manifest.filter((e) => e.kind === "critical");
   const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter(
-    (id) => !(id in run9.tasks)
+    (id) => !(id in run10.tasks)
   );
   if (unknownTaskIds.length > 0) {
     const reason = `e2e-author: manifest references unknown task_id(s) not in this run: ` + unknownTaskIds.join(", ");
@@ -13681,7 +13278,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree) {
   }
   try {
     for (const entry of critical) {
-      await files.copySpec(join18(authorWorktree, entry.spec_path), join18(wtPath, entry.spec_path));
+      await files.copySpec(join16(authorWorktree, entry.spec_path), join16(wtPath, entry.spec_path));
       const baseResult = await runE2e(
         { cwd: wtPath, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: entry.spec_path },
         tool
@@ -13754,10 +13351,10 @@ async function markFailed(deps, runId, reason, attempts) {
       ended_at: nowIso()
     }
   }));
-  log28.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
+  log26.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
 }
 function throwawayConfigPath(worktree) {
-  return join18(worktree, ".factory-e2e-throwaway.config.cjs");
+  return join16(worktree, ".factory-e2e-throwaway.config.cjs");
 }
 function throwawayConfigContents(throwawayDir) {
   return [
@@ -13780,16 +13377,16 @@ function findEntry(manifest, spec) {
   return manifest.find((e) => spec.file === e.spec_path || spec.file.endsWith(`/${e.spec_path}`));
 }
 async function runSuiteAndDecide(deps, runId) {
-  const run9 = await deps.state.read(runId);
-  const manifest = run9.e2e_phase?.manifest ?? [];
-  const attempts = (run9.e2e_phase?.attempts ?? 0) + 1;
+  const run10 = await deps.state.read(runId);
+  const manifest = run10.e2e_phase?.manifest ?? [];
+  const attempts = (run10.e2e_phase?.attempts ?? 0) + 1;
   const firstPass = attempts === 1;
   const cfg = deps.config.e2e;
   if (manifest.length === 0) {
     await markDone(deps, runId, { attempts });
     return { kind: "done", run_id: runId };
   }
-  const staging = resolveStagingBranch(runId, run9.staging_branch);
+  const staging = resolveStagingBranch(runId, run10.staging_branch);
   const worktree = e2eRunWorktreePath(deps.dataDir, runId);
   const provision = deps.provision ?? provisionWorktree;
   await deps.git.fetch("origin", staging);
@@ -13852,7 +13449,7 @@ async function runSuiteAndDecide(deps, runId) {
     return { kind: "done", run_id: runId };
   }
   const taskIds = [...new Set(mappable.flatMap((m) => m.entry.task_ids))];
-  const reopenCounts = { ...run9.e2e_phase?.reopen_counts ?? {} };
+  const reopenCounts = { ...run10.e2e_phase?.reopen_counts ?? {} };
   const capExhausted = taskIds.filter((id) => (reopenCounts[id] ?? 0) >= cfg.reopenCap);
   if (capExhausted.length > 0) {
     const reason = `e2e reopen cap (${cfg.reopenCap}) exhausted for task(s): ${capExhausted.join(", ")}`;
@@ -13881,7 +13478,7 @@ async function runSuiteAndDecide(deps, runId) {
       reopen_counts: reopenCounts
     }
   }));
-  log28.info(`run '${runId}': e2e reopening task(s) ${taskIds.join(", ")} (pass ${attempts})`);
+  log26.info(`run '${runId}': e2e reopening task(s) ${taskIds.join(", ")} (pass ${attempts})`);
   return { kind: "reopen", run_id: runId, task_ids: taskIds, reason: feedback };
 }
 
@@ -13909,9 +13506,9 @@ async function loadCliDeps(opts) {
   const dirOpts = { ...opts, dataDir };
   const config = loadConfig(dirOpts);
   const state = new StateManager({ ...dirOpts });
-  const run9 = await state.read(opts.runId);
-  const spec = await new SpecStore(dirOpts).read(run9.spec.repo, run9.spec.spec_id);
-  const { owner, repo } = splitRepo(run9.spec.repo);
+  const run10 = await state.read(opts.runId);
+  const spec = await new SpecStore(dirOpts).read(run10.spec.repo, run10.spec.spec_id);
+  const { owner, repo } = splitRepo(run10.spec.repo);
   return {
     config,
     spec,
@@ -13926,10 +13523,23 @@ async function loadCliDeps(opts) {
     // The explicit `--ship-mode` flag overrides; otherwise honor the value
     // persisted on the run at create (manual/resume `drive`/`finalize` omit the
     // flag, and a `ship_mode: "live"` run must not silently downgrade to no-merge).
-    shipMode: opts.shipMode ?? run9.ship_mode,
+    shipMode: opts.shipMode ?? run10.ship_mode,
     state,
-    run: run9
+    run: run10
   };
+}
+
+// src/cli/current.ts
+async function readCurrentForCwd(state, overrides = {}) {
+  const cwd = overrides.cwd ?? process.cwd();
+  const gitClient = overrides.gitClient ?? new DefaultGitClient();
+  let repo;
+  try {
+    repo = await resolveRepo({ cwd, gitClient });
+  } catch {
+    return state.readCurrent();
+  }
+  return state.readCurrentForRepo(repo);
 }
 
 // src/autonomy/mode.ts
@@ -13972,7 +13582,7 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/cli/subcommands/run.ts
-var log29 = createLogger("run");
+var log27 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -14145,7 +13755,7 @@ async function resolveSpec(specStore, opts) {
 }
 async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
   if (opts.mode === "workflow") {
-    log29.warn(
+    log27.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
     );
   }
@@ -14161,9 +13771,10 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
     ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {},
     ...opts.ignoreQuota === true ? { ignore_quota: true } : {},
-    ...opts.e2e === true ? { e2e: true } : {}
+    ...opts.e2e === true ? { e2e: true } : {},
+    ...opts.debug === true ? { debug: true } : {}
   });
-  const run9 = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
+  const run10 = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
   if (stagingDeps !== void 0) {
     await ensureStaging({
       gitClient: stagingDeps.gitClient,
@@ -14180,7 +13791,10 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
       provision: true
     });
   }
-  return run9;
+  return run10;
+}
+async function createRun(state, specStore, opts) {
+  return createRunFromManifest(state, specStore, await resolveSpec(specStore, opts), opts);
 }
 async function supersedeRun(state, existing, stagingDeps) {
   const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
@@ -14225,21 +13839,21 @@ async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
   });
 }
 async function applyResume(state, runId, reading, config, nowEpochSec, priorUpdatedAt) {
-  const run9 = await state.read(runId);
-  if (isTerminalRunStatus(run9.status)) {
-    throw new Error(`run resume: run '${runId}' is terminal (${run9.status}); nothing to resume`);
+  const run10 = await state.read(runId);
+  if (isTerminalRunStatus(run10.status)) {
+    throw new Error(`run resume: run '${runId}' is terminal (${run10.status}); nothing to resume`);
   }
-  if (run9.debug) {
-    return { kind: "debug-resume", run_id: runId, run: run9 };
+  if (run10.debug) {
+    return { kind: "debug-resume", run_id: runId, run: run10 };
   }
-  const plan = planResume(run9, reading, config, nowEpochSec);
+  const plan = planResume(run10, reading, config, nowEpochSec);
   switch (plan.kind) {
     case "not-resumable":
-      return { kind: "resumed", run: run9 };
+      return { kind: "resumed", run: run10 };
     case "resume": {
       const idleMinutes = Math.max(
         0,
-        Math.floor((nowEpochSec - parseIso8601ToEpoch(priorUpdatedAt ?? run9.updated_at)) / 60)
+        Math.floor((nowEpochSec - parseIso8601ToEpoch(priorUpdatedAt ?? run10.updated_at)) / 60)
       );
       const updated = await state.update(runId, (s) => ({
         ...s,
@@ -14252,12 +13866,12 @@ async function applyResume(state, runId, reading, config, nowEpochSec, priorUpda
     case "pause": {
       const d = plan.decision;
       if (d.kind === "proceed") {
-        return { kind: "resumed", run: run9 };
+        return { kind: "resumed", run: run10 };
       }
       const base = {
         kind: "pause",
         run_id: runId,
-        status: run9.status,
+        status: run10.status,
         reason: d.reason
       };
       return "resetsAtEpoch" in d ? { ...base, resets_at_epoch: d.resetsAtEpoch } : base;
@@ -14445,10 +14059,10 @@ async function runFinalize(argv) {
     runId,
     ...shipMode !== void 0 ? { shipMode } : {}
   });
-  const { run: run9, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(deps, runId);
+  const { run: run10, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(deps, runId);
   emitJson({
     kind: "finalized",
-    run: run9,
+    run: run10,
     report,
     ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
     failure_comment_posted: failureCommentPosted
@@ -14558,14 +14172,14 @@ async function runCancel(argv, overrides = {}) {
     ...overrides.cwd !== void 0 ? { cwd: overrides.cwd } : {}
   };
   const runId = await resolveCancelRunId(state, args, sessionId, currentOverrides);
-  const run9 = await state.finalize(runId, "failed");
+  const run10 = await state.finalize(runId, "failed");
   const cleanup = args.flag("cleanup") === true;
-  const branch = resolveStagingBranch(run9.run_id, run9.staging_branch);
+  const branch = resolveStagingBranch(run10.run_id, run10.staging_branch);
   let cleanedUp = false;
   let cleanupError;
   if (cleanup) {
     const ghClient = overrides.ghClient ?? new DefaultGhClient();
-    const { owner, repo } = splitRepoSlug(run9.spec.repo);
+    const { owner, repo } = splitRepoSlug(run10.spec.repo);
     try {
       await ghClient.deleteProtection(owner, repo, branch);
       await ghClient.deleteRemoteBranch(owner, repo, branch);
@@ -14576,22 +14190,22 @@ async function runCancel(argv, overrides = {}) {
   }
   emitJson({
     kind: "cancelled",
-    run: run9,
+    run: run10,
     cleaned_up: cleanedUp,
     ...cleanupError !== void 0 ? { cleanup_error: cleanupError } : {}
   });
   if (cleanupError !== void 0) {
     emitError(
-      `run ${run9.run_id} cancelled (marked failed), but --cleanup did NOT finish for staging branch '${branch}': ${cleanupError}. The branch may still exist \u2014 re-run \`factory run cancel --run ${run9.run_id} --cleanup\` to retry the teardown.`
+      `run ${run10.run_id} cancelled (marked failed), but --cleanup did NOT finish for staging branch '${branch}': ${cleanupError}. The branch may still exist \u2014 re-run \`factory run cancel --run ${run10.run_id} --cleanup\` to retry the teardown.`
     );
   } else {
     emitError(
-      `run ${run9.run_id} cancelled (marked failed)` + (cleanup ? `; staging branch '${branch}' + its task PRs torn down.` : `; staging branch '${branch}' left in place \u2014 delete it manually or re-run with --cleanup.`)
+      `run ${run10.run_id} cancelled (marked failed)` + (cleanup ? `; staging branch '${branch}' + its task PRs torn down.` : `; staging branch '${branch}' left in place \u2014 delete it manually or re-run with --cleanup.`)
     );
   }
   return EXIT.OK;
 }
-async function run3(argv) {
+async function run2(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(RUN_HELP);
@@ -14621,7 +14235,7 @@ var runCommand = {
   describe: "Create or resume a run (create resolves+seeds a spec; resume re-checks quota)",
   run: async (argv) => {
     try {
-      return await run3(argv);
+      return await run2(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`run: ${err.message}`);
@@ -14647,7 +14261,7 @@ var resumeCommand = {
 };
 
 // src/cli/subcommands/spec.ts
-import { join as join19 } from "node:path";
+import { join as join17 } from "node:path";
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
@@ -14672,9 +14286,9 @@ var VERDICT_FILE = "verdict.json";
 function scratchPaths(dataDir, repo, issue) {
   const dir = specBuildDir(dataDir, repo, issue);
   return {
-    prdPath: join19(dir, PRD_FILE),
-    generatedPath: join19(dir, GENERATED_FILE),
-    verdictPath: join19(dir, VERDICT_FILE)
+    prdPath: join17(dir, PRD_FILE),
+    generatedPath: join17(dir, GENERATED_FILE),
+    verdictPath: join17(dir, VERDICT_FILE)
   };
 }
 async function resolveSpec2(deps, repo, issue, { regenerate = false } = {}) {
@@ -14780,7 +14394,7 @@ async function resolveSpecRepo(args, overrides = {}) {
     gitClient: overrides.gitClient ?? new DefaultGitClient()
   });
 }
-async function run4(argv) {
+async function run3(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(SPEC_HELP);
@@ -14806,10 +14420,1050 @@ var specCommand = {
   describe: "Build a durable spec (resolve \u2192 gate \u2192 store; runner drives the agent spawns)",
   run: async (argv) => {
     try {
-      return await run4(argv);
+      return await run3(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`spec: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/debug/review.ts
+function buildReviewManifest(opts) {
+  const manifest = buildPanelManifest(opts.resumePhase, opts.model, opts.maxTurns);
+  return {
+    manifest,
+    base: opts.base,
+    worktree: opts.worktree,
+    codexAvailable: opts.codexAvailable
+  };
+}
+async function adjudicateWholeScope(input) {
+  const reviews = input.reviews.map(parseRawReview);
+  const source = await buildWorktreeSource(input.worktree, reviews);
+  const makeRunner2 = makeReplayRunnerFactory({
+    reviews: input.reviews,
+    verifications: input.verifications,
+    ...input.crossVendorAbsent !== void 0 ? { crossVendorAbsent: input.crossVendorAbsent } : {}
+  });
+  const result = await runPanel({
+    reviews,
+    source,
+    makeRunner: makeRunner2,
+    gateEvidence: [],
+    phase: "verify",
+    redact: true
+  });
+  const confirmedBlockers = result.adjudicated.flatMap((a) => a.confirmedBlockers);
+  return {
+    adjudicated: result.adjudicated,
+    confirmedBlockers,
+    clean: confirmedBlockers.length === 0
+  };
+}
+function debugE2eEnv(cfg) {
+  return {
+    BASE_URL: cfg.baseURL,
+    FACTORY_E2E_START_COMMAND: cfg.startCommand,
+    FACTORY_E2E_READY_TIMEOUT_MS: String(cfg.readyTimeoutMs),
+    FACTORY_E2E: "1"
+  };
+}
+function scrubbedDebugE2eEnv(cfg) {
+  const env = debugE2eEnv(cfg);
+  for (const key of ["PATH", "HOME"]) {
+    const v = process.env[key];
+    if (v !== void 0) env[key] = v;
+  }
+  return env;
+}
+async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
+  const { config } = input;
+  if (!config.startCommand || !config.baseURL) {
+    return {
+      kind: "skipped",
+      reason: "e2e.startCommand/e2e.baseURL not configured \u2014 run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>`"
+    };
+  }
+  const results = await runE2e(
+    {
+      cwd: input.cwd,
+      env: scrubbedDebugE2eEnv(config),
+      replaceEnv: true,
+      testDir: config.testDir
+    },
+    tool
+  );
+  const findings = results.specs.filter((spec) => spec.status === "failed").map((spec) => ({
+    reviewer: "e2e",
+    severity: "critical",
+    blocking: true,
+    file: spec.file,
+    line: 1,
+    quote: spec.title,
+    description: `e2e spec failed: ${spec.title}`
+  }));
+  if (!results.ok && results.counts.failed === 0) {
+    findings.push({
+      reviewer: "e2e",
+      severity: "critical",
+      blocking: true,
+      quote: "(uncitable \u2014 e2e tooling failure, no per-spec citation available)",
+      description: "e2e tooling failed with no per-spec failures \u2014 investigate the Playwright run"
+    });
+  }
+  return { kind: "ran", results, findings };
+}
+function foldE2eIntoBlockers(confirmedBlockers, e2e) {
+  return e2e.kind === "skipped" ? confirmedBlockers : [...confirmedBlockers, ...e2e.findings];
+}
+
+// src/debug/spec-source.ts
+var DEBUG_ISSUE_BASE = 2e9;
+function debugIssueNumber(passNumber) {
+  if (!Number.isInteger(passNumber) || passNumber < 1) {
+    throw new Error(`debugIssueNumber: passNumber must be a positive integer, got ${passNumber}`);
+  }
+  return DEBUG_ISSUE_BASE + passNumber;
+}
+var ReportGhClient = class {
+  constructor(report) {
+    this.report = report;
+  }
+  async fetchPrd(issueNumber, _opts) {
+    return {
+      issue_number: issueNumber,
+      title: this.report.title,
+      body: this.report.body,
+      labels: ["factory-debug"],
+      body_truncated: false
+    };
+  }
+};
+function renderFinding(finding) {
+  const citation = finding.file !== void 0 && finding.line !== void 0 ? `${finding.file}:${finding.line}` : "(no citation)";
+  return [
+    `### [${finding.severity}] ${citation}`,
+    "",
+    `> ${finding.quote}`,
+    "",
+    finding.description
+  ].join("\n");
+}
+function renderFindingsBody(confirmedBlockers) {
+  const byReviewer = /* @__PURE__ */ new Map();
+  for (const finding of confirmedBlockers) {
+    const bucket = byReviewer.get(finding.reviewer);
+    if (bucket) {
+      bucket.push(finding);
+    } else {
+      byReviewer.set(finding.reviewer, [finding]);
+    }
+  }
+  const sections = [];
+  for (const [reviewer, findings] of byReviewer) {
+    sections.push(`## ${reviewer}`, "", findings.map(renderFinding).join("\n\n"));
+  }
+  return sections.join("\n\n");
+}
+function buildDebugReport(input) {
+  const { confirmedBlockers, passNumber, base } = input;
+  const title = `factory debug pass ${passNumber} \u2014 ${confirmedBlockers.length} blocking finding(s)`;
+  const header = [
+    `# Factory Debug Pass ${passNumber}`,
+    "",
+    `Scan base: \`${base}\``,
+    "",
+    `${confirmedBlockers.length} blocking finding(s) confirmed by the whole-scope review panel. Each finding below is a citation-verified, independently-confirmed blocker (reviewer, severity, exact file:line, the quoted offending code, and the reviewer's description). Treat this as the PRD: derive tasks that fix every finding below.`
+  ].join("\n");
+  const body = confirmedBlockers.length === 0 ? `${header}
+
+(no confirmed blockers)` : `${header}
+
+${renderFindingsBody(confirmedBlockers)}`;
+  return { title, body };
+}
+function wireDebugSpecDeps(report, dataDirOverride) {
+  const dataDir = dataDirOverride ?? resolveDataDir({});
+  const config = loadConfig({ dataDir });
+  return {
+    store: new SpecStore({ dataDir }),
+    gh: new ReportGhClient(report),
+    config,
+    dataDir
+  };
+}
+
+// src/debug/batch.ts
+function namespacedId(passNumber, taskId) {
+  return `p${passNumber}-${taskId}`;
+}
+function namespaceBatch(request, passNumber) {
+  const ids = new Set(request.tasks.map((t) => namespacedId(passNumber, t.task_id)));
+  const tasks = {};
+  for (const t of request.tasks) {
+    const id = namespacedId(passNumber, t.task_id);
+    validateId(id, "task-id");
+    if (tasks[id] !== void 0) {
+      throw new Error(
+        `appendTasksFromSpec: duplicate task id '${t.task_id}' in spec ${request.spec_id} (pass ${passNumber})`
+      );
+    }
+    const dependsOn = t.depends_on.map((dep) => namespacedId(passNumber, dep));
+    for (const [i, dep] of dependsOn.entries()) {
+      const rawDep = t.depends_on[i];
+      if (dep === id) {
+        throw new Error(
+          `appendTasksFromSpec: task '${t.task_id}' depends on itself in spec ${request.spec_id} (pass ${passNumber})`
+        );
+      }
+      if (!ids.has(dep)) {
+        throw new Error(
+          `appendTasksFromSpec: task '${t.task_id}' depends on unknown task '${rawDep}' in spec ${request.spec_id} (pass ${passNumber})`
+        );
+      }
+    }
+    tasks[id] = {
+      task_id: id,
+      status: "pending",
+      depends_on: dependsOn,
+      escalation_rung: 0,
+      reviewers: [],
+      merge_resyncs: 0
+    };
+  }
+  return tasks;
+}
+function assertAcyclic2(tasks, specId, passNumber) {
+  const VISITING = 1;
+  const DONE = 2;
+  const state = /* @__PURE__ */ new Map();
+  const visit = (id, trail) => {
+    const mark = state.get(id);
+    if (mark === DONE) return;
+    if (mark === VISITING) {
+      throw new Error(
+        `appendTasksFromSpec: dependency cycle in spec ${specId} (pass ${passNumber}): ${[...trail, id].join(" \u2192 ")}`
+      );
+    }
+    state.set(id, VISITING);
+    for (const dep of tasks[id]?.depends_on ?? []) {
+      visit(dep, [...trail, id]);
+    }
+    state.set(id, DONE);
+  };
+  for (const id of Object.keys(tasks)) visit(id, []);
+}
+function appendTasksFromSpec(existingTasks, request, passNumber) {
+  const newBatch = namespaceBatch(request, passNumber);
+  const merged = { ...existingTasks, ...newBatch };
+  assertAcyclic2(merged, request.spec_id, passNumber);
+  return merged;
+}
+
+// src/cli/subcommands/debug.ts
+var EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+var DEFAULT_MAX_PASSES = 5;
+var DEBUG_SESSION_FILE = "session.json";
+var DEBUG_HELP = `factory debug \u2014 the /factory:debug whole-scope review\u21C4fix loop
+
+Usage:
+  factory debug start [--base <ref> | --full] [--no-ship] [--author-e2e] [--max-passes <n>] [--session-id <id>]
+  factory debug review --emit --run <id>
+  factory debug review --record --run <id> --results <path>
+  factory debug spec resolve --run <id>
+  factory debug spec gate    --run <id>
+  factory debug spec store   --run <id>
+  factory debug seed --run <id>
+  factory debug finalize --run <id> [--no-ship]
+
+The in-session runner drives the agent spawns (the whole-scope review panel)
+AND the bounded review\u21C4fix loop across passes; each action emits ONE JSON
+envelope naming the next step. Scratch JSON is threaded through
+<dataDir>/debug/<run-id>/{session.json,pass-<n>/findings.{json,md}}.
+
+Actions:
+  start     Cut the debug staging branch, mint the run id, emit the pass-1 review scope.
+  review    --emit spawns the whole-scope panel; --record adjudicates its output.
+  spec      Thin pass-through to 'factory spec resolve|gate|store' fed a synthetic PRD.
+  seed      Create (pass 1) or append (pass > 1) the run's tasks from the resolved spec.
+  finalize  Turn an all-terminal debug run into its shipped outcome.`;
+var START_HELP = `factory debug start \u2014 cut the debug staging branch and mint a run id
+
+Usage:
+  factory debug start [--base <ref> | --full] [--no-ship] [--author-e2e] [--max-passes <n>] [--session-id <id>]
+
+  --base         Diff base for the whole-scope review. Default: HEAD~1.
+  --full         Review the ENTIRE tree (diff against the empty-tree SHA) instead of --base.
+                 Mutually exclusive with --base.
+  --no-ship      Persist no-merge ship mode for the eventual debug run (default: live).
+  --author-e2e   Persist e2e:true on the eventual debug run (opt into the e2e-authoring phase).
+  --max-passes   Cap on review\u21C4fix passes before the driver must stop looping. Default: ${DEFAULT_MAX_PASSES}.
+  --session-id   Owning Claude Code session id (defaults to $CLAUDE_CODE_SESSION_ID).
+
+Emits { kind:"review", run_id, base, worktree, pass:1 }.`;
+var REVIEW_HELP = `factory debug review \u2014 spawn or record the whole-scope review panel
+
+Usage:
+  factory debug review --emit --run <id>
+  factory debug review --record --run <id> --results <path>
+
+--results is a JSON file shaped { reviews, verifications, crossVendorAbsent? } \u2014
+IDENTICAL to the per-task merge-gate's record-reviews input shape.
+
+Emits { kind:"review-spawn", run_id, pass, manifest, base, worktree, codex_available }
+on --emit, or { kind:"clean", run_id, pass } | { kind:"findings", run_id, pass,
+report_path, confirmed_count } on --record.`;
+var SPEC_SUB_HELP = `factory debug spec \u2014 thin pass-through to 'factory spec' fed a synthetic PRD
+
+Usage:
+  factory debug spec resolve --run <id>
+  factory debug spec gate    --run <id>
+  factory debug spec store   --run <id>
+
+Reads the pass's confirmed blockers from the debug session, renders them as a
+synthetic PRD (src/debug/spec-source.ts), and calls the UNCHANGED
+resolveSpec/gateSpec/storeSpec \u2014 returns their envelope verbatim.`;
+var SEED_HELP = `factory debug seed \u2014 create (pass 1) or append (pass > 1) the run's tasks
+
+Usage:
+  factory debug seed --run <id>
+
+Emits { kind:"loop", run_id }.`;
+var FINALIZE_HELP2 = `factory debug finalize \u2014 turn an all-terminal debug run into its shipped outcome
+
+Usage:
+  factory debug finalize --run <id> [--no-ship]
+
+Delegates to the UNCHANGED finalizeRun exactly once (mirrors 'factory run finalize').
+Emits { kind:"finalized", run, report, rollup?, failure_comment_posted }.`;
+function debugSessionPath(dataDir, runId) {
+  return join18(dataDir, "debug", runId, DEBUG_SESSION_FILE);
+}
+function debugPassDir(dataDir, runId, pass) {
+  return join18(dataDir, "debug", runId, `pass-${pass}`);
+}
+async function readSession(dataDir, runId) {
+  return readJsonFile(debugSessionPath(dataDir, runId));
+}
+async function writeSession(dataDir, session) {
+  await writeJsonFile(debugSessionPath(dataDir, session.runId), session);
+}
+async function debugStart(deps, opts = {}) {
+  if (opts.full === true && opts.base !== void 0) {
+    throw new UsageError("debug start: pass exactly one of --base or --full");
+  }
+  const base = opts.full === true ? EMPTY_TREE_SHA : opts.base ?? "HEAD~1";
+  const maxPasses = opts.maxPasses ?? DEFAULT_MAX_PASSES;
+  if (!Number.isInteger(maxPasses) || maxPasses <= 0) {
+    throw new UsageError(
+      `--max-passes must be a positive integer, got '${String(opts.maxPasses)}'`
+    );
+  }
+  const runId = makeRunId();
+  validateId(runId, "run-id");
+  await ensureStaging({
+    gitClient: deps.gitClient,
+    stagingBranch: runStagingBranch(runId),
+    baseBranch: deps.config.git.baseBranch,
+    cwd: deps.cwd
+  });
+  const session = {
+    runId,
+    base,
+    pass: 1,
+    maxPasses,
+    noShip: opts.noShip === true,
+    authorE2e: opts.authorE2e === true,
+    ...opts.sessionId !== void 0 ? { sessionId: opts.sessionId } : {}
+  };
+  await writeSession(deps.dataDir, session);
+  return { kind: "review", run_id: runId, base, worktree: deps.cwd, pass: 1 };
+}
+async function debugReviewEmit(deps, runId) {
+  const session = await readSession(deps.dataDir, runId);
+  const built = buildReviewManifest({
+    resumePhase: "verify",
+    model: resolveReviewModel(deps.config),
+    maxTurns: deps.config.review.maxTurnsDeep,
+    base: session.base,
+    worktree: deps.cwd,
+    codexAvailable: deps.config.codex.model !== void 0
+  });
+  return {
+    kind: "review-spawn",
+    run_id: runId,
+    pass: session.pass,
+    manifest: built.manifest,
+    base: built.base,
+    worktree: built.worktree,
+    codex_available: built.codexAvailable
+  };
+}
+async function debugReviewRecord(deps, runId, input) {
+  const session = await readSession(deps.dataDir, runId);
+  const worktree = deps.cwd;
+  const adjudicated = await adjudicateWholeScope({
+    reviews: input.reviews,
+    verifications: input.verifications,
+    worktree,
+    ...input.crossVendorAbsent !== void 0 ? { crossVendorAbsent: input.crossVendorAbsent } : {}
+  });
+  const e2e = await runCommittedE2e({ cwd: worktree, config: deps.config.e2e });
+  const confirmedBlockers = foldE2eIntoBlockers(adjudicated.confirmedBlockers, e2e);
+  await writeSession(deps.dataDir, { ...session, confirmedBlockers });
+  if (confirmedBlockers.length === 0) {
+    return { kind: "clean", run_id: runId, pass: session.pass };
+  }
+  const passDir = debugPassDir(deps.dataDir, runId, session.pass);
+  const findingsPath = join18(passDir, "findings.json");
+  const reportPath = join18(passDir, "findings.md");
+  await writeJsonFile(findingsPath, { confirmedBlockers, base: session.base, pass: session.pass });
+  const report = buildDebugReport({
+    confirmedBlockers,
+    passNumber: session.pass,
+    base: session.base
+  });
+  await atomicWriteFile(reportPath, report.body);
+  return {
+    kind: "findings",
+    run_id: runId,
+    pass: session.pass,
+    report_path: reportPath,
+    confirmed_count: confirmedBlockers.length
+  };
+}
+async function specDepsFor(deps, session) {
+  if (session.confirmedBlockers === void 0) {
+    throw new Error(
+      `debug spec: run '${session.runId}' pass ${session.pass} has no recorded review \u2014 run 'debug review --record' first`
+    );
+  }
+  const report = buildDebugReport({
+    confirmedBlockers: session.confirmedBlockers,
+    passNumber: session.pass,
+    base: session.base
+  });
+  return wireDebugSpecDeps(report, deps.dataDir);
+}
+async function debugRepo(deps) {
+  return resolveRepo({ cwd: deps.cwd, gitClient: deps.gitClient });
+}
+async function debugSpecResolve(deps, runId) {
+  const session = await readSession(deps.dataDir, runId);
+  const repo = await debugRepo(deps);
+  return resolveSpec2(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
+}
+async function debugSpecGate(deps, runId) {
+  const session = await readSession(deps.dataDir, runId);
+  const repo = await debugRepo(deps);
+  return gateSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
+}
+async function debugSpecStore(deps, runId) {
+  const session = await readSession(deps.dataDir, runId);
+  const repo = await debugRepo(deps);
+  const envelope = await storeSpec(
+    await specDepsFor(deps, session),
+    repo,
+    debugIssueNumber(session.pass)
+  );
+  if (envelope.kind === "stored") {
+    await writeSession(deps.dataDir, { ...session, specId: envelope.pointer.spec_id });
+  }
+  return envelope;
+}
+async function debugSeed(deps, runId) {
+  const session = await readSession(deps.dataDir, runId);
+  if (session.specId === void 0) {
+    throw new Error(
+      `debug seed: run '${runId}' pass ${session.pass} has no stored spec \u2014 run 'debug spec store' first`
+    );
+  }
+  const repo = await debugRepo(deps);
+  if (session.pass === 1) {
+    await createRun(deps.state, deps.specStore, {
+      repo,
+      specId: session.specId,
+      runId,
+      debug: true,
+      intent: "fresh",
+      shipMode: session.noShip ? "no-merge" : "live",
+      e2e: session.authorE2e,
+      ...session.sessionId !== void 0 ? { ownerSession: session.sessionId } : {}
+    });
+  } else {
+    const run10 = await deps.state.read(runId);
+    const request = await deps.specStore.read(repo, session.specId);
+    const merged = appendTasksFromSpec(run10.tasks, request, session.pass);
+    await deps.state.update(runId, (s) => ({ ...s, tasks: merged }));
+  }
+  await writeSession(deps.dataDir, { ...session, pass: session.pass + 1 });
+  return { kind: "loop", run_id: runId };
+}
+async function debugFinalize(deps, runId, shipMode) {
+  const cliDeps = await loadCliDeps({
+    dataDir: deps.dataDir,
+    runId,
+    ...shipMode !== void 0 ? { shipMode } : {}
+  });
+  const { run: run10, report, rollup: rollup2, failureCommentPosted } = await finalizeRun(cliDeps, runId);
+  return {
+    kind: "finalized",
+    run: run10,
+    report,
+    ...rollup2 !== void 0 ? { rollup: rollup2 } : {},
+    failure_comment_posted: failureCommentPosted
+  };
+}
+function wireDeps2(overrides = {}) {
+  const hasDataDirOverride = overrides.dataDir !== void 0;
+  const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
+  const config = loadConfig(hasDataDirOverride ? { dataDir } : {});
+  return {
+    gitClient: overrides.gitClient ?? new DefaultGitClient(),
+    config,
+    dataDir,
+    cwd: overrides.cwd ?? process.cwd(),
+    state: new StateManager({ dataDir }),
+    specStore: new SpecStore({ dataDir })
+  };
+}
+function parseMaxPasses(raw) {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new UsageError(`--max-passes must be a positive integer, got '${raw}'`);
+  }
+  return n;
+}
+async function runDebugStart(argv, overrides = {}) {
+  const args = parseArgs(argv, { booleans: ["full", "no-ship", "author-e2e"] });
+  if (args.flag("help") === true) {
+    emitLine(START_HELP);
+    return EXIT.OK;
+  }
+  const base = optionalString(args.flag("base"));
+  const maxPassesRaw = optionalString(args.flag("max-passes"));
+  const sessionId = resolveOwnerSession(args.flag("session-id"));
+  const deps = wireDeps2(overrides);
+  const envelope = await debugStart(deps, {
+    full: args.flag("full") === true,
+    ...base !== void 0 ? { base } : {},
+    noShip: args.flag("no-ship") === true,
+    authorE2e: args.flag("author-e2e") === true,
+    ...maxPassesRaw !== void 0 ? { maxPasses: parseMaxPasses(maxPassesRaw) } : {},
+    ...sessionId !== void 0 ? { sessionId } : {}
+  });
+  emitJson(envelope);
+  return EXIT.OK;
+}
+async function runDebugReview(argv, overrides = {}) {
+  const args = parseArgs(argv, { booleans: ["emit", "record"] });
+  if (args.flag("help") === true) {
+    emitLine(REVIEW_HELP);
+    return EXIT.OK;
+  }
+  const emit2 = args.flag("emit") === true;
+  const record = args.flag("record") === true;
+  if (emit2 === record) {
+    throw new UsageError("debug review: pass exactly one of --emit or --record");
+  }
+  const runId = args.requireFlag("run");
+  const deps = wireDeps2(overrides);
+  if (emit2) {
+    emitJson(await debugReviewEmit(deps, runId));
+    return EXIT.OK;
+  }
+  const resultsPath = args.requireFlag("results");
+  const input = await readJsonInput(resultsPath);
+  emitJson(await debugReviewRecord(deps, runId, input));
+  return EXIT.OK;
+}
+var SPEC_ACTIONS = {
+  resolve: debugSpecResolve,
+  gate: debugSpecGate,
+  store: debugSpecStore
+};
+async function runDebugSpec(argv, overrides = {}) {
+  const subAction = argv[0];
+  if (subAction === void 0 || subAction === "--help" || subAction === "-h") {
+    emitLine(SPEC_SUB_HELP);
+    return EXIT.OK;
+  }
+  const handler = SPEC_ACTIONS[subAction];
+  if (handler === void 0) {
+    throw new UsageError(
+      `unknown debug spec action '${subAction}' (expected resolve | gate | store)`
+    );
+  }
+  const args = parseArgs(argv.slice(1), {});
+  if (args.flag("help") === true) {
+    emitLine(SPEC_SUB_HELP);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const deps = wireDeps2(overrides);
+  emitJson(await handler(deps, runId));
+  return EXIT.OK;
+}
+async function runDebugSeed(argv, overrides = {}) {
+  const args = parseArgs(argv, {});
+  if (args.flag("help") === true) {
+    emitLine(SEED_HELP);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const deps = wireDeps2(overrides);
+  emitJson(await debugSeed(deps, runId));
+  return EXIT.OK;
+}
+async function runDebugFinalize(argv, overrides = {}) {
+  const args = parseArgs(argv, { booleans: ["no-ship"] });
+  if (args.flag("help") === true) {
+    emitLine(FINALIZE_HELP2);
+    return EXIT.OK;
+  }
+  const runId = args.requireFlag("run");
+  const shipMode = args.flag("no-ship") === true ? "no-merge" : void 0;
+  const hasDataDirOverride = overrides.dataDir !== void 0;
+  const dataDir = resolveDataDir(hasDataDirOverride ? { dataDir: overrides.dataDir } : {});
+  emitJson(await debugFinalize({ dataDir }, runId, shipMode));
+  return EXIT.OK;
+}
+var ACTIONS2 = {
+  start: runDebugStart,
+  review: runDebugReview,
+  spec: runDebugSpec,
+  seed: runDebugSeed,
+  finalize: runDebugFinalize
+};
+async function run4(argv, overrides = {}) {
+  const action = argv[0];
+  if (action === void 0 || action === "--help" || action === "-h") {
+    emitLine(DEBUG_HELP);
+    return EXIT.OK;
+  }
+  const handler = ACTIONS2[action];
+  if (handler === void 0) {
+    throw new UsageError(
+      `unknown debug action '${action}' (expected start | review | spec | seed | finalize)`
+    );
+  }
+  return handler(argv.slice(1), overrides);
+}
+var debugCommand = {
+  describe: "/factory:debug \u2014 whole-scope review\u21C4fix loop (start \u2192 review \u2192 spec \u2192 seed \u2192 \u2026 \u2192 finalize)",
+  run: async (argv) => {
+    try {
+      return await run4(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`debug: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/state.ts
+var HELP2 = `factory state \u2014 read run state (read-only)
+
+Usage:
+  factory state                 Print the current run's state as JSON
+  factory state <run-id>        Print a specific run's state as JSON
+  factory state --summary       Print a compact human summary instead
+
+Exit OK with {"current": null} when there is no current run.`;
+function summarize2(run10) {
+  const lines = [
+    `run ${run10.run_id}  status=${run10.status}  execution_mode=`,
+    `spec ${run10.spec.repo}#${run10.spec.issue_number} (${run10.spec.spec_id})`,
+    `tasks (${Object.keys(run10.tasks).length}):`
+  ];
+  for (const t of Object.values(run10.tasks)) {
+    const bits = [`  ${t.task_id}`, t.status];
+    if (t.escalation_rung > 0) bits.push(`rung=${t.escalation_rung}`);
+    if (t.pr_number !== void 0) bits.push(`pr=#${t.pr_number}`);
+    if (t.failure_class !== void 0) bits.push(`class=${t.failure_class}`);
+    lines.push(bits.join("  "));
+  }
+  return lines.join("\n");
+}
+async function runState(argv, overrides = {}) {
+  const args = parseArgs(argv, { booleans: ["summary"] });
+  if (args.flag("help") === true) {
+    emitLine(HELP2);
+    return EXIT.OK;
+  }
+  const state = new StateManager();
+  const runId = args.positionals[0];
+  const runState2 = runId !== void 0 ? await state.read(runId) : await readCurrentForCwd(state, overrides);
+  if (runState2 === null) {
+    if (args.flag("summary") === true) {
+      emitLine("no current run");
+    } else {
+      emitJson({ current: null });
+    }
+    return EXIT.OK;
+  }
+  if (args.flag("summary") === true) {
+    emitLine(summarize2(runState2));
+  } else {
+    emitJson(runState2);
+  }
+  return EXIT.OK;
+}
+var stateCommand = {
+  describe: "Print run state (current or by run-id); read-only",
+  run: async (argv) => {
+    try {
+      return await runState(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`state: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  }
+};
+
+// src/cli/subcommands/scaffold.ts
+import { mkdir as mkdir11, readFile as readFile13, writeFile as writeFile2 } from "node:fs/promises";
+import { existsSync as existsSync8 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname9, join as join20, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// src/cli/subcommands/target-settings.ts
+import { mkdir as mkdir10, readFile as readFile12 } from "node:fs/promises";
+import { existsSync as existsSync7 } from "node:fs";
+import { join as join19 } from "node:path";
+var log28 = createLogger("cli:target-settings");
+var FACTORY_TARGET_BASE_ALLOWLIST = [
+  "Bash(factory:*)",
+  "Bash(git:*)",
+  "Bash(gh:*)",
+  "Bash(npm:*)",
+  "Bash(npx:*)",
+  "Read",
+  "Write",
+  "Edit",
+  "Grep",
+  "Glob",
+  "Agent"
+];
+var DATA_DIR_VERBS = ["Read", "Write", "Edit"];
+var STALE_DATA_DIR_ALLOW = [
+  "Read(${CLAUDE_PLUGIN_DATA}/**)",
+  "Write(${CLAUDE_PLUGIN_DATA}/**)",
+  "Edit(${CLAUDE_PLUGIN_DATA}/**)"
+];
+var STALE_DATA_DIR_ADDITIONAL = "${CLAUDE_PLUGIN_DATA}";
+function buildTargetDataDirRules(opts) {
+  const baked = tildeShorten(opts.dataDir, opts.home);
+  return { allowGlobBase: baked, additionalDir: baked };
+}
+function dataDirAllowRules(allowGlobBase) {
+  return DATA_DIR_VERBS.map((verb) => `${verb}(${allowGlobBase}/**)`);
+}
+function isObject(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function mergeTargetSettings(existing, dataDirRules) {
+  const settings = structuredClone(existing);
+  let changed = false;
+  const permissions = isObject(settings.permissions) ? settings.permissions : {};
+  const currentAllow = Array.isArray(permissions.allow) ? permissions.allow.filter((e) => typeof e === "string") : [];
+  const strippedAllow = currentAllow.filter((e) => !STALE_DATA_DIR_ALLOW.includes(e));
+  const removedStaleAllow = strippedAllow.length !== currentAllow.length;
+  const targetAllow = [
+    ...FACTORY_TARGET_BASE_ALLOWLIST,
+    ...dataDirAllowRules(dataDirRules.allowGlobBase)
+  ];
+  const have = new Set(strippedAllow);
+  const additions = targetAllow.filter((e) => !have.has(e));
+  if (removedStaleAllow || additions.length > 0) {
+    permissions.allow = [...strippedAllow, ...additions];
+    settings.permissions = permissions;
+    changed = true;
+  }
+  const currentDirs = Array.isArray(permissions.additionalDirectories) ? permissions.additionalDirectories.filter((e) => typeof e === "string") : [];
+  const strippedDirs = currentDirs.filter((e) => e !== STALE_DATA_DIR_ADDITIONAL);
+  const removedStaleDir = strippedDirs.length !== currentDirs.length;
+  const haveDirs = new Set(strippedDirs);
+  const dirAdditions = [dataDirRules.additionalDir].filter((e) => !haveDirs.has(e));
+  if (removedStaleDir || dirAdditions.length > 0) {
+    permissions.additionalDirectories = [...strippedDirs, ...dirAdditions];
+    settings.permissions = permissions;
+    changed = true;
+  }
+  const worktree = isObject(settings.worktree) ? settings.worktree : {};
+  if (worktree.baseRef !== "head") {
+    worktree.baseRef = "head";
+    settings.worktree = worktree;
+    changed = true;
+  }
+  return { settings, changed };
+}
+async function ensureTargetSettings(opts) {
+  const dir = join19(opts.targetRoot, ".claude");
+  const path5 = join19(dir, "settings.json");
+  const created = !existsSync7(path5);
+  let existing = {};
+  if (!created) {
+    const raw = await readFile12(path5, "utf8");
+    const parsed = raw.trim().length > 0 ? JSON.parse(raw) : {};
+    if (isObject(parsed)) {
+      existing = parsed;
+    } else {
+      log28.warn(
+        `${path5} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
+      );
+    }
+  }
+  const { settings, changed } = mergeTargetSettings(existing, opts.dataDirRules);
+  if (created || changed) {
+    await mkdir10(dir, { recursive: true });
+    await atomicWriteFile(path5, stringifyJson(settings));
+  }
+  return { settings, changed, created, path: path5 };
+}
+
+// src/cli/subcommands/scaffold.ts
+var log29 = createLogger("scaffold");
+var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
+
+Usage:
+  factory scaffold [--repo <owner/name>] [--provision]
+
+Copies the committed CI + gate-config templates and probes branch protection on
+develop (the integration base). Without --provision a repo whose develop branch is
+not protected (strict up-to-date + required checks) causes scaffold to REFUSE loudly.
+Per-run staging branches are minted at run create \u2014 scaffold no longer touches them.
+Also auto-detects the repo's CI build env and gap-fills quality.gateEnv (the same
+detection as 'factory configure --detect-gate-env'), captured BEFORE the managed
+quality-gate.yml template overwrites the repo's own workflow.
+
+Options:
+  --repo <owner/name>   OPTIONAL. Target GitHub repo (used for the protection probe).
+                        Auto-derived from the 'origin' remote when omitted; an
+                        explicit value disagreeing with the remote fails loud.
+  --provision           Write branch protection if missing (default: refuse)`;
+var GITIGNORE_ENTRIES = [
+  "# Claude Code local state (factory scaffold guarantee)",
+  ".claude/worktrees/",
+  ".claude/plugins/",
+  ".claude/file-history/",
+  ".claude/backups/",
+  ".claude/debug/",
+  ".claude/todos/",
+  ".claude/plans/",
+  ".claude/memory/",
+  ".claude/statsig/",
+  ".claude/cache/",
+  ".claude/paste-cache/",
+  ".claude/projects/",
+  ".claude/shell-snapshots/",
+  ".claude/tasks/",
+  ".claude/telemetry/",
+  ".claude/workflows/",
+  ".claude/history.jsonl",
+  ".claude/CLAUDE.local.md",
+  ".claude/tool-audit.jsonl",
+  ".claude/settings.local.json",
+  "# factory plugin state",
+  ".claude-plugin-data/",
+  "*.worktree"
+];
+function resolveTemplatesDir() {
+  let dir = dirname9(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    const candidate = join20(dir, "templates");
+    if (existsSync8(join20(candidate, ".github", "workflows", "quality-gate.yml"))) {
+      return candidate;
+    }
+    const parent = dirname9(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error("scaffold: could not locate the plugin templates/ directory");
+}
+var QUALITY_GATE_REL = ".github/workflows/quality-gate.yml";
+var TEMPLATE_MANIFEST = [
+  { rel: QUALITY_GATE_REL, policy: "managed" },
+  { rel: ".github/scripts/shard-mutation-scope.mjs", policy: "managed" },
+  { rel: ".stryker.config.json", policy: "seed", nodeOnly: true },
+  { rel: ".dependency-cruiser.cjs", policy: "seed", nodeOnly: true },
+  { rel: "eslint.config.mjs", policy: "seed", nodeOnly: true },
+  // e2e (Decision 39) — seed only; @playwright/test must already be a devDependency
+  // (scaffold never installs packages) and the config's webServer.command is a TODO
+  // the project fills in. testDir here MUST match `e2e.testDir` (default "e2e").
+  { rel: "playwright.config.ts", policy: "seed", nodeOnly: true },
+  { rel: "e2e/example.spec.ts", policy: "seed", nodeOnly: true }
+];
+async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) {
+  const segs = entry.rel.split("/");
+  const src = join20(templatesDir, ...segs);
+  const dest = join20(targetRoot, ...segs);
+  if (!existsSync8(src)) {
+    log29.warn(`template missing, skipping: ${src}`);
+    return;
+  }
+  const render = async () => {
+    const text = await readFile13(src, "utf8");
+    return transform ? transform(text) : text;
+  };
+  if (!existsSync8(dest)) {
+    await mkdir11(dirname9(dest), { recursive: true });
+    await writeFile2(dest, await render(), "utf8");
+    lists.created.push(entry.rel);
+    return;
+  }
+  if (entry.policy === "seed") {
+    lists.present.push(entry.rel);
+    return;
+  }
+  const [rendered, destText] = await Promise.all([render(), readFile13(dest, "utf8")]);
+  if (rendered === destText) {
+    lists.present.push(entry.rel);
+    return;
+  }
+  await writeFile2(dest, rendered, "utf8");
+  lists.updated.push(entry.rel);
+}
+async function ensureGitignore(root, lists) {
+  const path5 = join20(root, ".gitignore");
+  const rel = relative(root, path5);
+  if (!existsSync8(path5)) {
+    await writeFile2(path5, GITIGNORE_ENTRIES.join("\n") + "\n", "utf8");
+    lists.created.push(rel);
+    return;
+  }
+  const current = await readFile13(path5, "utf8");
+  const missing = GITIGNORE_ENTRIES.filter((e) => !current.split("\n").includes(e));
+  if (missing.length === 0) {
+    lists.present.push(rel);
+    return;
+  }
+  const sep2 = current.endsWith("\n") ? "" : "\n";
+  await writeFile2(path5, current + sep2 + missing.join("\n") + "\n", "utf8");
+  lists.present.push(rel);
+}
+async function runScaffold(opts) {
+  const lists = { created: [], present: [], updated: [] };
+  const gateEnv = await applyGateEnvDetection(opts.targetRoot, { dataDir: opts.dataDir });
+  if (gateEnv.written.length > 0) {
+    log29.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
+  }
+  if (gateEnv.warnings.length > 0) {
+    log29.warn(
+      `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
+    );
+  }
+  const isNodePackage = existsSync8(join20(opts.targetRoot, "package.json"));
+  for (const entry of TEMPLATE_MANIFEST) {
+    if (entry.nodeOnly && !isNodePackage) continue;
+    const transform = entry.rel === QUALITY_GATE_REL ? (text) => injectGateEnvIntoWorkflow(text, gateEnv.gateEnv) : void 0;
+    await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
+  }
+  if (lists.updated.length > 0) {
+    log29.info(
+      `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
+    );
+  }
+  await ensureGitignore(opts.targetRoot, lists);
+  const settings = await ensureTargetSettings({
+    targetRoot: opts.targetRoot,
+    dataDirRules: opts.dataDirRules
+  });
+  const settingsRel = relative(opts.targetRoot, settings.path);
+  if (settings.created) lists.created.push(settingsRel);
+  else lists.present.push(settingsRel);
+  const branch = opts.config.git.baseBranch;
+  const required = opts.config.git.requiredStatusChecks;
+  let state = await probeProtection({
+    ghClient: opts.ghClient,
+    owner: opts.owner,
+    repo: opts.repo,
+    branch
+  });
+  let provisioned = false;
+  if (opts.provision) {
+    state = await provisionProtection({
+      ghClient: opts.ghClient,
+      owner: opts.owner,
+      repo: opts.repo,
+      branch,
+      requiredChecks: required,
+      provision: true
+    });
+    provisioned = true;
+  }
+  requireProtectionOrRefuse(state, required, branch);
+  return {
+    repo: `${opts.owner}/${opts.repo}`,
+    files_created: lists.created,
+    files_present: lists.present,
+    files_updated: lists.updated,
+    protection: {
+      enabled: state.enabled,
+      strict_up_to_date: state.strictUpToDate,
+      required_status_checks: state.requiredStatusChecks,
+      provisioned
+    },
+    settings: { created: settings.created, changed: settings.changed },
+    // Include the detection report whenever a key was detected OR any anomaly
+    // surfaced (a parse warning, an expression-ref/secret/key drop) — so a malformed
+    // workflow's `warnings` are never silently swallowed. `written`/`conflicts` each
+    // imply a detected key, so they're subsumed by the detected-key check. Omitted
+    // only for a clean brand-new repo (no workflows, nothing to report).
+    ...Object.keys(gateEnv.detected).length > 0 || gateEnv.warnings.length > 0 || gateEnv.skippedExpressionRefs.length > 0 || gateEnv.droppedSecrets.length > 0 || gateEnv.droppedKeys.length > 0 ? { gateEnv } : {}
+  };
+}
+async function resolveScaffoldRepo(args, overrides = {}) {
+  const slug = await resolveRepo({
+    explicit: optionalString(args.flag("repo")),
+    cwd: overrides.cwd ?? process.cwd(),
+    gitClient: overrides.gitClient ?? new DefaultGitClient()
+  });
+  return splitRepoSlug(slug);
+}
+async function run5(argv) {
+  const args = parseArgs(argv, { booleans: ["provision"] });
+  if (args.flag("help") === true) {
+    emitLine(HELP3);
+    return EXIT.OK;
+  }
+  const { owner, repo } = await resolveScaffoldRepo(args);
+  const dataDir = resolveDataDir();
+  const report = await runScaffold({
+    targetRoot: process.cwd(),
+    templatesDir: resolveTemplatesDir(),
+    owner,
+    repo,
+    config: loadConfig(),
+    ghClient: new DefaultGhClient(),
+    // Bake the resolved data dir into the target permission rules, and thread it
+    // into CI build-env detection's config write.
+    dataDirRules: buildTargetDataDirRules({ dataDir, home: homedir2() }),
+    dataDir,
+    provision: args.flag("provision") === true
+  });
+  emitJson(report);
+  return EXIT.OK;
+}
+var scaffoldCommand = {
+  describe: "Prepare a repo (templates + develop branch protection) for the pipeline",
+  run: async (argv) => {
+    try {
+      return await run5(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`scaffold: ${err.message}`);
         return EXIT.USAGE;
       }
       throw err;
@@ -14876,14 +15530,14 @@ async function runScan(argv, overrides = {}) {
   }
   const state = new StateManager();
   const runId = await resolveRunId2(state, args, "scan", overrides);
-  const run9 = await state.read(runId);
+  const run10 = await state.read(runId);
   const git = overrides.gitClient ?? new DefaultGitClient();
   const probe = {
     refExists: (ref) => git.refExists(ref),
     commitsAhead: (base, branch) => git.commitsAhead(base, branch)
   };
-  const work = await assessWork(run9, probe);
-  emitJson({ ...scanRun(run9), work });
+  const work = await assessWork(run10, probe);
+  emitJson({ ...scanRun(run10), work });
   return EXIT.OK;
 }
 async function runApply(argv, overrides = {}) {
@@ -14905,7 +15559,7 @@ async function runApply(argv, overrides = {}) {
   emitJson(result);
   return EXIT.OK;
 }
-async function run5(argv) {
+async function run6(argv) {
   const action = argv[0];
   if (action === void 0 || action === "--help" || action === "-h") {
     emitLine(RESCUE_HELP);
@@ -14925,7 +15579,7 @@ var rescueCommand = {
   describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
   run: async (argv) => {
     try {
-      return await run5(argv);
+      return await run6(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`rescue: ${err.message}`);
@@ -15002,7 +15656,7 @@ envelope's result_key verbatim; a stale/duplicate key rejects LOUD (re-invoke wi
   expects=reviews         \u2192 { "result_key": {\u2026}, "holdout"?: {"raw": "<validator output>"},
                               "reviews": { reviews, verifications, crossVendorAbsent? } }
 Re-invoking without --results re-derives the same spawn envelope (idempotent).`;
-async function run6(argv) {
+async function run7(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
     emitLine(HELP5);
@@ -15033,7 +15687,7 @@ var driveCommand = {
   describe: "Step one task: run deterministic steps, emit spawn/terminal/quota envelope",
   run: async (argv) => {
     try {
-      return await run6(argv);
+      return await run7(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`next-action: ${err.message}`);
@@ -15088,7 +15742,7 @@ function assertExpectedMode(current, expectMode) {
     );
   }
 }
-async function run7(argv) {
+async function run8(argv) {
   const args = parseArgs(argv, { booleans: [] });
   if (args.flag("help") === true) {
     emitLine(HELP6);
@@ -15114,7 +15768,7 @@ var nextCommand = {
   describe: "One run-loop step: quota gate, cascade-fail, emit the ready set",
   run: async (argv) => {
     try {
-      return await run7(argv);
+      return await run8(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`next-task: ${err.message}`);
@@ -15175,8 +15829,8 @@ async function passthrough(payload, deps) {
   const original = deps.originalStatusline ?? process.env.FACTORY_ORIGINAL_STATUSLINE ?? "";
   if (original.trim().length === 0) return "";
   try {
-    const run9 = deps.exec ?? exec;
-    const result = await run9(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
+    const run10 = deps.exec ?? exec;
+    const result = await run10(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
       log30.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
@@ -15217,8 +15871,8 @@ var statuslineCommand = {
 
 // src/cli/subcommands/autonomy.ts
 import { existsSync as existsSync9 } from "node:fs";
-import { readFile as readFile13 } from "node:fs/promises";
-import { join as join20 } from "node:path";
+import { readFile as readFile14 } from "node:fs/promises";
+import { join as join21 } from "node:path";
 import { homedir as homedir3 } from "node:os";
 var log31 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
@@ -15256,7 +15910,7 @@ function factoryBinPath(pluginRoot) {
   return `${pluginRoot}/bin/factory`;
 }
 function mergedSettingsPath(dataDir) {
-  return join20(dataDir, "merged-settings.json");
+  return join21(dataDir, "merged-settings.json");
 }
 function tildeExpand(value, home) {
   if (value.startsWith("~")) return home + value.slice(1);
@@ -15332,10 +15986,10 @@ function materializeMergedSettings(input) {
   return merged;
 }
 async function readPluginVersion(pluginRoot) {
-  const path5 = join20(pluginRoot, ".claude-plugin", "plugin.json");
+  const path5 = join21(pluginRoot, ".claude-plugin", "plugin.json");
   if (!existsSync9(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile13(path5, "utf8"));
+    const parsed = JSON.parse(await readFile14(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed.version === "string") return parsed.version;
   } catch {
   }
@@ -15345,20 +15999,20 @@ async function runAutonomyEnsure(opts = {}) {
   const home = opts.home ?? homedir3();
   const dataDir = opts.dataDir ?? resolveDataDir();
   const pluginRoot = opts.pluginRoot ?? resolvePluginRoot();
-  const userSettingsPath = opts.userSettingsPath ?? join20(home, ".claude", "settings.json");
+  const userSettingsPath = opts.userSettingsPath ?? join21(home, ".claude", "settings.json");
   const write = opts.writeStdout ?? ((t) => process.stdout.write(t));
   let userSettings = {};
   if (existsSync9(userSettingsPath)) {
     try {
-      const parsed = JSON.parse(await readFile13(userSettingsPath, "utf8"));
+      const parsed = JSON.parse(await readFile14(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
       else log31.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
       log31.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
-  const templatePath = join20(pluginRoot, "templates", "settings.autonomous.json");
-  const template = await readFile13(templatePath, "utf8");
+  const templatePath = join21(pluginRoot, "templates", "settings.autonomous.json");
+  const template = await readFile14(templatePath, "utf8");
   const version = await readPluginVersion(pluginRoot);
   const merged = materializeMergedSettings({
     template,
@@ -15420,7 +16074,7 @@ merged-settings: ${status.mergedSettingsPresent ? `present at ${path5}` : "absen
 async function readOnDiskVersion(path5) {
   if (!existsSync9(path5)) return void 0;
   try {
-    const parsed = JSON.parse(await readFile13(path5, "utf8"));
+    const parsed = JSON.parse(await readFile14(path5, "utf8"));
     if (isObject2(parsed) && typeof parsed._factoryVersion === "string") {
       return parsed._factoryVersion;
     }
@@ -15496,7 +16150,7 @@ HALT: ${verdict} \u2014 relaunch to continue (command above).
 `);
   return EXIT.OK;
 }
-async function run8(argv) {
+async function run9(argv) {
   const args = parseArgs(argv, { booleans: ["json"] });
   if (args.flag("help") === true) {
     emitLine(HELP8);
@@ -15525,7 +16179,7 @@ var autonomyCommand = {
   describe: "Materialize merged-settings.json for an autonomous relaunch + print the command",
   run: async (argv) => {
     try {
-      return await run8(argv);
+      return await run9(argv);
     } catch (err) {
       if (isUsageError(err)) {
         emitError(`autonomy: ${err.message}`);
@@ -15547,6 +16201,7 @@ var cliRegistry = {
     }
   },
   configure: configureCommand,
+  debug: debugCommand,
   resume: resumeCommand,
   run: runCommand,
   spec: specCommand,

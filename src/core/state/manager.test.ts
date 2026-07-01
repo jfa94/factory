@@ -74,6 +74,19 @@ describe("lifecycle: create / read / update / finalize", () => {
     expect([specA, specB]).toContainEqual(onDisk.spec);
   });
 
+  it("create({debug:true}) persists debug:true on the run (Task 6 round-trip)", async () => {
+    const m = mgr();
+    const run = await m.create({ run_id: "run-debug", spec, debug: true });
+    expect(run.debug).toBe(true);
+    expect((await m.read("run-debug")).debug).toBe(true);
+  });
+
+  it("create() with no debug arg defaults to debug:false", async () => {
+    const m = mgr();
+    const run = await m.create({ run_id: "run-nodebug", spec });
+    expect(run.debug).toBe(false);
+  });
+
   it("readCurrent resolves the active run", async () => {
     const m = mgr();
     await m.create({ run_id: "run-1", spec });

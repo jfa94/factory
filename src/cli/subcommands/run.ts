@@ -318,6 +318,12 @@ export type CreateRunOptions = SpecSelector &
     readonly ignoreQuota?: boolean;
     /** When true, persist `e2e: true` on the run (from `--e2e`) — opts into the e2e phase. */
     readonly e2e?: boolean;
+    /**
+     * When true, persist `debug: true` on the run — a `/factory:debug` session
+     * (Decision 39, Task 6). No CLI flag on `run create`; only the debug driver
+     * (`factory debug seed`) ever passes this.
+     */
+    readonly debug?: boolean;
   };
 
 /**
@@ -383,6 +389,7 @@ async function createRunFromManifest(
     ...(opts.ownerSession !== undefined ? { owner_session: opts.ownerSession } : {}),
     ...(opts.ignoreQuota === true ? { ignore_quota: true } : {}),
     ...(opts.e2e === true ? { e2e: true } : {}),
+    ...(opts.debug === true ? { debug: true } : {}),
   });
   const run = await state.update(opts.runId, (s) => ({ ...s, tasks: seeded }));
 

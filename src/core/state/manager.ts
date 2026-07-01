@@ -85,6 +85,8 @@ export interface CreateRunArgs {
   ignore_quota?: RunState["ignore_quota"];
   /** e2e-phase opt-in from `--e2e` (Decision 39); persisted so `wantsE2e` reads it live. */
   e2e?: RunState["e2e"];
+  /** `/factory:debug` session marker (Decision 39, Task 4/6); mirrors `e2e`/`ignore_quota`. */
+  debug?: RunState["debug"];
 }
 
 export class StateManager {
@@ -217,6 +219,7 @@ export class StateManager {
       ...(args.staging_branch !== undefined ? { staging_branch: args.staging_branch } : {}),
       ...(args.ignore_quota !== undefined ? { ignore_quota: args.ignore_quota } : {}),
       ...(args.e2e !== undefined ? { e2e: args.e2e } : {}),
+      ...(args.debug !== undefined ? { debug: args.debug } : {}),
       spec: args.spec,
       tasks: {},
       started_at: now,

@@ -410,6 +410,22 @@ describe("createRun", () => {
     // Resume-safe: the persisted value survives a fresh read (the workflow's source of truth).
     expect((await state.read("run-sm1")).ship_mode).toBe("no-merge");
   });
+
+  it("createRun({debug:true}) → fresh run is born with debug:true (Task 6 persistence guard — no CLI flag; only the debug driver passes this)", async () => {
+    const run = await createRun(state, store, {
+      repo: REPO,
+      issue: 42,
+      runId: "run-debug",
+      debug: true,
+    });
+    expect(run.debug).toBe(true);
+    expect((await state.read("run-debug")).debug).toBe(true);
+  });
+
+  it("createRun() with no debug option → run defaults to debug:false", async () => {
+    const run = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-nodebug" });
+    expect(run.debug).toBe(false);
+  });
 });
 
 describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {

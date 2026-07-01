@@ -18,6 +18,7 @@ import type { Subcommand } from "./registry-types.js";
 import { loadConfig } from "../config/index.js";
 import { stringifyJson } from "../shared/json.js";
 import { configureCommand } from "./subcommands/configure.js";
+import { debugCommand } from "./subcommands/debug.js";
 import { stateCommand } from "./subcommands/state.js";
 import { scaffoldCommand } from "./subcommands/scaffold.js";
 import { runCommand, resumeCommand } from "./subcommands/run.js";
@@ -42,6 +43,7 @@ export const cliRegistry: Record<string, Subcommand> = {
     },
   },
   configure: configureCommand,
+  debug: debugCommand,
   resume: resumeCommand,
   run: runCommand,
   spec: specCommand,
