@@ -6254,6 +6254,13 @@ var ReviewerResultSchema = external_exports.object({
   /** Number of confirmed (verified) blocking findings this reviewer raised. */
   confirmed_blockers: external_exports.number().int().min(0).default(0)
 });
+var FixFindingSchema = external_exports.object({
+  /** Origin of the finding: a reviewer name (e.g. "security") or a gate id (e.g. "lint"). */
+  reviewer: external_exports.string().min(1),
+  file: external_exports.string().optional(),
+  line: external_exports.number().int().positive().optional(),
+  description: external_exports.string().min(1)
+});
 var TaskStateSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   status: TaskStatusEnum.default("pending"),
@@ -6291,6 +6298,17 @@ var TaskStateSchema = external_exports.object({
    * Transient — not a failure field (allowed on any status).
    */
   e2e_feedback: external_exports.string().optional(),
+  /**
+   * Fix-forward instructions carried from a blocked merge-gate verify into the
+   * NEXT producer (`exec`) rung (D5 fix-forward channel). Composed at the
+   * wait-retry branch (`record.ts`) from confirmed reviewer blockers ∪ non-holdout
+   * failing gate evidence, persisted BEFORE `escalateOrFail` clears `reviewers`
+   * (mirrors the `test_revision_feedback` precedent: a separate write ahead of the
+   * ladder transition). `handlers.ts`'s `exec` reads it into `buildProducerContext`
+   * as `confirmedBlockers`. Cleared on the next advance/complete. Absent otherwise.
+   * Transient — not a failure field (allowed on any status).
+   */
+  fix_findings: external_exports.array(FixFindingSchema).optional(),
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
@@ -8395,6 +8413,9 @@ var GIT_DEFAULTS = GitSchema.parse({});
 var DEFAULT_POLL_INTERVAL_MS = 15e3;
 var DEFAULT_MAX_POLLS = 80;
 var realSleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
+function isBranchPolicyBlock(err) {
+  return err instanceof Error && /base branch policy prohibits the merge/i.test(err.message);
+}
 async function waitForCi(gh, number, args) {
   const sleep = args.sleep ?? realSleep;
   const interval = args.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -8471,9 +8492,18 @@ async function rollup(args) {
     log7.warn(`rollup PR #${number} is CONFLICTING \u2014 not merged`);
     return { number, url, resumed, merged: false, reason: "not-mergeable", ci };
   }
-  await args.ghClient.prMergeSquash(number, { subject, body: args.body });
-  log7.info(`rollup PR #${number} squash-merged into ${base}`);
-  return { number, url, resumed, merged: true, subject, ci };
+  try {
+    await args.ghClient.prMergeSquash(number, { subject, body: args.body });
+    log7.info(`rollup PR #${number} squash-merged into ${base}`);
+    return { number, url, resumed, merged: true, subject, ci };
+  } catch (err) {
+    if (!isBranchPolicyBlock(err)) throw err;
+    log7.warn(
+      `rollup PR #${number}: base branch policy prohibits an immediate merge \u2014 arming --auto`
+    );
+    await args.ghClient.prMergeSquash(number, { subject, body: args.body, auto: true });
+    return { number, url, resumed, merged: false, reason: "auto-armed", ci };
+  }
 }
 
 // src/git/branch.ts
@@ -10490,11 +10520,20 @@ ${result.stderr}`.trim();
 };
 
 // src/verifier/deterministic/strategies/proc-strategy.ts
+var EXCERPT_MAX_CHARS = 1e3;
+function excerpt(text) {
+  const trimmed = text.trim();
+  if (trimmed.length <= EXCERPT_MAX_CHARS) return trimmed;
+  return `${trimmed.slice(0, EXCERPT_MAX_CHARS)}\u2026 (truncated)`;
+}
 function procOutcome(id, label, result) {
   if (result.truncated) {
     throw new Error(`${id} gate: ${label} output truncated \u2014 refusing to judge a clipped run`);
   }
-  return ran(id, result.code === 0, `${label} exit=${result.code ?? "null"}`);
+  const base = `${label} exit=${result.code ?? "null"}`;
+  if (result.code === 0) return ran(id, true, base);
+  const output = excerpt(result.stderr || result.stdout);
+  return ran(id, false, output ? `${base}: ${output}` : base);
 }
 function procStrategy(id, label, invoke) {
   return {
@@ -11855,8 +11894,9 @@ async function finalizeRun(deps, runId) {
     log20.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
+  const rollupNote = rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` + (rollupResult.merged ? "" : ` (${rollupResult.reason})`) : ", no rollup";
   log20.info(
-    `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed${failureCommentPosted ? ", PRD failure comment posted" : ""}${rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` : ", no rollup"})`
+    `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed${failureCommentPosted ? ", PRD failure comment posted" : ""}` + rollupNote + `)`
   );
   return {
     run: finalized,
@@ -11886,7 +11926,10 @@ async function completeTask(deps, runId, taskId) {
     // WS2 hygiene: no spawn is in flight past a terminal task
     // Decision 39: an e2e reopen's feedback is cleared once the task ships again —
     // the schema's own field comment ("cleared once the task ships again").
-    e2e_feedback: void 0
+    e2e_feedback: void 0,
+    // D5: a stale fix-forward record from an earlier blocked rung must not
+    // outlive the task it was for.
+    fix_findings: void 0
   }));
   return { done: true, outcome: { outcome: "done" } };
 }
@@ -12025,7 +12068,7 @@ function makePhaseHandlers(deps) {
       }
     ] : [];
   }
-  async function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = []) {
+  async function producerSpawn(role, specTask, runId, rung, resumePhase, extraPriorFailures = [], confirmedBlockers) {
     const dial = dialForRung(specTask.risk_tier, rung, deps.config);
     const split = splitFor(deps.config, runId, specTask);
     const context = buildProducerContext({
@@ -12041,7 +12084,11 @@ function makePhaseHandlers(deps) {
       priorFailures: [
         ...extraPriorFailures,
         ...dial.injectsPriorFailure ? [priorFailureNote(rung)] : []
-      ]
+      ],
+      // D5 fix-forward: a blocked verify's confirmed reviewer blockers ∪ gate-stderr
+      // record (record.ts persisted it as `task.fix_findings`), recorded in as
+      // concrete PATCH instructions rather than re-nuking the implementation.
+      ...confirmedBlockers !== void 0 ? { confirmedBlockers } : {}
     });
     const promptRef = await deps.artifacts.putProducerContext(
       runId,
@@ -12134,7 +12181,11 @@ function makePhaseHandlers(deps) {
         ctx.run.run_id,
         task.escalation_rung,
         "verify",
-        e2eFeedbackNote(task)
+        e2eFeedbackNote(task),
+        // D5 fix-forward: a prior blocked verify's confirmed reviewer blockers ∪
+        // gate-stderr record (record.ts persisted it on the wait-retry branch) —
+        // patches the specific verified misses instead of re-nuking.
+        task.fix_findings
       );
     },
     /**
@@ -12413,6 +12464,18 @@ function makeReplayRunnerFactory(input) {
     };
   };
 }
+function composeFixFindings(adjudicated, gateEvidence) {
+  const fromReviewers = adjudicated.flatMap(
+    (a) => a.confirmedBlockers.map((f) => ({
+      reviewer: f.reviewer,
+      ...f.file !== void 0 ? { file: f.file } : {},
+      ...f.line !== void 0 ? { line: f.line } : {},
+      description: f.description
+    }))
+  );
+  const fromGates = gateEvidence.filter((g) => g.gate !== "holdout" && !g.observed).map((g) => ({ reviewer: g.gate, description: g.detail ?? `${g.gate} gate failed` }));
+  return [...fromReviewers, ...fromGates];
+}
 async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   const run10 = await deps.state.read(runId);
   const task = run10.tasks[taskId];
@@ -12465,10 +12528,14 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
       ...t,
       reviewers: [...panel.reviewerResults],
       phase: nextPhaseVal,
-      status: nextStatus
+      status: nextStatus,
+      // A passing verify clears any stale fix-forward record from a prior blocked round.
+      fix_findings: void 0
     }));
     step = { done: false, phase: nextPhaseVal };
   } else if (panel.result.kind === "wait-retry") {
+    const fixFindings = composeFixFindings(panel.adjudicated, gateEvidence);
+    await deps.state.updateTask(runId, taskId, (t) => ({ ...t, fix_findings: fixFindings }));
     step = await escalateOrFail(
       deps,
       runId,

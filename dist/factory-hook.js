@@ -7268,6 +7268,13 @@ var ReviewerResultSchema = external_exports.object({
   /** Number of confirmed (verified) blocking findings this reviewer raised. */
   confirmed_blockers: external_exports.number().int().min(0).default(0)
 });
+var FixFindingSchema = external_exports.object({
+  /** Origin of the finding: a reviewer name (e.g. "security") or a gate id (e.g. "lint"). */
+  reviewer: external_exports.string().min(1),
+  file: external_exports.string().optional(),
+  line: external_exports.number().int().positive().optional(),
+  description: external_exports.string().min(1)
+});
 var TaskStateSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   status: TaskStatusEnum.default("pending"),
@@ -7305,6 +7312,17 @@ var TaskStateSchema = external_exports.object({
    * Transient — not a failure field (allowed on any status).
    */
   e2e_feedback: external_exports.string().optional(),
+  /**
+   * Fix-forward instructions carried from a blocked merge-gate verify into the
+   * NEXT producer (`exec`) rung (D5 fix-forward channel). Composed at the
+   * wait-retry branch (`record.ts`) from confirmed reviewer blockers ∪ non-holdout
+   * failing gate evidence, persisted BEFORE `escalateOrFail` clears `reviewers`
+   * (mirrors the `test_revision_feedback` precedent: a separate write ahead of the
+   * ladder transition). `handlers.ts`'s `exec` reads it into `buildProducerContext`
+   * as `confirmedBlockers`. Cleared on the next advance/complete. Absent otherwise.
+   * Transient — not a failure field (allowed on any status).
+   */
+  fix_findings: external_exports.array(FixFindingSchema).optional(),
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
