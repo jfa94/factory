@@ -179,6 +179,40 @@ describe("debugReviewRecord", () => {
     expect(report).toContain("this is broken");
     expect(report).toContain("Factory Debug Pass 1");
   });
+
+  it('propagates a finding-verifier error as a throw instead of returning kind:"clean"', async () => {
+    await seedCitableFile();
+    const d = deps();
+    const started = await debugStart(d, {});
+    if (started.kind !== "review") throw new Error("unreachable");
+
+    const reviews = [
+      {
+        reviewer: "quality-reviewer",
+        verdict: "blocked",
+        summary: "one blocker",
+        findings: [
+          {
+            reviewer: "quality-reviewer",
+            severity: "critical",
+            blocking: true,
+            file: "src/thing.ts",
+            line: 2,
+            quote: "line two",
+            description: "this is broken",
+          },
+        ],
+      },
+    ];
+    // No pre-recorded verdict for this citation → the replay runner rejects,
+    // which confirmBlocker turns into an `error` outcome (fail-closed) —
+    // mirrors review.test.ts's own verifier-error fixture shape.
+    const verifications: ReviewerVerifications[] = [];
+
+    await expect(debugReviewRecord(d, started.run_id, { reviews, verifications })).rejects.toThrow(
+      /finding-verifier error.*quality-reviewer/,
+    );
+  });
 });
 
 describe("debug spec resolve|gate|store — pass-through", () => {

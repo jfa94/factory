@@ -139,6 +139,22 @@ export async function adjudicateWholeScope(
     redact: true,
   });
 
+  // Fail CLOSED on a verifier error (D27), mirroring reviewerResultOf's
+  // identical `hadVerifierError` handling for the per-task merge gate
+  // (`panel-run.ts`): an unresolved confirmation means this pass's true
+  // clean/dirty status is UNKNOWN, not merely "not clean" — never silently
+  // coerce it into `clean: false` and keep looping.
+  const erroredReviewers = result.adjudicated
+    .filter((a) => a.hadVerifierError)
+    .map((a) => a.reviewer);
+  if (erroredReviewers.length > 0) {
+    throw new Error(
+      `adjudicateWholeScope: finding-verifier error for reviewer(s) ${erroredReviewers.join(", ")} — ` +
+        "a blocking finding's confirmation status could not be determined for this pass. " +
+        "Retry the verify spawn for the affected reviewer(s) and re-record before this pass can be judged clean or findings.",
+    );
+  }
+
   const confirmedBlockers = result.adjudicated.flatMap((a) => a.confirmedBlockers);
   return {
     adjudicated: result.adjudicated,

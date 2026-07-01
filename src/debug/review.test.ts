@@ -162,22 +162,21 @@ describe("adjudicateWholeScope", () => {
     expect(quality?.hadVerifierError).toBe(false);
   });
 
-  it("a verifier error outcome surfaces via adjudicated[].hadVerifierError — never a silent pass", async () => {
+  it("a verifier error throws LOUD naming the reviewer — never a silent pass", async () => {
     await writeWorktreeFile("src/z.ts", "line1\nconst z = 1\nline3\n");
 
-    const result = await adjudicateWholeScope({
-      reviews: [blockedWith("quality-reviewer", "src/z.ts", 2, "const z = 1")],
-      // No pre-recorded verdict for this citation → the replay runner rejects,
-      // which confirmBlocker turns into an `error` outcome (fail-closed).
-      verifications: [],
-      worktree,
-    });
-
-    expect(result.clean).toBe(true); // an `error` is not a confirmed blocker …
-    expect(result.confirmedBlockers).toEqual([]);
-    const quality = result.adjudicated.find((a) => a.reviewer === "quality-reviewer");
-    // … but it is NOT silently dropped: it is loudly flagged on hadVerifierError.
-    expect(quality?.hadVerifierError).toBe(true);
+    // No pre-recorded verdict for this citation → the replay runner rejects,
+    // which confirmBlocker turns into an `error` outcome (fail-closed) →
+    // adjudicateWholeScope must throw rather than resolve `clean: true`,
+    // since a verifier error means the pass's true clean/dirty status is
+    // UNKNOWN, not "not clean".
+    await expect(
+      adjudicateWholeScope({
+        reviews: [blockedWith("quality-reviewer", "src/z.ts", 2, "const z = 1")],
+        verifications: [],
+        worktree,
+      }),
+    ).rejects.toThrow(/finding-verifier error.*quality-reviewer/);
   });
 
   it("an unparseable raw review throws (LOUD, never silently skipped)", async () => {

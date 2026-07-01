@@ -14466,6 +14466,12 @@ async function adjudicateWholeScope(input) {
     phase: "verify",
     redact: true
   });
+  const erroredReviewers = result.adjudicated.filter((a) => a.hadVerifierError).map((a) => a.reviewer);
+  if (erroredReviewers.length > 0) {
+    throw new Error(
+      `adjudicateWholeScope: finding-verifier error for reviewer(s) ${erroredReviewers.join(", ")} \u2014 a blocking finding's confirmation status could not be determined for this pass. Retry the verify spawn for the affected reviewer(s) and re-record before this pass can be judged clean or findings.`
+    );
+  }
   const confirmedBlockers = result.adjudicated.flatMap((a) => a.confirmedBlockers);
   return {
     adjudicated: result.adjudicated,
