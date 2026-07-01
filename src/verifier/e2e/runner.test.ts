@@ -121,6 +121,30 @@ describe("parseE2eReport", () => {
   it("throws with a clear message on unparseable JSON", () => {
     expect(() => parseE2eReport("not json")).toThrow(/could not parse/i);
   });
+
+  it("ok is false when the process exited nonzero even though zero specs are marked failed", () => {
+    const report = pwJson([
+      { specs: [{ title: "a", file: "e2e/a.spec.ts", tests: [{ status: "expected" }] }] },
+    ]);
+    // The silent-pass bug: a crashed/errored run (bad boot, no tests matched) can still
+    // report a clean zero-failed suite — the exit code is what actually tells us it errored.
+    expect(parseE2eReport(report, 1).ok).toBe(false);
+  });
+
+  it("ok is true by default (code omitted) when zero specs are marked failed — back-compat", () => {
+    const report = pwJson([
+      { specs: [{ title: "a", file: "e2e/a.spec.ts", tests: [{ status: "expected" }] }] },
+    ]);
+    expect(parseE2eReport(report).ok).toBe(true);
+  });
+
+  it("ok is false when the reporter's top-level errors[] is non-empty, even with zero failed specs", () => {
+    const report = JSON.stringify({
+      suites: [{ specs: [{ title: "a", file: "e2e/a.spec.ts", tests: [{ status: "expected" }] }] }],
+      errors: [{ message: "Error: could not connect to http://localhost:3000" }],
+    });
+    expect(parseE2eReport(report, 0).ok).toBe(false);
+  });
 });
 
 describe("runE2e", () => {
@@ -135,6 +159,18 @@ describe("runE2e", () => {
     const result = await runE2e({ cwd: "/wt" }, okTool(report));
     expect(result.ok).toBe(false);
     expect(result.counts.failed).toBe(1);
+  });
+
+  it("ok is false end-to-end when the tool exits nonzero despite a clean (0-failed) report", async () => {
+    const report = pwJson([
+      { specs: [{ title: "a", file: "e2e/a.spec.ts", tests: [{ status: "expected" }] }] },
+    ]);
+    const tool: PlaywrightTool = {
+      run: async () => ({ code: 1, stdout: report, stderr: "boot failed", truncated: false }),
+    };
+    const result = await runE2e({ cwd: "/wt" }, tool);
+    expect(result.ok).toBe(false);
+    expect(result.counts.failed).toBe(0); // the silent-pass bug: no spec is individually failed
   });
 
   it("throws on a truncated payload rather than parsing a clipped JSON blob", async () => {
@@ -240,6 +276,32 @@ describe("DefaultPlaywrightTool", () => {
     expect(args).toEqual(["test", "e2e/checkout.spec.ts", "--grep", "checkout", "--reporter=json"]);
   });
 
+  it("passes --config when given, BEFORE the reporter flag", async () => {
+    execMock.mockResolvedValue(res("{}"));
+    await new DefaultPlaywrightTool(found("/wt/node_modules/.bin/playwright")).run({
+      cwd: "/wt",
+      config: "/wt/.factory-e2e-throwaway.config.cjs",
+    });
+    const [, args] = lastCall();
+    expect(args).toEqual([
+      "test",
+      "--config",
+      "/wt/.factory-e2e-throwaway.config.cjs",
+      "--reporter=json",
+    ]);
+  });
+
+  it("omits the testDir positional when --config is given (the config's own testDir governs)", async () => {
+    execMock.mockResolvedValue(res("{}"));
+    await new DefaultPlaywrightTool(found("/wt/node_modules/.bin/playwright")).run({
+      cwd: "/wt",
+      config: "/wt/.factory-e2e-throwaway.config.cjs",
+      testDir: "should-be-ignored",
+    });
+    const [, args] = lastCall();
+    expect(args).not.toContain("should-be-ignored");
+  });
+
   it("FAILS CLOSED (no exec, never npx) when no local bin exists", async () => {
     const result: E2eProcResult = await new DefaultPlaywrightTool(missing).run({ cwd: "/wt" });
     expect(execMock).not.toHaveBeenCalled();
@@ -256,5 +318,18 @@ describe("DefaultPlaywrightTool", () => {
     const call = execMock.mock.calls[execMock.mock.calls.length - 1]!;
     const opts = call[2] as Record<string, unknown>;
     expect(opts.env).toEqual({ BASE_URL: "http://localhost:3000" });
+    expect(opts.envMode).toBeUndefined();
+  });
+
+  it("replaceEnv:true forwards envMode:'replace' to the shared exec seam (Decision 39 W5 scrub)", async () => {
+    execMock.mockResolvedValue(res("{}"));
+    await new DefaultPlaywrightTool(found("/wt/node_modules/.bin/playwright")).run({
+      cwd: "/wt",
+      env: { BASE_URL: "http://localhost:3000" },
+      replaceEnv: true,
+    });
+    const call = execMock.mock.calls[execMock.mock.calls.length - 1]!;
+    const opts = call[2] as Record<string, unknown>;
+    expect(opts.envMode).toBe("replace");
   });
 });

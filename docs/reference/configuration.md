@@ -232,14 +232,14 @@ key below is **actually read** by the runtime at each call site (`src/orchestrat
 `src/verifier/e2e/runner.ts`) — unlike `quality.redTestCommand`, nothing here is
 declared-but-unwired.
 
-| Key              | Type               | Default | Meaning                                                                                                                                                                                                                                        |
-| ---------------- | ------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`        | boolean (optional) | —       | Repo-level "e2e is configured" signal, distinct from the run's `--e2e` flag. Informational/future-gating only today — `startCommand`+`baseURL` presence is the real readiness check.                                                           |
-| `startCommand`   | string (optional)  | —       | Command that boots the target app — for Playwright's `webServer` (test runs) and the e2e-author's live-exploration boot. **Required** before a run may pass `--e2e`; an unset value **suspends** the phase loud rather than skipping silently. |
-| `baseURL`        | string (optional)  | —       | Base URL the app serves once `startCommand` is up. **Required** before `--e2e`.                                                                                                                                                                |
-| `testDir`        | string             | `e2e`   | Repo-relative directory the **committed critical suite** lives in. Persistence in this directory IS the criticality signal — no `@critical` tag exists.                                                                                        |
-| `readyTimeoutMs` | int >0             | `30000` | Max wait for `startCommand` to become ready before the boot is a failure (ms).                                                                                                                                                                 |
-| `reopenCap`      | int ≥0             | `2`     | Per-task cap on e2e-triggered reopens. A critical spec still red after this many reopens of its mapped task fails the run outright instead of looping forever.                                                                                 |
+| Key              | Type               | Default | Meaning                                                                                                                                                                                                                                                |
+| ---------------- | ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`        | boolean (optional) | —       | Repo-level "e2e is configured" signal, distinct from the run's `--e2e` flag. Informational/future-gating only today — `startCommand`+`baseURL` presence is the real readiness check.                                                                   |
+| `startCommand`   | string (optional)  | —       | Command that boots the target app — for Playwright's `webServer` (test runs) and the e2e-author's live-exploration boot. **Required** before a run may pass `--e2e`; an unset value **suspends** the phase loud rather than skipping silently.         |
+| `baseURL`        | URL (optional)     | —       | Base URL the app serves once `startCommand` is up. Validated as a well-formed URL at config-parse time. **Required** before `--e2e`.                                                                                                                   |
+| `testDir`        | string             | `e2e`   | Repo-relative directory the **committed critical suite** lives in. Persistence in this directory IS the criticality signal — no `@critical` tag exists. **Schema-locked to `e2e`**: any other value is rejected at config-parse time (see note below). |
+| `readyTimeoutMs` | int >0             | `30000` | Max wait for `startCommand` to become ready before the boot is a failure (ms).                                                                                                                                                                         |
+| `reopenCap`      | int ≥0             | `2`     | Per-task cap on e2e-triggered reopens. A critical spec still red after this many reopens of its mapped task fails the run outright instead of looping forever.                                                                                         |
 
 `startCommand`/`baseURL` are unset until you configure them; set both before your first
 `--e2e` run:
@@ -249,11 +249,13 @@ factory configure --set e2e.startCommand="npm run dev"
 factory configure --set e2e.baseURL="http://localhost:3000"
 ```
 
-> `testDir` is load-bearing beyond config: the TCB `e2e-suite` guard is hardcoded to the
-> literal `e2e` path component (no config parameter can influence the denylist), so a repo
-> that customizes `testDir` away from the default loses the implementer-write-deny on the
-> committed suite — a known limitation. The seeded `templates/playwright.config.ts`
-> `testDir` must also match this key. See [Run with end-to-end tests](../guides/run-with-e2e.md).
+> `testDir` is load-bearing beyond config and is therefore **schema-locked to the literal
+> `e2e`** — the config parser rejects any other value. The seeded
+> `templates/playwright.config.ts` and `templates/.github/workflows/quality-gate.yml` both
+> hardcode `e2e`, and the TCB `e2e-suite` write-guard is hardcoded to the same path
+> component; a custom `testDir` would silently diverge from what actually runs and gates,
+> so the lock closes that gap rather than leaving it a documented limitation. See
+> [Run with end-to-end tests](../guides/run-with-e2e.md).
 
 ## Root keys
 

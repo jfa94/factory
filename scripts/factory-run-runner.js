@@ -492,8 +492,9 @@ async function runE2e() {
     model: modelAlias(emit.model),
     schema: E2E_AUTHOR_OUT,
   });
-  // A skipped/dead author is NOT a STATUS: DONE — record a status that suspends the
-  // phase (empty manifest — nothing was authored to merge/run).
+  // A skipped/dead author is NOT a STATUS: DONE — record a status that FAILS the
+  // phase (empty manifest — nothing was authored to merge/run; parseProducerStatus
+  // rejects it non-"done", so runE2eRecord's markFailed path fires, not a suspend).
   const status =
     out === null ? "STATUS: BLOCKED — ESCALATE e2e-author agent skipped or died" : out.status;
   const manifest = out === null ? [] : out.manifest;

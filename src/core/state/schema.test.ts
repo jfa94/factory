@@ -499,4 +499,18 @@ describe("e2e phase marker + author manifest", () => {
     );
     expect(run.e2e_phase?.reason).toBe("reopen cap exhausted for t1");
   });
+
+  it("advisory absent when failed (the done-side counterpart of reason)", () => {
+    expect(() =>
+      parseRunState(
+        minimalRun({
+          e2e_phase: { status: "failed", reason: "x", advisory: "residual throwaway red" },
+        }),
+      ),
+    ).toThrow(); // failed with an advisory
+    const run = parseRunState(
+      minimalRun({ e2e_phase: { status: "done", advisory: "residual throwaway red" } }),
+    );
+    expect(run.e2e_phase?.advisory).toBe("residual throwaway red");
+  });
 });

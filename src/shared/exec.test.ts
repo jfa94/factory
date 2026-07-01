@@ -45,6 +45,25 @@ describe("exec", () => {
     });
     expect(r.stdout).toBe("set-by-test");
   });
+
+  it("envMode:'replace' uses ONLY the passed env — no ambient process.env leaks through (Decision 39 W5 scrub)", async () => {
+    const r = await exec(NODE, ["-e", "process.stdout.write(String(process.env.PATH))"], {
+      env: { FACTORY_TEST_VAR: "set-by-test" },
+      envMode: "replace",
+    });
+    // PATH is near-universally present in the parent's process.env; under a plain
+    // merge it would leak through unasked. Replace mode must NOT admit it — the
+    // child sees exactly the passed env, nothing ambient.
+    expect(r.stdout).toBe("undefined");
+  });
+
+  it("envMode:'replace' still honors an explicitly-passed var", async () => {
+    const r = await exec(NODE, ["-e", "process.stdout.write(process.env.FACTORY_TEST_VAR||'')"], {
+      env: { FACTORY_TEST_VAR: "set-by-test" },
+      envMode: "replace",
+    });
+    expect(r.stdout).toBe("set-by-test");
+  });
 });
 
 describe("execOrThrow", () => {

@@ -253,10 +253,25 @@ phase runs again once the reopened task settles. Two fields **persist** across t
   `e2e.reopenCap` across the whole run, not just one pass.
 
 `status` semantics: absent = not yet run this pass (or cleared for a reopen re-fire);
-`done` = every critical spec green (the run proceeds to docs); `failed` (with `reason`) =
-the run fails — residual critical red, an unmappable critical failure, a rejected
-fail-first proof, an exhausted `reopenCap`, or a non-`DONE` author status. `advisory` is
-the `done`-side counterpart of `reason` — a non-gating note (e.g. residual throwaway red)
-never present on `failed`. `attempts` is the cumulative 1-indexed pass count. A reopen
-never touches `run.status`, which stays `running` until `finalize`.
-</content>
+`done` = every critical spec present and green (the run proceeds to docs); `failed` (with
+`reason`) = the run fails. A critical spec counts as proven only when it appears in the
+results as `passed` or `flaky` — an **absent, `failed`, or `skipped`** critical spec is a
+non-pass. `failed` reasons include: a residual critical miss past the reopen cadence, an
+unmappable critical failure (no manifest entry names the spec), a **tooling failure**
+(nonzero Playwright exit / reporter `errors[]` with no spec marked failed), an author
+manifest that references an **unknown `task_id`** (validated against `run.tasks` at ingest)
+or an unsafe/absolute `spec_path`, an author branch that touches a path **outside
+`testDir`** not declared in its manifest, a rejected fail-first proof, an exhausted
+`reopenCap`, or a non-`DONE` author status. `advisory` is the `done`-side counterpart of
+`reason` — a non-gating note (e.g. residual throwaway red) enforced as **never present on
+`failed`** (mirroring the `reason`-set-IFF-`failed` invariant). `attempts` is the
+cumulative 1-indexed pass count. A reopen never touches `run.status`, which stays
+`running` until `finalize`.
+
+A `failed` verdict is **repairable, not permanent**: `factory rescue apply --reset-e2e`
+clears `status`/`reason`/`advisory`/`ended_at` via the shared `reopenE2ePhase` helper while
+**preserving** `manifest`, `reopen_counts`, and `attempts`, so the phase re-enters and
+re-derives on the next pass instead of being stuck failed forever. This is never automatic —
+`rescue scan` surfaces it as `e2e_failed: true` (folded into `needs_rescue` even when every
+task is `done`), and `apply` clears it only on the explicit `--reset-e2e` flag. Plain
+`resume` does not clear it; it only re-checks the quota gate.

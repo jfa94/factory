@@ -112,7 +112,7 @@ describe("ConfigSchema", () => {
           enabled: true,
           startCommand: "npm run dev",
           baseURL: "http://localhost:3000",
-          testDir: "tests/e2e",
+          testDir: "e2e",
           readyTimeoutMs: 60_000,
           reopenCap: 1,
         },
@@ -121,7 +121,7 @@ describe("ConfigSchema", () => {
         enabled: true,
         startCommand: "npm run dev",
         baseURL: "http://localhost:3000",
-        testDir: "tests/e2e",
+        testDir: "e2e",
         readyTimeoutMs: 60_000,
         reopenCap: 1,
       });
@@ -137,6 +137,14 @@ describe("ConfigSchema", () => {
     it("rejects an empty testDir and a negative reopenCap (loud, not silent)", () => {
       expect(() => ConfigSchema.parse({ e2e: { testDir: "" } })).toThrow();
       expect(() => ConfigSchema.parse({ e2e: { reopenCap: -1 } })).toThrow();
+    });
+
+    it("rejects a non-default testDir — the scaffolded template and CI workflow hardcode 'e2e' today, so a custom value would silently diverge from what actually runs", () => {
+      expect(() => ConfigSchema.parse({ e2e: { testDir: "tests/e2e" } })).toThrow();
+    });
+
+    it("rejects a non-URL baseURL (loud, not silent)", () => {
+      expect(() => ConfigSchema.parse({ e2e: { baseURL: "not-a-url" } })).toThrow();
     });
 
     it("reopenCap accepts 0 (no reopen budget, still schema-valid)", () => {

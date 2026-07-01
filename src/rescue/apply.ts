@@ -27,7 +27,29 @@ import { scanRun } from "./scan.js";
 import { nowEpoch, parseIso8601ToEpoch } from "../shared/time.js";
 import type { StateManager } from "../core/state/index.js";
 import { isTerminalRunStatus } from "../types/index.js";
-import type { RunState, RunStatus, TaskState } from "../types/index.js";
+import type { E2ePhase, RunState, RunStatus, TaskState } from "../types/index.js";
+
+/**
+ * Clear a `failed` e2e_phase verdict back to unset so `wantsE2e` (orchestrator/next.ts)
+ * re-enters the phase and the verdict re-derives on the next pass — the Decision 39
+ * rescue repair path for W4. Drops `status`/`reason`/`advisory`/`ended_at` (the
+ * concluded verdict); PRESERVES `manifest`/`reopen_counts`/`attempts` (the authored
+ * suite + per-task reopen-cap history a fresh pass still needs).
+ *
+ * Lives here (not in orchestrator/e2e.ts, its only other natural home) to avoid a
+ * circular import: e2e.ts already imports `resetTaskRow` from this module via
+ * orchestrator/deps.ts → rescue/index.ts → rescue/apply.ts.
+ */
+function reopenE2ePhase(phase: E2ePhase): E2ePhase {
+  const {
+    status: _status,
+    reason: _reason,
+    advisory: _advisory,
+    ended_at: _endedAt,
+    ...rest
+  } = phase;
+  return rest;
+}
 
 /** Options narrowing what a `rescue apply` resets. */
 export interface RescueApplyOptions {
@@ -45,6 +67,15 @@ export interface RescueApplyOptions {
    * asserting the root cause is fixed; default is `false` (don't repeat dead ends).
    */
   includeDeadEnds?: boolean;
+  /**
+   * Clear a `failed` e2e_phase verdict (Decision 39) so the phase re-enters and
+   * re-derives on the next pass. Ignored when `run.e2e_phase?.status !== "failed"`.
+   * The human is asserting the underlying cause (flaky infra, a since-fixed app bug,
+   * a reopen-cap exhaustion worth retrying) no longer applies — default `false`
+   * (don't silently auto-retry a failed verdict). Alone sufficient to reopen a
+   * terminal run even when no task itself is resettable.
+   */
+  resetE2e?: boolean;
 }
 
 /** What a `rescue apply` did. */
@@ -175,9 +206,14 @@ export async function applyRescue(
   const updated = await state.update(runId, (run) => {
     const { targets, skipped } = selectTargets(run, opts);
     const wasTerminal = isTerminalRunStatus(run.status);
+    // A failed e2e_phase verdict, when the human asserts (via resetE2e) it's worth
+    // retrying, is ALSO sufficient reason to reopen — a run can be stuck purely on
+    // e2e (every task otherwise `done`, so `targets` is empty) and would otherwise
+    // never have anything for a plain rescue apply to reset.
+    const e2eReset = opts.resetE2e === true && run.e2e_phase?.status === "failed";
     // Only reopen a terminal run when there is actually work to pick back up —
     // reopening with nothing to do would just re-finalize to the same status.
-    const reopen = wasTerminal && targets.length > 0;
+    const reopen = wasTerminal && (targets.length > 0 || e2eReset);
 
     result = {
       run_id: runId,
@@ -198,6 +234,7 @@ export async function applyRescue(
     return {
       ...run,
       tasks: nextTasks,
+      ...(e2eReset ? { e2e_phase: reopenE2ePhase(run.e2e_phase!) } : {}),
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
       // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.

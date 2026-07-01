@@ -145,6 +145,31 @@ describe("rescue scan/apply happy paths", () => {
     expect(run.tasks.c!.status).toBe("pending");
   });
 
+  it("apply --reset-e2e clears a failed e2e_phase verdict and reopens the run", async () => {
+    await new StateManager({ dataDir }).update("run-c", (s) => ({
+      ...s,
+      status: "failed",
+      tasks: {
+        a: task({ task_id: "a", status: "done" }),
+        b: task({ task_id: "b", status: "done" }),
+        c: task({ task_id: "c", status: "done" }),
+      },
+      e2e_phase: {
+        status: "failed",
+        reason: "fail-first proof: 'checkout.spec.ts' is still red against staging",
+        manifest: [],
+        reopen_counts: {},
+      },
+    }));
+    const code = await rescueCommand.run(["apply", "--run", "run-c", "--reset-e2e"]);
+    expect(code).toBe(EXIT.OK);
+    expect(out().reopened).toBe(true);
+    const run = await new StateManager({ dataDir }).read("run-c");
+    expect(run.status).toBe("running");
+    expect(run.e2e_phase?.status).toBeUndefined();
+    expect(run.e2e_phase?.reason).toBeUndefined();
+  });
+
   it("apply --task selects exactly the named tasks (repeatable)", async () => {
     const code = await rescueCommand.run(["apply", "--run", "run-c", "--task", "a", "--task", "c"]);
     expect(code).toBe(EXIT.OK);

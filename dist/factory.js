@@ -546,8 +546,8 @@ var require_graceful_fs = __commonJS({
         }
       }
       var fs$writeFile = fs2.writeFile;
-      fs2.writeFile = writeFile2;
-      function writeFile2(path5, data, options, cb) {
+      fs2.writeFile = writeFile3;
+      function writeFile3(path5, data, options, cb) {
         if (typeof options === "function")
           cb = options, options = null;
         return go$writeFile(path5, data, options, cb);
@@ -5935,11 +5935,14 @@ var E2eConfigSchema = external_exports.object({
    */
   startCommand: external_exports.string().optional(),
   /** Base URL the app serves once `startCommand` is up. Required before `--e2e`. */
-  baseURL: external_exports.string().optional(),
+  baseURL: external_exports.string().url().optional(),
   /**
    * Repo-relative directory the COMMITTED critical suite lives in. Persistence
    * in this directory IS the criticality signal (Decision 39) — no `@critical`
-   * tag exists.
+   * tag exists. Locked to the default: the scaffolded `templates/playwright.config.ts`
+   * and `templates/.github/workflows/quality-gate.yml` both hardcode `e2e/` — a
+   * custom value here would silently diverge from what the template/CI actually
+   * run, rather than genuinely relocating the suite (see the superRefine below).
    */
   testDir: external_exports.string().min(1).default("e2e"),
   /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
@@ -5950,6 +5953,14 @@ var E2eConfigSchema = external_exports.object({
    * instead of looping forever.
    */
   reopenCap: external_exports.number().int().nonnegative().default(2)
+}).superRefine((cfg, ctx) => {
+  if (cfg.testDir !== "e2e") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["testDir"],
+      message: `e2e.testDir must be the default 'e2e' \u2014 the scaffolded playwright.config.ts and quality-gate.yml both hardcode that path, so a custom value here would silently diverge from what actually runs`
+    });
+  }
 }).default({});
 var ConfigSchema = external_exports.object({
   quality: QualitySchema,
@@ -6534,6 +6545,14 @@ function refineRunCrossFields(run9, ctx) {
         code: external_exports.ZodIssueCode.custom,
         path: ["e2e_phase", "reason"],
         message: `run '${run9.run_id}' e2e phase is '${run9.e2e_phase.status}' but carries a reason (reason is set IFF failed)`
+      });
+    }
+    const hasAdvisory = run9.e2e_phase.advisory != null && run9.e2e_phase.advisory.length > 0;
+    if (isFailed && hasAdvisory) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["e2e_phase", "advisory"],
+        message: `run '${run9.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`
       });
     }
   }
@@ -7643,7 +7662,7 @@ function exec(command, args = [], opts = {}) {
   return new Promise((resolve2, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      env: opts.envMode === "replace" ? opts.env ?? {} : opts.env ? { ...process.env, ...opts.env } : process.env,
       shell: opts.shell ?? false,
       timeout: opts.timeoutMs,
       killSignal: opts.killSignal ?? "SIGTERM"
@@ -7857,6 +7876,10 @@ var DefaultGitClient = class {
     log5.debug(`reset --hard ${ref} && clean -fd`);
     await this.execOrThrow(["reset", "--hard", ref], opts);
     await this.execOrThrow(["clean", "-fd"], opts);
+  }
+  async diffNames(base, ref, opts) {
+    const r = await this.execOrThrow(["diff", "--name-only", `${base}...${ref}`], opts);
+    return r.stdout.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
   }
 };
 
@@ -11861,10 +11884,18 @@ var DefaultPlaywrightTool = class {
     const bin = await this.resolve(opts.cwd);
     if (bin === null) return missingBinResult2(opts.cwd);
     const args = ["test"];
-    if (opts.testDir) args.push(opts.testDir);
+    if (opts.config) {
+      args.push("--config", opts.config);
+    } else if (opts.testDir) {
+      args.push(opts.testDir);
+    }
     if (opts.grep) args.push("--grep", opts.grep);
     args.push("--reporter=json");
-    const result = await exec(bin, args, { cwd: opts.cwd, env: opts.env });
+    const result = await exec(bin, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      envMode: opts.replaceEnv ? "replace" : void 0
+    });
     return {
       code: result.code,
       stdout: result.stdout,
@@ -11888,7 +11919,7 @@ function specStatus(spec) {
   if (statuses.length > 0 && statuses.every((s) => s === "skipped")) return "skipped";
   return "passed";
 }
-function parseE2eReport(json) {
+function parseE2eReport(json, code = 0) {
   let report;
   try {
     report = JSON.parse(json);
@@ -11908,7 +11939,8 @@ function parseE2eReport(json) {
     flaky: specs.filter((s) => s.status === "flaky").length,
     skipped: specs.filter((s) => s.status === "skipped").length
   };
-  return { ok: counts.failed === 0, specs, counts };
+  const ok = counts.failed === 0 && (report.errors ?? []).length === 0 && code === 0;
+  return { ok, specs, counts };
 }
 async function runE2e(opts, tool = new DefaultPlaywrightTool()) {
   const result = await tool.run(opts);
@@ -11922,7 +11954,7 @@ async function runE2e(opts, tool = new DefaultPlaywrightTool()) {
       `e2e runner: playwright produced no output (code=${result.code ?? "null"}): ${result.stderr}`
     );
   }
-  return parseE2eReport(result.stdout);
+  return parseE2eReport(result.stdout, result.code);
 }
 
 // src/rescue/scan.ts
@@ -11965,7 +11997,8 @@ function scanRun(run9) {
     (t) => t.status === "pending" && (depsSatisfied(run9, t.depends_on) || hasUnsatisfiableDep(run9, t.depends_on))
   );
   const would_deadlock = !allTerminal && !actionablePending;
-  const needs_rescue = resettable.length > 0;
+  const e2e_failed = run9.e2e_phase?.status === "failed";
+  const needs_rescue = resettable.length > 0 || e2e_failed;
   return {
     run_id: run9.run_id,
     run_status: run9.status,
@@ -11980,19 +12013,22 @@ function scanRun(run9) {
     resettable,
     dead_ends,
     needs_rescue,
+    e2e_failed,
     would_deadlock,
-    summary: summarize2(run9.status, resettable.length, dead_ends.length, would_deadlock),
+    summary: summarize2(run9.status, resettable.length, dead_ends.length, would_deadlock, e2e_failed),
     tasks
   };
 }
-function summarize2(status, resettable, deadEnds, wouldDeadlock) {
+function summarize2(status, resettable, deadEnds, wouldDeadlock, e2eFailed) {
+  const e2eTail = e2eFailed ? " (e2e phase failed \u2014 needs a fix + --reset-e2e)" : "";
   if (resettable === 0) {
-    const tail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
-    return `run '${status}': no rescue needed${tail}`;
+    const deadEndTail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
+    if (e2eFailed) return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}`;
+    return `run '${status}': no rescue needed${deadEndTail}`;
   }
   const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
   const deadlock = wouldDeadlock ? "; a re-drive would deadlock without rescue" : "";
-  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}`;
+  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}`;
 }
 
 // src/rescue/assess.ts
@@ -12028,6 +12064,16 @@ async function assessWork(run9, probe) {
 }
 
 // src/rescue/apply.ts
+function reopenE2ePhase(phase) {
+  const {
+    status: _status,
+    reason: _reason,
+    advisory: _advisory,
+    ended_at: _endedAt,
+    ...rest
+  } = phase;
+  return rest;
+}
 function resetTaskRow(task, opts = {}) {
   const {
     failure_class: _failureClass,
@@ -12086,7 +12132,8 @@ async function applyRescue(state, runId, opts = {}) {
   const updated = await state.update(runId, (run9) => {
     const { targets, skipped } = selectTargets(run9, opts);
     const wasTerminal = isTerminalRunStatus(run9.status);
-    const reopen = wasTerminal && targets.length > 0;
+    const e2eReset = opts.resetE2e === true && run9.e2e_phase?.status === "failed";
+    const reopen = wasTerminal && (targets.length > 0 || e2eReset);
     result = {
       run_id: runId,
       run_status: reopen ? "running" : run9.status,
@@ -12104,6 +12151,7 @@ async function applyRescue(state, runId, opts = {}) {
     return {
       ...run9,
       tasks: nextTasks,
+      ...e2eReset ? { e2e_phase: reopenE2ePhase(run9.e2e_phase) } : {},
       // Reopen: a terminal run carries no quota checkpoint (finalize cleared it),
       // so returning to `running` with `ended_at:null` satisfies every invariant.
       // Accumulate idle time so the runtime breaker deducts the rescue gap from wall-clock.
@@ -13400,13 +13448,17 @@ async function nextTask(deps, runId) {
 }
 
 // src/orchestrator/e2e.ts
-import { copyFile, mkdir as mkdir11 } from "node:fs/promises";
-import { dirname as dirname9, join as join18 } from "node:path";
+import { copyFile, mkdir as mkdir11, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname9, isAbsolute, join as join18 } from "node:path";
 var log28 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
     await mkdir11(dirname9(to), { recursive: true });
     await copyFile(from, to);
+  }
+  async writeConfig(path5, contents) {
+    await mkdir11(dirname9(path5), { recursive: true });
+    await writeFile2(path5, contents);
   }
 };
 var E2E_AUTHOR_MODEL = "sonnet";
@@ -13415,7 +13467,15 @@ var CONTROL_TITLE_PREFIX = "control:";
 var E2eResultsSchema = external_exports.object({
   status: external_exports.string().min(1),
   /** Empty when the author judged no task in this run to be UI-facing. */
-  manifest: external_exports.array(E2eManifestEntrySchema).default([])
+  manifest: external_exports.array(E2eManifestEntrySchema).default([]),
+  /**
+   * Explicit "nothing UI-facing" signal — must be `true` whenever `manifest` is
+   * empty. Distinguishes a genuine no-op from a malformed/incomplete author
+   * response that the `manifest` field's own `.default([])` would otherwise
+   * silently paper over as an unremarkable green. Omitted/false + an empty
+   * manifest is treated as ambiguous, not a silent pass.
+   */
+  no_ui_surface: external_exports.boolean().optional()
 }).strict();
 function e2eWorktreePath(dataDir, runId) {
   return join18(dataDir, "runs", runId, "e2e-worktree");
@@ -13431,6 +13491,22 @@ function e2eThrowawayDir(dataDir, runId) {
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
+}
+function e2eEnv(cfg) {
+  return {
+    BASE_URL: cfg.baseURL,
+    FACTORY_E2E_START_COMMAND: cfg.startCommand,
+    FACTORY_E2E_READY_TIMEOUT_MS: String(cfg.readyTimeoutMs),
+    FACTORY_E2E: "1"
+  };
+}
+function scrubbedE2eEnv(cfg) {
+  const env = e2eEnv(cfg);
+  for (const key of ["PATH", "HOME"]) {
+    const v = process.env[key];
+    if (v !== void 0) env[key] = v;
+  }
+  return env;
 }
 function buildAuthorPrompt(args) {
   const taskLines = args.spec.tasks.map((t) => `  - ${t.task_id} \u2014 ${t.title}: ${t.acceptance_criteria.join("; ")}`).join("\n");
@@ -13469,7 +13545,11 @@ async function prepareAuthorSpawn(deps, run9, runId, startCommand, baseURL, test
   const baseRef = `origin/${base}`;
   await deps.git.fetch("origin", staging);
   if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-b", branch, worktree, `origin/${staging}`]);
+    await deps.git.worktreeAdd(["-B", branch, worktree, `origin/${staging}`]);
+    await (deps.provision ?? provisionWorktree)({
+      path: worktree,
+      setupCommand: deps.config.quality.setupCommand
+    });
   }
   const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
   return {
@@ -13493,6 +13573,14 @@ async function prepareAuthorSpawn(deps, run9, runId, startCommand, baseURL, test
     })
   };
 }
+function assertSafeSpecPath(specPath) {
+  if (isAbsolute(specPath)) {
+    throw new Error(`e2e manifest spec_path '${specPath}' must be relative, not absolute`);
+  }
+  if (specPath.split(/[\\/]+/).includes("..")) {
+    throw new Error(`e2e manifest spec_path '${specPath}' must not contain '..' segments`);
+  }
+}
 async function runE2eRecord(deps, runId, results) {
   const outcome = parseProducerStatus(results.status);
   if (outcome.status !== "done") {
@@ -13500,19 +13588,51 @@ async function runE2eRecord(deps, runId, results) {
     await markFailed(deps, runId, reason);
     return { kind: "failed", run_id: runId, reason };
   }
+  if (results.manifest.length === 0 && results.no_ui_surface !== true) {
+    const reason = "e2e-author: STATUS: DONE with an empty manifest but no_ui_surface was not explicitly true \u2014 ambiguous (genuine no-op vs. a malformed/incomplete response); refusing to silently pass";
+    await markFailed(deps, runId, reason);
+    return { kind: "failed", run_id: runId, reason };
+  }
+  for (const entry of results.manifest) {
+    try {
+      assertSafeSpecPath(entry.spec_path);
+    } catch (err) {
+      const reason = `e2e-author: ${err instanceof Error ? err.message : String(err)}`;
+      await markFailed(deps, runId, reason);
+      return { kind: "failed", run_id: runId, reason };
+    }
+  }
+  const cfg = deps.config.e2e;
   const run9 = await deps.state.read(runId);
   const staging = resolveStagingBranch(runId, run9.staging_branch);
   const worktree = e2eWorktreePath(deps.dataDir, runId);
   const critical = results.manifest.filter((e) => e.kind === "critical");
+  const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter(
+    (id) => !(id in run9.tasks)
+  );
+  if (unknownTaskIds.length > 0) {
+    const reason = `e2e-author: manifest references unknown task_id(s) not in this run: ` + unknownTaskIds.join(", ");
+    await markFailed(deps, runId, reason);
+    return { kind: "failed", run_id: runId, reason };
+  }
   if (critical.length > 0) {
+    const branch = e2eBranchName(runId);
+    const changed = await deps.git.diffNames(staging, branch, { cwd: worktree });
+    const allowedSpecPaths = new Set(results.manifest.map((e) => e.spec_path));
+    const testDirPrefix = `${cfg.testDir}/`;
+    const stray = changed.filter((f) => !f.startsWith(testDirPrefix) && !allowedSpecPaths.has(f));
+    if (stray.length > 0) {
+      const reason = `e2e-author: branch touches path(s) outside '${testDirPrefix}' not declared in its manifest \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`;
+      await deps.git.worktreeRemove([worktree, "--force"]);
+      await markFailed(deps, runId, reason);
+      return { kind: "failed", run_id: runId, reason };
+    }
     const proof = await proveCriticals(deps, runId, critical, worktree);
     if (!proof.ok) {
       await deps.git.worktreeRemove([worktree, "--force"]);
       await markFailed(deps, runId, proof.reason);
       return { kind: "failed", run_id: runId, reason: proof.reason };
     }
-  }
-  if (critical.length > 0) {
     await deps.git.mergeFfOrCommit(staging, e2eBranchName(runId));
     await deps.git.push("origin", staging);
   }
@@ -13520,7 +13640,7 @@ async function runE2eRecord(deps, runId, results) {
   await deps.state.update(runId, (s) => ({
     ...s,
     e2e_phase: {
-      ...s.e2e_phase ?? { reopen_counts: {} },
+      ...s.e2e_phase ?? defaultE2ePhase(),
       manifest: results.manifest
     }
   }));
@@ -13530,7 +13650,8 @@ function classifyBaseRun(specs) {
   const control = specs.filter((s) => s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
   const journey = specs.filter((s) => !s.title.toLowerCase().startsWith(CONTROL_TITLE_PREFIX));
   return {
-    controlGreen: control.length === 0 || control.every((s) => s.status === "passed"),
+    hasControl: control.length > 0,
+    controlGreen: control.length > 0 && control.every((s) => s.status === "passed"),
     journeyRed: journey.length > 0 && journey.every((s) => s.status === "failed")
   };
 }
@@ -13541,16 +13662,26 @@ async function proveCriticals(deps, runId, critical, authorWorktree) {
   const wtPath = e2eBaseProofWorktreePath(deps.dataDir, runId);
   const base = `origin/${deps.config.git.baseBranch}`;
   if (!await deps.git.worktreeExists(wtPath)) {
-    await deps.git.worktreeAdd(["-b", `e2e-base-proof-${runId}`, wtPath, base]);
+    await deps.git.worktreeAdd(["-B", `e2e-base-proof-${runId}`, wtPath, base]);
+    await (deps.provision ?? provisionWorktree)({
+      path: wtPath,
+      setupCommand: deps.config.quality.setupCommand
+    });
   }
   try {
     for (const entry of critical) {
       await files.copySpec(join18(authorWorktree, entry.spec_path), join18(wtPath, entry.spec_path));
       const baseResult = await runE2e(
-        { cwd: wtPath, env: { BASE_URL: cfg.baseURL }, testDir: entry.spec_path },
+        { cwd: wtPath, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: entry.spec_path },
         tool
       );
-      const { controlGreen, journeyRed } = classifyBaseRun(baseResult.specs);
+      const { hasControl, controlGreen, journeyRed } = classifyBaseRun(baseResult.specs);
+      if (!hasControl) {
+        return {
+          ok: false,
+          reason: `fail-first proof: '${entry.spec_path}' has no "${CONTROL_TITLE_PREFIX}"-titled assertion \u2014 cannot verify the base app booted (required by the authoring contract)`
+        };
+      }
       if (!controlGreen) {
         return {
           ok: false,
@@ -13564,7 +13695,12 @@ async function proveCriticals(deps, runId, critical, authorWorktree) {
         };
       }
       const stagingResult = await runE2e(
-        { cwd: authorWorktree, env: { BASE_URL: cfg.baseURL }, testDir: entry.spec_path },
+        {
+          cwd: authorWorktree,
+          env: scrubbedE2eEnv(cfg),
+          replaceEnv: true,
+          testDir: entry.spec_path
+        },
         tool
       );
       if (!stagingResult.ok) {
@@ -13579,11 +13715,14 @@ async function proveCriticals(deps, runId, critical, authorWorktree) {
     await deps.git.worktreeRemove([wtPath, "--force"]);
   }
 }
+function defaultE2ePhase() {
+  return { manifest: [], reopen_counts: {} };
+}
 async function markDone(deps, runId, opts) {
   await deps.state.update(runId, (s) => ({
     ...s,
     e2e_phase: {
-      ...s.e2e_phase ?? { manifest: [], reopen_counts: {} },
+      ...s.e2e_phase ?? defaultE2ePhase(),
       status: "done",
       reason: void 0,
       advisory: opts.advisory,
@@ -13596,7 +13735,7 @@ async function markFailed(deps, runId, reason, attempts) {
   await deps.state.update(runId, (s) => ({
     ...s,
     e2e_phase: {
-      ...s.e2e_phase ?? { manifest: [], reopen_counts: {} },
+      ...s.e2e_phase ?? defaultE2ePhase(),
       status: "failed",
       reason,
       advisory: void 0,
@@ -13605,6 +13744,26 @@ async function markFailed(deps, runId, reason, attempts) {
     }
   }));
   log28.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
+}
+function throwawayConfigPath(worktree) {
+  return join18(worktree, ".factory-e2e-throwaway.config.cjs");
+}
+function throwawayConfigContents(throwawayDir) {
+  return [
+    "// Generated by the factory e2e coroutine \u2014 never commit, rewritten every run.",
+    'const { defineConfig } = require("@playwright/test");',
+    "module.exports = defineConfig({",
+    `  testDir: ${JSON.stringify(throwawayDir)},`,
+    "  use: { baseURL: process.env.BASE_URL },",
+    "  webServer: {",
+    "    command: process.env.FACTORY_E2E_START_COMMAND,",
+    "    url: process.env.BASE_URL,",
+    "    reuseExistingServer: process.env.FACTORY_E2E ? false : true,",
+    "    timeout: Number(process.env.FACTORY_E2E_READY_TIMEOUT_MS) || 30_000,",
+    "  },",
+    "});",
+    ""
+  ].join("\n");
 }
 function findEntry(manifest, spec) {
   return manifest.find((e) => spec.file === e.spec_path || spec.file.endsWith(`/${e.spec_path}`));
@@ -13621,44 +13780,66 @@ async function runSuiteAndDecide(deps, runId) {
   }
   const staging = resolveStagingBranch(runId, run9.staging_branch);
   const worktree = e2eRunWorktreePath(deps.dataDir, runId);
+  const provision = deps.provision ?? provisionWorktree;
   await deps.git.fetch("origin", staging);
   if (!await deps.git.worktreeExists(worktree)) {
-    await deps.git.worktreeAdd(["-b", `e2e-run-${runId}`, worktree, `origin/${staging}`]);
+    await deps.git.worktreeAdd(["-B", `e2e-run-${runId}`, worktree, `origin/${staging}`]);
   } else {
     await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
+  await provision({ path: worktree, setupCommand: deps.config.quality.setupCommand });
   const tool = deps.playwright ?? new DefaultPlaywrightTool();
   const criticalResult = await runE2e(
-    { cwd: worktree, env: { BASE_URL: cfg.baseURL }, testDir: cfg.testDir },
+    { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: cfg.testDir },
     tool
   );
   const throwaway = manifest.filter((e) => e.kind === "throwaway");
-  const throwawayResult = throwaway.length > 0 ? await runE2e(
-    {
-      cwd: worktree,
-      env: { BASE_URL: cfg.baseURL },
-      testDir: e2eThrowawayDir(deps.dataDir, runId)
-    },
-    tool
-  ) : void 0;
-  const criticalFailed = criticalResult.specs.filter((s) => s.status === "failed");
+  const throwawayResult = throwaway.length > 0 ? await (async () => {
+    const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
+    const configPath2 = throwawayConfigPath(worktree);
+    await (deps.files ?? new DefaultE2eFileOps()).writeConfig(
+      configPath2,
+      throwawayConfigContents(throwawayDir)
+    );
+    return runE2e(
+      { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, config: configPath2 },
+      tool
+    );
+  })() : void 0;
+  const criticalEntries = manifest.filter((e) => e.kind === "critical");
+  const criticalMisses = criticalEntries.map((entry) => ({
+    entry,
+    spec: criticalResult.specs.find(
+      (s) => s.file === entry.spec_path || s.file.endsWith(`/${entry.spec_path}`)
+    )
+  })).filter(
+    (m) => m.spec === void 0 || m.spec.status !== "passed" && m.spec.status !== "flaky"
+  );
+  if (!criticalResult.ok && criticalResult.specs.every((s) => s.status !== "failed")) {
+    const reason = "e2e critical suite reported a tooling failure (nonzero exit code or reporter errors[]) with no individual spec marked failed \u2014 refusing to attribute to a task";
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  }
+  const criticalSpecFailures = criticalResult.specs.filter((s) => s.status === "failed");
   const throwawayFailed = throwawayResult?.specs.filter((s) => s.status === "failed") ?? [];
-  if (criticalFailed.length === 0) {
+  const unmappableCritical = criticalSpecFailures.filter(
+    (s) => findEntry(manifest, s) === void 0
+  );
+  if (unmappableCritical.length > 0) {
+    const reason = `unmappable critical e2e failure(s): ${unmappableCritical.map((s) => s.file).join(", ")} \u2014 no manifest entry names this spec`;
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  }
+  const throwawayCandidates = firstPass ? throwawayFailed.map((spec) => ({ spec, entry: findEntry(manifest, spec) })).filter((m) => m.entry !== void 0) : [];
+  const mappable = [
+    ...criticalMisses,
+    ...throwawayCandidates
+  ];
+  if (mappable.length === 0) {
     const advisory = throwawayFailed.length > 0 ? `${throwawayFailed.length} throwaway spec(s) still red (non-gating): ` + throwawayFailed.map((s) => s.title).join(", ") : void 0;
     await markDone(deps, runId, { attempts, advisory });
     return { kind: "done", run_id: runId };
   }
-  const mappedCritical = criticalFailed.map((s) => ({ spec: s, entry: findEntry(manifest, s) }));
-  const unmappable = mappedCritical.filter((m) => m.entry === void 0);
-  if (unmappable.length > 0) {
-    const reason = `unmappable critical e2e failure(s): ${unmappable.map((m) => m.spec.file).join(", ")} \u2014 no manifest entry names this spec`;
-    await markFailed(deps, runId, reason, attempts);
-    return { kind: "failed", run_id: runId, reason };
-  }
-  const throwawayCandidates = firstPass ? throwawayFailed.map((s) => ({ spec: s, entry: findEntry(manifest, s) })) : [];
-  const mappable = [...mappedCritical, ...throwawayCandidates].filter(
-    (m) => m.entry !== void 0
-  );
   const taskIds = [...new Set(mappable.flatMap((m) => m.entry.task_ids))];
   const reopenCounts = { ...run9.e2e_phase?.reopen_counts ?? {} };
   const capExhausted = taskIds.filter((id) => (reopenCounts[id] ?? 0) >= cfg.reopenCap);
@@ -13667,7 +13848,9 @@ async function runSuiteAndDecide(deps, runId) {
     await markFailed(deps, runId, reason, attempts);
     return { kind: "failed", run_id: runId, reason };
   }
-  const feedback = "The e2e phase found these journeys still failing:\n" + mappable.map((m) => `- ${m.entry.spec_path} \u2014 "${m.spec.title}"`).join("\n");
+  const feedback = "The e2e phase found these journeys still failing:\n" + mappable.map(
+    (m) => `- ${m.entry.spec_path} \u2014 "${m.spec ? m.spec.title : "did not run (missing from results)"}"`
+  ).join("\n");
   for (const id of taskIds) reopenCounts[id] = (reopenCounts[id] ?? 0) + 1;
   await deps.state.update(runId, (s) => ({
     ...s,
@@ -13677,12 +13860,13 @@ async function runSuiteAndDecide(deps, runId) {
       )
     ),
     e2e_phase: {
-      ...s.e2e_phase ?? { manifest },
+      ...s.e2e_phase ?? defaultE2ePhase(),
       status: void 0,
       reason: void 0,
       advisory: void 0,
       attempts,
-      manifest: s.e2e_phase?.manifest ?? manifest,
+      manifest,
+      // already `run.e2e_phase?.manifest` (read at the top of this function) — s.e2e_phase can't have diverged since
       reopen_counts: reopenCounts
     }
   }));
@@ -14624,7 +14808,7 @@ var RESCUE_HELP = `factory rescue \u2014 scan or recover a stalled run
 
 Usage:
   factory rescue scan  [--run <id>]
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e]
 
 Actions:
   scan    Classify every task (read-only); report what a re-drive would do.
@@ -14637,11 +14821,11 @@ Usage:
   --run   The run to scan (defaults to runs/current).
 
 Emits ONE JSON document: the RescueScan (counts, resettable, dead_ends,
-needs_rescue, would_deadlock, summary, per-task lines). Writes nothing.`;
+needs_rescue, e2e_failed, would_deadlock, summary, per-task lines). Writes nothing.`;
 var APPLY_HELP = `factory rescue apply \u2014 reset resettable tasks and reopen a terminal run
 
 Usage:
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e]
 
   --run                The run to recover (defaults to runs/current).
   --task               Reset exactly this task (repeatable). Overrides the default
@@ -14649,10 +14833,15 @@ Usage:
                        one is skipped. An explicitly-named dead-end IS reset.
   --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
                        Use only after the root cause is actually fixed.
+  --reset-e2e          Clear a failed e2e-phase verdict (Decision 39) so it re-enters
+                       and re-derives on the next pass. Use only once the underlying
+                       cause (flaky infra, an app bug, a since-fixed reopen-cap
+                       exhaustion) no longer applies. Alone sufficient to reopen a
+                       terminal run even when no task itself is resettable.
 
 Default (no --task): resets stuck (crashed in-flight) + recoverable
 (blocked-environmental) tasks, leaving dead-ends failed. Reopens a terminal run
-to 'running' when it reset work. Idempotent.
+to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase). Idempotent.
 
 Emits ONE JSON document:
   { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
@@ -14684,7 +14873,7 @@ async function runScan(argv, overrides = {}) {
   return EXIT.OK;
 }
 async function runApply(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["include-dead-ends"] });
+  const args = parseArgs(argv, { booleans: ["include-dead-ends", "reset-e2e"] });
   if (args.flag("help") === true) {
     emitLine(APPLY_HELP);
     return EXIT.OK;
@@ -14693,9 +14882,11 @@ async function runApply(argv, overrides = {}) {
   const runId = await resolveRunId2(state, args, "apply", overrides);
   const tasks = args.all("task");
   const includeDeadEnds = args.flag("include-dead-ends") === true;
+  const resetE2e = args.flag("reset-e2e") === true;
   const result = await applyRescue(state, runId, {
     ...tasks.length > 0 ? { tasks } : {},
-    includeDeadEnds
+    includeDeadEnds,
+    resetE2e
   });
   emitJson(result);
   return EXIT.OK;

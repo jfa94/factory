@@ -118,7 +118,7 @@ End your final message with a one-line summary, then return exactly this JSON sh
 fenced ```json block is fine):
 
 ```json
-{ "status": "<your STATUS line>", "manifest": [ { "task_ids": [...], "spec_path": "...", "kind": "critical|throwaway" } ] }
+{ "status": "<your STATUS line>", "manifest": [ { "task_ids": [...], "spec_path": "...", "kind": "critical|throwaway" } ], "no_ui_surface": false }
 ```
 
 STATUS line values:
@@ -131,5 +131,9 @@ STATUS line values:
   single tricky journey (skip that journey and note it in your summary instead).
 - `STATUS: NEEDS_CONTEXT — <question>` — you need a clarification that only a human can
   give. Same fail-outright consequence as BLOCKED.
-- Manifest may be an empty array if you judged nothing in this PRD to be UI-facing — that
-  is a valid, non-failing outcome (the phase marks itself done with nothing to gate on).
+- Manifest may be an empty array **only if** you also set `"no_ui_surface": true` —
+  your explicit declaration that you reviewed every task and judged NONE of them
+  UI-facing (a valid, non-failing outcome — the phase marks itself done with nothing
+  to gate on). An empty manifest WITHOUT `no_ui_surface: true` fails the phase outright
+  — the engine cannot otherwise tell "genuinely nothing to test" apart from an
+  incomplete/malformed run.

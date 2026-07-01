@@ -65,6 +65,13 @@ export class FakeGitClient implements GitClient {
    * assertions). Keyed by the branch name receiving the merge.
    */
   readonly mergesInto: Record<string, string[]> = {};
+  /**
+   * Test-injectable: files `diffNames` reports as changed on the given ref, keyed by
+   * ref name. This fake models a flat per-branch changeset rather than a real
+   * base-relative tree diff — `base` is accepted (interface parity) but ignored.
+   * Unseeded refs report no changes (empty array), matching an untouched branch.
+   */
+  readonly branchFiles = new Map<string, string[]>();
   private head: string;
   private shaCounter = 0;
 
@@ -199,6 +206,7 @@ export class FakeGitClient implements GitClient {
     this.calls.push(`worktree add ${args.join(" ")}`);
     // Parse `-b|-B <branch> <path> <startPoint>` shape we emit from worktree.ts.
     const bIdx = args.findIndex((a) => a === "-b" || a === "-B");
+    const force = args[bIdx] === "-B";
     const branch = bIdx >= 0 ? args[bIdx + 1] : undefined;
     const path = bIdx >= 0 ? args[bIdx + 2] : undefined;
     const startPoint = bIdx >= 0 ? args[bIdx + 3] : undefined;
@@ -209,6 +217,12 @@ export class FakeGitClient implements GitClient {
       // as a failure here instead of a silent overwrite that hides the bug.
       if (this.worktrees.has(path)) {
         throw new Error(`fatal: '${path}' already exists (worktree add)`);
+      }
+      // Faithful to real git: a bare `-b` FATALS when <branch> already exists
+      // locally — e.g. a crash left the branch behind after its worktree was
+      // removed. `-B` force-creates/resets it regardless (the crash-safe mode).
+      if (!force && this.localBranches.has(branch)) {
+        throw new Error(`fatal: a branch named '${branch}' already exists`);
       }
       const startSha = await this.revParse(startPoint).catch(() => this.nextSha());
       this.localBranches.set(branch, startSha);
@@ -250,6 +264,10 @@ export class FakeGitClient implements GitClient {
     // The orchestrator passes the sha it captured at spawn-emit, so set the worktree's
     // branch tip back to it — restoring the pre-spawn state.
     this.localBranches.set(this.headBranch(opts), ref);
+  }
+
+  async diffNames(_base: string, ref: string, _opts?: GitOpts): Promise<string[]> {
+    return this.branchFiles.get(ref) ?? [];
   }
 }
 

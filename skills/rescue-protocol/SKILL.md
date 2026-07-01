@@ -24,18 +24,22 @@ ambiguous dead-ends. Never edit `state.json` by hand.
 3. **Default never repeats a dead end.** A default `apply` resets only stuck ∪ recoverable
    (`blocked-environmental`) tasks. A `spec-defect`/`capability-budget` drop is reset ONLY on
    an explicit assertion the root cause is fixed (`--include-dead-ends`, or `--task <id>`).
-4. **Never reset a `done` task.** It would un-ship merged work; `apply` makes it a LOUD error.
-5. **`rescue-diagnostic` is read-only and advisory.** Its decision drives whether you issue a
+4. **A failed e2e verdict is never auto-retried.** `scan.e2e_failed` can be `true` even when
+   `resettable` is empty (every task `done`, only the e2e phase failed) — a default `apply`
+   leaves it failed. It is cleared ONLY on an explicit human assertion the underlying cause no
+   longer applies (`apply --reset-e2e`).
+5. **Never reset a `done` task.** It would un-ship merged work; `apply` makes it a LOUD error.
+6. **`rescue-diagnostic` is read-only and advisory.** Its decision drives whether you issue a
    `--task` reset; it mutates nothing itself.
-6. **v1 reconciles RUN STATE only.** GitHub-side drift (merged-not-recorded PR, orphan
+7. **v1 reconciles RUN STATE only.** GitHub-side drift (merged-not-recorded PR, orphan
    branch/worktree, merge conflict, duplicate/closed-unmerged PR) is **out of scope** — surface
    it to the user, do not pretend it is fixed. See `reference/disposition-taxonomy.md`.
-7. **Final step is the handoff to resume**, unless the user cancels or nothing was reset.
+8. **Final step is the handoff to resume**, unless the user cancels or nothing was reset.
 
 ## Inputs
 
 `/factory:rescue` passes `run=<id-or-empty> tasks=<csv-or-empty> include-dead-ends=<bool>
-dry-run=<bool>`:
+reset-e2e=<bool> dry-run=<bool>`:
 
 - `run` → thread as `--run <id>` into every `scan`/`apply` (empty = default to `runs/current`).
 - `dry-run=true` → run steps 1–3 only: scan + report, then **stop**. No `apply`, no resume.
@@ -43,6 +47,9 @@ dry-run=<bool>`:
   `--task <id>` (repeated). A named dead-end is reset without `--include-dead-ends`.
 - `include-dead-ends=true` → in step 5, reset all dead-ends (`--include-dead-ends`) instead of
   diagnosing per task (the human has asserted the upstream root cause is fixed).
+- `reset-e2e=true` → in step 4, apply with `--reset-e2e` too (the human has asserted the e2e
+  failure's underlying cause no longer applies). When `false`/omitted and `scan.e2e_failed` is
+  `true`, leave it failed and surface it in the summary (step 3b) — never guess.
 
 ## Protocol
 
@@ -64,7 +71,7 @@ dry-run=<bool>`:
      "counts": { "total", "shipped", "runnable", "stuck", "recoverable", "dead_end" },
      "resettable": ["<task-id>", ...],   // stuck ∪ recoverable — default apply resets these
      "dead_ends":  ["<task-id>", ...],   // reset only on explicit assertion
-     "needs_rescue", "would_deadlock", "summary",
+     "needs_rescue", "e2e_failed", "would_deadlock", "summary",
      "tasks": [ { "task_id", "status", "disposition", "failure_class?", "failure_reason?", "branch?", "pr_number?" }, ... ],
      // Read-only recoverable-work survey (git-grounded; EVIDENCE, never an action). One
      // entry per non-shipped branched task, measured against origin/staging-<run-id>.
@@ -85,6 +92,12 @@ dry-run=<bool>`:
    otherwise report `summary` (it may note dead-ends that need a fix + `--include-dead-ends`)
    and stop. **If `dry-run=true`, report the scan and stop here regardless** — never apply.
 
+   3b. **`scan.e2e_failed` never short-circuits and never auto-resolves (Iron Law 4).** If
+   `true`, proceed to step 4 regardless of task-level `needs_rescue`. Apply `--reset-e2e`
+   alongside the default set ONLY if `reset-e2e=true` was explicitly passed; otherwise leave
+   it failed and name it in your report — there is no diagnostic-agent path for e2e (unlike
+   dead-ends), so never guess at whether the underlying cause has cleared.
+
    **If `tasks` was given (non-empty):** skip the default + diagnostic paths entirely — apply
    exactly those ids and go to step 7:
 
@@ -93,15 +106,17 @@ dry-run=<bool>`:
    ```
 
 4. **Apply the default (safe) set.** Resets stuck (crashed in-flight) + recoverable
-   (`blocked-environmental`) tasks, and reopens a terminal run that had work to reset:
+   (`blocked-environmental`) tasks, and reopens a terminal run that had work to reset. Add
+   `--reset-e2e` when `scan.e2e_failed` is `true` AND `reset-e2e=true` was passed (per 3b):
 
    ```
-   factory rescue apply [--run <id>]
+   factory rescue apply [--run <id>] [--reset-e2e]
    ```
 
    Emits `{ run_id, run_status, reset: [...], reopened, skipped: [...] }`. `run_status` is
-   `running` when a terminal run was reopened. This is safe to auto-apply — it never resets a
-   dead-end and never touches `done` work.
+   `running` when a terminal run was reopened (by reset work OR a cleared e2e verdict). This
+   is safe to auto-apply — it never resets a dead-end, never touches `done` work, and never
+   clears a failed e2e verdict without the explicit `reset-e2e=true` input.
 
 5. **Decide on dead-ends (only if any).** For each id in `scan.dead_ends`, decide whether the
    root cause has cleared. Two paths:

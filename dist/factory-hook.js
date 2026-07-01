@@ -1634,7 +1634,7 @@ function exec(command, args = [], opts = {}) {
   return new Promise((resolve3, reject) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      env: opts.envMode === "replace" ? opts.env ?? {} : opts.env ? { ...process.env, ...opts.env } : process.env,
       shell: opts.shell ?? false,
       timeout: opts.timeoutMs,
       killSignal: opts.killSignal ?? "SIGTERM"
@@ -6573,11 +6573,14 @@ var E2eConfigSchema = external_exports.object({
    */
   startCommand: external_exports.string().optional(),
   /** Base URL the app serves once `startCommand` is up. Required before `--e2e`. */
-  baseURL: external_exports.string().optional(),
+  baseURL: external_exports.string().url().optional(),
   /**
    * Repo-relative directory the COMMITTED critical suite lives in. Persistence
    * in this directory IS the criticality signal (Decision 39) — no `@critical`
-   * tag exists.
+   * tag exists. Locked to the default: the scaffolded `templates/playwright.config.ts`
+   * and `templates/.github/workflows/quality-gate.yml` both hardcode `e2e/` — a
+   * custom value here would silently diverge from what the template/CI actually
+   * run, rather than genuinely relocating the suite (see the superRefine below).
    */
   testDir: external_exports.string().min(1).default("e2e"),
   /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
@@ -6588,6 +6591,14 @@ var E2eConfigSchema = external_exports.object({
    * instead of looping forever.
    */
   reopenCap: external_exports.number().int().nonnegative().default(2)
+}).superRefine((cfg, ctx) => {
+  if (cfg.testDir !== "e2e") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["testDir"],
+      message: `e2e.testDir must be the default 'e2e' \u2014 the scaffolded playwright.config.ts and quality-gate.yml both hardcode that path, so a custom value here would silently diverge from what actually runs`
+    });
+  }
 }).default({});
 var ConfigSchema = external_exports.object({
   quality: QualitySchema,
@@ -7557,6 +7568,14 @@ function refineRunCrossFields(run, ctx) {
         code: external_exports.ZodIssueCode.custom,
         path: ["e2e_phase", "reason"],
         message: `run '${run.run_id}' e2e phase is '${run.e2e_phase.status}' but carries a reason (reason is set IFF failed)`
+      });
+    }
+    const hasAdvisory = run.e2e_phase.advisory != null && run.e2e_phase.advisory.length > 0;
+    if (isFailed && hasAdvisory) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["e2e_phase", "advisory"],
+        message: `run '${run.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`
       });
     }
   }

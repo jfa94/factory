@@ -40,7 +40,11 @@ function task(seed: TaskSeed): TaskState {
   return base;
 }
 
-function mkRun(seeds: readonly TaskSeed[], status: RunStatus = "running"): RunState {
+function mkRun(
+  seeds: readonly TaskSeed[],
+  status: RunStatus = "running",
+  e2ePhase?: RunState["e2e_phase"],
+): RunState {
   return parseRunState({
     run_id: "run-scan-1",
     status,
@@ -48,6 +52,7 @@ function mkRun(seeds: readonly TaskSeed[], status: RunStatus = "running"): RunSt
     tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
     started_at: "2026-06-08T00:00:00.000Z",
     updated_at: "2026-06-08T00:00:00.000Z",
+    ...(e2ePhase !== undefined ? { e2e_phase: e2ePhase } : {}),
   });
 }
 
@@ -113,6 +118,43 @@ describe("scanRun — resettable / dead_ends / needs_rescue", () => {
     expect(scan.needs_rescue).toBe(false);
     expect(scan.summary).toMatch(/no rescue needed/);
     expect(scan.summary).toMatch(/dead-end/); // names the unrecoverable fail
+  });
+
+  it("e2e_failed is true when the e2e phase is failed, even with every task done — and needs_rescue follows it (a run stuck ONLY on a failed e2e verdict must not scan as 'nothing to rescue')", () => {
+    const scan = scanRun(
+      mkRun(
+        [
+          { task_id: "a", status: "done" },
+          { task_id: "b", status: "done" },
+        ],
+        "failed",
+        {
+          status: "failed",
+          reason: "fail-first proof: 'checkout.spec.ts' is still red against staging",
+          manifest: [],
+          reopen_counts: {},
+        },
+      ),
+    );
+    expect(scan.resettable).toEqual([]); // no task-level work to reset
+    expect(scan.e2e_failed).toBe(true);
+    expect(scan.needs_rescue).toBe(true); // the e2e failure alone is enough
+    expect(scan.summary).toMatch(/e2e/i);
+    expect(scan.summary).toMatch(/reset-e2e/);
+  });
+
+  it("e2e_failed is false when the e2e phase is unset or done", () => {
+    const doneScan = scanRun(
+      mkRun([{ task_id: "a", status: "done" }], "completed", {
+        status: "done",
+        manifest: [],
+        reopen_counts: {},
+      }),
+    );
+    expect(doneScan.e2e_failed).toBe(false);
+
+    const unsetScan = scanRun(mkRun([{ task_id: "a", status: "done" }], "completed"));
+    expect(unsetScan.e2e_failed).toBe(false);
   });
 
   it("carries failure/branch/PR passthrough on the task lines", () => {

@@ -240,7 +240,7 @@ export const GitSchema = z
  * (`src/orchestrator/e2e.ts`) refuses to start the phase without both, rather than
  * silently no-op-ing (the `redTestCommand` cautionary tale at :53-57 — declared but
  * never load-bearing — must NOT repeat here: the runner module actually reads
- * every key below).
+ * every key below except `enabled`, which stays informational/future-gating only).
  */
 export const E2eConfigSchema = z
   .object({
@@ -257,11 +257,14 @@ export const E2eConfigSchema = z
      */
     startCommand: z.string().optional(),
     /** Base URL the app serves once `startCommand` is up. Required before `--e2e`. */
-    baseURL: z.string().optional(),
+    baseURL: z.string().url().optional(),
     /**
      * Repo-relative directory the COMMITTED critical suite lives in. Persistence
      * in this directory IS the criticality signal (Decision 39) — no `@critical`
-     * tag exists.
+     * tag exists. Locked to the default: the scaffolded `templates/playwright.config.ts`
+     * and `templates/.github/workflows/quality-gate.yml` both hardcode `e2e/` — a
+     * custom value here would silently diverge from what the template/CI actually
+     * run, rather than genuinely relocating the suite (see the superRefine below).
      */
     testDir: z.string().min(1).default("e2e"),
     /** Max wait for `startCommand` to become ready before the boot is a failure, ms. */
@@ -272,6 +275,18 @@ export const E2eConfigSchema = z
      * instead of looping forever.
      */
     reopenCap: z.number().int().nonnegative().default(2),
+  })
+  .superRefine((cfg, ctx) => {
+    if (cfg.testDir !== "e2e") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["testDir"],
+        message:
+          `e2e.testDir must be the default 'e2e' — the scaffolded playwright.config.ts and ` +
+          `quality-gate.yml both hardcode that path, so a custom value here would silently ` +
+          "diverge from what actually runs",
+      });
+    }
   })
   .default({});
 

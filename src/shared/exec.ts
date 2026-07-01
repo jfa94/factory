@@ -37,8 +37,15 @@ export interface ExecResult {
 export interface ExecOptions {
   /** Working directory for the child process. */
   cwd?: string;
-  /** Extra/overriding environment variables (merged over process.env). */
+  /** Extra/overriding environment variables (merged over process.env by default — see {@link envMode}). */
   env?: Record<string, string | undefined>;
+  /**
+   * `"merge"` (default): `env` is layered over the full inherited `process.env`.
+   * `"replace"`: the child sees ONLY `env` (or `{}` if omitted) — nothing ambient.
+   * Used to run untrusted/autonomously-authored code (e2e specs, Decision 39 W5)
+   * without handing it the parent's full environment (secrets, tokens, ...).
+   */
+  envMode?: "merge" | "replace";
   /** String/buffer piped to the child's stdin. */
   input?: string | Uint8Array;
   /** Hard timeout in ms; the child is killed with `killSignal` on expiry. */
@@ -71,7 +78,12 @@ export function exec(
   return new Promise<ExecResult>((resolve, reject) => {
     const child = spawn(command, args as string[], {
       cwd: opts.cwd,
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      env:
+        opts.envMode === "replace"
+          ? (opts.env ?? {})
+          : opts.env
+            ? { ...process.env, ...opts.env }
+            : process.env,
       shell: opts.shell ?? false,
       timeout: opts.timeoutMs,
       killSignal: opts.killSignal ?? "SIGTERM",

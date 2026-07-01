@@ -24,7 +24,7 @@ const RESCUE_HELP = `factory rescue — scan or recover a stalled run
 
 Usage:
   factory rescue scan  [--run <id>]
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e]
 
 Actions:
   scan    Classify every task (read-only); report what a re-drive would do.
@@ -38,12 +38,12 @@ Usage:
   --run   The run to scan (defaults to runs/current).
 
 Emits ONE JSON document: the RescueScan (counts, resettable, dead_ends,
-needs_rescue, would_deadlock, summary, per-task lines). Writes nothing.`;
+needs_rescue, e2e_failed, would_deadlock, summary, per-task lines). Writes nothing.`;
 
 const APPLY_HELP = `factory rescue apply — reset resettable tasks and reopen a terminal run
 
 Usage:
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e]
 
   --run                The run to recover (defaults to runs/current).
   --task               Reset exactly this task (repeatable). Overrides the default
@@ -51,10 +51,15 @@ Usage:
                        one is skipped. An explicitly-named dead-end IS reset.
   --include-dead-ends  Also reset dead-end failures (spec-defect / capability-budget).
                        Use only after the root cause is actually fixed.
+  --reset-e2e          Clear a failed e2e-phase verdict (Decision 39) so it re-enters
+                       and re-derives on the next pass. Use only once the underlying
+                       cause (flaky infra, an app bug, a since-fixed reopen-cap
+                       exhaustion) no longer applies. Alone sufficient to reopen a
+                       terminal run even when no task itself is resettable.
 
 Default (no --task): resets stuck (crashed in-flight) + recoverable
 (blocked-environmental) tasks, leaving dead-ends failed. Reopens a terminal run
-to 'running' when it reset work. Idempotent.
+to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase). Idempotent.
 
 Emits ONE JSON document:
   { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
@@ -110,7 +115,7 @@ export async function runApply(
   argv: string[],
   overrides: CurrentRunOverrides = {},
 ): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["include-dead-ends"] });
+  const args = parseArgs(argv, { booleans: ["include-dead-ends", "reset-e2e"] });
   if (args.flag("help") === true) {
     emitLine(APPLY_HELP);
     return EXIT.OK;
@@ -120,10 +125,12 @@ export async function runApply(
   const runId = await resolveRunId(state, args, "apply", overrides);
   const tasks = args.all("task");
   const includeDeadEnds = args.flag("include-dead-ends") === true;
+  const resetE2e = args.flag("reset-e2e") === true;
 
   const result = await applyRescue(state, runId, {
     ...(tasks.length > 0 ? { tasks } : {}),
     includeDeadEnds,
+    resetE2e,
   });
   emitJson(result);
   return EXIT.OK;

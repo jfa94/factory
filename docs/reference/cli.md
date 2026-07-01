@@ -336,24 +336,37 @@ returned envelope's `kind` tells the runner whether an agent is needed:
 - **Record** (`--results <path>`): reads the e2e-author's
   `{status:"<STATUS line>", manifest:[{task_ids, spec_path, kind}]}` envelope
   (`E2eResultsSchema`). Any non-`DONE` author status fails the whole e2e phase (no
-  re-author retry loop). On `DONE` it runs the **fail-first proof** on every critical
-  spec (red against the base branch with its `control:` assertion green; green against
-  staging), merges only the proven critical specs into `staging-<run-id>`, then runs the
-  full suite and applies the disposition.
+  re-author retry loop). Before proceeding it validates the manifest: every `spec_path` is
+  guarded against traversal/absolute paths, and every `task_id` is checked against
+  `run.tasks` (an unknown id fails loud rather than silently vanishing at reopen time). It
+  then enforces the **trust boundary** — a name-only diff of the author branch against
+  staging rejects any path outside `<testDir>/` not itself a declared manifest `spec_path`
+  (the branch is merged unreviewed, so a stray edit to application source aborts the phase).
+  On `DONE` it runs the **fail-first proof** on every critical spec (red against the base
+  branch with its `control:` assertion green; green against staging), merges only the proven
+  critical specs into `staging-<run-id>`, then runs the full suite and applies the
+  disposition. Authored specs execute under a **scrubbed, allowlisted env** (PATH/HOME plus
+  the `FACTORY_E2E_*`/`BASE_URL` boot vars — never the full inherited `process.env`).
 
 Both paths converge on the same suite-run decision, which returns one of:
 
-- `{kind:"done", run_id}` — no critical spec is red (a residual throwaway red becomes an
-  advisory line in the report, never a blocker); the phase is marked `done` and the run
-  proceeds to docs/finalize.
-- `{kind:"reopen", run_id, task_ids, reason}` — a mappable spec failed; the named tasks
-  are reset to `pending` carrying the failure as `e2e_feedback` (reusing the
-  `resetTaskRow` rescue primitive). **The run status stays `running`** — only task rows
-  reset. Pass 1 reopens for any mappable failure (critical or throwaway); pass 2+ reopens
-  only for critical. The e2e phase re-fires once the reopened tasks settle.
+- `{kind:"done", run_id}` — every critical spec is present and `passed`/`flaky` (a residual
+  throwaway red becomes an advisory line in the report, never a blocker); the phase is
+  marked `done` and the run proceeds to docs/finalize.
+- `{kind:"reopen", run_id, task_ids, reason}` — a mappable failure; the named tasks are
+  reset to `pending` carrying the failure as `e2e_feedback` (reusing the `resetTaskRow`
+  rescue primitive). **The run status stays `running`** — only task rows reset. A critical
+  **miss** (spec absent from results, or `failed`/`skipped` — not just red) reopens; pass 1
+  additionally reopens for any mappable throwaway failure; pass 2+ reopens only for
+  critical. The e2e phase re-fires once the reopened tasks settle.
 - `{kind:"failed", run_id, reason}` — an unmappable critical failure (no manifest entry
-  names the failing spec), an exhausted `e2e.reopenCap`, a rejected fail-first proof, or a
-  non-`DONE` author status. The docs phase is then skipped.
+  names the failing spec), a **tooling failure** (nonzero exit / reporter `errors[]` with no
+  spec marked failed — never attributed to a task), an exhausted `e2e.reopenCap`, a rejected
+  fail-first proof, a manifest referencing an unknown `task_id` or unsafe `spec_path`, an
+  author branch touching a path outside `testDir`, or a non-`DONE` author status. The docs
+  phase is then skipped. A failed verdict is not permanent — `factory rescue apply
+--reset-e2e` (only once the underlying cause no longer applies) clears it, preserving the
+  manifest + reopen counts, so the phase re-enters on the next pass.
 - `{kind:"suspend", run_id, reason}` — `e2e.startCommand`/`e2e.baseURL` not configured;
   resumable via `/factory:resume` after configuring them.
 
@@ -608,10 +621,12 @@ factory rescue scan [--run <id>]
 ```
 
 Emits a `RescueScan`: `{ run_id, run_status, counts, resettable, dead_ends,
-needs_rescue, would_deadlock, summary, tasks }`. Dispositions: `shipped`,
+needs_rescue, e2e_failed, would_deadlock, summary, tasks }`. Dispositions: `shipped`,
 `runnable`, `stuck` (crashed in-flight), `recoverable` (`blocked-environmental`
 fail), `dead-end` (`spec-defect`/`capability-budget` fail). Default-resettable =
-`stuck ∪ recoverable`.
+`stuck ∪ recoverable`. `e2e_failed` is `true` iff `run.e2e_phase.status === "failed"` —
+it folds into `needs_rescue` so a run stuck ONLY on a failed e2e verdict (every task
+`done`, `resettable` empty) still scans as needing rescue, not "nothing to do".
 
 The scan also appends a read-only `work` field — a git-grounded recoverable-work survey
 (`assessWork`, `src/rescue/assess.ts`):
@@ -641,16 +656,18 @@ Backed by new `GitClient.refExists`/`commitsAhead` (`src/git/git-client.ts`).
 Writer. Resets the resettable tasks to `pending` and reopens a terminal run.
 
 ```
-factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends]
+factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e]
 ```
 
-| Flag                  | Notes                                                                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--task <id>`         | Reset exactly this task (repeatable). Overrides the default set; a `done` task is a loud error, a `pending` one is skipped; a named dead-end IS reset. |
-| `--include-dead-ends` | Also reset dead-end fails. Use only after the root cause is fixed.                                                                                     |
+| Flag                  | Notes                                                                                                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--task <id>`         | Reset exactly this task (repeatable). Overrides the default set; a `done` task is a loud error, a `pending` one is skipped; a named dead-end IS reset.                                                                      |
+| `--include-dead-ends` | Also reset dead-end fails. Use only after the root cause is fixed.                                                                                                                                                          |
+| `--reset-e2e`         | Clears a `failed` e2e-phase verdict (manifest + reopen counts preserved) so it re-enters. Use only once the underlying cause no longer applies — alone sufficient to reopen a terminal run even when no task is resettable. |
 
 Default (no `--task`): resets `stuck` + `recoverable`, leaving dead-ends failed;
-reopens a terminal run to `running` when it reset work. Idempotent. Emits
+reopens a terminal run to `running` when it reset work (or when `--reset-e2e` clears
+a failed e2e phase). Idempotent. Emits
 `{ run_id, run_status, reset, reopened, skipped }`.
 
 ## `autonomy <ensure|status|preflight>`

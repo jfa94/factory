@@ -26,17 +26,31 @@ import { exec } from "../../shared/index.js";
 export interface E2eRunOpts {
   /** Working directory the Playwright CLI runs in (a worktree or the target repo). */
   readonly cwd: string;
-  /** Extra/overriding env vars (merged over process.env) — e.g. BASE_URL. */
+  /** Extra/overriding env vars (merged over process.env, unless {@link replaceEnv}) — e.g. BASE_URL. */
   readonly env?: Record<string, string>;
+  /**
+   * Run with ONLY {@link env} — no inherited `process.env` (Decision 39 W5). The
+   * code under test is an autonomously-authored, unreviewed e2e spec; it must not
+   * see the parent process's ambient secrets/tokens. Callers pass the PATH, HOME,
+   * and FACTORY_E2E/BASE_URL vars the app boot + Playwright resolution actually need.
+   */
+  readonly replaceEnv?: boolean;
   /**
    * Positional path filter passed to `playwright test` — a directory (the
    * criticality-by-persistence `e2e/` dir, or an ephemeral throwaway dir) or a
    * single spec file (the fail-first proof scopes to exactly one file). Omit to
-   * run whatever the target's `playwright.config.ts` `testDir` resolves.
+   * run whatever the target's `playwright.config.ts` `testDir` resolves. Ignored
+   * when {@link config} is set — that config's own `testDir` governs instead.
    */
   readonly testDir?: string;
   /** `--grep` pattern, e.g. to re-run one named journey after a reopen. */
   readonly grep?: string;
+  /**
+   * `--config <path>` — an alternate Playwright config, e.g. the generated
+   * throwaway-spec config (whose `testDir` points at the out-of-repo throwaway
+   * dir; the run worktree's own committed config only covers the critical suite).
+   */
+  readonly config?: string;
 }
 
 /** Per-spec outcome, already reconciled against retries by Playwright itself. */
@@ -132,11 +146,19 @@ export class DefaultPlaywrightTool implements PlaywrightTool {
     if (bin === null) return missingBinResult(opts.cwd);
 
     const args = ["test"];
-    if (opts.testDir) args.push(opts.testDir);
+    if (opts.config) {
+      args.push("--config", opts.config);
+    } else if (opts.testDir) {
+      args.push(opts.testDir);
+    }
     if (opts.grep) args.push("--grep", opts.grep);
     args.push("--reporter=json");
 
-    const result = await exec(bin, args, { cwd: opts.cwd, env: opts.env });
+    const result = await exec(bin, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      envMode: opts.replaceEnv ? "replace" : undefined,
+    });
     return {
       code: result.code,
       stdout: result.stdout,
@@ -168,6 +190,10 @@ interface PwJsonSuite {
 
 interface PwJsonReport {
   readonly suites: readonly PwJsonSuite[];
+  /** Top-level tooling errors (e.g. a `webServer` boot failure) — distinct from a
+   * per-spec failure; Playwright can emit these with an otherwise-empty/clean
+   * `suites` tree, which is exactly the silent-pass case this module must not miss. */
+  readonly errors?: readonly unknown[];
 }
 
 function collectSpecs(suites: readonly PwJsonSuite[] | undefined): PwJsonSpec[] {
@@ -197,8 +223,15 @@ function specStatus(spec: PwJsonSpec): E2eSpecStatus {
  * (possibly-nested, describe-block) suite tree; counts are derived from the SAME
  * flattened+classified `specs` list this returns, never from the reporter's
  * separate top-level `stats` block, so the two can never disagree.
+ *
+ * `ok` also gates on the process `code` and the reporter's top-level `errors[]` —
+ * NOT just `counts.failed === 0` — because a crashed/errored run (bad boot, no
+ * tests matched) can report a clean, zero-failed suite despite having proven
+ * nothing (the silent-pass bug this module must not repeat). `code` defaults to 0
+ * (success) so direct callers that only care about spec-level classification keep
+ * their existing call shape.
  */
-export function parseE2eReport(json: string): E2eResults {
+export function parseE2eReport(json: string, code: number | null = 0): E2eResults {
   let report: PwJsonReport;
   try {
     report = JSON.parse(json) as PwJsonReport;
@@ -218,7 +251,8 @@ export function parseE2eReport(json: string): E2eResults {
     flaky: specs.filter((s) => s.status === "flaky").length,
     skipped: specs.filter((s) => s.status === "skipped").length,
   };
-  return { ok: counts.failed === 0, specs, counts };
+  const ok = counts.failed === 0 && (report.errors ?? []).length === 0 && code === 0;
+  return { ok, specs, counts };
 }
 
 /**
@@ -242,5 +276,5 @@ export async function runE2e(
       `e2e runner: playwright produced no output (code=${result.code ?? "null"}): ${result.stderr}`,
     );
   }
-  return parseE2eReport(result.stdout);
+  return parseE2eReport(result.stdout, result.code);
 }

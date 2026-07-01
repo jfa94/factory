@@ -161,6 +161,56 @@ describe("applyRescue", () => {
     expect(run.ended_at).toBeNull();
   });
 
+  it("resetE2e:true clears a failed e2e_phase verdict and reopens the run even with NO resettable tasks (Decision 39 repair path)", async () => {
+    // Every task shipped `done` (e.g. the e2e phase failed on a reopen-cap
+    // exhaustion or an unmappable/tooling failure AFTER all tasks had already
+    // completed) — scanRun sees nothing wrong with the tasks themselves, so a
+    // plain rescue apply would find zero resettable targets and never reopen.
+    await seed([{ task_id: "a", status: "done" }], "failed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_phase: {
+        status: "failed",
+        reason: "e2e reopen cap (2) exhausted for task(s): a",
+        manifest: [{ task_ids: ["a"], spec_path: "checkout.spec.ts", kind: "critical" }],
+        reopen_counts: { a: 2 },
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID, { resetE2e: true });
+    expect(result.reopened).toBe(true);
+    expect(result.run_status).toBe("running");
+
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("running");
+    expect(run.e2e_phase?.status).toBeUndefined();
+    expect(run.e2e_phase?.reason).toBeUndefined();
+    // History the cadence/cap logic depends on survives the reset.
+    expect(run.e2e_phase?.manifest).toHaveLength(1);
+    expect(run.e2e_phase?.reopen_counts).toEqual({ a: 2 });
+  });
+
+  it("without resetE2e, a failed e2e_phase verdict is left untouched (no silent auto-retry)", async () => {
+    await seed([{ task_id: "a", status: "done" }], "failed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_phase: {
+        status: "failed",
+        reason: "e2e reopen cap (2) exhausted for task(s): a",
+        manifest: [],
+        reopen_counts: { a: 2 },
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID);
+    expect(result.reopened).toBe(false);
+    expect(result.run_status).toBe("failed");
+
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("failed");
+    expect(run.e2e_phase?.status).toBe("failed");
+  });
+
   it("leaves a suspended run suspended (so run resume clears the quota gate)", async () => {
     // Seed a suspended run carrying a quota checkpoint + a stuck task.
     await state.update(RUN_ID, (s) => ({

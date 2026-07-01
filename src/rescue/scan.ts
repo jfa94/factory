@@ -71,8 +71,15 @@ export interface RescueScan {
   resettable: string[];
   /** Failed dead-ends reset only with `--include-dead-ends` (+ a real fix). */
   dead_ends: string[];
-  /** True iff there is anything for rescue to reset. */
+  /** True iff there is anything for rescue to reset (task-level OR a failed e2e verdict). */
   needs_rescue: boolean;
+  /**
+   * True iff `run.e2e_phase.status === "failed"` — a run can be stuck on this ALONE
+   * (every task `done`, `resettable` empty), which a task-only `needs_rescue` would
+   * otherwise miss. Never auto-reset (Decision 39 W4): `apply --reset-e2e` requires
+   * the human to assert the underlying cause no longer applies.
+   */
+  e2e_failed: boolean;
   /**
    * True iff a re-drive would THROW: non-terminal work remains but no task is
    * actionable (none ready, none cascade-failable) — the orchestrator's deadlock guard.
@@ -148,7 +155,8 @@ export function scanRun(run: RunState): RescueScan {
       (depsSatisfied(run, t.depends_on) || hasUnsatisfiableDep(run, t.depends_on)),
   );
   const would_deadlock = !allTerminal && !actionablePending;
-  const needs_rescue = resettable.length > 0;
+  const e2e_failed = run.e2e_phase?.status === "failed";
+  const needs_rescue = resettable.length > 0 || e2e_failed;
 
   return {
     run_id: run.run_id,
@@ -164,8 +172,9 @@ export function scanRun(run: RunState): RescueScan {
     resettable,
     dead_ends,
     needs_rescue,
+    e2e_failed,
     would_deadlock,
-    summary: summarize(run.status, resettable.length, dead_ends.length, would_deadlock),
+    summary: summarize(run.status, resettable.length, dead_ends.length, would_deadlock, e2e_failed),
     tasks,
   };
 }
@@ -176,13 +185,16 @@ function summarize(
   resettable: number,
   deadEnds: number,
   wouldDeadlock: boolean,
+  e2eFailed: boolean,
 ): string {
+  const e2eTail = e2eFailed ? " (e2e phase failed — needs a fix + --reset-e2e)" : "";
   if (resettable === 0) {
-    const tail =
+    const deadEndTail =
       deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) — need a fix + --include-dead-ends)` : "";
-    return `run '${status}': no rescue needed${tail}`;
+    if (e2eFailed) return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}`;
+    return `run '${status}': no rescue needed${deadEndTail}`;
   }
   const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
   const deadlock = wouldDeadlock ? "; a re-drive would deadlock without rescue" : "";
-  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}`;
+  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}`;
 }

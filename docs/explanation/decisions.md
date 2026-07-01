@@ -1008,6 +1008,62 @@ loop until no crucial/important findings). `/factory:debug` is non-functional to
 contract) is deliberately consumer-agnostic so debug becomes a second consumer later
 without touching this phase.
 
+### Decision 39 addendum — remediation refinements
+
+A comprehensive-review remediation pass hardened the phase without changing its shape.
+These refine Decision 39; they do not supersede it.
+
+**Playwright owns the app lifecycle; the engine does not run a process manager.** Rather
+than the engine spawning/polling/killing a dev server around each run, the scaffolded
+`templates/playwright.config.ts` `webServer` block owns boot, readiness poll, and
+teardown — the standard Playwright mechanism. The engine's only contract with it is
+**environment**: every invocation passes `FACTORY_E2E_START_COMMAND` (falling back to
+`npm run dev`), `BASE_URL`, `FACTORY_E2E_READY_TIMEOUT_MS`, and `FACTORY_E2E=1`. That last
+flag forces `reuseExistingServer: false` so a factory-driven run always boots fresh, while
+a plain local/CI `playwright test` may reuse a running server. This keeps a single boot
+code path shared by the mechanical run and a human's local run, and avoids re-implementing
+process supervision (a "no process manager primitive" constraint the runner already works
+around by being the control loop). Because both the scaffolded config and CI
+`quality-gate.yml` hardcode `testDir: "e2e"`, `e2e.testDir` is now **schema-locked** to
+that default (rejected at config-parse time) rather than a documented-but-unenforced
+convention — a custom value could only diverge from what actually runs and gates.
+
+**App provisioning mirrors task worktrees.** Each e2e worktree (author, base-proof, and the
+persistent run worktree) is `provisionWorktree`'d (`npm ci`-equivalent) right after it is
+created and on every resync, so the app can actually boot — the same provisioning task
+worktrees already get. The throwaway tier now genuinely runs, via a generated CommonJS
+`--config` whose `testDir` points at the out-of-repo throwaway dir while `cwd` stays the run
+worktree (so `@playwright/test` resolves through that worktree's `node_modules`).
+
+**Honest green.** An errored Playwright run — nonzero exit code or a reporter `errors[]`
+entry (e.g. the app never booted) — is `ok:false`, distinct from a cleanly-red suite; a
+tooling failure with no spec marked failed fails the run outright rather than being absorbed
+as a green. A manifest `critical` spec is proven only when it appears in results as `passed`
+or `flaky`; **absent, `failed`, or `skipped`** are all misses that reopen the task. Pass-1
+throwaway failures fold into the same reopen decision (cadence unchanged: pass 1 reopens for
+any mappable failure, pass 2+ only for critical).
+
+**A `failed` verdict is repairable, not permanent.** `factory rescue apply --reset-e2e`
+clears the concluded `status`/`reason`/`advisory`/`ended_at` via the shared
+`reopenE2ePhase` helper while preserving `manifest`/`reopen_counts`/`attempts`, so the phase
+re-enters and re-derives instead of being stuck failed forever — never automatic, since
+`rescue scan` reports `e2e_failed: true` (folded into `needs_rescue`) but `apply` only clears
+it on the explicit flag; plain `resume` re-checks the quota gate alone. The three
+`worktreeAdd(["-b", …])` sites became `-B` (idempotent) for crash-safety — a crash between a
+worktree's removal and the state write that concludes the phase can leave the branch behind,
+and a bare `-b` would fatal on re-entry.
+
+**Tighter trust boundary on the unreviewed author branch.** Before merging, the engine does
+a name-only diff against staging and rejects any path outside `<testDir>/` not declared as a
+manifest `spec_path` — it no longer merges the author's entire branch sight-unseen. Authored
+specs run under a **scrubbed, allowlisted** env (PATH/HOME plus the boot vars, `replaceEnv`
+so the parent `process.env` is not merged in), and `assertSafeSpecPath` guards every manifest
+`spec_path` against traversal/absolute paths before any join/copy/`--testDir` use. Manifest
+`task_ids` are validated against `run.tasks` at ingest, rejecting unknown ids loudly instead
+of letting them silently vanish at reopen time. Schema invariants tightened to match:
+`advisory` is enforced never-present-when-`failed` (mirroring `reason`-set-IFF-`failed`), and
+`e2e.baseURL` is validated as a URL.
+
 ---
 
 ## Plugin System Constraints

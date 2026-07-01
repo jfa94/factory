@@ -695,6 +695,17 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
         message: `run '${run.run_id}' e2e phase is '${run.e2e_phase.status}' but carries a reason (reason is set IFF failed)`,
       });
     }
+
+    // `advisory` is the done-side counterpart of `reason` (see E2ePhaseSchema's own
+    // doc comment) — never present on `failed`.
+    const hasAdvisory = run.e2e_phase.advisory != null && run.e2e_phase.advisory.length > 0;
+    if (isFailed && hasAdvisory) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["e2e_phase", "advisory"],
+        message: `run '${run.run_id}' e2e phase is 'failed' but carries an advisory (advisory is the done-side counterpart of reason, never set on failed)`,
+      });
+    }
   }
 
   // F2: tasks map key must equal the row's task_id so DAG traversal and keyed lookups

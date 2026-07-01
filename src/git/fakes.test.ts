@@ -91,3 +91,24 @@ describe("FakeGitClient behavior helpers", () => {
     expect(git.calls).toContain("push -u origin factory/run-1/t1");
   });
 });
+
+describe("FakeGitClient.worktreeAdd — -b vs -B fidelity (crash-left-branch hazard)", () => {
+  it("worktree add -b FATALS when <branch> already exists locally, even at a fresh path — mirrors real git", async () => {
+    const git = new FakeGitClient({ remoteHeads: { staging: "sha-staging-1" } });
+    await git.worktreeAdd(["-b", "e2e-run-1", "/tmp/wt-a", "origin/staging"]);
+    await git.worktreeRemove(["/tmp/wt-a", "--force"]); // path gone, branch survives (the crash scenario)
+    await expect(
+      git.worktreeAdd(["-b", "e2e-run-1", "/tmp/wt-b", "origin/staging"]),
+    ).rejects.toThrow(/already exists/);
+  });
+
+  it("worktree add -B force-creates/resets <branch> even when it already exists — the crash-safe mode", async () => {
+    const git = new FakeGitClient({ remoteHeads: { staging: "sha-staging-1" } });
+    await git.worktreeAdd(["-b", "e2e-run-1", "/tmp/wt-a", "origin/staging"]);
+    await git.worktreeRemove(["/tmp/wt-a", "--force"]);
+    await expect(
+      git.worktreeAdd(["-B", "e2e-run-1", "/tmp/wt-b", "origin/staging"]),
+    ).resolves.toBeUndefined();
+    expect(git.worktrees.get("/tmp/wt-b")).toBe("e2e-run-1");
+  });
+});

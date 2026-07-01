@@ -108,6 +108,15 @@ export interface GitClient {
    * teardown `--force`). Fatal on failure.
    */
   resetHardClean(ref: string, opts?: GitOpts): Promise<void>;
+  /**
+   * `git diff --name-only <base>...<ref>` (triple-dot: diffed against their merge
+   * base, so a `base` that has moved on since `ref` forked doesn't leak unrelated
+   * files into the result) → the list of paths `ref` changed. Read-only; backs the
+   * e2e author-merge trust boundary (Decision 39 W5) — everything the autonomous
+   * author's branch touches outside its declared spec paths must be inspectable
+   * before that branch is merged unreviewed.
+   */
+  diffNames(base: string, ref: string, opts?: GitOpts): Promise<string[]>;
 }
 
 /** Default GitClient over the real (or an injected) git runner. */
@@ -239,5 +248,13 @@ export class DefaultGitClient implements GitClient {
     // `-fd` only (no `-x`): drop untracked source the producer added, but KEEP ignored
     // provisioned deps (node_modules) so the re-spawned producer is not left bare.
     await this.execOrThrow(["clean", "-fd"], opts);
+  }
+
+  async diffNames(base: string, ref: string, opts?: GitOpts): Promise<string[]> {
+    const r = await this.execOrThrow(["diff", "--name-only", `${base}...${ref}`], opts);
+    return r.stdout
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
   }
 }
