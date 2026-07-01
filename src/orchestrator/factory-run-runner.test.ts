@@ -15,6 +15,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { PANEL_ROLES } from "../verifier/judgment/index.js";
 
 const driverSrc = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "../../scripts/factory-run-runner.js"),
@@ -40,6 +41,16 @@ function buildFn<T>(src: string, free: Record<string, unknown>): T {
   const names = Object.keys(free);
   const factory = new Function(...names, `return (${src});`);
   return factory(...names.map((n) => free[n])) as T;
+}
+
+/**
+ * Reconstruct a sliced STATEMENT sequence (e.g. a `const` decl followed by a
+ * `function` decl) — unlike `buildFn`, this can't wrap the slice in `(...)` since
+ * it isn't a single expression. Runs the statements, then returns `returnExpr`.
+ */
+function buildStatements<T>(src: string, returnExpr: string): T {
+  const factory = new Function(`${src}\nreturn ${returnExpr};`);
+  return factory() as T;
 }
 
 /** A recording fake `agent`: returns scripted values in order; records every call. */
@@ -77,13 +88,19 @@ const SLICES = {
     sliceFn("async function runVerifyCollection(", "\n\n// Step one task to terminal"),
   cli: () => sliceFn("async function cli(", "\n\n// Persist a DriveResults document"),
   recordResults: () => sliceFn("async function recordResults(", "\n\nasync function runProducer("),
+  agentTypeMap: () => sliceFn("const AGENT_TYPE = {", "\nfunction parseEnvelope("),
 };
 
 describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
-  it("all four orchestration functions are extractable (sanity)", () => {
+  it("all orchestration functions are extractable (sanity)", () => {
+    // agentTypeMap is a statement pair (const + function decl), not a single async
+    // function expression — everything else in SLICES is.
+    const FN_SLICES = ["runProducer", "runVerifyCollection", "cli", "recordResults"];
     for (const [name, slice] of Object.entries(SLICES)) {
       expect(() => slice(), `slice failed for ${name}`).not.toThrow();
-      expect(slice().startsWith("async function"), `${name} not an async fn`).toBe(true);
+      if (FN_SLICES.includes(name)) {
+        expect(slice().startsWith("async function"), `${name} not an async fn`).toBe(true);
+      }
     }
   });
 
@@ -233,7 +250,16 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
         EXEC_AGENT_MODEL: "sonnet",
       });
 
-    const buildRecord = (agent: unknown, parseEnvelope: unknown) =>
+    // `cli` is the recovery-path's idempotent no-`--results` re-read (module-scope in
+    // production, injected here like every other free var). Defaults to a stub that
+    // fails loud if a test forgets to supply one but hits the recovery path.
+    const buildRecord = (
+      agent: unknown,
+      parseEnvelope: unknown,
+      cli: unknown = () => {
+        throw new Error("test forgot to inject a `cli` fake for the recovery path");
+      },
+    ) =>
       buildFn<Record>(SLICES.recordResults(), {
         fileSeq: 0,
         dataDir: "/data",
@@ -241,6 +267,8 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
         shipMode: "live",
         agent,
         parseEnvelope,
+        cli,
+        log: () => undefined,
         copyVerbatimInstruction: "copy",
         RAW_OUT: {},
         EXEC_AGENT_MODEL: "sonnet",
@@ -272,7 +300,13 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
         throw new Error("persistent boundary corruption");
       };
       await expect(
-        buildCli(agent, parseEnvelope)("factory next-task", "next-task", "Drive", new Set(), "next-task"),
+        buildCli(agent, parseEnvelope)(
+          "factory next-task",
+          "next-task",
+          "Drive",
+          new Set(),
+          "next-task",
+        ),
       ).rejects.toThrow(/persistent boundary corruption/);
       expect(calls).toHaveLength(3);
     });
@@ -285,22 +319,95 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
         return { kind: "spawn" };
       };
       await expect(
-        buildCli(agent, parseEnvelope)("factory next-task", "next-task", "Drive", new Set(), "next-task"),
+        buildCli(agent, parseEnvelope)(
+          "factory next-task",
+          "next-task",
+          "Drive",
+          new Set(),
+          "next-task",
+        ),
       ).rejects.toThrow(/skipped or died/);
       expect(calls).toHaveLength(1); // no retry
       expect(parsed).toBe(false); // parse never attempted on a dead agent
     });
 
-    it("recordResults calls the exec-agent EXACTLY ONCE — no retry on a parse failure (result_key-guarded mutation)", async () => {
+    it("recordResults never re-delivers on failure (result_key-guarded mutation) — the exec-agent for --results is called exactly once", async () => {
       const { agent, calls } = makeAgent([{ raw: "x" }]);
       const parseEnvelope = () => {
         throw new Error("record boundary parse flake");
       };
-      await expect(buildRecord(agent, parseEnvelope)("T1", "exec", { result_key: {} })).rejects.toThrow(
-        /record boundary parse flake/,
-      );
+      const cli = async () => ({ kind: "spawn", result_key: { phase: "exec", rung: 0 } });
+      await expect(
+        buildRecord(agent, parseEnvelope, cli)("T1", "exec", {
+          result_key: { phase: "exec", rung: 0 },
+        }),
+      ).rejects.toThrow(/record boundary parse flake/);
       // Exactly-once record atop at-least-once delivery: a re-spawn could double-record, so NONE.
       expect(calls).toHaveLength(1);
+    });
+
+    // ── D6: cursor-observation recovery ─────────────────────────────────────
+    // recordResults is at-least-once delivery: the exec-agent may already have RUN
+    // the state-mutating `--results` command before flaking on the handback (a
+    // transient post-tool API error). On any failure, recordResults re-observes the
+    // engine's cursor with ONE idempotent no-`--results` re-read and compares it
+    // against what it tried to deliver, instead of assuming failure == not-applied.
+
+    it("recovers via the idempotent re-read when it lands on a terminal envelope (the world moved on)", async () => {
+      const { agent, calls } = makeAgent([{ raw: "x" }]);
+      const parseEnvelope = () => {
+        throw new Error("drive: stale or duplicate results (result_key exec/0 vs cursor verify/0)");
+      };
+      let cliCalls = 0;
+      const cli = async () => {
+        cliCalls += 1;
+        return { kind: "done" };
+      };
+      const out = await buildRecord(agent, parseEnvelope, cli)("T1", "exec", {
+        result_key: { phase: "exec", rung: 0 },
+      });
+      expect(out).toEqual({ kind: "done" });
+      expect(calls).toHaveLength(1); // the failed --results delivery — never re-sent
+      expect(cliCalls).toBe(1); // exactly one recovery re-read
+    });
+
+    it("recovers via the idempotent re-read when the cursor has ADVANCED past the delivered result_key", async () => {
+      const { agent, calls } = makeAgent([{ raw: "x" }]);
+      const parseEnvelope = () => {
+        throw new Error("record boundary parse flake");
+      };
+      let cliCalls = 0;
+      const cli = async () => {
+        cliCalls += 1;
+        // cursor moved to rung 1 — the delivery at rung 0 landed before this attempt flaked.
+        return { kind: "spawn", result_key: { phase: "exec", rung: 1 } };
+      };
+      const out = await buildRecord(agent, parseEnvelope, cli)("T1", "exec", {
+        result_key: { phase: "exec", rung: 0 },
+      });
+      expect(out).toEqual({ kind: "spawn", result_key: { phase: "exec", rung: 1 } });
+      expect(calls).toHaveLength(1);
+      expect(cliCalls).toBe(1);
+    });
+
+    it("re-throws the ORIGINAL error loud when the re-read cursor is UNCHANGED (genuine transport failure, never masked)", async () => {
+      const { agent, calls } = makeAgent([{ raw: "x" }]);
+      const parseEnvelope = () => {
+        throw new Error("record boundary parse flake — never applied");
+      };
+      let cliCalls = 0;
+      const cli = async () => {
+        cliCalls += 1;
+        // same result_key as delivered — the mutation never landed.
+        return { kind: "spawn", result_key: { phase: "exec", rung: 0 } };
+      };
+      await expect(
+        buildRecord(agent, parseEnvelope, cli)("T1", "exec", {
+          result_key: { phase: "exec", rung: 0 },
+        }),
+      ).rejects.toThrow(/record boundary parse flake — never applied/);
+      expect(calls).toHaveLength(1);
+      expect(cliCalls).toBe(1); // recovery was attempted, then correctly declined
     });
 
     it("recordResults returns the parsed NextAction on the happy path (single agent call)", async () => {
@@ -311,12 +418,32 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
       expect(calls).toHaveLength(1);
     });
 
-    it("recordResults throws loud on a skipped/dead record agent (out===null)", async () => {
+    it("recordResults throws loud on a skipped/dead record agent (out===null) when the recovery re-read shows the cursor unchanged", async () => {
       const { agent } = makeAgent([null]);
       const parseEnvelope = () => ({ kind: "done" });
-      await expect(buildRecord(agent, parseEnvelope)("T1", "exec", { result_key: {} })).rejects.toThrow(
-        /skipped or died/,
+      // Same result_key as delivered — the dead agent never got far enough to mutate.
+      const cli = async () => ({ kind: "spawn", result_key: {} });
+      await expect(
+        buildRecord(agent, parseEnvelope, cli)("T1", "exec", { result_key: {} }),
+      ).rejects.toThrow(/skipped or died/);
+    });
+  });
+
+  // ── AGENT_TYPE map (D4 drift guard) ───────────────────────────────────────
+  // The engine's verify spawn names every PANEL_ROLES role; a role missing from
+  // the runner's map throws and kills the panel for EVERY task at review. Import
+  // the real PANEL_ROLES (source of truth) and assert the REAL shipped map
+  // resolves each one — a future new lens that forgets this file fails HERE.
+  describe("AGENT_TYPE map", () => {
+    it("resolves every PANEL_ROLES role to its factory: agentType", () => {
+      const agentTypeOfReal = buildStatements<(role: string) => string>(
+        SLICES.agentTypeMap(),
+        "agentTypeOf",
       );
+      for (const role of PANEL_ROLES) {
+        expect(() => agentTypeOfReal(role), `role '${role}' should resolve`).not.toThrow();
+        expect(agentTypeOfReal(role)).toBe(`factory:${role}`);
+      }
     });
   });
 });
