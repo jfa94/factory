@@ -7,7 +7,7 @@
  * genuinely exercised.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, symlinkSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateManager } from "../core/state/index.js";
@@ -58,6 +58,18 @@ describe("loadActiveRun — runs/current resolution", () => {
     mkdirSync(join(dataDir, "runs"), { recursive: true });
     symlinkSync(join(dataDir, "runs", "ghost"), currentLinkPath(dataDir));
     await expect(loadActiveRun({ dataDir })).rejects.toBeInstanceOf(BrokenRunStateError);
+  });
+
+  it("UNREADABLE runs dir (EACCES) → rethrows (guards fail closed), never a silent null", async () => {
+    // A permission failure is NOT "no active run": swallowing it would let every
+    // guard silently allow while a run may be active. Only ENOENT means absence.
+    mkdirSync(join(dataDir, "runs"), { recursive: true });
+    chmodSync(join(dataDir, "runs"), 0o000);
+    try {
+      await expect(loadActiveRun({ dataDir })).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      chmodSync(join(dataDir, "runs"), 0o755);
+    }
   });
 
   it("unresolvable data dir → null (bare dev shell, no active run)", async () => {

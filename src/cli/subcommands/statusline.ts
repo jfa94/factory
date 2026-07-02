@@ -81,13 +81,16 @@ function rateLimitsOf(payload: unknown): Record<string, unknown> | null {
 
 /**
  * Write `rate_limits + {captured_at}` to the usage cache. Best-effort: any
- * failure (unresolvable data dir, write error) is logged and swallowed — a
- * cache-write failure must never break the statusline.
+ * failure (unresolvable data dir, write error) is logged and returned as a
+ * short human-readable reason — never thrown, a cache-write failure must not
+ * break the statusline. The caller surfaces the reason IN the displayed text:
+ * a stderr-only warn is invisible on a statusline tick, and a silently stale
+ * cache mispaces the quota gate.
  */
 async function writeCache(
   rateLimits: Record<string, unknown>,
   deps: StatuslineDeps,
-): Promise<void> {
+): Promise<string | null> {
   let dataDir: string;
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
@@ -95,15 +98,17 @@ async function writeCache(
     // No data dir resolvable → the cache cannot be located. Skip (the bash guard
     // skipped on an unset CLAUDE_PLUGIN_DATA for the same reason).
     log.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
-    return;
+    return "usage-cache skipped: CLAUDE_PLUGIN_DATA unresolvable";
   }
 
   const now = (deps.now ?? defaultNowEpoch)();
   const cache = { ...rateLimits, captured_at: now };
   try {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
+    return null;
   } catch (err) {
     log.warn(`failed to write usage-cache.json: ${(err as Error).message}`);
+    return `usage-cache unwritable: ${(err as Error).message}`;
   }
 }
 
@@ -169,14 +174,14 @@ export async function runStatusline(
     parsed = undefined; // non-JSON stdin → no cache write (still passthrough below).
   }
   const rateLimits = rateLimitsOf(parsed);
-  if (rateLimits !== null) {
-    await writeCache(rateLimits, deps);
-  }
+  const cacheFailure = rateLimits !== null ? await writeCache(rateLimits, deps) : null;
 
-  // 3. Emit the displayed statusline (original's stdout, or empty).
+  // 3. Emit the displayed statusline (original's stdout, or empty), surfacing a
+  //    cache failure IN the visible text — the quota pacer is silently reading a
+  //    stale cache until this is fixed, so the operator must actually see it.
   const displayed = await passthrough(payload, deps);
   const write = deps.writeStdout ?? ((text: string) => process.stdout.write(text));
-  write(displayed);
+  write(cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`.trimStart());
 
   return EXIT.OK;
 }

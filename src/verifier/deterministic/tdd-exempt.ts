@@ -10,6 +10,9 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { createLogger } from "../../shared/logging.js";
+
+const log = createLogger("verifier:tdd-exempt");
 
 /**
  * Decide tdd_exempt from the parsed tasks.json + package.json. PURE.
@@ -79,16 +82,26 @@ export class DefaultExemptReader implements ExemptReader {
   }
 }
 
+/**
+ * Read + parse a JSON file, or null when unusable. Only genuine absence (ENOENT)
+ * is silent — an EXISTING file that is unreadable or corrupt is logged loudly,
+ * because the safe not-exempt default would otherwise mask a real tdd_exempt
+ * opt-out (task suddenly gated again with no visible cause).
+ */
 async function readJsonOrNull(file: string): Promise<unknown> {
   let raw: string;
   try {
     raw = await readFile(file, "utf8");
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      log.warn(`could not read '${file}': ${(err as Error).message} — treating as not exempt`);
+    }
     return null;
   }
   try {
     return JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    log.warn(`could not parse '${file}': ${(err as Error).message} — treating as not exempt`);
     return null;
   }
 }

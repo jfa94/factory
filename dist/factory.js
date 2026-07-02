@@ -5837,6 +5837,9 @@ var QualitySchema = external_exports.object({
    */
   gateEnv: external_exports.record(external_exports.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "valid POSIX env name"), external_exports.string()).default({})
 }).default({});
+function nonDecreasing(xs) {
+  return xs.every((x, i) => i === 0 || x >= xs[i - 1]);
+}
 var QuotaSchema = external_exports.object({
   /** Max single sleep chunk per gate call, seconds. */
   sleepCapSec: external_exports.number().int().positive().default(540),
@@ -5846,10 +5849,10 @@ var QuotaSchema = external_exports.object({
   maxStaleCycles: external_exports.number().int().positive().default(6),
   /** Accumulated wall-clock wait budget across cycles, minutes. */
   wallBudgetMin: external_exports.number().int().positive().default(75),
-  /** 5h-window utilization checkpoints by hour 1..5 (% caps). */
-  hourlyThresholds: external_exports.array(external_exports.number()).length(5).default([20, 40, 60, 80, 90]),
-  /** 7d-window utilization checkpoints by day 1..7 (% caps). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
-  dailyThresholds: external_exports.array(external_exports.number()).length(7).default([20, 40, 60, 80, 95, 95, 95]),
+  /** 5h-window utilization checkpoints by hour 1..5 (% caps, non-decreasing). */
+  hourlyThresholds: external_exports.array(external_exports.number().min(0).max(100)).length(5).refine(nonDecreasing, { message: "thresholds must be non-decreasing" }).default([20, 40, 60, 80, 90]),
+  /** 7d-window utilization checkpoints by day 1..7 (% caps, non-decreasing). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
+  dailyThresholds: external_exports.array(external_exports.number().min(0).max(100)).length(7).refine(nonDecreasing, { message: "thresholds must be non-decreasing" }).default([20, 40, 60, 80, 95, 95, 95]),
   /**
    * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
    * renamed model-router, narrowed) selects the producer model for a task from
@@ -6260,6 +6263,23 @@ var FixFindingSchema = external_exports.object({
   file: external_exports.string().optional(),
   line: external_exports.number().int().positive().optional(),
   description: external_exports.string().min(1)
+}).superRefine((finding, ctx) => {
+  const hasFile = finding.file !== void 0;
+  const hasLine = finding.line !== void 0;
+  if (hasFile && !hasLine) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["line"],
+      message: `finding has 'file' but no 'line' \u2014 provide both or neither for a citable finding`
+    });
+  }
+  if (hasLine && !hasFile) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["file"],
+      message: `finding has 'line' but no 'file' \u2014 provide both or neither for a citable finding`
+    });
+  }
 });
 var TaskStateSchema = external_exports.object({
   task_id: external_exports.string().min(1),
@@ -6411,7 +6431,7 @@ function refineTaskCrossFields(task, ctx) {
       });
     }
   });
-  if (task.spawn_in_flight !== void 0 && task.escalation_rung !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
+  if (task.spawn_in_flight !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["spawn_in_flight", "rung"],
@@ -6561,6 +6581,13 @@ function refineRunCrossFields(run10, ctx) {
       code: external_exports.ZodIssueCode.custom,
       path: ["quota"],
       message: `run '${run10.run_id}' carries a quota checkpoint but status is '${run10.status}' (a quota checkpoint is valid only while paused|suspended)`
+    });
+  }
+  if (isTerminalRunStatus(run10.status) !== (run10.ended_at != null)) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["ended_at"],
+      message: isTerminalRunStatus(run10.status) ? `run '${run10.run_id}' is terminal ('${run10.status}') but has no ended_at` : `run '${run10.run_id}' is '${run10.status}' (non-terminal) but carries ended_at`
     });
   }
   if (run10.docs !== void 0) {
@@ -10831,6 +10858,7 @@ var GateRunner = class {
 // src/verifier/deterministic/tdd-exempt.ts
 import { readFile as readFile5 } from "node:fs/promises";
 import path2 from "node:path";
+var log19 = createLogger("verifier:tdd-exempt");
 function isTddExempt(taskId, tasksJson, packageJson) {
   const list = extractTaskList(tasksJson);
   for (const entry of list) {
@@ -10864,12 +10892,16 @@ async function readJsonOrNull(file) {
   let raw;
   try {
     raw = await readFile5(file, "utf8");
-  } catch {
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      log19.warn(`could not read '${file}': ${err.message} \u2014 treating as not exempt`);
+    }
     return null;
   }
   try {
     return JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    log19.warn(`could not parse '${file}': ${err.message} \u2014 treating as not exempt`);
     return null;
   }
 }
@@ -11118,14 +11150,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log32 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log32.code !== 0) {
+    const log33 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log33.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log32.code ?? "null"}): ${log32.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log33.code ?? "null"}): ${log33.stderr.trim()}`
       );
     }
-    assertNotTruncated(log32, "git log (tdd classification)");
-    const shas = splitLines(log32.stdout).reverse();
+    assertNotTruncated(log33, "git log (tdd classification)");
+    const shas = splitLines(log33.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -11223,7 +11255,7 @@ function buildPanelManifest(resumePhase, model, maxTurns) {
 }
 
 // src/verifier/judgment/finding.ts
-var log19 = createLogger("finding");
+var log20 = createLogger("finding");
 var FindingSeverityEnum = external_exports.enum(["info", "warning", "error", "critical"]);
 var FindingBaseSchema = external_exports.object({
   /** Which panel reviewer raised this (free-form; the role string). */
@@ -11293,7 +11325,7 @@ function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) 
     }
   }
   if (topUnknown.length > 0 || findingUnknown.length > 0) {
-    log19.warn(
+    log20.warn(
       `review parse: stripped unknown keys from reviewer '${context}' payload: top[${topUnknown.join(", ")}] findings[${findingUnknown.join(", ")}]`
     );
   }
@@ -12000,7 +12032,7 @@ async function applyRescue(state, runId, opts = {}) {
 }
 
 // src/orchestrator/finalize.ts
-var log20 = createLogger("finalize");
+var log21 = createLogger("finalize");
 function prdDoneComment(report, rollupResult) {
   const prRef = rollupResult.url ? `[#${rollupResult.number}](${rollupResult.url})` : `#${rollupResult.number}`;
   return `PRD delivered \u2014 all ${report.totals.shipped} task(s) shipped via rollup PR ${prRef}.
@@ -12018,7 +12050,7 @@ async function commentFailuresOnPrd(deps, report) {
     number: report.issue_number
   });
   if (existing.some((body) => body.includes(marker))) {
-    log20.info(`failure comment already posted for run '${report.run_id}' \u2014 skipping duplicate`);
+    log21.info(`failure comment already posted for run '${report.run_id}' \u2014 skipping duplicate`);
     return false;
   }
   await deps.gh.issueComment({
@@ -12079,11 +12111,11 @@ async function finalizeRun(deps, runId) {
       }
     }));
   } else {
-    log20.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
+    log21.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
   const finalized = await deps.state.finalize(runId, terminal);
   const rollupNote = rollupResult ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` + (rollupResult.merged ? "" : ` (${rollupResult.reason})`) : ", no rollup";
-  log20.info(
+  log21.info(
     `run '${runId}' finalized: ${terminal} (${report.totals.shipped} shipped, ${report.totals.failed} failed${failureCommentPosted ? ", PRD failure comment posted" : ""}` + rollupNote + `)`
   );
   return {
@@ -12095,7 +12127,7 @@ async function finalizeRun(deps, runId) {
 }
 
 // src/orchestrator/transitions.ts
-var log21 = createLogger("transitions");
+var log22 = createLogger("transitions");
 function markInFlight(deps, runId, taskId, phase) {
   const status = phaseToInFlightStatus(phase);
   return deps.state.updateTask(runId, taskId, (t) => ({
@@ -12122,7 +12154,7 @@ async function completeTask(deps, runId, taskId) {
   return { done: true, outcome: { outcome: "done" } };
 }
 async function failTask(deps, runId, taskId, failureClass, reason) {
-  log21.warn(`task '${taskId}' failed (${failureClass}): ${reason}`);
+  log22.warn(`task '${taskId}' failed (${failureClass}): ${reason}`);
   await deps.state.updateTask(runId, taskId, (t) => ({
     ...t,
     status: "failed",
@@ -12161,7 +12193,7 @@ async function escalateOrFail(deps, runId, taskId, decision, resumePhase) {
     escalation_rung: nextRung,
     reviewers: []
   }));
-  log21.info(
+  log22.info(
     `task '${taskId}' escalating to rung ${nextRung}; resuming at '${resumePhase}' (${decision.reason})`
   );
   return { done: false, phase: resumePhase };
@@ -12546,7 +12578,7 @@ async function isDocsApplicable(repoRoot) {
 // src/orchestrator/record.ts
 import { readFile as readFile11 } from "node:fs/promises";
 import { join as join15 } from "node:path";
-var log22 = createLogger("record");
+var log23 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
     await markInFlight(deps, runId, taskId, step.phase);
@@ -12588,7 +12620,7 @@ function parseVerdictsFailClosed(raw) {
     return parseHoldoutVerdicts(raw);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    log22.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
+    log23.warn(`holdout validator output unparseable \u2014 failing closed (0 satisfied): ${detail}`);
     return [];
   }
 }
@@ -12668,7 +12700,7 @@ var PANEL_ROLE_SET = new Set(PANEL_ROLES);
 function enforcePanelRoster(reviews) {
   const out = reviews.map((r) => {
     if (PANEL_ROLE_SET.has(r.reviewer)) return r;
-    log22.warn(
+    log23.warn(
       `panel roster: unknown reviewer '${r.reviewer}' \u2014 verdict demoted to error (only the ${PANEL_ROLES.length} fixed panel roles may gate)`
     );
     return { ...r, verdict: "error" };
@@ -12676,7 +12708,7 @@ function enforcePanelRoster(reviews) {
   const present = new Set(reviews.map((r) => r.reviewer));
   for (const role of PANEL_ROLES) {
     if (!present.has(role)) {
-      log22.warn(`panel roster: reviewer '${role}' missing from results \u2014 synthesized error verdict`);
+      log23.warn(`panel roster: reviewer '${role}' missing from results \u2014 synthesized error verdict`);
       out.push({ reviewer: role, verdict: "error", findings: [] });
     }
   }
@@ -12722,7 +12754,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
   if (panel.crossVendorAbsence !== void 0) {
-    log22.warn(
+    log23.warn(
       `task '${taskId}' verify ran WITHOUT an independent cross-vendor reviewer: ` + panel.crossVendorAbsence.reason
     );
   }
@@ -12802,7 +12834,7 @@ function isSpawnPhase(phase) {
 }
 
 // src/orchestrator/quota-gate.ts
-var log23 = createLogger("quota-gate");
+var log24 = createLogger("quota-gate");
 async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false) {
   if (mode === "workflow" || ignoreQuota) return null;
   const reading = await deps.usage.read();
@@ -12814,7 +12846,7 @@ async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false
     case "pause-5h":
     case "suspend-7d": {
       const patch = buildCheckpoint(decision);
-      log23.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
+      log24.warn(`run '${runId}' ${decision.kind}: ${decision.reason}`);
       const run10 = await deps.state.update(runId, (s) => ({
         ...s,
         status: patch.status,
@@ -12828,7 +12860,7 @@ async function applyQuotaGate(deps, runId, mode = "session", ignoreQuota = false
       };
     }
     case "unavailable-halt": {
-      log23.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
+      log24.warn(`run '${runId}' quota unavailable \u2014 suspending: ${decision.reason}`);
       const run10 = await deps.state.update(runId, (s) => ({
         ...s,
         status: "suspended",
@@ -12849,7 +12881,7 @@ function quotaStopFields(stop) {
 }
 
 // src/orchestrator/ship.ts
-var log24 = createLogger("ship");
+var log25 = createLogger("ship");
 function requireTask(ctx) {
   if (ctx.task === void 0) {
     throw new Error("ship: phase 'ship' requires a task but ctx.task is absent");
@@ -12867,7 +12899,7 @@ async function shipTask(deps, ctx) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!/non-fast-forward|fetch first|\[rejected\]/i.test(msg)) throw err;
-    log24.warn(
+    log25.warn(
       `task '${task.task_id}' push of '${branch}' rejected non-fast-forward \u2014 deleting the stale remote ref and retrying once`
     );
     await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, branch);
@@ -12905,14 +12937,14 @@ async function shipTask(deps, ctx) {
   });
   const outcome = await serializer.merge(pr.number);
   if (outcome.merged) {
-    log24.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
+    log25.info(`task '${task.task_id}' merged PR #${pr.number} via ${outcome.via}`);
     return taskDone();
   }
   return waitRetry("ship", `serial merge refused (${outcome.reason})`, 1, 1);
 }
 
 // src/orchestrator/orchestrator.ts
-var log25 = createLogger("orchestrator");
+var log26 = createLogger("orchestrator");
 var MERGE_RESYNC_CAP = 8;
 function requireTask2(run10, taskId) {
   const task = run10.tasks[taskId];
@@ -13109,7 +13141,7 @@ async function nextAction(deps, runId, taskId, results) {
             if (!step2.done) throw new Error("orchestrator: failStep returned non-terminal step");
             return { kind: "done", run_id: runId, task_id: taskId, outcome: step2.outcome };
           }
-          log25.info(
+          log26.info(
             `task '${taskId}' merge refused (${result.reason}); re-routing to exec to re-sync (attempt ${newResyncs}/${MERGE_RESYNC_CAP})`
           );
           phase = "exec";
@@ -13356,7 +13388,7 @@ async function nextTask(deps, runId) {
 // src/orchestrator/e2e.ts
 import { copyFile, mkdir as mkdir9, writeFile } from "node:fs/promises";
 import { dirname as dirname8, isAbsolute, join as join17 } from "node:path";
-var log26 = createLogger("e2e");
+var log27 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
     await mkdir9(dirname8(to), { recursive: true });
@@ -13435,7 +13467,7 @@ async function runE2eEmit(deps, runId) {
   if (!cfg.startCommand || !cfg.baseURL) {
     const reason = "e2e phase requires e2e.startCommand and e2e.baseURL \u2014 run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>` first";
     await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
-    log26.warn(`run '${runId}': ${reason}`);
+    log27.warn(`run '${runId}': ${reason}`);
     return { kind: "suspend", run_id: runId, reason };
   }
   if (run10.e2e_phase === void 0) {
@@ -13668,7 +13700,7 @@ async function markFailed(deps, runId, reason, attempts) {
       ended_at: nowIso()
     }
   }));
-  log26.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
+  log27.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
 }
 function throwawayConfigPath(worktree) {
   return join17(worktree, ".factory-e2e-throwaway.config.cjs");
@@ -13819,7 +13851,7 @@ async function runSuiteAndDecide(deps, runId) {
       reopen_counts: reopenCounts
     }
   }));
-  log26.info(`run '${runId}': e2e reopening task(s) ${taskIds.join(", ")} (pass ${attempts})`);
+  log27.info(`run '${runId}': e2e reopening task(s) ${taskIds.join(", ")} (pass ${attempts})`);
   return { kind: "reopen", run_id: runId, task_ids: taskIds, reason: feedback };
 }
 
@@ -13923,7 +13955,7 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/cli/subcommands/run.ts
-var log27 = createLogger("run");
+var log28 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -14046,7 +14078,7 @@ async function resolveSpec2(specStore, opts) {
 }
 async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
   if (opts.mode === "workflow") {
-    log27.warn(
+    log28.warn(
       "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
     );
   }
@@ -15325,7 +15357,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir as mkdir10, readFile as readFile12 } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
 import { join as join19 } from "node:path";
-var log28 = createLogger("cli:target-settings");
+var log29 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
@@ -15403,7 +15435,7 @@ async function ensureTargetSettings(opts) {
     if (isObject(parsed)) {
       existing = parsed;
     } else {
-      log28.warn(
+      log29.warn(
         `${path5} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
@@ -15417,7 +15449,7 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold.ts
-var log29 = createLogger("scaffold");
+var log30 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -15493,7 +15525,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   const src = join20(templatesDir, ...segs);
   const dest = join20(targetRoot, ...segs);
   if (!existsSync8(src)) {
-    log29.warn(`template missing, skipping: ${src}`);
+    log30.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
@@ -15540,10 +15572,10 @@ async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
   const gateEnv = await applyGateEnvDetection(opts.targetRoot, { dataDir: opts.dataDir });
   if (gateEnv.written.length > 0) {
-    log29.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
+    log30.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
   }
   if (gateEnv.warnings.length > 0) {
-    log29.warn(
+    log30.warn(
       `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
     );
   }
@@ -15554,7 +15586,7 @@ async function runScaffold(opts) {
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
   }
   if (lists.updated.length > 0) {
-    log29.info(
+    log30.info(
       `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
     );
   }
@@ -15981,7 +16013,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log30 = createLogger("cli:statusline");
+var log31 = createLogger("cli:statusline");
 var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -16006,15 +16038,17 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log30.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
-    return;
+    log31.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    return "usage-cache skipped: CLAUDE_PLUGIN_DATA unresolvable";
   }
   const now = (deps.now ?? nowEpoch)();
   const cache = { ...rateLimits, captured_at: now };
   try {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
+    return null;
   } catch (err) {
-    log30.warn(`failed to write usage-cache.json: ${err.message}`);
+    log31.warn(`failed to write usage-cache.json: ${err.message}`);
+    return `usage-cache unwritable: ${err.message}`;
   }
 }
 async function passthrough(payload, deps) {
@@ -16025,12 +16059,12 @@ async function passthrough(payload, deps) {
     const result = await run10(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log30.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log31.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log30.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log31.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -16048,12 +16082,10 @@ async function runStatusline(argv = [], deps = {}) {
     parsed = void 0;
   }
   const rateLimits = rateLimitsOf(parsed);
-  if (rateLimits !== null) {
-    await writeCache(rateLimits, deps);
-  }
+  const cacheFailure = rateLimits !== null ? await writeCache(rateLimits, deps) : null;
   const displayed = await passthrough(payload, deps);
   const write = deps.writeStdout ?? ((text) => process.stdout.write(text));
-  write(displayed);
+  write(cacheFailure === null ? displayed : `${displayed} [factory: ${cacheFailure}]`.trimStart());
   return EXIT.OK;
 }
 var statuslineCommand = {
@@ -16066,7 +16098,7 @@ import { existsSync as existsSync9 } from "node:fs";
 import { readFile as readFile14 } from "node:fs/promises";
 import { join as join21 } from "node:path";
 import { homedir as homedir3 } from "node:os";
-var log31 = createLogger("autonomy");
+var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -16198,9 +16230,9 @@ async function runAutonomyEnsure(opts = {}) {
     try {
       const parsed = JSON.parse(await readFile14(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
-      else log31.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
-      log31.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
   const templatePath = join21(pluginRoot, "templates", "settings.autonomous.json");

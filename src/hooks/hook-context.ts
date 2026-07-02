@@ -68,8 +68,12 @@ export async function loadActiveRun(opts: DataDirOptions = {}): Promise<ActiveRu
   try {
     const st = await lstat(link);
     isLink = st.isSymbolicLink() || st.isDirectory();
-  } catch {
-    return null;
+  } catch (err) {
+    // Only genuine absence means "no active run". Anything else (EACCES, EIO, …)
+    // is an unreadable data dir → rethrow, which the guard pipeline maps to a
+    // fail-closed deny rather than a silent allow.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
   }
   if (!isLink) return null;
 

@@ -7,7 +7,7 @@
  * stdout). The end-to-end invariant: a cache it writes from a real payload must
  * read back through {@link StatuslineUsageSignal} as `{ kind: "available" }`.
  */
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -102,14 +102,37 @@ describe("runStatusline (cache writer)", () => {
     expect(existsSync(usageCachePath(dataDir))).toBe(false);
   });
 
-  it("is a clean no-op when the data dir is unresolvable", async () => {
-    // No dataDir override + empty env → resolveDataDir throws → no write, no throw.
+  it("surfaces an unresolvable data dir IN the displayed text (no throw, EXIT.OK)", async () => {
+    // No dataDir override + empty env → resolveDataDir throws → no write, no throw —
+    // but the skip is made VISIBLE: a stderr warn is never seen on a statusline tick.
+    let displayed = "";
     const code = await runStatusline([], {
       dataDirOptions: { env: {} },
       now: () => FIXED_NOW,
       readStdin: () => Promise.resolve(ccPayload()),
+      writeStdout: (s) => {
+        displayed += s;
+      },
     });
     expect(code).toBe(EXIT.OK);
+    expect(displayed).toContain("usage-cache skipped: CLAUDE_PLUGIN_DATA unresolvable");
+  });
+
+  it("surfaces a cache-write failure IN the displayed text (quota pacer is reading stale data)", async () => {
+    // Point the data dir at a FILE so usage-cache.json can't be created (ENOTDIR).
+    const bogus = join(dataDir, "not-a-dir");
+    writeFileSync(bogus, "x");
+    let displayed = "";
+    const code = await runStatusline([], {
+      dataDirOptions: { dataDir: bogus },
+      now: () => FIXED_NOW,
+      readStdin: () => Promise.resolve(ccPayload()),
+      writeStdout: (s) => {
+        displayed += s;
+      },
+    });
+    expect(code).toBe(EXIT.OK);
+    expect(displayed).toContain("[factory: usage-cache unwritable:");
   });
 
   it("reads from the real stdin stream when no override is given", async () => {

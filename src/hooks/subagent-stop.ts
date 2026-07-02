@@ -144,7 +144,11 @@ export async function handleSubagentStop(
     if (transcriptPath && deps.readTranscript) {
       try {
         transcriptText = await deps.readTranscript(transcriptPath);
-      } catch {
+      } catch (err) {
+        log.warn(
+          `could not read transcript '${transcriptPath}': ${(err as Error).message} — ` +
+            `falling back to last_assistant_message / single-reviewing-task resolution`,
+        );
         transcriptText = undefined;
       }
     }

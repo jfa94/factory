@@ -6466,6 +6466,9 @@ var QualitySchema = external_exports.object({
    */
   gateEnv: external_exports.record(external_exports.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "valid POSIX env name"), external_exports.string()).default({})
 }).default({});
+function nonDecreasing(xs) {
+  return xs.every((x, i) => i === 0 || x >= xs[i - 1]);
+}
 var QuotaSchema = external_exports.object({
   /** Max single sleep chunk per gate call, seconds. */
   sleepCapSec: external_exports.number().int().positive().default(540),
@@ -6475,10 +6478,10 @@ var QuotaSchema = external_exports.object({
   maxStaleCycles: external_exports.number().int().positive().default(6),
   /** Accumulated wall-clock wait budget across cycles, minutes. */
   wallBudgetMin: external_exports.number().int().positive().default(75),
-  /** 5h-window utilization checkpoints by hour 1..5 (% caps). */
-  hourlyThresholds: external_exports.array(external_exports.number()).length(5).default([20, 40, 60, 80, 90]),
-  /** 7d-window utilization checkpoints by day 1..7 (% caps). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
-  dailyThresholds: external_exports.array(external_exports.number()).length(7).default([20, 40, 60, 80, 95, 95, 95]),
+  /** 5h-window utilization checkpoints by hour 1..5 (% caps, non-decreasing). */
+  hourlyThresholds: external_exports.array(external_exports.number().min(0).max(100)).length(5).refine(nonDecreasing, { message: "thresholds must be non-decreasing" }).default([20, 40, 60, 80, 90]),
+  /** 7d-window utilization checkpoints by day 1..7 (% caps, non-decreasing). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
+  dailyThresholds: external_exports.array(external_exports.number().min(0).max(100)).length(7).refine(nonDecreasing, { message: "thresholds must be non-decreasing" }).default([20, 40, 60, 80, 95, 95, 95]),
   /**
    * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
    * renamed model-router, narrowed) selects the producer model for a task from
@@ -7349,6 +7352,23 @@ var FixFindingSchema = external_exports.object({
   file: external_exports.string().optional(),
   line: external_exports.number().int().positive().optional(),
   description: external_exports.string().min(1)
+}).superRefine((finding, ctx) => {
+  const hasFile = finding.file !== void 0;
+  const hasLine = finding.line !== void 0;
+  if (hasFile && !hasLine) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["line"],
+      message: `finding has 'file' but no 'line' \u2014 provide both or neither for a citable finding`
+    });
+  }
+  if (hasLine && !hasFile) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["file"],
+      message: `finding has 'line' but no 'file' \u2014 provide both or neither for a citable finding`
+    });
+  }
 });
 var TaskStateSchema = external_exports.object({
   task_id: external_exports.string().min(1),
@@ -7500,7 +7520,7 @@ function refineTaskCrossFields(task, ctx) {
       });
     }
   });
-  if (task.spawn_in_flight !== void 0 && task.escalation_rung !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
+  if (task.spawn_in_flight !== void 0 && task.spawn_in_flight.rung > task.escalation_rung) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       path: ["spawn_in_flight", "rung"],
@@ -7650,6 +7670,13 @@ function refineRunCrossFields(run, ctx) {
       code: external_exports.ZodIssueCode.custom,
       path: ["quota"],
       message: `run '${run.run_id}' carries a quota checkpoint but status is '${run.status}' (a quota checkpoint is valid only while paused|suspended)`
+    });
+  }
+  if (isTerminalRunStatus(run.status) !== (run.ended_at != null)) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["ended_at"],
+      message: isTerminalRunStatus(run.status) ? `run '${run.run_id}' is terminal ('${run.status}') but has no ended_at` : `run '${run.run_id}' is '${run.status}' (non-terminal) but carries ended_at`
     });
   }
   if (run.docs !== void 0) {
@@ -8204,8 +8231,9 @@ async function loadActiveRun(opts = {}) {
   try {
     const st = await lstat(link);
     isLink = st.isSymbolicLink() || st.isDirectory();
-  } catch {
-    return null;
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
   }
   if (!isLink) return null;
   if (!existsSync5(link)) {
@@ -8448,7 +8476,10 @@ async function handleSubagentStop(input, deps = {}) {
     if (transcriptPath && deps.readTranscript) {
       try {
         transcriptText = await deps.readTranscript(transcriptPath);
-      } catch {
+      } catch (err) {
+        log7.warn(
+          `could not read transcript '${transcriptPath}': ${err.message} \u2014 falling back to last_assistant_message / single-reviewing-task resolution`
+        );
         transcriptText = void 0;
       }
     }

@@ -3,8 +3,11 @@
  * tasks.json schemas), package.json.factory.tddExempt, and case_e1 (bare array).
  * NEVER reads state.json (there is no state.json input).
  */
-import { describe, expect, it } from "vitest";
-import { isTddExempt } from "./tdd-exempt.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DefaultExemptReader, isTddExempt } from "./tdd-exempt.js";
 
 describe("isTddExempt (Δ N)", () => {
   it("case4: {tasks:[...]} schema with tdd_exempt:true → exempt", () => {
@@ -35,5 +38,37 @@ describe("isTddExempt (Δ N)", () => {
     expect(isTddExempt("t1", "not-json", 42)).toBe(false);
     expect(isTddExempt("t1", null, null)).toBe(false);
     expect(isTddExempt("t1", { tasks: "nope" }, { factory: "nope" })).toBe(false);
+  });
+});
+
+describe("DefaultExemptReader (silent-null hygiene)", () => {
+  let dir: string;
+  let logged: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "factory-tdd-exempt-"));
+    logged = "";
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      logged += String(chunk);
+      return true;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("missing files (ENOENT) are a silent not-exempt — no warn", async () => {
+    const reader = new DefaultExemptReader({ specDir: dir, worktree: dir });
+    expect(await reader.isExempt("t1")).toBe(false);
+    expect(logged).toBe("");
+  });
+
+  it("an EXISTING but corrupt tasks.json warns loudly, naming the file", async () => {
+    writeFileSync(join(dir, "tasks.json"), "{not json!!");
+    const reader = new DefaultExemptReader({ specDir: dir, worktree: dir });
+    expect(await reader.isExempt("t1")).toBe(false);
+    expect(logged).toMatch(/could not parse/);
+    expect(logged).toContain(join(dir, "tasks.json"));
   });
 });
