@@ -149,6 +149,7 @@ describe("rescue scan/apply happy paths", () => {
     await new StateManager({ dataDir }).update("run-c", (s) => ({
       ...s,
       status: "failed",
+      ended_at: "2026-06-01T00:00:00.000Z",
       tasks: {
         a: task({ task_id: "a", status: "done" }),
         b: task({ task_id: "b", status: "done" }),

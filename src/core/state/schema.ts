@@ -214,13 +214,35 @@ export type ReviewerResult = z.infer<typeof ReviewerResultSchema>;
  * invert that dependency. `record.ts` maps confirmed reviewer blockers and
  * non-holdout failing gate evidence into this shape before persisting.
  */
-export const FixFindingSchema = z.object({
-  /** Origin of the finding: a reviewer name (e.g. "security") or a gate id (e.g. "lint"). */
-  reviewer: z.string().min(1),
-  file: z.string().optional(),
-  line: z.number().int().positive().optional(),
-  description: z.string().min(1),
-});
+export const FixFindingSchema = z
+  .object({
+    /** Origin of the finding: a reviewer name (e.g. "security") or a gate id (e.g. "lint"). */
+    reviewer: z.string().min(1),
+    file: z.string().optional(),
+    line: z.number().int().positive().optional(),
+    description: z.string().min(1),
+  })
+  .superRefine((finding, ctx) => {
+    // Mirrors the T4 both-or-neither rule on the verifier's FindingSchema
+    // (src/verifier/judgment/finding.ts): a half-citation would reach the next
+    // producer rung as an unlocatable instruction.
+    const hasFile = finding.file !== undefined;
+    const hasLine = finding.line !== undefined;
+    if (hasFile && !hasLine) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["line"],
+        message: `finding has 'file' but no 'line' — provide both or neither for a citable finding`,
+      });
+    }
+    if (hasLine && !hasFile) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["file"],
+        message: `finding has 'line' but no 'file' — provide both or neither for a citable finding`,
+      });
+    }
+  });
 export type FixFinding = z.infer<typeof FixFindingSchema>;
 
 /**
@@ -421,11 +443,7 @@ function refineTaskCrossFields(task: TaskState, ctx: z.RefinementCtx): void {
   // improper backward reset like the G2 bug (resetTaskRow resetting escalation_rung
   // to 0 without clearing spawn_in_flight). The primary fix is rescue/apply.ts
   // clearing the field; this invariant catches any future regression at parse time.
-  if (
-    task.spawn_in_flight !== undefined &&
-    task.escalation_rung !== undefined &&
-    task.spawn_in_flight.rung > task.escalation_rung
-  ) {
+  if (task.spawn_in_flight !== undefined && task.spawn_in_flight.rung > task.escalation_rung) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["spawn_in_flight", "rung"],
@@ -706,6 +724,19 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
       code: z.ZodIssueCode.custom,
       path: ["quota"],
       message: `run '${run.run_id}' carries a quota checkpoint but status is '${run.status}' (a quota checkpoint is valid only while paused|suspended)`,
+    });
+  }
+
+  // Terminal ⇔ ended: a terminal run must carry ended_at, and a live one must not —
+  // every terminal write sets it and rescue's reopen resets it to null, so a mismatch
+  // is a serialization bug (e.g. a status flip that skipped the timestamp).
+  if (isTerminalRunStatus(run.status) !== (run.ended_at != null)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["ended_at"],
+      message: isTerminalRunStatus(run.status)
+        ? `run '${run.run_id}' is terminal ('${run.status}') but has no ended_at`
+        : `run '${run.run_id}' is '${run.status}' (non-terminal) but carries ended_at`,
     });
   }
 

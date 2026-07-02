@@ -20,6 +20,7 @@ import { join } from "node:path";
 
 import { applyRescue, resetTaskRow } from "./apply.js";
 import { StateManager } from "../core/state/manager.js";
+import { isTerminalRunStatus } from "../core/state/schema.js";
 import type { RunStatus, TaskState } from "../types/index.js";
 
 const RUN_ID = "run-rescue-1";
@@ -67,7 +68,12 @@ describe("applyRescue", () => {
   async function seed(seeds: readonly TaskSeed[], status?: RunStatus): Promise<void> {
     await state.update(RUN_ID, (s) => ({
       ...s,
-      ...(status !== undefined ? { status } : {}),
+      ...(status !== undefined
+        ? {
+            status,
+            ...(isTerminalRunStatus(status) ? { ended_at: "2026-06-08T00:00:00.000Z" } : {}),
+          }
+        : {}),
       tasks: Object.fromEntries(seeds.map((t) => [t.task_id, task(t)])),
     }));
   }
@@ -366,6 +372,7 @@ describe("applyRescue", () => {
     await state.update(RUN_ID, (s) => ({
       ...s,
       status: "failed" as const,
+      ended_at: "2026-06-08T00:00:00.000Z",
       paused_minutes: 30,
       tasks: {
         a: task({ task_id: "a", status: "failed", failure_class: "blocked-environmental" }),

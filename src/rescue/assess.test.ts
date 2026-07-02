@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { assessWork, type WorkProbe, type TaskWork } from "./assess.js";
-import { parseRunState } from "../core/state/index.js";
+import { parseRunState, isTerminalRunStatus } from "../core/state/index.js";
 import type { RunState, RunStatus, TaskState } from "../types/index.js";
 
 type TaskSeed = Partial<TaskState> & { task_id: string; status: TaskState["status"] };
@@ -32,13 +32,15 @@ function task(seed: TaskSeed): TaskState {
 }
 
 function mkRun(seeds: readonly TaskSeed[], extra: Partial<RunState> = {}): RunState {
+  const status = (extra.status ?? "failed") as RunStatus;
   return parseRunState({
     run_id: "run-1",
-    status: "failed" as RunStatus,
+    status,
     spec: { repo: "acme/widgets", spec_id: "7-x", issue_number: 7 },
     tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
     started_at: "2026-06-08T00:00:00.000Z",
     updated_at: "2026-06-08T00:00:00.000Z",
+    ...(isTerminalRunStatus(status) ? { ended_at: "2026-06-08T01:00:00.000Z" } : {}),
     ...extra,
   });
 }

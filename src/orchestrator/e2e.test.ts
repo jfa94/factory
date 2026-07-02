@@ -256,6 +256,7 @@ describe("runE2eEmit", () => {
       // reopens a TERMINAL run, so a non-terminal `status` here would make
       // `resetE2e` a silent no-op and defeat the point of this test.
       status: "failed",
+      ended_at: "2026-06-08T00:00:00.000Z",
       e2e_phase: {
         status: "failed",
         reason: "e2e-author: no parseable status",

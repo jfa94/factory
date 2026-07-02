@@ -76,6 +76,11 @@ export const QualitySchema = z
   })
   .default({});
 
+/** A utilization curve must never step down — a later checkpoint below an earlier one would un-spend budget. */
+function nonDecreasing(xs: readonly number[]): boolean {
+  return xs.every((x, i) => i === 0 || x >= xs[i - 1]!);
+}
+
 /**
  * Two-window quota pacer config (WS4 owns). `hourlyThresholds` is the 5h curve
  * (per window-hour); `dailyThresholds` the 7d curve (per window-day). The 7d window
@@ -93,10 +98,18 @@ export const QuotaSchema = z
     maxStaleCycles: z.number().int().positive().default(6),
     /** Accumulated wall-clock wait budget across cycles, minutes. */
     wallBudgetMin: z.number().int().positive().default(75),
-    /** 5h-window utilization checkpoints by hour 1..5 (% caps). */
-    hourlyThresholds: z.array(z.number()).length(5).default([20, 40, 60, 80, 90]),
-    /** 7d-window utilization checkpoints by day 1..7 (% caps). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
-    dailyThresholds: z.array(z.number()).length(7).default([20, 40, 60, 80, 95, 95, 95]),
+    /** 5h-window utilization checkpoints by hour 1..5 (% caps, non-decreasing). */
+    hourlyThresholds: z
+      .array(z.number().min(0).max(100))
+      .length(5)
+      .refine(nonDecreasing, { message: "thresholds must be non-decreasing" })
+      .default([20, 40, 60, 80, 90]),
+    /** 7d-window utilization checkpoints by day 1..7 (% caps, non-decreasing). Ramps to 95% by day 5, plateaus through days 6–7 (5% end-of-window reserve). */
+    dailyThresholds: z
+      .array(z.number().min(0).max(100))
+      .length(7)
+      .refine(nonDecreasing, { message: "thresholds must be non-decreasing" })
+      .default([20, 40, 60, 80, 95, 95, 95]),
     /**
      * Producer-model dial keyed by risk tier (Decision 25). The quota-router (the
      * renamed model-router, narrowed) selects the producer model for a task from

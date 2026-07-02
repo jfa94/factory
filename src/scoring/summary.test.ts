@@ -12,7 +12,7 @@
 import { describe, it, expect } from "vitest";
 import { buildRunSummary, renderRunSummaryMarkdown } from "./summary.js";
 import type { PartialRunReport } from "./partial-report.js";
-import { parseRunState } from "../core/state/index.js";
+import { parseRunState, isTerminalRunStatus } from "../core/state/index.js";
 import type { RunState, RunStatus, TaskState } from "../types/index.js";
 
 type TaskSeed = Partial<TaskState> & { task_id: string; status: TaskState["status"] };
@@ -36,14 +36,19 @@ function mkRun(
   seeds: readonly TaskSeed[],
   opts: { status?: RunStatus; started_at?: string; ended_at?: string | null } = {},
 ): RunState {
+  const status = opts.status ?? "failed";
   return parseRunState({
     run_id: "run-sum-1",
-    status: opts.status ?? "failed",
+    status,
     execution_mode: "balanced",
     spec: { repo: "acme/widgets", spec_id: "7-x", issue_number: 7 },
     tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
     started_at: opts.started_at ?? "2026-06-08T00:00:00.000Z",
-    ...(opts.ended_at !== undefined ? { ended_at: opts.ended_at } : {}),
+    ...(opts.ended_at !== undefined
+      ? { ended_at: opts.ended_at }
+      : isTerminalRunStatus(status)
+        ? { ended_at: "2026-06-08T01:00:00.000Z" }
+        : {}),
     updated_at: "2026-06-08T00:00:00.000Z",
   });
 }

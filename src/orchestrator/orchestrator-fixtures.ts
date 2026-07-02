@@ -21,6 +21,7 @@ import { InMemoryHoldoutStore } from "../verifier/holdout/index.js";
 import { InMemoryArtifactStore } from "./artifacts.js";
 import { fakeUsageSignal, type UsageReading } from "../quota/usage-source.js";
 import type { TaskState, RunStatus, RunState } from "../types/index.js";
+import { isTerminalRunStatus } from "../core/state/schema.js";
 import type { OrchestratorDeps } from "./orchestrator.js";
 
 // ---------------------------------------------------------------------------
@@ -181,9 +182,17 @@ export async function makeOrchestratorDeps(
         ...(override.branch ? { branch: override.branch } : {}),
       };
     }
-    // Apply run status override if provided
+    // Apply run status override if provided — terminal statuses require ended_at
+    // (refineRunCrossFields invariant), so auto-stamp it here rather than at every call site.
     const statusPatch =
-      opts.runStatusOverride !== undefined ? { status: opts.runStatusOverride } : {};
+      opts.runStatusOverride !== undefined
+        ? {
+            status: opts.runStatusOverride,
+            ...(isTerminalRunStatus(opts.runStatusOverride)
+              ? { ended_at: new Date(NOW * 1000).toISOString() }
+              : {}),
+          }
+        : {};
     return { ...s, ...statusPatch, tasks: next };
   });
 

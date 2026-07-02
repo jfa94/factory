@@ -96,6 +96,7 @@ describe("score happy paths", () => {
     await state.update("run-s", (s) => ({
       ...s,
       status: "failed",
+      ended_at: "2026-06-01T00:00:00.000Z",
       tasks: {
         a: task({ task_id: "a", status: "done", pr_number: 11, branch: "factory/run/a" }),
         b: task({ task_id: "b", status: "failed", failure_class: "spec-defect" }),

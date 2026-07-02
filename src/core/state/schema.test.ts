@@ -77,6 +77,7 @@ describe("schema round-trip", () => {
     const run = parseRunState(
       minimalRun({
         status: "failed",
+        ended_at: "2026-01-01T01:00:00Z",
         tasks: {
           t1: minimalTask({
             status: "failed",
@@ -526,5 +527,49 @@ describe("e2e phase marker + author manifest", () => {
       minimalRun({ e2e_phase: { status: "done", advisory: "residual throwaway red" } }),
     );
     expect(run.e2e_phase?.advisory).toBe("residual throwaway red");
+  });
+});
+
+describe("FixFinding file/line both-or-neither (T4 mirror)", () => {
+  const base = { reviewer: "security", description: "fix it" };
+
+  it("accepts a full citation and an uncited finding", () => {
+    expect(() =>
+      parseTaskState(minimalTask({ fix_findings: [{ ...base, file: "a.ts", line: 3 }] })),
+    ).not.toThrow();
+    expect(() => parseTaskState(minimalTask({ fix_findings: [base] }))).not.toThrow();
+  });
+
+  it("rejects a half-citation (file without line, line without file)", () => {
+    expect(() =>
+      parseTaskState(minimalTask({ fix_findings: [{ ...base, file: "a.ts" }] })),
+    ).toThrow(/both or neither/);
+    expect(() => parseTaskState(minimalTask({ fix_findings: [{ ...base, line: 3 }] }))).toThrow(
+      /both or neither/,
+    );
+  });
+});
+
+describe("terminal ⇔ ended_at cross-check", () => {
+  it("accepts terminal+ended_at and non-terminal+null", () => {
+    for (const status of TERMINAL_RUN_STATUSES) {
+      expect(() => parseRunState(minimalRun({ status, ended_at: NOW }))).not.toThrow();
+    }
+    // running/paused/suspended stay ended_at:null.
+    for (const status of NONTERMINAL_RUN_STATUSES) {
+      expect(() => parseRunState(minimalRun({ status }))).not.toThrow();
+    }
+  });
+
+  it("rejects a terminal run without ended_at", () => {
+    for (const status of TERMINAL_RUN_STATUSES) {
+      expect(() => parseRunState(minimalRun({ status }))).toThrow(/no ended_at/);
+    }
+  });
+
+  it("rejects a live run carrying ended_at (rescue reopen must reset it)", () => {
+    expect(() => parseRunState(minimalRun({ status: "running", ended_at: NOW }))).toThrow(
+      /non-terminal/,
+    );
   });
 });

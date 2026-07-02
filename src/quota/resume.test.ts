@@ -144,6 +144,7 @@ describe("Δ F resume — non-resumable run states are reported, not resumed", (
     const completed = parseRunState({
       ...suspendedRun(),
       status: "completed",
+      ended_at: "2026-06-04T01:00:00Z",
       quota: undefined,
       tasks: { a: { task_id: "a", risk_tier: "low", status: "done" } },
     });

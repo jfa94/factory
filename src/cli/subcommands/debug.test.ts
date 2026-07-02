@@ -473,6 +473,7 @@ describe("debugFinalize", () => {
     await state.update("run-debug-finalize", (s) => ({
       ...s,
       status: "failed",
+      ended_at: "2026-06-08T00:00:00.000Z",
       tasks: {
         T1: {
           ...s.tasks.T1!,

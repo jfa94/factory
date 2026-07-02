@@ -14,7 +14,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { scanRun } from "./scan.js";
-import { parseRunState } from "../core/state/index.js";
+import { parseRunState, isTerminalRunStatus } from "../core/state/index.js";
 import type { RunState, RunStatus, TaskState } from "../types/index.js";
 
 /** A loose task seed; defaults fill the non-relevant fields. */
@@ -53,6 +53,7 @@ function mkRun(
     tasks: Object.fromEntries(seeds.map((s) => [s.task_id, task(s)])),
     started_at: "2026-06-08T00:00:00.000Z",
     updated_at: "2026-06-08T00:00:00.000Z",
+    ...(isTerminalRunStatus(status) ? { ended_at: "2026-06-08T01:00:00.000Z" } : {}),
     ...(e2ePhase !== undefined ? { e2e_phase: e2ePhase } : {}),
     ...(rollup !== undefined ? { rollup } : {}),
   });

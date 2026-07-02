@@ -79,6 +79,29 @@ describe("ConfigSchema", () => {
     expect(() => ConfigSchema.parse({ quota: { hourlyThresholds: [1, 2, 3] } })).toThrow();
   });
 
+  it("rejects out-of-range threshold elements (percent caps: 0..100)", () => {
+    expect(() =>
+      ConfigSchema.parse({ quota: { hourlyThresholds: [20, 40, 60, 80, 101] } }),
+    ).toThrow();
+    expect(() =>
+      ConfigSchema.parse({ quota: { dailyThresholds: [-1, 40, 60, 80, 95, 95, 95] } }),
+    ).toThrow();
+  });
+
+  it("rejects a decreasing threshold curve (utilization caps never step down)", () => {
+    expect(() => ConfigSchema.parse({ quota: { hourlyThresholds: [20, 40, 30, 80, 90] } })).toThrow(
+      /non-decreasing/,
+    );
+    expect(() =>
+      ConfigSchema.parse({ quota: { dailyThresholds: [20, 40, 60, 80, 95, 95, 90] } }),
+    ).toThrow(/non-decreasing/);
+    // A plateau (equal neighbours) is fine — the default daily curve has one.
+    expect(
+      ConfigSchema.parse({ quota: { hourlyThresholds: [20, 20, 60, 80, 90] } }).quota
+        .hourlyThresholds,
+    ).toEqual([20, 20, 60, 80, 90]);
+  });
+
   it("spec.specEffort defaults to 'max' and is a CLOSED enum (out-of-domain rejected loud)", () => {
     expect(ConfigSchema.parse({}).spec.specEffort).toBe("max");
     // An in-domain effort round-trips.
