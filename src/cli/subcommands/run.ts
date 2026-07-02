@@ -23,7 +23,7 @@
  * than surfacing later as a orchestrator deadlock.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
+import { parseArgs, UsageError, optionalString, parseResultsFlag } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { StateManager, seedTaskRows, assertAcyclic } from "../../core/state/index.js";
@@ -43,7 +43,7 @@ import {
   E2eResultsSchema,
   readJsonInput,
 } from "../../orchestrator/index.js";
-import { loadCliDeps } from "../wiring.js";
+import { loadCliDeps, type CliDeps } from "../wiring.js";
 import {
   DefaultGitClient,
   DefaultGhClient,
@@ -59,7 +59,7 @@ import {
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { requireAutonomousMode } from "../../autonomy/mode.js";
 import { createLogger } from "../../shared/index.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const log = createLogger("run");
 
@@ -917,35 +917,47 @@ Emit the documentation-phase spawn request, or (with --results) record a scribe
 result: publish the docs commit onto staging and mark the phase done, or suspend
 the run on failure. The CLI never spawns scribe — a orchestrator does.`;
 
-async function runDocs(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(DOCS_HELP);
-    return EXIT.OK;
-  }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "docs");
-  const deps = await loadCliDeps({ dataDir, runId });
-
-  const resultsPath = args.flag("results");
-  if (typeof resultsPath === "string" && resultsPath.length > 0) {
-    let results;
-    try {
-      results = DocsResultsSchema.parse(await readJsonInput<unknown>(resultsPath));
-    } catch (err) {
-      throw new UsageError(
-        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+/**
+ * Shared body of the docs/e2e phase subcommands: resolve the run, then either
+ * record `--results` or emit the phase's spawn request. The CLI never spawns
+ * the agent — a orchestrator does.
+ */
+function phaseCommand<R>(opts: {
+  help: string;
+  phase: string;
+  parse: (raw: unknown) => R;
+  record: (deps: CliDeps, runId: string, results: R) => Promise<unknown>;
+  emit: (deps: CliDeps, runId: string) => Promise<unknown>;
+}): (argv: string[]) => Promise<ExitCode> {
+  return async (argv) => {
+    const args = parseArgs(argv, { booleans: [] });
+    if (args.flag("help") === true) {
+      emitLine(opts.help);
+      return EXIT.OK;
     }
-    emitJson(await runDocsRecord(deps, runId, results));
-  } else if (resultsPath !== undefined) {
-    throw new UsageError("--results requires a file path");
-  } else {
-    emitJson(await runDocsEmit(deps, runId));
-  }
-  return EXIT.OK;
+    const dataDir = resolveDataDir({});
+    const state = new StateManager({ dataDir });
+    const runId = await resolveRunId(state, args, opts.phase);
+    const deps = await loadCliDeps({ dataDir, runId });
+    const results = await parseResultsFlag(args, async (path) =>
+      opts.parse(await readJsonInput<unknown>(path)),
+    );
+    emitJson(
+      results !== undefined
+        ? await opts.record(deps, runId, results)
+        : await opts.emit(deps, runId),
+    );
+    return EXIT.OK;
+  };
 }
+
+const runDocs = phaseCommand({
+  help: DOCS_HELP,
+  phase: "docs",
+  parse: (raw) => DocsResultsSchema.parse(raw),
+  record: runDocsRecord,
+  emit: runDocsEmit,
+});
 
 const E2E_HELP = `factory run e2e [--run <id>] [--results <path>]
 
@@ -955,35 +967,13 @@ run the full suite against staging, and either mark the phase done, reopen a
 mappable failing task with feedback, or fail the run. The CLI never spawns the
 e2e author — a orchestrator does.`;
 
-async function runE2ePhase(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(E2E_HELP);
-    return EXIT.OK;
-  }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "e2e");
-  const deps = await loadCliDeps({ dataDir, runId });
-
-  const resultsPath = args.flag("results");
-  if (typeof resultsPath === "string" && resultsPath.length > 0) {
-    let results;
-    try {
-      results = E2eResultsSchema.parse(await readJsonInput<unknown>(resultsPath));
-    } catch (err) {
-      throw new UsageError(
-        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    emitJson(await runE2eRecord(deps, runId, results));
-  } else if (resultsPath !== undefined) {
-    throw new UsageError("--results requires a file path");
-  } else {
-    emitJson(await runE2eEmit(deps, runId));
-  }
-  return EXIT.OK;
-}
+const runE2ePhase = phaseCommand({
+  help: E2E_HELP,
+  phase: "e2e",
+  parse: (raw) => E2eResultsSchema.parse(raw),
+  record: runE2eRecord,
+  emit: runE2eEmit,
+});
 
 /**
  * Test seam for {@link runCancel}: inject the gh client (the `--cleanup` teardown),
@@ -1155,31 +1145,11 @@ async function run(argv: string[]): Promise<ExitCode> {
 
 export const runCommand: Subcommand = {
   describe: "Create or resume a run (create resolves+seeds a spec; resume re-checks quota)",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`run: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("run", run),
 };
 
 /** Top-level `factory resume` — alias-equivalent of `run resume` (Decision 35). */
 export const resumeCommand: Subcommand = {
   describe: "Resume a paused/suspended run (re-check quota; clear a recovered checkpoint)",
-  run: async (argv) => {
-    try {
-      return await runResume(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`resume: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("resume", runResume),
 };

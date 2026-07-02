@@ -12,13 +12,13 @@
  * diagnostic itself.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError, UsageError } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
+import { parseArgs, UsageError } from "../args.js";
+import { emitJson, emitLine } from "../io.js";
 import { StateManager } from "../../core/state/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { scanRun, applyRescue, assessWork, type WorkProbe } from "../../rescue/index.js";
 import { DefaultGitClient } from "../../git/index.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const RESCUE_HELP = `factory rescue — scan or recover a stalled run
 
@@ -164,15 +164,5 @@ async function run(argv: string[]): Promise<ExitCode> {
 
 export const rescueCommand: Subcommand = {
   describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`rescue: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("rescue", run),
 };

@@ -12,8 +12,8 @@
  * changes stay visible to anyone who ran `configure`.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError, UsageError } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
+import { parseArgs, UsageError } from "../args.js";
+import { emitJson, emitLine } from "../io.js";
 import {
   loadConfig,
   readRawConfig,
@@ -25,7 +25,7 @@ import {
   getAtPath,
 } from "../../config/index.js";
 import { applyGateEnvDetection } from "../../ci/index.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const HELP = `factory configure — inspect or edit the config overlay
 
@@ -93,15 +93,5 @@ async function run(argv: string[]): Promise<ExitCode> {
 
 export const configureCommand: Subcommand = {
   describe: "Inspect or edit the persisted config (--get/--set/--unset)",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`configure: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("configure", run),
 };

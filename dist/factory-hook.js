@@ -7663,6 +7663,24 @@ var RunStateSchema = external_exports.object({
   updated_at: external_exports.string(),
   ended_at: external_exports.string().nullable().default(null)
 });
+function reasonIffFailed(ctx, opts) {
+  const isFailed = opts.status === "failed";
+  const hasReason = opts.reason != null && opts.reason.length > 0;
+  if (isFailed && !hasReason) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: [...opts.path],
+      message: `run '${opts.runId}' ${opts.label} is 'failed' but has no reason`
+    });
+  }
+  if (!isFailed && hasReason) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: [...opts.path],
+      message: `run '${opts.runId}' ${opts.label} is '${opts.status}' but carries a reason (reason is set IFF failed)`
+    });
+  }
+}
 function refineRunCrossFields(run, ctx) {
   const quotaStatuses = ["paused", "suspended"];
   if (run.quota != null && !quotaStatuses.includes(run.status)) {
@@ -7680,40 +7698,23 @@ function refineRunCrossFields(run, ctx) {
     });
   }
   if (run.docs !== void 0) {
-    const isFailed = run.docs.status === "failed";
-    const hasReason = run.docs.reason != null && run.docs.reason.length > 0;
-    if (isFailed && !hasReason) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["docs", "reason"],
-        message: `run '${run.run_id}' docs phase is 'failed' but has no reason`
-      });
-    }
-    if (!isFailed && hasReason) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["docs", "reason"],
-        message: `run '${run.run_id}' docs phase is '${run.docs.status}' but carries a reason (reason is set IFF failed)`
-      });
-    }
+    reasonIffFailed(ctx, {
+      runId: run.run_id,
+      path: ["docs", "reason"],
+      label: "docs phase",
+      status: run.docs.status,
+      reason: run.docs.reason
+    });
   }
   if (run.e2e_phase !== void 0 && run.e2e_phase.status !== void 0) {
     const isFailed = run.e2e_phase.status === "failed";
-    const hasReason = run.e2e_phase.reason != null && run.e2e_phase.reason.length > 0;
-    if (isFailed && !hasReason) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["e2e_phase", "reason"],
-        message: `run '${run.run_id}' e2e phase is 'failed' but has no reason`
-      });
-    }
-    if (!isFailed && hasReason) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["e2e_phase", "reason"],
-        message: `run '${run.run_id}' e2e phase is '${run.e2e_phase.status}' but carries a reason (reason is set IFF failed)`
-      });
-    }
+    reasonIffFailed(ctx, {
+      runId: run.run_id,
+      path: ["e2e_phase", "reason"],
+      label: "e2e phase",
+      status: run.e2e_phase.status,
+      reason: run.e2e_phase.reason
+    });
     const hasAdvisory = run.e2e_phase.advisory != null && run.e2e_phase.advisory.length > 0;
     if (isFailed && hasAdvisory) {
       ctx.addIssue({
@@ -8009,7 +8010,7 @@ var StateManager = class _StateManager {
         log6.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
       }
     }
-    return runs.sort((a, b) => a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0);
+    return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
   }
   /**
    * Find the newest NON-terminal run for `(repo, specId)`, or null. Powers the

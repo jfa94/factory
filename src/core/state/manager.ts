@@ -349,7 +349,7 @@ export class StateManager {
         log.warn(`state: skipping unreadable run '${entry.name}': ${(err as Error).message}`);
       }
     }
-    return runs.sort((a, b) => (a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0));
+    return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
   }
 
   /**

@@ -3,14 +3,14 @@
  * recovery, cascade-fail, and the ready set. Emits ONE JSON NextTask.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError, UsageError } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
+import { parseArgs, UsageError } from "../args.js";
+import { emitJson, emitLine } from "../io.js";
 import { loadOrchestratorDeps } from "../wiring.js";
 import { nextTask } from "../../orchestrator/index.js";
 import { StateManager, RunModeEnum } from "../../core/state/index.js";
 import type { RunState } from "../../core/state/index.js";
 import { resolveDataDir } from "../../config/index.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const HELP = `factory next-task — one run-loop step: quota gate, cascade-fail, ready set
 
@@ -119,15 +119,5 @@ async function run(argv: string[]): Promise<ExitCode> {
 
 export const nextCommand: Subcommand = {
   describe: "One run-loop step: quota gate, cascade-fail, emit the ready set",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`next-task: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("next-task", run),
 };

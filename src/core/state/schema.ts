@@ -717,6 +717,35 @@ export type RunState = z.infer<typeof RunStateSchema>;
  * run is `paused` or `suspended`. Resume MUST clear it before returning to
  * `running`; a terminal run never carries one. Applied at parse time.
  */
+/** Shared "reason set IFF failed" phase check (T1 docs / T2 e2e below). */
+function reasonIffFailed(
+  ctx: z.RefinementCtx,
+  opts: {
+    runId: string;
+    path: readonly string[];
+    label: string;
+    status: string;
+    reason: string | null | undefined;
+  },
+): void {
+  const isFailed = opts.status === "failed";
+  const hasReason = opts.reason != null && opts.reason.length > 0;
+  if (isFailed && !hasReason) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...opts.path],
+      message: `run '${opts.runId}' ${opts.label} is 'failed' but has no reason`,
+    });
+  }
+  if (!isFailed && hasReason) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...opts.path],
+      message: `run '${opts.runId}' ${opts.label} is '${opts.status}' but carries a reason (reason is set IFF failed)`,
+    });
+  }
+}
+
 function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
   const quotaStatuses: readonly RunStatus[] = ["paused", "suspended"];
   if (run.quota != null && !quotaStatuses.includes(run.status)) {
@@ -744,22 +773,13 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
   // invariant (refineTaskCrossFields above). A failed docs phase must carry a reason
   // (human-facing report); a reason on a done docs phase is a serialization smell.
   if (run.docs !== undefined) {
-    const isFailed = run.docs.status === "failed";
-    const hasReason = run.docs.reason != null && run.docs.reason.length > 0;
-    if (isFailed && !hasReason) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["docs", "reason"],
-        message: `run '${run.run_id}' docs phase is 'failed' but has no reason`,
-      });
-    }
-    if (!isFailed && hasReason) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["docs", "reason"],
-        message: `run '${run.run_id}' docs phase is '${run.docs.status}' but carries a reason (reason is set IFF failed)`,
-      });
-    }
+    reasonIffFailed(ctx, {
+      runId: run.run_id,
+      path: ["docs", "reason"],
+      label: "docs phase",
+      status: run.docs.status,
+      reason: run.docs.reason,
+    });
   }
 
   // T2: E2ePhase "reason set IFF failed" — mirrors the DocsPhase check above. Unlike
@@ -768,21 +788,13 @@ function refineRunCrossFields(run: RunState, ctx: z.RefinementCtx): void {
   // is present.
   if (run.e2e_phase !== undefined && run.e2e_phase.status !== undefined) {
     const isFailed = run.e2e_phase.status === "failed";
-    const hasReason = run.e2e_phase.reason != null && run.e2e_phase.reason.length > 0;
-    if (isFailed && !hasReason) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["e2e_phase", "reason"],
-        message: `run '${run.run_id}' e2e phase is 'failed' but has no reason`,
-      });
-    }
-    if (!isFailed && hasReason) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["e2e_phase", "reason"],
-        message: `run '${run.run_id}' e2e phase is '${run.e2e_phase.status}' but carries a reason (reason is set IFF failed)`,
-      });
-    }
+    reasonIffFailed(ctx, {
+      runId: run.run_id,
+      path: ["e2e_phase", "reason"],
+      label: "e2e phase",
+      status: run.e2e_phase.status,
+      reason: run.e2e_phase.reason,
+    });
 
     // `advisory` is the done-side counterpart of `reason` (see E2ePhaseSchema's own
     // doc comment) — never present on `failed`.

@@ -38,7 +38,7 @@ import { homedir } from "node:os";
 
 import type { ExitCode } from "../../shared/exit-codes.js";
 import { EXIT } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError } from "../args.js";
+import { parseArgs } from "../args.js";
 import { emitLine, emitError } from "../io.js";
 import { resolveDataDir, resolvePluginRoot } from "../../config/index.js";
 import { decideAutonomyPreflight, isAutonomous } from "../../autonomy/mode.js";
@@ -47,7 +47,7 @@ import { atomicWriteFile } from "../../shared/atomic-write.js";
 import { stringifyJson } from "../../shared/json.js";
 import { createLogger } from "../../shared/logging.js";
 import { tildeShorten } from "../../shared/paths.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const log = createLogger("autonomy");
 
@@ -562,15 +562,5 @@ async function run(argv: string[]): Promise<ExitCode> {
 
 export const autonomyCommand: Subcommand = {
   describe: "Materialize merged-settings.json for an autonomous relaunch + print the command",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`autonomy: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("autonomy", run),
 };

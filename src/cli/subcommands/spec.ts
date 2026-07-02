@@ -7,8 +7,8 @@
  * The moved names are re-exported below for existing importers.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
+import { parseArgs, UsageError, optionalString } from "../args.js";
+import { emitJson, emitLine } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import {
   SpecStore,
@@ -20,7 +20,7 @@ import {
   type SpecBuildEnvelope,
 } from "../../spec/index.js";
 import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 export { resolveSpec, gateSpec, storeSpec };
 export type { SpecBuildDeps, SpecBuildEnvelope };
@@ -131,15 +131,5 @@ async function run(argv: string[]): Promise<ExitCode> {
 
 export const specCommand: Subcommand = {
   describe: "Build a durable spec (resolve → gate → store; runner drives the agent spawns)",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`spec: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("spec", run),
 };

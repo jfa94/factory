@@ -126,3 +126,26 @@ export function parseShipMode(raw: string | boolean | undefined): ShipMode | und
 export function optionalString(raw: string | boolean | undefined): string | undefined {
   return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
+
+/**
+ * The shared three-way `--results <path>` grammar: absent → undefined;
+ * present with a path → `parse(path)` with failures rethrown as
+ * `--results <path>: <msg>` usage errors; present without a path → loud.
+ */
+export async function parseResultsFlag<T>(
+  args: ParsedArgs,
+  parse: (path: string) => Promise<T>,
+): Promise<T | undefined> {
+  const path = args.flag("results");
+  if (typeof path === "string" && path.length > 0) {
+    try {
+      return await parse(path);
+    } catch (err) {
+      throw new UsageError(
+        `--results ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  if (path !== undefined) throw new UsageError("--results requires a file path");
+  return undefined;
+}

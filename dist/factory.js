@@ -6574,6 +6574,24 @@ var RunStateSchema = external_exports.object({
   updated_at: external_exports.string(),
   ended_at: external_exports.string().nullable().default(null)
 });
+function reasonIffFailed(ctx, opts) {
+  const isFailed = opts.status === "failed";
+  const hasReason = opts.reason != null && opts.reason.length > 0;
+  if (isFailed && !hasReason) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: [...opts.path],
+      message: `run '${opts.runId}' ${opts.label} is 'failed' but has no reason`
+    });
+  }
+  if (!isFailed && hasReason) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: [...opts.path],
+      message: `run '${opts.runId}' ${opts.label} is '${opts.status}' but carries a reason (reason is set IFF failed)`
+    });
+  }
+}
 function refineRunCrossFields(run10, ctx) {
   const quotaStatuses = ["paused", "suspended"];
   if (run10.quota != null && !quotaStatuses.includes(run10.status)) {
@@ -6591,40 +6609,23 @@ function refineRunCrossFields(run10, ctx) {
     });
   }
   if (run10.docs !== void 0) {
-    const isFailed = run10.docs.status === "failed";
-    const hasReason = run10.docs.reason != null && run10.docs.reason.length > 0;
-    if (isFailed && !hasReason) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["docs", "reason"],
-        message: `run '${run10.run_id}' docs phase is 'failed' but has no reason`
-      });
-    }
-    if (!isFailed && hasReason) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["docs", "reason"],
-        message: `run '${run10.run_id}' docs phase is '${run10.docs.status}' but carries a reason (reason is set IFF failed)`
-      });
-    }
+    reasonIffFailed(ctx, {
+      runId: run10.run_id,
+      path: ["docs", "reason"],
+      label: "docs phase",
+      status: run10.docs.status,
+      reason: run10.docs.reason
+    });
   }
   if (run10.e2e_phase !== void 0 && run10.e2e_phase.status !== void 0) {
     const isFailed = run10.e2e_phase.status === "failed";
-    const hasReason = run10.e2e_phase.reason != null && run10.e2e_phase.reason.length > 0;
-    if (isFailed && !hasReason) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["e2e_phase", "reason"],
-        message: `run '${run10.run_id}' e2e phase is 'failed' but has no reason`
-      });
-    }
-    if (!isFailed && hasReason) {
-      ctx.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["e2e_phase", "reason"],
-        message: `run '${run10.run_id}' e2e phase is '${run10.e2e_phase.status}' but carries a reason (reason is set IFF failed)`
-      });
-    }
+    reasonIffFailed(ctx, {
+      runId: run10.run_id,
+      path: ["e2e_phase", "reason"],
+      label: "e2e phase",
+      status: run10.e2e_phase.status,
+      reason: run10.e2e_phase.reason
+    });
     const hasAdvisory = run10.e2e_phase.advisory != null && run10.e2e_phase.advisory.length > 0;
     if (isFailed && hasAdvisory) {
       ctx.addIssue({
@@ -7125,7 +7126,7 @@ var StateManager = class _StateManager {
         log4.warn(`state: skipping unreadable run '${entry.name}': ${err.message}`);
       }
     }
-    return runs.sort((a, b) => a.run_id < b.run_id ? 1 : a.run_id > b.run_id ? -1 : 0);
+    return runs.sort((a, b) => b.run_id.localeCompare(a.run_id));
   }
   /**
    * Find the newest NON-terminal run for `(repo, specId)`, or null. Powers the
@@ -7355,6 +7356,20 @@ function parseShipMode(raw) {
 }
 function optionalString(raw) {
   return typeof raw === "string" && raw.length > 0 ? raw : void 0;
+}
+async function parseResultsFlag(args, parse) {
+  const path5 = args.flag("results");
+  if (typeof path5 === "string" && path5.length > 0) {
+    try {
+      return await parse(path5);
+    } catch (err) {
+      throw new UsageError(
+        `--results ${path5}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+  if (path5 !== void 0) throw new UsageError("--results requires a file path");
+  return void 0;
 }
 
 // src/cli/io.ts
@@ -7730,6 +7745,21 @@ function injectGateEnvIntoWorkflow(text, gateEnv) {
   return lines.join("\n");
 }
 
+// src/cli/registry-types.ts
+function withUsageGuard(prefix, fn) {
+  return async (argv) => {
+    try {
+      return await fn(argv);
+    } catch (err) {
+      if (isUsageError(err)) {
+        emitError(`${prefix}: ${err.message}`);
+        return EXIT.USAGE;
+      }
+      throw err;
+    }
+  };
+}
+
 // src/cli/subcommands/configure.ts
 var HELP = `factory configure \u2014 inspect or edit the config overlay
 
@@ -7786,17 +7816,7 @@ async function run(argv) {
 }
 var configureCommand = {
   describe: "Inspect or edit the persisted config (--get/--set/--unset)",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`configure: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("configure", run)
 };
 
 // src/cli/subcommands/debug.ts
@@ -14397,34 +14417,34 @@ var DOCS_HELP = `factory run docs [--run <id>] [--results <path>]
 Emit the documentation-phase spawn request, or (with --results) record a scribe
 result: publish the docs commit onto staging and mark the phase done, or suspend
 the run on failure. The CLI never spawns scribe \u2014 a orchestrator does.`;
-async function runDocs(argv) {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(DOCS_HELP);
-    return EXIT.OK;
-  }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "docs");
-  const deps = await loadCliDeps({ dataDir, runId });
-  const resultsPath = args.flag("results");
-  if (typeof resultsPath === "string" && resultsPath.length > 0) {
-    let results;
-    try {
-      results = DocsResultsSchema.parse(await readJsonInput(resultsPath));
-    } catch (err) {
-      throw new UsageError(
-        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`
-      );
+function phaseCommand(opts) {
+  return async (argv) => {
+    const args = parseArgs(argv, { booleans: [] });
+    if (args.flag("help") === true) {
+      emitLine(opts.help);
+      return EXIT.OK;
     }
-    emitJson(await runDocsRecord(deps, runId, results));
-  } else if (resultsPath !== void 0) {
-    throw new UsageError("--results requires a file path");
-  } else {
-    emitJson(await runDocsEmit(deps, runId));
-  }
-  return EXIT.OK;
+    const dataDir = resolveDataDir({});
+    const state = new StateManager({ dataDir });
+    const runId = await resolveRunId(state, args, opts.phase);
+    const deps = await loadCliDeps({ dataDir, runId });
+    const results = await parseResultsFlag(
+      args,
+      async (path5) => opts.parse(await readJsonInput(path5))
+    );
+    emitJson(
+      results !== void 0 ? await opts.record(deps, runId, results) : await opts.emit(deps, runId)
+    );
+    return EXIT.OK;
+  };
 }
+var runDocs = phaseCommand({
+  help: DOCS_HELP,
+  phase: "docs",
+  parse: (raw) => DocsResultsSchema.parse(raw),
+  record: runDocsRecord,
+  emit: runDocsEmit
+});
 var E2E_HELP = `factory run e2e [--run <id>] [--results <path>]
 
 Emit the e2e-phase spawn request (author or run-suite, Decision 39), or (with
@@ -14432,34 +14452,13 @@ Emit the e2e-phase spawn request (author or run-suite, Decision 39), or (with
 run the full suite against staging, and either mark the phase done, reopen a
 mappable failing task with feedback, or fail the run. The CLI never spawns the
 e2e author \u2014 a orchestrator does.`;
-async function runE2ePhase(argv) {
-  const args = parseArgs(argv, { booleans: [] });
-  if (args.flag("help") === true) {
-    emitLine(E2E_HELP);
-    return EXIT.OK;
-  }
-  const dataDir = resolveDataDir({});
-  const state = new StateManager({ dataDir });
-  const runId = await resolveRunId(state, args, "e2e");
-  const deps = await loadCliDeps({ dataDir, runId });
-  const resultsPath = args.flag("results");
-  if (typeof resultsPath === "string" && resultsPath.length > 0) {
-    let results;
-    try {
-      results = E2eResultsSchema.parse(await readJsonInput(resultsPath));
-    } catch (err) {
-      throw new UsageError(
-        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-    emitJson(await runE2eRecord(deps, runId, results));
-  } else if (resultsPath !== void 0) {
-    throw new UsageError("--results requires a file path");
-  } else {
-    emitJson(await runE2eEmit(deps, runId));
-  }
-  return EXIT.OK;
-}
+var runE2ePhase = phaseCommand({
+  help: E2E_HELP,
+  phase: "e2e",
+  parse: (raw) => E2eResultsSchema.parse(raw),
+  record: runE2eRecord,
+  emit: runE2eEmit
+});
 async function resolveCancelRunId(state, args, sessionId, overrides = {}) {
   const explicit = optionalString(args.flag("run"));
   if (explicit !== void 0) return explicit;
@@ -14556,31 +14555,11 @@ async function run2(argv) {
 }
 var runCommand = {
   describe: "Create or resume a run (create resolves+seeds a spec; resume re-checks quota)",
-  run: async (argv) => {
-    try {
-      return await run2(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`run: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("run", run2)
 };
 var resumeCommand = {
   describe: "Resume a paused/suspended run (re-check quota; clear a recovered checkpoint)",
-  run: async (argv) => {
-    try {
-      return await runResume(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`resume: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("resume", runResume)
 };
 
 // src/cli/subcommands/spec.ts
@@ -14655,17 +14634,7 @@ async function run3(argv) {
 }
 var specCommand = {
   describe: "Build a durable spec (resolve \u2192 gate \u2192 store; runner drives the agent spawns)",
-  run: async (argv) => {
-    try {
-      return await run3(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`spec: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("spec", run3)
 };
 
 // src/debug/review.ts
@@ -15270,17 +15239,7 @@ async function run4(argv, overrides = {}) {
 }
 var debugCommand = {
   describe: "/factory:debug \u2014 whole-scope review\u21C4fix loop (start \u2192 review \u2192 spec \u2192 seed \u2192 \u2026 \u2192 finalize)",
-  run: async (argv) => {
-    try {
-      return await run4(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`debug: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("debug", run4)
 };
 
 // src/cli/subcommands/state.ts
@@ -15333,17 +15292,7 @@ async function runState(argv, overrides = {}) {
 }
 var stateCommand = {
   describe: "Print run state (current or by run-id); read-only",
-  run: async (argv) => {
-    try {
-      return await runState(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`state: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("state", runState)
 };
 
 // src/cli/subcommands/scaffold.ts
@@ -15673,17 +15622,7 @@ async function run5(argv) {
 }
 var scaffoldCommand = {
   describe: "Prepare a repo (templates + develop branch protection) for the pipeline",
-  run: async (argv) => {
-    try {
-      return await run5(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`scaffold: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("scaffold", run5)
 };
 
 // src/cli/subcommands/rescue.ts
@@ -15801,17 +15740,7 @@ async function run6(argv) {
 }
 var rescueCommand = {
   describe: "Scan or recover a stalled run (reset stuck tasks; reopen a terminal run)",
-  run: async (argv) => {
-    try {
-      return await run6(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`rescue: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("rescue", run6)
 };
 
 // src/cli/subcommands/score.ts
@@ -15846,17 +15775,7 @@ async function runScore(argv, overrides = {}) {
 }
 var scoreCommand = {
   describe: "Report a run's outcome summary (read-only)",
-  run: async (argv) => {
-    try {
-      return await runScore(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`score: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("score", runScore)
 };
 
 // src/cli/subcommands/drive.ts
@@ -15889,37 +15808,21 @@ async function run7(argv) {
   const runId = args.requireFlag("run");
   const taskId = args.requireFlag("task");
   const shipMode = parseShipMode(args.flag("ship-mode"));
-  const resultsPath = args.flag("results");
-  let results;
-  if (typeof resultsPath === "string" && resultsPath.length > 0) {
-    try {
-      results = parseDriveResults(await readJsonInput(resultsPath));
-    } catch (err) {
-      throw new UsageError(
-        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  } else if (resultsPath !== void 0) {
-    throw new UsageError("--results requires a file path");
-  }
-  const deps = await loadOrchestratorDeps({ runId, ...shipMode !== void 0 ? { shipMode } : {} });
+  const results = await parseResultsFlag(
+    args,
+    async (path5) => parseDriveResults(await readJsonInput(path5))
+  );
+  const deps = await loadOrchestratorDeps({
+    runId,
+    ...shipMode !== void 0 ? { shipMode } : {}
+  });
   const envelope = await nextAction(deps, runId, taskId, results);
   emitJson(envelope);
   return EXIT.OK;
 }
 var driveCommand = {
   describe: "Step one task: run deterministic steps, emit spawn/terminal/quota envelope",
-  run: async (argv) => {
-    try {
-      return await run7(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`next-action: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("next-action", run7)
 };
 
 // src/cli/subcommands/next.ts
@@ -15990,17 +15893,7 @@ async function run8(argv) {
 }
 var nextCommand = {
   describe: "One run-loop step: quota gate, cascade-fail, emit the ready set",
-  run: async (argv) => {
-    try {
-      return await run8(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`next-task: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("next-task", run8)
 };
 
 // src/shared/stdin.ts
@@ -16401,17 +16294,7 @@ async function run9(argv) {
 }
 var autonomyCommand = {
   describe: "Materialize merged-settings.json for an autonomous relaunch + print the command",
-  run: async (argv) => {
-    try {
-      return await run9(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`autonomy: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  }
+  run: withUsageGuard("autonomy", run9)
 };
 
 // src/cli/main.ts

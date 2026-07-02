@@ -11,12 +11,12 @@
  * this one only reads.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
+import { parseArgs } from "../args.js";
+import { emitJson, emitLine } from "../io.js";
 import { StateManager } from "../../core/state/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import type { RunState } from "../../types/index.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const HELP = `factory state — read run state (read-only)
 
@@ -79,15 +79,5 @@ export async function runState(
 
 export const stateCommand: Subcommand = {
   describe: "Print run state (current or by run-id); read-only",
-  run: async (argv) => {
-    try {
-      return await runState(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`state: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("state", runState),
 };

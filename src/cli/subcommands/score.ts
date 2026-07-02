@@ -6,14 +6,14 @@
  * the runner surfaces. Nothing here writes state.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
+import { parseArgs, UsageError, optionalString } from "../args.js";
+import { emitJson, emitLine } from "../io.js";
 import { resolveDataDir } from "../../config/index.js";
 import { StateManager } from "../../core/state/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { SpecStore } from "../../spec/index.js";
 import { buildPartialReport, buildRunSummary } from "../../scoring/index.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const HELP = `factory score — report a run's outcome summary (read-only)
 
@@ -58,15 +58,5 @@ export async function runScore(
 
 export const scoreCommand: Subcommand = {
   describe: "Report a run's outcome summary (read-only)",
-  run: async (argv) => {
-    try {
-      return await runScore(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`score: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("score", runScore),
 };

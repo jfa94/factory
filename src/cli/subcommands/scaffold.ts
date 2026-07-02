@@ -26,8 +26,8 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError, optionalString } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
+import { parseArgs, optionalString } from "../args.js";
+import { emitJson, emitLine } from "../io.js";
 import { createLogger } from "../../shared/index.js";
 import {
   DefaultGitClient,
@@ -51,7 +51,7 @@ import {
   buildTargetDataDirRules,
   type TargetDataDirRules,
 } from "./target-settings.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const log = createLogger("scaffold");
 
@@ -514,15 +514,5 @@ async function run(argv: string[]): Promise<ExitCode> {
 
 export const scaffoldCommand: Subcommand = {
   describe: "Prepare a repo (templates + develop branch protection) for the pipeline",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`scaffold: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("scaffold", run),
 };

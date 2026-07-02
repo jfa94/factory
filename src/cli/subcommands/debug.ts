@@ -61,8 +61,8 @@
  */
 import { join } from "node:path";
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
+import { parseArgs, UsageError, optionalString } from "../args.js";
+import { emitJson, emitLine } from "../io.js";
 import { readJsonInput } from "../../orchestrator/index.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
 import { atomicWriteFile } from "../../shared/atomic-write.js";
@@ -100,7 +100,7 @@ import type { Finding } from "../../verifier/judgment/finding.js";
 import type { PartialRunReport } from "../../scoring/index.js";
 import type { RollupResult } from "../../git/index.js";
 import type { Config, RunState, SpawnRequest } from "../../types/index.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -821,15 +821,5 @@ async function run(argv: string[], overrides: DebugOverrides = {}): Promise<Exit
 export const debugCommand: Subcommand = {
   describe:
     "/factory:debug — whole-scope review⇄fix loop (start → review → spec → seed → … → finalize)",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`debug: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("debug", run),
 };

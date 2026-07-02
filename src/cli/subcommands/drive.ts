@@ -7,11 +7,11 @@
  * `quota-blocked`. Re-invoking without --results is idempotent.
  */
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
-import { parseArgs, isUsageError, UsageError, parseShipMode } from "../args.js";
-import { emitJson, emitLine, emitError } from "../io.js";
+import { parseArgs, parseShipMode, parseResultsFlag } from "../args.js";
+import { emitJson, emitLine } from "../io.js";
 import { loadOrchestratorDeps } from "../wiring.js";
 import { nextAction, parseDriveResults, readJsonInput } from "../../orchestrator/index.js";
-import type { Subcommand } from "../registry-types.js";
+import { withUsageGuard, type Subcommand } from "../registry-types.js";
 
 const HELP = `factory next-action — step one task until it needs agents or is terminal
 
@@ -43,22 +43,14 @@ async function run(argv: string[]): Promise<ExitCode> {
   const runId = args.requireFlag("run");
   const taskId = args.requireFlag("task");
   const shipMode = parseShipMode(args.flag("ship-mode"));
-  const resultsPath = args.flag("results");
+  const results = await parseResultsFlag(args, async (path) =>
+    parseDriveResults(await readJsonInput<unknown>(path)),
+  );
 
-  let results;
-  if (typeof resultsPath === "string" && resultsPath.length > 0) {
-    try {
-      results = parseDriveResults(await readJsonInput<unknown>(resultsPath));
-    } catch (err) {
-      throw new UsageError(
-        `--results ${resultsPath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  } else if (resultsPath !== undefined) {
-    throw new UsageError("--results requires a file path");
-  }
-
-  const deps = await loadOrchestratorDeps({ runId, ...(shipMode !== undefined ? { shipMode } : {}) });
+  const deps = await loadOrchestratorDeps({
+    runId,
+    ...(shipMode !== undefined ? { shipMode } : {}),
+  });
   const envelope = await nextAction(deps, runId, taskId, results);
   emitJson(envelope);
   return EXIT.OK;
@@ -66,15 +58,5 @@ async function run(argv: string[]): Promise<ExitCode> {
 
 export const driveCommand: Subcommand = {
   describe: "Step one task: run deterministic steps, emit spawn/terminal/quota envelope",
-  run: async (argv) => {
-    try {
-      return await run(argv);
-    } catch (err) {
-      if (isUsageError(err)) {
-        emitError(`next-action: ${err.message}`);
-        return EXIT.USAGE;
-      }
-      throw err;
-    }
-  },
+  run: withUsageGuard("next-action", run),
 };
