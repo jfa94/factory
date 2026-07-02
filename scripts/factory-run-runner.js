@@ -613,11 +613,11 @@ for (;;) {
     continue; // docs done → loop back to `factory next-task` → all-terminal → finalize
   }
   if (next.kind === "finalize" || next.kind === "done") {
-    // all-terminal carries cascade_dropped (this-invocation drops) — surface it, never swallow.
+    // all-terminal carries cascade_failed (this-invocation fails) — surface it, never swallow.
     return {
       suspended: false,
       kind: next.kind,
-      cascade_dropped: next.cascade_dropped ?? [],
+      cascade_failed: next.cascade_failed ?? [],
       outcomes,
     };
   }

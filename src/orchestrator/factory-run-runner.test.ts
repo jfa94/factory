@@ -16,6 +16,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PANEL_ROLES } from "../verifier/judgment/index.js";
+import { nextTask } from "./next.js";
+import { makeOrchestratorDeps } from "./orchestrator-fixtures.js";
 
 const driverSrc = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "../../scripts/factory-run-runner.js"),
@@ -89,13 +91,22 @@ const SLICES = {
   cli: () => sliceFn("async function cli(", "\n\n// Persist a DriveResults document"),
   recordResults: () => sliceFn("async function recordResults(", "\n\nasync function runProducer("),
   agentTypeMap: () => sliceFn("const AGENT_TYPE = {", "\nfunction parseEnvelope("),
+  runDocs: () => sliceFn("async function runDocs(", "\n\n// Mirrors runDocs()"),
+  runE2e: () => sliceFn("async function runE2e(", '\nphase("Drive");'),
 };
 
 describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
   it("all orchestration functions are extractable (sanity)", () => {
     // agentTypeMap is a statement pair (const + function decl), not a single async
     // function expression — everything else in SLICES is.
-    const FN_SLICES = ["runProducer", "runVerifyCollection", "cli", "recordResults"];
+    const FN_SLICES = [
+      "runProducer",
+      "runVerifyCollection",
+      "cli",
+      "recordResults",
+      "runDocs",
+      "runE2e",
+    ];
     for (const [name, slice] of Object.entries(SLICES)) {
       expect(() => slice(), `slice failed for ${name}`).not.toThrow();
       if (FN_SLICES.includes(name)) {
@@ -426,6 +437,114 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
       await expect(
         buildRecord(agent, parseEnvelope, cli)("T1", "exec", { result_key: {} }),
       ).rejects.toThrow(/skipped or died/);
+    });
+  });
+
+  // ── runDocs / runE2e (phase-coroutine drift guards) ────────────────────────
+  describe("runDocs", () => {
+    type RunDocs = () => Promise<unknown>;
+
+    const build = (agent: unknown, cli: unknown, parseEnvelope: unknown) =>
+      buildFn<RunDocs>(SLICES.runDocs(), {
+        agent,
+        cli,
+        parseEnvelope,
+        runId: "run-1",
+        dataDir: "/data",
+        fileSeq: 0,
+        modelAlias,
+        copyVerbatimInstruction: "copy",
+        STATUS_OUT: {},
+        RAW_OUT: {},
+        EXEC_AGENT_MODEL: "sonnet",
+        DOCS_KINDS: new Set(["spawn", "done", "suspend"]),
+      });
+
+    it("a dead scribe (out===null) records STATUS: BLOCKED — ESCALATE, never a silent DONE", async () => {
+      const { agent, calls } = makeAgent([null, { raw: "envelope-bytes" }]);
+      const cli = async () => ({ kind: "spawn", prompt: "author docs", model: "sonnet" });
+      const parseEnvelope = () => ({ kind: "suspend", reason: "docs failed" });
+      const out = await build(agent, cli, parseEnvelope)();
+      expect(out).toEqual({ kind: "suspend", reason: "docs failed" });
+      // The record payload carries the escalation status, not a fabricated success.
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.prompt).toContain("STATUS: BLOCKED — ESCALATE scribe agent skipped or died");
+    });
+
+    it("a done/suspend emit short-circuits (idempotent re-entry — no scribe spawned)", async () => {
+      const { agent, calls } = makeAgent([]);
+      const cli = async () => ({ kind: "done" });
+      const out = await build(agent, cli, () => {
+        throw new Error("parse must not run");
+      })();
+      expect(out).toEqual({ kind: "done" });
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  describe("runE2e", () => {
+    type RunE2e = () => Promise<unknown>;
+
+    const build = (agent: unknown, cli: unknown, parseEnvelope: unknown) =>
+      buildFn<RunE2e>(SLICES.runE2e(), {
+        agent,
+        cli,
+        parseEnvelope,
+        runId: "run-1",
+        dataDir: "/data",
+        fileSeq: 0,
+        modelAlias,
+        copyVerbatimInstruction: "copy",
+        E2E_AUTHOR_OUT: {},
+        RAW_OUT: {},
+        EXEC_AGENT_MODEL: "sonnet",
+        E2E_KINDS: new Set(["spawn", "done", "failed", "reopen", "suspend"]),
+      });
+
+    it("a dead e2e-author (out===null) records BLOCKED — ESCALATE with an EMPTY manifest (fails the phase, never suspends)", async () => {
+      const { agent, calls } = makeAgent([null, { raw: "envelope-bytes" }]);
+      const cli = async () => ({ kind: "spawn", prompt: "author e2e", model: "sonnet" });
+      const parseEnvelope = () => ({ kind: "failed", reason: "author died" });
+      const out = await build(agent, cli, parseEnvelope)();
+      expect(out).toEqual({ kind: "failed", reason: "author died" });
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.prompt).toContain(
+        "STATUS: BLOCKED — ESCALATE e2e-author agent skipped or died",
+      );
+      // Nothing was authored → the recorded manifest MUST be empty (not fabricated).
+      expect(calls[1]?.prompt).toContain('"manifest":[]');
+    });
+
+    it("a non-spawn emit short-circuits (idempotent re-entry / already concluded)", async () => {
+      const { agent, calls } = makeAgent([]);
+      const cli = async () => ({ kind: "reopen", task_id: "T1" });
+      const out = await build(agent, cli, () => {
+        throw new Error("parse must not run");
+      })();
+      expect(out).toEqual({ kind: "reopen", task_id: "T1" });
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  // ── finalize envelope field (finding 5: cascade_failed, not cascade_dropped) ─
+  describe("finalize envelope contract", () => {
+    it("the runner reads next.cascade_failed — the field a REAL nextTask finalize emission carries", async () => {
+      // Source side: the shipped runner must read the engine's field name…
+      expect(driverSrc).toContain("next.cascade_failed");
+      // …and the retired misspelling must be gone everywhere in the runner.
+      expect(driverSrc).not.toContain("cascade_dropped");
+
+      // Engine side: a real all-terminal run emits kind:"finalize" WITH cascade_failed.
+      const { deps, runId, cleanup } = await makeOrchestratorDeps({
+        taskStateOverrides: { status: "done" },
+      });
+      try {
+        const env = await nextTask(deps, runId);
+        expect(env.kind).toBe("finalize");
+        expect(env).toHaveProperty("cascade_failed", []);
+      } finally {
+        await cleanup();
+      }
     });
   });
 
