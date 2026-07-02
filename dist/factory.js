@@ -13320,63 +13320,60 @@ function assertSafeSpecPath(specPath) {
     throw new Error(`e2e manifest spec_path '${specPath}' must not contain '..' segments`);
   }
 }
+async function failWithCleanup(deps, runId, worktree, reason) {
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  await markFailed(deps, runId, reason);
+  return { kind: "failed", run_id: runId, reason };
+}
+function errText(err) {
+  return err instanceof Error ? err.message : String(err);
+}
 async function runE2eRecord(deps, runId, results) {
+  const worktree = e2eWorktreePath(deps.dataDir, runId);
   const outcome = parseProducerStatus(results.status);
   if (outcome.status !== "done") {
     const reason = `e2e-author: ${"reason" in outcome ? outcome.reason : "no parseable status"}`;
-    await markFailed(deps, runId, reason);
-    return { kind: "failed", run_id: runId, reason };
+    return failWithCleanup(deps, runId, worktree, reason);
   }
   if (results.manifest.length === 0 && results.no_ui_surface !== true) {
     const reason = "e2e-author: STATUS: DONE with an empty manifest but no_ui_surface was not explicitly true \u2014 ambiguous (genuine no-op vs. a malformed/incomplete response); refusing to silently pass";
-    await markFailed(deps, runId, reason);
-    return { kind: "failed", run_id: runId, reason };
+    return failWithCleanup(deps, runId, worktree, reason);
   }
   for (const entry of results.manifest) {
     try {
       assertSafeSpecPath(entry.spec_path);
     } catch (err) {
-      const reason = `e2e-author: ${err instanceof Error ? err.message : String(err)}`;
-      await markFailed(deps, runId, reason);
-      return { kind: "failed", run_id: runId, reason };
+      return failWithCleanup(deps, runId, worktree, `e2e-author: ${errText(err)}`);
     }
   }
   const cfg = deps.config.e2e;
   const run10 = await deps.state.read(runId);
   const staging = resolveStagingBranch(runId, run10.staging_branch);
-  const worktree = e2eWorktreePath(deps.dataDir, runId);
   const critical = results.manifest.filter((e) => e.kind === "critical");
   const unknownTaskIds = [...new Set(results.manifest.flatMap((e) => e.task_ids))].filter(
     (id) => !(id in run10.tasks)
   );
   if (unknownTaskIds.length > 0) {
     const reason = `e2e-author: manifest references unknown task_id(s) not in this run: ` + unknownTaskIds.join(", ");
-    await markFailed(deps, runId, reason);
-    return { kind: "failed", run_id: runId, reason };
+    return failWithCleanup(deps, runId, worktree, reason);
   }
   if (critical.length > 0) {
     const testDirPrefix = `${cfg.testDir}/`;
     const outsideTestDir = critical.filter((e) => !e.spec_path.startsWith(testDirPrefix));
     if (outsideTestDir.length > 0) {
       const reason = `e2e-author: critical spec_path(s) not under '${testDirPrefix}' \u2014 refusing to merge: ` + outsideTestDir.map((e) => e.spec_path).join(", ");
-      await deps.git.worktreeRemove([worktree, "--force"]);
-      await markFailed(deps, runId, reason);
-      return { kind: "failed", run_id: runId, reason };
+      return failWithCleanup(deps, runId, worktree, reason);
     }
     const branch = e2eBranchName(runId);
     const changed = await deps.git.diffNames(staging, branch, { cwd: worktree });
     const stray = changed.filter((f) => !f.startsWith(testDirPrefix));
     if (stray.length > 0) {
       const reason = `e2e-author: branch touches path(s) outside '${testDirPrefix}' \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`;
-      await deps.git.worktreeRemove([worktree, "--force"]);
-      await markFailed(deps, runId, reason);
-      return { kind: "failed", run_id: runId, reason };
+      return failWithCleanup(deps, runId, worktree, reason);
     }
     const proof = await proveCriticals(deps, runId, critical, worktree);
     if (!proof.ok) {
-      await deps.git.worktreeRemove([worktree, "--force"]);
-      await markFailed(deps, runId, proof.reason);
-      return { kind: "failed", run_id: runId, reason: proof.reason };
+      return failWithCleanup(deps, runId, worktree, proof.reason);
     }
     await deps.git.mergeFfOrCommit(staging, e2eBranchName(runId));
     await deps.git.push("origin", staging);
@@ -13416,10 +13413,18 @@ async function proveCriticals(deps, runId, critical, authorWorktree) {
   try {
     for (const entry of critical) {
       await files.copySpec(join16(authorWorktree, entry.spec_path), join16(wtPath, entry.spec_path));
-      const baseResult = await runE2e(
-        { cwd: wtPath, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: entry.spec_path },
-        tool
-      );
+      let baseResult;
+      try {
+        baseResult = await runE2e(
+          { cwd: wtPath, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: entry.spec_path },
+          tool
+        );
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `fail-first proof: e2e tooling error running '${entry.spec_path}' against the base app: ${errText(err)}`
+        };
+      }
       const { hasControl, controlGreen, journeyRed } = classifyBaseRun(baseResult.specs);
       if (!hasControl) {
         return {
@@ -13439,15 +13444,23 @@ async function proveCriticals(deps, runId, critical, authorWorktree) {
           reason: `fail-first proof: '${entry.spec_path}' did not fail against the base app (vacuous-pass risk) \u2014 rejected`
         };
       }
-      const stagingResult = await runE2e(
-        {
-          cwd: authorWorktree,
-          env: scrubbedE2eEnv(cfg),
-          replaceEnv: true,
-          testDir: entry.spec_path
-        },
-        tool
-      );
+      let stagingResult;
+      try {
+        stagingResult = await runE2e(
+          {
+            cwd: authorWorktree,
+            env: scrubbedE2eEnv(cfg),
+            replaceEnv: true,
+            testDir: entry.spec_path
+          },
+          tool
+        );
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `fail-first proof: e2e tooling error running '${entry.spec_path}' against staging: ${errText(err)}`
+        };
+      }
       if (!stagingResult.ok) {
         return {
           ok: false,
@@ -13534,23 +13547,41 @@ async function runSuiteAndDecide(deps, runId) {
   }
   await provision({ path: worktree, setupCommand: deps.config.quality.setupCommand });
   const tool = deps.playwright ?? new DefaultPlaywrightTool();
-  const criticalResult = await runE2e(
-    { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: cfg.testDir },
-    tool
-  );
+  let criticalResult;
+  try {
+    criticalResult = await runE2e(
+      { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: cfg.testDir },
+      tool
+    );
+  } catch (err) {
+    const reason = `e2e critical suite tooling error: ${errText(err)}`;
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  }
   const throwaway = manifest.filter((e) => e.kind === "throwaway");
-  const throwawayResult = throwaway.length > 0 ? await (async () => {
+  let throwawayResult;
+  let throwawayThrew;
+  if (throwaway.length > 0) {
     const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
     const configPath2 = throwawayConfigPath(worktree);
     await (deps.files ?? new DefaultE2eFileOps()).writeConfig(
       configPath2,
       throwawayConfigContents(throwawayDir)
     );
-    return runE2e(
-      { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, config: configPath2 },
-      tool
-    );
-  })() : void 0;
+    try {
+      throwawayResult = await runE2e(
+        { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, config: configPath2 },
+        tool
+      );
+    } catch (err) {
+      if (firstPass) {
+        const reason = `e2e throwaway suite tooling error: ${errText(err)}`;
+        await markFailed(deps, runId, reason, attempts);
+        return { kind: "failed", run_id: runId, reason };
+      }
+      throwawayThrew = errText(err);
+    }
+  }
   const criticalEntries = manifest.filter((e) => e.kind === "critical");
   const criticalMisses = criticalEntries.map((entry) => ({
     entry,
@@ -13586,7 +13617,7 @@ async function runSuiteAndDecide(deps, runId) {
     ...throwawayCandidates
   ];
   if (mappable.length === 0) {
-    const throwawayToolingFailed = !firstPass && throwawayResult !== void 0 && !throwawayResult.ok && throwawayResult.specs.every((s) => s.status !== "failed");
+    const throwawayToolingFailed = !firstPass && (throwawayThrew !== void 0 || throwawayResult !== void 0 && !throwawayResult.ok && throwawayResult.specs.every((s) => s.status !== "failed"));
     const advisory = throwawayFailed.length > 0 ? `${throwawayFailed.length} throwaway spec(s) still red (non-gating): ` + throwawayFailed.map((s) => s.title).join(", ") : throwawayToolingFailed ? "throwaway suite reported a tooling failure (non-gating)" : void 0;
     await markDone(deps, runId, { attempts, advisory });
     return { kind: "done", run_id: runId };
@@ -14637,15 +14668,33 @@ async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
       reason: "e2e.startCommand/e2e.baseURL not configured \u2014 run `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>`"
     };
   }
-  const results = await runE2e(
-    {
-      cwd: input.cwd,
-      env: scrubbedDebugE2eEnv(config),
-      replaceEnv: true,
-      testDir: config.testDir
-    },
-    tool
-  );
+  let results;
+  try {
+    results = await runE2e(
+      {
+        cwd: input.cwd,
+        env: scrubbedDebugE2eEnv(config),
+        replaceEnv: true,
+        testDir: config.testDir
+      },
+      tool
+    );
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return {
+      kind: "ran",
+      results: { ok: false, specs: [], counts: { passed: 0, failed: 0, flaky: 0, skipped: 0 } },
+      findings: [
+        {
+          reviewer: "e2e",
+          severity: "critical",
+          blocking: true,
+          quote: "(uncitable \u2014 e2e tooling failure, no per-spec citation available)",
+          description: `e2e tooling error \u2014 the Playwright run itself failed: ${detail}`
+        }
+      ]
+    };
+  }
   const findings = results.specs.filter((spec) => spec.status === "failed").map((spec) => ({
     reviewer: "e2e",
     severity: "critical",

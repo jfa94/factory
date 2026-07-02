@@ -279,15 +279,36 @@ export async function runCommittedE2e(
     };
   }
 
-  const results = await runE2e(
-    {
-      cwd: input.cwd,
-      env: scrubbedDebugE2eEnv(config),
-      replaceEnv: true,
-      testDir: config.testDir,
-    },
-    tool,
-  );
+  // runE2e THROWS on a tooling-level failure (missing Playwright binary, empty/
+  // truncated reporter output) — fold it into the same uncitable blocking-finding
+  // shape as an ok:false run instead of crashing the debug loop.
+  let results: E2eResults;
+  try {
+    results = await runE2e(
+      {
+        cwd: input.cwd,
+        env: scrubbedDebugE2eEnv(config),
+        replaceEnv: true,
+        testDir: config.testDir,
+      },
+      tool,
+    );
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return {
+      kind: "ran",
+      results: { ok: false, specs: [], counts: { passed: 0, failed: 0, flaky: 0, skipped: 0 } },
+      findings: [
+        {
+          reviewer: "e2e",
+          severity: "critical",
+          blocking: true,
+          quote: "(uncitable — e2e tooling failure, no per-spec citation available)",
+          description: `e2e tooling error — the Playwright run itself failed: ${detail}`,
+        },
+      ],
+    };
+  }
 
   const findings: Finding[] = results.specs
     .filter((spec) => spec.status === "failed")

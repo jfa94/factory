@@ -321,17 +321,39 @@ function assertSafeSpecPath(specPath: string): void {
   }
 }
 
+/**
+ * Fail the phase AND discard the author worktree — every {@link runE2eRecord}
+ * failure exit routes through here so no early exit leaks the worktree (the
+ * `worktree remove` wrapper tolerates an already-absent path: nonzero exit code,
+ * not a throw).
+ */
+async function failWithCleanup(
+  deps: E2eRunDeps,
+  runId: string,
+  worktree: string,
+  reason: string,
+): Promise<Extract<E2eAction, { kind: "failed" }>> {
+  await deps.git.worktreeRemove([worktree, "--force"]);
+  await markFailed(deps, runId, reason);
+  return { kind: "failed", run_id: runId, reason };
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** Record the e2e-author's result: on failure, fail the run; on success, prove + run the suite. */
 export async function runE2eRecord(
   deps: E2eRunDeps,
   runId: string,
   results: E2eAuthorResults,
 ): Promise<Extract<E2eAction, { kind: "done" | "failed" | "reopen" | "suspend" }>> {
+  const worktree = e2eWorktreePath(deps.dataDir, runId);
+
   const outcome = parseProducerStatus(results.status);
   if (outcome.status !== "done") {
     const reason = `e2e-author: ${"reason" in outcome ? outcome.reason : "no parseable status"}`;
-    await markFailed(deps, runId, reason);
-    return { kind: "failed", run_id: runId, reason };
+    return failWithCleanup(deps, runId, worktree, reason);
   }
 
   if (results.manifest.length === 0 && results.no_ui_surface !== true) {
@@ -339,24 +361,20 @@ export async function runE2eRecord(
       "e2e-author: STATUS: DONE with an empty manifest but no_ui_surface was not " +
       "explicitly true — ambiguous (genuine no-op vs. a malformed/incomplete " +
       "response); refusing to silently pass";
-    await markFailed(deps, runId, reason);
-    return { kind: "failed", run_id: runId, reason };
+    return failWithCleanup(deps, runId, worktree, reason);
   }
 
   for (const entry of results.manifest) {
     try {
       assertSafeSpecPath(entry.spec_path);
     } catch (err) {
-      const reason = `e2e-author: ${err instanceof Error ? err.message : String(err)}`;
-      await markFailed(deps, runId, reason);
-      return { kind: "failed", run_id: runId, reason };
+      return failWithCleanup(deps, runId, worktree, `e2e-author: ${errText(err)}`);
     }
   }
 
   const cfg = deps.config.e2e;
   const run = await deps.state.read(runId);
   const staging = resolveStagingBranch(runId, run.staging_branch);
-  const worktree = e2eWorktreePath(deps.dataDir, runId);
   const critical = results.manifest.filter((e) => e.kind === "critical");
 
   // The author picks task_ids off the spec it was handed, but nothing upstream
@@ -369,8 +387,7 @@ export async function runE2eRecord(
     const reason =
       `e2e-author: manifest references unknown task_id(s) not in this run: ` +
       unknownTaskIds.join(", ");
-    await markFailed(deps, runId, reason);
-    return { kind: "failed", run_id: runId, reason };
+    return failWithCleanup(deps, runId, worktree, reason);
   }
 
   if (critical.length > 0) {
@@ -385,9 +402,7 @@ export async function runE2eRecord(
       const reason =
         `e2e-author: critical spec_path(s) not under '${testDirPrefix}' — refusing to merge: ` +
         outsideTestDir.map((e) => e.spec_path).join(", ");
-      await deps.git.worktreeRemove([worktree, "--force"]);
-      await markFailed(deps, runId, reason);
-      return { kind: "failed", run_id: runId, reason };
+      return failWithCleanup(deps, runId, worktree, reason);
     }
 
     // Reject up front — before spending the fail-first proof — if the branch
@@ -402,18 +417,14 @@ export async function runE2eRecord(
       const reason =
         `e2e-author: branch touches path(s) outside '${testDirPrefix}' — refusing to merge ` +
         `unreviewed changes: ${stray.join(", ")}`;
-      await deps.git.worktreeRemove([worktree, "--force"]);
-      await markFailed(deps, runId, reason);
-      return { kind: "failed", run_id: runId, reason };
+      return failWithCleanup(deps, runId, worktree, reason);
     }
 
     const proof = await proveCriticals(deps, runId, critical, worktree);
     if (!proof.ok) {
       // Never merge an unproven spec — the worktree (and its unmerged commits) is
       // discarded rather than landed in the target repo.
-      await deps.git.worktreeRemove([worktree, "--force"]);
-      await markFailed(deps, runId, proof.reason);
-      return { kind: "failed", run_id: runId, reason: proof.reason };
+      return failWithCleanup(deps, runId, worktree, proof.reason);
     }
 
     // Proven — merge the critical specs into staging (mirrors docs' ff-merge).
@@ -488,10 +499,21 @@ async function proveCriticals(
   try {
     for (const entry of critical) {
       await files.copySpec(join(authorWorktree, entry.spec_path), join(wtPath, entry.spec_path));
-      const baseResult = await runE2e(
-        { cwd: wtPath, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: entry.spec_path },
-        tool,
-      );
+      // runE2e THROWS on tooling-level failure (missing Playwright binary, empty/
+      // truncated reporter output) — convert to a ProofVerdict so the caller's
+      // failWithCleanup path persists the failure instead of an uncaught crash.
+      let baseResult;
+      try {
+        baseResult = await runE2e(
+          { cwd: wtPath, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: entry.spec_path },
+          tool,
+        );
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `fail-first proof: e2e tooling error running '${entry.spec_path}' against the base app: ${errText(err)}`,
+        };
+      }
       const { hasControl, controlGreen, journeyRed } = classifyBaseRun(baseResult.specs);
       if (!hasControl) {
         return {
@@ -517,15 +539,23 @@ async function proveCriticals(
             "(vacuous-pass risk) — rejected",
         };
       }
-      const stagingResult = await runE2e(
-        {
-          cwd: authorWorktree,
-          env: scrubbedE2eEnv(cfg),
-          replaceEnv: true,
-          testDir: entry.spec_path,
-        },
-        tool,
-      );
+      let stagingResult;
+      try {
+        stagingResult = await runE2e(
+          {
+            cwd: authorWorktree,
+            env: scrubbedE2eEnv(cfg),
+            replaceEnv: true,
+            testDir: entry.spec_path,
+          },
+          tool,
+        );
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `fail-first proof: e2e tooling error running '${entry.spec_path}' against staging: ${errText(err)}`,
+        };
+      }
       if (!stagingResult.ok) {
         return {
           ok: false,
@@ -655,26 +685,46 @@ async function runSuiteAndDecide(
   await provision({ path: worktree, setupCommand: deps.config.quality.setupCommand });
 
   const tool = deps.playwright ?? new DefaultPlaywrightTool();
-  const criticalResult = await runE2e(
-    { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: cfg.testDir },
-    tool,
-  );
+  // runE2e THROWS on a tooling-level failure (missing Playwright binary, empty/
+  // truncated reporter output) — persist a failed phase instead of crashing the
+  // record with the phase cursor left dangling.
+  let criticalResult;
+  try {
+    criticalResult = await runE2e(
+      { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: cfg.testDir },
+      tool,
+    );
+  } catch (err) {
+    const reason = `e2e critical suite tooling error: ${errText(err)}`;
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  }
   const throwaway = manifest.filter((e) => e.kind === "throwaway");
-  const throwawayResult =
-    throwaway.length > 0
-      ? await (async () => {
-          const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
-          const configPath = throwawayConfigPath(worktree);
-          await (deps.files ?? new DefaultE2eFileOps()).writeConfig(
-            configPath,
-            throwawayConfigContents(throwawayDir),
-          );
-          return runE2e(
-            { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, config: configPath },
-            tool,
-          );
-        })()
-      : undefined;
+  let throwawayResult;
+  let throwawayThrew: string | undefined;
+  if (throwaway.length > 0) {
+    const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
+    const configPath = throwawayConfigPath(worktree);
+    await (deps.files ?? new DefaultE2eFileOps()).writeConfig(
+      configPath,
+      throwawayConfigContents(throwawayDir),
+    );
+    try {
+      throwawayResult = await runE2e(
+        { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, config: configPath },
+        tool,
+      );
+    } catch (err) {
+      if (firstPass) {
+        const reason = `e2e throwaway suite tooling error: ${errText(err)}`;
+        await markFailed(deps, runId, reason, attempts);
+        return { kind: "failed", run_id: runId, reason };
+      }
+      // Pass 2+ throwaway is non-gating (Decision 8) — fold the crash into the
+      // advisory below instead of failing the run.
+      throwawayThrew = errText(err);
+    }
+  }
 
   // A manifest `critical` entry only counts as proven when ITS spec is present in the
   // results AND passed/flaky — absent (never collected) or explicitly failed/skipped
@@ -752,9 +802,10 @@ async function runSuiteAndDecide(
     // throwaway run.
     const throwawayToolingFailed =
       !firstPass &&
-      throwawayResult !== undefined &&
-      !throwawayResult.ok &&
-      throwawayResult.specs.every((s) => s.status !== "failed");
+      (throwawayThrew !== undefined ||
+        (throwawayResult !== undefined &&
+          !throwawayResult.ok &&
+          throwawayResult.specs.every((s) => s.status !== "failed")));
     const advisory =
       throwawayFailed.length > 0
         ? `${throwawayFailed.length} throwaway spec(s) still red (non-gating): ` +

@@ -444,6 +444,8 @@ describe("runE2eRecord", () => {
     expect(run.e2e_phase?.ended_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(git.calls.some((c) => c.startsWith("push"))).toBe(false);
     expect(Object.keys(git.mergesInto)).toHaveLength(0);
+    // The author worktree never leaks on an early failure exit.
+    expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false);
   });
 
   it("DONE with an empty manifest AND an explicit no_ui_surface declaration is an immediate done", async () => {
@@ -472,6 +474,7 @@ describe("runE2eRecord", () => {
     expect(env.reason).toContain("no_ui_surface");
     const run = await state.read(RUN_ID);
     expect(run.e2e_phase?.status).toBe("failed");
+    expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false);
   });
 
   it("rejects a manifest entry naming a task_id absent from run.tasks — never merges", async () => {
@@ -490,6 +493,7 @@ describe("runE2eRecord", () => {
     expect(env.reason).toContain("task-unknown");
     expect(Object.keys(git.mergesInto)).toHaveLength(0);
     expect(git.calls.some((c) => c.startsWith("push"))).toBe(false);
+    expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false);
   });
 
   it("fail-first proof passes: merges the critical spec, then runs the full suite green", async () => {
@@ -638,6 +642,7 @@ describe("manifest spec_path is guarded against traversal before any join/copySp
     if (env.kind !== "failed") throw new Error("expected failed");
     expect(env.reason).toContain("..");
     expect(Object.keys(git.mergesInto)).toHaveLength(0);
+    expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false);
   });
 
   it("rejects an absolute critical spec_path", async () => {
@@ -650,6 +655,7 @@ describe("manifest spec_path is guarded against traversal before any join/copySp
     if (env.kind !== "failed") throw new Error("expected failed");
     expect(env.reason).toContain("absolute");
     expect(Object.keys(git.mergesInto)).toHaveLength(0);
+    expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false);
   });
 });
 
@@ -1085,5 +1091,179 @@ describe("runSuiteAndDecide (via runE2eEmit re-entry)", () => {
     expect(env.task_ids).toEqual(["task-a"]); // deduped, not ["task-a", "task-a"]
     const run = await state.read(RUN_ID);
     expect(run.e2e_phase?.reopen_counts["task-a"]).toBe(1); // incremented once, not twice
+  });
+});
+
+describe("e2e tooling THROWS (missing binary, empty/truncated reporter output) are persisted, never an uncaught crash", () => {
+  /** runE2e throws before/instead of returning a result — e.g. Playwright binary absent. */
+  const throwingTool: PlaywrightTool = {
+    async run(): Promise<E2eProcResult> {
+      throw new Error("playwright: command not found");
+    },
+  };
+
+  it("a throw during the fail-first proof fails the phase, tears down BOTH worktrees, never merges", async () => {
+    await runE2eEmit(deps(), RUN_ID);
+    const manifest = [
+      { task_ids: ["task-a"], spec_path: "e2e/checkout.spec.ts", kind: "critical" as const },
+    ];
+    const env = await runE2eRecord(deps({ playwright: throwingTool }), RUN_ID, {
+      status: "STATUS: DONE",
+      manifest,
+    });
+    expect(env.kind).toBe("failed");
+    if (env.kind !== "failed") throw new Error("expected failed");
+    expect(env.reason).toContain("tooling error");
+    expect(env.reason).toContain("command not found");
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.status).toBe("failed");
+    expect(Object.keys(git.mergesInto)).toHaveLength(0);
+    expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false);
+    expect(await git.worktreeExists(e2eBaseProofWorktreePath(dataDir, RUN_ID))).toBe(false);
+  });
+
+  it("a throw against staging (base proof already red) names the staging side in the reason", async () => {
+    await runE2eEmit(deps(), RUN_ID);
+    const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID);
+    const scripted = new ScriptedPlaywrightTool((opts) => [
+      { file: "e2e/checkout.spec.ts", title: `${CONTROL_TITLE_PREFIX} boots`, status: "passed" },
+      {
+        file: "e2e/checkout.spec.ts",
+        title: "user can check out",
+        status: opts.cwd === baseWt ? "failed" : "passed",
+      },
+    ]);
+    const tool: PlaywrightTool = {
+      async run(opts) {
+        if (opts.cwd !== baseWt) throw new Error("reporter output truncated");
+        return scripted.run(opts);
+      },
+    };
+    const manifest = [
+      { task_ids: ["task-a"], spec_path: "e2e/checkout.spec.ts", kind: "critical" as const },
+    ];
+    const env = await runE2eRecord(deps({ playwright: tool }), RUN_ID, {
+      status: "STATUS: DONE",
+      manifest,
+    });
+    expect(env.kind).toBe("failed");
+    if (env.kind !== "failed") throw new Error("expected failed");
+    expect(env.reason).toContain("against staging");
+    expect((await state.read(RUN_ID)).e2e_phase?.status).toBe("failed");
+    expect(Object.keys(git.mergesInto)).toHaveLength(0);
+  });
+
+  it("a throw during the mechanical critical suite persists a failed phase (no dangling cursor)", async () => {
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_phase: {
+        manifest: [
+          { task_ids: ["task-a"], spec_path: "checkout.spec.ts", kind: "critical" as const },
+        ],
+        reopen_counts: {},
+      },
+    }));
+    const env = await runE2eEmit(deps({ playwright: throwingTool }), RUN_ID);
+    expect(env.kind).toBe("failed");
+    if (env.kind !== "failed") throw new Error("expected failed");
+    expect(env.reason).toContain("critical suite tooling error");
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.status).toBe("failed");
+    expect(run.e2e_phase?.reopen_counts).toEqual({}); // no task blamed
+  });
+
+  /** Green criticals; the throwaway invocation (the one with a --config) throws. */
+  function throwawayThrowingTool(): PlaywrightTool {
+    return {
+      async run(opts) {
+        if (opts.config !== undefined) throw new Error("playwright: command not found");
+        return new ScriptedPlaywrightTool(() => [
+          { file: "checkout.spec.ts", title: `${CONTROL_TITLE_PREFIX} boots`, status: "passed" },
+        ]).run(opts);
+      },
+    };
+  }
+
+  it("pass 1: a throw during the throwaway suite fails the run (gating on the first pass)", async () => {
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_phase: {
+        manifest: [
+          { task_ids: ["task-a"], spec_path: "checkout.spec.ts", kind: "critical" as const },
+          { task_ids: ["task-a"], spec_path: "task-a.spec.ts", kind: "throwaway" as const },
+        ],
+        reopen_counts: {},
+      },
+    }));
+    const env = await runE2eEmit(deps({ playwright: throwawayThrowingTool() }), RUN_ID);
+    expect(env.kind).toBe("failed");
+    if (env.kind !== "failed") throw new Error("expected failed");
+    expect(env.reason).toContain("throwaway suite tooling error");
+    expect((await state.read(RUN_ID)).e2e_phase?.status).toBe("failed");
+  });
+
+  it("pass 2+: a throw during the throwaway suite is NON-GATING — done with an advisory (Decision 8 cadence)", async () => {
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_phase: {
+        manifest: [
+          { task_ids: ["task-a"], spec_path: "checkout.spec.ts", kind: "critical" as const },
+          { task_ids: ["task-a"], spec_path: "task-a.spec.ts", kind: "throwaway" as const },
+        ],
+        reopen_counts: { "task-a": 1 },
+        attempts: 1, // this call becomes pass 2
+      },
+    }));
+    const env = await runE2eEmit(deps({ playwright: throwawayThrowingTool() }), RUN_ID);
+    expect(env.kind).toBe("done");
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.status).toBe("done");
+    expect(run.e2e_phase?.advisory).toMatch(/tooling failure \(non-gating\)/);
+  });
+});
+
+describe("every Playwright invocation runs under the scrubbed env allowlist (Decision 39 W5)", () => {
+  it("proof (base + staging), critical suite, and throwaway suite all pass replaceEnv:true with EXACTLY the allowlisted keys", async () => {
+    await runE2eEmit(deps(), RUN_ID);
+    const baseWt = e2eBaseProofWorktreePath(dataDir, RUN_ID);
+    const tool = new ScriptedPlaywrightTool((opts) => {
+      if (opts.config !== undefined)
+        return [{ file: "task-a.spec.ts", title: "explores the flow", status: "passed" }];
+      return [
+        {
+          file: "e2e/checkout.spec.ts",
+          title: `${CONTROL_TITLE_PREFIX} app boots`,
+          status: "passed",
+        },
+        {
+          file: "e2e/checkout.spec.ts",
+          title: "user can check out",
+          status: opts.cwd === baseWt ? "failed" : "passed",
+        },
+      ];
+    });
+    const manifest = [
+      { task_ids: ["task-a"], spec_path: "e2e/checkout.spec.ts", kind: "critical" as const },
+      { task_ids: ["task-a"], spec_path: "task-a.spec.ts", kind: "throwaway" as const },
+    ];
+    const env = await runE2eRecord(deps({ playwright: tool }), RUN_ID, {
+      status: "STATUS: DONE",
+      manifest,
+    });
+    expect(env.kind).toBe("done");
+    // base proof + staging proof + critical suite + throwaway suite
+    expect(tool.calls.length).toBe(4);
+    const allowlist = [
+      "BASE_URL",
+      "FACTORY_E2E",
+      "FACTORY_E2E_READY_TIMEOUT_MS",
+      "FACTORY_E2E_START_COMMAND",
+      ...(process.env["HOME"] !== undefined ? ["HOME"] : []),
+      ...(process.env["PATH"] !== undefined ? ["PATH"] : []),
+    ].sort();
+    for (const call of tool.calls) {
+      expect(call.replaceEnv).toBe(true); // never merged over process.env
+      expect(Object.keys(call.env ?? {}).sort()).toEqual(allowlist);
+    }
   });
 });

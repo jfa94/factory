@@ -334,6 +334,24 @@ describe("runCommittedE2e", () => {
     expect(finding.quote.length).toBeGreaterThan(0); // Finding.quote requires min(1)
   });
 
+  it("tooling THROW (missing binary, truncated reporter output): one blocking, uncitable finding — never an uncaught crash", async () => {
+    const tool: PlaywrightTool = {
+      async run(): Promise<E2eProcResult> {
+        throw new Error("playwright: command not found");
+      },
+    };
+    const result = await runCommittedE2e({ cwd: "/wt", config: configuredE2e() }, tool);
+    expect(result.kind).toBe("ran");
+    if (result.kind !== "ran") throw new Error("expected ran");
+    expect(result.results.ok).toBe(false);
+    expect(result.findings).toHaveLength(1);
+    const finding = result.findings[0]!;
+    expect(finding.blocking).toBe(true);
+    expect(finding.severity).toBe("critical");
+    expect(finding.description).toContain("command not found");
+    expect(finding.quote.length).toBeGreaterThan(0); // Finding.quote requires min(1)
+  });
+
   it("passes the scrubbed FACTORY_E2E_* env + replaceEnv:true + testDir into the tool call", async () => {
     const tool = new ScriptedPlaywrightTool([
       { file: "e2e/checkout.spec.ts", title: "checkout works", status: "passed" },
