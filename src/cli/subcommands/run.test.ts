@@ -47,7 +47,7 @@ const REPO = "acme/widgets";
 // existing create/resume test exercises the happy path, so make the whole file
 // run as if launched autonomously; the dedicated suite below covers the negative.
 // Also stamp a session id: session-mode run create now requires one (so the Stop
-// hook can resolve finalize-on-stop via findActiveByOwner); the dedicated test
+// hook can scope its run resolution via findActiveByOwner); the dedicated test
 // below covers the no-session-id rejection.
 let priorAutonomous: string | undefined;
 let priorSessionId: string | undefined;

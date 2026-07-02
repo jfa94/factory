@@ -672,9 +672,9 @@ export const RunStateSchema = z.object({
    * Whether this run is a `/factory:debug` session. Set once at `run create`;
    * immutable for the run's lifetime — mirrors `e2e`/`ignore_quota`. A `debug:true`
    * run loops through multiple review⇄fix passes before finalizing, so it defers
-   * `run finalize` (the PRD comment/close + the Stop-gate finalize-on-stop) to the
-   * debug driver instead of the plain runner loop. Default false: a run without the
-   * flag finalizes exactly as before.
+   * `run finalize` (the PRD comment/close) to the debug driver instead of the plain
+   * runner loop, and the Stop gate skips even its resumability hint for it. Default
+   * false: a run without the flag finalizes exactly as before.
    */
   debug: z.boolean().default(false),
 

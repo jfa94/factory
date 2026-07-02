@@ -1,14 +1,17 @@
 /**
  * WS9/WS10 — Stop hook tests.
  *
- * decideStop is pure and, since the session-hostage fix, only ever ALLOWS or FINALIZES:
- * null/terminal/paused/suspended pass through; workflow mode and a non-owner session pass
- * through; a live run with pending work passes through (NO block — it stays resumable); a
- * session-mode run whose tasks are all terminal finalizes to the decideFinalize status.
- * runStopGate wires that to the StateManager; the only `{decision:"block"}` outputs left are
- * the two corruption cases (unreadable state, finalize failure) — never lack of progress.
+ * decideStop is pure and only ever ALLOWS — the hook never blocks a stop and never
+ * mutates state (the old state-only finalize-on-stop arm is removed: it bypassed the
+ * real finalizeRun delivery and stranded runs in a healthy-looking but undelivered
+ * terminal state). null/terminal/paused/suspended pass through; workflow mode, debug
+ * runs, and a non-owner session pass through; a live run with pending work passes
+ * through (it stays resumable); a session-mode run whose tasks are ALL terminal is
+ * left `running` with the `allow-unfinalized` hint — `factory resume` routes it
+ * through the real finalizeRun. runStopGate wires that to the StateManager; the only
+ * `{decision:"block"}` output left is the data-dir corruption case.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { decideStop, runStopGate } from "./stop-gate.js";
 import { EXIT } from "../shared/exit-codes.js";
 import type { RunState, TaskState } from "../types/index.js";
@@ -55,7 +58,7 @@ describe("decideStop — pass-through statuses", () => {
   );
 });
 
-describe("decideStop — workflow mode → allow (the Workflow drives, not the session)", () => {
+describe("decideStop — workflow mode → plain allow (the Workflow drives, not the session)", () => {
   it("workflow-mode run with pending work → allow", () => {
     const action = decideStop(run({ mode: "workflow" }, { t1: task({ status: "executing" }) }));
     expect(action).toEqual({ kind: "allow" });
@@ -65,9 +68,7 @@ describe("decideStop — workflow mode → allow (the Workflow drives, not the s
     expect(decideStop(run({ mode: "workflow" }, {}))).toEqual({ kind: "allow" });
   });
 
-  it("workflow-mode all-terminal run → allow (the Workflow finalizes, not the Stop hook)", () => {
-    // In workflow mode the session must not finalize-on-stop either; the Workflow
-    // returns all-terminal and the launching command runs `factory run finalize`.
+  it("workflow-mode all-terminal run → plain allow (the Workflow finalizes; no hint here)", () => {
     const action = decideStop(
       run({ mode: "workflow" }, { a: task({ task_id: "a", status: "done" }) }),
     );
@@ -75,31 +76,27 @@ describe("decideStop — workflow mode → allow (the Workflow drives, not the s
   });
 });
 
-describe("decideStop — debug mode → allow (the debug driver owns finalize between passes)", () => {
-  it("session-owned, running, all-terminal, debug:true → allow (NOT finalize)", () => {
-    // Exact scenario that would previously have incorrectly finalized: absent the
-    // debug guard, this is the "every task done → finalize completed" case below.
+describe("decideStop — debug mode → plain allow (the debug driver owns finalize between passes)", () => {
+  it("session-owned, running, all-terminal, debug:true → plain allow (no hint)", () => {
     const action = decideStop(run({ debug: true }, { a: task({ task_id: "a", status: "done" }) }));
     expect(action).toEqual({ kind: "allow" });
   });
 
-  it("debug:true with pending work → allow (already allowed, but stays allow)", () => {
+  it("debug:true with pending work → allow", () => {
     const action = decideStop(run({ debug: true }, { t1: task({ status: "executing" }) }));
     expect(action).toEqual({ kind: "allow" });
   });
 
-  it("debug:false (explicit), all-terminal → finalize as before (regression guard)", () => {
+  it("debug:false (explicit), all-terminal → allow-unfinalized as for a plain run", () => {
     const action = decideStop(run({ debug: false }, { a: task({ task_id: "a", status: "done" }) }));
-    expect(action).toEqual({ kind: "finalize", status: "completed" });
+    expect(action).toEqual({ kind: "allow-unfinalized", run_id: "run-x" });
   });
 });
 
 describe("decideStop — session-ownership", () => {
   const OWNER = "session-owner-abc";
 
-  it("owner known + stopping session != owner → allow, even all-terminal (never finalize another session's run)", () => {
-    // Strengthened vs the old block-era test: an all-terminal run proves the non-owner
-    // does not FINALIZE it (the only mutation left), not merely that it isn't blocked.
+  it("owner known + stopping session != owner → plain allow, even all-terminal (another session's run)", () => {
     const action = decideStop(
       run({ mode: "session", owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
       "some-other-session",
@@ -107,12 +104,12 @@ describe("decideStop — session-ownership", () => {
     expect(action).toEqual({ kind: "allow" });
   });
 
-  it("owner known + stopping session == owner + all-terminal → finalize (the real owner)", () => {
+  it("owner known + stopping session == owner + all-terminal → allow-unfinalized (the real owner gets the hint)", () => {
     const action = decideStop(
       run({ mode: "session", owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
       OWNER,
     );
-    expect(action).toEqual({ kind: "finalize", status: "completed" });
+    expect(action).toEqual({ kind: "allow-unfinalized", run_id: "run-x" });
   });
 
   it("owner known + stopping session == owner + pending work → allow (NO hostage; resumable)", () => {
@@ -123,12 +120,12 @@ describe("decideStop — session-ownership", () => {
     expect(action).toEqual({ kind: "allow" });
   });
 
-  it("owner known + stopping session UNKNOWN (no stdin) + all-terminal → finalize (degraded path still finalizes own run)", () => {
+  it("owner known + stopping session UNKNOWN (no stdin) + all-terminal → allow-unfinalized (degraded path still hints)", () => {
     const action = decideStop(
       run({ mode: "session", owner_session: OWNER }, { a: task({ task_id: "a", status: "done" }) }),
       undefined,
     );
-    expect(action).toEqual({ kind: "finalize", status: "completed" });
+    expect(action).toEqual({ kind: "allow-unfinalized", run_id: "run-x" });
   });
 });
 
@@ -143,18 +140,18 @@ describe("decideStop — session-mode pending work → allow (the session-hostag
   });
 });
 
-describe("decideStop — session-mode, all tasks terminal → finalize", () => {
-  it("every task done → finalize completed", () => {
+describe("decideStop — session-mode, all tasks terminal → allow-unfinalized (NEVER a state-only finalize)", () => {
+  it("every task done → allow-unfinalized; the run stays running/resumable for the real finalizeRun", () => {
     const action = decideStop(
       run(
         {},
         { a: task({ task_id: "a", status: "done" }), b: task({ task_id: "b", status: "done" }) },
       ),
     );
-    expect(action).toEqual({ kind: "finalize", status: "completed" });
+    expect(action).toEqual({ kind: "allow-unfinalized", run_id: "run-x" });
   });
 
-  it("mix of done + failed → finalize failed (Decision 34: no partial rollup)", () => {
+  it("mix of done + failed → still only the hint (no derived status, no flip)", () => {
     const action = decideStop(
       run(
         {},
@@ -164,14 +161,7 @@ describe("decideStop — session-mode, all tasks terminal → finalize", () => {
         },
       ),
     );
-    expect(action).toEqual({ kind: "finalize", status: "failed" });
-  });
-
-  it("all failed (zero done) → finalize failed", () => {
-    const action = decideStop(
-      run({}, { a: task({ task_id: "a", status: "failed", failure_class: "spec-defect" }) }),
-    );
-    expect(action).toEqual({ kind: "finalize", status: "failed" });
+    expect(action).toEqual({ kind: "allow-unfinalized", run_id: "run-x" });
   });
 });
 
@@ -187,54 +177,33 @@ describe("runStopGate — I/O wiring", () => {
 
   it("no active run → OK, emits nothing", async () => {
     const { out, emit } = emitter();
-    const manager = { findActiveByOwner: async () => null, finalize: vi.fn() };
+    const manager = { findActiveByOwner: async () => null };
     const code = await runStopGate([], { manager, emit, readRaw: stdin("sess-a") });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]);
-    expect(manager.finalize).not.toHaveBeenCalled();
   });
 
-  it("pending work → allow (emits nothing, no finalize)", async () => {
+  it("pending work → allow (emits nothing)", async () => {
     const { out, emit } = emitter();
-    const finalize = vi.fn();
     const manager = {
       findActiveByOwner: async (s: string) =>
         s === "sess-a" ? run({}, { t1: task({ status: "executing" }) }) : null,
-      finalize,
     };
     const code = await runStopGate([], { manager, emit, readRaw: stdin("sess-a") });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]);
-    expect(finalize).not.toHaveBeenCalled();
   });
 
-  it("all-terminal run → finalizes to the derived status, OK, no block", async () => {
+  it("all-terminal run → OK, emits nothing, run left untouched (resume finalizes, not the hook)", async () => {
     const { out, emit } = emitter();
-    const finalize = vi.fn(async () => run({ status: "completed" }));
+    const owned = run({}, { a: task({ task_id: "a", status: "done" }) });
     const manager = {
-      findActiveByOwner: async (s: string) =>
-        s === "sess-a" ? run({}, { a: task({ task_id: "a", status: "done" }) }) : null,
-      finalize,
+      findActiveByOwner: async (s: string) => (s === "sess-a" ? owned : null),
     };
     const code = await runStopGate([], { manager, emit, readRaw: stdin("sess-a") });
     expect(code).toBe(EXIT.OK);
-    expect(finalize).toHaveBeenCalledWith("run-x", "completed");
-    expect(out).toEqual([]);
-  });
-
-  it("finalize failure → blocks (surface inconsistency), OK", async () => {
-    const { out, emit } = emitter();
-    const manager = {
-      findActiveByOwner: async (s: string) =>
-        s === "sess-a" ? run({}, { a: task({ task_id: "a", status: "done" }) }) : null,
-      finalize: vi.fn(async () => {
-        throw new Error("disk full");
-      }),
-    };
-    const code = await runStopGate([], { manager, emit, readRaw: stdin("sess-a") });
-    expect(code).toBe(EXIT.OK);
-    expect(JSON.parse(out[0]!)).toMatchObject({ decision: "block" });
-    expect(out[0]!).toContain("finalize-on-stop failed");
+    expect(out).toEqual([]); // hint goes to the log, never stdout (stdout JSON = block)
+    expect(owned.status).toBe("running"); // no mutation of any kind
   });
 
   it("foreign corrupt run → allow (stop-gate never reads another session's run state)", async () => {
@@ -243,7 +212,7 @@ describe("runStopGate — I/O wiring", () => {
     // findActiveByOwner returns null, and the gate allows — runs/current never touched.
     const { out, emit } = emitter();
     const code = await runStopGate([], {
-      manager: { findActiveByOwner: async () => null, finalize: vi.fn() },
+      manager: { findActiveByOwner: async () => null },
       emit,
       readRaw: stdin("sess-a"),
     });
@@ -260,7 +229,6 @@ describe("runStopGate — I/O wiring", () => {
         findActiveByOwner: async () => {
           throw new Error("EACCES: permission denied");
         },
-        finalize: vi.fn(),
       },
       emit,
       readRaw: stdin("sess-a"),
@@ -271,25 +239,19 @@ describe("runStopGate — I/O wiring", () => {
     expect(out[0]!).not.toContain("runs/current"); // must not blame a foreign pointer
   });
 
-  it("workflow-mode run → allow, emits nothing, no finalize (session is not the orchestrator)", async () => {
+  it("workflow-mode run → allow, emits nothing (session is not the orchestrator)", async () => {
     const { out, emit } = emitter();
-    const finalize = vi.fn();
     const manager = {
       findActiveByOwner: async (s: string) =>
         s === "sess-a" ? run({ mode: "workflow" }, { t1: task({ status: "executing" }) }) : null,
-      finalize,
     };
     const code = await runStopGate([], { manager, emit, readRaw: stdin("sess-a") });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]);
-    expect(finalize).not.toHaveBeenCalled();
   });
 
-  it("reads the stopping session_id from stdin → unrelated session never finalizes the owner's run", async () => {
-    // owner-1's run is ALL-TERMINAL: if the intruder WRONGLY resolved it, finalize would
-    // fire. Asserting no-finalize proves owner-scoped resolution excludes the intruder.
+  it("reads the stopping session_id from stdin → an unrelated session resolves nothing (owner-scoped)", async () => {
     const { out, emit } = emitter();
-    const finalize = vi.fn();
     const owner1 = run(
       { mode: "session", owner_session: "owner-1" },
       { a: task({ task_id: "a", status: "done" }) },
@@ -297,7 +259,6 @@ describe("runStopGate — I/O wiring", () => {
     const manager = {
       // intruder-9 owns nothing; owner-1's run is stamped and not returned → pass through.
       findActiveByOwner: async (s: string) => (s === "owner-1" ? owner1 : null),
-      finalize,
     };
     const code = await runStopGate([], {
       manager,
@@ -306,106 +267,31 @@ describe("runStopGate — I/O wiring", () => {
     });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]); // allow: a different session must not touch this run
-    expect(finalize).not.toHaveBeenCalled();
-  });
-
-  it("stdin session_id == owner + all-terminal → finalizes the owning session's run", async () => {
-    const { out, emit } = emitter();
-    const owner1 = run(
-      { mode: "session", owner_session: "owner-1" },
-      { a: task({ task_id: "a", status: "done" }) },
-    );
-    const finalize = vi.fn(async () => run({ status: "completed" }));
-    const manager = {
-      findActiveByOwner: async (s: string) => (s === "owner-1" ? owner1 : null),
-      finalize,
-    };
-    const code = await runStopGate([], {
-      manager,
-      emit,
-      readRaw: stdin("owner-1"),
-    });
-    expect(code).toBe(EXIT.OK);
-    expect(finalize).toHaveBeenCalledWith("run-x", "completed");
-    expect(out).toEqual([]);
-  });
-
-  it("stdin session_id == owner + pending → allow (no block, no finalize)", async () => {
-    const { out, emit } = emitter();
-    const finalize = vi.fn();
-    const owner1 = run(
-      { mode: "session", owner_session: "owner-1" },
-      { t1: task({ status: "executing" }) },
-    );
-    const manager = {
-      findActiveByOwner: async (s: string) => (s === "owner-1" ? owner1 : null),
-      finalize,
-    };
-    const code = await runStopGate([], {
-      manager,
-      emit,
-      readRaw: stdin("owner-1"),
-    });
-    expect(code).toBe(EXIT.OK);
-    expect(out).toEqual([]);
-    expect(finalize).not.toHaveBeenCalled();
-  });
-
-  it("CLOBBER FIX: finalizes the run the STOPPING session owns, not runs/current", async () => {
-    // The bug: runs/current was repointed to another session's run-B; the owner of
-    // run-A (all tasks done) reads `current` → run-B (owner-B, still live) → ALLOW
-    // → run-A dangles `running`. Owner-scoped resolution finalizes run-A correctly.
-    const { out, emit } = emitter();
-    const runA = run(
-      { run_id: "run-A", mode: "session", owner_session: "sess-A" },
-      { a: task({ task_id: "a", status: "done" }) },
-    );
-    const runB = run(
-      { run_id: "run-B", mode: "session", owner_session: "sess-B" },
-      { b: task({ task_id: "b", status: "executing" }) },
-    );
-    const finalize = vi.fn(async () => run({ status: "completed" }));
-    const manager = {
-      findActiveByOwner: async (s: string) =>
-        s === "sess-A" ? runA : s === "sess-B" ? runB : null,
-      finalize,
-    };
-    const code = await runStopGate([], {
-      manager,
-      emit,
-      readRaw: stdin("sess-A"),
-    });
-    expect(code).toBe(EXIT.OK);
-    expect(finalize).toHaveBeenCalledWith("run-A", "completed"); // NOT run-B
-    expect(out).toEqual([]);
+    expect(owner1.status).toBe("running");
   });
 
   it("known stopper owning no run → allow (no global-pointer adoption)", async () => {
     // A known stopper with no active run passes through — runs/current is never consulted.
     const { out, emit } = emitter();
-    const finalize = vi.fn();
     const code = await runStopGate([], {
-      manager: { findActiveByOwner: async () => null, finalize },
+      manager: { findActiveByOwner: async () => null },
       emit,
       readRaw: stdin("sess-a"),
     });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]);
-    expect(finalize).not.toHaveBeenCalled();
   });
 
-  it("unknown stopper (malformed stdin) → allow, no finalize", async () => {
+  it("unknown stopper (malformed stdin) → allow", async () => {
     // An unscoped stop (no session id parseable from stdin) resolves null and allows —
     // it no longer falls back to runs/current. The run stays resumable.
     const { out, emit } = emitter();
-    const finalize = vi.fn();
     const code = await runStopGate([], {
-      manager: { findActiveByOwner: async () => null, finalize },
+      manager: { findActiveByOwner: async () => null },
       emit,
       readRaw: async () => "}{ not json",
     });
     expect(code).toBe(EXIT.OK);
     expect(out).toEqual([]);
-    expect(finalize).not.toHaveBeenCalled();
   });
 });

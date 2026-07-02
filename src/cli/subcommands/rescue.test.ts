@@ -170,6 +170,61 @@ describe("rescue scan/apply happy paths", () => {
     expect(run.e2e_phase?.reason).toBeUndefined();
   });
 
+  it("apply --recheck-rollup reopens a completed run whose rollup armed but never landed", async () => {
+    await new StateManager({ dataDir }).update("run-c", (s) => ({
+      ...s,
+      status: "completed",
+      ended_at: "2026-06-01T00:00:00.000Z",
+      tasks: {
+        a: task({ task_id: "a", status: "done" }),
+        b: task({ task_id: "b", status: "done" }),
+        c: task({ task_id: "c", status: "done" }),
+      },
+      rollup: { number: 42, merged: false, reason: "branch policy: merge queued (--auto)" },
+    }));
+    const code = await rescueCommand.run(["apply", "--run", "run-c", "--recheck-rollup"]);
+    expect(code).toBe(EXIT.OK);
+    expect(out().reopened).toBe(true);
+    const run = await new StateManager({ dataDir }).read("run-c");
+    expect(run.status).toBe("running");
+    // Purely a reopen — finalize re-derives/clears rollup itself; no task touched.
+    expect(run.rollup).toEqual({
+      number: 42,
+      merged: false,
+      reason: "branch policy: merge queued (--auto)",
+    });
+    expect(run.tasks.a!.status).toBe("done");
+  });
+
+  it("apply --reset-e2e on a NON-terminal run (crash before finalize) still clears the failed e2e_phase", async () => {
+    // The run crashed between e2e's markFailed and finalize: status is still
+    // "running", so there is nothing to reopen — but the asserted repair must
+    // still clear the verdict instead of silently no-oping.
+    await new StateManager({ dataDir }).update("run-c", (s) => ({
+      ...s,
+      tasks: {
+        a: task({ task_id: "a", status: "done" }),
+        b: task({ task_id: "b", status: "done" }),
+        c: task({ task_id: "c", status: "done" }),
+      },
+      e2e_phase: {
+        status: "failed",
+        reason: "fail-first proof: 'checkout.spec.ts' is still red against staging",
+        manifest: [
+          { task_ids: ["a"], spec_path: "e2e/checkout.spec.ts", kind: "critical" as const },
+        ],
+        reopen_counts: {},
+      },
+    }));
+    const code = await rescueCommand.run(["apply", "--run", "run-c", "--reset-e2e"]);
+    expect(code).toBe(EXIT.OK);
+    expect(out().reopened).toBe(false); // nothing terminal to reopen — but the phase clears
+    const run = await new StateManager({ dataDir }).read("run-c");
+    expect(run.status).toBe("running");
+    expect(run.e2e_phase?.status).toBeUndefined();
+    expect(run.e2e_phase?.manifest).toHaveLength(1); // authored manifest preserved
+  });
+
   it("apply --task selects exactly the named tasks (repeatable)", async () => {
     const code = await rescueCommand.run(["apply", "--run", "run-c", "--task", "a", "--task", "c"]);
     expect(code).toBe(EXIT.OK);

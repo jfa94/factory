@@ -189,4 +189,88 @@ describe("shipTask", () => {
     expect(task.branch).toBe("factory/run-C/t-1");
     expect(task.pr_number).toBeGreaterThan(0);
   });
+
+  // The rescue-reset wedge (systemic-failure finding): a reset task's preflight
+  // re-roots the branch on a fresh staging tip while origin keeps the pre-rescue
+  // commits, so the force-free push is deterministically rejected non-fast-forward
+  // on every re-drive. The root-cause repair: delete the stale run-scoped remote
+  // ref and retry ONCE.
+  describe("non-fast-forward push recovery", () => {
+    /** Rejects the first `rejectPushes` pushes with a real git non-FF message. */
+    class NonFfGitClient extends FakeGitClient {
+      pushAttempts = 0;
+      constructor(
+        private readonly rejectPushes: number,
+        opts: ConstructorParameters<typeof FakeGitClient>[0],
+      ) {
+        super(opts);
+      }
+      override async push(
+        ...args: Parameters<FakeGitClient["push"]>
+      ): ReturnType<FakeGitClient["push"]> {
+        this.pushAttempts++;
+        if (this.pushAttempts <= this.rejectPushes) {
+          throw new Error(
+            `git push exited 1: ! [rejected] ${args[1]} -> ${args[1]} (non-fast-forward)\n` +
+              `hint: Updates were rejected because the tip of your current branch is behind`,
+          );
+        }
+        return super.push(...args);
+      }
+    }
+
+    function nonFfFixture(runId: string, rejectPushes: number) {
+      const git = new NonFfGitClient(rejectPushes, {
+        remoteHeads: { staging: "sha-staging" },
+        localBranches: { [`factory/${runId}/t-1`]: { sha: "sha-task" } },
+      });
+      return git;
+    }
+
+    it("deletes the stale remote ref and retries once — ship completes", async () => {
+      const { deps, ctx, gh, dataDir } = await makeShipFixture({ runId: "run-E" });
+      fixtures.push(dataDir);
+      const git = nonFfFixture("run-E", 1);
+
+      const result = await shipTask({ ...deps, git }, ctx);
+
+      expect(result).toEqual({ kind: "task-terminal", outcome: { outcome: "done" } });
+      expect(gh.deletedBranches).toEqual(["factory/run-E/t-1"]);
+      expect(git.pushAttempts).toBe(2); // rejected once, retried once
+      expect(gh.created).toHaveLength(1); // ship proceeded normally after recovery
+    });
+
+    it("fails the task (blocked-environmental) when the retry is also rejected — no infinite loop", async () => {
+      const { deps, ctx, gh, dataDir } = await makeShipFixture({ runId: "run-F" });
+      fixtures.push(dataDir);
+      const git = nonFfFixture("run-F", 2);
+
+      const result = await shipTask({ ...deps, git }, ctx);
+
+      expect(result.kind).toBe("task-terminal");
+      if (result.kind !== "task-terminal") throw new Error("expected task-terminal");
+      expect(result.outcome).toMatchObject({
+        outcome: "failed",
+        failure_class: "blocked-environmental",
+      });
+      if (result.outcome.outcome !== "failed") throw new Error("expected failed");
+      expect(result.outcome.reason).toContain("still rejected");
+      expect(gh.deletedBranches).toEqual(["factory/run-F/t-1"]); // deleted exactly once
+      expect(git.pushAttempts).toBe(2); // ONE retry, never a loop
+      expect(gh.created).toHaveLength(0); // never reached PR creation
+    });
+
+    it("a non-non-FF push failure (network, auth) rethrows untouched — never deletes the remote ref", async () => {
+      const { deps, ctx, gh, dataDir } = await makeShipFixture({ runId: "run-G" });
+      fixtures.push(dataDir);
+      const git = new (class extends FakeGitClient {
+        override async push(): Promise<void> {
+          throw new Error("fatal: unable to access origin: connection refused");
+        }
+      })({ remoteHeads: { staging: "sha-staging" } });
+
+      await expect(shipTask({ ...deps, git }, ctx)).rejects.toThrow("connection refused");
+      expect(gh.deletedBranches).toEqual([]); // the repair is scoped to non-FF only
+    });
+  });
 });

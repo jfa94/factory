@@ -6537,9 +6537,9 @@ var RunStateSchema = external_exports.object({
    * Whether this run is a `/factory:debug` session. Set once at `run create`;
    * immutable for the run's lifetime — mirrors `e2e`/`ignore_quota`. A `debug:true`
    * run loops through multiple review⇄fix passes before finalizing, so it defers
-   * `run finalize` (the PRD comment/close + the Stop-gate finalize-on-stop) to the
-   * debug driver instead of the plain runner loop. Default false: a run without the
-   * flag finalizes exactly as before.
+   * `run finalize` (the PRD comment/close) to the debug driver instead of the plain
+   * runner loop, and the Stop gate skips even its resumability hint for it. Default
+   * false: a run without the flag finalizes exactly as before.
    */
   debug: external_exports.boolean().default(false),
   /**
@@ -7808,6 +7808,12 @@ function waitRetry(phase, reason, attempt, max_attempts) {
 }
 function taskDone() {
   return { kind: "task-terminal", outcome: { outcome: "done" } };
+}
+function taskFailed(failure_class, reason) {
+  return {
+    kind: "task-terminal",
+    outcome: { outcome: "failed", failure_class, reason }
+  };
 }
 function finalizeTerminal(run_status) {
   return { kind: "finalize-terminal", run_status };
@@ -11824,7 +11830,7 @@ async function applyRescue(state, runId, opts = {}) {
       reopened: reopen,
       skipped
     };
-    if (targets.length === 0 && !reopen) {
+    if (targets.length === 0 && !reopen && !e2eReset && !rollupRecheck) {
       return run10;
     }
     const nextTasks = { ...run10.tasks };
@@ -12710,10 +12716,26 @@ async function shipTask(deps, ctx) {
   const runId = ctx.run.run_id;
   const specTask = specTaskOf(deps.spec, task.task_id);
   const branch = runScopedBranch(runId, task.task_id);
-  await deps.git.push("origin", branch, {
-    setUpstream: true,
-    cwd: taskWorktreePath(deps.dataDir, runId, task.task_id)
-  });
+  const cwd = taskWorktreePath(deps.dataDir, runId, task.task_id);
+  try {
+    await deps.git.push("origin", branch, { setUpstream: true, cwd });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/non-fast-forward|fetch first|\[rejected\]/i.test(msg)) throw err;
+    log24.warn(
+      `task '${task.task_id}' push of '${branch}' rejected non-fast-forward \u2014 deleting the stale remote ref and retrying once`
+    );
+    await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, branch);
+    try {
+      await deps.git.push("origin", branch, { setUpstream: true, cwd });
+    } catch (retryErr) {
+      const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      return taskFailed(
+        "blocked-environmental",
+        `ship: push of '${branch}' still rejected after deleting the stale remote ref \u2014 investigate origin manually: ${retryMsg}`
+      );
+    }
+  }
   const pr = await createTaskPrIdempotent({
     ghClient: deps.gh,
     branch,

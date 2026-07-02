@@ -80,8 +80,8 @@ command's `--workflow`/`--no-ship`/`--ignore-quota` flags verbatim (defaults —
 `mode` and `ship_mode` persist on the run. `mode` tells the quota gate whether to pace (Decision 24:
 `workflow` disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow runner +
 resume + finalize, so it is never re-marshaled. Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` — this stamps THIS
-runner session as the run's `owner_session`, so the Stop gate's finalize-on-stop is scoped to
-the owning session and never finalizes a _different_ session's run (Prompt J). The shell expands
+runner session as the run's `owner_session`, so the Stop gate resolves only the owning
+session's run and never acts on a _different_ session's run (Prompt J). The shell expands
 the env var; if it is unset it expands to empty and the CLI degrades to owner-unknown (unscoped Stop
 gate) — never a bogus empty owner. On success `run create` emits `{kind:"created"|"superseded", run}` —
 read `run_id` from `.run.run_id` (not a bare RunState). Seed failures (duplicate/dangling/cyclic deps)

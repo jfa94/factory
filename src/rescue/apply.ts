@@ -252,7 +252,12 @@ export async function applyRescue(
       skipped,
     };
 
-    if (targets.length === 0 && !reopen) {
+    // Phase repairs are DECOUPLED from run-status reopening: a crash between e2e's
+    // markFailed and finalize leaves the run NON-terminal (`reopen` false), but the
+    // asserted --reset-e2e repair must still clear the failed verdict — otherwise the
+    // documented recovery silently no-ops and requires the non-obvious two-step of
+    // finalizing first, then rescuing again.
+    if (targets.length === 0 && !reopen && !e2eReset && !rollupRecheck) {
       return run; // pure no-op (update still stamps updated_at — harmless)
     }
 

@@ -688,7 +688,7 @@ function parseIssue(raw: string | boolean | undefined): number | undefined {
  * runner/command can pass it deterministically) over the `CLAUDE_CODE_SESSION_ID`
  * env var that Claude Code sets for Bash-tool invocations. Returns `undefined` when
  * neither is available. Session-mode `run create` rejects an undefined result (the Stop
- * hook resolves finalize-on-stop via `findActiveByOwner`, which requires an owner);
+ * hook resolves the session's own run via `findActiveByOwner`, which requires an owner);
  * workflow-mode creates are exempt.
  */
 export function resolveOwnerSession(
@@ -760,7 +760,7 @@ export async function runCreate(
   const mode: RunState["mode"] = args.flag("workflow") === true ? "workflow" : "session";
   const shipMode: RunState["ship_mode"] = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
-  // Session-mode runs must be owned: the Stop hook resolves finalize-on-stop via
+  // Session-mode runs must be owned: the Stop hook resolves the session's own run via
   // findActiveByOwner, which never matches an ownerless run. Workflow-mode runs are
   // exempt — the Workflow runner owns finalization, not the interactive session.
   if (ownerSession === undefined && mode === "session") {

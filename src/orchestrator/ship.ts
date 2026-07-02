@@ -16,6 +16,7 @@
  */
 import {
   taskDone,
+  taskFailed,
   waitRetry,
   runScopedBranch,
   resolveStagingBranch,
@@ -65,10 +66,34 @@ export async function shipTask(deps: ShipDeps, ctx: PhaseContext): Promise<Phase
   // locally (`checkout -B`) and the producers committed to it locally — nothing pushed it
   // to origin. `gh pr create --head <branch>` needs the head to exist on the remote, so
   // push it FIRST. Force-free + idempotent: a re-ship fast-forwards or no-ops.
-  await deps.git.push("origin", branch, {
-    setUpstream: true,
-    cwd: taskWorktreePath(deps.dataDir, runId, task.task_id),
-  });
+  //
+  // Non-fast-forward rejection is the rescue-reset wedge: a reset task's preflight
+  // `checkout -B` re-roots the branch on the fresh staging tip while the remote still
+  // holds the pre-rescue commits, so every re-drive deterministically re-hits the same
+  // rejected push. The branch is run-scoped and factory-owned (never human work), so the
+  // root-cause repair is safe: delete the stale remote ref and retry ONCE, force-free.
+  const cwd = taskWorktreePath(deps.dataDir, runId, task.task_id);
+  try {
+    await deps.git.push("origin", branch, { setUpstream: true, cwd });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/non-fast-forward|fetch first|\[rejected\]/i.test(msg)) throw err;
+    log.warn(
+      `task '${task.task_id}' push of '${branch}' rejected non-fast-forward — ` +
+        `deleting the stale remote ref and retrying once`,
+    );
+    await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, branch);
+    try {
+      await deps.git.push("origin", branch, { setUpstream: true, cwd });
+    } catch (retryErr) {
+      const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      return taskFailed(
+        "blocked-environmental",
+        `ship: push of '${branch}' still rejected after deleting the stale remote ref — ` +
+          `investigate origin manually: ${retryMsg}`,
+      );
+    }
+  }
 
   const pr = await createTaskPrIdempotent({
     ghClient: deps.gh,

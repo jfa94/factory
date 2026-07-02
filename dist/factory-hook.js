@@ -7626,9 +7626,9 @@ var RunStateSchema = external_exports.object({
    * Whether this run is a `/factory:debug` session. Set once at `run create`;
    * immutable for the run's lifetime — mirrors `e2e`/`ignore_quota`. A `debug:true`
    * run loops through multiple review⇄fix passes before finalizing, so it defers
-   * `run finalize` (the PRD comment/close + the Stop-gate finalize-on-stop) to the
-   * debug driver instead of the plain runner loop. Default false: a run without the
-   * flag finalizes exactly as before.
+   * `run finalize` (the PRD comment/close) to the debug driver instead of the plain
+   * runner loop, and the Stop gate skips even its resumability hint for it. Default
+   * false: a run without the flag finalizes exactly as before.
    */
   debug: external_exports.boolean().default(false),
   /**
@@ -8181,25 +8181,6 @@ var SpawnRequestSchema = external_exports.object({
   agents: external_exports.array(AgentSpecSchema).min(1)
 });
 
-// src/core/phase-machine/result.ts
-function finalizeTerminal(run_status) {
-  return { kind: "finalize-terminal", run_status };
-}
-
-// src/core/phase-machine/engine.ts
-function decideFinalize(run) {
-  const tasks = Object.values(run.tasks);
-  const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
-  if (nonTerminal.length > 0) {
-    const ids = nonTerminal.map((t) => `${t.task_id}=${t.status}`).join(", ");
-    throw new Error(
-      `decideFinalize: ${nonTerminal.length} non-terminal task(s) remain [${ids}] \u2014 finalize is terminal and must not be called with in-flight work (would spin in bash)`
-    );
-  }
-  const allDone = tasks.length > 0 && tasks.every((t) => t.status === "done");
-  return finalizeTerminal(allDone ? "completed" : "failed");
-}
-
 // src/hooks/hook-context.ts
 import { existsSync as existsSync5 } from "node:fs";
 import { lstat, readlink } from "node:fs/promises";
@@ -8528,7 +8509,7 @@ function decideStop(run, stoppingSession) {
   const nonTerminal = tasks.filter((t) => !isTerminalTaskStatus(t.status));
   const pending = tasks.length === 0 || nonTerminal.length > 0;
   if (pending) return ALLOW;
-  return { kind: "finalize", status: decideFinalize(run).run_status };
+  return { kind: "allow-unfinalized", run_id: run.run_id };
 }
 async function runStopGate(_argv = [], deps = {}) {
   const emit2 = deps.emit ?? ((s) => process.stdout.write(s));
@@ -8557,21 +8538,12 @@ async function runStopGate(_argv = [], deps = {}) {
     return EXIT.OK;
   }
   const action = decideStop(run, stoppingSession);
-  switch (action.kind) {
-    case "allow":
-      return EXIT.OK;
-    case "finalize": {
-      try {
-        await manager.finalize(run.run_id, action.status);
-        log8.info(`run ${run.run_id} finalized as '${action.status}' on stop`);
-      } catch (err) {
-        const reason = `finalize-on-stop failed for ${run.run_id}: ${err.message}. Run state may be inconsistent; rerun finalize or investigate before stopping.`;
-        log8.error(reason);
-        emitBlockDecision(deny(reason), emit2);
-      }
-      return EXIT.OK;
-    }
+  if (action.kind === "allow-unfinalized") {
+    log8.info(
+      `run ${action.run_id}: all tasks terminal but the run is not finalized \u2014 left running; \`factory resume\` will run the real finalize`
+    );
   }
+  return EXIT.OK;
 }
 
 // src/hooks/main.ts
@@ -8601,7 +8573,7 @@ var hookRegistry = {
     run: (argv) => runSubagentStop(argv)
   },
   "stop-gate": {
-    describe: "Stop: finalize-on-stop an owned all-terminal run; block ONLY on state corruption (never on pending work \u2014 the run stays resumable)",
+    describe: "Stop: log a resumability hint for an owned all-terminal run (never mutates state \u2014 `factory resume` finalizes); block ONLY on state corruption",
     run: (argv) => runStopGate(argv)
   }
 };

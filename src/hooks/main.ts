@@ -51,7 +51,7 @@ export const hookRegistry: Record<string, Hook> = {
   },
   "stop-gate": {
     describe:
-      "Stop: finalize-on-stop an owned all-terminal run; block ONLY on state corruption (never on pending work — the run stays resumable)",
+      "Stop: log a resumability hint for an owned all-terminal run (never mutates state — `factory resume` finalizes); block ONLY on state corruption",
     run: (argv) => runStopGate(argv),
   },
 };
