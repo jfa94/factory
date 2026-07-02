@@ -814,6 +814,24 @@ The verbose `--mode <session|workflow>` / `--ship-mode <no-merge|live>` pairs ar
 
 **Addendum (2026-06-20) — supersede teardown is resume-safe-ordered.** `supersedeRun` (`src/cli/subcommands/run.ts`) now tears down the old run's protection + `staging-<run-id>` branch BEFORE flipping it `superseded`, the terminal write LAST — the resume-safe convention `finalizeRun` (`src/orchestrator/finalize.ts`) already uses. Previously it finalized first, then tore down unguarded: a teardown throw (GitHub 401/403/5xx) propagated, so the fresh run was never created AND the old run was already terminal — excluded from `findActiveBySpec`, so no re-run ever re-attempted its teardown and the protected branch was orphaned permanently (rescue scopes out branch GC). With finalize last, a teardown failure leaves the old run non-terminal, so re-running `run --supersede` re-resolves it and retries the whole step idempotently (`deleteProtection`/`deleteRemoteBranch` tolerate already-gone), leaving NO orphan. This is the DELIBERATE inverse of `run cancel`'s finalize-first ordering: cancel's priority is releasing the Stop gate even if teardown fails (so the terminal write must win), whereas supersede has no gate and is an interactive pre-start moment, so a clean, recoverable replacement wins over forcing the fresh run through.
 
+**Addendum (2026-07-01) — an armed-but-not-landed rollup is recoverable, not a silent loss.**
+When the completion rollup PR arms a `--auto` merge that GitHub's branch policy blocks from
+landing immediately (the "auto-armed" branch-policy fallback, D3), the run still finalizes
+`completed` — but the PRD-close and per-run branch-GC that a merged rollup triggers never fire,
+and nothing recorded the queued merge. `finalizeRun` now persists that outcome as
+`RunState.rollup {number, merged, reason?}` (`src/core/state/schema.ts`), written **before**
+the terminal status flip (so a crash between the two still leaves the pointer durable) and
+**only** when the rollup did not land (`merged:false`); a merged rollup has nothing to recover
+and stores nothing. `rescue scan` surfaces this purely from durable state — no live GitHub
+call — as a new `rollup_pending` flag folded into `needs_rescue`, and `rescue apply
+--recheck-rollup` reopens the `completed` run so a re-drive re-enters `finalizeRun`, whose
+idempotent `rollup()` resume-guard finds the now-merged PR and completes the PRD-close +
+branch-GC (clearing the pointer). Minimal-surface by design: no polling loop, the staging
+branch is **retained** until the merge is confirmed, and `apply` never mutates the pointer
+itself — only `finalizeRun` writes or clears `rollup`, keeping the finalize path the single
+source of truth for rollup state. Like `--reset-e2e`, the recheck is **never automatic** — a
+human asserts the queued merge landed; a default `apply` leaves a pending rollup alone.
+
 **Addendum (2026-06-21) — the Stop-gate pending-work block is removed (simplification Phase 2).** The Stop hook (`src/hooks/stop-gate.ts`) no longer emits `{decision:"block"}` while a `running` run has pending work, and the `FACTORY_ALLOW_STOP` escape hatch is gone. That block was the "session-hostage" behaviour — a session that could not progress was held open indefinitely — and it never functioned in `--workflow` mode (the strategic primary runner) anyway, since a workflow-mode run already passed through. A session may now always stop; a run left `running` with pending work stays cleanly resumable via `factory resume` (an idempotent re-entry — `applyResume`). The hook keeps finalize-on-stop (an owned, session-mode, all-terminal run is finalized so it never dangles) and its two CORRUPTION blocks (unreadable `state.json`, finalize failure — M9), which surface genuine inconsistency, not lack of progress. Consequence for `run cancel` (the 2026-06-19 addendum above): it is no longer the "escape from the Stop gate" — it is simply the explicit ABANDON verb (mark `failed`, optionally `--cleanup` teardown) for deliberately discarding a run you will not resume.
 
 ---
@@ -1038,24 +1056,47 @@ worktree (so `@playwright/test` resolves through that worktree's `node_modules`)
 **Honest green.** An errored Playwright run — nonzero exit code or a reporter `errors[]`
 entry (e.g. the app never booted) — is `ok:false`, distinct from a cleanly-red suite; a
 tooling failure with no spec marked failed fails the run outright rather than being absorbed
-as a green. A manifest `critical` spec is proven only when it appears in results as `passed`
-or `flaky`; **absent, `failed`, or `skipped`** are all misses that reopen the task. Pass-1
-throwaway failures fold into the same reopen decision (cadence unchanged: pass 1 reopens for
-any mappable failure, pass 2+ only for critical).
+as a green. This is enforced symmetrically for **both** tiers: the critical suite always
+gates on it, and the **throwaway** suite gates on it **on pass 1** (mirroring the critical
+check) — a broken throwaway config/invocation with zero individually-failed specs would
+otherwise fall through to an empty failure set and silently `markDone`. On pass 2+, where the
+throwaway tier is already non-gating (Decision 8), a throwaway tooling failure is **folded
+into the advisory string** rather than dropped silently. A manifest `critical` spec is proven
+only when it appears in results as `passed` or `flaky`; **absent, `failed`, or `skipped`** are
+all misses that reopen the task. Pass-1 throwaway failures fold into the same reopen decision
+(cadence unchanged: pass 1 reopens for any mappable failure, pass 2+ only for critical).
 
 **A `failed` verdict is repairable, not permanent.** `factory rescue apply --reset-e2e`
-clears the concluded `status`/`reason`/`advisory`/`ended_at` via the shared
-`reopenE2ePhase` helper while preserving `manifest`/`reopen_counts`/`attempts`, so the phase
-re-enters and re-derives instead of being stuck failed forever — never automatic, since
-`rescue scan` reports `e2e_failed: true` (folded into `needs_rescue`) but `apply` only clears
-it on the explicit flag; plain `resume` re-checks the quota gate alone. The three
+clears the concluded verdict via the shared `reopenE2ePhase` helper, **manifest-aware**: a
+failure that occurred **after** authoring drops `status`/`reason`/`advisory`/`ended_at` while
+preserving `manifest`/`reopen_counts`/`attempts`, so the phase re-enters and re-derives
+without re-invoking the author; a failure **before** any manifest was authored (empty
+`manifest` — every pre-authoring `markFailed`: author crash, non-`DONE` status, unsafe
+`spec_path`) drops `e2e_phase` **entirely**, so `runE2eEmit`'s `run.e2e_phase === undefined`
+gate re-fires and the author actually re-spawns. Preserving an empty-manifest phase instead
+would let `runSuiteAndDecide` settle a false "done" with zero e2e coverage — falsifying the
+"re-enters and re-derives" contract for exactly the pre-authoring case. Empty-vs-non-empty
+manifest is a reliable discriminator because `runSuiteAndDecide` (the only post-authoring
+`markFailed` caller) always reads a persisted non-empty manifest first. The repair is never
+automatic — `rescue scan` reports `e2e_failed: true` (folded into `needs_rescue`) but `apply`
+only clears it on the explicit flag; plain `resume` re-checks the quota gate alone. The three
 `worktreeAdd(["-b", …])` sites became `-B` (idempotent) for crash-safety — a crash between a
 worktree's removal and the state write that concludes the phase can leave the branch behind,
 and a bare `-b` would fatal on re-entry.
 
-**Tighter trust boundary on the unreviewed author branch.** Before merging, the engine does
-a name-only diff against staging and rejects any path outside `<testDir>/` not declared as a
-manifest `spec_path` — it no longer merges the author's entire branch sight-unseen. Authored
+**Tighter trust boundary on the unreviewed author branch.** Two location rules bound what the
+unreviewed branch can land, both anchored on the committed `<testDir>/`. First, every
+`critical` manifest entry's `spec_path` must itself start with `<testDir>/` — a critical entry
+declared at the repo root would otherwise merge an unreviewed file into application source
+purely by self-declaring as "critical" (nothing else checks a critical entry's location).
+Second, the engine does a name-only diff against staging and rejects **any** changed path
+outside `<testDir>/`. Because throwaway specs live out-of-repo (never committed, never in this
+diff), the only files a legitimate author branch touches are critical specs under
+`<testDir>/` — so once the critical-location rule holds, the stray-file guard collapses to the
+single rule "only files under `<testDir>/` may change," with no per-file manifest allowlist.
+The prior allowlist (built from every manifest `spec_path`, throwaway entries included) was
+removed: it could have whitelisted a stray file merely by listing it as a throwaway entry.
+Authored
 specs run under a **scrubbed, allowlisted** env (PATH/HOME plus the boot vars, `replaceEnv`
 so the parent `process.env` is not merged in), and `assertSafeSpecPath` guards every manifest
 `spec_path` against traversal/absolute paths before any join/copy/`--testDir` use. Manifest

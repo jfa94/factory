@@ -28,6 +28,10 @@ ambiguous dead-ends. Never edit `state.json` by hand.
    `resettable` is empty (every task `done`, only the e2e phase failed) — a default `apply`
    leaves it failed. It is cleared ONLY on an explicit human assertion the underlying cause no
    longer applies (`apply --reset-e2e`).
+   4b. **A pending rollup is never auto-rechecked.** `scan.rollup_pending` can be `true` on a
+   `completed` run whose staging→develop rollup armed but never landed (e.g. the "auto-armed"
+   branch-policy fallback) — a default `apply` leaves it alone. It is rechecked ONLY on an
+   explicit human assertion the queued merge landed (`apply --recheck-rollup`).
 5. **Never reset a `done` task.** It would un-ship merged work; `apply` makes it a LOUD error.
 6. **`rescue-diagnostic` is read-only and advisory.** Its decision drives whether you issue a
    `--task` reset; it mutates nothing itself.
@@ -39,7 +43,7 @@ ambiguous dead-ends. Never edit `state.json` by hand.
 ## Inputs
 
 `/factory:rescue` passes `run=<id-or-empty> tasks=<csv-or-empty> include-dead-ends=<bool>
-reset-e2e=<bool> dry-run=<bool>`:
+reset-e2e=<bool> recheck-rollup=<bool> dry-run=<bool>`:
 
 - `run` → thread as `--run <id>` into every `scan`/`apply` (empty = default to `runs/current`).
 - `dry-run=true` → run steps 1–3 only: scan + report, then **stop**. No `apply`, no resume.
@@ -50,6 +54,9 @@ reset-e2e=<bool> dry-run=<bool>`:
 - `reset-e2e=true` → in step 4, apply with `--reset-e2e` too (the human has asserted the e2e
   failure's underlying cause no longer applies). When `false`/omitted and `scan.e2e_failed` is
   `true`, leave it failed and surface it in the summary (step 3b) — never guess.
+- `recheck-rollup=true` → in step 4, apply with `--recheck-rollup` too (the human has confirmed
+  the queued merge landed). When `false`/omitted and `scan.rollup_pending` is `true`, leave it
+  alone and surface it in the summary (step 3b) — never guess.
 
 ## Protocol
 
@@ -71,7 +78,7 @@ reset-e2e=<bool> dry-run=<bool>`:
      "counts": { "total", "shipped", "runnable", "stuck", "recoverable", "dead_end" },
      "resettable": ["<task-id>", ...],   // stuck ∪ recoverable — default apply resets these
      "dead_ends":  ["<task-id>", ...],   // reset only on explicit assertion
-     "needs_rescue", "e2e_failed", "would_deadlock", "summary",
+     "needs_rescue", "e2e_failed", "rollup_pending", "would_deadlock", "summary",
      "tasks": [ { "task_id", "status", "disposition", "failure_class?", "failure_reason?", "branch?", "pr_number?" }, ... ],
      // Read-only recoverable-work survey (git-grounded; EVIDENCE, never an action). One
      // entry per non-shipped branched task, measured against origin/staging-<run-id>.
@@ -98,6 +105,11 @@ reset-e2e=<bool> dry-run=<bool>`:
    it failed and name it in your report — there is no diagnostic-agent path for e2e (unlike
    dead-ends), so never guess at whether the underlying cause has cleared.
 
+   3c. **`scan.rollup_pending` never short-circuits and never auto-resolves (Iron Law 4b).** If
+   `true`, proceed to step 4 regardless of task-level `needs_rescue`. Apply `--recheck-rollup`
+   alongside the default set ONLY if `recheck-rollup=true` was explicitly passed; otherwise
+   leave it alone and name it in your report — never guess at whether the queued merge landed.
+
    **If `tasks` was given (non-empty):** skip the default + diagnostic paths entirely — apply
    exactly those ids and go to step 7:
 
@@ -107,16 +119,19 @@ reset-e2e=<bool> dry-run=<bool>`:
 
 4. **Apply the default (safe) set.** Resets stuck (crashed in-flight) + recoverable
    (`blocked-environmental`) tasks, and reopens a terminal run that had work to reset. Add
-   `--reset-e2e` when `scan.e2e_failed` is `true` AND `reset-e2e=true` was passed (per 3b):
+   `--reset-e2e` when `scan.e2e_failed` is `true` AND `reset-e2e=true` was passed (per 3b), and
+   `--recheck-rollup` when `scan.rollup_pending` is `true` AND `recheck-rollup=true` was passed
+   (per 3c):
 
    ```
-   factory rescue apply [--run <id>] [--reset-e2e]
+   factory rescue apply [--run <id>] [--reset-e2e] [--recheck-rollup]
    ```
 
    Emits `{ run_id, run_status, reset: [...], reopened, skipped: [...] }`. `run_status` is
-   `running` when a terminal run was reopened (by reset work OR a cleared e2e verdict). This
-   is safe to auto-apply — it never resets a dead-end, never touches `done` work, and never
-   clears a failed e2e verdict without the explicit `reset-e2e=true` input.
+   `running` when a terminal run was reopened (by reset work, a cleared e2e verdict, or a
+   rechecked rollup). This is safe to auto-apply — it never resets a dead-end, never touches
+   `done` work, and never clears a failed e2e verdict or rechecks a pending rollup without the
+   explicit `reset-e2e=true` / `recheck-rollup=true` input.
 
 5. **Decide on dead-ends (only if any).** For each id in `scan.dead_ends`, decide whether the
    root cause has cleared. Two paths:

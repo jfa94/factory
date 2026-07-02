@@ -190,6 +190,80 @@ describe("applyRescue", () => {
     expect(run.e2e_phase?.reopen_counts).toEqual({ a: 2 });
   });
 
+  it("resetE2e:true on a PRE-authoring failure (empty manifest) clears e2e_phase entirely so the author re-spawns, instead of leaving a false-done empty-manifest phase", async () => {
+    // The author crashed/timed out/emitted an unparseable status before ANY
+    // manifest was produced — markFailed writes status:"failed" with manifest:[].
+    // A plain reopen that PRESERVED the empty manifest would leave `e2e_phase`
+    // defined, so `runE2eEmit`'s `run.e2e_phase === undefined` re-authoring gate
+    // would never re-fire — the next pass would hit `runSuiteAndDecide`'s
+    // empty-manifest branch and silently `markDone` with zero coverage.
+    await seed([{ task_id: "a", status: "done" }], "failed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_phase: {
+        status: "failed",
+        reason: "e2e-author: no parseable status",
+        manifest: [],
+        reopen_counts: {},
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID, { resetE2e: true });
+    expect(result.reopened).toBe(true);
+    expect(result.run_status).toBe("running");
+
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("running");
+    // The whole phase is gone (not merely status-cleared) — `runE2eEmit`'s
+    // `run.e2e_phase === undefined` gate must see it as truly unset.
+    expect(run.e2e_phase).toBeUndefined();
+  });
+
+  it("recheckRollup:true reopens a completed run whose rollup armed but never landed, even with NO resettable tasks (finding #5 repair path)", async () => {
+    // Every task shipped `done` — scanRun sees nothing wrong with the tasks
+    // themselves, so a plain rescue apply would find zero resettable targets and
+    // never reopen. Only the run-level rollup pointer says there's work left.
+    await seed([{ task_id: "a", status: "done" }], "completed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      rollup: { number: 42, merged: false, reason: "auto-armed" },
+    }));
+
+    const result = await applyRescue(state, RUN_ID, { recheckRollup: true });
+    expect(result.reopened).toBe(true);
+    expect(result.run_status).toBe("running");
+
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("running");
+    // apply does not touch the rollup pointer itself — finalize re-derives (and
+    // clears, on merge) it on the re-drive.
+    expect(run.rollup).toEqual({ number: 42, merged: false, reason: "auto-armed" });
+  });
+
+  it("without recheckRollup, a pending rollup is left untouched (no silent auto-recheck)", async () => {
+    await seed([{ task_id: "a", status: "done" }], "completed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      rollup: { number: 42, merged: false, reason: "auto-armed" },
+    }));
+
+    const result = await applyRescue(state, RUN_ID);
+    expect(result.reopened).toBe(false);
+    expect(result.run_status).toBe("completed");
+
+    const run = await state.read(RUN_ID);
+    expect(run.status).toBe("completed");
+    expect(run.rollup).toEqual({ number: 42, merged: false, reason: "auto-armed" });
+  });
+
+  it("recheckRollup:true is a no-op when the run has no rollup pointer (nothing to recheck)", async () => {
+    await seed([{ task_id: "a", status: "done" }], "completed");
+
+    const result = await applyRescue(state, RUN_ID, { recheckRollup: true });
+    expect(result.reopened).toBe(false);
+    expect(result.run_status).toBe("completed");
+  });
+
   it("without resetE2e, a failed e2e_phase verdict is left untouched (no silent auto-retry)", async () => {
     await seed([{ task_id: "a", status: "done" }], "failed");
     await state.update(RUN_ID, (s) => ({

@@ -169,8 +169,9 @@ Usage:
 IDENTICAL to the per-task merge-gate's record-reviews input shape.
 
 Emits { kind:"review-spawn", run_id, pass, manifest, base, worktree, codex_available }
-on --emit, or { kind:"clean", run_id, pass } | { kind:"findings", run_id, pass,
-report_path, confirmed_count } on --record.`;
+on --emit, or { kind:"clean", run_id, pass, e2e } | { kind:"findings", run_id, pass,
+report_path, confirmed_count, e2e } on --record, where e2e is
+{ kind:"ran" } | { kind:"skipped", reason }.`;
 
 const SPEC_SUB_HELP = `factory debug spec — thin pass-through to 'factory spec' fed a synthetic PRD
 
@@ -270,6 +271,11 @@ export type DebugEnvelope =
       readonly kind: "clean";
       readonly run_id: string;
       readonly pass: number;
+      /** Whether the committed e2e suite actually ran, or was skipped (unconfigured) —
+       * without this, a clean pass looks identical either way (finding #2). */
+      readonly e2e:
+        | { readonly kind: "ran" }
+        | { readonly kind: "skipped"; readonly reason: string };
     }
   | {
       /** `review --record`'s output when the pass has ≥1 confirmed blocker. */
@@ -278,6 +284,10 @@ export type DebugEnvelope =
       readonly pass: number;
       readonly report_path: string;
       readonly confirmed_count: number;
+      /** See `clean.e2e` above — same visibility, findings pass may or may not include e2e. */
+      readonly e2e:
+        | { readonly kind: "ran" }
+        | { readonly kind: "skipped"; readonly reason: string };
     }
   | {
       /** `seed`'s output — the run is ready for the ordinary next-task/next-action loop. */
@@ -439,11 +449,15 @@ export async function debugReviewRecord(
   });
   const e2e = await runCommittedE2e({ cwd: worktree, config: deps.config.e2e });
   const confirmedBlockers = foldE2eIntoBlockers(adjudicated.confirmedBlockers, e2e);
+  const e2eStatus =
+    e2e.kind === "skipped"
+      ? { kind: "skipped" as const, reason: e2e.reason }
+      : { kind: "ran" as const };
 
   await writeSession(deps.dataDir, { ...session, confirmedBlockers });
 
   if (confirmedBlockers.length === 0) {
-    return { kind: "clean", run_id: runId, pass: session.pass };
+    return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
 
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
@@ -463,6 +477,7 @@ export async function debugReviewRecord(
     pass: session.pass,
     report_path: reportPath,
     confirmed_count: confirmedBlockers.length,
+    e2e: e2eStatus,
   };
 }
 

@@ -29,17 +29,28 @@ caller's checkout (see [reference/cli.md](../reference/cli.md#per-repo-current-r
 The `RescueScan` reports per-task
 dispositions:
 
-| Disposition   | Task shape                                                            | Default rescue action       |
-| ------------- | --------------------------------------------------------------------- | --------------------------- |
-| `shipped`     | `done` (merged)                                                       | Never touched.              |
-| `runnable`    | `pending`                                                             | The runner will pick it up. |
-| `stuck`       | in-flight (`executing`/`reviewing`/`shipping`) — crashed mid-phase    | **Reset** to pending.       |
+| Disposition   | Task shape                                                           | Default rescue action       |
+| ------------- | -------------------------------------------------------------------- | --------------------------- |
+| `shipped`     | `done` (merged)                                                      | Never touched.              |
+| `runnable`    | `pending`                                                            | The runner will pick it up. |
+| `stuck`       | in-flight (`executing`/`reviewing`/`shipping`) — crashed mid-phase   | **Reset** to pending.       |
 | `recoverable` | `failed` + `blocked-environmental` — the blocker may have cleared    | **Reset** to pending.       |
-| `dead-end`    | `failed` + `spec-defect`/`capability-budget` — re-running repeats it | Left failed.               |
+| `dead-end`    | `failed` + `spec-defect`/`capability-budget` — re-running repeats it | Left failed.                |
 
 Key fields: `resettable` (= `stuck ∪ recoverable`), `dead_ends`, `needs_rescue`,
 and `would_deadlock` (true iff a re-drive would throw). If `needs_rescue` is false,
 there is nothing to do.
+
+Two run-level flags also fold into `needs_rescue` even when every task is `done`:
+
+- `e2e_failed` — the e2e phase concluded `failed` (see
+  [Run with end-to-end tests § Fail](./run-with-e2e.md#4-read-the-outcome)). Cleared only
+  by `apply --reset-e2e`.
+- `rollup_pending` — a `completed` run whose staging→develop rollup was **armed but never
+  landed** (e.g. GitHub's branch policy blocked the queued `--auto` merge, D3), persisted as
+  `run.rollup {number, merged:false, reason?}`. Cleared only by `apply --recheck-rollup`
+  (step 4b), and only once you've confirmed the queued merge actually landed. Neither is ever
+  auto-recovered — the scan surfaces them; a human asserts the cause cleared.
 
 The scan also carries a read-only `work` field — a git-grounded survey of how much
 committed work each non-shipped task branch (`factory/<run>/<task>`) carries above the
@@ -79,6 +90,23 @@ cause:
 factory rescue apply --include-dead-ends
 ```
 
+## 3b. Recheck a pending rollup
+
+When `scan` reports `rollup_pending: true`, a `completed` run merged every task into its
+`staging-<run-id>` branch but the staging→develop rollup PR **armed `--auto` and never
+landed** (GitHub's branch policy blocked the queued merge). Once you have confirmed the
+queued merge actually landed on develop, reopen the run so a re-drive re-enters finalize and
+finishes the PRD-close + branch cleanup:
+
+```bash
+factory rescue apply --recheck-rollup
+```
+
+`apply` only **reopens** the run — it never touches the `run.rollup` pointer itself. The
+re-driven `finalizeRun` re-checks the PR: finding it merged, it completes the PRD-close and
+per-run branch GC and clears the pointer. There is no polling and the staging branch is
+retained until the merge is confirmed.
+
 ## 4. Reconcile git/GitHub drift
 
 Before resuming, reconcile any **remote** drift run state cannot see (a run branch
@@ -104,7 +132,7 @@ The `/factory:rescue` command wraps this whole flow (scan → short-circuit if c
 prompting before anything destructive → hand off to resume):
 
 ```
-/factory:rescue [--run <id>] [--task <id>]... [--include-dead-ends] [--dry-run]
+/factory:rescue [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--dry-run]
 ```
 
 `--dry-run` stops after the scan (report only). The orchestration lives entirely

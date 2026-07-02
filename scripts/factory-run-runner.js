@@ -324,7 +324,7 @@ async function recordResults(taskId, phase, results) {
       JSON.stringify(reread.result_key) === JSON.stringify(results.result_key);
     if (unchanged) throw err;
     log(
-      `record:${taskId}: recovered from a record failure via idempotent re-read — ${err.message}`,
+      `record:${taskId}: recovered from a record failure via idempotent re-read — ${err.stack ?? err}`,
     );
     return reread;
   }

@@ -135,7 +135,13 @@ describe("debugReviewRecord", () => {
     const verifications: ReviewerVerifications[] = [];
 
     const env = await debugReviewRecord(d, started.run_id, { reviews, verifications });
-    expect(env).toEqual({ kind: "clean", run_id: started.run_id, pass: 1 });
+    expect(env.kind).toBe("clean");
+    if (env.kind !== "clean") throw new Error("unreachable");
+    // finding #2: a clean pass must say WHY it's clean — e2e ran vs was skipped —
+    // not look identical either way.
+    expect(env.e2e.kind).toBe("skipped");
+    if (env.e2e.kind !== "skipped") throw new Error("unreachable");
+    expect(env.e2e.reason).toMatch(/startCommand|baseURL/);
   });
 
   it("emits findings + writes the report when the panel confirms a blocker", async () => {

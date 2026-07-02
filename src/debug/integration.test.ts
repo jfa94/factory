@@ -192,7 +192,12 @@ describe("Scenario A — 1-pass clean convergence", () => {
 
     // review --record: hand-craft a --results file with zero confirmed blockers.
     const recorded = await debugReviewRecord(d, runId, cleanResults());
-    expect(recorded).toEqual({ kind: "clean", run_id: runId, pass: 1 });
+    expect(recorded).toEqual({
+      kind: "clean",
+      run_id: runId,
+      pass: 1,
+      e2e: { kind: "skipped", reason: expect.any(String) },
+    });
 
     // A `{kind:"clean"}` result on pass 1 — before `debug spec`/`debug seed`
     // have EVER run (Iron Law 1 forbids calling them after a clean result) —
@@ -335,7 +340,12 @@ describe("Scenario B — 2-pass residual-finding convergence", () => {
     expect(emit2.pass).toBe(2);
 
     const rec2 = await debugReviewRecord(d, runId, cleanResults());
-    expect(rec2).toEqual({ kind: "clean", run_id: runId, pass: 2 });
+    expect(rec2).toEqual({
+      kind: "clean",
+      run_id: runId,
+      pass: 2,
+      e2e: { kind: "skipped", reason: expect.any(String) },
+    });
 
     // ---- Finalize — called via finalizeRun directly (the SAME function
     // debugFinalize delegates to; see Scenario A's note — debugFinalize
@@ -458,6 +468,11 @@ describe("e2e path", () => {
     const started = await debugStart(d, {});
     if (started.kind !== "review") throw new Error("unreachable");
     const recorded = await debugReviewRecord(d, started.run_id, cleanResults());
-    expect(recorded).toEqual({ kind: "clean", run_id: started.run_id, pass: 1 });
+    expect(recorded).toEqual({
+      kind: "clean",
+      run_id: started.run_id,
+      pass: 1,
+      e2e: { kind: "skipped", reason: skipped.reason },
+    });
   });
 });

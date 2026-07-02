@@ -81,6 +81,14 @@ export interface RescueScan {
    */
   e2e_failed: boolean;
   /**
+   * True iff `run.rollup` is present with `merged:false` — a `completed` run whose
+   * staging→develop rollup was ARMED but never landed (e.g. the "auto-armed"
+   * branch-policy fallback, finding #5). Never auto-recovered: `apply
+   * --recheck-rollup` reopens the run so a re-drive re-enters finalize, whose
+   * rollup() resume-guard picks up the now-merged PR.
+   */
+  rollup_pending: boolean;
+  /**
    * True iff a re-drive would THROW: non-terminal work remains but no task is
    * actionable (none ready, none cascade-failable) — the orchestrator's deadlock guard.
    * A terminal `failed`/`completed`/`superseded` run is never "deadlocked" (it already finalized);
@@ -156,7 +164,8 @@ export function scanRun(run: RunState): RescueScan {
   );
   const would_deadlock = !allTerminal && !actionablePending;
   const e2e_failed = run.e2e_phase?.status === "failed";
-  const needs_rescue = resettable.length > 0 || e2e_failed;
+  const rollup_pending = run.rollup?.merged === false;
+  const needs_rescue = resettable.length > 0 || e2e_failed || rollup_pending;
 
   return {
     run_id: run.run_id,
@@ -173,8 +182,16 @@ export function scanRun(run: RunState): RescueScan {
     dead_ends,
     needs_rescue,
     e2e_failed,
+    rollup_pending,
     would_deadlock,
-    summary: summarize(run.status, resettable.length, dead_ends.length, would_deadlock, e2e_failed),
+    summary: summarize(
+      run.status,
+      resettable.length,
+      dead_ends.length,
+      would_deadlock,
+      e2e_failed,
+      rollup_pending,
+    ),
     tasks,
   };
 }
@@ -186,15 +203,21 @@ function summarize(
   deadEnds: number,
   wouldDeadlock: boolean,
   e2eFailed: boolean,
+  rollupPending: boolean,
 ): string {
   const e2eTail = e2eFailed ? " (e2e phase failed — needs a fix + --reset-e2e)" : "";
+  const rollupTail = rollupPending
+    ? " (rollup armed, not landed — re-run finalize once merged via --recheck-rollup)"
+    : "";
   if (resettable === 0) {
     const deadEndTail =
       deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) — need a fix + --include-dead-ends)` : "";
-    if (e2eFailed) return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}`;
+    if (e2eFailed || rollupPending) {
+      return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}${rollupTail}`;
+    }
     return `run '${status}': no rescue needed${deadEndTail}`;
   }
   const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
   const deadlock = wouldDeadlock ? "; a re-drive would deadlock without rescue" : "";
-  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}`;
+  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}${rollupTail}`;
 }

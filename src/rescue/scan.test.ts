@@ -44,6 +44,7 @@ function mkRun(
   seeds: readonly TaskSeed[],
   status: RunStatus = "running",
   e2ePhase?: RunState["e2e_phase"],
+  rollup?: RunState["rollup"],
 ): RunState {
   return parseRunState({
     run_id: "run-scan-1",
@@ -53,6 +54,7 @@ function mkRun(
     started_at: "2026-06-08T00:00:00.000Z",
     updated_at: "2026-06-08T00:00:00.000Z",
     ...(e2ePhase !== undefined ? { e2e_phase: e2ePhase } : {}),
+    ...(rollup !== undefined ? { rollup } : {}),
   });
 }
 
@@ -155,6 +157,36 @@ describe("scanRun — resettable / dead_ends / needs_rescue", () => {
 
     const unsetScan = scanRun(mkRun([{ task_id: "a", status: "done" }], "completed"));
     expect(unsetScan.e2e_failed).toBe(false);
+  });
+
+  it("rollup_pending is true when the rollup armed but never landed, even with every task done — and needs_rescue follows it", () => {
+    const scan = scanRun(
+      mkRun([{ task_id: "a", status: "done" }], "completed", undefined, {
+        number: 42,
+        merged: false,
+        reason: "auto-armed",
+      }),
+    );
+    expect(scan.resettable).toEqual([]); // no task-level work to reset
+    expect(scan.rollup_pending).toBe(true);
+    expect(scan.needs_rescue).toBe(true); // the pending rollup alone is enough
+    expect(scan.summary).toMatch(/rollup/i);
+    expect(scan.summary).toMatch(/recheck-rollup/);
+  });
+
+  it("rollup_pending is false when the run has no rollup pointer, or it landed merged", () => {
+    const unsetScan = scanRun(mkRun([{ task_id: "a", status: "done" }], "completed"));
+    expect(unsetScan.rollup_pending).toBe(false);
+
+    // A merged rollup is cleared (undefined) by finalize itself, but guard the
+    // classification directly in case a stale merged:true row is ever read.
+    const mergedScan = scanRun(
+      mkRun([{ task_id: "a", status: "done" }], "completed", undefined, {
+        number: 42,
+        merged: true,
+      }),
+    );
+    expect(mergedScan.rollup_pending).toBe(false);
   });
 
   it("carries failure/branch/PR passthrough on the task lines", () => {

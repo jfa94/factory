@@ -621,12 +621,16 @@ factory rescue scan [--run <id>]
 ```
 
 Emits a `RescueScan`: `{ run_id, run_status, counts, resettable, dead_ends,
-needs_rescue, e2e_failed, would_deadlock, summary, tasks }`. Dispositions: `shipped`,
-`runnable`, `stuck` (crashed in-flight), `recoverable` (`blocked-environmental`
+needs_rescue, e2e_failed, rollup_pending, would_deadlock, summary, tasks }`. Dispositions:
+`shipped`, `runnable`, `stuck` (crashed in-flight), `recoverable` (`blocked-environmental`
 fail), `dead-end` (`spec-defect`/`capability-budget` fail). Default-resettable =
 `stuck ∪ recoverable`. `e2e_failed` is `true` iff `run.e2e_phase.status === "failed"` —
 it folds into `needs_rescue` so a run stuck ONLY on a failed e2e verdict (every task
 `done`, `resettable` empty) still scans as needing rescue, not "nothing to do".
+`rollup_pending` is `true` iff `run.rollup?.merged === false` — a `completed` run whose
+staging→develop rollup was **armed but never landed** (e.g. the "auto-armed" branch-policy
+fallback, D3). It also folds into `needs_rescue` (from a purely durable-state check, no live
+GitHub call) but is **never auto-recovered** — only `apply --recheck-rollup` acts on it.
 
 The scan also appends a read-only `work` field — a git-grounded recoverable-work survey
 (`assessWork`, `src/rescue/assess.ts`):
@@ -656,19 +660,20 @@ Backed by new `GitClient.refExists`/`commitsAhead` (`src/git/git-client.ts`).
 Writer. Resets the resettable tasks to `pending` and reopens a terminal run.
 
 ```
-factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e]
+factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
 ```
 
-| Flag                  | Notes                                                                                                                                                                                                                       |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--task <id>`         | Reset exactly this task (repeatable). Overrides the default set; a `done` task is a loud error, a `pending` one is skipped; a named dead-end IS reset.                                                                      |
-| `--include-dead-ends` | Also reset dead-end fails. Use only after the root cause is fixed.                                                                                                                                                          |
-| `--reset-e2e`         | Clears a `failed` e2e-phase verdict (manifest + reopen counts preserved) so it re-enters. Use only once the underlying cause no longer applies — alone sufficient to reopen a terminal run even when no task is resettable. |
+| Flag                  | Notes                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--task <id>`         | Reset exactly this task (repeatable). Overrides the default set; a `done` task is a loud error, a `pending` one is skipped; a named dead-end IS reset.                                                                                                                                                                                                                                          |
+| `--include-dead-ends` | Also reset dead-end fails. Use only after the root cause is fixed.                                                                                                                                                                                                                                                                                                                              |
+| `--reset-e2e`         | Clears a `failed` e2e-phase verdict so it re-enters. A post-authoring failure keeps its manifest + reopen counts; a pre-authoring failure (empty manifest) drops `e2e_phase` entirely so the author re-spawns. Use only once the underlying cause no longer applies — alone sufficient to reopen a terminal run even when no task is resettable.                                                |
+| `--recheck-rollup`    | Reopens a `completed` run whose rollup **armed but never landed** (`rollup_pending`) so a re-drive re-enters `finalizeRun` and its `rollup()` resume-guard picks up the now-merged PR (PRD-close + branch-GC). Use only after confirming the queued merge landed — alone sufficient to reopen a terminal run. Reopen only: `apply` never mutates the `rollup` pointer, only `finalizeRun` does. |
 
 Default (no `--task`): resets `stuck` + `recoverable`, leaving dead-ends failed;
 reopens a terminal run to `running` when it reset work (or when `--reset-e2e` clears
-a failed e2e phase). Idempotent. Emits
-`{ run_id, run_status, reset, reopened, skipped }`.
+a failed e2e phase, or `--recheck-rollup` targets an armed-not-landed rollup).
+Idempotent. Emits `{ run_id, run_status, reset, reopened, skipped }`.
 
 ## `autonomy <ensure|status|preflight>`
 

@@ -651,6 +651,24 @@ export const RunStateSchema = z.object({
   e2e_phase: E2ePhaseSchema.optional(),
 
   /**
+   * The `completed` run's staging→develop rollup outcome, persisted at finalize
+   * (finalize.ts step 7) ONLY when it did not land (`merged:false` — e.g. the
+   * "auto-armed" branch-policy fallback, D3). Absent on a merged rollup (nothing
+   * to recover) or a `failed` run (no rollup attempted). Lets `rescue scan` flag
+   * an armed-but-not-landed rollup (`rollup_pending`) without a live GitHub call —
+   * minimal-surface recovery: `rescue apply --recheck-rollup` reopens the run so a
+   * re-drive re-enters `finalizeRun`, whose rollup() resume-guard finds the
+   * now-merged PR and completes the PRD-close + branch-GC.
+   */
+  rollup: z
+    .object({
+      number: z.number().int().positive(),
+      merged: z.boolean(),
+      reason: z.string().optional(),
+    })
+    .optional(),
+
+  /**
    * Whether this run is a `/factory:debug` session. Set once at `run create`;
    * immutable for the run's lifetime — mirrors `e2e`/`ignore_quota`. A `debug:true`
    * run loops through multiple review⇄fix passes before finalizing, so it defers

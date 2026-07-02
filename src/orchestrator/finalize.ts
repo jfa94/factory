@@ -250,6 +250,25 @@ export async function finalizeRun(
       await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
       await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
     }
+
+    // Persist the rollup outcome (finding #5, minimal surface): a not-yet-landed
+    // rollup (e.g. the "auto-armed" branch-policy fallback) needs a durable pointer
+    // so `rescue scan` can flag it (`rollup_pending`) without a live GitHub call, and
+    // `rescue apply --recheck-rollup` can reopen the run for a re-drive to re-check
+    // it. Written BEFORE the terminal flip (step 7) so a crash in between still
+    // leaves the pointer durable. Cleared (set undefined, dropped on persistence)
+    // once merged — a resumed finalize that now finds the PR merged has nothing
+    // left to recover.
+    await deps.state.update(runId, (s) => ({
+      ...s,
+      rollup: rollupResult!.merged
+        ? undefined
+        : {
+            number: rollupResult!.number,
+            merged: false,
+            ...(rollupResult!.reason ? { reason: rollupResult!.reason } : {}),
+          },
+    }));
   } else {
     log.warn(`run '${runId}': ${terminal} — develop untouched (no rollup, PRD left open)`);
   }

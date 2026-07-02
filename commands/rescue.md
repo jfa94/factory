@@ -1,6 +1,6 @@
 ---
 description: "Recover a stalled factory run (tasks stuck mid-stage, or recoverable drops to retry) and hand off to resume"
-argument-hint: "[--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--dry-run]"
+argument-hint: "[--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup] [--dry-run]"
 arguments:
   - name: "--run"
     description: "Run id to rescue (defaults to the current run)"
@@ -13,6 +13,9 @@ arguments:
     required: false
   - name: "--reset-e2e"
     description: "Clear a failed e2e-phase verdict (Decision 39) so it re-enters — only after the underlying cause no longer applies"
+    required: false
+  - name: "--recheck-rollup"
+    description: "Reopen a completed run whose rollup armed but never landed, so a re-drive re-checks it — only after confirming the queued merge landed"
     required: false
   - name: "--dry-run"
     description: "Scan and report only; skip apply and the resume handoff"
@@ -43,7 +46,7 @@ clear git/GitHub drift (prompting before anything destructive) → hand off to `
 Parse the flags from the user's input, then load the skill:
 
 ```
-Skill(rescue-protocol, "run=<id-or-empty> tasks=<csv-or-empty> include-dead-ends=<bool> reset-e2e=<bool> dry-run=<bool>")
+Skill(rescue-protocol, "run=<id-or-empty> tasks=<csv-or-empty> include-dead-ends=<bool> reset-e2e=<bool> recheck-rollup=<bool> dry-run=<bool>")
 ```
 
 `--dry-run` stops after the scan (report only — no apply, no resume). `--include-dead-ends`
@@ -52,8 +55,11 @@ also resets determined drops; pass it only when the upstream root cause is genui
 assertion the cause is fixed). `--reset-e2e` clears a `failed` e2e-phase verdict (scan reports
 this as `e2e_failed`) so it re-enters instead of staying stuck failed forever — pass it only
 once the underlying cause (flaky infra, an app bug, a since-fixed reopen-cap exhaustion) no
-longer applies. Default (no flags): reset stuck + recoverable, leave dead-ends and any e2e
-failure untouched.
+longer applies. `--recheck-rollup` reopens a `completed` run whose rollup armed but never
+landed (scan reports this as `rollup_pending`) so a re-drive re-enters finalize and picks up
+the merged PR — pass it only after confirming the queued merge actually landed. Default (no
+flags): reset stuck + recoverable, leave dead-ends, any e2e failure, and any pending rollup
+untouched.
 
 All orchestration logic lives in `skills/rescue-protocol/SKILL.md` and its `reference/`
 directory. Do not duplicate it here.

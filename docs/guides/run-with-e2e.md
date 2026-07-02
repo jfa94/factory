@@ -84,12 +84,23 @@ change). The runner steps [`factory run e2e`](../reference/cli.md#run-e2e):
    before spending the fail-first proof the engine validates the returned manifest: every
    `spec_path` is rejected if it is absolute or contains `..`, and every `task_id` must
    exist in `run.tasks` (an unknown id fails loud instead of silently vanishing at reopen
-   time). It then diffs the author branch against staging by name and rejects any changed
-   path **outside `<testDir>/`** that isn't a declared manifest `spec_path` — a stray edit
-   to application source aborts the phase rather than landing unreviewed. Authored specs
-   also execute under a **scrubbed, allowlisted environment** (only `PATH`/`HOME` plus the
-   `FACTORY_E2E_*`/`BASE_URL` boot vars — never the parent process's full `process.env`), so
-   an autonomously-authored spec can't reach ambient CI tokens or cloud credentials.
+   time). Two location rules then bound what can land, with `<testDir>/` (e.g. `e2e/`) as
+   the single allowed area:
+   - Every **`critical`** manifest entry's `spec_path` must itself start with `<testDir>/`.
+     A critical entry declared at the repo root (or anywhere outside `testDir`) is rejected —
+     otherwise a spec could merge an unreviewed file into application source just by
+     self-declaring as "critical".
+   - The engine diffs the author branch against staging by name and rejects **any** changed
+     path outside `<testDir>/`. Throwaway specs live out-of-repo (never committed, so never
+     in this diff), so the only files a legitimate author branch touches are critical specs
+     under `<testDir>/` — the single rule "only files under `<testDir>/` may change" needs no
+     per-file manifest allowlist. A stray edit to application source aborts the phase rather
+     than landing unreviewed.
+
+   Authored specs also execute under a **scrubbed, allowlisted environment** (only
+   `PATH`/`HOME` plus the `FACTORY_E2E_*`/`BASE_URL` boot vars — never the parent process's
+   full `process.env`), so an autonomously-authored spec can't reach ambient CI tokens or
+   cloud credentials.
 
 3. **Fail-first proof (critical specs only).** Before any critical spec is merged, the
    engine runs it twice: once against the **unmodified base branch** (its `control:`
@@ -119,7 +130,12 @@ change). The runner steps [`factory run e2e`](../reference/cli.md#run-e2e):
      mappable failure (critical miss or throwaway red); pass 2+ reopens only for critical.
    - **A tooling failure** (nonzero Playwright exit / reporter `errors[]` with no individual
      spec marked failed — e.g. the app never booted) fails the run outright rather than
-     being silently absorbed into a green suite or attributed to an arbitrary task.
+     being silently absorbed into a green suite or attributed to an arbitrary task. This is
+     checked for **both** suites: a broken **critical** run always fails the phase, and a
+     broken **throwaway** run fails it too **on pass 1** (mirroring the critical check).
+     On pass 2+ — where the throwaway tier is already non-gating (Decision 8) — a throwaway
+     tooling failure no longer fails the run but is **folded into the advisory line** rather
+     than silently dropped.
    - Playwright's own **flaky** classification (fail then pass on retry) never reopens.
 
 ## 4. Read the outcome
@@ -132,14 +148,19 @@ the run's e2e contribution in one of:
   rollup and keeps gating future runs and CI. Any throwaway red is reported as advisory.
 - **Fail** — the run finalizes `failed` when a critical journey exhausts `e2e.reopenCap`,
   a critical failure is **unmappable** (no manifest entry names the failing spec), a
-  **tooling failure** occurs (nonzero exit / reporter `errors[]` with no spec marked
-  failed), the manifest references an unknown `task_id` or an unsafe `spec_path`, the author
-  branch touches a path outside `testDir`, the fail-first proof rejects a spec, or the
-  e2e-author returns a non-`DONE` status. There is deliberately no re-author retry loop. On
-  a failed e2e phase the docs and rollup steps are skipped. A failed verdict is **not
-  permanent**, though: `factory rescue apply --reset-e2e` clears the concluded verdict
-  (preserving the authored manifest and per-task reopen counts) so the phase re-enters and
-  re-runs on the next pass. This is never automatic — `factory rescue scan` reports it as
+  **tooling failure** occurs on either suite (nonzero exit / reporter `errors[]` with no spec
+  marked failed — the throwaway one only gates on pass 1), the manifest references an unknown
+  `task_id` or an unsafe `spec_path`, a `critical` spec_path lands outside `testDir`, the
+  author branch touches any path outside `testDir`, the fail-first proof rejects a spec, or
+  the e2e-author returns a non-`DONE` status. There is deliberately no re-author retry loop.
+  On a failed e2e phase the docs and rollup steps are skipped. A failed verdict is **not
+  permanent**, though: `factory rescue apply --reset-e2e` clears the concluded verdict so the
+  phase re-enters and re-runs on the next pass. The clear is **manifest-aware**: a phase that
+  failed **after** authoring keeps its manifest and per-task reopen counts (the author is not
+  re-invoked); a phase that failed **before** a manifest was ever authored (empty manifest —
+  e.g. the author crashed or returned an unsafe path) is cleared **entirely**, so the next
+  pass genuinely re-spawns the author instead of settling to a false "done" with zero e2e
+  coverage. This is never automatic — `factory rescue scan` reports it as
   `e2e_failed: true` (folded into `needs_rescue` even when every task is `done`), but `apply`
   clears it only when `--reset-e2e` is explicitly passed, once the underlying cause (flaky
   infra, an app bug, a since-fixed reopen-cap exhaustion) no longer applies. Plain `resume`

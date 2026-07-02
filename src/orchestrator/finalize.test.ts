@@ -238,6 +238,50 @@ describe("finalizeRun", () => {
     expect(gh.issueCloses).toHaveLength(0); // PRD left open
     expect(gh.deletedBranches).not.toContain(`staging-${RUN_ID}`);
     expect(gh.protectionDeletes).not.toContain(`staging-${RUN_ID}`);
+    // finding #5 (minimal surface): the armed-not-landed outcome is persisted onto
+    // RunState so `rescue scan` can flag it without a live GitHub call.
+    expect((await state.read(RUN_ID)).rollup).toEqual({
+      number: result.rollup!.number,
+      merged: false,
+      reason: "auto-armed",
+    });
+  });
+
+  it("finding #5 recovery: rescue apply --recheck-rollup reopens an auto-armed run, and a re-drive finalize picks up the now-merged PR and clears the pointer", async () => {
+    const { applyRescue } = await import("../rescue/apply.js");
+    const tasks: TaskSeed[] = [{ task_id: "t1", status: "done", pr_number: 11 }];
+    await seed(tasks);
+    const spec = makeSpec(tasks);
+    gh.failMergeSquashUnlessAuto = new Error(
+      "GraphQL: Pull request is not mergeable: the base branch policy prohibits the merge. (mergePullRequest)",
+    );
+
+    const first = await finalizeRun(makeDeps(spec, "live"), RUN_ID);
+    expect(first.rollup?.merged).toBe(false);
+    expect(first.rollup?.reason).toBe("auto-armed");
+    expect((await state.read(RUN_ID)).status).toBe("completed");
+    expect((await state.read(RUN_ID)).rollup?.merged).toBe(false);
+
+    // Simulate GitHub's queued --auto merge landing externally (out-of-band, no
+    // rescue/finalize involvement) — the PR is now MERGED.
+    const stagingBranch = `staging-${RUN_ID}`;
+    const pr = gh.prs.get(stagingBranch)!;
+    gh.setPr({ ...pr, state: "MERGED" });
+
+    // Human confirms it landed → reopen for a re-drive.
+    const rescued = await applyRescue(state, RUN_ID, { recheckRollup: true });
+    expect(rescued.reopened).toBe(true);
+    expect((await state.read(RUN_ID)).status).toBe("running");
+
+    const second = await finalizeRun(makeDeps(spec, "live"), RUN_ID);
+    expect(second.rollup?.merged).toBe(true);
+    expect(second.rollup?.resumed).toBe(true); // hit the already-merged short-circuit
+    expect(second.run.status).toBe("completed");
+    // The pointer is cleared — nothing left for rescue to flag.
+    expect((await state.read(RUN_ID)).rollup).toBeUndefined();
+    // Now-merged → the merged-only PRD comment/close + branch GC fire.
+    expect(gh.issueCloses).toHaveLength(1);
+    expect(gh.deletedBranches).toContain(stagingBranch);
   });
 
   it("failed (some failed): no rollup, one PRD comment, PRD left open (Decision 34)", async () => {

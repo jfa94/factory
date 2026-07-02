@@ -375,19 +375,33 @@ export async function runE2eRecord(
 
   if (critical.length > 0) {
     // Trust boundary (Decision 39 W5): the author's ENTIRE branch is about to be
-    // merged unreviewed. Reject up front — before spending the fail-first proof —
-    // if it touches anything outside the spec dir that isn't itself a declared
-    // spec_path (e.g. a stray edit to application source the author wasn't asked
-    // to make).
+    // merged unreviewed. Every `critical` spec_path must itself live under the
+    // committed testDir — a critical entry declared OUTSIDE it (e.g. repo root)
+    // would otherwise merge an unreviewed file just by being self-declared as
+    // "critical" (nothing else checks a critical entry's location).
+    const testDirPrefix = `${cfg.testDir}/`;
+    const outsideTestDir = critical.filter((e) => !e.spec_path.startsWith(testDirPrefix));
+    if (outsideTestDir.length > 0) {
+      const reason =
+        `e2e-author: critical spec_path(s) not under '${testDirPrefix}' — refusing to merge: ` +
+        outsideTestDir.map((e) => e.spec_path).join(", ");
+      await deps.git.worktreeRemove([worktree, "--force"]);
+      await markFailed(deps, runId, reason);
+      return { kind: "failed", run_id: runId, reason };
+    }
+
+    // Reject up front — before spending the fail-first proof — if the branch
+    // touches anything outside testDir at all. Throwaway specs live OUTSIDE this
+    // worktree (never committed, so never in this diff) — the only files a
+    // legitimate author branch touches are critical specs under testDir/, so no
+    // additional per-file allowlist is needed once THAT is enforced above.
     const branch = e2eBranchName(runId);
     const changed = await deps.git.diffNames(staging, branch, { cwd: worktree });
-    const allowedSpecPaths = new Set(results.manifest.map((e) => e.spec_path));
-    const testDirPrefix = `${cfg.testDir}/`;
-    const stray = changed.filter((f) => !f.startsWith(testDirPrefix) && !allowedSpecPaths.has(f));
+    const stray = changed.filter((f) => !f.startsWith(testDirPrefix));
     if (stray.length > 0) {
       const reason =
-        `e2e-author: branch touches path(s) outside '${testDirPrefix}' not declared ` +
-        `in its manifest — refusing to merge unreviewed changes: ${stray.join(", ")}`;
+        `e2e-author: branch touches path(s) outside '${testDirPrefix}' — refusing to merge ` +
+        `unreviewed changes: ${stray.join(", ")}`;
       await deps.git.worktreeRemove([worktree, "--force"]);
       await markFailed(deps, runId, reason);
       return { kind: "failed", run_id: runId, reason };
@@ -688,6 +702,24 @@ async function runSuiteAndDecide(
     return { kind: "failed", run_id: runId, reason };
   }
 
+  // Same tooling-failure blind spot as above, but for the throwaway run: a broken
+  // throwaway config/tool invocation (`ok:false`, no spec marked `failed`) would
+  // otherwise fall through to an empty `throwawayFailed` and silently `markDone`.
+  // Only gate on pass 1 — pass 2+ throwaway is already non-gating (Decision 8), so
+  // a tooling failure there is folded into the advisory instead (see below).
+  if (
+    firstPass &&
+    throwawayResult &&
+    !throwawayResult.ok &&
+    throwawayResult.specs.every((s) => s.status !== "failed")
+  ) {
+    const reason =
+      "e2e throwaway suite reported a tooling failure (nonzero exit code or reporter " +
+      "errors[]) with no individual spec marked failed — refusing to attribute to a task";
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  }
+
   const criticalSpecFailures = criticalResult.specs.filter((s) => s.status === "failed");
   const throwawayFailed = throwawayResult?.specs.filter((s) => s.status === "failed") ?? [];
   const unmappableCritical = criticalSpecFailures.filter(
@@ -715,11 +747,21 @@ async function runSuiteAndDecide(
   ];
 
   if (mappable.length === 0) {
+    // Pass 2+ throwaway tooling failures never gate (Decision 8), but must still
+    // surface — otherwise this branch would silently `markDone` past a broken
+    // throwaway run.
+    const throwawayToolingFailed =
+      !firstPass &&
+      throwawayResult !== undefined &&
+      !throwawayResult.ok &&
+      throwawayResult.specs.every((s) => s.status !== "failed");
     const advisory =
       throwawayFailed.length > 0
         ? `${throwawayFailed.length} throwaway spec(s) still red (non-gating): ` +
           throwawayFailed.map((s) => s.title).join(", ")
-        : undefined;
+        : throwawayToolingFailed
+          ? "throwaway suite reported a tooling failure (non-gating)"
+          : undefined;
     await markDone(deps, runId, { attempts, advisory });
     return { kind: "done", run_id: runId };
   }

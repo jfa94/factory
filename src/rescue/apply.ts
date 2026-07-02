@@ -30,17 +30,33 @@ import { isTerminalRunStatus } from "../types/index.js";
 import type { E2ePhase, RunState, RunStatus, TaskState } from "../types/index.js";
 
 /**
- * Clear a `failed` e2e_phase verdict back to unset so `wantsE2e` (orchestrator/next.ts)
- * re-enters the phase and the verdict re-derives on the next pass — the Decision 39
- * rescue repair path for W4. Drops `status`/`reason`/`advisory`/`ended_at` (the
- * concluded verdict); PRESERVES `manifest`/`reopen_counts`/`attempts` (the authored
- * suite + per-task reopen-cap history a fresh pass still needs).
+ * Clear a `failed` e2e_phase verdict so `wantsE2e` (orchestrator/next.ts) re-enters
+ * the phase and the verdict re-derives on the next pass — the Decision 39 rescue
+ * repair path for W4.
+ *
+ * A failure with an EMPTY manifest is unambiguously a PRE-authoring failure (the
+ * author crashed/timed out, emitted an unparseable status, or listed an unsafe
+ * `spec_path` — every one of `runE2eRecord`'s `markFailed` calls before a manifest
+ * is persisted). `runSuiteAndDecide` (the only other `markFailed` caller) always
+ * reads a persisted, non-empty manifest first (its own empty-manifest branch is a
+ * `markDone`, never a failure) — so no POST-authoring failure ever has an empty
+ * manifest. That makes `manifest.length === 0` a reliable signal here: return
+ * `undefined` (phase absent) so `runE2eEmit`'s `run.e2e_phase === undefined` gate
+ * re-fires and the author actually re-spawns, instead of leaving a defined,
+ * empty-manifest phase that `runSuiteAndDecide` would silently `markDone`
+ * (Decision 39's "re-enters and re-derives" contract falsified for exactly this case).
+ *
+ * Otherwise (a manifest was authored), drop `status`/`reason`/`advisory`/`ended_at`
+ * (the concluded verdict); PRESERVE `manifest`/`reopen_counts`/`attempts` (the
+ * authored suite + per-task reopen-cap history a fresh pass still needs) — the
+ * author is not re-invoked once it has produced a manifest.
  *
  * Lives here (not in orchestrator/e2e.ts, its only other natural home) to avoid a
  * circular import: e2e.ts already imports `resetTaskRow` from this module via
  * orchestrator/deps.ts → rescue/index.ts → rescue/apply.ts.
  */
-function reopenE2ePhase(phase: E2ePhase): E2ePhase {
+function reopenE2ePhase(phase: E2ePhase): E2ePhase | undefined {
+  if (phase.manifest.length === 0) return undefined;
   const {
     status: _status,
     reason: _reason,
@@ -76,6 +92,18 @@ export interface RescueApplyOptions {
    * terminal run even when no task itself is resettable.
    */
   resetE2e?: boolean;
+  /**
+   * Reopen a `completed` run whose rollup ARMED but never landed
+   * (`run.rollup?.merged === false` — e.g. the "auto-armed" branch-policy
+   * fallback, finding #5) so a re-drive re-enters `finalizeRun`. Its rollup()
+   * resume-guard then finds the (by-then, hopefully) merged PR and completes the
+   * PRD-close + branch-GC. Ignored when `run.rollup` is absent or already merged.
+   * No task/e2e state is touched — this is purely a reopen; finalize re-derives
+   * and re-persists (or clears) `rollup` itself. Default `false` — a human is
+   * asserting the queued merge landed (or is worth re-checking), not silently
+   * auto-polled. Alone sufficient to reopen a terminal run.
+   */
+  recheckRollup?: boolean;
 }
 
 /** What a `rescue apply` did. */
@@ -211,9 +239,10 @@ export async function applyRescue(
     // e2e (every task otherwise `done`, so `targets` is empty) and would otherwise
     // never have anything for a plain rescue apply to reset.
     const e2eReset = opts.resetE2e === true && run.e2e_phase?.status === "failed";
+    const rollupRecheck = opts.recheckRollup === true && run.rollup?.merged === false;
     // Only reopen a terminal run when there is actually work to pick back up —
     // reopening with nothing to do would just re-finalize to the same status.
-    const reopen = wasTerminal && (targets.length > 0 || e2eReset);
+    const reopen = wasTerminal && (targets.length > 0 || e2eReset || rollupRecheck);
 
     result = {
       run_id: runId,

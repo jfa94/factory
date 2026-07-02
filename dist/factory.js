@@ -6519,6 +6519,21 @@ var RunStateSchema = external_exports.object({
   /** E2E phase marker + author manifest; absent until the e2e phase first runs. */
   e2e_phase: E2ePhaseSchema.optional(),
   /**
+   * The `completed` run's staging→develop rollup outcome, persisted at finalize
+   * (finalize.ts step 7) ONLY when it did not land (`merged:false` — e.g. the
+   * "auto-armed" branch-policy fallback, D3). Absent on a merged rollup (nothing
+   * to recover) or a `failed` run (no rollup attempted). Lets `rescue scan` flag
+   * an armed-but-not-landed rollup (`rollup_pending`) without a live GitHub call —
+   * minimal-surface recovery: `rescue apply --recheck-rollup` reopens the run so a
+   * re-drive re-enters `finalizeRun`, whose rollup() resume-guard finds the
+   * now-merged PR and completes the PRD-close + branch-GC.
+   */
+  rollup: external_exports.object({
+    number: external_exports.number().int().positive(),
+    merged: external_exports.boolean(),
+    reason: external_exports.string().optional()
+  }).optional(),
+  /**
    * Whether this run is a `/factory:debug` session. Set once at `run create`;
    * immutable for the run's lifetime — mirrors `e2e`/`ignore_quota`. A `debug:true`
    * run loops through multiple review⇄fix passes before finalizing, so it defers
@@ -11652,7 +11667,8 @@ function scanRun(run10) {
   );
   const would_deadlock = !allTerminal && !actionablePending;
   const e2e_failed = run10.e2e_phase?.status === "failed";
-  const needs_rescue = resettable.length > 0 || e2e_failed;
+  const rollup_pending = run10.rollup?.merged === false;
+  const needs_rescue = resettable.length > 0 || e2e_failed || rollup_pending;
   return {
     run_id: run10.run_id,
     run_status: run10.status,
@@ -11668,21 +11684,32 @@ function scanRun(run10) {
     dead_ends,
     needs_rescue,
     e2e_failed,
+    rollup_pending,
     would_deadlock,
-    summary: summarize(run10.status, resettable.length, dead_ends.length, would_deadlock, e2e_failed),
+    summary: summarize(
+      run10.status,
+      resettable.length,
+      dead_ends.length,
+      would_deadlock,
+      e2e_failed,
+      rollup_pending
+    ),
     tasks
   };
 }
-function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed) {
+function summarize(status, resettable, deadEnds, wouldDeadlock, e2eFailed, rollupPending) {
   const e2eTail = e2eFailed ? " (e2e phase failed \u2014 needs a fix + --reset-e2e)" : "";
+  const rollupTail = rollupPending ? " (rollup armed, not landed \u2014 re-run finalize once merged via --recheck-rollup)" : "";
   if (resettable === 0) {
     const deadEndTail = deadEnds > 0 ? ` (${deadEnds} dead-end failure(s) \u2014 need a fix + --include-dead-ends)` : "";
-    if (e2eFailed) return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}`;
+    if (e2eFailed || rollupPending) {
+      return `run '${status}': no task rescue needed${deadEndTail}${e2eTail}${rollupTail}`;
+    }
     return `run '${status}': no rescue needed${deadEndTail}`;
   }
   const reopen = isTerminalRunStatus(status) ? " (will reopen the run)" : "";
   const deadlock = wouldDeadlock ? "; a re-drive would deadlock without rescue" : "";
-  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}`;
+  return `run '${status}': rescue can reset ${resettable} task(s)${reopen}${deadlock}${e2eTail}${rollupTail}`;
 }
 
 // src/rescue/assess.ts
@@ -11719,6 +11746,7 @@ async function assessWork(run10, probe) {
 
 // src/rescue/apply.ts
 function reopenE2ePhase(phase) {
+  if (phase.manifest.length === 0) return void 0;
   const {
     status: _status,
     reason: _reason,
@@ -11787,7 +11815,8 @@ async function applyRescue(state, runId, opts = {}) {
     const { targets, skipped } = selectTargets(run10, opts);
     const wasTerminal = isTerminalRunStatus(run10.status);
     const e2eReset = opts.resetE2e === true && run10.e2e_phase?.status === "failed";
-    const reopen = wasTerminal && (targets.length > 0 || e2eReset);
+    const rollupRecheck = opts.recheckRollup === true && run10.rollup?.merged === false;
+    const reopen = wasTerminal && (targets.length > 0 || e2eReset || rollupRecheck);
     result = {
       run_id: runId,
       run_status: reopen ? "running" : run10.status,
@@ -11890,6 +11919,14 @@ async function finalizeRun(deps, runId) {
       await deps.gh.deleteProtection(deps.owner, deps.repo, stagingBranch);
       await deps.gh.deleteRemoteBranch(deps.owner, deps.repo, stagingBranch);
     }
+    await deps.state.update(runId, (s) => ({
+      ...s,
+      rollup: rollupResult.merged ? void 0 : {
+        number: rollupResult.number,
+        merged: false,
+        ...rollupResult.reason ? { reason: rollupResult.reason } : {}
+      }
+    }));
   } else {
     log20.warn(`run '${runId}': ${terminal} \u2014 develop untouched (no rollup, PRD left open)`);
   }
@@ -13300,13 +13337,19 @@ async function runE2eRecord(deps, runId, results) {
     return { kind: "failed", run_id: runId, reason };
   }
   if (critical.length > 0) {
+    const testDirPrefix = `${cfg.testDir}/`;
+    const outsideTestDir = critical.filter((e) => !e.spec_path.startsWith(testDirPrefix));
+    if (outsideTestDir.length > 0) {
+      const reason = `e2e-author: critical spec_path(s) not under '${testDirPrefix}' \u2014 refusing to merge: ` + outsideTestDir.map((e) => e.spec_path).join(", ");
+      await deps.git.worktreeRemove([worktree, "--force"]);
+      await markFailed(deps, runId, reason);
+      return { kind: "failed", run_id: runId, reason };
+    }
     const branch = e2eBranchName(runId);
     const changed = await deps.git.diffNames(staging, branch, { cwd: worktree });
-    const allowedSpecPaths = new Set(results.manifest.map((e) => e.spec_path));
-    const testDirPrefix = `${cfg.testDir}/`;
-    const stray = changed.filter((f) => !f.startsWith(testDirPrefix) && !allowedSpecPaths.has(f));
+    const stray = changed.filter((f) => !f.startsWith(testDirPrefix));
     if (stray.length > 0) {
-      const reason = `e2e-author: branch touches path(s) outside '${testDirPrefix}' not declared in its manifest \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`;
+      const reason = `e2e-author: branch touches path(s) outside '${testDirPrefix}' \u2014 refusing to merge unreviewed changes: ${stray.join(", ")}`;
       await deps.git.worktreeRemove([worktree, "--force"]);
       await markFailed(deps, runId, reason);
       return { kind: "failed", run_id: runId, reason };
@@ -13504,6 +13547,11 @@ async function runSuiteAndDecide(deps, runId) {
     await markFailed(deps, runId, reason, attempts);
     return { kind: "failed", run_id: runId, reason };
   }
+  if (firstPass && throwawayResult && !throwawayResult.ok && throwawayResult.specs.every((s) => s.status !== "failed")) {
+    const reason = "e2e throwaway suite reported a tooling failure (nonzero exit code or reporter errors[]) with no individual spec marked failed \u2014 refusing to attribute to a task";
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  }
   const criticalSpecFailures = criticalResult.specs.filter((s) => s.status === "failed");
   const throwawayFailed = throwawayResult?.specs.filter((s) => s.status === "failed") ?? [];
   const unmappableCritical = criticalSpecFailures.filter(
@@ -13520,7 +13568,8 @@ async function runSuiteAndDecide(deps, runId) {
     ...throwawayCandidates
   ];
   if (mappable.length === 0) {
-    const advisory = throwawayFailed.length > 0 ? `${throwawayFailed.length} throwaway spec(s) still red (non-gating): ` + throwawayFailed.map((s) => s.title).join(", ") : void 0;
+    const throwawayToolingFailed = !firstPass && throwawayResult !== void 0 && !throwawayResult.ok && throwawayResult.specs.every((s) => s.status !== "failed");
+    const advisory = throwawayFailed.length > 0 ? `${throwawayFailed.length} throwaway spec(s) still red (non-gating): ` + throwawayFailed.map((s) => s.title).join(", ") : throwawayToolingFailed ? "throwaway suite reported a tooling failure (non-gating)" : void 0;
     await markDone(deps, runId, { attempts, advisory });
     return { kind: "done", run_id: runId };
   }
@@ -14797,8 +14846,9 @@ Usage:
 IDENTICAL to the per-task merge-gate's record-reviews input shape.
 
 Emits { kind:"review-spawn", run_id, pass, manifest, base, worktree, codex_available }
-on --emit, or { kind:"clean", run_id, pass } | { kind:"findings", run_id, pass,
-report_path, confirmed_count } on --record.`;
+on --emit, or { kind:"clean", run_id, pass, e2e } | { kind:"findings", run_id, pass,
+report_path, confirmed_count, e2e } on --record, where e2e is
+{ kind:"ran" } | { kind:"skipped", reason }.`;
 var SPEC_SUB_HELP = `factory debug spec \u2014 thin pass-through to 'factory spec' fed a synthetic PRD
 
 Usage:
@@ -14898,9 +14948,10 @@ async function debugReviewRecord(deps, runId, input) {
   });
   const e2e = await runCommittedE2e({ cwd: worktree, config: deps.config.e2e });
   const confirmedBlockers = foldE2eIntoBlockers(adjudicated.confirmedBlockers, e2e);
+  const e2eStatus = e2e.kind === "skipped" ? { kind: "skipped", reason: e2e.reason } : { kind: "ran" };
   await writeSession(deps.dataDir, { ...session, confirmedBlockers });
   if (confirmedBlockers.length === 0) {
-    return { kind: "clean", run_id: runId, pass: session.pass };
+    return { kind: "clean", run_id: runId, pass: session.pass, e2e: e2eStatus };
   }
   const passDir = debugPassDir(deps.dataDir, runId, session.pass);
   const findingsPath = join18(passDir, "findings.json");
@@ -14917,7 +14968,8 @@ async function debugReviewRecord(deps, runId, input) {
     run_id: runId,
     pass: session.pass,
     report_path: reportPath,
-    confirmed_count: confirmedBlockers.length
+    confirmed_count: confirmedBlockers.length,
+    e2e: e2eStatus
   };
 }
 async function specDepsFor(deps, session) {
@@ -15563,7 +15615,7 @@ var RESCUE_HELP = `factory rescue \u2014 scan or recover a stalled run
 
 Usage:
   factory rescue scan  [--run <id>]
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
 
 Actions:
   scan    Classify every task (read-only); report what a re-drive would do.
@@ -15576,11 +15628,12 @@ Usage:
   --run   The run to scan (defaults to runs/current).
 
 Emits ONE JSON document: the RescueScan (counts, resettable, dead_ends,
-needs_rescue, e2e_failed, would_deadlock, summary, per-task lines). Writes nothing.`;
+needs_rescue, e2e_failed, rollup_pending, would_deadlock, summary, per-task lines).
+Writes nothing.`;
 var APPLY_HELP = `factory rescue apply \u2014 reset resettable tasks and reopen a terminal run
 
 Usage:
-  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e]
+  factory rescue apply [--run <id>] [--task <id>]... [--include-dead-ends] [--reset-e2e] [--recheck-rollup]
 
   --run                The run to recover (defaults to runs/current).
   --task               Reset exactly this task (repeatable). Overrides the default
@@ -15593,10 +15646,16 @@ Usage:
                        cause (flaky infra, an app bug, a since-fixed reopen-cap
                        exhaustion) no longer applies. Alone sufficient to reopen a
                        terminal run even when no task itself is resettable.
+  --recheck-rollup     Reopen a 'completed' run whose rollup ARMED but never landed
+                       (e.g. the "auto-armed" branch-policy fallback) so a re-drive
+                       re-enters finalize and picks up the (by-then) merged PR. Use
+                       once you've confirmed the queued merge landed. Alone
+                       sufficient to reopen a terminal run.
 
 Default (no --task): resets stuck (crashed in-flight) + recoverable
 (blocked-environmental) tasks, leaving dead-ends failed. Reopens a terminal run
-to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase). Idempotent.
+to 'running' when it reset work (or when --reset-e2e clears a failed e2e phase, or
+--recheck-rollup targets an armed-not-landed rollup). Idempotent.
 
 Emits ONE JSON document:
   { run_id, run_status, reset:[...], reopened, skipped:[...] }`;
@@ -15628,7 +15687,7 @@ async function runScan(argv, overrides = {}) {
   return EXIT.OK;
 }
 async function runApply(argv, overrides = {}) {
-  const args = parseArgs(argv, { booleans: ["include-dead-ends", "reset-e2e"] });
+  const args = parseArgs(argv, { booleans: ["include-dead-ends", "reset-e2e", "recheck-rollup"] });
   if (args.flag("help") === true) {
     emitLine(APPLY_HELP);
     return EXIT.OK;
@@ -15638,10 +15697,12 @@ async function runApply(argv, overrides = {}) {
   const tasks = args.all("task");
   const includeDeadEnds = args.flag("include-dead-ends") === true;
   const resetE2e = args.flag("reset-e2e") === true;
+  const recheckRollup = args.flag("recheck-rollup") === true;
   const result = await applyRescue(state, runId, {
     ...tasks.length > 0 ? { tasks } : {},
     includeDeadEnds,
-    resetE2e
+    resetE2e,
+    recheckRollup
   });
   emitJson(result);
   return EXIT.OK;
