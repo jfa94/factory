@@ -179,4 +179,13 @@ independently) and the **risk-invariant review panel** (seven reviewers, unanimo
 approval required, with verify-then-fix confirmation of each blocking finding). The
 overall merge gate is the subject of
 [../explanation/verifier.md](../explanation/verifier.md).
+
+The full seven-role panel is enforced at the record seam: an all-approve **subset** of
+the panel can no longer clear the gate. `enforcePanelRoster` (`src/orchestrator/record.ts`)
+synthesizes a `verdict:"error"` review for every `PANEL_ROLES` entry missing from the
+supplied `--results`, and demotes any unknown reviewer name to `error` — either failing
+the unanimity conjunction loudly. The cross-vendor reviewer is an **executor of a roster
+role** (e.g. quality-reviewer via Codex), never an extra reviewer name, so it stays
+additive/optional. (`/factory:debug`'s whole-scope `runPanel` is deliberately outside this
+check — it is not a task merge gate.)
 </content>

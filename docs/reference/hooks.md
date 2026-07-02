@@ -11,15 +11,15 @@ exits `2`.
 
 ## The guards
 
-| Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                                                                   |
-| ------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches.                                                                                                                                                                                                                                               |
-| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that phases a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                                                                     |
-| `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating (categorical agent-deny of `gh pr create`/`gh pr merge`). Each arm derives its owning run from its own inputs — never the global pointer (see [Run ownership](#run-ownership)). |
-| `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                                                    |
-| `write-protection`  | PreToolUse `Edit\|Write\|MultiEdit`         | Deny writes to hardcoded TCB (trusted-computing-base) paths.                                                                                                                                                                                                                                   |
-| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                       |
-| `stop-gate`         | Stop                                        | Finalize-on-stop an owned, all-terminal run so it never dangles `running`; block ONLY on inaccessible data directory or finalize failure. Does NOT block a session end with pending work — the run stays resumable via `factory resume`.                                                       |
+| Hook                | Fires on                                    | What it does                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `branch-protection` | PreToolUse `Bash`                           | Block destructive git ops on protected branches.                                                                                                                                                                                                                                                                                                                    |
+| `secret-guard`      | PreToolUse `Bash`                           | Block a `git commit`/`push` that phases a known secret shape, and deny the redirection bypass forms that would decouple the scanned index/repo from the committed one (see [secret-guard](#secret-guard)).                                                                                                                                                          |
+| `pipeline-guards`   | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Three invariants while a run is active: test-writer path scope; nested-shell / hook-bypass denial; ship gating (categorical agent-deny of `gh pr create`/`gh pr merge`). Each arm derives its owning run from its own inputs — never the global pointer (see [Run ownership](#run-ownership)).                                                                      |
+| `holdout-guard`     | PreToolUse `Read\|Grep\|Glob`, `Bash`       | Deny reads of the holdout answer-key store.                                                                                                                                                                                                                                                                                                                         |
+| `write-protection`  | PreToolUse `Bash`, `Edit\|Write\|MultiEdit` | Deny writes to hardcoded TCB (trusted-computing-base) paths — via the `Edit`/`Write`/`MultiEdit` `file_path`(s) **and** via a `Bash` command's write targets (redirects, `tee`/`cp`/`mv`/`install`, `dd of=`, `sed`/`perl -i`, `truncate`, `rm`).                                                                                                                   |
+| `subagent-stop`     | SubagentStop                                | Log a stopping reviewer's parsed verdict (observational — the runner record is the single writer of `task.reviewers[]`).                                                                                                                                                                                                                                            |
+| `stop-gate`         | Stop                                        | Pass-through + resumability hint. NEVER finalizes and performs NO state mutation; an owned, all-terminal run is left `running` (with a log hint) so the next `factory resume` routes it through the real `finalizeRun`. Blocks ONLY on an inaccessible data directory. Never blocks a session end with pending work — the run stays resumable via `factory resume`. |
 
 ## `hooks.json` wiring
 
@@ -29,7 +29,8 @@ than one matcher):
 ```mermaid
 graph TD
   subgraph PreToolUse
-    Bash["matcher: ^Bash$"] --> bp[branch-protection]
+    Bash["matcher: ^Bash$"] --> wpB[write-protection]
+    Bash --> bp[branch-protection]
     Bash --> sg[secret-guard]
     Bash --> pg1[pipeline-guards]
     Bash --> hg1[holdout-guard]
@@ -79,9 +80,13 @@ across different repos run concurrently without cross-contamination:
   rail, the ship arm is dormant in production).
 - **`stop-gate`**: resolves the run owned by the **stopping session**
   (`findActiveByOwner`) rather than the global pointer, so a clobber can't make it
-  finalize the wrong run. When the stopping session owns no single active run —
-  no active run, an unknown session, or an ambiguous ≥2-owned set — it passes
-  through (allow), logging the pass-through; nothing is finalized.
+  attribute the hint to the wrong run. When the stopping session owns no single active
+  run — no active run, an unknown session, or an ambiguous ≥2-owned set — it passes
+  through (allow), logging the pass-through. It **never** finalizes and **never** mutates
+  state: an owned, all-terminal run is left `running` with a log hint, and the next
+  `factory resume` re-derives all-terminal and routes through the real `finalizeRun`
+  (a state-only status flip would bypass the rollup PR, PRD close, and e2e-failed
+  override — see [`stop-gate`](#the-guards)).
 - **`subagent-stop`**: attributes a stopping reviewer's verdict to the run owned
   by its own session (`findActiveByOwner`); no owned run → the result is skipped
   (it is observational, never authoritative).
@@ -100,10 +105,13 @@ producer write issued via `Bash`) does not weaken enforcement.
 
 ## write-protection (TCB)
 
-`write-protection` denies `Edit`/`Write`/`MultiEdit` to the **trusted-computing-base**
-(TCB) — the paths whose contents control the boundary itself. The category enum
-(`TcbCategory`, `src/types/tcb.ts`) is **closed**; adding one is a deliberate design
-change. The protected set:
+`write-protection` denies writes to the **trusted-computing-base** (TCB) — the paths
+whose contents control the boundary itself. It fires on both the file-editing tools
+(`Edit`/`Write`/`MultiEdit`, checking every `file_path`) and on `Bash` (checking the
+command's extracted write targets), so a redirect or coreutil write cannot slip past a
+guard that only watched the edit tools. The category enum (`TcbCategory`,
+`src/types/tcb.ts`) is **closed**; adding one is a deliberate design change. The
+protected set:
 
 | Category       | Path                                              | Why                                                                                                                                                                                                                                                                                                                                           |
 | -------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -119,7 +127,27 @@ change. The protected set:
 When the data dir is unresolved, the out-of-repo rules fall back to component-anchored
 matching (`runs`/`holdouts`/`reviews`) as defense-in-depth. TCB write-protection is
 the guard layer; the engine's own `factory` CLI writes bypass it (the hook guards
-`Edit`/`Write` tools, not the engine's fs writes — the CLI is the sanctioned writer).
+`Edit`/`Write`/`Bash` tool inputs, not the engine's fs writes — the CLI is the
+sanctioned writer).
+
+### The `Bash` arm
+
+A `Bash` command can write a file without ever touching an edit tool, so
+`write-protection` also parses each `Bash` command for **write targets** and denies any
+that canonicalizes to a TCB path (same denylist, same category messages). The extractor
+(`bashWriteTargets`, `src/hooks/write-protection.ts`) is a token-level heuristic, not a
+full shell parser; it covers the common file-writing forms:
+
+- **Output-redirection RHS** — `>`, `>>`, `>|`, `2>`, `&>` (scanned across the whole
+  command so a redirect inside `$(…)` still counts; fd-dups like `>&1` and process
+  substitution `>(cmd)` are excluded).
+- **Writing-binary destinations** — `tee`, `cp`/`mv`/`install` (last positional +
+  `-t`/`--target-directory`), `dd of=`, `sed`/`perl -i` (in-place), `truncate`, and
+  `rm`/`unlink` (deleting a gate config neutralizes it as surely as rewriting it).
+
+Env-prefixes (`VAR=…`) and pass-through wrappers (`sudo`, `env`, `xargs`, …) are skipped
+when locating a segment's binary. Exotic quoting or nested-shell forms that evade the
+heuristic are already denied by the `pipeline-guards` nested-shell / hook-bypass arm.
 
 ## secret-guard
 

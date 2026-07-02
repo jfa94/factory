@@ -65,6 +65,15 @@ regardless of how the task was tiered. The reviewer model is fixed (not
 quota-routed) for the same reason — review quality must not degrade under quota
 pressure.
 
+"The panel is the panel" is enforced structurally, not just intended. The merge-gate
+verdict is unanimity over whatever reviews arrive, so a partial all-approve **subset**
+of the seven roles would otherwise clear it. At the record seam (`enforcePanelRoster`,
+`src/orchestrator/record.ts`) any missing role is synthesized as a `verdict:"error"`
+review and any unknown reviewer name is demoted to `error` — both fail the gate loudly,
+so an incomplete panel can never pass. The cross-vendor reviewer is an executor of a
+roster role (quality-reviewer via Codex), never an extra name, so it stays additive and
+optional; supplying it does not change the required roster.
+
 ## How the panel and holdout inspect a task
 
 Both the review panel and the holdout-validator are spawned against the **task

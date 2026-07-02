@@ -71,7 +71,10 @@ untrusted input with `parseRunState` (it layers the run-level cross-field check
 `refineRunCrossFields`), never `RunStateSchema.parse` directly. The cross-field
 check enforces that each entry in the `tasks` map is keyed by its own `task_id`
 (a key/`task_id` mismatch is a loud parse error), so DAG traversal and keyed
-lookups never read a misfiled row.
+lookups never read a misfiled row. It also enforces the **terminal ⇔ `ended_at`
+biconditional**: `isTerminalRunStatus(status)` must equal `ended_at != null`, so a
+terminal run always carries an end timestamp and a non-terminal run never does —
+a mismatch is a loud parse error.
 
 | Field                       | Type                         | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | --------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

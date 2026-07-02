@@ -152,6 +152,11 @@ The two-window quota pacer.
 | `producerModels.medium` | string    | `claude-sonnet-4-5`      | Producer model for medium risk tier.                                                                                                                                                                                                                    |
 | `producerModels.high`   | string    | `claude-opus-4-6`        | Producer model for high risk tier.                                                                                                                                                                                                                      |
 
+Each `hourlyThresholds` / `dailyThresholds` element is validated as a percentage in
+`[0, 100]`, and the array as a whole must be **non-decreasing** (a later checkpoint may
+not cap lower than an earlier one) — an out-of-range or descending value is a loud config
+error, never persisted.
+
 The review panel is risk-_invariant_ (Decision 26), so there is no review-depth
 dial here. `producerModels` is the only dial the quota router carries.
 

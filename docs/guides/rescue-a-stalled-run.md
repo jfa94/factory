@@ -124,6 +124,13 @@ After applying and reconciling, continue the run:
 factory resume [--run <id>]
 ```
 
+A reset task re-cuts its branch from a fresh staging tip, so its first ship push can be
+rejected **non-fast-forward** against the stale factory-owned remote ref left by the
+pre-rescue run (the "rescue-reset wedge"). Ship self-heals this: it deletes the stale
+run-scoped remote ref and retries the push **once**. A second rejection fails the task
+`blocked-environmental` (investigate origin by hand); a non-FF-unrelated push error is
+never swallowed — it rethrows.
+
 ## Via the command
 
 The `/factory:rescue` command wraps this whole flow (scan → short-circuit if clean
