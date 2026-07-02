@@ -79,5 +79,15 @@ export {
 // Durable spec-request builder (shared by the `spec store` CLI seam).
 export { buildManifest } from "./pipeline.js";
 
+// Deterministic spec-build seam (resolve → gate → store; the `factory spec`
+// CLI + `/factory:debug`'s synthetic-PRD deps both drive these unchanged).
+export {
+  resolveSpec,
+  gateSpec,
+  storeSpec,
+  type SpecBuildDeps,
+  type SpecBuildEnvelope,
+} from "./build.js";
+
 // Spec-pipeline defaults now live in the canonical config schema (src/config).
 export { SPEC_DEFAULTS, type SpecConfig } from "../config/index.js";

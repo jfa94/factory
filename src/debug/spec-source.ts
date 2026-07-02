@@ -2,7 +2,7 @@
  * Report → spec adapter for `/factory:debug` (Decision 39 rebuild, Task 3).
  *
  * The existing spec pipeline (`resolveSpec`/`gateSpec`/`storeSpec` in
- * `src/cli/subcommands/spec.ts`) fetches a PRD via an injectable {@link GhClient}
+ * `src/spec/build.ts`) fetches a PRD via an injectable {@link GhClient}
  * keyed by a positive-integer "issue number," then runs the SAME
  * spec-generator ⇄ spec-reviewer loop regardless of where the PRD came from.
  * `/factory:debug` feeds that unchanged loop a SYNTHETIC "PRD" rendered from a
@@ -23,13 +23,12 @@
  *      separate store).
  *
  * `resolveSpec`/`gateSpec`/`storeSpec` themselves are imported UNCHANGED from
- * `src/cli/subcommands/spec.ts` — this module never forks or reimplements
- * them; only the `SpecBuildDeps` passed in differs.
+ * `src/spec/build.ts` — this module never forks or reimplements them; only
+ * the `SpecBuildDeps` passed in differs.
  */
 import type { Config } from "../config/index.js";
 import { loadConfig, resolveDataDir } from "../config/index.js";
-import { SpecStore, type GhClient, type Prd } from "../spec/index.js";
-import type { SpecBuildDeps } from "../cli/subcommands/spec.js";
+import { SpecStore, type GhClient, type Prd, type SpecBuildDeps } from "../spec/index.js";
 import type { Finding } from "../verifier/judgment/finding.js";
 
 /**
@@ -163,7 +162,7 @@ export function buildDebugReport(input: BuildDebugReportInput): {
 
 /**
  * Wire a debug-specific `SpecBuildDeps`, mirroring `wireDeps()` in
- * `src/cli/subcommands/spec.ts:309-318`. Debug specs reuse the SAME
+ * `src/cli/subcommands/spec.ts`. Debug specs reuse the SAME
  * `SpecStore`/`dataDir` as real PRD-issue specs — isolation from real specs
  * comes from the synthetic issue-number range ({@link DEBUG_ISSUE_BASE}), not
  * from a separate store. `gh` is swapped for a {@link ReportGhClient} seeded

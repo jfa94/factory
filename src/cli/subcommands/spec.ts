@@ -1,62 +1,29 @@
 /**
- * `factory spec <resolve|gate|store>` — the DETERMINISTIC spec-build seam (Model A).
- *
- * The spec pipeline needs two live agent spawns (spec-generator + spec-reviewer),
- * which a `factory` subprocess cannot do (no Agent tool). So the in-process
- * {@link import("../../spec/pipeline.js").runSpecPipeline} is split into three
- * runner-sequenced reporter actions; the in-session runner owns the
- * agent spawns AND the bounded regeneration loop, the CLI owns the deterministic
- * glue (resolveByIssue / PRD fetch / spec gates / review adjudication / store.write).
- *
- * State is threaded through a TRANSIENT scratch dir, `specBuildDir(dataDir,repo,issue)`,
- * holding three files: `prd.json` (written by `resolve`), `generated.json` (written
- * by the runner after spawning the generator), and `verdict.json` (written by
- * the runner after spawning the reviewer). Every action takes `--repo` +
- * `--issue` and recomputes the scratch dir, so the runner never threads paths
- * by hand — the CLI also echoes the concrete paths in each envelope.
- *
- * Loop (runner-owned):
- *   resolve → reuse(pointer)  → DONE (go straight to `run create`)
- *           → generate(spawn) → [spawn generator → write generated.json] → gate
- *   gate    → revise(blockers)→ [re-spawn generator with blockers] → gate          (≤ max_iterations)
- *           → review(spawn)   → [spawn reviewer → write verdict.json] → store
- *   store   → revise(reason)  → [re-spawn generator] → gate                         (≤ max_iterations)
- *           → stored(pointer) → DONE (go to `run create`)
- *
- * Mirrors {@link import("../../spec/pipeline.js").runSpecPipeline} exactly (same
- * gates, same 56/60+floor adjudication, same request construction) — the only
- * difference is WHO drives the agent spawns and the loop.
+ * `factory spec <resolve|gate|store>` — the CLI wrapper over the deterministic
+ * spec-build seam. The testable cores (`resolveSpec`/`gateSpec`/`storeSpec` +
+ * the `SpecBuildEnvelope`/`SpecBuildDeps` runner contract) live in
+ * `src/spec/build.ts` — see its header for the full runner-owned loop; this
+ * file owns only flag parsing, production dep wiring, and envelope emission.
+ * The moved names are re-exported below for existing importers.
  */
-import { join } from "node:path";
 import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
-import { readJsonInput } from "../../orchestrator/index.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
-import { atomicWriteFile } from "../../shared/atomic-write.js";
-import { stringifyJson } from "../../shared/json.js";
-import { specBuildDir } from "../../core/state/paths.js";
 import {
   SpecStore,
   RealGhClient,
-  runSpecGates,
-  decideSpecReview,
-  parseReviewVerdict,
-  parseGenerateResult,
-  buildGenerateSpawn,
-  buildReviewSpawn,
-  buildReviseSpawn,
-  buildManifest,
-  type GhClient,
-  type Prd,
-  type SpecSpawnSpec,
-  type GenerateContext,
-  type ReviseContext,
-  type ReviewContext,
+  resolveSpec,
+  gateSpec,
+  storeSpec,
+  type SpecBuildDeps,
+  type SpecBuildEnvelope,
 } from "../../spec/index.js";
 import { DefaultGitClient, resolveRepo, type GitClient } from "../../git/index.js";
-import type { Config, SpecPointer } from "../../types/index.js";
 import type { Subcommand } from "../registry-types.js";
+
+export { resolveSpec, gateSpec, storeSpec };
+export type { SpecBuildDeps, SpecBuildEnvelope };
 
 const SPEC_HELP = `factory spec — deterministic spec-build seam (resolve → gate → store)
 
@@ -76,226 +43,6 @@ Actions:
   resolve  Reuse an existing spec by issue, else fetch the PRD + emit the generate spawn.
   gate     Run the deterministic spec gates; emit revise (blockers) or the review spawn.
   store    Adjudicate the review (56/60 + floor); emit revise or persist + emit the pointer.`;
-
-/** Scratch file names threaded between the three actions. */
-const PRD_FILE = "prd.json";
-const GENERATED_FILE = "generated.json";
-const VERDICT_FILE = "verdict.json";
-
-/** The single JSON document each `factory spec` action emits — the runner's contract. */
-export type SpecBuildEnvelope =
-  | {
-      /** An existing spec for this issue was reused (Δ X) — no generation needed. */
-      readonly kind: "reuse";
-      readonly repo: string;
-      readonly issue: number;
-      readonly pointer: SpecPointer;
-    }
-  | {
-      /** No spec yet — spawn the generator, then write `generated_path` and call `gate`. */
-      readonly kind: "generate";
-      readonly repo: string;
-      readonly issue: number;
-      readonly spawn: SpecSpawnSpec<GenerateContext>;
-      readonly prd_path: string;
-      readonly generated_path: string;
-      /** The runner's bound on the generate/review loop (config.spec.maxRegenIterations). */
-      readonly max_iterations: number;
-    }
-  | {
-      /** Gates passed — spawn the reviewer, then write `verdict_path` and call `store`. */
-      readonly kind: "review";
-      readonly repo: string;
-      readonly issue: number;
-      readonly spawn: SpecSpawnSpec<ReviewContext>;
-      readonly generated_path: string;
-      readonly verdict_path: string;
-    }
-  | {
-      /** The spec needs revision (gate blockers OR a sub-threshold review) — patch + re-gate. */
-      readonly kind: "revise";
-      readonly repo: string;
-      readonly issue: number;
-      readonly source: "gate" | "review";
-      readonly reason: string;
-      readonly blockers: readonly string[];
-      /**
-       * The generator re-spawn, carrying the PRIOR spec + blockers so the agent patches
-       * it rather than re-authoring from the PRD (symmetric with `generate`/`review`).
-       * Invariant: `spawn.context.review_feedback` is built from `blockers` at the single
-       * construction site below — the two never diverge.
-       */
-      readonly spawn: SpecSpawnSpec<ReviseContext>;
-      readonly generated_path: string;
-    }
-  | {
-      /** PASS — the spec is durably stored; the runner proceeds to `run create`. */
-      readonly kind: "stored";
-      readonly repo: string;
-      readonly issue: number;
-      readonly pointer: SpecPointer;
-    };
-
-/** The deps the testable cores need (injected in tests; production-wired by the command). */
-export interface SpecBuildDeps {
-  readonly store: SpecStore;
-  readonly gh: GhClient;
-  readonly config: Config;
-  readonly dataDir: string;
-}
-
-/** Resolve the three scratch paths for a (repo, issue) build. */
-function scratchPaths(
-  dataDir: string,
-  repo: string,
-  issue: number,
-): {
-  prdPath: string;
-  generatedPath: string;
-  verdictPath: string;
-} {
-  const dir = specBuildDir(dataDir, repo, issue);
-  return {
-    prdPath: join(dir, PRD_FILE),
-    generatedPath: join(dir, GENERATED_FILE),
-    verdictPath: join(dir, VERDICT_FILE),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// resolve
-// ---------------------------------------------------------------------------
-
-/**
- * Reuse-or-begin: on a store hit return the pointer (Δ X — never regen); else fetch
- * the PRD, persist it to the scratch dir, and emit the apex-pinned generate spawn.
- *
- * Pass `regenerate: true` (from `--supersede`) to delete any existing durable spec
- * before the reuse check, forcing Phase 1 to regenerate from the PRD. Deletion is
- * mandatory — regen without delete risks two dirs for the same issue, which
- * `resolveByIssue` treats as a store-integrity error.
- */
-export async function resolveSpec(
-  deps: SpecBuildDeps,
-  repo: string,
-  issue: number,
-  { regenerate = false }: { regenerate?: boolean } = {},
-): Promise<SpecBuildEnvelope> {
-  if (regenerate) {
-    await deps.store.deleteByIssue(repo, issue);
-  }
-  const existing = await deps.store.resolveByIssue(repo, issue);
-  if (existing) {
-    return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
-  }
-
-  const prd = await deps.gh.fetchPrd(issue, { repo });
-  const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
-  await atomicWriteFile(prdPath, stringifyJson(prd));
-
-  return {
-    kind: "generate",
-    repo,
-    issue,
-    spawn: buildGenerateSpawn(prd),
-    prd_path: prdPath,
-    generated_path: generatedPath,
-    max_iterations: deps.config.spec.maxRegenIterations,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// gate
-// ---------------------------------------------------------------------------
-
-/**
- * Run the deterministic spec gates against the generator's output. On a block, emit
- * `revise` (the runner re-spawns the generator with the blockers). On a pass,
- * emit the apex-pinned review spawn. `generated.json` is UNTRUSTED agent output, so
- * it is parsed loudly via {@link parseGenerateResult}.
- */
-export async function gateSpec(
-  deps: SpecBuildDeps,
-  repo: string,
-  issue: number,
-): Promise<SpecBuildEnvelope> {
-  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
-  const prd = await readJsonInput<Prd>(prdPath);
-  const generated = parseGenerateResult(await readJsonInput<unknown>(generatedPath));
-
-  const gates = runSpecGates(prd, generated.tasks);
-  if (!gates.passed) {
-    return {
-      kind: "revise",
-      repo,
-      issue,
-      source: "gate",
-      reason: "deterministic spec gates blocked the spec",
-      blockers: gates.blockers,
-      // review_feedback derives from these same blockers — single source, no divergence.
-      spawn: buildReviseSpawn(prd, generated, gates.blockers),
-      generated_path: generatedPath,
-    };
-  }
-
-  return {
-    kind: "review",
-    repo,
-    issue,
-    spawn: buildReviewSpawn(prd, generated),
-    generated_path: generatedPath,
-    verdict_path: verdictPath,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// store
-// ---------------------------------------------------------------------------
-
-/**
- * Adjudicate the reviewer verdict (single 56/60 threshold + any-dimension floor,
- * Δ I) against the generator output. On NEEDS_REVISION emit `revise`; on PASS build
- * the durable request and persist it, returning the run-facing pointer. Both
- * `generated.json` and `verdict.json` are UNTRUSTED agent output → parsed loudly.
- */
-export async function storeSpec(
-  deps: SpecBuildDeps,
-  repo: string,
-  issue: number,
-): Promise<SpecBuildEnvelope> {
-  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
-  const generated = parseGenerateResult(await readJsonInput<unknown>(generatedPath));
-  const verdict = parseReviewVerdict(await readJsonInput<unknown>(verdictPath));
-
-  const decision = decideSpecReview(verdict, {
-    passReviewThreshold: deps.config.spec.passReviewThreshold,
-    dimensionFloor: deps.config.spec.dimensionFloor,
-  });
-  if (decision.decision === "NEEDS_REVISION") {
-    const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
-    // The revise spawn embeds the PRD (written by `resolve`, durable for the loop) so the
-    // generator patches the prior spec against the reviewer's blockers, not re-derives it.
-    const prd = await readJsonInput<Prd>(prdPath);
-    return {
-      kind: "revise",
-      repo,
-      issue,
-      source: "review",
-      reason: decision.reason,
-      blockers,
-      spawn: buildReviseSpawn(prd, generated, blockers),
-      generated_path: generatedPath,
-    };
-  }
-
-  const request = buildManifest(repo, issue, generated);
-  const pointer = await deps.store.write(request, generated.specMd);
-  return { kind: "stored", repo, issue, pointer };
-}
-
-// ---------------------------------------------------------------------------
-// Flag parsing + command wiring
-// ---------------------------------------------------------------------------
 
 function parseIssue(raw: string): number {
   const n = Number(raw);

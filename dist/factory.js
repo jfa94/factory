@@ -6622,6 +6622,87 @@ function parseRunState(raw) {
   return RunStateChecked.parse(raw);
 }
 
+// src/shared/ids.ts
+var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+var SLUG_MAX_LENGTH = 50;
+function validateId(id, label = "id") {
+  if (id.length === 0) {
+    throw new Error(`${label}: empty`);
+  }
+  if (!ID_PATTERN.test(id)) {
+    throw new Error(`${label}: invalid (must match ${ID_PATTERN.source}): ${id}`);
+  }
+  return id;
+}
+function makeRunId(now = /* @__PURE__ */ new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  const date = `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}`;
+  const time = `${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}`;
+  return `run-${date}-${time}`;
+}
+function slugify(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "").slice(0, SLUG_MAX_LENGTH);
+}
+
+// src/core/state/seed.ts
+function seedTaskRows(specTasks, ctx, idOf = (id) => id) {
+  const ids = new Set(specTasks.map((t) => idOf(t.task_id)));
+  const tasks = {};
+  for (const t of specTasks) {
+    const id = idOf(t.task_id);
+    validateId(id, "task-id");
+    if (tasks[id] !== void 0) {
+      throw new Error(`${ctx.context}: duplicate task id '${t.task_id}' in ${ctx.specLabel}`);
+    }
+    const dependsOn = t.depends_on.map(idOf);
+    for (const [i, dep] of dependsOn.entries()) {
+      if (dep === id) {
+        throw new Error(
+          `${ctx.context}: task '${t.task_id}' depends on itself in ${ctx.specLabel}`
+        );
+      }
+      if (!ids.has(dep)) {
+        throw new Error(
+          `${ctx.context}: task '${t.task_id}' depends on unknown task '${t.depends_on[i]}' in ${ctx.specLabel}`
+        );
+      }
+    }
+    tasks[id] = {
+      task_id: id,
+      status: "pending",
+      // Frozen denormalization of the spec DAG edges for hot traversal (next.ts,
+      // rescue/scan.ts); integrity pinned by the dangling/self/cyclic/duplicate
+      // checks in this module. The risk_tier dial is NOT copied — it is read live
+      // from the SpecTask via specTaskOf (derive-don't-store, Decision 25).
+      depends_on: dependsOn,
+      escalation_rung: 0,
+      reviewers: [],
+      merge_resyncs: 0
+    };
+  }
+  return tasks;
+}
+function assertAcyclic(tasks, ctx) {
+  const VISITING = 1;
+  const DONE = 2;
+  const state = /* @__PURE__ */ new Map();
+  const visit = (id, trail) => {
+    const mark = state.get(id);
+    if (mark === DONE) return;
+    if (mark === VISITING) {
+      throw new Error(
+        `${ctx.context}: dependency cycle in ${ctx.specLabel}: ${[...trail, id].join(" \u2192 ")}`
+      );
+    }
+    state.set(id, VISITING);
+    for (const dep of tasks[id]?.depends_on ?? []) {
+      visit(dep, [...trail, id]);
+    }
+    state.set(id, DONE);
+  };
+  for (const id of Object.keys(tasks)) visit(id, []);
+}
+
 // src/core/state/derive.ts
 function mkVerdict(passed, gate, from) {
   return { passed, gate, __derived: true, from };
@@ -6730,30 +6811,6 @@ function epochToIso(epochSeconds) {
 
 // src/core/state/paths.ts
 import { join as join3 } from "node:path";
-
-// src/shared/ids.ts
-var ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
-var SLUG_MAX_LENGTH = 50;
-function validateId(id, label = "id") {
-  if (id.length === 0) {
-    throw new Error(`${label}: empty`);
-  }
-  if (!ID_PATTERN.test(id)) {
-    throw new Error(`${label}: invalid (must match ${ID_PATTERN.source}): ${id}`);
-  }
-  return id;
-}
-function makeRunId(now = /* @__PURE__ */ new Date()) {
-  const p = (n) => String(n).padStart(2, "0");
-  const date = `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}`;
-  const time = `${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}`;
-  return `run-${date}-${time}`;
-}
-function slugify(input) {
-  return input.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "").slice(0, SLUG_MAX_LENGTH);
-}
-
-// src/core/state/paths.ts
 var SPECS_DIR = "specs";
 var SPEC_BUILD_DIR = "spec-build";
 var DOCS_FACTORY_DIR = "factory";
@@ -9996,6 +10053,94 @@ function buildManifest(repo, issueNumber, generated) {
   });
 }
 
+// src/spec/build.ts
+import { join as join9 } from "node:path";
+var PRD_FILE = "prd.json";
+var GENERATED_FILE = "generated.json";
+var VERDICT_FILE = "verdict.json";
+function scratchPaths(dataDir, repo, issue) {
+  const dir = specBuildDir(dataDir, repo, issue);
+  return {
+    prdPath: join9(dir, PRD_FILE),
+    generatedPath: join9(dir, GENERATED_FILE),
+    verdictPath: join9(dir, VERDICT_FILE)
+  };
+}
+async function resolveSpec(deps, repo, issue, { regenerate = false } = {}) {
+  if (regenerate) {
+    await deps.store.deleteByIssue(repo, issue);
+  }
+  const existing = await deps.store.resolveByIssue(repo, issue);
+  if (existing) {
+    return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
+  }
+  const prd = await deps.gh.fetchPrd(issue, { repo });
+  const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
+  await atomicWriteFile(prdPath, stringifyJson(prd));
+  return {
+    kind: "generate",
+    repo,
+    issue,
+    spawn: buildGenerateSpawn(prd),
+    prd_path: prdPath,
+    generated_path: generatedPath,
+    max_iterations: deps.config.spec.maxRegenIterations
+  };
+}
+async function gateSpec(deps, repo, issue) {
+  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
+  const prd = await readJsonFile(prdPath);
+  const generated = parseGenerateResult(await readJsonFile(generatedPath));
+  const gates = runSpecGates(prd, generated.tasks);
+  if (!gates.passed) {
+    return {
+      kind: "revise",
+      repo,
+      issue,
+      source: "gate",
+      reason: "deterministic spec gates blocked the spec",
+      blockers: gates.blockers,
+      // review_feedback derives from these same blockers — single source, no divergence.
+      spawn: buildReviseSpawn(prd, generated, gates.blockers),
+      generated_path: generatedPath
+    };
+  }
+  return {
+    kind: "review",
+    repo,
+    issue,
+    spawn: buildReviewSpawn(prd, generated),
+    generated_path: generatedPath,
+    verdict_path: verdictPath
+  };
+}
+async function storeSpec(deps, repo, issue) {
+  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
+  const generated = parseGenerateResult(await readJsonFile(generatedPath));
+  const verdict = parseReviewVerdict(await readJsonFile(verdictPath));
+  const decision = decideSpecReview(verdict, {
+    passReviewThreshold: deps.config.spec.passReviewThreshold,
+    dimensionFloor: deps.config.spec.dimensionFloor
+  });
+  if (decision.decision === "NEEDS_REVISION") {
+    const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
+    const prd = await readJsonFile(prdPath);
+    return {
+      kind: "revise",
+      repo,
+      issue,
+      source: "review",
+      reason: decision.reason,
+      blockers,
+      spawn: buildReviseSpawn(prd, generated, blockers),
+      generated_path: generatedPath
+    };
+  }
+  const request = buildManifest(repo, issue, generated);
+  const pointer = await deps.store.write(request, generated.specMd);
+  return { kind: "stored", repo, issue, pointer };
+}
+
 // src/producer/agents.ts
 function parseProducerStatus(raw) {
   const line = raw.trim();
@@ -11424,7 +11569,7 @@ function splitHoldout(criteria, percent, seed) {
 
 // src/verifier/holdout/store.ts
 import { mkdir as mkdir6, readFile as readFile7 } from "node:fs/promises";
-import { dirname as dirname5, join as join9 } from "node:path";
+import { dirname as dirname5, join as join10 } from "node:path";
 var HoldoutRecordSchema = external_exports.object({
   task_id: external_exports.string().min(1),
   withheld_criteria: external_exports.array(external_exports.string()),
@@ -11455,7 +11600,7 @@ var FsHoldoutStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join9(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
+    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.json`);
   }
   async put(runId, record) {
     const path5 = this.path(runId, record.task_id);
@@ -11479,7 +11624,7 @@ var FsHoldoutStore = class {
 
 // src/verifier/holdout/verdict-store.ts
 import { mkdir as mkdir7, readFile as readFile8 } from "node:fs/promises";
-import { dirname as dirname6, join as join10 } from "node:path";
+import { dirname as dirname6, join as join11 } from "node:path";
 var HoldoutVerdictSchema = external_exports.object({
   criterion: external_exports.string(),
   satisfied: external_exports.boolean(),
@@ -11492,7 +11637,7 @@ var FsHoldoutVerdictStore = class {
   }
   path(runId, taskId) {
     const safe = validateId(taskId, "task_id");
-    return join10(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
+    return join11(runDir(this.dataDir, runId), "holdouts", `${safe}.verdicts.json`);
   }
   async put(runId, taskId, verdicts) {
     const path5 = this.path(runId, taskId);
@@ -12066,11 +12211,11 @@ async function applyProducerOutcome(deps, runId, taskId, opts, outcome) {
 }
 
 // src/orchestrator/paths.ts
-import { join as join11 } from "node:path";
+import { join as join12 } from "node:path";
 function taskWorktreePath(dataDir, runId, taskId) {
   validateId(runId, "run-id");
   validateId(taskId, "task-id");
-  return join11(worktreesRoot(dataDir), runId, taskId);
+  return join12(worktreesRoot(dataDir), runId, taskId);
 }
 
 // src/orchestrator/exempt.ts
@@ -12343,7 +12488,7 @@ function shipBody(runId, specTask) {
 
 // src/orchestrator/artifacts.ts
 import { mkdir as mkdir8, readFile as readFile9 } from "node:fs/promises";
-import { dirname as dirname7, join as join12 } from "node:path";
+import { dirname as dirname7, join as join13 } from "node:path";
 function producerRef(taskId, label) {
   return `prompts/${taskId}/${label}.json`;
 }
@@ -12352,7 +12497,7 @@ var FsArtifactStore = class {
     this.dataDir = dataDir;
   }
   absPath(runId, ref) {
-    return join12(runDir(this.dataDir, runId), ref);
+    return join13(runDir(this.dataDir, runId), ref);
   }
   async putProducerContext(runId, taskId, label, context) {
     const ref = producerRef(taskId, label);
@@ -12370,7 +12515,7 @@ var FsArtifactStore = class {
 
 // src/orchestrator/docs-applicable.ts
 import { readFile as readFile10, stat } from "node:fs/promises";
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 async function readJsonOrNull2(file) {
   let raw;
   try {
@@ -12390,17 +12535,17 @@ function docsEnabled(packageJson) {
 }
 async function isDocsApplicable(repoRoot) {
   try {
-    const s = await stat(join13(repoRoot, "docs"));
+    const s = await stat(join14(repoRoot, "docs"));
     if (!s.isDirectory()) return false;
   } catch {
     return false;
   }
-  return docsEnabled(await readJsonOrNull2(join13(repoRoot, "package.json")));
+  return docsEnabled(await readJsonOrNull2(join14(repoRoot, "package.json")));
 }
 
 // src/orchestrator/record.ts
 import { readFile as readFile11 } from "node:fs/promises";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 var log22 = createLogger("record");
 async function persistStepCursor(deps, runId, taskId, step) {
   if (!step.done) {
@@ -12470,7 +12615,7 @@ async function buildWorktreeSource(worktree, reviews) {
   const lines = /* @__PURE__ */ new Map();
   for (const file of files) {
     try {
-      const text = await readFile11(join14(worktree, file), "utf8");
+      const text = await readFile11(join15(worktree, file), "utf8");
       lines.set(file, text.split("\n"));
     } catch (err) {
       if (err?.code !== "ENOENT") throw err;
@@ -12995,12 +13140,12 @@ async function nextAction(deps, runId, taskId, results) {
 }
 
 // src/orchestrator/docs.ts
-import { join as join15 } from "node:path";
+import { join as join16 } from "node:path";
 var DOCS_MODEL = "opus";
 var DOCS_MAX_TURNS = 60;
 var MAX_DOCS_ATTEMPTS = 2;
 function docsWorktreePath(dataDir, runId) {
-  return join15(dataDir, "runs", runId, "docs-worktree");
+  return join16(dataDir, "runs", runId, "docs-worktree");
 }
 function buildScribePrompt(worktree, baseRef) {
   return [
@@ -13210,7 +13355,7 @@ async function nextTask(deps, runId) {
 
 // src/orchestrator/e2e.ts
 import { copyFile, mkdir as mkdir9, writeFile } from "node:fs/promises";
-import { dirname as dirname8, isAbsolute, join as join16 } from "node:path";
+import { dirname as dirname8, isAbsolute, join as join17 } from "node:path";
 var log26 = createLogger("e2e");
 var DefaultE2eFileOps = class {
   async copySpec(from, to) {
@@ -13239,16 +13384,16 @@ var E2eResultsSchema = external_exports.object({
   no_ui_surface: external_exports.boolean().optional()
 }).strict();
 function e2eWorktreePath(dataDir, runId) {
-  return join16(dataDir, "runs", runId, "e2e-worktree");
+  return join17(dataDir, "runs", runId, "e2e-worktree");
 }
 function e2eRunWorktreePath(dataDir, runId) {
-  return join16(dataDir, "runs", runId, "e2e-run-worktree");
+  return join17(dataDir, "runs", runId, "e2e-run-worktree");
 }
 function e2eBaseProofWorktreePath(dataDir, runId) {
-  return join16(dataDir, "runs", runId, "e2e-base-proof-worktree");
+  return join17(dataDir, "runs", runId, "e2e-base-proof-worktree");
 }
 function e2eThrowawayDir(dataDir, runId) {
-  return join16(dataDir, "runs", runId, "e2e-throwaway");
+  return join17(dataDir, "runs", runId, "e2e-throwaway");
 }
 function e2eBranchName(runId) {
   return `e2e-${runId}`;
@@ -13434,7 +13579,7 @@ async function proveCriticals(deps, runId, critical, authorWorktree) {
   }
   try {
     for (const entry of critical) {
-      await files.copySpec(join16(authorWorktree, entry.spec_path), join16(wtPath, entry.spec_path));
+      await files.copySpec(join17(authorWorktree, entry.spec_path), join17(wtPath, entry.spec_path));
       let baseResult;
       try {
         baseResult = await runE2e(
@@ -13526,7 +13671,7 @@ async function markFailed(deps, runId, reason, attempts) {
   log26.warn(`run '${runId}': e2e phase failed \u2014 ${reason}`);
 }
 function throwawayConfigPath(worktree) {
-  return join16(worktree, ".factory-e2e-throwaway.config.cjs");
+  return join17(worktree, ".factory-e2e-throwaway.config.cjs");
 }
 function throwawayConfigContents(throwawayDir) {
   return [
@@ -13882,62 +14027,12 @@ session end and leaves the run resumable; cancel is for deliberately discarding 
 Emits ONE JSON envelope:
   { kind:"cancelled", run, cleaned_up }`;
 function seedTasksFromSpec(request) {
-  const ids = new Set(request.tasks.map((t) => t.task_id));
-  const tasks = {};
-  for (const t of request.tasks) {
-    validateId(t.task_id, "task-id");
-    if (tasks[t.task_id] !== void 0) {
-      throw new Error(`run create: duplicate task id '${t.task_id}' in spec ${request.spec_id}`);
-    }
-    for (const dep of t.depends_on) {
-      if (dep === t.task_id) {
-        throw new Error(
-          `run create: task '${t.task_id}' depends on itself in spec ${request.spec_id}`
-        );
-      }
-      if (!ids.has(dep)) {
-        throw new Error(
-          `run create: task '${t.task_id}' depends on unknown task '${dep}' in spec ${request.spec_id}`
-        );
-      }
-    }
-    tasks[t.task_id] = {
-      task_id: t.task_id,
-      status: "pending",
-      // Frozen denormalization of the spec DAG edges for hot traversal (next.ts,
-      // rescue/scan.ts); integrity pinned by the dangling/self/cyclic/duplicate
-      // checks above. The risk_tier dial is NOT copied — it is read live from the
-      // SpecTask via specTaskOf (derive-don't-store, Decision 25).
-      depends_on: [...t.depends_on],
-      escalation_rung: 0,
-      reviewers: [],
-      merge_resyncs: 0
-    };
-  }
-  assertAcyclic(tasks, request.spec_id);
+  const ctx = { context: "run create", specLabel: `spec ${request.spec_id}` };
+  const tasks = seedTaskRows(request.tasks, ctx);
+  assertAcyclic(tasks, ctx);
   return tasks;
 }
-function assertAcyclic(tasks, specId) {
-  const VISITING = 1;
-  const DONE = 2;
-  const state = /* @__PURE__ */ new Map();
-  const visit = (id, trail) => {
-    const mark = state.get(id);
-    if (mark === DONE) return;
-    if (mark === VISITING) {
-      throw new Error(
-        `run create: dependency cycle in spec ${specId}: ${[...trail, id].join(" \u2192 ")}`
-      );
-    }
-    state.set(id, VISITING);
-    for (const dep of tasks[id]?.depends_on ?? []) {
-      visit(dep, [...trail, id]);
-    }
-    state.set(id, DONE);
-  };
-  for (const id of Object.keys(tasks)) visit(id, []);
-}
-async function resolveSpec(specStore, opts) {
+async function resolveSpec2(specStore, opts) {
   if (opts.specId !== void 0) {
     return specStore.read(opts.repo, opts.specId);
   }
@@ -13990,7 +14085,7 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
   return run10;
 }
 async function createRun(state, specStore, opts) {
-  return createRunFromManifest(state, specStore, await resolveSpec(specStore, opts), opts);
+  return createRunFromManifest(state, specStore, await resolveSpec2(specStore, opts), opts);
 }
 async function supersedeRun(state, existing, stagingDeps) {
   const branch = resolveStagingBranch(existing.run_id, existing.staging_branch);
@@ -13999,7 +14094,7 @@ async function supersedeRun(state, existing, stagingDeps) {
   await state.finalize(existing.run_id, "superseded");
 }
 async function resolveOrCreateRun(state, specStore, opts, stagingDeps) {
-  const request = await resolveSpec(specStore, opts);
+  const request = await resolveSpec2(specStore, opts);
   if (opts.intent === "fresh") {
     return {
       kind: "created",
@@ -14457,7 +14552,6 @@ var resumeCommand = {
 };
 
 // src/cli/subcommands/spec.ts
-import { join as join17 } from "node:path";
 var SPEC_HELP = `factory spec \u2014 deterministic spec-build seam (resolve \u2192 gate \u2192 store)
 
 Usage:
@@ -14476,91 +14570,6 @@ Actions:
   resolve  Reuse an existing spec by issue, else fetch the PRD + emit the generate spawn.
   gate     Run the deterministic spec gates; emit revise (blockers) or the review spawn.
   store    Adjudicate the review (56/60 + floor); emit revise or persist + emit the pointer.`;
-var PRD_FILE = "prd.json";
-var GENERATED_FILE = "generated.json";
-var VERDICT_FILE = "verdict.json";
-function scratchPaths(dataDir, repo, issue) {
-  const dir = specBuildDir(dataDir, repo, issue);
-  return {
-    prdPath: join17(dir, PRD_FILE),
-    generatedPath: join17(dir, GENERATED_FILE),
-    verdictPath: join17(dir, VERDICT_FILE)
-  };
-}
-async function resolveSpec2(deps, repo, issue, { regenerate = false } = {}) {
-  if (regenerate) {
-    await deps.store.deleteByIssue(repo, issue);
-  }
-  const existing = await deps.store.resolveByIssue(repo, issue);
-  if (existing) {
-    return { kind: "reuse", repo, issue, pointer: deps.store.toPointer(existing) };
-  }
-  const prd = await deps.gh.fetchPrd(issue, { repo });
-  const { prdPath, generatedPath } = scratchPaths(deps.dataDir, repo, issue);
-  await atomicWriteFile(prdPath, stringifyJson(prd));
-  return {
-    kind: "generate",
-    repo,
-    issue,
-    spawn: buildGenerateSpawn(prd),
-    prd_path: prdPath,
-    generated_path: generatedPath,
-    max_iterations: deps.config.spec.maxRegenIterations
-  };
-}
-async function gateSpec(deps, repo, issue) {
-  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
-  const prd = await readJsonInput(prdPath);
-  const generated = parseGenerateResult(await readJsonInput(generatedPath));
-  const gates = runSpecGates(prd, generated.tasks);
-  if (!gates.passed) {
-    return {
-      kind: "revise",
-      repo,
-      issue,
-      source: "gate",
-      reason: "deterministic spec gates blocked the spec",
-      blockers: gates.blockers,
-      // review_feedback derives from these same blockers — single source, no divergence.
-      spawn: buildReviseSpawn(prd, generated, gates.blockers),
-      generated_path: generatedPath
-    };
-  }
-  return {
-    kind: "review",
-    repo,
-    issue,
-    spawn: buildReviewSpawn(prd, generated),
-    generated_path: generatedPath,
-    verdict_path: verdictPath
-  };
-}
-async function storeSpec(deps, repo, issue) {
-  const { prdPath, generatedPath, verdictPath } = scratchPaths(deps.dataDir, repo, issue);
-  const generated = parseGenerateResult(await readJsonInput(generatedPath));
-  const verdict = parseReviewVerdict(await readJsonInput(verdictPath));
-  const decision = decideSpecReview(verdict, {
-    passReviewThreshold: deps.config.spec.passReviewThreshold,
-    dimensionFloor: deps.config.spec.dimensionFloor
-  });
-  if (decision.decision === "NEEDS_REVISION") {
-    const blockers = verdict.blockers.length > 0 ? verdict.blockers : [decision.reason];
-    const prd = await readJsonInput(prdPath);
-    return {
-      kind: "revise",
-      repo,
-      issue,
-      source: "review",
-      reason: decision.reason,
-      blockers,
-      spawn: buildReviseSpawn(prd, generated, blockers),
-      generated_path: generatedPath
-    };
-  }
-  const request = buildManifest(repo, issue, generated);
-  const pointer = await deps.store.write(request, generated.specMd);
-  return { kind: "stored", repo, issue, pointer };
-}
 function parseIssue2(raw) {
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) {
@@ -14579,7 +14588,7 @@ function wireDeps() {
   };
 }
 var ACTIONS = {
-  resolve: resolveSpec2,
+  resolve: resolveSpec,
   gate: gateSpec,
   store: storeSpec
 };
@@ -14608,7 +14617,7 @@ async function run3(argv) {
   const issue = parseIssue2(args.requireFlag("issue"));
   const repo = await resolveSpecRepo(args);
   const deps = wireDeps();
-  const envelope = action === "resolve" ? await resolveSpec2(deps, repo, issue, { regenerate: args.flag("supersede") === true }) : await handler(deps, repo, issue);
+  const envelope = action === "resolve" ? await resolveSpec(deps, repo, issue, { regenerate: args.flag("supersede") === true }) : await handler(deps, repo, issue);
   emitJson(envelope);
   return EXIT.OK;
 }
@@ -14821,66 +14830,14 @@ function wireDebugSpecDeps(report, dataDirOverride) {
 function namespacedId(passNumber, taskId) {
   return `p${passNumber}-${taskId}`;
 }
-function namespaceBatch(request, passNumber) {
-  const ids = new Set(request.tasks.map((t) => namespacedId(passNumber, t.task_id)));
-  const tasks = {};
-  for (const t of request.tasks) {
-    const id = namespacedId(passNumber, t.task_id);
-    validateId(id, "task-id");
-    if (tasks[id] !== void 0) {
-      throw new Error(
-        `appendTasksFromSpec: duplicate task id '${t.task_id}' in spec ${request.spec_id} (pass ${passNumber})`
-      );
-    }
-    const dependsOn = t.depends_on.map((dep) => namespacedId(passNumber, dep));
-    for (const [i, dep] of dependsOn.entries()) {
-      const rawDep = t.depends_on[i];
-      if (dep === id) {
-        throw new Error(
-          `appendTasksFromSpec: task '${t.task_id}' depends on itself in spec ${request.spec_id} (pass ${passNumber})`
-        );
-      }
-      if (!ids.has(dep)) {
-        throw new Error(
-          `appendTasksFromSpec: task '${t.task_id}' depends on unknown task '${rawDep}' in spec ${request.spec_id} (pass ${passNumber})`
-        );
-      }
-    }
-    tasks[id] = {
-      task_id: id,
-      status: "pending",
-      depends_on: dependsOn,
-      escalation_rung: 0,
-      reviewers: [],
-      merge_resyncs: 0
-    };
-  }
-  return tasks;
-}
-function assertAcyclic2(tasks, specId, passNumber) {
-  const VISITING = 1;
-  const DONE = 2;
-  const state = /* @__PURE__ */ new Map();
-  const visit = (id, trail) => {
-    const mark = state.get(id);
-    if (mark === DONE) return;
-    if (mark === VISITING) {
-      throw new Error(
-        `appendTasksFromSpec: dependency cycle in spec ${specId} (pass ${passNumber}): ${[...trail, id].join(" \u2192 ")}`
-      );
-    }
-    state.set(id, VISITING);
-    for (const dep of tasks[id]?.depends_on ?? []) {
-      visit(dep, [...trail, id]);
-    }
-    state.set(id, DONE);
-  };
-  for (const id of Object.keys(tasks)) visit(id, []);
-}
 function appendTasksFromSpec(existingTasks, request, passNumber) {
-  const newBatch = namespaceBatch(request, passNumber);
+  const ctx = {
+    context: "appendTasksFromSpec",
+    specLabel: `spec ${request.spec_id} (pass ${passNumber})`
+  };
+  const newBatch = seedTaskRows(request.tasks, ctx, (id) => namespacedId(passNumber, id));
   const merged = { ...existingTasks, ...newBatch };
-  assertAcyclic2(merged, request.spec_id, passNumber);
+  assertAcyclic(merged, ctx);
   return merged;
 }
 
@@ -14988,12 +14945,10 @@ async function debugStart(deps, opts = {}) {
   }
   const runId = makeRunId();
   validateId(runId, "run-id");
-  await ensureStaging({
-    gitClient: deps.gitClient,
-    stagingBranch: runStagingBranch(runId),
-    baseBranch: deps.config.git.baseBranch,
-    cwd: deps.cwd
-  });
+  const headSha = await deps.gitClient.revParse("HEAD", { cwd: deps.cwd });
+  const stagingBranch = runStagingBranch(runId);
+  await deps.gitClient.checkoutB(stagingBranch, headSha, { cwd: deps.cwd });
+  await deps.gitClient.push("origin", stagingBranch, { setUpstream: true, cwd: deps.cwd });
   const session = {
     runId,
     base,
@@ -15080,7 +15035,7 @@ async function debugRepo(deps) {
 async function debugSpecResolve(deps, runId) {
   const session = await readSession(deps.dataDir, runId);
   const repo = await debugRepo(deps);
-  return resolveSpec2(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
+  return resolveSpec(await specDepsFor(deps, session), repo, debugIssueNumber(session.pass));
 }
 async function debugSpecGate(deps, runId) {
   const session = await readSession(deps.dataDir, runId);

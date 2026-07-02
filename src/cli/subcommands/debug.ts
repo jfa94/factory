@@ -72,7 +72,6 @@ import { StateManager } from "../../core/state/index.js";
 import { SpecStore } from "../../spec/index.js";
 import {
   DefaultGitClient,
-  ensureStaging,
   runStagingBranch,
   resolveRepo,
   type GitClient,
@@ -340,10 +339,17 @@ export interface DebugStartOptions {
 }
 
 /**
- * Mint the debug run id, cut its per-run staging branch (the SAME mechanism
- * `run create` uses — `ensureStaging` + `runStagingBranch`, reused unchanged),
- * write the session's scratch state, and emit the pass-1 review scope. No
- * {@link RunState} exists yet — `seed` creates it once pass 1's spec is stored.
+ * Mint the debug run id, cut its per-run staging branch FROM THE TARGET'S
+ * CURRENT HEAD, write the session's scratch state, and emit the pass-1 review
+ * scope. No {@link RunState} exists yet — `seed` creates it once pass 1's
+ * spec is stored.
+ *
+ * Deliberately NOT `run create`'s `ensureStaging` (which cuts from
+ * `origin/<base>`): the debug target is the user's checkout — often ahead of
+ * the base, or on a feature branch — and the per-run branch is always absent
+ * remotely, so `ensureStaging` would `checkout -B … origin/<base>` IN PLACE
+ * and swap the reviewed tree out from under the session. Cutting from the
+ * snapshot HEAD keeps the working tree byte-identical.
  */
 export async function debugStart(
   deps: DebugDeps,
@@ -363,12 +369,10 @@ export async function debugStart(
   const runId = makeRunId();
   validateId(runId, "run-id");
 
-  await ensureStaging({
-    gitClient: deps.gitClient,
-    stagingBranch: runStagingBranch(runId),
-    baseBranch: deps.config.git.baseBranch,
-    cwd: deps.cwd,
-  });
+  const headSha = await deps.gitClient.revParse("HEAD", { cwd: deps.cwd });
+  const stagingBranch = runStagingBranch(runId);
+  await deps.gitClient.checkoutB(stagingBranch, headSha, { cwd: deps.cwd });
+  await deps.gitClient.push("origin", stagingBranch, { setUpstream: true, cwd: deps.cwd });
 
   const session: DebugSession = {
     runId,

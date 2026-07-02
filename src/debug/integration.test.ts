@@ -60,11 +60,12 @@ let cwd: string;
 let gitClient: FakeGitClient;
 let originalCwd: string;
 
-/** A FakeGitClient whose origin remote-url resolves to REPO and whose base branch already exists remotely (so ensureStaging FFs cleanly) — same fixture shape debug.test.ts uses. */
+/** A FakeGitClient whose origin remote-url resolves to REPO, with a local HEAD (the review target's checkout) and a remote base branch — same fixture shape debug.test.ts uses. */
 function makeGitClient(): FakeGitClient {
   const git = new FakeGitClient();
   git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
   git.setRemoteHead("develop", "sha-develop-1");
+  git.localBranches.set("main", "sha-target-head-1");
   return git;
 }
 

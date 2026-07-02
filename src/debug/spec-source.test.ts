@@ -10,7 +10,7 @@ import {
   wireDebugSpecDeps,
   type BuildDebugReportInput,
 } from "./spec-source.js";
-import { resolveSpec } from "../cli/subcommands/spec.js";
+import { resolveSpec } from "../spec/index.js";
 import type { Finding } from "../verifier/judgment/finding.js";
 
 const REPO = "owner/app";

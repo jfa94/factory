@@ -64,6 +64,10 @@ export type {
   E2ePhase,
 } from "./schema.js";
 
+// --- Seed-time DAG integrity (run create first batch + debug pass-N append) ---
+export { seedTaskRows, assertAcyclic } from "./seed.js";
+export type { SeedableTask, SeedContext } from "./seed.js";
+
 // --- Derive-don't-store gate-verdict accessors ---
 export {
   deriveGateVerdict,

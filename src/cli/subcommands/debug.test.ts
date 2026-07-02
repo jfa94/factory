@@ -29,11 +29,12 @@ let cwd: string;
 let gitClient: FakeGitClient;
 let originalCwd: string;
 
-/** A FakeGitClient whose origin remote-url resolves to REPO and whose base/staging branches already exist remotely (so ensureStaging FFs cleanly). */
+/** A FakeGitClient whose origin remote-url resolves to REPO, with a local HEAD (the review target's checkout) and a remote base branch. */
 function makeGitClient(): FakeGitClient {
   const git = new FakeGitClient();
   git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
   git.setRemoteHead("develop", "sha-develop-1");
+  git.localBranches.set("main", "sha-target-head-1");
   return git;
 }
 
@@ -76,6 +77,16 @@ describe("debugStart", () => {
     expect(env.base).toBe("HEAD~1");
     expect(env.worktree).toBe(cwd);
     expect(gitClient.localBranches.has(`staging-${env.run_id}`)).toBe(true);
+  });
+
+  it("cuts the staging branch from the target's HEAD snapshot, never origin/<base>", async () => {
+    const env = await debugStart(deps(), {});
+    if (env.kind !== "review") throw new Error("unreachable");
+    // The reviewed tree must stay byte-identical: branch is born on the local
+    // HEAD sha, not checked out in-place from origin/develop (finding 16).
+    expect(gitClient.calls).toContain(`checkout -B staging-${env.run_id} sha-target-head-1`);
+    expect(gitClient.calls).toContain(`push -u origin staging-${env.run_id}`);
+    expect(gitClient.calls.filter((c) => c.includes("origin/develop"))).toEqual([]);
   });
 
   it("--full diffs against the empty-tree SHA instead of --base", async () => {

@@ -26,7 +26,7 @@ import { EXIT, type ExitCode } from "../../shared/exit-codes.js";
 import { parseArgs, isUsageError, UsageError, optionalString } from "../args.js";
 import { emitJson, emitLine, emitError } from "../io.js";
 import { loadConfig, resolveDataDir } from "../../config/index.js";
-import { StateManager } from "../../core/state/index.js";
+import { StateManager, seedTaskRows, assertAcyclic } from "../../core/state/index.js";
 import { SpecStore, type SpecManifest } from "../../spec/index.js";
 import { makeRunId, validateId } from "../../shared/ids.js";
 import { nowEpoch, parseIso8601ToEpoch } from "../../shared/time.js";
@@ -182,70 +182,10 @@ Emits ONE JSON envelope:
  * that would otherwise deadlock the orchestrator.
  */
 export function seedTasksFromSpec(request: SpecManifest): Record<string, TaskState> {
-  const ids = new Set(request.tasks.map((t) => t.task_id));
-  const tasks: Record<string, TaskState> = {};
-
-  for (const t of request.tasks) {
-    validateId(t.task_id, "task-id");
-    if (tasks[t.task_id] !== undefined) {
-      throw new Error(`run create: duplicate task id '${t.task_id}' in spec ${request.spec_id}`);
-    }
-    for (const dep of t.depends_on) {
-      if (dep === t.task_id) {
-        throw new Error(
-          `run create: task '${t.task_id}' depends on itself in spec ${request.spec_id}`,
-        );
-      }
-      if (!ids.has(dep)) {
-        throw new Error(
-          `run create: task '${t.task_id}' depends on unknown task '${dep}' in spec ${request.spec_id}`,
-        );
-      }
-    }
-    tasks[t.task_id] = {
-      task_id: t.task_id,
-      status: "pending",
-      // Frozen denormalization of the spec DAG edges for hot traversal (next.ts,
-      // rescue/scan.ts); integrity pinned by the dangling/self/cyclic/duplicate
-      // checks above. The risk_tier dial is NOT copied — it is read live from the
-      // SpecTask via specTaskOf (derive-don't-store, Decision 25).
-      depends_on: [...t.depends_on],
-      escalation_rung: 0,
-      reviewers: [],
-      merge_resyncs: 0,
-    };
-  }
-
-  assertAcyclic(tasks, request.spec_id);
+  const ctx = { context: "run create", specLabel: `spec ${request.spec_id}` };
+  const tasks = seedTaskRows(request.tasks, ctx);
+  assertAcyclic(tasks, ctx);
   return tasks;
-}
-
-/**
- * LOUD-fail on a dependency cycle (DFS with a recursion stack). The orchestrator would
- * otherwise reach a deadlock — no ready, no blocked, no terminal — and throw at
- * drive time; catching it at seed time names the offending task instead.
- */
-function assertAcyclic(tasks: Record<string, TaskState>, specId: string): void {
-  const VISITING = 1;
-  const DONE = 2;
-  const state = new Map<string, number>();
-
-  const visit = (id: string, trail: string[]): void => {
-    const mark = state.get(id);
-    if (mark === DONE) return;
-    if (mark === VISITING) {
-      throw new Error(
-        `run create: dependency cycle in spec ${specId}: ${[...trail, id].join(" → ")}`,
-      );
-    }
-    state.set(id, VISITING);
-    for (const dep of tasks[id]?.depends_on ?? []) {
-      visit(dep, [...trail, id]);
-    }
-    state.set(id, DONE);
-  };
-
-  for (const id of Object.keys(tasks)) visit(id, []);
 }
 
 // ---------------------------------------------------------------------------
