@@ -12513,6 +12513,24 @@ function composeFixFindings(adjudicated, gateEvidence) {
   const fromGates = gateEvidence.filter((g) => g.gate !== "holdout" && !g.observed).map((g) => ({ reviewer: g.gate, description: g.detail ?? `${g.gate} gate failed` }));
   return [...fromReviewers, ...fromGates];
 }
+var PANEL_ROLE_SET = new Set(PANEL_ROLES);
+function enforcePanelRoster(reviews) {
+  const out = reviews.map((r) => {
+    if (PANEL_ROLE_SET.has(r.reviewer)) return r;
+    log22.warn(
+      `panel roster: unknown reviewer '${r.reviewer}' \u2014 verdict demoted to error (only the ${PANEL_ROLES.length} fixed panel roles may gate)`
+    );
+    return { ...r, verdict: "error" };
+  });
+  const present = new Set(reviews.map((r) => r.reviewer));
+  for (const role of PANEL_ROLES) {
+    if (!present.has(role)) {
+      log22.warn(`panel roster: reviewer '${role}' missing from results \u2014 synthesized error verdict`);
+      out.push({ reviewer: role, verdict: "error", findings: [] });
+    }
+  }
+  return out;
+}
 async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
   const run10 = await deps.state.read(runId);
   const task = run10.tasks[taskId];
@@ -12520,7 +12538,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     throw new Error(`record-reviews: run '${runId}' has no task '${taskId}'`);
   }
   const worktree = taskWorktreePath(deps.dataDir, runId, taskId);
-  const reviews = input.reviews.map(parseRawReview);
+  const reviews = enforcePanelRoster(input.reviews.map(parseRawReview));
   const source = await buildWorktreeSource(worktree, reviews);
   const makeRunner2 = makeReplayRunnerFactory(input);
   const gateCtx = {

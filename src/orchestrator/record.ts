@@ -39,6 +39,7 @@ import { GateRunner, type GateContext } from "../verifier/deterministic/index.js
 import {
   runPanel,
   parseRawReview,
+  PANEL_ROLES,
   type RawReview,
   type SourceReader,
   type FindingVerifierRunner,
@@ -369,6 +370,38 @@ function composeFixFindings(
   return [...fromReviewers, ...fromGates];
 }
 
+const PANEL_ROLE_SET: ReadonlySet<string> = new Set(PANEL_ROLES);
+
+/**
+ * Roster enforcement (D26): `derivePanelVerdict` is unanimity over WHATEVER
+ * reviews arrived, so any all-approve SUBSET of the panel would clear the merge
+ * gate. At this record seam — the last hop before the verdict is derived — every
+ * {@link PANEL_ROLES} entry must be present: a missing role becomes a synthesized
+ * `error` review and an unknown reviewer name is demoted to `error` (never counted
+ * as an approve). Both fail the gate LOUDLY. The cross-vendor slot is an EXECUTOR
+ * of a roster role (quality-reviewer via Codex), never an extra reviewer name, so
+ * no extra name is legitimate. /factory:debug calls runPanel directly and is
+ * deliberately outside this check (whole-scope review, not the task merge gate).
+ */
+export function enforcePanelRoster(reviews: readonly RawReview[]): RawReview[] {
+  const out: RawReview[] = reviews.map((r) => {
+    if (PANEL_ROLE_SET.has(r.reviewer)) return r;
+    log.warn(
+      `panel roster: unknown reviewer '${r.reviewer}' — verdict demoted to error ` +
+        `(only the ${PANEL_ROLES.length} fixed panel roles may gate)`,
+    );
+    return { ...r, verdict: "error" };
+  });
+  const present = new Set(reviews.map((r) => r.reviewer));
+  for (const role of PANEL_ROLES) {
+    if (!present.has(role)) {
+      log.warn(`panel roster: reviewer '${role}' missing from results — synthesized error verdict`);
+      out.push({ reviewer: role, verdict: "error", findings: [] });
+    }
+  }
+  return out;
+}
+
 /**
  * Record the panel + verify-then-fix verdicts into the merge gate and return the next-step
  * envelope. `verdictStore` is the holdout-verdict source `applyRecordHoldout` persisted.
@@ -390,7 +423,7 @@ export async function applyRecordReviews(
   // 1. parse reviews + build the worktree source and the replay verifier factory
   //    (BEFORE the expensive GateRunner re-run — a malformed review item must fail
   //    fast rather than burning a full deterministic gate sweep first).
-  const reviews = input.reviews.map(parseRawReview);
+  const reviews = enforcePanelRoster(input.reviews.map(parseRawReview));
   const source = await buildWorktreeSource(worktree, reviews);
   const makeRunner = makeReplayRunnerFactory(input);
 

@@ -53,6 +53,10 @@ function blockedWith(reviewer: string, line: number, quote: string): RawReview {
   });
 }
 
+// NOTE: runPanel derives over WHATEVER reviews it is handed — roster completeness
+// (all 7 PANEL_ROLES present, no unknown names) is enforced upstream at the record
+// seam (record.ts enforcePanelRoster). The 2-reviewer fixtures here exercise the
+// citation-verify/confirm/derive pipeline only, not a real merge-gate pass.
 describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
   it("D26 merge gate: unanimous approve → merge gate passes and advances to ship", async () => {
     const res = await runPanel({

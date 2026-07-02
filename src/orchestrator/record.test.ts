@@ -20,7 +20,7 @@ import {
   type RecordReviewsInput,
   type RecordDeps,
 } from "./record.js";
-import type { RawReview } from "../verifier/judgment/index.js";
+import { PANEL_ROLES, type RawReview } from "../verifier/judgment/index.js";
 import { taskWorktreePath } from "./paths.js";
 import { defaultConfig } from "../config/schema.js";
 import { parseSpecManifest } from "../spec/index.js";
@@ -217,6 +217,16 @@ function approve(reviewer: string) {
   return { reviewer, verdict: "approve" as const, findings: [] };
 }
 
+/**
+ * A FULL 7-role all-approve panel (the record seam enforces roster completeness —
+ * any missing role is synthesized as an `error` and fails the gate). `overrides`
+ * replace the review for their role.
+ */
+function fullPanel(...overrides: RawReview[]): unknown[] {
+  const byRole = new Map(overrides.map((o) => [o.reviewer, o]));
+  return PANEL_ROLES.map((role) => byRole.get(role) ?? approve(role));
+}
+
 describe("applyRecordReviews record", () => {
   let dataDir: string;
   let state: StateManager;
@@ -303,10 +313,10 @@ describe("applyRecordReviews record", () => {
     }
   }
 
-  it("a unanimous-approve panel + green gates advances to ship", async () => {
+  it("a unanimous-approve FULL panel + green gates advances to ship", async () => {
     const deps = makeDeps();
     const input: RecordReviewsInput = {
-      reviews: [approve("quality"), approve("security")],
+      reviews: fullPanel(),
       verifications: [],
     };
 
@@ -315,8 +325,44 @@ describe("applyRecordReviews record", () => {
     expect(env.mergeGate.passed).toBe(true);
     expect(env.step).toEqual({ done: false, phase: "ship" });
     const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
-    expect(task.reviewers.map((r) => r.verdict)).toEqual(["approve", "approve"]);
+    expect(task.reviewers.map((r) => r.verdict)).toEqual(PANEL_ROLES.map(() => "approve"));
     expect(task.status).toBe("shipping"); // markInFlight(ship)
+  });
+
+  it("roster enforcement: an all-approve SUBSET of the panel FAILS the merge gate", async () => {
+    const deps = makeDeps();
+    const input: RecordReviewsInput = {
+      reviews: [approve("implementation-reviewer"), approve("security-reviewer")],
+      verifications: [],
+    };
+
+    const { result: env, stderr } = await captureWarnings(() =>
+      applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input),
+    );
+
+    expect(env.mergeGate.passed).toBe(false);
+    expect(env.step).toEqual({ done: false, phase: "exec" });
+    // Every missing role is synthesized as an ERROR reviewer (LOUD, never a pass).
+    const errored = env.reviewers.filter((r) => r.verdict === "error").map((r) => r.reviewer);
+    expect(errored).toContain("quality-reviewer");
+    expect(errored).toHaveLength(PANEL_ROLES.length - 2);
+    expect(stderr).toMatch(/missing from results/);
+  });
+
+  it("roster enforcement: an unknown reviewer name is demoted to error (never counts as approve)", async () => {
+    const deps = makeDeps();
+    const input: RecordReviewsInput = {
+      reviews: [...fullPanel(), approve("quality")],
+      verifications: [],
+    };
+
+    const { result: env, stderr } = await captureWarnings(() =>
+      applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input),
+    );
+
+    expect(env.mergeGate.passed).toBe(false);
+    expect(env.reviewers.find((r) => r.reviewer === "quality")!.verdict).toBe("error");
+    expect(stderr).toMatch(/unknown reviewer 'quality'/);
   });
 
   it("advancing past a prior blocked rung clears the stale fix_findings record (D5)", async () => {
@@ -332,7 +378,7 @@ describe("applyRecordReviews record", () => {
       },
     }));
     const input: RecordReviewsInput = {
-      reviews: [approve("quality"), approve("security")],
+      reviews: fullPanel(),
       verifications: [],
     };
 
@@ -347,28 +393,25 @@ describe("applyRecordReviews record", () => {
     await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
     const deps = makeDeps();
     const input: RecordReviewsInput = {
-      reviews: [
-        approve("security"),
-        {
-          reviewer: "quality",
-          verdict: "blocked",
-          findings: [
-            {
-              reviewer: "quality",
-              severity: "critical",
-              blocking: true,
-              file: "src/x.ts",
-              line: 2,
-              quote: "const x = 1",
-              description: "magic number",
-            },
-          ],
-        },
-      ],
+      reviews: fullPanel({
+        reviewer: "quality-reviewer",
+        verdict: "blocked",
+        findings: [
+          {
+            reviewer: "quality-reviewer",
+            severity: "critical",
+            blocking: true,
+            file: "src/x.ts",
+            line: 2,
+            quote: "const x = 1",
+            description: "magic number",
+          },
+        ],
+      }),
       // The runner's independent verifier CONFIRMED the blocker.
       verifications: [
         {
-          reviewer: "quality",
+          reviewer: "quality-reviewer",
           verdicts: [{ file: "src/x.ts", line: 2, holds: true, note: "confirmed" }],
         },
       ],
@@ -379,7 +422,7 @@ describe("applyRecordReviews record", () => {
     expect(env.mergeGate.passed).toBe(false);
     expect(env.step).toEqual({ done: false, phase: "exec" });
     // The round's reviewers are reported on the envelope (audit)…
-    const quality = env.reviewers.find((r) => r.reviewer === "quality")!;
+    const quality = env.reviewers.find((r) => r.reviewer === "quality-reviewer")!;
     expect(quality.verdict).toBe("blocked");
     expect(quality.confirmed_blockers).toBe(1);
     // …but state CLEARS them on escalation and bumps the rung.
@@ -390,7 +433,7 @@ describe("applyRecordReviews record", () => {
     // D5 fix-forward: the confirmed blocker survives escalateOrFail's reviewers
     // clear, in the lean fix_findings shape (not the full judgment Finding).
     expect(task.fix_findings).toEqual([
-      { reviewer: "quality", file: "src/x.ts", line: 2, description: "magic number" },
+      { reviewer: "quality-reviewer", file: "src/x.ts", line: 2, description: "magic number" },
     ]);
   });
 
@@ -398,23 +441,21 @@ describe("applyRecordReviews record", () => {
     await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
     const deps = makeDeps();
     const input: RecordReviewsInput = {
-      reviews: [
-        {
-          reviewer: "quality",
-          verdict: "blocked",
-          findings: [
-            {
-              reviewer: "quality",
-              severity: "critical",
-              blocking: true,
-              file: "src/x.ts",
-              line: 2,
-              quote: "const x = 1",
-              description: "magic number",
-            },
-          ],
-        },
-      ],
+      reviews: fullPanel({
+        reviewer: "quality-reviewer",
+        verdict: "blocked",
+        findings: [
+          {
+            reviewer: "quality-reviewer",
+            severity: "critical",
+            blocking: true,
+            file: "src/x.ts",
+            line: 2,
+            quote: "const x = 1",
+            description: "magic number",
+          },
+        ],
+      }),
       verifications: [], // no pre-recorded verdict for the kept blocker
     };
 
@@ -423,7 +464,7 @@ describe("applyRecordReviews record", () => {
     expect(env.mergeGate.passed).toBe(false);
     expect(env.step).toEqual({ done: false, phase: "exec" });
     // The missing verdict surfaces as a LOUD verifier error, not an auto-confirm/refute.
-    expect(env.reviewers.find((r) => r.reviewer === "quality")!.verdict).toBe("error");
+    expect(env.reviewers.find((r) => r.reviewer === "quality-reviewer")!.verdict).toBe("error");
   });
 
   it("a failing holdout blocks the merge gate even with an approving panel + green gates", async () => {
@@ -434,7 +475,7 @@ describe("applyRecordReviews record", () => {
       { criterion: "e", satisfied: false, evidence: "" },
     ]);
     const deps = makeDeps();
-    const input: RecordReviewsInput = { reviews: [approve("quality")], verifications: [] };
+    const input: RecordReviewsInput = { reviews: fullPanel(), verifications: [] };
 
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
@@ -455,7 +496,7 @@ describe("applyRecordReviews record", () => {
       { criterion: "e", satisfied: true, evidence: "src/y.ts:2" },
     ]);
     const deps = makeDeps();
-    const input: RecordReviewsInput = { reviews: [approve("quality")], verifications: [] };
+    const input: RecordReviewsInput = { reviews: fullPanel(), verifications: [] };
 
     const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
 
@@ -479,27 +520,24 @@ describe("applyRecordReviews record", () => {
     await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
     const depsEscalate = makeDeps();
     const escalateInput: RecordReviewsInput = {
-      reviews: [
-        approve("security"),
-        {
-          reviewer: "quality",
-          verdict: "blocked",
-          findings: [
-            {
-              reviewer: "quality",
-              severity: "critical",
-              blocking: true,
-              file: "src/x.ts",
-              line: 2,
-              quote: "const x = 1",
-              description: "magic number",
-            },
-          ],
-        },
-      ],
+      reviews: fullPanel({
+        reviewer: "quality-reviewer",
+        verdict: "blocked",
+        findings: [
+          {
+            reviewer: "quality-reviewer",
+            severity: "critical",
+            blocking: true,
+            file: "src/x.ts",
+            line: 2,
+            quote: "const x = 1",
+            description: "magic number",
+          },
+        ],
+      }),
       verifications: [
         {
-          reviewer: "quality",
+          reviewer: "quality-reviewer",
           verdicts: [{ file: "src/x.ts", line: 2, holds: true, note: "confirmed" }],
         },
       ],
@@ -532,7 +570,7 @@ describe("applyRecordReviews record", () => {
     }));
     const depsApprove = makeDeps();
     const approveInput: RecordReviewsInput = {
-      reviews: [approve("quality"), approve("security")],
+      reviews: fullPanel(),
       verifications: [],
     };
     const approveEnv = await applyRecordReviews(
@@ -546,7 +584,9 @@ describe("applyRecordReviews record", () => {
     expect(approveEnv.step).toEqual({ done: false, phase: "ship" });
     // After advance record: reviewers persisted + phase advanced atomically.
     const taskAfterApprove = (await state.read(RUN_ID)).tasks[TASK_ID]!;
-    expect(taskAfterApprove.reviewers.map((r) => r.verdict)).toEqual(["approve", "approve"]);
+    expect(taskAfterApprove.reviewers.map((r) => r.verdict)).toEqual(
+      PANEL_ROLES.map(() => "approve"),
+    );
     expect(taskAfterApprove.phase).toBe("ship");
     expect(taskAfterApprove.status).toBe("shipping");
   });
@@ -597,7 +637,7 @@ describe("applyRecordReviews record", () => {
   it("surfaces a cross-vendor ABSENCE on the envelope and LOUDLY warns (Δ U — never silently dropped)", async () => {
     const deps = makeDeps();
     const input: RecordReviewsInput = {
-      reviews: [approve("quality"), approve("security")],
+      reviews: fullPanel(),
       verifications: [],
       crossVendorAbsent: { reason: "single-vendor v1 (no second vendor configured)" },
     };
@@ -621,7 +661,7 @@ describe("applyRecordReviews record", () => {
   it("records NO cross-vendor absence (and emits no warn) when a second vendor was present", async () => {
     const deps = makeDeps();
     const input: RecordReviewsInput = {
-      reviews: [approve("quality"), approve("security")],
+      reviews: fullPanel(),
       verifications: [],
     };
 
@@ -662,7 +702,7 @@ describe("applyRecordReviews record", () => {
       state,
     };
     const input: RecordReviewsInput = {
-      reviews: [approve("quality"), approve("security")],
+      reviews: fullPanel(),
       verifications: [],
     };
 

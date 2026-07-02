@@ -54,6 +54,10 @@ describe("derive-don't-store: verdicts are computed from ground truth (Δ V)", (
 });
 
 describe("panel verdict is conjunctive/unanimous (Decision 26)", () => {
+  // NOTE: derivePanelVerdict is unanimity over WHATEVER arrived — roster
+  // completeness (all 7 PANEL_ROLES present) is enforced upstream at the record
+  // seam (record.ts enforcePanelRoster), so subsets here exercise ONLY the
+  // conjunction, not a real merge-gate pass.
   it("passes only on unanimous approve", () => {
     expect(derivePanelVerdict([approve("impl"), approve("security")]).passed).toBe(true);
   });
