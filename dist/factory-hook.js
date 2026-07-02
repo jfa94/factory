@@ -1959,12 +1959,12 @@ function basename2(tok) {
   return parts[parts.length - 1] ?? tok;
 }
 function parseGitInvocation(command) {
-  const ENV_PREFIX_RE = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+  const ENV_PREFIX_RE2 = /^([A-Za-z_][A-Za-z0-9_]*)=/;
   const tokens = [];
   const envNames = [];
   for (const tok of command.split(/\s+/)) {
     if (tok.length === 0) continue;
-    const m = ENV_PREFIX_RE.exec(tok);
+    const m = ENV_PREFIX_RE2.exec(tok);
     if (m) {
       envNames.push(m[1]);
       continue;
@@ -6881,6 +6881,80 @@ function isTcbProtected(candidatePath, ctx = {}, cwd = process.cwd()) {
 
 // src/hooks/write-protection.ts
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit"]);
+var SEGMENT_SPLIT_RE = /&&|\|\||;|&|\||\n|\$\(|`|\)/;
+var REDIRECT_TARGET_RE = /(?:\d+|&)?>{1,2}\|?\s*("[^"]+"|'[^']+'|[^\s;|&<>()`]+)/g;
+var INPUT_REDIRECT_RE = /<+\s*[^\s;|&<>()`]*/g;
+var ENV_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "command", "nohup", "time", "nice", "stdbuf", "xargs"]);
+function unquote2(tok) {
+  let t = tok;
+  if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
+  if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
+  return t;
+}
+function basenameOf(tok) {
+  const parts = tok.split("/");
+  return parts[parts.length - 1] ?? tok;
+}
+function nonFlagArgs(args) {
+  return args.filter((a) => !a.startsWith("-"));
+}
+function destArgs(args) {
+  const out = [];
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-t" || a === "--target-directory") {
+      const v = args[i + 1];
+      if (v !== void 0) out.push(v);
+      i++;
+    } else if (a.startsWith("--target-directory=")) {
+      out.push(a.slice("--target-directory=".length));
+    } else if (!a.startsWith("-")) {
+      positional.push(a);
+    }
+  }
+  const last = positional[positional.length - 1];
+  if (last !== void 0) out.push(last);
+  return out;
+}
+function inPlaceArgs(args) {
+  const inPlace = args.some((a) => /^--in-place/.test(a) || /^-[A-Za-z0-9.]*i/.test(a));
+  return inPlace ? nonFlagArgs(args) : [];
+}
+var WRITE_BINARIES = {
+  tee: nonFlagArgs,
+  rm: nonFlagArgs,
+  // deleting a gate config / workflow neutralizes it as surely as rewriting it
+  unlink: nonFlagArgs,
+  truncate: nonFlagArgs,
+  cp: destArgs,
+  mv: destArgs,
+  install: destArgs,
+  dd: (args) => args.filter((a) => a.startsWith("of=")).map((a) => a.slice(3)),
+  sed: inPlaceArgs,
+  perl: inPlaceArgs
+};
+function bashWriteTargets(command) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of command.matchAll(REDIRECT_TARGET_RE)) {
+    out.add(unquote2(m[1]));
+  }
+  for (const seg of command.split(SEGMENT_SPLIT_RE)) {
+    const cleaned = seg.replace(REDIRECT_TARGET_RE, " ").replace(INPUT_REDIRECT_RE, " ");
+    const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0).map(unquote2);
+    let i = 0;
+    while (i < tokens.length && (ENV_PREFIX_RE.test(tokens[i]) || WRAPPERS.has(basenameOf(tokens[i])) || tokens[i].startsWith("-"))) {
+      i++;
+    }
+    const bin = i < tokens.length ? tokens[i] : void 0;
+    const rule = bin === void 0 ? void 0 : WRITE_BINARIES[basenameOf(bin)];
+    if (rule) {
+      for (const t of rule(tokens.slice(i + 1))) out.add(t);
+    }
+  }
+  return [...out];
+}
 function resolveTcbContext(deps) {
   const cwd = deps.cwd ?? process.cwd();
   let dataDir;
@@ -6893,8 +6967,9 @@ function resolveTcbContext(deps) {
 }
 function decideWriteProtection(input, deps = {}) {
   const tool = toolNameOf(input);
-  if (!WRITE_TOOLS.has(tool)) return allow();
-  const targets = filePathsOf(input);
+  const isBash = tool === "Bash";
+  if (!isBash && !WRITE_TOOLS.has(tool)) return allow();
+  const targets = isBash ? bashWriteTargets(commandOf(input)) : filePathsOf(input);
   if (targets.length === 0) return allow();
   const ctx = resolveTcbContext(deps);
   const cwd = deps.cwd ?? process.cwd();
@@ -6903,7 +6978,7 @@ function decideWriteProtection(input, deps = {}) {
     if (match) {
       return deny(
         "tcb_write_denied",
-        `${tool} to TCB-protected path '${match.canonical}' is forbidden (category=${match.rule.category}: ${match.rule.describe})`
+        `${isBash ? "Bash write" : tool} to TCB-protected path '${match.canonical}' is forbidden (category=${match.rule.category}: ${match.rule.describe})`
       );
     }
   }

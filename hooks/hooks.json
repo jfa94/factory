@@ -6,6 +6,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js write-protection",
+            "timeout": 5,
+            "statusMessage": "Checking TCB write-protection"
+          },
+          {
+            "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/dist/factory-hook.js branch-protection",
             "timeout": 5,
             "statusMessage": "Checking branch protection"

@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decideWriteProtection } from "./write-protection.js";
+import { decideWriteProtection, bashWriteTargets } from "./write-protection.js";
 import { parseHookInput, isDeny } from "./hook-io.js";
 
 describe("write-protection — TCB write-deny (Δ W)", () => {
@@ -115,5 +115,106 @@ describe("write-protection — TCB write-deny (Δ W)", () => {
       JSON.stringify({ tool_name: "Read", tool_input: { file_path: p } }),
     );
     expect(isDeny(decideWriteProtection(input, deps()))).toBe(false);
+  });
+
+  // ── Bash arm: top-level shell writes to TCB paths (the config-bypass class the
+  //    Edit/Write matcher alone could not see — a plain redirect is not a nested
+  //    shell, so shell-bypass never fired either).
+  describe("Bash write-target arm", () => {
+    function bashInput(command: string) {
+      return parseHookInput(JSON.stringify({ tool_name: "Bash", tool_input: { command } }));
+    }
+    const denied = (cmd: string) => isDeny(decideWriteProtection(bashInput(cmd), deps()));
+
+    it("Δ W: redirect into a workflow is blocked (create + append + noclobber)", () => {
+      writeFileSync(join(repoRoot, ".github", "workflows", "quality-gate.yml"), "x");
+      expect(denied("printf 'x' > .github/workflows/quality-gate.yml")).toBe(true);
+      expect(denied("echo x >> .github/workflows/quality-gate.yml")).toBe(true);
+      expect(denied("echo x >| .github/workflows/quality-gate.yml")).toBe(true);
+      expect(denied("echo x &> .github/workflows/quality-gate.yml")).toBe(true);
+    });
+
+    it("Δ W: tee / cp / mv / install / dd / sed -i / truncate into TCB are blocked", () => {
+      const wf = ".github/workflows/quality-gate.yml";
+      writeFileSync(join(repoRoot, ".github", "workflows", "quality-gate.yml"), "x");
+      expect(denied(`cat /tmp/x | tee ${wf}`)).toBe(true);
+      expect(denied(`cp /tmp/x ${wf}`)).toBe(true);
+      expect(denied(`mv /tmp/x ${wf}`)).toBe(true);
+      expect(denied(`install -m 644 /tmp/x ${wf}`)).toBe(true);
+      expect(denied(`dd if=/tmp/x of=${wf}`)).toBe(true);
+      expect(denied(`sed -i 's/a/b/' ${wf}`)).toBe(true);
+      expect(denied(`sed -i.bak 's/a/b/' ${wf}`)).toBe(true);
+      expect(denied(`perl -pi -e 's/a/b/' ${wf}`)).toBe(true);
+      expect(denied(`truncate -s 0 ${wf}`)).toBe(true);
+    });
+
+    it("Δ W: deleting a gate config is blocked (rm neutralizes as surely as rewrite)", () => {
+      writeFileSync(join(repoRoot, ".stryker.config.json"), "{}");
+      expect(denied("rm .stryker.config.json")).toBe(true);
+      expect(denied("rm -f .stryker.config.json")).toBe(true);
+    });
+
+    it("Δ W: gate-config shadow write via redirect is blocked", () => {
+      expect(denied("echo 'module.exports={}' > .dependency-cruiser.cjs")).toBe(true);
+    });
+
+    it("Δ W: write to <dataDir>/config.json (setupCommand ACE vector) is blocked", () => {
+      expect(denied(`tee ${join(dataDir, "config.json")} < /tmp/x`)).toBe(true);
+      expect(denied(`printf '{}' > ${join(dataDir, "config.json")}`)).toBe(true);
+    });
+
+    it("Δ Y: redirect into the holdout store is blocked", () => {
+      expect(denied(`echo x > ${join(dataDir, "runs", "run-1", "holdouts", "a.json")}`)).toBe(true);
+    });
+
+    it("§4: `..` traversal and quoted targets are blocked", () => {
+      writeFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "x");
+      expect(denied("echo x > src/../.github/workflows/ci.yml")).toBe(true);
+      expect(denied('echo x > ".github/workflows/ci.yml"')).toBe(true);
+    });
+
+    it("compound commands are checked per segment", () => {
+      writeFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "x");
+      expect(denied("npm test && printf x > .github/workflows/ci.yml")).toBe(true);
+      expect(denied("true; cp /tmp/x .github/workflows/ci.yml")).toBe(true);
+    });
+
+    it("wrapper binaries (env/xargs) do not hide the write", () => {
+      writeFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "x");
+      expect(denied("env FOO=1 tee .github/workflows/ci.yml")).toBe(true);
+      expect(denied("echo x | xargs tee .github/workflows/ci.yml")).toBe(true);
+    });
+
+    it("benign Bash writes and TCB reads pass", () => {
+      writeFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "x");
+      expect(denied("echo hi > /tmp/out.txt")).toBe(false);
+      expect(denied("npm run build")).toBe(false);
+      expect(denied("cat .github/workflows/ci.yml")).toBe(false);
+      expect(denied("grep -rn pattern hooks/")).toBe(false);
+      expect(denied("cp src/a.ts src/b.ts")).toBe(false);
+      expect(denied("ls -la 2>&1")).toBe(false);
+      expect(denied("")).toBe(false);
+    });
+  });
+
+  describe("bashWriteTargets extraction", () => {
+    it("extracts redirect targets including inside substitutions", () => {
+      expect(bashWriteTargets("echo $(date) > out.log")).toContain("out.log");
+      expect(bashWriteTargets("x=`echo y > inner.txt`")).toContain("inner.txt");
+    });
+
+    it("ignores fd-dups and process substitution", () => {
+      expect(bashWriteTargets("ls 2>&1")).toEqual([]);
+      expect(bashWriteTargets("diff <(a) >(b)")).toEqual([]);
+    });
+
+    it("cp -t form yields the target directory", () => {
+      expect(bashWriteTargets("cp -t dest/ a b")).toContain("dest/");
+      expect(bashWriteTargets("cp --target-directory=dest2 a")).toContain("dest2");
+    });
+
+    it("sed without -i yields nothing", () => {
+      expect(bashWriteTargets("sed 's/a/b/' file.txt")).toEqual([]);
+    });
   });
 });
