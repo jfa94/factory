@@ -45,12 +45,7 @@ first on a missing bin (gate not applicable), so in practice only the unconditio
 `type` and `test` gates reach the fail-closed path, where a missing `tsc`/`vitest`
 in a provisioned worktree is a genuine failure.
 
-Why not `npx`? Under corepack with a `packageManager: pnpm@…` field (node ≥ 24), a
-bare `npx <tool>` bypasses the installed `node_modules/.bin` and resolves a remote
-registry package of the same name instead — e.g. `npx tsc` fetches an unrelated
-`tsc` decoy and exits 1, a false type-gate failure independent of the code under
-test. Executing the local bin directly is package-manager-agnostic and never
-touches the network.
+Why not `npx`? See [Why gates exec local bins, never `npx`](../explanation/verifier.md#why-gates-exec-local-bins-never-npx).
 
 The `test` gate additionally runs vitest with `--coverage.enabled=false`
 (`DefaultVitestTool`). It is a diff-scoped pass/fail gate (only the changed test

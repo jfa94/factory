@@ -76,7 +76,7 @@ Usage:
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
-  finalize   Build the run report, file per-failure issues, ship the rollup only when completed, flip terminal.
+  finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
@@ -127,6 +127,7 @@ Usage:
 Emits ONE JSON envelope:
   { kind:"resumed", run }                              — window recovered (or already running)
   { kind:"pause", run_id, status, reason, … }  — window has not recovered (state untouched)
+  { kind:"debug-resume", run_id, run }         — a /factory:debug run; resume it via factory debug
 
 A terminal run is a loud error (nothing to resume).`;
 

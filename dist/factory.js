@@ -6348,13 +6348,10 @@ var TaskStateSchema = external_exports.object({
    * summary; `phase` is the machine cursor. Absent = not started (preflight).
    * NOTE: on terminal rows (done/failed), `phase` is the last in-flight phase,
    * not a resume point — terminal writers do not clear it.
-   * NOTE: these literals DUPLICATE phase-machine's TASK_PHASE_ORDER because
-   * core/state must not import phase-machine (dependency direction, enforced by
-   * `madge --circular` in verify). The duplication is kept honest by a LOAD-BEARING
-   * cross-check test — "TaskState.phase enum equals TASK_PHASE_ORDER (cross-module
-   * pin)" in src/orchestrator/orchestrator.test.ts — which fails the instant the two drift.
-   * Do NOT delete that test: it is the only thing tying this hand-copied list to its
-   * source of truth.
+   * NOTE: both this enum and phase-machine's TASK_PHASE_ORDER import the SAME
+   * literal tuple from `types/phases-vocab.ts` (the dependency-free vocabulary
+   * leaf), so they cannot drift; the cross-check test in
+   * src/orchestrator/orchestrator.test.ts is belt-and-braces, not load-bearing.
    */
   phase: external_exports.enum(TASK_PHASES).optional(),
   /** Ship live-merge re-sync count (cap enforced by the orchestrator; persisted so the cap survives process boundaries). */
@@ -6371,9 +6368,9 @@ var TaskStateSchema = external_exports.object({
    * in flight (the steady state between phases).
    *
    * `phase` is the spawn-phase subset (tests|exec|verify) — preflight/ship never spawn.
-   * The literal duplicates orchestrator/results' SPAWN_PHASES because core/state must not
-   * import the orchestrator (dependency direction); a cross-check test in
-   * src/orchestrator/orchestrator.test.ts pins them equal (mirrors the `phase` field's pin).
+   * Both this enum and orchestrator/results' SPAWN_PHASES import the same tuple from
+   * `types/phases-vocab.ts`, so they cannot drift (the orchestrator.test.ts cross-check
+   * is belt-and-braces, mirroring the `phase` field's pin).
    */
   spawn_in_flight: external_exports.object({
     phase: external_exports.enum(SPAWN_PHASES),
@@ -13989,7 +13986,7 @@ Usage:
 Actions:
   create     Resolve a durable spec, create a run, seed its tasks, emit the RunState.
   resume     Re-check the live quota window; clear the checkpoint if it has recovered.
-  finalize   Build the run report, file per-failure issues, ship the rollup only when completed, flip terminal.
+  finalize   Build the run report, post the deduped PRD failure comment, ship the rollup only when completed, flip terminal.
   docs       Emit the documentation-phase spawn request, or (with --results) record a scribe result.
   e2e        Emit the e2e-phase spawn request, or (with --results) record the e2e author's manifest.
   cancel     Abandon a live run (mark it failed; not resumable); --cleanup also tears down its branch.`;
@@ -14038,6 +14035,7 @@ Usage:
 Emits ONE JSON envelope:
   { kind:"resumed", run }                              \u2014 window recovered (or already running)
   { kind:"pause", run_id, status, reason, \u2026 }  \u2014 window has not recovered (state untouched)
+  { kind:"debug-resume", run_id, run }         \u2014 a /factory:debug run; resume it via factory debug
 
 A terminal run is a loud error (nothing to resume).`;
 var FINALIZE_HELP = `factory run finalize \u2014 turn an all-terminal run into its shipped outcome

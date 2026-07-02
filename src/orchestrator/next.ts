@@ -160,7 +160,7 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
     // Clear quota checkpoint before finalizing: a paused run whose tasks all complete
     // bypasses the step-4 clear below. Without this, a stop between this return and
     // factory-run-finalize strands the run as paused (stop-gate returns ALLOW for
-    // non-running, so it never self-finalizes). Mirrors next.ts:149-155.
+    // non-running, so it never self-finalizes). Mirrors the step-4 recovery clear below.
     if (run.status === "paused" || run.status === "suspended") {
       const patch = clearCheckpoint();
       await deps.state.update(runId, (s) => ({ ...s, status: patch.status, quota: patch.quota }));

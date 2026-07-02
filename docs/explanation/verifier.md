@@ -148,3 +148,16 @@ is each individual reviewer's panel verdict (that opinion is itself ground truth
 the merge gate (unanimity) is computed from those. See
 [derive-dont-store.md](./derive-dont-store.md).
 </content>
+
+## Why gates exec local bins, never `npx`
+
+The command-running gates (`test`, `type`, `lint`, `mutation`) resolve and exec
+the worktree's own `node_modules/.bin/<tool>` (see
+[the gate-resolution reference](../reference/automated-gates.md#how-a-command-gate-resolves-its-tool)),
+never `npx <tool>`. Under corepack with a `packageManager: pnpm@…` field
+(node ≥ 24), a bare `npx <tool>` bypasses the installed `node_modules/.bin` and
+resolves a remote registry package of the same name instead — e.g. `npx tsc`
+fetches an unrelated `tsc` decoy and exits 1, a false type-gate failure
+independent of the code under test. Executing the local bin directly is
+package-manager-agnostic and never touches the network; when no local bin
+resolves the gate fails closed rather than falling back to `npx`.

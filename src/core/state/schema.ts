@@ -327,13 +327,10 @@ export const TaskStateSchema = z.object({
    * summary; `phase` is the machine cursor. Absent = not started (preflight).
    * NOTE: on terminal rows (done/failed), `phase` is the last in-flight phase,
    * not a resume point — terminal writers do not clear it.
-   * NOTE: these literals DUPLICATE phase-machine's TASK_PHASE_ORDER because
-   * core/state must not import phase-machine (dependency direction, enforced by
-   * `madge --circular` in verify). The duplication is kept honest by a LOAD-BEARING
-   * cross-check test — "TaskState.phase enum equals TASK_PHASE_ORDER (cross-module
-   * pin)" in src/orchestrator/orchestrator.test.ts — which fails the instant the two drift.
-   * Do NOT delete that test: it is the only thing tying this hand-copied list to its
-   * source of truth.
+   * NOTE: both this enum and phase-machine's TASK_PHASE_ORDER import the SAME
+   * literal tuple from `types/phases-vocab.ts` (the dependency-free vocabulary
+   * leaf), so they cannot drift; the cross-check test in
+   * src/orchestrator/orchestrator.test.ts is belt-and-braces, not load-bearing.
    */
   phase: z.enum(TASK_PHASES).optional(),
   /** Ship live-merge re-sync count (cap enforced by the orchestrator; persisted so the cap survives process boundaries). */
@@ -351,9 +348,9 @@ export const TaskStateSchema = z.object({
    * in flight (the steady state between phases).
    *
    * `phase` is the spawn-phase subset (tests|exec|verify) — preflight/ship never spawn.
-   * The literal duplicates orchestrator/results' SPAWN_PHASES because core/state must not
-   * import the orchestrator (dependency direction); a cross-check test in
-   * src/orchestrator/orchestrator.test.ts pins them equal (mirrors the `phase` field's pin).
+   * Both this enum and orchestrator/results' SPAWN_PHASES import the same tuple from
+   * `types/phases-vocab.ts`, so they cannot drift (the orchestrator.test.ts cross-check
+   * is belt-and-braces, mirroring the `phase` field's pin).
    */
   spawn_in_flight: z
     .object({

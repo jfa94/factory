@@ -71,7 +71,7 @@ export function prdDoneComment(report: PartialRunReport, rollupResult: RollupRes
 export interface FinalizeRunDeps {
   /** The only sanctioned state read/write path. */
   readonly state: StateManager;
-  /** gh client for the rollup PR + per-failure issues. */
+  /** gh client for the rollup PR + the deduped PRD failure comment. */
   readonly gh: GhClient;
   /**
    * git client for the forward-reconcile (fetch + merge + push) before the rollup.
@@ -161,7 +161,7 @@ async function commentFailuresOnPrd(
 
 /**
  * Finalize a run whose tasks are ALL terminal: build + persist the report, emit
- * telemetry, file the per-failure issues, ship the rollup, then flip the run terminal.
+ * telemetry, post the deduped PRD failure comment, ship the rollup, then flip the run terminal.
  * See the module header for the resume-safe ordering + idempotency contract.
  */
 export async function finalizeRun(
@@ -277,7 +277,8 @@ export async function finalizeRun(
   const finalized = await deps.state.finalize(runId, terminal);
   // D3: a not-merged rollup (incl. the new "auto-armed" branch-policy fallback) names
   // its reason here — "visible, not silent" for the completed-but-not-yet-landed gap
-  // (status flips to `completed` at step 1, before the rollup even runs).
+  // (the `completed` verdict is DECIDED at step 1, before the rollup runs; it is only
+  // persisted here at step 7).
   const rollupNote = rollupResult
     ? `, rollup #${rollupResult.number} merged=${rollupResult.merged}` +
       (rollupResult.merged ? "" : ` (${rollupResult.reason})`)

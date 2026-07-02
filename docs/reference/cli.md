@@ -780,4 +780,35 @@ IO contract: stdout is the DISPLAYED statusline text (passthrough), never a
 `{kind:…}` envelope. Fail-soft invariant: the statusline fires constantly and must
 never crash — every degraded condition (empty/non-JSON stdin, no `rate_limits`,
 unresolvable data dir, a broken/slow original command) is a clean no-op returning
-exit 0. Diagnostics go to stderr.
+exit 0. Diagnostics go to stderr; a cache-write failure is additionally surfaced
+inline in the displayed text (`[factory: usage-cache …]`) so a silently stale
+quota cache is visible.
+
+## `debug <start|review|spec|seed|finalize>`
+
+The `/factory:debug` whole-scope review⇄fix loop: review the CURRENT state of a
+checkout (not a PRD), convert adjudicated findings into a fix spec, run the fix
+tasks through the normal task pipeline, and repeat for a bounded number of passes.
+
+```
+factory debug start [--base <ref> | --full] [--no-ship] [--author-e2e] [--max-passes <n>] [--session-id <id>]
+factory debug review --emit --run <id>
+factory debug review --record --run <id> --results <path>
+factory debug spec resolve|gate|store --run <id>
+factory debug seed --run <id>
+factory debug finalize --run <id> [--no-ship]
+```
+
+| Action     | What it does                                                                                        |
+| ---------- | --------------------------------------------------------------------------------------------------- |
+| `start`    | Cut the debug staging branch from the target's HEAD, mint the run id, emit the pass-1 review scope. |
+| `review`   | `--emit` spawns the whole-scope review panel; `--record` adjudicates its output.                    |
+| `spec`     | Thin pass-through to `factory spec resolve\|gate\|store` fed a synthetic PRD.                       |
+| `seed`     | Create (pass 1) or append (pass > 1) the run's tasks from the resolved spec.                        |
+| `finalize` | Turn an all-terminal debug run into its shipped outcome.                                            |
+
+The in-session runner drives the agent spawns AND the bounded review⇄fix loop;
+each action emits ONE JSON envelope naming the next step. Scratch JSON lives in
+`<dataDir>/debug/<run-id>/{session.json,pass-<n>/findings.{json,md}}`. A debug
+run resumed via `factory resume` answers `{ kind:"debug-resume", run_id, run }` —
+continue it with `factory debug`, not the PRD pipeline.

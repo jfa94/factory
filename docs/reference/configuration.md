@@ -42,28 +42,9 @@ required for correctness, and — if you want to silence it permanently — to s
 `CLAUDE_PLUGIN_DATA` to factory's own `factory-<your-marketplace-id>` dir. The
 redirect **behavior** is unconditional and unaffected by the warn rate-limiting.
 
-**Root cause (why it happens, why it's benign).** The leak is external to factory:
-Claude Code does not scope `CLAUDE_PLUGIN_DATA` per-plugin in the **shared process
-env**, so a sibling plugin that exports it (e.g. `codex`) leaves its value visible to
-every `factory` subprocess. Factory's defense is two-layer and complete on its own
-side:
-
-1. **Primary pin — `merged-settings.json`.** In autonomous mode (the sanctioned run
-   path), `factory autonomy ensure` bakes `env.CLAUDE_PLUGIN_DATA = <canonical dir>`
-   into the merged settings file the session relaunches with (`src/cli/subcommands/autonomy.ts`),
-   so the var is correct from process start and no redirect fires.
-2. **Backstop — the `CLAUDE_PLUGIN_ROOT` self-correct.** When a session was _not_
-   launched through merged settings (a foreign value leaked in), `resolveDataDir()`
-   re-derives the canonical dir from `CLAUDE_PLUGIN_ROOT` (the per-plugin anchor Claude
-   Code injects reliably) and the WARN is simply **evidence the backstop fired** — not a
-   factory misconfiguration.
-
-The warn **repeats across commands by design**: the once-per-process dedup cannot span
-processes, and every `factory` CLI call is a fresh process, so each command re-derives
-and re-warns once. It is cosmetic; correctness (state always under factory's own dir) is
-already guaranteed by the two layers above. The only way to silence it permanently is to
-stop the foreign export — i.e. set `CLAUDE_PLUGIN_DATA` to factory's canonical dir in
-your shell profile, or launch through `merged-settings.json` (which pins it for you).
+Why the leak happens, why it is benign, and why the warn repeats across
+commands is explained in
+[the plugin-data-dir explanation](../explanation/plugin-data-dir.md).
 
 ## `quality`
 
