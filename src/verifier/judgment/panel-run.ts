@@ -167,6 +167,15 @@ export interface RunPanelInput {
    * citation / confirm semantics.
    */
   readonly crossVendor?: CrossVendorResolution;
+  /**
+   * S5/C — `review.requireCrossVendor === "block"`. When true AND the resolution
+   * is `absent`, the quality-reviewer's result is DEMOTED to `verdict: "error"`
+   * (synthesized, like enforcePanelRoster) before the merge gate derives — an
+   * error verdict fails the gate, routing the existing wait-retry/escalate path.
+   * Covers the runtime-fallback case too: probe said present, `codex exec` failed
+   * at run time, the Claude fallback ran same-vendor.
+   */
+  readonly blockOnCrossVendorAbsence?: boolean;
 }
 
 /**
@@ -191,17 +200,36 @@ export async function runPanel(input: RunPanelInput): Promise<PanelRunResult> {
     adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
   }
 
-  const reviewerResults = adjudicated.map(reviewerResultOf);
+  let reviewerResults: readonly ReviewerResult[] = adjudicated.map(reviewerResultOf);
+
+  // S5/C block mode: the quality-reviewer slot REQUIRED a second vendor and none
+  // ran — demote its result to `error` (synthesize one if the review is missing,
+  // fail-closed) so the derived merge gate blocks with an honest reason.
+  const demoted =
+    input.blockOnCrossVendorAbsence === true && input.crossVendor?.status === "absent";
+  if (demoted) {
+    const hasQuality = reviewerResults.some((r) => r.reviewer === "quality-reviewer");
+    reviewerResults = hasQuality
+      ? reviewerResults.map((r) =>
+          r.reviewer === "quality-reviewer" ? { ...r, verdict: "error" as const } : r,
+        )
+      : [
+          ...reviewerResults,
+          { reviewer: "quality-reviewer", verdict: "error" as const, confirmed_blockers: 0 },
+        ];
+  }
 
   // DERIVE the merge gate (Δ V / D26): both the deterministic gates and the judgment
   // panel must pass; an `error` reviewer fails it LOUDLY. Never read from storage.
-  const mergeGate = deriveMergeGateVerdict({ reviewers: reviewerResults }, input.gateEvidence);
+  const mergeGate = deriveMergeGateVerdict({ reviewers: [...reviewerResults] }, input.gateEvidence);
 
   const result: PhaseResult = mergeGate.passed
     ? advance(nextOrSelf(input.phase))
     : waitRetry(
         input.phase,
-        mergeGateBlockReason(reviewerResults, input.gateEvidence),
+        demoted && input.crossVendor?.status === "absent"
+          ? `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${input.crossVendor.reason}`
+          : mergeGateBlockReason(reviewerResults, input.gateEvidence),
         input.attempt ?? 1,
         input.maxAttempts ?? 1,
       );

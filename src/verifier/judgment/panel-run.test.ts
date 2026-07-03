@@ -299,3 +299,75 @@ describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", (
     expect(res.crossVendorAbsence).toBeUndefined();
   });
 });
+
+describe("S5/C — requireCrossVendor=block demotes the quality-reviewer (synthesized error)", () => {
+  const ABSENT = {
+    status: "absent",
+    reason: "cross-vendor executor 'codex' is not available",
+  } as const;
+
+  it("block + absent: quality-reviewer demoted to `error`, merge gate blocked, reason names the policy + absence", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer"), approve("quality-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+      crossVendor: ABSENT,
+      blockOnCrossVendorAbsence: true,
+    });
+    const q = res.reviewerResults.find((r) => r.reviewer === "quality-reviewer");
+    expect(q?.verdict).toBe("error");
+    expect(res.mergeGate.passed).toBe(false);
+    expect(res.result.kind).toBe("wait-retry");
+    if (res.result.kind === "wait-retry") {
+      expect(res.result.reason).toContain("requireCrossVendor=block");
+      expect(res.result.reason).toContain("codex' is not available");
+    }
+    // The absence record stays loud alongside the demotion.
+    expect(res.crossVendorAbsence?.reason).toBe(ABSENT.reason);
+  });
+
+  it("warn (flag false/omitted) + absent: NO demotion — merge gate passes", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer"), approve("quality-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+      crossVendor: ABSENT,
+      blockOnCrossVendorAbsence: false,
+    });
+    expect(res.reviewerResults.every((r) => r.verdict === "approve")).toBe(true);
+    expect(res.mergeGate.passed).toBe(true);
+  });
+
+  it("block + present: NO demotion — merge gate passes", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer"), approve("quality-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+      crossVendor: { status: "present", slot: { vendor: "codex", model: "gpt-x" } },
+      blockOnCrossVendorAbsence: true,
+    });
+    expect(res.reviewerResults.every((r) => r.verdict === "approve")).toBe(true);
+    expect(res.mergeGate.passed).toBe(true);
+  });
+
+  it("block + absent fails CLOSED even when no quality-reviewer review was handed in (synthesized entry)", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+      crossVendor: ABSENT,
+      blockOnCrossVendorAbsence: true,
+    });
+    const q = res.reviewerResults.find((r) => r.reviewer === "quality-reviewer");
+    expect(q?.verdict).toBe("error");
+    expect(res.mergeGate.passed).toBe(false);
+  });
+});

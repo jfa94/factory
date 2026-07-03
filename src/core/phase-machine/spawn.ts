@@ -63,6 +63,18 @@ export const AgentSpecSchema = z.object({
 export type AgentSpec = z.infer<typeof AgentSpecSchema>;
 
 /**
+ * The resolved cross-vendor slot stamped on a VERIFY panel manifest (S5/C).
+ * `present` ⇒ the runner executes the quality-reviewer via `codex exec` with
+ * `model`; `absent` ⇒ all-Claude panel, and the runner echoes `reason` verbatim
+ * as `crossVendorAbsent` in its results file. Absent from producer manifests.
+ */
+export const CrossVendorStampSchema = z.union([
+  z.object({ status: z.literal("present"), model: z.string().min(1) }),
+  z.object({ status: z.literal("absent"), reason: z.string().min(1) }),
+]);
+export type CrossVendorStamp = z.infer<typeof CrossVendorStampSchema>;
+
+/**
  * The full request: the phase the engine RESUMES at once the listed agents have
  * returned, plus a non-empty list of agents to spawn (in parallel).
  */
@@ -71,6 +83,8 @@ export const SpawnRequestSchema = z.object({
   resume_phase: TaskPhaseEnum,
   /** Agents to spawn; at least one (an empty request is a programming error). */
   agents: z.array(AgentSpecSchema).min(1),
+  /** Cross-vendor resolution — verify panel manifests only (S5/C). */
+  cross_vendor: CrossVendorStampSchema.optional(),
 });
 export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
 

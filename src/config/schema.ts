@@ -187,6 +187,13 @@ export const ReviewSchema = z
     maxTurnsDeep: z.number().int().positive().default(40),
     /** Max turns for a quick review pass. */
     maxTurnsQuick: z.number().int().positive().default(20),
+    /**
+     * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
+     * `warn` records the absence loudly (task state + report + summary);
+     * `block` additionally fails the merge gate — a task cannot ship without an
+     * independent second-vendor review.
+     */
+    requireCrossVendor: z.enum(["warn", "block"]).default("warn"),
   })
   .default({});
 

@@ -24,6 +24,13 @@ export {
   type CrossVendorSlot,
   type CrossVendorResolution,
 } from "./vendor.js";
+export {
+  CODEX_PROBE_TIMEOUT_MS,
+  makeCodexProbe,
+  codexProbe,
+  resolveCodexCrossVendor,
+  type ProbeExec,
+} from "./codex-probe.js";
 
 // judgment-domain finding types
 export {

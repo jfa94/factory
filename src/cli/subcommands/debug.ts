@@ -95,6 +95,8 @@ import {
 import { debugIssueNumber, buildDebugReport, wireDebugSpecDeps } from "../../debug/spec-source.js";
 import { appendTasksFromSpec } from "../../debug/batch.js";
 import { resolveReviewModel } from "../../verifier/judgment/config.js";
+import { resolveCodexCrossVendor } from "../../verifier/judgment/codex-probe.js";
+import type { VendorProbe } from "../../verifier/judgment/vendor.js";
 import type { ReviewerVerifications } from "../../orchestrator/record.js";
 import type { Finding } from "../../verifier/judgment/finding.js";
 import type { PartialRunReport } from "../../scoring/index.js";
@@ -264,6 +266,8 @@ export type DebugEnvelope =
       readonly base: string;
       readonly worktree: string;
       readonly codex_available: boolean;
+      /** The exact absence reason when codex_available=false — echoed verbatim by the runner. */
+      readonly codex_absent_reason?: string;
     }
   | {
       /** `review --record`'s output when the pass has zero confirmed blockers. */
@@ -322,6 +326,8 @@ export interface DebugDeps {
   readonly cwd: string;
   readonly state: StateManager;
   readonly specStore: SpecStore;
+  /** S5/C — injectable cross-vendor probe (tests inject; defaults to the real `codex --version`). */
+  readonly vendorProbe?: VendorProbe;
 }
 
 // ---------------------------------------------------------------------------
@@ -400,13 +406,15 @@ export async function debugStart(
  */
 export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<DebugEnvelope> {
   const session = await readSession(deps.dataDir, runId);
+  // S5/C: a REAL availability resolution (probe + config), not a config-presence check.
+  const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
   const built = buildReviewManifest({
     resumePhase: "verify",
     model: resolveReviewModel(deps.config),
     maxTurns: deps.config.review.maxTurnsDeep,
     base: session.base,
     worktree: deps.cwd,
-    codexAvailable: deps.config.codex.model !== undefined,
+    crossVendor,
   });
   return {
     kind: "review-spawn",
@@ -416,6 +424,9 @@ export async function debugReviewEmit(deps: DebugDeps, runId: string): Promise<D
     base: built.base,
     worktree: built.worktree,
     codex_available: built.codexAvailable,
+    ...(built.codexAbsentReason !== undefined
+      ? { codex_absent_reason: built.codexAbsentReason }
+      : {}),
   };
 }
 

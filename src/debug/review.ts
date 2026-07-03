@@ -30,6 +30,7 @@
  * start reading `result.mergeGate`/`result.result` off of this call.
  */
 import { buildPanelManifest } from "../verifier/judgment/panel.js";
+import type { CrossVendorResolution } from "../verifier/judgment/vendor.js";
 import { parseRawReview, type Finding } from "../verifier/judgment/finding.js";
 import { runPanel, type AdjudicatedReviewer } from "../verifier/judgment/panel-run.js";
 import {
@@ -54,8 +55,10 @@ export interface DebugReviewManifest {
   readonly base: string;
   /** The debug staging checkout path the reviewers run against. */
   readonly worktree: string;
-  /** Cross-vendor availability, passed through from the caller's resolution (Δ U). */
+  /** Cross-vendor availability, derived from the caller's REAL resolution (Δ U/S5). */
   readonly codexAvailable: boolean;
+  /** The exact absence reason when unavailable — the runner echoes it verbatim. */
+  readonly codexAbsentReason?: string;
 }
 
 /**
@@ -69,14 +72,21 @@ export function buildReviewManifest(opts: {
   readonly maxTurns: number;
   readonly base: string;
   readonly worktree: string;
-  readonly codexAvailable: boolean;
+  /** The resolved cross-vendor slot (resolveCodexCrossVendor — a real probe, not a config-presence check). */
+  readonly crossVendor: CrossVendorResolution;
 }): DebugReviewManifest {
-  const manifest = buildPanelManifest(opts.resumePhase, opts.model, opts.maxTurns);
+  const manifest = buildPanelManifest(
+    opts.resumePhase,
+    opts.model,
+    opts.maxTurns,
+    opts.crossVendor,
+  );
   return {
     manifest,
     base: opts.base,
     worktree: opts.worktree,
-    codexAvailable: opts.codexAvailable,
+    codexAvailable: opts.crossVendor.status === "present",
+    ...(opts.crossVendor.status === "absent" ? { codexAbsentReason: opts.crossVendor.reason } : {}),
   };
 }
 

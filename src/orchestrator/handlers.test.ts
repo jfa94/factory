@@ -540,6 +540,55 @@ describe("makePhaseHandlers (Model-A reporters)", () => {
     expect(result.request.agents).toHaveLength(PANEL_ROLES.length);
   });
 
+  it("S5/C: default config stamps a deterministic absent cross_vendor WITHOUT probing (hermetic)", async () => {
+    const handlers = makePhaseHandlers(makeDeps());
+    const ctx = await ctxFor({ task_id: "t-multi", reviewers: [] });
+    const result = await handlers.verify(ctx);
+
+    expect(result.kind).toBe("spawn-agents");
+    if (result.kind !== "spawn-agents") throw new Error("unreachable");
+    expect(result.request.cross_vendor).toEqual({
+      status: "absent",
+      reason: "no cross-vendor model configured (codex.model)",
+    });
+  });
+
+  it("S5/C: with codex.model configured + probe available, the manifest stamps cross_vendor present", async () => {
+    const cfg = defaultConfig();
+    const deps = makeDeps({
+      config: { ...cfg, codex: { ...cfg.codex, model: "gpt-5-codex" } },
+      vendorProbe: { vendor: "codex", available: async () => true },
+    });
+    const handlers = makePhaseHandlers(deps);
+    const ctx = await ctxFor({ task_id: "t-multi", reviewers: [] });
+    const result = await handlers.verify(ctx);
+
+    expect(result.kind).toBe("spawn-agents");
+    if (result.kind !== "spawn-agents") throw new Error("unreachable");
+    expect(result.request.cross_vendor).toEqual({ status: "present", model: "gpt-5-codex" });
+  });
+
+  it("S5/C: requireCrossVendor=block + absent fails fast (wait-retry) WITHOUT spawning the panel", async () => {
+    const cfg = defaultConfig();
+    const deps = makeDeps({
+      config: {
+        ...cfg,
+        codex: { ...cfg.codex, model: "gpt-5-codex" },
+        review: { ...cfg.review, requireCrossVendor: "block" },
+      },
+      // Probe says codex is NOT runnable — quota must not burn a 4-reviewer panel.
+      vendorProbe: { vendor: "codex", available: async () => false },
+    });
+    const handlers = makePhaseHandlers(deps);
+    const ctx = await ctxFor({ task_id: "t-multi", reviewers: [] });
+    const result = await handlers.verify(ctx);
+
+    expect(result.kind).toBe("wait-retry");
+    if (result.kind !== "wait-retry") throw new Error("unreachable");
+    expect(result.reason).toContain("requireCrossVendor=block");
+    expect(result.reason).toContain("codex");
+  });
+
   it("verify advances to ship when gates are green and reviewers unanimously approve", async () => {
     const handlers = makePhaseHandlers(makeDeps());
     const reviewers: ReviewerResult[] = [

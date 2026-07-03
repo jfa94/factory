@@ -39,6 +39,7 @@ import {
   resolveReviewModel,
   dialForRung,
   buildProducerContext,
+  resolveCodexCrossVendor,
   ESCALATION_CAP,
   splitHoldout,
   makeHoldoutRecord,
@@ -346,14 +347,34 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
       };
       const gate = await new GateRunner().run(gateCtx);
 
-      if (task.reviewers.length === 0) {
+      // S5/C — resolve the cross-vendor slot ONCE per spawn decision. In block
+      // mode an absent second vendor cannot pass the merge gate, so fail fast
+      // with an honest wait-retry INSTEAD of burning a 4-reviewer panel run.
+      const panelSpawn = async (): Promise<PhaseResult> => {
+        const crossVendor = await resolveCodexCrossVendor(
+          deps.config.codex.model,
+          deps.vendorProbe,
+        );
+        if (deps.config.review.requireCrossVendor === "block" && crossVendor.status === "absent") {
+          return waitRetry(
+            "verify",
+            `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`,
+            ctx.attempt ?? 1,
+            ESCALATION_CAP + 1,
+          );
+        }
         return spawn(
           buildPanelManifest(
             "verify",
             resolveReviewModel(deps.config),
             deps.config.review.maxTurnsDeep,
+            crossVendor,
           ),
         );
+      };
+
+      if (task.reviewers.length === 0) {
+        return panelSpawn();
       }
 
       // Fail-closed crash-resume guard: reviewers>0 here is the LEGITIMATE merge-resync
@@ -371,13 +392,7 @@ export function makePhaseHandlers(deps: HandlerDeps): PhaseHandlers {
         const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
         const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id);
         if (!hasVerdicts) {
-          return spawn(
-            buildPanelManifest(
-              "verify",
-              resolveReviewModel(deps.config),
-              deps.config.review.maxTurnsDeep,
-            ),
-          );
+          return panelSpawn();
         }
         // Re-derive holdout gate evidence for the fast-path. The normal composition site
         // is applyRecordReviews (record.ts:382-388), which is skipped on merge-resync.

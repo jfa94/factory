@@ -20,6 +20,7 @@
  * {@link parseSpawnRequest} so it can never drift from the WS2 shape.
  */
 import { parseSpawnRequest, type SpawnRequest, type SpawnRole } from "../../types/index.js";
+import type { CrossVendorResolution } from "./vendor.js";
 
 /**
  * The four fixed panel roles, in a stable order. CLOSED: this list IS the panel
@@ -60,6 +61,10 @@ function promptRefFor(role: SpawnRole): string {
  *   reviewers (resolve via {@link resolveReviewModel}). Deliberately not a
  *   per-role map: every reviewer runs the same model (Δ T).
  * @param maxTurns the FIXED deep-review turn budget for ALL reviewers (D26).
+ * @param crossVendor the resolved cross-vendor slot (S5/C, resolveCodexCrossVendor)
+ *   — stamped onto the manifest so the runner knows whether to run the
+ *   quality-reviewer via `codex exec` (present) or report the absence verbatim.
+ *   Omitted ⇒ no stamp (callers that predate the honesty wiring).
  *
  * The output is validated through {@link parseSpawnRequest}; an empty/blank
  * model or non-positive `maxTurns` therefore fails LOUDLY at the seam rather than
@@ -70,6 +75,7 @@ export function buildPanelManifest(
   resumePhase: SpawnRequest["resume_phase"],
   model: string,
   maxTurns: number,
+  crossVendor?: CrossVendorResolution,
 ): SpawnRequest {
   const agents = PANEL_ROLES.map((role) => ({
     role,
@@ -78,5 +84,15 @@ export function buildPanelManifest(
     max_turns: maxTurns,
     prompt_ref: promptRefFor(role),
   }));
-  return parseSpawnRequest({ resume_phase: resumePhase, agents });
+  const cross_vendor =
+    crossVendor === undefined
+      ? undefined
+      : crossVendor.status === "present"
+        ? ({ status: "present", model: crossVendor.slot.model } as const)
+        : ({ status: "absent", reason: crossVendor.reason } as const);
+  return parseSpawnRequest({
+    resume_phase: resumePhase,
+    agents,
+    ...(cross_vendor !== undefined ? { cross_vendor } : {}),
+  });
 }

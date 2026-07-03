@@ -461,6 +461,7 @@ export async function applyRecordReviews(
     phase: "verify",
     attempt: task.escalation_rung + 1,
     maxAttempts: ESCALATION_CAP + 1,
+    blockOnCrossVendorAbsence: deps.config.review.requireCrossVendor === "block",
     ...(input.crossVendorAbsent !== undefined
       ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } as const }
       : {}),

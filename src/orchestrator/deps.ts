@@ -165,6 +165,7 @@ export {
   resolveReviewModel,
   resolveJudgmentConfig,
   parseRawReview,
+  resolveCodexCrossVendor,
 } from "../verifier/judgment/index.js";
 export type {
   RunPanelInput,
@@ -174,6 +175,8 @@ export type {
   SourceReader,
   FindingVerifierRunner,
   JudgmentConfig,
+  VendorProbe,
+  CrossVendorResolution,
 } from "../verifier/judgment/index.js";
 
 // --- holdout gate (src/verifier/holdout) — Δ Y ------------------------------

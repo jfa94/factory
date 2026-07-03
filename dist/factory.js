@@ -5895,7 +5895,14 @@ var ReviewSchema = external_exports.object({
   /** Max turns for a deep review pass. */
   maxTurnsDeep: external_exports.number().int().positive().default(40),
   /** Max turns for a quick review pass. */
-  maxTurnsQuick: external_exports.number().int().positive().default(20)
+  maxTurnsQuick: external_exports.number().int().positive().default(20),
+  /**
+   * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
+   * `warn` records the absence loudly (task state + report + summary);
+   * `block` additionally fails the merge gate — a task cannot ship without an
+   * independent second-vendor review.
+   */
+  requireCrossVendor: external_exports.enum(["warn", "block"]).default("warn")
 }).default({});
 var TestWriterSchema = external_exports.object({
   maxTurns: external_exports.number().int().positive().default(30)
@@ -7935,11 +7942,17 @@ var AgentSpecSchema = external_exports.object({
    */
   effort: EffortEnum.optional()
 });
+var CrossVendorStampSchema = external_exports.union([
+  external_exports.object({ status: external_exports.literal("present"), model: external_exports.string().min(1) }),
+  external_exports.object({ status: external_exports.literal("absent"), reason: external_exports.string().min(1) })
+]);
 var SpawnRequestSchema = external_exports.object({
   /** Engine resumes here after the agents return. A per-task phase. */
   resume_phase: TaskPhaseEnum,
   /** Agents to spawn; at least one (an empty request is a programming error). */
-  agents: external_exports.array(AgentSpecSchema).min(1)
+  agents: external_exports.array(AgentSpecSchema).min(1),
+  /** Cross-vendor resolution — verify panel manifests only (S5/C). */
+  cross_vendor: CrossVendorStampSchema.optional()
 });
 function parseSpawnRequest(raw) {
   return SpawnRequestSchema.parse(raw);
@@ -11358,7 +11371,7 @@ var PANEL_ROLES = [
 function promptRefFor(role) {
   return `reviews/prompts/${role}.md`;
 }
-function buildPanelManifest(resumePhase, model, maxTurns) {
+function buildPanelManifest(resumePhase, model, maxTurns, crossVendor) {
   const agents = PANEL_ROLES.map((role) => ({
     role,
     isolation: "worktree",
@@ -11366,7 +11379,64 @@ function buildPanelManifest(resumePhase, model, maxTurns) {
     max_turns: maxTurns,
     prompt_ref: promptRefFor(role)
   }));
-  return parseSpawnRequest({ resume_phase: resumePhase, agents });
+  const cross_vendor = crossVendor === void 0 ? void 0 : crossVendor.status === "present" ? { status: "present", model: crossVendor.slot.model } : { status: "absent", reason: crossVendor.reason };
+  return parseSpawnRequest({
+    resume_phase: resumePhase,
+    agents,
+    ...cross_vendor !== void 0 ? { cross_vendor } : {}
+  });
+}
+
+// src/verifier/judgment/vendor.ts
+async function resolveCrossVendor(codexModel, probe) {
+  let available;
+  try {
+    available = await probe.available();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return {
+      status: "absent",
+      reason: `cross-vendor probe '${probe.vendor}' failed: ${detail}`
+    };
+  }
+  if (!available) {
+    return {
+      status: "absent",
+      reason: `cross-vendor executor '${probe.vendor}' is not available`
+    };
+  }
+  if (codexModel === void 0 || codexModel.trim().length === 0) {
+    return {
+      status: "absent",
+      reason: `cross-vendor executor '${probe.vendor}' is available but no model is configured (codex.model)`
+    };
+  }
+  return { status: "present", slot: { vendor: probe.vendor, model: codexModel } };
+}
+
+// src/verifier/judgment/codex-probe.ts
+var CODEX_PROBE_TIMEOUT_MS = 5e3;
+function makeCodexProbe(run10 = exec) {
+  let memo;
+  return {
+    vendor: "codex",
+    available() {
+      memo ??= run10("codex", ["--version"], { timeoutMs: CODEX_PROBE_TIMEOUT_MS }).then(
+        (r) => r.code === 0
+      );
+      return memo;
+    }
+  };
+}
+var codexProbe = makeCodexProbe();
+async function resolveCodexCrossVendor(codexModel, probe = codexProbe) {
+  if (codexModel === void 0 || codexModel.trim().length === 0) {
+    return {
+      status: "absent",
+      reason: "no cross-vendor model configured (codex.model)"
+    };
+  }
+  return resolveCrossVendor(codexModel, probe);
 }
 
 // src/verifier/judgment/finding.ts
@@ -11629,11 +11699,21 @@ async function runPanel(input) {
   for (const review of input.reviews) {
     adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
   }
-  const reviewerResults = adjudicated.map(reviewerResultOf);
-  const mergeGate = deriveMergeGateVerdict({ reviewers: reviewerResults }, input.gateEvidence);
+  let reviewerResults = adjudicated.map(reviewerResultOf);
+  const demoted = input.blockOnCrossVendorAbsence === true && input.crossVendor?.status === "absent";
+  if (demoted) {
+    const hasQuality = reviewerResults.some((r) => r.reviewer === "quality-reviewer");
+    reviewerResults = hasQuality ? reviewerResults.map(
+      (r) => r.reviewer === "quality-reviewer" ? { ...r, verdict: "error" } : r
+    ) : [
+      ...reviewerResults,
+      { reviewer: "quality-reviewer", verdict: "error", confirmed_blockers: 0 }
+    ];
+  }
+  const mergeGate = deriveMergeGateVerdict({ reviewers: [...reviewerResults] }, input.gateEvidence);
   const result = mergeGate.passed ? advance(nextOrSelf(input.phase)) : waitRetry(
     input.phase,
-    mergeGateBlockReason(reviewerResults, input.gateEvidence),
+    demoted && input.crossVendor?.status === "absent" ? `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${input.crossVendor.reason}` : mergeGateBlockReason(reviewerResults, input.gateEvidence),
     input.attempt ?? 1,
     input.maxAttempts ?? 1
   );
@@ -12640,14 +12720,30 @@ function makePhaseHandlers(deps) {
         exemptReader: taskExemptReader(deps, worktree)
       };
       const gate = await new GateRunner().run(gateCtx);
-      if (task.reviewers.length === 0) {
+      const panelSpawn = async () => {
+        const crossVendor = await resolveCodexCrossVendor(
+          deps.config.codex.model,
+          deps.vendorProbe
+        );
+        if (deps.config.review.requireCrossVendor === "block" && crossVendor.status === "absent") {
+          return waitRetry(
+            "verify",
+            `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`,
+            ctx.attempt ?? 1,
+            ESCALATION_CAP + 1
+          );
+        }
         return spawn(
           buildPanelManifest(
             "verify",
             resolveReviewModel(deps.config),
-            deps.config.review.maxTurnsDeep
+            deps.config.review.maxTurnsDeep,
+            crossVendor
           )
         );
+      };
+      if (task.reviewers.length === 0) {
+        return panelSpawn();
       }
       const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id);
       const fastPathEvidence = [...gate.evidence];
@@ -12655,13 +12751,7 @@ function makePhaseHandlers(deps) {
         const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
         const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id);
         if (!hasVerdicts) {
-          return spawn(
-            buildPanelManifest(
-              "verify",
-              resolveReviewModel(deps.config),
-              deps.config.review.maxTurnsDeep
-            )
-          );
+          return panelSpawn();
         }
         const holdoutGate = await deriveHoldoutEvidence(
           deps.holdout,
@@ -12963,6 +13053,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     phase: "verify",
     attempt: task.escalation_rung + 1,
     maxAttempts: ESCALATION_CAP + 1,
+    blockOnCrossVendorAbsence: deps.config.review.requireCrossVendor === "block",
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
   if (panel.crossVendorAbsence !== void 0) {
@@ -15392,12 +15483,18 @@ var specCommand = {
 
 // src/debug/review.ts
 function buildReviewManifest(opts) {
-  const manifest = buildPanelManifest(opts.resumePhase, opts.model, opts.maxTurns);
+  const manifest = buildPanelManifest(
+    opts.resumePhase,
+    opts.model,
+    opts.maxTurns,
+    opts.crossVendor
+  );
   return {
     manifest,
     base: opts.base,
     worktree: opts.worktree,
-    codexAvailable: opts.codexAvailable
+    codexAvailable: opts.crossVendor.status === "present",
+    ...opts.crossVendor.status === "absent" ? { codexAbsentReason: opts.crossVendor.reason } : {}
   };
 }
 async function adjudicateWholeScope(input) {
@@ -15721,13 +15818,14 @@ async function debugStart(deps, opts = {}) {
 }
 async function debugReviewEmit(deps, runId) {
   const session = await readSession(deps.dataDir, runId);
+  const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
   const built = buildReviewManifest({
     resumePhase: "verify",
     model: resolveReviewModel(deps.config),
     maxTurns: deps.config.review.maxTurnsDeep,
     base: session.base,
     worktree: deps.cwd,
-    codexAvailable: deps.config.codex.model !== void 0
+    crossVendor
   });
   return {
     kind: "review-spawn",
@@ -15736,7 +15834,8 @@ async function debugReviewEmit(deps, runId) {
     manifest: built.manifest,
     base: built.base,
     worktree: built.worktree,
-    codex_available: built.codexAvailable
+    codex_available: built.codexAvailable,
+    ...built.codexAbsentReason !== void 0 ? { codex_absent_reason: built.codexAbsentReason } : {}
   };
 }
 async function debugReviewRecord(deps, runId, input) {

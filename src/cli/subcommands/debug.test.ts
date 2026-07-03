@@ -120,6 +120,34 @@ describe("debugReviewEmit", () => {
     expect(env.worktree).toBe(cwd);
     expect(env.manifest.resume_phase).toBe("verify");
   });
+
+  it("S5/C: default config (no codex.model) → codex_available=false with the exact reason, no probe run", async () => {
+    const d = deps();
+    const started = await debugStart(d, {});
+    if (started.kind !== "review") throw new Error("unreachable");
+
+    const env = await debugReviewEmit(d, started.run_id);
+    if (env.kind !== "review-spawn") throw new Error("unreachable");
+    expect(env.codex_available).toBe(false);
+    expect(env.codex_absent_reason).toBe("no cross-vendor model configured (codex.model)");
+  });
+
+  it("S5/C: codex.model + available probe → codex_available=true from a REAL resolution, no reason field", async () => {
+    const base = deps();
+    const d: DebugDeps = {
+      ...base,
+      config: { ...base.config, codex: { ...base.config.codex, model: "gpt-5-codex" } },
+      vendorProbe: { vendor: "codex", available: async () => true },
+    };
+    const started = await debugStart(d, {});
+    if (started.kind !== "review") throw new Error("unreachable");
+
+    const env = await debugReviewEmit(d, started.run_id);
+    if (env.kind !== "review-spawn") throw new Error("unreachable");
+    expect(env.codex_available).toBe(true);
+    expect(env.codex_absent_reason).toBeUndefined();
+    expect(env.manifest.cross_vendor).toEqual({ status: "present", model: "gpt-5-codex" });
+  });
 });
 
 describe("debugReviewRecord", () => {
