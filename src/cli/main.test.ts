@@ -30,6 +30,10 @@ describe("cli dispatch", () => {
     expect(parsed.quota.dailyThresholds).toHaveLength(7);
     // Retired human-gate keys must never appear.
     expect(parsed).not.toHaveProperty("humanReviewLevel");
+    // Pruned decorative keys (S6) must never appear.
+    expect(parsed.spec).not.toHaveProperty("specModel");
+    expect(parsed.spec).not.toHaveProperty("specEffort");
+    expect(parsed.e2e).not.toHaveProperty("enabled");
   });
 
   it("--help returns OK", async () => {

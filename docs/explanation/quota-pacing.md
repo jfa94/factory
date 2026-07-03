@@ -52,12 +52,15 @@ fail/fail" is true by construction, not by convention.
 
 The reverse separation also holds: the **circuit breaker**
 (`src/quota/circuit-breaker.ts`) is a distinct hard-abort predicate, _not_ part of
-the pacer. The pure predicate trips on `cumulativeFailures >= maxConsecutiveFailures`
-(default 3) — **failures-only** since Decision 42 deleted the runtime arm along with
-workflow mode. The predicate's failure input is named `cumulativeFailures` to match the
-signal it actually bounds; the public config key keeps its historical name
-`maxConsecutiveFailures` for back-compat (the threshold is unchanged, only its
-documentation was corrected to say "cumulative"). The runner wires it into the run orchestrator through
+the pacer. The pure predicate trips on `cumulativeFailures >= effectiveThreshold`,
+where the threshold is **proportional to the task-graph size** (Decision 45):
+`max(maxConsecutiveFailures, ceil(0.15 × totalTasks))` — the config key is the
+floor (default 3; ≤20 tasks behave as the old flat cap, 30 tasks → 5, 40 → 6), and
+the 0.15 ratio is a module constant, not config. The breaker is **failures-only**
+since Decision 42 deleted the runtime arm along with workflow mode. The predicate's
+failure input is named `cumulativeFailures` to match the signal it actually bounds;
+the public config key keeps its historical name `maxConsecutiveFailures` for
+back-compat. The runner wires it into the run orchestrator through
 `src/orchestrator/circuit-breaker-gate.ts` (evaluated in `nextTask`, mirroring the
 `applyQuotaGate` seam). A trip — the `failures` arm, or `fail-closed` on malformed
 input — is a hard abort: every remaining non-terminal task is

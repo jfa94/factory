@@ -5,7 +5,6 @@ import {
   buildReviseSpawn,
   type GenerateResult,
 } from "./agents.js";
-import { SPEC_DEFAULTS } from "../config/index.js";
 import type { Prd } from "./gh.js";
 import type { SpecTask } from "./schema.js";
 
@@ -34,8 +33,8 @@ const generated: GenerateResult = { specMd: "# spec", slug: "checkout", tasks: [
 describe("D21 apex pin — spec generate spawn is UNCONDITIONALLY opus/max", () => {
   it("D21: generate spawn pins model=opus + effort=max", () => {
     const s = buildGenerateSpawn(prd);
-    expect(s.model).toBe(SPEC_DEFAULTS.specModel);
-    expect(s.effort).toBe(SPEC_DEFAULTS.specEffort);
+    expect(s.model).toBe("opus");
+    expect(s.effort).toBe("max");
     expect(s.model).toBe("opus");
     expect(s.effort).toBe("max");
     expect(s.role).toBe("spec-generator");
@@ -92,8 +91,8 @@ describe("buildReviseSpawn — feeds the prior spec + blockers back for an incre
     expect(s.role).toBe("spec-generator");
     expect(s.model).toBe("opus");
     expect(s.effort).toBe("max");
-    expect(s.model).toBe(SPEC_DEFAULTS.specModel);
-    expect(s.effort).toBe(SPEC_DEFAULTS.specEffort);
+    expect(s.model).toBe("opus");
+    expect(s.effort).toBe("max");
   });
 
   it("forwards the original PRD context (the axiom is preserved across revisions)", () => {

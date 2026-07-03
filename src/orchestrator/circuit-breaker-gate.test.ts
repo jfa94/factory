@@ -91,6 +91,26 @@ describe("applyCircuitBreaker — capability-budget failures only", () => {
     }
   });
 
+  it("passes the real task count: a 30-task run tolerates 4 genuine failures, trips at 5", async () => {
+    const thirty = Array.from({ length: 30 }, (_, i) => ({
+      task_id: `T${i + 1}`,
+      acceptance_criteria: ["only one"],
+    }));
+    const { deps, runId, state, cleanup } = await makeOrchestratorDeps({ tasks: thirty });
+    try {
+      for (const id of ["T1", "T2", "T3", "T4"]) {
+        await failTask(state, runId, id, "capability-budget");
+      }
+      // Proportional threshold ceil(0.15×30)=5 > floor 3 — 4 genuine failures survive.
+      expect(await applyCircuitBreaker(deps, runId)).toBeNull();
+      await failTask(state, runId, "T5", "capability-budget");
+      const v = await applyCircuitBreaker(deps, runId);
+      expect(v?.tripped).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("a healthy run does not trip", async () => {
     const { deps, runId, cleanup } = await makeOrchestratorDeps();
     try {

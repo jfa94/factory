@@ -142,8 +142,8 @@ describe("resolveSpec", () => {
     if (env.kind !== "generate") throw new Error("unreachable");
 
     expect(env.spawn.role).toBe("spec-generator");
-    expect(env.spawn.model).toBe(SPEC_DEFAULTS.specModel);
-    expect(env.spawn.effort).toBe(SPEC_DEFAULTS.specEffort);
+    expect(env.spawn.model).toBe("opus");
+    expect(env.spawn.effort).toBe("max");
     expect(env.max_iterations).toBe(SPEC_DEFAULTS.maxRegenIterations);
     expect(env.generated_path.endsWith("generated.json")).toBe(true);
 
@@ -200,7 +200,7 @@ describe("gateSpec", () => {
     // The revise envelope re-spawns the generator with the PRIOR spec + blockers
     // embedded, so the agent patches it instead of re-authoring from the PRD.
     expect(env.spawn.role).toBe("spec-generator");
-    expect(env.spawn.model).toBe(SPEC_DEFAULTS.specModel);
+    expect(env.spawn.model).toBe("opus");
     expect(env.spawn.context.prior_spec_md).toBe(FAIL_GENERATED.specMd);
     expect(env.spawn.context.prior_tasks).toEqual(FAIL_GENERATED.tasks);
     expect(env.spawn.context.review_feedback).toEqual(env.blockers);
@@ -214,7 +214,7 @@ describe("gateSpec", () => {
     expect(env.kind).toBe("review");
     if (env.kind !== "review") throw new Error("unreachable");
     expect(env.spawn.role).toBe("spec-reviewer");
-    expect(env.spawn.model).toBe(SPEC_DEFAULTS.specModel);
+    expect(env.spawn.model).toBe("opus");
     expect(env.verdict_path.endsWith("verdict.json")).toBe(true);
   });
 

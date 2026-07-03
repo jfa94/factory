@@ -27,6 +27,8 @@ describe("ConfigSchema", () => {
     const cfg = ConfigSchema.parse({
       maxRuntimeMinutes: 480,
       quota: { maxStaleCycles: 6 },
+      e2e: { enabled: true },
+      spec: { specModel: "opus", specEffort: "max" },
     });
     expect(cfg).toEqual(defaultConfig());
   });
@@ -122,14 +124,6 @@ describe("ConfigSchema", () => {
     ).toEqual([20, 20, 60, 80, 90]);
   });
 
-  it("spec.specEffort defaults to 'max' and is a CLOSED enum (out-of-domain rejected loud)", () => {
-    expect(ConfigSchema.parse({}).spec.specEffort).toBe("max");
-    // An in-domain effort round-trips.
-    expect(ConfigSchema.parse({ spec: { specEffort: "high" } }).spec.specEffort).toBe("high");
-    // An out-of-domain effort is rejected, not silently coerced to a string.
-    expect(() => ConfigSchema.parse({ spec: { specEffort: "turbo" } })).toThrow();
-  });
-
   it("does NOT carry forward retired human-gate keys", () => {
     const cfg = ConfigSchema.parse({});
     expect("humanReviewLevel" in cfg).toBe(false);
@@ -139,12 +133,11 @@ describe("ConfigSchema", () => {
   });
 
   describe("e2e (Decision 39 — Playwright config)", () => {
-    it("defaults testDir, readyTimeoutMs, reopenCap; leaves startCommand/baseURL/enabled unset", () => {
+    it("defaults testDir, readyTimeoutMs, reopenCap; leaves startCommand/baseURL unset", () => {
       const cfg = ConfigSchema.parse({});
       expect(cfg.e2e.testDir).toBe("e2e");
       expect(cfg.e2e.readyTimeoutMs).toBe(30_000);
       expect(cfg.e2e.reopenCap).toBe(2);
-      expect(cfg.e2e.enabled).toBeUndefined();
       expect(cfg.e2e.startCommand).toBeUndefined();
       expect(cfg.e2e.baseURL).toBeUndefined();
     });
@@ -152,7 +145,6 @@ describe("ConfigSchema", () => {
     it("round-trips a fully-configured e2e block", () => {
       const cfg = ConfigSchema.parse({
         e2e: {
-          enabled: true,
           startCommand: "npm run dev",
           baseURL: "http://localhost:3000",
           testDir: "e2e",
@@ -161,7 +153,6 @@ describe("ConfigSchema", () => {
         },
       });
       expect(cfg.e2e).toEqual({
-        enabled: true,
         startCommand: "npm run dev",
         baseURL: "http://localhost:3000",
         testDir: "e2e",

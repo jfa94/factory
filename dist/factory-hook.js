@@ -6510,10 +6510,6 @@ var SpecSchema = external_exports.object({
   dimensionFloor: external_exports.number().int().min(0).max(10).default(5),
   /** Max spec generate→review revision iterations before a loud give-up. */
   maxRegenIterations: external_exports.number().int().positive().default(5),
-  /** Apex model the spec generator AND reviewer are pinned to (Decision 21). */
-  specModel: external_exports.string().min(1).default("opus"),
-  /** Apex effort the spec generator AND reviewer are pinned to (Decision 21). */
-  specEffort: EffortEnum.default("max"),
   /** Max bytes of PRD body retained from `gh issue view` before truncation. */
   prdBodyMaxBytes: external_exports.number().int().positive().default(64 * 1024)
 }).default({});
@@ -6569,11 +6565,6 @@ var GitSchema = external_exports.object({
 }).default({});
 var E2eConfigSchema = external_exports.object({
   /**
-   * Repo-level "e2e IS configured" signal, distinct from the run's `--e2e` flag
-   * (that's "run this run WITH e2e"). Informational/future-gating only today.
-   */
-  enabled: external_exports.boolean().optional(),
-  /**
    * OPTIONAL override (Decision 40 D10) of the command that boots the target app,
    * for both Playwright's `webServer` (test runs) and the e2e-author's
    * live-exploration boot. Normally unset — the run-start assessment resolves it.
@@ -6618,7 +6609,9 @@ var ConfigSchema = external_exports.object({
   git: GitSchema,
   e2e: E2eConfigSchema,
   /**
-   * Cumulative genuine capability-budget task failures before the run aborts.
+   * FLOOR of the circuit-breaker threshold: the run aborts when cumulative genuine
+   * capability-budget failures reach `max(this, ceil(0.15 × total tasks))` — big
+   * task graphs tolerate proportionally more (≤20 tasks behave as a flat cap of 3).
    * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
    * total capability-budget drops); the field keeps its name for config back-compat.
    */

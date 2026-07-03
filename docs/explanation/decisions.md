@@ -1390,6 +1390,43 @@ executor" enforceable end-to-end.
 
 ---
 
+## Decision 45 — Proportional Circuit Breaker + Config Pruning
+
+**Date:** 2026-07-03
+
+**Context:** Redesign session S6 (workstream C2 + C6). (1) The run-level circuit
+breaker tripped at a flat `maxConsecutiveFailures` (default 3) regardless of
+task-graph size — on a 40-task PRD, 3 genuine failures out of 40 aborted the whole
+run, the sharpest edge of the whole-PRD delivery cliff (Decision 34 keeps whole-PRD
+delivery; this softens it). (2) Two config surfaces were decorative: `e2e.enabled`
+was informational-only (the e2e phase is gated solely by `run.e2e` from the `--e2e`
+flag — verified zero control-flow readers), and `spec.specModel`/`spec.specEffort`
+were a frozen-default pin no override could ever reach (the apex boundary read
+`SPEC_DEFAULTS`, never the resolved config).
+
+**Decision:**
+
+- **Proportional breaker (C2).** `effectiveThreshold = max(maxConsecutiveFailures,
+ceil(0.15 × totalTasks))`. The existing config key is REINTERPRETED as the floor —
+  no rename, default 3 unchanged; ≤20 tasks behave exactly as before, 30 → 5, 40 → 6.
+  `FAILURE_RATIO = 0.15` is a module constant in `src/quota/circuit-breaker.ts`, NOT
+  config (no speculative knob). `CircuitBreakerInput` gains `totalTasks`, fail-closed
+  on malformed input like `cumulativeFailures`; the gate supplies
+  `Object.keys(run.tasks).length` (derive-don't-store, as before).
+- **Config pruning (C6).** `e2e.enabled` and `spec.specModel`/`spec.specEffort`
+  deleted from the schema. The Decision-21 apex pin becomes hard consts
+  (`APEX_MODEL`/`APEX_EFFORT`) in `src/spec/agents.ts` — invariant by construction
+  instead of by docstring; the rest of `SPEC_DEFAULTS` survives. Stale on-disk
+  overlays keep loading (ConfigSchema strips unknown keys; regression test extended
+  with the newly pruned keys).
+
+**Consequences:** Large task graphs tolerate a proportional failure budget instead
+of a fixed one, so one bad corner of a big PRD no longer aborts still-runnable
+independent work; small runs are byte-identical to before. The config surface only
+contains keys the engine actually branches on.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent
