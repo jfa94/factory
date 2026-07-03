@@ -302,7 +302,10 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 3. **Verify-then-fix:** for EACH finding that is `blocking:true` AND citable, spawn an
    INDEPENDENT finding-verifier (`general-purpose`, isolation `"worktree"`, model
    `opus`, adversarial framing — _"try to refute this finding against the actual
-   code"_, inspecting via `git -C <tenv.worktree> diff <tenv.base_ref>`). It returns
+   code"_, inspecting via `git -C <tenv.worktree> diff <tenv.base_ref>`). Its prompt
+   interpolates ONLY `{reviewer, severity, claim, file, line, quote}` — NEVER the
+   finding's `description` (anti-anchoring: the verifier must judge the bare claim
+   against the code, not be led by the reviewer's reasoning chain). It returns
    `{ "holds": true|false, "note": "<why>" }`.
 4. Results file:
    ```json

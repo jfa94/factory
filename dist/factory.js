@@ -11559,15 +11559,23 @@ function verifyCitations(findings, source, options = {}) {
 }
 
 // src/verifier/judgment/finding-verifier.ts
-async function confirmBlocker(finding, runner, finderIdentity) {
+async function confirmBlocker(finding, runner, finderIdentity, citedLine) {
   if (runner.identity === finderIdentity) {
     throw new Error(
       `finding-verifier identity '${runner.identity}' equals the finder's \u2014 the verifier must be INDEPENDENT (D27)`
     );
   }
+  const projection = {
+    reviewer: finding.reviewer,
+    severity: finding.severity,
+    claim: finding.claim,
+    file: finding.file,
+    line: citedLine ?? finding.line,
+    quote: finding.quote
+  };
   let verdict;
   try {
-    verdict = await runner.confirm(finding);
+    verdict = await runner.confirm(projection);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     return { status: "error", reason: `finding-verifier errored: ${detail}` };
@@ -11584,11 +11592,7 @@ async function adjudicateReviewer(review, source, makeRunner2, redact) {
   let hadVerifierError = false;
   for (const { finding, citedLine } of kept) {
     if (!isCitable(finding)) continue;
-    const outcome = await confirmBlocker(
-      citedLine === void 0 ? finding : { ...finding, line: citedLine },
-      runner,
-      review.reviewer
-    );
+    const outcome = await confirmBlocker(finding, runner, review.reviewer, citedLine);
     if (outcome.status === "confirmed") {
       confirmed.push(finding);
     } else if (outcome.status === "error") {

@@ -163,7 +163,9 @@ citable (`file`+`line` both present), spawn an INDEPENDENT finding-verifier —
 `general-purpose`, isolation `"worktree"`, model `opus`, adversarial framing ("does
 this finding hold against the code?"), inspecting via `git -C <worktree> diff <base>` —
 per `skills/pipeline-runner/SKILL.md`'s "Collecting a spawn envelope" →
-`expects: "reviews"` step 3, reused verbatim (not re-derived here). It returns
+`expects: "reviews"` step 3, reused verbatim (not re-derived here) — including its
+claim-only prompt rule: interpolate ONLY `{reviewer, severity, claim, file, line,
+quote}`, NEVER the finding's `description` (anti-anchoring). It returns
 `{ "holds": true|false, "note": "<why>" }`.
 
 ### 2b. Record the results

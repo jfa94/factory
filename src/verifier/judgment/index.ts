@@ -55,6 +55,7 @@ export {
 // verify-then-fix independent finding-verifier
 export {
   confirmBlocker,
+  type ClaimOnlyFinding,
   type FindingVerifierRunner,
   type VerifierVerdict,
   type VerifierOutcome,

@@ -20,9 +20,35 @@
  *
  * LOUD on error: a runner that throws does NOT auto-confirm and does NOT
  * auto-refute — it surfaces as `error`, an UNRESOLVED outcome the caller must
- * handle (it must never silently let the finding through OR drop it).
+ * handle (it must never silently let the finding through OR drop it). This is a
+ * deliberate divergence from comprehensive-code-review's keep-finding-on-death
+ * (where a dead verifier lets the finding through as-is): in the factory a
+ * verifier death BLOCKS the task rather than shipping an unverified blocker.
+ *
+ * ANTI-ANCHORING (S5/B2): the verifier sees ONLY the {@link ClaimOnlyFinding}
+ * projection — the one-sentence `claim`, never the reviewer's `description`
+ * (its reasoning chain). A verifier that reads the finder's reasoning tends to
+ * be led by it; a bare checkable claim must stand against the code on its own.
  */
-import type { Finding } from "./finding.js";
+import type { Finding, FindingSeverity } from "./finding.js";
+
+/**
+ * The projection of a finding the independent verifier is allowed to see (S5/B2).
+ * Built by {@link confirmBlocker} via explicit field-picking — NEVER a spread of a
+ * full {@link Finding}. `line` is the reviewer's CITED line (the coordinate the
+ * runner-side verifier agent was spawned on and replay verdicts are keyed by —
+ * S5/A2), not a grep-relocated one.
+ */
+export interface ClaimOnlyFinding {
+  readonly reviewer: string;
+  readonly severity: FindingSeverity;
+  readonly claim: string;
+  readonly file: string;
+  readonly line: number;
+  readonly quote: string;
+  /** Type-level leak guard: an object carrying the reviewer's reasoning fails to compile. */
+  readonly description?: never;
+}
 
 /** Ground-truth evidence the verifier inspected (audit trail). */
 export interface VerifierEvidence {
@@ -68,22 +94,26 @@ export interface FindingVerifierRunner {
    * assert the verifier is independent of the finder (different identity).
    */
   readonly identity: string;
-  /** Run the single bounded confirmation pass. */
-  confirm(finding: Finding): Promise<VerifierVerdict>;
+  /** Run the single bounded confirmation pass on the claim-only projection. */
+  confirm(finding: ClaimOnlyFinding): Promise<VerifierVerdict>;
 }
 
 /**
  * Independently confirm a single blocking finding (D27). Runs the injected runner
  * EXACTLY ONCE.
  *
+ * @param citedLine the reviewer's ORIGINAL cited line when citation-verify
+ *   grep-relocated the finding (S5/A2) — the replay-verdict key. Defaults to the
+ *   finding's own line.
  * @throws if the runner identity equals the finder identity — that would defeat
  *   the independence invariant, so it is a LOUD programming error, not a silent
  *   downgrade.
  */
 export async function confirmBlocker(
-  finding: Finding,
+  finding: Finding & { file: string; line: number },
   runner: FindingVerifierRunner,
   finderIdentity: string,
+  citedLine?: number,
 ): Promise<VerifierOutcome> {
   if (runner.identity === finderIdentity) {
     throw new Error(
@@ -91,9 +121,19 @@ export async function confirmBlocker(
     );
   }
 
+  // Explicit field-picking — never `...finding`, which would leak `description`.
+  const projection: ClaimOnlyFinding = {
+    reviewer: finding.reviewer,
+    severity: finding.severity,
+    claim: finding.claim,
+    file: finding.file,
+    line: citedLine ?? finding.line,
+    quote: finding.quote,
+  };
+
   let verdict: VerifierVerdict;
   try {
-    verdict = await runner.confirm(finding);
+    verdict = await runner.confirm(projection);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     // LOUD + UNRESOLVED: a verifier error never auto-confirms and never silently

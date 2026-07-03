@@ -99,11 +99,7 @@ async function adjudicateReviewer(
     // verifier (and any pre-recorded replay verdict, keyed file:line) saw. The
     // RELOCATED finding is what gets forwarded, so fix_findings/reports carry
     // the corrected line.
-    const outcome = await confirmBlocker(
-      citedLine === undefined ? finding : { ...finding, line: citedLine },
-      runner,
-      review.reviewer,
-    );
+    const outcome = await confirmBlocker(finding, runner, review.reviewer, citedLine);
     if (outcome.status === "confirmed") {
       confirmed.push(finding);
     } else if (outcome.status === "error") {

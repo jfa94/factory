@@ -223,7 +223,7 @@ describe("S5/A — grep-rescue meets verify-then-fix (A2 replay-keying pin)", ()
       makeRunner: (review) => ({
         identity: `verifier-for-${review.reviewer}`,
         confirm: async (f): Promise<VerifierVerdict> => {
-          seenLines.push(f.line!);
+          seenLines.push(f.line);
           return { holds: true, note: "n" };
         },
       }),
