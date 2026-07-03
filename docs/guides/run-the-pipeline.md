@@ -8,9 +8,9 @@ and competence with `gh`. For the deterministic detail of each step, see the
 
 The `factory` CLI is the deterministic engine: it owns all control flow and
 exposes one seam, the **orchestrator** (`factory next-task` + `factory next-action`). A thin
-**runner** steps that seam and spawns the agents each envelope names. You pick the
-runner with `--workflow` (below); by default the loop runs **in your Claude Code
-session**.
+**runner** steps that seam and spawns the agents each envelope names. The loop runs
+**in your Claude Code session** as a parallel event loop, driving up to
+`maxParallelTasks` tasks at once (config, default 3).
 
 ## 1. Scaffold the target repo (once per repo)
 
@@ -40,32 +40,23 @@ an active run already exists for the spec.
 | `--repo <owner/name>` | no       | Target repo. Auto-derived from the `origin` remote when omitted.                                                                                                                        |
 | `--issue <N>`         | one of   | PRD issue number (the stable spec key).                                                                                                                                                 |
 | `--spec-id <id>`      | one of   | `<issue>-<slug>`; mutually exclusive with `--issue`.                                                                                                                                    |
-| `--workflow`          | no       | Run the background Workflow runner. Omit for the in-session loop (default) — see below.                                                                                                 |
 | `--no-ship`           | no       | Open the PRs but never merge. Omit for the default **live** — auto-merge tasks→staging, rollup→develop.                                                                                 |
 | `--e2e`               | no       | Opt into the run-level e2e phase — author + run Playwright journeys against staging before docs. Create-only + immutable on resume. See [Run with end-to-end tests](./run-with-e2e.md). |
 | `--supersede`         | no       | If an active run already exists, replace it (see below). Mutually exclusive with `--resume`.                                                                                            |
 | `--resume`            | no       | If an active run already exists, hand off to `/factory:resume` instead of starting fresh.                                                                                               |
 | `--ignore-quota`      | no       | Override the weekly-quota hard stop **and** disable per-step quota pacing for this run (see below).                                                                                     |
 
-`--workflow` selects the runner. Both step the same `factory next-task` / `factory next-action`
-seam and enforce the identical engine gates; they differ only in where the loop
-runs:
-
-- **Session mode** (default, no flag) — the in-session LLM runner loop
-  (`skills/pipeline-runner/SKILL.md`). It runs in your Claude Code session
-  and drives tasks one at a time.
-- **`--workflow`** — the plugin-shipped Workflow script
-  (`scripts/factory-run-runner.js`). It drives ready tasks in the background;
-  because Workflow JS cannot shell out, it wraps every `factory` CLI call in a
-  small exec agent. Note: workflow mode has no quota pacing (it cannot observe the
-  usage signal) — it hard-stops when the allowance runs out.
+The runner (`skills/pipeline-runner/SKILL.md`) is a parallel event loop in your
+Claude Code session: every `factory` call runs foreground (one-driver-per-task by
+construction) while the agents of up to `maxParallelTasks` ready tasks run in the
+background. Quota pacing applies to every run (Decision 42).
 
 `--no-ship` is the cutover-safety opt-out. The default is **live**: each task
 auto-merges into the run's `staging-<run-id>` branch and the `staging-<run-id>` →
 develop rollup merges into develop (gated by branch protection + the review panel +
 TDD + the holdout), but **only when the whole PRD completed** (see [Read the
 outcome](#4-read-the-outcome)). Pass `--no-ship` to open the PRs but never merge.
-Ship mode **is persisted** on the run at create, so the workflow runner,
+Ship mode **is persisted** on the run at create, so the runner,
 `/factory:resume`, and `finalize` read it back without re-passing. (`run finalize
 --no-ship` overrides the persisted value for that one finalize call.)
 
@@ -95,13 +86,12 @@ create` instead emits `{kind:"pause", scope:"7d", …}` and exits `3` — a hard
 stop, not the prompt above. This blocks the default path, `--supersede`, and `--new`
 alike. Wait for the window to reset and run `/factory:resume`, or pass `--ignore-quota`
 to override the wall and proceed. `--ignore-quota` also disables per-step quota pacing
-for the run (it persists on the run, like the `--workflow` no-pacing mode) — use it only
+for the run (it persists on the run) — use it only
 to override a mistaken suspend or after a manual quota reset.
 
 ## 3. What happens (the four phases)
 
-The runner follows `skills/pipeline-runner/SKILL.md` (session mode) or runs
-the equivalent Workflow script (workflow mode):
+The runner follows `skills/pipeline-runner/SKILL.md`:
 
 1. **Preconditions** — `factory scaffold` (idempotent re-check).
 2. **Spec** — the bounded generate ⇄ review loop (`factory spec
@@ -109,12 +99,14 @@ resolve|gate|store`), spawning `spec-generator` / `spec-reviewer`, until the
    spec is `reuse`d or `stored`.
 3. **Create** — `factory run create`; the `RunState` is emitted with the tasks
    seeded.
-4. **Drive** — the runner steps the seam. `factory next-task` returns the ready task;
-   `factory next-action` advances it through the per-task phase machine (`preflight →
-tests → exec → verify → ship`), emitting a spawn request whenever it needs
-   agents. The runner spawns the producers and the review panel the request
-   names, then records their raw output back with `factory next-action --results` (one
-   state step). The engine — not the runner — decides every transition.
+4. **Drive** — the runner steps the seam as an event loop. `factory next-task` returns
+   the ready set (+ `max_parallel`); for each ready task `factory next-action` advances
+   it through the per-task phase machine (`preflight → tests → exec → verify → ship`),
+   emitting a spawn request whenever it needs agents. The runner spawns the producers
+   and the review panel the request names in the background — up to `maxParallelTasks`
+   tasks in flight — and records each task's raw output back with `factory next-action
+--results` (one state step, foreground). The engine — not the runner — decides every
+   transition.
 5. **E2E** (`--e2e` runs only) — bracketed by two engine phases (Decision 40). A run-start
    **e2e-assessment** (`factory run e2e-assess`) fires **before the first task**: it resolves
    the app's boot config, writes it into `playwright.config.ts`, authors any seed/auth
@@ -169,13 +161,8 @@ A run that hits a quota window does **not** finalize — it has unfinished work.
 
 - `paused` (5h window) — self-heals; waits out the curve in-session.
 - `suspended` (7d window) — state is persisted and the process exits cleanly.
-- `suspended` (`scope:"runtime-budget"`, workflow mode) — the runtime circuit-breaker's
-  effective runtime (`wall − idle`) hit `maxRuntimeMinutes` (Decision 41). Idle time is
-  already excluded, so this is a real activity budget. Raise `maxRuntimeMinutes` in
-  `config.json`, then resume — resuming without raising the cap re-suspends here.
 
-Re-enter it once the window resets (or, for a runtime-budget suspend, once the cap is
-raised):
+Re-enter it once the window resets:
 
 ```
 /factory:resume [--run <id>] [--ignore-quota]

@@ -34,11 +34,10 @@ most important structural fact about the system.
 
 ```mermaid
 graph TD
-  subgraph Surface["Runner surface (markdown + workflow)"]
+  subgraph Surface["Runner surface (markdown)"]
     Cmd[commands/*.md]
     Skill[skills/pipeline-runner/SKILL.md]
     Agents[agents/*.md]
-    WF[scripts/factory-run-runner.js]
   end
 
   subgraph Engine["Deterministic engine (TypeScript)"]
@@ -46,11 +45,11 @@ graph TD
     Hook[factory-hook<br/>dist/factory-hook.js]
   end
 
-  Runner["Runner (session loop | --workflow script)"] -->|loads| Skill
+  Runner["Runner (in-session event loop)"] -->|loads| Skill
   Runner -->|steps: next-task / next-action| CLI
   CLI -->|envelope: spawn request / next step| Runner
   Runner -->|Agent spawns| Producers[test-writer / implementer]
-  Runner -->|Agent spawns| Panel[7-reviewer panel + holdout + verifiers]
+  Runner -->|Agent spawns| Panel[review panel + holdout + verifiers]
   Runner -->|next-action --results: records outcomes| CLI
   CLI -->|reads/writes| State[(run/spec state)]
   Hook -->|deny/allow at tool-use| Runner
@@ -66,9 +65,11 @@ merge gate, PR creation — and the pipeline loop itself, exposed through ONE se
 **A runner is the hands.** A thin runner steps the seam: it performs every
 `Agent()` spawn the orchestrator's request names, collects the agents' raw output, and
 feeds it back via `factory next-action --results`. It never decides a transition,
-re-runs a gate, classifies a failure, or writes state by prose. Two interchangeable
-runners exist (selected by `--workflow` on `/factory:run`): the in-session runner
-loop (session, the default) and the plugin-shipped Workflow script (`--workflow`).
+re-runs a gate, classifies a failure, or writes state by prose. ONE runner exists
+(Decision 42): the in-session parallel event loop — every `factory` call runs
+foreground in the invoking Claude Code session (one-driver-per-task by
+construction) while the agents of up to `maxParallelTasks` tasks run in the
+background.
 
 The CLI is a **reporter + orchestrator + writer**, not a runner:
 
@@ -90,8 +91,7 @@ Why this split exists, and what it buys, is the subject of
 
 A run proceeds through four phases. The CLI provides the deterministic glue — and
 the loop itself, behind the orchestrator — at each phase; the runner owns only the agent
-spawns. The participant below is the runner (the in-session runner loop by
-default, or the Workflow script).
+spawns. The participant below is the runner (the in-session event loop).
 
 ```mermaid
 sequenceDiagram

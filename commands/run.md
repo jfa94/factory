@@ -121,8 +121,11 @@ branch + task PRs). A cancelled run is `failed` and NOT resumable — start fres
 
 ## The loop
 
-Continue with the skill's Phase 3 THE LOOP and Phase 4 verbatim: every agent is spawned
-in this session, and the `factory` CLI stays the single source of control flow.
+Continue with the skill's Phase 3 THE LOOP and Phase 4 verbatim: a parallel event loop
+driving up to `maxParallelTasks` tasks in flight (config, default 3 — emitted as
+`max_parallel` on the work envelope). Every agent is spawned in this session (agents in
+the background, every `factory` call foreground), and the `factory` CLI stays the single
+source of control flow.
 
 ## Autonomous mode (MANDATORY — no opt-in, no opt-out)
 
@@ -154,7 +157,7 @@ substituted, `CLAUDE_PLUGIN_DATA` baked into `env`, `statusLine` wired to `facto
 user's own statusline chained via `FACTORY_ORIGINAL_STATUSLINE`), then prints
 `claude --settings <merged-settings.json>`. Relaunching with that command sets
 `FACTORY_AUTONOMOUS_MODE=1` and produces a fresh `usage-cache.json` on the first turn, which the
-session-mode quota pacer reads. The relaunch is irreducible: Claude Code reads settings only at
+quota pacer reads. The relaunch is irreducible: Claude Code reads settings only at
 launch, so a running session can never make _itself_ autonomous — automation covers the scaffold,
 never the relaunch.
 

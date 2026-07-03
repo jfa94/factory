@@ -92,11 +92,11 @@ across different repos run concurrently without cross-contamination:
   (it is observational, never authoritative).
 - **`holdout-guard`**: run-independent (reads only `dataDir`) — correctly global.
 
-Because session-mode `factory run create` now **requires** an owning session id
-(`--session-id` or `CLAUDE_CODE_SESSION_ID`; workflow-mode runs are exempt — the
-Workflow runner owns finalization), an ownerless session-mode run never arises in
-normal operation. The stop-gate's owner check is therefore belt-and-suspenders for
-unusual paths rather than a routine code path.
+Because `factory run create` **requires** an owning session id
+(`--session-id` or `CLAUDE_CODE_SESSION_ID` — always, no exemption since
+Decision 42), an ownerless run never arises in normal operation. The stop-gate's
+owner check is therefore belt-and-suspenders for unusual paths rather than a
+routine code path.
 
 The write-scope arm is a **rail**, not the boundary: the authoritative TDD
 enforcement is the deterministic commit-order gate on the task branch

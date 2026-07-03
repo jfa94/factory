@@ -89,17 +89,16 @@ load-bearing: `createTaskWorktree` (`src/git/worktree.ts`) creates the worktree 
 `git worktree add -b <branch> <path> origin/staging-<run-id>`, so it forks from that
 remote-tracking ref (fetched fresh at creation) and **never creates or maintains a
 local staging branch**. A bare `git diff` against a local name therefore resolves to
-a stale or absent ref — it degraded silently in session mode (a local branch
-sometimes happened to be current, and reviewers Read files directly) and would
-hard-error in workflow mode (the background Workflow never checks out the branch).
+a stale or absent ref — it degraded silently (a local branch
+sometimes happened to be current, and reviewers Read files directly).
 `origin/staging-<run-id>` is exactly the fork point, so it is the deterministic base
 for every "inspect the diff" instruction. (Same root cause as the worktree-base
 invariant — see [decisions.md Decision 12](./decisions.md#decision-12-staging-branch-as-integration-point).)
 
 A reviewer's lens is **not** delivered as a per-run prompt file. The spawn
 request carries a `prompt_ref` of `reviews/prompts/<role>.md` for each reviewer
-purely to satisfy the request schema's non-empty constraint — no runner reads it
-and nothing writes it. Both runners build the reviewer prompt **inline** from the
+purely to satisfy the request schema's non-empty constraint — the runner never reads it
+and nothing writes it. The runner builds the reviewer prompt **inline** from the
 reviewer's `agents/<role>.md` definition plus the shared
 `skills/review-protocol/SKILL.md` contract. Only a **producer's** `prompt_ref`
 points at a real per-run artifact a runner Reads (the `ProducerContext`).

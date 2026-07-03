@@ -60,8 +60,7 @@ reports; the runner acts.
 
 The deterministic **orchestrator** — the transition logic that turns a
 `PhaseResult` into state effects. This is the unit-test target for control flow
-and is stepped verbatim by both runners (the session loop and the Workflow
-script).
+and is stepped verbatim by the runner (the in-session event loop).
 
 - `next.ts` (`nextTask`) — the **run-level** orchestrator: terminal/quota checks,
   cascade-fail, and the ready set, emitted as a `NextTask`.
