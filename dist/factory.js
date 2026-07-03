@@ -11507,6 +11507,17 @@ function checkQuote(quote, line, lines) {
   }
   return "quote-not-in-window";
 }
+function rescueLine(quote, reason, lines) {
+  if (reason !== "quote-not-in-window" && reason !== "line-out-of-range") return null;
+  const needle = quote.trim();
+  if (needle === "" || needle.includes("\n")) return null;
+  const matches = [];
+  for (let n = 1; n <= lines.length; n++) {
+    const text = lines[n - 1];
+    if (text !== void 0 && text.includes(needle)) matches.push(n);
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
 function verifyCitations(findings, source, options = {}) {
   const redact = options.redact ?? true;
   const kept = [];
@@ -11526,12 +11537,22 @@ function verifyCitations(findings, source, options = {}) {
     }
     const reason = checkQuote(f.quote, f.line, lines);
     if (reason !== null) {
-      dropped.push({ finding: f, reason });
-      audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
+      const found = rescueLine(f.quote, reason, lines);
+      if (found === null) {
+        dropped.push({ finding: f, reason });
+        audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
+        continue;
+      }
+      const relocated = { ...f, line: found };
+      kept.push({
+        finding: redact ? redactFinding(relocated) : relocated,
+        citedLine: f.line
+      });
+      audit.push(`RELOCATE relocated_ok ${f.file}:${f.line}\u2192${found}: ${f.reviewer}`);
       continue;
     }
     const retained = redact ? redactFinding(f) : f;
-    kept.push(retained);
+    kept.push({ finding: retained });
     audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`);
   }
   return { kept, dropped, audit };
@@ -11561,9 +11582,13 @@ async function adjudicateReviewer(review, source, makeRunner2, redact) {
   const runner = makeRunner2(review);
   const confirmed = [];
   let hadVerifierError = false;
-  for (const finding of kept) {
+  for (const { finding, citedLine } of kept) {
     if (!isCitable(finding)) continue;
-    const outcome = await confirmBlocker(finding, runner, review.reviewer);
+    const outcome = await confirmBlocker(
+      citedLine === void 0 ? finding : { ...finding, line: citedLine },
+      runner,
+      review.reviewer
+    );
     if (outcome.status === "confirmed") {
       confirmed.push(finding);
     } else if (outcome.status === "error") {

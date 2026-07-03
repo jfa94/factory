@@ -47,6 +47,7 @@ export {
   type SourceReader,
   type FailReason,
   type DroppedFinding,
+  type KeptFinding,
   type CitationVerifyResult,
   type VerifyCitationsOptions,
 } from "./citation-verify.js";

@@ -46,12 +46,12 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
     expect(res2.kept.length).toBe(1);
   });
 
-  it("Δ K: DROPS a hallucinated quote absent from the ±2 window", () => {
+  it("Δ K: DROPS a hallucinated quote absent from the file entirely", () => {
     const res = verifyCitations(
       [
         f({ line: 1, quote: "const value = process(input)" }), // line 3, cited 1: +2 OK
-        f({ line: 5, quote: "import { x } from './x';" }),
-      ], // real on line 1, cited 5 → 4 away → DROP
+        f({ line: 5, quote: "const hallucinated = true;" }), // nowhere in the file → DROP
+      ],
       reader,
     );
     expect(res.kept.length).toBe(1);
@@ -91,8 +91,64 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
     ];
     const a = verifyCitations(findings, reader);
     const b = verifyCitations(findings, reader);
-    expect(a.kept.map((k) => k.quote)).toEqual(b.kept.map((k) => k.quote));
+    expect(a.kept.map((k) => k.finding.quote)).toEqual(b.kept.map((k) => k.finding.quote));
     expect(a.dropped.map((d) => d.reason)).toEqual(b.dropped.map((d) => d.reason));
+  });
+
+  // S5/A — grep-rescue: an off-by-a-few line number on a real, UNIQUE single-line
+  // quote is a relocation, not a hallucination. 0 or ≥2 matches stay fail-closed.
+  describe("grep-rescue (S5/A)", () => {
+    it("RESCUES a quote-not-in-window quote found on exactly ONE line — relocates + keeps citedLine", () => {
+      // real quote on line 1, cited at 5 → 4 away → window fails → rescued.
+      const res = verifyCitations([f({ line: 5, quote: "import { x } from './x';" })], reader);
+      expect(res.dropped.length).toBe(0);
+      expect(res.kept.length).toBe(1);
+      expect(res.kept[0]!.finding.line).toBe(1);
+      expect(res.kept[0]!.citedLine).toBe(5);
+      expect(
+        res.audit.some((l) => l.includes("relocated_ok") && l.includes("src/app.ts:5→1")),
+      ).toBe(true);
+    });
+
+    it("RESCUES a line-out-of-range citation when the quote is unique in the file", () => {
+      const res = verifyCitations([f({ line: 9999, quote: "return value + 1;" })], reader);
+      expect(res.kept.length).toBe(1);
+      expect(res.kept[0]!.finding.line).toBe(4);
+      expect(res.kept[0]!.citedLine).toBe(9999);
+    });
+
+    it("does NOT rescue an ambiguous quote (≥2 matching lines)", () => {
+      const dupSrc: SourceReader = {
+        readLines: () => ["const a = 1;", "x();", "y();", "z();", "w();", "v();", "const a = 1;"],
+      };
+      const res = verifyCitations([f({ line: 4, quote: "const a = 1;" })], dupSrc);
+      expect(res.kept.length).toBe(0);
+      expect(res.dropped[0]!.reason).toBe("quote-not-in-window");
+    });
+
+    it("does NOT rescue a multi-line quote", () => {
+      const res = verifyCitations([f({ line: 1, quote: "  return value + 1;\n}" })], reader);
+      expect(res.kept.length).toBe(0);
+      expect(res.dropped[0]!.reason).toBe("quote-not-in-window");
+    });
+
+    it("matches on the TRIMMED quote (stray whitespace from copy-paste)", () => {
+      const res = verifyCitations([f({ line: 9999, quote: "  return value + 1;  " })], reader);
+      expect(res.kept.length).toBe(1);
+      expect(res.kept[0]!.finding.line).toBe(4);
+    });
+
+    it("does NOT rescue a whitespace-only quote (trimmed-empty matches everything)", () => {
+      const res = verifyCitations([f({ line: 9999, quote: "   " })], reader);
+      expect(res.kept.length).toBe(0);
+      expect(res.dropped[0]!.reason).toBe("line-out-of-range");
+    });
+
+    it("a normal in-window keep carries NO citedLine and an unchanged finding", () => {
+      const res = verifyCitations([f({ line: 3, quote: "const value = process(input)" })], reader);
+      expect(res.kept[0]!.citedLine).toBeUndefined();
+      expect(res.kept[0]!.finding.line).toBe(3);
+    });
   });
 
   it("Δ K (redaction): a secret in RETAINED finding text is redacted via secret-patterns", () => {
@@ -113,9 +169,9 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
     });
     const res = verifyCitations([finding], r, { redact: true });
     expect(res.kept.length).toBe(1);
-    expect(res.kept[0]!.quote).toContain(REDACTION_TOKEN);
-    expect(res.kept[0]!.quote).not.toContain(akia);
-    expect(res.kept[0]!.description).not.toContain(akia);
+    expect(res.kept[0]!.finding.quote).toContain(REDACTION_TOKEN);
+    expect(res.kept[0]!.finding.quote).not.toContain(akia);
+    expect(res.kept[0]!.finding.description).not.toContain(akia);
   });
 
   it("Δ K (redaction off): retained text is left verbatim when redact=false", () => {
@@ -135,6 +191,6 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
       description: "hardcoded key",
     });
     const res = verifyCitations([finding], r, { redact: false });
-    expect(res.kept[0]!.quote).toContain(akia);
+    expect(res.kept[0]!.finding.quote).toContain(akia);
   });
 });

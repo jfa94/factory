@@ -91,11 +91,19 @@ async function adjudicateReviewer(
   const confirmed: Finding[] = [];
   let hadVerifierError = false;
 
-  for (const finding of kept) {
+  for (const { finding, citedLine } of kept) {
     // Only citable findings reach here (citation-verify drops uncitable ones),
     // but guard for type-narrowing clarity.
     if (!isCitable(finding)) continue;
-    const outcome = await confirmBlocker(finding, runner, review.reviewer);
+    // Confirm at the reviewer's CITED coordinates: that's what the independent
+    // verifier (and any pre-recorded replay verdict, keyed file:line) saw. The
+    // RELOCATED finding is what gets forwarded, so fix_findings/reports carry
+    // the corrected line.
+    const outcome = await confirmBlocker(
+      citedLine === undefined ? finding : { ...finding, line: citedLine },
+      runner,
+      review.reviewer,
+    );
     if (outcome.status === "confirmed") {
       confirmed.push(finding);
     } else if (outcome.status === "error") {

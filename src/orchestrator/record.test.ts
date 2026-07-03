@@ -466,6 +466,53 @@ describe("applyRecordReviews record", () => {
     ]);
   });
 
+  // S5/A2 replay-keying pin: the runner's verifier agents (and thus the recorded
+  // verdicts) are keyed on the reviewer's CITED file:line — a grep-rescued finding
+  // must still find its verdict at the CITED line, while fix_findings carries the
+  // RELOCATED line. A naive relocate-before-replay orphans the verdict → LOUD error.
+  it("a grep-RESCUED blocker replays its verdict at the CITED line and fixes forward at the RELOCATED line", async () => {
+    await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
+    const deps = makeDeps();
+    const input: RecordReviewsInput = {
+      reviews: fullPanel({
+        reviewer: "quality-reviewer",
+        verdict: "blocked",
+        findings: [
+          {
+            reviewer: "quality-reviewer",
+            severity: "critical",
+            blocking: true,
+            file: "src/x.ts",
+            line: 9, // out of range; quote is unique on line 2 → rescued
+            quote: "const x = 1",
+            claim: "a magic number is hardcoded",
+            description: "magic number",
+          },
+        ],
+      }),
+      // Verdict recorded at the CITED line 9 — what the verifier agent saw.
+      verifications: [
+        {
+          reviewer: "quality-reviewer",
+          verdicts: [{ file: "src/x.ts", line: 9, holds: true, note: "confirmed" }],
+        },
+      ],
+    };
+
+    const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
+
+    expect(env.mergeGate.passed).toBe(false);
+    // Confirmed (verdict FOUND at the cited key — not a verifier error)…
+    const quality = env.reviewers.find((r) => r.reviewer === "quality-reviewer")!;
+    expect(quality.verdict).toBe("blocked");
+    expect(quality.confirmed_blockers).toBe(1);
+    // …and the producer-facing record carries the corrected line.
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.fix_findings).toEqual([
+      { reviewer: "quality-reviewer", file: "src/x.ts", line: 2, description: "magic number" },
+    ]);
+  });
+
   it("a kept blocker with NO recorded verdict FAILS CLOSED (verifier error, never a pass)", async () => {
     await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
     const deps = makeDeps();

@@ -213,6 +213,53 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
   });
 });
 
+describe("S5/A — grep-rescue meets verify-then-fix (A2 replay-keying pin)", () => {
+  it("a RESCUED finding is confirmed at the CITED line (replay-verdict key) but forwarded with the RELOCATED line", async () => {
+    const seenLines: number[] = [];
+    const res = await runPanel({
+      // real quote on line 1, cited at 4 → 3 away → grep-rescued to line 1.
+      reviews: [blockedWith("quality-reviewer", 4, "function run(input: string) {")],
+      source,
+      makeRunner: (review) => ({
+        identity: `verifier-for-${review.reviewer}`,
+        confirm: async (f): Promise<VerifierVerdict> => {
+          seenLines.push(f.line!);
+          return { holds: true, note: "n" };
+        },
+      }),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+    });
+    // The verifier (and any replay verdict keyed file:line) sees the CITED 4 —
+    // a naive relocation-before-confirm would key on 1 and orphan the verdict.
+    expect(seenLines).toEqual([4]);
+    // Downstream (fix_findings, reports) gets the corrected line.
+    const q = res.adjudicated.find((a) => a.reviewer === "quality-reviewer");
+    expect(q?.confirmedBlockers[0]?.line).toBe(1);
+    expect(res.mergeGate.passed).toBe(false);
+  });
+
+  it("never-resurrect: a DROPPED finding stays dropped even when a verdict was recorded for it", async () => {
+    let confirmCalls = 0;
+    const res = await runPanel({
+      // quote nowhere in the file → dropped, not rescued (0 matches).
+      reviews: [blockedWith("quality-reviewer", 2, "this code does not exist anywhere")],
+      source,
+      makeRunner: (review) => ({
+        identity: `verifier-for-${review.reviewer}`,
+        confirm: async (): Promise<VerifierVerdict> => {
+          confirmCalls++;
+          return { holds: true, note: "a recorded verdict exists but must go unused" };
+        },
+      }),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+    });
+    expect(confirmCalls).toBe(0);
+    expect(res.mergeGate.passed).toBe(true);
+  });
+});
+
 describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", () => {
   it("an `absent` cross-vendor resolution records PanelRunResult.crossVendorAbsence={reason} (LOUD, never silent)", async () => {
     const res = await runPanel({
