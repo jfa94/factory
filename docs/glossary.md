@@ -155,7 +155,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - The panel is risk-invariant — the same reviewers judge every Task at the same depth; scrutiny is never narrowed for work deemed low-risk.
 - **examples**:
   - A copy tweak and an authentication change face the same full panel — the merge gate never narrows.
-  - Counter-example: skipping the security reviewer on a "routine" Task — the panel does not shrink with perceived risk.
+  - Counter-example: skipping the silent-failure-hunter on a "routine" Task — the panel does not shrink with perceived risk.
 - **relationships**: gates a Task's ship; panel is risk-invariant (Risk Tier dials the producer, not Review); complements Automated Gates and Holdout Validation.
 - **synonyms**: —
 - **code anchor**: `src/verifier/judgment/panel-run.ts`

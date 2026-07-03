@@ -25,7 +25,7 @@ arguments:
 # /factory:debug
 
 Whole-scope review⇄fix loop: repeatedly review the diff between a base ref and
-`HEAD` with the same risk-invariant 7-role panel `/factory:run`'s merge gate uses,
+`HEAD` with the same risk-invariant 4-role panel `/factory:run`'s merge gate uses,
 turn confirmed blockers into a synthetic spec, drive it through the ordinary
 `factory next-task`/`factory next-action` producer⇄reviewer loop, and repeat until
 a pass comes back clean (or `--max-passes` is reached) — then finalize into one PR.
