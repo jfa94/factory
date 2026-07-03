@@ -91,12 +91,15 @@ script).
 - `ship.ts` (`shipTask`) opens the PR + serial-merges; `finalize.ts` is the
   run-completion coordinator (report → PRD-issue fails comment → rollup → flip
   terminal, in resume-safe order).
-- `docs.ts` / `e2e.ts` — the run-level **coroutines** behind `factory run docs` /
-  `factory run e2e`, each an emit/record pair symmetric with `nextAction`. `docs.ts`
-  runs once before finalize (Decision 37); `e2e.ts` runs before docs on an `--e2e` run
-  (Decision 39) — it spawns the `e2e-author` once, proves + merges the critical suite,
-  then re-runs the suite on every re-entry and can reopen a task (via `resetTaskRow`)
-  without touching `run.status`.
+- `docs.ts` / `e2e.ts` / `assessment.ts` — the run-level **coroutines** behind `factory run
+docs` / `factory run e2e` / `factory run e2e-assess`, each an emit/record pair symmetric with
+  `nextAction`. `docs.ts` runs once before finalize (Decision 37); `assessment.ts` runs once at
+  run START before any task on an `--e2e` run (Decision 40 D3) — it spawns the `e2e-assessor` to
+  resolve boot config into `playwright.config.ts`, forecast affected specs, and fail the run
+  loud if the app can't boot; `e2e.ts` runs before docs on an `--e2e` run (Decision 39/40) — it
+  spawns the `e2e-author` once, proves + merges the critical suite, then re-runs the suite on
+  every re-entry and can reopen a task (via `resetTaskRow`) or spawn an `e2e-adjudicator` for an
+  unmappable pre-existing failure, all without touching `run.status`.
 
 ## Producer (`src/producer`)
 

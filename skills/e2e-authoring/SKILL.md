@@ -9,7 +9,7 @@ description: Use when authoring or reviewing Playwright end-to-end journey specs
 
 You are authoring end-to-end specs **nobody will review**. A vitest/unit test that's
 wrong gets caught by the reviewer panel diffing the implementation against it; an e2e
-spec gates a run (and future runs, via CI) on your judgment alone. That asymmetry drives
+spec gates a run (and every future `--e2e` run) on your judgment alone. That asymmetry drives
 every rule below.
 
 **Core principle:** a green e2e spec must mean "the user journey actually works," never
@@ -22,8 +22,8 @@ There is no `@critical` tag, no annotation, no metadata file. **Where a spec liv
 what it means:**
 
 - **Committed** (target repo's `e2e/` by default, config `e2e.testDir`) = **critical**.
-  Thin, journey-oriented, load-bearing — it gates this run, every future `--e2e` run, and
-  the repo's CI. Must pass the fail-first proof (below) before it is ever merged.
+  Thin, journey-oriented, load-bearing — it gates this run and every future `--e2e` run.
+  Must pass the fail-first proof (below) before it is ever merged.
 - **Ephemeral** (an out-of-repo run directory, never committed) = **throwaway**. One per
   user-facing task, broader coverage, exists only to shake out issues in _this_ run.
   Discarded when the run ends. No proof required — but still write it honestly; a
@@ -119,3 +119,6 @@ not that RED is real.
 - [ ] The critical tier stays thin — money-paths only, not one-per-task.
 - [ ] Every spec appears in the manifest with correct `task_ids` and `kind` — an
       unlisted spec can never be joined back to its task if it later fails.
+- [ ] Every manifest entry carries a human-readable `title` ("Checkout completes and
+      shows order confirmation") — it is what the run report shows a user who knows
+      nothing about e2e testing (Decision 40).

@@ -92,7 +92,8 @@ a mismatch is a loud parse error.
 | `quota`                     | QuotaCheckpoint?             | Resume checkpoint; present _iff_ paused/suspended.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `docs`                      | DocsPhase?                   | Documentation-phase marker; absent until the engine docs phase runs ([Decision 37](../explanation/decisions.md#decision-37--documentation-is-an-engine-phase-before-finalize)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `e2e`                       | boolean (default false)      | Whether this run opted into the e2e phase (the `--e2e` flag). Set once at create, immutable across resume. Default `false`: a run without the flag never schedules the e2e stage ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)).                                                                                                                                                                                                                                                                                                                                                                                             |
-| `e2e_phase`                 | E2ePhase?                    | E2E-phase marker + author manifest; absent until the e2e phase first runs. See [`E2ePhase`](#e2ephase).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `e2e_assessment`            | E2eAssessment?               | Run-start e2e-assessment record (Decision 40 D3): the coverage forecast, the boot config the assessor resolved into `playwright.config.ts`, and any degraded-coverage warning. Absent until the assessment runs; present only on an `--e2e` run. See [`E2eAssessment`](#e2eassessment).                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `e2e_phase`                 | E2ePhase?                    | E2E-phase marker + author manifest + adjudication cursor; absent until the e2e phase first runs. See [`E2ePhase`](#e2ephase).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `rollup`                    | `{number, merged, reason?}`? | The `completed` run's staging→develop rollup outcome, persisted at finalize **only when it did not land** (`merged:false` — e.g. the "auto-armed" branch-policy fallback, D3). Absent on a merged rollup (nothing to recover) or a `failed` run (no rollup attempted). Lets `rescue scan` flag an armed-but-not-landed rollup (`rollup_pending`) without a live GitHub call; `rescue apply --recheck-rollup` reopens the run so a re-drive re-enters `finalizeRun`, whose `rollup()` resume-guard picks up the now-merged PR and completes the PRD-close + branch-GC. Cleared (set absent) by a resumed finalize once the PR is merged. Only `finalizeRun` mutates this pointer — `rescue apply` never does. |
 | `paused_minutes`            | number (default 0)           | Cumulative minutes the run spent idle between suspend/pause and resume/rescue-reopen, accumulated on each resume or rescue-reopen. The runtime circuit-breaker deducts it from wall-time so a long-paused run does not falsely trip. Absent on legacy runs → `0`.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `started_at` / `updated_at` | string                       | ISO-8601.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -241,33 +242,46 @@ read-only and the marker simply stays absent.
 
 ## `E2ePhase`
 
-`{ status?: "done" | "failed", reason?, advisory?, attempts?, manifest, reopen_counts, ended_at? }`
-— the engine-owned e2e-phase marker + author manifest ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag)),
+`{ status?: "done" | "failed", reason?, advisory?, attempts?, author_attempts?, manifest, reopen_counts, adjudication?, adjudication_counts?, ended_at? }`
+— the engine-owned e2e-phase marker + author manifest ([Decision 39](../explanation/decisions.md#decision-39--e2e-is-a-run-level-engine-phase-criticality-is-persistence-not-a-tag),
+overhauled by [Decision 40](../explanation/decisions.md#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language)),
 present only on an `--e2e` run and absent until the phase first runs.
 
 Unlike `DocsPhase` (written once, never re-entered), this marker is **re-fired** on every
 reopen: `status` is cleared back to absent when a failing journey reopens a task, so the
-phase runs again once the reopened task settles. Two fields **persist** across the clear:
+phase runs again once the reopened task settles. Several fields **persist** across the clear:
 
-- `manifest` — the author's spec→task rows (`{ task_ids, spec_path, kind: "critical" | "throwaway" }`),
+- `manifest` — the author's spec→task rows (`{ task_ids, spec_path, kind: "critical" | "throwaway", title? }`),
   fixed at authoring time and reused on every later pass (the author is not re-invoked;
   throwaway specs are re-run, not re-authored). This is the only join from a failing spec
-  back to its task.
+  back to its task. `title` (Decision 40 D12) is the human-readable journey name surfaced in
+  the run report.
 - `reopen_counts` — per-`task_id` cumulative reopen count, bounding each task by
   `e2e.reopenCap` across the whole run, not just one pass.
+- `adjudication_counts` — per-`spec_path` count of adjudications spent (Decision 40 D7, cap 1
+  per spec per run); a spec failing again after its one adjudication is a regression.
+
+Two more fields track sub-phase bookkeeping: `author_attempts` (Decision 40 D5 — a crashed or
+unparseable author earns ONE automatic re-spawn before the phase fails; deliberate
+blocked/needs-context verdicts never retry) and `adjudication` — the **in-flight adjudication
+cursor** (`{ specs, attempts, requested_at }`), present only between "the suite hit unmappable
+pre-existing failures" and "the adjudicator's result was recorded". Its presence is what routes
+`runE2eRecord` to the adjudication leg.
 
 `status` semantics: absent = not yet run this pass (or cleared for a reopen re-fire);
 `done` = every critical spec present and green (the run proceeds to docs); `failed` (with
 `reason`) = the run fails. A critical spec counts as proven only when it appears in the
 results as `passed` or `flaky` — an **absent, `failed`, or `skipped`** critical spec is a
-non-pass. `failed` reasons include: a residual critical miss past the reopen cadence, an
-unmappable critical failure (no manifest entry names the spec), a **tooling failure**
+non-pass. An unmappable critical failure (no manifest entry names the spec) no longer fails the
+run directly — it routes through **adjudication** (regression → fail; intentional-change →
+rewrite the spec, re-prove, merge, re-run). `failed` reasons include: a residual critical miss
+past the reopen cadence, an **adjudicated regression**, a **tooling failure**
 (nonzero Playwright exit / reporter `errors[]` with no spec marked failed), an author
 manifest that references an **unknown `task_id`** (validated against `run.tasks` at ingest)
-or an unsafe/absolute `spec_path`, a **`critical` `spec_path` that lands outside `testDir`**,
-an author branch that touches **any** path outside `testDir` (the single stray-file rule —
-no per-file manifest allowlist), a rejected fail-first proof, an exhausted `reopenCap`, or a
-non-`DONE` author status. `advisory` is the `done`-side counterpart of
+or an unsafe/absolute `spec_path`, an author branch that violates the trust boundary (a change
+outside `testDir`, or an undeclared file inside it — carve-out for the assessment-owned
+`e2e/support/**` + `e2e/auth.setup.ts`), a rejected fail-first proof, an exhausted `reopenCap`,
+or a non-`DONE` author status. `advisory` is the `done`-side counterpart of
 `reason` — a non-gating note (e.g. residual throwaway red) enforced as **never present on
 `failed`** (mirroring the `reason`-set-IFF-`failed` invariant). `attempts` is the
 cumulative 1-indexed pass count. A reopen never touches `run.status`, which stays
@@ -277,9 +291,9 @@ A `failed` verdict is **repairable, not permanent**: `factory rescue apply --res
 clears it via the shared `reopenE2ePhase` helper. The clear is **manifest-aware**:
 
 - A phase that failed **after** authoring (non-empty `manifest`) has
-  `status`/`reason`/`advisory`/`ended_at` dropped while `manifest`, `reopen_counts`, and
-  `attempts` are **preserved** — the phase re-enters and re-derives on the next pass without
-  re-invoking the author.
+  `status`/`reason`/`advisory`/`ended_at` dropped and any live `adjudication` cursor dropped,
+  while `manifest`, `reopen_counts`, `adjudication_counts`, and `attempts` are **preserved** —
+  the phase re-enters and re-derives on the next pass without re-invoking the author.
 - A phase that failed **before** a manifest was ever authored (empty `manifest` — every
   pre-authoring `markFailed`: author crash, non-`DONE` status, unsafe `spec_path`) is dropped
   **entirely** (`e2e_phase` set to absent), so `runE2eEmit`'s `run.e2e_phase === undefined`
@@ -288,5 +302,28 @@ clears it via the shared `reopenE2ePhase` helper. The clear is **manifest-aware*
 
 This is never automatic —
 `rescue scan` surfaces it as `e2e_failed: true` (folded into `needs_rescue` even when every
-task is `done`), and `apply` clears it only on the explicit `--reset-e2e` flag. Plain
-`resume` does not clear it; it only re-checks the quota gate.
+task is `done`), and `apply` clears it only on the explicit `--reset-e2e` flag. The same
+`--reset-e2e` also drops a failed run-start `e2e_assessment` (surfaced by `rescue scan` as
+`e2e_assessment_failed`). Plain `resume` does not clear it; it only re-checks the quota gate.
+
+## `E2eAssessment`
+
+`{ status?: "done" | "failed", reason?, warning?, resolved?, affected_specs, attempts?, ended_at? }`
+— the run-start e2e-assessment record ([Decision 40 D3](../explanation/decisions.md#decision-40--e2e-overhaul-zero-knowledge-ux-via-assessment-adjudication-and-plain-language)),
+written once per `--e2e` run **before any task executes** and present only on an `--e2e` run.
+
+- `status` — absent = not yet concluded (never spawned, or a crashed attempt awaiting its one
+  retry); `done` = machinery validated (or steady-state, already present) — tasks may proceed;
+  `failed` (with `reason`) = boot- or machinery-impossible, so the run **fails loud in plain
+  language** and every non-terminal task is swept `blocked-environmental`.
+- `warning` — a degraded-coverage note on a `done` assessment (e.g. auth machinery couldn't be
+  resolved → logged-out coverage only). Surfaced in the run report as `e2e_warnings`.
+- `resolved` — `{ start_command?, base_url? }` the assessor resolved and wrote into the repo's
+  `playwright.config.ts` (the single source of truth, D10). `resolveBootConfig` reads a config
+  override if present, else this.
+- `affected_specs` — the coverage forecast: rows of `{ spec_path, task_ids, expectation }` over
+  EXISTING committed specs, `expectation` being `needs-update` (a task deliberately changes what
+  the spec asserts) or `should-still-pass` (a failure is a regression). This routes the e2e
+  phase's adjudication of unmappable failures.
+- `attempts` — assessor spawn attempts (crash-retry bookkeeping, cap 2); a deliberate
+  `-impossible` verdict is final and never retried.

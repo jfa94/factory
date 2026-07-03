@@ -1105,6 +1105,73 @@ of letting them silently vanish at reopen time. Schema invariants tightened to m
 `advisory` is enforced never-present-when-`failed` (mirroring `reason`-set-IFF-`failed`), and
 `e2e.baseURL` is validated as a URL.
 
+## Decision 40 — E2E Overhaul: Zero-Knowledge UX via Assessment, Adjudication, and Plain Language
+
+**Date:** 2026-07-03
+
+**Context:** A design review of Decision 39 against two goals — catch real regressions on
+real apps, and require ZERO e2e knowledge from the user — found structural gaps: the user
+had to hand-configure boot values they don't know; a stale committed spec (intentional UI
+change) failed runs the user couldn't repair; a crashed author failed the whole phase; the
+CI `e2e` job could brick auto-merge on infra CI can't boot; and every e2e surface spoke
+engine jargon. Fourteen sub-decisions (D1–D14) landed as one overhaul; this is not a 39
+addendum because it removes a 39 element (the CI job) and adds phases 39 never had.
+
+**Decision (by sub-decision):**
+
+- **D2/D10 — boot config is resolved, not configured.** `factory run create --e2e` eagerly
+  checks only three static prerequisites (`package.json`, `@playwright/test`,
+  `playwright.config.ts` — `factory scaffold` provides them). The real boot pair
+  (`startCommand`/`baseURL`) has a single source of truth: `resolveBootConfig` = operator
+  config override ?? the values the run-start ASSESSMENT resolved (and wrote into the
+  repo's `playwright.config.ts`). The config keys are now optional overrides, normally
+  unset. Phase-entry suspend stays as a backstop for legacy/assessment-skipped runs.
+- **D3 — run-start e2e-assessment phase** (once per `--e2e` run, BEFORE any task; opus,
+  `agents/e2e-assessor.md`, coroutine `src/orchestrator/assessment.ts`): (a) forecasts
+  which committed specs this run's tasks will touch (`affected_specs` rows with
+  `expectation: needs-update | should-still-pass` — the adjudication routing map);
+  (b) detects/authors seed+auth machinery and writes the resolved boot pair into
+  `playwright.config.ts`, validating by booting + logging in; (c) boot/machinery
+  impossible → the RUN fails loud in plain language before any task runs; auth-only gap →
+  degrade to logged-out coverage with a named warning that reaches the report.
+- **D4/D5 — author hardening.** The e2e-author is apex-pinned (opus). Its failure modes
+  split: deliberate verdicts (BLOCKED/NEEDS_CONTEXT) stay FINAL; a crash/unparseable
+  status earns ONE automatic re-spawn (`author_attempts`, cap 2) from a hard-reset
+  worktree. Runner dead-agent synthesis must parse as the retryable `error` status —
+  never contain BLOCKED/ESCALATE/NEEDS/DONE (the R2 wording lesson).
+- **D6 — converse manifest check.** Every committed file under `testDir/` must be a
+  declared critical manifest row (carve-out: `support/**`, `auth.setup.ts`) — an
+  undeclared spec could never reopen a task when it later fails.
+- **D7 — adjudication of pre-existing failing specs.** An unmappable critical failure no
+  longer hard-fails the run. Routing (in `runSuiteAndDecide`): forecast
+  `should-still-pass` → reopen the mapped tasks like any manifest failure; forecast
+  `needs-update` → adjudicator spawn in pre-authorized update mode; unforecast →
+  adjudicator rules **regression** (fail loud with its plain-language reason) vs
+  **intentional-change** (REQUIRES a verbatim citation of the authorizing task/criterion;
+  the spec is rewritten to the new behavior, re-proven fail-first, diff-scope-guarded,
+  merged, and the suite re-runs). Cap: ONE adjudication per spec per run
+  (`adjudication_counts`) — failing again after the update merged IS a regression. The
+  cursor (`e2e_phase.adjudication`) routes the record leg; `E2eAction` spawns are
+  discriminated by `expects: "author-results" | "adjudication-results"`, and both runners
+  loop while `kind === "spawn"`. Rescue drops a live cursor (dead worktree) but preserves
+  `adjudication_counts`.
+- **D8/D12 — plain language end to end.** Playwright per-test error detail (4KB cap)
+  rides into `e2e_feedback` and adjudication prompts. Manifest rows carry a human `title`;
+  the run report gains `e2e_journeys` (what was verified, in user words), `e2e_reopened`
+  (found-and-sent-back), `e2e_warnings` (assessment degradations), and
+  `e2e_assessment_failure`; engine reasons may follow `"<plain>\n<detail>"` — renderers
+  show the plain line and fence the detail.
+- **D9 — reopened tasks keep the FULL pipeline** (explicit no-change).
+- **D11 — CI `e2e` job removed** from the quality-gate template and auto-merge `needs:` —
+  a committed suite CI cannot boot would brick auto-merge (self-inflicted, undebuggable
+  for a zero-knowledge user). Critical specs still gate every `--e2e` run's rollup.
+
+**Consequences:** A user needs to know nothing about e2e testing: setup is assessed and
+authored for them, intentional UI changes no longer wedge runs, and every failure surface
+leads with a sentence a non-engineer can read. In-flight pre-D40 `--e2e` runs hit the
+assessment gate on resume (idempotent, acceptable). The committed suite no longer runs in
+CI — its gate is the factory run itself.
+
 ---
 
 ## Plugin System Constraints

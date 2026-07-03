@@ -18,7 +18,7 @@ arguments:
     description: "CREATE-ONLY ship selector: open task/rollup PRs but never merge. Default (omit): live — auto-merge tasks into staging + rollup into develop. Cannot combine with --resume (rejected loud)"
     required: false
   - name: "--e2e"
-    description: "Opt into the run-level e2e phase (Decision 39): once all tasks are terminal, author + run Playwright journeys against staging before docs/finalize; a mappable failing journey reopens its task with feedback. Persisted on the run — CREATE-ONLY, like --workflow/--no-ship"
+    description: "Opt into run-level e2e (Decisions 39/40): create checks the static Playwright prerequisites (scaffold provides them); a run-start e2e-assessment resolves boot config + authors seed/auth machinery BEFORE any task; once all tasks are terminal, author + run Playwright journeys against staging before docs/finalize; a mappable failing journey reopens its task with feedback. Persisted on the run — CREATE-ONLY, like --workflow/--no-ship"
     required: false
   - name: "--supersede"
     description: "If an active run already exists for this spec, mark it `superseded` (delete its staging branch + PRs) and start fresh — also deletes the durable spec so Phase 1 regenerates from the PRD. Skips the conflict prompt. (Has no effect on the spec when combined with --spec-id, which bypasses Phase 1.)"
@@ -151,8 +151,9 @@ file-lock serialized). When it returns:
   re-runs `/factory:resume` after the window resets. Do NOT finalize.
 - otherwise → run the skill's Phase 4: `factory run finalize --run <run_id>` (ship mode is
   read from the run's persisted `ship_mode`), then `factory score` + `factory state --summary`,
-  and report. (On an `--e2e` run, the e2e phase and documentation are both handled in-loop as
-  engine stages — e2e before docs (Decision 39) — before finalize; not separate post-finalize
+  and report. (On an `--e2e` run, the run-start e2e-assessment, the e2e phase, and
+  documentation are all handled in-loop as engine stages — assessment before any task
+  (Decision 40), e2e before docs (Decision 39) — before finalize; not separate post-finalize
   steps here.)
 
 ## Autonomous mode (MANDATORY — no opt-in, no opt-out)

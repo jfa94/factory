@@ -12,7 +12,7 @@ arguments:
     description: "Also reset determined drops (spec-defect / capability-budget) — only after the root cause is actually fixed"
     required: false
   - name: "--reset-e2e"
-    description: "Clear a failed e2e-phase verdict (Decision 39) so it re-enters — only after the underlying cause no longer applies"
+    description: "Clear a failed e2e-phase verdict or a failed run-start e2e-assessment (Decisions 39/40) so it re-enters — only after the underlying cause no longer applies"
     required: false
   - name: "--recheck-rollup"
     description: "Reopen a completed run whose rollup armed but never landed, so a re-drive re-checks it — only after confirming the queued merge landed"
@@ -53,9 +53,10 @@ Skill(rescue-protocol, "run=<id-or-empty> tasks=<csv-or-empty> include-dead-ends
 also resets determined drops; pass it only when the upstream root cause is genuinely fixed.
 `--task <id>` (repeatable) resets exactly those tasks, including a dead-end (naming it is the
 assertion the cause is fixed). `--reset-e2e` clears a `failed` e2e-phase verdict (scan reports
-this as `e2e_failed`) so it re-enters instead of staying stuck failed forever — pass it only
-once the underlying cause (flaky infra, an app bug, a since-fixed reopen-cap exhaustion) no
-longer applies. `--recheck-rollup` reopens a `completed` run whose rollup armed but never
+this as `e2e_failed`) AND a failed run-start e2e-assessment (`e2e_assessment_failed`, Decision 40) so they re-enter instead of staying stuck failed forever — pass it only once the underlying
+cause (flaky infra, an app bug, an unbootable app, a since-fixed reopen-cap exhaustion) no
+longer applies. A live adjudication cursor is always dropped on e2e reset (its worktree is
+gone); its per-spec caps survive. `--recheck-rollup` reopens a `completed` run whose rollup armed but never
 landed (scan reports this as `rollup_pending`) so a re-drive re-enters finalize and picks up
 the merged PR — pass it only after confirming the queued merge actually landed. Default (no
 flags): reset stuck + recoverable, leave dead-ends, any e2e failure, and any pending rollup

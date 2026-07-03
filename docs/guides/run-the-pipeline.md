@@ -115,13 +115,18 @@ tests → exec → verify → ship`), emitting a spawn request whenever it needs
    agents. The runner spawns the producers and the review panel the request
    names, then records their raw output back with `factory next-action --results` (one
    state step). The engine — not the runner — decides every transition.
-5. **E2E** (`--e2e` runs only) — once all tasks are terminal, before docs,
-   `factory next-task` schedules the e2e stage. The runner runs `factory run e2e`,
-   which spawns the `e2e-author` to write + prove journey specs against the integrated
-   staging app, then runs the suite. A failing mappable journey reopens its task
-   (`e2e_feedback`) and re-drives it — the run stays `running`; a critical failure that
-   exhausts `e2e.reopenCap` fails the run. On a run created without `--e2e` this phase is
-   skipped entirely. See [Run with end-to-end tests](./run-with-e2e.md).
+5. **E2E** (`--e2e` runs only) — bracketed by two engine phases (Decision 40). A run-start
+   **e2e-assessment** (`factory run e2e-assess`) fires **before the first task**: it resolves
+   the app's boot config, writes it into `playwright.config.ts`, authors any seed/auth
+   machinery, forecasts which committed specs the tasks touch, and fails the run loud in plain
+   language if the app can't boot. Then, once all tasks are terminal and before docs,
+   `factory next-task` schedules the e2e stage. The runner runs `factory run e2e`, which spawns
+   the `e2e-author` to write + prove journey specs against the integrated staging app, then runs
+   the suite. A failing mappable journey reopens its task (`e2e_feedback`) and re-drives it — the
+   run stays `running`; a critical failure that exhausts `e2e.reopenCap` fails the run; an
+   unmappable pre-existing failure is **adjudicated** (regression → fail; intentional change →
+   update the spec). On a run created without `--e2e` both phases are skipped entirely. See
+   [Run with end-to-end tests](./run-with-e2e.md).
 6. **Docs** — once all tasks are terminal (and the e2e phase, if any, is `done`) and the
    PRD would be `completed`,
    `factory next-task` returns `document` (not yet `finalize`) if the repo keeps a

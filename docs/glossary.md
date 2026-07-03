@@ -222,6 +222,38 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
 - **synonyms**: —
 - **code anchor**: `src/orchestrator/e2e.ts`
 
+### E2E Assessment
+
+- **type**: Process
+- **status**: accepted
+- **definition**: A once-per-Run stage that fires before any Task on an `--e2e` Run: it forecasts which committed browser journeys this Run's Tasks will touch, prepares whatever the repository still needs to run journeys at all (boot command, base URL, seed/login machinery), and refuses to let the Run start if the app cannot even be booted. Its forecast is what later tells the E2E Adjudication which failures were expected.
+- **invariants**:
+  - Runs at most once per Run, and always before the first Task.
+  - If the app cannot be booted or the machinery cannot be prepared, the Run fails loudly before any Task work is spent; a login-only gap degrades coverage with a named warning instead.
+  - Its resolved boot values are the single source of truth for every later journey run, unless an operator override is set.
+- **examples**:
+  - On the first `--e2e` Run in a repo, the assessment works out how to start the app, writes that into the repo's Playwright config, and validates it by booting and logging in.
+  - Counter-example: prompting the user to configure start commands by hand — the assessment exists precisely so the user never has to know them.
+- **relationships**: precedes every Task in a Run; feeds the E2E Phase its boot values; its forecast routes the E2E Adjudication.
+- **synonyms**: Run-start Assessment
+- **code anchor**: `src/orchestrator/assessment.ts`
+
+### E2E Adjudication
+
+- **type**: Process
+- **status**: accepted
+- **definition**: The ruling that happens when a Critical (Persisted) E2E Spec from an earlier Run fails and no manifest links it to this Run's Tasks: was the old behavior broken (a regression — the Run fails, in plain language), or did this Run deliberately change the behavior the spec asserts (an intentional change — the spec is updated to the new behavior, re-proven, and the journeys run again)? It exists so a stale committed journey cannot wedge a Run the user has no way to repair.
+- **invariants**:
+  - An intentional-change ruling must cite the Task or criterion language that authorizes the new behavior; an uncited ruling is rejected.
+  - Each spec may be adjudicated at most once per Run; failing again after its update is treated as a regression.
+  - An updated spec must clear the Fail-first Proof again before it is merged; nothing outside the adjudicated specs may change.
+- **examples**:
+  - A redesign task legitimately changes the checkout layout; the old checkout journey fails, is ruled an intentional change citing the task's criterion, is rewritten to the new layout, and the Run proceeds.
+  - Counter-example: the checkout button simply stopped working — ruled a regression, and the Run fails with that sentence, not a stack trace.
+- **relationships**: triggered by the E2E Phase; routed by the E2E Assessment's forecast; its spec updates are gated by the Fail-first Proof.
+- **synonyms**: Adjudication
+- **code anchor**: `src/orchestrator/e2e.ts`
+
 ### E2E Author
 
 - **type**: Role
@@ -247,7 +279,7 @@ Ubiquitous-language terms for the Dark Factory domain. Vocabulary only — no im
   - Must pass the Fail-first Proof before it is ever committed.
   - Only the E2E Author may add or change one; no other Role may touch it.
 - **examples**:
-  - A checkout journey is committed as a Critical spec, so it keeps gating every future `--e2e` Run and every pull request afterward.
+  - A checkout journey is committed as a Critical spec, so it keeps gating the rollup of every future `--e2e` Run.
   - Counter-example: a one-off spec for a minor settings toggle, discarded at Run end — that belongs in the Throwaway tier instead.
 - **relationships**: authored by the E2E Author; verified by the Fail-first Proof; executed by the E2E Runner; joined to its Task by the E2E Reopen Loop's manifest.
 - **synonyms**: Critical Spec, Persisted Spec

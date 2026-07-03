@@ -27,7 +27,9 @@ ambiguous dead-ends. Never edit `state.json` by hand.
 4. **A failed e2e verdict is never auto-retried.** `scan.e2e_failed` can be `true` even when
    `resettable` is empty (every task `done`, only the e2e phase failed) — a default `apply`
    leaves it failed. It is cleared ONLY on an explicit human assertion the underlying cause no
-   longer applies (`apply --reset-e2e`).
+   longer applies (`apply --reset-e2e`). Same rule for `scan.e2e_assessment_failed` (the
+   run-start e2e-assessment condemned the run, Decision 40): `--reset-e2e` drops that failed
+   assessment too, so it re-runs on resume.
    4b. **A pending rollup is never auto-rechecked.** `scan.rollup_pending` can be `true` on a
    `completed` run whose staging→develop rollup armed but never landed (e.g. the "auto-armed"
    branch-policy fallback) — a default `apply` leaves it alone. It is rechecked ONLY on an
@@ -52,8 +54,9 @@ reset-e2e=<bool> recheck-rollup=<bool> dry-run=<bool>`:
 - `include-dead-ends=true` → in step 5, reset all dead-ends (`--include-dead-ends`) instead of
   diagnosing per task (the human has asserted the upstream root cause is fixed).
 - `reset-e2e=true` → in step 4, apply with `--reset-e2e` too (the human has asserted the e2e
-  failure's underlying cause no longer applies). When `false`/omitted and `scan.e2e_failed` is
-  `true`, leave it failed and surface it in the summary (step 3b) — never guess.
+  failure's underlying cause no longer applies; clears a failed e2e phase AND a failed
+  e2e-assessment). When `false`/omitted and `scan.e2e_failed` or `scan.e2e_assessment_failed`
+  is `true`, leave it failed and surface it in the summary (step 3b) — never guess.
 - `recheck-rollup=true` → in step 4, apply with `--recheck-rollup` too (the human has confirmed
   the queued merge landed). When `false`/omitted and `scan.rollup_pending` is `true`, leave it
   alone and surface it in the summary (step 3b) — never guess.
@@ -99,11 +102,12 @@ reset-e2e=<bool> recheck-rollup=<bool> dry-run=<bool>`:
    otherwise report `summary` (it may note dead-ends that need a fix + `--include-dead-ends`)
    and stop. **If `dry-run=true`, report the scan and stop here regardless** — never apply.
 
-   3b. **`scan.e2e_failed` never short-circuits and never auto-resolves (Iron Law 4).** If
-   `true`, proceed to step 4 regardless of task-level `needs_rescue`. Apply `--reset-e2e`
-   alongside the default set ONLY if `reset-e2e=true` was explicitly passed; otherwise leave
-   it failed and name it in your report — there is no diagnostic-agent path for e2e (unlike
-   dead-ends), so never guess at whether the underlying cause has cleared.
+   3b. **`scan.e2e_failed` / `scan.e2e_assessment_failed` never short-circuit and never
+   auto-resolve (Iron Law 4).** If either is `true`, proceed to step 4 regardless of task-level
+   `needs_rescue`. Apply `--reset-e2e` alongside the default set ONLY if `reset-e2e=true` was
+   explicitly passed; otherwise leave it failed and name it in your report — there is no
+   diagnostic-agent path for e2e (unlike dead-ends), so never guess at whether the underlying
+   cause has cleared.
 
    3c. **`scan.rollup_pending` never short-circuits and never auto-resolves (Iron Law 4b).** If
    `true`, proceed to step 4 regardless of task-level `needs_rescue`. Apply `--recheck-rollup`

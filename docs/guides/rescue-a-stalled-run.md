@@ -41,11 +41,15 @@ Key fields: `resettable` (= `stuck ∪ recoverable`), `dead_ends`, `needs_rescue
 and `would_deadlock` (true iff a re-drive would throw). If `needs_rescue` is false,
 there is nothing to do.
 
-Two run-level flags also fold into `needs_rescue` even when every task is `done`:
+Run-level flags also fold into `needs_rescue` even when every task is `done`:
 
 - `e2e_failed` — the e2e phase concluded `failed` (see
   [Run with end-to-end tests § Fail](./run-with-e2e.md#4-read-the-outcome)). Cleared only
-  by `apply --reset-e2e`.
+  by `apply --reset-e2e`, which is manifest-aware and also drops any in-flight adjudication
+  cursor (preserving `adjudication_counts`).
+- `e2e_assessment_failed` — the **run-start** e2e-assessment concluded boot- or
+  machinery-impossible (Decision 40 D3). Also cleared by `apply --reset-e2e`, which drops the
+  failed `e2e_assessment` so the assessment re-runs.
 - `rollup_pending` — a `completed` run whose staging→develop rollup was **armed but never
   landed** (e.g. GitHub's branch policy blocked the queued `--auto` merge, D3), persisted as
   `run.rollup {number, merged:false, reason?}`. Cleared only by `apply --recheck-rollup`
