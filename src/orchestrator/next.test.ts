@@ -11,13 +11,9 @@
  * deps.state.update / deps.state.updateTask directly in the test body.
  */
 import { describe, expect, it } from "vitest";
-import { readFile } from "node:fs/promises";
 
 import { nextTask } from "./next.js";
-import { makeOrchestratorDeps, NOW, PAUSE_5H } from "./orchestrator-fixtures.js";
-import { runStatePath } from "../core/state/paths.js";
-import { atomicWriteFile } from "../shared/atomic-write.js";
-import { epochToIso } from "../shared/time.js";
+import { makeOrchestratorDeps, PAUSE_5H } from "./orchestrator-fixtures.js";
 import type { UsageReading } from "../quota/usage-source.js";
 
 const UNAVAILABLE: UsageReading = { kind: "unavailable", reason: "usage-cache-missing" };
@@ -47,26 +43,15 @@ describe("nextTask", () => {
     }
   });
 
-  it("workflow mode proceeds past the gate even with an unobservable usage signal", async () => {
-    const { deps, runId, cleanup } = await makeOrchestratorDeps({
-      modeOverride: "workflow",
-      usage: UNAVAILABLE,
-    });
-    try {
-      const env = await nextTask(deps, runId);
-      expect(env.kind).toBe("work");
-      expect((await deps.state.read(runId)).status).toBe("running");
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("session mode (default) fail-closes on the same unobservable signal", async () => {
+  it("fail-closes on an unobservable usage signal (suspend + quota marker written)", async () => {
     const { deps, runId, cleanup } = await makeOrchestratorDeps({ usage: UNAVAILABLE });
     try {
       const env = await nextTask(deps, runId);
       expect(env).toMatchObject({ kind: "pause", scope: "unavailable" });
-      expect((await deps.state.read(runId)).status).toBe("suspended");
+      const run = await deps.state.read(runId);
+      expect(run.status).toBe("suspended");
+      // A2 invariant: every quota-caused stop writes run.quota.
+      expect(run.quota).toEqual({ binding_window: "unavailable" });
     } finally {
       await cleanup();
     }
@@ -395,46 +380,6 @@ describe("nextTask", () => {
       expect(run.tasks["T4"]?.status).toBe("failed");
       expect(run.tasks["T4"]?.failure_class).toBe("capability-budget");
       expect(run.tasks["T4"]?.failure_reason).toMatch(/circuit breaker tripped/);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  // D7: the RUNTIME arm is a recoverable budget stop — the run suspends (pause
-  // envelope, resumable after raising maxRuntimeMinutes) instead of cascade-failing
-  // every healthy task the way the failures arm does.
-  it("circuit breaker runtime arm: workflow run over the runtime cap SUSPENDS — no task failed", async () => {
-    const { deps, runId, dataDir, cleanup } = await makeOrchestratorDeps({
-      modeOverride: "workflow",
-      tasks: [
-        { task_id: "T1", acceptance_criteria: ["only one"] },
-        { task_id: "T2", acceptance_criteria: ["only one"] },
-      ],
-    });
-    try {
-      // Genuinely ACTIVE for 480min: recent write (sub-grace pending gap), started
-      // at the cap. Raw on-disk write — StateManager.update() would re-stamp
-      // updated_at and bank the gap itself.
-      const path = runStatePath(dataDir, runId);
-      const onDisk = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-      await atomicWriteFile(
-        path,
-        JSON.stringify({
-          ...onDisk,
-          started_at: epochToIso(NOW - 480 * 60),
-          updated_at: epochToIso(NOW - 5 * 60),
-        }),
-      );
-
-      const env = await nextTask(deps, runId);
-      expect(env).toMatchObject({ kind: "pause", scope: "runtime-budget" });
-      if (env.kind === "pause") expect(env.reason).toMatch(/maxRuntimeMinutes/);
-
-      const run = await deps.state.read(runId);
-      expect(run.status).toBe("suspended");
-      // The healthy tasks are untouched — this is the whole point vs the old cascade-fail.
-      expect(run.tasks["T1"]?.status).toBe("pending");
-      expect(run.tasks["T2"]?.status).toBe("pending");
     } finally {
       await cleanup();
     }

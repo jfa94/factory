@@ -71,15 +71,13 @@ CLI validates their JSON loudly — never coerce a malformed payload.
 ## Phase 2 — Create
 
 ```bash
-factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] --session-id "$CLAUDE_CODE_SESSION_ID"
+factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new] [--supersede | --resume] [--no-ship] [--ignore-quota] --session-id "$CLAUDE_CODE_SESSION_ID"
 ```
 
 `--repo` is OPTIONAL — auto-derived from the `origin` remote of the current checkout (pass it only
 to override; an explicit value that disagrees with the remote fails loud). Forward the invoking
-command's `--workflow`/`--no-ship`/`--ignore-quota` flags verbatim (defaults — no flag: session + live); the resolved
-`mode` and `ship_mode` persist on the run. `mode` tells the quota gate whether to pace (Decision 24:
-`workflow` disables pacing — hard-stop, no pacing); `ship_mode` is read back by the workflow runner +
-resume + finalize, so it is never re-marshaled. Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` — this stamps THIS
+command's `--no-ship`/`--ignore-quota` flags verbatim (default — no flag: live); the resolved
+`ship_mode` persists on the run and is read back by resume + finalize, so it is never re-marshaled. Always pass `--session-id "$CLAUDE_CODE_SESSION_ID"` — this stamps THIS
 runner session as the run's `owner_session`, so the Stop gate resolves only the owning
 session's run and never acts on a _different_ session's run (Prompt J). The shell expands
 the env var; if it is unset it expands to empty and the CLI degrades to owner-unknown (unscoped Stop
@@ -107,18 +105,7 @@ session is not autonomous (`FACTORY_AUTONOMOUS_MODE=1`). This is the determinist
 start an unattended pipeline in an interactive session — not a transient error. Surface the relaunch
 instruction (Phase 0 step 2); never retry blindly.
 
-**When the run is in workflow mode, STOP after this phase** — return control to `/factory:run`,
-which owns the Workflow launch (`commands/run.md`). Do NOT enter Phase 3. Read the mode from the
-run's **persisted** `mode` (the `created`/`resumed` envelope), which the forwarded `--workflow`
-flag set at create — NOT from the invoking flags directly. On a **resume** re-entry (`factory
-resume` → `{kind:"resumed", run}`), the runner is `resumed.run.mode` verbatim (`session` → Phase 3;
-`workflow` → hand back to `/factory:resume` for the Workflow launch); `mode` is immutable, so it is
-never ambiguous and resume itself takes no mode flag.
-
 ## Phase 3 — THE LOOP
-
-THE LOOP is the session-mode runner ONLY. In workflow mode you stopped after Phase 2 — the
-Workflow script (`scripts/factory-run-runner.js`) is the loop; do not run this phase.
 
 The ship mode is persisted on the run (Phase 2's `run create`); `next-task`, `next-action`, and `finalize` all
 read it from state — never re-pass it and never choose it yourself.

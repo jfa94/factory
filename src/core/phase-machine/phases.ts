@@ -35,8 +35,8 @@ export const RunPhaseEnum = z.enum(["finalize"]);
 export type RunPhase = z.infer<typeof RunPhaseEnum>;
 
 /**
- * The canonical per-task phase order. `nextPhase` walks this; the engine and both
- * runners (v1 session, v2 Workflow) share it so the transition logic has ONE home.
+ * The canonical per-task phase order. `nextPhase` walks this; the engine and the
+ * runner share it so the transition logic has ONE home.
  */
 export const TASK_PHASE_ORDER: readonly TaskPhase[] = TASK_PHASES;
 

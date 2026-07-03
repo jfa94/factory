@@ -63,10 +63,7 @@ import {
 } from "../../git/index.js";
 import { readCurrentForCwd, type CurrentRunOverrides } from "../current.js";
 import { requireAutonomousMode } from "../../autonomy/mode.js";
-import { createLogger } from "../../shared/index.js";
 import { withUsageGuard, type Subcommand } from "../registry-types.js";
-
-const log = createLogger("run");
 
 const RUN_HELP = `factory run — create or resume a run
 
@@ -91,7 +88,7 @@ Actions:
 const CREATE_HELP = `factory run create — create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] [--e2e] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--no-ship] [--ignore-quota] [--e2e] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -103,20 +100,17 @@ Usage:
   --new         Force a fresh run even if a live one already exists for this spec.
   --supersede   Terminate the active run for this spec, then create a fresh one.
   --resume      Continue the active run for this spec (full hand-off: forthcoming).
-  --workflow    Run the parallel background Workflow runner. Default (no flag): session —
-                the in-session, quota-paced runner loop.
   --no-ship     Open the rollup PR but never merge. Default (no flag): live — auto-merge
                 each task into staging and merge the staging→develop rollup into develop.
-                Persisted on the run so the workflow runner + resume + finalize read it
-                without re-passing.
+                Persisted on the run so resume + finalize read it without re-passing.
   --ignore-quota Bypass the weekly-quota hard stop AND the per-step quota pacer for this run.
-                Persisted as ignore_quota:true so both orchestrators + orchestrators skip the gate
+                Persisted as ignore_quota:true so the orchestrator skips the gate
                 without re-passing — lets create/--supersede proceed past a 7d-parked run.
   --e2e         Opt into the run-level e2e phase (Decision 39): after all tasks are terminal,
                 author + run Playwright journeys against staging before docs/finalize; a
                 mappable failing journey reopens its task with feedback. Persisted as e2e:true.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
-                Defaults to $CLAUDE_CODE_SESSION_ID; absent ⇒ owner-unknown (Stop gate unscoped).
+                Defaults to $CLAUDE_CODE_SESSION_ID; required — an ownerless run is rejected.
 
 Resolves the spec via the durable store (LOUD if none exists — generate one first).
 On an ACTIVE run for this (repo, spec_id): exits CONFLICT (3) and reports it — pass
@@ -254,7 +248,6 @@ export type CreateRunOptions = SpecSelector &
   RunIntent & {
     readonly repo: string;
     readonly runId: string;
-    readonly mode?: RunState["mode"];
     readonly shipMode?: RunState["ship_mode"];
     /**
      * The owning Claude Code session id (Prompt J — session-scoped Stop gate),
@@ -314,13 +307,6 @@ async function createRunFromManifest(
   opts: CreateRunOptions,
   stagingDeps?: RunStagingDeps,
 ): Promise<RunState> {
-  // Decision 24: workflow mode disables quota pacing. Warn ONCE here — at opt-in
-  // (run creation) — not on every step; the gate then proceeds silently.
-  if (opts.mode === "workflow") {
-    log.warn(
-      "workflow mode: quota pacing disabled — relying on hard rate-limit errors; long runs may exhaust limits",
-    );
-  }
   const seeded = seedTasksFromSpec(request);
   // Decision 33 hardening: compute the per-run staging branch ONCE and PIN it on the
   // row, so every later base-ref resolution reads this exact name (never a recompute
@@ -332,7 +318,6 @@ async function createRunFromManifest(
     staging_branch: branch,
     // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
     execution_mode: "sequential",
-    ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
     ...(opts.shipMode !== undefined ? { ship_mode: opts.shipMode } : {}),
     ...(opts.ownerSession !== undefined ? { owner_session: opts.ownerSession } : {}),
     ...(opts.ignoreQuota === true ? { ignore_quota: true } : {}),
@@ -571,8 +556,6 @@ export async function applyResume(
       // Non-terminal but not paused/suspended ⇒ already running: idempotent re-entry.
       return { kind: "resumed", run };
     case "resume": {
-      // Idle time is banked by StateManager.update() itself (the sole
-      // paused_minutes writer, D7) — this just clears the quota checkpoint.
       const updated = await state.update(runId, (s) => ({
         ...s,
         status: plan.clear.status,
@@ -623,9 +606,8 @@ function parseIssue(raw: string | boolean | undefined): number | undefined {
  * session-scoped Stop gate). Precedence: an explicit `--session-id` flag (the
  * runner/command can pass it deterministically) over the `CLAUDE_CODE_SESSION_ID`
  * env var that Claude Code sets for Bash-tool invocations. Returns `undefined` when
- * neither is available. Session-mode `run create` rejects an undefined result (the Stop
- * hook resolves the session's own run via `findActiveByOwner`, which requires an owner);
- * workflow-mode creates are exempt.
+ * neither is available. `run create` rejects an undefined result (the Stop hook
+ * resolves the session's own run via `findActiveByOwner`, which requires an owner).
  */
 export function resolveOwnerSession(
   flag: string | boolean | undefined,
@@ -694,7 +676,7 @@ export async function runCreate(
   overrides: RunCreateOverrides = {},
 ): Promise<ExitCode> {
   const args = parseArgs(argv, {
-    booleans: ["new", "workflow", "no-ship", "supersede", "resume", "ignore-quota", "e2e"],
+    booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e"],
   });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
@@ -731,21 +713,18 @@ export async function runCreate(
   const explicitRunId = optionalString(args.flag("run-id"));
   const runId = explicitRunId ?? makeRunId();
   validateId(runId, "run-id");
-  // Terse boolean overrides over the no-flag defaults (session + live). Both resolve to
-  // a CONCRETE value so the reuse guard can compare the caller's intent against an
-  // existing run — a bare re-create of a `--workflow`/`--no-ship` run must not silently
-  // reuse it under the (different) default intent.
-  const mode: RunState["mode"] = args.flag("workflow") === true ? "workflow" : "session";
+  // Terse boolean override over the no-flag default (live). Resolves to a CONCRETE
+  // value so the reuse guard can compare the caller's intent against an existing
+  // run — a bare re-create of a `--no-ship` run must not silently reuse it under
+  // the (different) default intent.
   const shipMode: RunState["ship_mode"] = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
-  // Session-mode runs must be owned: the Stop hook resolves the session's own run via
-  // findActiveByOwner, which never matches an ownerless run. Workflow-mode runs are
-  // exempt — the Workflow runner owns finalization, not the interactive session.
-  if (ownerSession === undefined && mode === "session") {
+  // Runs must be owned: the Stop hook resolves the session's own run via
+  // findActiveByOwner, which never matches an ownerless run.
+  if (ownerSession === undefined) {
     throw new UsageError(
-      "run create: session-mode runs require an owning session id " +
-        "(pass --session-id <id> or set CLAUDE_CODE_SESSION_ID). " +
-        "Workflow-mode runs are exempt (the Workflow runner owns finalization).",
+      "run create: runs require an owning session id " +
+        "(pass --session-id <id> or set CLAUDE_CODE_SESSION_ID).",
     );
   }
   // Exactly-one-of the lifecycle flags → the typed intent. --new and an explicit
@@ -755,21 +734,14 @@ export async function runCreate(
   const fresh = args.flag("new") === true || explicitRunId !== undefined;
   const supersede = args.flag("supersede") === true;
   const resume = args.flag("resume") === true;
-  // --workflow/--no-ship/--e2e are CREATE-ONLY selectors; --resume continues a run
-  // whose mode + ship_mode + e2e are already fixed (all immutable post-create). The combo is
-  // incoherent and is the ROOT CAUSE of the `run --resume --workflow` incident: the flag
-  // rode the resume hand-off and launched a workflow runner against a session-mode run.
-  // Reject it loud here, before any orchestrator launches. (No expressiveness lost: the only
-  // case where `--resume --workflow` would create anything — no active run exists —
-  // is identical to a bare `--workflow`, which the default intent already creates fresh.)
-  if (
-    resume &&
-    (args.flag("workflow") === true || args.flag("no-ship") === true || args.flag("e2e") === true)
-  ) {
+  // --no-ship/--e2e are CREATE-ONLY selectors; --resume continues a run whose
+  // ship_mode + e2e are already fixed (immutable post-create). The combo is
+  // incoherent — reject it loud here, before any orchestrator launches.
+  if (resume && (args.flag("no-ship") === true || args.flag("e2e") === true)) {
     throw new UsageError(
-      "run create: --workflow/--no-ship/--e2e are create-only and cannot combine with --resume — " +
-        "a resumed run keeps the mode/ship_mode/e2e it was created with. Drop the flag to continue " +
-        "the existing run, or use --supersede to start fresh in that mode.",
+      "run create: --no-ship/--e2e are create-only and cannot combine with --resume — " +
+        "a resumed run keeps the ship_mode/e2e it was created with. Drop the flag to continue " +
+        "the existing run, or use --supersede to start fresh.",
     );
   }
   const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
@@ -807,7 +779,6 @@ export async function runCreate(
       repo: repoSlug,
       runId,
       ...selector,
-      mode,
       shipMode,
       ...(ownerSession !== undefined ? { ownerSession } : {}),
       ...(ignoreQuota ? { ignoreQuota } : {}),
@@ -854,23 +825,18 @@ export async function runCreate(
 }
 
 async function runResume(argv: string[]): Promise<ExitCode> {
-  const args = parseArgs(argv, { booleans: ["workflow", "no-ship", "ignore-quota", "e2e"] });
+  const args = parseArgs(argv, { booleans: ["no-ship", "ignore-quota", "e2e"] });
   if (args.flag("help") === true) {
     emitLine(RESUME_HELP);
     return EXIT.OK;
   }
-  // --workflow/--no-ship/--e2e select mode/ship/e2e at CREATE; a resumed run keeps them
-  // all as born (immutable). Silently ignoring these flags here is the quieter twin of
-  // the create-side footgun — reject loud so neither path can ever imply a mode on resume.
-  // The orchestrator is chosen from the run's persisted `mode`.
-  if (
-    args.flag("workflow") === true ||
-    args.flag("no-ship") === true ||
-    args.flag("e2e") === true
-  ) {
+  // --no-ship/--e2e select ship/e2e at CREATE; a resumed run keeps them as born
+  // (immutable). Silently ignoring these flags here is the quieter twin of the
+  // create-side footgun — reject loud so neither path can ever imply them on resume.
+  if (args.flag("no-ship") === true || args.flag("e2e") === true) {
     throw new UsageError(
-      "run resume: --workflow/--no-ship/--e2e are not valid on resume — a run keeps the " +
-        "mode/ship_mode/e2e it was created with. Resume drives the run in its persisted mode.",
+      "run resume: --no-ship/--e2e are not valid on resume — a run keeps the " +
+        "ship_mode/e2e it was created with.",
     );
   }
   // Mandatory autonomous-mode gate (see runCreate): resume re-activates a run and

@@ -2,7 +2,7 @@
  * WS2 — {@link SpawnRequest} Zod schema: the structured spawn payload the engine
  * hands the orchestrator when a phase needs subagents.
  *
- * Pure validation; NO I/O. This is the v2-Workflow-friendly replacement for the
+ * Pure validation; NO I/O. This is the structured replacement for the
  * bash `_emit_manifest` JSON (`bin/pipeline-run-task-phases.sh`, exit-10 stdout).
  * Field renames from that shape (detail-only reference, never ported verbatim):
  *   - `subagent_type` → `role`

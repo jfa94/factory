@@ -3,13 +3,15 @@
  * Reads the usage signal, evaluates the two-window pacer, and on a breach
  * persists the matching checkpoint + status and returns a structured
  * {@link QuotaStop}; on proceed returns null. Unobservable fails closed
- * (`suspended`, scope "unavailable", no horizon).
+ * (`suspended`, scope "unavailable", no horizon — but the checkpoint IS
+ * written: `run.quota` present ⇔ the stop was quota-caused, the invariant
+ * planResume discriminates on).
  *
  * On a proceed (null return) the gate never writes state; clearing a stale
  * paused/suspended checkpoint on recovery is the CALLER's job (see nextAction in
  * orchestrator.ts and nextTask in next.ts).
  */
-import { evaluateQuota, buildCheckpoint, assertNever } from "./deps.js";
+import { evaluateQuota, buildCheckpoint, buildUnavailableCheckpoint, assertNever } from "./deps.js";
 import type { Config, RunState, StateManager, UsageSignal } from "./deps.js";
 import { createLogger } from "../shared/index.js";
 
@@ -35,12 +37,10 @@ export interface QuotaStop {
 export async function applyQuotaGate(
   deps: QuotaGateDeps,
   runId: string,
-  mode: RunState["mode"] = "session",
   ignoreQuota = false,
 ): Promise<QuotaStop | null> {
-  // Workflow mode (Decision 24) and --ignore-quota both skip pacing entirely.
-  // Neither reads the usage signal nor writes state.
-  if (mode === "workflow" || ignoreQuota) return null;
+  // --ignore-quota skips pacing entirely: neither reads the usage signal nor writes state.
+  if (ignoreQuota) return null;
   const reading = await deps.usage.read();
   const decision = evaluateQuota(reading, deps.config, deps.now());
   if (decision.kind === "proceed") {
@@ -64,11 +64,15 @@ export async function applyQuotaGate(
       };
     }
     case "unavailable-halt": {
+      // Write the checkpoint (binding_window:"unavailable") — quota-caused stops
+      // ALWAYS carry run.quota, so planResume can tell them from non-quota suspends
+      // (docs/e2e phase parks), which carry none and clear unconditionally.
+      const patch = buildUnavailableCheckpoint();
       log.warn(`run '${runId}' quota unavailable — suspending: ${decision.reason}`);
       const run = await deps.state.update(runId, (s) => ({
         ...s,
-        status: "suspended",
-        quota: undefined,
+        status: patch.status,
+        quota: patch.quota,
       }));
       return { scope: "unavailable", reason: decision.reason, run };
     }

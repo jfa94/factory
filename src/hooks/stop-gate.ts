@@ -22,10 +22,9 @@
  * `factory resume` re-derives all-terminal and routes through the real `finalizeRun`.
  * The hook performs NO state mutation at all.
  *
- * SESSION-SCOPED + MODE-AWARE (Prompt J — so the hint names the RIGHT run, and only
- * this session's own): workflow-mode runs pass through silently (the background
- * Workflow owns continuation + finalize), as do debug runs (the debug driver owns
- * finalize between review⇄fix passes) and runs owned by a DIFFERENT session.
+ * SESSION-SCOPED (Prompt J — so the hint names the RIGHT run, and only this
+ * session's own): debug runs pass through silently (the debug driver owns
+ * finalize between review⇄fix passes), as do runs owned by a DIFFERENT session.
  *
  * The ONLY remaining block is an inaccessible data directory (M9 — surface the
  * inconsistency, never silently accept a corrupt-state stop). A foreign run's
@@ -59,38 +58,31 @@ const ALLOW: StopAction = { kind: "allow" };
  * Decide what to log when the session stops, given a run snapshot and the id of the
  * STOPPING session (from the Stop hook stdin; `undefined` when it could not be read).
  * Pure — no I/O, no state writes. Returns plain `allow` in EVERY case except an owned,
- * session-mode, all-terminal run, which allows WITH the resumability hint.
+ * all-terminal run, which allows WITH the resumability hint.
  *
  * Precedence (each earlier rule short-circuits to plain `allow`):
  *   1. no active run / not `running`            → allow.
- *   2. `mode === "workflow"`                     → allow (the Workflow, not the session,
- *      drives continuation + finalize).
- *   3. `debug === true`                          → allow (the debug driver owns finalize
+ *   2. `debug === true`                          → allow (the debug driver owns finalize
  *      between review⇄fix passes, not the plain Stop gate).
- *   4. owner KNOWN and stopping session ≠ owner  → allow (another session's run is
+ *   3. owner KNOWN and stopping session ≠ owner  → allow (another session's run is
  *      none of this session's business).
- *   5. pending work (in-flight tasks, or setup unfinished) → allow (NO hostage: the run
+ *   4. pending work (in-flight tasks, or setup unfinished) → allow (NO hostage: the run
  *      stays `running` and resumable via `factory resume`).
- *   6. otherwise (≥1 task, all terminal)         → allow-unfinalized (hint only).
+ *   5. otherwise (≥1 task, all terminal)         → allow-unfinalized (hint only).
  */
 export function decideStop(run: RunState | null, stoppingSession?: string): StopAction {
   if (run === null) return ALLOW; // no active run — nothing to gate.
   if (run.status !== "running") return ALLOW; // terminal / paused / suspended: intentional.
 
-  // (a) MODE-AWARENESS — workflow mode: the background Workflow owns continuation +
-  // finalize, so the interactive session is never the orchestrator here.
-  if (run.mode === "workflow") return ALLOW;
-
-  // (a.1) DEBUG-AWARENESS — a debug run loops through multiple review⇄fix passes
+  // (a) DEBUG-AWARENESS — a debug run loops through multiple review⇄fix passes
   // before finalizing (unlike a plain run, which finalizes as soon as all tasks go
   // terminal). The debug driver, not the Stop gate, owns finalize between passes.
   if (run.debug === true) return ALLOW; // the debug driver owns finalize between passes
 
   // (b) SESSION-OWNERSHIP — when the owning session is KNOWN and a DIFFERENT session is
   // stopping, that run is unrelated to this session: pass through.
-  // (Session-mode run create now requires an owner, so un-owned session-mode runs don't
-  // arise in normal operation. In workflow mode this check is irrelevant — workflow is
-  // already returned above. The guard is belt-and-suspenders for unusual paths.)
+  // (`run create` now requires an owner, so un-owned runs don't arise in normal
+  // operation. The guard is belt-and-suspenders for unusual paths.)
   if (
     run.owner_session !== undefined &&
     stoppingSession !== undefined &&

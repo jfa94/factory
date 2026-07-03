@@ -118,9 +118,9 @@ describe("next --run resolution falls back to runs/current", () => {
       const code = await nextCommand.run([]); // no --run
       expect(code).toBe(EXIT.OK);
       const envelope = JSON.parse(stdout.read());
-      // The envelope self-carries the run context the workflow runner adopts
-      // (run_id from runs/current, the canonical data_dir, and the persisted ship_mode
-      // default — now `live`) — so nothing rides Workflow args.
+      // The envelope self-carries the run context the runner adopts (run_id from
+      // runs/current, the canonical data_dir, and the persisted ship_mode
+      // default — now `live`).
       expect(envelope).toMatchObject({
         kind: "work",
         run_id: "run-current",
@@ -133,7 +133,7 @@ describe("next --run resolution falls back to runs/current", () => {
   });
 });
 
-describe("next runs/current guards (--assert-owner + --expect-mode)", () => {
+describe("next runs/current guards (--assert-owner)", () => {
   let dir: string;
   let state: StateManager;
   let savedEnv: string | undefined;
@@ -154,13 +154,12 @@ describe("next runs/current guards (--assert-owner + --expect-mode)", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  /** Seed a current run with one ready task + zero-usage cache; optional owner/mode. */
-  async function seedReadyCurrent(ownerSession?: string, mode?: "session" | "workflow") {
+  /** Seed a current run with one ready task + zero-usage cache; optional owner. */
+  async function seedReadyCurrent(ownerSession?: string) {
     await state.create({
       run_id: "run-current",
       spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
       ...(ownerSession !== undefined ? { owner_session: ownerSession } : {}),
-      ...(mode !== undefined ? { mode } : {}),
     });
     await state.update("run-current", (s) => ({
       ...s,
@@ -244,59 +243,24 @@ describe("next runs/current guards (--assert-owner + --expect-mode)", () => {
     }
   });
 
-  it("throws LOUD when runs/current mode differs from --expect-mode", async () => {
-    await seedReadyCurrent("sess-A", "session"); // a session-mode run is current
-    await expect(nextCommand.run(["--expect-mode", "workflow"])).rejects.toThrow(
-      /in mode 'session'.*expected 'workflow'/s,
-    );
-  });
-
-  it("proceeds when runs/current mode matches --expect-mode", async () => {
-    await seedReadyCurrent("sess-A", "workflow");
-    const stdout = captureStream(process.stdout);
-    try {
-      expect(await nextCommand.run(["--expect-mode", "workflow"])).toBe(EXIT.OK);
-      expect(JSON.parse(stdout.read())).toMatchObject({
-        kind: "work",
-        run_id: "run-current",
-      });
-    } finally {
-      stdout.restore();
-    }
-  });
-
-  it("rejects an invalid --expect-mode value as a usage error", async () => {
-    await seedReadyCurrent("sess-A", "workflow");
-    const stderr = captureStream(process.stderr);
-    try {
-      expect(await nextCommand.run(["--expect-mode", "bogus"])).toBe(EXIT.USAGE);
-      expect(stderr.read()).toMatch(/--expect-mode must be/);
-    } finally {
-      stderr.restore();
-    }
-  });
-
   it("C1 regression: a concurrent create that moved runs/current to a foreign run fails loud, never drives it", async () => {
-    // Run A: the workflow's intended run (this session, workflow mode).
+    // Run A: this session's intended run.
     await state.create({
       run_id: "run-A",
       spec: { repo: "acme/widgets", spec_id: "42-checkout", issue_number: 42 },
       owner_session: "sess-A",
-      mode: "workflow",
     });
-    // A concurrent create of run B in another session moves runs/current → B (both
-    // workflow-mode, so --expect-mode passes and ONLY the owner assertion catches it).
+    // A concurrent create of run B in another session moves runs/current → B.
     await state.create({
       run_id: "run-B",
       spec: { repo: "acme/other", spec_id: "7-thing", issue_number: 7 },
       owner_session: "sess-B",
-      mode: "workflow",
     });
-    // The workflow for A bootstraps with its own session + mode; must fail loud,
+    // The runner for A bootstraps with its own session; must fail loud,
     // never silently drive run-B.
-    await expect(
-      nextCommand.run(["--assert-owner", "sess-A", "--expect-mode", "workflow"]),
-    ).rejects.toThrow(/owned by session 'sess-B'.*expected 'sess-A'/s);
+    await expect(nextCommand.run(["--assert-owner", "sess-A"])).rejects.toThrow(
+      /owned by session 'sess-B'.*expected 'sess-A'/s,
+    );
   });
 });
 

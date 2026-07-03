@@ -10,11 +10,12 @@
  * `status: "running"`. The orchestrator (WS10) owns the `StateManager.update` call; this
  * module only produces the typed patch — it never writes state.
  *
- * `proceed` and `unavailable-halt` are intentionally NOT checkpointable here:
- * `proceed` is a non-event (no patch), and `unavailable-halt` has no observed
- * reset horizon. {@link buildCheckpoint} narrows to the two checkpointable
- * decisions at the type level so a caller cannot ask for a checkpoint that the
- * invariant would reject.
+ * `proceed` is intentionally NOT checkpointable (a non-event, no patch).
+ * `unavailable-halt` gets its own builder ({@link buildUnavailableCheckpoint}):
+ * it has no observed reset horizon, but it IS quota-caused, and the invariant
+ * `run.quota` present ⇔ quota-caused stop is what lets planResume distinguish it
+ * from a non-quota suspend (docs/e2e phase park), which carries no checkpoint
+ * and clears unconditionally.
  */
 import { QuotaCheckpointSchema } from "../types/index.js";
 import type { QuotaCheckpoint, RunStatus } from "../types/index.js";
@@ -61,6 +62,18 @@ export function buildCheckpoint(decision: CheckpointableDecision): CheckpointPat
         }),
       };
   }
+}
+
+/**
+ * The persist patch for an unobservable usage signal: suspended with a
+ * `binding_window:"unavailable"` checkpoint (no reset horizon — resume rechecks
+ * the live signal like any window).
+ */
+export function buildUnavailableCheckpoint(): CheckpointPatch {
+  return {
+    status: "suspended",
+    quota: QuotaCheckpointSchema.parse({ binding_window: "unavailable" }),
+  };
 }
 
 /**

@@ -94,8 +94,6 @@ export const QuotaSchema = z
     sleepCapSec: z.number().int().positive().default(540),
     /** Max wait cycles before the gate ends a wait, count. */
     maxWaitCycles: z.number().int().positive().default(60),
-    /** Max consecutive stale-cache cycles before graceful end, count. */
-    maxStaleCycles: z.number().int().positive().default(6),
     /** Accumulated wall-clock wait budget across cycles, minutes. */
     wallBudgetMin: z.number().int().positive().default(75),
     /** 5h-window utilization checkpoints by hour 1..5 (% caps, non-decreasing). */
@@ -327,8 +325,6 @@ export const ConfigSchema = z
      * total capability-budget drops); the field keeps its name for config back-compat.
      */
     maxConsecutiveFailures: z.number().int().positive().default(3),
-    /** Hard wall-clock cap for a whole run, minutes. */
-    maxRuntimeMinutes: z.number().int().positive().default(480),
   })
   .default({});
 

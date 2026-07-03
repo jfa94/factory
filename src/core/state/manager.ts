@@ -58,24 +58,6 @@ import { UsageError } from "../../shared/usage-error.js";
 const log = createLogger("state");
 
 /**
- * Per-write cap on counted runtime (minutes). Any gap between two state writes
- * beyond this is credited to `paused_minutes` as idle — a legit workflow step
- * (spawn write → agent stage → results write) stays under it, while a human
- * pause (nobody drives the loop, so nothing writes) is hours-to-days. Counted
- * runtime thus becomes Σ min(gap, cap): activity time, not wall-clock.
- */
-// ponytail: const, make config if real agent stages exceed 60min
-export const ACTIVE_GAP_CAP_MINUTES = 60;
-
-/** Idle minutes to bank for the gap since `prevUpdatedAt` (0 if short or unparseable). */
-export function idleGapCredit(prevUpdatedAt: string, nowMs = Date.now()): number {
-  const prevMs = Date.parse(prevUpdatedAt);
-  if (Number.isNaN(prevMs)) return 0; // legacy/corrupt timestamp: never brick a write
-  const gapMinutes = Math.floor((nowMs - prevMs) / 60_000);
-  return Math.max(0, gapMinutes - ACTIVE_GAP_CAP_MINUTES);
-}
-
-/**
  * Tunables for the robust lock. Now the shared {@link FileLockTuning}; kept as a
  * local alias so the re-export from `./index.ts` stays stable.
  */
@@ -93,7 +75,6 @@ export interface CreateRunArgs {
   run_id: string;
   spec: SpecPointer;
   execution_mode?: RunState["execution_mode"];
-  mode?: RunState["mode"];
   ship_mode?: RunState["ship_mode"];
   /** The owning Claude Code session id (Prompt J — session-scoped Stop gate). */
   owner_session?: RunState["owner_session"];
@@ -229,7 +210,6 @@ export class StateManager {
       run_id: args.run_id,
       status: "running",
       execution_mode: args.execution_mode ?? "sequential",
-      mode: args.mode ?? "session",
       ship_mode: args.ship_mode ?? "live",
       // Stamp the owning session only when known (best-effort) — an absent owner
       // leaves the field undefined and the Stop gate falls back to unscoped behavior.
@@ -420,12 +400,6 @@ export class StateManager {
    * and returns the next state; the result is re-validated through the schema
    * (so a mutator cannot persist an out-of-enum value) and `updated_at` is
    * stamped. This is the ONLY write path for an existing run.
-   *
-   * Idle crediting (D7): because this is also the only place `updated_at` is
-   * re-stamped — i.e. the only place the idle anchor is erased — it is the ONE
-   * sanctioned writer of `paused_minutes`: any gap since the previous write
-   * beyond {@link ACTIVE_GAP_CAP_MINUTES} is banked as idle in the same write,
-   * so no later write path can erase a pause before it is credited.
    */
   async update(
     runId: string,
@@ -454,7 +428,6 @@ export class StateManager {
       }
       const validated = parseRunState({
         ...next,
-        paused_minutes: next.paused_minutes + idleGapCredit(current.updated_at),
         updated_at: nowIso(),
       });
       await atomicWriteFile(this.statePath(runId), stringifyJson(validated));

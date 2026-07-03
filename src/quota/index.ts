@@ -45,7 +45,7 @@ export { evaluate } from "./pacer.js";
 export type { QuotaDecision } from "./pacer.js";
 
 // Checkpoint patches
-export { buildCheckpoint, clearCheckpoint } from "./checkpoint.js";
+export { buildCheckpoint, buildUnavailableCheckpoint, clearCheckpoint } from "./checkpoint.js";
 export type {
   CheckpointableDecision,
   CheckpointPatch,

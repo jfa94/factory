@@ -46,9 +46,7 @@ import type { OrchestratorDeps } from "./orchestrator.js";
 /**
  * Every variant carries the run's self-resolved context — `run_id`, the canonical
  * `data_dir` (from {@link resolveDataDir}), and the persisted `ship_mode`. The
- * workflow runner adopts these from the FIRST envelope instead of having
- * them marshaled through Workflow `args` (a real object passed as `args` arrives
- * JSON-string-encoded, so a load-bearing arg silently becomes `undefined`).
+ * runner adopts these from the FIRST envelope instead of re-passing them per call.
  */
 type NextContext = {
   readonly run_id: string;
@@ -84,12 +82,7 @@ export type NextTask =
     })
   | (NextContext & {
       readonly kind: "pause";
-      /**
-       * Quota scopes plus "runtime-budget": the runtime circuit-breaker arm — a
-       * recoverable budget stop (suspend), NOT a quota event, so it is widened here
-       * on the envelope rather than on QuotaStop (which the quota gate never emits it as).
-       */
-      readonly scope: QuotaStop["scope"] | "runtime-budget";
+      readonly scope: QuotaStop["scope"];
       readonly reason: string;
       readonly resets_at_epoch?: number;
     });
@@ -164,8 +157,8 @@ function wantsE2eAssessment(run: RunState, allTerminal: boolean, needsE2e: boole
 export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<NextTask> {
   let run = await deps.state.read(runId);
 
-  // Self-resolved run context stamped onto EVERY envelope variant (so the workflow
-  // orchestrator adopts run_id/data_dir/ship_mode from the first `next`, never from args).
+  // Self-resolved run context stamped onto EVERY envelope variant (so the runner
+  // adopts run_id/data_dir/ship_mode from the first `next`).
   // `data_dir`/`ship_mode` are immutable for the run; reading the current `run`
   // snapshot at call time is always correct even after the cascade re-reads `run`.
   const ctx = () => ({ run_id: runId, data_dir: deps.dataDir, ship_mode: run.ship_mode });
@@ -199,9 +192,9 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
     return { ...ctx(), kind: "finalize", cascade_failed: [] };
   }
 
-  // 3. Quota gate — a breach persists the checkpoint and stops cleanly. Workflow
-  //    mode and --ignore-quota skip pacing (Decision 24).
-  const stop = await applyQuotaGate(deps, runId, run.mode, run.ignore_quota);
+  // 3. Quota gate — a breach persists the checkpoint and stops cleanly.
+  //    --ignore-quota skips pacing (Decision 24).
+  const stop = await applyQuotaGate(deps, runId, run.ignore_quota);
   if (stop !== null) {
     return { ...ctx(), kind: "pause", ...quotaStopFields(stop) };
   }
@@ -278,33 +271,14 @@ export async function nextTask(deps: OrchestratorDeps, runId: string): Promise<N
 
   // 6b. Run-level circuit breaker (WS4) — distinct from both the recoverable quota
   //     pause and the Decision-34 wedge-fail below. Trips on genuine repeated
-  //     capability failures (BOTH modes) or — workflow only — the runtime ceiling
-  //     (see circuit-breaker-gate.ts for why session disarms runtime). Placed AFTER
-  //     the terminal checks (never abort an already-finished run; never write on a
-  //     terminal run) and AFTER the quota gate (a paused run early-returns above, so
-  //     quota waiting never trips the breaker). The two arms differ in severity:
-  //     - runtime arm (D7): a BUDGET stop, not a pathology — suspend the run
-  //       (resumable after raising maxRuntimeMinutes) instead of destroying 28
-  //       healthy tasks the way the old cascade-fail did. Step 4 above clears the
-  //       suspend on the next drive, so an un-raised cap just re-suspends here.
-  //     - failures / fail-closed arms: HARD abort — fail every remaining
-  //       non-terminal task LOUD (capability-budget, breaker reason carried) and
-  //       fall through to all-terminal → finalize → `failed`, reusing the
-  //       wedge-fail path.
+  //     capability failures. Placed AFTER the terminal checks (never abort an
+  //     already-finished run; never write on a terminal run) and AFTER the quota
+  //     gate (a paused run early-returns above, so quota waiting never trips the
+  //     breaker). A trip is a HARD abort — fail every remaining non-terminal task
+  //     LOUD (capability-budget, breaker reason carried) and fall through to
+  //     all-terminal → finalize → `failed`, reusing the wedge-fail path.
   const breaker = await applyCircuitBreaker(deps, runId);
   if (breaker !== null) {
-    if (breaker.arm === "runtime") {
-      run = await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
-      return {
-        ...ctx(),
-        kind: "pause",
-        scope: "runtime-budget",
-        reason:
-          `circuit breaker: ${breaker.reason} — the run's ACTIVE runtime budget is spent ` +
-          `(idle time is already excluded). Raise maxRuntimeMinutes in config.json, then ` +
-          `factory resume / relaunch; resuming without raising the cap re-suspends here.`,
-      };
-    }
     for (const t of tasks.filter((x) => !isTerminalTaskStatus(x.status))) {
       await failTask(
         deps,

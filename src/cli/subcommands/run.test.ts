@@ -205,18 +205,10 @@ describe("run arg/usage edges", () => {
   it("create: --help prints help and exits OK", async () => {
     expect(await runCommand.run(["create", "--help"])).toBe(EXIT.OK);
   });
-  it("create: --resume + --workflow is a usage error (mode flag on a resume path)", async () => {
-    expect(
-      await runCommand.run(["create", "--repo", REPO, "--issue", "1", "--resume", "--workflow"]),
-    ).toBe(EXIT.USAGE);
-  });
   it("create: --resume + --no-ship is a usage error (ship flag on a resume path)", async () => {
     expect(
       await runCommand.run(["create", "--repo", REPO, "--issue", "1", "--resume", "--no-ship"]),
     ).toBe(EXIT.USAGE);
-  });
-  it("resume: --workflow is a usage error (mode is persisted, never re-passed)", async () => {
-    expect(await runCommand.run(["resume", "--workflow"])).toBe(EXIT.USAGE);
   });
   it("resume: --no-ship is a usage error (ship_mode is persisted, never re-passed)", async () => {
     expect(await runCommand.run(["resume", "--no-ship"])).toBe(EXIT.USAGE);
@@ -355,26 +347,6 @@ describe("createRun", () => {
     ).rejects.toThrow(/no spec for issue #999/);
   });
 
-  it("workflow mode persists mode and warns once at opt-in", async () => {
-    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    try {
-      const run = await createRun(state, store, {
-        repo: REPO,
-        issue: 42,
-        runId: "run-wf",
-        mode: "workflow",
-      });
-      expect(run.mode).toBe("workflow");
-      // Persisted (resume-safe): the mode round-trips through a fresh read.
-      expect((await state.read("run-wf")).mode).toBe("workflow");
-      // Decision 24: warned ONCE at opt-in (run create), not on every step.
-      const warned = spy.mock.calls.filter((c) => /pacing disabled/.test(String(c[0])));
-      expect(warned).toHaveLength(1);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
   it("stamps owner_session when given (session-ownership) and leaves it undefined otherwise", async () => {
     const owned = await createRun(state, store, {
       repo: REPO,
@@ -391,25 +363,7 @@ describe("createRun", () => {
     expect((await state.read("run-anon")).owner_session).toBeUndefined();
   });
 
-  it("session mode is the default and never warns about pacing", async () => {
-    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    try {
-      const run = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-se" });
-      expect(run.mode).toBe("session");
-      expect(spy.mock.calls.filter((c) => /pacing disabled/.test(String(c[0])))).toHaveLength(0);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("persisted mode survives a state.update round-trip (resume-safe)", async () => {
-    await createRun(state, store, { repo: REPO, issue: 42, runId: "run-rt", mode: "workflow" });
-    // A resume clears the quota checkpoint by spreading the prior state — mode rides along.
-    await state.update("run-rt", (s) => ({ ...s, status: "running" as const }));
-    expect((await state.read("run-rt")).mode).toBe("workflow");
-  });
-
-  it("persists ship_mode (default live; explicit no-merge round-trips) so the workflow reads it back", async () => {
+  it("persists ship_mode (default live; explicit no-merge round-trips) so the runner reads it back", async () => {
     const dflt = await createRun(state, store, { repo: REPO, issue: 42, runId: "run-sm0" });
     expect(dflt.ship_mode).toBe("live");
     expect((await state.read("run-sm0")).ship_mode).toBe("live");
@@ -421,7 +375,7 @@ describe("createRun", () => {
       shipMode: "no-merge",
     });
     expect(noMerge.ship_mode).toBe("no-merge");
-    // Resume-safe: the persisted value survives a fresh read (the workflow's source of truth).
+    // Resume-safe: the persisted value survives a fresh read (the runner's source of truth).
     expect((await state.read("run-sm1")).ship_mode).toBe("no-merge");
   });
 
@@ -531,7 +485,6 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       repo: REPO,
       issue: 42,
       runId: "run-a",
-      mode: "workflow",
       shipMode: "live",
     });
     const second = await resolveOrCreateRun(state, store, {
@@ -542,23 +495,20 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect(second.kind).toBe("exists");
     if (second.kind !== "exists") throw new Error("narrowing");
     expect(second.existing.run_id).toBe("run-a");
-    expect(second.existing.mode).toBe("workflow");
     expect(second.existing.ship_mode).toBe("live");
   });
 
-  it("active run + no flag → kind:'exists' even when re-passed mode/ship MATCH", async () => {
+  it("active run + no flag → kind:'exists' even when re-passed ship MATCHES", async () => {
     await resolveOrCreateRun(state, store, {
       repo: REPO,
       issue: 42,
       runId: "run-a",
-      mode: "workflow",
       shipMode: "live",
     });
     const second = await resolveOrCreateRun(state, store, {
       repo: REPO,
       issue: 42,
       runId: "run-b",
-      mode: "workflow",
       shipMode: "live",
     });
     expect(second.kind).toBe("exists");
@@ -582,18 +532,6 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 
-  it("active run + no flag → kind:'exists' even when re-passed --mode diverges (no guard without --resume)", async () => {
-    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" });
-    const second = await resolveOrCreateRun(state, store, {
-      repo: REPO,
-      issue: 42,
-      runId: "run-b",
-      mode: "workflow",
-    });
-    expect(second.kind).toBe("exists");
-    expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
-  });
-
   it("--resume with divergent ship intent → kind:'exists' (no premature guard; resume continues the live run)", async () => {
     await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // ship_mode=live
     const second = await resolveOrCreateRun(state, store, {
@@ -605,19 +543,6 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     });
     expect(second.kind).toBe("exists");
     // No orphan: the live run is reported, not replaced.
-    expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
-  });
-
-  it("--resume with divergent --mode → kind:'exists' (no premature guard)", async () => {
-    await resolveOrCreateRun(state, store, { repo: REPO, issue: 42, runId: "run-a" }); // mode=session
-    const second = await resolveOrCreateRun(state, store, {
-      repo: REPO,
-      issue: 42,
-      runId: "run-b",
-      intent: "resume",
-      mode: "workflow",
-    });
-    expect(second.kind).toBe("exists");
     expect((await state.listRuns()).map((r) => r.run_id)).toEqual(["run-a"]);
   });
 
@@ -890,7 +815,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect(env.run_id).toBe("run-old");
   });
 
-  it("runCreate: session-mode without session id → UsageError (Stop hook needs an owner)", async () => {
+  it("runCreate: without session id → UsageError (Stop hook needs an owner; no exemptions)", async () => {
     // The file-level beforeEach sets CLAUDE_CODE_SESSION_ID; delete it to simulate a
     // bare invocation with no owner available.
     delete process.env.CLAUDE_CODE_SESSION_ID;
@@ -901,23 +826,8 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       runCreate(["--issue", "42"], { gitClient: git, ghClient: gh, cwd: "/x", dataDir }),
     ).rejects.toMatchObject({
       isUsageError: true,
-      message: expect.stringMatching(/session-mode runs require an owning session id/),
+      message: expect.stringMatching(/runs require an owning session id/),
     });
-  });
-
-  it("runCreate: workflow-mode without session id → allowed (Workflow runner owns finalization)", async () => {
-    delete process.env.CLAUDE_CODE_SESSION_ID;
-    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
-    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
-    const gh = new FakeGhClient();
-    const code = await runCreate(["--issue", "42", "--run-id", "run-wf-anon", "--workflow"], {
-      gitClient: git,
-      ghClient: gh,
-      cwd: "/x",
-      dataDir,
-    });
-    expect(code).toBe(EXIT.OK);
-    expect((await state.read("run-wf-anon")).owner_session).toBeUndefined();
   });
 
   it("runCreate: --supersede + --resume together → UsageError (at most one)", async () => {
@@ -932,23 +842,6 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
         dataDir,
       }),
     ).rejects.toMatchObject({ isUsageError: true });
-  });
-
-  it("runCreate: --resume + --workflow → UsageError naming the create-only flags (root-cause guard)", async () => {
-    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
-    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
-    const gh = new FakeGhClient();
-    await expect(
-      runCreate(["--issue", "42", "--resume", "--workflow"], {
-        gitClient: git,
-        ghClient: gh,
-        cwd: "/x",
-        dataDir,
-      }),
-    ).rejects.toMatchObject({
-      isUsageError: true,
-      message: expect.stringMatching(/create-only and cannot combine with --resume/),
-    });
   });
 
   it("runCreate: --resume + --e2e → UsageError naming the create-only flags (root-cause guard)", async () => {
@@ -968,21 +861,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     });
   });
 
-  it("runCreate: bare --workflow still creates a fresh run with mode='workflow' (guard is scoped to --resume)", async () => {
-    const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
-    git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
-    const gh = new FakeGhClient();
-    const code = await runCreate(["--issue", "42", "--run-id", "run-wf", "--workflow"], {
-      gitClient: git,
-      ghClient: gh,
-      cwd: "/x",
-      dataDir,
-    });
-    expect(code).toBe(EXIT.OK);
-    expect((await state.read("run-wf")).mode).toBe("workflow");
-  });
-
-  it("runCreate: --supersede + --workflow replaces the active run in workflow mode (guard is scoped to --resume)", async () => {
+  it("runCreate: --supersede replaces the active run (guard is scoped to --resume)", async () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
@@ -995,7 +874,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     // No --run-id on the supersede call: an explicit id means "fresh" and would
     // collide with --supersede (picked.length > 1). The superseding run gets a
     // generated id, which we resolve back out of the run list.
-    const code = await runCreate(["--issue", "42", "--supersede", "--workflow"], {
+    const code = await runCreate(["--issue", "42", "--supersede"], {
       gitClient: git,
       ghClient: gh,
       cwd: "/x",
@@ -1004,7 +883,6 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     expect(code).toBe(EXIT.OK);
     expect((await state.read("run-old")).status).toBe("superseded");
     const fresh = (await state.listRuns()).find((r) => r.run_id !== "run-old");
-    expect(fresh?.mode).toBe("workflow");
     expect(fresh?.status).toBe("running");
   });
 
@@ -1012,10 +890,12 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
-    const code = await runCreate(
-      ["--issue", "42", "--run-id", "run-iq", "--ignore-quota", "--workflow"],
-      { gitClient: git, ghClient: gh, cwd: "/x", dataDir },
-    );
+    const code = await runCreate(["--issue", "42", "--run-id", "run-iq", "--ignore-quota"], {
+      gitClient: git,
+      ghClient: gh,
+      cwd: "/x",
+      dataDir,
+    });
     expect(code).toBe(EXIT.OK);
     expect((await state.read("run-iq")).ignore_quota).toBe(true);
   });
@@ -1026,10 +906,12 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const gh = new FakeGhClient();
     const cwd = await playwrightReadyCwd();
     try {
-      const code = await runCreate(
-        ["--issue", "42", "--run-id", "run-e2e", "--e2e", "--workflow"],
-        { gitClient: git, ghClient: gh, cwd, dataDir },
-      );
+      const code = await runCreate(["--issue", "42", "--run-id", "run-e2e", "--e2e"], {
+        gitClient: git,
+        ghClient: gh,
+        cwd,
+        dataDir,
+      });
       expect(code).toBe(EXIT.OK);
       expect((await state.read("run-e2e")).e2e).toBe(true);
     } finally {
@@ -1044,7 +926,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const bare = await mkdtemp(join(tmpdir(), "factory-e2e-bare-"));
     try {
       await expect(
-        runCreate(["--issue", "42", "--run-id", "run-e2e-bare", "--e2e", "--workflow"], {
+        runCreate(["--issue", "42", "--run-id", "run-e2e-bare", "--e2e"], {
           gitClient: git,
           ghClient: gh,
           cwd: bare,
@@ -1068,7 +950,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
       await writeFile(join(cwd, "package.json"), JSON.stringify({ name: "t" }));
       await writeFile(join(cwd, "playwright.config.ts"), "export default {};\n");
       await expect(
-        runCreate(["--issue", "42", "--run-id", "run-e2e-nodep", "--e2e", "--workflow"], {
+        runCreate(["--issue", "42", "--run-id", "run-e2e-nodep", "--e2e"], {
           gitClient: git,
           ghClient: gh,
           cwd,
@@ -1087,7 +969,7 @@ describe("resolveOrCreateRun (discriminated result, Decision 35)", () => {
     const git = new FakeGitClient({ remoteHeads: { develop: "sha-develop-1" } });
     git.setRemoteUrl("origin", `git@github.com:${REPO}.git`);
     const gh = new FakeGhClient();
-    const code = await runCreate(["--issue", "42", "--run-id", "run-no-e2e", "--workflow"], {
+    const code = await runCreate(["--issue", "42", "--run-id", "run-no-e2e"], {
       gitClient: git,
       ghClient: gh,
       cwd: "/x",
@@ -1265,7 +1147,7 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     ).rejects.toMatchObject({ isUsageError: true });
   });
 
-  it("no mode/ship flags → persists the no-flag defaults: session + live", async () => {
+  it("no ship flag → persists the no-flag default: live", async () => {
     const code = await runCreate(["--issue", "42", "--run-id", "run-def"], {
       gitClient: gitWithOrigin(REPO),
       ghClient: new FakeGhClient(),
@@ -1274,23 +1156,10 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
     });
     expect(code).toBe(EXIT.OK);
     const run = await new StateManager({ dataDir }).read("run-def");
-    expect(run.mode).toBe("session");
     expect(run.ship_mode).toBe("live");
   });
 
-  it("--workflow flips mode to workflow (ship still defaults live)", async () => {
-    await runCreate(["--issue", "42", "--run-id", "run-wf", "--workflow"], {
-      gitClient: gitWithOrigin(REPO),
-      ghClient: new FakeGhClient(),
-      cwd: "/wherever",
-      dataDir,
-    });
-    const run = await new StateManager({ dataDir }).read("run-wf");
-    expect(run.mode).toBe("workflow");
-    expect(run.ship_mode).toBe("live");
-  });
-
-  it("--no-ship flips ship_mode to no-merge (mode still defaults session)", async () => {
+  it("--no-ship flips ship_mode to no-merge", async () => {
     await runCreate(["--issue", "42", "--run-id", "run-ns", "--no-ship"], {
       gitClient: gitWithOrigin(REPO),
       ghClient: new FakeGhClient(),
@@ -1298,7 +1167,6 @@ describe("runCreate auto-derives --repo from the origin remote", () => {
       dataDir,
     });
     const run = await new StateManager({ dataDir }).read("run-ns");
-    expect(run.mode).toBe("session");
     expect(run.ship_mode).toBe("no-merge");
   });
 });
@@ -1732,18 +1600,6 @@ describe("applyResume", () => {
       );
     },
   );
-
-  // D7: resume no longer credits paused_minutes itself — idle time is banked by
-  // StateManager.update() (the sole writer; see manager.test.ts + the breaker
-  // gate's D7 blind-spot tests). Resume must simply not DISTURB the balance.
-  it("E: resume preserves the persisted paused_minutes balance", async () => {
-    await createBareRun("r1");
-    await setStatus("r1", "paused", "5h");
-    await state.update("r1", (s) => ({ ...s, paused_minutes: 30 }));
-    const env = asResumed(await applyResume(state, "r1", underCurve(), defaultConfig(), NOW));
-    expect(env.run.status).toBe("running");
-    expect(env.run.paused_minutes).toBe(30);
-  });
 
   describe("Decision 39: run.debug routes to a distinct 'debug-resume' envelope", () => {
     function asDebugResume(env: ResumeResult): Extract<ResumeResult, { kind: "debug-resume" }> {

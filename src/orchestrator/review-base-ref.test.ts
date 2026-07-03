@@ -31,8 +31,8 @@ const PLACEHOLDER_SURFACES = [
   "agents/type-design-reviewer.md",
 ];
 
-/** The two orchestrator templates that interpolate the envelope's per-run base ref. */
-const DRIVER_SURFACES = ["skills/pipeline-runner/SKILL.md", "scripts/factory-run-runner.js"];
+/** The orchestrator template that interpolates the envelope's per-run base ref. */
+const DRIVER_SURFACES = ["skills/pipeline-runner/SKILL.md"];
 
 describe("review base ref plumbing (Fix 2 regression guard)", () => {
   // `diff origin/staging` NOT followed by `-`/word char = the bare, namespace-colliding
@@ -53,11 +53,6 @@ describe("review base ref plumbing (Fix 2 regression guard)", () => {
       expect(read(rel)).toContain("diff <baseRef>");
     },
   );
-
-  it("the workflow runner interpolates env.base_ref into the reviewer + verifier prompts", () => {
-    const src = read("scripts/factory-run-runner.js");
-    expect(src).toContain("diff ${env.base_ref}");
-  });
 
   it("the session runner substitutes <tenv.base_ref> into the reviewer prompt", () => {
     expect(read("skills/pipeline-runner/SKILL.md")).toContain("diff <tenv.base_ref>");

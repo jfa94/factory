@@ -110,7 +110,7 @@ describe("applyQuotaGate", () => {
     expect(run.status).toBe("suspended");
   });
 
-  it("unobservable reading → suspended + scope unavailable, no horizon", async () => {
+  it("unobservable reading → suspended + scope unavailable, unavailable checkpoint written", async () => {
     const stop = await applyQuotaGate(makeDeps(UNAVAILABLE), RUN_ID);
     expect(stop).not.toBeNull();
     expect(stop?.scope).toBe("unavailable");
@@ -118,7 +118,8 @@ describe("applyQuotaGate", () => {
     expect(stop?.run.status).toBe("suspended");
     const run = await state.read(RUN_ID);
     expect(run.status).toBe("suspended");
-    expect(run.quota).toBeUndefined();
+    // A2 invariant: run.quota present ⇔ quota-caused stop — the fail-closed halt included.
+    expect(run.quota).toEqual({ binding_window: "unavailable" });
   });
 
   it("proceed leaves a stale paused checkpoint intact (caller owns recovery)", async () => {
@@ -141,27 +142,14 @@ describe("applyQuotaGate", () => {
     expect(run.quota).toEqual(checkpoint);
   });
 
-  it("workflow mode → proceeds (null) without reading usage or touching state", async () => {
-    const read = vi.fn(async (): Promise<UsageReading> => UNAVAILABLE);
-    const deps: QuotaGateDeps = {
-      state,
-      usage: { read },
-      config: defaultConfig(),
-      now: () => NOW,
-    };
-    const stop = await applyQuotaGate(deps, RUN_ID, "workflow");
-    expect(stop).toBeNull();
-    // The pacer is fully skipped — the usage signal is never consulted.
-    expect(read).not.toHaveBeenCalled();
-    const run = await state.read(RUN_ID);
-    expect(run.status).toBe("running");
-    expect(run.quota).toBeUndefined();
-  });
-
-  it("explicit session mode still fail-closes on an unobservable reading", async () => {
-    const stop = await applyQuotaGate(makeDeps(UNAVAILABLE), RUN_ID, "session");
+  it("fail-closes on an unobservable reading AND writes the unavailable checkpoint", async () => {
+    const stop = await applyQuotaGate(makeDeps(UNAVAILABLE), RUN_ID);
     expect(stop?.scope).toBe("unavailable");
     expect(stop?.run.status).toBe("suspended");
+    // A2 invariant: run.quota present ⇔ quota-caused stop — the unavailable
+    // suspend carries a checkpoint so planResume rechecks the live signal
+    // instead of clearing it as a non-quota park.
+    expect(stop?.run.quota).toEqual({ binding_window: "unavailable" });
   });
 
   it("ignoreQuota=true → proceeds (null) without reading usage or touching state", async () => {
@@ -173,7 +161,7 @@ describe("applyQuotaGate", () => {
       now: () => NOW,
     };
     // Even a would-be suspension reading returns null when ignoreQuota is set.
-    const stop = await applyQuotaGate(deps, RUN_ID, "session", true);
+    const stop = await applyQuotaGate(deps, RUN_ID, true);
     expect(stop).toBeNull();
     expect(read).not.toHaveBeenCalled();
     const run = await state.read(RUN_ID);

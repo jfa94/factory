@@ -16,8 +16,7 @@
  *      forcing the caller to classify a fail. The engine cannot spin.
  *
  * The engine surfaces decisions; the ORCHESTRATOR (WS10) acts on them. {@link nextPhaseFor}
- * computes the resume phase for `advance`/`spawn-agents` so the v1 session runner
- * and the v2 Workflow runner share the transition logic.
+ * computes the resume phase for `advance`/`spawn-agents`.
  */
 import { TaskPhaseEnum, RunPhaseEnum, type TaskPhase, type RunPhase } from "./phases.js";
 import {
