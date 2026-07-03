@@ -5881,10 +5881,6 @@ var SpecSchema = external_exports.object({
   dimensionFloor: external_exports.number().int().min(0).max(10).default(5),
   /** Max spec generate→review revision iterations before a loud give-up. */
   maxRegenIterations: external_exports.number().int().positive().default(5),
-  /** Apex model the spec generator AND reviewer are pinned to (Decision 21). */
-  specModel: external_exports.string().min(1).default("opus"),
-  /** Apex effort the spec generator AND reviewer are pinned to (Decision 21). */
-  specEffort: EffortEnum.default("max"),
   /** Max bytes of PRD body retained from `gh issue view` before truncation. */
   prdBodyMaxBytes: external_exports.number().int().positive().default(64 * 1024)
 }).default({});
@@ -5939,11 +5935,6 @@ var GitSchema = external_exports.object({
   branchPrefix: external_exports.string().min(1).default("factory")
 }).default({});
 var E2eConfigSchema = external_exports.object({
-  /**
-   * Repo-level "e2e IS configured" signal, distinct from the run's `--e2e` flag
-   * (that's "run this run WITH e2e"). Informational/future-gating only today.
-   */
-  enabled: external_exports.boolean().optional(),
   /**
    * OPTIONAL override (Decision 40 D10) of the command that boots the target app,
    * for both Playwright's `webServer` (test runs) and the e2e-author's
@@ -9956,6 +9947,8 @@ var SpecStore = class {
 var META_FILE = "spec.meta.json";
 
 // src/spec/agents.ts
+var APEX_MODEL = "opus";
+var APEX_EFFORT = "max";
 var GenerateResultSchema = external_exports.object({
   specMd: external_exports.string().min(1),
   slug: external_exports.string().min(1),
@@ -9967,8 +9960,8 @@ function parseGenerateResult(raw) {
 function buildGenerateSpawn(prd) {
   return {
     role: "spec-generator",
-    model: SPEC_DEFAULTS.specModel,
-    effort: SPEC_DEFAULTS.specEffort,
+    model: APEX_MODEL,
+    effort: APEX_EFFORT,
     context: {
       issue_number: prd.issue_number,
       title: prd.title,
@@ -9992,8 +9985,8 @@ function buildReviseSpawn(prd, prior, feedback) {
 function buildReviewSpawn(prd, generated) {
   return {
     role: "spec-reviewer",
-    model: SPEC_DEFAULTS.specModel,
-    effort: SPEC_DEFAULTS.specEffort,
+    model: APEX_MODEL,
+    effort: APEX_EFFORT,
     context: {
       issue_number: prd.issue_number,
       prd_body: prd.body,

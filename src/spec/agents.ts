@@ -3,9 +3,9 @@
  *
  * Decision 21 (apex gate): the spec generator AND the spec reviewer are spawned
  * UNCONDITIONALLY at the apex model + effort. {@link buildGenerateSpawn} /
- * {@link buildReviewSpawn} hard-code that pin from {@link SPEC_DEFAULTS}; they do
- * NOT read it from a risk tier, task count, or any per-input config — the pin is
- * the whole point. WS5 owns spawn-request CONSTRUCTION + verdict parsing; the
+ * {@link buildReviewSpawn} hard-code that pin as local consts; they do NOT read
+ * it from a risk tier, task count, or any config — the pin is invariant by
+ * construction. WS5 owns spawn-request CONSTRUCTION + verdict parsing; the
  * WS10 in-session runner performs the live `Agent()` spawn (an agent cannot
  * deterministically spawn an agent inside a unit), mirroring how WS2 handlers
  * report and the runner acts.
@@ -17,7 +17,10 @@ import { z } from "zod";
 import type { Prd } from "./gh.js";
 import { SpecTasksSchema, type SpecTask } from "./schema.js";
 import type { ReviewVerdict } from "./review.js";
-import { SPEC_DEFAULTS } from "../config/index.js";
+
+/** Decision-21 apex pin — invariant by construction, deliberately NOT config. */
+const APEX_MODEL = "opus";
+const APEX_EFFORT = "max";
 
 /** The two spec-agent roles. */
 export type SpecAgentRole = "spec-generator" | "spec-reviewer";
@@ -64,9 +67,9 @@ export interface ReviewContext {
  */
 export interface SpecSpawnSpec<C = Record<string, unknown>> {
   role: SpecAgentRole;
-  /** Apex pin (Decision 21) — always `SPEC_DEFAULTS.specModel`. */
+  /** Apex pin (Decision 21) — always {@link APEX_MODEL}. */
   model: string;
-  /** Apex pin (Decision 21) — always `SPEC_DEFAULTS.specEffort`. */
+  /** Apex pin (Decision 21) — always {@link APEX_EFFORT}. */
   effort: string;
   /** Structured context handed to the agent prompt. */
   context: C;
@@ -121,8 +124,8 @@ export interface SpecAgentRunner {
 export function buildGenerateSpawn(prd: Prd): SpecSpawnSpec<GenerateContext> {
   return {
     role: "spec-generator",
-    model: SPEC_DEFAULTS.specModel,
-    effort: SPEC_DEFAULTS.specEffort,
+    model: APEX_MODEL,
+    effort: APEX_EFFORT,
     context: {
       issue_number: prd.issue_number,
       title: prd.title,
@@ -164,8 +167,8 @@ export function buildReviewSpawn(
 ): SpecSpawnSpec<ReviewContext> {
   return {
     role: "spec-reviewer",
-    model: SPEC_DEFAULTS.specModel,
-    effort: SPEC_DEFAULTS.specEffort,
+    model: APEX_MODEL,
+    effort: APEX_EFFORT,
     context: {
       issue_number: prd.issue_number,
       prd_body: prd.body,

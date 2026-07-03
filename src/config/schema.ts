@@ -24,10 +24,10 @@ import { z } from "zod";
 
 /**
  * The closed Agent effort/reasoning domain (weakest→strongest). THE one home for
- * the effort enum: the Decision-21 apex pin ({@link SpecSchema}'s `specEffort`),
- * the spawn request (`AgentSpecSchema.effort`), and the producer dial's effort
- * ladder (`model-dial.ts`) all reuse it, so an out-of-domain effort is rejected at
- * the boundary instead of flowing through as an open string. Mirrors `RiskTierEnum`.
+ * the effort enum: the spawn request (`AgentSpecSchema.effort`) and the producer
+ * dial's effort ladder (`model-dial.ts`) reuse it, so an out-of-domain effort is
+ * rejected at the boundary instead of flowing through as an open string. Mirrors
+ * `RiskTierEnum`.
  */
 export const EffortEnum = z.enum(["low", "medium", "high", "xhigh", "max"]);
 export type Effort = z.infer<typeof EffortEnum>;
@@ -132,13 +132,10 @@ export const QuotaSchema = z
  * Spec-pipeline config (WS5). Migrated here from the staged `src/spec/config-
  * defaults.ts` per the seam contract ("ALL config defaults live in this file").
  *
- * `specModel`/`specEffort` are the Decision-21 apex pin: the spec generator AND
- * reviewer run UNCONDITIONALLY at this model/effort. They are surfaced as defaults
- * (so the value has ONE home) but the apex boundary (`src/spec/agents.ts`) reads
- * the frozen {@link SPEC_DEFAULTS}, never a per-run override — the pin is invariant
- * by construction. The remaining keys (`passReviewThreshold`, `dimensionFloor`,
- * `maxRegenIterations`, `prdBodyMaxBytes`) ARE operator-tunable and the WS10 orchestrator
- * threads them off the resolved config into the spec pipeline.
+ * Every key is operator-tunable; the WS10 orchestrator threads them off the
+ * resolved config into the spec pipeline. The Decision-21 apex pin (spec
+ * generator + reviewer model/effort) is deliberately NOT here — it is invariant
+ * by construction, hard consts in `src/spec/agents.ts`.
  */
 export const SpecSchema = z
   .object({
@@ -155,10 +152,6 @@ export const SpecSchema = z
     dimensionFloor: z.number().int().min(0).max(10).default(5),
     /** Max spec generate→review revision iterations before a loud give-up. */
     maxRegenIterations: z.number().int().positive().default(5),
-    /** Apex model the spec generator AND reviewer are pinned to (Decision 21). */
-    specModel: z.string().min(1).default("opus"),
-    /** Apex effort the spec generator AND reviewer are pinned to (Decision 21). */
-    specEffort: EffortEnum.default("max"),
     /** Max bytes of PRD body retained from `gh issue view` before truncation. */
     prdBodyMaxBytes: z
       .number()
@@ -172,9 +165,8 @@ export const SpecSchema = z
 export type SpecConfig = z.infer<typeof SpecSchema>;
 
 /**
- * The frozen spec defaults. The single source the apex boundary
- * (`src/spec/agents.ts`) reads for the unconditional Decision-21 pin, and the
- * fallback the WS5 pipeline functions use when the orchestrator passes no override.
+ * The frozen spec defaults — the fallback the WS5 pipeline functions use when
+ * the orchestrator passes no override.
  */
 export const SPEC_DEFAULTS: Readonly<SpecConfig> = Object.freeze(SpecSchema.parse({}));
 
@@ -257,17 +249,11 @@ export const GitSchema = z
  * (Decision 40 D10): the run-start assessment resolves the real boot pair itself and
  * writes it into the repo's `playwright.config.ts`; a value set here wins over the
  * assessment's (`resolveBootConfig` in `src/orchestrator/e2e.ts`). The runner module
- * actually reads every key below except `enabled`, which stays informational/
- * future-gating only (the `redTestCommand` cautionary tale at :53-57 — declared but
- * never load-bearing — must NOT repeat here).
+ * actually reads every key below — no declared-but-never-load-bearing keys (the
+ * `redTestCommand` cautionary tale must NOT repeat here).
  */
 export const E2eConfigSchema = z
   .object({
-    /**
-     * Repo-level "e2e IS configured" signal, distinct from the run's `--e2e` flag
-     * (that's "run this run WITH e2e"). Informational/future-gating only today.
-     */
-    enabled: z.boolean().optional(),
     /**
      * OPTIONAL override (Decision 40 D10) of the command that boots the target app,
      * for both Playwright's `webServer` (test runs) and the e2e-author's
