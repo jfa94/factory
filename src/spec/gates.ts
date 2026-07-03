@@ -177,17 +177,35 @@ export function testabilityGate(tasks: SpecTask[]): GateResult {
 // ---------------------------------------------------------------------------
 
 /**
+ * Headings whose section content is explicitly NOT a requirement — extracting
+ * these would make the traceability gate demand the spec cover an exclusion
+ * (or push the spec-generator to build it).
+ */
+const EXCLUDED_SECTION_HEADING = /^(out[ -]of[ -]scope|non[- ]?goals?|not doing|won'?t do)\b/i;
+
+/**
  * Extract atomic PRD requirements from the body. Heuristic: each markdown bullet
  * / numbered list item / "must|should|shall" sentence is a requirement. The PRD
  * is the AXIOM — every extracted requirement must be covered by ≥1 acceptance
- * criterion across the spec.
+ * criterion across the spec. Content under an exclusion heading (Out of Scope /
+ * Non-Goals / …) is skipped until the next heading of equal or higher level.
  */
 export function extractPrdRequirements(body: string): string[] {
   const lines = body.split(/\r?\n/);
   const reqs: string[] = [];
+  // ponytail: heading-level skip flag, not a markdown AST.
+  let skipLevel: number | null = null;
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0) continue;
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      const level = heading[1]!.length;
+      if (skipLevel !== null && level <= skipLevel) skipLevel = null;
+      if (EXCLUDED_SECTION_HEADING.test(heading[2]!.trim())) skipLevel = level;
+      continue;
+    }
+    if (skipLevel !== null) continue;
     // Bullet / numbered list item.
     const bullet = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
     if (bullet && bullet[1] && bullet[1].trim().length > 0) {

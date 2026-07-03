@@ -174,6 +174,44 @@ describe("extractPrdRequirements", () => {
     // A plain non-normative prose line is not a requirement.
     expect(reqs).not.toContain("plain prose line");
   });
+
+  it("Δ skips bullets and normative sentences under an Out of Scope section", () => {
+    const reqs = extractPrdRequirements(
+      [
+        "## Requirements",
+        "- show balance",
+        "## Out of Scope",
+        "- Transaction history",
+        "The app must not send push notifications.",
+        "## Rollout",
+        "- feature flag",
+      ].join("\n"),
+    );
+    expect(reqs).toContain("show balance");
+    expect(reqs).not.toContain("Transaction history");
+    expect(reqs.some((r) => r.includes("push notifications"))).toBe(false);
+    // A same-level heading after the excluded section resets the skip.
+    expect(reqs).toContain("feature flag");
+  });
+
+  it("Δ a subsection nested under an excluded section stays skipped", () => {
+    const reqs = extractPrdRequirements(
+      ["## Out of Scope", "### Later maybe", "- realtime sync", "# Goals", "- login"].join("\n"),
+    );
+    expect(reqs).not.toContain("realtime sync");
+    // A higher-level heading also resets the skip.
+    expect(reqs).toContain("login");
+  });
+
+  it("Δ recognizes exclusion-heading variants case-insensitively", () => {
+    for (const heading of ["Out-of-Scope", "Non-goals", "NON GOALS", "Not doing", "Won't do"]) {
+      const reqs = extractPrdRequirements(
+        `## ${heading}\n- excluded thing\n## Scope\n- kept thing\n`,
+      );
+      expect(reqs, heading).not.toContain("excluded thing");
+      expect(reqs, heading).toContain("kept thing");
+    }
+  });
 });
 
 describe("runSpecGates — conjunctive", () => {
