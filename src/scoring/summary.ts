@@ -58,6 +58,8 @@ export interface RunSummary {
   effort: RunEffort;
   /** The shipped tasks' PRs, in spec order. */
   shipped_prs: ShippedPr[];
+  /** Δ U/S5 — tasks reviewed WITHOUT an independent second-vendor reviewer. */
+  tasks_without_cross_vendor: number;
 }
 
 /** Options for {@link buildRunSummary}. */
@@ -128,6 +130,7 @@ export function buildRunSummary(
     failures_by_class: failuresByClass,
     effort,
     shipped_prs,
+    tasks_without_cross_vendor: report.cross_vendor_absences?.length ?? 0,
   };
 }
 
@@ -173,5 +176,11 @@ export function renderRunSummaryMarkdown(summary: RunSummary): string {
     `**Effort:** ${summary.effort.reviewer_results} reviewer result(s) · ` +
       `max escalation rung ${summary.effort.max_escalation_rung}`,
   );
+  if (summary.tasks_without_cross_vendor > 0) {
+    out.push(
+      `**Review independence:** ${summary.tasks_without_cross_vendor} task(s) reviewed ` +
+        `without a second-vendor reviewer`,
+    );
+  }
   return out.join("\n");
 }

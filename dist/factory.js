@@ -6341,6 +6341,14 @@ var TaskStateSchema = external_exports.object({
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
+  /**
+   * Δ U/S5 — set IFF the ADVANCING verify pass ran WITHOUT an independent
+   * cross-vendor reviewer (runPanel's crossVendorAbsence). An EVENT RECORD like
+   * `reviewers[]` (derive-don't-store exception: which executor actually reviewed
+   * is not derivable after the fact). Written/cleared in the SAME advance write
+   * as `reviewers`; surfaced by the partial report + run summary.
+   */
+  cross_vendor_absent: external_exports.object({ reason: external_exports.string().min(1) }).optional(),
   // --- Git / PR pointers (WS3 populates; schema reserves the shape) ---
   /** Run-scoped branch `factory/<run_id>/<task_id>` (Δ M). */
   branch: external_exports.string().optional(),
@@ -9129,8 +9137,13 @@ function buildPartialReport(run10, request, opts = {}) {
     incomplete,
     ...run10.e2e_phase?.status === "failed" ? { e2e_failure: run10.e2e_phase.reason } : {},
     ...run10.e2e_phase?.status === "done" && run10.e2e_phase.advisory !== void 0 ? { e2e_advisory: run10.e2e_phase.advisory } : {},
-    ...buildE2eNarrative(run10)
+    ...buildE2eNarrative(run10),
+    ...buildCrossVendorAbsences(run10, bySpecOrder)
   };
+}
+function buildCrossVendorAbsences(run10, bySpecOrder) {
+  const absences = Object.values(run10.tasks).filter((t) => t.cross_vendor_absent !== void 0).map((t) => ({ task_id: t.task_id, reason: t.cross_vendor_absent.reason })).sort(bySpecOrder);
+  return absences.length > 0 ? { cross_vendor_absences: absences } : {};
 }
 function buildE2eNarrative(run10) {
   const journeys = (run10.e2e_phase?.manifest ?? []).map((e) => e.title ?? e.spec_path);
@@ -9220,6 +9233,16 @@ function renderPartialReportMarkdown(report) {
     for (const w of report.e2e_warnings) out.push(`- ${w}`);
     out.push("");
   }
+  if (report.cross_vendor_absences !== void 0) {
+    out.push("## Review independence");
+    out.push(
+      `${report.cross_vendor_absences.length} task(s) were reviewed WITHOUT an independent second-vendor reviewer:`
+    );
+    for (const a of report.cross_vendor_absences) {
+      out.push(`- \`${a.task_id}\` \u2014 ${a.reason}`);
+    }
+    out.push("");
+  }
   if (report.e2e_assessment_failure !== void 0) {
     const { plain, detail } = splitReason(report.e2e_assessment_failure);
     out.push("## End-to-end setup failed before any task ran");
@@ -9301,7 +9324,8 @@ function buildRunSummary(run10, report, opts = {}) {
     totals: report.totals,
     failures_by_class: failuresByClass,
     effort,
-    shipped_prs
+    shipped_prs,
+    tasks_without_cross_vendor: report.cross_vendor_absences?.length ?? 0
   };
 }
 
@@ -13071,7 +13095,9 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
       phase: nextPhaseVal,
       status: nextStatus,
       // A passing verify clears any stale fix-forward record from a prior blocked round.
-      fix_findings: void 0
+      fix_findings: void 0,
+      // Δ U/S5: record (or clear) the absence for the pass that actually shipped.
+      cross_vendor_absent: panel.crossVendorAbsence
     }));
     step = { done: false, phase: nextPhaseVal };
   } else if (panel.result.kind === "wait-retry") {

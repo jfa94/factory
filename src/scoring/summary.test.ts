@@ -285,3 +285,33 @@ describe("renderRunSummaryMarkdown", () => {
     expect(renderRunSummaryMarkdown(summary)).not.toContain("**Failures:**");
   });
 });
+
+describe("tasks_without_cross_vendor (Δ U/S5)", () => {
+  it("counts the report's cross_vendor_absences and renders the review-independence line", () => {
+    const summary = buildRunSummary(
+      mkRun([{ task_id: "a", status: "done" }], { status: "completed" }),
+      report({
+        run_status: "completed",
+        totals: { total: 1, shipped: 1, failed: 0, incomplete: 0 },
+        cross_vendor_absences: [
+          { task_id: "a", reason: "no cross-vendor model configured (codex.model)" },
+        ],
+      }),
+      { now: NOW },
+    );
+    expect(summary.tasks_without_cross_vendor).toBe(1);
+    expect(renderRunSummaryMarkdown(summary)).toContain(
+      "**Review independence:** 1 task(s) reviewed without a second-vendor reviewer",
+    );
+  });
+
+  it("is 0 (and the line omitted) when the report has no absences", () => {
+    const summary = buildRunSummary(
+      mkRun([{ task_id: "a", status: "done" }], { status: "completed" }),
+      report({ run_status: "completed" }),
+      { now: NOW },
+    );
+    expect(summary.tasks_without_cross_vendor).toBe(0);
+    expect(renderRunSummaryMarkdown(summary)).not.toContain("Review independence");
+  });
+});

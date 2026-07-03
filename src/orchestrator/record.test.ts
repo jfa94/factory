@@ -751,6 +751,64 @@ describe("applyRecordReviews record", () => {
     expect(stderr).not.toMatch(/cross-vendor/i);
   });
 
+  it("S5/C4 warn: an advancing verify PERSISTS cross_vendor_absent in the same write as reviewers", async () => {
+    const deps = makeDeps();
+    const input: RecordReviewsInput = {
+      reviews: fullPanel(),
+      verifications: [],
+      crossVendorAbsent: { reason: "cross-vendor executor 'codex' is not available" },
+    };
+
+    const { result: env } = await captureWarnings(() =>
+      applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input),
+    );
+
+    expect(env.step).toEqual({ done: false, phase: "ship" });
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.cross_vendor_absent).toEqual({
+      reason: "cross-vendor executor 'codex' is not available",
+    });
+    expect(task.reviewers.length).toBeGreaterThan(0);
+  });
+
+  it("S5/C4: a later advancing pass WITH a second vendor clears the stale persisted absence", async () => {
+    await state.updateTask(RUN_ID, TASK_ID, (t) => ({
+      ...t,
+      cross_vendor_absent: { reason: "stale absence from a prior pass" },
+    }));
+    const deps = makeDeps();
+    const input: RecordReviewsInput = { reviews: fullPanel(), verifications: [] };
+
+    await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
+
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.cross_vendor_absent).toBeUndefined();
+  });
+
+  it("S5/C block mode: requireCrossVendor=block + absent → merge gate blocked with the honest policy reason", async () => {
+    const cfg = defaultConfig();
+    const deps: RecordDeps = {
+      ...makeDeps(),
+      config: { ...cfg, review: { ...cfg.review, requireCrossVendor: "block" } },
+    };
+    const input: RecordReviewsInput = {
+      reviews: fullPanel(), // all approve — ONLY the absence blocks
+      verifications: [],
+      crossVendorAbsent: { reason: "codex execution failed: exit 1" },
+    };
+
+    const { result: env } = await captureWarnings(() =>
+      applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input),
+    );
+
+    expect(env.mergeGate.passed).toBe(false);
+    expect(env.step).toEqual({ done: false, phase: "exec" }); // escalate, not ship
+    const quality = env.reviewers.find((r) => r.reviewer === "quality-reviewer")!;
+    expect(quality.verdict).toBe("error");
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.escalation_rung).toBe(1);
+  });
+
   it("gate baseRef is per-run staging/<run-id>, not shared staging (Decision 33)", async () => {
     // Probe seeded with ONLY origin/staging/<run-id>. If the record still passes
     // deps.config.git.stagingBranch ("staging") as baseRef, the TDD strategy will

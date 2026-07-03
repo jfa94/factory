@@ -7430,6 +7430,14 @@ var TaskStateSchema = external_exports.object({
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
+  /**
+   * Δ U/S5 — set IFF the ADVANCING verify pass ran WITHOUT an independent
+   * cross-vendor reviewer (runPanel's crossVendorAbsence). An EVENT RECORD like
+   * `reviewers[]` (derive-don't-store exception: which executor actually reviewed
+   * is not derivable after the fact). Written/cleared in the SAME advance write
+   * as `reviewers`; surfaced by the partial report + run summary.
+   */
+  cross_vendor_absent: external_exports.object({ reason: external_exports.string().min(1) }).optional(),
   // --- Git / PR pointers (WS3 populates; schema reserves the shape) ---
   /** Run-scoped branch `factory/<run_id>/<task_id>` (Δ M). */
   branch: external_exports.string().optional(),
