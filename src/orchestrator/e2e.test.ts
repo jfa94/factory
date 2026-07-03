@@ -1355,3 +1355,117 @@ describe("every Playwright invocation runs under the scrubbed env allowlist (Dec
     }
   });
 });
+
+describe("author crash retry (Decision 40 D5)", () => {
+  it("an unparseable author status re-spawns the author once — author_attempts=1, no verdict, worktree hard-reset (not removed)", async () => {
+    await runE2eEmit(deps(), RUN_ID); // creates the author worktree
+    const env = await runE2eRecord(deps(), RUN_ID, {
+      status: "I ran out of turns before finishing",
+      manifest: [],
+    });
+    expect(env.kind).toBe("spawn");
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.author_attempts).toBe(1);
+    expect(run.e2e_phase?.status).toBeUndefined(); // retryable, not a verdict
+    // Attempt 2 starts from a clean staging tip — the crashed attempt's partial
+    // work is discarded via hard-reset, not by tearing the worktree down.
+    expect(git.calls.some((c) => c.startsWith(`reset --hard origin/staging-${RUN_ID}`))).toBe(true);
+    expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(true);
+  });
+
+  it("a second crash fails the phase with '(after 2 attempts)' and cleans up the worktree", async () => {
+    await runE2eEmit(deps(), RUN_ID);
+    const first = await runE2eRecord(deps(), RUN_ID, { status: "gibberish", manifest: [] });
+    expect(first.kind).toBe("spawn");
+    const second = await runE2eRecord(deps(), RUN_ID, { status: "gibberish again", manifest: [] });
+    expect(second.kind).toBe("failed");
+    if (second.kind !== "failed") throw new Error("expected failed");
+    expect(second.reason).toContain("(after 2 attempts)");
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.status).toBe("failed");
+    expect(await git.worktreeExists(e2eWorktreePath(dataDir, RUN_ID))).toBe(false);
+  });
+
+  it("a deliberate NEEDS_CONTEXT verdict is FINAL — fails without spending the author retry", async () => {
+    await runE2eEmit(deps(), RUN_ID);
+    const env = await runE2eRecord(deps(), RUN_ID, {
+      status: "STATUS: NEEDS_CONTEXT — which flow is the money path?",
+      manifest: [],
+    });
+    expect(env.kind).toBe("failed");
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.status).toBe("failed");
+    expect(run.e2e_phase?.author_attempts).toBeUndefined();
+  });
+
+  it("emit re-enters the author spawn from a crash-retry state (author_attempts persisted, no manifest, no verdict) — never a false empty-manifest done", async () => {
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_phase: { manifest: [], reopen_counts: {}, author_attempts: 1 },
+    }));
+    const env = await runE2eEmit(deps(), RUN_ID);
+    expect(env.kind).toBe("spawn");
+    expect((await state.read(RUN_ID)).e2e_phase?.status).toBeUndefined();
+  });
+});
+
+describe("boot config resolution (Decision 40 D10)", () => {
+  const RESOLVED = {
+    status: "done" as const,
+    resolved: { start_command: "pnpm dev", base_url: "http://localhost:5173" },
+    affected_specs: [],
+  };
+
+  it("falls back to the assessment's resolved boot pair when no config overrides are set", async () => {
+    await state.update(RUN_ID, (s) => ({ ...s, e2e_assessment: RESOLVED }));
+    const env = await runE2eEmit(deps({ config: defaultConfig() }), RUN_ID);
+    expect(env.kind).toBe("spawn");
+    if (env.kind !== "spawn") throw new Error("expected spawn");
+    expect(env.prompt).toContain("pnpm dev");
+    expect(env.prompt).toContain("http://localhost:5173");
+  });
+
+  it("config overrides WIN over the assessment's resolved values", async () => {
+    await state.update(RUN_ID, (s) => ({ ...s, e2e_assessment: RESOLVED }));
+    const env = await runE2eEmit(deps(), RUN_ID); // e2eConfig(): npm start / :3000
+    expect(env.kind).toBe("spawn");
+    if (env.kind !== "spawn") throw new Error("expected spawn");
+    expect(env.prompt).toContain("npm start");
+    expect(env.prompt).not.toContain("pnpm dev");
+  });
+
+  it("the mechanical suite boots with the assessment-resolved env when no overrides exist", async () => {
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_assessment: RESOLVED,
+      e2e_phase: {
+        manifest: [
+          { task_ids: ["task-a"], spec_path: "checkout.spec.ts", kind: "critical" as const },
+        ],
+        reopen_counts: {},
+      },
+    }));
+    const tool = new ScriptedPlaywrightTool(() => [
+      { file: "checkout.spec.ts", title: `${CONTROL_TITLE_PREFIX} boots`, status: "passed" },
+    ]);
+    const env = await runE2eEmit(deps({ config: defaultConfig(), playwright: tool }), RUN_ID);
+    expect(env.kind).toBe("done");
+    expect(tool.calls.length).toBeGreaterThan(0);
+    for (const call of tool.calls) {
+      expect(call.env).toMatchObject({
+        BASE_URL: "http://localhost:5173",
+        FACTORY_E2E_START_COMMAND: "pnpm dev",
+      });
+    }
+  });
+
+  it("suspends (backstop, R14) when the assessment concluded WITHOUT resolved values and no overrides are set", async () => {
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_assessment: { status: "done" as const, affected_specs: [] },
+    }));
+    const env = await runE2eEmit(deps({ config: defaultConfig() }), RUN_ID);
+    expect(env.kind).toBe("suspend");
+    expect((await state.read(RUN_ID)).status).toBe("suspended");
+  });
+});

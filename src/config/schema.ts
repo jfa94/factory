@@ -247,29 +247,30 @@ export const GitSchema = z
   .default({});
 
 /**
- * Playwright e2e config (Decision 39). All optional/defaulted so a repo that never
- * passes `--e2e` pays nothing. `startCommand`/`baseURL` are unset until `factory
- * configure --set e2e.startCommand=… --set e2e.baseURL=…` runs; the e2e coroutine
- * (`src/orchestrator/e2e.ts`) refuses to start the phase without both, rather than
- * silently no-op-ing (the `redTestCommand` cautionary tale at :53-57 — declared but
- * never load-bearing — must NOT repeat here: the runner module actually reads
- * every key below except `enabled`, which stays informational/future-gating only).
+ * Playwright e2e config (Decision 39/40). All optional/defaulted so a repo that
+ * never passes `--e2e` pays nothing. `startCommand`/`baseURL` are OPTIONAL OVERRIDES
+ * (Decision 40 D10): the run-start assessment resolves the real boot pair itself and
+ * writes it into the repo's `playwright.config.ts`; a value set here wins over the
+ * assessment's (`resolveBootConfig` in `src/orchestrator/e2e.ts`). The runner module
+ * actually reads every key below except `enabled`, which stays informational/
+ * future-gating only (the `redTestCommand` cautionary tale at :53-57 — declared but
+ * never load-bearing — must NOT repeat here).
  */
 export const E2eConfigSchema = z
   .object({
     /**
      * Repo-level "e2e IS configured" signal, distinct from the run's `--e2e` flag
-     * (that's "run this run WITH e2e"). Informational/future-gating only today —
-     * `startCommand`+`baseURL` presence is the real readiness check.
+     * (that's "run this run WITH e2e"). Informational/future-gating only today.
      */
     enabled: z.boolean().optional(),
     /**
-     * Command that boots the target app, for both Playwright's `webServer` (test
-     * runs) and the e2e-author's live-exploration boot (`reuseExistingServer`).
-     * Required before a run may pass `--e2e`.
+     * OPTIONAL override (Decision 40 D10) of the command that boots the target app,
+     * for both Playwright's `webServer` (test runs) and the e2e-author's
+     * live-exploration boot. Normally unset — the run-start assessment resolves it.
      */
     startCommand: z.string().optional(),
-    /** Base URL the app serves once `startCommand` is up. Required before `--e2e`. */
+    /** OPTIONAL override of the base URL the app serves once booted (D10 — normally
+     * assessment-resolved). */
     baseURL: z.string().url().optional(),
     /**
      * Repo-relative directory the COMMITTED critical suite lives in. Persistence

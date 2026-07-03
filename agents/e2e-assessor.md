@@ -77,8 +77,10 @@ Return exactly this JSON shape (a fenced ```json block is fine):
 }
 ```
 
-- `"ok"` — machinery ready (validated, or steady-state). Always include `resolved`
-  when you booted the app.
+- `"ok"` — machinery ready (validated, or steady-state). ALWAYS include `resolved`
+  on ok/degraded — even steady-state, where you read the values out of
+  `playwright.config.ts` instead of booting. The engine's e2e phase boots the app
+  from `resolved`; omitting it strands the run without a boot config.
 - `"degraded"` — the app boots but auth/seed coverage cannot be made to work; set
   `warning` naming **exactly what coverage is lost**, in plain language ("journeys
   behind login can't be tested — the app has no way to create a test account").

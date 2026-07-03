@@ -6565,17 +6565,17 @@ var GitSchema = external_exports.object({
 var E2eConfigSchema = external_exports.object({
   /**
    * Repo-level "e2e IS configured" signal, distinct from the run's `--e2e` flag
-   * (that's "run this run WITH e2e"). Informational/future-gating only today —
-   * `startCommand`+`baseURL` presence is the real readiness check.
+   * (that's "run this run WITH e2e"). Informational/future-gating only today.
    */
   enabled: external_exports.boolean().optional(),
   /**
-   * Command that boots the target app, for both Playwright's `webServer` (test
-   * runs) and the e2e-author's live-exploration boot (`reuseExistingServer`).
-   * Required before a run may pass `--e2e`.
+   * OPTIONAL override (Decision 40 D10) of the command that boots the target app,
+   * for both Playwright's `webServer` (test runs) and the e2e-author's
+   * live-exploration boot. Normally unset — the run-start assessment resolves it.
    */
   startCommand: external_exports.string().optional(),
-  /** Base URL the app serves once `startCommand` is up. Required before `--e2e`. */
+  /** OPTIONAL override of the base URL the app serves once booted (D10 — normally
+   * assessment-resolved). */
   baseURL: external_exports.string().url().optional(),
   /**
    * Repo-relative directory the COMMITTED critical suite lives in. Persistence
@@ -7565,6 +7565,12 @@ var E2ePhaseSchema = external_exports.object({
   advisory: external_exports.string().optional(),
   /** Cumulative attempt count across ALL passes (1-indexed). */
   attempts: external_exports.number().int().nonnegative().optional(),
+  /**
+   * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
+   * automatic re-spawn before the phase fails; distinct from `attempts` (suite
+   * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
+   */
+  author_attempts: external_exports.number().int().nonnegative().optional(),
   /** The author's spec→task manifest, fixed once authored and reused across passes. */
   manifest: external_exports.array(E2eManifestEntrySchema).default([]),
   /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */

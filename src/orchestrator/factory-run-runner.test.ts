@@ -91,7 +91,7 @@ const SLICES = {
   cli: () => sliceFn("async function cli(", "\n\n// Persist a DriveResults document"),
   recordResults: () => sliceFn("async function recordResults(", "\n\nasync function runProducer("),
   agentTypeMap: () => sliceFn("const AGENT_TYPE = {", "\nfunction parseEnvelope("),
-  runDocs: () => sliceFn("async function runDocs(", "\n\n// Mirrors runDocs()"),
+  runDocs: () => sliceFn("async function runDocs(", "\n\n// Mirrors runAssessment()"),
   runE2e: () => sliceFn("async function runE2e(", "\n\n// Run-start e2e assessment"),
   runAssessment: () => sliceFn("async function runAssessment(", '\nphase("Drive");'),
 };
@@ -503,18 +503,45 @@ describe("factory-run-runner orchestration (workflow-mode drift guard)", () => {
         E2E_KINDS: new Set(["spawn", "done", "failed", "reopen", "suspend"]),
       });
 
-    it("a dead e2e-author (out===null) records BLOCKED — ESCALATE with an EMPTY manifest (fails the phase, never suspends)", async () => {
+    it('a dead e2e-author (out===null) records a status parsing as "error" — the RETRYABLE status, never BLOCKED/ESCALATE (R2, Decision 40 D5) — with an EMPTY manifest', async () => {
       const { agent, calls } = makeAgent([null, { raw: "envelope-bytes" }]);
       const cli = async () => ({ kind: "spawn", prompt: "author e2e", model: "sonnet" });
-      const parseEnvelope = () => ({ kind: "failed", reason: "author died" });
+      const parseEnvelope = () => ({ kind: "failed", reason: "author died twice" });
       const out = await build(agent, cli, parseEnvelope)();
-      expect(out).toEqual({ kind: "failed", reason: "author died" });
+      expect(out).toEqual({ kind: "failed", reason: "author died twice" });
       expect(calls).toHaveLength(2);
-      expect(calls[1]?.prompt).toContain(
-        "STATUS: BLOCKED — ESCALATE e2e-author agent skipped or died",
-      );
+      expect(calls[1]?.prompt).toContain("e2e-author agent skipped or died");
+      // A BLOCKED/ESCALATE/NEEDS/DONE keyword would parse as a deliberate FINAL
+      // verdict and skip the engine's one author retry.
+      for (const keyword of ["BLOCKED", "ESCALATE", "NEEDS", "STATUS: DONE"]) {
+        expect(calls[1]?.prompt).not.toContain(keyword);
+      }
       // Nothing was authored → the recorded manifest MUST be empty (not fabricated).
       expect(calls[1]?.prompt).toContain('"manifest":[]');
+    });
+
+    it("loops while the record leg re-emits spawn (the one-author-crash-retry contract, D5)", async () => {
+      // author #1 (dead) → record #1 → SPAWN again → author #2 (manifest) → record #2 → done
+      const { agent, calls } = makeAgent([
+        null,
+        { raw: "record-1" },
+        { status: "STATUS: DONE", manifest: [] },
+        { raw: "record-2" },
+      ]);
+      const cli = async () => ({ kind: "spawn", prompt: "author e2e", model: "sonnet" });
+      let parses = 0;
+      const parseEnvelope = () =>
+        ++parses === 1
+          ? { kind: "spawn", prompt: "author e2e (retry)", model: "sonnet" }
+          : { kind: "done", run_id: "run-1" };
+      const out = await build(agent, cli, parseEnvelope)();
+      expect(out).toEqual({ kind: "done", run_id: "run-1" });
+      expect(calls).toHaveLength(4);
+      // Second author spawn used the RE-EMITTED prompt, not the stale first one.
+      expect(calls[2]?.prompt).toBe("author e2e (retry)");
+      // Distinct results files per attempt (fileSeq advances — no overwrite).
+      expect(calls[1]?.prompt).toContain("wf-e2e-1.json");
+      expect(calls[3]?.prompt).toContain("wf-e2e-2.json");
     });
 
     it("a non-spawn emit short-circuits (idempotent re-entry / already concluded)", async () => {

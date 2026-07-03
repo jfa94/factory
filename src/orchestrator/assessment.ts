@@ -156,7 +156,9 @@ function buildAssessorPrompt(args: {
       "work, and what the user could do about it.",
     '   - "machinery-impossible" — the app boots but no meaningful e2e coverage is achievable; ' +
       "plain-language `reason` as above.",
-    "   Always set resolved {start_command, base_url} when you booted the app.",
+    "   ALWAYS set resolved {start_command, base_url} on ok/degraded — even steady-state, where you " +
+      "read the values out of playwright.config.ts instead of booting. The engine's e2e phase boots " +
+      "the app from `resolved`; omitting it strands the run without a boot config.",
     "Per agents/e2e-assessor.md for the full discipline.",
   ].join("\n");
 }

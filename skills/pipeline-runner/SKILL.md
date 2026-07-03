@@ -154,6 +154,22 @@ If `next-action` rejects `--results` as stale/duplicate (result_key mismatch), r
 ```
 e2e stage:
   eenv = factory run e2e --run <run_id>
+  loop while eenv.kind == "spawn":
+    spawn the e2e author (subagent_type `e2e-author`, model per eenv.model,
+    isolation OMITTED — it works IN eenv.worktree), prompt = eenv.prompt
+    VERBATIM. It explores the live staging app (Playwright MCP), authors
+    throwaway journey specs (into eenv.throwaway_dir — never committed) and
+    any load-bearing journey specs (into eenv.worktree's e2e/ — committed),
+    self-validates green, and finishes with its terminal STATUS line plus a
+    manifest joining each spec to the task_id(s) it covers.
+    Write {"status":"<line>","manifest":[{"task_ids":[...],
+    "spec_path":"...","kind":"critical|throwaway","title":"..."}, ...]} to a
+    results file under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
+    (If the author died/was skipped, write {"status":"e2e-author agent skipped
+    or died (no STATUS line)","manifest":[]} — a status containing none of
+    BLOCKED/ESCALATE/NEEDS/DONE, so the engine spends its one author retry
+    instead of failing on a phantom deliberate verdict.)
+    eenv = factory run e2e --run <run_id> --results <file>   # may re-spawn once (D5)
   case eenv.kind:
     "done"    → loop  # phase concluded clean (0 critical red; a residual throwaway
                        #   red is folded into the report as an advisory, not a stop)
@@ -163,20 +179,8 @@ e2e stage:
     "reopen"  → loop  # a failing journey was joined to its task via the author's
                        #   manifest; that task was reset to pending with e2e_feedback
                        #   set — next iteration re-drives it as "work"
-    "suspend" → report eenv.reason; STOP  # e2e.startCommand/baseURL not configured
-                                           #   (or similar); /factory:resume retries
-    "spawn"   → spawn the e2e author (subagent_type `e2e-author`, model per eenv.model,
-                isolation OMITTED — it works IN eenv.worktree), prompt = eenv.prompt
-                VERBATIM. It explores the live staging app (Playwright MCP), authors
-                throwaway journey specs (into eenv.throwaway_dir — never committed) and
-                any load-bearing journey specs (into eenv.worktree's e2e/ — committed),
-                self-validates green, and finishes with its terminal STATUS line plus a
-                manifest joining each spec to the task_id(s) it covers.
-                Write {"status":"<line>","manifest":[{"task_ids":[...],
-                "spec_path":"...","kind":"critical|throwaway"}, ...]} to a results file
-                under $CLAUDE_PLUGIN_DATA/results/<run_id>/.
-                eenv2 = factory run e2e --run <run_id> --results <file>
-                case eenv2.kind: "done"|"failed"|"reopen" → loop; "suspend" → report + STOP
+    "suspend" → report eenv.reason; STOP  # no boot config (assessment resolved none
+                                           #   and no override set); /factory:resume retries
 
 e2e-assessment stage (Decision 40 — once per --e2e run, BEFORE any task):
   aenv = factory run e2e-assess --run <run_id>

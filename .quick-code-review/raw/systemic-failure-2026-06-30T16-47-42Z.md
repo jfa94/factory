@@ -1,0 +1,30 @@
+# systemic-failure-reviewer — raw output
+
+**Status:** DONE
+**Verdict:** Two systemic, cross-stage defects survive verification in the money-path e2e sweep. (1) A session run that fully completes and fixes a blocking money-path forward but crashes before recording the `--adjudicated` marker is permanently forced to `failed` on resume: the sweep stage's re-entry is gated to `mode==="workflow"`, so the session run can never re-enter ADJUDICATE, contradicting the in-code comment and SKILL.md that promise "Resume re-enters ADJUDICATE." Fail-closed is safe, but the documented repair path is unreachable and the completed work is irrecoverable except by a full fresh re-run. (2) A workflow money-path suspend (a non-quota suspend with no checkpoint) is gated on the live quota pacer at resume: `planResume` only short-circuits for `ignore_quota`, never for `mode==="workflow"`, whereas the drive-loop gate (`quota-gate.ts`) explicitly skips workflow — so a workflow run (defined by its inability to observe usage / opted out of pacing) can be parked up to the 7-day window or refused via `unavailable-halt` at the exact resume the feature's "fix on staging then resume to re-verify" loop depends on.
+
+## Findings (2)
+
+### [important] src/orchestrator/finalize.ts:223 — Session crash mid-ADJUDICATE permanently fails an otherwise-complete run; the documented resume re-ADJUDICATE recovery is unreachable
+- kind: systemic
+- quote: `terminal = "failed";`
+- failure_mode: invariant-without-repair
+- scenario: A session run finishes all tasks, the sweep flags a blocking money-path, the runner fixes it forward and commits the spec/fix to staging but the process dies before `factory run e2e --adjudicated`; on resume the sweep stage never re-enters (wantsSemanticSweep returns false for a session `done` marker because re-entry is gated to mode==='workflow'), so the money-path backstop forces the complete, fixed run to terminal `failed` with no path to record the adjudication and ship the work.
+- anchors:
+  - src/orchestrator/finalize.ts:223 — `terminal = "failed";` (actual outcome — complete+fixed session run forced to absorbing failed)
+  - src/orchestrator/finalize.ts:218 — `Resume re-enters ADJUDICATE, which records the marker.` (promised-but-unreachable repair path)
+  - src/orchestrator/next.ts:129 — `run.mode === "workflow" &&` (re-sweep/ADJUDICATE re-entry gated to workflow only; session done never re-enters)
+- why: The finalize backstop and SKILL.md both assert the lost `adjudicated` marker is repaired by resume re-entering ADJUDICATE, but no engine path makes that re-entry possible for a session-mode `done` sweep — next.ts returns false before the workflow-only re-sweep branch, the runner only ever receives a `finalize` envelope, and `factory run finalize` then drives the run to an absorbing `failed`. The invariant 'a blocking session sweep must carry a durable adjudication record' has no convergence/repair when the record is lost to a crash; the only recovery is discarding all completed work and re-running from scratch. This is a cross-stage gap (sweep recorder ↔ run-level re-entry decision ↔ finalize ↔ documented runner protocol), not a single swallowed exception.
+- fix: On resume, let a session run with e2e_sweep done + blocking_count>0 + !adjudicated re-enter the ADJUDICATE step (emit a semantic-sweep/adjudicate-needed envelope instead of finalize), so the runner can re-run `factory run e2e --adjudicated` against the already-fixed staging branch; only fall through to terminal `failed` once the cap is exhausted.
+
+### [important] src/orchestrator/e2e-sweep.ts:274 — Workflow money-path suspend is quota-gated at resume, violating workflow's no-quota contract and stalling the documented re-verify loop
+- kind: systemic
+- quote: `const suspendOnBlocking = run.mode === "workflow" && blockingCount > 0;`
+- failure_mode: invariant-without-repair
+- scenario: A workflow run (quota pacing disabled by contract) completes all tasks, the sweep blocks on a money-path and suspends with no quota checkpoint; the user fixes the money-path on staging and runs `/factory:resume`, but planResume runs the live pacer (it short-circuits only for ignore_quota, never for mode==='workflow'), so an over-curve reading returns pause/suspend-7d or an unobservable reading returns unavailable-halt and refuses resume — parking the re-sweep that would re-verify and ship the fix behind a quota window the workflow run was never supposed to be subject to.
+- anchors:
+  - src/orchestrator/e2e-sweep.ts:274 — `const suspendOnBlocking = run.mode === "workflow" && blockingCount > 0;` (introduces the non-quota workflow money-path suspend (no checkpoint))
+  - src/orchestrator/quota-gate.ts:43 — `if (mode === "workflow" || ignoreQuota) return null;` (drive-loop honors the workflow no-quota contract)
+  - src/quota/resume.ts:63 — `const decision = evaluatePacer(reading, config, nowEpoch);` (resume gates ALL suspended runs on the live pacer regardless of mode — only ignore_quota (line 59) is exempted)
+- why: The drive-loop quota gate explicitly skips workflow runs (they cannot observe usage and opted out of pacing), but the resume seam applies evaluatePacer to every non-ignore_quota suspended run regardless of mode. This change introduces a prominent new non-quota workflow suspend whose entire recovery story ('fix on staging, then resume — the re-sweep re-verifies') routes through that resume seam, so the workflow no-quota invariant is silently unenforced exactly where the feature depends on it: recovery requires waiting up to the 7-day window or knowing to pass an out-of-band --ignore-quota, and the failure reason shown is a misleading quota message rather than the real money-path block. The chain spans the sweep suspend writer, the run-level resume planner, and the drive-loop gate it contradicts.
+- fix: Mirror quota-gate.ts in planResume: short-circuit to resume for mode==='workflow' (or distinguish a non-quota money-path/docs suspend from a quota suspend and only pace the latter), so workflow money-path recovery re-verifies immediately instead of stalling behind a quota window the run opted out of.

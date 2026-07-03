@@ -8,13 +8,15 @@ import { defineConfig, devices } from "@playwright/test";
  * persistence in that directory IS the criticality signal for the run-level
  * e2e phase: nothing is tagged, so this directory boundary is load-bearing.
  *
- * TODO: replace the `webServer.command` fallback below with this repo's real
- * dev/start command, and set `e2e.startCommand` + `e2e.baseURL` via
- * `factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>`
- * to the SAME values — the run-level e2e phase passes `FACTORY_E2E_*` env
- * vars into every Playwright invocation, and `webServer` below reads them,
- * so both the factory's mechanical runs AND a plain local/CI
- * `playwright test` boot the app the same way.
+ * The `webServer.command`/`url` fallbacks below are scaffold placeholders: the
+ * run-start e2e ASSESSMENT (Decision 40) resolves this repo's real dev/start
+ * command + base URL and writes them in on the first `--e2e` run. You can also
+ * set them yourself, or override per-repo via `factory configure --set
+ * e2e.startCommand=<cmd> --set e2e.baseURL=<url>` (config overrides win). The
+ * run-level e2e phase passes `FACTORY_E2E_*` env vars into every Playwright
+ * invocation, and `webServer` below reads them, so both the factory's
+ * mechanical runs AND a plain local/CI `playwright test` boot the app the
+ * same way.
  */
 export default defineConfig({
   testDir: "./e2e",
@@ -31,7 +33,7 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: process.env.FACTORY_E2E_START_COMMAND ?? "npm run dev", // TODO: replace fallback
+    command: process.env.FACTORY_E2E_START_COMMAND ?? "npm run dev", // placeholder — the e2e assessment writes the real command
     url: process.env.BASE_URL ?? "http://localhost:3000",
     // FACTORY_E2E=1 marks a factory-driven run (fail-first proof, mechanical
     // suite) — always boot fresh there; a plain local/CI run may reuse.

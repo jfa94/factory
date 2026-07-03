@@ -116,6 +116,10 @@ export type E2eAction =
 // Apex-pinned (Decision 40): the author runs once per run, no human reviews its
 // assertions, and they gate the run — same rationale as the spec-generator pin (Decision 21).
 const E2E_AUTHOR_MODEL = "opus";
+// D5 (Decision 40): a crashed/unparseable author earns ONE automatic re-spawn —
+// mirrors the assessment coroutine's MAX_ASSESS_ATTEMPTS. Deliberate verdicts
+// (blocked-escalate, needs-context) are FINAL and never retry.
+const MAX_AUTHOR_ATTEMPTS = 2;
 // ponytail: 90 (docs' 60 + a 50% margin) — live MCP exploration burns more turns
 // than a diff read; bump if the author routinely hits the ceiling.
 const E2E_AUTHOR_MAX_TURNS = 90;
@@ -174,16 +178,34 @@ function e2eBranchName(runId: string): string {
   return `e2e-${runId}`;
 }
 
+/** The boot pair every Playwright invocation + author prompt needs. */
+export interface BootConfig {
+  readonly startCommand: string;
+  readonly baseURL: string;
+}
+
+/**
+ * Single source of truth for boot config (Decision 40 D10): an operator config
+ * override wins; otherwise the values the run-start ASSESSMENT resolved (and wrote
+ * into the repo's `playwright.config.ts`). `null` = genuinely unknown — the caller
+ * suspends/fails loud rather than booting with a fabricated command.
+ */
+export function resolveBootConfig(cfg: Config["e2e"], run: RunState): BootConfig | null {
+  const startCommand = cfg.startCommand ?? run.e2e_assessment?.resolved?.start_command;
+  const baseURL = cfg.baseURL ?? run.e2e_assessment?.resolved?.base_url;
+  return startCommand !== undefined && baseURL !== undefined ? { startCommand, baseURL } : null;
+}
+
 /**
  * The env every Playwright invocation gets — read by the scaffolded
  * `templates/playwright.config.ts`'s `webServer` block so the app boots the
- * SAME command/URL/timeout the operator configured via `factory configure`,
+ * SAME command/URL/timeout the engine resolved ({@link resolveBootConfig}),
  * fresh every run (`FACTORY_E2E=1` forces `reuseExistingServer: false`).
  */
-function e2eEnv(cfg: Config["e2e"]): Record<string, string> {
+function e2eEnv(cfg: Config["e2e"], boot: BootConfig): Record<string, string> {
   return {
-    BASE_URL: cfg.baseURL!,
-    FACTORY_E2E_START_COMMAND: cfg.startCommand!,
+    BASE_URL: boot.baseURL,
+    FACTORY_E2E_START_COMMAND: boot.startCommand,
     FACTORY_E2E_READY_TIMEOUT_MS: String(cfg.readyTimeoutMs),
     FACTORY_E2E: "1",
   };
@@ -197,8 +219,8 @@ function e2eEnv(cfg: Config["e2e"]): Record<string, string> {
  * {@link e2eEnv} vars the scaffolded `webServer` block reads. Pass alongside
  * `replaceEnv: true` so `exec` does NOT merge this over `process.env`.
  */
-function scrubbedE2eEnv(cfg: Config["e2e"]): Record<string, string> {
-  const env = e2eEnv(cfg);
+function scrubbedE2eEnv(cfg: Config["e2e"], boot: BootConfig): Record<string, string> {
+  const env = e2eEnv(cfg, boot);
   for (const key of ["PATH", "HOME"]) {
     const v = process.env[key];
     if (v !== undefined) env[key] = v;
@@ -250,17 +272,32 @@ export async function runE2eEmit(deps: E2eRunDeps, runId: string): Promise<E2eAc
   const run = await deps.state.read(runId);
   const cfg = deps.config.e2e;
 
-  if (!cfg.startCommand || !cfg.baseURL) {
+  // Backstop only (R14, Decision 40): the run-start assessment normally resolves the
+  // boot pair; a legacy/assessment-skipped run with no config override lands here.
+  const boot = resolveBootConfig(cfg, run);
+  if (boot === null) {
     const reason =
-      "e2e phase requires e2e.startCommand and e2e.baseURL — run " +
-      "`factory configure --set e2e.startCommand=<cmd> --set e2e.baseURL=<url>` first";
+      "e2e phase has no boot config — the run-start assessment resolved none and no " +
+      "override is set; run `factory configure --set e2e.startCommand=<cmd> " +
+      "--set e2e.baseURL=<url>` then resume";
     await deps.state.update(runId, (s) => ({ ...s, status: "suspended" }));
     log.warn(`run '${runId}': ${reason}`);
     return { kind: "suspend", run_id: runId, reason };
   }
 
   if (run.e2e_phase === undefined) {
-    return prepareAuthorSpawn(deps, run, runId, cfg.startCommand, cfg.baseURL, cfg.testDir);
+    return prepareAuthorSpawn(deps, run, runId, boot, cfg.testDir);
+  }
+
+  // Author-crash re-entry (D5): author_attempts persisted with no manifest and no
+  // verdict means the previous author spawn died mid-flight — re-spawn it (the
+  // record leg's retryAuthorOrFail caps total attempts).
+  if (
+    run.e2e_phase.status === undefined &&
+    run.e2e_phase.manifest.length === 0 &&
+    (run.e2e_phase.author_attempts ?? 0) >= 1
+  ) {
+    return prepareAuthorSpawn(deps, run, runId, boot, cfg.testDir);
   }
 
   // Re-entry after a reopened task settled: the manifest is already authored
@@ -273,8 +310,7 @@ async function prepareAuthorSpawn(
   deps: E2eRunDeps,
   run: RunState,
   runId: string,
-  startCommand: string,
-  baseURL: string,
+  boot: BootConfig,
   testDir: string,
 ): Promise<E2eAction> {
   const staging = resolveStagingBranch(runId, run.staging_branch);
@@ -294,6 +330,10 @@ async function prepareAuthorSpawn(
       path: worktree,
       setupCommand: deps.config.quality.setupCommand,
     });
+  } else if ((run.e2e_phase?.author_attempts ?? 0) >= 1) {
+    // Re-spawn after a crashed author (D5): discard its partial, unmerged work so
+    // attempt 2 starts from a clean staging tip, not a half-written suite.
+    await deps.git.resetHardClean(`origin/${staging}`, { cwd: worktree });
   }
 
   const throwawayDir = e2eThrowawayDir(deps.dataDir, runId);
@@ -312,8 +352,8 @@ async function prepareAuthorSpawn(
       baseRef,
       throwawayDir,
       testDir,
-      startCommand,
-      baseURL,
+      startCommand: boot.startCommand,
+      baseURL: boot.baseURL,
       spec: deps.spec,
     }),
   };
@@ -356,15 +396,50 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Record the e2e-author's result: on failure, fail the run; on success, prove + run the suite. */
+/**
+ * D5 (Decision 40): an `error` verdict means the author CRASHED or returned no
+ * parseable STATUS — not a deliberate refusal — so it earns one automatic re-spawn
+ * (the returned action is the fresh `spawn`). At the cap the phase fails like any
+ * other author failure. Deliberate verdicts never route here.
+ */
+async function retryAuthorOrFail(
+  deps: E2eRunDeps,
+  runId: string,
+  worktree: string,
+  reason: string,
+): Promise<E2eAction> {
+  const run = await deps.state.read(runId);
+  const attempts = (run.e2e_phase?.author_attempts ?? 0) + 1;
+  if (attempts >= MAX_AUTHOR_ATTEMPTS) {
+    return failWithCleanup(deps, runId, worktree, `${reason} (after ${attempts} attempts)`);
+  }
+  await deps.state.update(runId, (s) => ({
+    ...s,
+    e2e_phase: {
+      ...(s.e2e_phase ?? defaultE2ePhase()),
+      author_attempts: attempts,
+    },
+  }));
+  log.warn(
+    `run '${runId}': e2e-author attempt ${attempts}/${MAX_AUTHOR_ATTEMPTS} crashed — re-spawning (${reason})`,
+  );
+  return runE2eEmit(deps, runId);
+}
+
+/** Record the e2e-author's result: on failure, fail the run (crash → one re-spawn,
+ * D5); on success, prove + run the suite. Widened to the FULL {@link E2eAction} —
+ * the crash-retry path returns a fresh `spawn`, so runners loop while `spawn`. */
 export async function runE2eRecord(
   deps: E2eRunDeps,
   runId: string,
   results: E2eAuthorResults,
-): Promise<Extract<E2eAction, { kind: "done" | "failed" | "reopen" | "suspend" }>> {
+): Promise<E2eAction> {
   const worktree = e2eWorktreePath(deps.dataDir, runId);
 
   const outcome = parseProducerStatus(results.status);
+  if (outcome.status === "error") {
+    return retryAuthorOrFail(deps, runId, worktree, `e2e-author: ${outcome.reason}`);
+  }
   if (outcome.status !== "done") {
     const reason = `e2e-author: ${"reason" in outcome ? outcome.reason : "no parseable status"}`;
     return failWithCleanup(deps, runId, worktree, reason);
@@ -454,7 +529,19 @@ export async function runE2eRecord(
       return failWithCleanup(deps, runId, worktree, reason);
     }
 
-    const proof = await proveCriticals(deps, runId, critical, worktree);
+    // Boot config can only vanish between spawn and record if config/assessment
+    // state was mutated mid-run — fail loud rather than proving with a bogus boot.
+    const boot = resolveBootConfig(cfg, run);
+    if (boot === null) {
+      return failWithCleanup(
+        deps,
+        runId,
+        worktree,
+        "e2e-author: boot config vanished between spawn and record (config or assessment state changed mid-run)",
+      );
+    }
+
+    const proof = await proveCriticals(deps, runId, critical, worktree, boot);
     if (!proof.ok) {
       // Never merge an unproven spec — the worktree (and its unmerged commits) is
       // discarded rather than landed in the target repo.
@@ -514,6 +601,7 @@ async function proveCriticals(
   runId: string,
   critical: readonly E2eManifestEntry[],
   authorWorktree: string,
+  boot: BootConfig,
 ): Promise<ProofVerdict> {
   const cfg = deps.config.e2e;
   const files = deps.files ?? new DefaultE2eFileOps();
@@ -539,7 +627,12 @@ async function proveCriticals(
       let baseResult;
       try {
         baseResult = await runE2e(
-          { cwd: wtPath, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: entry.spec_path },
+          {
+            cwd: wtPath,
+            env: scrubbedE2eEnv(cfg, boot),
+            replaceEnv: true,
+            testDir: entry.spec_path,
+          },
           tool,
         );
       } catch (err) {
@@ -578,7 +671,7 @@ async function proveCriticals(
         stagingResult = await runE2e(
           {
             cwd: authorWorktree,
-            env: scrubbedE2eEnv(cfg),
+            env: scrubbedE2eEnv(cfg, boot),
             replaceEnv: true,
             testDir: entry.spec_path,
           },
@@ -703,6 +796,16 @@ async function runSuiteAndDecide(
     return { kind: "done", run_id: runId };
   }
 
+  // Emit's suspend backstop gates entry, but this leg is also reached from record —
+  // a mid-run config/assessment mutation must fail loud, not boot a fabricated app.
+  const boot = resolveBootConfig(cfg, run);
+  if (boot === null) {
+    const reason =
+      "e2e suite has no boot config — the run-start assessment resolved none and no override is set";
+    await markFailed(deps, runId, reason, attempts);
+    return { kind: "failed", run_id: runId, reason };
+  }
+
   const staging = resolveStagingBranch(runId, run.staging_branch);
   const worktree = e2eRunWorktreePath(deps.dataDir, runId);
   const provision = deps.provision ?? provisionWorktree;
@@ -725,7 +828,7 @@ async function runSuiteAndDecide(
   let criticalResult;
   try {
     criticalResult = await runE2e(
-      { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, testDir: cfg.testDir },
+      { cwd: worktree, env: scrubbedE2eEnv(cfg, boot), replaceEnv: true, testDir: cfg.testDir },
       tool,
     );
   } catch (err) {
@@ -745,7 +848,7 @@ async function runSuiteAndDecide(
     );
     try {
       throwawayResult = await runE2e(
-        { cwd: worktree, env: scrubbedE2eEnv(cfg), replaceEnv: true, config: configPath },
+        { cwd: worktree, env: scrubbedE2eEnv(cfg, boot), replaceEnv: true, config: configPath },
         tool,
       );
     } catch (err) {

@@ -551,6 +551,12 @@ export const E2ePhaseSchema = z.object({
   advisory: z.string().optional(),
   /** Cumulative attempt count across ALL passes (1-indexed). */
   attempts: z.number().int().nonnegative().optional(),
+  /**
+   * Author SPAWN attempts (Decision 40 D5): a crashed/unparseable author earns ONE
+   * automatic re-spawn before the phase fails; distinct from `attempts` (suite
+   * passes). Deliberate blocked-escalate/needs-context verdicts never retry.
+   */
+  author_attempts: z.number().int().nonnegative().optional(),
   /** The author's spec→task manifest, fixed once authored and reused across passes. */
   manifest: z.array(E2eManifestEntrySchema).default([]),
   /** Per-task reopen count so far, keyed by task_id — bounds each task by `e2e.reopenCap`. */

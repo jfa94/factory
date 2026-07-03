@@ -196,6 +196,27 @@ describe("applyRescue", () => {
     expect(run.e2e_phase?.reopen_counts).toEqual({ a: 2 });
   });
 
+  it("resetE2e:true preserves author_attempts through the reopen (D5 history — the author-retry cap survives a rescue, like reopen_counts)", async () => {
+    await seed([{ task_id: "a", status: "done" }], "failed");
+    await state.update(RUN_ID, (s) => ({
+      ...s,
+      e2e_phase: {
+        status: "failed",
+        reason: "e2e reopen cap (2) exhausted for task(s): a",
+        manifest: [{ task_ids: ["a"], spec_path: "checkout.spec.ts", kind: "critical" }],
+        reopen_counts: { a: 2 },
+        author_attempts: 1,
+      },
+    }));
+
+    const result = await applyRescue(state, RUN_ID, { resetE2e: true });
+    expect(result.reopened).toBe(true);
+
+    const run = await state.read(RUN_ID);
+    expect(run.e2e_phase?.status).toBeUndefined();
+    expect(run.e2e_phase?.author_attempts).toBe(1);
+  });
+
   it("resetE2e:true on a PRE-authoring failure (empty manifest) clears e2e_phase entirely so the author re-spawns, instead of leaving a false-done empty-manifest phase", async () => {
     // The author crashed/timed out/emitted an unparseable status before ANY
     // manifest was produced — markFailed writes status:"failed" with manifest:[].
