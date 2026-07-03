@@ -232,6 +232,70 @@ describe("orchestrator transitions (shared loop + CLI ladder/fail logic)", () =>
     );
   });
 
+  // N1 (S2 parallel enablers) — PINNING TEST. DO NOT "FIX" THE BEHAVIOR THIS PINS
+  // WITHOUT READING THIS COMMENT.
+  //
+  // escalateOrFail reads the run OUTSIDE the state lock (transitions.ts: the
+  // `deps.state.read` snapshot) and computes `nextRung` from that snapshot, then
+  // writes it back in a separate locked updateTask. Two CONCURRENT same-task
+  // escalations therefore LOSE AN UPDATE: both read rung=0, both write rung=1 —
+  // one escalation rung is silently skipped (and with it a model/effort dial bump).
+  //
+  // This is deliberately NOT fixed in the engine. The protocol prevents it:
+  // one-driver-per-task — every `factory` call runs FOREGROUND in the single
+  // runner session (S3 event loop), so exactly one next-action drives a given
+  // task at a time. The backstops if the protocol is violated are the per-run
+  // state write lock (no torn writes) and the result_key exactly-once gate
+  // (orchestrator.ts recordResults: stale/duplicate results reject LOUD — the
+  // sequential seam is pinned in orchestrator.test.ts "stale results…rejects").
+  //
+  // If you make escalateOrFail compute the rung INSIDE the updateTask mutator
+  // (the merge_resyncs pattern in orchestrator.ts), this test flips to rung=2 —
+  // update it deliberately, and only with the protocol context above in mind.
+  //
+  // Approximation note (per the S2 plan): this pins the transitions-layer lost
+  // update deterministically via a read barrier, not the full two-process
+  // next-action race (which needs two OS processes to bypass the in-process lock
+  // queue). The damage pinned is the same seam the race would hit.
+  it("N1: two CONCURRENT same-task escalations lose an update — rung lands at 1, not 2 (protocol, not engine, prevents this)", async () => {
+    await seedTask({ task_id: "t1", status: "reviewing", escalation_rung: 0 });
+
+    // Barrier StateManager over the same dataDir: both escalations must complete
+    // their outside-lock read BEFORE either proceeds to write — deterministic, no
+    // timing. (After the barrier opens, later internal reads pass straight through.)
+    class ReadBarrierStateManager extends StateManager {
+      reads = 0;
+      private open!: () => void;
+      private readonly barrier = new Promise<void>((resolve) => {
+        this.open = resolve;
+      });
+      override async read(runId: string): Promise<Awaited<ReturnType<StateManager["read"]>>> {
+        const snapshot = await super.read(runId);
+        this.reads += 1;
+        if (this.reads === 2) this.open();
+        await this.barrier;
+        return snapshot;
+      }
+    }
+    const racingState = new ReadBarrierStateManager({
+      dataDir,
+      lock: { stale: 5000, retries: 200, retryMinTimeout: 5, retryMaxTimeout: 50 },
+    });
+    const racingDeps: TransitionDeps = { state: racingState };
+    const decision: ClassifyDecision = { action: "retry", reason: "merge gate blocked" };
+
+    const [stepA, stepB] = await Promise.all([
+      escalateOrFail(racingDeps, RUN_ID, "t1", decision, "exec"),
+      escalateOrFail(racingDeps, RUN_ID, "t1", decision, "exec"),
+    ]);
+
+    // Both callers believe they escalated…
+    expect(stepA).toEqual({ done: false, phase: "exec" });
+    expect(stepB).toEqual({ done: false, phase: "exec" });
+    // …but the rung moved by ONE, not two: the second write clobbered the first.
+    expect((await readTask("t1")).escalation_rung).toBe(1);
+  });
+
   // -- classifyProducerFailure ----------------------------------------------
 
   it("classifyProducerFailure: blocked-escalate → fail spec-defect", () => {
