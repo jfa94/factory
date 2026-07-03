@@ -397,3 +397,4 @@ dist/*
 # Playwright MCP session artifacts (accessibility snapshots etc.) — scratch from
 # interactive exploration via mcp__plugin_playwright_playwright__*, never committed.
 .playwright-mcp/
+.quick-code-review/
