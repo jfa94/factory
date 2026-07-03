@@ -124,6 +124,7 @@ function blockingReviewsResults(priorEnvelope: NextAction & { kind: "spawn" }): 
               file: "src/x.ts",
               line: 1,
               quote: "bad code",
+              claim: "the code is bad",
               description: "a blocker",
             },
           ]
@@ -855,7 +856,9 @@ describe("nextAction", () => {
       expect(env2.phase).toBe("exec");
 
       // Re-deliver the SAME results (result_key tests/0) after cursor moved to exec/0.
-      await expect(nextAction(deps, runId, "T1", testsResults)).rejects.toThrow(/stale or duplicate/);
+      await expect(nextAction(deps, runId, "T1", testsResults)).rejects.toThrow(
+        /stale or duplicate/,
+      );
     } finally {
       await cleanup();
     }
@@ -1024,7 +1027,10 @@ describe("result_key validation (Important 1 — schema gate)", () => {
       // Lie: claim result_key.phase is "exec" but cursor is "tests"
       const wrongKey: ResultKey = { phase: "exec", rung: 0 };
       await expect(
-        nextAction(deps, runId, "T1", { result_key: wrongKey, producer: { status: "STATUS: DONE" } }),
+        nextAction(deps, runId, "T1", {
+          result_key: wrongKey,
+          producer: { status: "STATUS: DONE" },
+        }),
       ).rejects.toThrow(/stale or duplicate/);
     } finally {
       await cleanup();
@@ -1040,7 +1046,10 @@ describe("result_key validation (Important 1 — schema gate)", () => {
       // Lie: claim rung 99 but actual is 0
       const wrongKey: ResultKey = { phase: "tests", rung: 99 };
       await expect(
-        nextAction(deps, runId, "T1", { result_key: wrongKey, producer: { status: "STATUS: DONE" } }),
+        nextAction(deps, runId, "T1", {
+          result_key: wrongKey,
+          producer: { status: "STATUS: DONE" },
+        }),
       ).rejects.toThrow(/stale or duplicate/);
     } finally {
       await cleanup();

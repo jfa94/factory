@@ -101,6 +101,8 @@ Emit **one RawReview JSON object** exactly as specified in the `review-protocol`
 `{ reviewer, verdict, findings[] }` with `reviewer: "systemic-failure-reviewer"`. Each finding:
 
 - **Primary anchor** → `quote`/`file`/`line` (the CLI citation-verifies this exact substring).
+- **`claim`** — one sentence (≤300 chars) stating the checkable failure mode; the independent
+  verifier sees only the claim, never your `description`.
 - **`description`** leads with `[failure_mode: <name>]`, then the one-sentence `scenario`,
   then any 2nd+ anchors quoted inline as `path:line "verbatim"`. Example:
   `[failure_mode: stuck-state] When the TDD gate rejects a test-writer commit, the retry loop

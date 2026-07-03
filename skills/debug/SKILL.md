@@ -146,7 +146,7 @@ artifact; see `panel.ts`'s `promptRefFor` doc comment). Tell each reviewer to
 inspect via `git -C <worktree> diff <base>` (the envelope's `base`/`worktree`
 verbatim) and emit exactly one RawReview JSON per `skills/review-protocol/SKILL.md`'s
 output contract: `{ reviewer, verdict: "approve"|"blocked"|"error", findings: [
-{ reviewer, severity, blocking, file, line, quote, description } ] }`.
+{ reviewer, severity, blocking, file, line, quote, claim, description } ] }`.
 
 **Cross-vendor (Codex).** `codex_available` is the CLI's own resolution
 (`config.codex.model !== undefined` — a config-presence check, not a live probe;

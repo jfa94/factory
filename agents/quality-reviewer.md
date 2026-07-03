@@ -131,7 +131,9 @@ Violating the letter of this rule violates the spirit. No exceptions.
 
 Emit **one RawReview JSON object** exactly as specified in the `review-protocol` skill —
 `{ reviewer, verdict, findings[] }` with `reviewer: "quality-reviewer"`. Each finding carries
-a verbatim `quote` matching real source at the cited `file:line`, and a `description` that
+a verbatim `quote` matching real source at the cited `file:line`, a one-sentence `claim`
+(≤300 chars) stating the checkable defect (the independent verifier sees only the claim, never
+your `description`), and a `description` that
 captures your premise/trace/conclusion (for security: the source→sink trace, attack vector,
 and impact; for type design: the illegal state and the tightening). `verdict` is `blocked` if
 any finding is `blocking: true`, else `approve` (a clean approve may have empty `findings`),

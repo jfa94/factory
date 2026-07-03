@@ -296,8 +296,9 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
 2. **Panel:** spawn EVERY entry in `manifest.agents` (count-agnostic; each isolation `"worktree"`, model mapped from each agent's `model`, `max_turns` from the manifest). Construct each prompt per
    `skills/review-protocol/SKILL.md`: inspect via `git -C <tenv.worktree> diff <tenv.base_ref>`,
    emit ONE RawReview JSON:
-   `{ "reviewer":"<role>", "verdict":"approve|blocked|error", "findings":[ { "reviewer","severity","blocking","file","line","quote","description" } ] }`
-   (`quote` REQUIRED; `file`+`line` make a finding citable; `findings` may be empty.)
+   `{ "reviewer":"<role>", "verdict":"approve|blocked|error", "findings":[ { "reviewer","severity","blocking","file","line","quote","claim","description" } ] }`
+   (`quote` and `claim` REQUIRED — `claim` is the one-sentence checkable assertion, ≤300
+   chars; `file`+`line` make a finding citable; `findings` may be empty.)
 3. **Verify-then-fix:** for EACH finding that is `blocking:true` AND citable, spawn an
    INDEPENDENT finding-verifier (`general-purpose`, isolation `"worktree"`, model
    `opus`, adversarial framing — _"try to refute this finding against the actual

@@ -11390,7 +11390,17 @@ var FindingBaseSchema = external_exports.object({
    * `.min(1)`.)
    */
   quote: external_exports.string().min(1),
-  /** Human-facing description of the concern. */
+  /**
+   * The reviewer's ONE-SENTENCE checkable assertion (≤300 chars) — what the
+   * independent finding-verifier confirms. Deliberately distinct from
+   * `description`: the claim states WHAT is wrong in verifiable form; the
+   * description carries the reasoning chain, which must never reach the
+   * verifier (anti-anchoring — the verifier confirms independently, it is not
+   * led). Required and bounded LOUDLY: an old-format finding without a claim
+   * is a ZodError, never a silent fallback to truncated description.
+   */
+  claim: external_exports.string().min(1).max(300),
+  /** Human-facing description of the concern (the reasoning; producer-facing). */
   description: external_exports.string().min(1)
 });
 var FindingSchema = FindingBaseSchema.superRefine((finding, ctx) => {
@@ -15436,6 +15446,7 @@ async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
           severity: "critical",
           blocking: true,
           quote: "(uncitable \u2014 e2e tooling failure, no per-spec citation available)",
+          claim: "the Playwright e2e run itself failed (tooling error, not a spec failure)",
           description: `e2e tooling error \u2014 the Playwright run itself failed: ${detail}`
         }
       ]
@@ -15448,6 +15459,8 @@ async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
     file: spec.file,
     line: 1,
     quote: spec.title,
+    // claim is schema-bounded to 300 chars; a Playwright title can exceed it.
+    claim: `e2e spec failed: ${spec.title}`.slice(0, 300),
     description: `e2e spec failed: ${spec.title}`
   }));
   if (!results.ok && results.counts.failed === 0) {
@@ -15456,6 +15469,7 @@ async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
       severity: "critical",
       blocking: true,
       quote: "(uncitable \u2014 e2e tooling failure, no per-spec citation available)",
+      claim: "the e2e run failed as a whole with no individually-failed spec",
       description: "e2e tooling failed with no per-spec failures \u2014 investigate the Playwright run"
     });
   }

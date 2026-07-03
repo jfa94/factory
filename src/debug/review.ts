@@ -304,6 +304,7 @@ export async function runCommittedE2e(
           severity: "critical",
           blocking: true,
           quote: "(uncitable — e2e tooling failure, no per-spec citation available)",
+          claim: "the Playwright e2e run itself failed (tooling error, not a spec failure)",
           description: `e2e tooling error — the Playwright run itself failed: ${detail}`,
         },
       ],
@@ -319,6 +320,8 @@ export async function runCommittedE2e(
       file: spec.file,
       line: 1,
       quote: spec.title,
+      // claim is schema-bounded to 300 chars; a Playwright title can exceed it.
+      claim: `e2e spec failed: ${spec.title}`.slice(0, 300),
       description: `e2e spec failed: ${spec.title}`,
     }));
 
@@ -328,6 +331,7 @@ export async function runCommittedE2e(
       severity: "critical",
       blocking: true,
       quote: "(uncitable — e2e tooling failure, no per-spec citation available)",
+      claim: "the e2e run failed as a whole with no individually-failed spec",
       description: "e2e tooling failed with no per-spec failures — investigate the Playwright run",
     });
   }

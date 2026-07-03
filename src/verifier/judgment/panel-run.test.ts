@@ -47,6 +47,7 @@ function blockedWith(reviewer: string, line: number, quote: string): RawReview {
         file: "src/app.ts",
         line,
         quote,
+        claim: "checkable issue",
         description: "issue",
       },
     ],

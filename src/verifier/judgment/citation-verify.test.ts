@@ -24,6 +24,7 @@ function f(partial: Partial<Finding> & Pick<Finding, "quote">): Finding {
     blocking: true,
     file: "src/app.ts",
     line: 3,
+    claim: "checkable concern",
     description: "concern",
     ...partial,
   });
@@ -75,6 +76,7 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
       severity: "warning",
       blocking: true,
       quote: "vague concern",
+      claim: "vague concern",
       description: "no location",
     });
     const res = verifyCitations([finding], reader);
@@ -106,6 +108,7 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
       file: "src/leak.ts",
       line: 1,
       quote: `const key = "${akia}";`,
+      claim: "an AWS key is hardcoded",
       description: `hardcoded key ${akia}`,
     });
     const res = verifyCitations([finding], r, { redact: true });
@@ -128,6 +131,7 @@ describe("WS7 deterministic citation-verify (Δ K)", () => {
       file: "src/leak.ts",
       line: 1,
       quote: `const key = "${akia}";`,
+      claim: "an AWS key is hardcoded",
       description: "hardcoded key",
     });
     const res = verifyCitations([finding], r, { redact: false });

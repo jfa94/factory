@@ -131,6 +131,7 @@ function findingsResults(file: string, line: number, description: string): Debug
             file,
             line,
             quote: "line two",
+            claim: "line two is broken",
             description,
           },
         ],

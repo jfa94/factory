@@ -97,6 +97,7 @@ describe("adjudicateWholeScope", () => {
           file,
           line,
           quote,
+          claim: "checkable issue",
           description: "issue",
         },
       ],
@@ -378,6 +379,7 @@ describe("foldE2eIntoBlockers", () => {
       severity: "critical",
       blocking: true,
       quote: "const x = 1",
+      claim: "a magic number is hardcoded",
       description: "issue",
     },
   ];
@@ -395,6 +397,7 @@ describe("foldE2eIntoBlockers", () => {
       file: "e2e/login.spec.ts",
       line: 1,
       quote: "login works",
+      claim: "e2e spec failed: login works",
       description: "e2e spec failed: login works",
     };
     const result = foldE2eIntoBlockers(existing, {

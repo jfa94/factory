@@ -13,6 +13,7 @@ const finding: Finding = parseFinding({
   file: "src/app.ts",
   line: 3,
   quote: "const value = process(input)",
+  claim: "unsanitised input reaches process()",
   description: "unsanitised input",
 });
 
