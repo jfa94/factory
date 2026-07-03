@@ -157,7 +157,7 @@ substituted, `CLAUDE_PLUGIN_DATA` baked into `env`, `statusLine` wired to `facto
 user's own statusline chained via `FACTORY_ORIGINAL_STATUSLINE`), then prints
 `claude --settings <merged-settings.json>`. Relaunching with that command sets
 `FACTORY_AUTONOMOUS_MODE=1` and produces a fresh `usage-cache.json` on the first turn, which the
-session-mode quota pacer reads. The relaunch is irreducible: Claude Code reads settings only at
+quota pacer reads. The relaunch is irreducible: Claude Code reads settings only at
 launch, so a running session can never make _itself_ autonomous — automation covers the scaffold,
 never the relaunch.
 

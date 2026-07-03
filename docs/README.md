@@ -22,7 +22,7 @@ all enforced by a tested TypeScript engine — not by prose an agent may ignore.
 
 ## Design philosophy
 
-**Model A — one engine, one seam, two thin runners.** The plugin is two halves
+**Model A — one engine, one seam, one thin runner.** The plugin is two halves
 with a hard seam between them:
 
 - A **deterministic engine**: one Node + TypeScript CLI, `factory <subcommand>`,
@@ -34,9 +34,9 @@ with a hard seam between them:
 - A thin **runner**: it steps the seam — spawning exactly the `Agent()`s the
   orchestrator's spawn request names and feeding their raw output back via `factory next-action
 --results`. It carries no pipeline logic and never decides a transition by prose.
-  Two interchangeable runners (chosen by `--workflow` on `/factory:run`): the in-session
-  runner loop (`skills/pipeline-runner/SKILL.md`, default) and the
-  plugin-shipped Workflow script (`scripts/factory-run-runner.js`).
+  ONE runner steps the seam (Decision 42): the in-session parallel event loop
+  (`skills/pipeline-runner/SKILL.md`) — every `factory` call foreground, up to
+  `maxParallelTasks` tasks' agents in the background.
 
 The CLI subcommands are **reporters** (read-only; emit one JSON envelope), the
 **orchestrator** (`next-task` / `next-action` — the control-flow seam), or **writers** (single-step

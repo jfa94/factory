@@ -15,9 +15,8 @@ control plane decides; the data plane acts; the names say which is which.
 | **Runner**       | A thin loop that steps the orchestrator and spawns the agents it names.                    | Yes — but no judgment. |
 
 The orchestrator is the brain that cannot move; the runner is the hands with no
-judgment. Two runners exist, stepping the identical seam: the in-session LLM loop
-(`skills/pipeline-runner/SKILL.md`, `--mode session`) and the Workflow script
-(`scripts/factory-run-runner.js`, `--mode workflow`).
+judgment. ONE runner exists (Decision 42): the in-session parallel event loop
+(`skills/pipeline-runner/SKILL.md`).
 
 ## The seam — two verbs
 
@@ -34,8 +33,8 @@ the runner what to do, not what state something is in.
 
 **`NextTask` kinds:** `work` (drive this ready task) · `document` (run the docs
 phase) · `finalize` (everything terminal — roll up) · `done` (run already terminal)
-· `pause` (blocked; wait — `scope` distinguishes a quota window from the workflow
-runtime-budget suspend, Decision 41).
+· `pause` (quota-blocked; wait — `scope` names the binding window: `5h`, `7d`, or
+`unavailable`).
 
 **`NextAction` kinds:** `spawn` (spawn these agents, resume after) · `done` (task
 terminal) · `pause` (quota-blocked; wait).

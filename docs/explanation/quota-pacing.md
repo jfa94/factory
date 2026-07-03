@@ -53,41 +53,22 @@ fail/fail" is true by construction, not by convention.
 The reverse separation also holds: the **circuit breaker**
 (`src/quota/circuit-breaker.ts`) is a distinct hard-abort predicate, _not_ part of
 the pacer. The pure predicate trips on `cumulativeFailures >= maxConsecutiveFailures`
-(default 3) or on effective runtime `(wall − paused) >= maxRuntimeMinutes` (default
-480). The predicate's failure input is named `cumulativeFailures` to match the
+(default 3) — **failures-only** since Decision 42 deleted the runtime arm along with
+workflow mode. The predicate's failure input is named `cumulativeFailures` to match the
 signal it actually bounds; the public config key keeps its historical name
 `maxConsecutiveFailures` for back-compat (the threshold is unchanged, only its
 documentation was corrected to say "cumulative"). The runner wires it into the run orchestrator through
 `src/orchestrator/circuit-breaker-gate.ts` (evaluated in `nextTask`, mirroring the
-`applyQuotaGate` seam). A tripped verdict carries which **arm** fired, and `nextTask` maps
-severity (Decision 41): the **runtime** arm is a recoverable budget stop — the run
-**suspends** and returns a `kind:"pause"` envelope with scope `"runtime-budget"`
-(resumable after raising `maxRuntimeMinutes`), preserving otherwise-healthy tasks; the
-**failures** and **fail-closed** arms are hard aborts — every remaining non-terminal task is
+`applyQuotaGate` seam). A trip — the `failures` arm, or `fail-closed` on malformed
+input — is a hard abort: every remaining non-terminal task is
 failed `capability-budget` and the run finalizes `failed`. Following derive-don't-store,
-**no breaker counter is persisted** — the gate derives both signals from run state:
-
-- **Failure-count arm (both modes)** — the count of `capability-budget` fails, i.e.
-  tasks whose producer ladder genuinely exhausted its budget. `blocked-environmental`
-  (dependency cascades) and `spec-defect` (wedge) fails are deliberately **excluded**:
-  they are consequences of a failure, not independent failures, so one real failure
-  that cascades to two dependents can never masquerade as three counted failures
-  and abort still-runnable work.
-- **Runtime arm (workflow mode only)** — effective runtime `(wall − paused)` since
-  `run.started_at`, where `wall` is the elapsed time and `paused` is idle time deducted so
-  the ceiling bounds **activity, not wall-clock**. It is exact only in workflow mode, which
-  never pauses on quota (Decision 24). Idle crediting is single-writer (Decision 41):
-  `StateManager.update()` is the **sole** writer of `run.paused_minutes` — every write banks
-  `max(0, gap_since_last_write − 60min)` (the `ACTIVE_GAP_CAP_MINUTES` cap), so a normal
-  step (spawn → agent stage → results write) stays under the cap while a human pause banks
-  its full gap. The gate **deducts** the persisted `paused_minutes` **plus** the still-pending
-  gap since the last write (`idleGapCredit(run.updated_at, now)`) — the read-side term is
-  required because `nextTask` evaluates the breaker before any post-pause write lands.
-  Counted runtime is thus `Σ min(gap, 60)`: a multi-day park costs one cap, not its
-  wall-clock. Session mode pauses and suspends and `started_at` is never reset, so the gate
-  **disarms** the runtime ceiling there (it feeds `now` as the start → 0 wall minutes →
-  cannot trip) and lets the usage pacer own session time/quota. Either way, a quota
-  pause can **never** trip the breaker.
+**no breaker counter is persisted** — the gate derives the signal from run state: the
+count of `capability-budget` fails, i.e.
+tasks whose producer ladder genuinely exhausted its budget. `blocked-environmental`
+(dependency cascades) and `spec-defect` (wedge) fails are deliberately **excluded**:
+they are consequences of a failure, not independent failures, so one real failure
+that cascades to two dependents can never masquerade as three counted failures
+and abort still-runnable work. A quota pause can **never** trip the breaker.
 
 ## Decision 3 — Fail closed; absence is never permission
 
@@ -99,30 +80,25 @@ pacer turns into `unavailable-halt`. An observability gap **halts cleanly**; it 
 never treated as "under curve, proceed". The unobservable case is a value the
 pacer routes on, not an exception it swallows.
 
-## Mode scopes the safety net
+## The usage signal
 
-Usage-based pacing requires _observing_ the usage cache, and only the in-session
-runner can read it. Workflow mode (Decision 24) runs as a background Workflow script
-with no access to the cache, so `applyQuotaGate` (`src/orchestrator/quota-gate.ts`) returns
-`proceed` unconditionally when `mode` is `workflow` — the two-window pacer is
-structurally **session-only**. That is not a gap: workflow's runaway protection is the
-state-based **circuit breaker** above, which derives its signals from run state and
-needs no usage signal. The two safety nets therefore divide cleanly by mode:
-
-| Mechanism                | Session | Workflow | Needs usage signal |
-| ------------------------ | ------- | -------- | ------------------ |
-| Two-window pacer         | ✅      | —        | yes                |
-| Circuit-breaker failures | ✅      | ✅       | no                 |
-| Circuit-breaker runtime  | —       | ✅       | no                 |
+Usage-based pacing requires _observing_ the usage cache
+(`${CLAUDE_PLUGIN_DATA}/usage-cache.json`), which the `factory statusline`
+passthrough writes on every statusline tick and `applyQuotaGate`
+(`src/orchestrator/quota-gate.ts`) reads on every step. Pacing applies to **every**
+run (Decision 42). When the cache is unobservable the gate does not guess — it fails
+closed (Decision 3 above), suspending with scope `"unavailable"` and writing a
+`{binding_window: "unavailable"}` checkpoint: `run.quota` present ⇔ the stop was
+quota-caused, the invariant `planResume` discriminates on.
 
 ## `--ignore-quota` — the per-run pacing override
 
-`mode === "workflow"` is one way `applyQuotaGate` short-circuits to `proceed`; a
-per-run **`ignore_quota`** flag is the other. When `ignore_quota` is true the gate
-returns `null` unconditionally — it neither reads the usage signal nor writes state,
-exactly like workflow mode. The flag is persisted on the run (`RunState.ignore_quota`,
-default `false`) so **both orchestrators** (`factory next-task`/`factory next-action`) and **both
-runners** read it straight from state — no per-call flag threading. A legacy run with
+A per-run **`ignore_quota`** flag is the one way `applyQuotaGate` short-circuits
+to `proceed`: when true the gate
+returns `null` unconditionally — it neither reads the usage signal nor writes state.
+The flag is persisted on the run (`RunState.ignore_quota`,
+default `false`) so **both orchestrators** (`factory next-task`/`factory next-action`) and the
+runner read it straight from state — no per-call flag threading. A legacy run with
 no field reads as `false` and is unaffected.
 
 Two entry points set it:
@@ -149,7 +125,7 @@ and `--supersede` alike.
 
 The guard is narrow by design:
 
-- A **5h pause** and an **`unavailable` suspend** (`quota: undefined`, no `binding_window`)
+- A **5h pause** and an **`unavailable` suspend** (`quota.binding_window === "unavailable"`)
   are NOT blocked — only the weekly park is.
 - The **`--resume` intent** falls through to the ordinary `kind:"exists"` conflict, because
   the `factory resume` door it hands off to already re-checks the LIVE 7d window on the
@@ -194,6 +170,6 @@ never reaches the producer.
 - [State model](../reference/state-model.md) — the `RunStatus` enum and the quota
   checkpoint fields persisted on suspend.
 - [Configuration schema](../reference/configuration.md) — the `quota` block:
-  curves, `producerModels`, and the breaker limits.
+  curves and `producerModels`.
 - [The producer escalation ladder](./producer-ladder.md) — how the routed model
   feeds the producer's starting rung.

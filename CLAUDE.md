@@ -4,7 +4,7 @@ Autonomous coding pipeline that converts GitHub PRD issues into merged pull requ
 
 ## Architecture (Model A)
 
-- The plugin surface is markdown (`commands/`, `agents/`, `skills/`) + hooks. The deterministic engine owns ALL control flow and exposes ONE seam — the **orchestrator** (`factory next-task` + `factory next-action`). Two thin runners step it: the in-session LLM runner loop (`skills/pipeline-runner/SKILL.md`, `--mode session`) and the plugin-shipped Workflow script (`scripts/factory-run-runner.js`, `--mode workflow`). A runner only spawns the `Agent()`s the orchestrator's `NextAction` spawn manifest names — it carries no pipeline logic of its own.
+- The plugin surface is markdown (`commands/`, `agents/`, `skills/`) + hooks. The deterministic engine owns ALL control flow and exposes ONE seam — the **orchestrator** (`factory next-task` + `factory next-action`). ONE thin runner steps it (Decision 42): the in-session parallel event loop (`skills/pipeline-runner/SKILL.md`) — every `factory` call foreground, up to `maxParallelTasks` tasks' agents spawned in the background. The runner only spawns the `Agent()`s the orchestrator's `NextAction` spawn manifest names — it carries no pipeline logic of its own.
 - The deterministic engine is one Node+TS CLI — `factory <subcommand>` — built by esbuild into two checked-in bundles: `dist/factory.js` (CLI) and `dist/factory-hook.js` (hook dispatcher, wired in `hooks/hooks.json`). `bin/factory` is the PATH shim onto the bundle.
 - The CLI is the orchestrator seam + reporters + writers, never an agent-spawner: `factory next-task` emits the ready-task result (`NextTask`); `factory next-action` emits the spawn manifest (`NextAction`) and, via `--results`, records agent output into ONE state step. The six retired single-step writers (`run-task`/`advance`/`drop`/`record-producer`/`record-holdout`/`record-reviews`) collapsed into the orchestrator; the surviving writers are `spec`, `rescue`, `scaffold`, `configure`, `state`.
 - Source lives in `src/` (vitest, colocated `*.test.ts`). `npm run verify` = typecheck && lint && test && build. `npx tsc` is shadowed — use `npm run typecheck`.
@@ -28,8 +28,7 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 
 ## Key entry points
 
-- `commands/run.md` — main entry (`--workflow`/`--no-ship`; default session+live: session = the runner loop in the invoking Claude Code session; workflow = the Workflow script. See `skills/pipeline-runner/SKILL.md` for the protocol + CLI surface table). Four distinct lifecycle verbs (Decision 35): `run` starts FRESH (no silent reuse — on an active run it exits 3 / prompts resume·supersede·cancel), `commands/resume.md` (`/factory:resume`, `factory resume`) continues an unfinished run, `commands/rescue.md` repairs git/GitHub drift then resumes, `commands/debug.md` is the standalone review-fix loop.
-- `scripts/factory-run-runner.js` — the `--workflow` runner: a Workflow script stepping the same `next-task`/`next-action` seam, wrapping every CLI call in a sonnet exec-agent (Workflow JS can't shell out)
+- `commands/run.md` — main entry (`--no-ship` to open PRs without merging; default: live. The runner loop runs in the invoking Claude Code session — see `skills/pipeline-runner/SKILL.md` for the protocol + CLI surface table). Four distinct lifecycle verbs (Decision 35): `run` starts FRESH (no silent reuse — on an active run it exits 3 / prompts resume·supersede·cancel), `commands/resume.md` (`/factory:resume`, `factory resume`) continues an unfinished run, `commands/rescue.md` repairs git/GitHub drift then resumes, `commands/debug.md` is the standalone review-fix loop.
 - `src/cli/main.ts` — the `factory` subcommand registry (run, resume, spec, next-task, next-action, rescue, score, state, scaffold, configure, config-defaults, debug, autonomy, statusline)
 - `src/orchestrator/orchestrator.ts` + `src/orchestrator/next.ts` — the task-level and run-level orchestrators behind `factory next-action`/`factory next-task` (record logic in `src/orchestrator/record.ts`)
 - `src/hooks/main.ts` — the `factory-hook` guard dispatch (TCB write-deny, holdout guard, secret guard, branch protection, stop gates)
@@ -40,7 +39,7 @@ Reviewer roles (risk-invariant panel — every reviewer runs on every task):
 
 ## Skills
 
-- `skills/pipeline-runner/SKILL.md` — full runner protocol (the `--mode session` runner loop)
+- `skills/pipeline-runner/SKILL.md` — full runner protocol (the in-session parallel event loop)
 - `skills/test-driven-development/SKILL.md` — TDD discipline for subagents
 - `skills/prd-to-spec/SKILL.md` — converts PRD issues to spec + tasks.json
 - `skills/review-protocol/SKILL.md` — the RawReview JSON output contract every risk-invariant-panel reviewer emits (CLI citation-verifies + records it into the merge gate)

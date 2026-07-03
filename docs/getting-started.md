@@ -86,9 +86,8 @@ orchestrator); what lives in markdown is the **runner** — the thin loop that s
 agents each envelope names — because only a session can call the `Agent` tool.
 That is the Model-A split. Read these two files in order:
 
-1. `commands/run.md` — the `/factory:run` entry point (the spine; picks the runner
-   via `--workflow` — session by default).
-2. `skills/pipeline-runner/SKILL.md` — the session runner's full loop: the
+1. `commands/run.md` — the `/factory:run` entry point (the spine).
+2. `skills/pipeline-runner/SKILL.md` — the runner's full event loop: the
    Iron Laws, the orchestrator surface (`next-task` / `next-action`), the agent-spawn matrix, and the
    four phases (preconditions → spec → create → drive → completion).
 

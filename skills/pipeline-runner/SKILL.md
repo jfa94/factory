@@ -270,7 +270,7 @@ docs stage:
 
 ### Collecting a spawn envelope
 
-Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the dir). NEVER write under `runs/**` or `specs/**` — the plugin's own TCB hooks deny those writes; `drive --results` reads from any path. Every spawn envelope names `expects`:
+Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the dir). NEVER write under `runs/**` or `specs/**` — the plugin's own TCB hooks deny those writes; `next-action --results` reads from any path. Every spawn envelope names `expects`:
 
 **`expects: "producer-status"`** (stages tests/exec — ONE producer agent):
 
@@ -343,7 +343,7 @@ so no aliasing applies; it appears only on producer spawns, never reviewers.
   status (`completed | failed`), the rollup PR, filed issues, and every
   drop with its class — plainly, never papered over.
 - Documentation is no longer a Phase-4 step: the engine runs it as the
-  `docs-ready` stage in THE LOOP (Phase 3), before finalize ships the rollup.
+  `document` stage in THE LOOP (Phase 3), before finalize ships the rollup.
   On an `--e2e` run, the e2e stage runs before docs (Decision 39) — a failed
   e2e phase skips docs entirely (don't document code the e2e verdict just
   condemned) and is reported alongside the rollup, not as a separate step.

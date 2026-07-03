@@ -23,7 +23,7 @@ is unacceptable for an unattended pipeline whose whole value proposition is trus
 ## The Model-A answer
 
 Split the system in two and put a hard seam between them — **one engine, one
-seam, two thin runners**:
+seam, one thin runner**:
 
 - **The CLI is the brain, and it owns ALL control flow.** `factory <subcommand>`
   is a deterministic, tested TypeScript engine. It owns every piece of
@@ -45,17 +45,14 @@ seam, two thin runners**:
   classifies a failure, or writes state by prose. It is a dumb loop around the
   orchestrator.
 
-Two interchangeable runners step the same seam, selected by `--workflow` on
-`/factory:run`:
+ONE runner steps the seam (Decision 42): the in-session parallel event loop
+(`skills/pipeline-runner/SKILL.md`), running in the invoking Claude Code session
+— the only place that can spawn `Agent()`s directly. Every `factory` CLI call
+runs foreground in that session (one-driver-per-task by construction); the
+agents of up to `maxParallelTasks` ready tasks run in the background, and the
+runner multiplexes their completions back through `next-action --results`.
 
-- **Session mode** (default, no flag) — the in-session LLM runner loop
-  (`skills/pipeline-runner/SKILL.md`), running in the invoking Claude Code
-  session. This is the runner that can spawn `Agent()`s directly.
-- **`--workflow`** — the plugin-shipped Workflow script
-  (`scripts/factory-run-runner.js`). Because Workflow JS cannot shell out, it
-  wraps every `factory` CLI call in a small exec agent (sonnet).
-
-Both are **subscription-only** — there is no headless `claude -p` / API-token path
+It is **subscription-only** — there is no headless `claude -p` / API-token path
 anywhere. The runner's entire job is the glue: step → spawn what the request names
 → feed the raw results back → follow the step the orchestrator returned.
 
@@ -69,14 +66,14 @@ A few alternatives were rejected:
   producer or reviewer. So the session runner must run in the main session.
 - **Pure-script runner.** A shell/Node process cannot invoke the `Agent`
   tool at all. So the engine cannot also be the thing that spawns agents — the
-  workflow runner exists precisely because it can launch `Agent()`s while the
+  runner exists precisely because it can launch `Agent()`s while the
   engine (the orchestrator) cannot.
 - **Pure-agent orchestration.** This is exactly the unreliability problem above —
   100%-reliable bookkeeping cannot be left to ~70%-reliable prose-following. A
   runner that "decides" anything would re-introduce it; the runner only steps.
 
 Model A is the only split that respects both constraints: the agent-spawning must
-live in a runner (the session or the Workflow runtime), and the bookkeeping —
+live in the runner session, and the bookkeeping —
 every decision — must live behind the orchestrator in code. The seam is the `factory`
 CLI's JSON contract.
 
@@ -92,18 +89,18 @@ CLI's JSON contract.
 - **Forgery resistance.** Because the CLI derives verdicts from ground truth and
   stores none (see [derive-dont-store.md](./derive-dont-store.md)), an agent cannot
   fake a passing gate by writing to state — there is no field to write.
-- **One loop, many runners.** Because the orchestrator (`src/orchestrator/orchestrator.ts` +
-  `next.ts` + `record.ts`) is the _single_ implementation of the loop, every runner
-  inherits identical control flow for free. The session loop and the Workflow
-  script are thin and interchangeable; a future out-of-session scheduler would be a
-  third runner over the same unchanged seam.
+- **One loop, runner-agnostic.** Because the orchestrator (`src/orchestrator/orchestrator.ts` +
+  `next.ts` + `record.ts`) is the _single_ implementation of the loop, any runner
+  inherits identical control flow for free. The event loop stays thin; a future
+  out-of-session scheduler would just be a second runner over the same unchanged
+  seam.
 
 ## The cost
 
-The two runners must each faithfully obey the orchestrator's envelopes — spawn exactly
-what a request names and feed results back verbatim — but they share no pipeline
-logic, so they cannot _diverge_ on a transition: there is one loop, in code, and
-the runners only step it. The discipline that remains is at the spawn boundary
+The runner must faithfully obey the orchestrator's envelopes — spawn exactly
+what a request names and feed results back verbatim — but it carries no pipeline
+logic, so it cannot _diverge_ on a transition: there is one loop, in code, and
+the runner only steps it. The discipline that remains is at the spawn boundary
 (the runner skill's Iron Laws), not in a duplicated loop. This is the
 payoff of collapsing the earlier in-process runner and the single-step CLI writers
 into the orchestrator: the spawn-path record and a crash-resume record now run the identical

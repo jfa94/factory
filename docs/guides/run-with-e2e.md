@@ -66,10 +66,10 @@ validated as a well-formed URL at config time. Optional tuning
 /factory:run --repo <owner/name> --issue <N> --e2e
 ```
 
-`--e2e` is **create-only and immutable**, exactly like `--workflow` / `--no-ship`: it is
+`--e2e` is **create-only and immutable**, exactly like `--no-ship`: it is
 persisted on the run at creation and cannot be added, removed, or changed on resume.
 Passing `--e2e` together with `--resume` is rejected loud — a resumed run keeps the
-`e2e` setting it was born with. It combines freely with `--workflow`, `--no-ship`, and
+`e2e` setting it was born with. It combines freely with `--no-ship` and
 `--ignore-quota`.
 
 ## 3. What the e2e phase does

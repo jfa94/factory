@@ -535,6 +535,8 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 
 ## Decision 24: Quota Pacing and the Execution-Mode Caveat
 
+> **Superseded in part (2026-07-03, [Decision 42](#decision-42--one-runner-workflow-mode-deleted-runquota-presence-is-the-suspend-discriminant)).** Workflow mode is deleted, so the execution-mode caveat is moot: pacing applies to **every** run. The pacing model itself (two windows, the curve, the 5h-pause / 7d-stop split) stands.
+
 **Choice:** The pipeline bounds its own subscription-quota consumption by **proactive pacing**, not reactive backoff. Quota is **never a reason to fail work — only to pause it** (distinct from the Decision 22 retry-budget fail).
 
 - **Two windows, paced linearly with a 10% reserve floor:**
@@ -629,6 +631,8 @@ So E2 substitutes the placeholder to the resolved absolute path at `factory auto
 ---
 
 ## Decision 28: One Engine, One Seam (the Orchestrator), Two Thin Drivers
+
+> **Superseded in part (2026-07-03, [Decision 42](#decision-42--one-runner-workflow-mode-deleted-runquota-presence-is-the-suspend-discriminant)).** "Two thin drivers" became ONE: the Workflow-script runner is deleted; the in-session parallel event loop is the only runner. The engine / one-seam split and everything else here stands.
 
 **Choice:** The deterministic `factory` CLI owns **all** pipeline control flow — including the loop itself — and exposes exactly **one** seam, the **orchestrator**, in two halves:
 
@@ -1176,6 +1180,8 @@ CI — its gate is the factory run itself.
 
 ## Decision 41 — Runtime Circuit-Breaker: Idle Never Counts, and a Runtime Trip Suspends
 
+> **Superseded (2026-07-03, [Decision 42](#decision-42--one-runner-workflow-mode-deleted-runquota-presence-is-the-suspend-discriminant)).** The runtime arm and the whole idle-crediting apparatus (`paused_minutes`, `idleGapCredit`, `ACTIVE_GAP_CAP_MINUTES`, `maxRuntimeMinutes`, scope `"runtime-budget"`) were deleted with workflow mode; the circuit breaker is **failures-only**. Kept for history.
+
 **Date:** 2026-07-03
 
 **Context:** The workflow-mode runtime circuit breaker (`src/quota/circuit-breaker.ts`)
@@ -1268,6 +1274,23 @@ and quota pacing applies to every run (the Decision-24 workflow exemption is moo
 Decisions 24 (workflow half), 28, and 41 are superseded in their workflow-specific parts.
 Supersedes the runtime arm entirely; Decision 41's idle-crediting rationale is preserved
 here for history but the mechanism no longer exists.
+
+**Addendum (2026-07-03) — the runner event-loop protocol (S3).** The "parallel event
+loop" this decision announced is now specified in `skills/pipeline-runner/SKILL.md`
+(Phase 3). The load-bearing choices: the **main session is the multiplexer** —
+background subagents cannot spawn agents, so ALL `factory` CLI calls run FOREGROUND in
+the main session (one-driver-per-task by construction) and ONLY `Agent()` spawns run in
+the background. The runner's **in-flight table** (`task_id → {result_key, wave, agent
+ids}`) is a rebuildable cache held in conversation context only — the state file is
+truth, and compaction recovery re-derives it from `next-task` (in-flight first) +
+idempotent `next-action` re-invocations, never from memory. After every completion the
+runner **refills** up to the work envelope's `max_parallel`; a task's wave records only
+when ALL its agents are in (`next-action --results`, foreground). Any `kind:"pause"`
+from either verb converges hard: spawn nothing, `TaskStop` every in-flight agent —
+safe because the quota gate precedes `recordResults` and the `spawn_in_flight` reset
+makes abandoned spawns resume-clean. Run-level stages (document / e2e / finalize) only
+emit once the table is empty by construction; one arriving with tasks in flight is an
+engine defect, stop loud.
 
 ---
 
