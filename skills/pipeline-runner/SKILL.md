@@ -299,6 +299,25 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
    `{ "reviewer":"<role>", "verdict":"approve|blocked|error", "findings":[ { "reviewer","severity","blocking","file","line","quote","claim","description" } ] }`
    (`quote` and `claim` REQUIRED — `claim` is the one-sentence checkable assertion, ≤300
    chars; `file`+`line` make a finding citable; `findings` may be empty.)
+
+   **Cross-vendor quality-reviewer (Δ U/S5).** The manifest carries the engine's
+   resolved `cross_vendor` stamp; it decides how the `quality-reviewer` entry runs:
+   - `cross_vendor.status == "present"` → do NOT spawn the Claude quality-reviewer.
+     Run it via Bash instead:
+     `codex exec --model <cross_vendor.model> --sandbox read-only --cd <tenv.worktree> "<prompt>"`
+     where `<prompt>` = the `agents/quality-reviewer.md` charter body + the
+     `skills/review-protocol/SKILL.md` contract + the SAME diff-scope context the
+     Claude spawn would get (`git diff <tenv.base_ref>`, task title/criteria).
+     Parse the RawReview JSON from stdout (last JSON object). On rc≠0, unparseable
+     output, or a wrong-shape verdict: FALL BACK to spawning the Claude
+     quality-reviewer as normal AND set
+     `crossVendorAbsent: { "reason": "codex execution failed: <rc/parse detail>" }`
+     in the results file — the fallback ran same-vendor, and that must stay loud.
+   - `cross_vendor.status == "absent"` → spawn the Claude quality-reviewer as
+     normal and copy the stamp's `reason` VERBATIM into `crossVendorAbsent`.
+   - stamp missing (older engine) → treat as absent with reason
+     `"no cross-vendor stamp on manifest"`.
+
 3. **Verify-then-fix:** for EACH finding that is `blocking:true` AND citable, spawn an
    INDEPENDENT finding-verifier (`general-purpose`, isolation `"worktree"`, model
    `opus`, adversarial framing — _"try to refute this finding against the actual
@@ -314,11 +333,13 @@ Write results files under `$CLAUDE_PLUGIN_DATA/results/<run_id>/` (create the di
      "reviews": {
        "reviews": [ <each RawReview JSON> ],
        "verifications": [ { "reviewer":"<role>", "verdicts":[ {"file","line","holds","note"} ] } ],
-       "crossVendorAbsent": { "reason": "no second-vendor reviewer configured" } } }
+       "crossVendorAbsent": { "reason": "<the manifest stamp's reason, or the codex runtime-failure detail>" } } }
    ```
    Omit `"holdout"` when there was no sidecar. Include one verdict for every
    blocking+citable finding (the CLI fails closed on a missing one). Include
-   `crossVendorAbsent` only when no cross-vendor reviewer ran.
+   `crossVendorAbsent` ONLY when no cross-vendor reviewer actually ran (stamp
+   absent, or the `codex exec` fallback fired) — never invent the reason: echo
+   the stamp's reason or the runtime-failure detail exactly.
 
 ### Agent spawn matrix
 

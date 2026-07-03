@@ -1335,6 +1335,61 @@ truncated. Decision 26's roster examples now describe 4 roles.
 
 ---
 
+## Decision 44 — Verifier Upgrades: Grep-Rescue, Claim-Only Verification, Real Cross-Vendor
+
+**Date:** 2026-07-03
+
+**Context:** Redesign session S5 (workstream B2). Three verify-pipeline defects: (1)
+citation-verify dropped findings whose quote was REAL but whose line number was off by
+more than ±2 — losing true blockers to a reviewer's counting error; (2) the independent
+finding-verifier (Decision 27) received the reviewer's full finding including
+`description`, so its "independent" judgment could be anchored by the finder's reasoning
+chain; (3) cross-vendor review was aspirational — the panel was hardcoded all-Claude,
+the SKILL shipped a hardcoded `crossVendorAbsent` string, and debug's `codex_available`
+was a config-presence check that never executed Codex.
+
+**Decision:**
+
+- **Grep-rescue (Δ K).** On `quote-not-in-window`/`line-out-of-range`, a single-line,
+  non-blank trimmed quote is grepped across the whole cited file; EXACTLY one match →
+  the finding is kept with its line RELOCATED (audit `RELOCATE relocated_ok`), 0 or ≥2
+  matches → dropped as before. `uncitable`/`file-not-found`/multi-line never rescue.
+  `kept` entries carry `{finding, citedLine?}`: confirmation (and the replay runner's
+  `file:line` verdict key) uses the CITED line — what the verifier agent actually saw —
+  while `fix_findings`/reports carry the RELOCATED line. A naive relocate-before-confirm
+  would orphan every recorded verdict and turn rescued blockers into blocked tasks.
+- **Claim-only verification (D27 hardening).** `Finding` gains a required
+  `claim` (≤300 chars, the one-sentence checkable assertion; `description` stays the
+  reviewer's reasoning). The verifier sees ONLY the typed `ClaimOnlyFinding`
+  projection `{reviewer, severity, claim, file, line, quote}` — `description?: never`
+  makes leaking it a compile error, and both runner SKILLs pin the same six-field
+  interpolation rule. `FixFinding` (producer-facing) deliberately KEEPS `description`.
+  `claim` is REQUIRED with no grace fallback: prompts + engine ship in one bundle, and a
+  mid-upgrade old-format review fails loud at `parseRawReview` → fresh panel spawn.
+- **Real cross-vendor (Δ U).** `review.requireCrossVendor: "warn" | "block"` (default
+  `warn`). The engine resolves availability once per spawn decision via
+  `resolveCodexCrossVendor` — a memoized `codex --version` probe, short-circuited to a
+  deterministic `absent` when `codex.model` is unset (default config never shells out) —
+  and stamps `cross_vendor: {status:"present",model} | {status:"absent",reason}` on the
+  verify panel manifest. `present` ⇒ the runner executes the quality-reviewer via
+  `codex exec --sandbox read-only` (Claude fallback + honest
+  `codex execution failed: <detail>` absence on runtime failure). `warn` ⇒ the absence
+  persists as `TaskState.cross_vendor_absent` (event record, written in the same advance
+  write as `reviewers`) and surfaces as the report's `## Review independence` section +
+  the summary's `tasks_without_cross_vendor` — no more buried `log.warn`. `block` ⇒
+  runPanel demotes the quality-reviewer result to `verdict:"error"` (fail-closed
+  synthesis if missing) so the merge gate blocks with the policy named in the reason;
+  the verify handler fail-fasts the spawn (wait-retry BEFORE burning a 4-Opus panel)
+  when the probe already says absent.
+
+**Consequences:** Real blockers with off-by-a-few citations now survive to
+confirmation; ambiguity still fails closed. The verifier judges the bare claim against
+the code. Single-vendor review is now a visible, policy-controlled property of a run
+instead of a silent default; `block` makes Decision 43's "Codex is the preferred
+executor" enforceable end-to-end.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent
