@@ -393,6 +393,44 @@ describe("plain-language e2e narrative (Decision 40 D12)", () => {
   });
 });
 
+describe("cross-vendor absences (Δ U/S5 review independence)", () => {
+  it("builds cross_vendor_absences in spec order from persisted task.cross_vendor_absent + renders the section", () => {
+    const spec = makeSpec([specTask("t1"), specTask("t2"), specTask("t3")]);
+    const run = makeRun(
+      [
+        { ...doneTask("t3", 3), cross_vendor_absent: { reason: "codex execution failed: exit 1" } },
+        doneTask("t2", 2),
+        {
+          ...doneTask("t1", 1),
+          cross_vendor_absent: { reason: "no cross-vendor model configured (codex.model)" },
+        },
+      ],
+      { status: "completed" },
+    );
+    const report = buildPartialReport(run, spec, { now: NOW });
+
+    expect(report.cross_vendor_absences).toEqual([
+      { task_id: "t1", reason: "no cross-vendor model configured (codex.model)" },
+      { task_id: "t3", reason: "codex execution failed: exit 1" },
+    ]);
+
+    const md = renderPartialReportMarkdown(report);
+    expect(md).toContain("## Review independence");
+    expect(md).toContain("2 task(s) were reviewed WITHOUT an independent second-vendor reviewer:");
+    expect(md).toContain("- `t1` — no cross-vendor model configured (codex.model)");
+    expect(md).toContain("- `t3` — codex execution failed: exit 1");
+  });
+
+  it("field + section are absent when every task had a second vendor", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], { status: "completed" });
+    const report = buildPartialReport(run, spec, { now: NOW });
+
+    expect(report.cross_vendor_absences).toBeUndefined();
+    expect(renderPartialReportMarkdown(report)).not.toContain("Review independence");
+  });
+});
+
 describe("failureCommentMarker", () => {
   it("embeds the run id in a hidden HTML comment", () => {
     expect(failureCommentMarker("run-1")).toBe("<!-- factory:run-failed:run-1 -->");

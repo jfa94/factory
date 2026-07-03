@@ -35,6 +35,14 @@ describe("ConfigSchema", () => {
     expect(defaultConfig()).toEqual(ConfigSchema.parse({}));
   });
 
+  it("review.requireCrossVendor defaults to warn, accepts block, rejects anything else (S5/C)", () => {
+    expect(ConfigSchema.parse({}).review.requireCrossVendor).toBe("warn");
+    expect(
+      ConfigSchema.parse({ review: { requireCrossVendor: "block" } }).review.requireCrossVendor,
+    ).toBe("block");
+    expect(() => ConfigSchema.parse({ review: { requireCrossVendor: "off" } })).toThrow();
+  });
+
   it("quality.setupCommand is optional and round-trips when set", () => {
     expect(ConfigSchema.parse({}).quality.setupCommand).toBeUndefined();
     const cfg = ConfigSchema.parse({ quality: { setupCommand: "pnpm install --frozen-lockfile" } });

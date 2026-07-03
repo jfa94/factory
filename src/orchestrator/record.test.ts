@@ -432,6 +432,7 @@ describe("applyRecordReviews record", () => {
             file: "src/x.ts",
             line: 2,
             quote: "const x = 1",
+            claim: "a magic number is hardcoded",
             description: "magic number",
           },
         ],
@@ -465,6 +466,53 @@ describe("applyRecordReviews record", () => {
     ]);
   });
 
+  // S5/A2 replay-keying pin: the runner's verifier agents (and thus the recorded
+  // verdicts) are keyed on the reviewer's CITED file:line — a grep-rescued finding
+  // must still find its verdict at the CITED line, while fix_findings carries the
+  // RELOCATED line. A naive relocate-before-replay orphans the verdict → LOUD error.
+  it("a grep-RESCUED blocker replays its verdict at the CITED line and fixes forward at the RELOCATED line", async () => {
+    await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
+    const deps = makeDeps();
+    const input: RecordReviewsInput = {
+      reviews: fullPanel({
+        reviewer: "quality-reviewer",
+        verdict: "blocked",
+        findings: [
+          {
+            reviewer: "quality-reviewer",
+            severity: "critical",
+            blocking: true,
+            file: "src/x.ts",
+            line: 9, // out of range; quote is unique on line 2 → rescued
+            quote: "const x = 1",
+            claim: "a magic number is hardcoded",
+            description: "magic number",
+          },
+        ],
+      }),
+      // Verdict recorded at the CITED line 9 — what the verifier agent saw.
+      verifications: [
+        {
+          reviewer: "quality-reviewer",
+          verdicts: [{ file: "src/x.ts", line: 9, holds: true, note: "confirmed" }],
+        },
+      ],
+    };
+
+    const env = await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
+
+    expect(env.mergeGate.passed).toBe(false);
+    // Confirmed (verdict FOUND at the cited key — not a verifier error)…
+    const quality = env.reviewers.find((r) => r.reviewer === "quality-reviewer")!;
+    expect(quality.verdict).toBe("blocked");
+    expect(quality.confirmed_blockers).toBe(1);
+    // …and the producer-facing record carries the corrected line.
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.fix_findings).toEqual([
+      { reviewer: "quality-reviewer", file: "src/x.ts", line: 2, description: "magic number" },
+    ]);
+  });
+
   it("a kept blocker with NO recorded verdict FAILS CLOSED (verifier error, never a pass)", async () => {
     await writeWorktreeFile("src/x.ts", "line1\nconst x = 1\nline3\n");
     const deps = makeDeps();
@@ -480,6 +528,7 @@ describe("applyRecordReviews record", () => {
             file: "src/x.ts",
             line: 2,
             quote: "const x = 1",
+            claim: "a magic number is hardcoded",
             description: "magic number",
           },
         ],
@@ -559,6 +608,7 @@ describe("applyRecordReviews record", () => {
             file: "src/x.ts",
             line: 2,
             quote: "const x = 1",
+            claim: "a magic number is hardcoded",
             description: "magic number",
           },
         ],
@@ -699,6 +749,64 @@ describe("applyRecordReviews record", () => {
 
     expect(env.crossVendorAbsence).toBeUndefined();
     expect(stderr).not.toMatch(/cross-vendor/i);
+  });
+
+  it("S5/C4 warn: an advancing verify PERSISTS cross_vendor_absent in the same write as reviewers", async () => {
+    const deps = makeDeps();
+    const input: RecordReviewsInput = {
+      reviews: fullPanel(),
+      verifications: [],
+      crossVendorAbsent: { reason: "cross-vendor executor 'codex' is not available" },
+    };
+
+    const { result: env } = await captureWarnings(() =>
+      applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input),
+    );
+
+    expect(env.step).toEqual({ done: false, phase: "ship" });
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.cross_vendor_absent).toEqual({
+      reason: "cross-vendor executor 'codex' is not available",
+    });
+    expect(task.reviewers.length).toBeGreaterThan(0);
+  });
+
+  it("S5/C4: a later advancing pass WITH a second vendor clears the stale persisted absence", async () => {
+    await state.updateTask(RUN_ID, TASK_ID, (t) => ({
+      ...t,
+      cross_vendor_absent: { reason: "stale absence from a prior pass" },
+    }));
+    const deps = makeDeps();
+    const input: RecordReviewsInput = { reviews: fullPanel(), verifications: [] };
+
+    await applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input);
+
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.cross_vendor_absent).toBeUndefined();
+  });
+
+  it("S5/C block mode: requireCrossVendor=block + absent → merge gate blocked with the honest policy reason", async () => {
+    const cfg = defaultConfig();
+    const deps: RecordDeps = {
+      ...makeDeps(),
+      config: { ...cfg, review: { ...cfg.review, requireCrossVendor: "block" } },
+    };
+    const input: RecordReviewsInput = {
+      reviews: fullPanel(), // all approve — ONLY the absence blocks
+      verifications: [],
+      crossVendorAbsent: { reason: "codex execution failed: exit 1" },
+    };
+
+    const { result: env } = await captureWarnings(() =>
+      applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input),
+    );
+
+    expect(env.mergeGate.passed).toBe(false);
+    expect(env.step).toEqual({ done: false, phase: "exec" }); // escalate, not ship
+    const quality = env.reviewers.find((r) => r.reviewer === "quality-reviewer")!;
+    expect(quality.verdict).toBe("error");
+    const task = (await state.read(RUN_ID)).tasks[TASK_ID]!;
+    expect(task.escalation_rung).toBe(1);
   });
 
   it("gate baseRef is per-run staging/<run-id>, not shared staging (Decision 33)", async () => {
@@ -942,6 +1050,7 @@ describe("buildWorktreeSource — ENOENT-only swallow (citation source loader)",
         file,
         line: 1,
         quote: "x",
+        claim: "c",
         description: "d",
       },
     ],

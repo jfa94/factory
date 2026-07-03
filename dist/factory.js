@@ -5895,7 +5895,14 @@ var ReviewSchema = external_exports.object({
   /** Max turns for a deep review pass. */
   maxTurnsDeep: external_exports.number().int().positive().default(40),
   /** Max turns for a quick review pass. */
-  maxTurnsQuick: external_exports.number().int().positive().default(20)
+  maxTurnsQuick: external_exports.number().int().positive().default(20),
+  /**
+   * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
+   * `warn` records the absence loudly (task state + report + summary);
+   * `block` additionally fails the merge gate — a task cannot ship without an
+   * independent second-vendor review.
+   */
+  requireCrossVendor: external_exports.enum(["warn", "block"]).default("warn")
 }).default({});
 var TestWriterSchema = external_exports.object({
   maxTurns: external_exports.number().int().positive().default(30)
@@ -6334,6 +6341,14 @@ var TaskStateSchema = external_exports.object({
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
+  /**
+   * Δ U/S5 — set IFF the ADVANCING verify pass ran WITHOUT an independent
+   * cross-vendor reviewer (runPanel's crossVendorAbsence). An EVENT RECORD like
+   * `reviewers[]` (derive-don't-store exception: which executor actually reviewed
+   * is not derivable after the fact). Written/cleared in the SAME advance write
+   * as `reviewers`; surfaced by the partial report + run summary.
+   */
+  cross_vendor_absent: external_exports.object({ reason: external_exports.string().min(1) }).optional(),
   // --- Git / PR pointers (WS3 populates; schema reserves the shape) ---
   /** Run-scoped branch `factory/<run_id>/<task_id>` (Δ M). */
   branch: external_exports.string().optional(),
@@ -7935,11 +7950,17 @@ var AgentSpecSchema = external_exports.object({
    */
   effort: EffortEnum.optional()
 });
+var CrossVendorStampSchema = external_exports.union([
+  external_exports.object({ status: external_exports.literal("present"), model: external_exports.string().min(1) }),
+  external_exports.object({ status: external_exports.literal("absent"), reason: external_exports.string().min(1) })
+]);
 var SpawnRequestSchema = external_exports.object({
   /** Engine resumes here after the agents return. A per-task phase. */
   resume_phase: TaskPhaseEnum,
   /** Agents to spawn; at least one (an empty request is a programming error). */
-  agents: external_exports.array(AgentSpecSchema).min(1)
+  agents: external_exports.array(AgentSpecSchema).min(1),
+  /** Cross-vendor resolution — verify panel manifests only (S5/C). */
+  cross_vendor: CrossVendorStampSchema.optional()
 });
 function parseSpawnRequest(raw) {
   return SpawnRequestSchema.parse(raw);
@@ -9116,8 +9137,13 @@ function buildPartialReport(run10, request, opts = {}) {
     incomplete,
     ...run10.e2e_phase?.status === "failed" ? { e2e_failure: run10.e2e_phase.reason } : {},
     ...run10.e2e_phase?.status === "done" && run10.e2e_phase.advisory !== void 0 ? { e2e_advisory: run10.e2e_phase.advisory } : {},
-    ...buildE2eNarrative(run10)
+    ...buildE2eNarrative(run10),
+    ...buildCrossVendorAbsences(run10, bySpecOrder)
   };
+}
+function buildCrossVendorAbsences(run10, bySpecOrder) {
+  const absences = Object.values(run10.tasks).filter((t) => t.cross_vendor_absent !== void 0).map((t) => ({ task_id: t.task_id, reason: t.cross_vendor_absent.reason })).sort(bySpecOrder);
+  return absences.length > 0 ? { cross_vendor_absences: absences } : {};
 }
 function buildE2eNarrative(run10) {
   const journeys = (run10.e2e_phase?.manifest ?? []).map((e) => e.title ?? e.spec_path);
@@ -9207,6 +9233,16 @@ function renderPartialReportMarkdown(report) {
     for (const w of report.e2e_warnings) out.push(`- ${w}`);
     out.push("");
   }
+  if (report.cross_vendor_absences !== void 0) {
+    out.push("## Review independence");
+    out.push(
+      `${report.cross_vendor_absences.length} task(s) were reviewed WITHOUT an independent second-vendor reviewer:`
+    );
+    for (const a of report.cross_vendor_absences) {
+      out.push(`- \`${a.task_id}\` \u2014 ${a.reason}`);
+    }
+    out.push("");
+  }
   if (report.e2e_assessment_failure !== void 0) {
     const { plain, detail } = splitReason(report.e2e_assessment_failure);
     out.push("## End-to-end setup failed before any task ran");
@@ -9288,7 +9324,8 @@ function buildRunSummary(run10, report, opts = {}) {
     totals: report.totals,
     failures_by_class: failuresByClass,
     effort,
-    shipped_prs
+    shipped_prs,
+    tasks_without_cross_vendor: report.cross_vendor_absences?.length ?? 0
   };
 }
 
@@ -11358,7 +11395,7 @@ var PANEL_ROLES = [
 function promptRefFor(role) {
   return `reviews/prompts/${role}.md`;
 }
-function buildPanelManifest(resumePhase, model, maxTurns) {
+function buildPanelManifest(resumePhase, model, maxTurns, crossVendor) {
   const agents = PANEL_ROLES.map((role) => ({
     role,
     isolation: "worktree",
@@ -11366,7 +11403,64 @@ function buildPanelManifest(resumePhase, model, maxTurns) {
     max_turns: maxTurns,
     prompt_ref: promptRefFor(role)
   }));
-  return parseSpawnRequest({ resume_phase: resumePhase, agents });
+  const cross_vendor = crossVendor === void 0 ? void 0 : crossVendor.status === "present" ? { status: "present", model: crossVendor.slot.model } : { status: "absent", reason: crossVendor.reason };
+  return parseSpawnRequest({
+    resume_phase: resumePhase,
+    agents,
+    ...cross_vendor !== void 0 ? { cross_vendor } : {}
+  });
+}
+
+// src/verifier/judgment/vendor.ts
+async function resolveCrossVendor(codexModel, probe) {
+  let available;
+  try {
+    available = await probe.available();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return {
+      status: "absent",
+      reason: `cross-vendor probe '${probe.vendor}' failed: ${detail}`
+    };
+  }
+  if (!available) {
+    return {
+      status: "absent",
+      reason: `cross-vendor executor '${probe.vendor}' is not available`
+    };
+  }
+  if (codexModel === void 0 || codexModel.trim().length === 0) {
+    return {
+      status: "absent",
+      reason: `cross-vendor executor '${probe.vendor}' is available but no model is configured (codex.model)`
+    };
+  }
+  return { status: "present", slot: { vendor: probe.vendor, model: codexModel } };
+}
+
+// src/verifier/judgment/codex-probe.ts
+var CODEX_PROBE_TIMEOUT_MS = 5e3;
+function makeCodexProbe(run10 = exec) {
+  let memo;
+  return {
+    vendor: "codex",
+    available() {
+      memo ??= run10("codex", ["--version"], { timeoutMs: CODEX_PROBE_TIMEOUT_MS }).then(
+        (r) => r.code === 0
+      );
+      return memo;
+    }
+  };
+}
+var codexProbe = makeCodexProbe();
+async function resolveCodexCrossVendor(codexModel, probe = codexProbe) {
+  if (codexModel === void 0 || codexModel.trim().length === 0) {
+    return {
+      status: "absent",
+      reason: "no cross-vendor model configured (codex.model)"
+    };
+  }
+  return resolveCrossVendor(codexModel, probe);
 }
 
 // src/verifier/judgment/finding.ts
@@ -11390,7 +11484,17 @@ var FindingBaseSchema = external_exports.object({
    * `.min(1)`.)
    */
   quote: external_exports.string().min(1),
-  /** Human-facing description of the concern. */
+  /**
+   * The reviewer's ONE-SENTENCE checkable assertion (≤300 chars) — what the
+   * independent finding-verifier confirms. Deliberately distinct from
+   * `description`: the claim states WHAT is wrong in verifiable form; the
+   * description carries the reasoning chain, which must never reach the
+   * verifier (anti-anchoring — the verifier confirms independently, it is not
+   * led). Required and bounded LOUDLY: an old-format finding without a claim
+   * is a ZodError, never a silent fallback to truncated description.
+   */
+  claim: external_exports.string().min(1).max(300),
+  /** Human-facing description of the concern (the reasoning; producer-facing). */
   description: external_exports.string().min(1)
 });
 var FindingSchema = FindingBaseSchema.superRefine((finding, ctx) => {
@@ -11497,6 +11601,17 @@ function checkQuote(quote, line, lines) {
   }
   return "quote-not-in-window";
 }
+function rescueLine(quote, reason, lines) {
+  if (reason !== "quote-not-in-window" && reason !== "line-out-of-range") return null;
+  const needle = quote.trim();
+  if (needle === "" || needle.includes("\n")) return null;
+  const matches = [];
+  for (let n = 1; n <= lines.length; n++) {
+    const text = lines[n - 1];
+    if (text !== void 0 && text.includes(needle)) matches.push(n);
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
 function verifyCitations(findings, source, options = {}) {
   const redact = options.redact ?? true;
   const kept = [];
@@ -11516,27 +11631,45 @@ function verifyCitations(findings, source, options = {}) {
     }
     const reason = checkQuote(f.quote, f.line, lines);
     if (reason !== null) {
-      dropped.push({ finding: f, reason });
-      audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
+      const found = rescueLine(f.quote, reason, lines);
+      if (found === null) {
+        dropped.push({ finding: f, reason });
+        audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
+        continue;
+      }
+      const relocated = { ...f, line: found };
+      kept.push({
+        finding: redact ? redactFinding(relocated) : relocated,
+        citedLine: f.line
+      });
+      audit.push(`RELOCATE relocated_ok ${f.file}:${f.line}\u2192${found}: ${f.reviewer}`);
       continue;
     }
     const retained = redact ? redactFinding(f) : f;
-    kept.push(retained);
+    kept.push({ finding: retained });
     audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`);
   }
   return { kept, dropped, audit };
 }
 
 // src/verifier/judgment/finding-verifier.ts
-async function confirmBlocker(finding, runner, finderIdentity) {
+async function confirmBlocker(finding, runner, finderIdentity, citedLine) {
   if (runner.identity === finderIdentity) {
     throw new Error(
       `finding-verifier identity '${runner.identity}' equals the finder's \u2014 the verifier must be INDEPENDENT (D27)`
     );
   }
+  const projection = {
+    reviewer: finding.reviewer,
+    severity: finding.severity,
+    claim: finding.claim,
+    file: finding.file,
+    line: citedLine ?? finding.line,
+    quote: finding.quote
+  };
   let verdict;
   try {
-    verdict = await runner.confirm(finding);
+    verdict = await runner.confirm(projection);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     return { status: "error", reason: `finding-verifier errored: ${detail}` };
@@ -11551,9 +11684,9 @@ async function adjudicateReviewer(review, source, makeRunner2, redact) {
   const runner = makeRunner2(review);
   const confirmed = [];
   let hadVerifierError = false;
-  for (const finding of kept) {
+  for (const { finding, citedLine } of kept) {
     if (!isCitable(finding)) continue;
-    const outcome = await confirmBlocker(finding, runner, review.reviewer);
+    const outcome = await confirmBlocker(finding, runner, review.reviewer, citedLine);
     if (outcome.status === "confirmed") {
       confirmed.push(finding);
     } else if (outcome.status === "error") {
@@ -11590,11 +11723,21 @@ async function runPanel(input) {
   for (const review of input.reviews) {
     adjudicated.push(await adjudicateReviewer(review, input.source, input.makeRunner, redact));
   }
-  const reviewerResults = adjudicated.map(reviewerResultOf);
-  const mergeGate = deriveMergeGateVerdict({ reviewers: reviewerResults }, input.gateEvidence);
+  let reviewerResults = adjudicated.map(reviewerResultOf);
+  const demoted = input.blockOnCrossVendorAbsence === true && input.crossVendor?.status === "absent";
+  if (demoted) {
+    const hasQuality = reviewerResults.some((r) => r.reviewer === "quality-reviewer");
+    reviewerResults = hasQuality ? reviewerResults.map(
+      (r) => r.reviewer === "quality-reviewer" ? { ...r, verdict: "error" } : r
+    ) : [
+      ...reviewerResults,
+      { reviewer: "quality-reviewer", verdict: "error", confirmed_blockers: 0 }
+    ];
+  }
+  const mergeGate = deriveMergeGateVerdict({ reviewers: [...reviewerResults] }, input.gateEvidence);
   const result = mergeGate.passed ? advance(nextOrSelf(input.phase)) : waitRetry(
     input.phase,
-    mergeGateBlockReason(reviewerResults, input.gateEvidence),
+    demoted && input.crossVendor?.status === "absent" ? `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${input.crossVendor.reason}` : mergeGateBlockReason(reviewerResults, input.gateEvidence),
     input.attempt ?? 1,
     input.maxAttempts ?? 1
   );
@@ -12601,14 +12744,30 @@ function makePhaseHandlers(deps) {
         exemptReader: taskExemptReader(deps, worktree)
       };
       const gate = await new GateRunner().run(gateCtx);
-      if (task.reviewers.length === 0) {
+      const panelSpawn = async () => {
+        const crossVendor = await resolveCodexCrossVendor(
+          deps.config.codex.model,
+          deps.vendorProbe
+        );
+        if (deps.config.review.requireCrossVendor === "block" && crossVendor.status === "absent") {
+          return waitRetry(
+            "verify",
+            `cross-vendor reviewer required (review.requireCrossVendor=block) but absent: ${crossVendor.reason}`,
+            ctx.attempt ?? 1,
+            ESCALATION_CAP + 1
+          );
+        }
         return spawn(
           buildPanelManifest(
             "verify",
             resolveReviewModel(deps.config),
-            deps.config.review.maxTurnsDeep
+            deps.config.review.maxTurnsDeep,
+            crossVendor
           )
         );
+      };
+      if (task.reviewers.length === 0) {
+        return panelSpawn();
       }
       const holdoutExpected = await deps.holdout.has(ctx.run.run_id, task.task_id);
       const fastPathEvidence = [...gate.evidence];
@@ -12616,13 +12775,7 @@ function makePhaseHandlers(deps) {
         const verdictStore = new FsHoldoutVerdictStore(deps.dataDir);
         const hasVerdicts = await verdictStore.has(ctx.run.run_id, task.task_id);
         if (!hasVerdicts) {
-          return spawn(
-            buildPanelManifest(
-              "verify",
-              resolveReviewModel(deps.config),
-              deps.config.review.maxTurnsDeep
-            )
-          );
+          return panelSpawn();
         }
         const holdoutGate = await deriveHoldoutEvidence(
           deps.holdout,
@@ -12924,6 +13077,7 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
     phase: "verify",
     attempt: task.escalation_rung + 1,
     maxAttempts: ESCALATION_CAP + 1,
+    blockOnCrossVendorAbsence: deps.config.review.requireCrossVendor === "block",
     ...input.crossVendorAbsent !== void 0 ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } } : {}
   });
   if (panel.crossVendorAbsence !== void 0) {
@@ -12941,7 +13095,9 @@ async function applyRecordReviews(deps, runId, taskId, verdictStore, input) {
       phase: nextPhaseVal,
       status: nextStatus,
       // A passing verify clears any stale fix-forward record from a prior blocked round.
-      fix_findings: void 0
+      fix_findings: void 0,
+      // Δ U/S5: record (or clear) the absence for the pass that actually shipped.
+      cross_vendor_absent: panel.crossVendorAbsence
     }));
     step = { done: false, phase: nextPhaseVal };
   } else if (panel.result.kind === "wait-retry") {
@@ -15353,12 +15509,18 @@ var specCommand = {
 
 // src/debug/review.ts
 function buildReviewManifest(opts) {
-  const manifest = buildPanelManifest(opts.resumePhase, opts.model, opts.maxTurns);
+  const manifest = buildPanelManifest(
+    opts.resumePhase,
+    opts.model,
+    opts.maxTurns,
+    opts.crossVendor
+  );
   return {
     manifest,
     base: opts.base,
     worktree: opts.worktree,
-    codexAvailable: opts.codexAvailable
+    codexAvailable: opts.crossVendor.status === "present",
+    ...opts.crossVendor.status === "absent" ? { codexAbsentReason: opts.crossVendor.reason } : {}
   };
 }
 async function adjudicateWholeScope(input) {
@@ -15436,6 +15598,7 @@ async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
           severity: "critical",
           blocking: true,
           quote: "(uncitable \u2014 e2e tooling failure, no per-spec citation available)",
+          claim: "the Playwright e2e run itself failed (tooling error, not a spec failure)",
           description: `e2e tooling error \u2014 the Playwright run itself failed: ${detail}`
         }
       ]
@@ -15448,6 +15611,8 @@ async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
     file: spec.file,
     line: 1,
     quote: spec.title,
+    // claim is schema-bounded to 300 chars; a Playwright title can exceed it.
+    claim: `e2e spec failed: ${spec.title}`.slice(0, 300),
     description: `e2e spec failed: ${spec.title}`
   }));
   if (!results.ok && results.counts.failed === 0) {
@@ -15456,6 +15621,7 @@ async function runCommittedE2e(input, tool = new DefaultPlaywrightTool()) {
       severity: "critical",
       blocking: true,
       quote: "(uncitable \u2014 e2e tooling failure, no per-spec citation available)",
+      claim: "the e2e run failed as a whole with no individually-failed spec",
       description: "e2e tooling failed with no per-spec failures \u2014 investigate the Playwright run"
     });
   }
@@ -15678,13 +15844,14 @@ async function debugStart(deps, opts = {}) {
 }
 async function debugReviewEmit(deps, runId) {
   const session = await readSession(deps.dataDir, runId);
+  const crossVendor = await resolveCodexCrossVendor(deps.config.codex.model, deps.vendorProbe);
   const built = buildReviewManifest({
     resumePhase: "verify",
     model: resolveReviewModel(deps.config),
     maxTurns: deps.config.review.maxTurnsDeep,
     base: session.base,
     worktree: deps.cwd,
-    codexAvailable: deps.config.codex.model !== void 0
+    crossVendor
   });
   return {
     kind: "review-spawn",
@@ -15693,7 +15860,8 @@ async function debugReviewEmit(deps, runId) {
     manifest: built.manifest,
     base: built.base,
     worktree: built.worktree,
-    codex_available: built.codexAvailable
+    codex_available: built.codexAvailable,
+    ...built.codexAbsentReason !== void 0 ? { codex_absent_reason: built.codexAbsentReason } : {}
   };
 }
 async function debugReviewRecord(deps, runId, input) {

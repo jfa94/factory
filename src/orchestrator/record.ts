@@ -461,6 +461,7 @@ export async function applyRecordReviews(
     phase: "verify",
     attempt: task.escalation_rung + 1,
     maxAttempts: ESCALATION_CAP + 1,
+    blockOnCrossVendorAbsence: deps.config.review.requireCrossVendor === "block",
     ...(input.crossVendorAbsent !== undefined
       ? { crossVendor: { status: "absent", reason: input.crossVendorAbsent.reason } as const }
       : {}),
@@ -503,6 +504,8 @@ export async function applyRecordReviews(
       status: nextStatus,
       // A passing verify clears any stale fix-forward record from a prior blocked round.
       fix_findings: undefined,
+      // Δ U/S5: record (or clear) the absence for the pass that actually shipped.
+      cross_vendor_absent: panel.crossVendorAbsence,
     }));
     step = { done: false, phase: nextPhaseVal };
   } else if (panel.result.kind === "wait-retry") {

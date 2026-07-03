@@ -91,8 +91,8 @@ Apply **your role's lens** first, then sweep these universal hazards:
 
 Your **final message is exactly one JSON object** in this shape — no prose before or after it
 (a fenced ```json block is fine). The CLI parses it strictly: a bad `severity`, a missing or
-empty `quote`, a non-array `findings`, a non-positive `line`, or an unknown `verdict` is a
-LOUD parse error.
+empty `quote`, a missing/empty/over-300-char `claim`, a non-array `findings`, a non-positive
+`line`, or an unknown `verdict` is a LOUD parse error.
 
 ```json
 {
@@ -106,6 +106,7 @@ LOUD parse error.
       "file": "src/path/to/file.ts",
       "line": 42,
       "quote": "exact substring copied from src/path/to/file.ts line ~42",
+      "claim": "One-sentence checkable assertion of the defect",
       "description": "What is wrong and why it matters"
     }
   ]
@@ -120,6 +121,10 @@ Field rules:
 - **`file` + `line`**: optional individually, but a finding **without both is uncitable** and
   the CLI drops it. Always cite both for anything you want to count.
 - **`quote`**: REQUIRED, non-empty, an exact substring of the cited source within ±2 lines.
+- **`claim`**: REQUIRED, ≤300 chars — ONE sentence stating the checkable defect ("X is called
+  on unvalidated input"), distinct from `description` (your reasoning). The independent
+  finding-verifier sees ONLY the claim (never your `description`) so it can't be led by your
+  reasoning chain — a claim that can't stand alone won't survive verification.
 - **`blocking`**: `true` only for a real defect that must be fixed before shipping.
 - **`findings`** may be an empty array for a clean `approve`. Cap at 10, ranked by
   likelihood × impact — the CLI truncates anything beyond 10 (keeping your first 10).

@@ -24,6 +24,13 @@ export {
   type CrossVendorSlot,
   type CrossVendorResolution,
 } from "./vendor.js";
+export {
+  CODEX_PROBE_TIMEOUT_MS,
+  makeCodexProbe,
+  codexProbe,
+  resolveCodexCrossVendor,
+  type ProbeExec,
+} from "./codex-probe.js";
 
 // judgment-domain finding types
 export {
@@ -47,6 +54,7 @@ export {
   type SourceReader,
   type FailReason,
   type DroppedFinding,
+  type KeptFinding,
   type CitationVerifyResult,
   type VerifyCitationsOptions,
 } from "./citation-verify.js";
@@ -54,6 +62,7 @@ export {
 // verify-then-fix independent finding-verifier
 export {
   confirmBlocker,
+  type ClaimOnlyFinding,
   type FindingVerifierRunner,
   type VerifierVerdict,
   type VerifierOutcome,

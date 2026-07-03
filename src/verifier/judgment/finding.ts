@@ -56,7 +56,17 @@ const FindingBaseSchema = z.object({
    * `.min(1)`.)
    */
   quote: z.string().min(1),
-  /** Human-facing description of the concern. */
+  /**
+   * The reviewer's ONE-SENTENCE checkable assertion (≤300 chars) — what the
+   * independent finding-verifier confirms. Deliberately distinct from
+   * `description`: the claim states WHAT is wrong in verifiable form; the
+   * description carries the reasoning chain, which must never reach the
+   * verifier (anti-anchoring — the verifier confirms independently, it is not
+   * led). Required and bounded LOUDLY: an old-format finding without a claim
+   * is a ZodError, never a silent fallback to truncated description.
+   */
+  claim: z.string().min(1).max(300),
+  /** Human-facing description of the concern (the reasoning; producer-facing). */
   description: z.string().min(1),
 });
 

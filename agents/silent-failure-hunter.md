@@ -92,7 +92,9 @@ members) — note at most one adjacent issue as `blocking: false`.
 Emit **one RawReview JSON object** exactly as specified in the `review-protocol` skill —
 `{ reviewer, verdict, findings[] }` with `reviewer: "silent-failure-hunter"`. Each finding
 carries a verbatim `quote` of the silencing line matching real source at the cited `file:line`,
-and a `description` tracing what breaks because the failure was hidden. `verdict` is `blocked`
+a one-sentence `claim` (≤300 chars) stating the checkable defect (the independent verifier sees
+only the claim, never your `description`), and a `description` tracing what breaks because the
+failure was hidden. `verdict` is `blocked`
 if any finding is `blocking: true`, else `approve` (a clean approve may have an empty `findings`
 array), or `error` only if you could not complete the review. No `## Verdict` block, no STATUS
 line, no prose around the JSON.

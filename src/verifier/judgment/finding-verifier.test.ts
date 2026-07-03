@@ -1,23 +1,27 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseFinding, type Finding } from "./finding.js";
+import { parseFinding, isCitable } from "./finding.js";
 import {
   confirmBlocker,
+  type ClaimOnlyFinding,
   type FindingVerifierRunner,
   type VerifierVerdict,
 } from "./finding-verifier.js";
 
-const finding: Finding = parseFinding({
+const parsed = parseFinding({
   reviewer: "quality-reviewer",
   severity: "critical",
   blocking: true,
   file: "src/app.ts",
   line: 3,
   quote: "const value = process(input)",
+  claim: "unsanitised input reaches process()",
   description: "unsanitised input",
 });
+if (!isCitable(parsed)) throw new Error("fixture must be citable");
+const finding = parsed;
 
 function runner(
-  fn: (f: Finding) => Promise<VerifierVerdict>,
+  fn: (f: ClaimOnlyFinding) => Promise<VerifierVerdict>,
   identity = "codex",
 ): FindingVerifierRunner {
   return { identity, confirm: fn };
@@ -81,5 +85,53 @@ describe("WS7 verify-then-fix finding-verifier (D27)", () => {
     );
     expect(out.status).not.toBe("confirmed");
     expect(out.status).not.toBe("refuted");
+  });
+});
+
+// S5/B2 — anti-anchoring: the independent verifier confirms the CLAIM, never the
+// reviewer's reasoning chain. The projection is enforced both at the type level
+// (`description?: never`) and at runtime (exactly six keys reach the runner).
+describe("claim-only projection (S5/B2)", () => {
+  it("the runner receives EXACTLY {reviewer,severity,claim,file,line,quote} — never description", async () => {
+    let received: ClaimOnlyFinding | undefined;
+    await confirmBlocker(
+      finding,
+      runner(async (f) => {
+        received = f;
+        return { holds: true, note: "ok" };
+      }),
+      "quality-reviewer",
+    );
+    expect(received).toBeDefined();
+    expect(Object.keys(received!).sort()).toEqual([
+      "claim",
+      "file",
+      "line",
+      "quote",
+      "reviewer",
+      "severity",
+    ]);
+    expect(received).not.toHaveProperty("description");
+    expect(received!.claim).toBe("unsanitised input reaches process()");
+  });
+
+  it("projects the CITED line (replay-verdict key, S5/A2) when the finding was grep-relocated", async () => {
+    let received: ClaimOnlyFinding | undefined;
+    await confirmBlocker(
+      finding, // finding.line === 3 (relocated)
+      runner(async (f) => {
+        received = f;
+        return { holds: true, note: "ok" };
+      }),
+      "quality-reviewer",
+      9, // the reviewer's original cited line
+    );
+    expect(received!.line).toBe(9);
+  });
+
+  it("type-level leak guard: a full Finding (with description) is not assignable to ClaimOnlyFinding", () => {
+    // @ts-expect-error — `description?: never` rejects any object carrying it.
+    const leak: ClaimOnlyFinding = { ...finding };
+    expect(leak).toBeDefined(); // the assertion is the compile error above
   });
 });

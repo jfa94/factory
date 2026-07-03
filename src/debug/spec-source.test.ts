@@ -23,6 +23,7 @@ function finding(overrides: Partial<Finding> = {}): Finding {
     file: "src/widget.ts",
     line: 42,
     quote: "const x = maybeUndefined!;",
+    claim: "a non-null assertion masks a possible undefined",
     description: "Non-null assertion silently masks a possible undefined.",
     ...overrides,
   };

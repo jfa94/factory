@@ -47,6 +47,7 @@ function blockedWith(reviewer: string, line: number, quote: string): RawReview {
         file: "src/app.ts",
         line,
         quote,
+        claim: "checkable issue",
         description: "issue",
       },
     ],
@@ -212,6 +213,53 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
   });
 });
 
+describe("S5/A — grep-rescue meets verify-then-fix (A2 replay-keying pin)", () => {
+  it("a RESCUED finding is confirmed at the CITED line (replay-verdict key) but forwarded with the RELOCATED line", async () => {
+    const seenLines: number[] = [];
+    const res = await runPanel({
+      // real quote on line 1, cited at 4 → 3 away → grep-rescued to line 1.
+      reviews: [blockedWith("quality-reviewer", 4, "function run(input: string) {")],
+      source,
+      makeRunner: (review) => ({
+        identity: `verifier-for-${review.reviewer}`,
+        confirm: async (f): Promise<VerifierVerdict> => {
+          seenLines.push(f.line);
+          return { holds: true, note: "n" };
+        },
+      }),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+    });
+    // The verifier (and any replay verdict keyed file:line) sees the CITED 4 —
+    // a naive relocation-before-confirm would key on 1 and orphan the verdict.
+    expect(seenLines).toEqual([4]);
+    // Downstream (fix_findings, reports) gets the corrected line.
+    const q = res.adjudicated.find((a) => a.reviewer === "quality-reviewer");
+    expect(q?.confirmedBlockers[0]?.line).toBe(1);
+    expect(res.mergeGate.passed).toBe(false);
+  });
+
+  it("never-resurrect: a DROPPED finding stays dropped even when a verdict was recorded for it", async () => {
+    let confirmCalls = 0;
+    const res = await runPanel({
+      // quote nowhere in the file → dropped, not rescued (0 matches).
+      reviews: [blockedWith("quality-reviewer", 2, "this code does not exist anywhere")],
+      source,
+      makeRunner: (review) => ({
+        identity: `verifier-for-${review.reviewer}`,
+        confirm: async (): Promise<VerifierVerdict> => {
+          confirmCalls++;
+          return { holds: true, note: "a recorded verdict exists but must go unused" };
+        },
+      }),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+    });
+    expect(confirmCalls).toBe(0);
+    expect(res.mergeGate.passed).toBe(true);
+  });
+});
+
 describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", () => {
   it("an `absent` cross-vendor resolution records PanelRunResult.crossVendorAbsence={reason} (LOUD, never silent)", async () => {
     const res = await runPanel({
@@ -249,5 +297,77 @@ describe("Δ U — cross-vendor ABSENCE reaches the panel result (WS8-wired)", (
       phase: "verify",
     });
     expect(res.crossVendorAbsence).toBeUndefined();
+  });
+});
+
+describe("S5/C — requireCrossVendor=block demotes the quality-reviewer (synthesized error)", () => {
+  const ABSENT = {
+    status: "absent",
+    reason: "cross-vendor executor 'codex' is not available",
+  } as const;
+
+  it("block + absent: quality-reviewer demoted to `error`, merge gate blocked, reason names the policy + absence", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer"), approve("quality-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+      crossVendor: ABSENT,
+      blockOnCrossVendorAbsence: true,
+    });
+    const q = res.reviewerResults.find((r) => r.reviewer === "quality-reviewer");
+    expect(q?.verdict).toBe("error");
+    expect(res.mergeGate.passed).toBe(false);
+    expect(res.result.kind).toBe("wait-retry");
+    if (res.result.kind === "wait-retry") {
+      expect(res.result.reason).toContain("requireCrossVendor=block");
+      expect(res.result.reason).toContain("codex' is not available");
+    }
+    // The absence record stays loud alongside the demotion.
+    expect(res.crossVendorAbsence?.reason).toBe(ABSENT.reason);
+  });
+
+  it("warn (flag false/omitted) + absent: NO demotion — merge gate passes", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer"), approve("quality-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+      crossVendor: ABSENT,
+      blockOnCrossVendorAbsence: false,
+    });
+    expect(res.reviewerResults.every((r) => r.verdict === "approve")).toBe(true);
+    expect(res.mergeGate.passed).toBe(true);
+  });
+
+  it("block + present: NO demotion — merge gate passes", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer"), approve("quality-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+      crossVendor: { status: "present", slot: { vendor: "codex", model: "gpt-x" } },
+      blockOnCrossVendorAbsence: true,
+    });
+    expect(res.reviewerResults.every((r) => r.verdict === "approve")).toBe(true);
+    expect(res.mergeGate.passed).toBe(true);
+  });
+
+  it("block + absent fails CLOSED even when no quality-reviewer review was handed in (synthesized entry)", async () => {
+    const res = await runPanel({
+      reviews: [approve("implementation-reviewer")],
+      source,
+      makeRunner: confirmAll(true),
+      gateEvidence: PASSING_GATES,
+      phase: "verify",
+      crossVendor: ABSENT,
+      blockOnCrossVendorAbsence: true,
+    });
+    const q = res.reviewerResults.find((r) => r.reviewer === "quality-reviewer");
+    expect(q?.verdict).toBe("error");
+    expect(res.mergeGate.passed).toBe(false);
   });
 });

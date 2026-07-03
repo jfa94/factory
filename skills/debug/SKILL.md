@@ -146,24 +146,29 @@ artifact; see `panel.ts`'s `promptRefFor` doc comment). Tell each reviewer to
 inspect via `git -C <worktree> diff <base>` (the envelope's `base`/`worktree`
 verbatim) and emit exactly one RawReview JSON per `skills/review-protocol/SKILL.md`'s
 output contract: `{ reviewer, verdict: "approve"|"blocked"|"error", findings: [
-{ reviewer, severity, blocking, file, line, quote, description } ] }`.
+{ reviewer, severity, blocking, file, line, quote, claim, description } ] }`.
 
-**Cross-vendor (Codex).** `codex_available` is the CLI's own resolution
-(`config.codex.model !== undefined` — a config-presence check, not a live probe;
+**Cross-vendor (Codex, Δ U/S5).** `codex_available` is the CLI's REAL resolution
+(config `codex.model` + a live `codex --version` probe;
 `src/cli/subcommands/debug.ts`'s `debugReviewEmit`) — read it off THIS envelope,
-never re-derive it. `skills/pipeline-runner/SKILL.md` does not document a separate
-runner-side Codex spawn for the per-task panel either (the panel's 4 roles are
-ALL Claude agents; a second vendor participates only via the finding-verifier's
-identity, below) — debug follows the identical convention: `codex_available` governs
-ONLY whether you omit or include `crossVendorAbsent` in the `--results` file
-(2b, below), never an extra manifest entry.
+never re-derive it. When `false`, the envelope also carries `codex_absent_reason`
+(the exact resolution reason). The manifest's `cross_vendor` stamp mirrors it.
+Follow `skills/pipeline-runner/SKILL.md`'s "Cross-vendor quality-reviewer" recipe
+verbatim: `codex_available == true` → run the `quality-reviewer` via
+`codex exec --model <cross_vendor.model> --sandbox read-only --cd <worktree>`
+instead of a Claude spawn (Claude fallback + `crossVendorAbsent:
+{ reason: "codex execution failed: <detail>" }` on rc≠0/unparseable output);
+`false` → all-Claude panel + `crossVendorAbsent` echoing `codex_absent_reason`
+VERBATIM in the `--results` file (2b, below).
 
 **Verify-then-fix.** For EVERY finding any reviewer marked `blocking: true` AND
 citable (`file`+`line` both present), spawn an INDEPENDENT finding-verifier —
 `general-purpose`, isolation `"worktree"`, model `opus`, adversarial framing ("does
 this finding hold against the code?"), inspecting via `git -C <worktree> diff <base>` —
 per `skills/pipeline-runner/SKILL.md`'s "Collecting a spawn envelope" →
-`expects: "reviews"` step 3, reused verbatim (not re-derived here). It returns
+`expects: "reviews"` step 3, reused verbatim (not re-derived here) — including its
+claim-only prompt rule: interpolate ONLY `{reviewer, severity, claim, file, line,
+quote}`, NEVER the finding's `description` (anti-anchoring). It returns
 `{ "holds": true|false, "note": "<why>" }`.
 
 ### 2b. Record the results
@@ -178,13 +183,15 @@ a whole-scope pass has no sidecar/holdout-validator step):
   "verifications": [
     { "reviewer": "<role>", "verdicts": [ { "file", "line", "holds", "note" } ] }
   ],
-  "crossVendorAbsent": { "reason": "no second-vendor reviewer configured" }
+  "crossVendorAbsent": { "reason": "<codex_absent_reason verbatim, or the codex runtime-failure detail>" }
 }
 ```
 
-Omit `crossVendorAbsent` entirely when `codex_available` was `true`; include it
-(with that exact reason string) when it was `false`. Include one verdict for every
-blocking+citable finding — the CLI fails closed on a missing one.
+Omit `crossVendorAbsent` entirely when the Codex quality-reviewer actually ran;
+include it when it didn't — echoing the envelope's `codex_absent_reason` verbatim,
+or `"codex execution failed: <detail>"` if the `codex exec` fallback fired. Include
+one verdict for every blocking+citable finding — the CLI fails closed on a missing
+one.
 
 ```bash
 factory debug review --record --run <run_id> --results <path-to-above-file>

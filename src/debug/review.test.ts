@@ -22,12 +22,14 @@ describe("buildReviewManifest", () => {
       maxTurns: 40,
       base: "origin/main",
       worktree: "/tmp/debug-worktree",
-      codexAvailable: true,
+      crossVendor: { status: "present", slot: { vendor: "codex", model: "gpt-5-codex" } },
     });
 
     expect(result.base).toBe("origin/main");
     expect(result.worktree).toBe("/tmp/debug-worktree");
     expect(result.codexAvailable).toBe(true);
+    expect(result.codexAbsentReason).toBeUndefined();
+    expect(result.manifest.cross_vendor).toEqual({ status: "present", model: "gpt-5-codex" });
     expect(result.manifest.resume_phase).toBe("verify");
     const roles = result.manifest.agents.map((a) => a.role).sort();
     expect(roles).toEqual([...PANEL_ROLES].sort());
@@ -37,16 +39,21 @@ describe("buildReviewManifest", () => {
     expect([...turns]).toEqual([40]);
   });
 
-  it("passes codexAvailable=false through unchanged", () => {
+  it("an absent resolution yields codexAvailable=false plus the exact reason (stamped on the manifest too)", () => {
     const result = buildReviewManifest({
       resumePhase: "verify",
       model: "opus",
       maxTurns: 40,
       base: "4b825dc642cb6eb9a060e54bf8d69288fbee4904", // empty-tree SHA
       worktree: "/tmp/debug-worktree-2",
-      codexAvailable: false,
+      crossVendor: { status: "absent", reason: "no cross-vendor model configured (codex.model)" },
     });
     expect(result.codexAvailable).toBe(false);
+    expect(result.codexAbsentReason).toBe("no cross-vendor model configured (codex.model)");
+    expect(result.manifest.cross_vendor).toEqual({
+      status: "absent",
+      reason: "no cross-vendor model configured (codex.model)",
+    });
     expect(result.base).toBe("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
   });
 
@@ -58,7 +65,7 @@ describe("buildReviewManifest", () => {
         maxTurns: 40,
         base: "origin/main",
         worktree: "/tmp/debug-worktree",
-        codexAvailable: true,
+        crossVendor: { status: "present", slot: { vendor: "codex", model: "gpt-5-codex" } },
       }),
     ).toThrow();
   });
@@ -97,6 +104,7 @@ describe("adjudicateWholeScope", () => {
           file,
           line,
           quote,
+          claim: "checkable issue",
           description: "issue",
         },
       ],
@@ -378,6 +386,7 @@ describe("foldE2eIntoBlockers", () => {
       severity: "critical",
       blocking: true,
       quote: "const x = 1",
+      claim: "a magic number is hardcoded",
       description: "issue",
     },
   ];
@@ -395,6 +404,7 @@ describe("foldE2eIntoBlockers", () => {
       file: "e2e/login.spec.ts",
       line: 1,
       quote: "login works",
+      claim: "e2e spec failed: login works",
       description: "e2e spec failed: login works",
     };
     const result = foldE2eIntoBlockers(existing, {

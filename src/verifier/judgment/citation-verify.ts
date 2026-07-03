@@ -52,10 +52,21 @@ export interface DroppedFinding {
   readonly reason: FailReason;
 }
 
+/**
+ * A retained finding. When grep-rescue (S5/A) relocated the citation, `finding.line`
+ * is the FOUND line and `citedLine` is the reviewer's original — the coordinate any
+ * downstream verdict (finding-verifier spawn, replay verdict) was keyed on. A plain
+ * in-window keep has no `citedLine`.
+ */
+export interface KeptFinding {
+  readonly finding: Finding;
+  readonly citedLine?: number;
+}
+
 /** The result of one citation-verify pass. No verdict is computed here. */
 export interface CitationVerifyResult {
   /** Findings whose quote was confirmed against real source (possibly redacted). */
-  readonly kept: readonly Finding[];
+  readonly kept: readonly KeptFinding[];
   /** Findings dropped, each with its reason. */
   readonly dropped: readonly DroppedFinding[];
   /** Per-finding audit line (kept|dropped + reason) for the report. */
@@ -103,6 +114,26 @@ function checkQuote(quote: string, line: number, lines: readonly string[]): Fail
 }
 
 /**
+ * Grep-rescue (S5/A): a reviewer that quotes REAL code but miscounts the line is a
+ * relocation, not a hallucination. Only `quote-not-in-window`/`line-out-of-range`
+ * qualify (never `uncitable`/`file-not-found`), only a single-line quote, and only
+ * when the TRIMMED quote matches exactly ONE line in the whole file — 0 or ≥2
+ * matches stay fail-closed and drop as before.
+ */
+function rescueLine(quote: string, reason: FailReason, lines: readonly string[]): number | null {
+  if (reason !== "quote-not-in-window" && reason !== "line-out-of-range") return null;
+  const needle = quote.trim();
+  // Trimmed-empty would `includes`-match every line; inner \n can never sit on one line.
+  if (needle === "" || needle.includes("\n")) return null;
+  const matches: number[] = [];
+  for (let n = 1; n <= lines.length; n++) {
+    const text = lines[n - 1];
+    if (text !== undefined && text.includes(needle)) matches.push(n);
+  }
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+/**
  * Run the deterministic citation-verify filter over `findings`. Pure: all source
  * access goes through `source`. See module header for the rule.
  */
@@ -112,7 +143,7 @@ export function verifyCitations(
   options: VerifyCitationsOptions = {},
 ): CitationVerifyResult {
   const redact = options.redact ?? true;
-  const kept: Finding[] = [];
+  const kept: KeptFinding[] = [];
   const dropped: DroppedFinding[] = [];
   const audit: string[] = [];
 
@@ -130,12 +161,22 @@ export function verifyCitations(
     }
     const reason = checkQuote(f.quote, f.line, lines);
     if (reason !== null) {
-      dropped.push({ finding: f, reason });
-      audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
+      const found = rescueLine(f.quote, reason, lines);
+      if (found === null) {
+        dropped.push({ finding: f, reason });
+        audit.push(`DROP ${reason} ${f.file}:${f.line}: ${f.reviewer}`);
+        continue;
+      }
+      const relocated: Finding = { ...f, line: found };
+      kept.push({
+        finding: redact ? redactFinding(relocated) : relocated,
+        citedLine: f.line,
+      });
+      audit.push(`RELOCATE relocated_ok ${f.file}:${f.line}→${found}: ${f.reviewer}`);
       continue;
     }
     const retained = redact ? redactFinding(f) : f;
-    kept.push(retained);
+    kept.push({ finding: retained });
     audit.push(`KEEP ${f.file}:${f.line}: ${f.reviewer}`);
   }
 

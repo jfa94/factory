@@ -14,6 +14,7 @@ const citable: unknown = {
   file: "src/app.ts",
   line: 42,
   quote: "const x = eval(input)",
+  claim: "eval() is called on unvalidated user input",
   description: "eval on untrusted input",
 };
 
@@ -31,6 +32,7 @@ describe("WS7 Finding schema (Δ K)", () => {
       severity: "warning",
       blocking: false,
       quote: "the module boundary leaks",
+      claim: "the module boundary leaks",
       description: "layering concern",
     });
     expect(isCitable(f)).toBe(false);
@@ -87,6 +89,27 @@ describe("WS7 Finding schema (Δ K)", () => {
     } else {
       throw new Error("expected citable");
     }
+  });
+
+  // S5/B1: `claim` is REQUIRED and bounded — the one-sentence checkable assertion
+  // the finding-verifier confirms (anti-anchoring: distinct from `description`,
+  // which carries the reviewer's reasoning chain and never reaches the verifier).
+  // LOUD, no grace fallback: reviewer prompts + engine ship in one plugin bundle,
+  // and findings are never persisted, so an old-format payload is a mid-upgrade
+  // anomaly that must fail visibly, not degrade silently.
+  it("loud: rejects a finding with NO claim (old-format payload)", () => {
+    const { claim: _claim, ...withoutClaim } = citable as Record<string, unknown>;
+    expect(() => parseFinding(withoutClaim)).toThrow();
+  });
+
+  it("loud: rejects an empty claim and a claim over 300 chars", () => {
+    expect(() => parseFinding({ ...(citable as object), claim: "" })).toThrow();
+    expect(() => parseFinding({ ...(citable as object), claim: "x".repeat(301) })).toThrow();
+  });
+
+  it("accepts a claim at exactly 300 chars", () => {
+    const f = parseFinding({ ...(citable as object), claim: "x".repeat(300) });
+    expect(f.claim).toHaveLength(300);
   });
 
   // T4: half-citations (file-without-line, line-without-file) are now a LOUD parse
@@ -149,6 +172,7 @@ describe("unknown-key stripping observability", () => {
           file: "src/app.ts",
           line: 10,
           quote: "eval(x)",
+          claim: "eval is called on external input",
           description: "unsafe eval",
           rationale: "extra LLM key", // unknown — should be stripped + warned
         },
@@ -197,6 +221,7 @@ describe("findings cap + dropped_by_cap (D43)", () => {
     file: "src/app.ts",
     line: i + 1,
     quote: `const x${i} = 1`,
+    claim: `claim ${i}`,
     description: `finding ${i}`,
   });
   const review = (count: number, extra?: Record<string, unknown>) => ({

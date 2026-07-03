@@ -6524,7 +6524,14 @@ var ReviewSchema = external_exports.object({
   /** Max turns for a deep review pass. */
   maxTurnsDeep: external_exports.number().int().positive().default(40),
   /** Max turns for a quick review pass. */
-  maxTurnsQuick: external_exports.number().int().positive().default(20)
+  maxTurnsQuick: external_exports.number().int().positive().default(20),
+  /**
+   * Policy when NO cross-vendor (Codex) reviewer is available (S5/C):
+   * `warn` records the absence loudly (task state + report + summary);
+   * `block` additionally fails the merge gate — a task cannot ship without an
+   * independent second-vendor review.
+   */
+  requireCrossVendor: external_exports.enum(["warn", "block"]).default("warn")
 }).default({});
 var TestWriterSchema = external_exports.object({
   maxTurns: external_exports.number().int().positive().default(30)
@@ -7423,6 +7430,14 @@ var TaskStateSchema = external_exports.object({
   // --- Merge gate (Decision 26/27) ---
   /** Per-reviewer panel results (derive.ts computes the merge-gate verdict from these). */
   reviewers: external_exports.array(ReviewerResultSchema).default([]),
+  /**
+   * Δ U/S5 — set IFF the ADVANCING verify pass ran WITHOUT an independent
+   * cross-vendor reviewer (runPanel's crossVendorAbsence). An EVENT RECORD like
+   * `reviewers[]` (derive-don't-store exception: which executor actually reviewed
+   * is not derivable after the fact). Written/cleared in the SAME advance write
+   * as `reviewers`; surfaced by the partial report + run summary.
+   */
+  cross_vendor_absent: external_exports.object({ reason: external_exports.string().min(1) }).optional(),
   // --- Git / PR pointers (WS3 populates; schema reserves the shape) ---
   /** Run-scoped branch `factory/<run_id>/<task_id>` (Δ M). */
   branch: external_exports.string().optional(),
@@ -8267,11 +8282,17 @@ var AgentSpecSchema = external_exports.object({
    */
   effort: EffortEnum.optional()
 });
+var CrossVendorStampSchema = external_exports.union([
+  external_exports.object({ status: external_exports.literal("present"), model: external_exports.string().min(1) }),
+  external_exports.object({ status: external_exports.literal("absent"), reason: external_exports.string().min(1) })
+]);
 var SpawnRequestSchema = external_exports.object({
   /** Engine resumes here after the agents return. A per-task phase. */
   resume_phase: TaskPhaseEnum,
   /** Agents to spawn; at least one (an empty request is a programming error). */
-  agents: external_exports.array(AgentSpecSchema).min(1)
+  agents: external_exports.array(AgentSpecSchema).min(1),
+  /** Cross-vendor resolution — verify panel manifests only (S5/C). */
+  cross_vendor: CrossVendorStampSchema.optional()
 });
 
 // src/hooks/hook-context.ts

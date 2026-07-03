@@ -103,6 +103,13 @@ export interface PartialRunReport {
   e2e_warnings?: string[];
   /** The run-start e2e assessment's failure reason (Decision 40 D3c), IFF it failed. */
   e2e_assessment_failure?: string;
+  /**
+   * Δ U/S5 — tasks whose ADVANCING verify pass ran WITHOUT an independent
+   * cross-vendor reviewer (task.cross_vendor_absent), in spec order. Present IFF
+   * non-empty, so a run reviewed entirely single-vendor is visible in the report,
+   * not just a buried log.warn.
+   */
+  cross_vendor_absences?: { task_id: string; reason: string }[];
 }
 
 /** Options for {@link buildPartialReport}. */
@@ -193,7 +200,20 @@ export function buildPartialReport(
       ? { e2e_advisory: run.e2e_phase.advisory }
       : {}),
     ...buildE2eNarrative(run),
+    ...buildCrossVendorAbsences(run, bySpecOrder),
   };
+}
+
+/** Δ U/S5 — the review-independence field (tasks reviewed without a second vendor). */
+function buildCrossVendorAbsences(
+  run: RunState,
+  bySpecOrder: <T extends { task_id: string }>(a: T, b: T) => number,
+): Partial<PartialRunReport> {
+  const absences = Object.values(run.tasks)
+    .filter((t) => t.cross_vendor_absent !== undefined)
+    .map((t) => ({ task_id: t.task_id, reason: t.cross_vendor_absent!.reason }))
+    .sort(bySpecOrder);
+  return absences.length > 0 ? { cross_vendor_absences: absences } : {};
 }
 
 /** The D12 plain-language e2e fields (journeys/reopens/warnings/assessment failure). */
@@ -328,6 +348,18 @@ export function renderPartialReportMarkdown(report: PartialRunReport): string {
   if (report.e2e_warnings !== undefined) {
     out.push("## End-to-end warnings");
     for (const w of report.e2e_warnings) out.push(`- ${w}`);
+    out.push("");
+  }
+
+  if (report.cross_vendor_absences !== undefined) {
+    out.push("## Review independence");
+    out.push(
+      `${report.cross_vendor_absences.length} task(s) were reviewed WITHOUT an ` +
+        `independent second-vendor reviewer:`,
+    );
+    for (const a of report.cross_vendor_absences) {
+      out.push(`- \`${a.task_id}\` — ${a.reason}`);
+    }
     out.push("");
   }
 

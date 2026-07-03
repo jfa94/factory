@@ -16,6 +16,7 @@ export function fakeFinding(overrides: Partial<Finding> = {}): Finding {
     file: overrides.file ?? "src/x.ts",
     line: overrides.line ?? 10,
     quote: overrides.quote ?? "const secret = process.env.KEY",
+    claim: overrides.claim ?? "a secret is read from a hardcoded env fallback",
     description: overrides.description ?? "hardcoded secret path",
   };
 }

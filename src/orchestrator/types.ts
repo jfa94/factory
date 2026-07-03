@@ -32,6 +32,7 @@ import type {
   HoldoutStore,
   ProvisionWorktreeFn,
   SpecManifest,
+  VendorProbe,
 } from "./deps.js";
 import type { GateTools } from "../verifier/deterministic/index.js";
 import type { ArtifactStore } from "./artifacts.js";
@@ -89,4 +90,10 @@ export interface HandlerDeps {
   readonly repo: string;
   /** `live` serial-merges; `no-merge` opens PRs but never auto-merges. */
   readonly shipMode: ShipMode;
+  /**
+   * S5/C — injectable cross-vendor probe (tests inject a fake). Optional: the
+   * verify reporter defaults to the real memoized `codex --version` probe. Never
+   * consulted when `codex.model` is unconfigured (deterministic absent, no exec).
+   */
+  readonly vendorProbe?: VendorProbe;
 }
