@@ -9,31 +9,13 @@
 // add `typescript-eslint` and a `files: ["src/**/*.ts"]` block later if the team
 // wants type-aware enforcement in CI.
 import js from "@eslint/js";
-import { createRequire } from "node:module";
-
-// The Workflow runner script (scripts/factory-run-runner.js) is ESM with a top-level `return` — the
-// Workflow harness wraps the script body in an async function, so the return is
-// legal at runtime. ESLint core force-disables espree's `globalReturn` whenever
-// sourceType is "module" (lib/languages/js/index.js normalizeLanguageOptions),
-// but ONLY when the configured parser is identity-equal to espree. This thin
-// delegating parser sidesteps that reset; espree itself parses module +
-// globalReturn fine. espree is not a direct dependency (pnpm strict layout), so
-// resolve it through eslint's own dependency tree.
-const require = createRequire(import.meta.url);
-const espree = createRequire(require.resolve("eslint"))("espree");
-const workflowParser = {
-  meta: { name: "espree-with-top-level-return", version: "1.0.0" },
-  parse: (code, parserOptions) => espree.parse(code, parserOptions),
-};
 
 export default [
   {
     // `.claude/**` holds ephemeral agent worktrees (full repo copies), project
     // settings, and plans — none of it is lintable source. Without this, ESLint
-    // walks into `.claude/worktrees/*/` and lints stale copies of the build +
-    // workflow scripts (the latter parse-error on their top-level `return`,
-    // since the worktree path doesn't match the driver-script parser override).
-    // `templates/.github/scripts/**` is a generated, diff-reviewable esbuild
+    // walks into `.claude/worktrees/*/` and lints stale copies of the build
+    // scripts. `templates/.github/scripts/**` is a generated, diff-reviewable esbuild
     // artifact (like `dist/**`) — its TS source under `src/bin/` is what tsc
     // checks; linting the bundle just trips on injected `process` globals.
     ignores: [
@@ -55,35 +37,6 @@ export default [
         process: "readonly",
         console: "readonly",
         URL: "readonly",
-      },
-    },
-  },
-  {
-    // Claude Code Workflow scripts: plain ESM executed by the Workflow harness,
-    // which injects these globals and wraps the body in an async context where
-    // top-level `return` is legal (hence `globalReturn` + the delegating parser
-    // above). No TS rules apply.
-    files: ["scripts/factory-run-runner.js"],
-    languageOptions: {
-      ecmaVersion: 2022,
-      sourceType: "module",
-      parser: workflowParser,
-      parserOptions: {
-        ecmaVersion: 2022,
-        sourceType: "module",
-        ecmaFeatures: {
-          globalReturn: true,
-        },
-      },
-      globals: {
-        agent: "readonly",
-        parallel: "readonly",
-        pipeline: "readonly",
-        phase: "readonly",
-        log: "readonly",
-        args: "readonly",
-        budget: "readonly",
-        workflow: "readonly",
       },
     },
   },

@@ -11321,14 +11321,14 @@ var DefaultGitProbe = class {
     return splitLines(r.stdout);
   }
   async commits(base, taskId, opts) {
-    const log34 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
-    if (log34.code !== 0) {
+    const log33 = await this.git(["log", "--format=%H", `${base}..HEAD`], opts.cwd);
+    if (log33.code !== 0) {
       throw new Error(
-        `git log ${base}..HEAD failed (code=${log34.code ?? "null"}): ${log34.stderr.trim()}`
+        `git log ${base}..HEAD failed (code=${log33.code ?? "null"}): ${log33.stderr.trim()}`
       );
     }
-    assertNotTruncated(log34, "git log (tdd classification)");
-    const shas = splitLines(log34.stdout).reverse();
+    assertNotTruncated(log33, "git log (tdd classification)");
+    const shas = splitLines(log33.stdout).reverse();
     const out = [];
     for (const sha of shas) {
       const parents = await this.git(["show", "-s", "--format=%P", sha], opts.cwd);
@@ -14687,7 +14687,6 @@ function decideAutonomyPreflight(input) {
 }
 
 // src/cli/subcommands/run.ts
-var log29 = createLogger("run");
 var RUN_HELP = `factory run \u2014 create or resume a run
 
 Usage:
@@ -14710,7 +14709,7 @@ Actions:
 var CREATE_HELP = `factory run create \u2014 create a run and seed its tasks from a durable spec
 
 Usage:
-  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--workflow] [--no-ship] [--ignore-quota] [--e2e] [--session-id <id>]
+  factory run create [--repo <owner/name>] (--issue <n> | --spec-id <id>) [--run-id <id>] [--new | --supersede | --resume] [--no-ship] [--ignore-quota] [--e2e] [--session-id <id>]
 
   --repo        OPTIONAL. Repo identity 'owner/name' (the first key of the spec store).
                 Auto-derived from the 'origin' remote when omitted; an explicit value
@@ -14722,20 +14721,17 @@ Usage:
   --new         Force a fresh run even if a live one already exists for this spec.
   --supersede   Terminate the active run for this spec, then create a fresh one.
   --resume      Continue the active run for this spec (full hand-off: forthcoming).
-  --workflow    Run the parallel background Workflow runner. Default (no flag): session \u2014
-                the in-session, quota-paced runner loop.
   --no-ship     Open the rollup PR but never merge. Default (no flag): live \u2014 auto-merge
                 each task into staging and merge the staging\u2192develop rollup into develop.
-                Persisted on the run so the workflow runner + resume + finalize read it
-                without re-passing.
+                Persisted on the run so resume + finalize read it without re-passing.
   --ignore-quota Bypass the weekly-quota hard stop AND the per-step quota pacer for this run.
-                Persisted as ignore_quota:true so both orchestrators + orchestrators skip the gate
+                Persisted as ignore_quota:true so the orchestrator skips the gate
                 without re-passing \u2014 lets create/--supersede proceed past a 7d-parked run.
   --e2e         Opt into the run-level e2e phase (Decision 39): after all tasks are terminal,
                 author + run Playwright journeys against staging before docs/finalize; a
                 mappable failing journey reopens its task with feedback. Persisted as e2e:true.
   --session-id  Owning Claude Code session id for the session-scoped Stop gate (Prompt J).
-                Defaults to $CLAUDE_CODE_SESSION_ID; absent \u21D2 owner-unknown (Stop gate unscoped).
+                Defaults to $CLAUDE_CODE_SESSION_ID; required \u2014 an ownerless run is rejected.
 
 Resolves the spec via the durable store (LOUD if none exists \u2014 generate one first).
 On an ACTIVE run for this (repo, spec_id): exits CONFLICT (3) and reports it \u2014 pass
@@ -14812,11 +14808,6 @@ async function resolveSpec2(specStore, opts) {
   return resolved;
 }
 async function createRunFromManifest(state, specStore, request, opts, stagingDeps) {
-  if (opts.mode === "workflow") {
-    log29.warn(
-      "workflow mode: quota pacing disabled \u2014 relying on hard rate-limit errors; long runs may exhaust limits"
-    );
-  }
   const seeded = seedTasksFromSpec(request);
   const branch = runStagingBranch(opts.runId);
   await state.create({
@@ -14825,7 +14816,6 @@ async function createRunFromManifest(state, specStore, request, opts, stagingDep
     staging_branch: branch,
     // v1 orchestrator seam drives tasks strictly one at a time — the execution-mode dial is fixed.
     execution_mode: "sequential",
-    ...opts.mode !== void 0 ? { mode: opts.mode } : {},
     ...opts.shipMode !== void 0 ? { ship_mode: opts.shipMode } : {},
     ...opts.ownerSession !== void 0 ? { owner_session: opts.ownerSession } : {},
     ...opts.ignoreQuota === true ? { ignore_quota: true } : {},
@@ -14973,7 +14963,7 @@ async function assertE2ePrereqs(cwd) {
 }
 async function runCreate(argv, overrides = {}) {
   const args = parseArgs(argv, {
-    booleans: ["new", "workflow", "no-ship", "supersede", "resume", "ignore-quota", "e2e"]
+    booleans: ["new", "no-ship", "supersede", "resume", "ignore-quota", "e2e"]
   });
   if (args.flag("help") === true) {
     emitLine(CREATE_HELP);
@@ -15002,20 +14992,19 @@ async function runCreate(argv, overrides = {}) {
   const explicitRunId = optionalString(args.flag("run-id"));
   const runId = explicitRunId ?? makeRunId();
   validateId(runId, "run-id");
-  const mode = args.flag("workflow") === true ? "workflow" : "session";
   const shipMode = args.flag("no-ship") === true ? "no-merge" : "live";
   const ownerSession = resolveOwnerSession(args.flag("session-id"));
-  if (ownerSession === void 0 && mode === "session") {
+  if (ownerSession === void 0) {
     throw new UsageError(
-      "run create: session-mode runs require an owning session id (pass --session-id <id> or set CLAUDE_CODE_SESSION_ID). Workflow-mode runs are exempt (the Workflow runner owns finalization)."
+      "run create: runs require an owning session id (pass --session-id <id> or set CLAUDE_CODE_SESSION_ID)."
     );
   }
   const fresh = args.flag("new") === true || explicitRunId !== void 0;
   const supersede = args.flag("supersede") === true;
   const resume = args.flag("resume") === true;
-  if (resume && (args.flag("workflow") === true || args.flag("no-ship") === true || args.flag("e2e") === true)) {
+  if (resume && (args.flag("no-ship") === true || args.flag("e2e") === true)) {
     throw new UsageError(
-      "run create: --workflow/--no-ship/--e2e are create-only and cannot combine with --resume \u2014 a resumed run keeps the mode/ship_mode/e2e it was created with. Drop the flag to continue the existing run, or use --supersede to start fresh in that mode."
+      "run create: --no-ship/--e2e are create-only and cannot combine with --resume \u2014 a resumed run keeps the ship_mode/e2e it was created with. Drop the flag to continue the existing run, or use --supersede to start fresh."
     );
   }
   const picked = [supersede && "supersede", resume && "resume", fresh && "fresh"].filter(
@@ -15050,7 +15039,6 @@ async function runCreate(argv, overrides = {}) {
       repo: repoSlug,
       runId,
       ...selector,
-      mode,
       shipMode,
       ...ownerSession !== void 0 ? { ownerSession } : {},
       ...ignoreQuota ? { ignoreQuota } : {},
@@ -15093,14 +15081,14 @@ async function runCreate(argv, overrides = {}) {
   return EXIT.OK;
 }
 async function runResume(argv) {
-  const args = parseArgs(argv, { booleans: ["workflow", "no-ship", "ignore-quota", "e2e"] });
+  const args = parseArgs(argv, { booleans: ["no-ship", "ignore-quota", "e2e"] });
   if (args.flag("help") === true) {
     emitLine(RESUME_HELP);
     return EXIT.OK;
   }
-  if (args.flag("workflow") === true || args.flag("no-ship") === true || args.flag("e2e") === true) {
+  if (args.flag("no-ship") === true || args.flag("e2e") === true) {
     throw new UsageError(
-      "run resume: --workflow/--no-ship/--e2e are not valid on resume \u2014 a run keeps the mode/ship_mode/e2e it was created with. Resume drives the run in its persisted mode."
+      "run resume: --no-ship/--e2e are not valid on resume \u2014 a run keeps the ship_mode/e2e it was created with."
     );
   }
   requireAutonomousMode();
@@ -16061,7 +16049,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir as mkdir10, readFile as readFile13 } from "node:fs/promises";
 import { existsSync as existsSync7 } from "node:fs";
 import { join as join21 } from "node:path";
-var log30 = createLogger("cli:target-settings");
+var log29 = createLogger("cli:target-settings");
 var FACTORY_TARGET_BASE_ALLOWLIST = [
   "Bash(factory:*)",
   "Bash(git:*)",
@@ -16139,7 +16127,7 @@ async function ensureTargetSettings(opts) {
     if (isObject(parsed)) {
       existing = parsed;
     } else {
-      log30.warn(
+      log29.warn(
         `${path5} is valid JSON but not an object (${Array.isArray(parsed) ? "array" : typeof parsed}); replacing it with the factory settings object`
       );
     }
@@ -16153,7 +16141,7 @@ async function ensureTargetSettings(opts) {
 }
 
 // src/cli/subcommands/scaffold.ts
-var log31 = createLogger("scaffold");
+var log30 = createLogger("scaffold");
 var HELP3 = `factory scaffold \u2014 prepare a repo for the factory pipeline
 
 Usage:
@@ -16229,7 +16217,7 @@ async function applyTemplate(entry, templatesDir, targetRoot, lists, transform) 
   const src = join22(templatesDir, ...segs);
   const dest = join22(targetRoot, ...segs);
   if (!existsSync8(src)) {
-    log31.warn(`template missing, skipping: ${src}`);
+    log30.warn(`template missing, skipping: ${src}`);
     return;
   }
   const render = async () => {
@@ -16276,10 +16264,10 @@ async function runScaffold(opts) {
   const lists = { created: [], present: [], updated: [] };
   const gateEnv = await applyGateEnvDetection(opts.targetRoot, { dataDir: opts.dataDir });
   if (gateEnv.written.length > 0) {
-    log31.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
+    log30.info(`detected ${gateEnv.written.length} CI build-env var(s) \u2192 quality.gateEnv`);
   }
   if (gateEnv.warnings.length > 0) {
-    log31.warn(
+    log30.warn(
       `CI build-env detection skipped ${gateEnv.warnings.length} unparseable workflow file(s): ` + gateEnv.warnings.map((w) => w.workflow).join(", ")
     );
   }
@@ -16290,7 +16278,7 @@ async function runScaffold(opts) {
     await applyTemplate(entry, opts.templatesDir, opts.targetRoot, lists, transform);
   }
   if (lists.updated.length > 0) {
-    log31.info(
+    log30.info(
       `auto-updated ${lists.updated.length} plugin-managed file(s): ${lists.updated.join(", ")}`
     );
   }
@@ -16589,15 +16577,14 @@ Usage:
   factory next-task [--run <id>]      (defaults to runs/current)
 
 Emits ONE JSON envelope to stdout. Every variant also carries the self-resolved run
-context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the workflow runner
-adopts them from the first \`next-task\` instead of via Workflow args:
+context \u2014 run_id, data_dir (canonical), ship_mode \u2014 so the runner adopts them
+from the first \`next-task\`:
   { kind:"work", run_id, data_dir, ship_mode, ready:[...], cascade_failed:[...] }
   { kind:"finalize", run_id, data_dir, ship_mode, cascade_failed:[...] }  \u2192 call \`factory run finalize\`
   { kind:"done", run_id, data_dir, ship_mode, run_status }
   { kind:"pause", run_id, data_dir, ship_mode, scope, reason, resets_at_epoch? }
 
   factory next-task --assert-owner <session>          (loud-assert runs/current ownership)
-  factory next-task --expect-mode <session|workflow>  (loud-assert runs/current mode)
 
 Ready tasks are ordered in-flight first (crash resume), then pending (spec order).
 Throws LOUD on a dependency deadlock.`;
@@ -16608,21 +16595,7 @@ function assertCurrentOwner(current, assertOwner) {
   if (actual === void 0) return;
   if (actual !== expected) {
     throw new Error(
-      `next-task: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Relaunch via /factory:run --workflow, or pass --run <id> explicitly.`
-    );
-  }
-}
-function assertExpectedMode(current, expectMode) {
-  if (expectMode === void 0) return;
-  const parsed = RunModeEnum.safeParse(typeof expectMode === "string" ? expectMode : "");
-  if (!parsed.success) {
-    throw new UsageError(
-      `--expect-mode must be ${RunModeEnum.options.map((o) => `'${o}'`).join(" or ")}, got '${String(expectMode)}'`
-    );
-  }
-  if (current.mode !== parsed.data) {
-    throw new Error(
-      `next-task: runs/current points at run '${current.run_id}' in mode '${current.mode}', but --expect-mode expected '${parsed.data}' \u2014 a concurrent 'run create' moved runs/current onto a run of a different mode. Relaunch via /factory:run --workflow, or pass --run <id> explicitly.`
+      `next-task: runs/current points at run '${current.run_id}' owned by session '${actual}', but --assert-owner expected '${expected}' \u2014 a concurrent 'run create' moved runs/current onto a foreign run. Pass --run <id> explicitly.`
     );
   }
 }
@@ -16641,7 +16614,6 @@ async function run8(argv) {
     const current = await new StateManager({ dataDir }).readCurrent();
     if (current === null) throw new UsageError("no --run given and no current run");
     assertCurrentOwner(current, args.flag("assert-owner"));
-    assertExpectedMode(current, args.flag("expect-mode"));
     runId = current.run_id;
   }
   const deps = await loadOrchestratorDeps({ runId });
@@ -16663,7 +16635,7 @@ async function readStdin(stream = process.stdin) {
 }
 
 // src/cli/subcommands/statusline.ts
-var log32 = createLogger("cli:statusline");
+var log31 = createLogger("cli:statusline");
 var HELP7 = `factory statusline \u2014 capture Claude Code rate limits + chain the statusline
 
 Wire this as the Claude Code statusLine.command. On every statusline update it
@@ -16688,7 +16660,7 @@ async function writeCache(rateLimits, deps) {
   try {
     dataDir = resolveDataDir(deps.dataDirOptions ?? {});
   } catch {
-    log32.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
+    log31.warn("CLAUDE_PLUGIN_DATA unresolvable; skipping usage-cache.json write");
     return "usage-cache skipped: CLAUDE_PLUGIN_DATA unresolvable";
   }
   const now = (deps.now ?? nowEpoch)();
@@ -16697,7 +16669,7 @@ async function writeCache(rateLimits, deps) {
     await atomicWriteFile(usageCachePath(dataDir), stringifyJson(cache));
     return null;
   } catch (err) {
-    log32.warn(`failed to write usage-cache.json: ${err.message}`);
+    log31.warn(`failed to write usage-cache.json: ${err.message}`);
     return `usage-cache unwritable: ${err.message}`;
   }
 }
@@ -16709,12 +16681,12 @@ async function passthrough(payload, deps) {
     const result = await run10(original, [], { shell: true, input: payload, timeoutMs: 3e3 });
     if (result.code !== 0) {
       const why = result.code === null ? `was killed by signal ${result.signal ?? "unknown"} (likely the 3s timeout)` : `exited ${result.code}`;
-      log32.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
+      log31.warn(`FACTORY_ORIGINAL_STATUSLINE ${why}; statusline left empty`);
       return "";
     }
     return result.stdout;
   } catch (err) {
-    log32.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
+    log31.warn(`FACTORY_ORIGINAL_STATUSLINE failed to run: ${err.message}`);
     return "";
   }
 }
@@ -16748,7 +16720,7 @@ import { existsSync as existsSync9 } from "node:fs";
 import { readFile as readFile15 } from "node:fs/promises";
 import { join as join23 } from "node:path";
 import { homedir as homedir3 } from "node:os";
-var log33 = createLogger("autonomy");
+var log32 = createLogger("autonomy");
 var HELP8 = `factory autonomy <ensure|status|preflight> \u2014 manage / inspect autonomous mode
 
 The pipeline runs unattended: \`run create\`/\`run resume\` HALT unless the session
@@ -16880,9 +16852,9 @@ async function runAutonomyEnsure(opts = {}) {
     try {
       const parsed = JSON.parse(await readFile15(userSettingsPath, "utf8"));
       if (isObject2(parsed)) userSettings = parsed;
-      else log33.warn(`${userSettingsPath} is not a JSON object; ignoring`);
+      else log32.warn(`${userSettingsPath} is not a JSON object; ignoring`);
     } catch (err) {
-      log33.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
+      log32.warn(`could not parse ${userSettingsPath} (${err.message}); ignoring`);
     }
   }
   const templatePath = join23(pluginRoot, "templates", "settings.autonomous.json");

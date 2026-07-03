@@ -14,8 +14,8 @@
  * itself read-throughs to the same-repo legacy pointer for pre-upgrade in-flight runs.
  *
  * NOTE this is intentionally NOT used by `factory next-task`: that command is machine-driven
- * (the workflow/runner bootstrap), always passes `--run` on the hot path, and its
- * no-`--run` fallback is guarded against a foreign run by `--assert-owner`/`--expect-mode`.
+ * (the runner bootstrap), always passes `--run` on the hot path, and its
+ * no-`--run` fallback is guarded against a foreign run by `--assert-owner`.
  */
 import { DefaultGitClient, resolveRepo, type GitClient } from "../git/index.js";
 import type { RunState, StateManager } from "../core/state/index.js";
