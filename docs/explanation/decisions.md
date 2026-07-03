@@ -1227,6 +1227,50 @@ exhaustion is a resumable budget stop the operator clears by raising the cap, no
 
 ---
 
+## Decision 42 — One Runner: Workflow Mode Deleted; `run.quota` Presence Is the Suspend Discriminant
+
+**Date:** 2026-07-03
+
+**Context:** The 2026-07 design review concluded the unattended path (workflow mode) was
+the least-hardened surface: no quota pacing (Decision 24 exempted it), an LLM in the
+control channel (every CLI step wrapped in a Sonnet exec-agent — the blocker-#9 class),
+a permanent exec-agent quota tax, and a second runner protocol to keep in lockstep with
+the session loop. The redesign (2026-07-03, session plan S1–S12) chose ONE runner: the
+session loop becomes a parallel event loop; workflow mode dies entirely.
+
+**Decision:**
+
+- **Workflow mode is deleted end to end.** `scripts/factory-run-runner.js`, the
+  workflow envelope (`src/orchestrator/workflow-envelope.ts`), `--workflow`/`--expect-mode`,
+  `RunModeEnum` and the persisted `mode` field, and the stop-gate's workflow ALLOW are all
+  gone. `--owner` is now always required — no unattended exemption. `z.object` strips the
+  stale `mode`/`paused_minutes` keys from persisted runs; no migration.
+- **The circuit breaker is failures-only.** The runtime arm existed to bound an unattended
+  workflow run; with the runner always session-owned it lost its reason to exist. The whole
+  Decision-41 idle-crediting apparatus (`paused_minutes`, `idleGapCredit`,
+  `ACTIVE_GAP_CAP_MINUTES`, `maxRuntimeMinutes`, `maxStaleCycles`, scope
+  `"runtime-budget"`) is deleted with it. A trip (`cumulativeFailures >=
+maxConsecutiveFailures`, capability-budget failures only, fail-closed on malformed
+  input) is a HARD abort, as before Decision 41.
+- **`run.quota` presence ⇔ the stop was quota-caused.** Every quota stop now writes a
+  checkpoint — including the fail-closed unavailable halt, which writes
+  `{binding_window: "unavailable"}` (the enum gains that value; `resets_at_epoch` is
+  optional). Non-quota suspends (docs/e2e parks, future spec-approval) never write one.
+  `planResume` needs no stored reason field: a quota-present suspend gets a fresh pacer
+  recheck (an unavailable checkpoint rechecks like any window); a quota-absent suspend
+  clears unconditionally — **resume IS the sign-off**. Legacy pre-42 unavailable suspends
+  (no checkpoint) self-heal: cleared as non-quota, re-suspended by the next quota gate if
+  usage is still unobservable. An explicit `suspend_reason` field was rejected: three
+  writers plus every clear path for the same discrimination the checkpoint already makes.
+
+**Consequences:** One runner protocol, no LLM in the control channel, no exec-agent tax,
+and quota pacing applies to every run (the Decision-24 workflow exemption is moot).
+Decisions 24 (workflow half), 28, and 41 are superseded in their workflow-specific parts.
+Supersedes the runtime arm entirely; Decision 41's idle-crediting rationale is preserved
+here for history but the mechanism no longer exists.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent
