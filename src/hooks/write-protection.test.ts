@@ -84,6 +84,14 @@ describe("write-protection — TCB write-deny (Δ W)", () => {
     expect(isDeny(decideWriteProtection(editInput("Edit", p), deps()))).toBe(true);
   });
 
+  it("D46: Write/Edit to .factory/gates.json (the gate contract) is blocked", () => {
+    const p = join(repoRoot, ".factory", "gates.json");
+    mkdirSync(join(repoRoot, ".factory"), { recursive: true });
+    expect(isDeny(decideWriteProtection(editInput("Write", p), deps()))).toBe(true);
+    writeFileSync(p, "{}");
+    expect(isDeny(decideWriteProtection(editInput("Edit", p), deps()))).toBe(true);
+  });
+
   it("Δ Y: Write into the holdout store is blocked", () => {
     const p = join(dataDir, "runs", "run-1", "holdouts", "answers.json");
     expect(isDeny(decideWriteProtection(editInput("Write", p), deps()))).toBe(true);
@@ -161,6 +169,13 @@ describe("write-protection — TCB write-deny (Δ W)", () => {
     it("Δ W: write to <dataDir>/config.json (setupCommand ACE vector) is blocked", () => {
       expect(denied(`tee ${join(dataDir, "config.json")} < /tmp/x`)).toBe(true);
       expect(denied(`printf '{}' > ${join(dataDir, "config.json")}`)).toBe(true);
+    });
+
+    it("D46: redirect / rm on .factory/gates.json is blocked", () => {
+      mkdirSync(join(repoRoot, ".factory"), { recursive: true });
+      writeFileSync(join(repoRoot, ".factory", "gates.json"), "{}");
+      expect(denied("echo '{}' > .factory/gates.json")).toBe(true);
+      expect(denied("rm .factory/gates.json")).toBe(true);
     });
 
     it("Δ Y: redirect into the holdout store is blocked", () => {

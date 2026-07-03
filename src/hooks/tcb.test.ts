@@ -156,6 +156,45 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     expect(isTcbProtected(p, ctx())).toBeNull();
   });
 
+  it("D46: ADVERSARIAL — a producer write to .factory/gates.json is DENIED", () => {
+    // The committed gate contract is producer-immutable: an implementer that could
+    // edit it could waive its own gates — the exact silent-skip S7 kills.
+    const p = join(repoRoot, ".factory", "gates.json");
+    mkdirSync(join(repoRoot, ".factory"), { recursive: true });
+    writeFileSync(p, "{}");
+    expect(isTcbProtected(p, ctx())?.rule.category).toBe("gate-contract");
+  });
+
+  it("D46: the gate-contract deny is context-free (absolute-path Bash write still denied)", () => {
+    const p = join(repoRoot, ".factory", "gates.json");
+    mkdirSync(join(repoRoot, ".factory"), { recursive: true });
+    writeFileSync(p, "{}");
+    expect(isTcbProtected(p)?.rule.category).toBe("gate-contract");
+  });
+
+  it("D46: `..` traversal into .factory/gates.json resolves to the same deny", () => {
+    const sub = join(repoRoot, "src");
+    mkdirSync(sub, { recursive: true });
+    mkdirSync(join(repoRoot, ".factory"), { recursive: true });
+    writeFileSync(join(repoRoot, ".factory", "gates.json"), "{}");
+    const traversal = join(sub, "..", ".factory", "gates.json");
+    expect(isTcbProtected(traversal, ctx())?.rule.category).toBe("gate-contract");
+  });
+
+  it("D46: a sibling file under .factory/ is NOT protected (scoped exactly to gates.json)", () => {
+    const p = join(repoRoot, ".factory", "notes.md");
+    mkdirSync(join(repoRoot, ".factory"), { recursive: true });
+    writeFileSync(p, "x");
+    expect(isTcbProtected(p, ctx())).toBeNull();
+  });
+
+  it("D46: a benign my.factory/gates.json is NOT protected (component-anchored)", () => {
+    const p = join(repoRoot, "my.factory-data", "gates.json");
+    mkdirSync(join(repoRoot, "my.factory-data"), { recursive: true });
+    writeFileSync(p, "{}");
+    expect(isTcbProtected(p, ctx())).toBeNull();
+  });
+
   it("Δ W: a non-TCB repo path is NOT protected", () => {
     const p = join(repoRoot, "src", "feature.ts");
     mkdirSync(join(repoRoot, "src"), { recursive: true });
@@ -206,6 +245,7 @@ describe("tcb — hardcoded denylist (Δ W)", () => {
     expect(categories).toContain("data-config");
     expect(categories).toContain("docs-factory");
     expect(categories).toContain("e2e-suite");
+    expect(categories).toContain("gate-contract");
   });
 
   it("canonicalizePath collapses ./ and .. for a non-existent leaf (create case)", () => {

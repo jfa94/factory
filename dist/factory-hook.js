@@ -6789,6 +6789,11 @@ function buildTcbRules(ctx = {}) {
     test: (p) => hasAdjacentComponents(p, "docs", "factory")
   });
   rules.push({
+    category: "gate-contract",
+    describe: ".factory/gates.json (the committed gate contract \u2014 Decision 46)",
+    test: (p) => hasAdjacentComponents(p, ".factory", "gates.json")
+  });
+  rules.push({
     category: "gate-config",
     describe: "gate/CI config (.stryker.config.json, .dependency-cruiser.cjs)",
     test: (p) => GATE_CONFIG_BASENAMES.has(baseName(p))
