@@ -25,10 +25,7 @@ const PLACEHOLDER_SURFACES = [
   "skills/review-protocol/SKILL.md",
   "agents/implementation-reviewer.md",
   "agents/quality-reviewer.md",
-  "agents/architecture-reviewer.md",
-  "agents/security-reviewer.md",
   "agents/silent-failure-hunter.md",
-  "agents/type-design-reviewer.md",
 ];
 
 /** The orchestrator template that interpolates the envelope's per-run base ref. */

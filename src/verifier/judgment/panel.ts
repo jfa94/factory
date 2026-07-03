@@ -9,10 +9,11 @@
  * RiskTier parameter at all: there is nowhere to branch on the tier, so two tasks
  * of different tiers necessarily get a deep-equal request.
  *
- * The panel is the full CCR-pattern set (Δ K): the four classic reviewers
- * (implementation / quality / architecture / security) PLUS silent-failure-hunter,
- * type-design-reviewer, and systemic-failure-reviewer. All seven roles already exist
- * in the frozen {@link SpawnRoleEnum} — no new role is invented here.
+ * The panel is the consolidated four-lens set (Decision 43): implementation-reviewer
+ * (spec alignment), quality-reviewer (the merged adversarial quality + security +
+ * architecture + type-design lens), silent-failure-hunter, and
+ * systemic-failure-reviewer. All four roles already exist in the frozen
+ * {@link SpawnRoleEnum} — no new role is invented here.
  *
  * Every reviewer runs on the SAME fixed model (Δ T) and the SAME turn budget
  * (D26 fixed depth). The request is validated through the frozen
@@ -21,17 +22,14 @@
 import { parseSpawnRequest, type SpawnRequest, type SpawnRole } from "../../types/index.js";
 
 /**
- * The seven fixed panel roles, in a stable order. CLOSED: this list IS the panel
+ * The four fixed panel roles, in a stable order. CLOSED: this list IS the panel
  * membership invariant. Each entry is a {@link SpawnRole} from the frozen enum.
  * Exported so the acceptance test asserts the exact set.
  */
 export const PANEL_ROLES: readonly SpawnRole[] = [
   "implementation-reviewer",
   "quality-reviewer",
-  "architecture-reviewer",
-  "security-reviewer",
   "silent-failure-hunter",
-  "type-design-reviewer",
   "systemic-failure-reviewer",
 ] as const;
 
@@ -58,7 +56,7 @@ function promptRefFor(role: SpawnRole): string {
  *
  * @param resumePhase the per-task phase the engine resumes at once the panel
  *   returns (the verify phase).
- * @param model the FIXED reviewer model — a SINGLE value used for ALL six
+ * @param model the FIXED reviewer model — a SINGLE value used for ALL four
  *   reviewers (resolve via {@link resolveReviewModel}). Deliberately not a
  *   per-role map: every reviewer runs the same model (Δ T).
  * @param maxTurns the FIXED deep-review turn budget for ALL reviewers (D26).

@@ -47,7 +47,7 @@ hands.
 commits failing tests, then a `implementer` commits the minimal
 implementation — enforced by the TDD gate), passes a stack of deterministic
 automated gates (tests, coverage, mutation, SAST, type, lint, build, and the TDD
-gate itself), and clears a unanimous seven-reviewer adversarial panel before it can
+gate itself), and clears a unanimous four-reviewer adversarial panel before it can
 ship. Reviewer findings are independently confirmed before they act
 (verify-then-fix).
 

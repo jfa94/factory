@@ -7,7 +7,7 @@
  * Helpers:
  *   - driveToVerify: step twice (record DONE twice) to reach the verify spawn;
  *     returns the verify spawn envelope (LOUD if not reached)
- *   - approvingReviewsResults: a DriveResults with 6 approving reviews + holdout pass
+ *   - approvingReviewsResults: a DriveResults with approving reviews from all PANEL_ROLES + holdout pass
  *   - blockingReviewsResults: a DriveResults with one confirmed blocker
  *
  * result_key discipline: every helper that builds a DriveResults accepts the prior
@@ -75,7 +75,7 @@ async function driveToVerify(
 }
 
 /**
- * Build a DriveResults with 6 approving reviews (all PANEL_ROLES) + holdout pass.
+ * Build a DriveResults with approving reviews from all PANEL_ROLES (all PANEL_ROLES) + holdout pass.
  * result_key is echoed from the prior spawn envelope.
  */
 function approvingReviewsResults(

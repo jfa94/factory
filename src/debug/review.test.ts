@@ -105,7 +105,7 @@ describe("adjudicateWholeScope", () => {
 
   it("a clean pass: every reviewer approves → clean: true, no confirmed blockers", async () => {
     const result = await adjudicateWholeScope({
-      reviews: [approve("quality-reviewer"), approve("security-reviewer")],
+      reviews: [approve("implementation-reviewer"), approve("quality-reviewer")],
       verifications: [],
       worktree,
     });
@@ -121,7 +121,7 @@ describe("adjudicateWholeScope", () => {
 
     const result = await adjudicateWholeScope({
       reviews: [
-        approve("security-reviewer"),
+        approve("implementation-reviewer"),
         blockedWith("quality-reviewer", "src/x.ts", 2, "const x = 1"),
       ],
       verifications: [

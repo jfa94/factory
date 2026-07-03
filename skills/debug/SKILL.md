@@ -119,7 +119,7 @@ Emits:
   "kind": "review-spawn",
   "run_id": "<id>",
   "pass": <n>,
-  "manifest": { "resume_phase": "verify", "agents": [ /* 7 panel roles */ ] },
+  "manifest": { "resume_phase": "verify", "agents": [ /* 4 panel roles */ ] },
   "base": "<resolved base>",
   "worktree": "<cwd>",
   "codex_available": true | false
@@ -129,15 +129,14 @@ Emits:
 `manifest` is `buildPanelManifest("verify", <reviewModel>, <maxTurnsDeep>)` —
 **identical construction** to the per-task verify phase's panel (Δ T/Δ K: the panel
 is risk-invariant, same model + turn budget for every reviewer, no debug-specific
-variant). Its `agents` array is the SAME fixed 7-role
+variant). Its `agents` array is the SAME fixed 4-role
 `PANEL_ROLES` (`src/verifier/judgment/panel.ts`) `skills/pipeline-runner/SKILL.md`'s
 per-task "Panel" step spawns:
 
-- `implementation-reviewer`, `quality-reviewer`, `architecture-reviewer`,
-  `security-reviewer`, `silent-failure-hunter`, `type-design-reviewer`,
+- `implementation-reviewer`, `quality-reviewer`, `silent-failure-hunter`,
   `systemic-failure-reviewer`.
 
-**Spawn all 7 in one assistant message** (parallel), isolation `"worktree"`, model
+**Spawn all 4 in one assistant message** (parallel), isolation `"worktree"`, model
 mapped per the manifest agent's `model` field (per
 `skills/pipeline-runner/SKILL.md`'s Agent spawn matrix / model-alias table). Before
 spawning, each reviewer's prompt is built INLINE from that role's `agents/<role>.md`
@@ -153,7 +152,7 @@ output contract: `{ reviewer, verdict: "approve"|"blocked"|"error", findings: [
 (`config.codex.model !== undefined` — a config-presence check, not a live probe;
 `src/cli/subcommands/debug.ts`'s `debugReviewEmit`) — read it off THIS envelope,
 never re-derive it. `skills/pipeline-runner/SKILL.md` does not document a separate
-runner-side Codex spawn for the per-task panel either (the panel's 7 roles are
+runner-side Codex spawn for the per-task panel either (the panel's 4 roles are
 ALL Claude agents; a second vendor participates only via the finding-verifier's
 identity, below) — debug follows the identical convention: `codex_available` governs
 ONLY whether you omit or include `crossVendorAbsent` in the `--results` file

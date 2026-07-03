@@ -12,9 +12,9 @@ spawns an independent **finding-verifier** per blocking finding (verify-then-fix
 derives the merge gate. You judge; the CLI decides. You never edit code and never decide the
 transition.
 
-Your specific lens (correctness / quality / architecture / security / silent failures / type
-design) is defined by **your agent role** — this protocol is the shared posture + output
-contract every panel member obeys.
+Your specific lens (spec alignment / quality — including security, architecture, and type
+design / silent failures / systemic failures) is defined by **your agent role** — this
+protocol is the shared posture + output contract every panel member obeys.
 
 ## What you inspect
 
@@ -96,7 +96,7 @@ LOUD parse error.
 
 ```json
 {
-  "reviewer": "<your role, e.g. security-reviewer>",
+  "reviewer": "<your role, e.g. quality-reviewer>",
   "verdict": "approve | blocked | error",
   "findings": [
     {
@@ -121,6 +121,10 @@ Field rules:
   the CLI drops it. Always cite both for anything you want to count.
 - **`quote`**: REQUIRED, non-empty, an exact substring of the cited source within ±2 lines.
 - **`blocking`**: `true` only for a real defect that must be fixed before shipping.
-- **`findings`** may be an empty array for a clean `approve`.
+- **`findings`** may be an empty array for a clean `approve`. Cap at 10, ranked by
+  likelihood × impact — the CLI truncates anything beyond 10 (keeping your first 10).
+- **`dropped_by_cap`** (optional, top-level, non-negative integer): if you dropped a tail of
+  real findings to stay under the cap, self-report the dropped count here so coverage reads
+  as truncated, not exhaustive.
 
 Quote the real source → cite the line → emit the JSON. Nothing else.

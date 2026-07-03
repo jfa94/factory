@@ -12,7 +12,7 @@ risk-invariant panel and verify-then-fix.
 graph TD
   W[Task worktree] --> Gates[Deterministic gates<br/>test·tdd·coverage·mutation·sast·type·lint·build]
   W --> Holdout[Holdout validation<br/>withheld answer-key]
-  W --> Panel[Judgment panel<br/>7 reviewers]
+  W --> Panel[Judgment panel<br/>4 reviewers]
   Gates --> MergeGate{Merge-gate verdict<br/>conjunctive}
   Holdout --> MergeGate
   Panel --> VtF[Verify-then-fix<br/>confirm each blocker]
@@ -45,13 +45,15 @@ does **not** do this for the merge gate. Every reviewer runs on every task:
 
 - `implementation-reviewer` — spec alignment: does the code address the spec, not
   just pass the tests?
-- `quality-reviewer` — adversarial code quality (Codex is the preferred implementer
-  when available).
-- `architecture-reviewer`, `security-reviewer`, `silent-failure-hunter`,
-  `type-design-reviewer`, `systemic-failure-reviewer` — the last is the
-  cross-stage lens: stuck states, invariants without a repair path, unsafe
-  recovery, and over-pinned cross-stage contracts — defects that span multiple
-  files or pipeline stages that no line-level reviewer sees.
+- `quality-reviewer` — adversarial code quality, plus the folded security,
+  architecture, and type-design dimensions (Decision 43); Codex is the preferred
+  executor when available.
+- `silent-failure-hunter` — swallowed errors, log-only catches, fallbacks that
+  mask failure as success.
+- `systemic-failure-reviewer` — the cross-stage lens: stuck states, invariants
+  without a repair path, unsafe recovery, and over-pinned cross-stage contracts —
+  defects that span multiple files or pipeline stages that no line-level reviewer
+  sees.
 
 Risk does not change _who_ reviews; it changes _the producer's starting model and
 escalation budget_ (see [producer-ladder.md](./producer-ladder.md)). The single
@@ -67,7 +69,7 @@ pressure.
 
 "The panel is the panel" is enforced structurally, not just intended. The merge-gate
 verdict is unanimity over whatever reviews arrive, so a partial all-approve **subset**
-of the seven roles would otherwise clear it. At the record seam (`enforcePanelRoster`,
+of the four roles would otherwise clear it. At the record seam (`enforcePanelRoster`,
 `src/orchestrator/record.ts`) any missing role is synthesized as a `verdict:"error"`
 review and any unknown reviewer name is demoted to `error` — both fail the gate loudly,
 so an incomplete panel can never pass. The cross-vendor reviewer is an executor of a

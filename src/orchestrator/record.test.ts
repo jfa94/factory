@@ -218,9 +218,9 @@ function approve(reviewer: string) {
 }
 
 /**
- * A FULL 7-role all-approve panel (the record seam enforces roster completeness —
- * any missing role is synthesized as an `error` and fails the gate). `overrides`
- * replace the review for their role.
+ * A FULL all-approve panel over PANEL_ROLES (the record seam enforces roster
+ * completeness — any missing role is synthesized as an `error` and fails the
+ * gate). `overrides` replace the review for their role.
  */
 function fullPanel(...overrides: RawReview[]): unknown[] {
   const byRole = new Map(overrides.map((o) => [o.reviewer, o]));
@@ -332,7 +332,7 @@ describe("applyRecordReviews record", () => {
   it("roster enforcement: an all-approve SUBSET of the panel FAILS the merge gate", async () => {
     const deps = makeDeps();
     const input: RecordReviewsInput = {
-      reviews: [approve("implementation-reviewer"), approve("security-reviewer")],
+      reviews: [approve("implementation-reviewer"), approve("silent-failure-hunter")],
       verifications: [],
     };
 
@@ -347,6 +347,34 @@ describe("applyRecordReviews record", () => {
     expect(errored).toContain("quality-reviewer");
     expect(errored).toHaveLength(PANEL_ROLES.length - 2);
     expect(stderr).toMatch(/missing from results/);
+  });
+
+  // D43 self-heal pin. Deliberate grep-gate exception (like schema.test.ts's
+  // stale-overlay test): the retired role names appear here BECAUSE the test
+  // asserts they get demoted, simulating an in-flight pre-D43 7-role run.
+  it("roster enforcement: a stale 7-role in-flight review set self-heals via demotion (D43)", async () => {
+    const deps = makeDeps();
+    const retired = ["architecture-reviewer", "security-reviewer", "type-design-reviewer"];
+    const input: RecordReviewsInput = {
+      reviews: [...fullPanel(), ...retired.map(approve)],
+      verifications: [],
+    };
+
+    const { result: env, stderr } = await captureWarnings(() =>
+      applyRecordReviews(deps, RUN_ID, TASK_ID, verdictStore, input),
+    );
+
+    // The 4 current roles approve, but every retired-role review is demoted to
+    // error → the gate fails LOUD (one burned rung), never a silent approve.
+    expect(env.mergeGate.passed).toBe(false);
+    expect(env.step).toEqual({ done: false, phase: "exec" });
+    for (const role of retired) {
+      expect(env.reviewers.find((r) => r.reviewer === role)!.verdict).toBe("error");
+    }
+    for (const role of PANEL_ROLES) {
+      expect(env.reviewers.find((r) => r.reviewer === role)!.verdict).toBe("approve");
+    }
+    expect(stderr).toMatch(/unknown reviewer 'architecture-reviewer'/);
   });
 
   it("roster enforcement: an unknown reviewer name is demoted to error (never counts as approve)", async () => {

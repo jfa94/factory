@@ -7913,10 +7913,7 @@ var SpawnRoleEnum = external_exports.enum([
   "implementer",
   "implementation-reviewer",
   "quality-reviewer",
-  "architecture-reviewer",
-  "security-reviewer",
   "silent-failure-hunter",
-  "type-design-reviewer",
   "systemic-failure-reviewer",
   "scribe"
 ]);
@@ -11355,10 +11352,7 @@ function resolveReviewModel(config) {
 var PANEL_ROLES = [
   "implementation-reviewer",
   "quality-reviewer",
-  "architecture-reviewer",
-  "security-reviewer",
   "silent-failure-hunter",
-  "type-design-reviewer",
   "systemic-failure-reviewer"
 ];
 function promptRefFor(role) {
@@ -11424,8 +11418,16 @@ var RawReviewSchema = external_exports.object({
   /** The reviewer's self-reported verdict. */
   verdict: RawReviewVerdictEnum,
   /** Findings raised. May be empty (an `approve` with no findings). */
-  findings: external_exports.array(FindingSchema)
+  findings: external_exports.array(FindingSchema),
+  /**
+   * How many findings the reviewer dropped to stay under the findings cap
+   * (self-reported per the review-protocol contract). {@link parseRawReview} adds
+   * any engine-side truncation overflow on top, so silent cap truncation is
+   * always visible rather than reading as full coverage.
+   */
+  dropped_by_cap: external_exports.number().int().min(0).optional()
 });
+var MAX_FINDINGS_PER_REVIEW = 10;
 var KNOWN_REVIEW_KEYS = new Set(Object.keys(RawReviewSchema.shape));
 var KNOWN_FINDING_KEYS = new Set(Object.keys(FindingBaseSchema.shape));
 function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) {
@@ -11452,10 +11454,26 @@ function warnStrippedKeys(context, topObj, topKnown, findingsArr, findingKnown) 
   }
 }
 function parseRawReview(raw) {
-  const result = RawReviewSchema.parse(raw);
+  let result = RawReviewSchema.parse(raw);
   const reviewerLabel = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? String(raw.reviewer ?? result.reviewer) : result.reviewer;
   const rawFindings = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw.findings : void 0;
   warnStrippedKeys(reviewerLabel, raw, KNOWN_REVIEW_KEYS, rawFindings, KNOWN_FINDING_KEYS);
+  if (result.findings.length > MAX_FINDINGS_PER_REVIEW) {
+    const overflow = result.findings.length - MAX_FINDINGS_PER_REVIEW;
+    log20.warn(
+      `review parse: reviewer '${reviewerLabel}' exceeded the findings cap (${result.findings.length} > ${MAX_FINDINGS_PER_REVIEW}) \u2014 kept the first ${MAX_FINDINGS_PER_REVIEW}, ${overflow} truncated into dropped_by_cap`
+    );
+    result = {
+      ...result,
+      findings: result.findings.slice(0, MAX_FINDINGS_PER_REVIEW),
+      dropped_by_cap: (result.dropped_by_cap ?? 0) + overflow
+    };
+  }
+  if (result.dropped_by_cap !== void 0 && result.dropped_by_cap > 0) {
+    log20.warn(
+      `review parse: reviewer '${reviewerLabel}' dropped ${result.dropped_by_cap} finding(s) by cap \u2014 coverage is truncated, not exhaustive`
+    );
+  }
   return result;
 }
 function isCitable(f) {

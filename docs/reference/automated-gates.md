@@ -175,12 +175,12 @@ The mutation gate runs `stryker run --mutate <diff-scope>` (scope = added/modifi
 
 The deterministic gates are only the first layer of the merge gate. The merge gate
 also records in **holdout validation** (a withheld answer-key, validated
-independently) and the **risk-invariant review panel** (seven reviewers, unanimous
+independently) and the **risk-invariant review panel** (four reviewers, unanimous
 approval required, with verify-then-fix confirmation of each blocking finding). The
 overall merge gate is the subject of
 [../explanation/verifier.md](../explanation/verifier.md).
 
-The full seven-role panel is enforced at the record seam: an all-approve **subset** of
+The full four-role panel is enforced at the record seam: an all-approve **subset** of
 the panel can no longer clear the gate. `enforcePanelRoster` (`src/orchestrator/record.ts`)
 synthesizes a `verdict:"error"` review for every `PANEL_ROLES` entry missing from the
 supplied `--results`, and demotes any unknown reviewer name to `error` — either failing

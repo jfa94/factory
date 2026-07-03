@@ -1294,6 +1294,47 @@ engine defect, stop loud.
 
 ---
 
+## Decision 43 — Panel 7→4: Quality Absorbs Security, Architecture, and Type Design
+
+**Date:** 2026-07-03
+
+**Context:** The risk-invariant panel (Decision 26) spawned 7 Opus reviewers on every
+task — the single largest quota spend on the happy path. Review telemetry showed the
+architecture, security, and type-design lenses were the panel's lowest-marginal-value
+layer: heavily overlapping citation disciplines (quote the import / quote the source→sink
+pair / quote the declaration), the same fresh-context adversarial posture, and findings
+that a strong quality reviewer surfaces anyway. The 2026-07 redesign (session S4,
+workstream B1) consolidated them.
+
+**Decision:**
+
+- **`PANEL_ROLES` is exactly 4:** `implementation-reviewer`, `quality-reviewer`,
+  `silent-failure-hunter`, `systemic-failure-reviewer` (~-43% panel spend). The
+  architecture, security, and type-design charters fold into a rewritten merged
+  `quality-reviewer` charter that keeps each lens's citation law (source→sink both lines;
+  quote the import edge; quote the indicted declaration), adds an explicit
+  dimension-ownership map, and keeps Codex as the preferred executor. Unanimity,
+  risk-invariance, engine-side Opus pinning, citation-verify, and the finding-verifier
+  (Decision 27) are all unchanged.
+- **No state migration.** `ReviewerResultSchema.reviewer` is an open string; an in-flight
+  pre-43 7-role run self-heals at the record seam (`enforcePanelRoster`): retired-role
+  reviews demote to `verdict:"error"`, the gate fails loud, and the task re-reviews with
+  the 4-role panel — one burned rung, no silent pass.
+- **Findings cap 10, engine-enforced, with visibility.** The old cap existed only as
+  charter prose ("≤ ~7"). `parseRawReview` now soft-truncates to the FIRST 10 findings
+  (the reviewer's own likelihood × impact ranking) — never a parse error, which would burn
+  escalation rungs on noise. Overflow is added to the new optional `dropped_by_cap`
+  RawReview field (reviewers may also self-report it) and surfaced via warn; it stays in
+  the review artifact, not run state.
+
+**Consequences:** Panel quota drops ~43% per task with the merged charter carrying the
+folded dimensions' iron laws. A weaker per-dimension depth is the accepted trade — the
+deterministic gates (SAST, dependency-cruiser, tsc) still own the mechanical ends of
+security/architecture/types, and `dropped_by_cap` makes truncated coverage read as
+truncated. Decision 26's roster examples now describe 4 roles.
+
+---
+
 ## Plugin System Constraints
 
 ### Agents Cannot Use Hooks Per-Agent

@@ -88,7 +88,7 @@ describe("ReportGhClient", () => {
 describe("buildDebugReport", () => {
   it("renders the title with pass number + blocker count", () => {
     const input: BuildDebugReportInput = {
-      confirmedBlockers: [finding(), finding({ reviewer: "security-reviewer" })],
+      confirmedBlockers: [finding(), finding({ reviewer: "silent-failure-hunter" })],
       passNumber: 2,
       base: "abc123",
     };
@@ -105,7 +105,7 @@ describe("buildDebugReport", () => {
       quote: "catch (e) {}",
     });
     const f2 = finding({
-      reviewer: "security-reviewer",
+      reviewer: "quality-reviewer",
       file: "src/bar.ts",
       line: 99,
       description: "Unsanitized input reaches a shell command",
@@ -130,14 +130,14 @@ describe("buildDebugReport", () => {
     const { body } = buildDebugReport({
       confirmedBlockers: [
         finding({ reviewer: "quality-reviewer", file: "a.ts", line: 1 }),
-        finding({ reviewer: "security-reviewer", file: "b.ts", line: 2 }),
-        finding({ reviewer: "quality-reviewer", file: "c.ts", line: 3 }),
+        finding({ reviewer: "quality-reviewer", file: "b.ts", line: 2 }),
+        finding({ reviewer: "silent-failure-hunter", file: "c.ts", line: 3 }),
       ],
       passNumber: 1,
       base: "main",
     });
     expect(body).toContain("## quality-reviewer");
-    expect(body).toContain("## security-reviewer");
+    expect(body).toContain("## silent-failure-hunter");
     // Only one quality-reviewer section header, even though it has 2 findings.
     expect(body.split("## quality-reviewer").length - 1).toBe(1);
   });

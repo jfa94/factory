@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { parseFinding, parseRawReview, isCitable, type Finding } from "./finding.js";
+import {
+  parseFinding,
+  parseRawReview,
+  isCitable,
+  MAX_FINDINGS_PER_REVIEW,
+  type Finding,
+} from "./finding.js";
 
 const citable: unknown = {
-  reviewer: "security-reviewer",
+  reviewer: "quality-reviewer",
   severity: "critical",
   blocking: true,
   file: "src/app.ts",
@@ -21,7 +27,7 @@ describe("WS7 Finding schema (Δ K)", () => {
 
   it("Δ K: a finding with NO file:line is parseable but uncitable (so citation-verify can drop it)", () => {
     const f = parseFinding({
-      reviewer: "architecture-reviewer",
+      reviewer: "quality-reviewer",
       severity: "warning",
       blocking: false,
       quote: "the module boundary leaks",
@@ -89,7 +95,7 @@ describe("WS7 Finding schema (Δ K)", () => {
   it("T4: parseFinding rejects half-citations (file-without-line, line-without-file)", () => {
     expect(() =>
       parseFinding({
-        reviewer: "security-reviewer",
+        reviewer: "quality-reviewer",
         severity: "critical",
         blocking: true,
         file: "src/app.ts",
@@ -100,7 +106,7 @@ describe("WS7 Finding schema (Δ K)", () => {
 
     expect(() =>
       parseFinding({
-        reviewer: "security-reviewer",
+        reviewer: "quality-reviewer",
         severity: "critical",
         blocking: true,
         line: 42,
@@ -133,11 +139,11 @@ describe("unknown-key stripping observability", () => {
   it("parseRawReview: unknown key inside a finding parses successfully and logs a warn naming it", () => {
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const r = parseRawReview({
-      reviewer: "security-reviewer",
+      reviewer: "quality-reviewer",
       verdict: "blocked",
       findings: [
         {
-          reviewer: "security-reviewer",
+          reviewer: "quality-reviewer",
           severity: "critical",
           blocking: true,
           file: "src/app.ts",
@@ -178,5 +184,67 @@ describe("unknown-key stripping observability", () => {
     expect(output).toMatch(/WARN/);
     expect(output).toMatch(/stripped unknown keys/);
     expect(output).toMatch(/extra_llm_field/);
+  });
+});
+
+describe("findings cap + dropped_by_cap (D43)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const finding = (i: number) => ({
+    reviewer: "quality-reviewer",
+    severity: "warning",
+    blocking: false,
+    file: "src/app.ts",
+    line: i + 1,
+    quote: `const x${i} = 1`,
+    description: `finding ${i}`,
+  });
+  const review = (count: number, extra?: Record<string, unknown>) => ({
+    reviewer: "quality-reviewer",
+    verdict: "blocked",
+    findings: Array.from({ length: count }, (_, i) => finding(i)),
+    ...extra,
+  });
+
+  it("a review over the cap is truncated to the FIRST 10 with the overflow in dropped_by_cap + a warn", () => {
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const r = parseRawReview(review(12));
+    expect(r.findings).toHaveLength(MAX_FINDINGS_PER_REVIEW);
+    // Head kept (the reviewer's own likelihood × impact ranking), tail dropped.
+    expect(r.findings[0]!.description).toBe("finding 0");
+    expect(r.findings[9]!.description).toBe("finding 9");
+    expect(r.dropped_by_cap).toBe(2);
+    const output = stderrWrite.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).toMatch(/exceeded the findings cap/);
+  });
+
+  it("engine truncation stacks on top of a self-reported dropped_by_cap", () => {
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const r = parseRawReview(review(11, { dropped_by_cap: 3 }));
+    expect(r.findings).toHaveLength(10);
+    expect(r.dropped_by_cap).toBe(4);
+  });
+
+  it("a self-reported dropped_by_cap survives parsing (not stripped) and warns for visibility", () => {
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const r = parseRawReview(review(2, { dropped_by_cap: 5 }));
+    expect(r.dropped_by_cap).toBe(5);
+    const output = stderrWrite.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).not.toMatch(/stripped unknown keys/);
+    expect(output).toMatch(/dropped 5 finding\(s\) by cap/);
+  });
+
+  it("a review at or under the cap passes through untruncated with no cap warn", () => {
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const r = parseRawReview(review(10));
+    expect(r.findings).toHaveLength(10);
+    expect(r.dropped_by_cap).toBeUndefined();
+    const output = stderrWrite.mock.calls.map((c) => String(c[0])).join("");
+    expect(output).not.toMatch(/findings cap/);
+  });
+
+  it("loud: rejects a negative or non-integer dropped_by_cap", () => {
+    expect(() => parseRawReview(review(1, { dropped_by_cap: -1 }))).toThrow();
+    expect(() => parseRawReview(review(1, { dropped_by_cap: 1.5 }))).toThrow();
   });
 });

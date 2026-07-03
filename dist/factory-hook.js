@@ -8245,10 +8245,7 @@ var SpawnRoleEnum = external_exports.enum([
   "implementer",
   "implementation-reviewer",
   "quality-reviewer",
-  "architecture-reviewer",
-  "security-reviewer",
   "silent-failure-hunter",
-  "type-design-reviewer",
   "systemic-failure-reviewer",
   "scribe"
 ]);
@@ -8497,14 +8494,8 @@ function reviewerNameOf(agentType) {
       return "implementation";
     case "quality-reviewer":
       return "quality";
-    case "architecture-reviewer":
-      return "architecture";
-    case "security-reviewer":
-      return "security";
     case "silent-failure-hunter":
       return "silent-failure";
-    case "type-design-reviewer":
-      return "type-design";
     case "systemic-failure-reviewer":
       return "systemic-failure";
     default:

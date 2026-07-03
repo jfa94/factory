@@ -589,7 +589,7 @@ the user-facing knob is `--no-ship` on `run create`/`run finalize`). Emits one o
   and is omitted otherwise so the agent inherits the spawn default. `phase` is one of
   `tests | exec | verify` (preflight only advances; ship never spawns). `expects`
   is `producer-status` (tests/exec — one producer agent) or `reviews` (verify —
-  the seven-reviewer panel); a `holdout` accompanies `verify` when a holdout answer
+  the four-reviewer panel); a `holdout` accompanies `verify` when a holdout answer
   key was withheld. `worktree` is the task working tree the agents commit in.
   `base_ref` is the per-run staging base that worktree forked from
   (`origin/staging-<run-id>`); the panel and holdout validator diff against THIS, never

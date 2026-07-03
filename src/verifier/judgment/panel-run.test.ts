@@ -54,7 +54,7 @@ function blockedWith(reviewer: string, line: number, quote: string): RawReview {
 }
 
 // NOTE: runPanel derives over WHATEVER reviews it is handed — roster completeness
-// (all 7 PANEL_ROLES present, no unknown names) is enforced upstream at the record
+// (all PANEL_ROLES present, no unknown names) is enforced upstream at the record
 // seam (record.ts enforcePanelRoster). The 2-reviewer fixtures here exercise the
 // citation-verify/confirm/derive pipeline only, not a real merge-gate pass.
 describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
@@ -75,7 +75,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
     const res = await runPanel({
       reviews: [
         approve("implementation-reviewer"),
-        blockedWith("security-reviewer", 2, "const value = process(input)"),
+        blockedWith("quality-reviewer", 2, "const value = process(input)"),
       ],
       source,
       makeRunner: confirmAll(true),
@@ -84,9 +84,9 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
     });
     expect(res.mergeGate.passed).toBe(false);
     expect(res.result.kind).toBe("wait-retry");
-    const sec = res.reviewerResults.find((r) => r.reviewer === "security-reviewer");
-    expect(sec?.verdict).toBe("blocked");
-    expect(sec?.confirmed_blockers).toBeGreaterThanOrEqual(1);
+    const q = res.reviewerResults.find((r) => r.reviewer === "quality-reviewer");
+    expect(q?.verdict).toBe("blocked");
+    expect(q?.confirmed_blockers).toBeGreaterThanOrEqual(1);
     // WS1 coherence: parseTaskState enforces approve⇒0 / blocked⇒≥1; the assembled
     // ReviewerResult[] must satisfy it.
     expect(() =>
@@ -105,7 +105,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
     const res = await runPanel({
       reviews: [
         approve("implementation-reviewer"),
-        blockedWith("security-reviewer", 1, "this code does not exist anywhere"),
+        blockedWith("quality-reviewer", 1, "this code does not exist anywhere"),
       ],
       source,
       // If the dropped finding HAD reached confirmation, confirmAll(true) would
@@ -115,14 +115,14 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(true);
-    const sec = res.reviewerResults.find((r) => r.reviewer === "security-reviewer");
-    expect(sec?.verdict).toBe("approve");
-    expect(sec?.confirmed_blockers).toBe(0);
+    const q = res.reviewerResults.find((r) => r.reviewer === "quality-reviewer");
+    expect(q?.verdict).toBe("approve");
+    expect(q?.confirmed_blockers).toBe(0);
   });
 
   it("D27: a refuted blocker does not count → merge gate passes", async () => {
     const res = await runPanel({
-      reviews: [blockedWith("security-reviewer", 2, "const value = process(input)")],
+      reviews: [blockedWith("quality-reviewer", 2, "const value = process(input)")],
       source,
       makeRunner: confirmAll(false), // verifier refutes
       gateEvidence: PASSING_GATES,
@@ -151,7 +151,7 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
 
   it("D27 (loud error): a verifier error on a blocker yields an `error` reviewer (unresolved, fails merge gate)", async () => {
     const res = await runPanel({
-      reviews: [blockedWith("security-reviewer", 2, "const value = process(input)")],
+      reviews: [blockedWith("quality-reviewer", 2, "const value = process(input)")],
       source,
       makeRunner: (review) => ({
         identity: `verifier-for-${review.reviewer}`,
@@ -163,8 +163,8 @@ describe("WS7 panel-run integration (D26/D27, Δ K)", () => {
       phase: "verify",
     });
     expect(res.mergeGate.passed).toBe(false);
-    const sec = res.reviewerResults.find((r) => r.reviewer === "security-reviewer");
-    expect(sec?.verdict).toBe("error");
+    const q = res.reviewerResults.find((r) => r.reviewer === "quality-reviewer");
+    expect(q?.verdict).toBe("error");
   });
 
   it("Δ V: the merge gate is DERIVED from the reviewer results, never a stored boolean", async () => {
