@@ -87,6 +87,22 @@ export interface PartialRunReport {
    * outcome, one note).
    */
   e2e_advisory?: string;
+  /**
+   * Plain-language journey names the e2e suite covered (Decision 40 D12) — the
+   * author manifest's `title`s (spec_path fallback for pre-D12 manifests). Present
+   * IFF a manifest was authored, so a non-technical reader sees WHAT was verified
+   * end-to-end, not just pass/fail.
+   */
+  e2e_journeys?: string[];
+  /** Task ids the e2e phase reopened at least once (D12's "found & sent back for fixes"). */
+  e2e_reopened?: string[];
+  /**
+   * Non-fatal e2e setup warnings (Decision 40 D3) — e.g. the assessment degraded to
+   * logged-out coverage because auth machinery couldn't be authored.
+   */
+  e2e_warnings?: string[];
+  /** The run-start e2e assessment's failure reason (Decision 40 D3c), IFF it failed. */
+  e2e_assessment_failure?: string;
 }
 
 /** Options for {@link buildPartialReport}. */
@@ -176,7 +192,36 @@ export function buildPartialReport(
     ...(run.e2e_phase?.status === "done" && run.e2e_phase.advisory !== undefined
       ? { e2e_advisory: run.e2e_phase.advisory }
       : {}),
+    ...buildE2eNarrative(run),
   };
+}
+
+/** The D12 plain-language e2e fields (journeys/reopens/warnings/assessment failure). */
+function buildE2eNarrative(run: RunState): Partial<PartialRunReport> {
+  const journeys = (run.e2e_phase?.manifest ?? []).map((e) => e.title ?? e.spec_path);
+  const reopened = Object.entries(run.e2e_phase?.reopen_counts ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([id]) => id)
+    .sort();
+  const warning = run.e2e_assessment?.warning;
+  return {
+    ...(journeys.length > 0 ? { e2e_journeys: journeys } : {}),
+    ...(reopened.length > 0 ? { e2e_reopened: reopened } : {}),
+    ...(warning !== undefined ? { e2e_warnings: [warning] } : {}),
+    ...(run.e2e_assessment?.status === "failed"
+      ? { e2e_assessment_failure: run.e2e_assessment.reason ?? "e2e assessment failed" }
+      : {}),
+  };
+}
+
+/**
+ * D12 reason convention: engine reasons may be `"<plain>\n<detail>"` — the first
+ * line reads as a sentence for a non-technical reader; the remainder is technical
+ * detail the renderers set apart instead of inlining.
+ */
+function splitReason(reason: string): { plain: string; detail?: string } {
+  const i = reason.indexOf("\n");
+  return i === -1 ? { plain: reason } : { plain: reason.slice(0, i), detail: reason.slice(i + 1) };
 }
 
 /**
@@ -205,11 +250,14 @@ export function renderFailureComment(report: PartialRunReport): string {
       `PRD left open for rescue/resume.`,
   ];
   if (report.e2e_failure !== undefined) {
-    lines.push(
-      "",
-      "### End-to-end verification failed",
-      `Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`,
-    );
+    const { plain, detail } = splitReason(report.e2e_failure);
+    lines.push("", "### End-to-end verification failed", plain);
+    if (detail !== undefined) lines.push("```", detail, "```");
+  }
+  if (report.e2e_assessment_failure !== undefined) {
+    const { plain, detail } = splitReason(report.e2e_assessment_failure);
+    lines.push("", "### End-to-end setup failed before any task ran", plain);
+    if (detail !== undefined) lines.push("```", detail, "```");
   }
   for (const failure of report.failures) {
     lines.push("", `### \`${failure.task_id}\` — ${failure.title}`);
@@ -262,9 +310,40 @@ export function renderPartialReportMarkdown(report: PartialRunReport): string {
   }
   out.push("");
 
+  if (report.e2e_journeys !== undefined) {
+    out.push(`## End-to-end journeys verified (${report.e2e_journeys.length})`);
+    for (const j of report.e2e_journeys) out.push(`- ${j}`);
+    out.push("");
+  }
+
+  if (report.e2e_reopened !== undefined) {
+    out.push("## Found by end-to-end testing");
+    out.push(
+      `The e2e suite caught failing journeys and sent ${report.e2e_reopened.length} task(s) ` +
+        `back for fixes: ${report.e2e_reopened.map((id) => `\`${id}\``).join(", ")}`,
+    );
+    out.push("");
+  }
+
+  if (report.e2e_warnings !== undefined) {
+    out.push("## End-to-end warnings");
+    for (const w of report.e2e_warnings) out.push(`- ${w}`);
+    out.push("");
+  }
+
+  if (report.e2e_assessment_failure !== undefined) {
+    const { plain, detail } = splitReason(report.e2e_assessment_failure);
+    out.push("## End-to-end setup failed before any task ran");
+    out.push(plain);
+    if (detail !== undefined) out.push("```", detail, "```");
+    out.push("");
+  }
+
   if (report.e2e_failure !== undefined) {
+    const { plain, detail } = splitReason(report.e2e_failure);
     out.push("## End-to-end verification failed");
-    out.push(`Every task shipped, but the e2e phase vetoed the rollup: ${report.e2e_failure}`);
+    out.push(plain);
+    if (detail !== undefined) out.push("```", detail, "```");
     out.push("");
   }
 

@@ -276,6 +276,123 @@ describe("renderPartialReportMarkdown", () => {
   });
 });
 
+describe("plain-language e2e narrative (Decision 40 D12)", () => {
+  const E2E_RUN = {
+    status: "completed" as const,
+    e2e_phase: {
+      status: "done" as const,
+      manifest: [
+        {
+          task_ids: ["t1"],
+          spec_path: "e2e/checkout.spec.ts",
+          kind: "critical" as const,
+          title: "Buy an item and reach order confirmation",
+        },
+        // Pre-D12 manifest row without a title — spec_path fallback.
+        { task_ids: ["t1"], spec_path: "e2e/nav.spec.ts", kind: "throwaway" as const },
+      ],
+      reopen_counts: { t1: 1, t2: 0 },
+      ended_at: NOW,
+    },
+    e2e_assessment: {
+      status: "done" as const,
+      warning: "No login machinery could be authored — journeys run logged-out only",
+      affected_specs: [],
+    },
+  };
+
+  it("builds e2e_journeys (title, spec_path fallback), e2e_reopened (counts > 0 only) and e2e_warnings", () => {
+    const spec = makeSpec([specTask("t1"), specTask("t2")]);
+    const run = makeRun([doneTask("t1", 1), doneTask("t2", 2)], E2E_RUN);
+    const report = buildPartialReport(run, spec, { now: NOW });
+
+    expect(report.e2e_journeys).toEqual([
+      "Buy an item and reach order confirmation",
+      "e2e/nav.spec.ts",
+    ]);
+    expect(report.e2e_reopened).toEqual(["t1"]);
+    expect(report.e2e_warnings).toEqual([
+      "No login machinery could be authored — journeys run logged-out only",
+    ]);
+    expect(report.e2e_assessment_failure).toBeUndefined();
+  });
+
+  it("all narrative fields are absent for a run without an e2e phase (and their sections unrendered)", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], { status: "completed" });
+    const report = buildPartialReport(run, spec, { now: NOW });
+
+    expect(report.e2e_journeys).toBeUndefined();
+    expect(report.e2e_reopened).toBeUndefined();
+    expect(report.e2e_warnings).toBeUndefined();
+    expect(report.e2e_assessment_failure).toBeUndefined();
+
+    const md = renderPartialReportMarkdown(report);
+    expect(md).not.toContain("End-to-end journeys");
+    expect(md).not.toContain("Found by end-to-end");
+    expect(md).not.toContain("End-to-end warnings");
+    expect(md).not.toContain("End-to-end setup failed");
+  });
+
+  it("surfaces e2e_assessment_failure (D3c fail-loud) in build + both renderers", () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([failedTask("t1", "blocked-environmental", "assessment failed the run")], {
+      status: "failed",
+      e2e_assessment: {
+        status: "failed" as const,
+        reason: "The app never became reachable\n`npm run dev` exited 1 after 30s",
+        affected_specs: [],
+      },
+    });
+    const report = buildPartialReport(run, spec, { now: NOW });
+    expect(report.e2e_assessment_failure).toBe(
+      "The app never became reachable\n`npm run dev` exited 1 after 30s",
+    );
+
+    const md = renderPartialReportMarkdown(report);
+    expect(md).toContain("## End-to-end setup failed before any task ran");
+    expect(md).toContain("The app never became reachable");
+
+    const comment = renderFailureComment(report);
+    expect(comment).toContain("### End-to-end setup failed before any task ran");
+  });
+
+  it('splits a "<plain>\\n<detail>" reason: plain line reads standalone, detail fenced', () => {
+    const spec = makeSpec([specTask("t1")]);
+    const run = makeRun([doneTask("t1", 1)], {
+      status: "failed",
+      e2e_phase: {
+        status: "failed",
+        reason:
+          "A pre-existing checkout journey broke and the run cannot repair it\n" +
+          "e2e adjudication: regression verdict — e2e/legacy.spec.ts: button gone",
+        manifest: [],
+        reopen_counts: {},
+        ended_at: NOW,
+      },
+    });
+    const md = renderPartialReportMarkdown(buildPartialReport(run, spec, { now: NOW }));
+
+    expect(md).toContain(
+      "## End-to-end verification failed\nA pre-existing checkout journey broke and the run cannot repair it\n```\n" +
+        "e2e adjudication: regression verdict — e2e/legacy.spec.ts: button gone\n```",
+    );
+  });
+
+  it("renders the journeys / found-by / warnings sections", () => {
+    const spec = makeSpec([specTask("t1"), specTask("t2")]);
+    const run = makeRun([doneTask("t1", 1), doneTask("t2", 2)], E2E_RUN);
+    const md = renderPartialReportMarkdown(buildPartialReport(run, spec, { now: NOW }));
+
+    expect(md).toContain("## End-to-end journeys verified (2)");
+    expect(md).toContain("- Buy an item and reach order confirmation");
+    expect(md).toContain("## Found by end-to-end testing");
+    expect(md).toContain("sent 1 task(s) back for fixes: `t1`");
+    expect(md).toContain("## End-to-end warnings");
+    expect(md).toContain("- No login machinery could be authored");
+  });
+});
+
 describe("failureCommentMarker", () => {
   it("embeds the run id in a hidden HTML comment", () => {
     expect(failureCommentMarker("run-1")).toBe("<!-- factory:run-failed:run-1 -->");
