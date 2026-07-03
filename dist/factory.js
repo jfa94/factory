@@ -5989,7 +5989,9 @@ var ConfigSchema = external_exports.object({
   git: GitSchema,
   e2e: E2eConfigSchema,
   /**
-   * Cumulative genuine capability-budget task failures before the run aborts.
+   * FLOOR of the circuit-breaker threshold: the run aborts when cumulative genuine
+   * capability-budget failures reach `max(this, ceil(0.15 × total tasks))` — big
+   * task graphs tolerate proportionally more (≤20 tasks behave as a flat cap of 3).
    * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
    * total capability-budget drops); the field keeps its name for config back-compat.
    */
@@ -9574,11 +9576,12 @@ function clearCheckpoint() {
 }
 
 // src/quota/circuit-breaker.ts
+var FAILURE_RATIO = 0.15;
 function isNonNegativeFinite(value) {
   return Number.isFinite(value) && value >= 0;
 }
 function evaluate2(input, config) {
-  const { cumulativeFailures } = input;
+  const { cumulativeFailures, totalTasks } = input;
   if (!isNonNegativeFinite(cumulativeFailures)) {
     return {
       tripped: true,
@@ -9586,12 +9589,22 @@ function evaluate2(input, config) {
       reason: `circuit breaker fail-closed: cumulativeFailures is not a non-negative finite number (got ${String(cumulativeFailures)})`
     };
   }
+  if (!isNonNegativeFinite(totalTasks)) {
+    return {
+      tripped: true,
+      arm: "fail-closed",
+      reason: `circuit breaker fail-closed: totalTasks is not a non-negative finite number (got ${String(totalTasks)})`
+    };
+  }
   const { maxConsecutiveFailures } = config;
-  if (cumulativeFailures >= maxConsecutiveFailures) {
+  const proportional = Math.ceil(FAILURE_RATIO * totalTasks);
+  const effectiveThreshold = Math.max(maxConsecutiveFailures, proportional);
+  if (cumulativeFailures >= effectiveThreshold) {
+    const derivation = proportional > maxConsecutiveFailures ? `ceil(${FAILURE_RATIO} \xD7 ${totalTasks} tasks)` : `floor maxConsecutiveFailures=${maxConsecutiveFailures}`;
     return {
       tripped: true,
       arm: "failures",
-      reason: `max cumulative failures (${cumulativeFailures} >= ${maxConsecutiveFailures})`
+      reason: `max cumulative failures (${cumulativeFailures} >= ${effectiveThreshold}, from ${derivation})`
     };
   }
   return { tripped: false };
@@ -13581,7 +13594,10 @@ async function applyCircuitBreaker(deps, runId) {
   const capabilityFailures = Object.values(run10.tasks).filter(
     (t) => t.status === "failed" && t.failure_class === "capability-budget"
   ).length;
-  const verdict = evaluate2({ cumulativeFailures: capabilityFailures }, deps.config);
+  const verdict = evaluate2(
+    { cumulativeFailures: capabilityFailures, totalTasks: Object.keys(run10.tasks).length },
+    deps.config
+  );
   return verdict.tripped ? verdict : null;
 }
 

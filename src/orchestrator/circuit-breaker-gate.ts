@@ -19,8 +19,10 @@
  * that cascades to two dependents masquerade as three "consecutive" failures and
  * abort still-runnable independent work — directly against the highest-quality-code
  * objective. (The signal is run-cumulative, not strictly consecutive: once N tasks
- * have GENUINELY failed, the run is pathological enough to abort in lights-out mode;
- * the cap is configurable.)
+ * have GENUINELY failed, the run is pathological enough to abort in lights-out mode.)
+ * The gate also supplies the task-graph size (`Object.keys(run.tasks).length`) so the
+ * pure breaker can scale its threshold proportionally — `maxConsecutiveFailures` is
+ * the configurable FLOOR.
  */
 import { evaluate, type CircuitBreakerResult } from "../quota/circuit-breaker.js";
 import type { Config, StateManager } from "./deps.js";
@@ -49,6 +51,9 @@ export async function applyCircuitBreaker(
     (t) => t.status === "failed" && t.failure_class === "capability-budget",
   ).length;
 
-  const verdict = evaluate({ cumulativeFailures: capabilityFailures }, deps.config);
+  const verdict = evaluate(
+    { cumulativeFailures: capabilityFailures, totalTasks: Object.keys(run.tasks).length },
+    deps.config,
+  );
   return verdict.tripped ? verdict : null;
 }

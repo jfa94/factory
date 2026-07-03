@@ -327,7 +327,9 @@ export const ConfigSchema = z
     git: GitSchema,
     e2e: E2eConfigSchema,
     /**
-     * Cumulative genuine capability-budget task failures before the run aborts.
+     * FLOOR of the circuit-breaker threshold: the run aborts when cumulative genuine
+     * capability-budget failures reach `max(this, ceil(0.15 × total tasks))` — big
+     * task graphs tolerate proportionally more (≤20 tasks behave as a flat cap of 3).
      * The signal is run-cumulative, not strictly consecutive (the breaker gate counts
      * total capability-budget drops); the field keeps its name for config back-compat.
      */
